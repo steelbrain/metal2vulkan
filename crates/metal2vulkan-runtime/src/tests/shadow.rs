@@ -2067,12 +2067,13 @@ fn a_large_surface_is_copied_in_whole_once_for_a_command_buffer_that_samples_it(
 }
 
 /// A command buffer carries a shadowed texture's image on only while nothing lets another writer
-/// of its truth in: a command of any of its encoders that writes the bytes another way, a wait for
-/// an event or a fence (or any other split of its batches, `State::shadows_to_carry`), work the
-/// encoder records apart, and an encoder that did not end holding the truth each leave the next
-/// encoder to copy the plane in again. An encoder of another command buffer that ended with the
-/// texture in between, or while this one's encoder was open, does not: on the GPU it runs before
-/// or after the batch (`shadow::ShadowCarry`).
+/// of its truth in: a command of any of its encoders that writes the bytes another way, a copy
+/// back or merge of another shadowed texture over them, a wait for an event or a fence (or any
+/// other split of its batches, `State::shadows_to_carry`), work the encoder records apart, and an
+/// encoder that did not end holding the truth each leave the next encoder to copy the plane in
+/// again. An encoder of another command buffer that ended with the texture in between, or while
+/// this one's encoder was open, does not: on the GPU it runs before or after the batch
+/// (`shadow::ShadowCarry`).
 #[test]
 fn a_carried_surface_is_dropped_by_anything_that_lets_another_writer_in() {
     let plane = ResourceKey::new();
@@ -2174,6 +2175,17 @@ fn a_carried_surface_is_dropped_by_anything_that_lets_another_writer_in() {
     frame.end(sync);
     frame.sampling(&dropped, 1);
     assert_eq!(frame.texels, twice, "writes Metal drops");
+    // An encoder that writes through another shadowed texture over the same bytes, merged back
+    // as it ends, and never meets the carried one: the carried image no longer holds the bytes.
+    let twin = surface_shadow(plane);
+    let mut frame = Frame::new();
+    frame.sampling(&s, 1);
+    let mut sync = frame.encoder();
+    let mut made = 0;
+    frame.texels += texels_in(&planned(&mut sync, &mut made, &[(&twin, true)], &[]));
+    frame.end(sync);
+    frame.sampling(&s, 1);
+    assert_eq!(frame.texels, 3 * SURFACE_TEXELS, "a twin written through");
 }
 
 /// A render pass that renders a large surface's texture as a color attachment it loads pays only

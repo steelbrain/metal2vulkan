@@ -316,6 +316,8 @@ mod shadow_merge_read;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod shadow_runs;
 mod shadow_stencil;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod shadow_twins;
 #[cfg(all(debug_assertions, any(m2v_gpu, m2v_cpu_icd)))]
 mod shared_draw_locks;
 #[cfg(all(unix, any(m2v_gpu, m2v_cpu_icd)))]
