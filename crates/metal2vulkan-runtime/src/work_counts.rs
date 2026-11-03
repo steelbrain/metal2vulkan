@@ -14,6 +14,7 @@ use super::recorder::CommandsRecorded;
 use super::scheduler::HeldFor;
 use super::shadow::{Backing, CarryTally, CopyCause, Lost, ShadowCopy, ShadowSource};
 use super::Device;
+use crate::shards::Sharded;
 use ash::vk;
 use std::panic::Location;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -37,6 +38,8 @@ pub(crate) enum Predicted {
 pub(crate) struct Counters {
     /// Released objects and shadow keeps by kind (`churn_counts.rs`).
     pub(crate) churn: super::churn_counts::ChurnCounters,
+    /// The counts draws add on the paths that take no shared lock, by thread.
+    draws: Sharded<DrawCounters>,
     command_pools_made: AtomicU64,
     spare_command_pools_taken: AtomicU64,
     spare_command_pools_reset: AtomicU64,
@@ -249,13 +252,9 @@ pub(crate) struct Counters {
     heap_tables_worked_out: AtomicU64,
     argument_samplers_taken: AtomicU64,
     bind_views_worked_out: AtomicU64,
-    stage_tables_read: AtomicU64,
-    stage_tables_read_in_part: AtomicU64,
     no_copy_lies_read: AtomicU64,
-    commands_noted_as_before: AtomicU64,
     draws_settled: AtomicU64,
     two_plane_draws: AtomicU64,
-    provoking_last_pipeline_draws: AtomicU64,
     provoking_listed_draws: AtomicU64,
     device_wide_line_draws: AtomicU64,
     line_band_draws: AtomicU64,
@@ -272,9 +271,6 @@ pub(crate) struct Counters {
     color_group_passes: AtomicU64,
     color_group_twins: AtomicU64,
     color_group_draws_skipped: AtomicU64,
-    draw_states_recorded: AtomicU64,
-    draws_pushing_set_zero: AtomicU64,
-    set_zero_writes_pushed: AtomicU64,
     set_zero_equal_shape_switches: AtomicU64,
     set_zero_writes_on_equal_shape_switches: AtomicU64,
     set_zero_writes_if_shapes_shared: AtomicU64,
@@ -283,8 +279,6 @@ pub(crate) struct Counters {
     set_zero_sets_found: AtomicU64,
     draw_shapes_reused: AtomicU64,
     draw_shapes_carried: AtomicU64,
-    draws_as_before: AtomicU64,
-    draws_rebound: AtomicU64,
     host_holds_looked_up: AtomicU64,
     dispatches_settled_as_before: AtomicU64,
     dispatches_planned_as_before: AtomicU64,
@@ -462,6 +456,22 @@ pub(crate) struct Counters {
     render_log_ends_by_program: AtomicU64,
     render_log_commits_by_thread: AtomicU64,
     render_log_commits_by_program: AtomicU64,
+}
+
+/// The counts a draw adds on the paths that take no shared lock (`render/draw_again.rs`), kept
+/// by thread (`shards.rs`) so threads that draw at once count apart: each counted as it is
+/// recorded.
+#[derive(Default)]
+struct DrawCounters {
+    stage_tables_read: AtomicU64,
+    stage_tables_read_in_part: AtomicU64,
+    commands_noted_as_before: AtomicU64,
+    provoking_last_pipeline_draws: AtomicU64,
+    draw_states_recorded: AtomicU64,
+    draws_pushing_set_zero: AtomicU64,
+    set_zero_writes_pushed: AtomicU64,
+    draws_as_before: AtomicU64,
+    draws_rebound: AtomicU64,
 }
 
 /// How a render pass took a shadowed texture as a color attachment
@@ -1793,14 +1803,13 @@ impl Counters {
     /// A draw read a stage's table into its encoder's kept bind state
     /// (`ArgumentTable::refresh_reading`).
     pub(crate) fn stage_table_read(&self) {
-        self.stage_tables_read.fetch_add(1, Ordering::Relaxed);
+        (self.draws.mine().stage_tables_read).fetch_add(1, Ordering::Relaxed);
     }
 
     /// One of those reads brought in only the slots calls changed since the table was read
     /// (`ArgumentTable::refresh_changed`).
     pub(crate) fn stage_table_read_in_part(&self) {
-        self.stage_tables_read_in_part
-            .fetch_add(1, Ordering::Relaxed);
+        (self.draws.mine().stage_tables_read_in_part).fetch_add(1, Ordering::Relaxed);
     }
 
     /// A look at where a no-copy buffer's bytes lie, which takes its pages' lock
@@ -1812,8 +1821,7 @@ impl Counters {
     /// A draw's uses were noted already: the last command its encoder noted had them
     /// (`noted_apart.rs`).
     pub(crate) fn command_noted_as_before(&self) {
-        self.commands_noted_as_before
-            .fetch_add(1, Ordering::Relaxed);
+        (self.draws.mine().commands_noted_as_before).fetch_add(1, Ordering::Relaxed);
     }
 
     /// A draw settled its variant and plan from its bind shape (`GraphicsState::settle_shape`).
@@ -1830,8 +1838,7 @@ impl Counters {
     /// A draw under the last provoking vertex ran a `VkPipeline` of the last vertex
     /// (`render/provoking.rs`).
     pub(crate) fn provoking_last_pipeline_draw(&self) {
-        self.provoking_last_pipeline_draws
-            .fetch_add(1, Ordering::Relaxed);
+        (self.draws.mine().provoking_last_pipeline_draws).fetch_add(1, Ordering::Relaxed);
     }
 
     /// A draw under the last provoking vertex drew the list of its primitives in Metal's mode-1
@@ -1931,14 +1938,13 @@ impl Counters {
     /// (`render::Recording::record`).
     pub(crate) fn draw_states_recorded(&self, count: u64) {
         if count > 0 {
-            self.draw_states_recorded
-                .fetch_add(count, Ordering::Relaxed);
+            (self.draws.mine().draw_states_recorded).fetch_add(count, Ordering::Relaxed);
         }
     }
 
     /// A draw recorded with its set 0 pushed (`pipeline::objects::pushes_set_zero`).
     pub(crate) fn draw_pushing_set_zero(&self) {
-        self.draws_pushing_set_zero.fetch_add(1, Ordering::Relaxed);
+        (self.draws.mine().draws_pushing_set_zero).fetch_add(1, Ordering::Relaxed);
     }
 
     /// A dispatch encoded with its set 0 pushed (`pipeline::objects::pushes_set_zero`).
@@ -1971,30 +1977,43 @@ impl Counters {
         self.draw_shapes_carried.fetch_add(1, Ordering::Relaxed);
     }
 
-    /// `draws` draws a render encoder recorded as its last draw again (`render/draw_again.rs`),
-    /// of which `pushing_set_zero` were of a variant that pushes set 0 and `last_vertex` ran a
-    /// `VkPipeline` of the last provoking vertex: each a draw whose uses were noted already.
-    pub(crate) fn draws_drawn_again(&self, draws: u64, pushing_set_zero: u64, last_vertex: u64) {
-        self.draws_as_before.fetch_add(draws, Ordering::Relaxed);
-        self.commands_noted_as_before
-            .fetch_add(draws, Ordering::Relaxed);
-        if pushing_set_zero > 0 {
-            self.draws_pushing_set_zero
-                .fetch_add(pushing_set_zero, Ordering::Relaxed);
-        }
-        if last_vertex > 0 {
-            self.provoking_last_pipeline_draws
-                .fetch_add(last_vertex, Ordering::Relaxed);
-        }
+    /// A draw a render encoder recorded as its last draw again (`render/draw_again.rs`), whose
+    /// uses were noted already; `kept` says whether the draw it repeats pushed set 0 and ran a
+    /// `VkPipeline` of the last provoking vertex.
+    pub(crate) fn draw_drawn_again(&self, kept: (bool, bool)) {
+        let counts = self.draws.mine();
+        counts.draws_as_before.fetch_add(1, Ordering::Relaxed);
+        counts
+            .commands_noted_as_before
+            .fetch_add(1, Ordering::Relaxed);
+        Self::kept_draw(counts, kept);
     }
 
-    /// `draws` render draws rebound (`WorkCounts::draws_rebound`), whose stage tables `tables`
-    /// reads brought in part: counted at their encoder's next call or its end.
-    pub(crate) fn draws_rebound(&self, draws: u64, tables: u64) {
-        self.draws_rebound.fetch_add(draws, Ordering::Relaxed);
-        self.stage_tables_read.fetch_add(tables, Ordering::Relaxed);
-        self.stage_tables_read_in_part
+    /// A render draw rebound (`WorkCounts::draws_rebound`), whose bind brought in `tables` stage
+    /// tables in part; `kept` as `draw_drawn_again`'s.
+    pub(crate) fn draw_rebound(&self, tables: u64, kept: (bool, bool)) {
+        let counts = self.draws.mine();
+        counts.draws_rebound.fetch_add(1, Ordering::Relaxed);
+        counts
+            .stage_tables_read
             .fetch_add(tables, Ordering::Relaxed);
+        counts
+            .stage_tables_read_in_part
+            .fetch_add(tables, Ordering::Relaxed);
+        Self::kept_draw(counts, kept);
+    }
+
+    /// What a draw again or rebound counts as the draw it repeats did: a push of set 0 and a
+    /// `VkPipeline` of the last provoking vertex.
+    fn kept_draw(counts: &DrawCounters, (pushes_set_zero, last_vertex): (bool, bool)) {
+        if pushes_set_zero {
+            counts
+                .draws_pushing_set_zero
+                .fetch_add(1, Ordering::Relaxed);
+        }
+        if last_vertex {
+            (counts.provoking_last_pipeline_draws).fetch_add(1, Ordering::Relaxed);
+        }
     }
 
     /// An encoder's hold of a key its commands named first that looked the key up among the
@@ -2027,8 +2046,7 @@ impl Counters {
     /// Draws' pushes of their set 0 carried `count` writes (`render/bound.rs`).
     pub(crate) fn set_zero_writes_pushed(&self, count: u64) {
         if count > 0 {
-            self.set_zero_writes_pushed
-                .fetch_add(count, Ordering::Relaxed);
+            (self.draws.mine().set_zero_writes_pushed).fetch_add(count, Ordering::Relaxed);
         }
     }
 
@@ -4566,8 +4584,7 @@ pub struct WorkCounts {
     /// no notice the device announces at every occurrence (`render/draw_again.rs`). Each is
     /// counted in `commands_noted_as_before`, `draws_pushing_set_zero` and
     /// `provoking_last_pipeline_draws` as the draw it repeats was, and in no count of work it
-    /// does not take (`draw_shapes_reused`, `set_zero_sets_reused`, `draw_states_recorded`); all
-    /// are counted at the encoder's next call or its end.
+    /// does not take (`draw_shapes_reused`, `set_zero_sets_reused`, `draw_states_recorded`).
     pub draws_as_before: u64,
     /// Render encoders' direct draws recorded as their encoder's last draw again after calls
     /// that bound other buffers, offsets or bytes at buffer slots, or other textures or sampler
@@ -4579,9 +4596,7 @@ pub struct WorkCounts {
     /// changed stage tables in part (`stage_tables_read_in_part`), writes again only those slots'
     /// descriptors, dynamic offsets, push fields and vertex buffers, notes its uses as any draw
     /// does, and records the state commands that changed (`draw_states_recorded`) and its draw;
-    /// it takes nothing of the shape memo (`draw_shapes_reused`) and settles nothing. Its counts
-    /// of draws, tables read and states recorded are counted at the encoder's next call or its
-    /// end.
+    /// it takes nothing of the shape memo (`draw_shapes_reused`) and settles nothing.
     pub draws_rebound: u64,
     /// Keys an encoder's commands named first, while the device has a buffer over host pages
     /// (`new_buffer_with_bytes_no_copy`), that were looked up among those buffers under the lock
@@ -5384,6 +5399,7 @@ impl Device {
         let (render_create_nanos, compute_create_nanos) = self.shared().pipeline_create_nanos();
         let directory = self.shared().shader_cache.directory_time();
         let churn = counters.churn.snapshot();
+        let draws = |count: fn(&DrawCounters) -> &AtomicU64| counters.draws.sum(count);
         let group_end = |end: GroupEnd| counters.group_ends[end as usize].load(Ordering::Relaxed);
         let first_work_order = self.shared().textures.first_moves.submissions_waited();
         let held_for =
@@ -5823,15 +5839,13 @@ impl Device {
             heap_tables_worked_out: counters.heap_tables_worked_out.load(Ordering::Relaxed),
             argument_samplers_taken: counters.argument_samplers_taken.load(Ordering::Relaxed),
             bind_views_worked_out: counters.bind_views_worked_out.load(Ordering::Relaxed),
-            stage_tables_read: counters.stage_tables_read.load(Ordering::Relaxed),
-            stage_tables_read_in_part: counters.stage_tables_read_in_part.load(Ordering::Relaxed),
+            stage_tables_read: draws(|counts| &counts.stage_tables_read),
+            stage_tables_read_in_part: draws(|counts| &counts.stage_tables_read_in_part),
             no_copy_lies_read: counters.no_copy_lies_read.load(Ordering::Relaxed),
-            commands_noted_as_before: counters.commands_noted_as_before.load(Ordering::Relaxed),
+            commands_noted_as_before: draws(|counts| &counts.commands_noted_as_before),
             draws_settled: counters.draws_settled.load(Ordering::Relaxed),
             two_plane_draws: counters.two_plane_draws.load(Ordering::Relaxed),
-            provoking_last_pipeline_draws: counters
-                .provoking_last_pipeline_draws
-                .load(Ordering::Relaxed),
+            provoking_last_pipeline_draws: draws(|counts| &counts.provoking_last_pipeline_draws),
             provoking_listed_draws: counters.provoking_listed_draws.load(Ordering::Relaxed),
             device_wide_line_draws: counters.device_wide_line_draws.load(Ordering::Relaxed),
             line_band_draws: counters.line_band_draws.load(Ordering::Relaxed),
@@ -5852,9 +5866,9 @@ impl Device {
             color_group_passes: counters.color_group_passes.load(Ordering::Relaxed),
             color_group_twins: counters.color_group_twins.load(Ordering::Relaxed),
             color_group_draws_skipped: counters.color_group_draws_skipped.load(Ordering::Relaxed),
-            draw_states_recorded: counters.draw_states_recorded.load(Ordering::Relaxed),
-            draws_pushing_set_zero: counters.draws_pushing_set_zero.load(Ordering::Relaxed),
-            set_zero_writes_pushed: counters.set_zero_writes_pushed.load(Ordering::Relaxed),
+            draw_states_recorded: draws(|counts| &counts.draw_states_recorded),
+            draws_pushing_set_zero: draws(|counts| &counts.draws_pushing_set_zero),
+            set_zero_writes_pushed: draws(|counts| &counts.set_zero_writes_pushed),
             set_zero_equal_shape_switches: (counters.set_zero_equal_shape_switches)
                 .load(Ordering::Relaxed),
             set_zero_writes_on_equal_shape_switches: (counters
@@ -5868,8 +5882,8 @@ impl Device {
             set_zero_sets_found: counters.set_zero_sets_found.load(Ordering::Relaxed),
             draw_shapes_reused: counters.draw_shapes_reused.load(Ordering::Relaxed),
             draw_shapes_carried: counters.draw_shapes_carried.load(Ordering::Relaxed),
-            draws_as_before: counters.draws_as_before.load(Ordering::Relaxed),
-            draws_rebound: counters.draws_rebound.load(Ordering::Relaxed),
+            draws_as_before: draws(|counts| &counts.draws_as_before),
+            draws_rebound: draws(|counts| &counts.draws_rebound),
             host_holds_looked_up: counters.host_holds_looked_up.load(Ordering::Relaxed),
             dispatches_settled_as_before: (counters.dispatches_settled_as_before)
                 .load(Ordering::Relaxed),

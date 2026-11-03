@@ -541,6 +541,52 @@ fn offset_rectangles(
     }
 }
 
+/// Draws again and rebound draws count themselves as they are recorded: the device's counts, read
+/// before each draw but the first with no call of the encoder since the last draw but the binds
+/// a rebound draw takes, hold every draw again and every rebound draw before it, not only once
+/// another call or the encoder's end came.
+#[test]
+fn draws_again_and_rebound_count_as_they_record() {
+    let scratch = Scratch::new("draw-again-counted");
+    let heard = Heard::default();
+    let device = device(&scratch.0, &[], &heard);
+    let state = adding_state(&device);
+    let columns = rectangles_from_columns(&device);
+    let drawn = (&state, &columns);
+    warm(&device, |encoder| rectangles(encoder, &state, |_| {}));
+    warm(&device, |encoder| {
+        offset_rectangles(encoder, drawn, |_| 1.0 / 64.0, |_| {})
+    });
+    // The count `of` read before each draw but the first, over its count before the run.
+    let read_between =
+        |encode: &dyn Fn(&mut RenderCommandEncoder, &dyn Fn(&mut RenderCommandEncoder)),
+         of: fn(&WorkCounts) -> u64| {
+            let read = std::cell::RefCell::new(Vec::new());
+            let before = of(&device.work_counts());
+            run(&device, |encoder| {
+                encode(encoder, &|_| {
+                    read.borrow_mut().push(of(&device.work_counts()) - before)
+                });
+            });
+            read.into_inner()
+        };
+    // Before the `at`th draw: the draws again among the first `at` draws, the first beginning the
+    // instance and the second kept.
+    let expected: Vec<u64> = (1..DRAWS)
+        .map(|at| drawn_alone(at.saturating_sub(2)))
+        .collect();
+    let again = read_between(
+        &|encoder, between| rectangles(encoder, &state, between),
+        |counts| counts.draws_as_before,
+    );
+    assert_eq!(again, expected, "draws again, counted as they draw");
+    let rebound = read_between(
+        &|encoder, between| offset_rectangles(encoder, drawn, |_| 1.0 / 64.0, between),
+        |counts| counts.draws_rebound,
+    );
+    assert_eq!(rebound, expected, "rebound draws, counted as they draw");
+}
+
 /// Draws after calls that bound other offsets and bytes at buffer slots their functions read
 /// rebind those slots alone (`WorkCounts::draws_rebound`), with the same commands of every kind,
 /// state commands and noted uses, and the same pixels, as the same draws with a call between each

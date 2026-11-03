@@ -36,7 +36,7 @@
 //!   recording against what its command buffer holds (`render/bound.rs`); its tables' new objects
 //!   and its new samplers retained; and the rest as a draw again: kept for recording again (but
 //!   where it met a notice met at each occurrence, as its every step forgets it then), its
-//!   execution record, its counts until the encoder's next call or its end.
+//!   execution record, its counts into its thread's shard of the device's (`shards.rs`).
 //! - **Checked in builds with debug assertions.** As a draw again is: the first rebound draw of a
 //!   kept draw and every second after it work out the rebind, then take every step instead, which
 //!   must keep the draw, with the same commands, set-0 writes, dynamic offsets, push bytes, vertex
@@ -531,13 +531,9 @@ impl RenderLowering {
         if images {
             kept.reads_images = live.uses.iter().any(super::reads_image);
         }
-        let counted = &mut self.again.counted;
-        counted.draws += 1;
-        counted.rebound += 1;
-        counted.tables += read;
-        counted.recorded += recorded;
-        counted.pushing_set_zero += u64::from(kept.pushes_set_zero);
-        counted.last_vertex += u64::from(kept.last_vertex);
+        let counts = &self.core.device().shared().counts;
+        counts.draw_rebound(read, (kept.pushes_set_zero, kept.last_vertex));
+        recorded.count(counts);
         self.current.recorded = true;
         let again = kept.again;
         let (reads, rasterizes, depth_writes) = (kept.reads, kept.rasterizes, kept.depth_writes);

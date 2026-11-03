@@ -49,8 +49,8 @@
 //!   into the kept command buffer, keeps itself for recording again where its instance keeps draws
 //!   (`render/reroute.rs`), adds its execution record where the device keeps them, and counts
 //!   itself drawn. It takes no lock and changes no count other threads share: its counts, and
-//!   those the kept draw counted per draw, are the encoder's until its next call or its end
-//!   ([`Counted`]).
+//!   those the kept draw counted per draw, go into its thread's shard of the device's
+//!   (`shards.rs`).
 //! - **Checked in builds with debug assertions.** The first draw again of a kept draw, and every
 //!   second one after it, takes every step instead, and checks that it announced nothing, recorded
 //!   no state command, kept an equal draw, retained only its index buffer again, and left the
@@ -66,7 +66,6 @@ use std::time::Duration;
 pub(super) use rebound::KeptRecording;
 pub(crate) use rebound::KeptStorage;
 
-use super::bound::Recorded;
 use super::{Assembly, DrawBuffers, RenderLowering};
 use crate::argument_table::Stamp;
 use crate::degradation::EachWatch;
@@ -78,30 +77,14 @@ use crate::resource::ResourceKey;
 use crate::tracker::{Use, UseRange};
 use metal2vulkan::metal::RenderStages;
 
-/// The encoder's last direct draw, where it is kept, and the counts of its draws again (the
-/// module docs).
+/// The encoder's last direct draw, where it is kept (the module docs).
 #[derive(Default)]
 pub(super) struct DrawAgain {
     kept: Option<Kept>,
-    counted: Counted,
     /// Draws again since the draw was kept: in builds with debug assertions, the first and every
     /// second one after it take every step instead (the module docs).
     #[cfg(debug_assertions)]
     hits: u64,
-}
-
-/// The counts of an encoder's draws again not yet added to its device's
-/// (`WorkCounts::draws_as_before`, and what the kept draws counted per draw).
-#[derive(Default)]
-struct Counted {
-    draws: u64,
-    pushing_set_zero: u64,
-    last_vertex: u64,
-    /// Of `draws`, those rebound (`rebound.rs`), the stage tables they read in part, and the state
-    /// commands and pushed writes they recorded.
-    rebound: u64,
-    tables: u64,
-    recorded: Recorded,
 }
 
 /// What a kept draw was, what it read, and what a draw again repeats of it (the module docs).
@@ -237,27 +220,9 @@ impl RenderLowering {
         }
     }
 
-    /// Forget the kept draw (a call came, another draw, or the encoder's end), adding its draws
-    /// again's counts to the device's (the module docs).
+    /// Forget the kept draw (a call came, another draw, or the encoder's end).
     pub(super) fn forget_again(&mut self) {
         self.again.kept = None;
-        let Counted {
-            draws,
-            pushing_set_zero,
-            last_vertex,
-            rebound,
-            tables,
-            recorded,
-        } = self.again.counted;
-        if draws > 0 {
-            let counts = &self.core.device().shared().counts;
-            counts.draws_drawn_again(draws - rebound, pushing_set_zero, last_vertex);
-            if rebound > 0 {
-                counts.draws_rebound(rebound, tables);
-                recorded.count(counts);
-            }
-            self.again.counted = Counted::default();
-        }
     }
 
     /// The stamps of the encoder's vertex, fragment, object and mesh tables.
@@ -307,10 +272,8 @@ impl RenderLowering {
                 return Again::Check(Box::new(Checked::of(self, None)));
             }
         }
-        let counted = &mut self.again.counted;
-        counted.draws += 1;
-        counted.pushing_set_zero += u64::from(kept.pushes_set_zero);
-        counted.last_vertex += u64::from(kept.last_vertex);
+        let counts = &self.core.device().shared().counts;
+        counts.draw_drawn_again((kept.pushes_set_zero, kept.last_vertex));
         // Its noting: its reads of fresh textures, where any texture is fresh, and what the
         // encoder made resident since (nothing: no call came).
         match kept.reads_images && self.core.observes_fresh() {
