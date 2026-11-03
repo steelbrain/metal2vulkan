@@ -19,9 +19,10 @@
 //! completion over the same frames, and the presents missed (ticks that came while one was still
 //! out); and the device's counters over them.
 //!
-//! [`STATES_VAR`], [`OPS_VAR`] and [`DROP_VAR`] change the workload: more states, fragment
-//! functions that take the driver longer to compile, and the program's release of every state
-//! but the named ones a while into the first frame.
+//! [`STATES_VAR`], [`OPS_VAR`], [`VERTEX_OPS_VAR`] and [`DROP_VAR`] change the workload: more
+//! states, fragment functions that take the driver longer to compile, a vertex function of each
+//! state's own that does too (whose large-buffer form no other state's pipeline shares), and the
+//! program's release of every state but the named ones a while into the first frame.
 //!
 //! Ignored by default: a measurement, not a check. Run it by name with `--run-ignored all`, in a
 //! build with `--cfg m2v_system_alloc`.
@@ -52,6 +53,8 @@ const COMMANDS: u64 = 5000;
 const STATES_VAR: &str = "HOST_REPLAY_STATES";
 /// The variable that sets [`fragment_ops`].
 const OPS_VAR: &str = "HOST_REPLAY_OPS";
+/// The variable that sets [`vertex_ops`].
+const VERTEX_OPS_VAR: &str = "HOST_REPLAY_VERTEX_OPS";
 /// The variable that sets [`drop_after`].
 const DROP_VAR: &str = "HOST_REPLAY_DROP_MS";
 
@@ -69,6 +72,59 @@ fn live_states() -> usize {
 /// [`OPS_VAR`] says.
 fn fragment_ops() -> usize {
     knob(OPS_VAR, 0) as usize
+}
+
+/// The dependent operations of each state's own vertex function: none (every state draws
+/// `rt6_resolve_half`) unless [`VERTEX_OPS_VAR`] says.
+fn vertex_ops() -> usize {
+    knob(VERTEX_OPS_VAR, 0) as usize
+}
+
+/// State `k`'s own vertex function's text: `rt6_resolve_half`'s triangle, its depth a chain of `ops`
+/// dependent multiplies and adds on the vertex's index times zero, plus a half.
+fn vertex_text(k: usize, ops: usize) -> String {
+    let start = (k as f64 / 1024.0).to_bits();
+    let mut body = String::new();
+    for i in 1..=ops {
+        let step = ((i as f64) / 4096.0 + 1.0).to_bits();
+        let (op, with) = match i % 2 {
+            0 => ("fmul", "0x3FEFFFFFE0000000".to_string()),
+            _ => ("fadd", format!("0x{step:016X}")),
+        };
+        body.push_str(&format!("  %a{i} = {op} float %a{}, {with}\n", i - 1));
+    }
+    format!(
+        "source_filename = \"host_replay_frames\"\n\
+         declare float @air.convert.f.f32.u.i32(i32)\n\
+         define <{{ <4 x float> }}> @host_replay_vertex(i32 %vid) {{\n  \
+         %b = and i32 %vid, 1\n  \
+         %bx = call float @air.convert.f.f32.u.i32(i32 %b)\n  \
+         %h = lshr i32 %vid, 1\n  \
+         %hy = call float @air.convert.f.f32.u.i32(i32 %h)\n  \
+         %x2 = fmul float %bx, 2.000000e+00\n  \
+         %x = fadd float %x2, -1.000000e+00\n  \
+         %y2 = fmul float %hy, 2.000000e+00\n  \
+         %y = fadd float %y2, -1.000000e+00\n  \
+         %v = call float @air.convert.f.f32.u.i32(i32 %vid)\n  \
+         %a0 = fadd float %v, 0x{start:016X}\n{body}  \
+         %z0 = fmul float %a{ops}, 0.000000e+00\n  \
+         %z = fadd float %z0, 5.000000e-01\n  \
+         %p0 = insertelement <4 x float> <float 0.0, float 0.0, float 0.0, float 1.000000e+00>, \
+         float %x, i64 0\n  \
+         %p1 = insertelement <4 x float> %p0, float %y, i64 1\n  \
+         %p = insertelement <4 x float> %p1, float %z, i64 2\n  \
+         %r = insertvalue <{{ <4 x float> }}> undef, <4 x float> %p, 0\n  \
+         ret <{{ <4 x float> }}> %r\n\
+         }}\n\
+         !air.vertex = !{{!0}}\n\
+         !0 = !{{ptr @host_replay_vertex, !1, !3}}\n\
+         !1 = !{{!2}}\n\
+         !2 = !{{!\"air.position\", !\"air.arg_type_name\", !\"float4\", !\"air.arg_name\", \
+         !\"position\"}}\n\
+         !3 = !{{!4}}\n\
+         !4 = !{{i32 0, !\"air.vertex_id\", !\"air.arg_type_name\", !\"uint\", !\"air.arg_name\", \
+         !\"vid\"}}\n"
+    )
 }
 
 /// How long after the first frame begins the program releases every state but the named ones,
@@ -182,7 +238,7 @@ impl Workload {
             .unwrap();
         let vertex = resolves.new_function_with_name("rt6_resolve_half").unwrap();
         let made = Instant::now();
-        let (count, ops) = (live_states(), fragment_ops());
+        let (count, ops, vertex_ops) = (live_states(), fragment_ops(), vertex_ops());
         let states: Vec<RenderPipelineState> = (0..count)
             .map(|k| {
                 let library = device
@@ -191,8 +247,17 @@ impl Workload {
                 let function = library
                     .new_function_with_name("host_replay_fragment")
                     .unwrap();
+                let own = (vertex_ops > 0).then(|| {
+                    device
+                        .new_library_with_air(
+                            &llvm_assemble_text(&vertex_text(k, vertex_ops)).unwrap(),
+                        )
+                        .unwrap()
+                        .new_function_with_name("host_replay_vertex")
+                        .unwrap()
+                });
                 let mut descriptor = RenderPipelineDescriptor::new(StageSource::Function(
-                    vertex.function_descriptor(),
+                    own.as_ref().unwrap_or(&vertex).function_descriptor(),
                 ));
                 descriptor.fragment = Some(StageSource::Function(function.function_descriptor()));
                 descriptor.color_attachments[0] =
@@ -204,7 +269,8 @@ impl Workload {
             })
             .collect();
         eprintln!(
-            "HOST-REPLAY {}: {count} states of {ops} fragment operations made in {:.1} ms",
+            "HOST-REPLAY {}: {count} states of {ops} fragment and {vertex_ops} vertex operations \
+             made in {:.1} ms",
             device.name(),
             made.elapsed().as_secs_f64() * 1e3
         );
