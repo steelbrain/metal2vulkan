@@ -2,7 +2,7 @@
 //! shape of a consumer that records a command buffer, adds handlers, commits and never waits.
 //!
 //! ```sh
-//! cargo run --release -p metal2vulkan-runtime --example submit_path [-- latency|cpu|empty|idle|all [--seen] [--bare]]
+//! cargo run --release -p metal2vulkan-runtime --example submit_path [-- latency|cpu|threads|empty|idle|all [--seen] [--bare] [--at-commit]]
 //! ```
 //!
 //! - **latency**: one thread commits a tiny blit command buffer (a fill of 16 bytes) with a
@@ -16,6 +16,8 @@
 //!   for: command buffers a second, and the CPU per command buffer of the runtime's threads (by
 //!   thread on Linux, from `/proc/self/task/*/schedstat`; elsewhere the process's CPU less the
 //!   committing thread's).
+//! - **threads**: the cpu shape on 1 and on 8 threads at once, each with a queue of its own:
+//!   command buffers a second in all, and the CPU per command buffer.
 //! - **empty**: a command buffer with nothing encoded, committed and waited for, back to back and
 //!   at a 300 us gap; and committed as fast as the slots allow, never waited for.
 //! - **idle**: after one fill committed and waited for, wakes a second over [`IDLE_SECONDS`] with
@@ -23,12 +25,28 @@
 //!   `/proc/self/task/*/status`; everywhere the scheduler's sleeps and the sleeps that ended at
 //!   its slice, from the device's work counts (macOS's per-process switch counts read back
 //!   inconsistently, so none is printed there).
+//!
+//! With `--at-commit`, latency, cpu and threads commit with `CommandBuffer::commit_and_submit`
+//! (a runtime extension: the committing thread submits where no pass is under way) instead of
+//! `commit`.
 
 use metal2vulkan_runtime::{
     host_time, Buffer, CommandBuffer, CommandQueue, Device, ResourceOptions,
 };
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
+
+/// Whether command buffers are committed with `commit_and_submit` (`--at-commit`).
+static AT_COMMIT: AtomicBool = AtomicBool::new(false);
+
+/// Commit `command_buffer` as `--at-commit` says.
+fn commit(command_buffer: &CommandBuffer) {
+    match AT_COMMIT.load(Ordering::Relaxed) {
+        true => command_buffer.commit_and_submit().unwrap(),
+        false => command_buffer.commit().unwrap(),
+    }
+}
 
 /// Command buffers per measured row.
 const ROUNDS: usize = 2000;
@@ -146,7 +164,7 @@ fn latency(device: &Device, callback: Callback, scheduled: bool) {
                 signalled.set(after)
             });
             let committed = Instant::now();
-            command_buffer.commit().unwrap();
+            commit(&command_buffer);
             drop(command_buffer);
             let (started, after) = signal.take();
             if round >= 50 {
@@ -296,18 +314,14 @@ fn cpu(device: &Device, callback: Callback) {
     let target = device.new_buffer(16, ResourceOptions::shared()).unwrap();
     // Warm.
     for _ in 0..200 {
-        tiny(&queue, &target, (callback, true), |_| {})
-            .commit()
-            .unwrap();
+        commit(&tiny(&queue, &target, (callback, true), |_| {}));
     }
     std::thread::sleep(Duration::from_millis(200));
     let before = cpu_by_group();
     let start = Instant::now();
     let mut count = 0;
     while start.elapsed().as_secs_f64() < RATE_SECONDS {
-        tiny(&queue, &target, (callback, true), |_| {})
-            .commit()
-            .unwrap();
+        commit(&tiny(&queue, &target, (callback, true), |_| {}));
         count += 1;
     }
     let elapsed = start.elapsed().as_secs_f64();
@@ -369,12 +383,71 @@ fn empty(device: &Device) {
     print_cpu("empty never waited", &before, &after, count);
 }
 
+/// The cpu shape on `threads` threads at once, each with a queue of its own.
+fn threads(device: &Device, threads: usize) {
+    let queues: Vec<(CommandQueue, Buffer)> = (0..threads)
+        .map(|_| {
+            let queue = device.new_command_queue().unwrap();
+            let target = device.new_buffer(16, ResourceOptions::shared()).unwrap();
+            (queue, target)
+        })
+        .collect();
+    for (queue, target) in &queues {
+        for _ in 0..200 {
+            commit(&tiny(queue, target, (Callback::Completed, true), |_| {}));
+        }
+    }
+    std::thread::sleep(Duration::from_millis(200));
+    let before = cpu_by_group();
+    let start = Instant::now();
+    let count: usize = std::thread::scope(|scope| {
+        let running: Vec<_> = (queues.iter())
+            .map(|(queue, target)| {
+                scope.spawn(move || {
+                    let mut count = 0;
+                    while start.elapsed().as_secs_f64() < RATE_SECONDS {
+                        commit(&tiny(queue, target, (Callback::Completed, true), |_| {}));
+                        count += 1;
+                    }
+                    count
+                })
+            })
+            .collect();
+        running
+            .into_iter()
+            .map(|thread| thread.join().unwrap())
+            .sum()
+    });
+    let elapsed = start.elapsed().as_secs_f64();
+    let after = cpu_by_group();
+    println!(
+        "threads {threads}: {:.0} command buffers a second ({count} in {elapsed:.2} s)",
+        count as f64 / elapsed
+    );
+    print_cpu(&format!("threads {threads}"), &before, &after, count);
+    for (queue, _) in &queues {
+        let last = queue.command_buffer().unwrap();
+        last.commit().unwrap();
+        last.wait_until_completed().unwrap();
+    }
+}
+
 fn main() {
     let device = Device::system_default().unwrap();
     println!("device: {}", device.name());
     let what = std::env::args().nth(1).unwrap_or_else(|| "all".to_owned());
     let seen = std::env::args().any(|arg| arg == "--seen");
     let bare = std::env::args().any(|arg| arg == "--bare");
+    let at_commit = std::env::args().any(|arg| arg == "--at-commit");
+    AT_COMMIT.store(at_commit, Ordering::Relaxed);
+    println!(
+        "committed with {}",
+        if at_commit {
+            "commit_and_submit"
+        } else {
+            "commit"
+        }
+    );
     let callbacks: &[Callback] = match seen {
         true => &[Callback::Completed, Callback::Seen],
         false => &[Callback::Completed],
@@ -392,6 +465,11 @@ fn main() {
     if what == "cpu" || what == "all" {
         for &callback in callbacks {
             cpu(&device, callback);
+        }
+    }
+    if what == "threads" || what == "all" {
+        for count in [1, 8] {
+            threads(&device, count);
         }
     }
     if what == "empty" || what == "all" {
