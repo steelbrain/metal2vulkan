@@ -526,7 +526,7 @@ fn a_target_fetched_beside_an_encoding_command_buffer_keeps_its_answers() {
     let parallel = beside(true);
     let device = &serial.device;
     println!(
-        "PARALLEL-STORAGE-FORM on {device}: through a scratch {}, forms taken after each frame          and the lone pass serially {:?}, on two threads {:?}",
+        "PARALLEL-STORAGE-FORM on {device}: through a scratch {}, forms taken after each frame and the lone pass serially {:?}, on two threads {:?}",
         serial.through_scratch, serial.taken, parallel.taken
     );
     assert_eq!(
