@@ -286,7 +286,15 @@ enum Churn {
     /// one): a window server's frame of a few hundred draws a pass, each binding its own buffer
     /// and texture, its few pipeline states the same every frame.
     Compositor,
+    /// Each draw's own rectangle, at the next [`RECT_STRIDE`] bytes of no-copy buffers over host
+    /// pages of [`HOST_CHUNK`] bytes each (`setVertexBuffer:offset:atIndex:` of the chunk at the
+    /// offset): a guest's `setVertexBytes:` as its upload chunks hand it on.
+    Host,
 }
+
+/// The bytes of each no-copy buffer [`Churn::Host`] draws from, a guest's upload chunk: 256
+/// draws' rectangles.
+const HOST_CHUNK: usize = 64 * 1024;
 
 /// The draws of each pass of [`Churn::Passes`].
 const PASS_DRAWS: usize = 3;
@@ -304,6 +312,7 @@ impl Churn {
             Churn::Pipeline => "pipeline",
             Churn::Passes => "passes",
             Churn::Compositor => "compositor",
+            Churn::Host => "host",
         }
     }
 
@@ -317,13 +326,14 @@ impl Churn {
     }
 }
 
-/// Encode one render pass of `draws` small draws with `churn` (module docs of `main.rs`).
+/// Encode one render pass of `draws` small draws with `churn` (module docs of `main.rs`), the
+/// host churn's from `chunks` ([`host_chunks`]).
 fn encode_draws<G: Gpu>(
     g: &G,
     s: &Scene<G>,
     command_buffer: &G::CommandBuffer,
-    draws: usize,
-    churn: Churn,
+    (draws, churn): (usize, Churn),
+    chunks: &[G::Buffer],
 ) {
     let mut encoder = g.render_encoder(command_buffer, &s.target, true);
     g.set_render_pipeline(&mut encoder, &s.textured[0]);
@@ -346,7 +356,14 @@ fn encode_draws<G: Gpu>(
         if matches!(churn, Churn::Offset) {
             g.set_vertex_buffer_offset(&mut encoder, (draw % RECTS) * RECT_STRIDE, 0);
         }
-        if !matches!(churn, Churn::Static | Churn::Offset) {
+        if matches!(churn, Churn::Host) {
+            let at = draw * RECT_STRIDE;
+            g.set_vertex_buffer(&mut encoder, &chunks[at / HOST_CHUNK], at % HOST_CHUNK, 0);
+        }
+        if matches!(
+            churn,
+            Churn::Bind | Churn::Pipeline | Churn::Passes | Churn::Compositor
+        ) {
             let buffer = &s.rects[(draw / 7) % RECT_BUFFERS];
             g.set_vertex_buffer(&mut encoder, buffer, (draw % RECTS) * RECT_STRIDE, 0);
             g.set_fragment_texture(&mut encoder, &s.textures[draw % TEXTURES], 0);
@@ -357,6 +374,32 @@ fn encode_draws<G: Gpu>(
         g.draw_strip(&mut encoder, 4);
     }
     g.end_render(encoder);
+}
+
+/// [`Churn::Host`]'s chunks for `draws` draws: no-copy buffers of [`HOST_CHUNK`] bytes each over
+/// one mapping of host pages, draw `d`'s rectangle at `d * RECT_STRIDE` bytes of them end to end.
+fn host_chunks<G: Gpu>(g: &G, draws: usize) -> Vec<G::Buffer> {
+    let chunks = (draws * RECT_STRIDE).div_ceil(HOST_CHUNK).max(1);
+    let rects = rect_bytes(0);
+    // SAFETY: kept for the process's life, past every buffer over it.
+    let pages = unsafe { host_pages(chunks * HOST_CHUNK) };
+    // SAFETY: the mapping's bytes, read-write, which nothing else holds yet.
+    let bytes = unsafe { std::slice::from_raw_parts_mut(pages, chunks * HOST_CHUNK) };
+    for (at, rect) in bytes
+        .as_chunks_mut::<RECT_STRIDE>()
+        .0
+        .iter_mut()
+        .enumerate()
+    {
+        let r = at % RECTS;
+        rect.copy_from_slice(&rects[r * RECT_STRIDE..][..RECT_STRIDE]);
+    }
+    (0..chunks)
+        .map(|chunk| {
+            // SAFETY: page-aligned read-write bytes of the mapping, which outlives the buffer.
+            unsafe { g.buffer_no_copy(pages.add(chunk * HOST_CHUNK), HOST_CHUNK) }
+        })
+        .collect()
 }
 
 /// Encode one compute encoder of `dispatches` small dispatches, changing the buffers' offsets and
@@ -555,17 +598,22 @@ pub fn encode<G: Gpu>(
         Churn::Pipeline,
         Churn::Passes,
         Churn::Compositor,
+        Churn::Host,
     ] {
         if !runs(format!("draw_{}", churn.name())) {
             continue;
         }
+        let chunks = match churn {
+            Churn::Host => host_chunks(g, n),
+            _ => vec![],
+        };
         let (mut wall, mut cpu, mut commit, mut total) = (vec![], vec![], vec![], vec![]);
         for run in 0..sizes.timed + 3 {
             g.pool(|| {
                 let cpu0 = process_cpu();
                 let t0 = Instant::now();
                 let command_buffer = g.command_buffer();
-                encode_draws(g, s, &command_buffer, n, churn);
+                encode_draws(g, s, &command_buffer, (n, churn), &chunks);
                 let t1 = Instant::now();
                 g.commit(&command_buffer);
                 let t2 = Instant::now();
@@ -925,7 +973,7 @@ fn encode_tiny<G: Gpu>(g: &G, s: &Scene<G>, command_buffer: &G::CommandBuffer, t
         Tiny::Empty => {}
         Tiny::Fill => g.fill(command_buffer, &s.fill, 256),
         Tiny::Dispatch => encode_dispatches(g, s, command_buffer, 1, DispatchChurn::Static),
-        Tiny::Draw => encode_draws(g, s, command_buffer, 1, Churn::Static),
+        Tiny::Draw => encode_draws(g, s, command_buffer, (1, Churn::Static), &[]),
     }
 }
 
