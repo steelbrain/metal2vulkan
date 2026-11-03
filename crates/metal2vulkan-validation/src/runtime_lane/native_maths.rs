@@ -336,10 +336,13 @@ fn to_half(x: f64) -> f64 {
 /// `NativeTranscendentals` (`fast::sqrt`), and `NativeMinMax` where the device is not measured to
 /// answer Metal's operand; and `NativeNanEncoding` wherever the device is not measured to answer
 /// Metal's canonical NaN (on one measured to, it records the note where the kernel computes another
-/// of Metal's NaNs). The pipeline state announces each native kind of its stage once, and every
-/// thread's answers are within the bounds their kinds record. On MoltenVK, whose functions and
-/// minimum and maximum are Metal's own, the stage records none of their kinds and announces none.
-/// The device announces `float-tininess-after-rounding` as it is made, exactly off MoltenVK.
+/// of Metal's NaNs). The kernel's `a / b`, an `fdiv` without `arcp`, is Metal's precise division,
+/// which is the device's `OpFDiv` on every device (`lower::arith::float_binop_notes`): its
+/// `NativeDivision` is recorded on every device. The pipeline state announces each native kind of
+/// its stage once, and every thread's answers are within the bounds their kinds record. On
+/// MoltenVK, whose functions and minimum and maximum are Metal's own, the stage records none of
+/// their kinds but the precise division's and announces that one alone. The device announces
+/// `float-tininess-after-rounding` as it is made, exactly off MoltenVK.
 #[test]
 fn native_maths_answers_within_its_recorded_bounds() {
     let bitcode = llvm_assemble_text(&kernel()).unwrap();
@@ -374,7 +377,8 @@ fn answers_under(device: &Device, messages: &Messages, bitcode: &[u8]) {
     );
     for (note, native) in [
         (PrecisionNote::NativeTranscendentals, !metals),
-        (PrecisionNote::NativeDivision, !metals),
+        // The precise division (`a / b` without `arcp`) on every device.
+        (PrecisionNote::NativeDivision, true),
         (PrecisionNote::NativeDot, !metals),
         (PrecisionNote::NativeMix, !metals),
         (
