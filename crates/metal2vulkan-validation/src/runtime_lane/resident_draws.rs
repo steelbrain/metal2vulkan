@@ -22,7 +22,8 @@
 //! and binding of a shape draws the same pixels. [`resident_draws`] measures, without the layer:
 //! printed as `RESIDENT-DRAWS` lines, for each shape, binding, draw count and path, the frame's
 //! time (encoding to completion) over [`frames`] frames after one to warm, median and largest,
-//! per draw, and the device's counters over those frames. [`COUNTS_VAR`] lists the draw counts
+//! per draw, and the device's counters over those frames, each case's held to what its resident
+//! resources' count does not set (`assert_bounded`). [`COUNTS_VAR`] lists the draw counts
 //! (500, 1000, 2000 and 5000 by default), [`FRAMES_VAR`] the frames timed, [`ONLY_VAR`] keeps the
 //! cases whose name (`shape binding path`, such as `slot own write`) contains it, and
 //! [`DUMP_VAR`] prints every counter a case's frames moved, and a hash of what its last frame
@@ -369,6 +370,43 @@ fn moved(before: &WorkCounts, after: &WorkCounts) -> Vec<(String, i128)> {
         .collect()
 }
 
+/// What a frame of `n` draws of `shape` on `path` may cost of the resources made resident, at
+/// most, whatever their count: the ranges its root tables note of their own resident sets, the
+/// draw's own binding in each of the two stages that read through it (the entry shape's; the
+/// slot shape's functions read no pointer, so their draws upload no root table), and one index
+/// of the resident buffers by address for the execution's commands to resolve in (none for the
+/// encoder's draws, which resolve nothing). Each frame's `moved` counters, of `frames` frames.
+fn assert_bounded(
+    case: &str,
+    (shape, path, n): (Shape, Path, u64),
+    moved: &[(String, i128)],
+    frames: usize,
+) {
+    let count = |name: &str| {
+        let found = moved.iter().find(|(field, _)| field == name);
+        found.map_or(0, |&(_, count)| count)
+    };
+    let frames = frames as i128;
+    let ranges = match shape {
+        Shape::Slot => 0,
+        Shape::Entry => 2 * i128::from(n),
+    };
+    let noted = count("root_table_ranges_noted");
+    assert!(
+        noted <= ranges * frames,
+        "{case} N {n}: {noted} root-table ranges noted"
+    );
+    let indexes = match path {
+        Path::Encoder => 0,
+        Path::Read | Path::Write => 1,
+    };
+    let made = count("resident_address_indexes_made");
+    assert!(
+        made <= indexes * frames,
+        "{case} N {n}: {made} address indexes made"
+    );
+}
+
 /// FNV-1a of `bytes`.
 fn hashed(bytes: &[u8]) -> u64 {
     bytes.iter().fold(0xcbf2_9ce4_8422_2325, |hash, &byte| {
@@ -379,7 +417,8 @@ fn hashed(bytes: &[u8]) -> u64 {
 /// Every path of each shape, with a position buffer a draw and with one buffer at offsets, draws
 /// what the encoder's own draws of positions in one buffer draw: 300 draws, past a chunk of an
 /// indirect command buffer's records, each resolving its own buffer's address among the many made
-/// resident (the `write` path's host step resolves each record's binding there).
+/// resident (the `write` path's host step resolves each record's binding there), at a cost of
+/// the resources made resident that their count does not set (`assert_bounded`).
 #[test]
 fn each_path_draws_what_the_encoder_draws() {
     on_device(|device, _| {
@@ -393,9 +432,12 @@ fn each_path_draws_what_the_encoder_draws() {
             for own in [true, false] {
                 let draws = Draws::new(&scene, shape, own, 300);
                 for path in PATHS {
+                    let before = device.work_counts();
                     draws.frame(path);
-                    let pixels = scene.pixels();
-                    assert!(pixels == expected, "{shape:?} own {own} {path:?}");
+                    let moved = moved(&before, &device.work_counts());
+                    let case = format!("{shape:?} own {own} {path:?}");
+                    assert_bounded(&case, (shape, path, 300), &moved, 1);
+                    assert!(scene.pixels() == expected, "{case}");
                 }
             }
         }
@@ -432,6 +474,7 @@ fn resident_draws() {
                     let before = device.work_counts();
                     let mut times: Vec<f64> = (0..frames).map(|_| draws.frame(path)).collect();
                     let after = device.work_counts();
+                    assert_bounded(&case, (shape, path, n), &moved(&before, &after), frames);
                     times.sort_by(f64::total_cmp);
                     let median = times[times.len() / 2];
                     let per = |name: &str| {
@@ -443,7 +486,8 @@ fn resident_draws() {
                         "RESIDENT-DRAWS {name}: {case} N {n}: frame {median:.2} ms median, \
                          {:.2} largest, {:.2} us a draw; a frame's host steps {:.0} taking \
                          {:.2} ms, records read {:.0}, chunks kept {:.0}, heap tables worked out \
-                         {:.0}, resident resources joined {:.0}",
+                         {:.0}, resident resources joined {:.0}, root-table ranges noted {:.0}, \
+                         address indexes made {:.0}",
                         times[times.len() - 1],
                         median * 1e3 / n as f64,
                         per("host_steps_recorded"),
@@ -452,6 +496,8 @@ fn resident_draws() {
                         per("indirect_chunks_kept"),
                         per("heap_tables_worked_out"),
                         per("resident_resources_joined"),
+                        per("root_table_ranges_noted"),
+                        per("resident_address_indexes_made"),
                     );
                     if dump {
                         let moved = moved(&before, &after);
