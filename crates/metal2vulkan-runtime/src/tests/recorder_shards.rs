@@ -2,10 +2,30 @@
 //! threads past the shards into one they share, so threads that count at once write apart; a
 //! shard given back keeps its counts for its next owner to add on top of.
 
-use crate::shards::{shard, Sharded, SHARDED_THREADS, SHARDS, SHARED};
+use crate::shards::{held, shard, Sharded, SHARDED_THREADS, SHARDS, SHARED};
 use std::collections::BTreeSet;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Barrier;
+
+/// A recorder's thunk counts into the shard its thread holds, taking none (`shards::held`): a
+/// thread that took none holds the shared one, and holding takes none; a thread that took its own
+/// holds that.
+#[test]
+fn a_thread_holds_the_shared_shard_until_it_takes_its_own() {
+    std::thread::spawn(|| {
+        assert_eq!(
+            held(),
+            SHARED,
+            "a thread that took none holds the shared shard"
+        );
+        assert_eq!(held(), SHARED, "holding takes none");
+        let at = shard();
+        assert!(at < SHARDS, "the thread takes one of its own");
+        assert_eq!(held(), at, "a thread that took its own holds it");
+    })
+    .join()
+    .unwrap();
+}
 
 /// Threads alive at once own shards apart, a thread keeping its own; the thread past them shares
 /// the one no thread owns; and a thread that starts once they ended owns a shard again.

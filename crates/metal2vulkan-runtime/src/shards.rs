@@ -12,6 +12,10 @@
 //! - **Shared past them.** A thread that finds every shard owned, or counts after its
 //!   thread-locals ended (its last destructors'), adds into the one shard no thread owns, by an
 //!   atomic add.
+//! - **Held without a call where a call costs.** A recorder's command thunk counts into the shard
+//!   its thread holds ([`held`]) and takes none: it makes no call, so it keeps the command's
+//!   arguments in their registers to hand on. A thread takes its shard at its first other count
+//!   (a draw's, [`shard`]); its commands before then count into the shared one.
 //! - **Handed over in order.** The shard's bit is given back with release ordering after its
 //!   owner's last store and taken with acquire ordering, so the next owner loads what the last one
 //!   stored. A reader sums each shard's count as stored: an addition is in the sum once its store
@@ -33,22 +37,32 @@ pub(crate) const SHARDED_THREADS: usize = SHARDS + 3;
 /// The owned shards in use: bit `i` while a live thread owns shard `i`.
 static OWNED: AtomicU32 = AtomicU32::new(0);
 
-/// A thread's shard: its index once taken, `usize::MAX` before; given back as the thread ends.
-struct Taken(Cell<usize>);
+thread_local! {
+    /// The shard this thread counts into: `usize::MAX` before its first count, [`SHARED`] once
+    /// it gave its own back. No destructor of its own, so reading it checks no state: what
+    /// [`shard`] reads at each count.
+    static SHARD: Cell<usize> = const { Cell::new(usize::MAX) };
+    /// What gives the thread's shard back as it ends, touched once, as it takes one.
+    static OWNER: Owner = const { Owner };
+}
 
-impl Drop for Taken {
+/// The thread's hold on the shard [`SHARD`] names (the module docs).
+struct Owner;
+
+impl Drop for Owner {
     fn drop(&mut self) {
-        let at = self.0.get();
-        if at < SHARDS {
-            // After the thread's last store into it: the next owner's take acquires them.
-            OWNED.fetch_and(!(1 << at), Ordering::Release);
-        }
+        // After the thread's last store into it: its later counts (its last destructors') go to
+        // the shared shard, and the next owner's take acquires its stores.
+        let at = SHARD.with(|shard| shard.replace(SHARED));
+        give_back(at);
     }
 }
 
-thread_local! {
-    /// The shard this thread counts into, taken at its first count.
-    static SHARD: Taken = const { Taken(Cell::new(usize::MAX)) };
+/// Give back shard `at`, where it is an owned one.
+fn give_back(at: usize) {
+    if at < SHARDS {
+        OWNED.fetch_and(!(1 << at), Ordering::Release);
+    }
 }
 
 /// The lowest free owned shard, taken; [`SHARED`] where every one is owned.
@@ -72,16 +86,38 @@ fn take() -> usize {
     }
 }
 
-/// The shard the calling thread counts into: the one it owns, taken at its first count, else
-/// [`SHARED`].
+/// The shard the calling thread counts into: the one it owns, taken at its first count
+/// ([`first_shard`]), else [`SHARED`].
+#[inline]
 pub(crate) fn shard() -> usize {
-    let taken = SHARD.try_with(|shard| {
-        if shard.0.get() == usize::MAX {
-            shard.0.set(take());
-        }
-        shard.0.get()
-    });
-    taken.unwrap_or(SHARED)
+    match SHARD.with(Cell::get) {
+        usize::MAX => first_shard(),
+        at => at,
+    }
+}
+
+/// The shard the calling thread holds, taking none: [`SHARED`] before it takes one through
+/// [`shard`].
+#[inline]
+pub(crate) fn held() -> usize {
+    match SHARD.with(Cell::get) {
+        usize::MAX => SHARED,
+        at => at,
+    }
+}
+
+/// A thread's first count: a shard taken, held by its [`OWNER`]; the shared one where none is
+/// free, or the thread is past its thread-locals' end (its owner could give none back).
+#[cold]
+#[inline(never)]
+fn first_shard() -> usize {
+    let mut at = take();
+    if OWNER.try_with(|_| ()).is_err() {
+        give_back(at);
+        at = SHARED;
+    }
+    SHARD.with(|shard| shard.set(at));
+    at
 }
 
 /// Add `by` to `count`, a count of shard `at`, which the calling thread counts into

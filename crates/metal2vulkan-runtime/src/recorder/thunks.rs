@@ -4,15 +4,15 @@
 
 use super::SLOTS;
 use crate::generated_commands::GeneratedCommandsInfo;
-use crate::shards::{shard, SHARDS};
+use crate::shards::{held, SHARDS};
 use ash::vk;
 use std::ffi::{c_void, CStr};
 use std::sync::atomic::{AtomicPtr, AtomicU64, Ordering};
 
 /// One shard of a slot's counts, one per command at its index, on cache lines of its own (128
 /// bytes, the line of Apple's and the pair of lines x86's prefetchers fetch together): a thread
-/// counts into the one it owns, or the shared one past them (`shards.rs`), and a slot's count of a
-/// command is the sum of its shards'.
+/// counts into the one it holds, else the one threads share (`shards::held`), and a slot's count
+/// of a command is the sum of its shards'.
 #[repr(align(128))]
 struct Shard([AtomicU64; Command::COUNT]);
 
@@ -181,7 +181,7 @@ macro_rules! commands {
                 command_buffer: vk::CommandBuffer,
                 $($a: $t,)*
             ) $(-> $r)? {
-                let at = shard();
+                let at = held();
                 crate::shards::add(at, &COUNTS[S][at].0[Command::$v as usize], 1);
                 let real = REAL.$f[S].load(Ordering::Acquire);
                 if real.is_null() {

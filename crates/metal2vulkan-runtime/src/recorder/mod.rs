@@ -13,9 +13,9 @@
 //! - **Counted by kind.** Each command recorded through a slot counts once for its kind, one
 //!   relaxed increment into a fixed array of the slot's indexed by the command, whatever the
 //!   command buffer (`WorkCounts::commands_recorded`). Each slot keeps its counts in shards, one a
-//!   thread it owns (`shards.rs`, the threads past them sharing one more), each on cache lines of
-//!   its own, and reads their sums: threads that record at once write apart, where one array would
-//!   take each of their commands' counts in turn. A device past the slots records with its
+//!   thread holds (`shards.rs`, the threads that hold none sharing one more), each on cache lines
+//!   of its own, and reads their sums: threads that record at once write apart, where one array
+//!   would take each of their commands' counts in turn. A device past the slots records with its
 //!   driver's commands, uncounted.
 
 mod thunks;
