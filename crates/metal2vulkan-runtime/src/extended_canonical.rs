@@ -28,7 +28,7 @@ use super::error::{internal, Error};
 use super::owned_kernel::{OwnedBinds, OwnedModule, OwnedSet};
 use super::texture::{buffer_image_copy, Texture};
 use super::tracker::Access;
-use super::values::ResourceOptions;
+use super::values::HazardTrackingMode;
 use super::Buffer;
 use ash::vk;
 use metal2vulkan::bind::ExtendedCanonicalModule;
@@ -109,7 +109,10 @@ impl BlitCommandEncoder {
         let levels = span(|r| (r.level, r.level + 1));
         let layers = span(|r| (r.layer, r.layer + r.layers));
         let device = self.core().device().clone();
-        let scratch = device.own_buffer(length, ResourceOptions::private())?;
+        // The copy out writes every byte the dispatches and the copy back read (the regions,
+        // tightly packed), and nothing reads the alignment gaps between them, so the scratch is
+        // made without zeros, which would take a copy or a fill in a submission's first work.
+        let scratch = device.unzeroed_buffer(length, HazardTrackingMode::Default)?;
         let (through, base) = scratch.at(0);
         let copies: Vec<vk::BufferImageCopy> = placed
             .iter()

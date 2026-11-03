@@ -415,6 +415,14 @@ fn blits_through_a_compressed_texture_keep_their_bytes_and_announce_it() {
     layer_reported_nothing_at_all(&messages);
 }
 
+/// The buffer-to-buffer copies `device` recorded and the fills of new buffers with zeros it made:
+/// a new buffer whose bytes the host cannot write is set to zero by one or the other, in a
+/// submission's first work (`texture/first_move.rs`).
+fn zeros_written(device: &Device) -> u64 {
+    let counts = device.work_counts();
+    counts.commands_recorded.cmd_copy_buffer + counts.new_buffer_zero_fills
+}
+
 /// `bytes`, `BGRA10_XR` texels, as Metal's blit through its compression writes them: each 16-bit
 /// field's low six bits cleared, the alpha code (the fourth field) clamped to `[384, 894]`; a
 /// fill's (`fill`) the low six bits alone.
@@ -475,7 +483,16 @@ fn extended_range_blits_write_metal_s_encoding_under_the_canonical_policy() {
             {
                 let bytes = rng.bytes((SIDE * height * per) as usize);
                 let texture = lane.texture(pf, optimized, StorageMode::Private, height, 1);
+                let before = zeros_written(&lane.device);
                 lane.blit_in(&texture, 0, [SIDE, height], per, &bytes);
+                // The canonical encoding's scratch is written whole by its copy out before
+                // anything reads it, so the blit sets no buffer to zero: neither policy copies the
+                // device's zeros or fills one.
+                assert_eq!(
+                    zeros_written(&lane.device) - before,
+                    0,
+                    "{pf:?} optimized {optimized}, {height} high, blitted in on {name}"
+                );
                 let out = lane.blit_out(&texture, 0, [SIDE, height], (0, SIDE * per));
                 let want = match compressed {
                     true => metal(&bytes, false),
