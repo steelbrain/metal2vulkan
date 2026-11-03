@@ -14,10 +14,12 @@ pub enum Format {
     Depth32Float,
 }
 
-/// One side of the A/B: a device, its queue, and Metal's calls on them.
-pub trait Gpu {
-    type Library;
-    type RenderPipeline;
+/// One side of the A/B: a device, its queue, and Metal's calls on them. Its device, libraries and
+/// render pipeline states are shared by threads that each draw through a queue of their own
+/// (`threads`).
+pub trait Gpu: Sync {
+    type Library: Sync;
+    type RenderPipeline: Sync;
     type ComputePipeline;
     type Buffer;
     type Texture;
@@ -36,6 +38,12 @@ pub trait Gpu {
 
     /// The side and the device's name.
     fn label(&self) -> String;
+
+    /// Another handle on the same device, with a command queue of its own: a thread's own
+    /// (`threads`).
+    fn with_own_queue(&self) -> Self
+    where
+        Self: Sized;
 
     /// `newLibraryWithURL:` (native) or `newLibraryWithData:` of the file's bytes (the runtime).
     fn library(&self, metallib: &Path) -> Self::Library;
@@ -267,6 +275,13 @@ pub trait Gpu {
         &self,
         encoder: &mut Self::RenderEncoder,
         buffer: &Self::Buffer,
+        offset: usize,
+        index: usize,
+    );
+    /// `setVertexBufferOffset:atIndex:`.
+    fn set_vertex_buffer_offset(
+        &self,
+        encoder: &mut Self::RenderEncoder,
         offset: usize,
         index: usize,
     );

@@ -136,6 +136,20 @@ pub struct Scene<G: Gpu> {
     pub fill: G::Buffer,
 }
 
+/// A 32 by 32 grid of small rectangles over the target, each at its own 256-byte offset (a
+/// constant buffer's offset alignment), in the order of rectangle buffer `b`.
+fn rect_bytes(b: usize) -> Vec<u8> {
+    let mut bytes = vec![0u8; RECTS * RECT_STRIDE];
+    for r in 0..RECTS {
+        let cell = (r + b * 7) % RECTS;
+        let (x, y) = ((cell % 32) as f32, (cell / 32) as f32);
+        let at = |v: f32| v / 16.0 - 1.0;
+        let rect = floats(&[at(x), at(y), at(x + 0.5), at(y + 0.5)]);
+        bytes[r * RECT_STRIDE..r * RECT_STRIDE + 16].copy_from_slice(&rect);
+    }
+    bytes
+}
+
 fn texels(side: usize, seed: u8) -> Vec<u8> {
     (0..side * side)
         .flat_map(|i| {
@@ -209,20 +223,8 @@ impl<G: Gpu> Scene<G> {
         let textures = (0..TEXTURES)
             .map(|n| shader_texture(TEXTURE_SIDE, n as u8 * 16))
             .collect();
-        // A 32 by 32 grid of small rectangles over the target, each at its own 256-byte offset
-        // (a constant buffer's offset alignment).
         let rects = (0..RECT_BUFFERS)
-            .map(|b| {
-                let mut bytes = vec![0u8; RECTS * RECT_STRIDE];
-                for r in 0..RECTS {
-                    let cell = (r + b * 7) % RECTS;
-                    let (x, y) = ((cell % 32) as f32, (cell / 32) as f32);
-                    let at = |v: f32| v / 16.0 - 1.0;
-                    let rect = floats(&[at(x), at(y), at(x + 0.5), at(y + 0.5)]);
-                    bytes[r * RECT_STRIDE..r * RECT_STRIDE + 16].copy_from_slice(&rect);
-                }
-                g.buffer_with(&bytes)
-            })
+            .map(|b| g.buffer_with(&rect_bytes(b)))
             .collect();
         Scene {
             textured,
@@ -259,6 +261,8 @@ impl<G: Gpu> Scene<G> {
 enum Churn {
     /// Nothing: every draw the same.
     Static,
+    /// The vertex buffer's offset alone (`setVertexBufferOffset:atIndex:`).
+    Offset,
     /// The vertex buffer (another buffer and offset) and the fragment texture.
     Bind,
     /// As `Bind`, and the pipeline state switched between two.
@@ -275,6 +279,7 @@ impl Churn {
     fn name(self) -> &'static str {
         match self {
             Churn::Static => "static",
+            Churn::Offset => "offset",
             Churn::Bind => "bind",
             Churn::Pipeline => "pipeline",
             Churn::Passes => "passes",
@@ -301,7 +306,10 @@ fn encode_draws<G: Gpu>(
             encoder = g.render_encoder(command_buffer, &s.target, false);
             g.set_fragment_sampler(&mut encoder, &s.sampler, 0);
         }
-        if !matches!(churn, Churn::Static) {
+        if matches!(churn, Churn::Offset) {
+            g.set_vertex_buffer_offset(&mut encoder, (draw % RECTS) * RECT_STRIDE, 0);
+        }
+        if !matches!(churn, Churn::Static | Churn::Offset) {
             let buffer = &s.rects[(draw / 7) % RECT_BUFFERS];
             g.set_vertex_buffer(&mut encoder, buffer, (draw % RECTS) * RECT_STRIDE, 0);
             g.set_fragment_texture(&mut encoder, &s.textures[draw % TEXTURES], 0);
@@ -362,13 +370,148 @@ impl DispatchChurn {
     }
 }
 
+/// Encode the encode workload's draws with `churn` on `threads` threads at once, each through its
+/// own queue (`Gpu::with_own_queue`) into its own target, of its own rectangles, texture and
+/// sampler, through `shared` where given, else through a pipeline state of its own made like it, `rounds` command buffers of `draws` draws
+/// each, one in flight while the next encodes: the draws a second of all of them together, from
+/// their common start to the last one's last commit, the mean of each thread's CPU time per draw,
+/// and the process's CPU time per draw (module docs of `main.rs`).
+fn threaded_draws<G: Gpu>(
+    g: &G,
+    library: &G::Library,
+    (threads, shared): (usize, Option<&G::RenderPipeline>),
+    (rounds, draws, churn): (usize, usize, Churn),
+) -> (f64, f64, f64) {
+    let start = std::sync::Barrier::new(threads + 1);
+    let (per_thread, wall, cpu) = std::thread::scope(|scope| {
+        let workers: Vec<_> = (0..threads)
+            .map(|_| {
+                let start = &start;
+                scope.spawn(move || {
+                    let g = g.with_own_queue();
+                    let target = g.texture(Format::Bgra8, 256, 256, true);
+                    let rects = g.buffer_with(&rect_bytes(0));
+                    let texture = g.texture(Format::Rgba8, TEXTURE_SIDE, TEXTURE_SIDE, false);
+                    let side = (TEXTURE_SIDE, TEXTURE_SIDE);
+                    g.replace_region(&texture, side, &texels(TEXTURE_SIDE, 0), TEXTURE_SIDE * 4);
+                    let sampler = g.sampler(true);
+                    let own = shared.is_none().then(|| {
+                        let (vertex, fragment) = ("quad_vertex", "textured_fragment");
+                        g.render_pipeline(library, vertex, fragment, Format::Bgra8, false)
+                    });
+                    let state = shared.or(own.as_ref()).expect("a pipeline state");
+                    let encode = |command_buffer: &G::CommandBuffer| {
+                        let mut encoder = g.render_encoder(command_buffer, &target, true);
+                        g.set_render_pipeline(&mut encoder, state);
+                        g.set_fragment_sampler(&mut encoder, &sampler, 0);
+                        g.set_vertex_buffer(&mut encoder, &rects, 0, 0);
+                        g.set_fragment_texture(&mut encoder, &texture, 0);
+                        for draw in 0..draws {
+                            if matches!(churn, Churn::Offset) {
+                                let offset = (draw % RECTS) * RECT_STRIDE;
+                                g.set_vertex_buffer_offset(&mut encoder, offset, 0);
+                            }
+                            g.draw_strip(&mut encoder, 4);
+                        }
+                        g.end_render(encoder);
+                    };
+                    // Warm: its pipeline made, its queue's first command buffers behind it.
+                    for _ in 0..3 {
+                        g.pool(|| {
+                            let command_buffer = g.command_buffer();
+                            encode(&command_buffer);
+                            g.commit(&command_buffer);
+                            g.wait(&command_buffer);
+                        });
+                    }
+                    start.wait();
+                    let cpu0 = thread_cpu();
+                    let mut in_flight: Option<G::CommandBuffer> = None;
+                    for _ in 0..rounds {
+                        g.pool(|| {
+                            let command_buffer = g.command_buffer();
+                            encode(&command_buffer);
+                            if let Some(last) = in_flight.take() {
+                                g.wait(&last);
+                            }
+                            g.commit(&command_buffer);
+                            in_flight = Some(command_buffer);
+                        });
+                    }
+                    let (done, cpu) = (Instant::now(), thread_cpu() - cpu0);
+                    if let Some(last) = in_flight.take() {
+                        g.wait(&last);
+                    }
+                    (done, cpu)
+                })
+            })
+            .collect();
+        start.wait();
+        let (t0, cpu0) = (Instant::now(), process_cpu());
+        let ended: Vec<(Instant, Duration)> = workers
+            .into_iter()
+            .map(|worker| worker.join().expect("a drawing thread"))
+            .collect();
+        let cpu = process_cpu() - cpu0;
+        let last = ended.iter().map(|(done, _)| *done).max().expect("a thread");
+        let per_thread: Duration = ended.iter().map(|(_, cpu)| *cpu).sum();
+        (per_thread / threads as u32, last - t0, cpu)
+    });
+    let each = (rounds * draws) as f64;
+    let all = each * threads as f64;
+    (
+        all / wall.as_secs_f64(),
+        us(per_thread) / each,
+        us(cpu) / all,
+    )
+}
+
+/// The thread-scaling workload, its shared pipeline state `shared` (module docs of `main.rs`).
+pub fn threads<G: Gpu>(g: &G, library: &G::Library, shared: &G::RenderPipeline, sizes: &Sizes) {
+    let rounds = (sizes.timed / 4).max(8);
+    for churn in [Churn::Static, Churn::Offset] {
+        for (pso, shared) in [("shared", Some(shared)), ("each", None)] {
+            for threads in [1, 2, 4, 8] {
+                let (mut rate, mut thread, mut process) = (vec![], vec![], vec![]);
+                for _ in 0..3 {
+                    let run = (rounds, sizes.draws, churn);
+                    let (r, t, p) = threaded_draws(g, library, (threads, shared), run);
+                    rate.push(r / 1e6);
+                    thread.push(t);
+                    process.push(p);
+                }
+                let name = format!("draw_{}_{pso}_{threads}t", churn.name());
+                emit("threads", &format!("{name}_rate"), "Mdraws/s", &mut rate);
+                emit(
+                    "threads",
+                    &format!("{name}_thread_cpu"),
+                    "us/draw",
+                    &mut thread,
+                );
+                emit(
+                    "threads",
+                    &format!("{name}_process_cpu"),
+                    "us/draw",
+                    &mut process,
+                );
+            }
+        }
+    }
+}
+
 /// The CPU cost of encoding: per draw and per dispatch, on the encoding thread (wall) and in the
 /// whole process (CPU time of every thread, from the command buffer's creation until its wait
 /// returned, which takes in work moved off the encoding thread to commit or to other threads).
 pub fn encode<G: Gpu>(g: &G, s: &Scene<G>, sizes: &Sizes, variants: &[String]) {
     let n = sizes.draws;
     let runs = |name: String| variants.is_empty() || variants.contains(&name);
-    for churn in [Churn::Static, Churn::Bind, Churn::Pipeline, Churn::Passes] {
+    for churn in [
+        Churn::Static,
+        Churn::Offset,
+        Churn::Bind,
+        Churn::Pipeline,
+        Churn::Passes,
+    ] {
         if !runs(format!("draw_{}", churn.name())) {
             continue;
         }

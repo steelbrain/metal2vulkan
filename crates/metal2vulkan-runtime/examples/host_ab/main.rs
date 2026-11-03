@@ -16,7 +16,8 @@
 //! Workloads (`--only a,b,...`; all by default):
 //!
 //! - `encode`: CPU cost of encoding. A render pass of `--draws` small textured draws into a
-//!   512x512 `BGRA8Unorm` target, `static` (nothing set between draws), `bind` (each draw another
+//!   512x512 `BGRA8Unorm` target, `static` (nothing set between draws), `offset` (each draw the
+//!   vertex buffer's offset alone, `setVertexBufferOffset:atIndex:`), `bind` (each draw another
 //!   vertex buffer and offset, and another fragment texture), `pipeline` (as `bind`, and the
 //!   pipeline state switched between two) and `passes` (as `pipeline`, in render passes of three
 //!   draws, as a window server draws), and a compute encoder of as many single-threadgroup
@@ -188,6 +189,12 @@
 //!   the frame from the command buffer's creation to the wait's return; and the commit to the
 //!   wait's return. On the runtime's side, its draws through last-vertex pipelines, its listed
 //!   draws, dispatches and pipeline barriers per frame (`rt_*`).
+//! - **threads**: the encode workload's `static` and `offset` draws on 1, 2, 4 and 8 threads at
+//!   once, each with its own command queue and target, through one shared pipeline state
+//!   (`shared`) and through one of each thread's own (`each`); each thread encodes `--timed / 4`
+//!   (at least 8) command buffers of `--draws` draws, one in flight before the next commits. Per
+//!   case, over 3 runs: the draws a second of all threads together (from their common start to
+//!   the last one's last commit), each thread's CPU time per draw, and the process's.
 //!
 //! Options: `--rounds N` (3), `--draws N` (2000), `--timed N` (30), `--latency N` (200),
 //! `--heavy-iterations N` (64), `--heavy-runs N` (15), `--many-draws N` (6000), `--frames N`
@@ -195,7 +202,7 @@
 //! shader caches; a directory under the OS's temporary directory by default, removed at the end),
 //! `--metallib PATH` (skip the compile; not with `pipeline`), `--cache DIR` (the runtime's shader
 //! cache, with `--side`), `--variants a,b,...` (the encode workload's variants alone:
-//! `draw_static`, `draw_bind`, `draw_pipeline`, `draw_passes`, `dispatch_static`,
+//! `draw_static`, `draw_offset`, `draw_bind`, `draw_pipeline`, `draw_passes`, `dispatch_static`,
 //! `dispatch_offsets`, `dispatch_churn`, `dispatch_resident_0`, `_1`, `_256`, `_4096`,
 //! `_same_4096`; for a profile of one; and the memory workload's parts alone: `create`,
 //! `no_copy`, `held_1m`, `held_64m`, `texture`), `--announce-each a,b,...` (the runtime's device
@@ -224,7 +231,7 @@ use std::process::{Command, Stdio};
 use std::time::Instant;
 use workloads::Sizes;
 
-const WORKLOADS: [&str; 20] = [
+const WORKLOADS: [&str; 21] = [
     "encode",
     "fixed",
     "calls",
@@ -245,6 +252,7 @@ const WORKLOADS: [&str; 20] = [
     "provoking",
     "icb_cpu",
     "percall",
+    "threads",
 ];
 
 struct Options {
@@ -518,6 +526,7 @@ fn run<G: Gpu>(g: &G, opened: Instant, metallib: &Path, options: &Options) {
             "provoking" => workloads::provoking(g, &library, sizes),
             "icb_cpu" => workloads::icb_cpu(g, &library, sizes),
             "percall" => percall::percall(g, &scene, &library, sizes),
+            "threads" => workloads::threads(g, &library, &scene.textured[0], sizes),
             _ => unreachable!(),
         }
     }

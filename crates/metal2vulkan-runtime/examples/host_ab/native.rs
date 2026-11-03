@@ -93,6 +93,14 @@ impl Gpu for Native {
         format!("native Metal on {}", self.device.name())
     }
 
+    fn with_own_queue(&self) -> Native {
+        let queue = self.device.newCommandQueue().expect("newCommandQueue");
+        Native {
+            device: self.device.clone(),
+            queue,
+        }
+    }
+
     fn library(&self, metallib: &Path) -> Self::Library {
         let path = NSString::from_str(metallib.to_str().expect("a UTF-8 path"));
         self.device
@@ -734,6 +742,16 @@ impl Gpu for Native {
     ) {
         // SAFETY: the offset lies in the buffer and the index is in Metal's range.
         unsafe { encoder.setVertexBuffer_offset_atIndex(Some(buffer), offset, index) };
+    }
+
+    fn set_vertex_buffer_offset(
+        &self,
+        encoder: &mut Self::RenderEncoder,
+        offset: usize,
+        index: usize,
+    ) {
+        // SAFETY: the offset lies in the buffer bound at the index, which is in Metal's range.
+        unsafe { encoder.setVertexBufferOffset_atIndex(offset, index) };
     }
 
     fn set_vertex_buffers(

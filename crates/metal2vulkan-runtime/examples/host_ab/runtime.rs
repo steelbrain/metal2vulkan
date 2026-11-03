@@ -113,6 +113,14 @@ impl Gpu for Runtime {
         format!("runtime on {}", self.device.name())
     }
 
+    fn with_own_queue(&self) -> Runtime {
+        let queue = self.device.new_command_queue().expect("new_command_queue");
+        Runtime {
+            device: self.device.clone(),
+            queue,
+        }
+    }
+
     fn library(&self, metallib: &Path) -> rt::Library {
         let bytes = std::fs::read(metallib).expect("read the metallib");
         self.device
@@ -692,6 +700,17 @@ impl Gpu for Runtime {
         encoder
             .set_vertex_buffer(Some(buffer), offset as u64, index as u32)
             .expect("set_vertex_buffer");
+    }
+
+    fn set_vertex_buffer_offset(
+        &self,
+        encoder: &mut rt::RenderCommandEncoder,
+        offset: usize,
+        index: usize,
+    ) {
+        encoder
+            .set_vertex_buffer_offset(offset as u64, index as u32)
+            .expect("set_vertex_buffer_offset");
     }
 
     fn set_vertex_buffers(
