@@ -2,7 +2,7 @@
 //! shape of a consumer that records a command buffer, adds handlers, commits and never waits.
 //!
 //! ```sh
-//! cargo run --release -p metal2vulkan-runtime --example submit_path [-- latency|cpu|threads|empty|idle|all [--seen] [--bare] [--at-commit] [--checked]]
+//! cargo run --release -p metal2vulkan-runtime --example submit_path [-- latency|cross|cpu|threads|empty|idle|all [--seen] [--bare] [--at-commit] [--checked]]
 //! ```
 //!
 //! - **latency**: one thread commits a tiny blit command buffer (a fill of 16 bytes) with a
@@ -12,6 +12,12 @@
 //!   buffer's `GPUEndTime` to the handler's start (both on the runtime's host clock,
 //!   `host_time`), at idle gaps of 0, 100 us, 300 us and 2 ms between command buffers. With
 //!   `--bare`, also with no scheduled handler: a lone fill and its one callback.
+//! - **cross**: the latency shape over two queues: command buffer A on the first signals an event
+//!   at its end, a shared one (whose wait the host holds until its value is reached) and a plain
+//!   one (whose wait goes to the GPU), and B on the second waits for it, each with a scheduled
+//!   handler and the handler `callback` names; A is committed, then B. Timed: A's commit to each
+//!   handler's start, at the same gaps; counted, the rounds where B's handler started before A's
+//!   or saw A's status short of `Completed` (Metal's completion follows the GPU's: none).
 //! - **cpu**: the same command buffers committed as fast as the queue's slots allow, never waited
 //!   for: command buffers a second, and the CPU per command buffer of the runtime's threads (by
 //!   thread on Linux, from `/proc/self/task/*/schedstat`; elsewhere the process's CPU less the
@@ -32,7 +38,8 @@
 //! (`CommandBuffer::set_submission_check`, a runtime extension), as a consumer's detach check does.
 
 use metal2vulkan_runtime::{
-    host_time, Buffer, CommandBuffer, CommandQueue, Device, ResourceOptions, Submission,
+    host_time, Buffer, CommandBuffer, CommandBufferStatus, CommandQueue, Device, EventRef,
+    ResourceOptions, Submission,
 };
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
@@ -186,6 +193,103 @@ fn latency(device: &Device, callback: Callback, scheduled: bool) {
         println!(
             "latency {name:<14} gap {gap:>4} us: commit to handler p50 {p50:7.1} p90 {p90:7.1} \
              p99 {p99:7.1} us; GPU end to handler p50 {e50:7.1} p90 {e90:7.1} p99 {e99:7.1} us"
+        );
+    }
+}
+
+/// One round's handler starts of the cross row: A's, and B's with whether A's handler had started
+/// and its status was `Completed` then.
+type Starts = (Option<Instant>, Option<(Instant, bool)>);
+
+/// The cross row's [`Starts`], and their signal to the committing thread.
+#[derive(Default)]
+struct Cross {
+    starts: Mutex<Starts>,
+    changed: Condvar,
+}
+
+impl Cross {
+    fn take(&self) -> (Instant, Instant, bool) {
+        let mut starts = self.starts.lock().unwrap();
+        loop {
+            if let (Some(a), Some((b, completed))) = *starts {
+                *starts = (None, None);
+                return (a, b, completed);
+            }
+            starts = self.changed.wait(starts).unwrap();
+        }
+    }
+}
+
+fn cross(device: &Device, callback: Callback, shared: bool) {
+    let (first, second) = (
+        device.new_command_queue().unwrap(),
+        device.new_command_queue().unwrap(),
+    );
+    let (shared_event, plain_event) = (
+        device.new_shared_event().unwrap(),
+        device.new_event().unwrap(),
+    );
+    let event = || match shared {
+        true => EventRef::from(&shared_event),
+        false => EventRef::from(&plain_event),
+    };
+    let target = device.new_buffer(32, ResourceOptions::shared()).unwrap();
+    let mut value = 0;
+    for gap in GAPS_US {
+        let starts = Arc::new(Cross::default());
+        let (mut to_a, mut to_b) = (Vec::with_capacity(ROUNDS), Vec::with_capacity(ROUNDS));
+        let mut overtaken = 0;
+        for round in 0..ROUNDS + 50 {
+            idle(gap);
+            value += 1;
+            let at_a = Arc::clone(&starts);
+            let a = tiny(&first, &target, (callback, true), move |_| {
+                at_a.starts.lock().unwrap().0 = Some(Instant::now());
+                at_a.changed.notify_one();
+            });
+            a.encode_signal_event(event(), value).unwrap();
+            let b = second.command_buffer().unwrap();
+            b.encode_wait_for_event(event(), value).unwrap();
+            let mut blit = b.blit_command_encoder().unwrap();
+            blit.fill_buffer(&target, 16..32, 0x5a).unwrap();
+            blit.end_encoding().unwrap();
+            b.add_scheduled_handler(Box::new(|_: &CommandBuffer| {}))
+                .unwrap();
+            let (at_b, signaller) = (Arc::clone(&starts), a.clone());
+            let handler = Box::new(move |_: &CommandBuffer| {
+                let completed = signaller.status() == CommandBufferStatus::Completed;
+                let mut starts = at_b.starts.lock().unwrap();
+                let before_a = starts.0.is_none();
+                starts.1 = Some((Instant::now(), completed && !before_a));
+                at_b.changed.notify_one();
+            });
+            match callback {
+                Callback::Completed => b.add_completed_handler(handler).unwrap(),
+                Callback::Seen => b.add_completion_seen_handler(handler).unwrap(),
+            }
+            let committed = Instant::now();
+            commit(&a);
+            commit(&b);
+            drop((a, b));
+            let (a_started, b_started, in_order) = starts.take();
+            if round >= 50 {
+                to_a.push(a_started.duration_since(committed).as_secs_f64() * 1e6);
+                to_b.push(b_started.duration_since(committed).as_secs_f64() * 1e6);
+                overtaken += usize::from(!in_order);
+            }
+        }
+        let (a50, a90, a99) = percentiles(&mut to_a);
+        let (b50, b90, b99) = percentiles(&mut to_b);
+        let kind = match shared {
+            true => "shared",
+            false => "plain",
+        };
+        println!(
+            "cross {:<10} {kind:<6} gap {gap:>4} us: A's commit to A's handler p50 {a50:7.1} p90 \
+             {a90:7.1} p99 {a99:7.1} us, to B's p50 {b50:7.1} p90 {b90:7.1} p99 {b99:7.1} us; B \
+             before A {overtaken}/{ROUNDS}",
+            callback.name()
         );
     }
 }
@@ -490,6 +594,13 @@ fn main() {
         if bare {
             for &callback in callbacks {
                 latency(&device, callback, false);
+            }
+        }
+    }
+    if what == "cross" || what == "all" {
+        for &callback in callbacks {
+            for shared in [true, false] {
+                cross(&device, callback, shared);
             }
         }
     }
