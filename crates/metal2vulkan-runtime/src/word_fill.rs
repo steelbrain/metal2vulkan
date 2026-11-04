@@ -9,11 +9,21 @@
 //!   250 to 330 ms in that submit on an M4. On a release measured so
 //!   (`DriverFact::FillCompiledPerCommandPool`, MoltenVK 1.4.1), a fill goes as transfers, which
 //!   MoltenVK runs as blits and compiles nothing for:
-//!   `vkCmdUpdateBuffer` of the first words (at most 65536 bytes, its limit), then copies of the
-//!   filled words onto the rest, each copying all that is filled so far, past a barrier.
+//!   `vkCmdUpdateBuffer` of the first words (at most 65536 bytes, its limit), then, past each
+//!   barrier, one `vkCmdCopyBuffer` of up to [`FAN_OUT`] regions, each a copy of all that is
+//!   filled so far onto the next words, so each barrier multiplies what is filled by
+//!   `FAN_OUT + 1`.
+//! - **Few barriers.** MoltenVK ends its blit encoder at each barrier and makes a new one for the
+//!   next copy, and encodes it inside `vkQueueSubmit`: an encoder costs about 10 us of the
+//!   submitting thread on an M3 Max, where one region more in an encoder costs a blit. A fill of
+//!   256 MiB took 12 barriers when each copy doubled what was filled, and 192 such fills kept their
+//!   command buffer's `vkQueueSubmit` 10 to 27 ms (an M3 Max, MoltenVK 1.4.2, the conformance case
+//!   `event-wait-behind-a-running-signal`, where Metal schedules the same fills 0.04 to 0.18 ms
+//!   after the commit); with sixteenfold steps it takes 3.
 //! - **Exact.** Each copy reads only words the fill wrote before the barrier ahead of it, and
-//!   writes words no earlier step of the fill wrote, so its source and destination never overlap
-//!   (as `vkCmdCopyBuffer` requires), and every word ends as the fill's.
+//!   writes words no earlier step of the fill wrote, nor another copy of its step, so one
+//!   command's sources and destinations never overlap (as `vkCmdCopyBuffer` requires), and every
+//!   word ends as the fill's.
 //! - **Elsewhere** `vkCmdFillBuffer`, unchanged, on every other driver and release.
 //! - **Counted.** Each fill counts as one of the two forms (`WorkCounts::fills_recorded` and
 //!   `fills_by_transfers`), so a run shows which its device took; a new buffer's first zeros
@@ -30,6 +40,10 @@ use std::ops::Range;
 /// The most bytes one `vkCmdUpdateBuffer` writes.
 const UPDATE_LIMIT: u64 = 65536;
 
+/// The most regions one step's `vkCmdCopyBuffer` copies what is filled onto (the module docs):
+/// each step multiplies what is filled by one more than this.
+const FAN_OUT: u64 = 15;
+
 /// One step of a fill by transfers ([`steps`]).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Step {
@@ -37,12 +51,21 @@ pub(crate) enum Step {
     Update(Range<u64>),
     /// The transfers before it have written before the ones after it read.
     Barrier,
-    /// `vkCmdCopyBuffer` of `len` bytes at `from` to `to`, within the buffer.
-    Copy { from: u64, to: u64, len: u64 },
+    /// One `vkCmdCopyBuffer` of these regions, within the buffer.
+    Copies(Vec<Copy>),
+}
+
+/// One region of a [`Step::Copies`]: `len` bytes at `from` to `to`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Copy {
+    pub(crate) from: u64,
+    pub(crate) to: u64,
+    pub(crate) len: u64,
 }
 
 /// The steps that fill `words` (its ends multiples of 4) by transfers: the first words updated,
-/// then each copy doubles what is filled, from the filled words at its start, past a barrier.
+/// then, past each barrier, up to [`FAN_OUT`] copies of what is filled, from the filled words at
+/// its start, onto the words after it.
 pub(crate) fn steps(words: Range<u64>) -> Vec<Step> {
     let total = words.end.saturating_sub(words.start);
     if total == 0 {
@@ -52,14 +75,20 @@ pub(crate) fn steps(words: Range<u64>) -> Vec<Step> {
     let mut steps = vec![Step::Update(words.start..words.start + first)];
     let mut filled = first;
     while filled < total {
-        let len = filled.min(total - filled);
+        let mut copies = Vec::new();
+        let mut to = filled;
+        while to < total && (copies.len() as u64) < FAN_OUT {
+            let len = filled.min(total - to);
+            copies.push(Copy {
+                from: words.start,
+                to: words.start + to,
+                len,
+            });
+            to += len;
+        }
         steps.push(Step::Barrier);
-        steps.push(Step::Copy {
-            from: words.start,
-            to: words.start + filled,
-            len,
-        });
-        filled += len;
+        steps.push(Step::Copies(copies));
+        filled = to;
     }
     steps
 }
@@ -96,8 +125,8 @@ pub(crate) unsafe fn record(
     let bytes: Vec<u8> = (0..first).flat_map(|_| word.to_ne_bytes()).collect();
     for step in steps(words) {
         // SAFETY: the caller's contract; each update writes at most 65536 bytes of `bytes`, a
-        // multiple of 4 at a multiple of 4, and each copy's regions lie in `words` and do not
-        // overlap (the module docs).
+        // multiple of 4 at a multiple of 4, and each copy's regions lie in `words`, its sources'
+        // union apart from its destinations' (the module docs).
         unsafe {
             match step {
                 Step::Update(range) => device.cmd_update_buffer(
@@ -120,12 +149,16 @@ pub(crate) unsafe fn record(
                         &[],
                     );
                 }
-                Step::Copy { from, to, len } => {
-                    let region = vk::BufferCopy::default()
-                        .src_offset(from)
-                        .dst_offset(to)
-                        .size(len);
-                    device.cmd_copy_buffer(command_buffer, buffer, buffer, &[region]);
+                Step::Copies(copies) => {
+                    let regions: Vec<vk::BufferCopy> = (copies.iter())
+                        .map(|copy| {
+                            vk::BufferCopy::default()
+                                .src_offset(copy.from)
+                                .dst_offset(copy.to)
+                                .size(copy.len)
+                        })
+                        .collect();
+                    device.cmd_copy_buffer(command_buffer, buffer, buffer, &regions);
                 }
             }
         }
