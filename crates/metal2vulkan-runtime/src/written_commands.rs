@@ -4,16 +4,17 @@
 //!
 //! - **The routes.** The CPU's setters add what the record holds after each edit: its draw or
 //!   dispatch (a draw's primitive type among them), its barrier, and the state it names, with
-//!   what that state's functions may write and whether they may encode. An encoder that made the
-//!   buffer resident for writing adds what its states may write (`indirect_command_writes`, read
-//!   from their functions' AIR): the state set when the buffer was made resident, each set after,
-//!   and the states an execution in the encoder may run (the executed buffer's named states;
-//!   inherited states are the encoder's own). A blit's copy adds the source's, and for good: the
-//!   source's later gains reach the copy too, since what it copies is the source's records when
-//!   the GPU runs it. A reset, the CPU's or a blit's, adds nothing. Nothing is taken away: a
-//!   record written again keeps the earlier writes in the summary, as a GPU write may stay.
+//!   what that state's functions may write and whether they may encode. A command buffer that made
+//!   the buffer resident for writing, in any of its encoders, adds what every route it met may
+//!   write (`write_routes.rs`): each state set in any of its encoders, before the residency or
+//!   after it (`indirect_command_writes`, read from their functions' AIR), and the states an
+//!   execution in any of them may run (the executed buffer's named states; inherited states are
+//!   the encoder's own). A blit's copy adds the source's, and for good: the source's later gains
+//!   reach the copy too, since what it copies is the source's records when the GPU runs it. A
+//!   reset, the CPU's or a blit's, adds nothing. Nothing is taken away: a record written again
+//!   keeps the earlier writes in the summary, as a GPU write may stay.
 //! - **What it is for.** A clear bit is proven of every write encoded so far; a route encoded
-//!   later (an encoder that makes the buffer resident for writing after a commit read the
+//!   later (a command buffer that makes the buffer resident for writing after a commit read the
 //!   summary) adds its own then. A commit that left a buffer unmarked though its command buffer
 //!   made it resident for writing (`write_routes.rs`) is followed by the buffers it executed:
 //!   where one's summary first names a state whose functions may write records, it marks them.
@@ -189,43 +190,5 @@ impl WrittenCommands {
             (held.writes, held.named)
         };
         self.add(writes, named)
-    }
-}
-
-/// The indirect command buffers an encoder made resident for writing, and what its state set last
-/// may write into them: Metal's `useResource:usage:` reaches the encoder's later commands, so a
-/// buffer made resident takes the state already set and every state set after it.
-#[derive(Debug, Default)]
-pub(crate) struct Writers {
-    open: Vec<Arc<WrittenCommands>>,
-    /// What the state set last may write.
-    state: CommandWrites,
-}
-
-impl Writers {
-    /// The encoder made the buffer of `written` resident for writing.
-    pub(crate) fn made_writable(&mut self, written: &Arc<WrittenCommands>) {
-        if self.open.iter().any(|open| Arc::ptr_eq(open, written)) {
-            return;
-        }
-        written.add_writer(self.state).mark();
-        self.open.push(Arc::clone(written));
-    }
-
-    /// The encoder set a state whose functions may write `writes`.
-    pub(crate) fn state_set(&mut self, writes: CommandWrites) {
-        self.state = writes;
-        self.runs(writes);
-    }
-
-    /// The encoder runs functions that may write `writes` (an execution's commands under states
-    /// their records name).
-    pub(crate) fn runs(&self, writes: CommandWrites) {
-        if writes.is_empty() {
-            return;
-        }
-        for open in &self.open {
-            open.add_writer(writes).mark();
-        }
     }
 }

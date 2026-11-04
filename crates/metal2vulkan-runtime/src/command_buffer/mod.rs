@@ -2882,7 +2882,8 @@ impl CommandBuffer {
     /// before (`IndirectCommandBuffer::written_by_gpu`). Those it leaves unmarked are counted, and
     /// held, where it executed indirect commands, until it completes.
     fn mark_gpu_written(&self) {
-        let decided = self.state().routes.at_commit();
+        let (decided, followed) = self.state().routes.at_commit();
+        followed.mark();
         match decided {
             AtCommit::Mark(buffers, writer) => {
                 for icb in buffers {

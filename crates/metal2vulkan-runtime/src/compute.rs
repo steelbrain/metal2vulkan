@@ -84,7 +84,6 @@ use super::texture::Texture;
 use super::tracker::Barrier;
 use super::used_resources::EncoderKind;
 use super::values::{Region, Size};
-use super::written_commands::Writers;
 use ash::vk;
 use metal2vulkan::bind::{
     BindShape, BindState, BindingPlan, Dispatch, DispatchCommands, FlatIndirect, HeapPlacement,
@@ -173,8 +172,6 @@ pub struct ComputeCommandEncoder {
     /// of `stage_in_region` until the next `setStageInRegion:`.
     indirect_stage_in: Option<(Buffer, u64)>,
     residency: Residency,
-    /// The indirect command buffers it made resident for writing (`written_commands.rs`).
-    writers: Writers,
     /// The bodies of the predicated loops it opened and has not closed (`predication.rs`).
     captures: Captures,
     /// Its calls so far, where the device had a buffer over host pages as it opened
@@ -283,7 +280,6 @@ impl CommandBuffer {
             stage_in_region: None,
             indirect_stage_in: None,
             residency: self.inherited_residency(false),
-            writers: Writers::default(),
             captures: Captures::carried(carried),
             log: (self.device().shared().rebinds.any())
                 .then(|| self.device().shared().scheduler.spare_logs().compute()),
@@ -314,7 +310,6 @@ impl ComputeCommandEncoder {
             stage_in_region: None,
             indirect_stage_in: None,
             residency,
-            writers: Writers::default(),
             captures: Captures::default(),
             log: None,
             dispatches: 0,
@@ -447,7 +442,6 @@ impl ComputeCommandEncoder {
                 this.core
                     .check_device("set_compute_pipeline_state", state.device())?;
                 this.pipeline = Some(state.clone());
-                this.writers.state_set(state.indirect_command_writes());
                 (this.core.routes).state_set(state.indirect_command_writes(), || {
                     vec![state.function_name().to_owned()]
                 });
@@ -1231,7 +1225,6 @@ impl ComputeCommandEncoder {
             }
             if let ResourceRef::IndirectCommandBuffer(icb) = resource {
                 if usage.contains(ResourceUsage::WRITE) {
-                    self.writers.made_writable(icb.written());
                     self.core.routes.writable(icb);
                     self.core.retain(icb.gpu_write());
                 }
@@ -1480,7 +1473,6 @@ impl ComputeCommandEncoder {
         self.sync_heaps();
         // Its commands run the states their records name, where it inherits none.
         if !icb.descriptor().inherit_pipeline_state {
-            self.writers.runs(icb.written().named().writes);
             self.core.routes.executed(icb);
         }
         let table = if icb.descriptor().inherit_buffers {

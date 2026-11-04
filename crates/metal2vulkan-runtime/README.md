@@ -413,7 +413,9 @@ Calls Metal does not have, for a consumer that emulates a Metal device:
   one; or a blit copied or reset commands into it. Only then does an execution of it wait for the
   work before it and read its records on the host. A buffer made resident for writing beside
   functions that call no such operation runs its executions from the CPU's records, as one made
-  resident for reading does (`WorkCounts::indirect_write_residencies_unmarked`).
+  resident for reading does (`WorkCounts::indirect_write_residencies_unmarked`). What its records
+  may hold (`command_writes`), which decides whether an execution runs on the GPU alone, takes what
+  every such state of the command buffer may write, whichever encoder set it.
 - `HostMemory::with_dma_buf` and its `DmaBufSource`: dma-bufs of a no-copy object's pages, for a
   device that refuses their pointer.
 - `HostMemory::with_dirty_pages` and its `DirtyPages` (with `DirtyStamp`): the consumer's log of

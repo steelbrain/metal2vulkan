@@ -344,7 +344,6 @@ use super::tracker::{self, Access, Barrier, GeometryWrites, IndirectReads, Unord
 use super::used_resources::EncoderKind;
 use super::versioned::Versioned;
 use super::visibility::{self, Continuation, Visibility, VisibilityResultMode};
-use super::written_commands::Writers;
 use crate::device::functions::Vk;
 use crate::work_counts::Begun;
 use crate::work_counts::NotInline;
@@ -1487,8 +1486,6 @@ pub(crate) struct RenderLowering {
     /// What `use_resource(s)` and `use_heap(s)` made resident, each in its render stages
     /// (`render/arguments.rs`).
     residency: Residency,
-    /// The indirect command buffers it made resident for writing (`written_commands.rs`).
-    writers: Writers,
     /// The executions of render commands, in encoding order, left to record with the pass
     /// (`render/executions.rs`).
     executions: Vec<RenderExecution>,
@@ -2085,7 +2082,6 @@ impl RenderLowering {
             tile_memory_splits: 0,
             tile_memory: tile_memory::TileMemory::default(),
             residency,
-            writers: Writers::default(),
             executions: Vec::new(),
             pending: Vec::new(),
             draw_calls: 0,
@@ -2657,7 +2653,6 @@ impl RenderLowering {
         }
         self.shape_inputs()
             .check_pipeline(CALL, &state, &self.layout)?;
-        self.writers.state_set(state.indirect_command_writes());
         (self.core.routes).state_set(state.indirect_command_writes(), || state.function_names());
         self.pipeline = Some(state);
         self.grouped_set(&drawn);

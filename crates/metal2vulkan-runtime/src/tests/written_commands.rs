@@ -7,7 +7,7 @@ use metal2vulkan::bind::indirect_commands::{Action, CommandRecord};
 use metal2vulkan::pipeline::CommandWrites as W;
 
 use crate::write_routes::Unmarked;
-use crate::written_commands::{Named, Writers, WrittenCommands};
+use crate::written_commands::{Named, WrittenCommands};
 
 fn draws(primitive_types: u8) -> W {
     W {
@@ -110,29 +110,6 @@ fn a_copy_gains_what_its_source_gains() {
     for buffer in [&a, &b, &c] {
         assert_eq!(buffer.writes().primitive_types, 0b1011);
     }
-}
-
-/// An encoder's writers: a buffer made resident takes the state already set and each set after,
-/// and an execution's named states, however many times it is made resident; a buffer it did not
-/// make resident takes none.
-#[test]
-fn an_encoder_adds_its_states() {
-    let buffer = Arc::new(WrittenCommands::default());
-    let other = Arc::new(WrittenCommands::default());
-    let mut writers = Writers::default();
-    writers.state_set(draws(0b1));
-    assert!(buffer.writes().is_empty());
-    writers.made_writable(&buffer);
-    writers.made_writable(&buffer);
-    assert_eq!(buffer.writes(), draws(0b1));
-    writers.state_set(draws(0b100));
-    writers.runs(W {
-        operations: W::DISPATCH,
-        primitive_types: 0,
-    });
-    assert_eq!(buffer.writes().operations, W::DRAW | W::DISPATCH);
-    assert_eq!(buffer.writes().primitive_types, 0b101);
-    assert!(other.writes().is_empty());
 }
 
 /// A commit's unmarked buffers (`write_routes.rs`) are held by an executed buffer's summary until

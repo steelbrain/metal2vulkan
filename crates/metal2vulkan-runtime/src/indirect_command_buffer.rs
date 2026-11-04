@@ -2800,11 +2800,11 @@ impl IndirectCommandBuffer {
     /// What the buffer's records may hold, from every route that writes them encoded so far: a
     /// runtime extension, with no Metal counterpart. The CPU's setters add what each command
     /// holds after the call (its draw or dispatch, a draw's primitive type among it, its barrier,
-    /// and [`CommandWrites::PIPELINE`] where it names a state); an encoder that made the buffer
-    /// resident for writing adds what its states may write
-    /// ([`ComputePipelineState::indirect_command_writes`],
-    /// [`RenderPipelineState::indirect_command_writes`]): the state set when it made the buffer
-    /// resident, each set after, and the states its executions' commands name; a blit encoder's
+    /// and [`CommandWrites::PIPELINE`] where it names a state); a command buffer that made the
+    /// buffer resident for writing, in any of its encoders, adds what the states set in any of
+    /// them may write ([`ComputePipelineState::indirect_command_writes`],
+    /// [`RenderPipelineState::indirect_command_writes`]), before the residency or after it, and
+    /// what the states its executions' commands name may write; a blit encoder's
     /// `copy_indirect_command_buffer` into it adds the source buffer's, now and as the source
     /// gains more. Resets add nothing, and nothing is taken away: a record written again keeps
     /// the earlier writes here, as a GPU write may stay. A clear bit is proven of every write

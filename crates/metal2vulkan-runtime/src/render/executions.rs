@@ -329,7 +329,7 @@ use crate::tracker::{
 use crate::versioned::Versioned;
 use crate::visibility::{Lent, Visibility};
 use crate::write_routes::replay_why;
-use crate::written_commands::{Writers, WrittenCommands};
+use crate::written_commands::WrittenCommands;
 use crate::Device;
 use ahead::Ahead;
 use ash::vk;
@@ -551,7 +551,6 @@ impl RenderLowering {
         self.sync_heaps();
         // Its commands run the states their records name, where it inherits none.
         if !icb.descriptor().inherit_pipeline_state {
-            self.writers.runs(icb.written().named().writes);
             self.core.routes.executed(icb);
         }
         // An execution keeps an extended-range, padded or bfloat attachment's texels as a draw
@@ -2486,7 +2485,6 @@ impl RenderExecution {
                 .arguments()
                 .with_buffer(storage.tile_memory),
             residency: residency.clone(),
-            writers: Writers::default(),
             executions: Vec::new(),
             pending: Vec::new(),
             draw_calls: 0,

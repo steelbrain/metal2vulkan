@@ -13,9 +13,9 @@
 //!   state counting as one, where it looks for them; the encoder's state encodes no indirect
 //!   commands, where it looks for such states), so it is never called; of a buffer of draws of
 //!   primitives alone (`IndirectCommandType::DRAW`) that inherits the encoder's pipeline state
-//!   and not its buffers, and whose records the CPU and every encoder that made it resident for
-//!   writing may fill with draws of one primitive type, buffers, resets and cleared barriers
-//!   alone; in a pass whose fragment stages wrote no bytes before the call (no copy of them is
+//!   and not its buffers, and whose records the CPU and every route of a command buffer that made
+//!   it resident for writing (`write_routes.rs`) may fill with draws of one primitive type,
+//!   buffers, resets and cleared barriers alone; in a pass whose fragment stages wrote no bytes before the call (no copy of them is
 //!   read, `render/pass_start_reads.rs`), with no tile threadgroup memory argument set, and where
 //!   the pass has a shadowed texture, whose command buffer made resident past the call nothing
 //!   that meets a shadowed texture's truth (`shadows::meets_truths`), as the host step's rule.

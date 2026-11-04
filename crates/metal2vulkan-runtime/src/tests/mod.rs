@@ -378,6 +378,8 @@ mod warm_record;
 mod word_fill;
 mod word_samples;
 mod wrapped;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod write_routes_device;
 mod written_commands;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod ycbcr_device;
