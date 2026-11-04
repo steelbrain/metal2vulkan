@@ -1,9 +1,13 @@
 //! Draws that bind one buffer at other offsets, at `device` slots read through storage views of
-//! their whole windows, bind the set 0 their encoder's first draw wrote
-//! (`WorkCounts::set_zero_sets_reused`), and bind it once: each such slot's descriptor range runs
-//! from the buffer's space start to its padded end whatever the bind offset, which its residual
-//! push field holds (`metal2vulkan`'s `bind::instantiate::planned_range`). They draw what the same
-//! draws draw from buffers of their own each, which write and bind a set each.
+//! their whole windows, write their set 0 once: each such slot's descriptor range runs from the
+//! buffer's space start to its padded end whatever the bind offset, which its residual push field
+//! holds (`metal2vulkan`'s `bind::instantiate::planned_range`). Where set 0 is allocated and
+//! bound, they bind the set 0 their encoder's first draw wrote
+//! (`WorkCounts::set_zero_sets_reused`), once. Where their variant pushes it
+//! (`WorkCounts::draws_pushing_set_zero`: a device of Vulkan 1.4 or `VK_KHR_push_descriptor`
+//! whose set 0 a push descriptor set layout holds), the first draw's push carries its writes and
+//! no later draw pushes, since set 0 holds them (`render/bound.rs`). They draw what the same draws
+//! draw from buffers of their own each, which write a set each.
 //!
 //! Device test: compiled only under the GPU safety cfgs (`m2v_gpu`, `m2v_cpu_icd`). The functions
 //! are `colored_vertex` and `colored_fragment` of the owned fixture
@@ -65,12 +69,15 @@ fn buffer_of(device: &Device, values: &[f32]) -> Buffer {
         .unwrap()
 }
 
-/// What a run drew and counted: the target's words, its `set_zero_sets_reused`, and its
-/// `vkCmdBindDescriptorSets` and `vkCmdDraw` calls.
+/// What a run drew and counted: the target's words, its `set_zero_sets_reused` and
+/// `draws_pushing_set_zero`, and its `vkCmdBindDescriptorSets`, `vkCmdPushDescriptorSet` and
+/// `vkCmdDraw` calls.
 struct Ran {
     words: Vec<u32>,
     reused: u64,
+    pushing: u64,
     binds: u64,
+    pushes: u64,
     draws: u64,
 }
 
@@ -120,7 +127,9 @@ fn run(
     Ran {
         words: words_of(&back),
         reused: grew(|counts| counts.set_zero_sets_reused),
+        pushing: grew(|counts| counts.draws_pushing_set_zero),
         binds: grew(|counts| counts.commands_recorded.cmd_bind_descriptor_sets),
+        pushes: grew(|counts| counts.commands_recorded.cmd_push_descriptor_set),
         draws: grew(|counts| counts.commands_recorded.cmd_draw),
     }
 }
@@ -129,6 +138,24 @@ fn run(
 fn rectangle(encoder: &mut RenderCommandEncoder) {
     let drawn = encoder.draw_primitives(PrimitiveType::Triangle, 0, VERTICES, 1, 0);
     assert_eq!(drawn, Ok(()));
+}
+
+/// Whether the draws of `runs` pushed their set 0 (`WorkCounts::draws_pushing_set_zero`): one
+/// variant's draws push it all or none.
+fn pushes_set_zero(runs: &[&Ran]) -> bool {
+    let pushing: Vec<u64> = runs.iter().map(|ran| ran.pushing).collect();
+    assert!(
+        pushing.iter().all(|&p| p == 0) || pushing.iter().all(|&p| p == DRAWS),
+        "draws pushing set 0 in each run: {pushing:?} of {DRAWS}; one variant's draws push it \
+         all or none"
+    );
+    pushing[0] == DRAWS
+}
+
+/// How a run recorded set 0: the sets it bound again (`set_zero_sets_reused`), and its
+/// `vkCmdBindDescriptorSets` and `vkCmdPushDescriptorSet` calls.
+fn set_zero(ran: &Ran) -> (u64, u64, u64) {
+    (ran.reused, ran.binds, ran.pushes)
 }
 
 #[test]
@@ -195,14 +222,18 @@ fn draws_that_move_only_a_device_buffer_s_offset_bind_one_set_zero() {
         "the draws of their own buffers"
     );
     assert_eq!((at_offsets.draws, own_buffers.draws), (DRAWS, DRAWS));
+    let (once, each) = match pushes_set_zero(&[&at_offsets, &own_buffers]) {
+        false => ((DRAWS - 1, 1, 0), (0, DRAWS, 0)),
+        true => ((0, 0, 1), (0, 0, DRAWS)),
+    };
     assert_eq!(
-        (at_offsets.reused, at_offsets.binds),
-        (DRAWS - 1, 1),
-        "the draws at offsets bind their first draw's set 0, once"
+        set_zero(&at_offsets),
+        once,
+        "the draws at offsets record their first draw's set 0, once"
     );
     assert_eq!(
-        (own_buffers.reused, own_buffers.binds),
-        (0, DRAWS),
-        "the draws of their own buffers write and bind a set 0 each"
+        set_zero(&own_buffers),
+        each,
+        "the draws of their own buffers write and record a set 0 each"
     );
 }
