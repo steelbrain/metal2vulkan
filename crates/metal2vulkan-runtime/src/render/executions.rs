@@ -1982,6 +1982,26 @@ impl RenderLowering {
 }
 
 impl RenderExecution {
+    /// What its commands reach of the encoder's bindings at the call, where the buffer inherits
+    /// its buffers (`ArgumentTable::bound_uses` of each stage's table the snapshot holds; none
+    /// otherwise): `None` where a table binds a visible-function table.
+    fn inherited_uses(&self) -> Option<Vec<Use<ResourceKey>>> {
+        if !self.icb.descriptor().inherit_buffers {
+            return Some(Vec::new());
+        }
+        let snapshot = &self.snapshot;
+        let mut uses = Vec::new();
+        for table in [
+            &snapshot.vertex,
+            &snapshot.fragment,
+            &snapshot.object,
+            &snapshot.mesh,
+        ] {
+            uses.extend(table.bound_uses()?);
+        }
+        Some(uses)
+    }
+
     /// Whether the commands may reach the pass's tile threadgroup memory: the encoder set an
     /// argument of it at the call (`render/tile_memory.rs`).
     pub(super) fn reaches_tile_memory(&self) -> bool {
@@ -2900,8 +2920,10 @@ impl DeferredPass {
     /// (`CommandBufferShared::footprint`), with `residency`, its command buffer's: its attachments'
     /// and steps' uses, as [`known_summary`](Self::known_summary) states them; every resource
     /// made resident, with its usage (`Residency::bound_uses`); and what the step reads on the
-    /// host of each execution (`ExecutionRange::host_reads`). `None` where its commands may reach
-    /// more that Metal orders: an execution's inherited buffers, the pass's tile threadgroup
+    /// host of each execution (`ExecutionRange::host_reads`); and what an execution that inherits
+    /// the encoder's buffers reaches of the bindings it inherits
+    /// ([`inherited_uses`](RenderExecution::inherited_uses)). `None` where its commands may reach
+    /// more that Metal orders: an inherited visible-function table, the pass's tile threadgroup
     /// memory, a visibility result's query, or a shadowed texture's copies.
     pub(crate) fn bound(
         &self,
@@ -2909,14 +2931,17 @@ impl DeferredPass {
         residency: &Residency,
     ) -> Option<Summary<ResourceKey>> {
         let reaches_more = |execution: &RenderExecution| {
-            execution.icb.descriptor().inherit_buffers
-                || execution.reaches_tile_memory()
-                || execution.lent.is_some()
+            execution.reaches_tile_memory() || execution.lent.is_some()
         };
         if !self.shadows.is_empty() || self.executions.iter().any(reaches_more) {
             return None;
         }
-        let aliased = device.shared().aliases.augment(&self.uses);
+        let mut inherited = Vec::new();
+        for execution in &self.executions {
+            inherited.extend(execution.inherited_uses()?);
+        }
+        let aliases = &device.shared().aliases;
+        let aliased = aliases.augment(&self.uses);
         let mut uses = EncoderUses::new(false);
         uses.record(
             render_target::ATTACHMENT_STAGES,
@@ -2927,6 +2952,7 @@ impl DeferredPass {
         for execution in &self.executions {
             reached.extend(execution.range.host_reads(&execution.icb));
         }
+        reached.extend(aliases.augment(&inherited).unwrap_or(inherited));
         uses.record(vk::PipelineStageFlags2::ALL_COMMANDS, &reached, None);
         Some(uses.finish())
     }

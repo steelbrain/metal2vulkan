@@ -43,11 +43,14 @@ use super::encoder::EncoderCore;
 use super::error::{invalid, Error, Problem};
 use super::function_table::{FunctionTableProblem, VisibleFunctionTable};
 use super::live_bind::Reshape;
+use super::residency::whole_use;
 use super::resource::ResourceKey;
 use super::retained::HeldBy;
 use super::sampler::SamplerState;
 use super::texture::Texture;
+use super::tracker::{Access, Use};
 use super::upload::Upload;
+use ash::vk;
 use metal2vulkan::bind::{BindState, BoundBuffer, BoundSampler, BoundTexture, StageTable};
 use metal2vulkan::pipeline::{
     BufferKind, PipelineInterface, SlotClass, SlotInterface, SlotRef, Stage,
@@ -573,6 +576,23 @@ pub(super) fn same_as_printed(a: &BoundSampler, b: &BoundSampler) -> bool {
 }
 
 impl ArgumentTable {
+    /// What commands that run with this table's bindings, as an indirect command buffer's
+    /// commands inherit the encoder's, may use of them, for the scheduler's order across queues
+    /// (`CommandBufferShared::footprint`): each buffer over all its bytes and each texture over its
+    /// whole image, read and written in every stage, as nothing bounds what their functions do
+    /// there. `None` where it binds a visible-function table, whose functions reach more.
+    pub(super) fn bound_uses(&self) -> Option<Vec<Use<ResourceKey>>> {
+        if !self.function_tables.is_empty() {
+            return None;
+        }
+        let stages = vk::PipelineStageFlags2::ALL_COMMANDS;
+        let read = Access::new(stages, vk::AccessFlags2::MEMORY_READ);
+        let write = Access::new(stages, vk::AccessFlags2::MEMORY_WRITE);
+        let buffers = (self.buffers.values()).map(|(buffer, _)| whole_use(buffer, read, write));
+        let textures = (self.textures.values()).map(|texture| texture.bound_use(read, write));
+        Some(buffers.chain(textures).collect())
+    }
+
     /// A compute encoder's table (the module docs).
     pub(super) fn compute() -> ArgumentTable {
         ArgumentTable {

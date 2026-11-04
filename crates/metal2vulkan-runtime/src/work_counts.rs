@@ -4260,7 +4260,8 @@ pub struct WorkCounts {
     /// all known yet (work a host step or its submission records, `tracker::ordered`'s `None`)
     /// conflicts with every batch that makes a tracked use or names a fence, but for a host
     /// step's execution whose uses `commit` bounded (`Segment::bound`: the resources made
-    /// resident and the records), which conflicts with what shares those.
+    /// resident, the records, and the encoder's bindings its commands inherit), which conflicts
+    /// with what shares those.
     pub heads_held_for_earlier_commits: u64,
     /// Times a look left a head that needs a host step waiting at its gate: the step reads what
     /// the GPU may write, so it waits until every `VkQueue` completed what was submitted to it

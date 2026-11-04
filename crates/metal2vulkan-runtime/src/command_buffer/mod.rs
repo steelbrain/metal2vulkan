@@ -3982,7 +3982,8 @@ impl CommandBufferShared {
     /// (`Segment::known_summary`): Metal makes the pipeline at `newRenderPipelineState`, so only a
     /// batch that shares a resource with it waits for it; and for a segment its host step records
     /// for what the GPU may write, what `commit` bounded its uses by (`Segment::bound`: what Metal
-    /// orders its commands' reach by, the resources made resident and the records), so a later
+    /// orders its commands' reach by, the resources made resident, the records and the bindings
+    /// they inherit), so a later
     /// batch of another queue that shares nothing with it is not held behind its gate and step.
     /// `None` while some of it is not known: such a segment `commit` could not bound, one its
     /// submission records (a scrub), or a resource state encoder's update, whose uses its

@@ -530,18 +530,23 @@ impl Execute {
     /// What its host step's recording may use that Metal orders, for the scheduler's order across
     /// queues (`CommandBufferShared::footprint`), with `residency`, its command buffer's: every
     /// resource made resident, with its usage (`Residency::bound_uses`), and what the step reads
-    /// on the host ([`ExecutionRange::host_reads`]). `None` where its commands may reach more
-    /// that Metal orders: the encoder's buffers, where the buffer inherits them; and inside a
-    /// block of command predication, whose counter the step reads.
+    /// on the host ([`ExecutionRange::host_reads`]); and where the buffer inherits the encoder's
+    /// buffers, what its commands reach of the encoder's bindings at the call
+    /// (`ArgumentTable::bound_uses`). `None` where its commands may reach more that Metal orders:
+    /// an inherited visible-function table; and inside a block of command predication, whose
+    /// counter the step reads.
     pub(super) fn bound(&self, residency: &Residency) -> Option<Summary<ResourceKey>> {
-        if self.icb.descriptor().inherit_buffers
-            || self.gate.is_some()
-            || self.preprocess_gate.is_some()
-        {
+        if self.gate.is_some() || self.preprocess_gate.is_some() {
             return None;
         }
+        let inherited = match self.icb.descriptor().inherit_buffers {
+            true => self.table.bound_uses()?,
+            false => Vec::new(),
+        };
         let mut uses = residency.bound_uses();
         uses.extend(self.range.host_reads(&self.icb));
+        let aliases = &self.icb.device().shared().aliases;
+        uses.extend(aliases.augment(&inherited).unwrap_or(inherited));
         let mut bound = EncoderUses::new(false);
         bound.record(vk::PipelineStageFlags2::ALL_COMMANDS, &uses, None);
         Some(bound.finish())

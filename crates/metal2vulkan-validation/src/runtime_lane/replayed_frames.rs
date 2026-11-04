@@ -7,9 +7,9 @@
 //! pass does; the draw of instance `i` encodes command `i`, a draw of 6 16-bit indices of
 //! primitive type `i % 5` (`ive_encode` may call `draw_indexed_primitives` alone). The pass makes
 //! the buffer resident for writing, the indices for reading, and a texture the presenter samples
-//! for reading. A second pass executes the buffer's [`DRAWS`] commands, which inherit its state
-//! (`ive_vertex`, `ive_fragment`) and buffers: the GPU may write the records, so a host step
-//! records the execution from them.
+//! for reading. A second pass binds a buffer for its vertex stage and executes the buffer's
+//! [`DRAWS`] commands, which inherit its state (`ive_vertex`, `ive_fragment`) and buffers: the GPU
+//! may write the records, so a host step records the execution from them.
 //!
 //! Meanwhile a presenter queue commits a blit that reads the texture, and a bystander queue one
 //! that fills a buffer of its own, each one at a time, again as each completes, until the frame
@@ -22,8 +22,15 @@
 //! groups do (none by default): the step's time should grow with the records alone, not with
 //! them times the resident resources. It is ignored by default: run it by name with
 //! `--run-ignored all`.
+//!
+//! [`a_replayed_execution_holds_only_what_shares_its_resources`] checks what the frame holds of
+//! other queues' work while its host step is not recorded: a later commit on another queue waits
+//! behind it only where Metal orders the two, as one writes what the other uses.
 
-use super::{buffer_with, validated_device_with, Messages, ScratchCache, WAIT};
+use super::{
+    buffer_with, layer_reported_nothing_at_all, validated_device, validated_device_with, Messages,
+    ScratchCache, WAIT,
+};
 use crate::air_library::AirLibrary;
 use crate::gpu::TEST_DEVICE;
 use metal2vulkan::metal::{
@@ -48,19 +55,27 @@ const FRAMES_VAR: &str = "REPLAYED_FRAMES_FRAMES";
 /// besides (none by default).
 const RESIDENT_VAR: &str = "REPLAYED_FRAMES_RESIDENT";
 
-/// The commands the pass encodes, one a draw.
+/// The commands the pass encodes, one a draw, in [`replayed_frames`].
 const DRAWS: u32 = 5000;
+
+/// The commands the pass encodes in [`a_replayed_execution_holds_only_what_shares_its_resources`]:
+/// enough that the host step takes longer than another queue's commit.
+const CHECKED_DRAWS: u32 = 256;
 
 /// The target's width and height.
 const SIDE: u64 = 64;
 
 /// The fixture's states and buffers on a device.
 struct Page {
+    /// The commands the pass encodes and the second executes.
+    draws: u32,
     encode: RenderPipelineState,
     draw: RenderPipelineState,
     icb: IndirectCommandBuffer,
     table: Buffer,
     indices: Buffer,
+    /// The buffer the execution's pass binds for its vertex stage, which the commands inherit.
+    inherited: Buffer,
     target: Texture,
     surface: Texture,
     /// The buffers and textures the execution's pass makes resident besides, as a page's bind
@@ -69,7 +84,7 @@ struct Page {
 }
 
 impl Page {
-    fn new(device: &Device) -> Page {
+    fn new(device: &Device, draws: u32) -> Page {
         let bitcode = llvm_assemble(&engine_dir().join("icb_vertex_encode_indexed.ll")).unwrap();
         let library = device.new_library_with_air(&bitcode).unwrap();
         let function = |library: &Library, name: &str| {
@@ -96,7 +111,7 @@ impl Page {
         commands.inherit_pipeline_state = true;
         commands.inherit_buffers = true;
         let icb = device
-            .new_indirect_command_buffer(&commands, u64::from(DRAWS), ResourceOptions::shared())
+            .new_indirect_command_buffer(&commands, u64::from(draws), ResourceOptions::shared())
             .unwrap();
         let table = buffer_with(device, &icb.gpu_resource_id().0.to_le_bytes()).unwrap();
         let indices: Vec<u8> = (0..64u16 * 6)
@@ -120,11 +135,13 @@ impl Page {
             })
             .collect();
         Page {
+            draws,
             encode,
             draw,
             icb,
             table,
             indices,
+            inherited: device.new_buffer(256, ResourceOptions::shared()).unwrap(),
             target: texture(TextureUsage::RENDER_TARGET),
             surface: texture(TextureUsage::SHADER_READ),
             resident,
@@ -158,7 +175,7 @@ impl Page {
         encoder
             .set_vertex_buffer(Some(&self.indices), 0, 1)
             .unwrap();
-        for draw in 0..DRAWS {
+        for draw in 0..self.draws {
             encoder.set_render_pipeline_state(&self.encode).unwrap();
             encoder
                 .draw_primitives(PrimitiveType::Point, 0, 1, 1, draw)
@@ -167,6 +184,9 @@ impl Page {
         encoder.end_encoding().unwrap();
         let mut encoder = command_buffer.render_command_encoder(&self.pass()).unwrap();
         encoder.set_render_pipeline_state(&self.draw).unwrap();
+        encoder
+            .set_vertex_buffer(Some(&self.inherited), 0, 0)
+            .unwrap();
         let stages = RenderStages::VERTEX | RenderStages::FRAGMENT;
         for (buffer, texture) in &self.resident {
             for resource in [buffer.as_resource(), texture.as_resource()] {
@@ -176,7 +196,7 @@ impl Page {
             }
         }
         encoder
-            .execute_commands_in_buffer(&self.icb, 0..u64::from(DRAWS))
+            .execute_commands_in_buffer(&self.icb, 0..u64::from(self.draws))
             .unwrap();
         encoder.end_encoding().unwrap();
         command_buffer.commit().unwrap();
@@ -221,13 +241,16 @@ fn split(before: &WorkCounts, after: &WorkCounts) -> String {
     let ms = |nanos: u64| nanos as f64 / 1e6;
     format!(
         "host_steps {} host_step_ms {:.1} render_pipelines_made_ms {:.1} \
-         compute_pipelines_made_ms {:.1} variant_pipelines_made {} records_read {}",
+         compute_pipelines_made_ms {:.1} variant_pipelines_made {} records_read {} \
+         heads_held_for_host_steps {} heads_held_for_earlier_commits {}",
         after.host_steps_recorded - before.host_steps_recorded,
         ms(after.host_step_nanos - before.host_step_nanos),
         ms(after.render_pipeline_create_nanos - before.render_pipeline_create_nanos),
         ms(after.compute_pipeline_create_nanos - before.compute_pipeline_create_nanos),
         after.variant_pipelines_made - before.variant_pipelines_made,
         after.indirect_records_read - before.indirect_records_read,
+        after.heads_held_for_host_steps - before.heads_held_for_host_steps,
+        after.heads_held_for_earlier_commits - before.heads_held_for_earlier_commits,
     )
 }
 
@@ -243,7 +266,7 @@ fn replayed_frames() {
     })
     .unwrap();
     let name = device.name().to_owned();
-    let page = Page::new(&device);
+    let page = Page::new(&device, DRAWS);
     let (page_queue, presenter, bystander) = (
         device.new_command_queue().unwrap(),
         device.new_command_queue().unwrap(),
@@ -309,4 +332,100 @@ fn replayed_frames() {
             stood.total.as_secs_f64() * 1e3 / stood.count.max(1) as f64,
         );
     }
+}
+
+/// While the page's frame is held for its host step (`WorkCounts::heads_held_for_host_steps`
+/// moves), another queue's command buffer committed after it is held behind it
+/// (`WorkCounts::heads_held_for_earlier_commits`) only where Metal orders the two: a bystander
+/// that fills a buffer of its own, and a presenter that copies out the texture the frame only
+/// reads, go at once; a presenter that fills the buffer the execution's commands inherit waits.
+/// The validation layer stays silent.
+#[test]
+fn a_replayed_execution_holds_only_what_shares_its_resources() {
+    let cache = ScratchCache::new().unwrap();
+    let messages = Messages::default();
+    {
+        let device = validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
+        let name = device.name().to_owned();
+        let page = Page::new(&device, CHECKED_DRAWS);
+        let (page_queue, other) = (
+            device.new_command_queue().unwrap(),
+            device.new_command_queue().unwrap(),
+        );
+        let read = device
+            .new_buffer(SIDE * SIDE * 4, ResourceOptions::shared())
+            .unwrap();
+        let own = device.new_buffer(256, ResourceOptions::shared()).unwrap();
+        let fill = |buffer: &Buffer, command_buffer: &CommandBuffer| {
+            let mut blit = command_buffer.blit_command_encoder().unwrap();
+            blit.fill_buffer(buffer, 0..256, 7).unwrap();
+            blit.end_encoding().unwrap();
+        };
+        let copy_out = |command_buffer: &CommandBuffer| {
+            let mut blit = command_buffer.blit_command_encoder().unwrap();
+            let size = Size::new(SIDE, SIDE, 1);
+            let (row, image) = (SIDE * 4, SIDE * SIDE * 4);
+            let origin = Origin::new(0, 0, 0);
+            let none = BlitOption::None;
+            blit.copy_from_texture_to_buffer(
+                &page.surface,
+                0,
+                0,
+                origin,
+                size,
+                &read,
+                0,
+                row,
+                image,
+                none,
+            )
+            .unwrap();
+            blit.end_encoding().unwrap();
+        };
+        let cases: [(&str, bool, &dyn Fn(&CommandBuffer)); 3] = [
+            (
+                "a bystander that fills a buffer of its own",
+                false,
+                &|command_buffer| fill(&own, command_buffer),
+            ),
+            (
+                "a presenter that copies out the texture the frame reads",
+                false,
+                &copy_out,
+            ),
+            (
+                "a presenter that fills the buffer the commands inherit",
+                true,
+                &|command_buffer| fill(&page.inherited, command_buffer),
+            ),
+        ];
+        for (case, shares, encode) in cases {
+            let before = device.work_counts();
+            let frame = page.frame(&page_queue);
+            let command_buffer = other.command_buffer().unwrap();
+            encode(&command_buffer);
+            command_buffer.commit().unwrap();
+            for command_buffer in [&frame, &command_buffer] {
+                command_buffer.wait_until_completed_for(WAIT).unwrap();
+                assert_eq!(
+                    command_buffer.status(),
+                    CommandBufferStatus::Completed,
+                    "{case}"
+                );
+            }
+            let after = device.work_counts();
+            let step = after.heads_held_for_host_steps - before.heads_held_for_host_steps;
+            assert!(
+                step > 0,
+                "{case} on {name}: the frame was not held for its host step"
+            );
+            let held = after.heads_held_for_earlier_commits - before.heads_held_for_earlier_commits;
+            assert_eq!(
+                held > 0,
+                shares,
+                "{case} on {name}: {held} looks held it behind the frame"
+            );
+        }
+    }
+    layer_reported_nothing_at_all(&messages);
 }
