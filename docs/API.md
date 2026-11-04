@@ -3803,7 +3803,10 @@ each item named states the rule in full.
   it. From then on an execution runs the records as they stand once the work before
   it completed. A buffer made resident for writing alongside functions that call no such operation
   stays unmarked, and its executions run the CPU's records as a buffer made resident for reading
-  does (`WorkCounts::indirect_write_residencies_unmarked` counts each such commit's buffers).
+  does (`WorkCounts::indirect_write_residencies_unmarked` counts each such commit's buffers). A
+  buffer no encoder of the command buffer made resident for writing is outside Metal's contract for
+  a function's write: its executions run the CPU's records, where Metal on an M3 Max ran a compute
+  execution's commands as the kernel wrote them (and a render execution's as the CPU did).
 - **What an execution runs, where its records are read**
   (`CommandBuffer::add_executed_commands_handler`, no Metal counterpart): a handler is called each
   time the runtime reads an execution's records, at `commit`, in a host step, or not at all for an
