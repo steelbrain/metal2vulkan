@@ -6636,7 +6636,7 @@ impl RuntimeSide<'_> {
             ))
         };
         let mut descriptor = RenderPipelineDescriptor::new(stage(&spec.vertex)?);
-        descriptor.fragment = spec.fragment.as_ref().map(&stage).transpose()?;
+        descriptor.fragment = spec.fragment.as_ref().map(stage).transpose()?;
         let apart = pipeline_fields(spec)?;
         descriptor.color_attachments = apart.color_attachments;
         descriptor.depth_format = apart.depth_format;
@@ -7600,7 +7600,7 @@ fn encode_pass(command_buffer: &CommandBuffer, pass: &RenderPass, pools: &Pools)
                 offset,
                 instance_stride,
             } => {
-                let factors = held.map(&buffer).transpose()?;
+                let factors = held.map(buffer).transpose()?;
                 encoder
                     .set_tessellation_factor_buffer(factors, *offset, *instance_stride)
                     .map_err(Failure::from_error)?;
@@ -7617,7 +7617,7 @@ fn encode_pass(command_buffer: &CommandBuffer, pass: &RenderPass, pools: &Pools)
                 instances,
                 base_instance,
             } => {
-                let indices = patch_indices.map(&buffer).transpose()?;
+                let indices = patch_indices.map(buffer).transpose()?;
                 encoder
                     .draw_patches(
                         *control_points,
@@ -7641,7 +7641,7 @@ fn encode_pass(command_buffer: &CommandBuffer, pass: &RenderPass, pools: &Pools)
                 instances,
                 base_instance,
             } => {
-                let indices = patch_indices.map(&buffer).transpose()?;
+                let indices = patch_indices.map(buffer).transpose()?;
                 encoder
                     .draw_indexed_patches(
                         *control_points,

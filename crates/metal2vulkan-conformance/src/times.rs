@@ -528,7 +528,7 @@ impl TimeVerdict {
     pub fn ratio(&self) -> Option<f64> {
         match self {
             TimeVerdict::Within { ours, metal } | TimeVerdict::Over { ours, metal } => {
-                (*metal > 0).then(|| *ours as f64 / *metal as f64)
+                (*metal > 0).then_some(*ours as f64 / *metal as f64)
             }
             TimeVerdict::Unmeasured { .. } => None,
         }
@@ -596,7 +596,7 @@ impl Comparison {
         match self {
             Comparison::Judged { verdict } => verdict.ratio(),
             Comparison::Noticed { ours, metal, .. } => {
-                (*metal > 0).then(|| *ours as f64 / *metal as f64)
+                (*metal > 0).then_some(*ours as f64 / *metal as f64)
             }
             Comparison::Apart { .. } => None,
         }
@@ -824,7 +824,7 @@ pub struct Paired {
 impl Paired {
     /// How many times our leg's total is Metal's, where Metal's is not zero.
     pub fn ratio(&self) -> Option<f64> {
-        (self.metal.wall > 0).then(|| self.ours.wall as f64 / self.metal.wall as f64)
+        (self.metal.wall > 0).then_some(self.ours.wall as f64 / self.metal.wall as f64)
     }
 }
 

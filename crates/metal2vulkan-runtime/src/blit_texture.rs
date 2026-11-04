@@ -1466,55 +1466,54 @@ impl BlitCommandEncoder {
         let one_extent = in_images.iter().all(|copy| copy.src.size == copy.dst.size);
         let samples = source.record().samples;
         let mut bits = Vec::new();
-        for to in [into] {
-            match Some(&from).filter(|from| from.copies_into(&to) && !overlap && one_extent) {
-                Some(from) => {
-                    let mut regions: Vec<ImageCopyRegion> = in_images
+        let to = into;
+        match Some(&from).filter(|from| from.copies_into(&to) && !overlap && one_extent) {
+            Some(from) => {
+                let mut regions: Vec<ImageCopyRegion> = in_images
+                    .iter()
+                    .map(|copy| from.region(&to, copy))
+                    .collect();
+                // Into a multisampled float image whose NaNs the device's copy converts:
+                // the regions at one origin in both images by the sample planes' copies,
+                // which move every sample's bits; the rest, or all where those cannot run,
+                // copied by the device and announced.
+                let device = self.core().device().clone();
+                if nan_clear::converting_copy(&device, to.format, samples) {
+                    let (exact, rest): (Vec<&ImageCopyRegion>, Vec<&ImageCopyRegion>) = regions
                         .iter()
-                        .map(|copy| from.region(&to, copy))
-                        .collect();
-                    // Into a multisampled float image whose NaNs the device's copy converts:
-                    // the regions at one origin in both images by the sample planes' copies,
-                    // which move every sample's bits; the rest, or all where those cannot run,
-                    // copied by the device and announced.
-                    let device = self.core().device().clone();
-                    if nan_clear::converting_copy(&device, to.format, samples) {
-                        let (exact, rest): (Vec<&ImageCopyRegion>, Vec<&ImageCopyRegion>) = regions
-                            .iter()
-                            .partition(|copy| copy.src.origin == copy.dst.origin);
-                        let pairs: Vec<(ImageRegion, ImageRegion)> =
-                            exact.iter().map(|copy| (copy.src, copy.dst)).collect();
-                        if let Some(copy) = sample_planes::BitsCopy::plan(
-                            self.core().command_buffer(),
-                            source,
-                            destination,
-                            to.format,
-                            &pairs,
-                            samples,
-                        )? {
-                            bits.push(copy);
-                            regions = rest.into_iter().copied().collect();
-                        }
-                        if !regions.is_empty() {
-                            nan_clear::degrade_converting_copy(&device, to.format, samples, || {
-                                format!(
-                                    "a blit copy into a multisampled {:?} texture",
-                                    destination.pixel_format()
-                                )
-                            });
-                        }
+                        .partition(|copy| copy.src.origin == copy.dst.origin);
+                    let pairs: Vec<(ImageRegion, ImageRegion)> =
+                        exact.iter().map(|copy| (copy.src, copy.dst)).collect();
+                    if let Some(copy) = sample_planes::BitsCopy::plan(
+                        self.core().command_buffer(),
+                        source,
+                        destination,
+                        to.format,
+                        &pairs,
+                        samples,
+                    )? {
+                        bits.push(copy);
+                        regions = rest.into_iter().copied().collect();
                     }
                     if !regions.is_empty() {
-                        let regions: Vec<vk::ImageCopy> = regions.iter().map(image_copy).collect();
-                        direct.push((from.image, to.image, regions));
-                        // A depth that may hold a negative value or a NaN, copied as it is.
-                        if to.aspect == ImageAspectFlags::DEPTH {
-                            destination.degrade_signed_depth(call);
-                        }
+                        nan_clear::degrade_converting_copy(&device, to.format, samples, || {
+                            format!(
+                                "a blit copy into a multisampled {:?} texture",
+                                destination.pixel_format()
+                            )
+                        });
                     }
                 }
-                None => staged.push(to),
+                if !regions.is_empty() {
+                    let regions: Vec<vk::ImageCopy> = regions.iter().map(image_copy).collect();
+                    direct.push((from.image, to.image, regions));
+                    // A depth that may hold a negative value or a NaN, copied as it is.
+                    if to.aspect == ImageAspectFlags::DEPTH {
+                        destination.degrade_signed_depth(call);
+                    }
+                }
             }
+            None => staged.push(to),
         }
         for copy in &bits {
             self.command_in_reading(

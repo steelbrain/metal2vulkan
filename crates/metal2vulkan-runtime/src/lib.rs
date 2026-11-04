@@ -22,6 +22,11 @@
 // Every public item says what it is and its Metal counterpart: a new undocumented one fails the
 // warnings-denied gates.
 #![warn(missing_docs)]
+// The compiler's proofs of `Send` and `Sync` in this crate (`render/deferral.rs`) walk a render
+// encoder's lowering through the standard library's containers, which take more levels per
+// container than they did: past the default limit of 128 (`recursion_depth_exceeding_limit`). A
+// program's crate keeps the default (`tests/consumer_auto_traits.rs`).
+#![recursion_limit = "256"]
 
 mod address;
 mod address_map;

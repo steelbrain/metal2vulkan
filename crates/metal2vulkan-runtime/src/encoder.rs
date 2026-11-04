@@ -416,8 +416,8 @@ fn into_parts(
         segment.executions_at += base;
         if segment.host {
             let before = segment.at - taken;
-            parts.push((raws.by_ref().take(before).collect::<Vec<_>>(), current));
-            current = Vec::new();
+            let finished = std::mem::take(&mut current);
+            parts.push((raws.by_ref().take(before).collect::<Vec<_>>(), finished));
             taken = segment.at;
         }
         segment.at -= taken;

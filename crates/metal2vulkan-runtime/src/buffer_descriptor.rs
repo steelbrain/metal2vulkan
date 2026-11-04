@@ -1759,7 +1759,7 @@ impl Device {
         {
             use std::sync::atomic::Ordering;
             let failing = &shared.failing_host_imports;
-            if (failing.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_sub(1)))
+            if (failing.try_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_sub(1)))
                 .is_ok()
             {
                 return Err(Error::OutOfMemory(MemoryKind::Device));

@@ -134,8 +134,8 @@ fn attachments(
     let mut unwritten = ColorAttachmentDescriptor::new(PixelFormat::RGBA16Float);
     unwritten.write_mask = ColorWriteMask::NONE;
     let mut r = RenderLinkInputs::new();
-    for c in 0..=color + 1 {
-        r.color_attachments[c] = Some(unwritten);
+    for slot in r.color_attachments.iter_mut().take(color + 2) {
+        *slot = Some(unwritten);
     }
     r.color_attachments[color] = Some(blended);
     r

@@ -11,8 +11,8 @@
 blessing it asserts. Every verb takes `--root DIR` (the repository, the default being this
 script's own two directories up) and `--table FILE`.
 
-It reads source text only: no build, no toolchain, no rustdoc, whose JSON surface is nightly-only
-while this fleet is pinned to stable. So it is the same five seconds on any checkout, under any
+It reads source text only: no build, no toolchain, no rustdoc, whose JSON surface is unstable and
+changes between nightlies. So it is the same five seconds on any checkout, under any
 feature set: a `#[cfg]`-gated item is read as present, with its gate kept in the signature.
 
 The surface is the set of names a consumer may write -- the module roots the crates export, their

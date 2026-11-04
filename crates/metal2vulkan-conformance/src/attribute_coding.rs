@@ -127,7 +127,7 @@ pub fn shape(name: &str) -> Option<Shape> {
         });
     }
     let (base, components) = match tail.as_bytes().last() {
-        Some(digit @ (b'2' | b'3' | b'4')) => (&tail[..tail.len() - 1], usize::from(digit - b'0')),
+        Some(digit @ b'2'..=b'4') => (&tail[..tail.len() - 1], usize::from(digit - b'0')),
         _ => (tail, 1),
     };
     let coding = match (base, normalized) {

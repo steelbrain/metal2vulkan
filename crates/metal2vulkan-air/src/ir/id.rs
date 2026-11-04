@@ -57,40 +57,49 @@ macro_rules! ir_id {
 
 ir_id!(
     /// An interned type ([`super::Type`]).
-    TypeId, "t"
+    TypeId,
+    "t"
 );
 ir_id!(
     /// An interned constant ([`super::Constant`]).
-    ConstId, "c"
+    ConstId,
+    "c"
 );
 ir_id!(
     /// A module-level global variable.
-    GlobalId, "g"
+    GlobalId,
+    "g"
 );
 ir_id!(
     /// A function (definition or declaration).
-    FuncId, "f"
+    FuncId,
+    "f"
 );
 ir_id!(
     /// A basic block within one function body. Block 0 is the entry.
-    BlockId, "bb"
+    BlockId,
+    "bb"
 );
 ir_id!(
     /// An instruction within one function body (void instructions included).
-    InstId, "i"
+    InstId,
+    "i"
 );
 ir_id!(
     /// A function parameter position.
-    ArgIdx, "a"
+    ArgIdx,
+    "a"
 );
 ir_id!(
     /// A metadata node, string, or value.
-    MdId, "md"
+    MdId,
+    "md"
 );
 ir_id!(
     /// An interned byte string (symbol names, metadata strings). Diagnostics and ABI only: no
     /// product decision may branch on its contents except stable `air.*`/`llvm.*` ABI keys.
-    Sym, "s"
+    Sym,
+    "s"
 );
 
 /// A dense arena of `T` indexed by `I`.

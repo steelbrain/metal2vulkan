@@ -20,7 +20,6 @@ rust-version = "1.98"
 license = "GPL-2.0-or-later OR LGPL-3.0-or-later"
 authors = ["Anees Iqbal <hello@aneesiqbal.ai>"]
 repository = "https://github.com/steelbrain/metal2vulkan"
-homepage = "https://github.com/steelbrain/metal2vulkan"
 
 # The external dependencies more than one crate takes, at one version each. A crate adds its own
 # features (and `optional`). The crates' dependencies on one another stay in their own manifests,

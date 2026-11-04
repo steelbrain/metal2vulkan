@@ -1133,7 +1133,7 @@ fn the_threads_that_take_command_buffers_to_their_handlers_run_at_the_user_inter
             reaper.start().unwrap().reap(Box::new(Reaped(dropped)));
             let reaped = drops.recv_timeout(WAIT).unwrap();
             reaper.stop();
-            let plain = exit_guard::spawn(std::thread::Builder::new(), || qos_class_self())
+            let plain = exit_guard::spawn(std::thread::Builder::new(), qos_class_self)
                 .unwrap()
                 .join()
                 .unwrap();

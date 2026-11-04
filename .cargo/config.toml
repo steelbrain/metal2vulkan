@@ -1,0 +1,21 @@
+# Build settings for this workspace's own builds. A consumer that depends on the published crates
+# never reads this file (Cargo reads the configuration of the directory it runs in).
+
+[build]
+# kache (a compiler cache) where it is installed, plain rustc where it is not, CI included:
+# `scripts/rustc-wrapper` decides per invocation. `RUSTC_WRAPPER` set in the environment replaces
+# it, and an empty `RUSTC_WRAPPER=` runs rustc with no wrapper at all.
+rustc-wrapper = "scripts/rustc-wrapper"
+
+[unstable]
+profile-rustflags = true
+
+# rustc's parallel front end on every compile, with as many threads as the machine has cores
+# (`0`). Profile rustflags are added to `RUSTFLAGS` rather than replaced by it, so the GPU lanes'
+# `--cfg m2v_gpu` and CI's `-Dwarnings` keep it. `test`, `bench` and `debugger` inherit it from
+# `dev` and `release`.
+[profile.dev]
+rustflags = ["-Zthreads=0"]
+
+[profile.release]
+rustflags = ["-Zthreads=0"]

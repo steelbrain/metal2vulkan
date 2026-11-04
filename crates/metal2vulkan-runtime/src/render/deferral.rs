@@ -197,6 +197,37 @@ const _: () = {
     sent::<Lowerer>();
 };
 
+/// An encoder's own lowering (`RenderLoweringPolicy::AtCall`), boxed where it is made
+/// ([`RenderLowering::assemble`]).
+pub(super) struct OwnLowering(Box<RenderLowering>);
+
+// SAFETY: an `OwnLowering` is `Send` exactly when `RenderLowering` is, its one field being a box of
+// one; the constant below makes the compiler prove that. Written out, as `LoweringSlot`'s are, the
+// impl ends a program's crate's walk of an encoder's fields there: the walk from a
+// `RenderCommandEncoder` through its own lowering ran past rustc's default recursion limit
+// (`tests/consumer_auto_traits.rs`).
+unsafe impl Send for OwnLowering {}
+
+// The compiler's proof of what `OwnLowering`'s `Send` impl rests on.
+const _: () = {
+    const fn sent<T: Send>() {}
+    sent::<RenderLowering>();
+};
+
+impl std::ops::Deref for OwnLowering {
+    type Target = RenderLowering;
+
+    fn deref(&self) -> &RenderLowering {
+        &self.0
+    }
+}
+
+impl std::ops::DerefMut for OwnLowering {
+    fn deref_mut(&mut self) -> &mut RenderLowering {
+        &mut self.0
+    }
+}
+
 /// A slot's lowering, and whether it refused a call.
 struct Lowerer {
     /// Its encoder's lowering: `None` once the encoder ended, and in a slot not taken.
@@ -654,7 +685,7 @@ impl RenderCommandEncoder {
         let logs = device.compile_device().policy().render_lowering == RenderLoweringPolicy::Worker
             && lowering.grouped.is_none();
         let (own, logged) = match logs {
-            false => (Some(lowering), None),
+            false => (Some(OwnLowering(lowering)), None),
             true => {
                 let device = device.clone();
                 let command_buffer = lowering.core.command_buffer().downgrade();
@@ -845,7 +876,7 @@ impl RenderCommandEncoder {
     /// the end of an encoder that logged its calls name it as `endEncoding`, after its calls.
     pub(super) fn end(self) -> Result<(), Error> {
         let logged = match (self.own, self.logged) {
-            (Some(lowering), _) => return lowering.end_encoding(),
+            (Some(lowering), _) => return lowering.0.end_encoding(),
             (None, Some(logged)) => logged,
             (None, None) => return Err(internal("an encoder without its lowering")),
         };

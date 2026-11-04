@@ -113,7 +113,7 @@ FROM ubuntu:26.04@sha256:da6fc2be547864451aa253836dd926da33623312df4a9a243e35dc8
 # First, so nothing below runs (or compiles) while the mesa stage builds.
 COPY --from=mesa /opt/mesa /opt/mesa
 
-ARG RUST_VERSION=1.98.1
+ARG RUST_VERSION=nightly-2026-11-03
 ARG NEXTEST_VERSION=0.9.140
 
 ENV DEBIAN_FRONTEND=noninteractive \

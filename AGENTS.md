@@ -156,7 +156,8 @@ has the commands.
   - make worktrees with `scripts/lean-tree worktree` (the observations are clones) and source
     snapshots with `scripts/lean-tree snapshot` (no observations unless the tree runs validation);
   - start each new target directory from a seed with `scripts/seed-target`;
-  - set `CARGO_INCREMENTAL=0` for one-shot builds;
+  - builds are incremental, and compile through `scripts/rustc-wrapper` (kache where it is
+    installed: a local cache that also carries incremental state between worktrees);
   - record Instruments traces through `scripts/xctrace-run`, and delete the `.trace` once
     exported.
 - `pgrep -f` and `ps | grep` match their own command line. Always bracket the first character:
@@ -218,7 +219,9 @@ cargo nextest run -p metal2vulkan-conformance --all-features
 cargo test --workspace --all-features --doc
 ```
 
-- MSRV: `rust-version` in the crates' manifests (1.98).
+- MSRV: `rust-version` in the crates' manifests (1.98). The tree builds on the dated nightly
+  `rust-toolchain.toml` pins, with rustc's parallel front end on every core (`-Zthreads=0`,
+  `.cargo/config.toml`).
 - Warnings are errors everywhere (CI sets `RUSTFLAGS=-Dwarnings`). Never hide one behind
   `#[allow(...)]`; fix it.
 - Features: `serde`, `ash` and `cli` (which enables `serde`). Every gate passes `--all-features`;

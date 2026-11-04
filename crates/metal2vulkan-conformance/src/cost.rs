@@ -231,7 +231,7 @@ pub struct PipelinesPerState {
 impl PipelinesPerState {
     /// The ratio this measurement read, where it read one.
     pub fn ratio(&self) -> Option<f64> {
-        (self.states > 0).then(|| self.pipelines as f64 / self.states as f64)
+        (self.states > 0).then_some(self.pipelines as f64 / self.states as f64)
     }
 
     /// The most pipelines this bound allows a run that created `states` states.

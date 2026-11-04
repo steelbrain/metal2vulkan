@@ -1,10 +1,13 @@
 # The toolchain every build of this tree uses. It travels with the tree, so a worktree, a snapshot
-# or a fresh clone cannot silently take whatever `stable` happens to be on the machine — which is
-# how three lints that exist only in a later Rust were once reported as a broken `development`.
+# or a fresh clone cannot silently take whatever toolchain happens to be the machine's default —
+# which is how three lints that exist only in a later Rust were once reported as a broken
+# `development`.
 #
-# The channel is the MSRV the published crates promise in `rust-version`, so an ordinary build is
-# what checks that promise rather than a separate job nobody runs. Raising it is a deliberate,
-# fleet-wide step: it is a consumer-facing contract, not a local convenience.
+# A dated nightly, for rustc's parallel front end (`-Zthreads`, set in `.cargo/config.toml`) and
+# Cargo's profile rustflags. The date is fixed so every machine runs one rustc, clippy and rustfmt;
+# moving it is a deliberate, fleet-wide step. The published crates still promise the stable
+# `rust-version` in their manifests (1.98), which this build no longer checks by itself: clippy's
+# `incompatible_msrv` catches a standard-library item newer than it, not a language feature.
 [toolchain]
-channel = "1.98.1"
+channel = "nightly-2026-11-03"
 components = ["clippy", "rustfmt"]

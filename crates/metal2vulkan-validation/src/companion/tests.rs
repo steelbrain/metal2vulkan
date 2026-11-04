@@ -1009,11 +1009,10 @@ fn generated_companions_link_with_their_cases_in_the_engine() {
         &draws,
         "mesh_draws_fragment",
     )));
-    for index in 0..2 {
-        descriptor.color_attachments[index] =
-            Some(metal2vulkan::pipeline::ColorAttachmentDescriptor::new(
-                metal2vulkan::metal::PixelFormat::RGBA32Uint,
-            ));
+    for slot in descriptor.color_attachments.iter_mut().take(2) {
+        *slot = Some(metal2vulkan::pipeline::ColorAttachmentDescriptor::new(
+            metal2vulkan::metal::PixelFormat::RGBA32Uint,
+        ));
     }
     let linked = device
         .compile_mesh_pipeline(&descriptor, &metal2vulkan::Budget::standard())

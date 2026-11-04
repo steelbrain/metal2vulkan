@@ -2887,8 +2887,8 @@ fn the_graphics_state_masks_the_colors_the_fragment_function_writes() {
     let p = profile("lavapipe");
     let f4 = io_ty(IoNumeric::Float, 4);
     let mut r = RenderLinkInputs::new();
-    for index in 0..4 {
-        r.color_attachments[index] = Some(ColorAttachmentDescriptor::new(PixelFormat::RGBA16Float));
+    for slot in r.color_attachments.iter_mut().take(4) {
+        *slot = Some(ColorAttachmentDescriptor::new(PixelFormat::RGBA16Float));
     }
     let inputs = LinkInputs::Render(Box::new(r));
     let va = artifact(iface(Stage::Vertex, vec![], vec![]), None);

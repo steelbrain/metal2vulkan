@@ -9,7 +9,6 @@ description = "Translate Metal AIR / LLVM IR to Vulkan SPIR-V with a native Rust
 # The repository's README, at the root: `cargo package` puts it at the package's root.
 readme = "../../README.md"
 repository.workspace = true
-homepage.workspace = true
 documentation = "https://docs.rs/metal2vulkan"
 keywords = ["metal", "air", "spir-v", "vulkan", "gpu"]
 categories = ["compilers", "graphics", "encoding"]

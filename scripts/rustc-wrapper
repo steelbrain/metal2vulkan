@@ -1,0 +1,9 @@
+#!/bin/sh
+# Cargo's rustc wrapper for this workspace (`.cargo/config.toml`): Cargo runs it as
+# `rustc-wrapper RUSTC ARGS...`. It hands the compile to kache, a local compiler cache, where
+# kache is on PATH and the build is not CI's; anywhere else it runs the compiler itself. kache is a
+# tool on PATH, never a dependency, and its store stays on the machine.
+if [ -z "${CI:-}" ] && command -v kache >/dev/null 2>&1; then
+  exec kache "$@"
+fi
+exec "$@"

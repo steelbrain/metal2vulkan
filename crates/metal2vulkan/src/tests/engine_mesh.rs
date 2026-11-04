@@ -920,8 +920,8 @@ fn without_the_extension_a_mesh_pipeline_draws_its_records() {
         let dev = device(&stem);
         let mut d = MeshPipelineDescriptor::new(stage(&draws, "mesh_draws_grid"));
         d.fragment = Some(stage(&draws, "mesh_draws_fragment"));
-        for i in 0..2 {
-            d.color_attachments[i] = Some(ColorAttachmentDescriptor::new(PixelFormat::RGBA32Uint));
+        for slot in d.color_attachments.iter_mut().take(2) {
+            *slot = Some(ColorAttachmentDescriptor::new(PixelFormat::RGBA32Uint));
         }
         let pipeline = dev
             .compile_mesh_pipeline(&d, &budget)
@@ -1147,8 +1147,8 @@ fn object_records_draws(dev: &crate::device::Device, draws: &crate::library::Lib
     let mut d = MeshPipelineDescriptor::new(stage("mesh_draws_mesh"));
     d.object = Some(stage("mesh_draws_object"));
     d.fragment = Some(stage("mesh_draws_fragment"));
-    for i in 0..2 {
-        d.color_attachments[i] = Some(ColorAttachmentDescriptor::new(PixelFormat::RGBA32Uint));
+    for slot in d.color_attachments.iter_mut().take(2) {
+        *slot = Some(ColorAttachmentDescriptor::new(PixelFormat::RGBA32Uint));
     }
     let pipeline = dev
         .compile_mesh_pipeline(&d, &Budget::standard())
@@ -2019,8 +2019,8 @@ fn a_last_first_mesh_draw_reads_its_corners_from_the_last() {
         let dev = device(&stem);
         let mut d = MeshPipelineDescriptor::new(stage("mesh_draws_grid"));
         d.fragment = Some(stage("mesh_draws_fragment"));
-        for i in 0..2 {
-            d.color_attachments[i] = Some(ColorAttachmentDescriptor::new(PixelFormat::RGBA32Uint));
+        for slot in d.color_attachments.iter_mut().take(2) {
+            *slot = Some(ColorAttachmentDescriptor::new(PixelFormat::RGBA32Uint));
         }
         let base = dev
             .compile_mesh_pipeline(&d, &budget)

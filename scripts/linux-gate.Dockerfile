@@ -8,8 +8,8 @@
 #   already ships and the build needs (a C toolchain for linking and bundled SQLite, clang for the
 #   tests that probe it), `vulkan-tools` (vulkaninfo), and what the two source builds below need
 #   (git, cmake, ninja).
-# - Rust: `dtolnay/rust-toolchain@stable` with rustfmt + clippy in CI; pinned here to the stable
-#   release current when this recipe was written. Bump RUST_VERSION when CI's stable moves.
+# - Rust: the dated nightly `rust-toolchain.toml` names, with rustfmt + clippy, as in CI. Keep
+#   RUST_VERSION equal to that file's channel.
 # - cargo-nextest: `taiki-e/install-action` installs the latest in CI; pinned here by
 #   NEXTEST_VERSION and built from crates.io with its lockfile.
 # - SwiftShader (Google's CPU Vulkan ICD; Ubuntu does not package it): built from source at
@@ -30,7 +30,7 @@
 # Changing this file changes the image tag `scripts/linux-gate` computes, so the next run rebuilds.
 FROM ubuntu:26.04@sha256:da6fc2be547864451aa253836dd926da33623312df4a9a243e35dc877c378a78
 
-ARG RUST_VERSION=1.98.1
+ARG RUST_VERSION=nightly-2026-11-03
 ARG NEXTEST_VERSION=0.9.140
 
 ENV DEBIAN_FRONTEND=noninteractive \

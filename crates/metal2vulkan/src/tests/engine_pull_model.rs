@@ -111,8 +111,8 @@ fn render(
     };
     let mut d = RenderPipelineDescriptor::new(stage(VERTEX));
     d.fragment = Some(stage(fragment));
-    for i in 0..count {
-        d.color_attachments[i] = Some(ColorAttachmentDescriptor::new(format));
+    for slot in d.color_attachments.iter_mut().take(count) {
+        *slot = Some(ColorAttachmentDescriptor::new(format));
     }
     d.raster_sample_count = samples;
     d

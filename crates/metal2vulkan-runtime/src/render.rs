@@ -430,8 +430,8 @@ mod vertex_strides;
 #[cfg(all(test, debug_assertions, any(m2v_gpu, m2v_cpu_icd)))]
 pub(crate) use bound::dynamic_compares;
 use bound::{Bound, EqualShapes, Now, Recorded};
-use deferral::Logged;
 pub(crate) use deferral::{lowering, DeferredEncoders, EndInFlight};
+use deferral::{Logged, OwnLowering};
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 pub(crate) use deferral::{BATCH_CALLS, HANDED_BATCHES};
 pub(crate) use draw_again::KeptStorage;
@@ -1379,7 +1379,7 @@ pub struct RenderCommandEncoder {
     /// (`RenderLoweringPolicy::AtCall`): no slot, no lock (`render/deferral.rs`). Boxed where
     /// it is made ([`RenderLowering::assemble`]), so neither the encoder's return nor a caller's
     /// move of it copies the lowering's state, thousands of bytes.
-    own: Option<Box<RenderLowering>>,
+    own: Option<OwnLowering>,
     /// Else its slot of the device's, which holds its lowering, its checks at the call and its
     /// calls not yet lowered.
     logged: Option<Logged>,

@@ -10,8 +10,8 @@
 //!
 //! `scripts/api-signatures/signatures.py` derives the surface from the sources and
 //! `tests/api_signatures.tsv` is what it must derive. The derivation reads source text only: no
-//! build, no toolchain, and no rustdoc, whose JSON surface is nightly-only while this workspace
-//! is pinned to stable. So it gives the same answer under any feature set, and the run is seconds.
+//! build, no toolchain, and no rustdoc, whose JSON surface is unstable and changes between
+//! nightlies. So it gives the same answer under any feature set, and the run is seconds.
 //!
 //! A record is `kind<TAB>key<TAB>signature`. The kinds are the declaration itself (`struct`,
 //! `enum`, `fn`, `trait`, `type`, `const`, `static`), a public field or an enum variant (`field`,

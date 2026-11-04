@@ -201,7 +201,7 @@ fn check_plan(
         // Or, with extended usage, through the view of the format's word.
         let word = WordAttachment::of(pf, profile).map(|w| w.word_format());
         assert!(
-            supports(FormatUsage::ColorAttachment) || (extended && word.is_some_and(&viewable)),
+            supports(FormatUsage::ColorAttachment) || (extended && word.is_some_and(viewable)),
             "{what}"
         );
     }

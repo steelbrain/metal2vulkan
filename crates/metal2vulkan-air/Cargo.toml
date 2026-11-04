@@ -8,7 +8,6 @@ license.workspace = true
 authors.workspace = true
 description = "Read Metal AIR: the metallib container, LLVM bitcode, a typed IR, the AIR metadata ABI, intrinsics, and canonicalization"
 repository.workspace = true
-homepage.workspace = true
 documentation = "https://docs.rs/metal2vulkan-air"
 keywords = ["metal", "air", "llvm", "bitcode", "gpu"]
 categories = ["compilers", "graphics", "parser-implementations"]

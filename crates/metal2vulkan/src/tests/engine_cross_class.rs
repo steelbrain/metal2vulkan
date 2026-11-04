@@ -1175,12 +1175,11 @@ fn integer_writes_into_narrow_floats_take_the_devices_conversion() {
             let img = images.into_iter().next().expect("image");
             for n in 0..SIDE * SIDE {
                 let at = img.index(0, 0, 0, [n % SIDE, n / SIDE, 0]).expect("texel");
-                for c in 0..4 {
+                for (c, &stored) in img.texels[at].iter().enumerate().take(4) {
                     assert_eq!(
-                        img.texels[at][c],
+                        stored,
                         lane(n, c),
-                        "{what}: texel {n} lane {c} stored {:#x}",
-                        img.texels[at][c]
+                        "{what}: texel {n} lane {c} stored {stored:#x}"
                     );
                 }
             }

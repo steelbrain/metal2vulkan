@@ -118,7 +118,6 @@ nextest_list() {
   shift 3
   ( cd "$repo" \
     && CARGO_TARGET_DIR="$target" \
-       CARGO_INCREMENTAL=0 \
        RUSTFLAGS="$flags" \
        cargo nextest list --workspace --all-features $profile_args \
          --run-ignored all --message-format json --list-type full "$@" ) \
@@ -193,7 +192,6 @@ while IFS="$(printf '\t')" read -r name binary terms; do
   status=0
   ( cd "$repo" \
     && CARGO_TARGET_DIR="$cfg_target" \
-       CARGO_INCREMENTAL=0 \
        RUSTFLAGS="--cfg m2v_gpu" \
        cargo nextest run --no-run --workspace --all-features $profile_args \
          --hide-progress-bar -E "$expression" ) >> "$log" 2>&1 || status=$?
@@ -206,7 +204,6 @@ while IFS="$(printf '\t')" read -r name binary terms; do
   started=$(date +%s)
   ( cd "$repo" \
     && CARGO_TARGET_DIR="$cfg_target" \
-       CARGO_INCREMENTAL=0 \
        RUSTFLAGS="--cfg m2v_gpu" \
        ${wrap_words:+$wrap_words} \
        cargo nextest run --workspace --all-features $profile_args \

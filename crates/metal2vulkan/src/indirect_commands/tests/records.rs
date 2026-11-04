@@ -860,11 +860,13 @@ fn a_field_written_alone_is_the_record_encoded_again() {
             }
             assert_eq!(view.buffer(stage, BINDING_COUNT), None);
         }
-        for index in 0..THREADGROUP_COUNT {
-            assert_eq!(
-                view.threadgroup_memory_length(index),
-                Some(record.threadgroup_memory_lengths[index])
-            );
+        for (index, &length) in record
+            .threadgroup_memory_lengths
+            .iter()
+            .enumerate()
+            .take(THREADGROUP_COUNT)
+        {
+            assert_eq!(view.threadgroup_memory_length(index), Some(length));
         }
         assert_eq!(view.threadgroup_memory_length(THREADGROUP_COUNT), None);
         let field = draws.field();

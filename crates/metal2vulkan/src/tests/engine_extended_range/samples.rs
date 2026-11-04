@@ -1512,15 +1512,13 @@ fn a_sampled_slot_joins_the_variant() {
                             assert_eq!(named.variant, plan.variant, "{what} {name}");
                         }
                     }
-                    for (name, desc) in [("mixed", mixed)] {
-                        match plain.plan(&dev, &sampled_state(pf, desc).shape()) {
-                            Err(crate::error::BindError::Unsupported(u)) => assert_eq!(
-                                u,
-                                Unsupported::not_implemented(Feature::Format),
-                                "{what} {name}"
-                            ),
-                            other => panic!("{what} {name}: {:?}", other.map(|_| ())),
-                        }
+                    match plain.plan(&dev, &sampled_state(pf, mixed).shape()) {
+                        Err(crate::error::BindError::Unsupported(u)) => assert_eq!(
+                            u,
+                            Unsupported::not_implemented(Feature::Format),
+                            "{what} mixed"
+                        ),
+                        other => panic!("{what} mixed: {:?}", other.map(|_| ())),
                     }
                 }
             }

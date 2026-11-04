@@ -83,8 +83,8 @@ fn pipeline(
 ) -> RenderPipelineDescriptor {
     let mut d = RenderPipelineDescriptor::new(StageSource::Function(function(bc, vertex)));
     d.fragment = fragment.map(|f| StageSource::Function(function(bc, f)));
-    for c in 0..colors {
-        d.color_attachments[c] = Some(ColorAttachmentDescriptor::new(PixelFormat::RGBA32Uint));
+    for slot in d.color_attachments.iter_mut().take(colors) {
+        *slot = Some(ColorAttachmentDescriptor::new(PixelFormat::RGBA32Uint));
     }
     d
 }

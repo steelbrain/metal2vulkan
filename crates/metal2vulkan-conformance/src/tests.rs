@@ -5352,8 +5352,8 @@ fn the_runtime_side_forwards_every_field_of_a_pipeline_spec() {
     let third = made.color_attachments[2].expect("color 2");
     assert_eq!(third.pixel_format, PixelFormat::R16Snorm, "color 2 format");
     assert_eq!(third.write_mask, ColorWriteMask::GREEN, "color 2 mask");
-    for at in 3..8 {
-        assert!(made.color_attachments[at].is_none(), "color {at}");
+    for (at, attachment) in made.color_attachments.iter().enumerate().take(8).skip(3) {
+        assert!(attachment.is_none(), "color {at}");
     }
 
     let vertex = made.vertex_descriptor.expect("vertex_descriptor");

@@ -8,7 +8,6 @@ authors.workspace = true
 description = "The Metal API on Vulkan: Metal's objects and calls run on a Vulkan device through ash"
 readme = "README.md"
 repository.workspace = true
-homepage.workspace = true
 documentation = "https://docs.rs/metal2vulkan-runtime"
 keywords = ["metal", "vulkan", "gpu", "graphics"]
 categories = ["graphics", "api-bindings"]
