@@ -724,6 +724,16 @@ driver's. Each is open work.
   GPU, once per cold cache; states that share the module then take 13 to 16 ms, and a warm cache
   2 ms. The module inlines a few sampling helpers five or six times each; keeping one copy of each
   would cut it. It is not built.
+- **Making and releasing an event on NVIDIA take 0.1 to 0.6 ms of the calling thread.**
+  `new_event` and `new_shared_event` each make one timeline semaphore (`vkCreateSemaphore`,
+  `event.rs`), and an event's release destroys it where it goes. On the RTX 5080 Laptop GPU both
+  grow with the semaphores live: made and released back to back, one or two live, a median of 98
+  to 119 µs each; 1,000 made, then released, 143 to 262 µs a making and 495 to 579 µs a release.
+  Through MoltenVK 1.4.2 on an M3 Max a making takes 2.0 to 4.6 µs, and Metal's own `newEvent`
+  and `newSharedEvent` 0.8 to 1.9 µs. The release does not post its destroy to the device's free
+  thread (`free_thread.rs`): NVIDIA's driver runs a making behind another thread's destroy, so
+  there a posted destroy took a making and release back to back from 203-238 µs to 390-507 µs.
+  Not announced.
 - **An intrinsic declaration from macOS 12's and 13's Metal compiler** whose type fits none of the
   forms `intrinsics::classify` derives from its name is refused with
   `InvalidInput(Intrinsic(SignatureMismatch))` (`intrinsics::bind`). AIR 2.5 (Metal compiler

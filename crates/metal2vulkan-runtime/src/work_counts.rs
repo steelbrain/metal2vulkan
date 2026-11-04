@@ -3817,12 +3817,7 @@ pub struct WorkCounts {
     /// of the caller's memory, one that waited for the batches in flight, and one that found the
     /// thread's queue full (`free_thread_queue_full`).
     pub memory_frees_posted: u64,
-    /// The destroys of events' timeline semaphores posted to the device's free thread, as each
-    /// event's last holder let go (`free_thread.rs`): every one but those that found its queue
-    /// full (`free_thread_queue_full`).
-    pub semaphore_destroys_posted: u64,
-    /// The blocks freed and the semaphores destroyed where they went as the free thread's queue
-    /// was full (`free_thread.rs`).
+    /// The blocks freed where they went as the free thread's queue was full (`free_thread.rs`).
     pub free_thread_queue_full: u64,
     /// The waits for the frees posted to the free thread: an allocation at
     /// `maxMemoryAllocationCount`, a block whose making would take its heap past the heap's size,
@@ -5833,8 +5828,7 @@ impl Device {
                 memory.frees(),
             )
         };
-        let (frees_posted, semaphores_posted, frees_queue_full, free_waits) =
-            self.shared().frees.counts();
+        let (frees_posted, frees_queue_full, free_waits) = self.shared().frees.counts();
         let dirty = self.shared().dirty.tally();
         WorkCounts {
             command_pools_made: counters.command_pools_made.load(Ordering::Relaxed),
@@ -6394,7 +6388,6 @@ impl Device {
                 self.shared().allocations.allocations.refused(),
             ),
             memory_frees_posted: frees_posted,
-            semaphore_destroys_posted: semaphores_posted,
             free_thread_queue_full: frees_queue_full,
             memory_free_waits: free_waits,
             host_ram_chunk_bytes: counters.host_ram_chunk_bytes.load(Ordering::Relaxed),

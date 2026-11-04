@@ -4,10 +4,8 @@
 //! forced resource ID take a new resource at once, the old block not yet freed; an allocation at
 //! `maxMemoryAllocationCount` waits for the posted frees, which still count, and is then made,
 //! where it would otherwise be refused; a block whose making would take its heap past the heap's
-//! size waits for the frees of that heap first; the device's teardown returns only once every
-//! posted free ran and the thread ended (each `memory_free_waits` counting the wait); and an
-//! event's timeline semaphore is destroyed there once its last holder, a command buffer that
-//! signals it among them, let go (`WorkCounts::semaphore_destroys_posted`).
+//! size waits for the frees of that heap first; and the device's teardown returns only once every
+//! posted free ran and the thread ended (each `memory_free_waits` counting the wait).
 //!
 //! Device tests: compiled only under the validation crate's GPU safety cfgs (`m2v_gpu`,
 //! `m2v_cpu_icd`), on the kind of device the cfg selects.
@@ -231,38 +229,4 @@ fn the_teardown_runs_every_posted_free_and_ends_the_thread_before_it_returns() {
     );
     release.join().unwrap();
     eprintln!("POSTED-FREES: the teardown waited {took:?} for the two held frees");
-}
-
-#[test]
-fn an_event_s_semaphore_is_destroyed_on_the_free_thread_once_its_last_holder_lets_go() {
-    let device = device();
-    let frees = Arc::clone(&device.shared().frees);
-    let queue = device.new_command_queue().unwrap();
-    let shared = device.new_shared_event().unwrap();
-    let plain = device.new_event().unwrap();
-    // A command buffer that signals both holds them until it completed.
-    let command_buffer = queue.command_buffer().unwrap();
-    command_buffer
-        .encode_signal_event((&shared).into(), 1)
-        .unwrap();
-    command_buffer
-        .encode_signal_event((&plain).into(), 1)
-        .unwrap();
-    let before = device.work_counts();
-    let hold = Hold::new(&frees);
-    drop((shared, plain));
-    assert_eq!(
-        device.work_counts().semaphore_destroys_posted,
-        before.semaphore_destroys_posted,
-        "the command buffer holds the events"
-    );
-    command_buffer.commit().unwrap();
-    command_buffer.wait_until_completed().unwrap();
-    drop(command_buffer);
-    until("both semaphores' destroys posted", || {
-        device.work_counts().semaphore_destroys_posted - before.semaphore_destroys_posted == 2
-    });
-    assert_eq!(frees.pending().0, 2, "neither semaphore is destroyed yet");
-    drop(hold);
-    until("the posted destroys", || frees.pending().0 == 0);
 }

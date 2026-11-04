@@ -2888,7 +2888,6 @@ field	metal2vulkan-runtime::WorkCounts.second_twin_checks	pub second_twin_checks
 field	metal2vulkan-runtime::WorkCounts.second_twin_decodes	pub second_twin_decodes: u64
 field	metal2vulkan-runtime::WorkCounts.second_twins	pub second_twins: u64
 field	metal2vulkan-runtime::WorkCounts.segments_recorded_again	pub segments_recorded_again: u64
-field	metal2vulkan-runtime::WorkCounts.semaphore_destroys_posted	pub semaphore_destroys_posted: u64
 field	metal2vulkan-runtime::WorkCounts.set_zero_equal_shape_switches	pub set_zero_equal_shape_switches: u64
 field	metal2vulkan-runtime::WorkCounts.set_zero_sets_found	pub set_zero_sets_found: u64
 field	metal2vulkan-runtime::WorkCounts.set_zero_sets_reused	pub set_zero_sets_reused: u64

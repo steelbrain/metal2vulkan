@@ -5,10 +5,8 @@
 //! (`WorkCounts::memory_frees_posted`), while a no-copy buffer's import of the caller's pages is
 //! freed before its release returns, posted never: Vulkan has "the application must ensure that the
 //! imported memory range remains valid and accessible for the lifetime of the imported memory
-//! object", and the caller frees its pages once the release returns. An event's release, plain or
-//! shared, posts its timeline semaphore's destroy there too
-//! (`WorkCounts::semaphore_destroys_posted`). Each release's time is printed (`POSTED-FREES`
-//! lines).
+//! object", and the caller frees its pages once the release returns. Each release's time is
+//! printed (`POSTED-FREES` lines).
 //!
 //! What the runtime crate's own tests hold the thread for (`tests/posted_frees.rs`): a pinned
 //! address and a forced resource ID take a new resource while the old block's free waits, an
@@ -38,14 +36,13 @@ fn managed() -> ResourceOptions {
     )
 }
 
-/// Each release's time and the counts it moved: the blocks freed, those of them posted, the
-/// host imports freed, and the semaphores' destroys posted.
+/// Each release's time and the counts it moved: the blocks freed, those of them posted, and the
+/// host imports freed.
 struct Released {
     times: Vec<Duration>,
     blocks: u64,
     posted: u64,
     imports: u64,
-    semaphores: u64,
 }
 
 impl Released {
@@ -55,7 +52,6 @@ impl Released {
             blocks: 0,
             posted: 0,
             imports: 0,
-            semaphores: 0,
         }
     }
 
@@ -73,19 +69,17 @@ impl Released {
         self.blocks += after.memory_frees.blocks - before.memory_frees.blocks;
         self.posted += after.memory_frees_posted - before.memory_frees_posted;
         self.imports += after.memory_frees.host_import - before.memory_frees.host_import;
-        self.semaphores += after.semaphore_destroys_posted - before.semaphore_destroys_posted;
     }
 
     fn line(&self, kind: &str) -> String {
         let longest = self.times.iter().max().copied().unwrap_or_default();
         format!(
-            "{kind}: {} releases, {} blocks freed, {} posted, {} host imports, {} semaphores' \
-             destroys posted; longest release {longest:?}",
+            "{kind}: {} releases, {} blocks freed, {} posted, {} host imports; longest release \
+             {longest:?}",
             self.times.len(),
             self.blocks,
             self.posted,
-            self.imports,
-            self.semaphores
+            self.imports
         )
     }
 }
@@ -170,19 +164,6 @@ fn a_released_block_is_freed_on_the_free_thread_and_a_host_import_before_the_rel
             );
             lines.push(released.line("no-copy buffer"));
         }
-        // Events: each release posts its semaphore's destroy.
-        let mut released = Released::new();
-        for _ in 0..ROUNDS {
-            released.release(device, device.new_event().unwrap());
-            released.release(device, device.new_shared_event().unwrap());
-        }
-        assert_eq!(
-            released.semaphores,
-            2 * ROUNDS as u64,
-            "each event's semaphore destroy posted ({})",
-            released.line("event")
-        );
-        lines.push(released.line("event"));
         for line in lines {
             eprintln!("POSTED-FREES on {name}: {line}");
         }

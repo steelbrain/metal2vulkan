@@ -1226,7 +1226,8 @@ impl Memory {
             .collect()
     }
 
-    /// Put the memory heaps' sizes back to `sizes` ([`hold_heaps_to_live`](Self::hold_heaps_to_live)).
+    /// Put the memory heaps' sizes back to `sizes`
+    /// ([`hold_heaps_to_live`](Self::hold_heaps_to_live)).
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     pub(super) fn put_heaps_back(&mut self, sizes: &[u64]) {
         for ((size, _), &was) in self.heaps.iter_mut().zip(sizes) {

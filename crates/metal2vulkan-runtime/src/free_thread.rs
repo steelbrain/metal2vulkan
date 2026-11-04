@@ -1,10 +1,8 @@
 //! The device's free thread: the `vkFreeMemory` of a block of the runtime's own memory that a
-//! release let go of runs here, off the releasing thread (`memory.rs`'s `Memory::let_go`), and
-//! the `vkDestroySemaphore` of an event's timeline semaphore (`event.rs`). A driver that unmaps a
-//! block's pages as it frees it charges that to the free: on an Apple M3 Max an object's release
-//! that freed a block took up to 24 ms (a 2048x2048 `Shared` texture's, a 16 MiB buffer's, each
-//! the last placement in its block). On an RTX 5080 an event's release took about 400 us, in
-//! the kernel driver (the consumer's measurement: median of 5, 1000 events).
+//! release let go of runs here, off the releasing thread (`memory.rs`'s `Memory::let_go`). A
+//! driver that unmaps a block's pages as it frees it charges that to the free: on an Apple M3 Max
+//! an object's release that freed a block took up to 24 ms (a 2048x2048 `Shared` texture's, a
+//! 16 MiB buffer's, each the last placement in its block).
 //!
 //! - **What is posted.** A block of the runtime's own memory, pooled or dedicated, whose last
 //!   placement went, with its buffer of addresses, and a block over fresh pages the runtime
@@ -16,13 +14,10 @@
 //!   object's release returns, so such an import is freed before the release returns. A block
 //!   that waits for the batches in flight (`freed_memory.rs`) is freed by the handler thread that
 //!   sees them complete, and posted here where they had completed as it went.
-//! - **And an event's semaphore**, as the event's last holder lets go: every batch that waits for
-//!   or signals it holds the event until it completed, a reserved signal of the caller's holds it
-//!   until the signal landed, and the caller keeps it while its own submissions that use the
-//!   semaphore run (`SharedEvent::vk_semaphore`'s contract), so nothing of the runtime's or the
-//!   caller's names the semaphore any more. It is no longer among the device's own timelines
-//!   from then (`interop.rs`), and the driver hands its handle out again only once it is
-//!   destroyed. Never recycled: its counter only rises, and its handle was the caller's to see.
+//! - **Not an event's semaphore**, which its release destroys where it goes (`event.rs`): NVIDIA's
+//!   driver runs a `vkCreateSemaphore` behind a `vkDestroySemaphore` another thread runs, so a
+//!   posted destroy moves its cost onto the program's next event and adds to it
+//!   (docs/FAST-PATHS.md, known gaps).
 //! - **Reusable at once.** The block left its pool before it is posted, and the object's
 //!   resource ID and Metal address go back with the object: the address space is the runtime's
 //!   own (`address.rs`), a pinned address one of its ranges, never a Vulkan device address, and
@@ -66,10 +61,8 @@ struct Shared {
     work: Condvar,
     /// A free completed.
     done: Condvar,
-    /// The blocks' frees posted so far.
+    /// The frees posted so far.
     posted: AtomicU64,
-    /// The semaphores' destroys posted so far.
-    semaphores: AtomicU64,
     /// The frees run where they went, the queue full.
     full: AtomicU64,
     /// The waits for posted frees: an allocation at the count's limit or past its heap's size.
@@ -81,18 +74,12 @@ struct Shared {
 
 #[derive(Default)]
 struct State {
-    queue: VecDeque<Free>,
+    queue: VecDeque<Posted>,
     /// Posted and not yet freed: those queued and the one the thread frees now.
     pending: usize,
     /// Per memory heap, the bytes posted and not yet freed.
     heap_bytes: [u64; vk::MAX_MEMORY_HEAPS],
     stopping: bool,
-}
-
-/// What the thread frees.
-enum Free {
-    Block(Posted),
-    Semaphore(vk::Semaphore),
 }
 
 /// A block's memory, its buffer of addresses and the pages it was imported from, posted to be
@@ -144,7 +131,6 @@ impl FreeThread {
                 work: Condvar::new(),
                 done: Condvar::new(),
                 posted: AtomicU64::new(0),
-                semaphores: AtomicU64::new(0),
                 full: AtomicU64::new(0),
                 waits: AtomicU64::new(0),
                 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
@@ -177,39 +163,11 @@ impl FreeThread {
         }
         state.pending += 1;
         state.heap_bytes[posted.heap] += posted.size;
-        state.queue.push_back(Free::Block(posted));
+        state.queue.push_back(posted);
         drop(state);
         self.shared.posted.fetch_add(1, Ordering::Relaxed);
         self.shared.work.notify_one();
         Ok(())
-    }
-
-    /// Post the destroy of an event's timeline semaphore (the module docs), or destroy it on
-    /// `device` here where the queue is full, the device's teardown began or the host cannot
-    /// start a thread.
-    ///
-    /// # Safety
-    ///
-    /// The semaphore is the device's, and nothing waits for or signals it, nor will.
-    pub(crate) unsafe fn destroy_semaphore(&self, semaphore: vk::Semaphore, device: &ash::Device) {
-        let posted = self.started() && {
-            let mut state = lock(&self.shared.state);
-            let room = !state.stopping && state.pending < QUEUE;
-            if room {
-                state.pending += 1;
-                state.queue.push_back(Free::Semaphore(semaphore));
-            } else if !state.stopping {
-                self.shared.full.fetch_add(1, Ordering::Relaxed);
-            }
-            room
-        };
-        if posted {
-            self.shared.semaphores.fetch_add(1, Ordering::Relaxed);
-            self.shared.work.notify_one();
-        } else {
-            // SAFETY: the caller's.
-            unsafe { crate::release::object(device, semaphore) };
-        }
     }
 
     /// [`post`](Self::post) `posted`, or free it on `device` here where it is given back: what
@@ -268,13 +226,12 @@ impl FreeThread {
         true
     }
 
-    /// The blocks' frees and the semaphores' destroys posted so far, those run where they went
-    /// as the queue was full, and the waits for posted frees.
-    pub(crate) fn counts(&self) -> (u64, u64, u64, u64) {
+    /// The frees posted so far, those run where they went as the queue was full, and the waits
+    /// for posted frees.
+    pub(crate) fn counts(&self) -> (u64, u64, u64) {
         let shared = &*self.shared;
         (
             shared.posted.load(Ordering::Relaxed),
-            shared.semaphores.load(Ordering::Relaxed),
             shared.full.load(Ordering::Relaxed),
             shared.waits.load(Ordering::Relaxed),
         )
@@ -319,34 +276,23 @@ fn run(shared: &Shared) {
                 state = (shared.work.wait(state)).unwrap_or_else(PoisonError::into_inner);
             }
         };
-        let left = match &posted {
-            Free::Block(block) => Some((block.heap, block.size)),
-            Free::Semaphore(_) => None,
-        };
+        let (heap, size) = (posted.heap, posted.size);
         #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
         shared.held.pass();
         // The free is a section of the exit guard: while the process exits, the block, and the
-        // pages it was imported from, or the semaphore, stay to its end (`exit_guard`).
-        match (exit_guard::enter(), posted) {
-            (Some(busy), Free::Block(block)) => {
+        // pages it was imported from, stay to its end (`exit_guard`).
+        match exit_guard::enter() {
+            Some(busy) => {
                 // SAFETY: `post`'s contract.
-                let after = unsafe { block.free(shared.functions.get()) };
+                let after = unsafe { posted.free(shared.functions.get()) };
                 drop(busy);
                 drop(after);
             }
-            (Some(busy), Free::Semaphore(semaphore)) => {
-                // SAFETY: `destroy_semaphore`'s contract.
-                unsafe { crate::release::object(shared.functions.get(), semaphore) };
-                drop(busy);
-            }
-            (None, Free::Block(block)) => std::mem::forget(block),
-            (None, Free::Semaphore(_)) => {}
+            None => std::mem::forget(posted),
         }
         let mut state = lock(&shared.state);
         state.pending -= 1;
-        if let Some((heap, size)) = left {
-            state.heap_bytes[heap] -= size;
-        }
+        state.heap_bytes[heap] -= size;
         drop(state);
         shared.done.notify_all();
     }
