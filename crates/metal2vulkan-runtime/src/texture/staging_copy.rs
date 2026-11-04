@@ -509,9 +509,9 @@ impl Image {
     /// staging queue's next submission (the module docs); the image [takes staging
     /// copies](Self::takes_staging_copies), and `keeper` is what holds it (itself, or the texture
     /// whose decoded twin it is). Whether it did: not while it presents a stand-in, and then
-    /// `fill` is not called. Where the image's `VkImage` was handed out (`Texture::vk_image`), whose
-    /// user the runtime does not see, or the work queued passed its bound, the submission is
-    /// made now and waited for.
+    /// `fill` is not called. Where the image's `VkImage` was handed out (`Texture::vk_image`),
+    /// whose user the runtime does not see, or the work queued passed its bound, the submission
+    /// is made now and waited for.
     pub(super) fn staging_write(
         &self,
         keeper: &Arc<Image>,

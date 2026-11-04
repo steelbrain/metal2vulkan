@@ -276,11 +276,14 @@ fn two_plane_cpu_copies_wait_for_no_submission_where_a_textures_do() {
 }
 /// A block-compressed texture's `replaceRegion` waits for no submission on any device: the copy
 /// is staged for the device's next submission (`texture/first_move.rs`) where the image takes no
-/// host copies, and runs on the host where it does. Its `getBytes` waits for none either where
-/// the device copies such an image's blocks on the host, and for one between all of them where a
-/// driver that copies a host-transfer image out of its memory as the memory is bound takes block
-/// formats off that path (`RuntimeDriverDefect::HostTransferImagesCopiedAtBind`, MoltenVK): the
-/// first read makes a host shadow of the image's texels and every read after it comes out of that
+/// host copies, queued for the staging queue's next submission where the image copies there
+/// (`texture/staging_copy.rs`), and runs on the host where it does. Its `getBytes` waits for none
+/// either where the device copies such an image's blocks on the host; for one each on the
+/// staging queue, which carries the copies queued before it, where the image copies there; and
+/// for one between all of them where a driver that copies a host-transfer image out of its memory
+/// as the memory is bound takes block formats off that path
+/// (`RuntimeDriverDefect::HostTransferImagesCopiedAtBind`, MoltenVK): the first read makes a host
+/// shadow of the image's texels and every read after it comes out of that
 /// (`texture/host_shadow.rs`, whose own tests hold the shadow's rules).
 ///
 /// The levels here are small and few, so the staged copies stay under the bound past which a
@@ -340,17 +343,26 @@ fn block_cpu_copies_stage_their_writes_and_read_where_the_device_copies_on_the_h
         waited, 0,
         "a block-compressed texture's `replaceRegion` waited for an internal submission"
     );
-    // Where the device reads such an image's blocks on the host, so does `getBytes`; elsewhere
-    // the levels' reads share the one submission the first of them makes its shadow by.
-    match read_host > 0 {
-        true => assert_eq!(
+    // Where the device reads such an image's blocks on the host, so does `getBytes`; where it
+    // copies on its staging queue, each write is queued there and each read's submission carries
+    // the write before it; elsewhere the levels' reads share the one submission the first of them
+    // makes its shadow by.
+    match (read_host > 0, device.has_staging_queue()) {
+        (true, _) => assert_eq!(
             [read_host, read_waited],
             [levels, 0],
             "a block-compressed texture's `getBytes` waited for an internal submission"
         ),
-        false => assert_eq!(
+        (false, true) => assert_eq!(
+            [staged, read_staged, read_waited],
+            [0, levels, 0],
+            "a block-compressed texture's {levels} writes queued for the staging queue and each \
+             read's one submission there"
+        ),
+        (false, false) => assert_eq!(
             read_waited, 1,
-            "a block-compressed texture's {levels} `getBytes` calls took more than the one              submission the first of them makes its host shadow by"
+            "a block-compressed texture's {levels} `getBytes` calls took more than the one \
+             submission the first of them makes its host shadow by"
         ),
     }
 }

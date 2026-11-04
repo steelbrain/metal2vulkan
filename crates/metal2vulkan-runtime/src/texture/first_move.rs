@@ -19,11 +19,12 @@
 //!   one's (`rebind.rs`). The image (or stand-in) is registered weakly once it is shared
 //!   ([`FirstMoves::register`]); an image that copies on the device's staging queue queues its
 //!   move and zeros there instead, which every submission of the device's makes there before its
-//!   own (`texture/staging_copy.rs`, [`FirstMoves::queue_staging`]). An image over a dma-buf of its own pages (`dma_buf.rs`) starts
-//!   `UNDEFINED` too, and its move is an acquire from `VK_QUEUE_FAMILY_FOREIGN_EXT` for the
-//!   device's queue family (`VK_QUEUE_FAMILY_IGNORED` where its images are concurrent among
-//!   several), from `GENERAL` (which keeps its bytes, as Vulkan's foreign images keep theirs only
-//!   through such an acquire) to `GENERAL` ([`FirstMove::acquired`]); it rests there.
+//!   own (`texture/staging_copy.rs`, [`FirstMoves::queue_staging`]). An image over a dma-buf of
+//!   its own pages (`dma_buf.rs`) starts `UNDEFINED` too, and its move is an acquire from
+//!   `VK_QUEUE_FAMILY_FOREIGN_EXT` for the device's queue family (`VK_QUEUE_FAMILY_IGNORED` where
+//!   its images are concurrent among several), from `GENERAL` (which keeps its bytes, as Vulkan's
+//!   foreign images keep theirs only through such an acquire) to `GENERAL`
+//!   ([`FirstMove::acquired`]); it rests there.
 //!   A new buffer whose bytes the host cannot write (`Private`, and a
 //!   `Managed` buffer's device copy) notes its fill with zeros ([`FirstFill`]) the same way
 //!   (`Buffer::clear_first`), and a new `Private` buffer made with bytes then the copy of a staging
