@@ -14,6 +14,7 @@
 //! `validation/fixtures/public/examples/runtime_examples.ll`.
 
 use super::blit_holds::{device, Scratch, WAIT};
+use super::draw_again::warm;
 use super::encoder_holds::{bytes_of, pass, render_state, words_of};
 use crate::{
     BlitOption, Buffer, CommandBufferStatus, Device, Origin, RenderCommandEncoder,
@@ -69,12 +70,13 @@ fn buffer_of(device: &Device, values: &[f32]) -> Buffer {
         .unwrap()
 }
 
-/// What a run drew and counted: the target's words, its `set_zero_sets_reused` and
-/// `draws_pushing_set_zero`, and its `vkCmdBindDescriptorSets`, `vkCmdPushDescriptorSet` and
-/// `vkCmdDraw` calls.
+/// What a run drew and counted: the target's words, its `set_zero_sets_reused`,
+/// `draws_rebound` and `draws_pushing_set_zero`, and its `vkCmdBindDescriptorSets`,
+/// `vkCmdPushDescriptorSet` and `vkCmdDraw` calls.
 struct Ran {
     words: Vec<u32>,
     reused: u64,
+    rebound: u64,
     pushing: u64,
     binds: u64,
     pushes: u64,
@@ -127,6 +129,7 @@ fn run(
     Ran {
         words: words_of(&back),
         reused: grew(|counts| counts.set_zero_sets_reused),
+        rebound: grew(|counts| counts.draws_rebound),
         pushing: grew(|counts| counts.draws_pushing_set_zero),
         binds: grew(|counts| counts.commands_recorded.cmd_bind_descriptor_sets),
         pushes: grew(|counts| counts.commands_recorded.cmd_push_descriptor_set),
@@ -158,12 +161,11 @@ fn set_zero(ran: &Ran) -> (u64, u64, u64) {
     (ran.reused, ran.binds, ran.pushes)
 }
 
-#[test]
-fn draws_that_move_only_a_device_buffer_s_offset_bind_one_set_zero() {
-    let scratch = Scratch::new("set-zero-at-offsets");
-    let device = device(&scratch.0);
+/// The state of `colored_vertex` and `colored_fragment`, and one buffer of every draw's positions
+/// and one of their colours, one after another.
+fn state_and_buffers(device: &Device) -> (RenderPipelineState, (Buffer, Buffer)) {
     let state = render_state(
-        &device,
+        device,
         "examples/runtime_examples.ll",
         "colored_vertex",
         "colored_fragment",
@@ -175,9 +177,17 @@ fn draws_that_move_only_a_device_buffer_s_offset_bind_one_set_zero() {
             (p, c)
         });
     let shared = (
-        buffer_of(&device, &all_positions),
-        buffer_of(&device, &all_colors),
+        buffer_of(device, &all_positions),
+        buffer_of(device, &all_colors),
     );
+    (state, shared)
+}
+
+#[test]
+fn draws_that_move_only_a_device_buffer_s_offset_bind_one_set_zero() {
+    let scratch = Scratch::new("set-zero-at-offsets");
+    let device = device(&scratch.0);
+    let (state, shared) = state_and_buffers(&device);
     let own: Vec<(Buffer, Buffer)> = (0..DRAWS)
         .map(|at| {
             (
@@ -235,5 +245,56 @@ fn draws_that_move_only_a_device_buffer_s_offset_bind_one_set_zero() {
         set_zero(&own_buffers),
         each,
         "the draws of their own buffers write and record a set 0 each"
+    );
+}
+
+/// Draws that move the second buffer's offset alone, the first bound as before, are rebound at
+/// that slot alone (`WorkCounts::draws_rebound`): its descriptor range found at its place among
+/// the bound ones from the plan, the unchanged slot before it not looked at
+/// (`rebind_draw_slots_into`), as every step finds it, which every second draw rebound checks in
+/// builds with debug assertions (`render/draw_again/`). Each draws draw 0's rectangle in its own
+/// colour, the last one's left.
+#[test]
+fn draws_that_move_the_second_buffer_s_offset_alone_are_rebound() {
+    let scratch = Scratch::new("set-zero-second-offset");
+    let device = device(&scratch.0);
+    let (state, shared) = state_and_buffers(&device);
+    let draws = |encoder: &mut RenderCommandEncoder| {
+        encoder.set_vertex_buffer(Some(&shared.0), 0, 0).unwrap();
+        encoder.set_vertex_buffer(Some(&shared.1), 0, 1).unwrap();
+        for at in 0..DRAWS {
+            if at > 0 {
+                encoder
+                    .set_vertex_buffer_offset(COLOR_BYTES * at, 1)
+                    .unwrap();
+            }
+            rectangle(encoder);
+        }
+    };
+    // Each draw's own pipeline made, as a draw kept to draw again finds it.
+    warm(&device, |encoder| {
+        encoder.set_render_pipeline_state(&state).unwrap();
+        draws(encoder);
+    });
+    let ran = run(&device, &state, draws);
+    let expected: Vec<u32> = (0..SIDE * SIDE)
+        .map(|texel| match texel % SIDE {
+            0 => u32::from_le_bytes(codes(DRAWS - 1)),
+            _ => 0,
+        })
+        .collect();
+    assert_eq!(ran.words, expected);
+    let once = match pushes_set_zero(&[&ran]) {
+        false => (DRAWS - 1, 1, 0),
+        true => (0, 0, 1),
+    };
+    assert_eq!(
+        set_zero(&ran),
+        once,
+        "the draws record their first draw's set 0, once"
+    );
+    assert!(
+        ran.rebound > 0,
+        "no draw rebound at the colours' slot alone"
     );
 }

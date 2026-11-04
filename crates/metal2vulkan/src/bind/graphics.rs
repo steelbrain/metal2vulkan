@@ -4739,6 +4739,18 @@ fn rebind_slots(
     let mut residuals = crate::bind::instantiate::Residuals::default();
     let mut at = 0;
     for pb in &t.buffers {
+        // A slot no call changed binds what it bound, of the plan's shape, which says whether it
+        // binds anything (`bound_buffer` holds the state to it, checked in builds with debug
+        // assertions): a bound descriptor-form slot takes its place.
+        if !changed(pb.slot) {
+            #[cfg(debug_assertions)]
+            crate::bind::instantiate::bound_buffer(state, pb.slot, pb.bound)?;
+            let descriptor = matches!((pb.form, pb.binding), (BufferForm::Descriptor(_), Some(_)));
+            if descriptor && pb.bound != BoundKind::Unbound {
+                at += 1;
+            }
+            continue;
+        }
         let bound = crate::bind::instantiate::bound_buffer(state, pb.slot, pb.bound)?;
         let (bind_offset, length) = match bound {
             Some(&BoundBuffer::Buffer { length, offset, .. }) => (offset, length),
@@ -4748,14 +4760,10 @@ fn rebind_slots(
         let (set, binding) = match (pb.form, pb.binding) {
             (BufferForm::Descriptor(_), Some(key)) => key,
             // A device-address slot's root entry.
-            _ if changed(pb.slot) => return Ok(false),
-            _ => continue,
+            _ => return Ok(false),
         };
         let place = at;
         at += 1;
-        if !changed(pb.slot) {
-            continue;
-        }
         let (range, residual) = crate::bind::instantiate::planned_range(pb, bind_offset, length)
             .map_err(|e| match e {
                 RangeError::TooLarge { needed } => BindError::DescriptorRangeExceeded {

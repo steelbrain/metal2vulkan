@@ -1006,7 +1006,7 @@ fn a_rebind_of_buffer_slots_writes_what_an_instantiation_writes() {
         },
         other => other,
     };
-    let (mut rebound, mut pushed, mut whole) = (0, 0, 0);
+    let (mut rebound, mut pushed, mut whole, mut alone) = (0, 0, 0, 0);
     for (stem, dev) in devices() {
         let Ok(p) = render_pipeline(&dev, &bc) else {
             continue;
@@ -1018,6 +1018,21 @@ fn a_rebind_of_buffer_slots_writes_what_an_instantiation_writes() {
             };
             let scales = [0, 4, 16, 20, 36, 48, 100, 240, 256];
             let vertices = [0, 24, 48, 72, 96, 2400];
+            // The scale slot alone named, the vertex slot before it bound as before: its place
+            // among the bound ones taken from the plan.
+            for &s in &scales {
+                let state = render_state(s);
+                if state.shape() != first.shape() {
+                    continue;
+                }
+                let before = plan.instantiate_draw(&first, &draw).expect("first draw");
+                let mut cmds = before.clone();
+                if plan.rebind_draw_slots_into(&state, &[scale], &mut cmds) == Ok(true) {
+                    alone += 1;
+                    let expected = plan.instantiate_draw(&state, &draw);
+                    assert_eq!(Ok(&cmds), expected.as_ref(), "{stem} {s}: the scale alone");
+                }
+            }
             let cases = scales
                 .iter()
                 .flat_map(|&s| vertices.iter().map(move |&v| (s, v)));
@@ -1055,6 +1070,7 @@ fn a_rebind_of_buffer_slots_writes_what_an_instantiation_writes() {
         pushed > 0,
         "no rebind wrote a push field ({rebound} rebound)"
     );
+    assert!(alone > 0, "no rebind of the scale slot alone");
 }
 
 fn with_vertex_buffer(state: &BindState, b: BoundBuffer) -> BindState {
