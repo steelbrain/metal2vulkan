@@ -197,6 +197,12 @@ pub(crate) struct Flushed {
 
 impl Drop for Flushed {
     fn drop(&mut self) {
+        // A section of the exit guard, wherever the last holder lets go (a batch's, on its
+        // queue's waiter): while the process exits, the staging buffers stay to its end
+        // (`exit_guard`).
+        let Some(_busy) = exit_guard::enter() else {
+            return;
+        };
         // A failed wait (a lost device) leaves nothing running that uses them.
         let _ = self.device.wait_staging(self.value);
         for bytes in self.bytes.drain(..) {
