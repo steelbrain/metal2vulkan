@@ -319,8 +319,8 @@ impl Lane {
     fn descriptor(&self, draw: &Draw, n: u32) -> RenderPipelineDescriptor {
         let mut d = RenderPipelineDescriptor::new(self.function("pm_place"));
         d.fragment = Some(self.function(draw.function));
-        for i in 0..draw.reads.len() {
-            d.color_attachments[i] = Some(ColorAttachmentDescriptor::new(draw.format));
+        for slot in d.color_attachments.iter_mut().take(draw.reads.len()) {
+            *slot = Some(ColorAttachmentDescriptor::new(draw.format));
         }
         d.raster_sample_count = n;
         d
