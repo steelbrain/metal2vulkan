@@ -135,9 +135,9 @@
 //!   completes meanwhile. Each waking is counted by what woke the thread, and each sleep
 //!   (`WorkCounts::scheduler_sleeps` and kin).
 //! - **Waits for a signal to land itself** ([`Nudge`]). Where the heads wait only for event
-//!   values that submitted GPU signals reach (no gate, none reached yet; a shared event's too,
-//!   whose wait is held on the host rather than handed to a `VkQueue`, `event_timeline.rs`:
-//!   [`landing_waits`]), the thread sleeps in one
+//!   values that submitted GPU signals reach (no gate, none reached yet; a shared event's, whose
+//!   wait is held on the host rather than handed to a `VkQueue`, `event_timeline.rs`, and a
+//!   checked head's for a shared event's value: [`landing_waits`]), the thread sleeps in one
 //!   `vkWaitSemaphores` for any of those values, or for the device's nudge semaphore to reach its
 //!   next value, instead of on its condition variable: the signal wakes it from the driver, with
 //!   no completion turn and no waker between, and it observes the values itself
@@ -1963,9 +1963,10 @@ fn plain(
 /// without the lock and right before it submits that head ([`Scheduler::submit_at_commit`]), as
 /// Metal checks a submission as it submits it: where they are still to run and no other thread
 /// took them, nothing else holds the head back from that thread ([`plain`]), and every event value
-/// it waits for was reached on the device or by the host. A head whose checks wait for a submitted
-/// GPU signal to land is left to the scheduler's thread, which waits for it ([`check_heads`]).
-/// Marked taken, so that thread leaves them.
+/// it waits for was reached on the device or by the host, or is one its `VkQueue` waits for
+/// ([`landing_waits`]). A head whose checks wait for a submitted GPU signal to land (a shared
+/// event's) is left to the scheduler's thread, which waits for it ([`check_heads`]). Marked
+/// taken, so that thread leaves them.
 fn claim_check(state: &mut State) -> Option<Work> {
     let State {
         order,
@@ -2126,11 +2127,12 @@ type Work = (Hold<CommandBufferShared>, usize);
 /// Look at each line's head of a command buffer with a submission check that is otherwise
 /// ready (its binary semaphores' signals submitted, its events' values reached, its host step
 /// recorded, not `behind` an earlier commit) and waits for its checks: once every value it waits
-/// for was reached on the device or by the host, not only by a submitted GPU signal (or the device
-/// is lost), it goes to `left` as a check, unless its checks were taken already (to `left`, or by
-/// a committing thread, [`claim_check`]). What it waits for goes to `awaits` before the events are
-/// read again, as [`Scheduler::completions`] says. Whether a head still waits for a GPU signal to
-/// land.
+/// for was reached on the device or by the host, or is one its `VkQueue` waits for (a plain
+/// event's for a submitted or reserved signal, [`landing_waits`]), not one a shared event's
+/// submitted GPU signal alone reaches (or the device is lost), it goes to `left` as a check,
+/// unless its checks were taken already (to `left`, or by a committing thread, [`claim_check`]).
+/// What it waits for goes to `awaits` before the events are read again, as
+/// [`Scheduler::completions`] says. Whether a head still waits for a GPU signal to land.
 ///
 /// Where the line's batches may go in one kernel submission (`command_buffer/group.rs`), the
 /// batches right behind a head that goes (its checks in `left` or none due, otherwise ready, its
@@ -2321,14 +2323,26 @@ fn events_reachable(held: &Held) -> bool {
         .all(|(event, value)| event.wait(*value).is_some())
 }
 
-/// The waits of `held`, a line's head whose checks wait for its events' values to land, for the
-/// signal indices of the submitted GPU signals that reach the values not yet reached, a shared
-/// event's whose wait is held on the host included (`EventShared::landing`): what the scheduler's
-/// thread may wait for on the GPU itself (the module docs). `None` while a value is reached by
-/// neither a submitted signal nor the host.
+/// The waits of `held`, a line's head whose checks are due, that its checks wait for to land:
+/// the signal indices of the submitted GPU signals that reach the values not yet reached of the
+/// waits the batch cannot hand to its `VkQueue` (`EventShared::wait` answers none: a shared
+/// event's, whose wait is held on the host, and one a signal behind a merge reaches), from
+/// `EventShared::landing`. What the scheduler's thread may wait for on the GPU itself (the module
+/// docs). `None` while such a value is reached by neither a submitted signal nor the host.
+///
+/// A wait the batch hands to its `VkQueue` (a plain event's, `MTLEvent`, for a signal submitted or
+/// reserved before it) holds no check: Metal submits a command buffer whose `MTLEvent` wait only
+/// a signal still running on the GPU meets, and so checks it, at once, where it holds one whose
+/// `MTLSharedEvent` wait such a signal meets until the signal lands (an M3 Max under macOS 27.0.1:
+/// the conformance case `event-wait-behind-a-running-signal`, the waiter's status and scheduled
+/// handler read while the signaller still ran). Such a head is checked once otherwise ready, and
+/// its waits chain on the `VkQueue` as an unchecked head's do ([`event_waits`]).
 fn landing_waits(held: &Held) -> Option<Vec<(vk::Semaphore, u64)>> {
     let mut waits = Vec::new();
     for (event, value) in &held.waits {
+        if event.wait(*value).is_some() {
+            continue;
+        }
         match event.landing(*value)? {
             WaitFor::Reached => {}
             WaitFor::Index(index) => waits.push((event.semaphore(), index)),

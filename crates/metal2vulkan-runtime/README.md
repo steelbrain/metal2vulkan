@@ -349,7 +349,11 @@ Calls Metal does not have, for a consumer that emulates a Metal device:
   encoders Metal would still run and keeping its signals, as a consumer measured on an M3 Max.
 - `CommandBuffer::set_submission_check` runs a check as the command buffer is submitted, and fails
   it as Metal fails a submission. It runs on the thread that submits it: the scheduler's, or one
-  in `commit_and_submit`, so it must take no lock that thread holds and wait for no GPU work.
+  in `commit_and_submit`, so it must take no lock that thread holds and wait for no GPU work. It
+  runs once the command buffer's event waits are met as Metal submits it: an `Event` wait for a
+  signal already submitted is met at once and waits on the `VkQueue`; a `SharedEvent` wait that
+  only a GPU signal still running reaches is held until the signal lands (measured on an M3 Max,
+  the conformance case `event-wait-behind-a-running-signal`).
 - `CommandBuffer::add_submission_handler` is called when the runtime takes the command buffer's
   last batch for its queue (submits it, or holds it for one kernel submission with later ones);
   `add_executed_commands_handler` each time an execution's indirect records are read.
@@ -367,7 +371,8 @@ Calls Metal does not have, for a consumer that emulates a Metal device:
   where no other submission pass is under way: the ready command buffers committed first, this
   one among them, while each needs no host step and no switch of a storage form, up to the pass's
   bound, their submission checks run inside the call just before each submission (unless one
-  waits for a GPU signal to land, which the scheduler's thread waits for) and their submission
+  waits for a shared event's GPU signal to land, which the scheduler's thread waits for; a plain
+  event's wait goes to the `VkQueue`, as Metal submits an `MTLEvent` wait at once) and their submission
   handlers after it, in submission order with every other command buffer's. What it leaves goes
   to the scheduler's thread. One wake and one thread hop fewer per command buffer than `commit`,
   whose submission is the scheduler thread's, as Metal's is its own thread's

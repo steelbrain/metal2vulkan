@@ -15,12 +15,16 @@
 //! - **Reached through an indirect command alone.** A buffer an indirect command binds, which
 //!   no encoder makes resident, is the submission's from the commit on; detached behind a wait,
 //!   that submission fails.
-//! - **A GPU signal in flight**. A submission whose `Event` or `SharedEvent` wait another command
-//!   buffer's GPU signal meets is checked only once that signal landed (the check reads a companion
+//! - **A GPU signal in flight**. A submission whose `SharedEvent` wait another command buffer's
+//!   GPU signal meets is checked only once that signal landed (the check reads a companion
 //!   `SharedEvent` the signaller signals first); detached while the signaller runs, it fails,
 //!   whether committed before the signaller or with `commit_and_submit` while its signal is in
-//!   flight (the committing thread leaves that check to the scheduler's). A `SharedEvent` the
-//!   host signals while a GPU signal of it is in flight is checked without waiting for the GPU.
+//!   flight (the committing thread leaves that check to the scheduler's). One whose `Event` wait
+//!   such a signal meets is checked at once and submitted with its wait on the `VkQueue`, while the
+//!   signal still runs (the companion reads 0 in its check), as Metal submits it
+//!   (`event-wait-behind-a-running-signal`), no head counted as awaiting its checks' signals. A
+//!   `SharedEvent` the host signals while a GPU signal of it is in flight is checked without
+//!   waiting for the GPU.
 
 use super::degrade_notices::on_device;
 use super::failed_commits::{Shape, HELD, KERNEL, SHAPES};
@@ -493,28 +497,32 @@ impl InFlight {
     }
 }
 
-/// A submission whose `Event` (then `SharedEvent`) wait another command buffer's GPU signal
-/// meets is checked only once that signal landed: the companion event the signaller signals
-/// first reads 1 in the check, every try. Its buffer detached once the signaller is scheduled,
-/// while its signal is in flight (the companion still reads 0 after the detach), the submission
-/// fails with code 8 and its fill does not run. A try whose signaller finished before the
-/// detach proves nothing of the detach, and the next doubles the signaller's work; one try at
-/// least must catch it in flight. So too for a waiter committed with `commit_and_submit` while
-/// the signal is in flight: its check is left to the scheduler's thread, never run on the
-/// committing thread before the signal landed.
+/// A submission whose `SharedEvent` wait another command buffer's GPU signal meets is checked
+/// only once that signal landed, as Metal holds such a command buffer until then
+/// (`event-wait-behind-a-running-signal`): the companion event the signaller signals first reads 1
+/// in the check, every try, and a head is counted as awaiting its checks' signals. Its buffer
+/// detached once the signaller is scheduled, while its signal is in flight (the companion still
+/// reads 0 after the detach), the submission fails with code 8 and its fill does not run. A try
+/// whose signaller finished before the detach proves nothing of the detach, and the next doubles
+/// the signaller's work; one try at least must catch it in flight. So too for a waiter committed
+/// with `commit_and_submit` while the signal is in flight: its check is left to the scheduler's
+/// thread, never run on the committing thread before the signal landed.
 #[test]
 fn a_submission_detached_while_a_gpu_signal_is_in_flight_fails() {
     on_device(|device, _| {
         let caller = std::thread::current().id();
-        for (shared, at_commit) in [(false, false), (true, false), (false, true), (true, true)] {
+        let shared = true;
+        for at_commit in [false, true] {
             let mut caught = None;
             for attempt in 0..ATTEMPTS {
                 let fills = 4u64 << attempt;
                 let waited = Waited::new(device, shared);
+                let awaiting = device.work_counts().heads_awaiting_check_signals;
                 let run = InFlight::start(device, &waited, fills, at_commit);
                 run.detach.detach(&run.target);
                 let in_flight = run.landed.signaled_value() == 0;
                 let at_check = run.finish();
+                let awaited = device.work_counts().heads_awaiting_check_signals - awaiting;
                 assert_eq!(
                     at_check, 1,
                     "shared {shared}, at commit {at_commit}: checked before the GPU signal landed"
@@ -525,6 +533,10 @@ fn a_submission_detached_while_a_gpu_signal_is_in_flight_fails() {
                 assert!(
                     !run.checked_on.lock().unwrap().contains(&caller),
                     "shared {shared}, at commit {at_commit}: checked on the committing thread"
+                );
+                assert!(
+                    awaited > 0,
+                    "at commit {at_commit}: no head counted as awaiting its checks' signals"
                 );
                 assert_eq!(
                     run.waiter.status(),
@@ -553,6 +565,68 @@ fn a_submission_detached_while_a_gpu_signal_is_in_flight_fails() {
             println!(
                 "IN-FLIGHT shared={shared} at_commit={at_commit} caught with {fills} fills of \
                  {FILL} bytes"
+            );
+        }
+    });
+}
+
+/// A submission whose `Event` wait another command buffer's GPU signal meets, still running, is
+/// checked at once and submitted with its wait on the `VkQueue`, as Metal submits (and so checks)
+/// such a command buffer at once (an M3 Max under macOS 27.0.1: the conformance case
+/// `event-wait-behind-a-running-signal`, the waiter `Scheduled` and its scheduled handler run while
+/// the signaller still ran). In one try at least the waiter reads `Scheduled` while the companion
+/// event the signaller signals first still reads 0, and the companion read 0 in its check; in
+/// every try no head is counted as awaiting its checks' signals
+/// (`WorkCounts::heads_awaiting_check_signals`), its check runs once, and its fill runs, after
+/// the signal. So too for a waiter committed with `commit_and_submit` while the signal is in
+/// flight. A try whose signaller finished first proves nothing of the order, and the next doubles
+/// its work.
+#[test]
+fn an_event_wait_a_gpu_signal_in_flight_meets_is_checked_at_once() {
+    on_device(|device, _| {
+        for at_commit in [false, true] {
+            let mut caught = None;
+            for attempt in 0..ATTEMPTS {
+                let fills = 4u64 << attempt;
+                let waited = Waited::new(device, false);
+                let awaiting = device.work_counts().heads_awaiting_check_signals;
+                let run = InFlight::start(device, &waited, fills, at_commit);
+                let deadline = std::time::Instant::now() + WAIT;
+                while run.waiter.status() == CommandBufferStatus::Committed {
+                    assert!(
+                        std::time::Instant::now() < deadline,
+                        "at commit {at_commit}: the waiter was never scheduled"
+                    );
+                    std::thread::sleep(std::time::Duration::from_micros(200));
+                }
+                // Read after the waiter's status: 0 says the signal had not landed when it was.
+                let in_flight = run.landed.signaled_value() == 0;
+                let at_check = run.finish();
+                let awaited = device.work_counts().heads_awaiting_check_signals - awaiting;
+                assert_eq!(
+                    awaited, 0,
+                    "at commit {at_commit}: a head awaited its checks' signals"
+                );
+                assert_eq!(run.waiter.status(), CommandBufferStatus::Completed);
+                assert_eq!(read_buffer(&run.target, 0, 4).unwrap(), [0x5a; 4]);
+                if !in_flight {
+                    continue;
+                }
+                assert_eq!(
+                    at_check, 0,
+                    "at commit {at_commit}: checked only once the GPU signal landed"
+                );
+                caught = Some(fills);
+                break;
+            }
+            let fills = caught.unwrap_or_else(|| {
+                panic!(
+                    "at commit {at_commit}: the signaller never ran at the waiter's scheduling \
+                     in {ATTEMPTS} tries"
+                )
+            });
+            println!(
+                "EVENT-IN-FLIGHT at_commit={at_commit} caught with {fills} fills of {FILL} bytes"
             );
         }
     });
