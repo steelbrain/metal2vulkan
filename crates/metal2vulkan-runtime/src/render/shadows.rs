@@ -49,6 +49,7 @@
 //!   (`NotImplemented(IndirectRenderCommands)`): a command's draw that uses a shadowed texture its
 //!   call did not gather (none can: its tables and residency are the call's).
 
+use crate::binding::ResidentPrefix;
 use crate::buffer::Buffer;
 use crate::clear_reach::DrawnArea;
 use crate::encoder::EncoderCore;
@@ -95,6 +96,11 @@ pub(super) struct InstanceShadows {
     /// one at its position there is gathered already (gathering one again changes nothing, as
     /// each range only grows), so a draw that uses what the last one did gathers nothing new.
     last: Vec<Use<ResourceKey>>,
+    /// The identity and count of the uses of what the encoder made resident the last
+    /// [`add_draw`](InstanceShadows::add_draw) began with: gathered, as what the instance
+    /// gathered stays until it is cleared, so a draw that begins with the same gathered those
+    /// already.
+    last_prefix: Option<(u64, usize)>,
 }
 
 /// `range` of the buffer `key` as a use, read or written (`write`), for `shadow.rs`, which reads
@@ -220,6 +226,7 @@ impl InstanceShadows {
             &self.bytes[..self.held],
             &self.images,
             &self.last,
+            self.last_prefix,
         )
     }
 
@@ -287,6 +294,53 @@ impl InstanceShadows {
         self.last.extend_from_slice(uses);
     }
 
+    /// [`add`](Self::add) a draw's `shadows` and `uses`, which begin with the uses of what its
+    /// encoder made resident of the identity `prefix`: those once while the instance's last such
+    /// draw began with the same, as what an instance gathered stays until it is cleared
+    /// (`WorkCounts::resident_uses_gathered` counts those it walked). Whether it walked them.
+    pub(super) fn add_draw(
+        &mut self,
+        shadows: &[ShadowUse],
+        (uses, prefix): (&[Use<ResourceKey>], ResidentPrefix),
+    ) -> bool {
+        let now = Some((prefix.id, prefix.len));
+        let past = match self.last_prefix == now {
+            true => prefix.len,
+            false => 0,
+        };
+        self.add(shadows, &uses[past..]);
+        self.last_prefix = now;
+        #[cfg(debug_assertions)]
+        for used in uses {
+            assert!(
+                self.holds(used),
+                "an instance gathered by its uses' identity less than its uses"
+            );
+        }
+        past == 0
+    }
+
+    /// Whether what it gathered holds `used`'s reads and writes (builds with debug assertions:
+    /// [`add_draw`](Self::add_draw)'s check).
+    #[cfg(debug_assertions)]
+    fn holds(&self, used: &Use<ResourceKey>) -> bool {
+        [(false, used.read), (true, used.write)]
+            .into_iter()
+            .filter(|(_, access)| !access.is_empty())
+            .all(|(write, _)| match &used.range {
+                UseRange::Bytes(range) => self.held().iter().any(|(key, ranges)| {
+                    *key == (used.key, write)
+                        && ranges
+                            .iter()
+                            .any(|held| held.start <= range.start && range.end <= held.end)
+                }),
+                image => self
+                    .images
+                    .iter()
+                    .any(|(key, held)| *key == (used.key, write) && span(held, image) == *held),
+            })
+    }
+
     /// The gathered buffers' byte ranges, by buffer and whether they write, in that order.
     fn held(&self) -> &[((ResourceKey, bool), Vec<Range<u64>>)] {
         &self.bytes[..self.held]
@@ -314,6 +368,7 @@ impl InstanceShadows {
         self.shadows.clear();
         self.images.clear();
         self.last.clear();
+        self.last_prefix = None;
     }
 
     /// How many uses [`uses`](Self::uses) gives.

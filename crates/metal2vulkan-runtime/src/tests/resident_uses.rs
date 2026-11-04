@@ -1,10 +1,12 @@
 //! The uses of what a render encoder made resident that its draws' binding plans list, kept from
 //! one draw to the next (`binding::command_uses_into`): a draw whose plan is the last draw's,
 //! under a residency of the last draw's generation, works none of them out
-//! (`WorkCounts::resident_uses_made`), and builds with debug assertions check each draw's kept
-//! uses against those it would make whole (`binding::kept_resident_checks`). The draws read
-//! through a root table and a handle table, so no draw of theirs is kept to draw again or rebind
-//! (`render/draw_again.rs`): each takes every step.
+//! (`WorkCounts::resident_uses_made`), nor walks them as it gathers them for its render pass
+//! instance (`WorkCounts::resident_uses_gathered`, `render/shadows.rs`), and builds with debug
+//! assertions check each draw's kept uses against those it would make whole
+//! (`binding::kept_resident_checks`), and its gathering against that of its whole uses. The draws
+//! read through a root table and a handle table, so no draw of theirs is kept to draw again or
+//! rebind (`render/draw_again.rs`): each takes every step.
 //! A draw after the encoder made another resource resident, a draw of another plan, and the
 //! first draw of an encoder of the same residency's shape over other resources (the same plan, a
 //! residency of another generation) work them out again.
@@ -141,11 +143,13 @@ impl Resources {
     }
 }
 
-/// What a draw changed: the resident uses its draw worked out, and the kept ones checked.
+/// What a draw changed: the resident uses its draw worked out, the kept ones checked, and the
+/// ones its gathering walked.
 #[derive(Debug, Default)]
 struct Drawn {
     made: u64,
     checked: u64,
+    gathered: u64,
 }
 
 /// Draw with `draw`, and what that changed.
@@ -156,13 +160,14 @@ fn drawn(device: &Device, draw: impl FnOnce()) -> Drawn {
     Drawn {
         made: after.0.resident_uses_made - before.0.resident_uses_made,
         checked: after.1 - before.1,
+        gathered: after.0.resident_uses_gathered - before.0.resident_uses_gathered,
     }
 }
 
 /// One encoder of `resources`, each draw's [`Drawn`]: [`POSITIONS`] draws of the entry shape,
-/// draw `i` binding table `i % 2`'s entry of position `i` at its vertex and fragment buffer 0, with the
-/// encoder's `later` buffer made resident before draw `later`; then one draw of the slot shape,
-/// which reads no pointer, and one of the entry shape again.
+/// draw `i` binding table `i % 2`'s entry of position `i` at its vertex and fragment buffer 0,
+/// with the encoder's `later` buffer made resident before draw `later`; then one draw of the slot
+/// shape, which reads no pointer, and one of the entry shape again.
 fn encode(scene: &Scene, resources: &Resources, later: u64) -> Vec<Drawn> {
     let device = &scene.device;
     let queue = device.new_command_queue().unwrap();
@@ -206,7 +211,8 @@ fn encode(scene: &Scene, resources: &Resources, later: u64) -> Vec<Drawn> {
 /// Two encoders, the second over other resources of the same residency's shape: within each,
 /// the draws after the first work out the uses of what it made resident only after it made
 /// another resource resident (the first encoder's fourth) and after a draw of another plan (the
-/// last); every other draw keeps them, and its kept uses are those it would make whole. The
+/// last), and only those walk them as they gather them for their render pass instance; every
+/// other draw keeps them, and its kept uses are those it would make whole. The
 /// second encoder's first draw, of the plan of the first's last (the second makes every resource
 /// resident before it) under another residency, works them out again.
 #[test]
@@ -221,12 +227,15 @@ fn draws_keep_the_uses_of_what_their_encoder_made_resident_until_it_or_their_pla
         let made_again = [0, later as usize, entry_draws + 1];
         for (at, drawn) in each.iter().enumerate() {
             let what = format!("encoder {encoder} draw {at}: {drawn:?}");
+            let walked = [drawn.made, drawn.gathered];
             match at {
                 // The slot shape's plan lists none.
-                at if at == entry_draws => assert_eq!(drawn.made, 0, "{what}"),
-                at if made_again.contains(&at) => assert!(drawn.made > 0, "{what}"),
+                at if at == entry_draws => assert_eq!(walked, [0; 2], "{what}"),
+                at if made_again.contains(&at) => {
+                    assert!(walked.iter().all(|walked| *walked > 0), "{what}")
+                }
                 _ => {
-                    assert_eq!(drawn.made, 0, "{what}");
+                    assert_eq!(walked, [0; 2], "{what}");
                     assert!(drawn.checked > 0, "{what}");
                 }
             }

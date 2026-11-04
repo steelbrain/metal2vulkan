@@ -9799,7 +9799,15 @@ impl RenderLowering {
         self.tile_memory_splits += usize::from(tile_memory_split);
         self.barrier_splits += usize::from(run_barrier_split);
         self.run_barrier = false;
-        self.gathering().add(&draw_shadows, uses);
+        match uses.prefix() {
+            None => self.gathering().add(&draw_shadows, uses),
+            Some(prefix) => {
+                if self.gathering().add_draw(&draw_shadows, (uses, prefix)) {
+                    let counts = &device.shared().counts;
+                    counts.resident_uses_gathered(prefix.len as u64);
+                }
+            }
+        }
         // Whether it recorded a barrier in its instance, or a state command (`Recorded`); and the
         // count of the record's recordings just after its last recorded through it, where one did
         // (`Bound::records`): what it holds kept (`Kept::settled`).

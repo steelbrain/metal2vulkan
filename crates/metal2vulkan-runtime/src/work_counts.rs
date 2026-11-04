@@ -496,6 +496,7 @@ struct DrawCounters {
     resident_uses_made: AtomicU64,
     argument_tables_held_at_bind: AtomicU64,
     bound_offsets_moved: AtomicU64,
+    resident_uses_gathered: AtomicU64,
 }
 
 /// How a render pass took a shadowed texture as a color attachment
@@ -2149,6 +2150,12 @@ impl Counters {
     /// (`WorkCounts::resident_uses_made`).
     pub(crate) fn resident_uses_made(&self, made: u64) {
         (self.draws.mine()).add(|counts| &counts.resident_uses_made, made);
+    }
+
+    /// `walked` uses of what a render encoder made resident that a draw's gathering for its
+    /// instance's shadowed textures walked (`WorkCounts::resident_uses_gathered`).
+    pub(crate) fn resident_uses_gathered(&self, walked: u64) {
+        (self.draws.mine()).add(|counts| &counts.resident_uses_gathered, walked);
     }
 
     /// A render draw rebound (`WorkCounts::draws_rebound`), which recorded `states` state
@@ -4902,6 +4909,11 @@ pub struct WorkCounts {
     /// widened, or heap used), and works out none then, a draw rebound or drawn again included;
     /// another works out each its plan lists.
     pub resident_uses_made: u64,
+    /// The uses of resources a render encoder made resident (`resident_uses_made`) that its
+    /// draws' gathering walked: compared with the last draw's and gathered into what its render
+    /// pass instance's draws use, which the shadowed textures they use are copied around. A draw
+    /// that begins with the uses its instance's last draw began with, by identity, walks none.
+    pub resident_uses_gathered: u64,
     /// Keys an encoder's commands named first, while the device has a buffer over host pages
     /// (`new_buffer_with_bytes_no_copy`), that were looked up among those buffers under the lock
     /// their command buffers' submissions take: the keys of such buffers, and the rare other key
@@ -6234,6 +6246,7 @@ impl Device {
             draws_as_before: draws(|counts| &counts.draws_as_before),
             draws_rebound: draws(|counts| &counts.draws_rebound),
             resident_uses_made: draws(|counts| &counts.resident_uses_made),
+            resident_uses_gathered: draws(|counts| &counts.resident_uses_gathered),
             host_holds_looked_up: counters.host_holds_looked_up.load(Ordering::Relaxed),
             dispatches_settled_as_before: (counters.dispatches_settled_as_before)
                 .load(Ordering::Relaxed),

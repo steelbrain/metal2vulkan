@@ -506,7 +506,14 @@ impl RenderLowering {
         self.unordered.add(uses);
         self.pass_start.announce(self.core.device(), uses, false);
         self.pass_start.add(uses);
-        self.gathering().add(&[], uses);
+        match uses.prefix() {
+            None => self.gathering().add(&[], uses),
+            Some(prefix) => {
+                if self.gathering().add_draw(&[], (uses, prefix)) {
+                    (self.core.device().shared().counts).resident_uses_gathered(prefix.len as u64);
+                }
+            }
+        }
         self.current.indirect_reads.add(uses);
         self.current.geometry_writes.add(uses);
         let owned = (live.kept.recording.as_ref())

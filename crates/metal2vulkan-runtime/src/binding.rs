@@ -2361,6 +2361,14 @@ fn uses_into(
                 plan: Arc::downgrade(plan),
                 generation,
             });
+            // Kept from one command to the next alone, so the identity of those kept alone
+            // (none where there are none: `prefix` reads it only where there are some).
+            if into.used > 0 {
+                into.prefix = match kept {
+                    Some(_) => identity(),
+                    None => 0,
+                };
+            }
         }
     }
     let CommandUses {
@@ -2664,6 +2672,27 @@ pub(super) struct CommandUses {
     /// Whether `resident` is other than `reaching` less `named`: a use added since the last call
     /// ([`push`](Self::push)) took a key out of it.
     taken: bool,
+    /// The identity of the uses of what the encoder made resident ([`ResidentPrefix`]), 0 where
+    /// they have none: given where [`command_uses_into`] made them, from [`IDENTITIES`].
+    prefix: u64,
+}
+
+/// The identities given to [`CommandUses`]' uses of what an encoder made resident, from 1: one of
+/// the process's, whose uses no other has.
+static IDENTITIES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+/// A new one of [`IDENTITIES`].
+fn identity() -> u64 {
+    IDENTITIES.fetch_add(1, Ordering::Relaxed)
+}
+
+/// The uses of what an encoder made resident that come first among a draw's
+/// ([`CommandUses::prefix`]), by identity: two draws' uses of the same identity begin with the same
+/// `len` uses. What takes a draw's uses may take those of the last one's identity once.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct ResidentPrefix {
+    pub(super) id: u64,
+    pub(super) len: usize,
 }
 
 impl CommandUses {
@@ -2671,6 +2700,16 @@ impl CommandUses {
     pub(super) fn push(&mut self, used: Use<ResourceKey>) {
         self.taken |= self.resident.remove(&used.key);
         self.uses.push(used);
+    }
+
+    /// The uses of what the encoder made resident at its start, by identity; `None` where there
+    /// are none, or they have no identity (made by [`command_uses`]).
+    pub(super) fn prefix(&self) -> Option<ResidentPrefix> {
+        let prefix = ResidentPrefix {
+            id: self.prefix,
+            len: self.used,
+        };
+        (prefix.len > 0 && prefix.id != 0).then_some(prefix)
     }
 
     /// How many uses of resources the encoder made resident the last call made: 0 where it kept
