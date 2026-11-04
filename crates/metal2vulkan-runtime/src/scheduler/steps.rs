@@ -146,13 +146,15 @@ fn record(shared: &SchedulerShared, work: Work) -> bool {
     buffer.device().shared().counts.host_step_recorded(took);
     buffer.end_step();
     drop(busy);
-    {
+    let stopping = {
         let mut state = lock(shared.inbox.state());
         if !state.stopping {
-            let asleep = state.mark(shared.nudge.get());
-            drop(state);
-            shared.woken(Woken::Host, asleep);
+            state.dirty = true;
         }
+        state.stopping
+    };
+    if !stopping {
+        shared.wake_thread(Woken::Host, shared.nudge.get());
     }
     // Out of the section: it may be the command buffer's last reference.
     drop(work);

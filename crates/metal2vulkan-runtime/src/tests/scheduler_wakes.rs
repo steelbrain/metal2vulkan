@@ -1,5 +1,5 @@
 //! A waker wakes the scheduler's thread once a sleep (`scheduler/mod.rs`, "Handed to the thread";
-//! `State::mark`): the first marks it awake as it notifies it, so a commit made before the thread
+//! `Sleep::mark`): the first marks it awake as it notifies it, so a commit made before the thread
 //! ran makes no system call, and no commit's wake is lost for it.
 //!
 //! - **Once a sleep.** The notifies counted as wakings by a commit, a completion or a host signal

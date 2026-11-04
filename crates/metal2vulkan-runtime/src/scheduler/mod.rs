@@ -6,9 +6,10 @@
 //!   pass and submits nothing, so no driver call holds it. This thread takes them in, in commit
 //!   order, at its next pass, and submits what is ready. The commit wakes the thread where it
 //!   sleeps, once a sleep: the waker that finds it asleep marks it awake as it notifies it, under
-//!   the lock, so a commit made before the thread ran finds it awake and makes no system call
-//!   ([`State::mark`]). Where it is making a pass, the thread looks at the inbox again once its
-//!   pass ends. The
+//!   the thread's own lock for its sleep ([`Sleep`]), so a commit made before the thread ran finds
+//!   it awake and makes no system call ([`Sleep::mark`]). No pass takes that lock, so a commit
+//!   never waits for the scheduler's lock, which a pass holds across its submissions. Where it is
+//!   making a pass, the thread looks at the inbox again once its pass ends. The
 //!   order sees every commit in commit order, and every batch is planned as it is submitted. This
 //!   thread stops looking at the inbox again at a pass that leaves it a check or a host step to
 //!   hand over, and before each one it runs passes again for as long as the inbox holds commits,
@@ -143,7 +144,8 @@
 //!   no completion turn and no waker between, and it observes the values itself
 //!   (`EventShared::value`, which waits for what it reads), then checks and submits. Every other
 //!   waker (a commit, a host signal, a finished decode, a lost device, a stop) signals the nudge,
-//!   under the lock, where the thread waits so; a completion turn needs not, as the thread's own
+//!   under the lock of the thread's sleep ([`Sleep`]), where the thread waits so; a completion
+//!   turn needs not, as the thread's own
 //!   wait sees the signal the turn saw. Not where the driver's wait for any of several objects
 //!   loses a signal that lands while it registers a later one
 //!   (`RuntimeDriverDefect::WaitForAnyObjectLosesASignal`, `driver_defects.rs`; MoltenVK's):
@@ -202,7 +204,7 @@ use metal2vulkan::error::RuntimeDriverDefect;
 use order::{Behind, Order};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::{fence, AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Condvar, Mutex, OnceLock};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
@@ -244,14 +246,14 @@ impl Nudge {
             .semaphore(self.semaphore)
             .value(value);
         // SAFETY: the device's semaphore, live while its scheduler runs; `value` is above the
-        // semaphore's (the values rise under the scheduler's lock).
+        // semaphore's (the values rise under the lock of the thread's sleep, [`Sleep`]).
         let signalled = unsafe { self.functions.get().signal_semaphore(&info) };
         exit_guard::called(exit_guard::Call::SignalSemaphore);
         signalled.is_ok()
     }
 }
 
-/// How the thread slept as a waker marked the state ([`State::mark`]).
+/// How the thread slept as a waker woke it ([`Sleep::mark`]).
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Asleep {
     /// It made a pass, was about to look again, or a waker before woke it: no wake needed.
@@ -394,6 +396,9 @@ pub(crate) struct Scheduler {
 struct SchedulerShared {
     /// The state, under the lock a pass holds, with the commits a pass under way takes in.
     inbox: Inbox<State, Committed>,
+    /// How the thread sleeps, under a lock of its own, which no pass takes ([`Sleep`]).
+    sleep: Mutex<Sleep>,
+    /// The thread's sleep on its condition variable, under `sleep`'s lock.
     wake: Condvar,
     /// What heads wait for from the GPU: the completion turns wake the thread once one is met.
     awaits: Awaits,
@@ -493,9 +498,18 @@ impl SchedulerShared {
         }
     }
 
-    /// A waker marked the state for the thread, which makes no pass: wake it where it sleeps
-    /// (`asleep`, read under the lock the mark was made under; one that sleeps later reads the
-    /// mark first), counted as `woken`; else the notify, a system call, is spared.
+    /// Wake the thread, which makes no pass, for what the caller wrote before (a commit posted, a
+    /// nudge, the state marked under its lock), signalling `nudge` where the thread waits for the
+    /// GPU: under the lock of its sleep alone ([`Sleep`]), which no pass holds, so the waker never
+    /// waits for a pass's submissions.
+    fn wake_thread(&self, woken: Woken, nudge: Option<&Nudge>) {
+        let asleep = lock(&self.sleep).mark(nudge);
+        self.woken(woken, asleep);
+    }
+
+    /// A waker found the thread making no pass: wake it where it sleeps (`asleep`, read under the
+    /// lock of its sleep; one that sleeps later reads what the waker wrote first), counted as
+    /// `woken`; else the notify, a system call, is spared.
     fn woken(&self, woken: Woken, asleep: Asleep) {
         match asleep {
             // The thread alone waits on it.
@@ -554,16 +568,9 @@ pub(crate) struct State {
     pub(crate) waited: Vec<Vec<u64>>,
     /// The binary semaphore signals the device's command buffers committed and submitted.
     binary: BinarySignals<vk::Semaphore>,
-    /// A commit or a host signal came since the thread last looked.
+    /// A host signal marked the state since the thread last looked (a commit and a nudge are
+    /// the inbox's, `inbox.rs`).
     dirty: bool,
-    /// The thread sleeps on its condition variable and no waker notified it yet: a waker
-    /// notifies it only then, and clears this as it does ([`State::mark`]).
-    asleep: bool,
-    /// The thread waits for the GPU, and for the nudge to reach this value: a waker signals it
-    /// to that value under the lock, instead of notifying (the module docs).
-    on_gpu: Option<u64>,
-    /// The nudge semaphore's value: the last a waker signalled it to.
-    nudge_value: u64,
     stopping: bool,
     /// The textures whose decoded twins have CPU decodes queued or running, each with how many
     /// (`texture/twin_decode.rs`): a batch whose footprint names one waits for them.
@@ -599,15 +606,34 @@ impl State {
         self.handler_tickets += 1;
         ticket
     }
+}
 
-    /// A waker's mark (the module docs): look for work again, and how the thread sleeps. Where it
-    /// waits for the GPU, `nudge` is signalled to the value it waits for, here, under the lock;
+/// How the scheduler's thread sleeps, under a lock of its own, which no pass takes: a waker that
+/// finds no pass under way wakes the thread through it alone ([`SchedulerShared::wake_thread`]),
+/// having written what it asks for first (a commit or a nudge in the inbox, or the state marked
+/// under the scheduler's lock), so it never waits for a pass's submissions. The thread takes this
+/// lock under the scheduler's as it goes to sleep, reads the inbox again, and lets go of the
+/// scheduler's lock before it sleeps: a waker's write is read there, or the waker finds it asleep.
+#[derive(Default)]
+struct Sleep {
+    /// The thread sleeps on its condition variable and no waker notified it yet: a waker
+    /// notifies it only then, and clears this as it does ([`Sleep::mark`]).
+    asleep: bool,
+    /// The thread waits for the GPU, and for the nudge to reach this value: a waker signals it
+    /// to that value under this lock, instead of notifying (the module docs).
+    on_gpu: Option<u64>,
+    /// The nudge semaphore's value: the last a waker signalled it to.
+    nudge_value: u64,
+}
+
+impl Sleep {
+    /// A waker's wake (the module docs), for what it wrote before: how the thread sleeps. Where it
+    /// waits for the GPU, `nudge` is signalled to the value it waits for, here, under this lock;
     /// none is given for a completion turn's wake, whose signal the thread's own wait sees. Where
-    /// it sleeps on its condition variable, it is marked awake here, for this waker to notify:
-    /// it then holds `dirty` and will pass, so a later waker before it ran notifies nothing (as
+    /// it sleeps on its condition variable, it is marked awake here, for this waker to notify: it
+    /// then passes for what the waker wrote, so a later waker before it ran notifies nothing (as
     /// the nudge, once signalled, is not signalled again).
     fn mark(&mut self, nudge: Option<&Nudge>) -> Asleep {
-        self.dirty = true;
         if self.asleep {
             self.asleep = false;
             return Asleep::OnCondvar;
@@ -733,9 +759,6 @@ impl Scheduler {
                 waited: vec![vec![0; queues + 2]; queues],
                 binary: BinarySignals::default(),
                 dirty: false,
-                asleep: false,
-                on_gpu: None,
-                nudge_value: 0,
                 stopping: false,
                 decodes: BTreeMap::new(),
                 untracked_decodes: 0,
@@ -746,6 +769,7 @@ impl Scheduler {
                 group: Group::default(),
                 grouped: Vec::new(),
             }),
+            sleep: Mutex::new(Sleep::default()),
             wake: Condvar::new(),
             awaits: Awaits::default(),
             sleeps: AtomicU64::new(0),
@@ -828,12 +852,8 @@ impl Scheduler {
             shared.inbox.post_quietly(committed);
             return;
         }
-        let mut asleep = Asleep::No;
-        let marked = (shared.inbox).post(committed, |state| {
-            asleep = state.mark(shared.nudge.get());
-        });
-        if marked {
-            shared.woken(Woken::Commit, asleep);
+        if shared.inbox.post(committed) {
+            shared.wake_thread(Woken::Commit, shared.nudge.get());
         }
     }
 
@@ -960,8 +980,8 @@ impl Scheduler {
         let shared = Arc::downgrade(&self.shared);
         move || {
             if let Some(shared) = shared.upgrade() {
-                let asleep = lock(shared.inbox.state()).mark(shared.nudge.get());
-                shared.woken(Woken::Host, asleep);
+                lock(shared.inbox.state()).dirty = true;
+                shared.wake_thread(Woken::Host, shared.nudge.get());
             }
         }
     }
@@ -1000,9 +1020,9 @@ impl Scheduler {
         if !tracked {
             state.untracked_decodes -= 1;
         }
-        let asleep = state.mark(self.shared.nudge.get());
+        state.dirty = true;
         drop(state);
-        self.shared.woken(Woken::Host, asleep);
+        (self.shared).wake_thread(Woken::Host, self.shared.nudge.get());
     }
 
     /// Whether this thread is the scheduler's (a submission check runs on it).
@@ -1024,9 +1044,8 @@ impl Scheduler {
     /// Look for work again: an event's value rose, a pipeline was made, a rebind encoded a
     /// command buffer again, or the device was lost (each a host signal). Where a pass is under
     /// way, it passes again once done, and wakes the thread for a step or a check that finds;
-    /// else the thread is woken here, under the lock, which then only a short hold or a pass made
-    /// after this one's change has ([`Inbox::wake`]): the waker never waits for a pass's
-    /// submissions.
+    /// else the thread is woken here, under the lock of its sleep alone
+    /// ([`SchedulerShared::wake_thread`]): the waker never waits for a pass's submissions.
     pub(crate) fn wake(&self) {
         self.wake_for(Woken::Host);
     }
@@ -1038,12 +1057,8 @@ impl Scheduler {
 
     /// [`wake_for`](Self::wake_for), signalling `nudge` where the thread waits for the GPU.
     fn wake_with(&self, woken: Woken, nudge: Option<&Nudge>) {
-        let mut asleep = Asleep::No;
-        let marked = (self.shared.inbox).wake(|state| {
-            asleep = state.mark(nudge);
-        });
-        if marked {
-            self.shared.woken(woken, asleep);
+        if !self.shared.inbox.nudge() {
+            self.shared.wake_thread(woken, nudge);
         }
     }
 
@@ -1111,11 +1126,8 @@ impl Scheduler {
     /// Ask the thread to end, and wait for it unless this is the thread. The device is being
     /// dropped, so nothing is held: every held command buffer holds its device.
     pub(crate) fn stop(&self) {
-        {
-            let mut state = lock(self.shared.inbox.state());
-            state.stopping = true;
-            state.mark(self.shared.nudge.get());
-        }
+        lock(self.shared.inbox.state()).stopping = true;
+        lock(&self.shared.sleep).mark(self.shared.nudge.get());
         self.shared.wake.notify_all();
         self.shared.steps.stop();
         let mut thread = lock(&self.thread);
@@ -1192,29 +1204,42 @@ fn run(shared: &Arc<SchedulerShared>) {
                 && bound.is_none()
                 && stalls.is_none();
             let slice = bound.map_or(slice, |left| left.min(slice));
+            let on_gpu = shared.nudge.get().filter(|_| shared.gpu_waits(&mut gpu));
+            // The lock of the sleep ([`Sleep`]), under the scheduler's: a waker that found no
+            // pass under way wrote what it asks for before it took it, so its commit or nudge is
+            // read here, or it finds the thread asleep and wakes it.
+            let mut sleep = lock(&shared.sleep);
+            if shared.inbox.holds_commits() || shared.inbox.nudged() {
+                continue;
+            }
             shared.sleeps.fetch_add(1, Ordering::Relaxed);
-            if let Some(nudge) = shared.nudge.get().filter(|_| shared.gpu_waits(&mut gpu)) {
-                state = wait_for_gpu(shared, state, nudge, &mut gpu, (slice, short));
+            if let Some(nudge) = on_gpu {
+                state = wait_for_gpu(shared, (state, sleep), nudge, &mut gpu, (slice, short));
                 continue;
             }
-            state.asleep = true;
-            if idle {
-                state = shared
-                    .wake
-                    .wait(state)
-                    .unwrap_or_else(std::sync::PoisonError::into_inner);
-                state.asleep = false;
-                continue;
-            }
-            let (woke, waited) = shared
-                .wake
-                .wait_timeout(state, slice)
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            state = woke;
-            state.asleep = false;
-            if waited.timed_out() && !short {
+            sleep.asleep = true;
+            // A waker that marks the state under the scheduler's lock takes it once this lets
+            // go of it, and then the sleep's, which the wait lets go of.
+            drop(state);
+            let timed_out = match idle {
+                true => {
+                    sleep = (shared.wake.wait(sleep))
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
+                    false
+                }
+                false => {
+                    let (woke, waited) = (shared.wake.wait_timeout(sleep, slice))
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
+                    sleep = woke;
+                    waited.timed_out()
+                }
+            };
+            sleep.asleep = false;
+            drop(sleep);
+            if timed_out && !short {
                 shared.wakings[Woken::Slice as usize].fetch_add(1, Ordering::Relaxed);
             }
+            state = lock(shared.inbox.state());
         }
         if state.stopping {
             return;
@@ -1238,19 +1263,20 @@ fn run(shared: &Arc<SchedulerShared>) {
 
 /// Sleep on the GPU (the module docs): for any of `gpu`'s semaphores to reach its value, or the
 /// nudge its next, at most `slice` ([`WAIT_SLICE`], or less to a head's bound, or, where `short`,
-/// the idle's length before a driver's stall is taken, whose end is no slice's), without the lock
-/// `state` holds, which comes back taken. Where a value landed, its events observe their counters,
-/// and the state is marked for a pass.
+/// the idle's length before a driver's stall is taken, whose end is no slice's), without the locks
+/// `state` and `sleep` hold, the scheduler's coming back taken. Where a value landed, its events
+/// observe their counters, and the state is marked for a pass.
 fn wait_for_gpu<'a>(
     shared: &'a SchedulerShared,
-    mut state: std::sync::MutexGuard<'a, State>,
+    (state, mut sleep): (MutexGuard<'a, State>, MutexGuard<'a, Sleep>),
     nudge: &Nudge,
     gpu: &mut GpuWait,
     (slice, short): (Duration, bool),
-) -> std::sync::MutexGuard<'a, State> {
+) -> MutexGuard<'a, State> {
     shared.gpu_waits.fetch_add(1, Ordering::Relaxed);
-    let target = state.nudge_value + 1;
-    state.on_gpu = Some(target);
+    let target = sleep.nudge_value + 1;
+    sleep.on_gpu = Some(target);
+    drop(sleep);
     drop(state);
     gpu.semaphores.push(nudge.semaphore);
     gpu.values.push(target);
@@ -1279,13 +1305,13 @@ fn wait_for_gpu<'a>(
     let mut state = lock(shared.inbox.state());
     // Whether a waker signalled the nudge (taking `on_gpu`); where none did, the next wait waits
     // for the same value.
-    let by_waker = state.on_gpu.take().is_none();
+    let by_waker = lock(&shared.sleep).on_gpu.take().is_none();
     match waited {
         Some(Ok(())) if !by_waker => {
             shared.wakings[Woken::Completion as usize].fetch_add(1, Ordering::Relaxed);
             state.dirty = true;
         }
-        // Nudged: the waker counted the waking and marked the state.
+        // Nudged: the waker counted the waking, and the next look reads what it wrote.
         Some(Ok(())) => {}
         Some(Err(vk::Result::TIMEOUT)) if !short => {
             shared.wakings[Woken::Slice as usize].fetch_add(1, Ordering::Relaxed);
