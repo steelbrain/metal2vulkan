@@ -18,7 +18,7 @@
 //! | `E == 0`: `±0` or a `float` denormal | `(+0, 0)` | `INT_MIN` |
 //! | `E == 255`, `a & 0x7fffff == 0`: `±inf` | `(x, 0)` | `INT_MAX` |
 //! | `E == 255`, a NaN | `(x, 0)`, its payload kept | `INT_MIN` |
-//! | otherwise | `(sign | 0x3f000000 | (u & 0x7fffff), E - 126)` | `E - 127` |
+//! | otherwise | `(sign \| 0x3f000000 \| (u & 0x7fffff), E - 126)` | `E - 127` |
 //!
 //! A `half` is exact as a `float` and never a `float` denormal, so the same table answers it:
 //! its denormals normalize (`0x0001` is `(0.5, -23)`, `ilogb` `-24`), its zeros are `(+0, 0)`, and
