@@ -535,7 +535,9 @@ pub(crate) fn bound_buffer(
         .get(&slot.stage)
         .and_then(|t| t.buffers.get(&slot.index));
     // The kind alone is compared, which no offset class changes.
-    if BoundKind::of(b.map(|b| b.shape(0)).as_ref()) != expected {
+    let kind = BoundKind::of_bound(b);
+    debug_assert_eq!(kind, BoundKind::of(b.map(|b| b.shape(0)).as_ref()));
+    if kind != expected {
         return Err(internal(format!(
             "the bind state's shape differs from the plan's at {slot:?}"
         )));
