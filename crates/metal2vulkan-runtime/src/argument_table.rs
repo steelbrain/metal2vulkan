@@ -214,8 +214,9 @@ impl Default for Stamp {
     }
 }
 
-/// The most slots a table keeps of its last calls' changes ([`Changes`]): a reader that read it
-/// before those reads it whole.
+/// The slots of its last calls' changes a table keeps at least, once it noted as many, and the
+/// most slots a call notes ([`Changes`]): it keeps at most twice as many, and a reader that read it
+/// before those it keeps reads it whole.
 const CHANGES_KEPT: usize = 16;
 
 /// The slots a table's last calls changed (or may have: a refused call's too), each with the
@@ -265,14 +266,16 @@ impl Changes {
             index,
             offset,
         }));
-        // The oldest calls go whole: a reader under the stamp one of them took saw its slots.
-        while self.slots.len() > CHANGES_KEPT {
-            let oldest = self.slots[0].stamp;
-            let gone = self
-                .slots
-                .partition_point(|changed| changed.stamp == oldest);
-            self.slots.drain(..gone);
-            self.since = Some(oldest);
+        // Past twice the slots it keeps, the oldest calls go whole, at once, down to the newest
+        // calls of at most `CHANGES_KEPT` slots: a reader under the stamp one of them took saw its
+        // slots. At once, so a note moves the slots it keeps once in `CHANGES_KEPT` calls.
+        if self.slots.len() > 2 * CHANGES_KEPT {
+            let mut cut = self.slots.len() - CHANGES_KEPT;
+            while cut < self.slots.len() && self.slots[cut].stamp == self.slots[cut - 1].stamp {
+                cut += 1;
+            }
+            self.since = Some(self.slots[cut - 1].stamp);
+            self.slots.drain(..cut);
         }
     }
 
@@ -1774,4 +1777,40 @@ fn bound_in<'a>(
         .values()
         .map(|(sampler, _)| Bound::Sampler(sampler));
     buffers.chain(textures).chain(samplers)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Changes, SlotClass, Stamp, CHANGES_KEPT};
+
+    /// A reader under the stamp before any of the calls the log keeps reads the slots those calls
+    /// changed, in order, with their offset marks; it keeps every call after a stamp whose calls
+    /// since changed at most `CHANGES_KEPT` slots, and never more than twice as many slots.
+    #[test]
+    fn the_changes_log_keeps_the_newest_calls() {
+        let mut changes = Changes::default();
+        // Each call: the stamp before it, and its slots with their offset marks.
+        let mut calls: Vec<(Stamp, Vec<(u32, bool)>)> = Vec::new();
+        let mut stamp = Stamp::fresh();
+        for call in 0..200u32 {
+            let first = call % 29;
+            let indices = first..first + 1 + call % 3;
+            let offset = call % 5 == 0;
+            let after = Stamp::fresh();
+            changes.note((stamp, after), SlotClass::Buffer, indices.clone(), offset);
+            calls.push((stamp, indices.map(|index| (index, offset)).collect()));
+            stamp = after;
+            assert!(changes.slots.len() <= 2 * CHANGES_KEPT, "call {call}");
+            for (at, (read, _)) in calls.iter().enumerate() {
+                let want: Vec<(u32, bool)> = calls[at..].iter().flat_map(|c| c.1.clone()).collect();
+                match changes.since(*read) {
+                    Some(got) => {
+                        let got: Vec<(u32, bool)> = got.map(|c| (c.index, c.offset)).collect();
+                        assert_eq!(got, want, "call {call}, read before call {at}");
+                    }
+                    None => assert!(want.len() > CHANGES_KEPT, "call {call}, read before {at}"),
+                }
+            }
+        }
+    }
 }
