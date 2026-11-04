@@ -1649,7 +1649,7 @@ fn the_device_s_functions_are_reached_through_checked_accessors() {
 /// tuple field, a type argument or a by-value parameter) fails
 /// `only_the_listed_modules_keep_the_device_s_functions`; so does a listed module that keeps none
 /// any more.
-const KEEPERS: [(&str, &str); 24] = [
+const KEEPERS: [(&str, &str); 25] = [
     (
         "binding.rs",
         "the push command (vkCmdPushDescriptorSet), a call's parameter (`push_set`) and the \
@@ -1691,6 +1691,12 @@ const KEEPERS: [(&str, &str); 24] = [
     (
         "dynamic_state.rs",
         "the device's extended dynamic state commands (DeviceShared)",
+    ),
+    (
+        "free_thread.rs",
+        "the frees of the runtime's own blocks, posted to the free thread, which frees each \
+         inside a section; the teardown stops the thread, which frees every block posted, and \
+         joins it before vkDestroyDevice",
     ),
     (
         "freed_memory.rs",

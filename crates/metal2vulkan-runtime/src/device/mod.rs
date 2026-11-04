@@ -1883,7 +1883,7 @@ impl Device {
         // its heaps and its allocations until they are (`free_thread.rs`).
         let functions = Arc::new(functions);
         let frees = Arc::new(crate::free_thread::FreeThread::new(Arc::clone(&functions)));
-        memory.free_on(Arc::clone(&frees));
+        memory.post_frees_to(Arc::clone(&frees));
         (allocations.allocations).wait_for_frees_on(Arc::clone(&frees));
         let resource_ids: Arc<Mutex<ResourceIds>> = Arc::default();
         let sampler_ids = lock(&resource_ids).sampler_id_reads();

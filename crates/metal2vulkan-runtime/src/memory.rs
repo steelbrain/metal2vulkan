@@ -1069,7 +1069,7 @@ pub(super) struct Memory {
     /// The memory log, where `METAL2VULKAN_LOG_MEMORY` is set (`memory_log.rs`).
     log: Option<MemoryLog>,
     /// The device's free thread, which the blocks that go are posted to, once set
-    /// ([`Memory::free_on`], `free_thread.rs`).
+    /// ([`Memory::post_frees_to`], `free_thread.rs`).
     frees: Option<Arc<FreeThread>>,
     /// Per memory heap: its size, and the bytes of the blocks of the runtime's own memory live in
     /// it ([`Memory::add_block`]), imports aside.
@@ -1130,7 +1130,7 @@ impl Memory {
     }
 
     /// Post the frees of the blocks that go from now on to `frees` (`free_thread.rs`).
-    pub(super) fn free_on(&mut self, frees: Arc<FreeThread>) {
+    pub(super) fn post_frees_to(&mut self, frees: Arc<FreeThread>) {
         self.frees = Some(frees);
     }
 
@@ -1152,7 +1152,7 @@ impl Memory {
     }
 
     /// The device's free thread, once set.
-    fn free_thread(&self) -> Option<Arc<FreeThread>> {
+    fn posted_frees(&self) -> Option<Arc<FreeThread>> {
         self.frees.clone()
     }
 
@@ -2297,7 +2297,7 @@ fn make_room(memory: &Mutex<Memory>, device: &ash::Device, type_index: u32) -> b
         let mut memory = lock(memory);
         (
             memory.release_kept(device, type_index),
-            memory.free_thread(),
+            memory.posted_frees(),
         )
     };
     let waited = frees.is_some_and(|frees| frees.wait());
