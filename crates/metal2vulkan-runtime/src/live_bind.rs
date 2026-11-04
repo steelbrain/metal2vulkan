@@ -64,6 +64,12 @@
 //!   draw's written over the last one's storage. Those hold values and raw handles, but for the
 //!   descriptor writes, whose keepers hold samplers and function tables: those are emptied as
 //!   the draw is done with them ([`Emptied`]), so they hold nothing past it, as a new vector's did.
+//! - **The resident textures' shadows listed once per change.** The shadows' copies of the
+//!   textures the encoder made resident (`shadow::ResidentShadows`) are kept here between draws
+//!   and listed again only where the residency's generation, or the count of usage shadows made,
+//!   moved, as a compute encoder keeps them (`compute/live.rs`): a draw's look at them costs
+//!   their count, not the resident textures'. They hold the copies, so they go as the encoder
+//!   ends ([`SpareLiveBinds::give`]).
 
 use ash::vk;
 use metal2vulkan::bind::{BindShape, BindState, DrawCommands};
@@ -82,6 +88,7 @@ use super::noted_apart::NotedApart;
 use super::pipeline::{BufferForms, GraphicsState, ProgramName, Settled};
 use super::render::KeptStorage;
 use super::sampler::OwnedSampler;
+use super::shadow::ResidentShadows;
 use super::work_counts::Counters;
 
 /// The most bind states a device keeps for its render encoders to start from: one per encoder
@@ -222,6 +229,9 @@ pub(super) struct LiveBind {
     /// What a draw rebound takes of its encoder's kept draw beyond its objects, kept likewise
     /// (`render/draw_again/rebound.rs`).
     pub(super) kept: KeptStorage,
+    /// The shadows' copies of the textures its encoder made resident, listed once per change (the
+    /// module docs).
+    pub(super) shadows: ResidentShadows,
 }
 
 /// A bind state a [`LiveBind`] set aside, with its shape, its listing's count and what its stage
@@ -521,9 +531,11 @@ impl SpareLiveBinds {
             return;
         };
         cell.clear_poison();
-        // What its draws settled goes with the encoder (the module docs).
+        // What its draws settled, and the shadows' copies listed, go with the encoder (the module
+        // docs).
         if let Ok(state) = cell.get_mut() {
             state.forget_settles();
+            state.shadows.let_go();
         }
         let mut spare = lock(&self.0);
         if spare.len() < SPARE_LIVE_BINDS {

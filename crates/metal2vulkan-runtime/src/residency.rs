@@ -132,6 +132,11 @@ pub(super) struct Residency {
     /// The tokens of the textures among `used`: a command's look at the textures made resident
     /// costs their count, not every resource's.
     textures: Vec<u32>,
+    /// Whether one of `textures` is sampled through an address-mode map other than the identity
+    /// (`Texture::address_mode_map`, fixed as the texture is made; a view's is its texture's):
+    /// set as such a texture is made resident, which none is ever made no longer, so a command's
+    /// look ([`maps_addresses`](Self::maps_addresses)) reads no texture.
+    maps_addresses: bool,
     /// The tokens of the shadowed textures (`shadow.rs`) among the first `textures_looked_at` of
     /// `textures`, in the order they were made resident: what a command buffer's next encoder
     /// starts with ([`shadows`](Self::shadows)) costs their count. Found where that is first
@@ -560,7 +565,10 @@ impl Residency {
         let token = u32::try_from(self.used.len()).expect("fewer than 2^32 resources resident");
         match &used {
             Used::IndirectCommandBuffer(_) => self.indirect.push(token),
-            Used::Texture(_) => self.textures.push(token),
+            Used::Texture(texture) => {
+                self.textures.push(token);
+                self.maps_addresses |= !texture.address_mode_map().is_identity();
+            }
             Used::Buffer(_) | Used::Heap { .. } => {}
         }
         self.tokens.insert(used.clone(), token);
@@ -753,6 +761,12 @@ impl Residency {
                 Some((Used::Texture(texture), usage, stages)) => Some((texture, *usage, *stages)),
                 _ => None,
             })
+    }
+
+    /// Whether a texture made resident is sampled through an address-mode map other than the
+    /// identity (`address_map.rs`).
+    pub(super) fn maps_addresses(&self) -> bool {
+        self.maps_addresses
     }
 
     /// The textures made resident.

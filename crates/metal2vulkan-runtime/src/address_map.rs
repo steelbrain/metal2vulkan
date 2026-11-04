@@ -223,8 +223,9 @@ pub(super) fn resolve(
 
 /// The maps one command of `layout` binds its runtime samplers with ([`resolve`]): `tables`
 /// are its stages' argument tables, and `residency` what its encoder made resident. A command
-/// whose tables bind no mapped texture, and whose functions sample no handles or reach no
-/// resident mapped texture, takes none, and reads no more of `layout`.
+/// whose tables bind no mapped texture, and whose encoder made none resident
+/// (`Residency::maps_addresses`, kept as textures are made resident), takes none, and reads no
+/// more of `layout` and no resident texture.
 pub(super) fn sampler_maps(
     layout: &PipelineLayout,
     tables: &[(Stage, &ArgumentTable)],
@@ -233,7 +234,7 @@ pub(super) fn sampler_maps(
     let mapped = |texture: &Texture| !texture.address_mode_map().is_identity();
     let bound = tables.iter().flat_map(|(_, table)| table.textures.values());
     let resident = || residency.into_iter().flat_map(Residency::textures);
-    if !bound.clone().any(mapped) && !resident().any(mapped) {
+    if !bound.clone().any(mapped) && !residency.is_some_and(Residency::maps_addresses) {
         return Ok(SamplerMaps::default());
     }
     let (pairs, handles) = pairs(layout);

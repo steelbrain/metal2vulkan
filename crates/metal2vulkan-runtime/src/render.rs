@@ -8883,16 +8883,18 @@ impl RenderLowering {
             self.skipped_draw();
             return Ok(());
         }
-        // The shadowed textures the draw uses, copied around its instance (`render/shadows.rs`).
-        let textures = self
+        // The shadowed textures the draw uses, copied around its instance (`render/shadows.rs`):
+        // those bound, then those made resident, as the encoder keeps their shadows listed
+        // (`LiveBind::shadows`).
+        let bound = self
             .vertex
             .textures
             .values()
             .chain(self.fragment.textures.values())
             .chain(self.object.textures.values())
-            .chain(self.mesh.textures.values())
-            .chain(self.residency.textures());
-        let mut draw_shadows = shadow::shadow_uses(textures, uses);
+            .chain(self.mesh.textures.values());
+        let resident = live.shadows.of(&device, &self.residency);
+        let mut draw_shadows = shadow::shadow_uses_of(bound, resident, uses);
         // A draw that reads an attachment's texture at its fragments' own pixels alone copies in
         // only the texels around its scissors (`texture/attached_reads.rs`).
         if attached {

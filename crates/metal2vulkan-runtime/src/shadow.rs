@@ -2225,7 +2225,8 @@ fn texture_copies(texture: &Texture, copies: &mut Vec<Arc<ShadowCopies>>) {
 }
 
 /// The shadows' copies of the textures a residency made resident ([`texture_copies`] of each, in
-/// its textures' order), kept by an encoder between its commands and listed again only where the
+/// its textures' order), kept by an encoder between its commands (a compute encoder's dispatches,
+/// `compute/live.rs`; a render encoder's draws, `live_bind.rs`) and listed again only where the
 /// residency's generation (`Residency::generation`), or the count of usage shadows its device
 /// made (`DeviceShared::usage_shadows_made`), moved since: a texture's own shadow is made with
 /// it, and a usage shadow is the one a texture makes later. A command's look at them
@@ -2255,7 +2256,7 @@ impl ResidentShadows {
         &self.copies
     }
 
-    /// Hold none: an ended encoder's, kept for the next (`compute/live.rs`).
+    /// Hold none: an ended encoder's, kept for the next (`compute/live.rs`, `live_bind.rs`).
     pub(super) fn let_go(&mut self) {
         self.listed_at = None;
         self.copies.clear();
