@@ -131,7 +131,9 @@
 //!   the current one's place when nothing recorded into it and, for the pass's first, every
 //!   attachment it leaves out that Metal clears can be cleared before the pass instead (its
 //!   level and layer is the whole render area, cleared by `vkCmdClearColorImage` with the value
-//!   the load operation would take; Vulkan converts both alike); otherwise the pass splits, and
+//!   the load operation would take; Vulkan converts both alike), and the draw is not one that
+//!   samples a color the pass clears after a memory barrier before its first draw, whose copy
+//!   must follow the clear (`texture/attached_reads.rs`); otherwise the pass splits, and
 //!   the new instance follows the current one after a barrier from everything before to
 //!   everything after. A split pass renders its memoryless attachments into stand-ins
 //!   (`attachment_stand_in.rs`), since its instances keep their contents in memory. A query
@@ -328,7 +330,7 @@ use super::residency::Residency;
 use super::resolve::{
     self, DepthStencilResolve, Resolve, ResolveCopies, ResolveMode, ResolveSource,
 };
-use super::resource::ResourceKey;
+use super::resource::{ResourceKey, ResourceRef};
 use super::sample_planes::{self, Planes, PlanesCommands};
 use super::sample_positions;
 use super::sampler::OwnedSampler;
@@ -1471,6 +1473,12 @@ pub(crate) struct RenderLowering {
     /// A memory barrier follows draws of the current instance: the next draw records into a new
     /// instance after a barrier from everything before (`fence.rs`).
     barrier: bool,
+    /// A memory barrier over the render targets after the fragment stage came before any draw of
+    /// the pass recorded (`fence.rs`): it orders the pass's load actions before the draws after
+    /// it, so a draw that samples a color the pass clears records into an instance after the
+    /// pass's first, which runs them (`texture/attached_reads.rs`), or reads through snapshots
+    /// (`render/snapshot.rs`). The pass's first split takes it.
+    loads_ordered: bool,
     /// The splits such barriers made, for the split's degrade notice.
     barrier_splits: usize,
     /// What MoltenVK restarts its Metal render pass for inside the subpass, storing the
@@ -2077,6 +2085,7 @@ impl RenderLowering {
             rate_map,
             amplification: Versioned::new(Amplification::default()),
             barrier: false,
+            loads_ordered: false,
             barrier_splits: 0,
             driver_restarts: false,
             tile_memory_splits: 0,
@@ -3955,7 +3964,7 @@ impl RenderLowering {
                 (&[], None),
                 (false, false),
                 ViewSetup::default(),
-                false,
+                (false, false),
                 None,
                 &[],
                 &[],
@@ -6375,7 +6384,10 @@ impl RenderLowering {
     /// layers `views` records, and the pass's layout from it on where stand-ins or sample planes
     /// arrive with it (the module docs, `attachment_stand_in.rs` and `sample_planes.rs`); a draw
     /// `ordered` after the current instance's draws (`render/tile_memory.rs`) records into a new
-    /// one. Refused (`NotImplemented(Render)`) where a fetched texture's scratch cannot be
+    /// one, and one ordered after the pass's load actions alone (`behind_loads`: a draw that
+    /// samples a color the pass clears, after a memory barrier before its first draw,
+    /// `texture/attached_reads.rs`) into one after the pass's first, which runs them with no
+    /// draw. Refused (`NotImplemented(Render)`) where a fetched texture's scratch cannot be
     /// copied, and (`Unsupported`) where the device cannot run the sample planes' copies.
     /// `by`: the state of the draw that fetches them, which a scratch's notice names.
     fn next_instance(
@@ -6383,7 +6395,7 @@ impl RenderLowering {
         (fetched, by): (&[u32], Option<&DrawingState>),
         (shadow, shader_tests): (bool, bool),
         views: ViewSetup,
-        ordered: bool,
+        (ordered, behind_loads): (bool, bool),
         hidden: Option<Target>,
         locations: &[Option<u32>],
         reformats: &[Reformat],
@@ -6564,12 +6576,13 @@ impl RenderLowering {
                 .and_then(Option::as_ref)
                 .is_some_and(|color| color.load == LoadAction::Clear)
         });
-        // An instance a tile dispatch follows runs before it, recorded or not.
+        // An instance a tile dispatch follows runs before it, recorded or not, and so does the
+        // pass's first ahead of a draw ordered after its load actions.
         // An instance that records the current one's draws again takes its place as an empty
         // one's would (`render/reroute.rs`).
         let replace = !self.dispatched
             && (!self.current.recorded || self.rerouting)
-            && (!first || (ahead && loads && !viewed_clears));
+            && (!first || (ahead && loads && !viewed_clears && !behind_loads));
         let split = !replace;
         if split {
             // A split pass keeps its memoryless attachments in memory between its instances.
@@ -6834,9 +6847,12 @@ impl RenderLowering {
                 let previous = std::mem::replace(&mut self.current, *instance);
                 self.earlier.push(previous);
                 self.barrier_splits += usize::from(self.barrier);
-                if self.barrier {
+                // The instance after the one that ran the pass's load actions behind a barrier
+                // before its first draw follows that barrier too.
+                if self.barrier || self.loads_ordered {
                     self.reload_at.insert(self.earlier.len());
                 }
+                self.loads_ordered = false;
             } else {
                 // It takes the place of the current one, whose draws it records again.
                 let mut instance = *instance;
@@ -6921,6 +6937,29 @@ impl RenderLowering {
         // compatible pass of its shape, which `render_target` made, and only this encoder records
         // it.
         unsafe { render_target::between_draws(raw, self.current.draws, view_mask) };
+    }
+
+    /// Order the pass's load actions before the draws after a memory barrier over the render
+    /// targets after the fragment stage (`fence.rs`), where it comes before any draw of the pass
+    /// recorded (`loads_ordered`). Past one, the draws before it order themselves
+    /// (`barrier_between_draws`), and an instance after the pass's first follows its load
+    /// actions already.
+    pub(super) fn barrier_orders_loads(&mut self) {
+        if self.earlier.is_empty() && !self.current.recorded {
+            self.loads_ordered = true;
+        }
+    }
+
+    /// [`barrier_orders_loads`](Self::barrier_orders_loads) for a memory barrier over
+    /// `resources`, where one of them is a texture a color attachment of the pass renders.
+    pub(super) fn barrier_orders_loads_of(&mut self, resources: &[ResourceRef<'_>]) {
+        let attached = resources.iter().any(|resource| match resource {
+            ResourceRef::Texture(texture) => texture.attached_in(&self.layout),
+            _ => false,
+        });
+        if attached {
+            self.barrier_orders_loads();
+        }
     }
 
     /// Bound the copy in of each shadow among `shadows` of a texture that presents a color
@@ -7028,9 +7067,14 @@ impl RenderLowering {
     }
 
     /// Whether a draw of `plan` samples, at a slot of its tables, a texture that presents a color
-    /// attachment of the pass (`texture/attached_reads.rs`): a sampled image or combined image
-    /// sampler binding, not a storage one.
-    fn samples_attachment(&self, plan: &BindingPlan) -> bool {
+    /// attachment of the pass (`texture/attached_reads.rs`) as `presents` tells
+    /// (`Texture::attached_in`, or `Texture::cleared_in` for one the pass clears): a sampled image
+    /// or combined image sampler binding, not a storage one.
+    fn samples_attachment(
+        &self,
+        plan: &BindingPlan,
+        presents: fn(&Texture, &PassLayout) -> bool,
+    ) -> bool {
         plan.descriptors.iter().any(|write| {
             let slot = match &write.source {
                 WriteSource::Texture { slot, .. } => slot,
@@ -7051,7 +7095,7 @@ impl RenderLowering {
                 && table
                     .textures
                     .get(&slot.index)
-                    .is_some_and(|texture| texture.attached_in(&self.layout))
+                    .is_some_and(|texture| presents(texture, &self.layout))
         })
     }
 
@@ -7091,7 +7135,7 @@ impl RenderLowering {
             (&[], None),
             (false, false),
             ViewSetup::default(),
-            false,
+            (false, false),
             None,
             &[],
             &[],
@@ -8407,8 +8451,16 @@ impl RenderLowering {
         // has begun its render pass instance with no color in the feedback loop layout, so the
         // draw records into a new one (`render/snapshot.rs`). So does a draw that binds a texture
         // the current instance holds in that layout as a storage image.
-        let attached = !self.replaying && snapshot.is_none() && self.samples_attachment(&plan);
-        let after_barrier = attached && (self.current.barriers || self.barrier);
+        // After a memory barrier before the pass's first draw, one that samples a color the pass
+        // clears records into an instance after the pass's first, which runs the clear, so its
+        // copy holds it (`texture/attached_reads.rs`): the pass's load actions are behind the
+        // barrier.
+        let attached = !self.replaying
+            && snapshot.is_none()
+            && self.samples_attachment(&plan, Texture::attached_in);
+        let behind_loads =
+            attached && self.loads_ordered && self.samples_attachment(&plan, Texture::cleared_in);
+        let after_barrier = (attached && (self.current.barriers || self.barrier)) || behind_loads;
         let snapshot_split = snapshot.as_ref().is_some_and(|w| self.snapshot_apart(w));
         let storage_colors = self.storage_colors(&plan);
         let apart = snapshot_split || storage_colors & self.current.feedback.0 != 0;
@@ -8424,7 +8476,10 @@ impl RenderLowering {
             (&fetched, Some(&pipeline)),
             (stencil_use.is_some(), tests_use.is_some()),
             views,
-            (ordered || after_barrier || apart || first_write) && !self.replaying,
+            (
+                (ordered || after_barrier || apart || first_write) && !self.replaying,
+                behind_loads,
+            ),
             hidden,
             &routing.locations,
             &reformats,
@@ -9674,7 +9729,7 @@ impl RenderLowering {
                     (&fetched, Some(&pipeline)),
                     (stencil_use.is_some(), tests_use.is_some()),
                     views,
-                    true,
+                    (true, false),
                     None,
                     &routing.locations,
                     &reformats,

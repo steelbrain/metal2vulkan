@@ -33,6 +33,15 @@
 //!   a new instance (`render.rs`, `WorkCounts::attachment_read_splits`), before which the copy
 //!   is taken: it holds every texel the draws before the barrier wrote, and those of the draws
 //!   between the barrier and it, which Metal does not order before it.
+//! - **After a memory barrier before the pass's first draw.** Such a barrier orders the pass's
+//!   load actions before the draws after it (`fence.rs`): a draw after it that samples the
+//!   texture of a color the pass clears ([`Texture::cleared_in`]) reads the clear on a Mac2 GPU,
+//!   where the copy taken ahead of the pass's load actions holds the texels from before the pass.
+//!   It records into an instance after the pass's first, which runs the pass's load actions and
+//!   draws nothing where no draw came before (`render.rs`, `WorkCounts::attachment_read_splits`),
+//!   before which the copy is taken, or reads through snapshots inside its instance (below). A
+//!   draw that samples a color the pass loads, or none, records as with no barrier: the copy
+//!   ahead of the load holds what it loads.
 //! - **The copy** is the texture's shadow, an image of its own, whose truth is the texture's
 //!   image or its buffer's bytes. The pass's shadow plan (`render/shadows.rs`) copies the truth
 //!   in before each instance whose draws read the shadow, after the instances before it wrote
@@ -102,7 +111,8 @@ use crate::binding_view::VkView;
 use crate::command_buffer::CommandBuffer;
 use crate::error::Error;
 use crate::image_plan::ImagePlan;
-use crate::render_pass::PassLayout;
+use crate::render_pass::{ColorTarget, PassLayout};
+use crate::render_values::LoadAction;
 use crate::texture_descriptor::TextureDescriptor;
 use crate::tracker::{Access, Use};
 use crate::values::ResourceOptions;
@@ -151,6 +161,20 @@ impl Texture {
     /// instance renders: the same image, and an overlapping level and layer (every layer of a 3D
     /// image, which has one, its depth planes the attachment's layers).
     pub(crate) fn attached_in(&self, layout: &PassLayout) -> bool {
+        self.attached_where(layout, |_| true)
+    }
+
+    /// Whether the texture presents a level and layer that a color attachment of `layout`'s
+    /// instance whose load action clears it renders, as [`attached_in`](Self::attached_in) tells:
+    /// what a draw after a memory barrier before the pass's first draw reads of it is the clear
+    /// (the module docs).
+    pub(crate) fn cleared_in(&self, layout: &PassLayout) -> bool {
+        self.attached_where(layout, |color| color.load == LoadAction::Clear)
+    }
+
+    /// [`attached_in`](Self::attached_in) of the color attachments of `layout` that `keep`
+    /// keeps.
+    fn attached_where(&self, layout: &PassLayout, keep: impl Fn(&ColorTarget) -> bool) -> bool {
         let Ok(image) = self.image() else {
             return false;
         };
@@ -158,16 +182,21 @@ impl Texture {
         let levels = record.base_level..record.base_level + record.level_count;
         let layers = record.base_layer..record.base_layer + record.layer_count;
         let volume = image.plan().image_type == ImageType::TYPE_3D;
-        layout.colors.iter().flatten().any(|color| {
-            let target = &color.target;
-            let same = target
-                .texture
-                .image()
-                .is_ok_and(|other| other.identity.key == image.identity.key);
-            let rendered = target.layer..target.layer + target.layers;
-            same && levels.contains(&target.level)
-                && (volume || (rendered.start < layers.end && layers.start < rendered.end))
-        })
+        layout
+            .colors
+            .iter()
+            .flatten()
+            .filter(|c| keep(c))
+            .any(|color| {
+                let target = &color.target;
+                let same = target
+                    .texture
+                    .image()
+                    .is_ok_and(|other| other.identity.key == image.identity.key);
+                let rendered = target.layer..target.layer + target.layers;
+                same && levels.contains(&target.level)
+                    && (volume || (rendered.start < layers.end && layers.start < rendered.end))
+            })
     }
 }
 

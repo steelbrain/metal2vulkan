@@ -583,8 +583,8 @@ pub(crate) enum Split {
     /// A draw ordered after draws of the instance that reached the tile threadgroup memory
     /// (`render/tile_memory.rs`).
     TileMemory,
-    /// A draw that samples a color attachment's texture after a barrier inside the instance
-    /// (`texture/attached_reads.rs`).
+    /// A draw that samples a color attachment's texture after a barrier inside the instance, or a
+    /// color the pass clears after a barrier before its first draw (`texture/attached_reads.rs`).
     AttachedRead,
     /// A draw that reads through snapshots apart from the instance, or binds a color the instance
     /// holds in the feedback loop layout (`render/snapshot.rs`).
@@ -4511,14 +4511,16 @@ pub struct WorkCounts {
     /// Instances of no draws that resolve a pass after its last (`render/pass_steps.rs`).
     pub render_passes_begun_resolves: u64,
     /// Splits of render encoders' passes, each a new render pass instance after one that
-    /// recorded (`render.rs`, **Instances**), at a memory barrier of the program's (`fence.rs`).
+    /// recorded, or that runs the pass's load actions alone (`render.rs`, **Instances**), at a
+    /// memory barrier of the program's (`fence.rs`).
     /// With the nine fields after this one, every split, by its first cause in this order.
     pub instance_splits_barrier: u64,
     /// At a tile dispatch, or for the store actions after the pass's last one.
     pub instance_splits_tile_dispatch: u64,
     /// At a draw ordered after draws that reached the tile threadgroup memory.
     pub instance_splits_tile_memory: u64,
-    /// At a draw that samples a color attachment's texture after a barrier inside the instance.
+    /// At a draw that samples a color attachment's texture after a barrier inside the instance,
+    /// or a color the pass clears after a barrier before its first draw.
     pub instance_splits_attached_read: u64,
     /// At a draw that reads through snapshots apart, or binds a color held in the feedback loop
     /// layout.
@@ -5669,7 +5671,9 @@ pub struct WorkCounts {
     pub attachment_reads_through_copies: u64,
     /// Draws that sample a color attachment's texture after a memory barrier of their render
     /// pass, each recorded into a new instance (a barrier inside an instance orders one pixel
-    /// alone), whose copy holds what the draws before the barrier wrote
+    /// alone), whose copy holds what the draws before the barrier wrote; and those that sample a
+    /// color the pass clears after a barrier before its first draw, each recorded into an
+    /// instance after the pass's first, which runs the clear, whose copy holds it
     /// (`texture/attached_reads.rs`).
     pub attachment_read_splits: u64,
     /// Draws that sample a color attachment's texture after a memory barrier of their render

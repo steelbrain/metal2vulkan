@@ -41,12 +41,21 @@
 //!   (buffers or textures, which a fragment may write at any address and a draw may read at any
 //!   stage) splits the pass: the next draw records into a new instance, after a barrier from
 //!   everything before to everything after (`render.rs`, the `render-pass-split` degradation).
+//! - **Before the pass's first draw**, a barrier over the render targets (or with them, or over
+//!   an attachment's texture), after the fragment stage and before a stage at or before it, orders
+//!   the pass's load actions, which write its render targets ahead of every draw, before the
+//!   draws after it, as Mac2 GPUs answer (measured: an Intel UHD 630 read the clear after one and
+//!   the texels from before the pass without one, an AMD Radeon Pro 5300M the clear either way):
+//!   a draw after it that samples the texture of a color the pass clears records into an instance
+//!   after the pass's first, which runs the clear alone, or reads through snapshots
+//!   (`texture/attached_reads.rs`). A pass with no such draw records as with no barrier.
 //! - **Barriers over the render targets on Apple GPUs.** The Metal Feature Set Tables give that
 //!   scope to Mac2 GPUs, not to Apple3 to Apple10 ones: on the M3 Max under macOS 27.0.1 (probe
 //!   `rtbarrier`), a draw after one read its own pixel's texels from before the pass, as with no
 //!   barrier, and (probe `rtb`) a draw after one from the fragment stage to the fragment or the
 //!   vertex stage read other pixels' texels from before the pass too, as an Apple GPU orders none
-//!   of them. The runtime orders what each barrier names, as a Mac2 GPU does.
+//!   of them, nor, after one at the pass's start, its clear: the draw read the texels from before
+//!   the pass. The runtime orders what each barrier names, as a Mac2 GPU does.
 //! - **Barriers after the fragment stage.** On an Apple GPU Metal's validation stops one
 //!   ("afterStages (0x2) can not contain MTLRenderStageTile or MTLRenderStageFragment on this
 //!   device", M4), and Metal without it did not order a fragment's buffer write before the next
@@ -297,6 +306,13 @@ const UP_TO_FRAGMENT: RenderStages = RenderStages::VERTEX
     .union(RenderStages::MESH)
     .union(RenderStages::FRAGMENT);
 
+/// Whether a barrier after `after_stages` and before `before_stages` orders the fragment stage's
+/// writes before the later draws' fragment stages: after the fragment stage, before a stage at or
+/// before it.
+fn orders_fragments(after_stages: RenderStages, before_stages: RenderStages) -> bool {
+    after_stages.contains(RenderStages::FRAGMENT) && before_stages.intersects(UP_TO_FRAGMENT)
+}
+
 impl RenderLowering {
     /// The lowering of [`RenderCommandEncoder::update_fence`].
     pub(crate) fn update_fence(
@@ -342,10 +358,14 @@ impl RenderLowering {
         if scope.is_empty() || after_stages.is_empty() || before_stages.is_empty() {
             return;
         }
+        // The pass's load actions write its render targets ahead of its first draw.
+        if scope.contains(BarrierScope::RENDER_TARGETS)
+            && orders_fragments(after_stages, before_stages)
+        {
+            self.barrier_orders_loads();
+        }
         if scope == BarrierScope::RENDER_TARGETS {
-            if after_stages.contains(RenderStages::FRAGMENT)
-                && before_stages.intersects(UP_TO_FRAGMENT)
-            {
+            if orders_fragments(after_stages, before_stages) {
                 self.barrier_between_draws();
             }
             return;
@@ -368,6 +388,9 @@ impl RenderLowering {
             self.core().check_device(CALL, resource.device())?;
         }
         if !resources.is_empty() && !after_stages.is_empty() && !before_stages.is_empty() {
+            if orders_fragments(after_stages, before_stages) {
+                self.barrier_orders_loads_of(resources);
+            }
             self.barrier_before_next_draw();
         }
         Ok(())

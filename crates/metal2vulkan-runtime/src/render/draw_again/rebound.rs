@@ -58,6 +58,7 @@ use crate::error::Error;
 use crate::live_bind::{LiveBind, Reshape};
 use crate::pipeline::{RenderStateKind, Settled};
 use crate::render::{Assembly, Bound, DrawBuffers, DrawState, Recording};
+use crate::texture::Texture;
 
 /// The most slots a draw rebound takes changed: a draw after more takes every step.
 const SLOTS: usize = 8;
@@ -364,7 +365,7 @@ impl RenderLowering {
         // texture is bound through a shadow (`LiveBind`'s state), as for the kept draw.
         let images = changed.images();
         if images
-            && (self.samples_attachment(plan)
+            && (self.samples_attachment(plan, Texture::attached_in)
                 || self.storage_colors(plan) != 0
                 || !live.state.extended_shadows.is_empty())
         {

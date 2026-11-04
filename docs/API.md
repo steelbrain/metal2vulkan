@@ -3937,6 +3937,15 @@ each item named states the rule in full.
   no notice says so, and every field the pass does determine is Metal's: the conformance case
   `mesh-commands-unordered-draws` compares those exactly and keeps Metal's own texels beside them,
   for the next macOS to be read against.
+- **A barrier over the render targets orders what it names, as a Mac2 GPU's does.** The Metal
+  Feature Set Tables give `MTLBarrierScopeRenderTargets` to Mac2 GPUs, not to Apple GPUs, and an
+  M3 Max (macOS 27.0.1) orders nothing with it: a draw after one that samples its own pass's color
+  attachment's texture reads the texels from before the pass, whatever the pass's load action or
+  draws wrote before the barrier. The runtime orders the draws after such a barrier, or one over
+  the texture, after the fragment stage, behind the draws before it and, where it comes before
+  the pass's first draw, behind the pass's load actions: that draw reads what the draws before the
+  barrier wrote, or the clear (the runtime's `fence.rs` and `texture/attached_reads.rs`). With no
+  barrier it reads the texels from before the pass at its own pixel, the M3 Max's answer.
 
 **GPU hangs and faults** (a draw of private primitive type 9, `DrawPrimitiveType::Nine`)
 

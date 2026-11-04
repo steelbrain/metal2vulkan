@@ -257,7 +257,12 @@ impl RenderLowering {
         pipeline: &DrawingState,
         reformats: &[Reformat],
     ) -> Option<Wanted> {
-        if self.replaying || self.rerouting || !(self.current.barriers || self.barrier) {
+        // After a barrier before the pass's first draw alone (`loads_ordered`), a slot reads
+        // through a snapshot only where its texture's color is one the pass clears: one the pass
+        // loads holds the texels from before the pass, which its copy holds
+        // (`texture/attached_reads.rs`).
+        let ordered = self.current.barriers || self.barrier;
+        if self.replaying || self.rerouting || !(ordered || self.loads_ordered) {
             return None;
         }
         let base = pipeline.base();
@@ -270,7 +275,8 @@ impl RenderLowering {
             let Some(texture) = self.fragment.textures.get(&slot) else {
                 continue;
             };
-            if !texture.attached_in(&self.layout) {
+            if !texture.attached_in(&self.layout) || !(ordered || texture.cleared_in(&self.layout))
+            {
                 continue;
             }
             let Some(index) = texture.snapshot_color(&self.layout) else {

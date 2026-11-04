@@ -156,7 +156,7 @@ impl RenderLowering {
                 (&colors, Some(by)),
                 (false, false),
                 ViewSetup::default(),
-                true,
+                (true, false),
                 None,
                 &locations,
                 &[],
