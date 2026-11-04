@@ -177,7 +177,13 @@ pub fn replay_against(
     // the case records the venue's gap (above), the sites the run never reached are not
     // divergences because the comparison is told the run stopped, and the device gaps are read
     // **after** the divergences and the refusals, so anything worse outranks them.
-    let (verdict, allowances) = verdict_over(case, answer, &ours, &announced, abort.is_some());
+    let (verdict, allowances) = verdict_over(
+        case,
+        answer,
+        &ours,
+        (&announced, venue.unified_memory),
+        abort.is_some(),
+    );
     Ok(Replayed {
         case: name.to_owned(),
         venue,
@@ -196,7 +202,8 @@ pub fn replay_against(
 
 /// The verdict of `ours` against `answer`'s outcomes: the most favourable of them, because Metal
 /// produced any of the set and matching one of them is matching Metal. With it, what the case's
-/// allowances did against that outcome.
+/// allowances did against that outcome. `offered` is what the run announced and whether its venue
+/// presents unified memory.
 ///
 /// The allowances follow the verdict rather than being gathered over every outcome, because they
 /// are a fact about the comparison the verdict came from: a racy case whose run matched the
@@ -205,7 +212,7 @@ fn verdict_over(
     case: &dyn Case,
     answer: &Answer,
     ours: &Transcript,
-    announced: &[String],
+    (announced, unified_memory): (&[String], bool),
     stopped: bool,
 ) -> (Verdict, Allowances) {
     let allowances = case.allowances();
@@ -231,7 +238,7 @@ fn verdict_over(
             ));
             continue;
         }
-        let offered = Offered::new(announced, &answer.validated);
+        let offered = Offered::new(announced, &answer.validated).on_venue(unified_memory);
         let found = compare_run(&outcome.transcript, ours, &allowances, offered, stopped);
         let used = Allowances {
             named: found.named,
@@ -355,6 +362,38 @@ pub fn notice_allowance(code: &str) -> crate::allowance::Allowance {
 /// which run it rests on.
 pub fn shared_memory_notice() -> crate::allowance::Allowance {
     notice_allowance(metal2vulkan_runtime::Degradation::SharedInSystemMemory.code())
+}
+
+/// The slug of `docs/API.md`'s accepted difference that says what a device presented without
+/// unified memory answers as a Mac with a discrete GPU does ([`without_unified_memory`]).
+pub const WITHOUT_UNIFIED_MEMORY: &str =
+    "a-device-presented-without-unified-memory-keeps-no-texture-compressed";
+
+/// The declaration a case needs at `site`, a value a new `Private` texture's contents decide
+/// before anything writes them, for the one answer a **venue's memory model** changes there: on a
+/// device presented without unified memory, as a Mac with a discrete GPU is, such a texture holds
+/// what its memory held, zero or a released texture's texels, and nothing writes it
+/// (`WorkCounts::private_textures_unfilled`), where the Apple silicon Mac every recording was
+/// taken on reads zero or its compressed texture's fixed pattern.
+///
+/// **Why it is the venue's and not ours**, as [`shared_memory_notice`] is: every recording here
+/// was taken on an Apple chip, which presents unified memory and keeps such a texture
+/// compressed, so no recording holds what a Mac with a discrete GPU reads, and that Mac's answer
+/// is not one value but whatever its memory held. Metal's API leaves the contents undefined.
+///
+/// **It loosens the value, and only on such a venue.** The site is unchecked, justified by
+/// [`Justification::WithoutUnifiedMemory`], which holds only on a run whose venue presents no
+/// unified memory: on the M3 Max and on lavapipe it justifies nothing, so every byte of the site
+/// still compares exactly there, the pattern included. A run without such a venue counts the
+/// claim as one nothing checked ([`crate::report::Report::unchecked_everywhere`]); a case names it
+/// at the sites a new `Private` texture's unwritten texels reach, never at a written one, and says
+/// in a comment which run it rests on.
+pub fn without_unified_memory(site: &str) -> crate::allowance::Allowance {
+    crate::allowance::Allowance::new(
+        format!("case/{site}/*"),
+        crate::allowance::Loosening::Unchecked,
+        Justification::without_unified_memory(WITHOUT_UNIFIED_MEMORY),
+    )
 }
 
 /// The declaration a case needs where its kernel reaches a texture or a sampler through an

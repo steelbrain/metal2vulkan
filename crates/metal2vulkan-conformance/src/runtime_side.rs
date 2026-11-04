@@ -1833,6 +1833,7 @@ impl Side for RuntimeSide<'_> {
                 "{}.{}",
                 properties.api_version.major, properties.api_version.minor
             ),
+            unified_memory: properties.has_unified_memory,
         }
     }
 

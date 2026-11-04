@@ -33,11 +33,18 @@
 //!
 //! # What the rows are held to, and the one branch of the lane that is not exercised
 //!
-//! **Not one byte of this family is loosened.** Every row's bytes are Metal's own on MoltenVK, on
-//! lavapipe and on an RTX 5080 Laptop, so the only field that may differ is the set of degrade
-//! notices our side announced. The depth row's on lavapipe, which cannot hold Metal's denormal
-//! depths (`depth-denormals`), is the device's own answer, which the suite declares for every case
-//! ([`crate::replay::NATIVE_NOTES`]).
+//! **One site of one kind of row is loosened, and only on one kind of venue.** Every row's bytes
+//! are Metal's own on MoltenVK and on lavapipe, which present unified memory as the recordings'
+//! Apple silicon Mac does, so there the only field that may differ is the set of degrade notices
+//! our side announced. The depth row's on lavapipe, which cannot hold Metal's denormal depths
+//! (`depth-denormals`), is the device's own answer, which the suite declares for every case
+//! ([`crate::replay::NATIVE_NOTES`]). On a device presented without unified memory, as a Mac with
+//! a discrete GPU is (an RTX 5080 Laptop), a new `Private` texture holds what its memory held and
+//! nothing writes it, so the `fresh` site of every `Private` texture row and every pattern row
+//! reads zero, the released texture's [`OLD`] bytes or whatever else the memory held; that site
+//! alone is declared, by [`crate::replay::without_unified_memory`], which justifies nothing on a
+//! venue with unified memory. The `written` site, the statuses and every `Shared` and `Managed`
+//! row still compare exactly there.
 //!
 //! Every row names one notice, and it belongs to the venue rather than to any row: the declaration
 //! [`crate::replay::shared_memory_notice`] carries, the notice a device without unified memory
@@ -1085,7 +1092,13 @@ impl Case for FreshTexture {
     }
 
     fn allowances(&self) -> Vec<Allowance> {
-        vec![shared_memory_notice()]
+        let mut allowances = vec![shared_memory_notice()];
+        // A new `Private` texture on a device presented without unified memory holds what its
+        // memory held (the module docs); the 5080's run reads it so.
+        if self.row.storage == Storage::Private {
+            allowances.push(crate::replay::without_unified_memory("fresh"));
+        }
+        allowances
     }
 
     fn run(&self, side: &mut dyn Side, sites: &mut Sites) -> Result<(), Abort> {
@@ -1332,7 +1345,12 @@ impl Case for FreshPattern {
         // compressed: the note of the encoding the device's copy keeps, where it is not native
         // (`compressed_blits::kept_encoding_notice`). The pattern's bytes are each format's
         // canonical encoding, so every value still compares exactly.
-        let mut allowances = vec![shared_memory_notice()];
+        let mut allowances = vec![
+            shared_memory_notice(),
+            // A new `Private` texture on a device presented without unified memory holds what
+            // its memory held, never the pattern (the module docs).
+            crate::replay::without_unified_memory("fresh"),
+        ];
         allowances.extend(super::compressed_blits::kept_encoding_notice(
             self.row.format,
         ));

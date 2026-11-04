@@ -1,6 +1,7 @@
 //! Where a NaN clear keeps a `half` NaN's sign (`nan_clear::keeps_nan_sign`): only in a pass
 //! without a draw call, at a level of 16 texels or more a side of a texture Metal keeps
-//! compressed (an M4 under macOS 27.0.1).
+//! compressed (an M4 under macOS 27.0.1), on a device presented with unified memory; nowhere on
+//! one presented without, which keeps no texture compressed.
 //!
 //! A device test: compiled only under the validation crate's GPU safety cfgs (`m2v_gpu`,
 //! `m2v_cpu_icd`), on the kind of device the cfg selects. It makes textures and records nothing.
@@ -86,11 +87,12 @@ fn target(device: &Device, side: u32, samples: u32, usage: TextureUsage) -> Targ
 
 /// A pass with a draw call drops the sign at every level; one without keeps it at a plain level
 /// of 16 or more, and drops it at a smaller one and at one of `PixelFormatView` usage (which Metal
-/// keeps uncompressed).
+/// keeps uncompressed). On a device presented without unified memory every pass drops it.
 #[test]
 fn a_draw_call_drops_a_half_nan_s_sign() {
     let scratch = Scratch::new();
     let device = device(&scratch.0);
+    let compresses = device.properties().has_unified_memory;
     let plain = TextureUsage::RENDER_TARGET | TextureUsage::SHADER_READ;
     let viewed = plain | TextureUsage::PIXEL_FORMAT_VIEW;
     for samples in [1, 4] {
@@ -105,7 +107,7 @@ fn a_draw_call_drops_a_half_nan_s_sign() {
             let case = format!("{samples}x {side}x{side} {usage:?}");
             assert_eq!(
                 keeps_nan_sign(&target, false),
-                kept,
+                kept && compresses,
                 "{case} without a draw call"
             );
             assert!(!keeps_nan_sign(&target, true), "{case} with a draw call");

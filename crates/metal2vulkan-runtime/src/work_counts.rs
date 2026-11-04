@@ -247,6 +247,7 @@ pub(crate) struct Counters {
     passes_not_inline_actions_by: [AtomicU64; ActionsRefused::COUNT],
     commits_handed_off: AtomicU64,
     images_started_on_the_host: AtomicU64,
+    private_textures_unfilled: AtomicU64,
     host_texel_copies: AtomicU64,
     texel_shadows_made: AtomicU64,
     texel_shadow_bytes: AtomicU64,
@@ -3238,6 +3239,12 @@ impl Counters {
             .fetch_add(1, Ordering::Relaxed);
     }
 
+    /// A new `Private` texture of the program's was made holding what its memory held, written by
+    /// no command (`Device::metal_compresses_textures`).
+    pub(crate) fn private_texture_unfilled(&self) {
+        (self.private_textures_unfilled).fetch_add(1, Ordering::Relaxed);
+    }
+
     /// A texture's CPU copy ran on the host (`texture/host_copy.rs`).
     pub(crate) fn host_texel_copy(&self) {
         self.host_texel_copies.fetch_add(1, Ordering::Relaxed);
@@ -4795,6 +4802,12 @@ pub struct WorkCounts {
     /// New `Shared` and `Managed` textures' images moved to `GENERAL` and zeroed on the host, with
     /// no submission (`texture/host_copy.rs`).
     pub images_started_on_the_host: u64,
+    /// New `Private` textures the program made on a device presented without unified memory,
+    /// each holding what its memory held, written by no command: no zeros and no pattern, as a
+    /// Mac with a discrete GPU's new `Private` texture (`DeviceProperties::has_unified_memory`).
+    /// Zero on a device presented with unified memory, whose new `Private` textures start as an
+    /// Apple silicon Mac's.
+    pub private_textures_unfilled: u64,
     /// `replace_region` and `get_bytes` copies that ran on the host, with no submission
     /// (`texture/host_copy.rs`).
     pub host_texel_copies: u64,
@@ -6485,6 +6498,7 @@ impl Device {
             commits_handed_off: counters.commits_handed_off.load(Ordering::Relaxed),
             commits_taken_in: self.shared().scheduler.commits_taken_in(),
             images_started_on_the_host: counters.images_started_on_the_host.load(Ordering::Relaxed),
+            private_textures_unfilled: counters.private_textures_unfilled.load(Ordering::Relaxed),
             host_texel_copies: counters.host_texel_copies.load(Ordering::Relaxed),
             texel_shadows_made: counters.texel_shadows_made.load(Ordering::Relaxed),
             texel_shadow_bytes: counters.texel_shadow_bytes.load(Ordering::Relaxed),

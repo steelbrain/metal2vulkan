@@ -255,7 +255,12 @@ pub fn compare_run(
                     other => other,
                 }
             }
-            justification => justification.unjustified(&offered),
+            // A venue's own answer is checked where it fires, as a notice is: on a venue that
+            // presents unified memory it holds nowhere, and naming it is no fault there.
+            justification => match justification.unjustified(&offered) {
+                Some(Unjustified::UnifiedMemory) => None,
+                other => other,
+            },
         };
         if let Some(why) = missing {
             found.note_bad(&allowance.path, why);

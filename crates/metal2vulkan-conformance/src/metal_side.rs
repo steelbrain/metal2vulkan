@@ -2182,6 +2182,7 @@ impl Side for MetalSide {
             device: self.device.name().to_string(),
             driver: "Metal".to_owned(),
             api: "Metal".to_owned(),
+            unified_memory: self.device.hasUnifiedMemory(),
         }
     }
 

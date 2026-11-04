@@ -622,6 +622,10 @@ pub struct Venue {
     pub driver: String,
     /// The API version the device runs.
     pub api: String,
+    /// Whether the device presents unified memory (`DeviceProperties::has_unified_memory`), as the
+    /// Apple silicon Mac every recording was taken on does: what a venue's own answer
+    /// (`Justification::WithoutUnifiedMemory`) holds by.
+    pub unified_memory: bool,
 }
 
 impl Venue {
