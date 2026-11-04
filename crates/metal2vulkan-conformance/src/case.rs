@@ -2157,6 +2157,21 @@ pub trait Side {
         Err(Failure::unavailable("signal_before_a_wait"))
     }
 
+    /// What the wait-behind-a-running-signal probe observed
+    /// ([`crate::event_orders::WaitBehindRunningSignal`]) on an `MTLSharedEvent` where `shared`,
+    /// else an `MTLEvent`: a command buffer that waits for a signal another queue's command buffer
+    /// submitted ahead of it and is still running.
+    ///
+    /// One call, because the fact is a relation between two command buffers' states at one
+    /// moment: the waiting one's status read while the signalling one still runs.
+    fn event_wait_behind_a_running_signal(
+        &mut self,
+        shared: bool,
+    ) -> Answer<crate::event_orders::WaitBehindRunningSignal> {
+        let _ = shared;
+        Err(Failure::unavailable("event_wait_behind_a_running_signal"))
+    }
+
     /// What the scheduled-handler order probe observed
     /// ([`crate::scheduled_handlers::ScheduledHandlerOrder`]): a command buffer whose scheduled
     /// handler is held inside itself while the probe reads the status and a wait for the scheduling

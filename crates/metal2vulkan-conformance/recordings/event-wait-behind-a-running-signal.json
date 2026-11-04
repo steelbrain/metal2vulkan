@@ -1,0 +1,336 @@
+{
+  "format": 1,
+  "case": "event-wait-behind-a-running-signal",
+  "suite_version": 1,
+  "answers": [
+    {
+      "key": {
+        "chip": "apple-m3-max",
+        "os_version": "27.0.1",
+        "os_build": "26A434",
+        "metal_level": "27.0.1"
+      },
+      "provenance": "metal_run",
+      "device": "Apple M3 Max",
+      "runs": 5,
+      "outcomes": [
+        {
+          "runs": 5,
+          "transcript": {
+            "root": {
+              "name": "case",
+              "observed": {
+                "value": "absent"
+              },
+              "children": [
+                {
+                  "name": "inputs",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "scratch-bytes",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "2e22fd435060cd5d3cf5e3ef39f79e198b35bd2c4af31974db36601b3a2f4c91"
+                        }
+                      }
+                    },
+                    {
+                      "name": "wait-bounds-millis",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "15974581de1a64a38d73ffa2754e6c85bcf978e607026240ebb64d1cbac16ca1"
+                        }
+                      }
+                    },
+                    {
+                      "name": "long-job-and-window",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "e0c01514e44ebb8bc910f9ee5805c959d091ab22871e09916687adb1f284e830"
+                        }
+                      }
+                    },
+                    {
+                      "name": "handler-names",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "9a43ced3dbb398a5cb9df2bc92ad3c78b96a100c603b2cc4dfb706981cdde886"
+                        }
+                      }
+                    },
+                    {
+                      "name": "fill-bytes",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "4bf5122f344554c53bde2ebb8cd2b7e3d1600ad631c385a5d7cce23c7785459a"
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "order/event",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "signalling/signal-landed-before-the-reading",
+                      "observed": {
+                        "value": {
+                          "bool": false
+                        }
+                      }
+                    },
+                    {
+                      "name": "waiting/status-while-the-signaller-runs",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Scheduled",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "waiting/handlers-while-the-signaller-runs",
+                      "observed": {
+                        "value": {
+                          "lines": [
+                            "scheduled"
+                          ]
+                        }
+                      }
+                    },
+                    {
+                      "name": "signalling/status-when-the-waiting-one-was-read",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Scheduled",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "waiting/handlers-once-both-completed",
+                      "observed": {
+                        "value": {
+                          "lines": [
+                            "scheduled",
+                            "completed"
+                          ]
+                        }
+                      }
+                    },
+                    {
+                      "name": "waiting/status-once-both-completed",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Completed",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "signalling/status-once-both-completed",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Completed",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "scratch",
+                      "observed": {
+                        "value": {
+                          "bytes": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQ=="
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "buffer": {
+                                "offset": 0,
+                                "length": 256
+                              }
+                            },
+                            "element": "u8",
+                            "row_offset": 0,
+                            "row_elements": 256,
+                            "row_pitch": 256,
+                            "rows": 1,
+                            "image_pitch": 256,
+                            "images": 1,
+                            "gaps": "ignored"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "order/shared-event",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "signalling/signal-landed-before-the-reading",
+                      "observed": {
+                        "value": {
+                          "bool": false
+                        }
+                      }
+                    },
+                    {
+                      "name": "waiting/status-while-the-signaller-runs",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Committed",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "waiting/handlers-while-the-signaller-runs",
+                      "observed": {
+                        "value": {
+                          "nothing": "ran_nothing"
+                        }
+                      }
+                    },
+                    {
+                      "name": "event/value-while-the-signaller-runs",
+                      "observed": {
+                        "value": {
+                          "uint": 0
+                        }
+                      }
+                    },
+                    {
+                      "name": "signalling/status-when-the-waiting-one-was-read",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Scheduled",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "waiting/handlers-once-both-completed",
+                      "observed": {
+                        "value": {
+                          "lines": [
+                            "scheduled",
+                            "completed"
+                          ]
+                        }
+                      }
+                    },
+                    {
+                      "name": "waiting/status-once-both-completed",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Completed",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "signalling/status-once-both-completed",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Completed",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "scratch",
+                      "observed": {
+                        "value": {
+                          "bytes": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQ=="
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "buffer": {
+                                "offset": 0,
+                                "length": 256
+                              }
+                            },
+                            "element": "u8",
+                            "row_offset": 0,
+                            "row_elements": 256,
+                            "row_pitch": 256,
+                            "rows": 1,
+                            "image_pitch": 256,
+                            "images": 1,
+                            "gaps": "ignored"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "notices",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "set",
+                      "observed": {
+                        "value": {
+                          "nothing": "announced_nothing"
+                        }
+                      }
+                    },
+                    {
+                      "name": "counts",
+                      "observed": {
+                        "value": {
+                          "fields": {}
+                        }
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "validated": "ran"
+    }
+  ]
+}

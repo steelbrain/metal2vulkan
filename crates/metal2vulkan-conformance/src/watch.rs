@@ -901,6 +901,14 @@ impl<S: Side, W: Watcher> Side for Watching<S, W> {
         self.inner.signal_before_a_wait()
     }
 
+    fn event_wait_behind_a_running_signal(
+        &mut self,
+        shared: bool,
+    ) -> Answer<crate::event_orders::WaitBehindRunningSignal> {
+        let _span = self.watch("event_wait_behind_a_running_signal");
+        self.inner.event_wait_behind_a_running_signal(shared)
+    }
+
     fn scheduled_handler_order(
         &mut self,
     ) -> Answer<crate::scheduled_handlers::ScheduledHandlerOrder> {

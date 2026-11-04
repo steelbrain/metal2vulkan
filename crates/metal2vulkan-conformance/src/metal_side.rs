@@ -5766,6 +5766,146 @@ impl Side for MetalSide {
         })
     }
 
+    fn event_wait_behind_a_running_signal(
+        &mut self,
+        shared: bool,
+    ) -> Answer<crate::event_orders::WaitBehindRunningSignal> {
+        use crate::event_orders::{
+            Status, WaitBehindRunningSignal, COMPLETED, COMPLETION, LONG_FILLS, LONG_FILL_BYTES,
+            RUNNING_WINDOW, SCHEDULED, SCRATCH, WAITING_BYTE,
+        };
+        objc2::rc::autoreleasepool(|_| {
+            let queue = || {
+                self.device
+                    .newCommandQueue()
+                    .ok_or_else(|| Failure::named("NewCommandQueue", "returned nil"))
+            };
+            let (signalling_queue, waiting_queue) = (queue()?, queue()?);
+            // One event of the row's kind, and the `MTLEvent` both kinds are to the encoders.
+            let shared_event = match shared {
+                true => Some(
+                    self.device
+                        .newSharedEvent()
+                        .ok_or_else(|| Failure::named("NewSharedEvent", "returned nil"))?,
+                ),
+                false => None,
+            };
+            let plain_event = match &shared_event {
+                Some(_) => None,
+                None => Some(
+                    self.device
+                        .newEvent()
+                        .ok_or_else(|| Failure::named("NewEvent", "returned nil"))?,
+                ),
+            };
+            let as_event: &ProtocolObject<dyn MTLEvent> = match (&shared_event, &plain_event) {
+                (Some(event), _) => ProtocolObject::from_ref(&**event),
+                (None, Some(event)) => event,
+                (None, None) => unreachable!("one of the two kinds is made"),
+            };
+            // The companion the signaller signals just before the event: still 0 when read, last,
+            // it says the event's signal had not landed when the rest was read.
+            let landed = self
+                .device
+                .newSharedEvent()
+                .ok_or_else(|| Failure::named("NewSharedEvent", "returned nil"))?;
+            let long = self
+                .device
+                .newBufferWithLength_options(
+                    LONG_FILL_BYTES as usize,
+                    MTLResourceOptions::StorageModePrivate,
+                )
+                .ok_or_else(|| Failure::named("NewBuffer", "returned nil"))?;
+            let scratch = self
+                .device
+                .newBufferWithLength_options(
+                    SCRATCH as usize,
+                    MTLResourceOptions::StorageModeShared,
+                )
+                .ok_or_else(|| Failure::named("NewBuffer", "returned nil"))?;
+            // The long job: fills alone, ahead of the signal.
+            let signalling = signalling_queue
+                .commandBuffer()
+                .ok_or_else(|| Failure::named("CommandBuffer", "returned nil"))?;
+            let encoder = signalling
+                .blitCommandEncoder()
+                .ok_or_else(|| Failure::named("BlitCommandEncoder", "returned nil"))?;
+            for fill in 0..LONG_FILLS {
+                encoder.fillBuffer_range_value(
+                    &long,
+                    objc2_foundation::NSRange::new(0, LONG_FILL_BYTES as usize),
+                    fill as u8,
+                );
+            }
+            encoder.endEncoding();
+            signalling.encodeSignalEvent_value(ProtocolObject::from_ref(&*landed), 1);
+            signalling.encodeSignalEvent_value(as_event, 1);
+            let signalling_done = completion_channel(&signalling);
+            let waiting = waiting_queue
+                .commandBuffer()
+                .ok_or_else(|| Failure::named("CommandBuffer", "returned nil"))?;
+            waiting.encodeWaitForEvent_value(as_event, 1);
+            let encoder = waiting
+                .blitCommandEncoder()
+                .ok_or_else(|| Failure::named("BlitCommandEncoder", "returned nil"))?;
+            encoder.fillBuffer_range_value(
+                &scratch,
+                objc2_foundation::NSRange::new(0, SCRATCH as usize),
+                WAITING_BYTE,
+            );
+            encoder.endEncoding();
+            let mut log = HandlerLog::new();
+            // SAFETY: each block is a valid heap block the log keeps alive for as long as this
+            // probe runs, which outlives every call Metal makes of it.
+            log.add(SCHEDULED, |block| unsafe {
+                waiting.addScheduledHandler(block)
+            });
+            log.add(COMPLETED, |block| unsafe {
+                waiting.addCompletedHandler(block)
+            });
+            // The signaller first, so its signal is submitted ahead of the wait.
+            signalling.commit();
+            waiting.commit();
+            std::thread::sleep(RUNNING_WINDOW);
+            let waiting_while_it_runs = Status::read(status_word(waiting.status()));
+            let waiting_handlers_while_it_runs = log.names();
+            let value_while_it_runs = shared_event.as_ref().map(|event| event.signaledValue());
+            let signalling_while_it_runs = Status::read(status_word(signalling.status()));
+            // Last: 0 says nothing above was read after the event's signal landed.
+            let landed_before_the_reading = landed.signaledValue() != 0;
+            log.wait_for(COMPLETED, COMPLETION);
+            let waiting_handlers_at_the_end = log.names();
+            let waiting_at_the_end = if waiting_handlers_at_the_end
+                .iter()
+                .any(|name| name == COMPLETED)
+            {
+                Status::read(status_word(waiting.status()))
+            } else {
+                Status::NeverSettled
+            };
+            let signalling_at_the_end = settled(&signalling_done, &signalling);
+            // SAFETY: `SCRATCH` bytes of the shared buffer, whose writer has completed.
+            let bytes = unsafe {
+                std::slice::from_raw_parts(
+                    scratch.contents().as_ptr().cast::<u8>(),
+                    SCRATCH as usize,
+                )
+            }
+            .to_vec();
+            Ok(WaitBehindRunningSignal {
+                landed_before_the_reading,
+                waiting_while_it_runs,
+                waiting_handlers_while_it_runs,
+                value_while_it_runs,
+                signalling_while_it_runs,
+                waiting_handlers_at_the_end,
+                waiting_at_the_end,
+                signalling_at_the_end,
+                bytes,
+            })
+        })
+    }
+
     fn signal_before_a_wait(&mut self) -> Answer<crate::event_orders::SignalBeforeWait> {
         use crate::event_orders::{Status, HELD_FOR, SCRATCH, SIGNAL_WAIT};
         objc2::rc::autoreleasepool(|_| {

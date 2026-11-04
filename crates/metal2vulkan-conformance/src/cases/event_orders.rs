@@ -5,7 +5,7 @@
 //! **orders**. A command buffer's `encodeWaitForEvent:value:` holds that command buffer, and the
 //! ones committed behind it on its own queue, until the value arrives; a command buffer's
 //! `encodeSignalEvent:value:` raises it where it is encoded, not when the command buffer ends.
-//! Four cases:
+//! Five cases:
 //!
 //! - [`CROSS_QUEUE_WAIT`]: one queue's command buffer waits for an event the other's signals, and
 //!   the waiting one is committed **first**. Both run and both fills land.
@@ -16,6 +16,25 @@
 //!   raises the event its scheduled handler runs before its completed one.
 //! - [`SIGNAL_BEFORE_WAIT`]: the work ahead of a wait inside one command buffer runs, and its
 //!   signal lands, while the wait is still pending.
+//! - [`WAIT_BEHIND_A_RUNNING_SIGNAL`]: one queue's command buffer runs a long GPU job and then
+//!   signals an event; another queue's command buffer, committed after it, waits for that value.
+//!   While the long job still runs, is the waiting one submitted (its wait on the GPU), or held
+//!   until the signal lands? For an `MTLEvent` and an `MTLSharedEvent` alike, as two rows.
+//!
+//! # A wait whose signal is submitted and running
+//!
+//! [`CROSS_QUEUE_WAIT`] reads a waiting command buffer's status while its signaller is not yet
+//! committed, and [`HELD_COMMAND_BUFFER`] while only the host can raise the event: both answer
+//! `Committed`, and neither says what Metal does once the signal is already on the GPU.
+//! [`WAIT_BEHIND_A_RUNNING_SIGNAL`] asks that. The status is the proxy for "submitted": Metal's
+//! `Scheduled` follows a command buffer's submission to the GPU, with its scheduled handlers run,
+//! so `Scheduled` while the signaller still runs is "submitted, and so checked, before the signal
+//! landed", and `Committed` is "held until it lands". The signaller signals a companion shared
+//! event just before the event under test, and the companion is read last: a row whose companion
+//! reads 1 had its signal land before the reading, so it records that alone and no reading,
+//! which differs from Metal's recorded answer rather than passing for one. The long job is fills
+//! alone ([`LONG_FILLS`] of [`LONG_FILL_BYTES`] into a private buffer): no loop runs on the GPU,
+//! so nothing can hang.
 //!
 //! # What this pulls forward
 //!
@@ -59,7 +78,10 @@
 //! `runtime_lane` assertions.
 
 use crate::case::{Abort, Case, Input, MetalSource, Side};
-use crate::event_orders::{COMPLETED, HELD_FOR, SCHEDULED, SCRATCH, SIGNAL_WAIT};
+use crate::event_orders::{
+    COMPLETED, HELD_FOR, LONG_FILLS, LONG_FILL_BYTES, RUNNING_WINDOW, SCHEDULED, SCRATCH,
+    SIGNAL_WAIT,
+};
 use crate::transcript::{Node, Observed, Sites, Value};
 
 /// A wait committed before the signal that meets it.
@@ -73,6 +95,13 @@ pub const HELD_COMMAND_BUFFER: &str = "event-held-command-buffer";
 
 /// A signal encoded before a wait, inside one command buffer.
 pub const SIGNAL_BEFORE_WAIT: &str = "event-signal-before-a-wait";
+
+/// A wait committed behind a signal that is already submitted and still running.
+pub const WAIT_BEHIND_A_RUNNING_SIGNAL: &str = "event-wait-behind-a-running-signal";
+
+/// The two kinds of event [`WAIT_BEHIND_A_RUNNING_SIGNAL`] runs on, each a row: whether the event
+/// is an `MTLSharedEvent`, and the row's name.
+const EVENT_KINDS: [(bool, &str); 2] = [(false, "event"), (true, "shared-event")];
 
 /// The values the two queues of [`HIGHEST_SIGNAL`] signal, in each submission order.
 ///
@@ -108,15 +137,17 @@ enum Shape {
     HighestSignal,
     Held,
     SignalBeforeWait,
+    WaitBehindRunningSignal,
 }
 
-/// The four cases.
+/// The five cases.
 pub fn all() -> Vec<EventOrder> {
     [
         (CROSS_QUEUE_WAIT, Shape::CrossQueueWait),
         (HIGHEST_SIGNAL, Shape::HighestSignal),
         (HELD_COMMAND_BUFFER, Shape::Held),
         (SIGNAL_BEFORE_WAIT, Shape::SignalBeforeWait),
+        (WAIT_BEHIND_A_RUNNING_SIGNAL, Shape::WaitBehindRunningSignal),
     ]
     .into_iter()
     .map(|(name, shape)| EventOrder { name, shape })
@@ -143,7 +174,11 @@ impl Case for EventOrder {
         // the other three rows were exact (replay-nvidia.log). So the other three name nothing:
         // what they read back is a count our side holds, not a buffer the device wrote.
         match self.shape {
-            Shape::CrossQueueWait => vec![crate::replay::shared_memory_notice()],
+            // The waiting command buffer's scratch is read back out of a `Shared` buffer, as
+            // the cross-queue row's is.
+            Shape::CrossQueueWait | Shape::WaitBehindRunningSignal => {
+                vec![crate::replay::shared_memory_notice()]
+            }
             Shape::HighestSignal | Shape::Held | Shape::SignalBeforeWait => Vec::new(),
         }
     }
@@ -180,6 +215,22 @@ impl Case for EventOrder {
                 format!("{SCHEDULED},{COMPLETED}").as_bytes(),
             )),
             Shape::SignalBeforeWait => {}
+            // The long job's size and the window are what "while the signaller runs" means, and
+            // the handler names are what the record holds.
+            Shape::WaitBehindRunningSignal => {
+                let mut job = LONG_FILL_BYTES.to_le_bytes().to_vec();
+                job.extend(LONG_FILLS.to_le_bytes());
+                job.extend((RUNNING_WINDOW.as_millis() as u64).to_le_bytes());
+                inputs.push(Input::bytes("long-job-and-window", &job));
+                inputs.push(Input::bytes(
+                    "handler-names",
+                    format!("{SCHEDULED},{COMPLETED}").as_bytes(),
+                ));
+                inputs.push(Input::bytes(
+                    "fill-bytes",
+                    &[crate::event_orders::WAITING_BYTE],
+                ));
+            }
         }
         Ok(inputs)
     }
@@ -223,6 +274,18 @@ impl Case for EventOrder {
                 Ok(order) => sites.push(order.node(AT)),
                 Err(failure) => sites.push(Node::leaf(AT, Observed::value(failure.recorded()))),
             },
+            Shape::WaitBehindRunningSignal => {
+                for (shared, kind) in EVENT_KINDS {
+                    let at = format!("{AT}/{kind}");
+                    match side.event_wait_behind_a_running_signal(shared) {
+                        Ok(order) => sites.push(order.node(at)),
+                        // The other kind's answer is still readable where one refused.
+                        Err(failure) => {
+                            sites.push(Node::leaf(at, Observed::value(failure.recorded())))
+                        }
+                    }
+                }
+            }
         }
         Ok(())
     }

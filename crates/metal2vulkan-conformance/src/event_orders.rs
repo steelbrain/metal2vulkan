@@ -1,4 +1,5 @@
-//! What an event orders: the vocabulary for the four ordering facts of `runtime_lane::events`.
+//! What an event orders: the vocabulary for the four ordering facts of `runtime_lane::events`,
+//! and for what Metal does with a wait whose signal is already submitted and running.
 //!
 //! An `MTLEvent` and an `MTLSharedEvent` hold a value that only rises, and a command buffer's
 //! `encodeWaitForEvent:value:` holds that command buffer — and the ones committed behind it on its
@@ -265,6 +266,113 @@ impl SignalBeforeWait {
                 "status-at-the-end",
                 Observed::value(self.status_at_the_end.value()),
             ))
+    }
+}
+
+/// The bytes of the private buffer the signalling command buffer of [`WaitBehindRunningSignal`]
+/// fills, [`LONG_FILLS`] times over, ahead of its signal: 256 MiB.
+pub const LONG_FILL_BYTES: u64 = 256 << 20;
+
+/// How many fills of [`LONG_FILL_BYTES`] the signalling command buffer of
+/// [`WaitBehindRunningSignal`] runs before its signals: fills alone, no loop on the GPU. 48 GiB
+/// written, about 158 ms of GPU time on the recording M3 Max (Metal's `GPUEndTime` less
+/// `GPUStartTime` of the same fills, 156 to 163 ms over three runs), some eight times
+/// [`RUNNING_WINDOW`]; the record says whether the work outlasted the reading on each side
+/// ([`WaitBehindRunningSignal::landed_before_the_reading`]).
+pub const LONG_FILLS: u32 = 192;
+
+/// How long the waiting command buffer of [`WaitBehindRunningSignal`] is given, once both are
+/// committed, before its status is read while the signalling one still runs: as [`HELD_FOR`], the
+/// window a submission that was going to happen has had its chance in, and short enough to close
+/// well before the signalling command buffer's long work does.
+pub const RUNNING_WINDOW: Duration = Duration::from_millis(20);
+
+/// What the wait-behind-a-running-signal probe observed: one queue's command buffer runs a long
+/// GPU job ([`LONG_FILLS`] fills of [`LONG_FILL_BYTES`]), signals a companion shared event at 1
+/// and then the event under test at 1; another queue's command buffer waits for the event at 1
+/// and then fills [`SCRATCH`] bytes. The signalling one is committed first, then the waiting one;
+/// [`RUNNING_WINDOW`] later the waiting one's status and handlers are read, then the signalling
+/// one's status, then the companion's value.
+///
+/// The question is whether Metal submits a command buffer whose wait is met only by a signal
+/// already submitted and still running, so the wait is on the GPU, or holds it until the signal
+/// lands. Its status is the proxy for "submitted, and so checked": Metal answers `Scheduled` once
+/// a command buffer is submitted to the GPU (and runs its scheduled handlers then), so
+/// `Scheduled` while the signaller runs says "submitted before the signal landed", and
+/// `Committed` says "held until it lands".
+///
+/// **The reading has an answer only while the signal is still running**, and the companion says
+/// whether it was. The signalling command buffer signals it just before the event, and one
+/// command buffer's signals land in order, so a companion still at 0 when read, last, says the
+/// event's signal had not landed when anything before it was read. A run whose companion reads 1
+/// holds no reading: [`Self::node`] then records that fact alone where the reading would be, so it
+/// differs from a recording that has an answer rather than passing as one.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WaitBehindRunningSignal {
+    /// Whether the signal had landed by the time the rest was read (the companion read 1).
+    pub landed_before_the_reading: bool,
+    /// The waiting command buffer's status, [`RUNNING_WINDOW`] after both commits.
+    pub waiting_while_it_runs: Status,
+    /// Its handlers that had run by then, in order.
+    pub waiting_handlers_while_it_runs: Vec<String>,
+    /// A shared event's `signaledValue` then; `None` for an `MTLEvent`, which has none.
+    pub value_while_it_runs: Option<u64>,
+    /// The signalling command buffer's status, read right after the waiting one's.
+    pub signalling_while_it_runs: Status,
+    /// The waiting one's handlers once both completed, in order.
+    pub waiting_handlers_at_the_end: Vec<String>,
+    /// Both statuses once both completed.
+    pub waiting_at_the_end: Status,
+    pub signalling_at_the_end: Status,
+    /// The scratch buffer's [`SCRATCH`] bytes once both completed: the waiting one's fill.
+    pub bytes: Vec<u8>,
+}
+
+impl WaitBehindRunningSignal {
+    /// The observations as the sites a case emits under one node, so both sides emit one shape:
+    /// the reading while the signaller runs only where the signal had not landed by then.
+    pub fn node(&self, name: impl Into<NodeName>) -> Node {
+        let mut node = Node::branch(name, Vec::new()).with(Node::leaf(
+            "signalling/signal-landed-before-the-reading",
+            Observed::value(Value::Bool(self.landed_before_the_reading)),
+        ));
+        if !self.landed_before_the_reading {
+            node = node
+                .with(Node::leaf(
+                    "waiting/status-while-the-signaller-runs",
+                    Observed::value(self.waiting_while_it_runs.value()),
+                ))
+                .with(Node::leaf(
+                    "waiting/handlers-while-the-signaller-runs",
+                    Observed::value(handlers(&self.waiting_handlers_while_it_runs)),
+                ));
+            if let Some(value) = self.value_while_it_runs {
+                node = node.with(Node::leaf(
+                    "event/value-while-the-signaller-runs",
+                    Observed::value(Value::Uint(value)),
+                ));
+            }
+            node = node.with(Node::leaf(
+                "signalling/status-when-the-waiting-one-was-read",
+                Observed::value(self.signalling_while_it_runs.value()),
+            ));
+        }
+        node.with(Node::leaf(
+            "waiting/handlers-once-both-completed",
+            Observed::value(handlers(&self.waiting_handlers_at_the_end)),
+        ))
+        .with(Node::leaf(
+            "waiting/status-once-both-completed",
+            Observed::value(self.waiting_at_the_end.value()),
+        ))
+        .with(Node::leaf(
+            "signalling/status-once-both-completed",
+            Observed::value(self.signalling_at_the_end.value()),
+        ))
+        .with(Node::leaf(
+            "scratch",
+            Observed::bytes(self.bytes.clone(), scratch_layout()),
+        ))
     }
 }
 

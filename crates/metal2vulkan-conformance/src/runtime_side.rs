@@ -5334,6 +5334,126 @@ impl Side for RuntimeSide<'_> {
         })
     }
 
+    fn event_wait_behind_a_running_signal(
+        &mut self,
+        shared: bool,
+    ) -> Answer<crate::event_orders::WaitBehindRunningSignal> {
+        use crate::event_orders::{
+            Status, WaitBehindRunningSignal, COMPLETED, COMPLETION, LONG_FILLS, LONG_FILL_BYTES,
+            RUNNING_WINDOW, SCHEDULED, SCRATCH, WAITING_BYTE,
+        };
+        use metal2vulkan_runtime::EventRef;
+        let queue = || self.device.new_command_queue().map_err(Failure::from_error);
+        let (signalling_queue, waiting_queue) = (queue()?, queue()?);
+        let (plain_event, shared_event) = match shared {
+            true => (
+                None,
+                Some(
+                    self.device
+                        .new_shared_event()
+                        .map_err(Failure::from_error)?,
+                ),
+            ),
+            false => (
+                Some(self.device.new_event().map_err(Failure::from_error)?),
+                None,
+            ),
+        };
+        let event = || match (&plain_event, &shared_event) {
+            (Some(event), _) => EventRef::from(event),
+            (None, Some(event)) => EventRef::from(event),
+            (None, None) => unreachable!("one of the two kinds is made"),
+        };
+        // The companion the signaller signals just before the event: still 0 when read, last, it
+        // says the event's signal had not landed when the rest was read.
+        let landed = self
+            .device
+            .new_shared_event()
+            .map_err(Failure::from_error)?;
+        let long = self
+            .device
+            .new_buffer(LONG_FILL_BYTES, ResourceOptions::private())
+            .map_err(Failure::from_error)?;
+        let scratch = self
+            .device
+            .new_buffer(SCRATCH, ResourceOptions::shared())
+            .map_err(Failure::from_error)?;
+        // The long job: fills alone, ahead of the signal.
+        let signalling = signalling_queue
+            .command_buffer()
+            .map_err(Failure::from_error)?;
+        let mut blit = signalling
+            .blit_command_encoder()
+            .map_err(Failure::from_error)?;
+        for fill in 0..LONG_FILLS {
+            blit.fill_buffer(&long, 0..LONG_FILL_BYTES, fill as u8)
+                .map_err(Failure::from_error)?;
+        }
+        blit.end_encoding().map_err(Failure::from_error)?;
+        signalling
+            .encode_signal_event(EventRef::from(&landed), 1)
+            .map_err(Failure::from_error)?;
+        signalling
+            .encode_signal_event(event(), 1)
+            .map_err(Failure::from_error)?;
+        let waiting = waiting_queue
+            .command_buffer()
+            .map_err(Failure::from_error)?;
+        waiting
+            .encode_wait_for_event(event(), 1)
+            .map_err(Failure::from_error)?;
+        let mut blit = waiting
+            .blit_command_encoder()
+            .map_err(Failure::from_error)?;
+        blit.fill_buffer(&scratch, 0..SCRATCH, WAITING_BYTE)
+            .map_err(Failure::from_error)?;
+        blit.end_encoding().map_err(Failure::from_error)?;
+        let log = HandlerLog::new();
+        waiting
+            .add_scheduled_handler(log.handler(SCHEDULED))
+            .map_err(Failure::from_error)?;
+        waiting
+            .add_completed_handler(log.handler(COMPLETED))
+            .map_err(Failure::from_error)?;
+        // The signaller first, so its signal is submitted ahead of the wait.
+        signalling.commit().map_err(Failure::from_error)?;
+        waiting.commit().map_err(Failure::from_error)?;
+        std::thread::sleep(RUNNING_WINDOW);
+        let waiting_while_it_runs = Status::read(format!("{:?}", waiting.status()));
+        let waiting_handlers_while_it_runs = log.names();
+        let value_while_it_runs = shared_event.as_ref().map(|event| event.signaled_value());
+        let signalling_while_it_runs = Status::read(format!("{:?}", signalling.status()));
+        // Last: 0 says nothing above was read after the event's signal landed.
+        let landed_before_the_reading = landed.signaled_value() != 0;
+        log.wait_for(COMPLETED, COMPLETION);
+        let waiting_handlers_at_the_end = log.names();
+        let waiting_at_the_end = if waiting_handlers_at_the_end
+            .iter()
+            .any(|name| name == COMPLETED)
+        {
+            Status::read(format!("{:?}", waiting.status()))
+        } else {
+            Status::NeverSettled
+        };
+        let signalling_at_the_end = if signalling.wait_until_completed_for(COMPLETION).is_err() {
+            Status::NeverSettled
+        } else {
+            Status::read(format!("{:?}", signalling.status()))
+        };
+        let bytes = read_shared(&scratch, 0, SCRATCH as usize)?;
+        Ok(WaitBehindRunningSignal {
+            landed_before_the_reading,
+            waiting_while_it_runs,
+            waiting_handlers_while_it_runs,
+            value_while_it_runs,
+            signalling_while_it_runs,
+            waiting_handlers_at_the_end,
+            waiting_at_the_end,
+            signalling_at_the_end,
+            bytes,
+        })
+    }
+
     fn signal_before_a_wait(&mut self) -> Answer<crate::event_orders::SignalBeforeWait> {
         use crate::event_orders::{Status, COMPLETION, HELD_FOR, SCRATCH, SIGNAL_WAIT};
         let queue = self
