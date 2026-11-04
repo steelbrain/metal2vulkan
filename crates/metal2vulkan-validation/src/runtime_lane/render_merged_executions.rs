@@ -29,7 +29,7 @@ use super::degrade_notices::{
 };
 use super::host_memory::Mapping;
 use super::host_memory::Seen;
-use super::indirect_host_steps::{complete, HOST_STEPS};
+use super::indirect_host_steps::{complete, encoding_state_set, HOST_STEPS};
 use super::rebind_reach::{buffer_len, buffer_of, buffer_over, pages};
 use super::rebinds::rebind;
 use super::render_executions::{forced_with, icb};
@@ -232,8 +232,9 @@ impl Scene {
     }
 
     /// Encode into `command_buffer`: a compute encoder that makes `icb` resident for writing,
-    /// `writer`, where given, writing it over `threads` threads, then a pass over the target
-    /// that executes commands `0..count` of it.
+    /// `writer`, where given, writing it over `threads` threads (where none is, an encoder of its
+    /// own before sets a state that may encode, so the GPU may write the records all the same),
+    /// then a pass over the target that executes commands `0..count` of it.
     fn encode(
         &self,
         device: &Device,
@@ -242,6 +243,11 @@ impl Scene {
         (icb, threads, count): (&IndirectCommandBuffer, u64, u64),
     ) {
         let arguments = buffer_with(device, &icb.gpu_resource_id().0.to_le_bytes()).unwrap();
+        // With no kernel, a state that may encode set in an encoder of its own lets the GPU write
+        // the records, as the kernel does.
+        if writer.is_none() {
+            encoding_state_set(command_buffer);
+        }
         let mut encoder = command_buffer.compute_command_encoder().unwrap();
         encoder
             .use_resource(icb.as_resource(), ResourceUsage::WRITE)

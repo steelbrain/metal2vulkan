@@ -29,6 +29,7 @@
 
 use super::buffer_texture_blits::{hex_rows, texel, texels, Held, Kind, OFF};
 use super::degrade_notices::counts;
+use super::indirect_host_steps::encoding_state_set;
 use super::{
     buffer_with, layer_reported_nothing_at_all, read_buffer, validated_device, Messages,
     ScratchCache, WAIT,
@@ -1086,7 +1087,8 @@ fn a_shadowed_pass_executes_commands_the_gpu_may_write() {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Before {
     Nothing,
-    /// A compute encoder that makes the indirect command buffer resident for writing.
+    /// A compute encoder that makes the indirect command buffer resident for writing, after one
+    /// that sets a state that may encode (`indirect_host_steps::encoding_state_set`).
     Writer,
     /// That, and a compute encoder after the pass that makes the shadowed texture resident.
     WriterAndTexture,
@@ -1136,6 +1138,7 @@ fn executed(lane: &Lane, kind: Kind, before: Before, bpr: u64) {
     let o = lane.ordinary(rgba, ALL, None);
     let command_buffer = lane.queue.command_buffer().unwrap();
     if before != Before::Nothing {
+        encoding_state_set(&command_buffer);
         let mut writer = command_buffer.compute_command_encoder().unwrap();
         writer
             .use_resource(icb.as_resource(), ResourceUsage::WRITE)

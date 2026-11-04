@@ -277,9 +277,11 @@ impl Setup {
     }
 
     /// Make the buffer resident for writing in an encoder of `command_buffer` that writes
-    /// nothing: from then on the GPU may write its records, so an execution reads them on the
-    /// GPU or in a host step.
+    /// nothing, after one that sets a state that may encode indirect commands
+    /// (`indirect_host_steps::encoding_state_set`): from then on the GPU may write its records, so
+    /// an execution reads them on the GPU or in a host step.
     fn writable(&self, command_buffer: &CommandBuffer) {
+        indirect_host_steps::encoding_state_set(command_buffer);
         let mut encoder = command_buffer.compute_command_encoder().unwrap();
         encoder
             .use_resource(self.icb.as_resource(), ResourceUsage::WRITE)

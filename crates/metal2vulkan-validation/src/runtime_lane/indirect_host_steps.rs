@@ -118,6 +118,19 @@ pub(super) fn state(device: &Device, stem: &str, indirect: bool) -> ComputePipel
         .unwrap()
 }
 
+/// Set a state that may encode indirect commands (`icb_replay_encode`'s, made without
+/// `supportIndirectCommandBuffers`, so no record names it) in an encoder of `command_buffer` of its
+/// own that runs nothing: a buffer the command buffer makes resident for writing, before or after,
+/// may be written by the GPU (`IndirectCommandBuffer::gpu_written`), and what its records may hold
+/// gains nothing of the state, which the encoder that made it resident did not set
+/// (`IndirectCommandBuffer::command_writes`).
+pub(super) fn encoding_state_set(command_buffer: &CommandBuffer) {
+    let state = state(command_buffer.device(), "icb_replay_encode", false);
+    let mut encoder = command_buffer.compute_command_encoder().unwrap();
+    encoder.set_compute_pipeline_state(&state).unwrap();
+    encoder.end_encoding().unwrap();
+}
+
 /// What a test runs: the writing kernel's state, the template's, a buffer of `COMMANDS`
 /// commands of both dispatch kinds with `bind_count` kernel buffers, the writer's argument
 /// buffer (the buffer's ID, then the template's), `params` and `out`.

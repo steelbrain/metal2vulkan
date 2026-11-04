@@ -18,6 +18,7 @@
 //!   runtime records it ([`UNSIZED_POINTS`]).
 
 use super::degrade_notices::counts;
+use super::indirect_host_steps::encoding_state_set;
 use super::render_state::{texels, texture};
 use super::{
     buffer_with, layer_reported_nothing_at_all, read_buffer, validated_device_with, Messages,
@@ -106,7 +107,7 @@ impl Lane {
     fn pass(
         &self,
         messages: &Messages,
-        state: &RenderPipelineState,
+        (state, encoding): (&RenderPipelineState, bool),
         encode: impl FnOnce(&mut RenderCommandEncoder, &Buffer),
     ) -> (Left, [usize; 3]) {
         let announced = || {
@@ -124,6 +125,9 @@ impl Lane {
         target.clear_color = ClearColor::new(0.2, 0.4, 0.6, 1.0);
         target.store_action = StoreAction::Store;
         let command_buffer = self.queue.command_buffer().unwrap();
+        if encoding {
+            encoding_state_set(&command_buffer);
+        }
         let mut e = command_buffer.render_command_encoder(&pass).unwrap();
         e.set_render_pipeline_state(state).unwrap();
         e.set_fragment_buffer(Some(&counter), 0, 0).unwrap();
@@ -218,8 +222,10 @@ fn a_draw_outside_the_pipeline_s_class_draws_as_plain_metal() {
 /// `unsized-points`, asked for at every occurrence, is announced where each draw of points the
 /// pipeline sizes none of is decided, and each draws nothing, its vertex function run for every
 /// point: a direct draw at its call; an execution of an indirect command buffer's records the
-/// CPU wrote in `commit`, before it returns; an execution of a buffer an encoder made resident
-/// for writing (`gpu_written`) in its host step, after the commit. A draw of no vertices, a draw
+/// CPU wrote in `commit`, before it returns; an execution of a buffer the GPU may write
+/// (`gpu_written`: made resident for writing where a state that may encode is set) in its host
+/// step, after the commit, and one made resident for writing with no such state in `commit`. A
+/// draw of no vertices, a draw
 /// under the point class, and an execution of either, announce nothing.
 #[test]
 fn unsized_points_are_announced_at_the_draw_the_commit_and_the_host_step() {
@@ -242,7 +248,7 @@ fn unsized_points_are_announced_at_the_draw_the_commit_and_the_host_step() {
         (Class::Point, 3, 0),
     ] {
         let state = lane.pipeline(class);
-        let (left, notices) = lane.pass(&messages, &state, |e, _| {
+        let (left, notices) = lane.pass(&messages, (&state, false), |e, _| {
             e.draw_primitives(point, 0, count, 1, 0).unwrap();
         });
         assert_eq!(notices, [announced, 0, 0], "{class:?} {count} on {name}");
@@ -266,16 +272,22 @@ fn unsized_points_are_announced_at_the_draw_the_commit_and_the_host_step() {
             .unwrap();
         icb
     };
-    for (class, count, gpu_written, announced) in [
-        (Class::Triangle, 3, false, [0, 1, 0]),
-        (Class::Triangle, 0, false, [0, 0, 0]),
-        (Class::Point, 3, false, [0, 0, 0]),
-        (Class::Triangle, 3, true, [0, 0, 1]),
+    // An execution of a buffer made resident for writing, where a state that may encode is set in
+    // the command buffer (an encoder of its own before the pass), is recorded by the host step;
+    // without one, the GPU cannot write the records, and the commit records it, as one of a
+    // buffer made resident for nothing.
+    for (class, count, (writable, encoding), announced) in [
+        (Class::Triangle, 3, (false, false), [0, 1, 0]),
+        (Class::Triangle, 0, (false, false), [0, 0, 0]),
+        (Class::Point, 3, (false, false), [0, 0, 0]),
+        (Class::Triangle, 3, (true, true), [0, 0, 1]),
+        (Class::Triangle, 3, (true, false), [0, 1, 0]),
     ] {
+        let gpu_written = writable && encoding;
         let state = lane.pipeline_with(class, true);
         let icb = commands(count);
-        let (left, mut notices) = lane.pass(&messages, &state, |e, _| {
-            if gpu_written {
+        let (left, mut notices) = lane.pass(&messages, (&state, encoding), |e, _| {
+            if writable {
                 e.use_resource(
                     icb.as_resource(),
                     ResourceUsage::READ.union(ResourceUsage::WRITE),
@@ -285,7 +297,9 @@ fn unsized_points_are_announced_at_the_draw_the_commit_and_the_host_step() {
             }
             e.execute_commands_in_buffer(&icb, 0..1).unwrap();
         });
-        let at = format!("an execution: {class:?} {count}, GPU-written {gpu_written}, on {name}");
+        let at = format!(
+            "an execution: {class:?} {count}, writable {writable}, encoding {encoding}, on {name}"
+        );
         assert_eq!(icb.gpu_written(), gpu_written, "{at}");
         if gpu_written {
             // The host step runs on the steps' thread once the work before it completed,

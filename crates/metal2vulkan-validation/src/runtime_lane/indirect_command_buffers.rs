@@ -9,6 +9,7 @@
 
 use super::degrade_notices::{self as notices, counts};
 use super::host_memory::on_device;
+use super::indirect_host_steps;
 use super::{buffer_with, read_buffer, Messages, WAIT};
 use crate::air_library::AirLibrary;
 use metal2vulkan::bind::indirect_commands::COMMAND_BYTES;
@@ -3303,22 +3304,48 @@ fn states_whose_functions_use_a_direct_texture_or_sampler_are_refused_as_metal_r
     });
 }
 
-/// `IndirectCommandBuffer::gpu_written`: `false` for a fresh buffer, and after a read use of it,
-/// an empty copy into it, an empty reset of it and a copy out of it; `true`, at the call, before
-/// any commit, after a write use of it in a compute encoder, a copy of a command into it, and a
-/// reset of a command of it, each on a fresh buffer.
+/// `IndirectCommandBuffer::gpu_written`: `false` for a fresh buffer, after a read use of it beside
+/// a state that may encode indirect commands, after a write use of it beside no state or beside
+/// states that cannot encode (once its command buffer completed too, its commit counting the
+/// buffer it left unmarked: `WorkCounts::indirect_write_residencies_unmarked`), and after an empty
+/// copy into it, an empty reset of it and a copy out of it; `true` from the call that completes a
+/// route that may write its records, before any commit: a write use after a state that may encode
+/// was set, a state that may encode set after a write use, in its encoder or a later one of its
+/// command buffer, a copy of a command into it, and a reset of a command of it, each on a fresh
+/// buffer.
 #[test]
-fn the_gpu_written_flag_is_set_by_a_write_use_or_a_blit_into_the_buffer() {
+fn the_gpu_written_flag_is_set_by_a_write_use_beside_an_encoding_state_or_a_blit_into_it() {
     on_device(|device| {
         let queue = device.new_command_queue().unwrap();
         let fresh = || icb(device, &compute_descriptor(), 2);
-        let used = |buffer: &IndirectCommandBuffer, usage: ResourceUsage| {
+        let encoding = indirect_host_steps::state(device, "icb_replay_encode", false);
+        let plain = template_state(device, false);
+        // A use of `buffer` with `usage` in a compute encoder that sets `before` first and `after`
+        // after: the flag after the use, after `after`, and once the command buffer completed,
+        // and the buffers its commit left unmarked.
+        let used = |buffer: &IndirectCommandBuffer,
+                    usage: ResourceUsage,
+                    (before, after): (
+            Option<&ComputePipelineState>,
+            Option<&ComputePipelineState>,
+        )| {
             let command_buffer = queue.command_buffer().unwrap();
             let mut encoder = command_buffer.compute_command_encoder().unwrap();
+            if let Some(state) = before {
+                encoder.set_compute_pipeline_state(state).unwrap();
+            }
             encoder.use_resource(buffer.as_resource(), usage).unwrap();
-            let written = buffer.gpu_written();
+            let at_use = buffer.gpu_written();
+            if let Some(state) = after {
+                encoder.set_compute_pipeline_state(state).unwrap();
+            }
+            let at_state = buffer.gpu_written();
             encoder.end_encoding().unwrap();
-            written
+            let counted = device.work_counts().indirect_write_residencies_unmarked;
+            command_buffer.commit().unwrap();
+            command_buffer.wait_until_completed_for(WAIT).unwrap();
+            let unmarked = device.work_counts().indirect_write_residencies_unmarked - counted;
+            (at_use, at_state, buffer.gpu_written(), unmarked)
         };
         let blitted = |blit: &dyn Fn(&mut BlitCommandEncoder) -> Result<(), Error>,
                        buffer: &IndirectCommandBuffer| {
@@ -3329,11 +3356,21 @@ fn the_gpu_written_flag_is_set_by_a_write_use_or_a_blit_into_the_buffer() {
             encoder.end_encoding().unwrap();
             written
         };
+        let write = ResourceUsage::WRITE;
         // Nothing the GPU may write through.
         let buffer = fresh();
         let other = fresh();
         assert!(!buffer.gpu_written());
-        assert!(!used(&buffer, ResourceUsage::READ));
+        let read = used(&buffer, ResourceUsage::READ, (Some(&encoding), None));
+        assert_eq!(read, (false, false, false, 0), "a read use");
+        let alone = used(&buffer, write, (None, None));
+        assert_eq!(alone, (false, false, false, 1), "a write use alone");
+        let plainly = used(&buffer, write, (Some(&plain), Some(&plain)));
+        assert_eq!(
+            plainly,
+            (false, false, false, 1),
+            "a write use beside plain states"
+        );
         assert!(!blitted(
             &|blit| blit.copy_indirect_command_buffer(&other, 0..0, &buffer, 0),
             &buffer
@@ -3346,15 +3383,43 @@ fn the_gpu_written_flag_is_set_by_a_write_use_or_a_blit_into_the_buffer() {
             &|blit| blit.copy_indirect_command_buffer(&buffer, 0..1, &other, 0),
             &buffer
         ));
-        // Each way it is set, at the call, for good.
+        // Each way it is set, at the call that completes the route, for good.
         let buffer = fresh();
-        assert!(used(&buffer, ResourceUsage::WRITE));
-        assert!(buffer.gpu_written());
+        let after_a_state = used(&buffer, write, (Some(&encoding), None));
+        assert_eq!(
+            after_a_state,
+            (true, true, true, 0),
+            "a state, then a write use"
+        );
         let buffer = fresh();
-        assert!(used(
+        let before_a_state = used(&buffer, write, (Some(&plain), Some(&encoding)));
+        assert_eq!(
+            before_a_state,
+            (false, true, true, 0),
+            "a write use, then a state"
+        );
+        let buffer = fresh();
+        let both = used(
             &buffer,
-            ResourceUsage::READ.union(ResourceUsage::WRITE)
-        ));
+            ResourceUsage::READ.union(write),
+            (Some(&encoding), None),
+        );
+        assert_eq!(
+            both,
+            (true, true, true, 0),
+            "a state, then a read and write use"
+        );
+        let buffer = fresh();
+        let command_buffer = queue.command_buffer().unwrap();
+        let mut using = command_buffer.compute_command_encoder().unwrap();
+        using.use_resource(buffer.as_resource(), write).unwrap();
+        using.end_encoding().unwrap();
+        let mut setting = command_buffer.compute_command_encoder().unwrap();
+        assert!(!buffer.gpu_written());
+        setting.set_compute_pipeline_state(&encoding).unwrap();
+        assert!(buffer.gpu_written(), "a state set in a later encoder");
+        setting.end_encoding().unwrap();
+        drop(command_buffer);
         let buffer = fresh();
         assert!(blitted(
             &|blit| blit.copy_indirect_command_buffer(&other, 0..1, &buffer, 1),
@@ -3366,8 +3431,8 @@ fn the_gpu_written_flag_is_set_by_a_write_use_or_a_blit_into_the_buffer() {
             &buffer
         ));
         eprintln!(
-            "CBF-MARK {}: the GPU-written flag was set by a write use and blits into the buffer \
-             alone",
+            "CBF-MARK {}: the GPU-written flag was set by a write use beside a state that may \
+             encode and by blits into the buffer alone",
             device.name()
         );
     });

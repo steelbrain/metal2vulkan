@@ -1,7 +1,9 @@
 //! What a draw's functions reach of the command buffer's resident resources, by the stages that
 //! write memory, on the device the cfg selects, under the validation layer. An indirect command
 //! buffer an earlier compute encoder made resident for writing is in the command buffer's
-//! residency for writing, in every render stage (`runtime/residency.rs`); the host step draws its
+//! residency for writing, in every render stage (`runtime/residency.rs`), and, with a state that
+//! may encode set in another (`indirect_host_steps::encoding_state_set`), the GPU may write its
+//! records (`IndirectCommandBuffer::gpu_written`); the host step draws its
 //! commands, whose vertex and fragment functions (the owned fixture `tob_renders`' `tob_triangle`
 //! and `tob_solid`: the triangle of the points at vertex buffer 0, an unsized buffer the host
 //! step's large-buffer form reaches through the resident root table, and the color at fragment
@@ -11,7 +13,7 @@
 //! what its fragments touch (nothing announced past the host step).
 
 use super::degrade_notices::{assert_made_once, on_device};
-use super::indirect_host_steps::HOST_STEPS;
+use super::indirect_host_steps::{encoding_state_set, HOST_STEPS};
 use super::render_executions::{forced_with, icb};
 use super::{buffer_with, WAIT};
 use crate::air_library::AirLibrary;
@@ -103,6 +105,8 @@ fn run(device: &Device, state: &RenderPipelineState, commands: u64) -> (u64, Vec
     let before = device.work_counts().commands_recorded.cmd_pipeline_barrier;
     let queue = device.new_command_queue().unwrap();
     let command_buffer = queue.command_buffer().unwrap();
+    // A state that may encode, set in the command buffer, lets the GPU write the records.
+    encoding_state_set(&command_buffer);
     let mut encoder = command_buffer.compute_command_encoder().unwrap();
     encoder
         .use_resource(buffer.as_resource(), ResourceUsage::WRITE)
