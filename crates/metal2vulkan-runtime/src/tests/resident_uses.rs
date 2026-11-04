@@ -4,11 +4,12 @@
 //! (`WorkCounts::resident_uses_made`), nor walks them as it gathers them for its render pass
 //! instance (`WorkCounts::resident_uses_gathered`, `render/shadows.rs`) or checks them against
 //! what its pass's fragment stages wrote and read (`WorkCounts::resident_uses_against_fragments`,
-//! `render/pass_start_reads.rs`), and builds with debug assertions check each draw's kept uses
-//! against those it would make whole (`binding::kept_resident_checks`), and its gathering and
-//! checks against those of its whole uses. The draws read through a root table and a handle
-//! table, so no draw of theirs is kept to draw again or rebind (`render/draw_again.rs`): each
-//! takes every step.
+//! `render/pass_start_reads.rs`) or its attachments
+//! (`WorkCounts::resident_uses_against_attachments`, `Device::degrade_attachment_reads`), and
+//! builds with debug assertions check each draw's kept uses against those it would make whole
+//! (`binding::kept_resident_checks`), and its gathering and checks against those of its whole
+//! uses. The draws read through a root table and a handle table, so no draw of theirs is kept to
+//! draw again or rebind (`render/draw_again.rs`): each takes every step.
 //! A draw after the encoder made another resource resident, a draw of another plan, and the
 //! first draw of an encoder of the same residency's shape over other resources (the same plan, a
 //! residency of another generation) work them out again.
@@ -151,13 +152,14 @@ impl Resources {
 }
 
 /// What a draw changed: the resident uses its draw worked out, the kept ones checked, and the
-/// ones its gathering and its checks against its pass's fragment stages walked.
+/// ones its gathering and its checks against its pass's fragment stages and attachments walked.
 #[derive(Debug, Default)]
 struct Drawn {
     made: u64,
     checked: u64,
     gathered: u64,
     against: u64,
+    attachments: u64,
 }
 
 /// Draw with `draw`, and what that changed.
@@ -170,6 +172,8 @@ fn drawn(device: &Device, draw: impl FnOnce()) -> Drawn {
         checked: after.1 - before.1,
         gathered: after.0.resident_uses_gathered - before.0.resident_uses_gathered,
         against: after.0.resident_uses_against_fragments - before.0.resident_uses_against_fragments,
+        attachments: (after.0.resident_uses_against_attachments)
+            - before.0.resident_uses_against_attachments,
     }
 }
 
@@ -221,9 +225,10 @@ fn encode(scene: &Scene, resources: &Resources, later: u64) -> Vec<Drawn> {
 /// the draws after the first work out the uses of what it made resident only after it made
 /// another resource resident (the first encoder's fourth) and after a draw of another plan (the
 /// last), and only those walk them as they gather them for their render pass instance and check
-/// them against its fragment stages; every other draw keeps them, and its kept uses are those it
-/// would make whole. The second encoder's first draw, of the plan of the first's last (the second
-/// makes every resource resident before it) under another residency, works them out again.
+/// them against its fragment stages and attachments; every other draw keeps them, and its kept
+/// uses are those it would make whole. The second encoder's first draw, of the plan of the
+/// first's last (the second makes every resource resident before it) under another residency,
+/// works them out again.
 #[test]
 fn draws_keep_the_uses_of_what_their_encoder_made_resident_until_it_or_their_plan_changes() {
     let scratch = Scratch::new("resident-uses");
@@ -236,15 +241,15 @@ fn draws_keep_the_uses_of_what_their_encoder_made_resident_until_it_or_their_pla
         let made_again = [0, later as usize, entry_draws + 1];
         for (at, drawn) in each.iter().enumerate() {
             let what = format!("encoder {encoder} draw {at}: {drawn:?}");
-            let walked = [drawn.made, drawn.gathered, drawn.against];
+            let walked = [drawn.made, drawn.gathered, drawn.against, drawn.attachments];
             match at {
                 // The slot shape's plan lists none.
-                at if at == entry_draws => assert_eq!(walked, [0; 3], "{what}"),
+                at if at == entry_draws => assert_eq!(walked, [0; 4], "{what}"),
                 at if made_again.contains(&at) => {
                     assert!(walked.iter().all(|walked| *walked > 0), "{what}")
                 }
                 _ => {
-                    assert_eq!(walked, [0; 3], "{what}");
+                    assert_eq!(walked, [0; 4], "{what}");
                     assert!(drawn.checked > 0, "{what}");
                 }
             }
@@ -309,4 +314,55 @@ fn draws_announce_each_read_of_what_their_encoder_made_resident_their_pass_s_fra
         }
     }
     assert!(scene.covered() > 0, "the draws drew nothing");
+}
+
+/// Draws of the entry shape whose encoder made their pass's attachment resident: each reads, in
+/// its fragment stage through what the encoder made resident, memory the attachment renders
+/// (`Device::degrade_attachment_reads`), and announces it at each occurrence, where the device
+/// announces each, though those after the first keep the uses of what the encoder made resident:
+/// those found to share memory with an attachment are checked at each draw.
+#[test]
+fn draws_announce_each_read_of_an_attachment_their_encoder_made_resident() {
+    let scratch = Scratch::new("resident-uses-attachments");
+    let heard = Heard::default();
+    let kinds = [Degradation::AttachmentReadInPlace];
+    let device = device(&scratch.0, &kinds, &heard);
+    let scene = Scene::new(&device);
+    let resources = Resources::new(&scene, -0.9);
+    let mut target = TextureDescriptor::texture_2d(PixelFormat::RGBA8Unorm, SIDE, SIDE, false);
+    target.usage = TextureUsage::RENDER_TARGET | TextureUsage::SHADER_READ;
+    target.resource_options = ResourceOptions::shared();
+    let target = device.new_texture(&target).unwrap();
+    let queue = device.new_command_queue().unwrap();
+    let command_buffer = queue.command_buffer().unwrap();
+    let mut encoder = command_buffer
+        .render_command_encoder(&pass(&target))
+        .unwrap();
+    resources.resident(&scene, &mut encoder);
+    let read = (ResourceUsage::READ, RenderStages::FRAGMENT);
+    (encoder.use_resource(target.as_resource(), read.0, read.1)).unwrap();
+    encoder.set_render_pipeline_state(&scene.entry).unwrap();
+    let table = &resources.tables[0];
+    (encoder.set_vertex_buffer(Some(table), ENTRY, 0)).unwrap();
+    (encoder.set_fragment_buffer(Some(table), ENTRY, 0)).unwrap();
+    let mut each = Vec::new();
+    for _ in 0..3 {
+        let before = heard.lock().unwrap().len();
+        let drawn = drawn(&device, || {
+            (encoder.draw_primitives(PrimitiveType::Triangle, 0, 3, 1, 0)).unwrap();
+        });
+        let announced = (heard.lock().unwrap()[before..].iter())
+            .filter(|notice| kinds.contains(&notice.degradation))
+            .count();
+        each.push((drawn, announced));
+    }
+    encoder.end_encoding().unwrap();
+    command_buffer.commit().unwrap();
+    command_buffer.wait_until_completed_for(WAIT).unwrap();
+    assert_eq!(command_buffer.status(), CommandBufferStatus::Completed);
+    for (at, (drawn, announced)) in each.iter().enumerate() {
+        let what = format!("draw {at}: {drawn:?}, announced {announced}");
+        assert!(drawn.attachments > 0 && *announced == 1, "{what}");
+        assert_eq!(drawn.made > 0, at == 0, "{what}");
+    }
 }

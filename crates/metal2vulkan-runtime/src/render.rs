@@ -8846,7 +8846,14 @@ impl RenderLowering {
         // which no copy serves (`texture/attached_reads.rs`): a draw that reads through snapshots
         // reads no attachment otherwise (`snapshot_holds`).
         if snapshot.is_none() {
-            device.degrade_attachment_reads(call, layout, uses)?;
+            match uses.prefix() {
+                None => device.degrade_attachment_reads(call, layout, uses)?,
+                Some(prefix) => {
+                    let version = stood.is_none().then(|| self.layout.version());
+                    let uses = (&mut *uses, prefix);
+                    device.degrade_resident_attachment_reads(call, (layout, version), uses)?;
+                }
+            }
         }
         // In a pass of several color groups, what the draw reads of what another group writes
         // (`render/color_groups.rs`): checked at its first recording.

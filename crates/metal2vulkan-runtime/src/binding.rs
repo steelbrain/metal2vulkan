@@ -2675,6 +2675,10 @@ pub(super) struct CommandUses {
     /// The identity of the uses of what the encoder made resident ([`ResidentPrefix`]), 0 where
     /// they have none: given where [`command_uses_into`] made them, from [`IDENTITIES`].
     prefix: u64,
+    /// The identity and count of the uses of what the encoder made resident found to share no
+    /// memory with an attachment of a render pass of the layout of the version beside them
+    /// ([`apart_from`](Self::apart_from)).
+    apart: Option<(u64, usize, u64)>,
 }
 
 /// The identities given to [`CommandUses`]' uses of what an encoder made resident, from 1: one of
@@ -2710,6 +2714,23 @@ impl CommandUses {
             len: self.used,
         };
         (prefix.len > 0 && prefix.id != 0).then_some(prefix)
+    }
+
+    /// How many uses at its start, of what the encoder made resident, were found to share no
+    /// memory with an attachment of a render pass of the layout of `version`
+    /// (`Device::degrade_attachment_reads`): its count of them where they are those of the
+    /// identity found ([`prefix`](Self::prefix)), else 0.
+    pub(super) fn apart(&self, version: u64) -> usize {
+        match (self.prefix(), self.apart) {
+            (Some(prefix), Some(apart)) if apart == (prefix.id, prefix.len, version) => prefix.len,
+            _ => 0,
+        }
+    }
+
+    /// Note that its uses of what the encoder made resident share no memory with an attachment
+    /// of a render pass of the layout of `version` ([`apart`](Self::apart)).
+    pub(super) fn apart_from(&mut self, version: u64) {
+        self.apart = (self.prefix()).map(|prefix| (prefix.id, prefix.len, version));
     }
 
     /// How many uses of resources the encoder made resident the last call made: 0 where it kept

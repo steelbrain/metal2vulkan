@@ -503,6 +503,7 @@ struct DrawCounters {
     bound_offsets_moved: AtomicU64,
     resident_uses_gathered: AtomicU64,
     resident_uses_against_fragments: AtomicU64,
+    resident_uses_against_attachments: AtomicU64,
 }
 
 /// How a render pass took a shadowed texture as a color attachment
@@ -2193,6 +2194,12 @@ impl Counters {
     /// (`WorkCounts::resident_uses_against_fragments`).
     pub(crate) fn resident_uses_against_fragments(&self, walked: u64) {
         (self.draws.mine()).add(|counts| &counts.resident_uses_against_fragments, walked);
+    }
+
+    /// `walked` uses of what a render encoder made resident that a draw's check against its
+    /// render pass's attachments walked (`WorkCounts::resident_uses_against_attachments`).
+    pub(crate) fn resident_uses_against_attachments(&self, walked: u64) {
+        (self.draws.mine()).add(|counts| &counts.resident_uses_against_attachments, walked);
     }
 
     /// A render draw rebound (`WorkCounts::draws_rebound`), which recorded `states` state
@@ -4995,6 +5002,11 @@ pub struct WorkCounts {
     /// none of them again while the pass's notes hold each as it was noted, and checks none again
     /// where none of them had anything to announce while those bytes stand.
     pub resident_uses_against_fragments: u64,
+    /// The uses of resources a render encoder made resident (`resident_uses_made`) that its
+    /// draws' checks for memory an attachment of their render pass renders walked, while
+    /// `Degradation::AttachmentReadInPlace` would be announced. A draw that begins with the uses
+    /// found to share none with the pass's attachments, by identity, walks none of them.
+    pub resident_uses_against_attachments: u64,
     /// Keys an encoder's commands named first, while the device has a buffer over host pages
     /// (`new_buffer_with_bytes_no_copy`), that were looked up among those buffers under the lock
     /// their command buffers' submissions take: the keys of such buffers, and the rare other key
@@ -6343,6 +6355,9 @@ impl Device {
             resident_uses_gathered: draws(|counts| &counts.resident_uses_gathered),
             resident_uses_against_fragments: draws(|counts| {
                 &counts.resident_uses_against_fragments
+            }),
+            resident_uses_against_attachments: draws(|counts| {
+                &counts.resident_uses_against_attachments
             }),
             host_holds_looked_up: counters.host_holds_looked_up.load(Ordering::Relaxed),
             dispatches_settled_as_before: (counters.dispatches_settled_as_before)

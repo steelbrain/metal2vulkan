@@ -212,8 +212,14 @@ impl RenderLowering {
         #[cfg(not(debug_assertions))]
         let _: &mut Option<super::Checked> = checked;
         // The attachments' reads: its last check, refused here, as it may have announced.
-        let attached =
-            (self.core.device()).degrade_attachment_reads(call, &self.layout, &live.uses);
+        let device = self.core.device();
+        let attached = match live.uses.prefix() {
+            None => device.degrade_attachment_reads(call, &self.layout, &live.uses),
+            Some(prefix) => {
+                let layout = (&*self.layout, Some(self.layout.version()));
+                device.degrade_resident_attachment_reads(call, layout, (&mut live.uses, prefix))
+            }
+        };
         if let Err(refused) = attached {
             return Again::Refused(refused);
         }

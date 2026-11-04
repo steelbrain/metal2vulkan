@@ -54,6 +54,7 @@
 //!   `texture/shared.rs`, `texture/heap.rs`).
 
 use super::attachment_stand_in::{Cause, StandIn};
+use super::binding::{CommandUses, ResidentPrefix};
 use super::color_resolve;
 use super::device::{DebugMessage, Device, MessageKind, MessageSeverity};
 use super::error::Error;
@@ -2972,6 +2973,17 @@ pub(crate) fn placement(degradation: Degradation, each: bool, ends: bool) -> Opt
     Some(place)
 }
 
+/// The notice of a draw of `call` that reads or writes memory an attachment of its render pass
+/// instance renders (`Degradation::AttachmentReadInPlace`).
+fn attachment_read_notice(call: &'static str) -> (String, String) {
+    (
+        format!("a draw ({call})"),
+        "a function of the draw reads or writes, other than as an attachment, memory an \
+         attachment of its render pass instance renders"
+            .to_owned(),
+    )
+}
+
 impl Device {
     /// Announce `AttachmentReadInPlace` where `uses`, what a draw of `call` binds or reaches,
     /// share memory with an attachment of `layout`'s render pass instance
@@ -2989,14 +3001,43 @@ impl Device {
         {
             return Ok(());
         }
-        self.degrade(kind, || {
-            (
-                format!("a draw ({call})"),
-                "a function of the draw reads or writes, other than as an attachment, memory an \
-                 attachment of its render pass instance renders"
-                    .to_owned(),
-            )
-        });
+        self.degrade(kind, || attachment_read_notice(call));
+        Ok(())
+    }
+
+    /// [`degrade_attachment_reads`](Self::degrade_attachment_reads) of a draw whose `uses` begin
+    /// with those of what its encoder made resident of the identity `prefix`: of those, the uses
+    /// past them alone where they were found to share none with a layout of `version`
+    /// (`CommandUses::apart`), `None` for one of no version
+    /// (`WorkCounts::resident_uses_against_attachments` counts those it walked).
+    pub(super) fn degrade_resident_attachment_reads(
+        &self,
+        call: &'static str,
+        (layout, version): (&PassLayout, Option<u64>),
+        (uses, prefix): (&mut CommandUses, ResidentPrefix),
+    ) -> Result<(), Error> {
+        let kind = Degradation::AttachmentReadInPlace;
+        if !self.shared().announced.pending(kind) {
+            return Ok(());
+        }
+        let past = version.map_or(0, |version| uses.apart(version));
+        let shares = render_target::shares_attachment(layout, &uses[past..])?;
+        #[cfg(debug_assertions)]
+        assert_eq!(
+            shares,
+            render_target::shares_attachment(layout, uses)?,
+            "a draw's uses checked against the attachments by their identity less than its uses"
+        );
+        if past == 0 {
+            let counts = &self.shared().counts;
+            counts.resident_uses_against_attachments(prefix.len as u64);
+            if let Some(version) = version.filter(|_| !shares) {
+                uses.apart_from(version);
+            }
+        }
+        if shares {
+            self.degrade(kind, || attachment_read_notice(call));
+        }
         Ok(())
     }
 
