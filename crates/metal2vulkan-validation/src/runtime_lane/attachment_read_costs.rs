@@ -33,6 +33,12 @@
 //! split, the texels copied in per pass, and the clock (`gt_cur_freq_mhz`) at the first and last
 //! round.
 //!
+//! `pass_start_barrier_costs` weighs a memory barrier over the render targets at the start of a
+//! pass that clears its target, before a draw that reads the target (`texture/attached_reads.rs`):
+//! over a display-sized and a backdrop-sized `BGRA8Unorm` private target, a reader at its own pixels
+//! (`psb_masked`, beside an `A8Unorm` mask over a buffer) or sampling in pixel coordinates
+//! (`psb_sample`), through a scissor, with the barrier and without it.
+//!
 //! Ignored by default: measurements, not checks. Run them by name with `--run-ignored all`.
 
 use super::attachment_reads::{floats, function};
@@ -474,4 +480,200 @@ fn snapshot_crossover() {
     }
     drop((host, private, buffer));
     drop(mapping);
+}
+
+/// The targets of `pass_start_barrier_costs`: a display-sized compositor target and a
+/// backdrop-sized one, each with the scissor its reader draws through.
+const START_TARGETS: [([u64; 2], [u64; 2]); 2] =
+    [([1728, 1216], [453, 100]), ([896, 576], [841, 521])];
+/// `pass_start_barrier_costs`'s command buffers a frame, each one pass, and its rounds of every
+/// cell, the first untimed.
+const START_PASSES: usize = 8;
+const START_ROUNDS: usize = 12;
+
+/// One cell of `pass_start_barrier_costs`: the target, the reader (`psb_masked`, which reads at
+/// its own pixel, or `psb_sample`, which samples in pixel coordinates), and whether the pass begins
+/// with a memory barrier over the render targets.
+#[derive(Clone, Copy, Debug)]
+struct StartCell {
+    target: usize,
+    sample: bool,
+    barrier: bool,
+}
+
+/// One frame of `pass_start_barrier_costs` over `target`: [`START_PASSES`] command buffers of one
+/// pass each that clears it, `barrier` first where asked, then one draw of `reader` over the whole
+/// target through `scissor`, the target at fragment texture 0 and `mask` at 3. The GPU time of
+/// its command buffers, summed, and the CPU time from each command buffer's making through its
+/// commit, summed.
+fn start_frame(
+    queue: &CommandQueue,
+    (target, mask): (&Texture, &Texture),
+    reader: &RenderPipelineState,
+    scissor: [u64; 2],
+    barrier: bool,
+) -> (f64, f64) {
+    let mut d = RenderPassDescriptor::new();
+    let color = &mut d.color_attachments[0];
+    color.texture = Some(target.clone());
+    color.load_action = LoadAction::Clear;
+    color.store_action = StoreAction::Store;
+    let (width, height) = (target.width(), target.height());
+    let corners = {
+        let x = |p: u64| p as f32 / width as f32 * 2.0 - 1.0;
+        let y = |p: u64| 1.0 - p as f32 / height as f32 * 2.0;
+        floats([x(0), y(height), x(width), y(0)])
+    };
+    let mut committed = Vec::new();
+    let mut cpu = 0.0;
+    for _ in 0..START_PASSES {
+        let started = Instant::now();
+        let command_buffer = queue.command_buffer().unwrap();
+        let mut encoder = command_buffer.render_command_encoder(&d).unwrap();
+        if barrier {
+            encoder.memory_barrier_with_scope(
+                BarrierScope::RENDER_TARGETS,
+                RenderStages::FRAGMENT,
+                RenderStages::FRAGMENT,
+            );
+        }
+        encoder.set_render_pipeline_state(reader).unwrap();
+        encoder.set_vertex_bytes(&corners, 0).unwrap();
+        let rect = ScissorRect {
+            x: 0,
+            y: 0,
+            width: scissor[0],
+            height: scissor[1],
+        };
+        encoder.set_scissor_rect(rect).unwrap();
+        encoder.set_fragment_texture(Some(target), 0).unwrap();
+        encoder.set_fragment_texture(Some(mask), 3).unwrap();
+        encoder
+            .draw_primitives(PrimitiveType::Triangle, 0, 6, 1, 0)
+            .unwrap();
+        encoder.end_encoding().unwrap();
+        command_buffer.commit().unwrap();
+        cpu += started.elapsed().as_secs_f64();
+        committed.push(command_buffer);
+    }
+    committed
+        .last()
+        .unwrap()
+        .wait_until_completed_for(WAIT)
+        .unwrap();
+    let mut gpu = 0.0;
+    for command_buffer in &committed {
+        assert_eq!(command_buffer.error(), None);
+        gpu += command_buffer.gpu_end_time().unwrap() - command_buffer.gpu_start_time().unwrap();
+    }
+    (gpu, cpu)
+}
+
+/// What a memory barrier over the render targets at the start of a pass that clears its target
+/// costs where the pass's draw reads the target (`texture/attached_reads.rs`): the draw records
+/// into an instance after the pass's first, which runs the clear alone, or reads through snapshots.
+/// Each cell (the module docs' `StartCell`) runs [`START_PASSES`] passes a frame, the cells in
+/// turn, round after round; printed per cell (`PASS-START-BARRIER-COST`): the median GPU time per
+/// pass, the median CPU time per pass from its command buffer's making through its commit, and per
+/// pass the splits, snapshots, render pass instances begun and texels copied in.
+#[test]
+#[ignore = "a release-mode measurement: run by name"]
+fn pass_start_barrier_costs() {
+    let device = open_device(TEST_DEVICE, DeviceOptions::default()).unwrap();
+    let bgra = PixelFormat::BGRA8Unorm;
+    let psb = |name: &str| {
+        let mut d = RenderPipelineDescriptor::new(function(&device, "psb_rect", "psb_reads.ll"));
+        d.fragment = Some(function(&device, name, "psb_reads.ll"));
+        d.color_attachments[0] = Some(ColorAttachmentDescriptor::new(bgra));
+        device
+            .new_render_pipeline_state(&d, &PipelineOptions::default())
+            .unwrap()
+    };
+    let readers = [psb("psb_masked"), psb("psb_sample")];
+    let targets: Vec<Texture> = START_TARGETS
+        .iter()
+        .map(|&([width, height], _)| {
+            let mut d = TextureDescriptor::texture_2d(bgra, width, height, false);
+            d.usage = TextureUsage::RENDER_TARGET | TextureUsage::SHADER_READ;
+            d.resource_options = ResourceOptions::private();
+            device.new_texture(&d).unwrap()
+        })
+        .collect();
+    // A 64x16 `A8Unorm` mask over a buffer, rows 256 bytes apart.
+    let mask_buffer = device
+        .new_buffer(256 * 16, ResourceOptions::shared())
+        .unwrap();
+    let mut d = TextureDescriptor::texture_2d(PixelFormat::A8Unorm, 64, 16, false);
+    d.usage = TextureUsage::SHADER_READ;
+    d.resource_options = ResourceOptions::shared();
+    let mask = mask_buffer.new_texture(&d, 0, 256).unwrap();
+    let queue = device.new_command_queue().unwrap();
+    let mut cells = Vec::new();
+    for target in 0..START_TARGETS.len() {
+        for sample in [false, true] {
+            for barrier in [false, true] {
+                cells.push(StartCell {
+                    target,
+                    sample,
+                    barrier,
+                });
+            }
+        }
+    }
+    let mut times: BTreeMap<usize, (Vec<f64>, Vec<f64>)> = BTreeMap::new();
+    let mut moves: BTreeMap<usize, (WorkCounts, WorkCounts)> = BTreeMap::new();
+    for round in 0..START_ROUNDS {
+        for (index, cell) in cells.iter().enumerate() {
+            let before = device.work_counts();
+            let (gpu, cpu) = start_frame(
+                &queue,
+                (&targets[cell.target], &mask),
+                &readers[usize::from(cell.sample)],
+                START_TARGETS[cell.target].1,
+                cell.barrier,
+            );
+            let after = device.work_counts();
+            if round == 0 {
+                continue;
+            }
+            if round == 1 {
+                moves.insert(index, (before, after));
+            }
+            let held = times.entry(index).or_default();
+            held.0.push(gpu);
+            held.1.push(cpu);
+        }
+    }
+    let name = device.name().to_owned();
+    for (index, cell) in cells.iter().enumerate() {
+        let (gpu, cpu) = times.remove(&index).unwrap();
+        let (gpu, cpu) = (median(gpu), median(cpu));
+        let (before, after) = &moves[&index];
+        let per = |a: u64, b: u64| (b - a) as f64 / START_PASSES as f64;
+        let begun = |c: &WorkCounts| c.render_passes_begun_instances + c.render_passes_begun_inline;
+        let ([width, height], [sw, sh]) = START_TARGETS[cell.target];
+        println!(
+            "PASS-START-BARRIER-COST {name} {width}x{height} scissor {sw}x{sh} {} {}: GPU {:.1} \
+             us/pass, CPU {:.1} us/pass; per pass: splits {:.2}, snapshotted {:.2}, instances \
+             begun {:.2}, texels copied in {:.0}",
+            if cell.sample { "sample" } else { "own-pixel" },
+            if cell.barrier {
+                "barrier"
+            } else {
+                "no-barrier"
+            },
+            gpu * 1e6 / START_PASSES as f64,
+            cpu * 1e6 / START_PASSES as f64,
+            per(before.attachment_read_splits, after.attachment_read_splits),
+            per(
+                before.reading_draws_snapshotted,
+                after.reading_draws_snapshotted
+            ),
+            per(begun(before), begun(after)),
+            per(
+                before.shadow_texels_copied_in + before.shadow_texels_copied_in_images,
+                after.shadow_texels_copied_in + after.shadow_texels_copied_in_images
+            ),
+        );
+    }
 }
