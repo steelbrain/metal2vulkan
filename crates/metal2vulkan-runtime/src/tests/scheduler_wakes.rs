@@ -10,6 +10,9 @@
 //!   `commit_and_submit` in turn, never waiting for a command buffer (a wait would submit for
 //!   itself), see every command buffer complete within a bound: a commit whose wake was lost
 //!   would leave its batches in the inbox of an idle thread that sleeps until woken.
+//! - **Never behind a submission.** A commit that finds no pass under way wakes the thread without
+//!   the lock a pass holds across its `vkQueueSubmit`: with the `VkQueue` held and that lock held,
+//!   no pass counted, a commit from another thread returns at once.
 //!
 //! Device tests: compiled only under the validation crate's GPU safety cfgs (`m2v_gpu`,
 //! `m2v_cpu_icd`), on the kind of device the cfg selects.
@@ -19,7 +22,7 @@ use crate::{
     WorkCounts,
 };
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::{mpsc, Arc};
 use std::time::{Duration, Instant};
 
 /// How long the command buffers may go without one completing before the test reads it as a wake
@@ -190,4 +193,56 @@ fn commits_with_idle_gaps_lose_no_wake() {
         wakings <= sleeps,
         "{wakings} wakings over {sleeps} sleeps: a sleep was notified more than once"
     );
+}
+
+/// A commit that finds no pass under way wakes the scheduler's thread without the lock a pass
+/// holds across its `vkQueueSubmit` (`scheduler/inbox.rs`, "Posted, never passed"). A pass
+/// counted only after the commit looked for one can take that lock before the commit's wake, and
+/// hold it in a submission that waits for a held `VkQueue`. Here the `VkQueue` is held, and the
+/// lock is held as such a pass holds it, with no pass counted: a commit from another thread
+/// returns at once. Once both are let go, the thread's pass submits it and it completes.
+#[test]
+fn a_commit_returns_while_the_lock_a_submission_holds_is_held() {
+    let device = device();
+    let queue = device.new_command_queue().unwrap();
+    let target = device.new_buffer(256, ResourceOptions::private()).unwrap();
+    let completed = Arc::new(AtomicU64::new(0));
+    let command_buffer = counted_fill(&queue, &target, 1, &completed);
+    let (held, holding) = mpsc::channel();
+    let (release, released) = mpsc::channel::<()>();
+    let holder = {
+        let queue = queue.clone();
+        std::thread::spawn(move || {
+            // SAFETY: the closure keeps no handle and calls nothing of the runtime's; it waits
+            // only for this test's release, past the commit's bound.
+            unsafe {
+                queue.with_vk_queue(|_, _| {
+                    held.send(()).unwrap();
+                    let _ = released.recv_timeout(2 * BOUND);
+                })
+            }
+        })
+    };
+    holding.recv_timeout(BOUND).unwrap();
+    // The thread sleeps by now: no pass is under way.
+    std::thread::sleep(Duration::from_millis(5));
+    let (returned, committer) = device.shared().scheduler.under_lock(|| {
+        let (done, returns) = mpsc::channel();
+        let committer = std::thread::spawn(move || {
+            command_buffer.commit().unwrap();
+            // Gone where the test stopped waiting for it.
+            let _ = done.send(());
+            command_buffer
+        });
+        (returns.recv_timeout(BOUND).is_ok(), committer)
+    });
+    release.send(()).unwrap();
+    holder.join().unwrap();
+    let command_buffer = committer.join().unwrap();
+    assert!(
+        returned,
+        "the commit waited for the lock a pass holds across its submission"
+    );
+    settle(&completed, 1, "the commit made while the lock was held");
+    assert_eq!(command_buffer.error(), None);
 }
