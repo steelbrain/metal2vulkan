@@ -425,7 +425,7 @@
         "gate_waits": 1,
         "gate_waits_slept": 1,
         "graphics_pipelines_looked_up": 1,
-        "heads_held_for_host_steps": 4,
+        "heads_held_for_host_steps": 3,
         "heap_tables_worked_out": 2,
         "host_steps_recorded": 1,
         "host_texel_copies": 1,
@@ -454,7 +454,7 @@
         "render_passes_begun_instances": 1,
         "render_passes_made": 3,
         "scheduled_where_submitted": 1,
-        "scheduler_passes": 5,
+        "scheduler_passes": 4,
         "scheduler_passes_by_waiters": 1,
         "scheduler_sleeps": 3,
         "scheduler_wakes_commit": 1,
@@ -470,7 +470,7 @@
         "trail_waits": 1,
         "variant_pipelines_made": 2,
         "wakes_completion_waiters": 1,
-        "wakes_handler_threads": 1,
+        "wakes_handler_threads": 2,
         "wakes_spared": 8
       },
       "composed": {

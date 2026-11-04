@@ -332,5 +332,156 @@
       ],
       "validated": "ran"
     }
+  ],
+  "costs": [
+    {
+      "venue": "Apple M3 Max",
+      "runs": 8,
+      "measured": "8 run(s) of the whole selection on Apple M3 Max, in the case set's own order, the largest each count reached",
+      "contrasted": "8 run(s) of each case on its own on Apple M3 Max, nothing before it on the device, the largest each count reached",
+      "bounds": {
+        "addressable_buffers_made": 4,
+        "bare_starts": 4,
+        "batches_held_past_a_look": 1,
+        "batches_with_none_pending": 4,
+        "command_barriers": 382,
+        "command_buffers_begun": 6,
+        "command_buffers_begun_batch_work": 2,
+        "command_buffers_begun_encoders": 4,
+        "command_buffers_submitted": 6,
+        "commands_recorded.begin_command_buffer": 9,
+        "commands_recorded.cmd_copy_buffer": 1154,
+        "commands_recorded.cmd_pipeline_barrier": 1542,
+        "commands_recorded.cmd_update_buffer": 386,
+        "commands_recorded.end_command_buffer": 6,
+        "commits_handed_off": 4,
+        "commits_taken_in": 4,
+        "completed_waits": 14,
+        "completed_where_seen": 2,
+        "completion_arms": 7,
+        "completion_arms_after_a_wake": 4,
+        "completion_waiter_parks": 5,
+        "completion_waiter_parks_timed_out": 1,
+        "device_memory_allocated": 738197504,
+        "encoder_command_buffers_begun": 4,
+        "encoder_primaries_begun_ahead": 1,
+        "event_waits_met": 1,
+        "fence_waits": 7,
+        "fills_by_transfers": 386,
+        "finales_folded": 4,
+        "gate_waits": 2,
+        "heads_held_for_event_values": 1,
+        "memory_frees.blocks": 2,
+        "memory_frees.dedicated": 2,
+        "new_buffer_bytes_cleared": 512,
+        "object_churn.buffers_evicted": 20,
+        "object_churn.buffers_parked": 4,
+        "object_churn.buffers_recycled": 2,
+        "object_churn.vk_buffer_bindings": 4,
+        "object_churn.vk_buffers_destroyed": 22,
+        "object_churn.vk_buffers_made": 4,
+        "object_churn.vk_memory_allocations": 2,
+        "object_churn.vk_memory_freed": 2,
+        "pooled_memory_blocks_made": 3,
+        "primaries_begun_ahead": 4,
+        "queue_submissions": 4,
+        "queues_sharing_a_vk_queue": 4,
+        "scheduled_where_submitted": 2,
+        "scheduler_passes": 6,
+        "scheduler_sleep_slices": 1,
+        "scheduler_sleeps": 5,
+        "scheduler_wakes_commit": 2,
+        "scheduler_wakes_host": 2,
+        "shared_event_waits_held": 1,
+        "slot_returns": 4,
+        "spare_command_pools_taken": 4,
+        "submit_infos": 4,
+        "submit_stalls_on_work": 2,
+        "trail_waits": 2,
+        "wakes_completion_waiters": 4,
+        "wakes_handler_threads": 4,
+        "wakes_spared": 35
+      },
+      "composed": {
+        "device_memory_allocated": 738197504,
+        "queues_sharing_a_vk_queue": 0
+      },
+      "ceilings": {
+        "addressable_buffers_made": 4,
+        "pooled_memory_blocks_made": 3
+      }
+    }
+  ],
+  "times": [
+    {
+      "leg": "metal",
+      "venue": "native Metal",
+      "chip": "apple-m3-max",
+      "os_build": "26A434",
+      "rounds": 8,
+      "measured": "8 round(s) of the whole selection, in the case set's own order, each round on a fresh device, our shader cache carried over between the cases of a round; a figure is the median of the rounds' own medians; Metal's leg ran at a one-minute load average of 12.98 and ours at 12.62; the legs run one after the other, so the per-call margin is judged only when both are 26.0 or under and within 2.0x of each other",
+      "instrument": 299,
+      "times": {
+        "case": "event-wait-behind-a-running-signal",
+        "calls": 2,
+        "in_calls": 306147334,
+        "on_cpu": 5100457,
+        "blocked": 301059459,
+        "elsewhere": 23663208,
+        "spend": 330856458,
+        "spend_least": 321077833,
+        "spend_most": 354654042,
+        "per_call": [
+          {
+            "call": "event_wait_behind_a_running_signal",
+            "least_calls": 2,
+            "most_calls": 2,
+            "wall": 151753583,
+            "on_cpu": 2503125,
+            "blocked": 148590500,
+            "wall_least": 146456792,
+            "wall_most": 163924250,
+            "wall_total": 306147334,
+            "on_cpu_total": 5100457,
+            "blocked_total": 301059459
+          }
+        ]
+      }
+    },
+    {
+      "leg": "ours",
+      "venue": "Apple M3 Max",
+      "chip": "apple-m3-max",
+      "os_build": "26A434",
+      "rounds": 8,
+      "measured": "8 round(s) of the whole selection, in the case set's own order, each round on a fresh device, our shader cache carried over between the cases of a round; a figure is the median of the rounds' own medians; Metal's leg ran at a one-minute load average of 12.98 and ours at 12.62; the legs run one after the other, so the per-call margin is judged only when both are 26.0 or under and within 2.0x of each other",
+      "instrument": 291,
+      "times": {
+        "case": "event-wait-behind-a-running-signal",
+        "calls": 2,
+        "in_calls": 686253292,
+        "on_cpu": 329438249,
+        "blocked": 356604125,
+        "elsewhere": 26493125,
+        "spend": 711238499,
+        "spend_least": 688209542,
+        "spend_most": 755321916,
+        "per_call": [
+          {
+            "call": "event_wait_behind_a_running_signal",
+            "least_calls": 2,
+            "most_calls": 2,
+            "wall": 340761417,
+            "on_cpu": 164041166,
+            "blocked": 176085209,
+            "wall_least": 327758542,
+            "wall_most": 344129792,
+            "wall_total": 686253292,
+            "on_cpu_total": 329438249,
+            "blocked_total": 356604125
+          }
+        ]
+      }
+    }
   ]
 }

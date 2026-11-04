@@ -484,7 +484,6 @@
         "render_passes_begun_inline": 1,
         "render_passes_made": 2,
         "scheduled_where_submitted": 2,
-        "scheduler_passes": 2,
         "scheduler_passes_by_waiters": 2,
         "scheduler_sleeps": 2,
         "scheduler_wakes_commit": 2,

@@ -471,7 +471,7 @@
         "trail_waits": 1,
         "variant_pipelines_made": 2,
         "wakes_completion_waiters": 1,
-        "wakes_handler_threads": 1,
+        "wakes_handler_threads": 2,
         "wakes_spared": 8
       },
       "composed": {
