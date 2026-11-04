@@ -15,12 +15,17 @@
 //!   (`ERROR_TOO_MANY_OBJECTS`) without calling the driver, counted
 //!   (`WorkCounts::memory_allocations_refused_at_limit`). A caller then frees what it keeps and
 //!   tries again as after the driver's own refusal (`memory.rs`).
+//! - **Posted frees count until they run.** A block whose free is posted to the device's free
+//!   thread (`free_thread.rs`) stays counted until its `vkFreeMemory`; an allocation that finds
+//!   the limit reached while frees are posted waits for them, then asks again, before it is
+//!   refused.
 //! - **A margin the runtime's own work leaves.** [`Allocations::room_ahead`]: the allocations the
 //!   runtime makes ahead of any object (`host_ram.rs`'s ahead import) stop while fewer than a
 //!   quarter of the limit are left, so the objects and their imports have those. Once the
 //!   device's allocations reach that quarter, it gives back the chunks it imported ahead that no
 //!   object took ([`Allocations::made`]), so they are gone before they could take the last.
 
+use crate::free_thread::FreeThread;
 use ash::vk;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -40,6 +45,9 @@ pub(crate) struct Allocations {
     ahead: AtomicBool,
     /// What gives the allocations made ahead back, set once the device is made.
     give_back: OnceLock<Box<dyn Fn() + Send + Sync>>,
+    /// The device's free thread, whose posted frees an allocation at the limit waits for, set
+    /// once the device is made.
+    frees: OnceLock<Arc<FreeThread>>,
 }
 
 impl Allocations {
@@ -50,6 +58,7 @@ impl Allocations {
             refused: AtomicU32::new(0),
             ahead: AtomicBool::new(false),
             give_back: OnceLock::new(),
+            frees: OnceLock::new(),
         }
     }
 
@@ -59,19 +68,31 @@ impl Allocations {
         (limit / 4).max(1)
     }
 
-    /// Count one more live allocation, or refuse it where the limit is reached.
+    /// Count one more live allocation, or refuse it where the limit is reached, once the frees
+    /// posted to the device's free thread completed (the module docs).
     fn take(&self) -> bool {
-        let limit = self.limit.load(Ordering::Relaxed);
-        let taken = self
-            .live
-            .try_update(Ordering::AcqRel, Ordering::Acquire, |live| {
-                (live < limit).then_some(live + 1)
-            })
-            .is_ok();
+        let taken = self.try_take()
+            || self.frees.get().is_some_and(|frees| frees.wait()) && self.try_take();
         if !taken {
             self.refused.fetch_add(1, Ordering::Relaxed);
         }
         taken
+    }
+
+    /// Count one more live allocation where the limit leaves room for it.
+    fn try_take(&self) -> bool {
+        let limit = self.limit.load(Ordering::Relaxed);
+        self.live
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |live| {
+                (live < limit).then_some(live + 1)
+            })
+            .is_ok()
+    }
+
+    /// Wait for the frees posted to `frees` before refusing an allocation at the limit, from now
+    /// on.
+    pub(crate) fn wait_for_frees_on(&self, frees: Arc<FreeThread>) {
+        let _ = self.frees.set(frees);
     }
 
     /// One counted allocation was freed, or its making failed.

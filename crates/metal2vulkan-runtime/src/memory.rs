@@ -37,6 +37,11 @@
 //!   of addresses destroyed at once, and its memory waits, parked, until the batches and the
 //!   device's own submissions made before it completed.
 //!
+//! - **Freed off the releasing thread** (`free_thread.rs`): a block that goes, other than an
+//!   import, is freed on the device's free thread, counted against its heap and the device's
+//!   allocations until it is; a block that would take its heap past the heap's size waits for
+//!   the frees of that heap first ([`place`]).
+//!
 //! - **Images apart**. An image the runtime places in memory of its own takes a block that holds
 //!   images alone ([`Holds`], [`allocate_image`]): no buffer, a block's buffer of addresses among
 //!   them, is bound into such a block, nor such an image into a buffers' block. An image over a
@@ -49,6 +54,7 @@ use super::device::lock;
 #[cfg(unix)]
 use super::dma_buf::DmaBufPages;
 use super::error::{internal, vulkan, Error, MemoryKind};
+use super::free_thread::{FreeThread, Posted};
 use super::freed_memory::{Parked, Parking};
 use super::fresh_pages::OwnPages;
 use super::host_ram::RamChunk;
@@ -1062,6 +1068,12 @@ pub(super) struct Memory {
     freed_by: [u64; FreeCause::COUNT],
     /// The memory log, where `METAL2VULKAN_LOG_MEMORY` is set (`memory_log.rs`).
     log: Option<MemoryLog>,
+    /// The device's free thread, which the blocks that go are posted to, once set
+    /// ([`Memory::free_on`], `free_thread.rs`).
+    frees: Option<Arc<FreeThread>>,
+    /// Per memory heap: its size, and the bytes of the blocks of the runtime's own memory live in
+    /// it ([`Memory::add_block`]), imports aside.
+    heaps: Vec<(u64, u64)>,
     /// A bind into memory that queued work uses waits for that work on the device's driver
     /// ([`binds_wait`]), so an image bound while such work may be queued takes a block of its own
     /// ([`allocate_image_while_queued`]).
@@ -1083,6 +1095,11 @@ impl Memory {
     ) -> Memory {
         let count = properties.memory_type_count as usize;
         let types = properties.memory_types[..count.min(vk::MAX_MEMORY_TYPES)].to_vec();
+        let heaps = properties.memory_heaps
+            [..(properties.memory_heap_count as usize).min(vk::MAX_MEMORY_HEAPS)]
+            .iter()
+            .map(|heap| (heap.size, 0))
+            .collect();
         Memory {
             pools: (types.iter().chain(&types))
                 .map(|_| Pool::default())
@@ -1100,6 +1117,8 @@ impl Memory {
             parked_count: 0,
             freed_by: [0; FreeCause::COUNT],
             log: None,
+            frees: None,
+            heaps,
             binds_wait: binds_wait(driver),
         }
     }
@@ -1108,6 +1127,41 @@ impl Memory {
     /// (`memory_log.rs`).
     pub(super) fn log_to(&mut self, log: Option<MemoryLog>) {
         self.log = log;
+    }
+
+    /// Post the frees of the blocks that go from now on to `frees` (`free_thread.rs`).
+    pub(super) fn free_on(&mut self, frees: Arc<FreeThread>) {
+        self.frees = Some(frees);
+    }
+
+    /// The memory heap of memory type `type_index`.
+    fn heap_of(&self, type_index: u32) -> usize {
+        self.types[type_index as usize].heap_index as usize
+    }
+
+    /// The free thread to wait for before a block of `size` bytes of memory type `type_index` is
+    /// made: where frees of its heap are posted and the heap's live blocks, those frees and the new
+    /// block would pass the heap's size (`free_thread.rs`).
+    fn frees_before(&self, type_index: u32, size: u64) -> Option<Arc<FreeThread>> {
+        let frees = self.frees.as_ref()?;
+        let heap = self.heap_of(type_index);
+        let pending = frees.heap_pending(heap);
+        let (heap_size, live) = *self.heaps.get(heap)?;
+        let over = live.saturating_add(pending).saturating_add(size) > heap_size;
+        (pending > 0 && over).then(|| Arc::clone(frees))
+    }
+
+    /// The device's free thread, once set.
+    fn free_thread(&self) -> Option<Arc<FreeThread>> {
+        self.frees.clone()
+    }
+
+    /// A block of `size` bytes of memory type `type_index` left the heap's live blocks.
+    fn left_heap(&mut self, type_index: u32, size: u64) {
+        let heap = self.heap_of(type_index);
+        if let Some((_, live)) = self.heaps.get_mut(heap) {
+            *live = live.saturating_sub(size);
+        }
     }
 
     /// Say `what` happened to `block`, where the log is on: its device address from its buffer of
@@ -1155,6 +1209,29 @@ impl Memory {
     /// outside it (a dma-buf import, a GPU pool's block, a neutral or a spare).
     pub(super) fn frees(&self) -> [u64; FreeCause::COUNT] {
         self.freed_by
+    }
+
+    /// Hold each memory heap to its live blocks and the frees of it posted, from now on: the next
+    /// block made in it passes its size (`free_thread.rs`). The heaps' sizes, to put back.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(super) fn hold_heaps_to_live(&mut self) -> Vec<u64> {
+        let frees = self.frees.clone();
+        (self.heaps.iter_mut().enumerate())
+            .map(|(heap, (size, live))| {
+                let pending = frees.as_ref().map_or(0, |frees| frees.heap_pending(heap));
+                let was = *size;
+                *size = *live + pending;
+                was
+            })
+            .collect()
+    }
+
+    /// Put the memory heaps' sizes back to `sizes` ([`hold_heaps_to_live`](Self::hold_heaps_to_live)).
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(super) fn put_heaps_back(&mut self, sizes: &[u64]) {
+        for ((size, _), &was) in self.heaps.iter_mut().zip(sizes) {
+            *size = was;
+        }
     }
 
     /// Let the blocks that go from now on wait by `parking` (`freed_memory.rs`), as where the
@@ -1287,6 +1364,10 @@ impl Memory {
             self.say_block(what, &block);
         }
         self.allocated += size;
+        let heap = self.heap_of(type_index);
+        if let Some((_, live)) = self.heaps.get_mut(heap) {
+            *live += size;
+        }
         self.pool(holds, type_index)
             .add(size, dedicated, block, used)
     }
@@ -1486,10 +1567,13 @@ impl Memory {
     /// Free `block`, or where the device parks freed memory (`freed_memory.rs`), destroy its
     /// buffer of addresses and let its memory wait, with `after`, for the batches submitted
     /// before now, unless they completed. `after`, given back where the memory was freed here.
+    /// A block freed now that is no import, with nothing to go after it, is posted to the
+    /// device's free thread, unless its queue is full (`free_thread.rs`).
     ///
     /// The block's `vkFreeMemory` is counted under `cause`, or, where the block is an import of
     /// its own, under the import's cause instead: counted here, where the block goes, whether
-    /// the call runs now or once the batches in flight complete ([`Memory::frees`]).
+    /// the call runs now, on the free thread or once the batches in flight complete
+    /// ([`Memory::frees`]).
     ///
     /// # Safety
     ///
@@ -1502,11 +1586,40 @@ impl Memory {
         after: Option<Box<dyn Send>>,
     ) -> Option<Box<dyn Send>> {
         self.freed_by[block.cause(cause) as usize] += 1;
+        // An import was never among the heap's blocks ([`Memory::add_import`]).
+        if !block.imported && block.pages.is_none() {
+            self.left_heap(block.type_index, block.size);
+        }
+        // Freed on the free thread where it may be: no import of the caller's memory (a view of
+        // the caller's pages is one), with nothing of the caller's to go after it
+        // (`free_thread.rs`).
+        let frees = match (block.imported, &after) {
+            (false, None) => self.frees.clone(),
+            _ => None,
+        };
+        let (heap, size) = (self.heap_of(block.type_index), block.size);
         let Some(parking) = &self.parking else {
             self.say_block("freed a block", &block);
+            let Some(frees) = frees else {
+                // SAFETY: the caller's.
+                unsafe { block.release(device) };
+                return after;
+            };
+            let Block {
+                memory,
+                addresses,
+                pages,
+                ..
+            } = block;
+            let posted = Posted {
+                memory,
+                addresses: addresses.map(|addresses| addresses.raw),
+                after: pages.map(|pages| Box::new(pages) as Box<dyn Send>),
+                heap,
+                size,
+            };
             // SAFETY: the caller's.
-            unsafe { block.release(device) };
-            return after;
+            return unsafe { frees.post_or_free(posted, device) };
         };
         self.say_block(
             "a block goes, freed once the batches in flight complete",
@@ -1538,9 +1651,22 @@ impl Memory {
             }
             parking.freed(1);
         }
-        // SAFETY: the caller's; every batch that may list it completed.
-        unsafe { release::object(device, memory) };
-        after
+        // Every batch that may list it completed.
+        let Some(frees) = frees else {
+            // SAFETY: the caller's; every batch that may list it completed.
+            unsafe { release::object(device, memory) };
+            return after;
+        };
+        let posted = Posted {
+            memory,
+            addresses: None,
+            after,
+            heap,
+            size,
+        };
+        // SAFETY: the caller's; its buffer of addresses went, and every batch that may list it
+        // completed.
+        unsafe { frees.post_or_free(posted, device) }
     }
 
     /// The blocks that wait whose values were reached, out of the list, to free with no lock held
@@ -2133,9 +2259,16 @@ fn place(
                 return Ok(placement);
             }
         }
-        // The type's kept empty blocks go before a block of it fails to be made.
+        // Frees posted still count against their heap: where the block would take its heap past
+        // the heap's size, those of the heap complete first (`free_thread.rs`).
+        let before = lock(memory).frees_before(type_index, block_size);
+        if let Some(frees) = before {
+            frees.wait();
+        }
+        // The type's kept empty blocks go, and the frees posted complete, before a block of it
+        // fails to be made.
         let made = match maker.make(device, type_index, block_size, addressed) {
-            Err(Error::OutOfMemory(_)) if lock(memory).release_kept(device, type_index) > 0 => {
+            Err(Error::OutOfMemory(_)) if make_room(memory, device, type_index) => {
                 maker.make(device, type_index, block_size, addressed)
             }
             made => made,
@@ -2153,6 +2286,21 @@ fn place(
         }
     }
     Err(failure)
+}
+
+/// Room for a block of memory type `type_index` that failed to be made for room ([`place`]): the
+/// type's kept empty blocks go, and every free posted completes (`free_thread.rs`), waited for
+/// with `memory`'s lock released. Whether any went.
+fn make_room(memory: &Mutex<Memory>, device: &ash::Device, type_index: u32) -> bool {
+    let (released, frees) = {
+        let mut memory = lock(memory);
+        (
+            memory.release_kept(device, type_index),
+            memory.free_thread(),
+        )
+    };
+    let waited = frees.is_some_and(|frees| frees.wait());
+    released > 0 || waited
 }
 
 /// Keep room for any pooled placement (half a block) in each pool the runtime's encodings and

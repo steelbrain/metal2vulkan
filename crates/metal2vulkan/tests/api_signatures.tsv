@@ -2626,6 +2626,7 @@ field	metal2vulkan-runtime::WorkCounts.first_work_order_wait_nanos	pub first_wor
 field	metal2vulkan-runtime::WorkCounts.first_work_order_waits	pub first_work_order_waits: u64
 field	metal2vulkan-runtime::WorkCounts.flights_followed	pub flights_followed: u64
 field	metal2vulkan-runtime::WorkCounts.fragment_shader_libraries_made	pub fragment_shader_libraries_made: u64
+field	metal2vulkan-runtime::WorkCounts.free_thread_queue_full	pub free_thread_queue_full: u64
 field	metal2vulkan-runtime::WorkCounts.freed_memory_parked	pub freed_memory_parked: u64
 field	metal2vulkan-runtime::WorkCounts.freed_memory_waiting	pub freed_memory_waiting: u64
 field	metal2vulkan-runtime::WorkCounts.fresh_page_buffers_made	pub fresh_page_buffers_made: u64
@@ -2779,7 +2780,9 @@ field	metal2vulkan-runtime::WorkCounts.live_tables_uploaded	pub live_tables_uplo
 field	metal2vulkan-runtime::WorkCounts.long_queue_settles	pub long_queue_settles: u64
 field	metal2vulkan-runtime::WorkCounts.memory_allocations_refused_at_limit	pub memory_allocations_refused_at_limit: u64
 field	metal2vulkan-runtime::WorkCounts.memory_blocks_live	pub memory_blocks_live: u64
+field	metal2vulkan-runtime::WorkCounts.memory_free_waits	pub memory_free_waits: u64
 field	metal2vulkan-runtime::WorkCounts.memory_frees	pub memory_frees: MemoryFrees
+field	metal2vulkan-runtime::WorkCounts.memory_frees_posted	pub memory_frees_posted: u64
 field	metal2vulkan-runtime::WorkCounts.merged_draw_commands	pub merged_draw_commands: u64
 field	metal2vulkan-runtime::WorkCounts.mipmap_first_levels_fetched	pub mipmap_first_levels_fetched: u64
 field	metal2vulkan-runtime::WorkCounts.mipmaps_filtered	pub mipmaps_filtered: u64
@@ -2885,6 +2888,7 @@ field	metal2vulkan-runtime::WorkCounts.second_twin_checks	pub second_twin_checks
 field	metal2vulkan-runtime::WorkCounts.second_twin_decodes	pub second_twin_decodes: u64
 field	metal2vulkan-runtime::WorkCounts.second_twins	pub second_twins: u64
 field	metal2vulkan-runtime::WorkCounts.segments_recorded_again	pub segments_recorded_again: u64
+field	metal2vulkan-runtime::WorkCounts.semaphore_destroys_posted	pub semaphore_destroys_posted: u64
 field	metal2vulkan-runtime::WorkCounts.set_zero_equal_shape_switches	pub set_zero_equal_shape_switches: u64
 field	metal2vulkan-runtime::WorkCounts.set_zero_sets_found	pub set_zero_sets_found: u64
 field	metal2vulkan-runtime::WorkCounts.set_zero_sets_reused	pub set_zero_sets_reused: u64

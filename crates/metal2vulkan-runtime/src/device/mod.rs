@@ -264,6 +264,8 @@ pub(super) struct DeviceShared {
     /// The device's live `VkDeviceMemory` allocations, held to `maxMemoryAllocationCount`
     /// (`allocations.rs`).
     pub(crate) allocations: crate::allocations::Registered,
+    /// The thread the blocks of its memory that go are freed on (`free_thread.rs`).
+    pub(crate) frees: Arc<crate::free_thread::FreeThread>,
     /// The immutable sampler sets of the variants' layouts, by their samplers
     /// (`pipeline/objects.rs`, `pipeline/content_keyed.rs`).
     pub(crate) sampler_sets: Mutex<crate::pipeline::objects::SamplerSets>,
@@ -848,6 +850,8 @@ impl Drop for DeviceShared {
         // freed, with no lock held.
         let after = lock(&self.memory).destroy(self.vk());
         drop(after);
+        // Every free posted to the free thread runs, and the thread ends (`free_thread.rs`).
+        self.frees.stop();
         // The device's record of pipeline makings goes, before `vkDestroyDevice`: in builds with
         // debug assertions, no making is in progress (`compiles.rs`).
         compiles::unregister(self.vk().handle());
@@ -1875,13 +1879,19 @@ impl Device {
                 }
             }
         }
+        // The blocks of its memory that go are freed on a thread of the device's, counted against
+        // its heaps and its allocations until they are (`free_thread.rs`).
+        let functions = Arc::new(functions);
+        let frees = Arc::new(crate::free_thread::FreeThread::new(Arc::clone(&functions)));
+        memory.free_on(Arc::clone(&frees));
+        (allocations.allocations).wait_for_frees_on(Arc::clone(&frees));
         let resource_ids: Arc<Mutex<ResourceIds>> = Arc::default();
         let sampler_ids = lock(&resource_ids).sampler_id_reads();
         let depth_ranges = DepthRanges::of(compile.profile());
         let shared = Arc::new(DeviceShared {
             instance,
             physical,
-            functions: Arc::new(functions),
+            functions,
             queue_family,
             round_robin: queues.len() - present_queues,
             queues: queues.into(),
@@ -1917,6 +1927,7 @@ impl Device {
             samplers: Mutex::default(),
             sampler_count: SamplerCount::new(limits.max_sampler_allocation_count),
             allocations,
+            frees,
             sampler_sets: Mutex::default(),
             heaps: Mutex::default(),
             function_tables: Mutex::default(),

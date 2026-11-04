@@ -242,6 +242,8 @@ mod pointer_residency;
 mod pool_room;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod pool_room_creations;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod posted_frees;
 mod private_properties;
 mod push_raw_writes;
 mod queue;

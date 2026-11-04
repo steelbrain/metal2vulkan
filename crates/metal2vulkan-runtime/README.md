@@ -485,7 +485,7 @@ message text. The ones a consumer meets most:
 | `NotImplemented(RuntimeGap)` | Plain Metal the runtime does not build yet. Metal takes the input, so a later build may too. |
 | `AppleOnly(AppleOnly)` | An Apple-private call off Metal's default with no Vulkan form, or whose meaning on Apple's GPU is unmeasured. Calls that state Metal's default are accepted. |
 | `Compile(...)` | A library or pipeline the translator refused, over budget or cancelled ([docs/API.md section 8](../../docs/API.md#8-refusals-requested-inputs-and-precision)). |
-| `OutOfMemory`, `DeviceLost`, `Vulkan`, `NoDevice` | The device's own failures. `NoDevice`: the loader opened but found no usable device. A device holding `maxMemoryAllocationCount` allocations live has the next refused (`Vulkan`, `VK_ERROR_TOO_MANY_OBJECTS`) without a call of the driver, counted in `WorkCounts::memory_allocations_refused_at_limit`. |
+| `OutOfMemory`, `DeviceLost`, `Vulkan`, `NoDevice` | The device's own failures. `NoDevice`: the loader opened but found no usable device. A device holding `maxMemoryAllocationCount` allocations live has the next refused (`Vulkan`, `VK_ERROR_TOO_MANY_OBJECTS`) without a call of the driver, counted in `WorkCounts::memory_allocations_refused_at_limit`, once the frees its releases posted to its free thread (which count until they run) completed. |
 | `LoaderNotFound(LoaderNotFound)` | The Vulkan loader did not open; `tried` lists each path. |
 | `DriverSetting(DriverSetting)` | A driver setting the runtime cannot run under, such as MoltenVK with `MVK_CONFIG_USE_METAL_ARGUMENT_BUFFERS` off. |
 | `WaitWouldDeadlock(DeadlockCause)` | A command buffer wait that would deadlock, refused at once instead of hanging. |

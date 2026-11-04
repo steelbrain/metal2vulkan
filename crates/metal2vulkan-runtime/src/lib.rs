@@ -110,6 +110,7 @@ mod fetch_reach;
 mod fill_value;
 mod fragment_imageblock;
 mod framebuffer_fetch;
+mod free_thread;
 mod freed_memory;
 mod fresh_pages;
 mod fresh_unwritten;

@@ -56,7 +56,6 @@ use super::device::{lock, Device};
 use super::error::{vulkan, Error, RuntimeGap};
 use super::event_timeline::{EventTimeline, Signal, WaitFor};
 use super::exit_guard::{self, Call};
-use crate::release;
 use ash::vk;
 use std::collections::VecDeque;
 use std::sync::{Arc, Condvar, Mutex};
@@ -165,9 +164,12 @@ impl Drop for EventShared {
         };
         let shared = self.device.shared();
         shared.interop.timeline_gone(self.semaphore);
+        // On the device's free thread (`free_thread.rs`).
         // SAFETY: every batch that signals or waits for the semaphore holds this event until it
-        // completed, so the semaphore is not in use.
-        unsafe { release::object(shared.vk(), self.semaphore) };
+        // completed, a reserved signal of the caller's until the signal landed, and the caller
+        // keeps it while its own submissions that use the semaphore run
+        // (`SharedEvent::vk_semaphore`), so the semaphore is not in use, nor will be.
+        unsafe { shared.frees.destroy_semaphore(self.semaphore, shared.vk()) };
     }
 }
 

@@ -3307,7 +3307,8 @@ pub struct CopySite {
 
 /// Every `VkDeviceMemory` block the runtime's own allocator freed, by what made it go
 /// (`memory.rs`'s `FreeCause`), counted where the block went: one `vkFreeMemory` each, whether
-/// the call ran there or once the batches in flight completed (`freed_memory.rs`). A driver that
+/// the call ran there, on the device's free thread (`free_thread.rs`) or once the batches in
+/// flight completed (`freed_memory.rs`). A driver that
 /// unmaps a buffer object's pages as it frees it charges that page-table update to the free, so
 /// these are the frees such a driver charges the runtime for, and the cause says which of them a
 /// change could remove. A field of `WorkCounts`, for the lanes: no Metal counterpart, not part of
@@ -3811,6 +3812,22 @@ pub struct WorkCounts {
     /// `vkFreeMemory` each, and the allocator's whole share of
     /// `object_churn.vk_memory_freed`.
     pub memory_frees: MemoryFrees,
+    /// Of `memory_frees`, the blocks whose `vkFreeMemory` was posted to the device's free thread,
+    /// off the thread that released them (`free_thread.rs`): every block that went but an import
+    /// of the caller's memory, one that waited for the batches in flight, and one that found the
+    /// thread's queue full (`free_thread_queue_full`).
+    pub memory_frees_posted: u64,
+    /// The destroys of events' timeline semaphores posted to the device's free thread, as each
+    /// event's last holder let go (`free_thread.rs`): every one but those that found its queue
+    /// full (`free_thread_queue_full`).
+    pub semaphore_destroys_posted: u64,
+    /// The blocks freed and the semaphores destroyed where they went as the free thread's queue
+    /// was full (`free_thread.rs`).
+    pub free_thread_queue_full: u64,
+    /// The waits for the frees posted to the free thread: an allocation at
+    /// `maxMemoryAllocationCount`, a block whose making would take its heap past the heap's size,
+    /// or one that failed for room (`free_thread.rs`).
+    pub memory_free_waits: u64,
     /// The `VkDeviceMemory` allocations the runtime refused without calling the driver, the
     /// device holding `maxMemoryAllocationCount` of them live (`allocations.rs`): its blocks, its
     /// imports of host memory and of dma-bufs, counted together.
@@ -5816,6 +5833,8 @@ impl Device {
                 memory.frees(),
             )
         };
+        let (frees_posted, semaphores_posted, frees_queue_full, free_waits) =
+            self.shared().frees.counts();
         let dirty = self.shared().dirty.tally();
         WorkCounts {
             command_pools_made: counters.command_pools_made.load(Ordering::Relaxed),
@@ -6374,6 +6393,10 @@ impl Device {
             memory_allocations_refused_at_limit: u64::from(
                 self.shared().allocations.allocations.refused(),
             ),
+            memory_frees_posted: frees_posted,
+            semaphore_destroys_posted: semaphores_posted,
+            free_thread_queue_full: frees_queue_full,
+            memory_free_waits: free_waits,
             host_ram_chunk_bytes: counters.host_ram_chunk_bytes.load(Ordering::Relaxed),
             host_ram_chunks_live: counters.host_ram_chunks_live.load(Ordering::Relaxed),
             chunk_bound_buffers_made: counters.chunk_bound_buffers_made.load(Ordering::Relaxed),
