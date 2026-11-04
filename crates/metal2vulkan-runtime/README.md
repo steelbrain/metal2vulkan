@@ -408,7 +408,7 @@ Calls Metal does not have, for a consumer that emulates a Metal device:
   check looks for never calls it, and runs on the GPU alone where it can.
 - `IndirectCommandBuffer::gpu_written` says whether a route that may write a buffer's records met
   it: its command buffer made it resident for writing (`ResourceUsage::WRITE`) and set, in any
-  encoder, a pipeline state whose functions may call an indirect-command operation
+  encoder, before or after, a pipeline state whose functions may call an indirect-command operation
   (`indirect_command_writes`, read from their AIR), or executed commands whose records may name
   one; or a blit copied or reset commands into it. Only then does an execution of it wait for the
   work before it and read its records on the host. A buffer made resident for writing beside

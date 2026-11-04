@@ -503,6 +503,7 @@ impl EncoderCore {
         // which this one's first uses of them take instead of copying the truth in again
         // (`shadow::ShadowCarry`).
         let carry = state.shadows_to_carry();
+        let routes = state.routes.carried();
         drop(state);
         command_buffer
             .device()
@@ -542,7 +543,7 @@ impl EncoderCore {
             id: CORES.fetch_add(1, Ordering::Relaxed),
             replaying: false,
             last_set_zero: LastSetZero::default(),
-            routes: Routes::default(),
+            routes,
             _not_sync: PhantomData,
         })
     }

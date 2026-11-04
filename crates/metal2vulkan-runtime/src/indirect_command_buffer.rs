@@ -2761,19 +2761,21 @@ impl IndirectCommandBuffer {
 
     /// Whether the GPU may have written the buffer's records: a runtime extension, with no Metal
     /// counterpart. It answers `true`, for good, from the first route on that may write them:
-    /// - the commit of a command buffer that made the buffer resident for writing
-    ///   (`use_resource` or `use_resources` with a usage holding `ResourceUsage::WRITE`, in any of
-    ///   its compute or render encoders) and that also set, in any of them, before or after, a
-    ///   pipeline state whose functions may call an indirect-command operation
+    /// - in a command buffer that made the buffer resident for writing (`use_resource` or
+    ///   `use_resources` with a usage holding `ResourceUsage::WRITE`, in any of its compute or
+    ///   render encoders) and also set, in any of them, before or after, a pipeline state whose
+    ///   functions may call an indirect-command operation
     ///   ([`ComputePipelineState::indirect_command_writes`] or
     ///   [`RenderPipelineState::indirect_command_writes`] not empty, read from their AIR), or
-    ///   executed indirect commands whose records may name such a state;
+    ///   executed indirect commands whose records may name such a state: at the call that
+    ///   completes the pair, or at the commit, which asks again of what the records name then;
     /// - after such a commit that found neither, the first CPU or GPU write that leaves the
     ///   records of a buffer it executed naming such a state;
     /// - a blit encoder's `copy_indirect_command_buffer` into it of a range that is not empty, or
     ///   its `reset_commands_in_buffer` of a range that is not empty, at the call.
     ///
-    /// It stays set though the work never runs (its command buffer fails). A buffer made resident
+    /// It stays set though the work never runs (its command buffer is never committed, or
+    /// fails). A buffer made resident
     /// for writing alongside functions that call no such operation answers `false`: they cannot
     /// reach its records (`WorkCounts::indirect_write_residencies_unmarked` counts each such
     /// commit's buffers).

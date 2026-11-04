@@ -3794,12 +3794,13 @@ each item named states the rule in full.
   command's `draw` of primitive type 7, 8 or 9 reads as one of points (0), and `command_type` of
   an indexed draw of type 9 reads as none; `commands` keeps the type the command draws.
 - **Whether the GPU may have written the records** (`IndirectCommandBuffer::gpu_written`, no Metal
-  counterpart) turns true at the first route that may write them: the commit of a command buffer
-  that made the buffer resident for writing and also set, in any of its encoders, a pipeline state
-  whose functions may call an indirect-command operation (`indirect_command_writes` not empty, read
-  from their AIR), or executed commands whose records may name such a state; a later write that
-  first leaves such a state in the records of a buffer that command buffer executed; a blit's copy
-  or reset into it. From then on an execution runs the records as they stand once the work before
+  counterpart) turns true at the first route that may write them: the call that completes, in one
+  command buffer, a write residency of the buffer and a pipeline state whose functions may call an
+  indirect-command operation (`indirect_command_writes` not empty, read from their AIR) set in any
+  of its encoders, before or after, or an execution of commands whose records may name such a
+  state (the commit asks again of what the records name then); a later write that first leaves
+  such a state in the records of a buffer the command buffer executed; a blit's copy or reset into
+  it. From then on an execution runs the records as they stand once the work before
   it completed. A buffer made resident for writing alongside functions that call no such operation
   stays unmarked, and its executions run the CPU's records as a buffer made resident for reading
   does (`WorkCounts::indirect_write_residencies_unmarked` counts each such commit's buffers).

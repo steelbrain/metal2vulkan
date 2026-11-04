@@ -11,8 +11,13 @@
 //!   buffer is written by the GPU where its command buffer also runs a function that may call one:
 //!   a state set in any of its encoders, before the residency or after it, whose functions'
 //!   `indirect_command_writes` is not empty; or an execution in any of them of indirect commands
-//!   whose records may name such a state (`WrittenCommands::named`). The commit decides from what
-//!   the records name then, and a buffer it left unmarked is marked later where an executed
+//!   whose records may name such a state (`WrittenCommands::named`).
+//! - **When.** As soon as both meet, at the call that completes the pair: an encoder opens with
+//!   what its command buffer's ended encoders met ([`Routes::carried`]), so a later encoder's
+//!   execution of the buffer is encoded as one of records the GPU may write, a part of its own
+//!   that waits for the writer (`encoder.rs`, `Segment::host`), as one after the residency in the
+//!   same encoder is. The commit decides again, from what the records name then, and a buffer it
+//!   left unmarked is marked later where an executed
 //!   buffer's records come to name such a state ([`Unmarked`]: a CPU edit after the commit, which
 //!   a host step recording the execution again reads, or a GPU writer of those records). A blit's
 //!   copy into the buffer and its reset of a range in it write the records themselves, and mark
@@ -125,32 +130,71 @@ pub(crate) struct Routes {
 }
 
 impl Routes {
-    /// The encoder made `icb` resident for writing.
+    /// What an encoder opens with: what its command buffer's ended encoders met (the module
+    /// docs), which its end joins again.
+    pub(crate) fn carried(&self) -> Routes {
+        Routes {
+            writable: self.writable.clone(),
+            writer: self.writer.clone(),
+            executed: self.executed.clone(),
+        }
+    }
+
+    /// The encoder made `icb` resident for writing: marked at once where a route that may write
+    /// its records met the command buffer.
     pub(crate) fn writable(&mut self, icb: &IndirectCommandBuffer) {
-        if !icb.gpu_written() && !self.writable.contains(icb) {
+        if icb.gpu_written() {
+            return;
+        }
+        if !self.writable.contains(icb) {
             self.writable.push(icb.clone());
+        }
+        if let Some(writer) = self.writer() {
+            icb.written_by_gpu(writer);
         }
     }
 
     /// The encoder set a state whose functions may call `writes`' operations, of the functions
-    /// `functions` names, asked for the first such state alone.
+    /// `functions` names, asked for the first such state alone: where they may call one, the
+    /// buffers made resident for writing are marked at once.
     pub(crate) fn state_set(
         &mut self,
         writes: CommandWrites,
         functions: impl FnOnce() -> Vec<String>,
     ) {
-        if self.writer.is_none() && !writes.is_empty() {
-            self.writer = Some(GpuWriter::State {
-                functions: functions(),
-                writes,
-            });
+        if writes.is_empty() {
+            return;
         }
+        let writer = self.writer.get_or_insert_with(|| GpuWriter::State {
+            functions: functions(),
+            writes,
+        });
+        mark(&self.writable, writer);
     }
 
-    /// The encoder executed commands of `icb` under the states their records name.
+    /// The encoder executed commands of `icb` under the states their records name: where they may
+    /// name one whose functions may write records, the buffers made resident for writing are
+    /// marked at once.
     pub(crate) fn executed(&mut self, icb: &IndirectCommandBuffer) {
         if !self.executed.contains(icb) {
             self.executed.push(icb.clone());
+        }
+        if !icb.written().named().writes.is_empty() {
+            mark(&self.writable, &GpuWriter::Execution);
+        }
+    }
+
+    /// The route that may write records met so far: the first state set, else an execution whose
+    /// records may name one.
+    fn writer(&self) -> Option<GpuWriter> {
+        let named = |icb: &IndirectCommandBuffer| !icb.written().named().writes.is_empty();
+        match &self.writer {
+            Some(writer) => Some(writer.clone()),
+            None => self
+                .executed
+                .iter()
+                .any(named)
+                .then_some(GpuWriter::Execution),
         }
     }
 
@@ -178,8 +222,19 @@ impl Routes {
 
     /// What the commit decides (the module docs): the buffers to mark, each with what met it, or
     /// those it leaves unmarked, which an executed buffer's records may yet mark ([`Unmarked`],
-    /// held by the command buffer until it completes; `None` where it executed none).
-    pub(crate) fn at_commit(&self) -> AtCommit {
+    /// held by the command buffer until it completes; `None` where it executed none). The routes
+    /// hold no buffer after it: a buffer the command buffer made resident or executed lives no
+    /// longer for them than for its work, which releases it as it completes.
+    pub(crate) fn at_commit(&mut self) -> AtCommit {
+        let decided = self.decide();
+        self.writable.clear();
+        self.writer = None;
+        self.executed.clear();
+        decided
+    }
+
+    /// [`at_commit`](Self::at_commit)'s decision.
+    fn decide(&self) -> AtCommit {
         let writable: Vec<IndirectCommandBuffer> = (self.writable.iter())
             .filter(|icb| !icb.gpu_written())
             .cloned()
@@ -200,6 +255,13 @@ impl Routes {
             true => AtCommit::Mark(unmarked.buffers.clone(), GpuWriter::Execution),
             false => AtCommit::Unmarked(count, (!self.executed.is_empty()).then_some(unmarked)),
         }
+    }
+}
+
+/// Mark each of `buffers` not yet marked, with `writer`.
+fn mark(buffers: &[IndirectCommandBuffer], writer: &GpuWriter) {
+    for icb in buffers.iter().filter(|icb| !icb.gpu_written()) {
+        icb.written_by_gpu(writer.clone());
     }
 }
 
