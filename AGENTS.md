@@ -155,7 +155,9 @@ has the commands.
 - Keep disk writes down (CONTRIBUTING.md, "Many trees on one machine"):
   - make worktrees with `scripts/lean-tree worktree` (the observations are clones) and source
     snapshots with `scripts/lean-tree snapshot` (no observations unless the tree runs validation);
-  - start each new target directory from a seed with `scripts/seed-target`;
+  - keep each worktree's targets inside it (`target/`, and `target/gpucfg` for `--cfg m2v_gpu`):
+    kache shares incremental state only between in-tree targets; start a new one from a seed with
+    `scripts/seed-target`;
   - builds are incremental, and compile through `scripts/rustc-wrapper` (kache where it is
     installed: a local cache that also carries incremental state between worktrees);
   - record Instruments traces through `scripts/xctrace-run`, and delete the `.trace` once

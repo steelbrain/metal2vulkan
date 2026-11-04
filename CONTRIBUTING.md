@@ -89,6 +89,12 @@ Builds are incremental. Every compile goes through `scripts/rustc-wrapper`, whic
 otherwise; kache restores matching compiles from its local store and imports incremental state
 between worktrees. `RUSTC_WRAPPER=` (empty) builds without it.
 
+Keep each worktree's target directories inside it: Cargo's default `target/`, and
+`target/gpucfg` for `RUSTFLAGS='--cfg m2v_gpu'` (a target of its own, since `RUSTFLAGS` is in the
+build fingerprint). kache imports incremental state only between targets inside their worktrees;
+a `CARGO_TARGET_DIR` outside the worktree neither gives nor takes it. `seed-target new` takes such
+a path too (`scripts/seed-target new WORKTREE/target SEED WORKTREE`).
+
 ## Where tests go
 
 - A test that names an internal item is a unit test of its crate: under `src/tests/` (or its
