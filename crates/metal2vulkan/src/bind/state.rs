@@ -760,9 +760,23 @@ impl BindState {
     /// Whether `shape` is this state's shape ([`has_shape`](Self::has_shape)), its used
     /// resources' shape taken from `made`, or made into it where it is needed first.
     fn is_shape(&self, shape: &BindShape, made: &mut Option<BTreeMap<u32, UsedShape>>) -> bool {
+        // Last: the one field compared through a shape made of it.
+        self.has_shape_beside_used(shape)
+            && match self.used_resources.is_empty() {
+                true => shape.used.is_empty(),
+                false => *made.get_or_insert_with(|| self.used_shape()) == shape.used,
+            }
+    }
+
+    /// Whether `shape` is this state's shape but for its used resources' ([`BindShape::used`]),
+    /// which are not looked at: every other field compared as [`has_shape`](Self::has_shape)
+    /// compares it. A consumer that keeps the shapes a state took while its used resources stayed
+    /// as they are finds the state's among them so: the answer costs the state's slots and
+    /// fields, not the resources it lists as used.
+    pub fn has_shape_beside_used(&self, shape: &BindShape) -> bool {
         let BindShape {
             stages,
-            used,
+            used: _,
             vertex_amplification,
             imageblock_size,
             render_target_array_length,
@@ -789,11 +803,9 @@ impl BindState {
         } = shape;
         let tables = self.stages.iter().filter(|(_, t)| !t.has_empty_shape());
         tables.clone().count() == stages.len()
-            && tables
-                .zip(stages)
-                .all(|((stage, t), (of, s))| {
-                    stage == of && t.has_shape(s, self.view_base_alignment)
-                })
+            && tables.zip(stages).all(|((stage, t), (of, s))| {
+                stage == of && t.has_shape(s, self.view_base_alignment)
+            })
             && self.vertex_amplification == *vertex_amplification
             && self.imageblock_size == *imageblock_size
             && self.render_target_array_length == *render_target_array_length
@@ -817,11 +829,6 @@ impl BindState {
             && self.primitive_id_indices == *primitive_id_indices
             && self.quad_primitive_ids == *quad_primitive_ids
             && self.private_list == *private_list
-            // Last: the one field compared through a shape made of it.
-            && match self.used_resources.is_empty() {
-                true => used.is_empty(),
-                false => *made.get_or_insert_with(|| self.used_shape()) == *used,
-            }
     }
 
     /// `used_resources` by token ([`BindShape::used`]): one token names one resource, and listing

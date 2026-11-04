@@ -25,10 +25,15 @@
 //!   shape, no slot was bound or unbound, and no other field's shape changed, the shape is the
 //!   kept one: a function of those alone, so a draw that changes only values the shape does not
 //!   read (a depth/stencil state, as draws between which the program sets another) finds it kept.
-//!   After any other change, and at an encoder's first draw, it is one the drawing state settled
-//!   lately where the state has it (`BindState::position_of_shape`, compared in place:
-//!   `GraphicsState::kept_shape`), so a pass that draws as the one before it makes none; else it
-//!   is made again, whole.
+//!   After any other change, it is one of the shapes the state took lately while it listed the
+//!   used resources it lists now, where it is among them ([`RecentShapes`]): their used
+//!   resources' shape is the state's, so the rest of each is compared alone
+//!   (`BindState::has_shape_beside_used`), and draws whose calls alternate a field the shape
+//!   reads (a draw's primitive type picks its viewport compensation and its band) find theirs
+//!   without listing the resources made resident. Else, and at an encoder's first draw, it is
+//!   one the drawing state settled lately where the state has it (`BindState::position_of_shape`,
+//!   compared in place: `GraphicsState::kept_shape`), so a pass that draws as the one before it
+//!   makes none; else it is made again, whole.
 //! - **One per pipeline state lately drawn.** Beside the state its last draw brought in place, the
 //!   encoder sets aside the states of up to [`SET_ASIDE`] pipeline states it drew before that one
 //!   ([`LiveBind::select`]), and a draw starts from its pipeline state's, where one is set aside:
@@ -99,6 +104,15 @@ const SPARE_LIVE_BINDS: usize = 4;
 /// the last draw's ([`LiveBind::select`]): a draw of one of more pipeline states in turn than
 /// this starts from the state set aside longest.
 const SET_ASIDE: usize = 7;
+
+/// The most shapes a state keeps of those it took lately ([`RecentShapes`]): one per primitive
+/// type a draw names (Metal's five, `MTLPrimitiveType`), the call's one input that varies from
+/// draw to draw with nothing bound in between and that a shape reads (its viewport compensation,
+/// its band, its provoking forms), so draws of one pipeline state that cycle through every type,
+/// as an indirect command buffer's draws may, each find theirs. Draws that alternate more shapes
+/// than this (a type in two index types, for a pipeline that writes the primitive ID) find the
+/// one kept longest replaced, and take the drawing state's settled shapes as before.
+const RECENT_SHAPES: usize = 5;
 
 /// Whether the changes brought into a kept bind state may have changed its shape.
 #[derive(Clone, Copy, Debug, Default)]
@@ -185,6 +199,8 @@ pub(super) struct LiveBind {
     pub(super) state: Box<BindState>,
     /// The state's shape, `None` where a change may have changed it.
     shape: Option<Arc<BindShape>>,
+    /// The shapes the state took since it last listed other used resources ([`RecentShapes`]).
+    pub(super) recent: RecentShapes,
     /// The count of the device's sampler IDs' slots' changes (`Device::sampler_slots_changed`)
     /// at which the state's argument samplers are every live sampler state: while the count
     /// holds, a draw lists them as they are, without taking the states again
@@ -234,12 +250,47 @@ pub(super) struct LiveBind {
     pub(super) shadows: ResidentShadows,
 }
 
+/// The shapes a state took since it last listed other used resources (`BindState::used_resources`),
+/// the latest last, at most [`RECENT_SHAPES`]: each was the state's shape while it listed the used
+/// resources it lists now, so the used resources' shape of each is the state's, and a state has
+/// one of them as its shape where the rest of it matches (`BindState::has_shape_beside_used`).
+/// Forgotten where the state lists other used resources (`RenderCommandEncoder::
+/// refresh_bind_state`).
+#[derive(Default)]
+pub(super) struct RecentShapes(Vec<Arc<BindShape>>);
+
+impl RecentShapes {
+    /// The used resources the state lists changed: none of the shapes may be its shape.
+    pub(super) fn forget(&mut self) {
+        self.0.clear();
+    }
+
+    /// The one of them that is `state`'s shape, where one is.
+    fn find(&self, state: &BindState) -> Option<Arc<BindShape>> {
+        let found = self.0.iter().rev();
+        found
+            .find(|shape| state.has_shape_beside_used(shape))
+            .cloned()
+    }
+
+    /// Keep `shape`, the state's now, in place of the one kept longest where they are full.
+    fn keep(&mut self, shape: &Arc<BindShape>) {
+        if let Some(at) = self.0.iter().position(|kept| Arc::ptr_eq(kept, shape)) {
+            self.0.remove(at);
+        } else if self.0.len() == RECENT_SHAPES {
+            self.0.remove(0);
+        }
+        self.0.push(Arc::clone(shape));
+    }
+}
+
 /// A bind state a [`LiveBind`] set aside, with its shape, its listing's count and what its stage
 /// tables were read from, as [`LiveBind`] holds them for its last draw's state.
 #[derive(Default)]
 struct SetAside {
     state: Box<BindState>,
     shape: Option<Arc<BindShape>>,
+    recent: RecentShapes,
     listed_at: Option<u64>,
     read_from: ReadFrom,
     settled: Option<SettledHere>,
@@ -399,6 +450,7 @@ impl LiveBind {
         let aside = &mut self.set_aside[at];
         std::mem::swap(&mut self.state, &mut aside.state);
         std::mem::swap(&mut self.shape, &mut aside.shape);
+        std::mem::swap(&mut self.recent, &mut aside.recent);
         std::mem::swap(&mut self.listed_at, &mut aside.listed_at);
         std::mem::swap(&mut self.read_from, &mut aside.read_from);
         std::mem::swap(&mut self.settled, &mut aside.settled);
@@ -442,8 +494,9 @@ impl LiveBind {
         }
     }
 
-    /// The state's shape: the kept one, else the one `found` finds of the state, else made
-    /// again (counted in `counts`, found or made).
+    /// The state's shape: the kept one, else the one of those it took lately that is its shape
+    /// ([`RecentShapes`]), else the one `found` finds of the state, else made again (counted in
+    /// `counts`, found or made).
     pub(super) fn shape(
         &mut self,
         counts: &Counters,
@@ -455,6 +508,14 @@ impl LiveBind {
                 "a kept bind shape that is not its state's"
             );
             return Arc::clone(shape);
+        }
+        if let Some(shape) = self.recent.find(&self.state) {
+            debug_assert!(
+                *shape == self.state.shape(),
+                "a recent bind shape that is not its state's"
+            );
+            self.shape = Some(Arc::clone(&shape));
+            return shape;
         }
         let shape = match found(&self.state) {
             Some(shape) => {
@@ -470,6 +531,7 @@ impl LiveBind {
                 Arc::new(self.state.shape())
             }
         };
+        self.recent.keep(&shape);
         self.shape = Some(Arc::clone(&shape));
         shape
     }

@@ -8449,6 +8449,7 @@ method	metal2vulkan::bind::AstcDecode::texel_format	pub fn texel_format(self, te
 method	metal2vulkan::bind::AstcDecode::texel_pixel_format	pub fn texel_pixel_format(self, texels: AstcTexels) -> PixelFormat
 method	metal2vulkan::bind::BindShape::for_plan	pub fn for_plan(&self, dependencies: &[RuntimeDependency]) -> Cow<'_, BindShape>
 method	metal2vulkan::bind::BindState::has_shape	pub fn has_shape(&self, shape: &BindShape) -> bool
+method	metal2vulkan::bind::BindState::has_shape_beside_used	pub fn has_shape_beside_used(&self, shape: &BindShape) -> bool
 method	metal2vulkan::bind::BindState::position_of_shape	pub fn position_of_shape<'s>(&self, shapes: impl IntoIterator<Item = &'s BindShape>) -> Option<usize>
 method	metal2vulkan::bind::BindState::shape	pub fn shape(&self) -> BindShape
 method	metal2vulkan::bind::BindState::view_base_alignment_of	pub fn view_base_alignment_of(limits: &Limits) -> u32

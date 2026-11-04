@@ -6187,7 +6187,12 @@ impl RenderLowering {
             "a draw's kept used resources that are not its residency's"
         );
         if !kept {
-            reshape.field(&mut state.used_resources, self.residency.used_resources());
+            let used = self.residency.used_resources();
+            // The shapes it took lately listed the used resources it held (`live_bind.rs`).
+            if state.used_resources != used {
+                live.recent.forget();
+            }
+            reshape.field(&mut state.used_resources, used);
         }
         // Listed by token (`Residency::used_resources`); the commit points every root table at
         // the command buffer's resident set, which holds them (`State::root_table`).

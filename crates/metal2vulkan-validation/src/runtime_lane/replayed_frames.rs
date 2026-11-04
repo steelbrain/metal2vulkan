@@ -20,8 +20,11 @@
 //! count. [`FRAMES_VAR`] sets the frames (4 by default), and [`RESIDENT_VAR`] how many buffers
 //! and textures, one of each, the execution's pass makes resident besides, as a page's bind
 //! groups do (none by default): the step's time should grow with the records alone, not with
-//! them times the resident resources. It is ignored by default: run it by name with
-//! `--run-ignored all`.
+//! them times the resident resources. Each warm frame makes or finds few of its draws' bind
+//! shapes, at most [`WARM_SHAPES`] (`WorkCounts::draw_shapes_found` and `draw_shapes_made`): the
+//! replayed draws alternate primitive types, and each type's shape is one the state took lately
+//! (`live_bind::RecentShapes`), found without listing the resident resources again. It is
+//! ignored by default: run it by name with `--run-ignored all`.
 //!
 //! [`a_replayed_execution_holds_only_what_shares_its_resources`] checks what the frame holds of
 //! other queues' work while its host step is not recorded: a later commit on another queue waits
@@ -64,6 +67,11 @@ const CHECKED_DRAWS: u32 = 256;
 
 /// The target's width and height.
 const SIDE: u64 = 64;
+
+/// The most bind shapes a warm frame makes or finds among those its drawing states settled: a
+/// few for each pass (the encoding pass's one state, the execution's five primitive types), not
+/// one per replayed draw.
+const WARM_SHAPES: u64 = 32;
 
 /// The fixture's states and buffers on a device.
 struct Page {
@@ -242,7 +250,7 @@ fn split(before: &WorkCounts, after: &WorkCounts) -> String {
     format!(
         "host_steps {} host_step_ms {:.1} render_pipelines_made_ms {:.1} \
          compute_pipelines_made_ms {:.1} variant_pipelines_made {} records_read {} \
-         heads_held_for_host_steps {} heads_held_for_earlier_commits {}",
+         heads_held_for_host_steps {} heads_held_for_earlier_commits {} shapes_found_or_made {}",
         after.host_steps_recorded - before.host_steps_recorded,
         ms(after.host_step_nanos - before.host_step_nanos),
         ms(after.render_pipeline_create_nanos - before.render_pipeline_create_nanos),
@@ -251,7 +259,15 @@ fn split(before: &WorkCounts, after: &WorkCounts) -> String {
         after.indirect_records_read - before.indirect_records_read,
         after.heads_held_for_host_steps - before.heads_held_for_host_steps,
         after.heads_held_for_earlier_commits - before.heads_held_for_earlier_commits,
+        shapes(before, after),
     )
+}
+
+/// The bind shapes draws made or found among those their drawing states settled between `before`
+/// and `after`.
+fn shapes(before: &WorkCounts, after: &WorkCounts) -> u64 {
+    (after.draw_shapes_found + after.draw_shapes_made)
+        - (before.draw_shapes_found + before.draw_shapes_made)
 }
 
 #[test]
@@ -330,6 +346,11 @@ fn replayed_frames() {
             stood.count,
             stood.largest.as_secs_f64() * 1e3,
             stood.total.as_secs_f64() * 1e3 / stood.count.max(1) as f64,
+        );
+        let shapes = shapes(&before, &after);
+        assert!(
+            frame == 0 || shapes <= WARM_SHAPES,
+            "warm frame {frame} on {name} made or found {shapes} bind shapes"
         );
     }
 }
