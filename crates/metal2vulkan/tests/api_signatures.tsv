@@ -2497,6 +2497,7 @@ field	metal2vulkan-runtime::WorkCounts.batches_with_two_or_three_pending	pub bat
 field	metal2vulkan-runtime::WorkCounts.bind_views_worked_out	pub bind_views_worked_out: u64
 field	metal2vulkan-runtime::WorkCounts.block_decode_passes	pub block_decode_passes: u64
 field	metal2vulkan-runtime::WorkCounts.bound_notices_made	pub bound_notices_made: u64
+field	metal2vulkan-runtime::WorkCounts.bound_offsets_moved	pub bound_offsets_moved: u64
 field	metal2vulkan-runtime::WorkCounts.bounded_run_draws	pub bounded_run_draws: u64
 field	metal2vulkan-runtime::WorkCounts.bounded_shadow_copies	pub bounded_shadow_copies: u64
 field	metal2vulkan-runtime::WorkCounts.calibration_deviation_most	pub calibration_deviation_most: u64

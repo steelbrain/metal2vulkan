@@ -495,6 +495,7 @@ struct DrawCounters {
     draws_rebound: AtomicU64,
     resident_uses_made: AtomicU64,
     argument_tables_held_at_bind: AtomicU64,
+    bound_offsets_moved: AtomicU64,
 }
 
 /// How a render pass took a shadowed texture as a color attachment
@@ -2005,6 +2006,14 @@ impl Counters {
         self.draws
             .mine()
             .add(|counts| &counts.argument_tables_held_at_bind, 1);
+    }
+
+    /// A stage table read in part brought in a buffer slot whose buffer's offset alone moved,
+    /// looking at no buffer (`ArgumentTable::refresh_offset`).
+    pub(crate) fn bound_offset_moved(&self) {
+        self.draws
+            .mine()
+            .add(|counts| &counts.bound_offsets_moved, 1);
     }
 
     /// A command retained what an argument table binds (`ArgumentTable::retain`), taking hold of
@@ -4748,6 +4757,11 @@ pub struct WorkCounts {
     /// (`retained::HeldBy`). A retain of a table a call bound another object into since, or of a
     /// table's copy, or of one another encoder retained last, looks at every object it binds.
     pub argument_tables_held_at_bind: u64,
+    /// Buffer slots a stage table read in part brought in where every call since its last read
+    /// moved the offset (or attribute stride) of the buffer bound there alone: the binding kept,
+    /// its offset and stride the table's, and the buffer itself not looked at (no lock of a
+    /// no-copy buffer's pages taken).
+    pub bound_offsets_moved: u64,
     /// Draws that looked their `VkPipeline` up in their variant's memo by key: none for a draw
     /// whose key is one of those its pipeline state's last draws found made, while that entry
     /// stays.
@@ -6181,6 +6195,7 @@ impl Device {
             argument_tables_retained: counters.argument_tables_retained.load(Ordering::Relaxed),
             argument_objects_retained: counters.argument_objects_retained.load(Ordering::Relaxed),
             argument_tables_held_at_bind: draws(|counts| &counts.argument_tables_held_at_bind),
+            bound_offsets_moved: draws(|counts| &counts.bound_offsets_moved),
             graphics_pipelines_looked_up: counters
                 .graphics_pipelines_looked_up
                 .load(Ordering::Relaxed),

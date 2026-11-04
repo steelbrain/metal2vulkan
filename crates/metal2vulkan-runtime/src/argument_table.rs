@@ -226,13 +226,31 @@ const CHANGES_KEPT: usize = 16;
 #[derive(Default)]
 struct Changes {
     since: Option<Stamp>,
-    slots: Vec<(Stamp, SlotClass, u32)>,
+    slots: Vec<Changed>,
+}
+
+/// A slot a call changed, with the stamp the table took at the call: of `class` at `index`, and
+/// whether the call kept the buffer bound there, moving its offset or attribute stride alone
+/// (`offset`).
+#[derive(Clone, Copy)]
+struct Changed {
+    stamp: Stamp,
+    class: SlotClass,
+    index: u32,
+    offset: bool,
 }
 
 impl Changes {
     /// Note a call that took the table from `before` to `after`, changing the slots of `class`
-    /// at `indices`: of more slots than are kept, it leaves none to read from.
-    fn note(&mut self, (before, after): (Stamp, Stamp), class: SlotClass, indices: Range<u32>) {
+    /// at `indices`, their offsets alone where `offset` ([`Changed`]): of more slots than are
+    /// kept, it leaves none to read from.
+    fn note(
+        &mut self,
+        (before, after): (Stamp, Stamp),
+        class: SlotClass,
+        indices: Range<u32>,
+        offset: bool,
+    ) {
         if indices.len() > CHANGES_KEPT {
             self.since = None;
             self.slots.clear();
@@ -241,28 +259,30 @@ impl Changes {
         if self.slots.is_empty() {
             self.since = Some(before);
         }
-        self.slots
-            .extend(indices.map(|index| (after, class, index)));
+        self.slots.extend(indices.map(|index| Changed {
+            stamp: after,
+            class,
+            index,
+            offset,
+        }));
         // The oldest calls go whole: a reader under the stamp one of them took saw its slots.
         while self.slots.len() > CHANGES_KEPT {
-            let oldest = self.slots[0].0;
-            let gone = self.slots.partition_point(|&(stamp, ..)| stamp == oldest);
+            let oldest = self.slots[0].stamp;
+            let gone = self
+                .slots
+                .partition_point(|changed| changed.stamp == oldest);
             self.slots.drain(..gone);
             self.since = Some(oldest);
         }
     }
 
     /// The slots changed since the table's stamp was `read`, where it keeps them.
-    fn since(&self, read: Stamp) -> Option<impl Iterator<Item = (SlotClass, u32)> + '_> {
+    fn since(&self, read: Stamp) -> Option<impl Iterator<Item = Changed> + Clone + '_> {
         let from = match self.since == Some(read) {
             true => 0,
-            false => self.slots.iter().rposition(|&(stamp, ..)| stamp == read)? + 1,
+            false => (self.slots.iter()).rposition(|changed| changed.stamp == read)? + 1,
         };
-        Some(
-            self.slots[from..]
-                .iter()
-                .map(|&(_, class, index)| (class, index)),
-        )
+        Some(self.slots[from..].iter().copied())
     }
 }
 
@@ -567,9 +587,24 @@ impl ArgumentTable {
     /// may have changed nothing, which a reader then reads again): a fresh stamp, and the slots
     /// noted ([`Changes`]).
     fn changed(&mut self, class: SlotClass, indices: Range<u32>) {
+        self.changed_as(class, indices, false);
+    }
+
+    /// [`changed`](Self::changed), the call's change of the buffer slots at `indices` their
+    /// offsets alone where `offset`: each binds the buffer it bound, and keeps binding it
+    /// whatever the call's checks answer ([`Changed`]).
+    fn changed_as(&mut self, class: SlotClass, indices: Range<u32>, offset: bool) {
         let before = self.stamp;
         self.stamp = Stamp::fresh();
-        self.changes.note((before, self.stamp), class, indices);
+        self.changes
+            .note((before, self.stamp), class, indices, offset);
+    }
+
+    /// Whether buffer slot `index` binds `buffer` now: a buffer's offset moved there is the
+    /// change of an offset alone ([`changed_as`](Self::changed_as)).
+    fn binds_buffer(&self, index: u32, buffer: &Buffer) -> bool {
+        (self.buffers.get(&index)).is_some_and(|(bound, _)| bound == buffer)
+            && !self.function_tables.contains_key(&index)
     }
 
     /// A call through `core` binds `object`: where `core` does not hold it (from a retain of its
@@ -634,7 +669,8 @@ impl ArgumentTable {
         stride: u64,
         index: u32,
     ) -> Result<(), Error> {
-        self.changed(SlotClass::Buffer, index..index.saturating_add(1));
+        let same = buffer.is_some_and(|buffer| self.binds_buffer(index, buffer));
+        self.changed_as(SlotClass::Buffer, index..index.saturating_add(1), same);
         check_index(call, index, BUFFER_SLOTS)?;
         let stride = attribute_stride(stride);
         if let Some(buffer) = buffer {
@@ -742,7 +778,12 @@ impl ArgumentTable {
         stride: u64,
         index: u32,
     ) -> Result<(), Error> {
-        self.changed(SlotClass::Buffer, index..index.saturating_add(1));
+        // A buffer bound there keeps being bound, at another offset; inline bytes and a
+        // visible-function table are another change.
+        let same = !self.bytes.contains_key(&index)
+            && !self.function_tables.contains_key(&index)
+            && self.buffers.contains_key(&index);
+        self.changed_as(SlotClass::Buffer, index..index.saturating_add(1), same);
         check_index(call, index, BUFFER_SLOTS)?;
         let stride = attribute_stride(stride);
         if let Some(len) = self.bytes.get(&index).map(|bytes| bytes.len) {
@@ -1283,7 +1324,11 @@ impl ArgumentTable {
         &self,
         read: Stamp,
     ) -> Option<impl Iterator<Item = (SlotClass, u32)> + '_> {
-        self.changes.since(read)
+        Some(
+            self.changes
+                .since(read)?
+                .map(|changed| (changed.class, changed.index)),
+        )
     }
 
     /// [`refresh_reading`](Self::refresh_reading) of `kept`, read last under the stamp `read`
@@ -1306,8 +1351,24 @@ impl ArgumentTable {
             return false;
         }
         let alignment = views.alignment;
-        for (class, index) in changed {
+        // The buffer slots some call since changed otherwise than by its offset (indices below
+        // `BUFFER_SLOTS`): each is brought in whole.
+        let bit = |index: u32| 1u64.checked_shl(index).unwrap_or(0);
+        let whole = (changed.clone())
+            .filter(|c| c.class == SlotClass::Buffer && !c.offset)
+            .fold(0u64, |whole, c| whole | bit(c.index));
+        for Changed {
+            class,
+            index,
+            offset,
+            ..
+        } in changed
+        {
             match class {
+                SlotClass::Buffer if offset && bit(index) != 0 && whole & bit(index) == 0 => {
+                    let read = (stage, interface);
+                    self.refresh_offset((kept, index), read, alignment, reshape)
+                }
                 SlotClass::Buffer => {
                     self.refresh_buffer((kept, index), (stage, interface), alignment, reshape)
                 }
@@ -1350,6 +1411,58 @@ impl ArgumentTable {
         #[cfg(debug_assertions)]
         self.check_reading(kept, (stage, interface), (maps, views));
         true
+    }
+
+    /// Buffer slot `index` of `kept` brought in place where every call since `kept` was read moved
+    /// the offset (or attribute stride) of the buffer it bound alone ([`Changed`]): `kept`'s
+    /// binding of the same buffer, its offset and stride the table's now. The buffer's space and
+    /// addresses are as `kept` read them, as no no-copy buffer moved since (the callers' reads
+    /// stand only while none did: `live_bind::ReadFrom`), so the buffer is not looked at
+    /// (`WorkCounts::bound_offsets_moved`; checked against [`refresh_buffer`](Self::refresh_buffer)'s
+    /// binding in builds with debug assertions). Else as `refresh_buffer`.
+    fn refresh_offset(
+        &self,
+        (kept, index): (&mut StageTable, u32),
+        read: (Stage, &PipelineInterface),
+        alignment: u32,
+        reshape: &mut Reshape,
+    ) {
+        let held = match (self.buffers.get(&index), kept.buffers.get(&index)) {
+            (
+                Some((buffer, offset)),
+                Some(&BoundBuffer::Buffer {
+                    length,
+                    gpu_address,
+                    device_address,
+                    ..
+                }),
+            ) if !self.reads_unbound(read, index) && *offset <= buffer.length() => {
+                Some((buffer, *offset, (length, gpu_address, device_address)))
+            }
+            _ => None,
+        };
+        let Some((buffer, offset, (length, gpu_address, device_address))) = held else {
+            return self.refresh_buffer((kept, index), read, alignment, reshape);
+        };
+        let stride = self.attribute_strides.get(&index).copied();
+        // The space's start before the buffer's byte 0, as `bound_buffer` states it.
+        let base = length - buffer.length();
+        let bound = BoundBuffer::Buffer {
+            length,
+            offset: base + offset,
+            gpu_address,
+            device_address,
+            attribute_stride: stride,
+        };
+        #[cfg(debug_assertions)]
+        assert_eq!(
+            Some(bound),
+            bound_buffer(buffer, offset, stride),
+            "a buffer slot whose offset alone moved brought in otherwise than read whole"
+        );
+        buffer.device().shared().counts.bound_offset_moved();
+        let a = kept.class_alignment(index, alignment);
+        reshape.slot(&mut kept.buffers, index, bound, |b| b.shape(a));
     }
 
     /// Buffer slot `index` of `kept` brought in place as [`refresh_reading`](Self::refresh_reading)
