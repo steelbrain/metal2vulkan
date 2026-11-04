@@ -444,20 +444,32 @@ pages then takes a kernel mapping per page) can give the device the guest's RAM 
   `Problem::HostRam`).
 - One run inside one chunk: the device imports the RAM by host pointer in chunks of 64 MiB, never
   across a range's end, each once (`WorkCounts::host_ram_chunks_imported`, `host_ram_chunk_bytes`,
-  `host_ram_chunks_live`). From `use_host_ram` on, a thread of the device's imports them one after
-  another, ahead of the objects over them (`host_ram_chunks_imported_ahead`): an object over a
-  chunk it has not reached imports that chunk as it is made, on its own thread, one over the chunk
-  it is importing waits for that import, and once it is done no making waits for one. So the whole
-  RAM is faulted in and pinned from soon after `use_host_ram`, where a chunk's pages were faulted
-  in only when an object over it was first made (on an RTX 5080 laptop with no other load: 7.5 ms
-  a chunk of fresh `memfd` RAM under `MADV_HUGEPAGE`, 1.5 to 8.4 s for 16 GiB, the most where
-  the kernel compacts memory for the huge pages). The thread is paced: it runs as the system's batch
-  work (`SCHED_BATCH` on Linux, the utility class on Apple's systems), never at a weight the
-  system starves, since it holds a chunk's lock and, as it pins, the process's memory map lock; it
-  yields between chunks; and on Linux it faults each chunk's pages in 2 MiB at a time
-  (`MADV_POPULATE_WRITE`) before the import pins them. On that laptop with every CPU busy,
-  another thread's `mmap` waited at most 7.7 ms (in 99 of 100 at most 1.6 ms) during the import
-  of 16 GiB, which took 3.7 to 6.7 s. Each import is made with the device's memory lock released. The thread stops where one
+  `host_ram_chunks_live`). From `use_host_ram` on, a thread of the device's imports chunks ahead
+  of the objects over them (`host_ram_chunks_imported_ahead`): a window of chunks past the one an
+  object last took, one chunk after a take outside the window (and the RAM's first chunk before
+  any take), four once a take lands inside it. So a run of objects over consecutive RAM, as a
+  VMM's 2 MiB heaps over fresh guest RAM are, finds its next chunks imported while it stays
+  inside the window; an object over a chunk outside it imports that chunk as it is made, on its
+  own thread, and one over the chunk the thread is importing waits for that import. A burst of
+  objects that runs more than four chunks past the last one taken before the thread imports them
+  waits at each chunk past the window, one chunk's fault-in each. The thread faults in no more
+  than the window past the objects, and never goes back for a chunk a take skipped. What an
+  import costs is faulting in the chunk's fresh pages, not the pin. On an RTX 5080 laptop
+  (NVIDIA 615.71.09, Linux 7.2), the import of 64 MiB already resident took 2 to 3 ms; the
+  fault-in of 64 MiB of fresh `memfd` RAM under `MADV_HUGEPAGE` took 7.5 ms where free memory
+  held whole huge pages, and 45 to 70 ms (at worst 0.34 s) with 2 to 3 GB free and the page
+  cache filling the rest of memory, where the kernel reclaims and compacts memory for each huge
+  page. There, 16 GiB imported whole ahead took 40 to 57 s, during
+  which another thread's `mmap` waited up to 1.2 s for the memory map lock the fault-in held, and
+  every process on the host stalled on memory for 6.6 to 9.6 s (pressure stall information).
+  With the window, 2 GiB of 2 MiB heaps made in bursts of four chunks had 36 chunks faulted in
+  ahead, no heap after the first two imported its own chunk, and the host stalled on memory for
+  under 1 s; 16 heaps over scattered chunks had one chunk each faulted in ahead. The thread is
+  paced: it runs as the system's batch work (`SCHED_BATCH` on Linux, the utility class on
+  Apple's systems), never at a weight the system starves, since it holds a chunk's lock and, as
+  it pins, the process's memory map lock; it yields between chunks; and on Linux it faults each
+  chunk's pages in 2 MiB at a time (`MADV_POPULATE_WRITE`) before the import pins them. Each
+  import is made with the device's memory lock released. The thread stops where one
   more import would leave the device less than a quarter of its `maxMemoryAllocationCount`, the
   rest left to the objects over them; once the device's allocations come within that quarter, the
   chunks it imported that no object took are freed again (`host_ram_chunks_given_back`). Only

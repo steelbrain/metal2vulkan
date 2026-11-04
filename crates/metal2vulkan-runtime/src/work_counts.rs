@@ -5079,11 +5079,12 @@ pub struct WorkCounts {
     pub copied_dropped_bytes: u64,
     /// The chunks of guest RAM the device imported (`Device::use_host_ram`): 64 MiB of a RAM's
     /// range each (its last fewer), each once, by the device's own thread ahead of the objects
-    /// over it or by the first object made over it before that thread reached it.
+    /// over it or by the first object made over it where that thread had not imported it.
     pub host_ram_chunks_imported: u64,
     /// Of `host_ram_chunks_imported`, those the device's own thread imported ahead of every
-    /// object over them, so that no making waited for their import. The thread imports while the
-    /// device's allocations leave a quarter of its `maxMemoryAllocationCount`, and stops there.
+    /// object over them, so that no making waited for their import: the few chunks past the one
+    /// an object last took. The thread imports while the device's allocations leave a quarter of
+    /// its `maxMemoryAllocationCount`, and stops there.
     pub host_ram_chunks_imported_ahead: u64,
     /// Of `host_ram_chunks_imported_ahead`, those freed again before any object took them, as the
     /// device's other allocations came within that quarter of its limit, so that they are never
