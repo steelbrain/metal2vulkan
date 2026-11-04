@@ -298,3 +298,77 @@ fn draws_that_move_the_second_buffer_s_offset_alone_are_rebound() {
         "no draw rebound at the colours' slot alone"
     );
 }
+
+/// Draws of a render state in an encoder that starts from the bind state an encoder of another
+/// state of the same functions left (`SpareLiveBinds`), whose kept shape that other state's draws
+/// made, are rebound as well (`WorkCounts::draws_rebound`): the state's settle of an equal shape
+/// answers the encoder's very shape (`GraphicsState::settle_shape`), which the encoder finds its
+/// settle by at each draw. Two encoders of the two states open at once on a new device each make
+/// a shape of their own and settle it; the second ends last, so the encoders opened next start
+/// from its bind state.
+#[test]
+fn draws_from_another_state_s_spare_bind_state_are_rebound() {
+    let scratch = Scratch::new("set-zero-spare-bind");
+    let device = device(&scratch.0);
+    let (first, shared) = state_and_buffers(&device);
+    let (second, _) = state_and_buffers(&device);
+    let draws = |encoder: &mut RenderCommandEncoder| {
+        encoder.set_vertex_buffer(Some(&shared.0), 0, 0).unwrap();
+        encoder.set_vertex_buffer(Some(&shared.1), 0, 1).unwrap();
+        for at in 0..DRAWS {
+            if at > 0 {
+                encoder
+                    .set_vertex_buffer_offset(COLOR_BYTES * at, 1)
+                    .unwrap();
+            }
+            rectangle(encoder);
+        }
+    };
+    let target = || {
+        let mut descriptor =
+            TextureDescriptor::texture_2d(PixelFormat::RGBA8Unorm, SIDE, SIDE, false);
+        descriptor.usage = TextureUsage::RENDER_TARGET;
+        descriptor.resource_options = ResourceOptions::private();
+        device.new_texture(&descriptor).unwrap()
+    };
+    let queue = device.new_command_queue().unwrap();
+    let (targets, command_buffers) = (
+        [target(), target()],
+        [(); 2].map(|()| queue.command_buffer().unwrap()),
+    );
+    let mut encoders: Vec<RenderCommandEncoder> = (command_buffers.iter().zip(&targets))
+        .map(|(command_buffer, target)| command_buffer.render_command_encoder(&pass(target)))
+        .map(Result::unwrap)
+        .collect();
+    for (encoder, state) in encoders.iter_mut().zip([&first, &second]) {
+        encoder.set_render_pipeline_state(state).unwrap();
+        draws(encoder);
+    }
+    for encoder in encoders {
+        encoder.end_encoding().unwrap();
+    }
+    for command_buffer in &command_buffers {
+        command_buffer.commit().unwrap();
+    }
+    for command_buffer in &command_buffers {
+        command_buffer.wait_until_completed_for(WAIT).unwrap();
+        assert_eq!(command_buffer.status(), CommandBufferStatus::Completed);
+    }
+    // The first state's pipelines made, its encoders starting from the second's bind state.
+    warm(&device, |encoder| {
+        encoder.set_render_pipeline_state(&first).unwrap();
+        draws(encoder);
+    });
+    let ran = run(&device, &first, draws);
+    let expected: Vec<u32> = (0..SIDE * SIDE)
+        .map(|texel| match texel % SIDE {
+            0 => u32::from_le_bytes(codes(DRAWS - 1)),
+            _ => 0,
+        })
+        .collect();
+    assert_eq!(ran.words, expected);
+    assert!(
+        ran.rebound > 0,
+        "no draw rebound from the bind state another state's encoder left"
+    );
+}

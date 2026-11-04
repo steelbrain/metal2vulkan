@@ -46,7 +46,11 @@
 //! - **Kept from one encoder to the next.** An encoder that ends gives its state, with its shape,
 //!   to its device ([`SpareLiveBinds`]), and the next render encoder opened starts from it, as a
 //!   draw starts from the draw before it: its first draw brings it in place, so a pass that binds
-//!   as the one before it finds its shape kept and adds no slot. Exact for the reason a draw's is:
+//!   as the one before it finds its shape kept and adds no slot. The shape it keeps may be one
+//!   another pipeline state's draws made (an encoder of another thread's, say): a pipeline
+//!   state's settle of an equal shape answers the encoder's very one
+//!   (`GraphicsState::settle_shape`), so its draws find their settle kept from its first draw
+//!   on. Exact for the reason a draw's is:
 //!   every field of the state a render encoder's draw binds is derived again at each draw (its
 //!   slots, by `ArgumentTable::refresh_reading`, which unbinds every slot the encoder's tables do
 //!   not bind; every other field, by `RenderCommandEncoder::settle_draw` and

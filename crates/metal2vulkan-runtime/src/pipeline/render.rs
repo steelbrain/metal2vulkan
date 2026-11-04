@@ -2236,10 +2236,11 @@ impl GraphicsState {
     /// What a draw of bind shape `shape` runs on in `forms` ([`settle`](Self::settle)'s answer),
     /// through what the state settled last for its latest [`SETTLED`] shapes: a draw of an equal
     /// shape in the same forms (the very one, which its encoder kept, `live_bind.rs`, looked for
-    /// first by identity, or an equal one, compared whole where none is the very one) settles as
-    /// it did, not planned again; any other settles, and is kept in place of the
-    /// one used least lately. Exact: what `settle` answers is a function of the shape and `forms`
-    /// alone. A refused settle keeps nothing, and is answered as `settle` refuses it.
+    /// first by identity, or an equal one, compared whole where none is the very one, which then
+    /// holds the draw's shape) settles as it did, not planned again, answering the draw's very
+    /// shape; any other settles, and is kept in place of the one used least lately. Exact: what
+    /// `settle` answers is a function of the shape and `forms` alone. A refused settle keeps
+    /// nothing, and is answered as `settle` refuses it.
     pub(crate) fn settle_shape(
         &self,
         shape: &Arc<BindShape>,
@@ -2254,7 +2255,13 @@ impl GraphicsState {
                 .or_else(|| {
                     (kept.iter()).position(|(kept, last)| *kept == forms && last.shape == *shape)
                 });
-            if let Some(entry) = found.and_then(|at| kept.remove(at)) {
+            if let Some(mut entry) = found.and_then(|at| kept.remove(at)) {
+                // An equal shape holds the draw's own from now on, which its encoder keeps and
+                // finds its settle by (`LiveBind::settled`, by identity): a shape another
+                // pipeline state's draws made, which an encoder took with its bind state
+                // (`SpareLiveBinds`), would otherwise find this settle again by value at every
+                // draw, and no draw of its encoder rebound.
+                entry.1.shape = Arc::clone(shape);
                 let last = entry.1.clone();
                 kept.push_front(entry);
                 return Ok(last);
