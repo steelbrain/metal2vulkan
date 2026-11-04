@@ -2,32 +2,39 @@
 //! one draw to the next (`binding::command_uses_into`): a draw whose plan is the last draw's,
 //! under a residency of the last draw's generation, works none of them out
 //! (`WorkCounts::resident_uses_made`), nor walks them as it gathers them for its render pass
-//! instance (`WorkCounts::resident_uses_gathered`, `render/shadows.rs`), and builds with debug
-//! assertions check each draw's kept uses against those it would make whole
-//! (`binding::kept_resident_checks`), and its gathering against that of its whole uses. The draws
-//! read through a root table and a handle table, so no draw of theirs is kept to draw again or
-//! rebind (`render/draw_again.rs`): each takes every step.
+//! instance (`WorkCounts::resident_uses_gathered`, `render/shadows.rs`) or checks them against
+//! what its pass's fragment stages wrote and read (`WorkCounts::resident_uses_against_fragments`,
+//! `render/pass_start_reads.rs`), and builds with debug assertions check each draw's kept uses
+//! against those it would make whole (`binding::kept_resident_checks`), and its gathering and
+//! checks against those of its whole uses. The draws read through a root table and a handle
+//! table, so no draw of theirs is kept to draw again or rebind (`render/draw_again.rs`): each
+//! takes every step.
 //! A draw after the encoder made another resource resident, a draw of another plan, and the
 //! first draw of an encoder of the same residency's shape over other resources (the same plan, a
 //! residency of another generation) work them out again.
 //!
 //! Device tests: compiled only under the validation crate's GPU safety cfgs (`m2v_gpu`,
 //! `m2v_cpu_icd`) with debug assertions, on the kind of device the cfg selects. The functions are
-//! the owned fixture `validation/fixtures/public/engine/resident_draws.ll` (`llvm-as`).
+//! the owned fixtures `validation/fixtures/public/engine/resident_draws.ll` and
+//! `rt6_attachmentless.ll` (`llvm-as`).
 
 use super::blit_holds::{Scratch, WAIT};
 use super::draw_again::{device, Heard};
 use super::encoder_holds::{pass, render_state};
 use crate::binding::kept_resident_checks;
 use crate::{
-    Buffer, CommandBufferStatus, Device, Region, RenderCommandEncoder, RenderPipelineState,
-    ResourceOptions, ResourceRef, SamplerState, SamplerStateOptions, Texture, TextureDescriptor,
+    Buffer, CommandBufferStatus, Degradation, Device, Region, RenderCommandEncoder,
+    RenderPipelineState, ResourceOptions, ResourceRef, SamplerState, SamplerStateOptions, Texture,
+    TextureDescriptor,
 };
 use metal2vulkan::bind::SamplerDescriptor;
 use metal2vulkan::metal::{PixelFormat, PrimitiveType, RenderStages, ResourceUsage, TextureUsage};
 
 /// The fixture.
 const FIXTURE: &str = "engine/resident_draws.ll";
+
+/// The fixture of the marker, whose fragments write word 0 of their buffer 0.
+const MARKER: &str = "engine/rt6_attachmentless.ll";
 
 /// The target's width and height.
 const SIDE: u64 = 64;
@@ -144,12 +151,13 @@ impl Resources {
 }
 
 /// What a draw changed: the resident uses its draw worked out, the kept ones checked, and the
-/// ones its gathering walked.
+/// ones its gathering and its checks against its pass's fragment stages walked.
 #[derive(Debug, Default)]
 struct Drawn {
     made: u64,
     checked: u64,
     gathered: u64,
+    against: u64,
 }
 
 /// Draw with `draw`, and what that changed.
@@ -161,6 +169,7 @@ fn drawn(device: &Device, draw: impl FnOnce()) -> Drawn {
         made: after.0.resident_uses_made - before.0.resident_uses_made,
         checked: after.1 - before.1,
         gathered: after.0.resident_uses_gathered - before.0.resident_uses_gathered,
+        against: after.0.resident_uses_against_fragments - before.0.resident_uses_against_fragments,
     }
 }
 
@@ -211,10 +220,10 @@ fn encode(scene: &Scene, resources: &Resources, later: u64) -> Vec<Drawn> {
 /// Two encoders, the second over other resources of the same residency's shape: within each,
 /// the draws after the first work out the uses of what it made resident only after it made
 /// another resource resident (the first encoder's fourth) and after a draw of another plan (the
-/// last), and only those walk them as they gather them for their render pass instance; every
-/// other draw keeps them, and its kept uses are those it would make whole. The
-/// second encoder's first draw, of the plan of the first's last (the second makes every resource
-/// resident before it) under another residency, works them out again.
+/// last), and only those walk them as they gather them for their render pass instance and check
+/// them against its fragment stages; every other draw keeps them, and its kept uses are those it
+/// would make whole. The second encoder's first draw, of the plan of the first's last (the second
+/// makes every resource resident before it) under another residency, works them out again.
 #[test]
 fn draws_keep_the_uses_of_what_their_encoder_made_resident_until_it_or_their_plan_changes() {
     let scratch = Scratch::new("resident-uses");
@@ -227,19 +236,77 @@ fn draws_keep_the_uses_of_what_their_encoder_made_resident_until_it_or_their_pla
         let made_again = [0, later as usize, entry_draws + 1];
         for (at, drawn) in each.iter().enumerate() {
             let what = format!("encoder {encoder} draw {at}: {drawn:?}");
-            let walked = [drawn.made, drawn.gathered];
+            let walked = [drawn.made, drawn.gathered, drawn.against];
             match at {
                 // The slot shape's plan lists none.
-                at if at == entry_draws => assert_eq!(walked, [0; 2], "{what}"),
+                at if at == entry_draws => assert_eq!(walked, [0; 3], "{what}"),
                 at if made_again.contains(&at) => {
                     assert!(walked.iter().all(|walked| *walked > 0), "{what}")
                 }
                 _ => {
-                    assert_eq!(walked, [0; 2], "{what}");
+                    assert_eq!(walked, [0; 3], "{what}");
                     assert!(drawn.checked > 0, "{what}");
                 }
             }
         }
         assert!(scene.covered() > 0, "encoder {encoder} drew nothing");
     }
+}
+
+/// Draws of the entry shape after a draw whose fragments write a position the encoder made
+/// resident to read in the vertex stage: each reads in place, in its vertex stage through what the
+/// encoder made resident, bytes a fragment stage of the pass wrote (`render/pass_start_reads.rs`),
+/// and announces it at each occurrence, where the device announces each, though those after the
+/// first keep the uses of what the encoder made resident and so checks them as the last did.
+#[test]
+fn draws_announce_each_read_of_what_their_encoder_made_resident_their_pass_s_fragments_wrote() {
+    let scratch = Scratch::new("resident-uses-fragments");
+    let heard = Heard::default();
+    let kinds = [Degradation::InPlaceVertexReads];
+    let device = device(&scratch.0, &kinds, &heard);
+    let scene = Scene::new(&device);
+    let marker = render_state(&device, MARKER, "rt6_cover", "rt6_mark_sample");
+    let resources = Resources::new(&scene, -0.9);
+    let queue = device.new_command_queue().unwrap();
+    let command_buffer = queue.command_buffer().unwrap();
+    let mut encoder = command_buffer
+        .render_command_encoder(&pass(&scene.target))
+        .unwrap();
+    resources.resident(&scene, &mut encoder);
+    let table = &resources.tables[0];
+    let mut each = Vec::new();
+    for at in 0..4 {
+        if at == 1 {
+            encoder.set_render_pipeline_state(&marker).unwrap();
+            let position = &resources.positions[0];
+            (encoder.set_fragment_buffer(Some(position), 0, 0)).unwrap();
+            (encoder.draw_primitives(PrimitiveType::Triangle, 0, 3, 1, 0)).unwrap();
+        }
+        encoder.set_render_pipeline_state(&scene.entry).unwrap();
+        (encoder.set_vertex_buffer(Some(table), ENTRY, 0)).unwrap();
+        (encoder.set_fragment_buffer(Some(table), ENTRY, 0)).unwrap();
+        let before = heard.lock().unwrap().len();
+        let drawn = drawn(&device, || {
+            (encoder.draw_primitives(PrimitiveType::Triangle, 0, 3, 1, 0)).unwrap();
+        });
+        let announced = (heard.lock().unwrap()[before..].iter())
+            .filter(|notice| kinds.contains(&notice.degradation))
+            .count();
+        each.push((drawn, announced));
+    }
+    encoder.end_encoding().unwrap();
+    command_buffer.commit().unwrap();
+    command_buffer.wait_until_completed_for(WAIT).unwrap();
+    assert_eq!(command_buffer.status(), CommandBufferStatus::Completed);
+    for (at, (drawn, announced)) in each.iter().enumerate() {
+        let what = format!("draw {at}: {drawn:?}, announced {announced}");
+        assert!(drawn.against > 0, "{what}");
+        match at {
+            // Before the marker; the first after it, of a plan other than the last draw's.
+            0 => assert!(drawn.made > 0 && *announced == 0, "{what}"),
+            1 => assert!(drawn.made > 0 && *announced == 1, "{what}"),
+            _ => assert!(drawn.made == 0 && *announced == 1, "{what}"),
+        }
+    }
+    assert!(scene.covered() > 0, "the draws drew nothing");
 }

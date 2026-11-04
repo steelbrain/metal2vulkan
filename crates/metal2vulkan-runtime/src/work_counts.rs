@@ -501,6 +501,7 @@ struct DrawCounters {
     argument_tables_held_at_bind: AtomicU64,
     bound_offsets_moved: AtomicU64,
     resident_uses_gathered: AtomicU64,
+    resident_uses_against_fragments: AtomicU64,
 }
 
 /// How a render pass took a shadowed texture as a color attachment
@@ -2184,6 +2185,13 @@ impl Counters {
     /// instance's shadowed textures walked (`WorkCounts::resident_uses_gathered`).
     pub(crate) fn resident_uses_gathered(&self, walked: u64) {
         (self.draws.mine()).add(|counts| &counts.resident_uses_gathered, walked);
+    }
+
+    /// `walked` uses of what a render encoder made resident that a draw's checks against what its
+    /// render pass's fragment stages wrote and read walked
+    /// (`WorkCounts::resident_uses_against_fragments`).
+    pub(crate) fn resident_uses_against_fragments(&self, walked: u64) {
+        (self.draws.mine()).add(|counts| &counts.resident_uses_against_fragments, walked);
     }
 
     /// A render draw rebound (`WorkCounts::draws_rebound`), which recorded `states` state
@@ -4972,6 +4980,14 @@ pub struct WorkCounts {
     /// pass instance's draws use, which the shadowed textures they use are copied around. A draw
     /// that begins with the uses its instance's last draw began with, by identity, walks none.
     pub resident_uses_gathered: u64,
+    /// The uses of resources a render encoder made resident (`resident_uses_made`) that its
+    /// draws' checks against the bytes their render pass's fragment stages wrote and read walked,
+    /// counted whole for each of two: announcing what the device may order apart from Metal
+    /// (`Degradation::InPlaceVertexReads`, `Degradation::FragmentsBeforeGeometry`), and noting the
+    /// draw's own. A draw that begins with the uses the last draw began with, by identity, notes
+    /// none of them again while the pass's notes hold each as it was noted, and checks none again
+    /// where none of them had anything to announce while those bytes stand.
+    pub resident_uses_against_fragments: u64,
     /// Keys an encoder's commands named first, while the device has a buffer over host pages
     /// (`new_buffer_with_bytes_no_copy`), that were looked up among those buffers under the lock
     /// their command buffers' submissions take: the keys of such buffers, and the rare other key
@@ -6312,6 +6328,9 @@ impl Device {
             draws_rebound: draws(|counts| &counts.draws_rebound),
             resident_uses_made: draws(|counts| &counts.resident_uses_made),
             resident_uses_gathered: draws(|counts| &counts.resident_uses_gathered),
+            resident_uses_against_fragments: draws(|counts| {
+                &counts.resident_uses_against_fragments
+            }),
             host_holds_looked_up: counters.host_holds_looked_up.load(Ordering::Relaxed),
             dispatches_settled_as_before: (counters.dispatches_settled_as_before)
                 .load(Ordering::Relaxed),

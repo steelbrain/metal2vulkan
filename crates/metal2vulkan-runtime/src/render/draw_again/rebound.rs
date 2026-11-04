@@ -505,9 +505,15 @@ impl RenderLowering {
         });
         (self.core).note_reaching(stages, (uses, uses.resident()), Some(&mut live.noted))?;
         self.unordered.add(uses);
-        self.pass_start.announce(self.core.device(), uses, false);
-        self.pass_start.add(uses);
-        match uses.prefix() {
+        let prefix = uses.prefix();
+        match prefix {
+            None => {
+                self.pass_start.announce(self.core.device(), uses, false);
+                self.pass_start.add(uses);
+            }
+            Some(prefix) => (self.pass_start).draw(self.core.device(), (uses, prefix), false),
+        }
+        match prefix {
             None => self.gathering().add(&[], uses),
             Some(prefix) => {
                 if self.gathering().add_draw(&[], (uses, prefix)) {

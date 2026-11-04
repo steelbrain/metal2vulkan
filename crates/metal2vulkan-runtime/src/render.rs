@@ -9507,8 +9507,13 @@ impl RenderLowering {
         self.core
             .note_reaching(stages, reaching, Some(&mut live.noted))?;
         self.unordered.add(uses);
-        self.pass_start.announce(&device, uses, mesh_before);
-        self.pass_start.add(uses);
+        match uses.prefix() {
+            None => {
+                self.pass_start.announce(&device, uses, mesh_before);
+                self.pass_start.add(uses);
+            }
+            Some(prefix) => (self.pass_start).draw(&device, (uses, prefix), mesh_before),
+        }
         let heap_set = match heap {
             Some(_) => Some(heap_sets::bind(
                 &device,

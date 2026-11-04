@@ -40,8 +40,14 @@
 //!   first, where Metal's read the later write and their own write outlasts it. Running a later
 //!   draw's stages before an earlier draw's fragments has no Vulkan form short of running the
 //!   pass's stages before its fragments as work of their own.
+//! - **A draw's uses of what its encoder made resident** (`binding::ResidentPrefix`), which begin
+//!   its uses, are checked and noted once while what they meet stands: a draw that begins with the
+//!   uses the last draw began with, by identity, notes none of them again while no list merged its
+//!   ranges (each is held as it was noted), and checks none again where none of them had anything
+//!   to announce and the bytes the fragment stages wrote and read are as they were then.
 
 use crate::argument_table::ArgumentTable;
+use crate::binding::ResidentPrefix;
 use crate::blit::{reads, writes, TRANSFER};
 use crate::buffer::Buffer;
 use crate::degradation::Degradation;
@@ -77,6 +83,10 @@ const MESH_STAGES: vk::PipelineStageFlags2 = vk::PipelineStageFlags2::from_raw(
 struct Written {
     lists: Vec<(ResourceKey, Vec<Range<u64>>)>,
     held: usize,
+    /// How often it took a range it held none equal to, and how often it merged a key's ranges
+    /// into their hull: what [`overlaps`](Self::overlaps) answers stands while the first does,
+    /// and each range it took is held as it was taken while the second does.
+    changes: (u64, u64),
 }
 
 impl Written {
@@ -100,12 +110,23 @@ impl Written {
             return;
         }
         ranges.push(range.clone());
+        self.changes.0 += 1;
         if ranges.len() > RANGES_PER_KEY {
             let start = ranges.iter().map(|r| r.start).min().unwrap_or(0);
             let end = ranges.iter().map(|r| r.end).max().unwrap_or(0);
             ranges.clear();
             ranges.push(start..end);
+            self.changes.1 += 1;
         }
+    }
+
+    /// Whether it holds `range` of `key` as it was taken: adding it again changes nothing
+    /// (builds with debug assertions: [`PassStartReads::add`]'s check).
+    #[cfg(debug_assertions)]
+    fn holds(&self, key: ResourceKey, range: &Range<u64>) -> bool {
+        let held = &self.lists[..self.held];
+        let at = held.binary_search_by_key(&key, |&(at, _)| at).ok();
+        at.is_some_and(|at| held[at].1.contains(range))
     }
 
     fn overlaps(&self, key: ResourceKey, range: &Range<u64>) -> bool {
@@ -140,6 +161,63 @@ fn bytes<K>(used: &Use<K>) -> Option<&Range<u64>> {
     }
 }
 
+/// The lists a use is noted in, where it uses a buffer's bytes: those of the bytes the
+/// fragment stages wrote, the other stages wrote, and the fragment stages read.
+fn noted_in<K>(used: &Use<K>) -> [bool; 3] {
+    let fragment = vk::PipelineStageFlags2::FRAGMENT_SHADER;
+    let writes = used.write.stages;
+    [
+        writes.contains(fragment),
+        !(writes & !fragment).is_empty(),
+        used.read.stages.contains(fragment),
+    ]
+}
+
+/// The first of a draw's uses each kind [`PassStartReads::announce`] announces meets, with its
+/// position: a vertex stage's read in place of bytes a fragment stage of the pass wrote, and a
+/// read or write of the others the device may order apart from Metal (its access and what the
+/// fragment stages did).
+type Found = (
+    Option<(usize, Range<u64>)>,
+    Option<(usize, Range<u64>, &'static str, &'static str)>,
+);
+
+/// Bytes of a use's access the device may order apart from Metal, with what it is and what the
+/// fragment stages did ([`PassStartReads::announce`]).
+type Ordered<'u> = (&'u Range<u64>, &'static str, &'static str);
+
+/// The notice of a draw's vertex-stage read in place of `range`, which a fragment stage of its
+/// render pass wrote (`Degradation::InPlaceVertexReads`).
+fn in_place_notice(range: &Range<u64>) -> (String, String) {
+    let object = format!(
+        "a draw's vertex-stage read of bytes {}..{} a fragment stage of its render pass wrote",
+        range.start, range.end
+    );
+    let reason = "the read is through an argument buffer or a resident resource, or of bytes \
+                  another stage of the pass or the vertex function writes, where no copy is taken \
+                  before the pass: the device may order the fragments' write first, where Metal's \
+                  vertex stages read the bytes from before the pass's fragments"
+        .to_owned();
+    (object, reason)
+}
+
+/// The notice of a draw's access the device may order apart from Metal
+/// (`Degradation::FragmentsBeforeGeometry`).
+fn ordered_notice((range, access, fragments): Ordered<'_>) -> (String, String) {
+    let object = format!(
+        "a draw's vertex, object or mesh stage's {access} bytes {}..{} a fragment stage of its \
+         render pass {fragments}",
+        range.start, range.end
+    );
+    let reason = "Metal's GPUs run every draw's vertex, object and mesh functions before any \
+                  draw's fragments of the pass, behind a command's barrier or not, in every run \
+                  measured; here the device may run the earlier draws' fragments first, and does \
+                  across a split of the pass: the read sees their write, their read misses the \
+                  write, or the write outlasts theirs"
+        .to_owned();
+    (object, reason)
+}
+
 /// A copy of a buffer's bytes from `from` to its end, taken before the pass.
 struct PassStartCopy {
     /// The buffer's `VkBuffer` and its byte 0 there: which buffer it is.
@@ -159,6 +237,16 @@ pub(super) struct PassStartReads {
     /// The bytes the pass's other stages wrote.
     other: Written,
     copies: Vec<PassStartCopy>,
+    /// The identity and count of the uses of what the encoder made resident the last
+    /// [`add_draw`](Self::add_draw) began with, where no list merged its ranges as it noted
+    /// them, and the lists' merges then: each of those uses' ranges is held as it was taken while
+    /// the lists merge no more, as only a merge drops one.
+    added: Option<(u64, usize, u64)>,
+    /// Those the last [`check`](Self::check) began with, where none of them had anything to
+    /// announce, with its `compute_after` and the changes then of the bytes the fragment stages
+    /// wrote, and read where one of those uses writes in a stage whose writes count: none has
+    /// while those stand.
+    announced: Option<(u64, usize, bool, (u64, Option<u64>))>,
 }
 
 /// The tables a draw's stages before its fragments read in place of the encoder's: each with the
@@ -189,25 +277,87 @@ impl PassStartTables {
 }
 
 impl PassStartReads {
+    /// [`announce`](Self::announce), then [`add`](Self::add), a draw's `uses`, which begin with
+    /// the uses of what its encoder made resident of the identity `prefix`: those through
+    /// [`check`](Self::check) and [`add_draw`](Self::add_draw)
+    /// (`WorkCounts::resident_uses_against_fragments` counts those each walked).
+    pub(super) fn draw(
+        &mut self,
+        device: &Device,
+        (uses, prefix): (&[Use<ResourceKey>], ResidentPrefix),
+        compute_after: bool,
+    ) {
+        let (found, checked) = self.check((uses, prefix), compute_after);
+        self.degrade(device, found);
+        let walked = [checked, self.add_draw((uses, prefix))];
+        let walked = walked.iter().filter(|walked| **walked).count() as u64;
+        if walked > 0 {
+            let counts = &device.shared().counts;
+            counts.resident_uses_against_fragments(walked * prefix.len as u64);
+        }
+    }
+
     /// Note the accesses of a draw or tile dispatch of the pass with `uses`.
     pub(super) fn add(&mut self, uses: &[Use<ResourceKey>]) {
         for used in uses {
             let Some(range) = bytes(used) else { continue };
-            let stages = used.write.stages;
-            if stages.contains(vk::PipelineStageFlags2::FRAGMENT_SHADER) {
+            let [fragment, other, fragment_reads] = noted_in(used);
+            if fragment {
                 self.fragment.add(used.key, range);
             }
-            if !(stages & !vk::PipelineStageFlags2::FRAGMENT_SHADER).is_empty() {
+            if other {
                 self.other.add(used.key, range);
             }
-            if used
-                .read
-                .stages
-                .contains(vk::PipelineStageFlags2::FRAGMENT_SHADER)
-            {
+            if fragment_reads {
                 self.fragment_reads.add(used.key, range);
             }
         }
+    }
+
+    /// [`add`](Self::add) a draw's `uses`, which begin with the uses of what its encoder made
+    /// resident of the identity `prefix`: those not again where the last call of this began with
+    /// the same and no list merged since it noted them (the module docs). Whether it walked them.
+    pub(super) fn add_draw(
+        &mut self,
+        (uses, prefix): (&[Use<ResourceKey>], ResidentPrefix),
+    ) -> bool {
+        let merges = self.merges();
+        let now = (prefix.id, prefix.len, merges);
+        let past = match self.added == Some(now) {
+            true => prefix.len,
+            false => 0,
+        };
+        #[cfg(debug_assertions)]
+        for used in &uses[..past] {
+            assert!(
+                self.holds(used),
+                "a pass noted a draw's uses by their identity less than its uses"
+            );
+        }
+        self.add(&uses[past..]);
+        // Each use's range is held as it was taken where no list merged as it noted, while no
+        // list merges.
+        let now = self.merges();
+        self.added = (now == merges).then_some((prefix.id, prefix.len, now));
+        past == 0
+    }
+
+    /// How often its lists merged a key's ranges.
+    fn merges(&self) -> u64 {
+        let lists = [&self.fragment, &self.fragment_reads, &self.other];
+        lists.iter().map(|list| list.changes.1).sum()
+    }
+
+    /// Whether its lists hold `used`'s range as they took it, where they note it: noting it
+    /// again changes nothing (builds with debug assertions: [`add`](Self::add)'s check).
+    #[cfg(debug_assertions)]
+    fn holds(&self, used: &Use<ResourceKey>) -> bool {
+        let Some(range) = bytes(used) else {
+            return true;
+        };
+        let lists = [&self.fragment, &self.other, &self.fragment_reads];
+        (noted_in(used).into_iter().zip(lists))
+            .all(|(noted, list)| !noted || list.holds(used.key, range))
     }
 
     /// What it notes, without its copies' buffers: its lists' keys and ranges, and its copies'
@@ -233,6 +383,8 @@ impl PassStartReads {
         self.fragment_reads.clear();
         self.other.clear();
         self.copies.clear();
+        self.added = None;
+        self.announced = None;
     }
 
     /// Whether a fragment stage of the pass wrote any bytes so far: a later draw's stages before
@@ -249,6 +401,8 @@ impl PassStartReads {
             fragment_reads: self.fragment_reads.clone(),
             other: self.other.clone(),
             copies: Vec::new(),
+            added: None,
+            announced: None,
         }
     }
 
@@ -411,70 +565,247 @@ impl PassStartReads {
     /// pass's earlier instances (`compute_after`), as the draw's dispatches before its own
     /// instance do (`render.rs`).
     pub(super) fn announce(&self, device: &Device, uses: &[Use<ResourceKey>], compute_after: bool) {
-        let in_place = uses.iter().find_map(|used| {
-            let range = bytes(used)?;
-            let vertex = !(used.read.stages & VERTEX_READS).is_empty();
-            (vertex && self.fragment.overlaps(used.key, range)).then(|| range.clone())
-        });
+        let in_place = uses.iter().find_map(|used| self.in_place(used));
         if let Some(range) = in_place {
-            device.degrade(Degradation::InPlaceVertexReads, || {
-                let object = format!(
-                    "a draw's vertex-stage read of bytes {}..{} a fragment stage of its render \
-                     pass wrote",
-                    range.start, range.end
-                );
-                let reason = "the read is through an argument buffer or a resident resource, or \
-                              of bytes another stage of the pass or the vertex function writes, \
-                              where no copy is taken before the pass: the device may order the \
-                              fragments' write first, where Metal's vertex stages read the bytes \
-                              from before the pass's fragments"
-                    .to_owned();
-                (object, reason)
-            });
+            device.degrade(Degradation::InPlaceVertexReads, || in_place_notice(range));
         }
-        let compute = match compute_after {
-            true => vk::PipelineStageFlags2::COMPUTE_SHADER,
-            false => vk::PipelineStageFlags2::NONE,
-        };
-        // The stages whose reads count; their writes count, and the vertex shader's.
-        let readers = MESH_STAGES | compute;
-        let writers = readers | vk::PipelineStageFlags2::VERTEX_SHADER;
-        let ordered = uses.iter().find_map(|used| {
-            let range = bytes(used)?;
-            let wrote = self.fragment.overlaps(used.key, range);
-            let reads = !(used.read.stages & readers).is_empty() && wrote;
-            let touched = wrote || self.fragment_reads.overlaps(used.key, range);
-            let writes = !(used.write.stages & writers).is_empty() && touched;
-            match (reads, writes) {
-                (_, true) => Some((range.clone(), "write of", "read or wrote")),
-                (true, false) => Some((range.clone(), "in-place read of", "wrote")),
-                (false, false) => None,
-            }
-        });
-        if let Some((range, access, fragments)) = ordered {
+        let stages = (Self::readers(compute_after), Self::writers(compute_after));
+        let ordered = uses.iter().find_map(|used| self.ordered(used, stages));
+        if let Some(ordered) = ordered {
             device.degrade(Degradation::FragmentsBeforeGeometry, || {
-                let object = format!(
-                    "a draw's vertex, object or mesh stage's {access} bytes {}..{} a fragment \
-                     stage of its render pass {fragments}",
-                    range.start, range.end
-                );
-                let reason = "Metal's GPUs run every draw's vertex, object and mesh functions \
-                              before any draw's fragments of the pass, behind a command's \
-                              barrier or not, in every run measured; here the device may run the \
-                              earlier draws' fragments first, and does across a split of the \
-                              pass: the read sees their write, their read misses the write, or \
-                              the write outlasts theirs"
-                    .to_owned();
-                (object, reason)
+                ordered_notice(ordered)
             });
         }
+    }
+
+    /// Announce what [`check`](Self::check) found, as [`announce`](Self::announce) would.
+    fn degrade(&self, device: &Device, (in_place, ordered): Found) {
+        if let Some((_, range)) = in_place {
+            device.degrade(Degradation::InPlaceVertexReads, || in_place_notice(&range));
+        }
+        if let Some((_, range, access, fragments)) = ordered {
+            let ordered = (&range, access, fragments);
+            device.degrade(Degradation::FragmentsBeforeGeometry, || {
+                ordered_notice(ordered)
+            });
+        }
+    }
+
+    /// The bytes `used` reads in a stage before the fragments, in place, that a fragment stage
+    /// of the pass wrote ([`announce`](Self::announce)). Inlined into each draw's walk of its
+    /// uses, as is [`ordered`](Self::ordered).
+    #[inline(always)]
+    fn in_place<'u>(&self, used: &'u Use<ResourceKey>) -> Option<&'u Range<u64>> {
+        let range = bytes(used)?;
+        let vertex = !(used.read.stages & VERTEX_READS).is_empty();
+        (vertex && self.fragment.overlaps(used.key, range)).then_some(range)
+    }
+
+    /// The bytes of `used`'s access of the `stages` ([`readers`](Self::readers),
+    /// [`writers`](Self::writers)) that a fragment stage of the pass read or wrote, the device
+    /// may order apart from Metal ([`announce`](Self::announce)), with what it is and what the
+    /// fragments did.
+    #[inline(always)]
+    fn ordered<'u>(
+        &self,
+        used: &'u Use<ResourceKey>,
+        (readers, writers): (vk::PipelineStageFlags2, vk::PipelineStageFlags2),
+    ) -> Option<Ordered<'u>> {
+        let range = bytes(used)?;
+        let wrote = self.fragment.overlaps(used.key, range);
+        let reads = !(used.read.stages & readers).is_empty() && wrote;
+        let touched = wrote || self.fragment_reads.overlaps(used.key, range);
+        let writes = !(used.write.stages & writers).is_empty() && touched;
+        match (reads, writes) {
+            (_, true) => Some((range, "write of", "read or wrote")),
+            (true, false) => Some((range, "in-place read of", "wrote")),
+            (false, false) => None,
+        }
+    }
+
+    /// What [`announce`](Self::announce) announces of `uses` ([`Found`], positions from the
+    /// first use it walked), and whether it walked those of what the encoder made resident they
+    /// begin with, of the identity `prefix`: the uses past them alone where the last call began
+    /// with the same and none of them met anything while the bytes the fragment stages wrote and
+    /// read stand (the module docs).
+    fn check(
+        &mut self,
+        (uses, prefix): (&[Use<ResourceKey>], ResidentPrefix),
+        compute_after: bool,
+    ) -> (Found, bool) {
+        let changes = (self.fragment.changes.0, self.fragment_reads.changes.0);
+        let held = |(id, len, after, (wrote, read)): (u64, usize, bool, (u64, Option<u64>))| {
+            let same = (prefix.id, prefix.len) == (id, len);
+            let stand = wrote == changes.0 && read.is_none_or(|read| read == changes.1);
+            same && after == compute_after && stand
+        };
+        let past = match self.announced.is_some_and(held) {
+            true => prefix.len,
+            false => 0,
+        };
+        let (in_place, ordered) = self.found(&uses[past..], compute_after);
+        #[cfg(debug_assertions)]
+        {
+            // What it announces, wherever it lies.
+            let answer = |(in_place, ordered): Found| {
+                let ordered =
+                    ordered.map(|(_, range, access, fragments)| (range, access, fragments));
+                (in_place.map(|(_, range)| range), ordered)
+            };
+            let kept = answer((in_place.clone(), ordered.clone()));
+            assert_eq!(
+                answer(self.found(uses, compute_after)),
+                kept,
+                "a pass checked a draw's uses by their identity less than its uses"
+            );
+        }
+        // Where it walked them, whether those uses met nothing, and what that answer rests on.
+        if past == 0 {
+            let len = prefix.len;
+            let met = [
+                in_place.as_ref().map(|(at, _)| *at),
+                ordered.as_ref().map(|(at, ..)| *at),
+            ];
+            let clean = met.iter().all(|at| at.is_none_or(|at| at >= len));
+            let writes = uses[..len]
+                .iter()
+                .any(|used| !(used.write.stages & Self::writers(compute_after)).is_empty());
+            let read = writes.then_some(changes.1);
+            self.announced =
+                clean.then_some((prefix.id, prefix.len, compute_after, (changes.0, read)));
+        }
+        ((in_place, ordered), past == 0)
+    }
+
+    /// The first of `uses` each kind [`announce`](Self::announce) announces meets ([`Found`]).
+    fn found(&self, uses: &[Use<ResourceKey>], compute_after: bool) -> Found {
+        let in_place = (uses.iter().enumerate())
+            .find_map(|(at, used)| self.in_place(used).map(|range| (at, range.clone())));
+        let stages = (Self::readers(compute_after), Self::writers(compute_after));
+        let ordered = uses.iter().enumerate().find_map(|(at, used)| {
+            let (range, access, fragments) = self.ordered(used, stages)?;
+            Some((at, range.clone(), access, fragments))
+        });
+        (in_place, ordered)
+    }
+
+    /// The stages whose reads of bytes a fragment stage of the pass wrote count: a native object
+    /// or mesh stage's, and an emulated one's where its work records after the pass's earlier
+    /// instances (`compute_after`).
+    fn readers(compute_after: bool) -> vk::PipelineStageFlags2 {
+        match compute_after {
+            true => MESH_STAGES | vk::PipelineStageFlags2::COMPUTE_SHADER,
+            false => MESH_STAGES,
+        }
+    }
+
+    /// The stages whose writes of bytes a fragment stage of the pass read or wrote count:
+    /// [`readers`](Self::readers)' and the vertex shader's.
+    fn writers(compute_after: bool) -> vk::PipelineStageFlags2 {
+        Self::readers(compute_after) | vk::PipelineStageFlags2::VERTEX_SHADER
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::Written;
+    use super::{PassStartReads, Written};
+    use crate::binding::ResidentPrefix;
     use crate::resource::ResourceKey;
+    use crate::tracker::{Access, Use, UseRange};
+    use ash::vk;
+    use std::ops::Range;
+
+    /// A use of `range` of `key`'s bytes, read in `stage`, or written (`write`).
+    fn used(
+        key: ResourceKey,
+        range: Range<u64>,
+        stage: vk::PipelineStageFlags2,
+        write: bool,
+    ) -> Use<ResourceKey> {
+        let range = UseRange::Bytes(range);
+        match write {
+            true => Use::writes(
+                key,
+                true,
+                range,
+                Access::new(stage, vk::AccessFlags2::SHADER_STORAGE_WRITE),
+            ),
+            false => Use::reads(
+                key,
+                true,
+                range,
+                Access::new(stage, vk::AccessFlags2::SHADER_STORAGE_READ),
+            ),
+        }
+    }
+
+    /// The uses of what an encoder made resident of identity `id`: the first `len` of a draw's.
+    fn prefix(id: u64, len: usize) -> ResidentPrefix {
+        ResidentPrefix { id, len }
+    }
+
+    /// A draw's uses of what its encoder made resident are checked against what the pass's
+    /// fragment stages wrote once while none of them meets any and those bytes stand: again after
+    /// its own fragments wrote, not after a draw that changed nothing; once another draw's
+    /// fragments wrote what they read, again, and while that meets them, at each draw (builds with
+    /// debug assertions check each answer against that of the draw's whole uses).
+    #[test]
+    fn a_draw_checks_its_resident_uses_again_once_the_fragments_wrote_more() {
+        let (vertex, fragment) = (
+            vk::PipelineStageFlags2::VERTEX_SHADER,
+            vk::PipelineStageFlags2::FRAGMENT_SHADER,
+        );
+        let (a, b) = (ResourceKey::new(), ResourceKey::new());
+        let mut pass = PassStartReads::default();
+        // Its vertex stage reads `a` through the resident set, its fragments write `b`.
+        let draw = [
+            used(a, 0..16, vertex, false),
+            used(b, 0..16, fragment, true),
+        ];
+        let checked = |pass: &mut PassStartReads| {
+            let ((in_place, _), walked) = pass.check((&draw, prefix(1, 1)), false);
+            (in_place.map(|(_, range)| range), walked)
+        };
+        assert_eq!(checked(&mut pass), (None, true));
+        assert!(pass.add_draw((&draw, prefix(1, 1))));
+        assert_eq!(checked(&mut pass), (None, true), "its fragments wrote");
+        assert!(!pass.add_draw((&draw, prefix(1, 1))));
+        let unchanged = "nothing it meets changed";
+        assert_eq!(checked(&mut pass), (None, false), "{unchanged}");
+        // Another draw's fragments write `a`.
+        pass.add(&[used(a, 0..16, fragment, true)]);
+        for _ in 0..2 {
+            assert_eq!(checked(&mut pass), (Some(0..16), true));
+        }
+    }
+
+    /// A draw's uses of what its encoder made resident are noted once while the pass's lists
+    /// hold each as it was noted: a draw whose own uses past them merge a list's ranges into
+    /// their hull is followed by one that notes them again (builds with debug assertions check
+    /// each held whenever it is not).
+    #[test]
+    fn a_draw_notes_its_resident_uses_again_once_a_list_merged_their_ranges() {
+        let fragment = vk::PipelineStageFlags2::FRAGMENT_SHADER;
+        let key = ResourceKey::new();
+        let mut pass = PassStartReads::default();
+        // Each draw reads, in its fragment stage, the same bytes of `key` through the resident
+        // set, then bytes of its own; the 16th draw's are a 17th range, which merges them.
+        let walked: Vec<bool> = (1..=super::RANGES_PER_KEY as u64 + 2)
+            .map(|at| {
+                let own = 32 * at..32 * at + 16;
+                let draw = [
+                    used(key, 0..16, fragment, false),
+                    used(key, own, fragment, false),
+                ];
+                pass.add_draw((&draw, prefix(2, 1)))
+            })
+            .collect();
+        let merged = super::RANGES_PER_KEY;
+        let noted: Vec<usize> = (walked.iter().enumerate())
+            .filter_map(|(at, walked)| walked.then_some(at))
+            .collect();
+        assert_eq!(noted, [0, merged], "{walked:?}");
+    }
 
     /// A buffer's written ranges overlap what they meet and nothing else, by buffer; cleared,
     /// none is noted and the lists keep their room, which the next buffers take.
