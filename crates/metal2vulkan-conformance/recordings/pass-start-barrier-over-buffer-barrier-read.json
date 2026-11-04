@@ -1,0 +1,850 @@
+{
+  "format": 1,
+  "case": "pass-start-barrier-over-buffer-barrier-read",
+  "suite_version": 1,
+  "shaders": [
+    {
+      "fixture": "psb_reads.ll",
+      "entry": "psb_rect+psb_solid+psb_read+psb_sample+psb_masked+psb_under",
+      "source_sha256": "6233968f3935bb2b18bc3addaa89eef1ece4c1e4482306dcbc80a1b330bb1f2b"
+    },
+    {
+      "fixture": "psb_reads.air.ll",
+      "entry": "psb_rect+psb_solid+psb_read+psb_sample+psb_masked+psb_under",
+      "source_sha256": "acdac26065af4bc16e6066e9e9c15ab715e49682d40b9d9100470f5e914f1d9a"
+    }
+  ],
+  "answers": [
+    {
+      "key": {
+        "chip": "apple-m3-max",
+        "os_version": "27.0.1",
+        "os_build": "26A434",
+        "metal_level": "27.0.1"
+      },
+      "provenance": "metal_run",
+      "device": "Apple M3 Max",
+      "runs": 3,
+      "outcomes": [
+        {
+          "runs": 3,
+          "transcript": {
+            "root": {
+              "name": "case",
+              "observed": {
+                "value": "absent"
+              },
+              "children": [
+                {
+                  "name": "inputs",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "air:psb_reads",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "6233968f3935bb2b18bc3addaa89eef1ece4c1e4482306dcbc80a1b330bb1f2b"
+                        }
+                      }
+                    },
+                    {
+                      "name": "air-typed:psb_reads",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "acdac26065af4bc16e6066e9e9c15ab715e49682d40b9d9100470f5e914f1d9a"
+                        }
+                      }
+                    },
+                    {
+                      "name": "pipeline:psb_solid",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "c8bbe454bb86a39eea796148d4427b9729d6d29549f11abe6ae42781cbccb60b"
+                        }
+                      }
+                    },
+                    {
+                      "name": "pipeline:psb_read",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "ebb52f7e5891201601b69e03ba26e07f387c7c5f741165c6d3481450100c4d09"
+                        }
+                      }
+                    },
+                    {
+                      "name": "pipeline:psb_sample",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "2b5a76d521c93bb416e35c117a5356b671367d79b361b2ed7d8c7ea6fe6f9b55"
+                        }
+                      }
+                    },
+                    {
+                      "name": "pipeline:psb_masked",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "258370be8469e7539c7c0b47e499f61b06505542d73d008e35d05514ff279c1d"
+                        }
+                      }
+                    },
+                    {
+                      "name": "pipeline:psb_under",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "ea7a95ec0e937e69975b4f5d1c06879369eee6413489407a6288be42c60c4b44"
+                        }
+                      }
+                    },
+                    {
+                      "name": "target:0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "19f6eb3cc1d1c9db435baad52893d051bfff86598af15c62a56afc87bccf727c"
+                        }
+                      }
+                    },
+                    {
+                      "name": "buffer:0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "ad7facb2586fc6e966c004d7d1d16b024f5805ff7cb47c7a85dabd8b48892ca7"
+                        }
+                      }
+                    },
+                    {
+                      "name": "pass:0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "41323b5567706c6652395aba80c57e4778553f7bcce950d5c63c56195a2227ca"
+                        }
+                      }
+                    },
+                    {
+                      "name": "pass:1",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "20f099b3e07bab3894f906e37a6314fbf35337f062894426ce051856e0817422"
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "library",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "pipeline:psb_solid",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "pipeline:psb_read",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "pipeline:psb_sample",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "pipeline:psb_masked",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "pipeline:psb_under",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer:0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "target:0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "read-back:0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "render",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": {
+                          "variant": {
+                            "name": "Completed",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "pieces",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "0-renderCommandEncoder",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "1-renderCommandEncoder",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "2-copyFromTextureToBuffer",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "read:0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "texels-0",
+                  "observed": {
+                    "value": {
+                      "list": [
+                        {
+                          "fields": {
+                            "at": {
+                              "uint": 0
+                            },
+                            "texel": {
+                              "bytes": "eCjIoA=="
+                            },
+                            "texels": {
+                              "uint": 132
+                            }
+                          }
+                        },
+                        {
+                          "fields": {
+                            "at": {
+                              "uint": 132
+                            },
+                            "texel": {
+                              "bytes": "mcwz/w=="
+                            },
+                            "texels": {
+                              "uint": 12
+                            }
+                          }
+                        },
+                        {
+                          "fields": {
+                            "at": {
+                              "uint": 144
+                            },
+                            "texel": {
+                              "bytes": "ZjOZ/w=="
+                            },
+                            "texels": {
+                              "uint": 8
+                            }
+                          }
+                        },
+                        {
+                          "fields": {
+                            "at": {
+                              "uint": 152
+                            },
+                            "texel": {
+                              "bytes": "eCjIoA=="
+                            },
+                            "texels": {
+                              "uint": 12
+                            }
+                          }
+                        },
+                        {
+                          "fields": {
+                            "at": {
+                              "uint": 164
+                            },
+                            "texel": {
+                              "bytes": "mcwz/w=="
+                            },
+                            "texels": {
+                              "uint": 12
+                            }
+                          }
+                        },
+                        {
+                          "fields": {
+                            "at": {
+                              "uint": 176
+                            },
+                            "texel": {
+                              "bytes": "ZjOZ/w=="
+                            },
+                            "texels": {
+                              "uint": 8
+                            }
+                          }
+                        },
+                        {
+                          "fields": {
+                            "at": {
+                              "uint": 184
+                            },
+                            "texel": {
+                              "bytes": "eCjIoA=="
+                            },
+                            "texels": {
+                              "uint": 12
+                            }
+                          }
+                        },
+                        {
+                          "fields": {
+                            "at": {
+                              "uint": 196
+                            },
+                            "texel": {
+                              "bytes": "mcwz/w=="
+                            },
+                            "texels": {
+                              "uint": 12
+                            }
+                          }
+                        },
+                        {
+                          "fields": {
+                            "at": {
+                              "uint": 208
+                            },
+                            "texel": {
+                              "bytes": "ZjOZ/w=="
+                            },
+                            "texels": {
+                              "uint": 8
+                            }
+                          }
+                        },
+                        {
+                          "fields": {
+                            "at": {
+                              "uint": 216
+                            },
+                            "texel": {
+                              "bytes": "eCjIoA=="
+                            },
+                            "texels": {
+                              "uint": 12
+                            }
+                          }
+                        },
+                        {
+                          "fields": {
+                            "at": {
+                              "uint": 228
+                            },
+                            "texel": {
+                              "bytes": "mcwz/w=="
+                            },
+                            "texels": {
+                              "uint": 12
+                            }
+                          }
+                        },
+                        {
+                          "fields": {
+                            "at": {
+                              "uint": 240
+                            },
+                            "texel": {
+                              "bytes": "ZjOZ/w=="
+                            },
+                            "texels": {
+                              "uint": 8
+                            }
+                          }
+                        },
+                        {
+                          "fields": {
+                            "at": {
+                              "uint": 248
+                            },
+                            "texel": {
+                              "bytes": "eCjIoA=="
+                            },
+                            "texels": {
+                              "uint": 12
+                            }
+                          }
+                        },
+                        {
+                          "fields": {
+                            "at": {
+                              "uint": 260
+                            },
+                            "texel": {
+                              "bytes": "mcwz/w=="
+                            },
+                            "texels": {
+                              "uint": 12
+                            }
+                          }
+                        },
+                        {
+                          "fields": {
+                            "at": {
+                              "uint": 272
+                            },
+                            "texel": {
+                              "bytes": "ZjOZ/w=="
+                            },
+                            "texels": {
+                              "uint": 8
+                            }
+                          }
+                        },
+                        {
+                          "fields": {
+                            "at": {
+                              "uint": 280
+                            },
+                            "texel": {
+                              "bytes": "eCjIoA=="
+                            },
+                            "texels": {
+                              "uint": 12
+                            }
+                          }
+                        },
+                        {
+                          "fields": {
+                            "at": {
+                              "uint": 292
+                            },
+                            "texel": {
+                              "bytes": "mcwz/w=="
+                            },
+                            "texels": {
+                              "uint": 12
+                            }
+                          }
+                        },
+                        {
+                          "fields": {
+                            "at": {
+                              "uint": 304
+                            },
+                            "texel": {
+                              "bytes": "ZjOZ/w=="
+                            },
+                            "texels": {
+                              "uint": 8
+                            }
+                          }
+                        },
+                        {
+                          "fields": {
+                            "at": {
+                              "uint": 312
+                            },
+                            "texel": {
+                              "bytes": "eCjIoA=="
+                            },
+                            "texels": {
+                              "uint": 12
+                            }
+                          }
+                        },
+                        {
+                          "fields": {
+                            "at": {
+                              "uint": 324
+                            },
+                            "texel": {
+                              "bytes": "mcwz/w=="
+                            },
+                            "texels": {
+                              "uint": 12
+                            }
+                          }
+                        },
+                        {
+                          "fields": {
+                            "at": {
+                              "uint": 336
+                            },
+                            "texel": {
+                              "bytes": "ZjOZ/w=="
+                            },
+                            "texels": {
+                              "uint": 8
+                            }
+                          }
+                        },
+                        {
+                          "fields": {
+                            "at": {
+                              "uint": 344
+                            },
+                            "texel": {
+                              "bytes": "eCjIoA=="
+                            },
+                            "texels": {
+                              "uint": 12
+                            }
+                          }
+                        },
+                        {
+                          "fields": {
+                            "at": {
+                              "uint": 356
+                            },
+                            "texel": {
+                              "bytes": "mcwz/w=="
+                            },
+                            "texels": {
+                              "uint": 12
+                            }
+                          }
+                        },
+                        {
+                          "fields": {
+                            "at": {
+                              "uint": 368
+                            },
+                            "texel": {
+                              "bytes": "ZjOZ/w=="
+                            },
+                            "texels": {
+                              "uint": 8
+                            }
+                          }
+                        },
+                        {
+                          "fields": {
+                            "at": {
+                              "uint": 376
+                            },
+                            "texel": {
+                              "bytes": "eCjIoA=="
+                            },
+                            "texels": {
+                              "uint": 12
+                            }
+                          }
+                        },
+                        {
+                          "fields": {
+                            "at": {
+                              "uint": 388
+                            },
+                            "texel": {
+                              "bytes": "mcwz/w=="
+                            },
+                            "texels": {
+                              "uint": 12
+                            }
+                          }
+                        },
+                        {
+                          "fields": {
+                            "at": {
+                              "uint": 400
+                            },
+                            "texel": {
+                              "bytes": "ZjOZ/w=="
+                            },
+                            "texels": {
+                              "uint": 8
+                            }
+                          }
+                        },
+                        {
+                          "fields": {
+                            "at": {
+                              "uint": 408
+                            },
+                            "texel": {
+                              "bytes": "eCjIoA=="
+                            },
+                            "texels": {
+                              "uint": 12
+                            }
+                          }
+                        },
+                        {
+                          "fields": {
+                            "at": {
+                              "uint": 420
+                            },
+                            "texel": {
+                              "bytes": "mcwz/w=="
+                            },
+                            "texels": {
+                              "uint": 12
+                            }
+                          }
+                        },
+                        {
+                          "fields": {
+                            "at": {
+                              "uint": 432
+                            },
+                            "texel": {
+                              "bytes": "ZjOZ/w=="
+                            },
+                            "texels": {
+                              "uint": 8
+                            }
+                          }
+                        },
+                        {
+                          "fields": {
+                            "at": {
+                              "uint": 440
+                            },
+                            "texel": {
+                              "bytes": "eCjIoA=="
+                            },
+                            "texels": {
+                              "uint": 12
+                            }
+                          }
+                        },
+                        {
+                          "fields": {
+                            "at": {
+                              "uint": 452
+                            },
+                            "texel": {
+                              "bytes": "mcwz/w=="
+                            },
+                            "texels": {
+                              "uint": 12
+                            }
+                          }
+                        },
+                        {
+                          "fields": {
+                            "at": {
+                              "uint": 464
+                            },
+                            "texel": {
+                              "bytes": "ZjOZ/w=="
+                            },
+                            "texels": {
+                              "uint": 8
+                            }
+                          }
+                        },
+                        {
+                          "fields": {
+                            "at": {
+                              "uint": 472
+                            },
+                            "texel": {
+                              "bytes": "eCjIoA=="
+                            },
+                            "texels": {
+                              "uint": 12
+                            }
+                          }
+                        },
+                        {
+                          "fields": {
+                            "at": {
+                              "uint": 484
+                            },
+                            "texel": {
+                              "bytes": "mcwz/w=="
+                            },
+                            "texels": {
+                              "uint": 12
+                            }
+                          }
+                        },
+                        {
+                          "fields": {
+                            "at": {
+                              "uint": 496
+                            },
+                            "texel": {
+                              "bytes": "ZjOZ/w=="
+                            },
+                            "texels": {
+                              "uint": 8
+                            }
+                          }
+                        },
+                        {
+                          "fields": {
+                            "at": {
+                              "uint": 504
+                            },
+                            "texel": {
+                              "bytes": "eCjIoA=="
+                            },
+                            "texels": {
+                              "uint": 520
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  }
+                },
+                {
+                  "name": "notices",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "set",
+                      "observed": {
+                        "value": {
+                          "nothing": "announced_nothing"
+                        }
+                      }
+                    },
+                    {
+                      "name": "counts",
+                      "observed": {
+                        "value": {
+                          "fields": {}
+                        }
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "validated": {
+        "stopped": {
+          "call": "render",
+          "message": "Memory Barrier With Scope Validation\nscope (0x4) cannot contain MTLBarrierScopeRenderTargets on this device\nafterStages (0x2) can not contain MTLRenderStageTile or MTLRenderStageFragment on this device\nFragment Function(psb_read): uses Texture binding at index 0 for t[0] which is also a color attachment at index 0. This may be a conflict as the color attachment's storeAction == MTLStoreActionStore and writeMask != MTLColorWriteMaskNone."
+        }
+      }
+    }
+  ]
+}

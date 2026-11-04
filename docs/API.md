@@ -3954,7 +3954,9 @@ each item named states the rule in full.
   the texture, after the fragment stage, behind the draws before it and, where it comes before
   the pass's first draw, behind the pass's load actions: that draw reads what the draws before the
   barrier wrote, or the clear (the runtime's `fence.rs` and `texture/attached_reads.rs`). With no
-  barrier it reads the texels from before the pass at its own pixel, the M3 Max's answer.
+  barrier it reads the texels from before the pass at its own pixel, the M3 Max's answer. The
+  conformance cases `pass-start-barrier-*` keep the M3 Max's texels and take the Mac2 answer as
+  the one other.
 
 **GPU hangs and faults** (a draw of private primitive type 9, `DrawPrimitiveType::Nine`)
 

@@ -130,7 +130,7 @@ const READ_AND_TARGET: u32 = 5;
 /// *bytes* turned a 16 KiB level into 8,193 runs and a 3.5 MB recording, while runs of equal
 /// texels make it one line. A tail shorter than a texel is a run of its own, so nothing is lost
 /// where a length is not a whole number of texels.
-fn texel_runs(bytes: &[u8], texel: usize) -> Value {
+pub(super) fn texel_runs(bytes: &[u8], texel: usize) -> Value {
     let width = texel.max(1);
     let mut runs: Vec<Value> = Vec::new();
     let mut held: Option<(usize, &[u8], u64)> = None;
