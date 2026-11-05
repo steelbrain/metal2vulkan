@@ -125,13 +125,15 @@ fn target(texture: Texture, format: Format, samples: u32) -> Target {
 }
 
 /// Whether `plan` is made mutable to `view`, with extended usage and `STORAGE`, its own format
-/// and the view's listed.
+/// and the view's listed first. A multisampled stand-in a resolve into its format's twin reads
+/// through the twin's view lists that view after them (`color_resolve::twin_read_view`: the NVIDIA
+/// RTX 5080 Laptop's `BGRA8Unorm_sRGB` at 4 samples, `B8G8R8A8_UNORM`).
 fn mutable_to(plan: &ImagePlan, format: Format, view: Format) -> bool {
     plan.usage.contains(ImageUsageFlags::STORAGE)
         && plan
             .flags
             .contains(ImageCreateFlags::MUTABLE_FORMAT | ImageCreateFlags::EXTENDED_USAGE)
-        && plan.view_formats == [format, view]
+        && plan.view_formats.starts_with(&[format, view])
 }
 
 #[test]
