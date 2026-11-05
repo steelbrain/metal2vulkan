@@ -2426,7 +2426,10 @@ degradations! {
         /// conversion of an extended-range, padded 10-bit or bfloat texel, on every device (no
         /// Vulkan format holds them): a linear value within one `f32` ulp of Metal's, an encoded
         /// code within one (`R10Unorm_X6_sRGB`'s and `RGB10A2Unorm_sRGB`'s colour within two
-        /// below `0.0031308`), a `half` result within one `half` ulp.
+        /// below `0.0031308`), a `half` result within one `half` ulp. A texture a heap holds
+        /// by its raw texels alone, which a function's `float` read through an argument buffer
+        /// decodes so, is announced naming the texture, at the first command that binds a heap
+        /// set holding it, whether or not its function reads it.
         DevicePackConversion = "device-pack-conversion";
         /// A render pipeline whose color attachments the device draws in more than one group:
         /// each draw runs once per group, each group's variant over its own copy of the pass's

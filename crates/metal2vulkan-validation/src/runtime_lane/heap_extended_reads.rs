@@ -733,9 +733,10 @@ fn heap_extended_reads_are_the_slot_s() {
 
 /// The device's heap set holds each texture of a form a heap reads as a binding plan's arrays do
 /// (`bind::heap_element`: its raw view in the unsigned integer class, the neutral in the float
-/// one), so placing one announces nothing (no `UnnamedTextureUnviewable`, which a consumer
-/// writing every live texture's elements through `heap_element` would meet), and its `float`
-/// reads through an argument buffer are the slot's.
+/// one), so placing one announces no `UnnamedTextureUnviewable` (which a consumer writing every
+/// live texture's elements through `heap_element` would meet), and its `float` reads through an
+/// argument buffer are the slot's. The decode's own notice is
+/// [`a_heap_set_holding_a_raw_texture_announces_its_decode`]'s.
 #[test]
 fn the_heap_set_holds_the_forms_a_heap_reads_unannounced() {
     on_device(|device, messages| {
@@ -765,6 +766,43 @@ fn the_heap_set_holds_the_forms_a_heap_reads_unannounced() {
             "{:?}",
             tally.kinds
         );
+    });
+}
+
+/// A command that binds a heap set holding a texture a heap holds by its raw texels alone
+/// announces `device-pack-conversion`, naming the texture: its function's `float` read decodes the
+/// raw texels by the device's arithmetic, which the stage's notes cannot state, as only the set
+/// knows which textures it holds. The same command over an `RGBA8Unorm` texture, with no such
+/// texture live, announces no `device-pack-conversion`.
+#[test]
+fn a_heap_set_holding_a_raw_texture_announces_its_decode() {
+    on_device(|device, messages| {
+        let pack = Degradation::DevicePackConversion;
+        let stage = stage_notes(device, true, Texel::Float);
+        let heap = pipeline(device, true, Texel::Float);
+        let made_with = notices(messages);
+        let plain = made(device, PixelFormat::RGBA8Unorm, 4).unwrap();
+        dispatch(device, (&heap, true), &plain).unwrap();
+        let alone = notices(messages);
+        let raw = made(device, PixelFormat::BGRA10XR, 8).unwrap();
+        dispatch(device, (&heap, true), &raw).unwrap();
+        let held = notices(messages);
+        println!(
+            "HEAP-RAW-NOTICE {}: stage notes {stage:?}; making {made_with:?}; RGBA8Unorm alone \
+             {alone:?}; BGRA10XR held {held:?}",
+            device.name()
+        );
+        assert!(
+            ![&made_with, &alone]
+                .iter()
+                .any(|n| n.iter().any(|(k, _)| *k == pack)),
+            "announced before a raw texture lived"
+        );
+        let object = format!(
+            "BGRA10XR texture at resource ID {}",
+            raw.gpu_resource_id().0
+        );
+        assert!(held.contains(&(pack, object)), "{held:?}");
     });
 }
 

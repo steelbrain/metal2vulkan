@@ -37,9 +37,12 @@
 //!   (`texture/decoded_twin.rs`), and placing it is no read: where the twin's texels are not
 //!   Metal's decode exactly, `decoded-texel-precision` is announced at the first command that
 //!   binds a set holding it, named or not, or as it is placed in a set a command buffer that
-//!   bound the set and has not completed may read through. An element whose ID no texture holds
-//!   is never read: the table maps the ID to element 0. The function tables' elements are the
-//!   commands' writes ([`bind`]), each written where the set held another there.
+//!   bound the set and has not completed may read through. A texture a heap holds by its raw
+//!   texels alone (`bind::heap_raw_form`: its raw view in the unsigned integer class) is read
+//!   through the function's own decode of them, within the bounds `device-pack-conversion`
+//!   states, and announced as a twin is, with that kind ([`RawRead`]). An element whose ID no
+//!   texture holds is never read: the table maps the ID to element 0. The function tables'
+//!   elements are the commands' writes ([`bind`]), each written where the set held another there.
 //! - **Who reads an element while it changes.** The arrays are `UPDATE_AFTER_BIND` and, where
 //!   the device has `descriptorBindingUpdateUnusedWhilePending`, `UPDATE_UNUSED_WHILE_PENDING`
 //!   (`pipeline::link`): every command binds the set's one version ([`SetVersion`]), and a
@@ -113,15 +116,15 @@ use super::texture::{Texture, TextureShared, TwinRead};
 use super::tracker::{Access, Use};
 use ash::vk;
 use metal2vulkan::bind::{
-    handle_entry, handle_entry_flags, heap_element, ArgumentSampler, BindState, BindingPlan,
-    FunctionTableWords, HeapElement, HeapElements, NeutralResource, HANDLE_ENTRY_BYTES,
-    HANDLE_TABLE_CAPACITY,
+    handle_entry, handle_entry_flags, heap_element, heap_raw_form, ArgumentSampler, BindState,
+    BindingPlan, FunctionTableWords, HeapElement, HeapElements, NeutralResource,
+    HANDLE_ENTRY_BYTES, HANDLE_TABLE_CAPACITY,
 };
 use metal2vulkan::error::BindError;
 use metal2vulkan::metal::sampler::{OpaqueBlackBorder, SamplerUse, SamplerWord};
 use metal2vulkan::pipeline::{
-    BindingSource, DescriptorSetLayout, HandleClass, ImageHandleClass, PipelineLayout,
-    RuntimeDependency, RuntimeFact, Stage, SyntheticBinding,
+    BindingSource, DescriptorSetLayout, HandleClass, ImageAccess, ImageHandleClass, PipelineLayout,
+    RuntimeDependency, RuntimeFact, SampledType, Stage, SyntheticBinding,
 };
 use std::any::Any;
 use std::borrow::Cow;
@@ -506,6 +509,9 @@ impl DeviceHeaps {
             if let Some(read) = entry.twin(id, placed.twin) {
                 notes.twin_placed = Some(read);
             }
+            if let Some(read) = entry.raw(id, placed.raw) {
+                notes.raw_placed = Some(read);
+            }
         }
         if let Some(table) = &self.table {
             table.put(id, id, id as u32, flags);
@@ -545,6 +551,7 @@ impl DeviceHeaps {
         for entry in self.sets.values_mut() {
             entry.shadows.remove(&id);
             entry.twins.remove(&id);
+            entry.raws.remove(&id);
         }
         if let Some(table) = &self.table {
             table.put(id, id, 0, 0);
@@ -656,6 +663,7 @@ impl DeviceHeaps {
             written: BTreeMap::new(),
             shadows: BTreeMap::new(),
             twins: BTreeMap::new(),
+            raws: BTreeMap::new(),
         };
         entry.write(device, neutrals)?;
         let mut writes = Vec::new();
@@ -667,6 +675,7 @@ impl DeviceHeaps {
                 entry.shadow(id, &texture, placed.shadow);
                 // A new set no command bound yet: its first binding announces.
                 entry.twin(id, placed.twin);
+                entry.raw(id, placed.raw);
                 notes.placed(&texture, true);
             }
         }
@@ -1017,6 +1026,10 @@ struct SetEntry {
     /// (`decoded-texel-precision`, `texture/decoded_twin.rs`): a command that binds the set may
     /// read it through its ID, named or not.
     twins: BTreeMap<u64, TwinRead>,
+    /// By resource ID, the textures whose raw view an array of the set holds (a heap holds them
+    /// by their raw texels alone, [`RawRead`]): a command that binds the set may read one through
+    /// its ID, named or not, through its function's decode.
+    raws: BTreeMap<u64, RawRead>,
 }
 
 /// An element a heap set holds ([`HeapWrite`]).
@@ -1044,17 +1057,27 @@ impl SetEntry {
 
     /// Note texture `id` among the textures whose decoded twin's view the set holds, with what a
     /// read of it announces, where `read` (else not); answer `read` where a command that bound
-    /// the set may yet read the view through its ID: the set's shared version is held by a command
-    /// buffer that bound it and has not completed (each holds it until then, [`HeapUse`]), or a
-    /// command buffer that bound its own version has not committed (which takes the element).
+    /// the set may yet read the view through its ID ([`pending_read`](Self::pending_read)).
     fn twin(&mut self, id: u64, read: Option<TwinRead>) -> Option<TwinRead> {
-        let Some(read) = read else {
-            self.twins.remove(&id);
-            return None;
-        };
-        self.twins.insert(id, read.clone());
+        let read = noted(&mut self.twins, id, read)?;
+        self.pending_read().then_some(read)
+    }
+
+    /// Note texture `id` among the textures whose raw view the set holds, with what a read of it
+    /// announces, where `read` (else not); answer `read` where a command that bound the set may
+    /// yet read the view through its ID, as [`twin`](Self::twin) does.
+    fn raw(&mut self, id: u64, read: Option<RawRead>) -> Option<RawRead> {
+        let read = noted(&mut self.raws, id, read)?;
+        self.pending_read().then_some(read)
+    }
+
+    /// Whether a command that bound the set may yet read an element placed now: the set's shared
+    /// version is held by a command buffer that bound it and has not completed (each holds it
+    /// until then, [`HeapUse`]), or a command buffer that bound its own version has not committed
+    /// (which takes the element).
+    fn pending_read(&mut self) -> bool {
         let shared = (self.shared.as_ref()).is_some_and(|shared| Arc::strong_count(shared) > 1);
-        (shared || !self.open().is_empty()).then_some(read)
+        shared || !self.open().is_empty()
     }
 
     /// The command buffers' own versions whose command buffer has not committed.
@@ -1256,6 +1279,62 @@ fn sampler_writes(
     writes
 }
 
+/// Note `read` at ID `id` of `reads`, or none there where it is `None`; answer `read`.
+fn noted<R: Clone>(reads: &mut BTreeMap<u64, R>, id: u64, read: Option<R>) -> Option<R> {
+    let Some(read) = read else {
+        reads.remove(&id);
+        return None;
+    };
+    reads.insert(id, read.clone());
+    Some(read)
+}
+
+/// A texture a heap holds by its raw texels alone (`bind::heap_raw_form`: an extended-range,
+/// padded 10-bit or bfloat form of `ExtendedRange::HEAP_READ`), whose raw view a set's unsigned
+/// integer array holds: a function's `float` read, sample or gather of it through its ID decodes
+/// the raw texels itself, by the device's arithmetic, so a command that may read it announces
+/// `device-pack-conversion` with the texture's name, once per device (at each occurrence where
+/// the options ask for that), as a decoded twin's view announces its own ([`TwinRead`]). Which
+/// textures a function reads through an argument buffer the runtime does not see: a command that
+/// binds a set holding such a view announces it whether or not its function reads the texture,
+/// and one whose sets hold none announces nothing for it.
+#[derive(Clone)]
+struct RawRead {
+    object: Arc<str>,
+}
+
+impl RawRead {
+    /// Why a read of one differs from Metal's.
+    const WHY: &'static str = "a heap holds the texture by its raw texels alone, which the \
+         function's float read, sample or gather decodes itself (no Vulkan format holds them) by \
+         the device's arithmetic, where Metal divides correctly rounded and rounds a half result \
+         with ties away from zero: a linear value within one f32 ulp of Metal's, a half result \
+         within one half ulp, a bfloat NaN's bits as they are";
+
+    /// What a read of texture `texture`, at ID `id`, announces.
+    fn of(texture: &Texture, id: u64) -> RawRead {
+        RawRead {
+            object: format!("{:?} texture at resource ID {id}", texture.pixel_format()).into(),
+        }
+    }
+
+    /// Announce it on `device`, where a command that binds a set holding it may read it.
+    fn announce(&self, device: &Device) {
+        device.degrade(Degradation::DevicePackConversion, || {
+            (self.object.to_string(), Self::WHY.to_owned())
+        });
+    }
+
+    /// Announce it on `device` once per device, whatever its options ask: as it is placed in a
+    /// set a pending command buffer may read through, which a submission may do on a runtime
+    /// thread.
+    fn announce_once(&self, device: &Device) {
+        device.degrade_once(Degradation::DevicePackConversion, || {
+            (self.object.to_string(), Self::WHY.to_owned())
+        });
+    }
+}
+
 /// What [`texture_writes`] places of a texture into a set's arrays.
 struct TexturePlaced {
     writes: Vec<HeapWrite>,
@@ -1264,12 +1343,14 @@ struct TexturePlaced {
     /// An element is its decoded twin's view whose texels are not Metal's decode exactly: what a
     /// read of it announces.
     twin: Option<TwinRead>,
+    /// An element is its raw view, which a function's read decodes: what a read of it announces.
+    raw: Option<RawRead>,
 }
 
 /// The writes of texture `texture`, at ID `id`, into `arrays`: element `id` of each, which it
 /// holds as the array's class takes it (the module docs). An ID past an array's count is left
 /// out, noted. With whether an element is its shadow image's view, and what a read of its
-/// decoded twin's view announces where an element is that.
+/// decoded twin's view, or of its raw view, announces where an element is that.
 fn texture_writes(
     device: &Device,
     arrays: &[ImageArray],
@@ -1281,6 +1362,7 @@ fn texture_writes(
         writes: Vec::with_capacity(arrays.len()),
         shadow: false,
         twin: None,
+        raw: None,
     };
     for array in arrays {
         let element = match u32::try_from(id) {
@@ -1290,10 +1372,13 @@ fn texture_writes(
                 continue;
             }
         };
-        let (info, shadowed, twin) = texture_info(device, array, texture, notes)?;
+        let (info, shadowed, twin, raw) = texture_info(device, array, texture, notes)?;
         placed.shadow |= shadowed;
         if twin.is_some() {
             placed.twin = twin;
+        }
+        if raw && placed.raw.is_none() {
+            placed.raw = Some(RawRead::of(texture, id));
         }
         placed.writes.push(HeapWrite {
             binding: array.binding,
@@ -1307,21 +1392,23 @@ fn texture_writes(
 }
 
 /// What an element of `array` holds for `texture` (the module docs), whether it is the
-/// texture's shadow image's view, and what a read of it announces where it is a decoded twin's
-/// view whose texels are not Metal's decode exactly (`Texture::held_view`).
+/// texture's shadow image's view, what a read of it announces where it is a decoded twin's
+/// view whose texels are not Metal's decode exactly (`Texture::held_view`), and whether it is
+/// the raw view of a texture a heap holds by its raw texels alone ([`RawRead`]).
 fn texture_info(
     device: &Device,
     array: &ImageArray,
     texture: &Texture,
     notes: &mut Notes,
-) -> Result<(Info, bool, Option<TwinRead>), Error> {
-    let neutral = || Ok((image_info(array.neutral), false, None));
+) -> Result<(Info, bool, Option<TwinRead>, bool), Error> {
+    let neutral = || Ok((image_info(array.neutral), false, None, false));
     let profile = device.compile_device().profile();
     let class = HandleClass::Image(array.class);
+    let facts = texture.facts();
     let desc = match heap_element(
         profile,
         &class,
-        &texture.facts(),
+        &facts,
         metal2vulkan::vk::ImageLayout::GENERAL,
     ) {
         Ok(HeapElement::View(desc)) => desc,
@@ -1333,8 +1420,12 @@ fn texture_info(
         Err(error) => return Err(Error::Bind(error)),
     };
     let storage = array.ty == vk::DescriptorType::STORAGE_IMAGE;
+    // The unsigned integer class holds such a texture's raw view (`bind::heap::fit`).
+    let raw = array.class.access == ImageAccess::Sampled
+        && array.class.sampled_type == SampledType::Uint
+        && heap_raw_form(&facts).is_some();
     match texture.held_view("new_texture", &desc, storage) {
-        Ok((view, twin)) => Ok((image_info(view), texture.shadow().is_some(), twin)),
+        Ok((view, twin)) => Ok((image_info(view), texture.shadow().is_some(), twin, raw)),
         // The class needs what the texture's usage or levels lack: Metal's read is undefined.
         Err(Error::Invalid(_)) => neutral(),
         Err(Error::Unsupported(_)) => {
@@ -1368,6 +1459,12 @@ struct Notes {
     /// One placed in a set a command buffer that bound it and has not completed may read through
     /// ([`SetEntry::twin`]): announced once, as a submission may place it on a runtime thread.
     twin_placed: Option<TwinRead>,
+    /// A texture a heap holds by its raw texels alone in a set the command binds, whose function
+    /// may read it through its decode ([`RawRead`]).
+    raw_read: Option<RawRead>,
+    /// One placed in a set a command buffer that bound it and has not completed may read through
+    /// ([`SetEntry::raw`]): announced once, as `twin_placed` is.
+    raw_placed: Option<RawRead>,
 }
 
 impl Notes {
@@ -1496,6 +1593,12 @@ impl Notes {
             read.announce(device);
         }
         if let Some(read) = &self.twin_placed {
+            read.announce_once(device);
+        }
+        if let Some(read) = &self.raw_read {
+            read.announce(device);
+        }
+        if let Some(read) = &self.raw_placed {
             read.announce_once(device);
         }
     }
@@ -2211,6 +2314,9 @@ pub(super) fn bind(
         // A decoded twin whose texels are not Metal's decode exactly, which the command's
         // function may read through its ID whether or not the command names it.
         notes.twin_read = entry.twins.values().next().cloned();
+        // A texture held by its raw texels alone, which the function may read through its ID
+        // and its own decode.
+        notes.raw_read = entry.raws.values().next().cloned();
         // The shared version, or the command buffer's own, made as it first binds the set.
         let own = heap.versions.iter().find(|v| v.key == set.key).cloned();
         let version = match (&entry.shared, own) {

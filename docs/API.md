@@ -3694,7 +3694,13 @@ bound.
   two below `0.0031308`, where Metal rounds the value to `2^-13` before its table, a step there
   spanning 1.6 codes), an sRGB twin's decoded value within half a `2^-13` step of Metal's table
   (`R10Unorm_X6_sRGB`'s and `RGB10A2Unorm_sRGB`'s colour 1.64 steps) beyond the `Pow`'s bound, a
-  `half` result within one `half` ulp.
+  `half` result within one `half` ulp. A texture a heap holds by its raw texels alone
+  (`BGR10_XR`, `BGRA10_XR`, `R10Unorm_X6`, `RG10Unorm_X12` and the bfloat formats:
+  `bind::heap_raw_form`), whose `float` read, sample or gather through an argument buffer the
+  function decodes the same way, is announced by the runtime instead of by the stage, naming the
+  texture, at the first command that binds a heap set holding it (whether or not its function
+  reads it) or as it is placed in a set a command buffer that bound the set and has not completed
+  may read through.
 - `metal2vulkan-degrade-color-attachment-groups` (precision).
   `PrecisionNote::ColorAttachmentGroups`: A render pipeline whose color attachments the device
   draws in more than one group (more than the lesser of its `maxColorAttachments` and
