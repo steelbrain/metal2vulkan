@@ -31,9 +31,20 @@
 //! the texels from before the pass on the M3 Max and on the runtime alike
 //! (`texture/attached_reads.rs`).
 //!
-//! A texture's texels are recorded as their runs of equal texels (`fresh_contents::texel_runs`),
-//! a lossless encoding whose size follows how often the answer changes along the rows, so a
-//! display-sized target's answer is a few hundred runs.
+//! A texture's texels are recorded as their runs of equal rows, each row's texels as their runs
+//! of equal texels (`fresh_contents::texel_runs`): a lossless encoding whose size follows how often
+//! the answer changes down the target and along a row, so a target whose answer changes at a
+//! scissor's edges is a few rows of a few runs each, where its runs of texels alone would be two a
+//! row (1,042 for each of the chain's targets, 1.46 MB of recording for the three).
+//!
+//! **What the runtime announces, and the case declares.** Every row with a barrier announces
+//! `render-pass-split`: the draw that reads the target records into a Vulkan render pass instance
+//! after the one that runs the clear (`texture/attached_reads.rs`). The display row announces two
+//! more, from the parts of its shape the compositor gave it: `dont-care-load-tiles` for the earlier
+//! pass's `DontCare` load, whose draws cover the whole target before the read's pass clears it, and
+//! `shadowed-texture` for the mask over a buffer's bytes. Measured on the Apple M3 Max (MoltenVK)
+//! and on lavapipe (LLVM 23.1.1), under the exact policy and the runtime's defaults alike, with
+//! every texel and every other field of the transcripts compared.
 
 use crate::allowance::{Allowance, Justification, Loosening};
 use crate::case::{
@@ -45,8 +56,10 @@ use crate::render::{
     ColorState, OverBuffer, PassColor, Plane, ReadAt, RenderPass, RenderPipelineSpec, RenderStep,
     RenderWork, ScissorBox, TargetSpec,
 };
+use crate::replay::notice_allowance;
 use crate::transcript::{Digest, Node, Observed, Sites, Value};
 use metal2vulkan::metal::{BarrierScope, PixelFormat, PrimitiveType, RenderStages};
+use metal2vulkan_runtime::Degradation;
 
 /// The owned fixture of the rectangle and the reads.
 const FIXTURE: &str = "psb_reads";
@@ -616,6 +629,34 @@ fn texels_site(at: usize) -> String {
     format!("texels-{at}")
 }
 
+/// A target's texels, `width` to a row, as its runs of equal rows (the module docs): each
+/// `{at, rows, texels}`, `at` the run's first row and `texels` the row's runs of equal texels.
+fn texel_rows(bytes: &[u8], width: u32) -> Value {
+    let row = (width as usize * TEXEL).max(1);
+    let mut runs = Vec::new();
+    let mut held: Option<(usize, &[u8], u64)> = None;
+    for (at, texels) in bytes.chunks(row).enumerate() {
+        match held {
+            Some((_, last, ref mut rows)) if last == texels => *rows += 1,
+            _ => {
+                runs.extend(held.map(rows_value));
+                held = Some((at, texels, 1));
+            }
+        }
+    }
+    runs.extend(held.map(rows_value));
+    Value::List(runs)
+}
+
+/// One run of [`texel_rows`].
+fn rows_value((at, texels, rows): (usize, &[u8], u64)) -> Value {
+    Value::fields([
+        ("at", Value::Uint(at as u64)),
+        ("rows", Value::Uint(rows)),
+        ("texels", super::fresh_contents::texel_runs(texels, TEXEL)),
+    ])
+}
+
 impl Case for PassStartRead {
     fn name(&self) -> &'static str {
         self.row.case
@@ -632,23 +673,35 @@ impl Case for PassStartRead {
     fn allowances(&self) -> Vec<Allowance> {
         // Each target's texels, where the read follows a barrier, may be the Mac2 answer as well as
         // the M3 Max's, and nothing else: the answer whole, stated by the case (the module docs).
+        let targets = self.row.targets();
         let mut allowances: Vec<Allowance> = self
             .row
             .ordered()
             .into_iter()
             .flatten()
+            .zip(&targets)
             .enumerate()
-            .map(|(at, bytes)| {
+            .map(|(at, (bytes, made))| {
                 Allowance::new(
                     format!("case/{}", texels_site(at)),
-                    Loosening::AnyOf(vec![super::fresh_contents::texel_runs(&bytes, TEXEL)]),
+                    Loosening::AnyOf(vec![texel_rows(&bytes, made.size[0])]),
                     Justification::accepted(MAC2_BARRIER),
                 )
             })
             .collect();
+        // The notices the runtime announces for the row's shape (the module docs). Each loosens
+        // the notices site alone, so every texel still compares.
+        if self.row.barriered() {
+            allowances.push(notice_allowance(Degradation::RenderPassSplit.code()));
+        }
+        if matches!(self.row.shape, Shape::Display) {
+            allowances.push(notice_allowance(Degradation::DontCareLoadTiles.code()));
+            allowances.push(notice_allowance(Degradation::ShadowedTexture.code()));
+        }
         // Every row reads its answer back through a `Shared` buffer, so on a device without
         // unified memory the runtime announces `shared-in-system-memory`
-        // (`crate::replay::shared_memory_notice` holds the whole reason).
+        // (`crate::replay::shared_memory_notice` holds the whole reason). No run has announced it
+        // yet: the M3 Max shares its memory, and lavapipe's is the CPU's.
         allowances.push(crate::replay::shared_memory_notice());
         allowances
     }
@@ -814,7 +867,7 @@ impl Case for PassStartRead {
             )?;
             sites.push(Node::leaf(
                 texels_site(at),
-                Observed::value(super::fresh_contents::texel_runs(&bytes, TEXEL)),
+                Observed::value(texel_rows(&bytes, width)),
             ));
         }
         Ok(())
@@ -874,6 +927,90 @@ mod tests {
         }
     }
 
+    /// The bytes [`texel_rows`] encodes, `width` texels to a row.
+    fn rebuild(value: &Value, width: u32) -> Vec<u8> {
+        let Value::List(runs) = value else {
+            panic!("the rows are a list");
+        };
+        let mut bytes = Vec::new();
+        let mut rows = 0u64;
+        for run in runs {
+            let Value::Fields(fields) = run else {
+                panic!("a run of rows is fields");
+            };
+            let word = |name: &str| match fields[name] {
+                Value::Uint(word) => word,
+                _ => panic!("{name} is a word"),
+            };
+            assert_eq!(word("at"), rows);
+            let Value::List(texel_runs) = &fields["texels"] else {
+                panic!("a row's texels are a list");
+            };
+            let mut row = Vec::new();
+            for texel_run in texel_runs {
+                let Value::Fields(texel_run) = texel_run else {
+                    panic!("a run of texels is fields");
+                };
+                let (Value::Uint(at), Value::Uint(count), Value::Bytes(texel)) =
+                    (&texel_run["at"], &texel_run["texels"], &texel_run["texel"])
+                else {
+                    panic!("a run of texels is its first, its count and its texel");
+                };
+                assert_eq!(*at as usize, row.len() / TEXEL);
+                for _ in 0..*count {
+                    row.extend_from_slice(texel);
+                }
+            }
+            assert!(row.len() <= width as usize * TEXEL);
+            for _ in 0..word("rows") {
+                bytes.extend_from_slice(&row);
+            }
+            rows += word("rows");
+        }
+        bytes
+    }
+
+    /// The runs of rows are lossless: every answer a row states, and an image whose every row and
+    /// texel differs from its neighbours, rebuild from them; and a run of rows holds rows that
+    /// differ from the next run's.
+    #[test]
+    fn the_rows_rebuild_the_bytes_they_came_from() {
+        let mut images: Vec<(Vec<u8>, u32)> = Vec::new();
+        for row in &ROWS {
+            for (answer, made) in row.ordered().into_iter().flatten().zip(row.targets()) {
+                images.push((answer, made.size[0]));
+            }
+        }
+        images.push((image([7, 5], |x, y| [x as u8, y as u8, 3, 4]), 7));
+        images.push((Vec::new(), 7));
+        for (bytes, width) in &images {
+            let rows = texel_rows(bytes, *width);
+            assert_eq!(rebuild(&rows, *width), *bytes);
+            let Value::List(runs) = rows else {
+                panic!("the rows are a list");
+            };
+            for pair in runs.windows(2) {
+                let texels = |value: &Value| match value {
+                    Value::Fields(fields) => fields["texels"].clone(),
+                    _ => panic!("a run of rows is fields"),
+                };
+                assert_ne!(texels(&pair[0]), texels(&pair[1]));
+            }
+        }
+        // The chain's answer is a few runs of rows, not two runs of texels a row.
+        let chain = ROWS
+            .iter()
+            .find(|row| matches!(row.shape, Shape::Chain))
+            .and_then(Row::ordered)
+            .expect("the chain row");
+        for answer in &chain {
+            let Value::List(runs) = texel_rows(answer, CHAIN[0]) else {
+                panic!("the rows are a list");
+            };
+            assert_eq!(runs.len(), 2);
+        }
+    }
+
     /// Metal's recorded answer on the small rows: every read reads, at its pixels, the texels
     /// from before its pass, the barrier or not (the module docs), and every texel outside the
     /// read's scissor is the pass's clear, or its solid draw's color.
@@ -896,7 +1033,7 @@ mod tests {
                 true => reordered(texel(BEFORE)),
                 false => outside,
             });
-            let want = super::super::fresh_contents::texel_runs(&before, TEXEL);
+            let want = texel_rows(&before, SMALL);
             for answer in &recording.answers {
                 for outcome in &answer.outcomes {
                     let node = outcome
