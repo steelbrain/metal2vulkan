@@ -1243,6 +1243,9 @@ pub(super) struct Parts {
     pub(super) calibration: Option<gpu_time::Extension>,
     /// It answers GPU times from the host, writing no timestamps (`gpu_time.rs`).
     pub(super) gpu_times_from_host: bool,
+    /// The class of Mac it presents, as the consumer declared it (`None`: its GPU's,
+    /// `capabilities.rs`).
+    pub(super) mac_class: Option<crate::MacClass>,
     /// The degradation kinds it announces at every occurrence (`degradation.rs`).
     pub(super) announce_each: BTreeSet<Degradation>,
     /// The degradation kinds that refuse a render encoder's call met while lowering it after it
@@ -1328,6 +1331,7 @@ impl Device {
             extensions,
             calibration,
             gpu_times_from_host,
+            mac_class,
             announce_each,
             lowering_refuses,
             record_executions,
@@ -1678,7 +1682,7 @@ impl Device {
         // device exists, so the description's version passed the floor).
         let (identity, max_allocation) =
             unsafe { properties::query(&instance.raw, physical, instance.api_version) };
-        let properties = DeviceProperties::new(identity, description, &compile);
+        let properties = DeviceProperties::new(identity, description, &compile, mac_class);
         // SAFETY: as above.
         let memory_properties =
             unsafe { instance.raw.get_physical_device_memory_properties(physical) };

@@ -2869,17 +2869,20 @@ impl Device {
 
     /// [`new_image`](Self::new_image)'s image for a texture of its own memory the program made
     /// (`newTextureWithDescriptor:`, `newSharedTextureWithDescriptor:`), as Metal's new texture
-    /// starts on the Mac the device presents. `Shared` and `Managed` ones read zero in every
-    /// texel, and a `Memoryless` one holds nothing. A `Private` one, on a device that presents a
-    /// Mac keeping textures compressed
+    /// starts on the Mac the device presents (`MacClass`). `Shared` and `Managed` ones read zero
+    /// in every texel, and a `Memoryless` one holds nothing. A `Private` one, on a device that
+    /// presents a Mac keeping textures compressed
     /// ([`metal_compresses_textures`](Self::metal_compresses_textures)), reads zero where Metal
     /// keeps it uncompressed and Metal's fixed pattern where it compresses it (an Apple M4 under
     /// macOS 27.0.1, each time, also right after a texture of the same shape was written and
-    /// released; [`fresh_patterned`](Self::fresh_patterned)); on one that presents a Mac keeping
+    /// released; [`fresh_patterned`](Self::fresh_patterned)). On one that presents a Mac keeping
     /// none, it holds what its memory held, written by no command, as a Mac with an Intel or AMD
-    /// GPU's does (counted, `WorkCounts::private_textures_unfilled`). The runtime's own images
-    /// keep [`new_image`](Self::new_image)'s start: an image its first command writes in full
-    /// need not be zeroed first.
+    /// GPU's does (counted, `WorkCounts::private_textures_unfilled`), except on an Apple GPU,
+    /// whose own image of such a texture is compressed and would read Apple's pattern: there it
+    /// reads zero, what such a Mac's reads where its memory held nothing (counted,
+    /// `WorkCounts::private_textures_zero_filled`). The runtime's own images keep
+    /// [`new_image`](Self::new_image)'s start: an image its first command writes in full need
+    /// not be zeroed first.
     fn new_texture_image(
         &self,
         plan: ImagePlan,
@@ -2889,7 +2892,10 @@ impl Device {
     ) -> Result<Image, Error> {
         let identity = Identity::new(hazard, false);
         let storage = descriptor.resource_options.storage_mode()?;
-        let unfilled = storage == StorageMode::Private && !self.metal_compresses_textures();
+        let uncompressed = storage == StorageMode::Private && !self.metal_compresses_textures();
+        let apple_gpu = crate::MacClass::of_vendor(self.properties().vendor_id)
+            == crate::MacClass::AppleSilicon;
+        let unfilled = uncompressed && !apple_gpu;
         let held = storage == StorageMode::Memoryless || unfilled;
         let image = self.new_image_starting(
             plan,
@@ -2899,8 +2905,10 @@ impl Device {
             Start::held_or_zero(held),
             Device::runtime_owner,
         )?;
-        if unfilled {
-            self.shared().counts.private_texture_unfilled();
+        match (unfilled, uncompressed) {
+            (true, _) => self.shared().counts.private_texture_unfilled(),
+            (false, true) => self.shared().counts.private_texture_zero_filled(),
+            (false, false) => {}
         }
         Ok(image)
     }
@@ -3253,9 +3261,11 @@ impl Device {
             *lock(&image.first_move) = Some(first.zeroed(zeros, copies));
             return Ok(image);
         }
-        // A `Private` texture of the program's (the runtime's own images are held). Dropping
-        // `image` on failure releases everything above.
-        let patterned = match private && !held {
+        // A `Private` texture of the program's on a device that presents a Mac keeping textures
+        // compressed (the runtime's own images are held; one that presents a Mac keeping none
+        // reads zero, `new_texture_image`). Dropping `image` on failure releases everything
+        // above.
+        let patterned = match private && !held && self.metal_compresses_textures() {
             true => {
                 let key = image.identity.key;
                 self.fresh_patterned(&image.plan, layout, descriptor, clear, key)?

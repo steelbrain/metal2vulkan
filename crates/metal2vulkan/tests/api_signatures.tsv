@@ -1277,6 +1277,7 @@ enum	metal2vulkan-runtime::InstanceApiVersion	#[derive(Clone, Copy, Debug, Parti
 enum	metal2vulkan-runtime::LayerSettingValue	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub enum LayerSettingValue
 enum	metal2vulkan-runtime::LimitRow	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)] #[non_exhaustive] pub enum LimitRow
 enum	metal2vulkan-runtime::LoadAction	#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum LoadAction
+enum	metal2vulkan-runtime::MacClass	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum MacClass
 enum	metal2vulkan-runtime::MappedSampling	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum MappedSampling
 enum	metal2vulkan-runtime::MemoryKind	#[derive(Clone, Copy, Debug, PartialEq, Eq)] #[non_exhaustive] pub enum MemoryKind
 enum	metal2vulkan-runtime::MessageSeverity	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum MessageSeverity
@@ -2042,6 +2043,7 @@ field	metal2vulkan-runtime::DeviceOptions.layer_settings	pub layer_settings: Vec
 field	metal2vulkan-runtime::DeviceOptions.layers	pub layers: Vec<CString>
 field	metal2vulkan-runtime::DeviceOptions.loader	pub loader: Option<PathBuf>
 field	metal2vulkan-runtime::DeviceOptions.lowering_refuses	pub lowering_refuses: BTreeSet<crate::Degradation>
+field	metal2vulkan-runtime::DeviceOptions.mac_class	pub mac_class: Option<crate::MacClass>
 field	metal2vulkan-runtime::DeviceOptions.messages	pub messages: Option<MessageSink>
 field	metal2vulkan-runtime::DeviceOptions.optional_device_extensions	pub optional_device_extensions: Vec<CString>
 field	metal2vulkan-runtime::DeviceOptions.pipeline_records	pub pipeline_records: Option<Arc<dyn Fn(crate::PipelineRecord) + Send + Sync>>
@@ -2272,6 +2274,7 @@ field	metal2vulkan-runtime::RawDevice.host_image_copy	pub host_image_copy: bool
 field	metal2vulkan-runtime::RawDevice.instance	pub instance: vk::Instance
 field	metal2vulkan-runtime::RawDevice.instance_api_version	pub instance_api_version: metal2vulkan::vk::ApiVersion
 field	metal2vulkan-runtime::RawDevice.lowering_refuses	pub lowering_refuses: BTreeSet<crate::Degradation>
+field	metal2vulkan-runtime::RawDevice.mac_class	pub mac_class: Option<crate::MacClass>
 field	metal2vulkan-runtime::RawDevice.physical_device	pub physical_device: vk::PhysicalDevice
 field	metal2vulkan-runtime::RawDevice.pipeline_records	pub pipeline_records: Option<Arc<dyn Fn(crate::PipelineRecord) + Send + Sync>>
 field	metal2vulkan-runtime::RawDevice.queue_family	pub queue_family: u32
@@ -2859,6 +2862,7 @@ field	metal2vulkan-runtime::WorkCounts.predicated_loop_runs_again	pub predicated
 field	metal2vulkan-runtime::WorkCounts.prefixed_starts	pub prefixed_starts: u64
 field	metal2vulkan-runtime::WorkCounts.primaries_begun_ahead	pub primaries_begun_ahead: u64
 field	metal2vulkan-runtime::WorkCounts.private_textures_unfilled	pub private_textures_unfilled: u64
+field	metal2vulkan-runtime::WorkCounts.private_textures_zero_filled	pub private_textures_zero_filled: u64
 field	metal2vulkan-runtime::WorkCounts.provoking_last_pipeline_draws	pub provoking_last_pipeline_draws: u64
 field	metal2vulkan-runtime::WorkCounts.provoking_listed_draws	pub provoking_listed_draws: u64
 field	metal2vulkan-runtime::WorkCounts.query_result_copies_recorded	pub query_result_copies_recorded: u64
@@ -8127,6 +8131,7 @@ method	metal2vulkan-runtime::Library::reflection_for_function_with_name	pub fn r
 method	metal2vulkan-runtime::LimitRow::label	pub fn label(self) -> &'static str
 method	metal2vulkan-runtime::LoadAction::from_raw	pub fn from_raw(raw: u64) -> Result<LoadAction, Error>
 method	metal2vulkan-runtime::LoadAction::raw	pub fn raw(self) -> u64
+method	metal2vulkan-runtime::MacClass::of_vendor	pub fn of_vendor(vendor_id: u32) -> MacClass
 method	metal2vulkan-runtime::MessageSink::new	pub fn new(receive: impl Fn(&DebugMessage) + Send + Sync + 'static) -> MessageSink
 method	metal2vulkan-runtime::MessageSink::with_least_severity	pub fn with_least_severity(self, least: MessageSeverity) -> MessageSink
 method	metal2vulkan-runtime::MetalError::new	pub fn new(call: &'static str, problem: Problem, domain: &'static str, code: i64, localized_description: &'static str) -> MetalError
@@ -11824,6 +11829,8 @@ variant	metal2vulkan-runtime::LimitRow::VisibilityQueryOffset	VisibilityQueryOff
 variant	metal2vulkan-runtime::LoadAction::Clear	Clear
 variant	metal2vulkan-runtime::LoadAction::DontCare	DontCare
 variant	metal2vulkan-runtime::LoadAction::Load	Load
+variant	metal2vulkan-runtime::MacClass::AppleSilicon	AppleSilicon
+variant	metal2vulkan-runtime::MacClass::IntelOrAmd	IntelOrAmd
 variant	metal2vulkan-runtime::MappedSampling::ConstexprSampler	ConstexprSampler
 variant	metal2vulkan-runtime::MappedSampling::Handles	Handles
 variant	metal2vulkan-runtime::MappedSampling::SharedSamplerSlot	SharedSamplerSlot

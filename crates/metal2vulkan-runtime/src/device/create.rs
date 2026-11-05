@@ -157,6 +157,16 @@ pub struct DeviceOptions {
     /// device whose queue family writes no timestamps then answers GPU times instead of refusing
     /// them. Metal has no such setting.
     pub gpu_times_from_host: bool,
+    /// The class of Mac each device presents ([`MacClass`](crate::MacClass)), whose Metal's
+    /// answers it gives where a Mac's GPU decides them: what a new `Private` texture reads before
+    /// anything writes it, the encoding a GPU blit through a compressed texture writes, and a
+    /// `half` NaN clear's sign ([`DeviceProperties::lossless_compression`](crate::DeviceProperties::lossless_compression)
+    /// states it). `None` by default: the class of the device's GPU
+    /// ([`MacClass::of_vendor`](crate::MacClass::of_vendor): an Apple GPU presents an Apple
+    /// silicon Mac, every other GPU a Mac with an Intel or AMD GPU). A consumer that presents
+    /// another Mac than its GPU's (an x86-64 macOS guest, an Intel or AMD Mac, on an Apple GPU)
+    /// declares it. No Metal counterpart: a Mac's GPU is what it is.
+    pub mac_class: Option<crate::MacClass>,
     /// The degradation kinds each device announces at every occurrence, not once (empty by
     /// default: each kind once per device). Each occurrence's notice is the same
     /// [`DegradeNotice`] through the same sink (or stderr), on the thread whose call announces
@@ -291,6 +301,7 @@ impl std::fmt::Debug for DeviceOptions {
             withhold_view_reinterpretation,
             instance_api_version,
             gpu_times_from_host,
+            mac_class,
             announce_each,
             lowering_refuses,
             record_executions,
@@ -320,6 +331,7 @@ impl std::fmt::Debug for DeviceOptions {
             )
             .field("instance_api_version", instance_api_version)
             .field("gpu_times_from_host", gpu_times_from_host)
+            .field("mac_class", mac_class)
             .field("announce_each", announce_each)
             .field("lowering_refuses", lowering_refuses)
             .field("record_executions", record_executions)
@@ -1762,6 +1774,7 @@ fn create_on(
         extensions: enables.names().map(CStr::to_owned).collect(),
         calibration,
         gpu_times_from_host: options.gpu_times_from_host,
+        mac_class: options.mac_class,
         announce_each: options.announce_each.clone(),
         lowering_refuses: options.lowering_refuses.clone(),
         record_executions: options.record_executions,
@@ -1912,6 +1925,7 @@ fn same_options(a: &DeviceOptions, b: &DeviceOptions) -> bool {
         withhold_view_reinterpretation,
         instance_api_version,
         gpu_times_from_host,
+        mac_class,
         announce_each,
         lowering_refuses,
         record_executions,
@@ -1936,6 +1950,7 @@ fn same_options(a: &DeviceOptions, b: &DeviceOptions) -> bool {
         && *withhold_view_reinterpretation == b.withhold_view_reinterpretation
         && *instance_api_version == b.instance_api_version
         && *gpu_times_from_host == b.gpu_times_from_host
+        && *mac_class == b.mac_class
         && *announce_each == b.announce_each
         && *lowering_refuses == b.lowering_refuses
         && *record_executions == b.record_executions

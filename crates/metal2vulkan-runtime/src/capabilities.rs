@@ -26,6 +26,7 @@
 //! a method of its object's step on `Device` instead: step 5's per-format mipmap verdict, settled
 //! by the first mipmap generation of each format.
 
+use super::device::argument_buffers::APPLE;
 use super::device::DeviceKind;
 use super::driver_defects;
 use super::error::{invalid, Error, Problem, RuntimeGap};
@@ -70,14 +71,13 @@ pub struct DeviceProperties {
     /// Mac's does (docs/API.md "The runtime's memory model").
     pub has_unified_memory: bool,
     /// Whether the Mac the device presents keeps textures losslessly compressed, as an Apple
-    /// silicon Mac's GPU does, a Mac with an Intel or AMD GPU's does not. Metal has no property
-    /// for it: it shows in what a new `Private` texture reads before anything writes it (Metal's
-    /// fixed pattern or zero, against zero or a released texture's texels), in the encoding a GPU
-    /// blit through such a texture writes, and in a `half` NaN clear's sign (docs/API.md, the
-    /// accepted differences). Today a device presented with unified memory
-    /// ([`has_unified_memory`](Self::has_unified_memory)); an integrated GPU that is not Apple's
-    /// presents unified memory too, so it answers yes, though an Intel Mac's GPU keeps no texture
-    /// compressed.
+    /// silicon Mac's GPU does, a Mac with an Intel or AMD GPU's does not: true where the device
+    /// presents [`MacClass::AppleSilicon`], the class
+    /// [`DeviceOptions::mac_class`](crate::DeviceOptions::mac_class) declares, else the one of
+    /// the device's GPU ([`MacClass::of_vendor`]). Metal has no property for it: it shows in what
+    /// a new `Private` texture reads before anything writes it (Metal's fixed pattern or zero,
+    /// against zero or a released texture's texels), in the encoding a GPU blit through such a
+    /// texture writes, and in a `half` NaN clear's sign (docs/API.md, the accepted differences).
     pub lossless_compression: bool,
     /// `VkPhysicalDeviceProperties::vendorID`.
     pub vendor_id: u32,
@@ -199,25 +199,70 @@ pub(crate) struct DeviceIdentity {
     pub sampled_sample_counts: SampleCountFlags,
 }
 
-/// Whether the Mac a device of `identity` presents keeps textures losslessly compressed
-/// ([`DeviceProperties::lossless_compression`]): the one place the runtime decides it. Every
-/// answer that differs between an Apple silicon Mac and a Mac with an Intel or AMD GPU because the
-/// first compresses (a new `Private` texture's contents, a blit's canonical encodings, a `half` NaN
-/// clear's sign) reads that field, and nothing else decides it. Today a device presented with
-/// unified memory.
-fn presents_lossless_compression(identity: &DeviceIdentity) -> bool {
-    identity.kind.has_unified_memory()
+/// The class of Mac a device presents, whose GPU decides answers Metal gives without a property
+/// of its own: what a new `Private` texture reads before anything writes it, the encoding a GPU
+/// blit through a compressed texture writes, and a `half` NaN clear's sign (docs/API.md, the
+/// accepted differences). Every Mac's Metal answers one class's way, by the GPU it has (Apple
+/// silicon, or an Intel or AMD GPU); the runtime answers the class the consumer declares
+/// ([`DeviceOptions::mac_class`](crate::DeviceOptions::mac_class)), else the one of the device's
+/// GPU ([`MacClass::of_vendor`]), and states it as
+/// [`DeviceProperties::lossless_compression`]. No Metal counterpart: a Mac's GPU is what it is.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum MacClass {
+    /// An Apple silicon Mac, whose GPU keeps a texture losslessly compressed where Metal's rule
+    /// holds (`allowGPUOptimizedContents`, a level 0 of 16 texels or more on its shorter side, a
+    /// colour format of neither `ShaderWrite` nor `PixelFormatView` usage): a new `Private` such
+    /// texture reads Metal's fixed pattern over its first levels and zero elsewhere, blits
+    /// through it write three formats' canonical encodings, and a `half` NaN clear keeps its
+    /// sign. The runtime writes the pattern and the zeros (a pattern no clear or copy writes
+    /// exactly reads zero, announced as `fresh-pattern-zeroed`).
+    AppleSilicon,
+    /// A Mac with an Intel or AMD GPU, which keeps no texture compressed: a new `Private`
+    /// texture holds what its memory held (zero, or a released texture's texels: an Intel UHD
+    /// 630 and an AMD Radeon Pro 5300M), blits keep the bytes, and a `half` NaN clear goes
+    /// through `half`. On a GPU that keeps no texture compressed the runtime writes nothing into
+    /// a new `Private` texture (`WorkCounts::private_textures_unfilled`); on an Apple GPU, whose
+    /// own compressed texture would read Apple's pattern, it fills it with zeros
+    /// (`WorkCounts::private_textures_zero_filled`).
+    IntelOrAmd,
+}
+
+impl MacClass {
+    /// The class of the Mac whose GPU is of PCI vendor `vendor_id`
+    /// (`VkPhysicalDeviceProperties::vendorID`): an Apple GPU's (`0x106b`, MoltenVK on Apple
+    /// silicon) is [`AppleSilicon`](Self::AppleSilicon); every other GPU's (Intel, AMD, NVIDIA, a
+    /// CPU implementation's) is [`IntelOrAmd`](Self::IntelOrAmd), whose GPUs keep no texture
+    /// compressed, an integrated GPU of unified memory such as Intel's included. The class a
+    /// device presents where the consumer declares none. No Metal counterpart.
+    pub fn of_vendor(vendor_id: u32) -> MacClass {
+        match vendor_id == APPLE {
+            true => MacClass::AppleSilicon,
+            false => MacClass::IntelOrAmd,
+        }
+    }
+}
+
+/// Whether the Mac a device of `identity`, its class declared as `declared`, presents keeps
+/// textures losslessly compressed ([`DeviceProperties::lossless_compression`]): the one place the
+/// runtime decides it. Every answer that differs between an Apple silicon Mac and a Mac with an
+/// Intel or AMD GPU because the first compresses (a new `Private` texture's contents, a blit's
+/// canonical encodings, a `half` NaN clear's sign) reads that field, and nothing else decides it.
+fn presents_lossless_compression(identity: &DeviceIdentity, declared: Option<MacClass>) -> bool {
+    declared.unwrap_or_else(|| MacClass::of_vendor(identity.vendor_id)) == MacClass::AppleSilicon
 }
 
 impl DeviceProperties {
     /// The properties of the device `identity` names, created with `description` (what it
-    /// enables), whose compile-layer device is `compile`.
+    /// enables), whose compile-layer device is `compile`, presenting the Mac class `mac_class`
+    /// declares (`None`: its GPU's).
     pub(crate) fn new(
         identity: DeviceIdentity,
         description: DeviceDescription,
         compile: &metal2vulkan::device::Device,
+        mac_class: Option<MacClass>,
     ) -> DeviceProperties {
-        let lossless_compression = presents_lossless_compression(&identity);
+        let lossless_compression = presents_lossless_compression(&identity, mac_class);
         let metal = compile.metal_properties();
         let [width, height, depth] = metal.max_threads_per_threadgroup.map(u64::from);
         let texture_sample_counts = metal.raster_sample_counts & identity.sampled_sample_counts;

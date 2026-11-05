@@ -91,7 +91,10 @@ pub(super) fn zeroed(messages: &Messages) -> bool {
 }
 
 /// Whether `device` is without Metal's compression, where a new `Private` texture holds what
-/// its memory held, written by nothing (the module docs).
+/// its memory held, written by nothing (the module docs). Every lane device presents its GPU's
+/// Mac class (`DeviceOptions::mac_class` unset), which keeps no texture compressed on a GPU that
+/// is not Apple's alone, so the device writes nothing there; an Apple GPU presenting a Mac with an
+/// Intel or AMD GPU instead fills it with zeros, which the runtime's own `mac_class` tests hold.
 pub(super) fn unfilled(device: &Device) -> bool {
     !device.properties().lossless_compression
 }

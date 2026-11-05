@@ -248,6 +248,7 @@ pub(crate) struct Counters {
     commits_handed_off: AtomicU64,
     images_started_on_the_host: AtomicU64,
     private_textures_unfilled: AtomicU64,
+    private_textures_zero_filled: AtomicU64,
     host_texel_copies: AtomicU64,
     texel_shadows_made: AtomicU64,
     texel_shadow_bytes: AtomicU64,
@@ -3245,6 +3246,12 @@ impl Counters {
         (self.private_textures_unfilled).fetch_add(1, Ordering::Relaxed);
     }
 
+    /// A new `Private` texture of the program's was made zero-filled, on an Apple GPU presenting
+    /// a Mac that keeps no texture compressed (`Device::metal_compresses_textures`).
+    pub(crate) fn private_texture_zero_filled(&self) {
+        (self.private_textures_zero_filled).fetch_add(1, Ordering::Relaxed);
+    }
+
     /// A texture's CPU copy ran on the host (`texture/host_copy.rs`).
     pub(crate) fn host_texel_copy(&self) {
         self.host_texel_copies.fetch_add(1, Ordering::Relaxed);
@@ -4803,11 +4810,18 @@ pub struct WorkCounts {
     /// no submission (`texture/host_copy.rs`).
     pub images_started_on_the_host: u64,
     /// New `Private` textures the program made on a device that presents a Mac keeping no texture
-    /// compressed (`DeviceProperties::lossless_compression` false), each holding what its memory
-    /// held, written by no command: no zeros and no pattern, as a Mac with an Intel or AMD GPU's
-    /// new `Private` texture. Zero on a device that presents an Apple silicon Mac's compression,
-    /// whose new `Private` textures start as that Mac's.
+    /// compressed (`DeviceProperties::lossless_compression` false, `MacClass::IntelOrAmd`) on a GPU
+    /// that is not Apple's, each holding what its memory held, written by no command: no zeros and
+    /// no pattern, as a Mac with an Intel or AMD GPU's new `Private` texture. Zero on a device
+    /// that presents an Apple silicon Mac's compression, whose new `Private` textures start as
+    /// that Mac's, and on an Apple GPU ([`private_textures_zero_filled`](Self::private_textures_zero_filled)).
     pub private_textures_unfilled: u64,
+    /// New `Private` textures the program made on an Apple GPU that presents a Mac keeping no
+    /// texture compressed (`DeviceProperties::lossless_compression` false, a declared
+    /// `MacClass::IntelOrAmd`), each filled with zeros as it is made: the GPU's own compressed
+    /// texture would read Apple's fixed pattern, which no Mac with an Intel or AMD GPU reads, and
+    /// zero is what such a Mac's new texture reads where its memory held nothing. Zero elsewhere.
+    pub private_textures_zero_filled: u64,
     /// `replace_region` and `get_bytes` copies that ran on the host, with no submission
     /// (`texture/host_copy.rs`).
     pub host_texel_copies: u64,
@@ -6499,6 +6513,8 @@ impl Device {
             commits_taken_in: self.shared().scheduler.commits_taken_in(),
             images_started_on_the_host: counters.images_started_on_the_host.load(Ordering::Relaxed),
             private_textures_unfilled: counters.private_textures_unfilled.load(Ordering::Relaxed),
+            private_textures_zero_filled: (counters.private_textures_zero_filled)
+                .load(Ordering::Relaxed),
             host_texel_copies: counters.host_texel_copies.load(Ordering::Relaxed),
             texel_shadows_made: counters.texel_shadows_made.load(Ordering::Relaxed),
             texel_shadow_bytes: counters.texel_shadow_bytes.load(Ordering::Relaxed),

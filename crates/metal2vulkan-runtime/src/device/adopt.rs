@@ -88,6 +88,10 @@ pub struct RawDevice {
     /// queue's, which answers from the host's clock whatever this says. Metal has no such
     /// setting.
     pub gpu_times_from_host: bool,
+    /// The class of Mac the device presents, as
+    /// [`DeviceOptions::mac_class`](crate::DeviceOptions::mac_class) says: `None` by default,
+    /// the class of the device's GPU. No Metal counterpart.
+    pub mac_class: Option<crate::MacClass>,
     /// The degradation kinds the device announces at every occurrence, not once, as
     /// [`DeviceOptions::announce_each`](crate::DeviceOptions::announce_each) says: none by
     /// default.
@@ -121,6 +125,7 @@ impl std::fmt::Debug for RawDevice {
             view_format_reinterpretation,
             host_image_copy,
             gpu_times_from_host,
+            mac_class,
             announce_each,
             lowering_refuses,
             pipeline_records,
@@ -176,6 +181,7 @@ impl RawDevice {
             view_format_reinterpretation: false,
             host_image_copy: false,
             gpu_times_from_host: false,
+            mac_class: None,
             announce_each: BTreeSet::new(),
             lowering_refuses: BTreeSet::new(),
             pipeline_records: None,
@@ -329,6 +335,7 @@ impl Device {
             dma_buf_images,
             calibration: gpu_time::Extension::among(&raw.device_extensions.into_iter().collect()),
             gpu_times_from_host: raw.gpu_times_from_host,
+            mac_class: raw.mac_class,
             // An adopted device keeps no execution record: validation makes its own devices.
             record_executions: false,
             pipeline_records: raw.pipeline_records,

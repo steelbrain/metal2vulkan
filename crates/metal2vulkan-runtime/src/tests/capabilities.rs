@@ -8,7 +8,8 @@ use crate::capabilities::{
     DeviceIdentity, RATE_MAP_LAYERS,
 };
 use crate::{
-    BufferTextureProblem, DeviceKind, DeviceProperties, Error, Invalid, Problem, Query, Size,
+    BufferTextureProblem, DeviceKind, DeviceProperties, Error, Invalid, MacClass, Problem, Query,
+    Size,
 };
 use metal2vulkan::bind::{RasterizationRateMap, RateMapDescriptor, RateMapLayerDescriptor};
 use metal2vulkan::device::{
@@ -97,7 +98,7 @@ pub(super) fn created(
         .with_enabled(&enables)
         .unwrap_or_else(|e| panic!("{stem}: {e}"));
     let compile = Device::new(enabled.clone(), policy).unwrap_or_else(|e| panic!("{stem}: {e}"));
-    let properties = DeviceProperties::new(identity(stem), enabled.clone(), &compile);
+    let properties = DeviceProperties::new(identity(stem), enabled.clone(), &compile, None);
     (enabled, properties)
 }
 
@@ -124,8 +125,54 @@ fn unified_memory_is_the_device_kinds() {
             kind,
             ..identity(stem)
         };
-        let p = DeviceProperties::new(identity, enabled.clone(), &compile);
+        let p = DeviceProperties::new(identity, enabled.clone(), &compile, None);
         assert_eq!(p.has_unified_memory, unified, "{kind:?}");
+    }
+}
+
+/// `lossless_compression` is the Mac class the device presents: the one the consumer declares,
+/// whatever its GPU, else its GPU's, which is an Apple silicon Mac's on an Apple GPU alone. An
+/// integrated GPU that is not Apple's, of unified memory as an Intel Mac's is, presents a Mac
+/// keeping no texture compressed by default, as the consumer's probe of an Intel UHD 630 reads.
+#[test]
+fn lossless_compression_is_the_presented_mac_class() {
+    let (stem, desc) = &committed_descriptions()[0];
+    let policy = DevicePolicy::UNTRUSTED;
+    let enabled = desc
+        .clone()
+        .with_enabled(&desc.recommended_enables(&policy))
+        .unwrap_or_else(|e| panic!("{stem}: {e}"));
+    let compile = Device::new(enabled.clone(), policy).unwrap_or_else(|e| panic!("{stem}: {e}"));
+    // Apple, Intel, AMD, NVIDIA, and Mesa's for a CPU implementation (lavapipe).
+    let gpus = [
+        (0x106b, DeviceKind::Integrated, MacClass::AppleSilicon),
+        (0x8086, DeviceKind::Integrated, MacClass::IntelOrAmd),
+        (0x1002, DeviceKind::Integrated, MacClass::IntelOrAmd),
+        (0x1002, DeviceKind::Discrete, MacClass::IntelOrAmd),
+        (0x10de, DeviceKind::Discrete, MacClass::IntelOrAmd),
+        (0x10005, DeviceKind::Cpu, MacClass::IntelOrAmd),
+    ];
+    for (vendor_id, kind, own) in gpus {
+        assert_eq!(MacClass::of_vendor(vendor_id), own, "{vendor_id:#x}");
+        for declared in [
+            None,
+            Some(MacClass::AppleSilicon),
+            Some(MacClass::IntelOrAmd),
+        ] {
+            let identity = DeviceIdentity {
+                kind,
+                vendor_id,
+                ..identity(stem)
+            };
+            let p = DeviceProperties::new(identity, enabled.clone(), &compile, declared);
+            let class = declared.unwrap_or(own);
+            assert_eq!(
+                p.lossless_compression,
+                class == MacClass::AppleSilicon,
+                "{vendor_id:#x} {kind:?} declared {declared:?}"
+            );
+            assert_eq!(p.has_unified_memory, kind.has_unified_memory(), "{kind:?}");
+        }
     }
 }
 
@@ -239,7 +286,7 @@ fn raster_order_groups_agree_with_the_compile_layer() {
             .unsupported_features
             .iter()
             .any(|u: &Unsupported| u.feature == Feature::RasterOrderGroups);
-        let p = DeviceProperties::new(identity(stem), enabled, &compile);
+        let p = DeviceProperties::new(identity(stem), enabled, &compile, None);
         if p.device_answers().raster_order_groups {
             assert!(!refused, "{stem}");
         }

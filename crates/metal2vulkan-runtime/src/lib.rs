@@ -259,7 +259,7 @@ pub use blit::BlitCommandEncoder;
 pub use buffer::Buffer;
 pub use buffer_descriptor::{BufferContents, BufferDescriptor};
 pub use buffer_texture::IoSurfacePlane;
-pub use capabilities::{DeviceProperties, Query};
+pub use capabilities::{DeviceProperties, MacClass, Query};
 pub use churn_counts::{ObjectChurn, ShadowKeeps};
 pub use command_buffer::checks::{Submission, SubmissionCheck};
 pub use command_buffer::{CommandBuffer, CommitFailure, FailedEncoders, Handler};

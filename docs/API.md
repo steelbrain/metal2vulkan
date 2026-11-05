@@ -1925,8 +1925,9 @@ bound.
   Metal clears only the tiles a draw's primitives touch and keeps the texels of the others. Cost:
   the tiles no draw touches hold zero or the clear value where Metal keeps their texels.
 - `metal2vulkan-degrade-fresh-pattern-zeroed` (precision). `FreshPatternZeroed`: On a device that
-  presents an Apple silicon Mac's compression (`DeviceProperties::lossless_compression`; never on
-  one that presents none, whose new `Private` texture holds what its memory held: section 10), a
+  presents an Apple silicon Mac's compression (`DeviceProperties::lossless_compression`,
+  `MacClass::AppleSilicon`; never on one that presents a Mac with an Intel or AMD GPU, whose new
+  `Private` texture holds what its memory held or reads zero: section 10), a
   new `Private` texture Metal keeps losslessly compressed reads a fixed pattern in Metal, which the
   device cannot
   write exactly into its image: a NaN depth where a copy into a depth image may store it clamped or
@@ -4043,17 +4044,24 @@ each item named states the rule in full.
 
 **The Mac a device presents**
 
-- **A device that presents a Mac without texture compression answers as that Mac.** An Apple
-  silicon Mac's GPU keeps textures losslessly compressed; a Mac's Intel or AMD GPU keeps none. On
-  a device whose `DeviceProperties::lossless_compression` is false (today, one presented without
-  unified memory: a discrete GPU), the runtime answers as a Mac without the compression:
+- **A device answers as the class of Mac it presents.** An Apple silicon Mac's GPU keeps textures
+  losslessly compressed; a Mac's Intel or AMD GPU keeps none. A device presents the class
+  `DeviceOptions::mac_class` declares (`MacClass`), by default its GPU's: an Apple silicon Mac on
+  an Apple GPU (vendor `0x106b`, MoltenVK on Apple silicon), a Mac with an Intel or AMD GPU on
+  every other GPU, an integrated one of unified memory included (an Intel UHD 630 Mac reports
+  unified memory and keeps no texture compressed). `DeviceProperties::lossless_compression`
+  states it. On a device that presents a Mac with an Intel or AMD GPU (`lossless_compression`
+  false), the runtime answers as that Mac:
   - a new `Private` texture holds what its memory held, zero or a released texture's texels, and
     no command writes it (`WorkCounts::private_textures_unfilled` counts each), where an Apple
     silicon Mac's reads zero or the compressed texture's fixed pattern, so `fresh-pattern-zeroed`
     is never announced. Measured on Macs with an AMD Radeon Pro 5300M and an Intel UHD 630 (the
     consumer's probes): new `Private` textures read zero; a mipmapped `RGBA16Float` one made right
     after a cleared one of its descriptor was released read the cleared colour in every level on
-    both; a `Depth32Float` one never read the released clear.
+    both; a `Depth32Float` one never read the released clear. On an Apple GPU, whose own image of
+    such a texture is compressed and would read Apple's pattern, which no such Mac reads, the
+    runtime fills it with zeros as it is made instead (`WorkCounts::private_textures_zero_filled`
+    counts each).
   - a GPU blit or fill through any texture keeps its bytes, with no `extended-range-bits-kept`,
     `device-nan-encoding` or `shared-exponent-kept` note for it and no rewrite under
     `ExtendedRangeBlitPolicy::Canonical`, and a clear of any texture takes the route of Metal's
@@ -4062,9 +4070,14 @@ each item named states the rule in full.
 
   Metal leaves a new texture's contents undefined, and zero and a released texture's texels are
   both what such a Mac reads, so this trades no accuracy and no `DevicePolicy` switch fills the
-  texture. A device whose `lossless_compression` is true answers as an Apple silicon Mac, the
-  pattern included. An integrated GPU that is not Apple's (Intel's, AMD's) is one today, though an
-  Intel Mac's GPU keeps no texture compressed.
+  texture. A device that presents an Apple silicon Mac (`lossless_compression` true) answers as
+  one, on any GPU: the runtime writes the pattern and the zeros of a new `Private` texture, a
+  pattern no clear or copy writes exactly reading zero (`fresh-pattern-zeroed`). Under a declared
+  class other than the GPU's, the blit encodings and NaN signs above are the runtime's own
+  handling, except that MoltenVK's copies of an image Metal compresses on an Apple GPU still write
+  the canonical `RG11B10Float` and `RGB9E5Float` encodings
+  (`RuntimeDriverDefect::CompressedImageCopiesRewriteTexels`). Expected, not measured, beyond the
+  new textures' contents.
 
 **Heaps and memory**
 

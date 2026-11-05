@@ -804,8 +804,9 @@ degradations! {
             "the tiles no draw touches hold zero or the clear value where Metal keeps their \
              texels";
         /// On a device that presents an Apple silicon Mac's compression
-        /// (`DeviceProperties::lossless_compression`; never on one that presents none, whose new
-        /// `Private` texture holds what its memory held), a new `Private` texture Metal keeps
+        /// (`DeviceProperties::lossless_compression`, `MacClass::AppleSilicon`; never on one that
+        /// presents a Mac with an Intel or AMD GPU, whose new `Private` texture holds what its
+        /// memory held or reads zero), a new `Private` texture Metal keeps
         /// losslessly compressed reads a fixed pattern in Metal
         /// (`texture/heap_tiled.rs`'s `fresh_pattern`), which the device cannot write
         /// exactly into its image: a NaN depth where a copy into a depth image may store it
