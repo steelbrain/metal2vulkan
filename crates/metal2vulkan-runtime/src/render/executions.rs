@@ -2081,7 +2081,7 @@ impl RenderExecution {
         let mut encoder = self.replay_encoder(
             core,
             (draws, visibility),
-            (storage, layout, residency),
+            (storage, layout, residency.clone()),
             forms,
         );
         if !step {
@@ -2414,7 +2414,7 @@ impl RenderExecution {
         &self,
         core: EncoderCore,
         (draws, visibility): (vk::CommandBuffer, Visibility),
-        (storage, layout, residency): (PassStorage, PassLayout, &Residency),
+        (storage, layout, residency): (PassStorage, PassLayout, Residency),
         forms: BufferForms,
     ) -> RenderLowering {
         let snapshot = &self.snapshot;
@@ -2500,7 +2500,7 @@ impl RenderExecution {
                 .tile_memory
                 .arguments()
                 .with_buffer(storage.tile_memory),
-            residency: residency.clone(),
+            residency,
             executions: Vec::new(),
             pending: Vec::new(),
             draw_calls: 0,
@@ -2596,7 +2596,7 @@ impl RenderExecution {
         let mut encoder = self.replay_encoder(
             core,
             (vk::CommandBuffer::null(), visibility),
-            (storage, snapshot.layout.clone(), residency),
+            (storage, snapshot.layout.clone(), residency.clone()),
             BufferForms::Large,
         );
         for pipeline in named {

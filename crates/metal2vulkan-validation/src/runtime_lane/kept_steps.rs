@@ -5,11 +5,14 @@
 //! [`a_kept_host_step_records_again_where_one_input_changes`] runs a page of two chunks' commands
 //! three frames under one set of inputs: the third runs both chunks the second kept, recording
 //! none (`WorkCounts::host_step_chunks_kept`). It then changes one input of what a kept chunk's
-//! recording read, alone, and runs two frames more: the first records both chunks again
+//! recording read, alone, and runs frames more: the first records both chunks again
 //! (`WorkCounts::host_step_chunks_recorded_again`) and draws what a page that kept nothing draws
 //! under the new inputs (where the change shows in the pixels, other pixels than before); the
-//! second runs the new recording kept. The inputs, a case each: the records the GPU wrote (the
-//! encoding pass binds the indices' zero half, so every index address moves); the buffer
+//! next runs the new recording kept, but where the records changed, which the changed frame
+//! records inline and the next one records apart and keeps, as two steps read them alike
+//! (`WorkCounts::kept_contexts_made`). Records that change at each step record inline each,
+//! keeping nothing. The inputs, a case each: the records the GPU wrote (the encoding pass binds the indices' zero
+//! half, so every index address moves); the buffer
 //! the commands inherit, and its offset; the pipeline state they inherit; the encoder's scissor
 //! rectangle; the resources the command buffer made resident; the buffer an index address names,
 //! at the same address (the indices found among the device's live buffers, released and made
@@ -42,13 +45,35 @@ const SIDE: u64 = 64;
 /// granule's first page (`address.rs`), high in the space, far from the ranges the runtime picks.
 const PINNED: GpuAddress = GpuAddress(0x7000_0000_0000);
 
-/// What a frame moved of the kept chunks' counters: chunks run kept, and chunks recorded again
-/// though a recording of them was kept.
+/// What a frame moved of the kept chunks' counters: chunks run kept, chunks recorded again though
+/// a recording of them was kept, and chunks recorded apart to keep (`WorkCounts::kept_contexts_made`).
 #[derive(Debug, PartialEq)]
 struct Moved {
     kept: u64,
     again: u64,
+    apart: u64,
 }
+
+/// A frame that keeps nothing and runs nothing kept: one that records inline.
+const INLINE: Moved = Moved {
+    kept: 0,
+    again: 0,
+    apart: 0,
+};
+
+/// A frame that records every chunk apart and keeps it.
+const KEEPS: Moved = Moved {
+    kept: 0,
+    again: 0,
+    apart: CHUNKS,
+};
+
+/// A frame that runs every chunk kept.
+const KEPT: Moved = Moved {
+    kept: CHUNKS,
+    again: 0,
+    apart: 0,
+};
 
 /// One frame of `page` on `queue` under `inputs`, waited for: what it moved, and the target's
 /// pixels after it.
@@ -65,11 +90,12 @@ fn moved(before: &WorkCounts, after: &WorkCounts) -> Moved {
     Moved {
         kept: after.host_step_chunks_kept - before.host_step_chunks_kept,
         again: after.host_step_chunks_recorded_again - before.host_step_chunks_recorded_again,
+        apart: after.kept_contexts_made - before.kept_contexts_made,
     }
 }
 
-/// Frames 0 to 2 of `page` under `base`: the third runs every chunk the second kept and records
-/// none. Its pixels.
+/// Frames 0 to 2 of `page` under `base`: the first records inline, the second, which reads the
+/// records alike, records apart and keeps every chunk, and the third runs them kept. Its pixels.
 fn steady(
     device: &Device,
     queue: &CommandQueue,
@@ -77,53 +103,48 @@ fn steady(
     page: &Page,
     base: &Inputs,
 ) -> Vec<u8> {
-    for first in 0..2 {
-        let (counts, _) = frame(device, queue, page, base);
-        assert_eq!(counts, Moved { kept: 0, again: 0 }, "{case}: frame {first}");
+    let expected = [INLINE, KEEPS, KEPT];
+    let mut pixels = Vec::new();
+    for (at, expected) in expected.into_iter().enumerate() {
+        let (counts, drawn) = frame(device, queue, page, base);
+        assert_eq!(counts, expected, "{case}: frame {at}");
+        pixels = drawn;
     }
-    let (counts, pixels) = frame(device, queue, page, base);
-    assert_eq!(
-        counts,
-        Moved {
-            kept: CHUNKS,
-            again: 0
-        },
-        "{case}: the steady frame"
-    );
     pixels
 }
 
-/// Frames 3 and 4 of `page` under `changed`, one input changed from frame 2's, which drew
-/// `before`; and a fresh page's first frame under it, which keeps nothing: frame 3 records every
-/// chunk again and draws what the fresh page draws, other pixels than `before` where the change
-/// `shows`; frame 4 runs them kept again.
+/// A fresh page's first frame under `inputs`, which keeps nothing: its pixels.
+fn fresh(device: &Device, queue: &CommandQueue, case: &str, inputs: &Inputs) -> Vec<u8> {
+    let fresh = Page::new(device, DRAWS);
+    let (counts, pixels) = frame(device, queue, &fresh, inputs);
+    assert_eq!(counts, INLINE, "{case}: a fresh page");
+    pixels
+}
+
+/// Frames 3 on of `page` under `changed`, one input changed from frame 2's, which drew `before`:
+/// frame 3 records every chunk again and draws what a fresh page draws, other pixels than
+/// `before` where the change `shows`. Where the change is the `records`', frame 3 records inline,
+/// frame 4 records apart and keeps, as two steps read the records alike, and frame 5 runs kept;
+/// else frame 3 records apart and keeps at once, and frame 4 runs kept.
 fn changed(
     device: &Device,
     queue: &CommandQueue,
     case: &str,
     page: &Page,
     inputs: &Inputs,
-    (before, shows): (&[u8], bool),
+    (before, shows, records): (&[u8], bool, bool),
 ) {
     let (counts, pixels) = frame(device, queue, page, inputs);
-    assert_eq!(
-        counts,
-        Moved {
-            kept: 0,
-            again: CHUNKS
-        },
-        "{case}: the changed frame"
-    );
-    let fresh = Page::new(device, DRAWS);
-    let (fresh_counts, fresh_pixels) = frame(device, queue, &fresh, inputs);
-    assert_eq!(
-        fresh_counts,
-        Moved { kept: 0, again: 0 },
-        "{case}: a fresh page"
-    );
+    let apart = if records { 0 } else { CHUNKS };
+    let expected = Moved {
+        kept: 0,
+        again: CHUNKS,
+        apart,
+    };
+    assert_eq!(counts, expected, "{case}: the changed frame");
     assert_eq!(
         pixels_hash(&pixels),
-        pixels_hash(&fresh_pixels),
+        pixels_hash(&fresh(device, queue, case, inputs)),
         "{case}: the changed frame draws what a page that kept nothing draws"
     );
     assert_eq!(
@@ -131,19 +152,42 @@ fn changed(
         shows,
         "{case}: whether the change shows in the pixels"
     );
-    let (counts, after) = frame(device, queue, page, inputs);
-    assert_eq!(
-        counts,
-        Moved {
-            kept: CHUNKS,
-            again: 0
-        },
-        "{case}: the frame after"
-    );
-    assert_eq!(
-        after, pixels,
-        "{case}: the frame after draws as the changed one"
-    );
+    let expected = match records {
+        true => &[KEEPS, KEPT][..],
+        false => &[KEPT][..],
+    };
+    for (after, expected) in (1..).zip(expected) {
+        let (counts, drawn) = frame(device, queue, page, inputs);
+        assert_eq!(&counts, expected, "{case}: frame {after} after the change");
+        assert_eq!(
+            drawn, pixels,
+            "{case}: frame {after} after the change draws as the changed one"
+        );
+    }
+}
+
+/// Frames 3 to 6 of `page`, whose records change at each: the indices' zero half and their first
+/// half in turn. The first forgets the kept recordings; each records inline, keeping nothing, and
+/// draws what a fresh page draws under its inputs.
+fn changing(device: &Device, queue: &CommandQueue, page: &Page) {
+    let case = "records that change at each step";
+    let zeros = Inputs {
+        indices: Some((page.indices(), ZEROS_AT)),
+        ..Inputs::default()
+    };
+    let first = Inputs::default();
+    for at in 3..7 {
+        let inputs = if at % 2 == 1 { &zeros } else { &first };
+        let (counts, pixels) = frame(device, queue, page, inputs);
+        let again = if at == 3 { CHUNKS } else { 0 };
+        let expected = Moved { again, ..INLINE };
+        assert_eq!(counts, expected, "{case}: frame {at}");
+        assert_eq!(
+            pixels_hash(&pixels),
+            pixels_hash(&fresh(device, queue, case, inputs)),
+            "{case}: frame {at} draws what a page that kept nothing draws"
+        );
+    }
 }
 
 /// An input a case changes, of the page's own resources and those [`Others`] holds.
@@ -180,6 +224,11 @@ impl Change {
     /// the inherited buffer's and the residency's do not.
     fn shows(self) -> bool {
         matches!(self, Change::Records | Change::State | Change::Scissor)
+    }
+
+    /// Whether the change is the records'.
+    fn records(self) -> bool {
+        matches!(self, Change::Records)
     }
 
     /// `page`'s inputs with this one changed.
@@ -298,9 +347,19 @@ fn a_kept_host_step_records_again_where_one_input_changes() {
                 case,
                 &page,
                 &inputs,
-                (&before, change.shows()),
+                (&before, change.shows(), change.records()),
             );
         }
+
+        let page = Page::new(&device, DRAWS);
+        steady(
+            &device,
+            &queue,
+            "records that change",
+            &page,
+            &Inputs::default(),
+        );
+        changing(&device, &queue, &page);
 
         // The indices' buffer, found among the device's live buffers, released and made again at
         // its address with other indices: the records are the same bytes, their address names
@@ -318,7 +377,7 @@ fn a_kept_host_step_records_again_where_one_input_changes() {
             case,
             &page,
             &live(&second),
-            (&before, true),
+            (&before, true, false),
         );
 
         // The buffer the commands inherit, over host memory, rebound to other pages.
@@ -342,7 +401,14 @@ fn a_kept_host_step_records_again_where_one_input_changes() {
                 )
             }
             .unwrap();
-            changed(&device, &queue, case, &page, &inherited, (&before, false));
+            changed(
+                &device,
+                &queue,
+                case,
+                &page,
+                &inherited,
+                (&before, false, false),
+            );
         }
     }
     layer_reported_nothing_at_all(&messages);

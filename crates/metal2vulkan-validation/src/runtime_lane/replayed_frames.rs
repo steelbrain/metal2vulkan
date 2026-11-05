@@ -22,8 +22,9 @@
 //! runs every chunk again, its records compared with those it was recorded from
 //! (`WorkCounts::host_step_chunks_kept`, `host_step_records_compared`, `host_step_compare_nanos`).
 //! [`CHANGE_VAR`] sets a frame from which the GPU writes other records (the encoding pass binds the
-//! indices' zero half), which that frame's step records again; [`EACH_VAR`] makes them change on
-//! each frame from it (the two halves in turn). [`FRAMES_VAR`] sets the frames (4 by default), and
+//! indices' zero half), which that frame's step records inline, as one that keeps nothing, and
+//! the next one's records apart and keeps; [`EACH_VAR`] makes them change on each frame from it
+//! (the two halves in turn), so each frame's step records inline. [`FRAMES_VAR`] sets the frames (4 by default), and
 //! [`RESIDENT_VAR`] how many buffers
 //! and textures, one of each, the execution's pass makes resident besides, as a page's bind
 //! groups do (none by default): the step's time should grow with the records alone, not with

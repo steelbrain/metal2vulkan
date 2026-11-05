@@ -342,7 +342,7 @@ impl RenderExecution {
         let mut encoder = self.replay_encoder(
             core,
             (vk::CommandBuffer::null(), visibility),
-            (storage, snapshot.layout.clone(), residency),
+            (storage, snapshot.layout.clone(), residency.clone()),
             forms,
         );
         let slots = encoder
@@ -597,7 +597,7 @@ impl RenderExecution {
         let mut encoder = self.replay_encoder(
             core,
             (draws, visibility),
-            (storage, layout, residency),
+            (storage, layout, residency.clone()),
             forms,
         );
         // The first draw reads its arguments where the preprocess (or the last merge pass)

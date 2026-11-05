@@ -426,6 +426,17 @@ struct ChunkState {
     stepped: bool,
     /// An execution that may keep its commands ran it since a write last reached it.
     seen: bool,
+    /// A host step's: the bytes of its records as the last step that kept no recording of them
+    /// read them (`IndirectCommandBuffer::written_bytes`), which the next step compares the
+    /// records with before it keeps one (`render/executions/kept.rs`).
+    read: Option<Box<[u8]>>,
+}
+
+/// What a host step finds of a chunk ([`KeptChunks::look_up_step`]): what is kept of it, and the
+/// bytes of its records as the last step that kept no recording of them read them, taken.
+pub(super) struct StepChunk {
+    pub(super) kept: Kept,
+    pub(super) read: Option<Box<[u8]>>,
 }
 
 impl KeptChunks {
@@ -464,6 +475,23 @@ impl KeptChunks {
                 }
             })
             .collect()
+    }
+
+    /// What a host step finds of each chunk of `range`, in order, each noted as run now, the
+    /// bytes it last read of each taken ([`StepChunk`]).
+    pub(super) fn look_up_step(&mut self, range: Range<u32>) -> Vec<StepChunk> {
+        let kept = self.look_up(range.clone());
+        let reads: Vec<_> =
+            (chunks(range).map(|(chunk, _)| self.state(chunk).read.take())).collect();
+        (kept.into_iter().zip(reads))
+            .map(|(kept, read)| StepChunk { kept, read })
+            .collect()
+    }
+
+    /// A host step read `bytes` of chunk `chunk`'s records and kept no recording of them: the
+    /// next step compares the records with them.
+    pub(super) fn read(&mut self, chunk: u32, bytes: Box<[u8]>) {
+        self.state(chunk).read = Some(bytes);
     }
 
     /// Whether an execution last recorded a chunk of `range` otherwise than plainly.

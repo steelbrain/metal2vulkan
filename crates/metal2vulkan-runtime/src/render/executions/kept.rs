@@ -22,15 +22,20 @@
 //!   under the same rules but three: it inherits the encoder's pipeline state (no record names
 //!   one); its inherited tables bind buffers alone (no bytes, texture, sampler or visible-function
 //!   table), which its key holds; and a record barrier the buffer may hold makes the chunk it lies
-//!   in not plain, as below, rather than ruling the execution out. Its chunks are its own: a
-//!   chunk's first such step records as one that keeps nothing, and its later ones record it apart
-//!   and keep it, with a copy of the bytes of its records (`IndirectCommandBuffer::written_bytes`),
-//!   once the header holds no fault. A later step runs the kept chunk again only where its key is
-//!   equal (below) and its records hold those bytes now, compared whole
-//!   (`IndirectCommandBuffer::holds_written`, `WorkCounts::host_step_records_compared` and
-//!   `host_step_compare_nanos`); else it records the chunk again and keeps that
-//!   (`WorkCounts::host_step_chunks_recorded_again`). No write forgets such a chunk, as the
-//!   comparison decides. Counted: `WorkCounts::host_step_chunks_kept`.
+//!   in not plain, as below, rather than ruling the execution out. Its chunks are its own, and
+//!   a step keeps them only where its records hold, chunk by chunk, the bytes a kept recording of
+//!   the chunk was recorded from or else those the last step read, compared whole
+//!   (`RenderExecution::steady`, `IndirectCommandBuffer::holds_written`,
+//!   `WorkCounts::host_step_records_compared` and `host_step_compare_nanos`), once the header
+//!   holds no fault. Else the step records the execution inline, as one that keeps nothing, and
+//!   copies each chunk's records for the next step's comparison
+//!   (`IndirectCommandBuffer::written_bytes_into`), forgetting a recording whose records changed
+//!   (`WorkCounts::host_step_chunks_recorded_again`): records the GPU writes otherwise at each
+//!   step cost a step one copy of them. Where they hold, the step records apart and keeps each
+//!   chunk it keeps no recording of, with those bytes, and runs a kept one again where its key is
+//!   equal (below), else records it again and keeps that (`host_step_chunks_recorded_again`). No
+//!   write forgets such a chunk, as the comparison decides. Counted:
+//!   `WorkCounts::host_step_chunks_kept`.
 //! - **The key.** A chunk is recorded from its records and from the inputs [`RenderKey`] holds:
 //!   the inherited pipeline state, the instance's compatible pass and shape, the pass's extent,
 //!   layers, samples and sample positions, the attachments that are among the resources made
@@ -74,6 +79,7 @@ use crate::error::{internal, vulkan, Error};
 use crate::indirect_command_buffer::Reader;
 use crate::kept_commands::{
     self, Kept, KeptChunk, KeptContext, KeptEffects, ResidentKey, ResidentMet, Resolution,
+    StepChunk,
 };
 use crate::live_bind::LiveBind;
 use crate::pipeline::{BufferForms, RenderPipelineState};
@@ -161,20 +167,22 @@ impl PartialEq for RenderKey {
 }
 
 /// An execution that keeps its commands (the module docs): its key, what is kept of its range's
-/// chunks in order, and the CPU's writes of the buffer as they were looked up (`None` for a host
-/// step's, which compares the records instead).
+/// chunks in order, with the bytes of each one's records a host step read last (`None` for one
+/// it keeps a recording of, and at `commit`), and the CPU's writes of the buffer as they were
+/// looked up (`None` for a host step's, which compares the records instead).
 pub(super) struct Keeping {
     key: RenderKey,
-    kept: Vec<Kept>,
+    kept: Vec<(Kept, Option<Box<[u8]>>)>,
     read_at: Option<u64>,
 }
 
-/// The bind state and bind memo a chunk recorded apart starts from (`live_bind.rs`,
-/// `binding::BindMemo`): those the chunk before it left, the first chunk's the device's spares'.
-/// An execution's chunks share one residency, so a chunk's first draw lists its used resources
-/// again only where the one before it did not list them (a render encoder's first draw lists the
-/// residency's whole: thousands of resources).
-type Carried = (Arc<Mutex<LiveBind>>, BindMemo);
+/// The bind state, bind memo and residency a chunk recorded apart starts from (`live_bind.rs`,
+/// `binding::BindMemo`): those the chunk before it left, the first chunk's the device's spares'
+/// and a copy of the command buffer's residency. An execution's chunks share one residency, so a
+/// chunk's first draw lists its used resources again only where the one before it did not list
+/// them (a render encoder's first draw lists the residency's whole: thousands of resources), and
+/// the residency is copied once an execution, as an execution recorded inline copies it once.
+type Carried = (Arc<Mutex<LiveBind>>, BindMemo, Residency);
 
 /// A chunk recorded apart: its encoder after its commands, the addresses they named and what
 /// they resolved to, the no-copy buffers' moves before it read its records, whether a command
@@ -258,9 +266,13 @@ impl RenderExecution {
         let (kept, read_at) = match step {
             // Where the header holds no fault: one that does runs no command.
             true if self.icb.written_header_fault().is_some() => return None,
-            true => (self.icb.step_kept_chunks(range.clone())?, None),
+            true => {
+                let counts = &command_buffer.device().shared().counts;
+                (self.steady(range.clone(), counts)?, None)
+            }
             false => {
                 let (kept, read_at) = self.icb.kept_chunks(range.clone())?;
+                let kept = kept.into_iter().map(|kept| (kept, None)).collect();
                 (kept, Some(read_at))
             }
         };
@@ -297,6 +309,57 @@ impl RenderExecution {
         Some(Keeping { key, kept, read_at })
     }
 
+    /// What a host step that keeps its commands finds of each chunk of commands `range`, where
+    /// the records hold, chunk by chunk, the bytes a kept recording of the chunk was recorded from
+    /// or else the bytes of them the last step read, compared whole
+    /// (`IndirectCommandBuffer::holds_written`, `WorkCounts::host_step_records_compared`): what is
+    /// kept of each, with those bytes it read. Else `None`, the records changing (or read by no
+    /// step before): the execution records inline, as one that keeps nothing, each chunk's records
+    /// copied for the next step's comparison (into the bytes it last read) but where a kept
+    /// recording's records hold still, and a recording whose records changed is forgotten
+    /// (`WorkCounts::host_step_chunks_recorded_again`). So a step records apart and keeps only
+    /// what two steps read alike, and records whose bytes change at each step cost the step
+    /// one copy of them beside its recording inline.
+    fn steady(
+        &self,
+        range: Range<u32>,
+        counts: &crate::work_counts::Counters,
+    ) -> Option<Vec<(Kept, Option<Box<[u8]>>)>> {
+        let found = self.icb.step_kept_chunks(range.clone());
+        let compared = Instant::now();
+        let mut records = 0;
+        let holds: Vec<bool> = (kept_commands::chunks(range.clone()).zip(&found))
+            .map(|((_, covered), found)| {
+                let bytes = match &found.kept {
+                    Kept::Recording(kept) => kept.records(),
+                    Kept::Again | Kept::First => found.read.as_deref(),
+                };
+                bytes.is_some_and(|bytes| {
+                    records += u64::from(covered.end - covered.start);
+                    self.icb.holds_written(covered.clone(), bytes)
+                })
+            })
+            .collect();
+        counts.host_step_records_compared(records, compared.elapsed());
+        if holds.iter().all(|&holds| holds) {
+            let found = found.into_iter().map(|found| (found.kept, found.read));
+            return Some(found.collect());
+        }
+        let chunks = kept_commands::chunks(range).zip(found).zip(holds);
+        for (((chunk, covered), StepChunk { kept, read }), holds) in chunks {
+            if let Kept::Recording(_) = kept {
+                if holds {
+                    continue;
+                }
+                counts.host_step_chunk_recorded_again();
+                self.icb.keep_step_chunk(chunk, None);
+            }
+            let bytes = self.icb.written_bytes_into(covered, read);
+            self.icb.step_read(chunk, bytes);
+        }
+        None
+    }
+
     /// Record the commands chunk by chunk through `core`, the pass's (the module docs), into
     /// secondaries begun against the execution's instance, over the pass's `storage`, in a pass
     /// `rendered` lays out, with `residency`, `command_buffer`'s: `record`'s, where the execution
@@ -326,35 +389,25 @@ impl RenderExecution {
         let layout = rendered.backing(&self.snapshot.layout)?;
         let shared = device.shared();
         let counts = &shared.counts;
-        let mut carried = Some((shared.live_binds.take(), shared.bind_memos.take()));
+        let carried = (shared.live_binds.take(), shared.bind_memos.take());
+        let mut carried = Some((carried.0, carried.1, residency.clone()));
         let mut met = ResidentMet::default();
         let mut draws = Vec::new();
         let mut rest = None;
-        for ((chunk, covered), kept) in kept_commands::chunks(range.clone()).zip(kept) {
+        for ((chunk, covered), (kept, read)) in kept_commands::chunks(range.clone()).zip(kept) {
             let (kept, keeps) = match kept {
                 Kept::Recording(kept) => (Some(kept), true),
                 Kept::Again => (None, true),
                 Kept::First => (None, false),
             };
             let had = kept.is_some();
+            // A host step's records hold the bytes it was recorded from (`steady`).
             let again = kept.and_then(|kept| {
                 let resident = &kept.key::<RenderKey>()?.resident;
                 if !met.same(&mut key.resident, resident, counts) {
                     return None;
                 }
                 let held = kept.runs_again(command_buffer, (&key, &covered), residency)?;
-                // A host step's records, as the GPU and the CPU left them, hold the bytes it was
-                // recorded from.
-                if step {
-                    let compared = Instant::now();
-                    let holds = (kept.records())
-                        .is_some_and(|bytes| self.icb.holds_written(covered.clone(), bytes));
-                    let records = u64::from(covered.end - covered.start);
-                    counts.host_step_records_compared(records, compared.elapsed());
-                    if !holds {
-                        return None;
-                    }
-                }
                 Some((kept, held))
             });
             if let Some((kept, held)) = again {
@@ -383,10 +436,17 @@ impl RenderExecution {
             }
             let reached = command_buffer.own_reached();
             let mut chunk_found = Found::default();
-            let start = carried.take().unwrap_or_default();
+            let start = match carried.take() {
+                Some(carried) => carried,
+                None => (Arc::default(), BindMemo::default(), residency.clone()),
+            };
+            // A host step's from the bytes of the records it last read, as they stand now
+            // (`steady`), else from a copy of them.
+            let records =
+                step.then(|| read.unwrap_or_else(|| self.icb.written_bytes(covered.clone())));
             let apart = self.record_apart(
                 (command_buffer, residency),
-                (covered.clone(), step),
+                (covered.clone(), records),
                 (&storage, &layout, start),
                 &mut chunk_found,
             );
@@ -441,7 +501,7 @@ impl RenderExecution {
             found.faults = ReplayFaults(found.faults.0 | chunk_found.faults.0);
             draws.push(raw);
         }
-        if let Some((live, memo)) = carried {
+        if let Some((live, memo, _)) = carried {
             shared.live_binds.give(live);
             shared.bind_memos.give(memo);
         }
@@ -506,22 +566,21 @@ impl RenderExecution {
     /// Record commands `covered` apart (the module docs): through an encoder of the call's state
     /// over a core of its own into a secondary of its own, begun against the instance's
     /// compatible pass, over the pass's `storage`, in `layout`, the call's, from the bind state
-    /// `carried` holds; what their draws found noted into `found`. From the CPU's records, or for
-    /// a host step (`step`) from a copy of the records as the GPU and the CPU left them, which it
-    /// keeps.
+    /// and residency `carried` holds; what their draws found noted into `found`. From the CPU's
+    /// records, or for a host step from `records`, the bytes of the records as the GPU and the CPU
+    /// left them, which it keeps.
     fn record_apart(
         &self,
         (command_buffer, residency): (&CommandBuffer, &Residency),
-        (covered, step): (Range<u32>, bool),
+        (covered, records): (Range<u32>, Option<Box<[u8]>>),
         (storage, layout, carried): (&PassStorage, &PassLayout, Carried),
         found: &mut Found,
     ) -> Result<Apart, Error> {
         let snapshot = &self.snapshot;
         let device = command_buffer.device();
         let moved = crate::buffer::host_cells_moved();
-        let (commands, released, records, forms) = match step {
-            true => {
-                let bytes = self.icb.written_bytes(covered.clone());
+        let (commands, released, records, forms) = match records {
+            Some(bytes) => {
                 let written = self.icb.decode_written(&bytes);
                 let (commands, faults, released) =
                     self.named_commands(device, covered.start, written);
@@ -529,7 +588,7 @@ impl RenderExecution {
                 let commands: Vec<Command> = commands.into_iter().flatten().collect();
                 (commands, released, Some(bytes), BufferForms::Large)
             }
-            false => {
+            None => {
                 let (commands, released) = self.icb.render_records(covered, Reader::Commit)?;
                 self.icb.degrade_released(&released);
                 (commands, !released.is_empty(), None, BufferForms::Bound)
@@ -539,13 +598,14 @@ impl RenderExecution {
         let draws = command_buffer.begin_draws(&snapshot.compatible)?;
         let raw = command_buffer.device().shared().vk();
         let visibility = Visibility::borrowing(None, None, raw, draws);
+        let (live, bind_memo, carried) = carried;
         let mut encoder = self.replay_encoder(
             EncoderCore::capture(command_buffer),
             (draws, visibility),
-            (storage.clone(), layout.clone(), residency),
+            (storage.clone(), layout.clone(), carried),
             forms,
         );
-        (encoder.live, encoder.bind_memo) = carried;
+        (encoder.live, encoder.bind_memo) = (live, bind_memo);
         self.replay(&mut encoder, commands, residency, found)?;
         Ok(Apart {
             encoder,
@@ -565,8 +625,8 @@ impl RenderExecution {
         }
     }
 
-    /// End a plain chunk's encoder: its secondary ended. Its core back, and the bind state the
-    /// next chunk starts from, its encoder ended (`LiveBind::end_encoder`).
+    /// End a plain chunk's encoder: its secondary ended. Its core back, and the bind state and
+    /// residency the next chunk starts from, its encoder ended (`LiveBind::end_encoder`).
     fn end_apart(
         &self,
         encoder: RenderLowering,
@@ -579,6 +639,7 @@ impl RenderExecution {
             mut visibility,
             mut live,
             bind_memo,
+            residency,
             ..
         } = encoder;
         visibility.end(raw, current.draws);
@@ -590,7 +651,7 @@ impl RenderExecution {
             Some(Ok(state)) => state.end_encoder(),
             Some(Err(_)) | None => live = Arc::default(),
         }
-        Ok((core, (live, bind_memo)))
+        Ok((core, (live, bind_memo, residency)))
     }
 
     /// The addresses `commands` name (their buffers', where the buffer does not inherit them,

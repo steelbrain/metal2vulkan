@@ -1009,11 +1009,14 @@ else.
   chunk of which a write reached since, records as one that keeps nothing, so a range executed
   once pays nothing for keeping. A host step of a render execution of records the GPU may write,
   whose commands inherit the pipeline state and whose inherited tables bind buffers alone, keeps
-  its chunks so too (`render/executions/kept.rs`), from its second step on: it runs each one an
-  earlier step kept where the records hold the bytes it was recorded from, compared whole, and its
-  inputs are equal (`WorkCounts::host_step_chunks_kept`, `host_step_records_compared`,
-  `host_step_compare_nanos`), and records it again where either differs
-  (`host_step_chunks_recorded_again`); the step's round trip stays. Every other execution reads
+  its chunks so too (`render/executions/kept.rs`), where two steps read its records alike: a step
+  whose records hold, chunk by chunk, the bytes a kept recording was made from or else those the
+  last step read, compared whole (`WorkCounts::host_step_records_compared`,
+  `host_step_compare_nanos`), runs each kept one whose inputs are equal
+  (`WorkCounts::host_step_chunks_kept`) and records apart and keeps the others; one whose records
+  changed records inline as before and copies them for the next step's comparison, forgetting the
+  recordings whose records changed (`host_step_chunks_recorded_again`). The step's round trip
+  stays. Every other execution reads
   and records each of its commands at each commit: one of a buffer the GPU may write (from the
   call at which a route that may write its records met it, or a blit into it, on) at its commit,
   one of a buffer of mesh or patch draws alone (neither `DRAW` nor `DRAW_INDEXED` among its command

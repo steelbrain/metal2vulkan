@@ -71,7 +71,7 @@ use super::device::lock;
 use super::error::{internal, invalid, Error, MemoryKind, Problem, RuntimeGap};
 use super::families::GpuFamily;
 use super::indirect_execute::Unforeseen;
-use super::kept_commands::{Kept, KeptChunk, KeptChunks};
+use super::kept_commands::{Kept, KeptChunk, KeptChunks, StepChunk};
 use super::memory::MemoryClass;
 use super::pipeline::{
     ComputePipelineState, ComputeProgram, RenderPipelineState, RenderProgram, RenderStateKind,
@@ -2561,15 +2561,18 @@ impl IndirectCommandBuffer {
         }
     }
 
-    /// What is kept of each chunk of commands `range` (inside the size) for a host step that
-    /// records them from the records as the GPU and the CPU left them (`render/executions/kept.rs`),
-    /// in order, each noted as run now; `None` where none of them ran in such a step before.
-    pub(super) fn step_kept_chunks(&self, range: Range<u32>) -> Option<Vec<Kept>> {
-        let kept = lock(&self.0.pipelines).step_kept.look_up(range);
-        match kept.iter().all(|kept| matches!(kept, Kept::First)) {
-            true => None,
-            false => Some(kept),
-        }
+    /// What a host step that records commands `range` (inside the size) from the records as the
+    /// GPU and the CPU left them finds of each of their chunks (`render/executions/kept.rs`), in
+    /// order, each noted as run now: what is kept of it, and the bytes of its records the last
+    /// step that kept no recording of them read, taken.
+    pub(super) fn step_kept_chunks(&self, range: Range<u32>) -> Vec<StepChunk> {
+        lock(&self.0.pipelines).step_kept.look_up_step(range)
+    }
+
+    /// A host step read `bytes` of the records of chunk `chunk` and kept no recording of them:
+    /// the next step compares the records with them.
+    pub(super) fn step_read(&self, chunk: u32, bytes: Box<[u8]>) {
+        lock(&self.0.pipelines).step_kept.read(chunk, bytes);
     }
 
     /// Keep `kept`, a host step's recording of chunk `chunk`, which holds the bytes of the records
@@ -2972,8 +2975,22 @@ impl IndirectCommandBuffer {
     /// them, copied once the work before an execution completed: what a host step's recording of
     /// them that is kept compares later records with (`render/executions/kept.rs`).
     pub(super) fn written_bytes(&self, range: Range<u32>) -> Box<[u8]> {
+        self.written_bytes_into(range, None)
+    }
+
+    /// [`written_bytes`](Self::written_bytes), copied into `into` where it is as long, which an
+    /// earlier copy of them left: a host step copies each frame's records into the last frame's
+    /// bytes, faulting in no new pages.
+    pub(super) fn written_bytes_into(
+        &self,
+        range: Range<u32>,
+        into: Option<Box<[u8]>>,
+    ) -> Box<[u8]> {
         let bytes = record_offset(range.start)..record_offset(range.end);
-        let mut copy = vec![0; bytes.len()].into_boxed_slice();
+        let mut copy = match into {
+            Some(into) if into.len() == bytes.len() => into,
+            Some(_) | None => vec![0; bytes.len()].into_boxed_slice(),
+        };
         // SAFETY: the records of commands inside the size lie inside the mapped storage. A GPU
         // write to them meanwhile is the program's race, as on Metal.
         unsafe {

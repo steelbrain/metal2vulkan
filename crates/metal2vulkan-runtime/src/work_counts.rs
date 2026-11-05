@@ -1283,8 +1283,8 @@ impl Counters {
             .fetch_add(1, Ordering::Relaxed);
     }
 
-    /// A host step compared `records` records with the bytes a kept chunk was recorded from,
-    /// taking `took` (`render/executions/kept.rs`).
+    /// A host step compared `records` records with the bytes a kept chunk was recorded from or
+    /// those the last step read, taking `took` (`render/executions/kept.rs`).
     pub(crate) fn host_step_records_compared(&self, records: u64, took: std::time::Duration) {
         self.host_step_records_compared
             .fetch_add(records, Ordering::Relaxed);
@@ -3787,10 +3787,11 @@ pub struct WorkCounts {
     /// CPU left them, held the bytes the recording was made from, and its inputs were equal.
     pub host_step_chunks_kept: u64,
     /// Chunks a host step recorded again, one each time, though an earlier step kept a recording
-    /// of them: a record or an input differed from those the recording was made from.
+    /// of them: a record or an input differed from those the recording was made from (a step
+    /// whose records changed records them inline, and forgets the recording).
     pub host_step_chunks_recorded_again: u64,
-    /// Records a host step compared, byte for byte, with those a kept chunk was recorded from,
-    /// one a record each time.
+    /// Records a host step compared, byte for byte, with those a kept chunk was recorded from or
+    /// those the last step read, one a record each time.
     pub host_step_records_compared: u64,
     /// The time those comparisons took, in nanoseconds: part of
     /// [`host_step_nanos`](Self::host_step_nanos).
