@@ -390,6 +390,22 @@ fn within_note(kind: Kind, c: usize, srgb: Option<u32>, got: f32, want: f32) -> 
     }
 }
 
+/// The fewest codes from Metal's `code` whose sRGB decode, by Metal's table, `got` holds as
+/// ([`channel_holds`]), up to 255.
+fn codes_off(code: u32, got: f32) -> u32 {
+    (0..=255)
+        .find(|&k| {
+            (code.saturating_sub(k)..=(code + k).min(255)).any(|near| {
+                channel_holds(
+                    (got, ratio(super::srgb_step(near) as i32, 4095)),
+                    false,
+                    true,
+                )
+            })
+        })
+        .unwrap_or(255)
+}
+
 /// Metal's 8-bit code of the color channel `c` (0 to 2) of texel `(x, y)` of a 16 x 16 texture of
 /// a BC1 to BC3 `kind` whose blocks are `blocks`, before an sRGB form's table.
 fn metal_code(kind: Kind, blocks: &[u8], x: usize, y: usize, c: usize) -> u32 {
@@ -424,6 +440,10 @@ fn bc1_to_bc5_texels_read_the_device_s_decode() {
         for (f, (pf, kind, srgb)) in FORMATS.into_iter().enumerate() {
             let measured = facts.contains(&kind.fact());
             let (mut differ, mut most) = (0, 0.0f32);
+            // Per channel: the most a channel read off Metal's, in value, and an sRGB color
+            // channel's in codes (the fewest codes from Metal's whose decode it holds as); the
+            // lanes past the note's bound.
+            let (mut channel_most, mut codes_most, mut past) = ([0.0f32; 4], [0u32; 4], 0);
             for round in 0..ROUNDS {
                 let mut rng = Rng(0x5eed_bc00 + 0x100 * f as u64 + round);
                 let mut blocks = rng.bytes(16 * kind.block_bytes());
@@ -442,8 +462,13 @@ fn bc1_to_bc5_texels_read_the_device_s_decode() {
                         }
                         differ += 1;
                         most = most.max((got[c] - want[c]).abs());
+                        channel_most[c] = channel_most[c].max((got[c] - want[c]).abs());
                         let code = srgb.then(|| metal_code(kind, &blocks, x, y, c));
+                        if let Some(code) = code {
+                            codes_most[c] = codes_most[c].max(codes_off(code, got[c]));
+                        }
                         let holds = !measured && within_note(kind, c, code, got[c], want[c]);
+                        past += usize::from(!holds);
                         if !holds && wrong.len() < 24 {
                             wrong.push(format!(
                                 "{pf:?} round {round} texel {t} channel {c}: {} against \
@@ -456,9 +481,11 @@ fn bc1_to_bc5_texels_read_the_device_s_decode() {
             }
             eprintln!(
                 "BCDECODE {name} {pf:?}: {differ} of {} channels off Metal's, the largest by \
-                 {most} ({:.3}/255), fact {measured}",
+                 {most} ({:.3}/255), fact {measured}; per channel {:?}/255, in codes {codes_most:?}; \
+                 {past} past the note",
                 ROUNDS * 16 * 16 * 4,
-                most * 255.0
+                most * 255.0,
+                channel_most.map(|m| (m * 255.0 * 1000.0).round() / 1000.0)
             );
         }
         assert!(wrong.is_empty(), "on {name}:\n{}", wrong.join("\n"));
