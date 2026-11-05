@@ -1333,6 +1333,8 @@ struct Found {
     matched: usize,
     /// Of them, the cases of a triangle's edges at a width other than 1.
     edges_matched: usize,
+    /// Of `edges`, those left unchecked as announced line ties or subpixel snaps.
+    edges_unchecked: usize,
     /// Cases a device line drew otherwise than Metal, announced: left unchecked.
     announced: usize,
     /// Cases of a band of edges whose depth bias can differ from Metal's, announced: left
@@ -1545,6 +1547,7 @@ fn run(policy: DevicePolicy) -> Found {
                     "{name}: {key}: line ties announced with the fact"
                 );
                 found.ties += 1;
+                found.edges_unchecked += usize::from(edges);
                 continue;
             }
             // The band's draws are announced on a driver without the fact, and nowhere else; a
@@ -1557,6 +1560,7 @@ fn run(policy: DevicePolicy) -> Found {
                 );
                 if half_step_vertex(shot) {
                     found.snaps += 1;
+                    found.edges_unchecked += usize::from(edges);
                     continue;
                 }
             }
@@ -1729,7 +1733,11 @@ fn wide_lines_draw_metal_s_parallelograms() {
             "{found:?}"
         );
         assert!(found.edges_matched > 0, "{found:?}");
-        assert_eq!(found.edges_matched + found.biased, found.edges, "{found:?}");
+        assert_eq!(
+            found.edges_matched + found.biased + found.edges_unchecked,
+            found.edges,
+            "{found:?}"
+        );
     }
     if facts.tessellates && !facts.wide_lines {
         assert!(found.biased > 0, "{found:?}");
@@ -1750,7 +1758,11 @@ fn wide_lines_draw_metal_s_parallelograms_under_exact_answers() {
             found.cases - found.biased - found.ties - found.snaps,
             "{found:?}"
         );
-        assert_eq!(found.edges_matched + found.biased, found.edges, "{found:?}");
+        assert_eq!(
+            found.edges_matched + found.biased + found.edges_unchecked,
+            found.edges,
+            "{found:?}"
+        );
     }
 }
 
