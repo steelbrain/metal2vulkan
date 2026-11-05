@@ -531,8 +531,8 @@ degradations! {
         /// what the pass's load actions and earlier draws stored where the barrier orders them
         /// (`texture/attached_reads.rs`), but for a read of the clear alone before any draw of
         /// the pass, whose copy is cleared to it instead where it can be
-        /// (`WorkCounts::attachment_read_clears`). Not where the interlock alone splits the pass, on a
-        /// device whose driver ran such a pass no slower split than whole
+        /// (`WorkCounts::attachment_read_clears`). Not where the interlock alone splits the pass,
+        /// on a device whose driver ran such a pass no slower split than whole
         /// (`DriverFact::InterlockedPassSplitNoSlower`): its faster form.
         RenderPassSplit = "render-pass-split", Performance,
             "each instance after the first loads the attachments and each before the last \
