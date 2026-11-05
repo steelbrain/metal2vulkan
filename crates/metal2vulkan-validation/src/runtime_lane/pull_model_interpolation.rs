@@ -520,9 +520,12 @@ fn read_single(target: &Texture, format: PixelFormat) -> Vec<[f32; 4]> {
 /// Every draw of the lane, at 1 sample and at 4 where the device renders them, covers Metal's
 /// samples, and reads Metal's words where the profile takes `MetalInterpolation`, else values
 /// within [`device_bound`] of Metal's (the module docs). The pipelines that read at an offset, and
-/// those alone, record `PrecisionNote::DeviceInterpolationOffset` and require the device's offset
-/// origin: `InterpolateAtOffsetFromSevenSixteenths` on MoltenVK, `InterpolateAtOffsetCentered`
-/// elsewhere.
+/// those alone, record `PrecisionNote::DeviceInterpolationOffset`; they require the device's offset
+/// origin, `InterpolateAtOffsetFromSevenSixteenths` on MoltenVK, `InterpolateAtOffsetCentered`
+/// elsewhere, as does a pipeline of more than one sample that reads at the center where that read
+/// is `InterpolateAtOffset` at offset 0 (a device with the centered origin that does not read a
+/// center varying at the pixel center itself, `VkProperty::MetalCenterVaryings`: the NVIDIA RTX
+/// 5080 Laptop).
 #[test]
 fn interpolants_read_metal_s_values() {
     let messages = Messages::default();
@@ -540,7 +543,17 @@ fn interpolants_read_metal_s_values() {
             true => VkProperty::InterpolateAtOffsetCentered,
             false => VkProperty::InterpolateAtOffsetFromSevenSixteenths,
         };
-        println!("PM {name}: MetalInterpolation {exact}, offsets from {origin:?}");
+        // A center read at more than one sample takes the varying's pixel-center form where the
+        // device has one and does not read a center varying at the pixel center itself:
+        // `InterpolateAtOffset` at offset 0, from the centered origin (`stage_io::plan::param`).
+        let properties = &profile.enabled().properties;
+        let pixel_form = profile.interpolation_function_needs().is_empty()
+            && properties.contains(&VkProperty::InterpolateAtOffsetCentered)
+            && !properties.contains(&VkProperty::MetalCenterVaryings);
+        println!(
+            "PM {name}: MetalInterpolation {exact}, offsets from {origin:?}, center reads at the \
+             pixel center by an offset {pixel_form}"
+        );
         let reading = metal_reading();
         let slopes = Slopes::of(&reading[&("center".to_owned(), 1)]);
         let counts: Vec<u32> = [1, 4]
@@ -587,10 +600,12 @@ fn interpolants_read_metal_s_values() {
                         .contains(&PrecisionNote::DeviceInterpolationOffset)
                 });
                 let offsets = draw.reads.iter().any(|(read, _)| *read == Read::Offset);
+                let centers =
+                    n > 1 && pixel_form && draw.reads.iter().any(|(read, _)| *read == Read::Center);
                 assert_eq!(noted, offsets, "{name} {what}: the offset note");
                 assert_eq!(
                     compiled.requirements.properties.contains(&origin),
-                    offsets,
+                    offsets || centers,
                     "{name} {what}: the offset origin {origin:?}"
                 );
                 let theirs = &reading[&(draw.what.clone(), n)];
