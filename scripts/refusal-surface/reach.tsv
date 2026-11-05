@@ -147,6 +147,7 @@ gap	Render	system	render pass, resolve and attachment forms not built (20 sites:
 gap	TexelsPastBufferLength	rare	a texture over a buffer past its length
 gap	OverlappingSurfaceRows	rare	an IOSurface plane whose rows overlap
 gap	MemorylessSurfacePlane	rare	a memoryless texture over an IOSurface plane
+gap	SurfacePlaneShape	rare	a texture over an IOSurface plane past one 2D image of its rows
 gap	IndirectCommandPastSize	none	an indirect command at or past the buffer's size
 gap	ExecutionRangePastBuffer	rare	an execution range whose 8 bytes run past its buffer
 gap	ExecutionRangeOffFour	rare	an execution range at an offset off 4 bytes

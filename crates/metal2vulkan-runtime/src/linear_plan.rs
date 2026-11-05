@@ -181,7 +181,7 @@
 
 use super::chroma_pairs::is_four_two_two;
 use super::copy_plan::block_extent;
-use super::image_plan::{compatible, view_formats, ImageFacts, ImagePlan};
+use super::image_plan::{block_family, compatible, view_formats, ImageFacts, ImagePlan};
 use super::pixel_format_info::pixel_format_info;
 use super::texture_descriptor::TextureLayout;
 use super::two_planes;
@@ -314,6 +314,23 @@ pub(super) fn is_linear(pf: PixelFormat) -> bool {
     use PixelFormat as P;
     let compressed = block_extent(pf).is_some() || matches!(pf, P::GBGR422 | P::BGRG422);
     pf != P::Invalid && !compressed && !is_depth_stencil(pf)
+}
+
+/// Whether `pf` is of the BC family (BC1 to BC7, their sRGB and signed forms), whose textures
+/// Metal makes over an IOSurface plane's rows, a row of blocks to the plane's `bytesPerRow` (the
+/// module's **Block-compressed surfaces**), where no other buffer backs one.
+pub(super) fn surface_blocks(pf: PixelFormat) -> bool {
+    use PixelFormat as P;
+    matches!(
+        block_family(pf),
+        P::BC1RGBA
+            | P::BC2RGBA
+            | P::BC3RGBA
+            | P::BC4RUnorm
+            | P::BC5RGUnorm
+            | P::BC6HRGBUfloat
+            | P::BC7RGBAUnorm
+    )
 }
 
 /// Whether a buffer can back a texture of `pf` ([`is_linear`]), or why not.
@@ -520,6 +537,13 @@ pub(super) enum BufferRefusal {
     /// and serves on the CPU while every GPU use fails the command buffer (`NotImplemented`; the
     /// module's rules).
     MemorylessPlane,
+    /// A texture over a plane of a surface with planes that Metal makes and lays out no one way
+    /// across its GPUs and its CPU calls (`NotImplemented`; the module's **Beyond the plane's
+    /// rows**): rows wider than the plane's `bytesPerRow`, more than one level, a type but 2D, a
+    /// texture buffer, a 1D texture and a 2D array of one slice, a 1D texture wider than the
+    /// plane's row; and a texture buffer or a block-compressed texture over a plane whose offset
+    /// or `bytesPerRow` is off 16 bytes.
+    PlaneShape,
 }
 
 impl From<BufferTextureProblem> for BufferRefusal {
@@ -542,23 +566,46 @@ pub(super) fn plan_buffer_texture(
     // (`TextureDescriptor::check_made`).
     // Over a plane of a surface with planes Metal makes a depth or stencil texture, laid out as
     // a colour texture's in its one aspect's units (the module docs).
-    let planar_depth = matches!(
+    let planar = matches!(
         texture.call,
         BufferTextureCall::IoSurfacePlane { planar: true }
-    ) && is_depth_stencil(layout.pixel_format);
-    if !(surface && is_four_two_two(layout.pixel_format)) && !planar_depth {
+    );
+    let planar_depth = planar && is_depth_stencil(layout.pixel_format);
+    // Over a surface's rows Metal makes a BC texture, its blocks a row of blocks a row (the
+    // module's **Block-compressed surfaces**).
+    let blocks = surface && surface_blocks(layout.pixel_format);
+    if !(surface && is_four_two_two(layout.pixel_format)) && !planar_depth && !blocks {
         backed(layout.pixel_format)?;
     }
     let texture_type = layout.texture_type;
+    // Over a plane of a surface with planes Metal makes every type, of any levels (the module's
+    // **Beyond the plane's rows**): the runtime holds the ones its texels lie as a 2D texture's
+    // in.
+    let one_slice = texture_type == T::Type2DArray && layout.layers == 1;
     let made = match texture.call {
         BufferTextureCall::Texture => matches!(texture_type, T::Type2D | T::TextureBuffer),
         BufferTextureCall::Linear => {
             matches!(texture_type, T::Type2D | T::TextureBuffer | T::Type2DArray)
         }
-        BufferTextureCall::IoSurfacePlane { .. } => texture_type == T::Type2D,
+        BufferTextureCall::IoSurfacePlane { planar: false } => {
+            matches!(texture_type, T::Type2D | T::TextureBuffer)
+        }
+        BufferTextureCall::IoSurfacePlane { planar: true } => {
+            matches!(texture_type, T::Type2D | T::TextureBuffer | T::Type1D) || one_slice
+        }
     };
+    if !made && planar {
+        return Err(BufferRefusal::PlaneShape);
+    }
     if !made {
         return Err(P::TextureType { texture_type }.into());
+    }
+    // A BC texture over a plane is measured 2D alone.
+    if blocks && texture_type != T::Type2D {
+        return Err(BufferRefusal::PlaneShape);
+    }
+    if layout.levels != 1 && planar {
+        return Err(BufferRefusal::PlaneShape);
     }
     if layout.levels != 1 {
         return Err(P::MipmapLevelCount {
@@ -571,26 +618,60 @@ pub(super) fn plan_buffer_texture(
     }
     let [width, height, _] = layout.extent.map(u64::from);
     let (offset, bytes_per_row) = (texture.offset, texture.bytes_per_row);
-    let row_bytes = width.saturating_mul(texture.texel_bytes);
+    // A block-compressed texture's rows are rows of its blocks, `texel_bytes` each.
+    let [across, down] = match blocks {
+        true => units(layout.pixel_format, [width, height]),
+        false => [width, height],
+    };
+    let row_bytes = across.saturating_mul(texture.texel_bytes);
     // A two-plane YCbCr texture reads its codes at the surface plane's rows whatever their width
     // (the module docs): Metal checks no row against them.
     let ycbcr = surface && ycbcr(layout.pixel_format);
-    if bytes_per_row < row_bytes && !ycbcr {
-        return Err(P::RowPitch {
-            bytes_per_row,
-            row_bytes,
-        }
-        .into());
+    // A texture buffer over a plane of a surface with planes is its bytes from the plane's
+    // offset on, however wide (the module's **Beyond the plane's rows**); one over a surface
+    // without planes Metal holds to its row.
+    let texels_run = planar && texture_type == T::TextureBuffer;
+    if bytes_per_row < row_bytes && !ycbcr && !texels_run {
+        return Err(match planar {
+            true => BufferRefusal::PlaneShape,
+            false => P::RowPitch {
+                bytes_per_row,
+                row_bytes,
+            }
+            .into(),
+        });
     }
     if let BufferTextureCall::IoSurfacePlane { planar } = texture.call {
+        // A texture buffer's or a BC texture's GPU and CPU bytes are measured over a plane whose
+        // offset and `bytesPerRow` are multiples of 16 alone, where they lie alike.
+        let aligned = offset.is_multiple_of(LINEAR_ALIGNMENT)
+            && bytes_per_row.is_multiple_of(LINEAR_ALIGNMENT);
+        if planar && (texture_type == T::TextureBuffer || blocks) && !aligned {
+            return Err(BufferRefusal::PlaneShape);
+        }
         let cpu = BufferLayout {
             offset,
             row_pitch: bytes_per_row,
-            slice_pitch: bytes_per_row.saturating_mul(height),
+            slice_pitch: bytes_per_row.saturating_mul(down),
             row_bytes,
-            rows: height,
+            rows: down,
             slices: 1,
         };
+        // Over a surface without planes Metal holds a BC texture's rows of texels, not of
+        // blocks, to the surface's ("Descriptor height*arrayLength > IOSurface height").
+        if blocks && !planar {
+            let counted = (height - 1)
+                .saturating_mul(bytes_per_row)
+                .saturating_add(row_bytes)
+                .saturating_add(offset);
+            if counted > buffer.length {
+                return Err(P::PastBuffer {
+                    counted,
+                    length: buffer.length,
+                }
+                .into());
+            }
+        }
         return plan_iosurface_plane(cpu, planar, buffer.length, overlap_held(texture));
     }
     let array = texture_type == T::Type2DArray;
@@ -644,6 +725,13 @@ pub(super) fn plan_buffer_texture(
         return Err(BufferRefusal::TexelsPastLength);
     }
     Ok(Placed::same(placed))
+}
+
+/// The blocks of a block-compressed `pf` a texture of `extent` texels spans across and down,
+/// each side rounded up to whole blocks.
+fn units(pf: PixelFormat, [width, height]: [u64; 2]) -> [u64; 2] {
+    let [w, h] = block_extent(pf).map_or([1, 1], |extent| extent.map(u64::from));
+    [width.div_ceil(w), height.div_ceil(h)]
 }
 
 /// An IOSurface plane laid out as `cpu` in a buffer of `length` bytes, of a planar surface or

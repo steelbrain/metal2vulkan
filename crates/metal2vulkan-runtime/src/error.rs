@@ -1430,6 +1430,31 @@ pub enum RuntimeGap {
     /// texture made through `newTextureWithDescriptor:offset:bytesPerRow:` takes the buffer's
     /// options whatever its descriptor names, and a plane its descriptor's other modes.
     MemorylessSurfacePlane,
+    /// A texture over a plane of an IOSurface with planes (`Buffer::new_texture_with_iosurface_plane`,
+    /// the stand-in for `newTextureWithDescriptor:iosurface:plane:`) that Metal makes and whose
+    /// texels it lays out no one way: rows wider than the plane's `bytesPerRow`, more than one mip
+    /// level, a 2D array of more than one slice, a 3D, cube or multisample texture or any other
+    /// type but 2D, a texture buffer, 1D and a 2D array of one slice, a 1D texture wider than the
+    /// plane's row, a BC texture of another type than 2D or wider than the plane's rows, and a
+    /// texture buffer or BC texture over a plane at an offset or `bytesPerRow` off 16 bytes.
+    ///
+    /// Measured (`metal2vulkan-conformance/probes/surface_texture_envelope.m`, each texel's bytes
+    /// tagged, read by blit, kernel and `getBytes` and written by blit and `replaceRegion`, on an
+    /// AMD Radeon Pro 5300M and an Intel UHD 630 under macOS 26.7.1 and an Apple M3 Max under
+    /// 27.0.1; every one of these made on all three, but the M3's cube, at which its own assertion
+    /// ends the process): no layout holds them. Rows wider than the pitch overlap the next row on
+    /// the M3's GPU and CPU alike, while the UHD 630's GPU keeps no texel past the pitch and the
+    /// 5300M's blit into the texture changes no byte of the surface and its kernels read the rows
+    /// at another pitch. Levels past 0 lie at the plane's base on the M3's CPU and elsewhere on its
+    /// GPU, and in no byte of the surface on the two x86 GPUs (zeros, or other memory), while
+    /// their CPU lays them after level 0 or reads zeros. A second slice of a 2D array or 3D
+    /// texture lies one image on for the UHD 630 inside the plane and nowhere past it, at the
+    /// plane's base for the 5300M's and the M3's blits and CPU, and in zeros or one image on for
+    /// their kernels. A 1D texture wider than the row: the 5300M's blit writes its first row's
+    /// worth alone, and the UHD 630's writes the rest 8 KiB on. A multisample one reaches past
+    /// the plane's bytes and is not measured on the x86 GPUs. The offsets off 16 are not measured
+    /// for those formats.
+    SurfacePlaneShape,
     /// A command of an indirect command buffer at or past its size
     /// (`indirectComputeCommandAtIndex:`, `indirectRenderCommandAtIndex:`). Plain Metal checks no
     /// bound there, the API validation layer off: it gives a command for any index, every setter

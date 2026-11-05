@@ -1738,7 +1738,7 @@ fn a_plane_whose_rows_overlap_is_copied_through_two_regions_that_tile_it_once() 
                         ..case
                     };
                     let (into, back) =
-                        plane_copy_regions(&gpu, texel, start, vk::ImageAspectFlags::COLOR);
+                        plane_copy_regions(&gpu, (texel, None), start, vk::ImageAspectFlags::COLOR);
                     if shared == 0 {
                         apart += 1;
                         assert!(made.cpu.row_pitch >= made.cpu.row_bytes, "{case:?}");

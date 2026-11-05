@@ -2359,8 +2359,10 @@ impl Device {
             return Err(Error::NotImplemented(RuntimeGap::Textures));
         }
         // Where the device copies a shadow back faster by a dispatch, the image takes the
-        // integer view the dispatch reads (`shadow_copy_back.rs`).
-        let (plan, word) = match shadow_copy_back::dispatches(self) {
+        // integer view the dispatch reads (`shadow_copy_back.rs`). Both views are 2D: a 1D
+        // texture over an IOSurface plane's row (`linear_plan.rs`) takes neither.
+        let two_d = plan.image_type == metal2vulkan::vk::ImageType::TYPE_2D;
+        let (plan, word) = match two_d && shadow_copy_back::dispatches(self) {
             true => with_word_view(plan, &facts, shadow_copy_back::dispatches_in(self)),
             false => (plan, None),
         };
@@ -2368,7 +2370,8 @@ impl Device {
         // merges read through (`shadow_merge.rs`).
         let (plan, unorm) = match word {
             Some(_) => (plan, None),
-            None => with_unorm_view(plan, &facts),
+            None if two_d => with_unorm_view(plan, &facts),
+            None => (plan, None),
         };
         let hazard = texels.options().hazard_tracking_mode()?;
         // A depth or stencil texture over a surface's plane copies the aspect the plane holds

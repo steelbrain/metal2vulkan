@@ -29,7 +29,9 @@ use super::address::{AddressPlacement, ObjectsToken};
 use super::apple_only::AppleOnly;
 use super::buffer::{Buffer, ReadApart};
 use super::chroma_pairs;
-use super::copy_plan::{surface_depth_unit, CopyProblem, CopyUnit, HostLayout, ImageRegion};
+use super::copy_plan::{
+    block_extent, surface_depth_unit, CopyProblem, CopyUnit, HostLayout, ImageRegion,
+};
 use super::degradation::Degradation;
 use super::device::lock;
 use super::error::{internal, invalid, nil, vulkan, Error, Problem, RuntimeGap};
@@ -85,8 +87,12 @@ pub(super) struct Texels {
     /// rounded down to 16 bytes, as plain Metal's functions read and write a texture buffer at an
     /// offset off 16 ([`Texels::texture_buffer`]).
     shader: BufferLayout,
-    /// The bytes of one texel.
+    /// The bytes of one texel: of one block of a block-compressed texture (`blocks`).
     texel_bytes: u64,
+    /// A block-compressed texture's blocks (a BC texture over an IOSurface plane's rows,
+    /// `linear_plan.rs`): `layout`'s rows are rows of them; `None` for every other texture,
+    /// whose rows are rows of texels.
+    blocks: Option<Blocks>,
     pub(super) allow_gpu_optimized_contents: bool,
     /// The texture's resource options, its hazard tracking mode resolved, as `resourceOptions`
     /// reports them: the buffer's, which Metal's texture over a buffer takes, but an IOSurface
@@ -114,6 +120,16 @@ pub(super) struct Texels {
     pub(super) objects: ObjectsToken,
     /// The texels lie in an IOSurface's plane (`Buffer::new_texture_with_iosurface_plane`).
     surface: bool,
+}
+
+/// A block-compressed texture's blocks in its texels' layout ([`Texels::blocks`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct Blocks {
+    /// The texels of a block, across and down.
+    pub(super) extent: [u32; 2],
+    /// The texture's own texels, across and down, which its last block of a row or of a column
+    /// may cover only part of.
+    pub(super) texels: [u32; 2],
 }
 
 /// A texture's texel buffer views, by format, kind (storage or uniform) and range; destroyed
@@ -268,6 +284,7 @@ fn refusal_error(call: &'static str, refusal: BufferRefusal) -> Error {
         }
         BufferRefusal::OverlappingRows => Error::NotImplemented(RuntimeGap::OverlappingSurfaceRows),
         BufferRefusal::MemorylessPlane => Error::NotImplemented(RuntimeGap::MemorylessSurfacePlane),
+        BufferRefusal::PlaneShape => Error::NotImplemented(RuntimeGap::SurfacePlaneShape),
     }
 }
 
@@ -755,7 +772,11 @@ impl Buffer {
             );
         }
         if layout.texture_type == TextureType::TextureBuffer {
-            let texels = Texels::texture_buffer(self.clone(), placed.gpu, texel_bytes, descriptor)?;
+            // Over a surface's plane, of the descriptor's options (`Buffer::new_texture_with_iosurface_plane`).
+            let texels = Texels::new(self.clone(), placed.gpu, texel_bytes, descriptor)
+                .with_options(options)
+                .over_surface(surface)
+                .into_texture_buffer()?;
             Ok(texels.texture(descriptor, &layout, id_use))
         } else {
             let texels = Texels::placed(self.clone(), placed, texel_bytes, descriptor)
@@ -1040,7 +1061,7 @@ pub(super) fn texture_buffer_over(
         rows: 1,
         slices: 1,
     };
-    let mut texels = Texels::texture_buffer(buffer, placed, texel_bytes, descriptor)?;
+    let mut texels = Texels::new(buffer, placed, texel_bytes, descriptor).into_texture_buffer()?;
     texels.home = home;
     // A memoryless texture buffer lies over a `Private` buffer (`Device::new_texture_buffer`) and
     // answers `Memoryless`, as Metal's does, with the CPU cache and hazard tracking modes the
@@ -1258,11 +1279,17 @@ impl Texels {
         });
         // A rebind of the buffer's host pages empties the views (`rebind.rs`).
         buffer.watch_views(&views);
+        // The descriptor's checks bound a texture's extent to `u32`s.
+        let blocks = block_extent(descriptor.pixel_format).map(|extent| Blocks {
+            extent,
+            texels: [descriptor.width as u32, descriptor.height as u32],
+        });
         Texels {
             layout: placed,
             cpu: placed,
             shader: placed,
             texel_bytes,
+            blocks,
             allow_gpu_optimized_contents: descriptor.allow_gpu_optimized_contents,
             options: buffer.resource_options(),
             views,
@@ -1309,21 +1336,17 @@ impl Texels {
         }
     }
 
-    /// The texels of a texture buffer of `descriptor` at `placed` in `buffer`, `texel_bytes`
-    /// each. A function reads and writes them from their offset rounded down to 16 bytes, as
+    /// These texels as a texture buffer's, of their options and surface. A function reads and
+    /// writes them from their offset rounded down to 16 bytes, as
     /// plain Metal's do where its validation alone stops an offset off 16 (an M4 under macOS
     /// 27.0.1), and blits and the CPU at the offset itself (`layout`). Viewed in place where the
     /// device's `minTexelBufferOffsetAlignment`, which the binding plan holds a view's offset to,
     /// divides the functions' offset in the buffer's `VkBuffer`; else through a staging buffer of
     /// their own, at its start (a no-copy buffer's bytes, or Metal's offset, need not lie at a
     /// multiple of it). Refused as `new_buffer` refuses the staging buffer.
-    fn texture_buffer(
-        buffer: Buffer,
-        placed: BufferLayout,
-        texel_bytes: u64,
-        descriptor: &TextureDescriptor,
-    ) -> Result<Texels, Error> {
-        let mut texels = Texels::new(buffer, placed, texel_bytes, descriptor);
+    fn into_texture_buffer(self) -> Result<Texels, Error> {
+        let mut texels = self;
+        let placed = texels.layout;
         texels.shader = BufferLayout {
             offset: placed.offset - placed.offset % LINEAR_ALIGNMENT,
             ..placed
@@ -1453,7 +1476,8 @@ impl Texels {
             .map_or(at, |staging| staging.into.dst_offset);
         // The descriptor's checks bound a texture's extent and slices to `u32`s.
         let slices = layout.slices as u32;
-        let (regions, back) = plane_copy_regions(layout, self.texel_bytes, start, aspects);
+        let (regions, back) =
+            plane_copy_regions(layout, (self.texel_bytes, self.blocks), start, aspects);
         // A copy back dispatches, and a merge fetches, over one region copied in place alone.
         let one_region = regions.len() == 1 && slices == 1 && staging.is_none();
         let (bytes, tracked) = self.buffer.tracked(layout.offset..layout.end());
@@ -1469,7 +1493,9 @@ impl Texels {
                     regions,
                     back,
                     staging,
-                    texel: Some(self.texel_bytes),
+                    // A block-compressed texture is no color attachment, whose copies alone are
+                    // bounded.
+                    texel: Some(self.texel_bytes).filter(|_| self.blocks.is_none()),
                 },
                 alias: self.buffer.alias().map(|alias| alias.key),
             },
@@ -1514,11 +1540,12 @@ impl Texels {
         })
     }
 
-    /// The copy unit of CPU access to the texels: one texel.
+    /// The copy unit of CPU access to the texels: one texel, or one block of a block-compressed
+    /// texture.
     pub(super) fn unit(&self) -> CopyUnit {
         CopyUnit {
             bytes: self.texel_bytes as u32,
-            extent: [1, 1],
+            extent: self.blocks.map_or([1, 1], |blocks| blocks.extent),
             aspect: ImageAspectFlags::COLOR,
         }
     }
@@ -1623,6 +1650,9 @@ impl Texels {
     fn region_layout(&self, region: &ImageRegion, host: &HostLayout) -> (u64, HostLayout) {
         let layout = &self.cpu;
         let [x, y, _] = region.origin.map(u64::from);
+        // A block-compressed texture's region starts on a block (the copy's check).
+        let [w, h] = self.unit().extent.map(u64::from);
+        let (x, y) = (x / w, y / h);
         let start = layout.offset
             + layout.slice_pitch * u64::from(region.layer)
             + layout.row_pitch * y
@@ -1798,8 +1828,10 @@ pub(super) fn staged_rows_back(layout: &BufferLayout, start: u64, at: u64) -> Ve
     back
 }
 
-/// The regions that copy the texels laid out as `layout`, `texel_bytes` each, starting at `start`
-/// of the `VkBuffer` the copies address, into a 2D texture's shadow image of `aspects`, and the
+/// The regions that copy the texels laid out as `layout`, `texel_bytes` each (of a block each,
+/// where `blocks` gives a block-compressed texture's: its rows of blocks are copied as the texels
+/// they hold, its last block of a row and of a column covering its texels alone), starting at
+/// `start` of the `VkBuffer` the copies address, into a 2D texture's shadow image of `aspects`, and the
 /// regions that copy them back out of it (`shadow.rs`, [`Texels::shadow_copies`]): one region a
 /// slice each way, the slice's rows of texels, where each row lies a row apart from the one above
 /// or further. Metal's slices lie multiples of 128 bytes apart and its rows multiples of 16, so
@@ -1828,7 +1860,7 @@ pub(super) fn staged_rows_back(layout: &BufferLayout, start: u64, at: u64) -> Ve
 ///   ([`Degradation::CollidingSurfaceRowWrites`](super::Degradation::CollidingSurfaceRowWrites)).
 pub(super) fn plane_copy_regions(
     layout: &BufferLayout,
-    texel_bytes: u64,
+    (texel_bytes, blocks): (u64, Option<Blocks>),
     start: u64,
     aspects: vk::ImageAspectFlags,
 ) -> (Vec<vk::BufferImageCopy>, Vec<vk::BufferImageCopy>) {
@@ -1837,9 +1869,16 @@ pub(super) fn plane_copy_regions(
     let pitch = (layout.row_pitch / texel_bytes) as u32;
     // The descriptor's checks bound a texture's extent and slices to `u32`s.
     let (slices, rows) = (layout.slices as u32, layout.rows as u32);
-    let region = |slice: u32, at: u64, x: u32, texels: u32, height: u32| vk::BufferImageCopy {
+    // A block-compressed texture's rows of blocks, as Vulkan copies them: its pitch and offsets
+    // in texels, its extent its own texels (`VUID-vkCmdCopyBufferToImage-imageExtent-00207`).
+    let [bw, bh] = blocks.map_or([1, 1], |blocks| blocks.extent);
+    let texels = |units: u32, side: usize| {
+        let texels = units * [bw, bh][side];
+        blocks.map_or(texels, |blocks| texels.min(blocks.texels[side]))
+    };
+    let region = |slice: u32, at: u64, x: u32, units: u32, height: u32| vk::BufferImageCopy {
         buffer_offset: at + layout.slice_pitch * u64::from(slice),
-        buffer_row_length: pitch,
+        buffer_row_length: pitch * bw,
         buffer_image_height: 0,
         image_subresource: vk::ImageSubresourceLayers {
             aspect_mask: aspects,
@@ -1848,13 +1887,13 @@ pub(super) fn plane_copy_regions(
             layer_count: 1,
         },
         image_offset: vk::Offset3D {
-            x: x as i32,
+            x: (x * bw) as i32,
             y: 0,
             z: 0,
         },
         image_extent: vk::Extent3D {
-            width: texels,
-            height,
+            width: texels(x + units, 0) - x * bw,
+            height: texels(height, 1),
             depth: 1,
         },
     };
