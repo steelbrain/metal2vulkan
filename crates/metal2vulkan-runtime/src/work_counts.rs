@@ -517,6 +517,10 @@ struct DrawCounters {
     resident_uses_against_fragments: AtomicU64,
     resident_uses_against_attachments: AtomicU64,
     resident_uses_noted: AtomicU64,
+    resident_uses_unordered_writes: AtomicU64,
+    resident_uses_indirect_reads: AtomicU64,
+    resident_uses_geometry_writes: AtomicU64,
+    resident_uses_geometry_checked: AtomicU64,
 }
 
 /// How a render pass took a shadowed texture as a color attachment
@@ -2274,6 +2278,38 @@ impl Counters {
     /// (`WorkCounts::resident_uses_noted`).
     pub(crate) fn resident_uses_noted(&self, walked: u64) {
         (self.draws.mine()).add(|counts| &counts.resident_uses_noted, walked);
+    }
+
+    /// `walked` uses of what a render encoder made resident that a draw's adding of its writes
+    /// to those no barrier orders yet walked (`WorkCounts::resident_uses_unordered_writes`).
+    pub(crate) fn resident_uses_unordered_writes(&self, walked: u64) {
+        if walked > 0 {
+            (self.draws.mine()).add(|counts| &counts.resident_uses_unordered_writes, walked);
+        }
+    }
+
+    /// `walked` uses of what a render encoder made resident that a draw's adding of its indirect
+    /// argument reads walked (`WorkCounts::resident_uses_indirect_reads`).
+    pub(crate) fn resident_uses_indirect_reads(&self, walked: u64) {
+        if walked > 0 {
+            (self.draws.mine()).add(|counts| &counts.resident_uses_indirect_reads, walked);
+        }
+    }
+
+    /// `walked` uses of what a render encoder made resident that a draw's adding of its writes
+    /// before its fragments walked (`WorkCounts::resident_uses_geometry_writes`).
+    pub(crate) fn resident_uses_geometry_writes(&self, walked: u64) {
+        if walked > 0 {
+            (self.draws.mine()).add(|counts| &counts.resident_uses_geometry_writes, walked);
+        }
+    }
+
+    /// `walked` uses of what a render encoder made resident that a draw's check against the
+    /// writes before earlier draws' fragments walked (`WorkCounts::resident_uses_geometry_checked`).
+    pub(crate) fn resident_uses_geometry_checked(&self, walked: u64) {
+        if walked > 0 {
+            (self.draws.mine()).add(|counts| &counts.resident_uses_geometry_checked, walked);
+        }
     }
 
     /// A render draw rebound (`WorkCounts::draws_rebound`), which recorded `states` state
@@ -5144,6 +5180,22 @@ pub struct WorkCounts {
     /// the resident set alone, in the same part of the encoder while the device's buffers over
     /// host pages stand as they did, walks none of them.
     pub resident_uses_noted: u64,
+    /// The uses of resources a render encoder made resident (`resident_uses_made`) that its
+    /// draws' adding of their writes to those no memory barrier orders yet walked: what a later
+    /// command of the encoder reading them waits for.
+    pub resident_uses_unordered_writes: u64,
+    /// The uses of resources a render encoder made resident (`resident_uses_made`) that its
+    /// draws' adding of what they read as indirect arguments walked: what a later draw of their
+    /// render pass instance writing it waits for.
+    pub resident_uses_indirect_reads: u64,
+    /// The uses of resources a render encoder made resident (`resident_uses_made`) that its
+    /// draws' adding of what they write before their fragments walked: what a later draw's
+    /// fragments of their render pass instance touching it wait for.
+    pub resident_uses_geometry_writes: u64,
+    /// The uses of resources a render encoder made resident (`resident_uses_made`) that its
+    /// draws' checks against what earlier draws of their render pass instance wrote before their
+    /// fragments walked, a rebound draw's check whether it may rebind included.
+    pub resident_uses_geometry_checked: u64,
     /// Keys an encoder's commands named first, while the device has a buffer over host pages
     /// (`new_buffer_with_bytes_no_copy`), that were looked up among those buffers under the lock
     /// their command buffers' submissions take: the keys of such buffers, and the rare other key
@@ -6520,6 +6572,10 @@ impl Device {
                 &counts.resident_uses_against_attachments
             }),
             resident_uses_noted: draws(|counts| &counts.resident_uses_noted),
+            resident_uses_unordered_writes: draws(|counts| &counts.resident_uses_unordered_writes),
+            resident_uses_indirect_reads: draws(|counts| &counts.resident_uses_indirect_reads),
+            resident_uses_geometry_writes: draws(|counts| &counts.resident_uses_geometry_writes),
+            resident_uses_geometry_checked: draws(|counts| &counts.resident_uses_geometry_checked),
             host_holds_looked_up: counters.host_holds_looked_up.load(Ordering::Relaxed),
             dispatches_settled_as_before: (counters.dispatches_settled_as_before)
                 .load(Ordering::Relaxed),

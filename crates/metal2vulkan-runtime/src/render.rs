@@ -9536,6 +9536,11 @@ impl RenderLowering {
             }
         }
         self.unordered.add(uses);
+        // The uses of what the encoder made resident each tracker below walks
+        // (`WorkCounts::resident_uses_unordered_writes` and kin).
+        let resident = uses.prefix().map_or(0, |prefix| prefix.len as u64);
+        let counts = &device.shared().counts;
+        counts.resident_uses_unordered_writes(resident);
         match uses.prefix() {
             None => {
                 self.pass_start.announce(&device, uses, mesh_before);
@@ -10004,11 +10009,13 @@ impl RenderLowering {
                 }
             }
             self.current.indirect_reads.add(uses);
+            counts.resident_uses_indirect_reads(resident);
             // A draw whose fragment shader reads or writes what an earlier draw of the instance
             // wrote before its fragments records after a memory dependency from those writes
             // (`render_target::after_geometry_writes`): Metal runs every draw's vertex, object
             // and mesh functions before any draw's fragments.
             let mut geometry_barrier = None;
+            counts.resident_uses_geometry_checked(resident);
             if let Some(barrier) = self.current.geometry_writes.barrier_before(uses) {
                 barriered = true;
                 let view_mask = self.current.shape.view_mask;
@@ -10033,6 +10040,7 @@ impl RenderLowering {
                 }
             }
             self.current.geometry_writes.add(uses);
+            counts.resident_uses_geometry_writes(resident);
             if imageblock_use.is_some() {
                 self.current.imageblock = true;
             }

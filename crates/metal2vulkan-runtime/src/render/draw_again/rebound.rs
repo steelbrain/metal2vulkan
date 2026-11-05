@@ -474,8 +474,13 @@ impl RenderLowering {
         // Nor a detached buffer, a draw of which records nothing (`EncoderCore::skips`).
         let uses = &live.uses;
         let named = (uses.iter().map(|used| used.key)).filter(|key| !uses.resident().contains(key));
+        let resident = uses.prefix().map_or(0, |prefix| prefix.len as u64);
+        let counts = &self.core.device().shared().counts;
         crate::shadow::shadow_uses(textures, uses).is_empty()
-            && self.current.geometry_writes.barrier_before(uses).is_none()
+            && {
+                counts.resident_uses_geometry_checked(resident);
+                self.current.geometry_writes.barrier_before(uses).is_none()
+            }
             && !self.core.would_skip(named)
     }
 
@@ -523,6 +528,8 @@ impl RenderLowering {
             }
         }
         self.unordered.add(uses);
+        let resident = uses.prefix().map_or(0, |prefix| prefix.len as u64);
+        (self.core.device().shared().counts).resident_uses_unordered_writes(resident);
         let prefix = uses.prefix();
         match prefix {
             None => {
@@ -540,7 +547,9 @@ impl RenderLowering {
             }
         }
         self.current.indirect_reads.add(uses);
+        (self.core.device().shared().counts).resident_uses_indirect_reads(resident);
         self.current.geometry_writes.add(uses);
+        (self.core.device().shared().counts).resident_uses_geometry_writes(resident);
         let owned = (live.kept.recording.as_ref())
             .ok_or_else(|| crate::error::internal("a draw rebound without its recording"))?;
         let shared = self.core.device().shared();
