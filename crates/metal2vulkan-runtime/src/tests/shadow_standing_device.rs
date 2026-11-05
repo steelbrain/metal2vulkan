@@ -1,8 +1,18 @@
-//! A shadowed texture over a `Private` buffer the device made (an IOSurface plane's, rows padded
-//! so that no image holds them on any device) keeps its image's standing across command buffers
-//! (`shadow_standing.rs`): a later command buffer's first copy in moves nothing where nothing
-//! written since met the truth or the image, and every write that did reaches what the texture
-//! reads, and every write through the texture reaches the buffer.
+//! A shadowed texture made with the IOSurface-plane constructor over a `Private` buffer the device
+//! made (rows padded so that no image holds them on any device), as a consumer's device copy of a
+//! surface is: only the runtime's commands write its truth, so its image's standing holds across
+//! command buffers (`shadow_standing.rs`), and each copy back is a plain copy, no merge
+//! (`ShadowCopies::merges_back`). A later command buffer's first copy in moves nothing where
+//! nothing written since met the truth or the image; every write that did reaches what the
+//! texture reads, and every write through the texture reaches the buffer.
+//!
+//! Each read goes through the shadow's image: a kernel (`invert_texels`, the owned fixture
+//! `validation/fixtures/public/examples/runtime_examples.ll`) reads the texture and writes each
+//! texel's color inverted, its alpha kept, into a plain texture the test reads back. (A blit's
+//! read of a texture over a buffer copies the buffer's rows, never the image.) The writes are a
+//! blit fill of the buffer from another queue's command buffer, as a host's transfer queue fills
+//! a surface's device copy, and a pass drawing into the texture (`tob_rect`, `tob_solid` of
+//! `engine/tob_renders.ll`), which a blit read of the buffer then reads.
 //!
 //! Each leg checks both halves: the bytes read are the buffer's as every write left them, and
 //! the counts say which copies in moved nothing (`WorkCounts::shadow_copies_in_skipped_by_standing`).
@@ -11,14 +21,17 @@
 //! no-copy buffer imports, whose CPU writes no count sees, never stands.
 //!
 //! Device tests: compiled only under the validation crate's GPU safety cfgs (`m2v_gpu`,
-//! `m2v_cpu_icd`), on the kind of device the cfg selects. Blits alone: no function.
+//! `m2v_cpu_icd`), on the kind of device the cfg selects.
 
 use super::blit_holds::{device, over_host, Host, Scratch, WAIT};
+use super::encoder_holds::{bytes_of, library};
 use crate::{
-    BlitOption, Buffer, CommandQueue, Device, IoSurfacePlane, Origin, ResourceOptions, Size,
-    Texture, TextureDescriptor, WorkCounts,
+    Buffer, CommandQueue, ComputePipelineState, Device, IoSurfacePlane, LoadAction,
+    PipelineOptions, Region, RenderPassDescriptor, RenderPipelineState, ResourceOptions, Size,
+    StoreAction, Texture, TextureDescriptor, WorkCounts,
 };
-use metal2vulkan::metal::{PixelFormat, TextureUsage};
+use metal2vulkan::metal::{PixelFormat, PrimitiveType, TextureUsage};
+use metal2vulkan::pipeline::{ColorAttachmentDescriptor, RenderPipelineDescriptor, StageSource};
 use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
 
@@ -26,21 +39,125 @@ use std::sync::Arc;
 /// texels.
 const WIDTH: u64 = 64;
 const HEIGHT: u64 = 16;
-const PITCH: u64 = WIDTH * 4 + 64;
+const ROW: u64 = WIDTH * 4;
+const PITCH: u64 = ROW + 64;
 const LENGTH: u64 = PITCH * HEIGHT;
 
-/// The plane's texture over a `Private` buffer, and a `Shared` buffer its reads land in.
-struct Plane {
-    device: Device,
+/// What the texture is read and written with: the kernel that reads it, the plain texture the
+/// kernel writes, the pipeline that draws into it, and a `Shared` buffer the buffer's bytes are
+/// read into.
+struct Tools {
     queue: CommandQueue,
-    buffer: Buffer,
-    texture: Texture,
+    invert: ComputePipelineState,
+    inverted: Texture,
+    solid: RenderPipelineState,
     read: Buffer,
 }
 
+impl Tools {
+    fn new(device: &Device) -> Tools {
+        let examples = library(device, "examples/runtime_examples.ll");
+        let kernel = examples.new_function_with_name("invert_texels").unwrap();
+        let options = PipelineOptions::default();
+        let invert = (device.new_compute_pipeline_state_with_function(&kernel, &options)).unwrap();
+        let mut plain =
+            TextureDescriptor::texture_2d(PixelFormat::RGBA8Unorm, WIDTH, HEIGHT, false);
+        plain.usage = TextureUsage::SHADER_READ | TextureUsage::SHADER_WRITE;
+        let inverted = device.new_texture(&plain).unwrap();
+        let renders = library(device, "engine/tob_renders.ll");
+        let vertex = renders.new_function_with_name("tob_rect").unwrap();
+        let fragment = renders.new_function_with_name("tob_solid").unwrap();
+        let mut descriptor =
+            RenderPipelineDescriptor::new(StageSource::Function(vertex.function_descriptor()));
+        descriptor.fragment = Some(StageSource::Function(fragment.function_descriptor()));
+        descriptor.color_attachments[0] =
+            Some(ColorAttachmentDescriptor::new(PixelFormat::BGRA8Unorm));
+        let solid = (device.new_render_pipeline_state(&descriptor, &options)).unwrap();
+        let read = (device.new_buffer(LENGTH, ResourceOptions::shared())).unwrap();
+        Tools {
+            queue: device.new_command_queue().unwrap(),
+            invert,
+            inverted,
+            solid,
+            read,
+        }
+    }
+
+    /// `texture`'s texels as the kernel reads them in a command buffer of its own, inverted, row
+    /// after row, and the counts it moved.
+    fn texels(&self, texture: &Texture) -> (Vec<u8>, Stood) {
+        let device = self.queue.device();
+        let before = device.work_counts();
+        let command_buffer = self.queue.command_buffer().unwrap();
+        let mut encoder = command_buffer.compute_command_encoder().unwrap();
+        encoder.set_compute_pipeline_state(&self.invert).unwrap();
+        encoder.set_texture(Some(texture), 0).unwrap();
+        encoder.set_texture(Some(&self.inverted), 1).unwrap();
+        (encoder.dispatch_threads(Size::new(WIDTH, HEIGHT, 1), Size::new(8, 8, 1))).unwrap();
+        encoder.end_encoding().unwrap();
+        command_buffer.commit().unwrap();
+        command_buffer.wait_until_completed_for(WAIT).unwrap();
+        let counts = stood(&before, &device.work_counts());
+        (self.inverted_texels(), counts)
+    }
+
+    /// The texels the kernel last wrote, row after row.
+    fn inverted_texels(&self) -> Vec<u8> {
+        let mut bytes = vec![0; (ROW * HEIGHT) as usize];
+        let region = Region::new_2d(0, 0, WIDTH, HEIGHT);
+        (self.inverted.get_bytes(&mut bytes, ROW, 0, region, 0, 0)).unwrap();
+        bytes
+    }
+
+    /// A pass loading `texture` that draws `value` (every channel) over all of it, in a command
+    /// buffer of its own: the merge dispatches it planned.
+    fn draw(&self, texture: &Texture, value: u8) -> u64 {
+        let device = self.queue.device();
+        let before = device.work_counts().shadow_merge_dispatches_planned;
+        let command_buffer = self.queue.command_buffer().unwrap();
+        let mut pass = RenderPassDescriptor::new();
+        let attachment = &mut pass.color_attachments[0];
+        attachment.texture = Some(texture.clone());
+        attachment.load_action = LoadAction::Load;
+        attachment.store_action = StoreAction::Store;
+        let mut encoder = command_buffer.render_command_encoder(&pass).unwrap();
+        encoder.set_render_pipeline_state(&self.solid).unwrap();
+        let corners = bytes_of(&[-1.0f32, -1.0, 1.0, 1.0], f32::to_le_bytes);
+        encoder.set_vertex_bytes(&corners, 0).unwrap();
+        let unorm = f32::from(value) / 255.0;
+        let color = bytes_of(&[unorm; 4], f32::to_le_bytes);
+        encoder.set_fragment_bytes(&color, 0).unwrap();
+        (encoder.draw_primitives(PrimitiveType::Triangle, 0, 6, 1, 0)).unwrap();
+        encoder.end_encoding().unwrap();
+        command_buffer.commit().unwrap();
+        command_buffer.wait_until_completed_for(WAIT).unwrap();
+        device.work_counts().shadow_merge_dispatches_planned - before
+    }
+
+    /// `buffer`'s first `len` bytes, as a blit copy into the read buffer moves them.
+    fn bytes(&self, buffer: &Buffer, len: u64) -> Vec<u8> {
+        let command_buffer = self.queue.command_buffer().unwrap();
+        let mut blit = command_buffer.blit_command_encoder().unwrap();
+        (blit.copy_from_buffer_to_buffer(buffer, 0, &self.read, 0, len)).unwrap();
+        blit.end_encoding().unwrap();
+        command_buffer.commit().unwrap();
+        command_buffer.wait_until_completed_for(WAIT).unwrap();
+        let bytes = self.read.contents().unwrap().as_ptr();
+        // SAFETY: the read buffer's first `len` bytes, which no command writes now.
+        unsafe { std::slice::from_raw_parts(bytes, len as usize) }.to_vec()
+    }
+}
+
+/// The plane's texture over a `Private` buffer, its bytes filled with 0x11.
+struct Plane {
+    tools: Tools,
+    buffer: Buffer,
+    texture: Texture,
+}
+
 impl Plane {
-    fn new(device: Device) -> Plane {
-        let queue = device.new_command_queue().unwrap();
+    fn new(device: &Device) -> Plane {
+        let tools = Tools::new(device);
         let buffer = (device.new_buffer(LENGTH, ResourceOptions::private())).unwrap();
         let mut descriptor =
             TextureDescriptor::texture_2d(PixelFormat::BGRA8Unorm, WIDTH, HEIGHT, false);
@@ -49,15 +166,12 @@ impl Plane {
         let texture = buffer.new_texture_with_iosurface_plane(&descriptor, plane);
         let texture = texture.unwrap();
         assert!(texture.shadow().is_some(), "padded rows make a shadow");
-        let read = (device.new_buffer(LENGTH, ResourceOptions::shared())).unwrap();
         let plane = Plane {
-            device,
-            queue,
+            tools,
             buffer,
             texture,
-            read,
         };
-        plane.fill(0..LENGTH, 0x11, &plane.queue);
+        plane.fill(0..LENGTH, 0x11, &plane.tools.queue);
         plane
     }
 
@@ -71,69 +185,9 @@ impl Plane {
         command_buffer.wait_until_completed_for(WAIT).unwrap();
     }
 
-    /// The texture's texels as a command buffer of its own reads them, and the counts it moved.
     fn texels(&self) -> (Vec<u8>, Stood) {
-        texels(&self.queue, &self.texture, &self.read)
+        self.tools.texels(&self.texture)
     }
-
-    /// The buffer's own bytes, as a copy into the read buffer moves them.
-    fn bytes(&self) -> Vec<u8> {
-        let command_buffer = self.queue.command_buffer().unwrap();
-        let mut blit = command_buffer.blit_command_encoder().unwrap();
-        (blit.copy_from_buffer_to_buffer(&self.buffer, 0, &self.read, 0, LENGTH)).unwrap();
-        blit.end_encoding().unwrap();
-        command_buffer.commit().unwrap();
-        command_buffer.wait_until_completed_for(WAIT).unwrap();
-        read_back(&self.read, LENGTH as usize)
-    }
-
-    /// A write of `value` into every texel through the texture, from a `Shared` buffer.
-    fn write_through(&self, value: u8) {
-        let row = WIDTH * 4;
-        let source = (self
-            .device
-            .new_buffer(row * HEIGHT, ResourceOptions::shared()))
-        .unwrap();
-        let bytes = source.contents().unwrap().as_ptr();
-        // SAFETY: the source's bytes, which no command uses yet.
-        unsafe { std::ptr::write_bytes(bytes, value, (row * HEIGHT) as usize) };
-        let command_buffer = self.queue.command_buffer().unwrap();
-        let mut blit = command_buffer.blit_command_encoder().unwrap();
-        let size = Size::new(WIDTH, HEIGHT, 1);
-        let at = Origin::new(0, 0, 0);
-        let none = BlitOption::None;
-        (blit.copy_from_buffer_to_texture(&source, 0, row, 0, size, &self.texture, 0, 0, at, none))
-            .unwrap();
-        blit.end_encoding().unwrap();
-        command_buffer.commit().unwrap();
-        command_buffer.wait_until_completed_for(WAIT).unwrap();
-    }
-}
-
-/// `texture`'s texels as a command buffer of `queue`'s reads them into `read`, row after row, and
-/// the counts it moved.
-fn texels(queue: &CommandQueue, texture: &Texture, read: &Buffer) -> (Vec<u8>, Stood) {
-    let device = queue.device();
-    let before = device.work_counts();
-    let command_buffer = queue.command_buffer().unwrap();
-    let mut blit = command_buffer.blit_command_encoder().unwrap();
-    let size = Size::new(WIDTH, HEIGHT, 1);
-    let at = Origin::new(0, 0, 0);
-    let row = WIDTH * 4;
-    let none = BlitOption::None;
-    (blit.copy_from_texture_to_buffer(texture, 0, 0, at, size, read, 0, row, 0, none)).unwrap();
-    blit.end_encoding().unwrap();
-    command_buffer.commit().unwrap();
-    command_buffer.wait_until_completed_for(WAIT).unwrap();
-    let bytes = read_back(read, (row * HEIGHT) as usize);
-    (bytes, stood(&before, &device.work_counts()))
-}
-
-/// The first `len` bytes of `read`, a `Shared` buffer.
-fn read_back(read: &Buffer, len: usize) -> Vec<u8> {
-    let bytes = read.contents().unwrap().as_ptr();
-    // SAFETY: the buffer's first `len` bytes, which no command writes now.
-    unsafe { std::slice::from_raw_parts(bytes, len) }.to_vec()
 }
 
 /// The standing's counts between two snapshots of a device's.
@@ -152,45 +206,58 @@ fn stood(before: &WorkCounts, after: &WorkCounts) -> Stood {
     }
 }
 
-/// Every texel's bytes `value`.
+/// Whether every texel the kernel wrote is a texel of the byte `value` inverted: its three color
+/// channels `!value`, its alpha `value`.
+fn inverted(texels: &[u8], value: u8) -> bool {
+    (texels.chunks(4)).all(|texel| texel == [!value, !value, !value, value])
+}
+
+/// Every byte `value`.
 fn all(bytes: &[u8], value: u8) -> bool {
     bytes.iter().all(|&byte| byte == value)
 }
 
 /// A second command buffer's read of the texture moves nothing in; a fill of the buffer by
 /// another queue's command buffer since lets go of the standing, and the read after it takes the
-/// fill; a write through the texture reaches the buffer's bytes, and the read after it holds it.
+/// fill; a pass drawing into the texture reaches the buffer's bytes by a plain copy back (no
+/// merge), leaving the bytes between rows, and the read after it holds the pass's texels and
+/// moves nothing in.
 #[test]
 fn a_private_plane_s_image_stands_until_a_command_writes_the_buffer_or_the_texture() {
     let scratch = Scratch::new("shadow-standing");
-    let plane = Plane::new(device(&scratch.0));
+    let plane = Plane::new(&device(&scratch.0));
     let (first, counts) = plane.texels();
-    assert!(all(&first, 0x11), "the first read takes the buffer's bytes");
-    assert_eq!(counts.against, 1);
+    assert!(inverted(&first, 0x11), "the first read takes the bytes");
+    assert_eq!(
+        counts.against, 1,
+        "the first copy in is decided at submission"
+    );
     assert_eq!(counts.skipped, 0, "nothing stood yet");
     let (second, counts) = plane.texels();
-    assert!(all(&second, 0x11));
+    assert!(inverted(&second, 0x11));
     assert_eq!(counts.skipped, 1, "the image stood");
     assert_eq!(counts.texels, WIDTH * HEIGHT, "every texel");
-    // A host's transfer queue fills the buffer: the next read copies in again.
-    let transfer = plane.device.new_command_queue().unwrap();
+    // A host's transfer queue fills rows 1 and 2: the next read copies in again.
+    let transfer = plane.tools.queue.device().new_command_queue().unwrap();
     plane.fill(PITCH..3 * PITCH, 0x5A, &transfer);
     let (filled, counts) = plane.texels();
-    let row = (WIDTH * 4) as usize;
+    let row = ROW as usize;
     assert!(
-        all(&filled[row..3 * row], 0x5A),
+        inverted(&filled[row..3 * row], 0x5A),
         "the fill reached the texture"
     );
-    assert!(all(&filled[..row], 0x11) && all(&filled[3 * row..], 0x11));
+    assert!(inverted(&filled[..row], 0x11) && inverted(&filled[3 * row..], 0x11));
     assert_eq!(counts.skipped, 0, "the fill let go");
     let (_, counts) = plane.texels();
     assert_eq!(counts.skipped, 1, "and it stood again");
-    // A write through the texture reaches the buffer, leaving the bytes between rows.
-    plane.write_through(0xC3);
-    let bytes = plane.bytes();
+    // A pass draws 0x99 into every texel: a blit read of the buffer finds it, and the bytes
+    // between rows as the fills left them.
+    let merges = plane.tools.draw(&plane.texture, 0x99);
+    assert_eq!(merges, 0, "a copy back, no merge");
+    let bytes = plane.tools.bytes(&plane.buffer, LENGTH);
     for y in 0..HEIGHT as usize {
         let at = y * PITCH as usize;
-        assert!(all(&bytes[at..at + row], 0xC3), "row {y}'s texels");
+        assert!(all(&bytes[at..at + row], 0x99), "row {y}'s texels");
         let gap = if (1..3).contains(&y) { 0x5A } else { 0x11 };
         assert!(
             all(&bytes[at + row..at + PITCH as usize], gap),
@@ -198,8 +265,8 @@ fn a_private_plane_s_image_stands_until_a_command_writes_the_buffer_or_the_textu
         );
     }
     let (written, counts) = plane.texels();
-    assert!(all(&written, 0xC3), "the read holds the write");
-    assert_eq!(counts.skipped, 1, "the write's end left the image standing");
+    assert!(inverted(&written, 0x99), "the read holds the pass's texels");
+    assert_eq!(counts.skipped, 1, "the pass's end left the image standing");
 }
 
 /// A command buffer that fills the buffer and then reads the texture in a later encoder copies
@@ -208,43 +275,33 @@ fn a_private_plane_s_image_stands_until_a_command_writes_the_buffer_or_the_textu
 #[test]
 fn a_private_plane_copies_in_after_its_own_command_buffer_s_write_and_once_handed_out() {
     let scratch = Scratch::new("shadow-standing-own");
-    let plane = Plane::new(device(&scratch.0));
+    let plane = Plane::new(&device(&scratch.0));
     let _ = plane.texels();
     let (_, counts) = plane.texels();
     assert_eq!(counts.skipped, 1, "the image stood");
-    let before = plane.device.work_counts();
-    let command_buffer = plane.queue.command_buffer().unwrap();
+    let tools = &plane.tools;
+    let device = tools.queue.device();
+    let before = device.work_counts();
+    let command_buffer = tools.queue.command_buffer().unwrap();
     let mut blit = command_buffer.blit_command_encoder().unwrap();
     blit.fill_buffer(&plane.buffer, 0..PITCH, 0x77).unwrap();
     blit.end_encoding().unwrap();
-    let mut blit = command_buffer.blit_command_encoder().unwrap();
-    let size = Size::new(WIDTH, HEIGHT, 1);
-    let at = Origin::new(0, 0, 0);
-    let row = WIDTH * 4;
-    let none = BlitOption::None;
-    (blit.copy_from_texture_to_buffer(
-        &plane.texture,
-        0,
-        0,
-        at,
-        size,
-        &plane.read,
-        0,
-        row,
-        0,
-        none,
-    ))
-    .unwrap();
-    blit.end_encoding().unwrap();
+    let mut encoder = command_buffer.compute_command_encoder().unwrap();
+    encoder.set_compute_pipeline_state(&tools.invert).unwrap();
+    encoder.set_texture(Some(&plane.texture), 0).unwrap();
+    encoder.set_texture(Some(&tools.inverted), 1).unwrap();
+    (encoder.dispatch_threads(Size::new(WIDTH, HEIGHT, 1), Size::new(8, 8, 1))).unwrap();
+    encoder.end_encoding().unwrap();
     command_buffer.commit().unwrap();
     command_buffer.wait_until_completed_for(WAIT).unwrap();
-    let counts = stood(&before, &plane.device.work_counts());
-    let read = read_back(&plane.read, (row * HEIGHT) as usize);
+    let counts = stood(&before, &device.work_counts());
+    let read = tools.inverted_texels();
+    let row = ROW as usize;
     assert!(
-        all(&read[..row as usize], 0x77),
+        inverted(&read[..row], 0x77),
         "the read took its own command buffer's fill"
     );
-    assert!(all(&read[row as usize..], 0x11));
+    assert!(inverted(&read[row..], 0x11));
     assert_eq!(counts.skipped, 0);
     // SAFETY: the handle is only read; no work of the caller's uses it.
     let _ = unsafe { plane.buffer.vk_buffer() };
@@ -253,9 +310,9 @@ fn a_private_plane_copies_in_after_its_own_command_buffer_s_write_and_once_hande
     assert_eq!(counts.against, 0, "handed out, it never stands");
 }
 
-/// A shadowed render target over host pages a no-copy buffer imports (the shape a host's window
-/// takes) never stands: no count sees the CPU's writes. A CPU write between two command buffers
-/// reaches the second one's read, and no copy in of either is decided against a standing.
+/// A shadowed render target over host pages a no-copy buffer imports never stands: no count sees
+/// the CPU's writes. A CPU write between two command buffers reaches the second one's read, and
+/// no copy in of either is decided against a standing.
 #[test]
 fn a_render_target_over_host_pages_never_stands() {
     let host = Host::new();
@@ -268,19 +325,21 @@ fn a_render_target_over_host_pages_never_stands() {
     let mut descriptor =
         TextureDescriptor::texture_2d(PixelFormat::BGRA8Unorm, WIDTH, HEIGHT, false);
     descriptor.usage = TextureUsage::SHADER_READ | TextureUsage::RENDER_TARGET;
-    let texture = buffer.new_texture(&descriptor, 0, WIDTH * 4).unwrap();
+    let texture = buffer.new_texture(&descriptor, 0, ROW).unwrap();
     assert!(
         texture.shadow().is_some(),
         "a render target over host pages"
     );
-    let queue = device.new_command_queue().unwrap();
-    let read = (device.new_buffer(WIDTH * 4 * HEIGHT, ResourceOptions::shared())).unwrap();
+    let tools = Tools::new(&device);
     host.fill(0x1111_1111);
-    let (first, counts) = texels(&queue, &texture, &read);
-    assert!(all(&first, 0x11), "the first read takes the pages");
+    let (first, counts) = tools.texels(&texture);
+    assert!(inverted(&first, 0x11), "the first read takes the pages");
     assert_eq!((counts.against, counts.skipped), (0, 0));
     host.fill(0x5A5A_5A5A);
-    let (second, counts) = texels(&queue, &texture, &read);
-    assert!(all(&second, 0x5A), "the second read takes the CPU's write");
+    let (second, counts) = tools.texels(&texture);
+    assert!(
+        inverted(&second, 0x5A),
+        "the second read takes the CPU's write"
+    );
     assert_eq!((counts.against, counts.skipped), (0, 0), "nothing stands");
 }
