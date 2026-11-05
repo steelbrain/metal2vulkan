@@ -617,9 +617,9 @@ pub(crate) fn metal_keeps_uncompressed(colour: bool, usage: TextureUsage) -> boo
 /// `RG11B10Float`'s canonical NaNs and the extended-range formats' own
 /// codes; a NaN in a float or depth field. `None` for a format whose new texture reads zero however
 /// it is made (block-compressed, 4:2:2 and two-plane formats) or that the probes did not make.
-/// An Apple silicon Mac's answer: on a device presented without unified memory, as a Mac with a
-/// discrete GPU is, a new `Private` texture holds what its memory held, and nothing writes this
-/// (`Device::metal_compresses_textures`).
+/// An Apple silicon Mac's answer: on a device that presents a Mac keeping no texture compressed,
+/// as a Mac with an Intel or AMD GPU is, a new `Private` texture holds what its memory held, and
+/// nothing writes this (`Device::metal_compresses_textures`).
 pub(crate) fn fresh_pattern(pf: PixelFormat) -> Option<FreshPattern> {
     use FreshPattern::{Color, DepthStencil};
     use PixelFormat as P;

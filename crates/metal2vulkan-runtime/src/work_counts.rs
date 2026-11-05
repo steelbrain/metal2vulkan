@@ -4802,11 +4802,11 @@ pub struct WorkCounts {
     /// New `Shared` and `Managed` textures' images moved to `GENERAL` and zeroed on the host, with
     /// no submission (`texture/host_copy.rs`).
     pub images_started_on_the_host: u64,
-    /// New `Private` textures the program made on a device presented without unified memory,
-    /// each holding what its memory held, written by no command: no zeros and no pattern, as a
-    /// Mac with a discrete GPU's new `Private` texture (`DeviceProperties::has_unified_memory`).
-    /// Zero on a device presented with unified memory, whose new `Private` textures start as an
-    /// Apple silicon Mac's.
+    /// New `Private` textures the program made on a device that presents a Mac keeping no texture
+    /// compressed (`DeviceProperties::lossless_compression` false), each holding what its memory
+    /// held, written by no command: no zeros and no pattern, as a Mac with an Intel or AMD GPU's
+    /// new `Private` texture. Zero on a device that presents an Apple silicon Mac's compression,
+    /// whose new `Private` textures start as that Mac's.
     pub private_textures_unfilled: u64,
     /// `replace_region` and `get_bytes` copies that ran on the host, with no submission
     /// (`texture/host_copy.rs`).

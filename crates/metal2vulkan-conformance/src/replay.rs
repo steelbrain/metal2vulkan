@@ -181,7 +181,7 @@ pub fn replay_against(
         case,
         answer,
         &ours,
-        (&announced, venue.unified_memory),
+        (&announced, venue.lossless_compression),
         abort.is_some(),
     );
     Ok(Replayed {
@@ -203,7 +203,7 @@ pub fn replay_against(
 /// The verdict of `ours` against `answer`'s outcomes: the most favourable of them, because Metal
 /// produced any of the set and matching one of them is matching Metal. With it, what the case's
 /// allowances did against that outcome. `offered` is what the run announced and whether its venue
-/// presents unified memory.
+/// presents Metal's lossless compression.
 ///
 /// The allowances follow the verdict rather than being gathered over every outcome, because they
 /// are a fact about the comparison the verdict came from: a racy case whose run matched the
@@ -212,7 +212,7 @@ fn verdict_over(
     case: &dyn Case,
     answer: &Answer,
     ours: &Transcript,
-    (announced, unified_memory): (&[String], bool),
+    (announced, compression): (&[String], bool),
     stopped: bool,
 ) -> (Verdict, Allowances) {
     let allowances = case.allowances();
@@ -238,7 +238,7 @@ fn verdict_over(
             ));
             continue;
         }
-        let offered = Offered::new(announced, &answer.validated).on_venue(unified_memory);
+        let offered = Offered::new(announced, &answer.validated).on_venue(compression);
         let found = compare_run(&outcome.transcript, ours, &allowances, offered, stopped);
         let used = Allowances {
             named: found.named,
@@ -364,35 +364,37 @@ pub fn shared_memory_notice() -> crate::allowance::Allowance {
     notice_allowance(metal2vulkan_runtime::Degradation::SharedInSystemMemory.code())
 }
 
-/// The slug of `docs/API.md`'s accepted difference that says what a device presented without
-/// unified memory answers as a Mac with a discrete GPU does ([`without_unified_memory`]).
-pub const WITHOUT_UNIFIED_MEMORY: &str =
-    "a-device-presented-without-unified-memory-keeps-no-texture-compressed";
+/// The slug of `docs/API.md`'s accepted difference that says what a device presenting a Mac that
+/// keeps no texture compressed answers, as a Mac with an Intel or AMD GPU does
+/// ([`without_compression`]).
+pub const WITHOUT_COMPRESSION: &str =
+    "a-device-that-presents-a-mac-without-texture-compression-answers-as-that-mac";
 
-/// The declaration a case needs at `site`, a value a new `Private` texture's contents decide
-/// before anything writes them, for the one answer a **venue's memory model** changes there: on a
-/// device presented without unified memory, as a Mac with a discrete GPU is, such a texture holds
-/// what its memory held, zero or a released texture's texels, and nothing writes it
-/// (`WorkCounts::private_textures_unfilled`), where the Apple silicon Mac every recording was
-/// taken on reads zero or its compressed texture's fixed pattern.
+/// The declaration a case needs at `site`, a value Metal's lossless texture compression decides,
+/// for the one answer a **venue's Mac** changes there. The Apple silicon Mac every recording was
+/// taken on keeps textures compressed: a new `Private` texture reads zero or the compressed
+/// texture's fixed pattern, and a GPU blit through a compressed texture writes some formats'
+/// canonical encoding. A device that presents a Mac keeping none
+/// (`DeviceProperties::lossless_compression` false), as a Mac with an Intel or AMD GPU is, answers
+/// as that Mac: the new texture holds what its memory held, zero or a released texture's texels,
+/// and nothing writes it (`WorkCounts::private_textures_unfilled`), and the blit keeps the bytes.
 ///
-/// **Why it is the venue's and not ours**, as [`shared_memory_notice`] is: every recording here
-/// was taken on an Apple chip, which presents unified memory and keeps such a texture
-/// compressed, so no recording holds what a Mac with a discrete GPU reads, and that Mac's answer
-/// is not one value but whatever its memory held. Metal's API leaves the contents undefined.
+/// **Why it is the venue's and not ours**, as [`shared_memory_notice`] is: no recording holds what
+/// a Mac without the compression reads, and its answer for a new texture is not one value but
+/// whatever its memory held. Metal's API leaves the contents undefined.
 ///
 /// **It loosens the value, and only on such a venue.** The site is unchecked, justified by
-/// [`Justification::WithoutUnifiedMemory`], which holds only on a run whose venue presents no
-/// unified memory: on the M3 Max and on lavapipe it justifies nothing, so every byte of the site
+/// [`Justification::WithoutCompression`], which holds only on a run whose venue presents no
+/// compression: on the M3 Max and on lavapipe it justifies nothing, so every byte of the site
 /// still compares exactly there, the pattern included. A run without such a venue counts the
 /// claim as one nothing checked ([`crate::report::Report::unchecked_everywhere`]); a case names it
-/// at the sites a new `Private` texture's unwritten texels reach, never at a written one, and says
-/// in a comment which run it rests on.
-pub fn without_unified_memory(site: &str) -> crate::allowance::Allowance {
+/// at the sites the compression decides, never at another, and says in a comment which run it
+/// rests on.
+pub fn without_compression(site: &str) -> crate::allowance::Allowance {
     crate::allowance::Allowance::new(
         format!("case/{site}/*"),
         crate::allowance::Loosening::Unchecked,
-        Justification::without_unified_memory(WITHOUT_UNIFIED_MEMORY),
+        Justification::without_compression(WITHOUT_COMPRESSION),
     )
 }
 

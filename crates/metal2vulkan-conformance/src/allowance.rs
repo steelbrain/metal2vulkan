@@ -50,18 +50,19 @@ pub enum Justification {
         /// A fragment of the validation's own message, which the recording must contain.
         says: String,
     },
-    /// **The venue is presented without unified memory**, as a Mac with a discrete GPU is, and an
-    /// entry of `docs/API.md`'s accepted differences, by its slug, says what a device so
-    /// presented answers otherwise than the Apple silicon Mac every recording was taken on.
+    /// **The venue presents a Mac that keeps no texture compressed**, as a Mac with an Intel or
+    /// AMD GPU is, and an entry of `docs/API.md`'s accepted differences, by its slug, says what a
+    /// device so presented answers otherwise than the Apple silicon Mac every recording was taken
+    /// on.
     ///
     /// **It is scoped to the venue, and held both ways.** It holds only on a run whose device
-    /// presents no unified memory (`DeviceProperties::has_unified_memory`, the venue's
-    /// [`crate::case::Venue::unified_memory`]): on one that presents it, as the M3 Max and lavapipe
-    /// do, it justifies nothing, so the sites it covers compare exactly there and any difference
-    /// at them is a divergence. Where it is named and no venue without unified memory ran, the
-    /// report counts it as a claim nothing checked
+    /// presents no such compression (`DeviceProperties::lossless_compression` false, the venue's
+    /// [`crate::case::Venue::lossless_compression`]): on one that presents it, as the M3 Max and
+    /// lavapipe do, it justifies nothing, so the sites it covers compare exactly there and any
+    /// difference at them is a divergence. Where it is named and no venue without the compression
+    /// ran, the report counts it as a claim nothing checked
     /// ([`crate::report::Report::unchecked_everywhere`]), as it does a notice no run announced.
-    WithoutUnifiedMemory(String),
+    WithoutCompression(String),
 }
 
 impl Justification {
@@ -80,9 +81,10 @@ impl Justification {
         Self::MetalValidation { says: says.into() }
     }
 
-    /// A venue without unified memory's answer, by its accepted difference's slug.
-    pub fn without_unified_memory(slug: impl Into<String>) -> Self {
-        Self::WithoutUnifiedMemory(slug.into())
+    /// The answer of a venue that presents no texture compression, by its accepted difference's
+    /// slug.
+    pub fn without_compression(slug: impl Into<String>) -> Self {
+        Self::WithoutCompression(slug.into())
     }
 
     /// What the report prints for it.
@@ -95,9 +97,9 @@ impl Justification {
             Justification::MetalValidation { says } => {
                 format!("Metal's own API validation refuses the call: {says:?}")
             }
-            Justification::WithoutUnifiedMemory(slug) => format!(
-                "a venue without unified memory, the accepted difference {slug} (docs/API.md \
-                 section 10)"
+            Justification::WithoutCompression(slug) => format!(
+                "a venue presenting no texture compression, the accepted difference {slug} \
+                 (docs/API.md section 10)"
             ),
         }
     }
@@ -105,7 +107,7 @@ impl Justification {
     /// Why the justification does not hold: the code names no degrade kind, the slug names no
     /// entry, the notice the code names was not announced among `offered`'s notices, the
     /// recording's validated oracle does not say what the case claims it says, or the venue
-    /// presents the unified memory a venue's own answer needs it not to.
+    /// presents the compression a venue's own answer needs it not to.
     pub fn unjustified(&self, offered: &Offered<'_>) -> Option<Unjustified> {
         match self {
             Justification::Degradation(code) => {
@@ -132,11 +134,13 @@ impl Justification {
                 Validated::Ran => Some(Unjustified::MetalValidationRan),
                 Validated::NotRun => Some(Unjustified::MetalValidationNotRun),
             },
-            Justification::WithoutUnifiedMemory(slug) => {
+            Justification::WithoutCompression(slug) => {
                 if !accepted_differences().iter().any(|entry| entry == slug) {
                     return Some(Unjustified::NoSuchAcceptedDifference(slug.clone()));
                 }
-                offered.unified_memory.then_some(Unjustified::UnifiedMemory)
+                offered
+                    .lossless_compression
+                    .then_some(Unjustified::VenueCompresses)
             }
         }
     }
@@ -154,10 +158,11 @@ pub struct Offered<'a> {
     /// The recording's second Metal fact. On a host without Metal this is what the file says, so
     /// the validated oracle is as portable as the rest of the recording.
     pub metal_validation: &'a Validated,
-    /// Whether the run's venue presents unified memory, as the Apple silicon Mac every recording
-    /// was taken on does ([`Justification::WithoutUnifiedMemory`]). `true` unless the run says
-    /// otherwise ([`Offered::on_venue`]), so a venue's answer justifies nothing by default.
-    pub unified_memory: bool,
+    /// Whether the run's venue presents a Mac that keeps textures losslessly compressed, as the
+    /// Apple silicon Mac every recording was taken on does ([`Justification::WithoutCompression`]).
+    /// `true` unless the run says otherwise ([`Offered::on_venue`]), so a venue's answer justifies
+    /// nothing by default.
+    pub lossless_compression: bool,
 }
 
 impl<'a> Offered<'a> {
@@ -166,7 +171,7 @@ impl<'a> Offered<'a> {
         Self {
             announced,
             metal_validation: &Validated::NotRun,
-            unified_memory: true,
+            lossless_compression: true,
         }
     }
 
@@ -175,14 +180,14 @@ impl<'a> Offered<'a> {
         Self {
             announced,
             metal_validation,
-            unified_memory: true,
+            lossless_compression: true,
         }
     }
 
-    /// What it offers on a venue that presents unified memory where `unified_memory`.
-    pub fn on_venue(self, unified_memory: bool) -> Self {
+    /// What it offers on a venue that presents Metal's compression where `lossless_compression`.
+    pub fn on_venue(self, lossless_compression: bool) -> Self {
         Self {
-            unified_memory,
+            lossless_compression,
             ..self
         }
     }
@@ -206,9 +211,9 @@ pub enum Unjustified {
     /// The case was never run under Metal's API validation, so the recording holds no such fact.
     /// This is the one the whole axis turns on: an unexercised validated leg justifies nothing.
     MetalValidationNotRun,
-    /// The venue presents unified memory, as the recordings' Apple silicon Mac does, so the answer
-    /// of a venue without it justifies nothing here.
-    UnifiedMemory,
+    /// The venue presents a Mac that keeps textures compressed, as the recordings' Apple silicon
+    /// Mac does, so the answer of a venue that keeps none justifies nothing here.
+    VenueCompresses,
 }
 
 impl std::fmt::Display for Unjustified {
@@ -237,9 +242,9 @@ impl std::fmt::Display for Unjustified {
                 "the recording holds no validated Metal answer, so Metal's API validation \
                  justifies nothing: re-record the case on a Mac",
             ),
-            Unjustified::UnifiedMemory => out.write_str(
-                "the venue presents unified memory, as the recordings' Mac does, so the answer \
-                 of a venue without it justifies nothing here",
+            Unjustified::VenueCompresses => out.write_str(
+                "the venue presents a Mac that keeps textures compressed, as the recordings' Mac \
+                 does, so the answer of a venue that keeps none justifies nothing here",
             ),
         }
     }

@@ -262,7 +262,14 @@ the runtime made.
 - **New resources** read what plain Metal's measured answer is: a new buffer reads zero. A
   host-visible buffer longer than 32 MiB lies, where the device imports host pointers, in fresh
   anonymous pages imported by their pointer, zero as mapped, so that nothing writes its zeros; a
-  recycled one is set to zero on the host.
+  recycled one is set to zero on the host. A new `Shared` or `Managed` texture reads zero. A new
+  `Private` texture answers as the Mac the device presents
+  (`DeviceProperties::lossless_compression`): where it presents an Apple silicon Mac's
+  compression, zero or that Mac's fixed pattern of a compressed texture; where it presents none,
+  as a Mac with an Intel or AMD GPU, what its memory held, written by nothing
+  (`WorkCounts::private_textures_unfilled`). Today the compression follows `has_unified_memory`,
+  so an integrated GPU that is not Apple's keeps the pattern, though an Intel Mac's GPU reads zero
+  or a released texture's texels (docs/API.md, accepted differences).
 - **The Metal address space.** Every buffer and heap has a `gpu_address`, and textures, samplers,
   pipeline states and indirect command buffers a `gpu_resource_id`. Translated shaders read both
   from argument buffers, as on Metal 3. A consumer may pin either (`AddressPlacement`,

@@ -3181,7 +3181,7 @@ fn the_known_gaps_ledger_parses_and_names_real_cases() {
         device: device.to_owned(),
         driver: "vendor 0x10005 device 0x0000".to_owned(),
         api: "1.2".to_owned(),
-        unified_memory: true,
+        lossless_compression: true,
     };
     let measured = lavapipe("llvmpipe (LLVM 21.1.8, 128 bits)");
     let other = lavapipe("llvmpipe (LLVM 23.1.1, 256 bits)");
@@ -3320,7 +3320,7 @@ fn venue_named(device: &str) -> Venue {
         device: device.to_owned(),
         driver: "stub".to_owned(),
         api: "none".to_owned(),
-        unified_memory: true,
+        lossless_compression: true,
     }
 }
 

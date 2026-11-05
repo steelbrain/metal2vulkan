@@ -34,17 +34,18 @@
 //! # What the rows are held to, and the one branch of the lane that is not exercised
 //!
 //! **One site of one kind of row is loosened, and only on one kind of venue.** Every row's bytes
-//! are Metal's own on MoltenVK and on lavapipe, which present unified memory as the recordings'
-//! Apple silicon Mac does, so there the only field that may differ is the set of degrade notices
+//! are Metal's own on MoltenVK and on lavapipe, which present the recordings' Apple silicon Mac's
+//! lossless compression, so there the only field that may differ is the set of degrade notices
 //! our side announced. The depth row's on lavapipe, which cannot hold Metal's denormal depths
 //! (`depth-denormals`), is the device's own answer, which the suite declares for every case
-//! ([`crate::replay::NATIVE_NOTES`]). On a device presented without unified memory, as a Mac with
-//! a discrete GPU is (an RTX 5080 Laptop), a new `Private` texture holds what its memory held and
-//! nothing writes it, so the `fresh` site of every `Private` texture row and every pattern row
-//! reads zero, the released texture's [`OLD`] bytes or whatever else the memory held; that site
-//! alone is declared, by [`crate::replay::without_unified_memory`], which justifies nothing on a
-//! venue with unified memory. The `written` site, the statuses and every `Shared` and `Managed`
-//! row still compare exactly there.
+//! ([`crate::replay::NATIVE_NOTES`]). On a device that presents a Mac keeping no texture
+//! compressed (`DeviceProperties::lossless_compression` false, as an RTX 5080 Laptop presents
+//! today), a new `Private` texture holds what its memory held and nothing writes it, so the
+//! `fresh` site of every `Private` texture row and every pattern row reads zero, the released
+//! texture's [`OLD`] bytes or whatever else the memory held; that site alone is declared, by
+//! [`crate::replay::without_compression`], which justifies nothing on a venue that presents the
+//! compression. The `written` site, the statuses and every `Shared` and `Managed` row still compare
+//! exactly there.
 //!
 //! Every row names one notice, and it belongs to the venue rather than to any row: the declaration
 //! [`crate::replay::shared_memory_notice`] carries, the notice a device without unified memory
@@ -1093,10 +1094,10 @@ impl Case for FreshTexture {
 
     fn allowances(&self) -> Vec<Allowance> {
         let mut allowances = vec![shared_memory_notice()];
-        // A new `Private` texture on a device presented without unified memory holds what its
-        // memory held (the module docs); the 5080's run reads it so.
+        // A new `Private` texture on a device that presents no texture compression holds what
+        // its memory held (the module docs). Expected, not yet run: no such venue replayed it.
         if self.row.storage == Storage::Private {
-            allowances.push(crate::replay::without_unified_memory("fresh"));
+            allowances.push(crate::replay::without_compression("fresh"));
         }
         allowances
     }
@@ -1347,9 +1348,9 @@ impl Case for FreshPattern {
         // canonical encoding, so every value still compares exactly.
         let mut allowances = vec![
             shared_memory_notice(),
-            // A new `Private` texture on a device presented without unified memory holds what
-            // its memory held, never the pattern (the module docs).
-            crate::replay::without_unified_memory("fresh"),
+            // A new `Private` texture on a device that presents no texture compression holds
+            // what its memory held, never the pattern (the module docs). Expected, not yet run.
+            crate::replay::without_compression("fresh"),
         ];
         allowances.extend(super::compressed_blits::kept_encoding_notice(
             self.row.format,
@@ -2050,26 +2051,34 @@ mod tests {
         }
     }
 
-    /// **A row loosens the notices site and nothing else.** Not one byte of this family is ever
-    /// loosened: MoltenVK, lavapipe and an RTX 5080 Laptop all read Metal's own bytes, and the only
-    /// field that may differ is the set of notices our side announced.
+    /// **A row loosens the notices site, and a `Private` texture's row its `fresh` site on a venue
+    /// that presents no texture compression, and nothing else.** On a venue that presents the
+    /// compression (MoltenVK, lavapipe) every byte compares exactly: the one value declaration,
+    /// [`crate::replay::without_compression`], justifies nothing there.
     ///
     /// Every row names [`shared_memory_notice`], which is the venue's memory model and not the
-    /// row's; **only** the three pattern rows whose read blits out of a texture Metal keeps
-    /// compressed in a format whose canonical encoding the device's copy may keep apart from
-    /// Metal's (`BGRA10_XR`, its sRGB twin, `RGB9E5Float`; the notes lavapipe announced) name a
-    /// second kind. A row whose notices were a guess would show here as a row loosening a site
-    /// nothing needed.
+    /// row's; every `Private` texture row and every pattern row names the value declaration at its
+    /// `fresh` site, and no `Shared` or `Managed` row, buffer row or texture over a buffer does;
+    /// **only** the three pattern rows whose read blits out of a texture Metal keeps compressed in
+    /// a format whose canonical encoding the device's copy may keep apart from Metal's
+    /// (`BGRA10_XR`, its sRGB twin, `RGB9E5Float`; the notes lavapipe announced) name a further
+    /// notice. A row whose notices were a guess would show here as a row loosening a site nothing
+    /// needed.
     #[test]
-    fn a_row_loosens_the_notices_site_alone() {
+    fn a_row_loosens_the_notices_site_and_a_private_texture_s_fresh_site() {
         let notices = format!("case/{}/*", crate::replay::NOTICES_SITE);
+        let fresh = crate::replay::without_compression("fresh");
         let shared = metal2vulkan_runtime::Degradation::SharedInSystemMemory
             .code()
             .to_owned();
         for case in all() {
             let allowances = case.allowances();
             for allowance in &allowances {
-                assert_eq!(allowance.path, notices, "{}", case.name());
+                assert!(
+                    allowance.path == notices || *allowance == fresh,
+                    "{}: {allowance:?}",
+                    case.name()
+                );
             }
             // The venue's notice is the one every row declares, and it is declared exactly once.
             let declared = allowances
@@ -2081,7 +2090,10 @@ mod tests {
             assert_eq!(declared, 1, "{}", case.name());
         }
         for row in TEXTURES {
-            assert_eq!(FreshTexture { row }.allowances().len(), 1, "{}", row.case);
+            let private = row.storage == Storage::Private;
+            let allowances = FreshTexture { row }.allowances();
+            assert_eq!(allowances.len(), 1 + usize::from(private), "{}", row.case);
+            assert_eq!(allowances.contains(&fresh), private, "{}", row.case);
         }
         // Everything else is held to Metal exactly, the venue's own notice apart.
         for (case, storage) in BUFFERS {
@@ -2103,12 +2115,9 @@ mod tests {
                 row.case,
                 "fresh-pattern-552" | "fresh-pattern-553" | "fresh-pattern-93"
             );
-            assert_eq!(
-                FreshPattern { row }.allowances().len(),
-                1 + usize::from(kept),
-                "{}",
-                row.case
-            );
+            let allowances = FreshPattern { row }.allowances();
+            assert_eq!(allowances.len(), 2 + usize::from(kept), "{}", row.case);
+            assert!(allowances.contains(&fresh), "{}", row.case);
         }
     }
 

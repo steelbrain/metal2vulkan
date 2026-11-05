@@ -2065,6 +2065,7 @@ field	metal2vulkan-runtime::DeviceProperties.drm_render	pub drm_render: Option<(
 field	metal2vulkan-runtime::DeviceProperties.gpu_core_count	pub gpu_core_count: Option<u32>
 field	metal2vulkan-runtime::DeviceProperties.has_unified_memory	pub has_unified_memory: bool
 field	metal2vulkan-runtime::DeviceProperties.kind	pub kind: DeviceKind
+field	metal2vulkan-runtime::DeviceProperties.lossless_compression	pub lossless_compression: bool
 field	metal2vulkan-runtime::DeviceProperties.max_buffer_length	pub max_buffer_length: u64
 field	metal2vulkan-runtime::DeviceProperties.max_threadgroup_memory_length	pub max_threadgroup_memory_length: u64
 field	metal2vulkan-runtime::DeviceProperties.max_threads_per_threadgroup	pub max_threads_per_threadgroup: Size
@@ -2857,6 +2858,7 @@ field	metal2vulkan-runtime::WorkCounts.pooled_memory_blocks_made	pub pooled_memo
 field	metal2vulkan-runtime::WorkCounts.predicated_loop_runs_again	pub predicated_loop_runs_again: u64
 field	metal2vulkan-runtime::WorkCounts.prefixed_starts	pub prefixed_starts: u64
 field	metal2vulkan-runtime::WorkCounts.primaries_begun_ahead	pub primaries_begun_ahead: u64
+field	metal2vulkan-runtime::WorkCounts.private_textures_unfilled	pub private_textures_unfilled: u64
 field	metal2vulkan-runtime::WorkCounts.provoking_last_pipeline_draws	pub provoking_last_pipeline_draws: u64
 field	metal2vulkan-runtime::WorkCounts.provoking_listed_draws	pub provoking_listed_draws: u64
 field	metal2vulkan-runtime::WorkCounts.query_result_copies_recorded	pub query_result_copies_recorded: u64

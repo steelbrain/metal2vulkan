@@ -1046,7 +1046,7 @@ mod tests {
                 device: "stub".to_owned(),
                 driver: "stub".to_owned(),
                 api: "stub".to_owned(),
-                unified_memory: true,
+                lossless_compression: true,
             }
         }
 
@@ -1198,7 +1198,7 @@ mod tests {
                     device: "slow".to_owned(),
                     driver: "slow".to_owned(),
                     api: "slow".to_owned(),
-                    unified_memory: true,
+                    lossless_compression: true,
                 }
             }
             fn library(&mut self, _source: &ShaderSource<'_>) -> Answer<Handle> {

@@ -16,7 +16,7 @@ fn venue() -> Venue {
         device: "stub".to_owned(),
         driver: "stub".to_owned(),
         api: "1.2".to_owned(),
-        unified_memory: true,
+        lossless_compression: true,
     }
 }
 

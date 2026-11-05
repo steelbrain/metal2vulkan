@@ -44,15 +44,17 @@
 //! A memoryless attachment loaded `DontCare` reads zero: that case is
 //! `framebuffer_fetch::a_dont_care_memoryless_attachment_reads_zero`, where the fetches are.
 //!
-//! **On a device presented without unified memory**, as a Mac with a discrete GPU is, Metal keeps
-//! no texture compressed, and a new `Private` texture holds what its memory held: zero, or a
-//! released texture's texels (the consumer's probe of a new `Private` `BGRA8Unorm` on an AMD
-//! Radeon Pro 5300M: zero, about 1.6% of samples a released texture's texels). The runtime writes
-//! nothing into it (`WorkCounts::private_textures_unfilled`). Each case there holds its `Private`
-//! textures to that: the count moved by one a texture, nothing announced `fresh-pattern-zeroed`,
-//! and the texels, which nothing wrote, are not Metal's whole pattern; it prints what they held
-//! (`FRESH-UNFILLED`). Its `Shared` and `Managed` textures and its buffers read zero, as on every
-//! device. On a device presented with unified memory the count stays zero.
+//! **On a device without Metal's compression** (`DeviceProperties::lossless_compression` false: a
+//! device that presents a Mac whose GPU keeps no texture compressed, as an Intel or AMD GPU's
+//! does), a new `Private` texture holds what its memory held: zero, or a released texture's texels
+//! (the consumer's probe of new `Private` textures on an AMD Radeon Pro 5300M and an Intel UHD 630:
+//! zero, and a released colour texture's texels exactly where one of the same descriptor was
+//! released first). The runtime writes nothing into it (`WorkCounts::private_textures_unfilled`).
+//! Each case there holds its `Private` textures to that: the count moved by one a texture, nothing
+//! announced `fresh-pattern-zeroed`, and the texels, which nothing wrote, are not Metal's whole
+//! pattern; it prints what they held (`FRESH-UNFILLED`). Its `Shared` and `Managed` textures and
+//! its buffers read zero, as on every device. On a device with Metal's compression the count stays
+//! zero.
 
 use super::degrade_notices::counts;
 use super::extended_range_two_planes::{reads, write, Dispatch, Kernels};
@@ -88,10 +90,20 @@ pub(super) fn zeroed(messages: &Messages) -> bool {
     counts(&messages.take_notices()).contains_key(&Degradation::FreshPatternZeroed)
 }
 
-/// Whether `device` is presented without unified memory, where a new `Private` texture holds what
+/// Whether `device` is without Metal's compression, where a new `Private` texture holds what
 /// its memory held, written by nothing (the module docs).
 pub(super) fn unfilled(device: &Device) -> bool {
-    !device.properties().has_unified_memory
+    !device.properties().lossless_compression
+}
+
+/// The kinds a read of a new `Private` texture's unwritten pattern announces on `device` where
+/// the device cannot write it: [`FRESH_PATTERNS`], or none on a device without Metal's
+/// compression, whose new textures hold what their memory held, which nothing announces.
+pub(super) fn patterns_of(device: &Device) -> &'static [Degradation] {
+    match unfilled(device) {
+        true => &[],
+        false => &FRESH_PATTERNS,
+    }
 }
 
 /// The new `Private` textures `device` made holding what their memory held, so far.
@@ -455,7 +467,7 @@ fn shapes() -> Vec<(Shape, Vec<u8>)> {
 /// New textures of every storage mode read Metal's answer in every texel: zero, or the pattern of a
 /// `Private` one Metal compresses, in its levels, zero where the device announced it cannot write
 /// it; each made right after one of its shape was written with [`OLD`] bytes and released (the
-/// module docs). A `Private` one on a device presented without unified memory holds what its
+/// module docs). A `Private` one on a device without Metal's compression holds what its
 /// memory held, counted.
 #[test]
 fn new_textures_read_metal_s_answer_after_written_ones_are_released() {
@@ -502,7 +514,7 @@ fn new_textures_read_metal_s_answer_after_written_ones_are_released() {
             let pattern = shape.pattern.is_some() && read == shape.expected(false);
             assert!(
                 !zeroed && !pattern,
-                "{} on {name}, without unified memory: announced {zeroed}, reads Metal's \
+                "{} on {name}, without Metal's compression: announced {zeroed}, reads Metal's \
                  pattern {pattern}, which nothing wrote",
                 shape.name
             );
@@ -643,7 +655,7 @@ const PATTERNS: &[(PixelFormat, &[u8])] = &[
 /// A new `Private` 64² texture of each format of [`PATTERNS`], `ShaderRead` (a render target too
 /// where the format is a depth or stencil one), reads Metal's pattern in every texel, or zero
 /// where the device announced it cannot write it; formats the device refuses are skipped. On a
-/// device presented without unified memory each holds what its memory held, counted, and not
+/// device without Metal's compression each holds what its memory held, counted, and not
 /// the pattern, which nothing wrote.
 #[test]
 fn new_private_textures_read_metal_s_pattern_by_format() {
@@ -684,7 +696,7 @@ fn new_private_textures_read_metal_s_pattern_by_format() {
             let what = held(&read, &[]);
             assert!(
                 !zeroed && read != shape.expected(false),
-                "{pf:?} on {name}, without unified memory: announced {zeroed}, or reads Metal's \
+                "{pf:?} on {name}, without Metal's compression: announced {zeroed}, or reads Metal's \
                  pattern, which nothing wrote"
             );
             left.push(format!("{pf:?} {what}"));
@@ -711,8 +723,8 @@ fn new_private_textures_read_metal_s_pattern_by_format() {
 
 /// New `Private` mipmapped `RGBA8Unorm` chains read Metal's pattern in each level whose shorter
 /// side is 16 or more, zero in the rest (a 64² chain's levels 64, 32 and 16; 100x40's 100x40 and
-/// 50x20; 16x256's and 17²'s first), level by level. On a device presented without unified
-/// memory each holds what its memory held, counted, and not the pattern.
+/// 50x20; 16x256's and 17²'s first), level by level. On a device without Metal's compression each
+/// holds what its memory held, counted, and not the pattern.
 #[test]
 fn new_private_chains_read_the_pattern_in_their_wide_levels() {
     let (messages, cache, lane) = pattern_lane();
@@ -749,7 +761,7 @@ fn new_private_chains_read_the_pattern_in_their_wide_levels() {
                 let what = held(&read, &[]);
                 assert!(
                     read != shape.expected(false),
-                    "a new Private {width}x{height} chain on {name}, without unified memory: \
+                    "a new Private {width}x{height} chain on {name}, without Metal's compression: \
                      reads Metal's pattern, which nothing wrote"
                 );
                 println!("FRESH-UNFILLED a {width}x{height} chain on {name}: {what}");
@@ -772,7 +784,7 @@ const DEPTH_SIDE: u32 = 16;
 /// its pattern, a NaN depth (all ones), which no clear of a multisampled image writes, so it
 /// reads zero here and announces `fresh-pattern-zeroed` where a command first reads it unwritten.
 /// With it, whether it holds what its memory held, written by nothing (on a device presented
-/// without unified memory, counted).
+/// without Metal's compression, counted).
 fn msaa_depth(lane: &Lane) -> (Texture, bool) {
     let side = u64::from(DEPTH_SIDE);
     let pf = PixelFormat::Depth32Float;
@@ -867,7 +879,7 @@ fn a_cleared_multisampled_depth_target_reads_its_clear_silently() {
 
 /// A new multisampled `Depth32Float` target a pass loads before anything wrote it announces
 /// `fresh-pattern-zeroed` as the pass's encoder is made, where the device writes zero for Metal's
-/// NaN, and reads that. On a device presented without unified memory it holds what its memory
+/// NaN, and reads that. On a device without Metal's compression it holds what its memory
 /// held, and announces nothing.
 #[test]
 fn a_loaded_never_written_multisampled_depth_announces() {
@@ -893,7 +905,7 @@ fn a_loaded_never_written_multisampled_depth_announces() {
 
 /// A new multisampled `Depth32Float` target a shader reads before anything wrote it announces
 /// `fresh-pattern-zeroed` at that read, where the device writes zero for Metal's NaN. On a device
-/// presented without unified memory it holds what its memory held, and announces nothing.
+/// without Metal's compression it holds what its memory held, and announces nothing.
 #[test]
 fn a_never_written_multisampled_depth_read_by_a_shader_announces() {
     let (messages, cache, lane) = pattern_lane();
@@ -934,8 +946,8 @@ fn msaa_pass(
 }
 
 /// A new `Private` 4x multisampled `RGBA8Unorm` target, made right after one cleared to a color
-/// and stored was released, resolves to zero when loaded (the module docs). On a device presented
-/// without unified memory it holds what its memory held, counted, its resolve unchecked.
+/// and stored was released, resolves to zero when loaded (the module docs). On a device without
+/// Metal's compression it holds what its memory held, counted, its resolve unchecked.
 #[test]
 fn a_new_multisampled_texture_reads_zero() {
     let (messages, cache, lane) = lane();
@@ -1149,7 +1161,7 @@ fn a_new_multisampled_float_texture_s_samples_hold_metal_s_pattern_or_announce()
         },
         &samples[..8]
     );
-    // On a device presented without unified memory nothing wrote the samples, and nothing
+    // On a device without Metal's compression nothing wrote the samples, and nothing
     // announces their pattern zeroed.
     assert!(
         (unfilled && !zero) || exact || (nans && converted) || (zeros && zero),
@@ -1162,7 +1174,7 @@ fn a_new_multisampled_float_texture_s_samples_hold_metal_s_pattern_or_announce()
 
 /// A new `Private` `RGB10A8_2P_XR10` texture that shaders write reads, in both planes, what a new
 /// `Shared` one reads (zero bytes), made right after one written by a kernel was released (the
-/// module docs). On a device presented without unified memory it holds what its memory held,
+/// module docs). On a device without Metal's compression it holds what its memory held,
 /// counted, its planes unchecked.
 #[test]
 fn a_new_two_plane_texture_reads_zero_in_both_planes() {

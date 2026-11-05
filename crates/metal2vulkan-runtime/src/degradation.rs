@@ -803,8 +803,11 @@ degradations! {
         DontCareLoadTiles = "dont-care-load-tiles", Precision,
             "the tiles no draw touches hold zero or the clear value where Metal keeps their \
              texels";
-        /// A new `Private` texture Metal keeps losslessly compressed reads a fixed pattern in
-        /// Metal (`texture/heap_tiled.rs`'s `fresh_pattern`), which the device cannot write
+        /// On a device that presents an Apple silicon Mac's compression
+        /// (`DeviceProperties::lossless_compression`; never on one that presents none, whose new
+        /// `Private` texture holds what its memory held), a new `Private` texture Metal keeps
+        /// losslessly compressed reads a fixed pattern in Metal
+        /// (`texture/heap_tiled.rs`'s `fresh_pattern`), which the device cannot write
         /// exactly into its image: a NaN depth where a copy into a depth image may store it
         /// clamped or the image is multisampled, a NaN texel of a multisampled image (whose bits
         /// a clear leaves to the device), or an image holding other bytes than Metal's texel. The

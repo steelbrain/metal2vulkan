@@ -2870,12 +2870,13 @@ impl Device {
     /// [`new_image`](Self::new_image)'s image for a texture of its own memory the program made
     /// (`newTextureWithDescriptor:`, `newSharedTextureWithDescriptor:`), as Metal's new texture
     /// starts on the Mac the device presents. `Shared` and `Managed` ones read zero in every
-    /// texel, and a `Memoryless` one holds nothing. A `Private` one, on a device presented with
-    /// unified memory ([`metal_compresses_textures`](Self::metal_compresses_textures)), reads
-    /// zero where Metal keeps it uncompressed and Metal's fixed pattern where it compresses it
-    /// (an Apple M4 under macOS 27.0.1, each time, also right after a texture of the same shape
-    /// was written and released; [`fresh_patterned`](Self::fresh_patterned)); on one presented
-    /// without, it holds what its memory held, written by no command, as a Mac with a discrete
+    /// texel, and a `Memoryless` one holds nothing. A `Private` one, on a device that presents a
+    /// Mac keeping textures compressed
+    /// ([`metal_compresses_textures`](Self::metal_compresses_textures)), reads zero where Metal
+    /// keeps it uncompressed and Metal's fixed pattern where it compresses it (an Apple M4 under
+    /// macOS 27.0.1, each time, also right after a texture of the same shape was written and
+    /// released; [`fresh_patterned`](Self::fresh_patterned)); on one that presents a Mac keeping
+    /// none, it holds what its memory held, written by no command, as a Mac with an Intel or AMD
     /// GPU's does (counted, `WorkCounts::private_textures_unfilled`). The runtime's own images
     /// keep [`new_image`](Self::new_image)'s start: an image its first command writes in full
     /// need not be zeroed first.
@@ -2905,18 +2906,15 @@ impl Device {
     }
 
     /// Whether the Mac this device presents keeps textures losslessly compressed, as an Apple
-    /// silicon Mac's GPU does (`texture/heap_tiled.rs`, `metal_compresses`): a device presented
-    /// with unified memory ([`DeviceProperties::has_unified_memory`](super::DeviceProperties)),
-    /// which every Apple silicon Mac is and no Mac with a discrete GPU is. The compressor's own
-    /// answers follow it: a new `Private` texture's pattern
+    /// silicon Mac's GPU does (`texture/heap_tiled.rs`, `metal_compresses`;
+    /// `DeviceProperties::lossless_compression`, decided in one place, `capabilities.rs`). The
+    /// compressor's own answers follow it: a new `Private` texture's pattern
     /// ([`new_texture_image`](Self::new_texture_image)), the canonical encodings of a blit
     /// through a compressed texture (`compressed_blit.rs`) and a `half` NaN clear's sign
     /// (`nan_clear::keeps_nan_sign`). Heap textures' sizes and layouts do not: their answers are
-    /// Apple silicon's on every device. An integrated GPU that is no Apple GPU (Intel's, AMD's)
-    /// presents unified memory too, so it keeps Apple silicon's answers, though an Intel Mac's
-    /// integrated GPU reads zero or a released texture's texels in a new `Private` texture.
+    /// Apple silicon's on every device.
     pub(crate) fn metal_compresses_textures(&self) -> bool {
-        self.properties().has_unified_memory
+        self.properties().lossless_compression
     }
 
     /// The owner of an image the runtime placed in memory of its own at `placement`.

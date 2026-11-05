@@ -101,6 +101,7 @@ use objc2_foundation::{
     NSArray, NSDictionary, NSError, NSObjectProtocol, NSRange, NSString, NSUInteger, NSURL,
 };
 use objc2_metal::MTLBlitOption;
+use objc2_metal::MTLGPUFamily;
 use objc2_metal::{
     MTLArgumentDescriptor, MTLArgumentEncoder, MTLArrayType, MTLAttribute, MTLAttributeFormat,
     MTLBarrierScope, MTLBinaryArchive, MTLBinaryArchiveDescriptor, MTLBinding, MTLBindingAccess,
@@ -2182,7 +2183,9 @@ impl Side for MetalSide {
             device: self.device.name().to_string(),
             driver: "Metal".to_owned(),
             api: "Metal".to_owned(),
-            unified_memory: self.device.hasUnifiedMemory(),
+            // An Apple GPU keeps textures losslessly compressed; a Mac's Intel or AMD GPU, which
+            // supports no Apple family, keeps none (the consumer's AMD 5300M and Intel 630).
+            lossless_compression: self.device.supportsFamily(MTLGPUFamily::Apple1),
         }
     }
 

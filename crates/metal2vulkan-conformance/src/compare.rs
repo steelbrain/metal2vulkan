@@ -256,9 +256,9 @@ pub fn compare_run(
                 }
             }
             // A venue's own answer is checked where it fires, as a notice is: on a venue that
-            // presents unified memory it holds nowhere, and naming it is no fault there.
+            // presents Metal's compression it holds nowhere, and naming it is no fault there.
             justification => match justification.unjustified(&offered) {
-                Some(Unjustified::UnifiedMemory) => None,
+                Some(Unjustified::VenueCompresses) => None,
                 other => other,
             },
         };

@@ -12,7 +12,9 @@
 //!   cleared it reads the clear, and one that loads it before a committed-later clear reads the
 //!   pattern. Each case runs its two command buffers serially, then with the later-committed one
 //!   encoded whole first on another thread, and requires the same notices of both (the kinds
-//!   announced at every occurrence, one fresh texture a run).
+//!   announced at every occurrence, one fresh texture a run). On a device without Metal's
+//!   compression (`DeviceProperties::lossless_compression` false) a new texture holds no pattern
+//!   and every case announces nothing.
 //! - **A shadowed texture's carry** (`runtime::shadow`'s `ShadowCarry`): a texture over a
 //!   `Private` buffer at rows 48 bytes apart (32 bytes of texels: no linear image aliases it on a
 //!   device whose row pitch is another) written by a kernel, its buffer copied out by a blit, then
@@ -186,7 +188,11 @@ fn a_fresh_texture_s_pattern_notice_follows_the_commit_order() {
             "PARALLEL-FRESH on {name}: {samples}x, {first:?} then {second:?}: {} notice(s)              serially, {} with the later encoded first; Metal reads the pattern {metal:?} time(s)",
             announced[0], announced[1]
         );
-        let expected = metal.unwrap_or(announced[0]);
+        // No pattern, so nothing to announce, on a device without Metal's compression.
+        let expected = match super::fresh_contents::unfilled(&device) {
+            true => 0,
+            false => metal.unwrap_or(announced[0]),
+        };
         if announced != [expected; 2] {
             wrong.push((samples, first, second, announced, expected));
         }

@@ -17,13 +17,16 @@
 //! 4-sample `Depth32Float` copied out unwritten and the half-written one read whole, announce it
 //! once (every device notes one: no clear writes its pattern, a NaN), so the tracker is live
 //! where the cases ran. A single-sample `Depth32Float` is noted only where the device writes no
-//! all-ones depth, so its cases are checked there and pass trivially elsewhere.
+//! all-ones depth, so its cases are checked there and pass trivially elsewhere. On a device without
+//! Metal's compression (`DeviceProperties::lossless_compression` false) no new texture holds a
+//! pattern, so the controls announce nothing (`fresh_contents::patterns_of`).
 
 use super::degrade_notices::shared_in_system_memory;
 use super::degrade_notices::{assert_made_once, assert_once, clamps_depth_uploads};
 use super::degrade_notices::{
     draws_depth_copies, forced, loses_depth_denormals, signs_depth_tests,
 };
+use super::fresh_contents::{patterns_of, unfilled};
 use super::{
     buffer_with, layer_reported_nothing_at_all, read_buffer, validated_device, Messages,
     ScratchCache, WAIT,
@@ -267,7 +270,7 @@ fn a_new_texture_a_blit_wrote_whole_reads_its_texels_unannounced() {
         // notes it.
         let unwritten = fresh(&device, PixelFormat::Depth32Float, side, samples, false);
         copy_out(&device, &queue, &unwritten, whole);
-        let control = assert_once(&messages.take_notices(), &[Degradation::FreshPatternZeroed]);
+        let control = assert_once(&messages.take_notices(), patterns_of(&device));
         println!("FRESH-WRITE {name} control, read unwritten: announced {control:?}");
     }
     layer_reported_nothing_at_all(&messages);
@@ -413,7 +416,7 @@ fn a_new_texture_written_in_parts_or_by_a_pass_reads_its_texels_unannounced() {
         );
         // The control: the half-written texture read whole reaches its unwritten half.
         copy_out(&device, &queue, &halves, whole);
-        let control = assert_once(&messages.take_notices(), &[Degradation::FreshPatternZeroed]);
+        let control = assert_once(&messages.take_notices(), patterns_of(&device));
         println!(
             "FRESH-WRITE {name} control, the top half's texture read whole: announced {control:?}"
         );
@@ -433,7 +436,7 @@ fn a_new_texture_written_in_parts_or_by_a_pass_reads_its_texels_unannounced() {
         let first = forced(&[
             (
                 Degradation::FreshPatternZeroed,
-                clamps_depth_uploads(&device),
+                clamps_depth_uploads(&device) && !unfilled(&device),
             ),
             (
                 Degradation::SharedInSystemMemory,
@@ -492,7 +495,7 @@ fn a_clear_through_a_scratch_the_pass_does_not_store_writes_nothing() {
                 Degradation::SharedInSystemMemory,
                 shared_in_system_memory(&device),
             )]);
-            let counts = assert_made_once(&messages, &[Degradation::FreshPatternZeroed], &first);
+            let counts = assert_made_once(&messages, patterns_of(&device), &first);
             println!(
                 "FRESH-WRITE {name} separate 4x Depth32Float cleared, stored DontCare, read whole: announced {counts:?}"
             );

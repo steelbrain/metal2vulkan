@@ -69,6 +69,16 @@ pub struct DeviceProperties {
     /// follows Metal's contract for the answer (`managed.rs`), and `Shared` storage lies where a
     /// Mac's does (docs/API.md "The runtime's memory model").
     pub has_unified_memory: bool,
+    /// Whether the Mac the device presents keeps textures losslessly compressed, as an Apple
+    /// silicon Mac's GPU does, a Mac with an Intel or AMD GPU's does not. Metal has no property
+    /// for it: it shows in what a new `Private` texture reads before anything writes it (Metal's
+    /// fixed pattern or zero, against zero or a released texture's texels), in the encoding a GPU
+    /// blit through such a texture writes, and in a `half` NaN clear's sign (docs/API.md, the
+    /// accepted differences). Today a device presented with unified memory
+    /// ([`has_unified_memory`](Self::has_unified_memory)); an integrated GPU that is not Apple's
+    /// presents unified memory too, so it answers yes, though an Intel Mac's GPU keeps no texture
+    /// compressed.
+    pub lossless_compression: bool,
     /// `VkPhysicalDeviceProperties::vendorID`.
     pub vendor_id: u32,
     /// `VkPhysicalDeviceProperties::deviceID`.
@@ -189,6 +199,16 @@ pub(crate) struct DeviceIdentity {
     pub sampled_sample_counts: SampleCountFlags,
 }
 
+/// Whether the Mac a device of `identity` presents keeps textures losslessly compressed
+/// ([`DeviceProperties::lossless_compression`]): the one place the runtime decides it. Every
+/// answer that differs between an Apple silicon Mac and a Mac with an Intel or AMD GPU because the
+/// first compresses (a new `Private` texture's contents, a blit's canonical encodings, a `half` NaN
+/// clear's sign) reads that field, and nothing else decides it. Today a device presented with
+/// unified memory.
+fn presents_lossless_compression(identity: &DeviceIdentity) -> bool {
+    identity.kind.has_unified_memory()
+}
+
 impl DeviceProperties {
     /// The properties of the device `identity` names, created with `description` (what it
     /// enables), whose compile-layer device is `compile`.
@@ -197,6 +217,7 @@ impl DeviceProperties {
         description: DeviceDescription,
         compile: &metal2vulkan::device::Device,
     ) -> DeviceProperties {
+        let lossless_compression = presents_lossless_compression(&identity);
         let metal = compile.metal_properties();
         let [width, height, depth] = metal.max_threads_per_threadgroup.map(u64::from);
         let texture_sample_counts = metal.raster_sample_counts & identity.sampled_sample_counts;
@@ -209,6 +230,7 @@ impl DeviceProperties {
             name: identity.name,
             kind: identity.kind,
             has_unified_memory: identity.kind.has_unified_memory(),
+            lossless_compression,
             vendor_id: identity.vendor_id,
             device_id: identity.device_id,
             device_uuid: identity.device_uuid,

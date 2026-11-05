@@ -14,13 +14,14 @@
 //! census tried keep their bytes, and so do a texture over a buffer or of an IOSurface and CPU
 //! copies (`replace_region`, `get_bytes`) of any texture.
 //!
-//! **On a device presented without unified memory** (`Device::metal_compresses_textures`), as a
-//! Mac with a discrete GPU is, no texture is one of these: Metal's own uncompressed texture keeps
-//! the bytes through every blit, so the device's copy is Metal's answer there, and no blit or
-//! fill announces a note or, under `ExtendedRangeBlitPolicy::Canonical`, rewrites a texel. That
-//! answer is expected, not measured: no discrete Mac's blits were probed. The usage the
-//! runtime gives an image MoltenVK copies ([`Device::copy_exact_usage`]) follows the host's own
-//! Metal, not the Mac the device presents, and stays.
+//! **On a device that presents a Mac keeping no texture compressed**
+//! (`Device::metal_compresses_textures`), as a Mac with an Intel or AMD GPU is, no texture is one
+//! of these: Metal's own uncompressed texture keeps the bytes through every blit, so the device's
+//! copy is Metal's answer there, and no blit or fill announces a note or, under
+//! `ExtendedRangeBlitPolicy::Canonical`, rewrites a texel. That answer is expected, not measured:
+//! no Intel or AMD Mac's blits were probed. The usage the runtime gives an image MoltenVK copies
+//! ([`Device::copy_exact_usage`]) follows the host's own Metal, not the Mac the device presents,
+//! and stays.
 //!
 //! Metal's fill (`fillTexture:...`, Apple SPI) of such a `BGRA10_XR` texture clears each field's
 //! low six bits and leaves the alpha code as the texel gives it (the M3 Max under 27.0.1: the

@@ -23,6 +23,8 @@
 //!   macOS 27.0.1); a copy out into a texture over a buffer writes it at the texels' rows, the
 //!   bytes between them kept. Under `Kept` each keeps the bytes. An uncompressed texture's keep
 //!   them under either.
+//! - On a device without Metal's compression (`DeviceProperties::lossless_compression` false) no
+//!   texture is compressed: every blit keeps the bytes, under either policy, and announces no note.
 //! - A heap answers a `Shared` compressed texture's size and alignment as a `Private` one's, and
 //!   two `Shared` textures placed back to back in a heap at that size keep their CPU bytes (on
 //!   MoltenVK, whose copies of a compressed `RG11B10Float` or `RGB9E5Float` image rewrite texels,
@@ -264,6 +266,8 @@ fn blits_through_a_compressed_texture_keep_their_bytes_and_announce_it() {
     };
     let mut rng = Rng(0xfc5_b117);
     let mut announced = std::collections::BTreeSet::new();
+    // No texture is compressed, so no blit's encoding is noted, on a device without it.
+    let compresses = lane.device.properties().lossless_compression;
     for (pf, per, note) in FORMATS {
         let rewrites = copies_rewrite(&lane.device, pf);
         let whole = [SIDE, SIDE];
@@ -410,7 +414,11 @@ fn blits_through_a_compressed_texture_keep_their_bytes_and_announce_it() {
         let notices = counts(&messages.take_notices());
         eprintln!("COMPRESSED-BLITS {pf:?} on {name}: announced {notices:?}");
         announced.extend(notices.into_keys());
-        assert!(announced.contains(&note), "{pf:?} on {name}: {announced:?}");
+        assert_eq!(
+            announced.contains(&note),
+            compresses,
+            "{pf:?} on {name}: {announced:?}"
+        );
     }
     layer_reported_nothing_at_all(&messages);
 }
@@ -468,7 +476,9 @@ fn extended_range_blits_write_metal_s_encoding_under_the_canonical_policy() {
             queue: device.new_command_queue().unwrap(),
             device,
         };
-        let canon = policy == ExtendedRangeBlitPolicy::Canonical;
+        // Metal's encoding is its compressor's: none on a device without the compression.
+        let compresses = lane.device.properties().lossless_compression;
+        let canon = policy == ExtendedRangeBlitPolicy::Canonical && compresses;
         let metal = |bytes: &[u8], fill: bool| match canon {
             true => canonical(bytes, fill),
             false => bytes.to_vec(),
@@ -572,7 +582,7 @@ fn extended_range_blits_write_metal_s_encoding_under_the_canonical_policy() {
             eprintln!("EXTENDED-BLITS {pf:?} on {name}: announced {notices:?}");
             assert_eq!(
                 notices.contains_key(&Degradation::ExtendedRangeBitsKept),
-                !canon && pf == PixelFormat::BGRA10XR,
+                compresses && !canon && pf == PixelFormat::BGRA10XR,
                 "{pf:?} on {name}: {notices:?}"
             );
         }
