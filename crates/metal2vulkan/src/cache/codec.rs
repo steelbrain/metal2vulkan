@@ -1024,7 +1024,7 @@ codec_enum! {
         InterpolateAtOffsetCentered, SimdgroupLockstep, MetalSampler, StorageImageSampleCount(f0),
         DepthResolveMode(f0), StencilResolveMode(f0), IndependentResolveNone, IndependentResolve,
         VariableSampleLocations, SampleLocationSampleCount(f0), ColorAttachmentSampleCount(f0, f1),
-        MetalColorWrites, MetalFloatColorNans, MetalHalfColorNans,
+        MetalColorWrites, MetalFloatColorNans,
         MetalHalfFma, MetalFloatDenormals,
         MetalCenterVaryings, MetalSmallFloatColorWrites, MetalNorm16ColorWrites, MetalMinMax,
         MetalHalfArithmetic, MetalHalfStorageWrites, MetalHalfStorageNans,

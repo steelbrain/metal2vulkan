@@ -624,12 +624,6 @@ pub enum VkProperty {
     /// the NaN of a lane the function rounds to nearest even. No Vulkan query reports it. Without
     /// it, such a write records `PrecisionNote::DeviceNanEncoding`.
     MetalFloatColorNans,
-    /// The device stores a `half` NaN a fragment function writes to a half-float color channel
-    /// as its own bits, as Metal does (the driver's measured deviation
-    /// [`DriverDeviation::MetalHalfColorNans`](crate::error::DriverDeviation::MetalHalfColorNans)).
-    /// No Vulkan query reports it. Without it, such a write records
-    /// `PrecisionNote::DeviceNanEncoding`.
-    MetalHalfColorNans,
     /// The device's `GLSL.std.450 Fma` on 16-bit floats is Metal's own `half` `fma` (the
     /// driver's measured deviation
     /// [`DriverDeviation::MetalHalfFma`](crate::error::DriverDeviation::MetalHalfFma)). No Vulkan

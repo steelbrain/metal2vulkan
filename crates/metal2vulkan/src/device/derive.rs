@@ -740,9 +740,6 @@ fn enabled_caps(desc: &DeviceDescription, deviations: &BTreeSet<DriverDeviation>
     if deviations.contains(&DriverDeviation::MetalFloatColorNans) {
         properties.insert(VkProperty::MetalFloatColorNans);
     }
-    if deviations.contains(&DriverDeviation::MetalHalfColorNans) {
-        properties.insert(VkProperty::MetalHalfColorNans);
-    }
     if deviations.contains(&DriverDeviation::MetalHalfFma) {
         properties.insert(VkProperty::MetalHalfFma);
     }

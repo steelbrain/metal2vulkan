@@ -26,7 +26,10 @@
 //!   as a unorm channel of its bits, a tie (a 1-bit channel's 0.5) to even.
 //!
 //! A `half` output (probe 5, an M4) converts as its value does, and a half-float channel stores it
-//! as it is, a NaN's payload included; the half-output cases draw every `half`.
+//! as it is, a NaN's payload included; the half-output cases draw every `half`. Its NaN reaches the
+//! attachment through the device's widening, whose NaN is the device's, so its fragment stage
+//! records `DeviceNanEncoding` on every device (the RTX 5080 Laptop GPU stores every one as
+//! `0x7fff`).
 //!
 //! A packed format the device samples but does not render (the RTX 5080's `A1BGR5Unorm` and
 //! `ABGR4Unorm`) draws through the view of its word, the word the fragment function encodes
@@ -41,7 +44,7 @@
 //! quiets or canonicalizes a `half` NaN; RADV and NVIDIA keep a small float NaN's payload). Such
 //! channels are counted and printed apart, with the codes stored; where the fragment stage does
 //! not record the note (the driver is measured to store Metal's NaN,
-//! `DriverDeviation::MetalFloatColorNans` and `MetalHalfColorNans`), and for every other channel, a
+//! `DriverDeviation::MetalFloatColorNans`), and for every other channel, a
 //! NaN's class included, the lane is exact. The fragment function writes the output as computed and the device converts it: where the
 //! device is measured to convert the kind of channel as Metal does (MoltenVK on Apple's GPUs,
 //! `DriverDeviation::MetalColorWrites`; `MetalSmallFloatColorWrites`, a `float` output to a

@@ -249,10 +249,6 @@ impl DeviceProfile {
                 .enabled
                 .properties
                 .contains(&VkProperty::MetalFloatColorNans),
-            DriverDeviation::MetalHalfColorNans => f
-                .enabled
-                .properties
-                .contains(&VkProperty::MetalHalfColorNans),
             DriverDeviation::MetalHalfFma => {
                 f.enabled.properties.contains(&VkProperty::MetalHalfFma)
             }

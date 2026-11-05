@@ -602,8 +602,8 @@ fn the_projection_of_the_fixture_is_fixed_function() {
 /// (`PrecisionNote::DeviceNanEncoding`) only where the profile's driver is not measured to store
 /// Metal's NaN: a `float` output's everywhere but MoltenVK, whose conversion is Metal's (the
 /// output's own NaN reaches the device's conversion, which no other driver is measured with), a
-/// `half` output's everywhere but NVIDIA's measured GPUs. A write to an `RGBA8Unorm` attachment
-/// records none.
+/// `half` output's everywhere, its widening's NaN the device's (NVIDIA's on the RTX 5080 Laptop
+/// GPU stores `0x7fff`). A write to an `RGBA8Unorm` attachment records none.
 #[test]
 fn half_float_writes_note_the_nan_encoding_where_the_device_rewrites_it() {
     use crate::pipeline::artifact::PrecisionNote;
@@ -617,7 +617,7 @@ fn half_float_writes_note_the_nan_encoding_where_the_device_rewrites_it() {
         ("amd-rdna3-radv", true, true),
         ("intel-irisxe-rplp-anv", true, true),
         ("nvidia-rtx50-linux", true, true),
-        ("nvidia-rtx5080-laptop", true, false),
+        ("nvidia-rtx5080-laptop", true, true),
         ("moltenvk-m3", false, true),
     ] {
         let p = prof(stem);

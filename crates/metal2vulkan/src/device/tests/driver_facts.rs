@@ -72,10 +72,6 @@ fn taken(p: &crate::device::DeviceProfile) -> Vec<crate::error::DriverDeviation>
             D::MetalFloatColorNans,
             property(VkProperty::MetalFloatColorNans),
         ),
-        (
-            D::MetalHalfColorNans,
-            property(VkProperty::MetalHalfColorNans),
-        ),
         (D::MetalHalfFma, property(VkProperty::MetalHalfFma)),
         (
             D::MetalFloatDenormals,
@@ -222,7 +218,6 @@ fn the_profile_takes_the_deviations_its_driver_is_measured_with() {
     // `float` denormals, the half-float storage writes, and the half texel writes' NaN bits.
     let nvidia_measured = vec![
         D::MetalFloatColorNans,
-        D::MetalHalfColorNans,
         D::MetalFloatDenormals,
         D::MetalHalfStorageWrites,
         D::MetalHalfTexelWrites,

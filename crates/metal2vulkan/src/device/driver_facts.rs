@@ -95,12 +95,11 @@ pub(crate) fn among<F: Copy + Ord>(
 ///
 /// The color-NaN stores, measured by `runtime_lane::color_writes` (at 0c344d06f,
 /// 2026-10-06): every NaN class of `float` outputs (the rounding writes `0x7fc00000`) to
-/// `R16Float`, `RG16Float` and `RGBA16Float`, and every `half` NaN of a `half` output to
-/// `RGBA16Float`, plain and blended with factors one and zero, against Metal's `0x7e00` and the
-/// `half`'s own bits:
-/// - `MetalFloatColorNans` and `MetalHalfColorNans`: NVIDIA's (`NVIDIA_PROPRIETARY`) 615.71.09
-///   on the GeForce RTX 3090 (`deviceID` `0x2204`) and the RTX 5080 Laptop GPU (`0x2c19`): every
-///   channel Metal's. One row per GPU, as measured.
+/// `R16Float`, `RG16Float` and `RGBA16Float`, plain and blended with factors one and zero,
+/// against Metal's `0x7e00`:
+/// - `MetalFloatColorNans`: NVIDIA's (`NVIDIA_PROPRIETARY`) 615.71.09 on the GeForce RTX 3090
+///   (`deviceID` `0x2204`) and the RTX 5080 Laptop GPU (`0x2c19`): every channel Metal's. One row
+///   per GPU, as measured.
 /// - `MetalFloatColorNans` alone: lavapipe (`MESA_LLVMPIPE`) from Mesa 26.0.8 through 26.2.4,
 ///   every `float` NaN Metal's and a `half` NaN another: Mesa 26.0.8 on LLVM 21.1.8, x86_64 (the
 ///   linux-gate container; signalling `half` NaNs quieted) and arm64 (on an M4 mini; every `half`
@@ -110,7 +109,11 @@ pub(crate) fn among<F: Copy + Ord>(
 /// Measured to store another NaN for both outputs, so not listed: RADV, Mesa 26.2.4 on the
 /// Radeon 780M, and ANV, Mesa 26.2.4 on the Iris Xe (RPL-P), `0xfe00`. MoltenVK 1.4.1 stores a
 /// `half` NaN as `0x7e00` on the M3 Max and the M4, and its `float` NaN as Metal does
-/// (`MetalColorWrites`).
+/// (`MetalColorWrites`). A `half` output's NaN reaches the attachment through the device's
+/// widening of the `half` (`OpFConvert`), whose NaN is the device's, so no driver is listed for
+/// it: NVIDIA's 615.71.09 on the RTX 5080 Laptop GPU stores every `half` NaN of the lane's `half`
+/// output to `RGBA16Float` as `0x7fff`, where Metal stores the `half`'s own bits (at 961b1ff319,
+/// 2026-11-05).
 ///
 /// `MetalHalfFma`: MoltenVK 1.4.1's `GLSL.std.450 Fma` on 16-bit floats, which SPIRV-Cross writes
 /// as Metal's `fma(half, half, half)`, the operation a Metal `half` fused multiply-add compiles to.
@@ -509,8 +512,6 @@ pub(crate) const DEVIATIONS: &[Measured<DriverDeviation>] = &[
     },
     nvidia_on(DriverDeviation::MetalFloatColorNans, NVIDIA_RTX_3090),
     nvidia_on(DriverDeviation::MetalFloatColorNans, NVIDIA_RTX_5080_LAPTOP),
-    nvidia_on(DriverDeviation::MetalHalfColorNans, NVIDIA_RTX_3090),
-    nvidia_on(DriverDeviation::MetalHalfColorNans, NVIDIA_RTX_5080_LAPTOP),
     Measured {
         device: Some(APPLE9),
         ..moltenvk_on_apple(DriverDeviation::MetalHalfFma)

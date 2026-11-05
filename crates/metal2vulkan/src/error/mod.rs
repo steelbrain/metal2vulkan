@@ -599,12 +599,6 @@ pub enum DriverDeviation {
     /// records no note. Unmeasured, it records `PrecisionNote::DeviceNanEncoding`, as an output
     /// written as computed does on every device but one of `MetalColorWrites`.
     MetalFloatColorNans,
-    /// The device stores a `half` NaN a fragment function writes (held widened to `float`, its
-    /// payload in the top bits of the significand) to a half-float color channel as its own
-    /// bits, as Metal stores a `half` output's NaN (`VkProperty::MetalHalfColorNans`). Unmeasured,
-    /// a module that writes a `half` output to such a channel records
-    /// `PrecisionNote::DeviceNanEncoding`.
-    MetalHalfColorNans,
     /// The device's `GLSL.std.450 Fma` on 16-bit floats is Metal's own `half` `fma`, which
     /// rounds the exact `a * b + c` once (`VkProperty::MetalHalfFma`). Where the profile also has
     /// `shaderFloat16`, a `half` fused multiply-add converts its operands (each a `half`, so
