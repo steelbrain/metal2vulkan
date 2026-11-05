@@ -1812,7 +1812,7 @@ fn without_tessellation_lines_draw_at_the_nearest_width() {
                 .draw(&shot)
                 .unwrap_or_else(|e| panic!("{name}: width {width}: {e}"));
             let [band, own, nearest] = routed(&before, &lane.device.work_counts());
-            let ([_, announced, _, _], _) = announced_lines(&messages);
+            let ([_, announced, _, _, _], _) = announced_lines(&messages);
             assert_eq!(band, 0, "{name}: a band without tessellationShader");
             let drawable = facts.draws(width);
             let (expected_own, expected_nearest) = if width == 1.0 {
@@ -1879,7 +1879,7 @@ fn a_draw_of_no_complete_primitive_draws_nothing() {
                         "{name}: {shot:?}: drew"
                     );
                     assert_eq!(routes, [0, 0, 0], "{name}: {shot:?}: a route of the width");
-                    let [wide, nearest, biased, _] = announced_lines(&messages).0;
+                    let [wide, nearest, biased, _, _] = announced_lines(&messages).0;
                     assert_eq!([wide, nearest, biased], [0; 3], "{name}: {shot:?}");
                 }
             }
@@ -1928,7 +1928,7 @@ fn edges_draw_as_bands_or_at_the_nearest_width() {
                 let before = lane.device.work_counts();
                 let drawn = lane.draw(&shot).unwrap_or_else(|e| panic!("{what}: {e}"));
                 let routes = routed(&before, &lane.device.work_counts());
-                let ([differs, nearest, biased, _], _) = announced_lines(&messages);
+                let ([differs, nearest, biased, _, _], _) = announced_lines(&messages);
                 assert_eq!(biased, 0, "{what}");
                 // The width drawn, where it is Metal's map's.
                 let drawn_at = match (facts.device_route(width), tessellated) {
@@ -1994,7 +1994,7 @@ fn a_refused_band_draws_at_the_nearest_width() {
                     .draw(&shot)
                     .unwrap_or_else(|e| panic!("{what}: refused: {e}"));
                 let routes = routed(&before, &lane.device.work_counts());
-                let ([_, announced, _, _], reasons) = announced_lines(&messages);
+                let ([_, announced, _, _, _], reasons) = announced_lines(&messages);
                 assert_eq!((routes, announced), ([0, 0, 1], 1), "{what}");
                 assert!(
                     drawn.ids.chunks(4).any(|t| t[3] != 0),
