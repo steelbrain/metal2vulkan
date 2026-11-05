@@ -1880,7 +1880,7 @@ impl EncoderCore {
                 None => match copy.gate_log(&device) {
                     Some((log, texel)) => {
                         let shadows = &device.shared().dirty;
-                        let dirty = self.open.command_buffer.dirty();
+                        let mut dirty = self.open.command_buffer.dirty();
                         Some(CopyGate::Log(
                             dirty.gate((log, &copy.copies, texel), shadows),
                         ))
