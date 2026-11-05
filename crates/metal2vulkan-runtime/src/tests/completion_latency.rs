@@ -820,13 +820,21 @@ fn runtime_completion_latency() {
             .unwrap();
     }
     let steps = trace::stop();
-    let finished: Vec<(usize, u64, u64)> = steps
-        .iter()
-        .filter_map(|step| match *step {
-            Traced::Finished { queue, value, seen } => Some((queue, value, seen)),
-            _ => None,
-        })
-        .collect();
+    // Each turn's batch, and the steps of `finish` that follow it, up to the next turn's.
+    let mut finished: Vec<(usize, u64, u64, Vec<(&'static str, u64)>)> = Vec::new();
+    for step in &steps {
+        match *step {
+            Traced::Finished { queue, value, seen } => {
+                finished.push((queue, value, seen, Vec::new()));
+            }
+            Traced::Step { what, at } => {
+                if let Some((.., turn)) = finished.last_mut() {
+                    turn.push((what, at));
+                }
+            }
+            _ => {}
+        }
+    }
     assert_eq!(
         finished.len(),
         RUNS,
@@ -861,6 +869,8 @@ fn runtime_completion_latency() {
         entered: u64,
         returned: u64,
         turn: u64,
+        /// The turn's steps of `finish` (`trace::step`), in order.
+        turn_steps: Vec<(&'static str, u64)>,
         seen: u64,
         completed: u64,
         gpu_end: Option<u64>,
@@ -868,7 +878,8 @@ fn runtime_completion_latency() {
     let times: Vec<Times> = committed
         .iter()
         .zip(&finished)
-        .map(|(each, &(queue, value, turn))| {
+        .map(|(each, (queue, value, turn, turn_steps))| {
+            let (queue, value, turn) = (*queue, *value, *turn);
             let (entered, returned) = waited(queue, value, turn).expect("a wait before the turn");
             let gpu_end = calibrated
                 .then(|| (each.command_buffer.gpu_end_time().unwrap() * 1e9).round() as u64);
@@ -878,6 +889,7 @@ fn runtime_completion_latency() {
                 entered,
                 returned,
                 turn,
+                turn_steps: turn_steps.clone(),
                 seen: each
                     .seen
                     .lock()
@@ -911,4 +923,28 @@ fn runtime_completion_latency() {
         of(&|t| us(t.seen, t.completed)),
         of(&|t| us(t.commit, t.seen)),
     );
+    // The turn's steps, each from the one before it (the turn first) and the last to the
+    // completion-seen handler.
+    let names: Vec<&str> = times[0].turn_steps.iter().map(|&(what, _)| what).collect();
+    assert!(
+        (times.iter()).all(|t| t.turn_steps.iter().map(|&(what, _)| what).eq(names.clone())),
+        "every turn took the same steps"
+    );
+    let mut split = String::new();
+    for at in 0..=names.len() {
+        let from = |t: &Times| match at {
+            0 => t.turn,
+            at => t.turn_steps[at - 1].1,
+        };
+        let to = |t: &Times| t.turn_steps.get(at).map_or(t.seen, |&(_, to)| to);
+        let (from_name, to_name) = (
+            at.checked_sub(1).map_or("turn", |at| names[at]),
+            names.get(at).copied().unwrap_or("seen handler"),
+        );
+        split.push_str(&format!(
+            "; {from_name} -> {to_name} {} us",
+            of(&|t| us(from(t), to(t)))
+        ));
+    }
+    eprintln!("COMPLETION-LATENCY runtime turn ({name}){split}");
 }

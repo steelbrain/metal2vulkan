@@ -666,6 +666,8 @@ fn finish(watch: &Watch, lists: &mut FenceLists, mut finished: Vec<(usize, Submi
     }
     // A batch held at its gate, or for a GPU signal to land, may now go (`scheduler`).
     device.shared().scheduler.completions(&device);
+    #[cfg(test)]
+    trace::step("events reached");
     // Every finished batch's fence is waited for: where a queue's failures are relayed each
     // batch has one (`device/relay.rs`), signaled after the driver reported its failure.
     let mut ending = Vec::new();
@@ -688,6 +690,8 @@ fn finish(watch: &Watch, lists: &mut FenceLists, mut finished: Vec<(usize, Submi
         }
     }
     let settled = settle(&device, lists);
+    #[cfg(test)]
+    trace::step("fences settled");
     // Their GPU times' timestamps are read, and their slots given back, and their GPU times
     // placed among their queues' in order, before their transitions are posted: a completed
     // handler reads the times. A section, as each poll.
@@ -701,6 +705,8 @@ fn finish(watch: &Watch, lists: &mut FenceLists, mut finished: Vec<(usize, Submi
             buffer.place_gpu_times();
         }
     }
+    #[cfg(test)]
+    trace::step("times placed");
     drop(device);
     match settled {
         Settled::Signaled => {
@@ -1239,6 +1245,8 @@ pub(crate) mod trace {
         /// A turn finished the batch of value `value` of `queue` that ends its command buffer;
         /// `seen` is the command buffer's completion time (`finish`).
         Finished { queue: usize, value: u64, seen: u64 },
+        /// The turn that finished the batches reached step `what` of `finish`.
+        Step { what: &'static str, at: u64 },
     }
 
     static ON: AtomicBool = AtomicBool::new(false);
@@ -1254,6 +1262,14 @@ pub(crate) mod trace {
     pub(crate) fn stop() -> Vec<Traced> {
         ON.store(false, Ordering::SeqCst);
         STEPS.lock().unwrap().drain(..).collect()
+    }
+
+    /// Keep the turn's step `what`, now.
+    pub(super) fn step(what: &'static str) {
+        record(|| Traced::Step {
+            what,
+            at: crate::gpu_time::host_nanos(),
+        });
     }
 
     /// Keep the step `step` makes, while a test asks.
