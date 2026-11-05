@@ -16,7 +16,9 @@
 //! texture the device renders in its word's format (`image_plan::word_samples`) where the device
 //! renders the word at the count. Each leg prints which way it held each format. A word's samples
 //! are Metal's words, read as Metal reads them (an sRGB word's by the device's decode,
-//! `srgb-texel-decode`, within a code of the transfer where it is not Metal's: [`read`]), and its
+//! `srgb-texel-decode`, within a code of the transfer where it is not Metal's, and a 5- or 6-bit
+//! field's by the device's widening, `device-texel-conversion`, within its bound there: [`read`]),
+//! and its
 //! resolve, the crate-owned one, is Metal's
 //! for `R8Unorm_sRGB` and `RGB9E5Float` and within one code of each field of Metal's for the
 //! packed formats, announced as `word-resolve`. A format the device renders itself stores and
@@ -473,8 +475,10 @@ fn srgb_linear(code: u32) -> f32 {
 /// transfer where the device decodes through Metal's own texture unit (`metal_sampler`,
 /// `VkProperty::MetalSampler`), within a code's `1 / 255` elsewhere (the RTX 5080 rounds its
 /// decode of an `R8_SRGB` sample to a `1 / 256` step: 1.88e-3 from the transfer at most over the
-/// lane's 29 reads of 0b556ddfd6 that a `1e-3` bound refused); a channel the format lacks 0,
-/// alpha 1.
+/// lane's 29 reads of 0b556ddfd6 that a `1e-3` bound refused); a packed word's 5- or 6-bit field
+/// within 0.18 of a code where the device's texture unit is not Metal's, which may widen it by
+/// replicating its bits (`PrecisionNote::DeviceTexelConversion`'s bound: the RTX 5080 read
+/// `A1BGR5Unorm`'s 5-bit 4 as 33 / 255, Metal 4 / 31); a channel the format lacks 0, alpha 1.
 fn read(pf: PixelFormat, word: u32, metal_sampler: bool) -> ([f32; 4], f32) {
     match WordAttachment::layout(pf).unwrap() {
         WordAttachment::Rgb9e5 => {
@@ -495,7 +499,12 @@ fn read(pf: PixelFormat, word: u32, metal_sampler: bool) -> ([f32; 4], f32) {
                     ((word >> f.shift) & max) as f32 / max as f32
                 })
             };
-            (w.fields().map(value), 1e-6)
+            // The widest bound of a replicated 5- or 6-bit field, where the device's own.
+            let replicated = (w.fields().into_iter().flatten())
+                .filter(|f| !metal_sampler && matches!(f.bits, 5 | 6))
+                .map(|f| 0.18 / ((1u32 << f.bits) - 1) as f32)
+                .fold(1e-6, f32::max);
+            (w.fields().map(value), replicated)
         }
     }
 }
@@ -950,6 +959,14 @@ fn multisampled_word_formats_store_read_resolve_and_blend_as_metal() {
                     );
                     if srgb && !lane.metal_sampler() {
                         allowed.insert(Degradation::SrgbTexelDecode);
+                    }
+                    // A packed word's reads, the device's widening where it is not Metal's.
+                    let packed = matches!(
+                        WordAttachment::layout(pf),
+                        Some(WordAttachment::Packed16 { .. })
+                    );
+                    if packed && !lane.metal_sampler() {
+                        allowed.insert(Degradation::DeviceTexelConversion);
                     }
                 }
                 false => allowed.extend(resolve_kind(&lane.device, samples)),
