@@ -534,6 +534,7 @@ impl Device {
             }
             if kind == Kind::Copy {
                 shared.counts.copied_host_buffer_shared();
+                self.degrade_copied_shared(call, pointer, length, import.copy_drops_writes());
             }
             shared.aliases.join(key, made_over, kind, &import);
             shared.aliases.place(key, made_over);
@@ -823,6 +824,7 @@ impl Device {
             Some(import) => {
                 if import.copied() {
                     shared.counts.copied_host_buffer_shared();
+                    self.degrade_copied_shared(call, pointer, length, import.copy_drops_writes());
                 }
                 (self.pages_in_import(import), Remade::default())
             }
@@ -1525,6 +1527,35 @@ impl Device {
                 format!("{call} over {length:#x} bytes at {pointer:p}"),
                 format!(
                     "{why}, so the GPU uses a copy of them in memory of the device's own{dropped}"
+                ),
+            )
+        });
+    }
+
+    /// Announce `copied-host-pages` for `call` over the `length` bytes at `pointer`, a no-copy
+    /// buffer or rebind that lies in the live copy of the same bytes another buffer was made over
+    /// (`host_aliases.rs`), whose GPU writes are dropped where `drops`: it makes no copy of its
+    /// own, but the GPU uses that copy for it, as for the buffer it was made for.
+    fn degrade_copied_shared(
+        &self,
+        call: &'static str,
+        pointer: NonNull<u8>,
+        length: u64,
+        drops: bool,
+    ) {
+        self.degrade(Degradation::CopiedHostPages, || {
+            let dropped = match drops {
+                true => {
+                    ", whose GPU writes are dropped, as Metal drops them, since the process maps \
+                     some of their pages read-only"
+                }
+                false => "",
+            };
+            (
+                format!("{call} over {length:#x} bytes at {pointer:p}"),
+                format!(
+                    "they are the bytes a live copied host buffer was made over, so the GPU uses \
+                     its copy of them in memory of the device's own{dropped}, as one memory with it"
                 ),
             )
         });

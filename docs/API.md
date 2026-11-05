@@ -2730,7 +2730,8 @@ bound.
   laid out there (the detail says which). A buffer made over exactly the bytes (the same first
   byte and length) a live copied buffer was made over, of either storage mode, lies in its copy,
   as one over a live import's bytes lies in that import, and makes no copy of its own
-  (`copied_host_buffers_shared`, the gate not asked): one memory, ordered as one resource's
+  (`copied_host_buffers_shared`, the gate not asked; announced, the detail saying it lies in the
+  live copy): one memory, ordered as one resource's
   accesses; a rebind to them does too where its textures were planned at the copy's offset and no
   image in place rides on it. A heap's own buffer and memory whose GPU writes are dropped keep
   their own. Counted: `WorkCounts::copied_host_buffers_made`, of them

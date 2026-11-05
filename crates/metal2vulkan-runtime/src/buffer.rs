@@ -1176,6 +1176,14 @@ impl HostImport {
         self.copied.get().is_some()
     }
 
+    /// Whether its memory is a copy of the caller's pages that drops the GPU's writes, as the
+    /// process cannot write them (`copied.rs`).
+    pub(super) fn copy_drops_writes(&self) -> bool {
+        self.copied
+            .get()
+            .is_some_and(|copied| copied.drops_writes())
+    }
+
     /// Where the bytes start in its first page: their offset in their host page for an import of
     /// them, 0 for a copied host buffer's copy, which lays them from its first byte.
     pub(super) fn offset(&self) -> u64 {
