@@ -4,15 +4,19 @@
 //! completes in its queue's order, behind the work submitted before it, and where its queue has
 //! no work in flight the thread that took it finishes it, with no queue waiter woken
 //! (`Completion::turn_owed`, `WorkCounts::completion_turns_where_taken`). One that signals an
-//! event is submitted as before.
+//! event is submitted as before. Behind a batch the scheduler holds in its group
+//! (`command_buffer/group.rs`), it goes in the group's submission instead, as any batch behind a
+//! group held does.
 //!
 //! Device tests: compiled only under the validation crate's GPU safety cfgs (`m2v_gpu`,
 //! `m2v_cpu_icd`), on the kind of device the cfg selects.
 
+use crate::command_buffer::merges_submissions;
 use crate::{
     CommandBuffer, CommandBufferStatus, Device, DeviceKind, DeviceOptions, EventRef,
     ResourceOptions,
 };
+use metal2vulkan::device::{CompletionPolicy, DevicePolicy};
 use std::sync::{Arc, Mutex};
 
 /// The command buffers of each kind.
@@ -24,7 +28,15 @@ const FILL: u64 = 256 << 20;
 
 /// The device the cfg selects: a CPU device under `m2v_cpu_icd`, else a GPU.
 fn device() -> Device {
+    device_with(CompletionPolicy::default())
+}
+
+/// [`device`], its policy the default's with `completion`.
+fn device_with(completion: CompletionPolicy) -> Device {
+    let mut policy = DevicePolicy::default();
+    policy.completion = completion;
     let options = DeviceOptions {
+        policy,
         kinds: match cfg!(m2v_cpu_icd) {
             true => vec![DeviceKind::Cpu],
             false => vec![
@@ -138,9 +150,24 @@ fn an_empty_command_buffer_completes_with_no_submission() {
 /// completed handler runs after the fill's and sees the fill `Completed`, its GPU start is at or
 /// after the fill's GPU end, and only the fill is submitted. Metal's completes so (an M3 Max,
 /// macOS 27.0.1: its GPU times 65 to 135 us after the fill's `GPUEndTime`).
+///
+/// Under `CompletionPolicy::Exact`, so on every driver, the empty command buffer is taken with no
+/// submission in each round. Under the default, on a driver whose batches group
+/// (`DriverFact::SubmissionsWithoutSignalsMerge`: lavapipe), the scheduler may hold the fill in its
+/// group as it finds the empty one ready behind it, which then goes in the group's one
+/// submission with the fill: either way it makes no submission of its own.
 #[test]
 fn an_empty_command_buffer_completes_behind_its_queue_s_earlier_work() {
-    let device = device();
+    for completion in [CompletionPolicy::Exact, CompletionPolicy::Grouped] {
+        completes_behind(completion);
+    }
+}
+
+/// [`an_empty_command_buffer_completes_behind_its_queue_s_earlier_work`] under `completion`.
+fn completes_behind(completion: CompletionPolicy) {
+    let device = device_with(completion);
+    let groups = completion == CompletionPolicy::Grouped
+        && merges_submissions(&device.properties().driver_facts);
     let queue = device.new_command_queue().unwrap();
     let target = device.new_buffer(FILL, ResourceOptions::private()).unwrap();
     // Whether the fill was still running when the empty command buffer was committed, in some
@@ -192,10 +219,23 @@ fn an_empty_command_buffer_completes_behind_its_queue_s_earlier_work() {
             "fill end {fill_end}, empty {start}..{end}"
         );
         assert!(empty.kernel_start_time() >= fill.kernel_end_time());
-        assert_eq!(
-            after.command_buffers_unsubmitted - before.command_buffers_unsubmitted,
-            1
+        let unsubmitted = after.command_buffers_unsubmitted - before.command_buffers_unsubmitted;
+        let grouped = (
+            after.grouped_submissions - before.grouped_submissions,
+            after.batches_grouped - before.batches_grouped,
         );
+        println!(
+            "{completion:?}, batches grouping {groups}, round {round}: unsubmitted {unsubmitted}, \
+             grouped submissions and their batches {grouped:?}"
+        );
+        match (unsubmitted, grouped) {
+            (1, (0, 0)) => {}
+            (0, (1, 2)) if groups => {}
+            _ => panic!(
+                "{completion:?}: the empty command buffer was neither taken with no submission \
+                 nor grouped with the fill: unsubmitted {unsubmitted}, grouped {grouped:?}"
+            ),
+        }
         assert!(
             after.queue_submissions - before.queue_submissions >= 1,
             "the fill was not submitted"
@@ -203,7 +243,7 @@ fn an_empty_command_buffer_completes_behind_its_queue_s_earlier_work() {
     }
     assert!(
         behind,
-        "the fill always completed before the empty command buffer's commit"
+        "{completion:?}: the fill always completed before the empty command buffer's commit"
     );
 }
 
