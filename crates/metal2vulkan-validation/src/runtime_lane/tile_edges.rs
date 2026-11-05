@@ -156,26 +156,47 @@ fn run(
 
 /// A pass's first dispatch reads, in the cells past a loaded attachment, its texel nearest each
 /// (clamped to its edge), and past a cleared one the clear color (Metal's `ptile3-load`); the
-/// attachment keeps what it held.
+/// attachment keeps what it held. A cleared channel holds either of the two codes nearest the
+/// clear's scaled value where the device's clear is not Metal's conversion (no
+/// `DriverFact::ColorClearIsMetals`), as Vulkan lets a clear store (the RTX 5080 Laptop GPU stores
+/// 0.5, 127.5 codes, as 127, Metal 128).
 #[test]
 fn cells_past_the_attachment_hold_metals_values_when_the_pass_begins() {
     on_device(|device| {
         let read = state(device, "cfb_tn_read4");
+        let either = !(device.properties().driver_facts)
+            .contains(&metal2vulkan::device::DriverFact::ColorClearIsMetals);
         for load in [LoadAction::Load, LoadAction::Clear] {
             let want = |x: u64, y: u64| match load {
                 LoadAction::Clear => CLEARED,
                 _ => texel(x.min(WIDTH - 1), y.min(HEIGHT - 1)),
+            };
+            // Metal's codes, or the device's conversion of the clear.
+            let holds = |have: [u8; 4], want: [u8; 4]| {
+                have == want
+                    || (load == LoadAction::Clear
+                        && either
+                        && (have.iter().zip([0.25f64, 0.5, 0.75, 1.0]))
+                            .all(|(&h, c)| (f64::from(h) - c * 255.0).abs() < 1.0))
             };
             let target = attachment(device);
             let out = buffer_with(device, &vec![0xAB; (CELLS * 16) as usize]).unwrap();
             run(device, &target, load, &[(&read, &out)]);
             for (i, have) in codes(&out).into_iter().enumerate() {
                 let (x, y) = (i as u64 % TILE, i as u64 / TILE);
-                assert_eq!(have, want(x, y), "{load:?}: cell ({x}, {y})");
+                let want = want(x, y);
+                assert!(
+                    holds(have, want),
+                    "{load:?}: cell ({x}, {y}): {have:?}, not {want:?}"
+                );
             }
             for (i, have) in texels(&target).into_iter().enumerate() {
                 let (x, y) = (i as u64 % WIDTH, i as u64 / WIDTH);
-                assert_eq!(have, want(x, y), "{load:?}: texel ({x}, {y}) kept");
+                let want = want(x, y);
+                assert!(
+                    holds(have, want),
+                    "{load:?}: texel ({x}, {y}) kept: {have:?}, not {want:?}"
+                );
             }
         }
     });
