@@ -1169,6 +1169,12 @@ impl HostImport {
         self.copied.get().is_some()
     }
 
+    /// Where the bytes start in its first page: their offset in their host page for an import of
+    /// them, 0 for a copied host buffer's copy, which lays them from its first byte.
+    pub(super) fn offset(&self) -> u64 {
+        self.shape.offset
+    }
+
     /// Keep the logs of the writes to its pages (set once, as its first buffer is made), which
     /// its copy, where it is one, reports its merges back to (`copied.rs`).
     pub(super) fn keep_log(&self, log: Arc<PagesLog>) {

@@ -290,7 +290,8 @@ the runtime made.
   its bytes in memory of the device's own, announced (`copied-host-pages`,
   [HOWTO](../../docs/HOWTO.md#copied-host-buffers)), wherever the process maps the pages
   readable (a dma-buf's mapping among them); over pages not mapped readable it is refused. A
-  rebind's textures follow it onto the copy.
+  rebind's textures follow it onto the copy. A buffer over exactly the bytes a live copy covers
+  lies in that copy, as one over a live import's bytes lies in that import.
   `CommandBuffer::used_resources` lists what a command buffer uses until it completes, so a
   program knows when it may take memory away.
 - **Hazards** are tracked as Metal tracks them. A heap's resources are untracked by default, so

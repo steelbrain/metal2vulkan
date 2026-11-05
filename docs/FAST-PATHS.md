@@ -347,6 +347,17 @@ driver's. Each is open work.
   (0.3 and 3.5 ms on the 275HX). A completion whose command buffers' uses name the
   copies they write compares those alone. A copy is made only where the caller's gate refuses an
   import or an admitted import fails, never by default.
+- **Two memories over overlapping host bytes agree GPU to GPU only through the pages when one is
+  a copied host buffer** (`copied.rs`, `copied-host-pages`): a copy and another copy or an import
+  of pages that overlap without being the same first byte and length (a rebind's bytes inside a
+  surface's, a guest RAM chunk's import over a copy's pages, a rebind whose texture moved in its
+  page, a buffer made after the range was reported remapped). The writer's bytes reach the pages
+  at its completion, and the reader's copy at its commit, so a read committed before the write
+  completed reads the bytes from before it: in one command buffer, in one queue's command buffers
+  in flight together, and across queues an event orders (the held reader is not copied in again
+  when the event releases it). Of two such copies written in flight, the first's write stays where
+  Metal keeps the later. Buffers over exactly the bytes a live copy covers lie in that copy and are
+  one memory (`copied_host_buffers_shared`).
 - **A copied host buffer's merge keeps the CPU's byte where the CPU and the GPU both wrote it**
   between a commit and the completion: bytes are merged one at a time, so a GPU write never
   rewrites a byte beside it, but a byte both wrote keeps the CPU's, where on Metal the later write

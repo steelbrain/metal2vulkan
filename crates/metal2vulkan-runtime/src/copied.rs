@@ -14,6 +14,15 @@
 //!   read permission ([`mapped_readable`]): on Linux the kernel reads no page it cannot pin, such
 //!   as a mapping of a dma-buf (`VM_PFNMAP`). Pages not mapped, or mapped without read permission
 //!   (memory Metal makes no buffer over), keep the import's own refusal.
+//! - **One memory, one copy.** A no-copy buffer made over exactly the bytes (the same first byte
+//!   and length) a live copied buffer was made over lies in its copy, of either storage mode, as
+//!   one made over a live import's bytes lies in that import (`host_aliases.rs`): one `VkBuffer`,
+//!   one snapshot, one hazard key, the gate not asked and no page read. So two textures over one
+//!   surface's pages are ordered as one resource's accesses are, with no trip through the pages.
+//!   A rebind to such bytes lies in the copy too where its textures were planned at the copy's
+//!   offset (its first byte) and no image in place rides on it. Counted:
+//!   `WorkCounts::copied_host_buffers_shared`. A heap's own buffer and a buffer whose GPU writes
+//!   are dropped keep their own (`host_aliases.rs`, "Not joined").
 //! - **Coherence.** The runtime keeps, for each copy, the bytes the pages and the copy last agreed
 //!   on (its snapshot). At each commit, before any of the command buffer's work is submitted,
 //!   every byte the CPU changed in the pages since then is written into the copy
@@ -52,6 +61,17 @@
 //!   same batch read the write back, and a later command buffer the pages' bytes. The CPU's writes
 //!   to the pages through another mapping are copied in at each commit, as above. Counted:
 //!   `WorkCounts::copied_dropped_bytes`.
+//! - **Between copies, GPU to GPU** (`docs/FAST-PATHS.md`, known gaps). A copy and another copy, or
+//!   an import, of pages that overlap without being the same bytes (a rebind's bytes inside a
+//!   surface's, a guest RAM chunk's import over a copy's pages, a buffer whose texture moved in
+//!   its page, the bytes again after a reported remap) are two memories, which agree only through
+//!   the pages: at the writer's completion (its merge back, or its writes in place) and at the
+//!   reader's commit (its copy in). A read committed before the write completed reads the bytes
+//!   as of its commit, wherever the tracker orders it after the write: in one command buffer, in
+//!   one queue's command buffers in flight together, and across queues an event orders, as the
+//!   held reader is not copied in again when the event releases it. Of two such copies written in
+//!   flight, the second's merge back takes a byte the first merged for the CPU's write, which a
+//!   merge keeps, so the first write stays where Metal keeps the later.
 //! - **Event signals.** A batch's event signals, submitted while a copy is live, are seen at its
 //!   completion turn alone, after the merge: no read of the value observes them earlier, and a
 //!   wait for them is held on the host until that turn (`event_timeline.rs`), so the GPU's writes

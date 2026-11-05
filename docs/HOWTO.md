@@ -360,8 +360,8 @@ happens where:
   byte's through the last's). `false` makes the copy (`WorkCounts::host_imports_refused_by_host`,
   `copied_host_buffers_refused`). A consumer with a budget of mappings (Linux's
   `vm.max_map_count`) refuses there, paying in copies instead of a failed call. It is not asked
-  for a buffer or rebind that lies in a live import of the same bytes, memory whose GPU writes
-  Metal's private option bit 24 drops, a rebind whose bytes moved in their page under a texture
+  for a buffer or rebind that lies in a live import or copy of the same bytes, memory whose GPU
+  writes Metal's private option bit 24 drops, a rebind whose bytes moved in their page under a texture
   (below), or where the device refused the pointer before it;
 - an import the device and the gate admitted fails, of the pointer or of the dma-bufs of the
   caller's source (out of memory, another Vulkan error: `copied_host_buffers_degraded`);
@@ -369,6 +369,19 @@ happens where:
   runtime never hands that driver (`RuntimeDriverDefect::UnpinnablePagesBreakHostMemory`,
   `WorkCounts::host_imports_unpinnable`), and no dma-buf of the caller's source served them
   (`copied_host_buffers_degraded`).
+
+A buffer made over exactly the bytes (the same first byte and length) a live copied buffer was
+made over lies in that copy, of either storage mode, as a buffer over a live import's bytes lies in
+that import: no second copy, no read of the pages, the gate not asked
+(`copied_host_buffers_shared`). So textures of one surface over a new buffer each frame are one
+memory with the surface's other buffers while one of them lives, ordered as one resource's
+accesses in one command buffer and across queues, as Metal orders them; a buffer made after the
+last one over the bytes went makes a new copy. A rebind to such bytes lies in the copy where its
+textures were planned at the copy's offset (its first byte) and no image in place rides on it. A
+heap's own buffer, and memory whose GPU writes Metal's private option bit 24 drops, keep their own.
+A copy and another copy or import of overlapping but different bytes agree GPU to GPU only
+through the pages: a read committed before the write completed reads the bytes from before it
+([FAST-PATHS](FAST-PATHS.md), known gaps).
 
 `Buffer::host_backing` answers, per buffer, whether it got the copy: `HostBacking::Copied`, else
 how its pages are imported (`ImportedByPointer`, `ImportedAsDmaBuf`, `InHostRam`), or `Detached`;

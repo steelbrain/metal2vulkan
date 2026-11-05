@@ -19,6 +19,13 @@
 //! - **One memory, one import.** A buffer that joins a memory, of the memory class of a live
 //!   import of it, lies in that import's `VkBuffer` (`HostImport`, `Device::buffer_in_import`):
 //!   one resource to the driver, where the tracker's barriers are not all the ordering there is.
+//!   A copied host buffer (`copied.rs`) joins the memory as an import does, and a later buffer of
+//!   either class lies in its copy while no import of its class lives ([`Kind::Copy`]): the copy
+//!   is the runtime's own memory of one class whatever the storage mode, and two copies of one
+//!   memory agree only through the pages, at a completion's merge back and a commit's copy in, so
+//!   a read committed before the write's completion read the bytes from before it (the
+//!   consumer's two textures over one surface past its import gate, every texel stale in one
+//!   command buffer and across queues an event ordered).
 //!   MoltenVK records no barrier between blits and leaves their order to Metal's hazard
 //!   tracking, which is by `MTLBuffer`: two imports were two, and a blit's write through one
 //!   raced a read through the other in one encoder and in one command buffer (an M4: mixed texels);
@@ -32,7 +39,8 @@
 //!   moved as within one buffer (`blit.rs`, `blit_texture.rs`). A buffer rebound onto the bytes a
 //!   live buffer was made over, of the class of its import, lies in that import too, joining no key
 //!   (`Device::rebind_host_pages`; a heap's own buffer, and bytes with a texture's aliasing image
-//!   over them, import their own).
+//!   over them, import their own), and in a live copy of them where its textures were planned at
+//!   the offset the copy lays the bytes at (its first byte) and no image in place rides on it.
 //! - **Ownership stays the buffer's.** The added uses are hazard tracking's alone: what a command
 //!   holds and lists (`EncoderCore::touch`, rebind holds, `used_resources`) is named by the
 //!   command's own uses, each buffer by its own key.
@@ -40,7 +48,9 @@
 //!   (`ShadowCopies::meets`), so a write through the other buffer, or a texture over it, makes
 //!   the shadow copy in again, as a write through its own buffer does.
 //! - **Not joined.** Buffers over memory that overlaps without being the same range, a heap's
-//!   bytes, and the memory a rebound buffer takes, keep their own keys: Metal orders no two
+//!   bytes (a heap's own copy too), and the memory a rebound buffer takes, keep their own keys,
+//!   and a buffer whose GPU writes are dropped imports a read-only view of its own (a copy shared
+//!   with it would take its writes): Metal orders no two
 //!   no-copy buffers over one allocation (the same probe's `host` cases read stale or mixed
 //!   texels), so the runtime's joining of the same range is the IOSurface's ordering, which a
 //!   race over plain no-copy buffers may also give. A rebound buffer leaves the memory it was
@@ -96,6 +106,18 @@ use std::sync::{Arc, Mutex, Weak};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct Alias {
     pub(super) key: ResourceKey,
+}
+
+/// What a memory's import is to the buffers made over the memory later ([`HostAliases::import`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Kind {
+    /// An import of the caller's pages, in memory of this class: a later buffer of the class lies
+    /// in it.
+    Import(MemoryClass),
+    /// A copy of the caller's pages in memory of the runtime's own (`copied.rs`): a later buffer
+    /// of either class lies in it while no import of its class lives, as the copy's memory is of
+    /// one class whatever the buffer's storage mode, the memory a copy of its own would take.
+    Copy,
 }
 
 /// The device's no-copy buffers by the host memory they were made over (the module docs), and
@@ -166,24 +188,26 @@ struct Memory<I> {
     key: ResourceKey,
     /// How many live buffers were made over it.
     buffers: usize,
-    /// Its imports a buffer made, by memory class: a later buffer of the class lies in it while
-    /// it lives.
-    imports: Vec<(MemoryClass, Weak<I>)>,
+    /// Its imports a buffer made, by kind: a later buffer lies in one while it lives
+    /// ([`HostAliases::import`]).
+    imports: Vec<(Kind, Weak<I>)>,
     /// The serial it was noted with ([`Over`]).
     serial: u64,
 }
 
 impl<I> HostAliases<I> {
     /// The live import of `class` of `memory`, the bytes a live buffer was made over (its first
-    /// byte's host address and its length): a buffer made over them lies in it.
+    /// byte's host address and its length), else its live copy ([`Kind::Copy`]): a buffer of
+    /// `class` made over them lies in it.
     pub(super) fn import(&self, memory: (u64, u64), class: MemoryClass) -> Option<Arc<I>> {
         let inner = lock(&self.inner);
         let memory = inner.memories.get(memory)?;
-        memory
-            .imports
-            .iter()
-            .filter(|(made, _)| *made == class)
-            .find_map(|(_, import)| import.upgrade())
+        let live = |kind: Kind| {
+            (memory.imports.iter())
+                .filter(|(made, _)| *made == kind)
+                .find_map(|(_, import)| import.upgrade())
+        };
+        live(Kind::Import(class)).or_else(|| live(Kind::Copy))
     }
 
     /// Whether a live import of `class` was made over memory that holds all of `memory` and more
@@ -202,22 +226,23 @@ impl<I> HostAliases<I> {
             })
             .any(|at| {
                 inner.memories.get(at).is_some_and(|noted| {
-                    (noted.imports.iter())
-                        .any(|(made, import)| *made == class && import.strong_count() > 0)
+                    (noted.imports.iter()).any(|(made, import)| {
+                        *made == Kind::Import(class) && import.strong_count() > 0
+                    })
                 })
             });
         found
     }
 
     /// Note the buffer of `key`, made over `memory` (its first byte's host address and its
-    /// length) and lying in `import`, of memory class `class`: it joins the memory a live buffer
-    /// was made over, or its key becomes the memory's; later buffers of `class` over the memory
-    /// lie in `import` unless a live import of it is noted already.
+    /// length) and lying in `import`, of `kind`: it joins the memory a live buffer was made over,
+    /// or its key becomes the memory's; later buffers over the memory lie in `import`, where
+    /// [`import`](Self::import) finds it, unless a live import of its kind is noted already.
     pub(super) fn join(
         &self,
         key: ResourceKey,
         memory: (u64, u64),
-        class: MemoryClass,
+        kind: Kind,
         import: &Arc<I>,
     ) -> Option<Alias> {
         let mut inner = lock(&self.inner);
@@ -241,8 +266,8 @@ impl<I> HostAliases<I> {
         noted
             .imports
             .retain(|(_, import)| import.strong_count() > 0);
-        if !noted.imports.iter().any(|(made, _)| *made == class) {
-            noted.imports.push((class, Arc::downgrade(import)));
+        if !noted.imports.iter().any(|(made, _)| *made == kind) {
+            noted.imports.push((kind, Arc::downgrade(import)));
         }
         let owner = noted.key;
         let over = Over {

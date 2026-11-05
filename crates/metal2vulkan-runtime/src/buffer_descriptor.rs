@@ -22,6 +22,7 @@ use super::dirty_pages::{DirtySource, PagesLog};
 use super::error::MemoryKind;
 use super::error::{internal, invalid, nil, vulkan, Error, Problem, RuntimeGap};
 use super::heap::{Heap, HeapProblem};
+use super::host_aliases::Kind;
 use super::host_bytes::HostBytes;
 use super::host_memory::{
     based_size, binds_in, buffer_base, import_refused, import_window, not_importable,
@@ -502,8 +503,11 @@ impl Device {
             return Err(invalid(call, Problem::Heap(problem)));
         }
         // A buffer over the bytes a live no-copy buffer was made over, of its memory class, lies
-        // in its import (`host_aliases.rs`), its dma-buf source dropped uncalled; a heap's own
-        // buffer imports its own, as does one whose GPU writes are dropped.
+        // in its import, and a buffer of either class in its copy where it is a copied host
+        // buffer and no import of the class lives (`host_aliases.rs`, `copied.rs`): one
+        // `VkBuffer`, one snapshot and one key, its dma-buf source dropped uncalled and the gate
+        // unasked, as no page is mapped for it. A heap's own buffer imports or copies its own, as
+        // does one whose GPU writes are dropped (its import is a read-only view of the pages).
         let made_over = (pointer.as_ptr() as u64, length);
         let release = release.of(pointer, length);
         let shares = (!of_heap && !drops_writes)
@@ -514,19 +518,39 @@ impl Device {
         }
         if let Some(import) = shares {
             let address = self.place_window(placement, &window, length)?;
+            let kind = match import.copied() {
+                true => Kind::Copy,
+                false => Kind::Import(class),
+            };
             let buffer =
                 self.buffer_in_import(Arc::clone(&import), length, modes, address, release);
+            let key = buffer.identity().key;
             // The GPU's writes through it are reported to the import's logs, as through the
-            // buffer it was made for, over the same bytes (`dirty_pages.rs`).
+            // buffer it was made for, over the same bytes (`dirty_pages.rs`), and merged back
+            // from the copy where it lies in one.
             if let Some(pages) = buffer.host_pages() {
-                pages.logged_as(buffer.identity().key);
+                pages.logged_as(key);
+                pages.copied_as(key);
             }
-            shared
-                .aliases
-                .join(buffer.identity().key, made_over, class, &import);
-            shared.aliases.place(buffer.identity().key, made_over);
+            if kind == Kind::Copy {
+                shared.counts.copied_host_buffer_shared();
+            }
+            shared.aliases.join(key, made_over, kind, &import);
+            shared.aliases.place(key, made_over);
             return Ok(buffer);
         }
+        // A copied host buffer made below joins the memory as an import does, so that a later
+        // buffer over the same bytes lies in its copy; a heap's own copy is placed, joining none.
+        let noted = |buffer: Buffer| {
+            let key = buffer.identity().key;
+            if let (false, Some(pages)) = (of_heap, buffer.host_pages()) {
+                shared
+                    .aliases
+                    .join(key, made_over, Kind::Copy, pages.import());
+            }
+            shared.aliases.place(key, made_over);
+            buffer
+        };
         // Pages the caller resolves to runs of a guest RAM the device uses (`host_ram.rs`): asked
         // once, here, holding no lock of the runtime's, before the gate. One run inside one chunk
         // is bound in the chunk's import, with no import of its own: no pin, no kernel mapping,
@@ -573,7 +597,7 @@ impl Device {
                     shared.counts.host_import_refused_by_host();
                     // SAFETY: the caller's contract.
                     let copied = unsafe { self.copied_buffer(copy, release, dirty, None) };
-                    return copied.map(|buffer| kept(buffer, log, kept_runs));
+                    return copied.map(|buffer| noted(kept(buffer, log, kept_runs)));
                 }
                 // Only a buffer that imports its pages pins them, and so has their writability
                 // asked: one that lies in a live import pins none, that import's making asked for
@@ -619,7 +643,7 @@ impl Device {
                         // SAFETY: the caller's contract.
                         let copied =
                             unsafe { self.copied_buffer(copy, release, dirty, Some(error)) };
-                        return copied.map(|buffer| kept(buffer, log, kept_runs));
+                        return copied.map(|buffer| noted(kept(buffer, log, kept_runs)));
                     }
                     Err(error) => return Err(error),
                 };
@@ -666,9 +690,12 @@ impl Device {
         // A buffer over the bytes another no-copy buffer covers joins it (`host_aliases.rs`), and
         // a later one lies in its import; one whose GPU writes are dropped joins none.
         if let (false, false, Some(current)) = (of_heap, drops_writes, current) {
-            shared
-                .aliases
-                .join(buffer.identity().key, made_over, class, current.import());
+            (shared.aliases).join(
+                buffer.identity().key,
+                made_over,
+                Kind::Import(class),
+                current.import(),
+            );
         }
         // Its uses order against every other key's over bytes they meet, a heap's own buffer's
         // too (`host_aliases.rs`).
@@ -772,17 +799,33 @@ impl Device {
             false => None,
         };
         // Bytes a live no-copy buffer was made over, of its memory class, are given the pages of
-        // its import, as a buffer made over them lies in it (`host_aliases.rs`), the dma-buf source
-        // dropped uncalled: they pin no page, that import's making asked about the same window,
-        // and the pages stay writable while imported (`HostMemory::new`). A heap's own buffer
-        // imports its own, whose images bound to its bytes are made again over the new import's
-        // memory or its dma-bufs, as does a buffer whose GPU writes are dropped.
+        // its import, or of its copy where it is a copied host buffer and no import of the class
+        // lives, as a buffer made over them lies in it (`host_aliases.rs`), the dma-buf source
+        // dropped uncalled and the gate unasked: they pin no page, that import's making asked
+        // about the same window, and the pages stay writable while imported (`HostMemory::new`).
+        // An import lays the bytes at their offset in their page, so it serves textures planned
+        // at the old offset only where the bytes did not move in it; a copy lays them from its
+        // first byte, so it serves textures planned there, and no image in place, whose own copy
+        // lies in fresh pages it rides on. A heap's own buffer imports its own, whose images
+        // bound to its bytes are made again over the new import's memory or its dma-bufs, as does
+        // a buffer whose GPU writes are dropped.
         let made_over = (pointer.as_ptr() as u64, length);
-        let shares = (heap.is_none() && !drops_writes && !moved)
+        let shares = (heap.is_none() && !drops_writes)
             .then(|| shared.aliases.import(made_over, class))
-            .flatten();
+            .flatten()
+            .filter(|import| match import.copied() {
+                false => !moved,
+                true => {
+                    in_place.is_empty() && (texels.is_empty() || import.offset() == cell.offset())
+                }
+            });
         let (pages, remade) = match shares {
-            Some(import) => (self.pages_in_import(import), Remade::default()),
+            Some(import) => {
+                if import.copied() {
+                    shared.counts.copied_host_buffer_shared();
+                }
+                (self.pages_in_import(import), Remade::default())
+            }
             None => {
                 // Pages the caller resolves to runs of a guest RAM the device uses
                 // (`host_ram.rs`), as at the buffer's making: asked once, here, holding no lock of

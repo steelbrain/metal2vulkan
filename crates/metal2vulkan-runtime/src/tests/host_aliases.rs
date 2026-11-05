@@ -1,6 +1,6 @@
 //! No-copy buffers over the same host memory (`host_aliases.rs`).
 
-use super::super::host_aliases::{Alias, HostAliases, Memories};
+use super::super::host_aliases::{Alias, HostAliases, Kind, Memories};
 use super::super::memory::MemoryClass;
 use super::super::resource::ResourceKey;
 use super::super::tracker::{Access, Use, UseRange};
@@ -13,7 +13,7 @@ type Aliases = HostAliases<u32>;
 
 /// Note `key` over `memory`, lying in a new import of `Shared` memory, which is dropped at once.
 fn join(aliases: &Aliases, key: ResourceKey, memory: (u64, u64)) -> Option<Alias> {
-    aliases.join(key, memory, MemoryClass::Shared, &Arc::new(0))
+    aliases.join(key, memory, Kind::Import(MemoryClass::Shared), &Arc::new(0))
 }
 
 fn copy() -> Access {
@@ -104,7 +104,7 @@ fn a_buffer_over_the_bytes_another_covers_lies_in_its_import() {
     let (first, second, managed) = (ResourceKey::new(), ResourceKey::new(), ResourceKey::new());
     assert!(aliases.import(memory, MemoryClass::Shared).is_none());
     let import = Arc::new(1);
-    aliases.join(first, memory, MemoryClass::Shared, &import);
+    aliases.join(first, memory, Kind::Import(MemoryClass::Shared), &import);
     let shared = aliases.import(memory, MemoryClass::Shared).unwrap();
     assert!(Arc::ptr_eq(&shared, &import));
     // Other bytes, or another class, share nothing.
@@ -114,14 +114,14 @@ fn a_buffer_over_the_bytes_another_covers_lies_in_its_import() {
     assert!(aliases.import(memory, MemoryClass::Managed).is_none());
     // A second over the memory lies in it, and the first import stays the memory's.
     let again = Arc::new(2);
-    aliases.join(second, memory, MemoryClass::Shared, &again);
+    aliases.join(second, memory, Kind::Import(MemoryClass::Shared), &again);
     assert!(Arc::ptr_eq(
         &aliases.import(memory, MemoryClass::Shared).unwrap(),
         &import
     ));
     // A managed buffer's import is the memory's for its class.
     let own = Arc::new(3);
-    aliases.join(managed, memory, MemoryClass::Managed, &own);
+    aliases.join(managed, memory, Kind::Import(MemoryClass::Managed), &own);
     assert!(Arc::ptr_eq(
         &aliases.import(memory, MemoryClass::Managed).unwrap(),
         &own
@@ -130,7 +130,7 @@ fn a_buffer_over_the_bytes_another_covers_lies_in_its_import() {
     drop((import, shared));
     assert!(aliases.import(memory, MemoryClass::Shared).is_none());
     let third = ResourceKey::new();
-    aliases.join(third, memory, MemoryClass::Shared, &again);
+    aliases.join(third, memory, Kind::Import(MemoryClass::Shared), &again);
     assert!(Arc::ptr_eq(
         &aliases.import(memory, MemoryClass::Shared).unwrap(),
         &again
@@ -142,6 +142,47 @@ fn a_buffer_over_the_bytes_another_covers_lies_in_its_import() {
     assert!(aliases.import(memory, MemoryClass::Shared).is_none());
     assert!(aliases.import(memory, MemoryClass::Managed).is_none());
     drop((again, own));
+}
+
+/// A buffer over the bytes a live copy was made over (`copied.rs`) lies in the copy, of either
+/// memory class, while no import of its class lives; a copy is not an import a buffer over part
+/// of the bytes counts as inside, and once every buffer over the memory is gone it is not shared.
+#[test]
+fn a_buffer_over_the_bytes_a_copy_covers_lies_in_the_copy() {
+    let aliases = Aliases::default();
+    let memory = (0x40000, 0x4000);
+    let (first, second, third) = (ResourceKey::new(), ResourceKey::new(), ResourceKey::new());
+    let copy = Arc::new(1);
+    assert_eq!(aliases.join(first, memory, Kind::Copy, &copy), None);
+    for class in [MemoryClass::Shared, MemoryClass::Managed] {
+        assert!(Arc::ptr_eq(&aliases.import(memory, class).unwrap(), &copy));
+    }
+    // Other bytes share nothing, and the copy is no live import around part of them.
+    assert!(aliases
+        .import((0x40000, 0x2000), MemoryClass::Shared)
+        .is_none());
+    assert!(!aliases.inside_live((0x40000, 0x2000), MemoryClass::Shared));
+    // A buffer that lies in it joins the memory's key.
+    assert_eq!(
+        aliases.join(second, memory, Kind::Copy, &copy),
+        Some(Alias { key: first })
+    );
+    // An import of a class noted over the same bytes (two buffers made at once) is its class's.
+    let import = Arc::new(2);
+    aliases.join(third, memory, Kind::Import(MemoryClass::Managed), &import);
+    assert!(Arc::ptr_eq(
+        &aliases.import(memory, MemoryClass::Managed).unwrap(),
+        &import
+    ));
+    assert!(Arc::ptr_eq(
+        &aliases.import(memory, MemoryClass::Shared).unwrap(),
+        &copy
+    ));
+    for key in [first, second, third] {
+        aliases.forget(key);
+    }
+    assert!(aliases.import(memory, MemoryClass::Shared).is_none());
+    drop((copy, import));
 }
 
 /// The host page of the tests that name none of their own: an import's unit.
@@ -203,11 +244,11 @@ fn a_reported_remap_ends_the_sharing_of_imports_made_before() {
     let (first, second, after) = (ResourceKey::new(), ResourceKey::new(), ResourceKey::new());
     let import = Arc::new(1);
     assert_eq!(
-        aliases.join(first, memory, MemoryClass::Shared, &import),
+        aliases.join(first, memory, Kind::Import(MemoryClass::Shared), &import),
         None
     );
     assert_eq!(
-        aliases.join(second, memory, MemoryClass::Shared, &import),
+        aliases.join(second, memory, Kind::Import(MemoryClass::Shared), &import),
         Some(Alias { key: first })
     );
     // Bytes next to the memory, on either side: nothing changes.
@@ -220,7 +261,7 @@ fn a_reported_remap_ends_the_sharing_of_imports_made_before() {
     // A buffer made after imports anew and joins nothing; the second keeps the key it joined.
     let fresh = Arc::new(2);
     assert_eq!(
-        aliases.join(after, memory, MemoryClass::Shared, &fresh),
+        aliases.join(after, memory, Kind::Import(MemoryClass::Shared), &fresh),
         None
     );
     assert_eq!(aliases.of(second), Some(Alias { key: first }));
@@ -370,11 +411,11 @@ fn remaps_from_any_thread_keep_the_notes_whole() {
                         let memory = memory(round + worker);
                         let import = Arc::new(worker as u32);
                         let (first, second) = (ResourceKey::new(), ResourceKey::new());
-                        aliases.join(first, memory, MemoryClass::Shared, &import);
+                        aliases.join(first, memory, Kind::Import(MemoryClass::Shared), &import);
                         let shared = aliases
                             .import(memory, MemoryClass::Shared)
                             .unwrap_or_else(|| Arc::clone(&import));
-                        aliases.join(second, memory, MemoryClass::Shared, &shared);
+                        aliases.join(second, memory, Kind::Import(MemoryClass::Shared), &shared);
                         aliases.forget(first);
                         aliases.forget(second);
                         assert_eq!(aliases.of(second), None);

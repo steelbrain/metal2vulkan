@@ -342,6 +342,7 @@ pub(crate) struct Counters {
     copied_rebind_pages_made: AtomicU64,
     copied_rebind_images_made: AtomicU64,
     copied_heaps_made: AtomicU64,
+    copied_host_buffers_shared: AtomicU64,
     copied_copy_in_bytes: AtomicU64,
     copied_copy_in_bytes_skipped: AtomicU64,
     copied_merge_back_bytes: AtomicU64,
@@ -2476,6 +2477,12 @@ impl Counters {
     /// A rebind gave a buffer a copy of its new pages (`copied.rs`).
     pub(crate) fn copied_rebind_pages_made(&self) {
         (self.copied_rebind_pages_made).fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A no-copy buffer made over, or a rebind to, the bytes a live copied host buffer was made
+    /// over lay in its copy, making none of its own (`copied.rs`, `host_aliases.rs`).
+    pub(crate) fn copied_host_buffer_shared(&self) {
+        (self.copied_host_buffers_shared).fetch_add(1, Ordering::Relaxed);
     }
 
     /// The device imported a chunk of `bytes` of a guest RAM it uses (`host_ram.rs`).
@@ -5172,6 +5179,12 @@ pub struct WorkCounts {
     /// in `copied_host_buffers_made` and its kin too: the heap's buffers lie in the copy, and its
     /// textures are shadows of its bytes.
     pub copied_heaps_made: u64,
+    /// The no-copy buffers made over, and the rebinds to, the bytes a live copied host buffer was
+    /// made over (the same first byte and length) that lay in its copy rather than making one of
+    /// their own (`host_aliases.rs`): one `VkBuffer`, one snapshot and one hazard key for the
+    /// memory, as an import of it is one, the gate not asked. In none of the counts of copies
+    /// made.
+    pub copied_host_buffers_shared: u64,
     /// The bytes the CPU changed in copied host buffers' pages that commits copied into the
     /// copies.
     pub copied_copy_in_bytes: u64,
@@ -6395,6 +6408,8 @@ impl Device {
             copied_rebind_pages_made: counters.copied_rebind_pages_made.load(Ordering::Relaxed),
             copied_rebind_images_made: counters.copied_rebind_images_made.load(Ordering::Relaxed),
             copied_heaps_made: counters.copied_heaps_made.load(Ordering::Relaxed),
+            copied_host_buffers_shared: (counters.copied_host_buffers_shared)
+                .load(Ordering::Relaxed),
             copied_copy_in_bytes: counters.copied_copy_in_bytes.load(Ordering::Relaxed),
             copied_copy_in_bytes_skipped: (counters.copied_copy_in_bytes_skipped)
                 .load(Ordering::Relaxed),

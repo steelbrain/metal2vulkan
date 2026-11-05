@@ -2727,7 +2727,13 @@ bound.
   private option bit 24 drops is never copied. A buffer's or heap's rebind is copied the same way,
   its heap's bound textures and its images in place made again over the copy, and a buffer's
   rebind to bytes at another offset in their page under a texture planned at the old one is a copy
-  laid out there (the detail says which). Counted: `WorkCounts::copied_host_buffers_made`, of them
+  laid out there (the detail says which). A buffer made over exactly the bytes (the same first
+  byte and length) a live copied buffer was made over, of either storage mode, lies in its copy,
+  as one over a live import's bytes lies in that import, and makes no copy of its own
+  (`copied_host_buffers_shared`, the gate not asked): one memory, ordered as one resource's
+  accesses; a rebind to them does too where its textures were planned at the copy's offset and no
+  image in place rides on it. A heap's own buffer and memory whose GPU writes are dropped keep
+  their own. Counted: `WorkCounts::copied_host_buffers_made`, of them
   `copied_host_buffers_refused`, `copied_host_buffers_degraded` and `copied_rebind_pages_moved`
   (and `copied_heaps_made`, `copied_rebind_pages_made`, `copied_rebind_images_made`); each such
   buffer, and each buffer placed in such a heap, answers `Buffer::host_backing` with
@@ -2739,7 +2745,9 @@ bound.
   reads before the batch completes, is not seen, and each commit and completion compares every
   byte of every copy. An event signal submitted while a copy is live is seen once its batch's
   writes are back in the pages, as Metal's: its value at the completion turn, and a wait for it
-  held on the host until then (`event_signals_behind_merge`).
+  held on the host until then (`event_signals_behind_merge`). A copy and another memory over
+  overlapping but not the same bytes agree GPU to GPU only through the pages, so a read committed
+  before the write's completion reads the bytes from before it (docs/FAST-PATHS.md, known gaps).
 - `metal2vulkan-degrade-grouped-completion` (precision). `GroupedCompletion`: Batches of command
   buffers committed on one queue that the scheduler found ready together, or held while two or more
   earlier submissions of their queue ran, went to the driver in one `vkQueueSubmit`, only the last

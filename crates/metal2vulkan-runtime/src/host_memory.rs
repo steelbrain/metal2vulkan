@@ -169,13 +169,13 @@ pub type RunResolver = Arc<dyn Fn(u64, u64) -> Option<Vec<Range<u64>>> + Send + 
 /// copy whatever their permission, and a copy of pages the process maps read-only drops the GPU's
 /// writes, as Metal drops them. Called on the
 /// thread that makes the buffer, heap or rebind, holding no lock of the runtime's. Not asked for a
-/// buffer or rebind that lies in a live import (one made over the same bytes), nor where the device
-/// refused the import before it (no host-pointer import, an import alignment the range cannot
-/// meet), nor for memory whose GPU writes Metal's private option bit 24 drops, nor for a buffer's
-/// rebind to bytes at another offset in their page under a texture planned at the old one, which
-/// is a copy without asking. A heap's rebind asks it as a heap's making does. An import it lets go
-/// on that then fails (out of memory, another Vulkan error), of the pointer or of the dma-bufs of
-/// the caller's source, makes the copy all the same. Every copy is announced
+/// buffer or rebind that lies in a live import or copy (one made over the same bytes), nor where
+/// the device refused the import before it (no host-pointer import, an import alignment the range
+/// cannot meet), nor for memory whose GPU writes Metal's private option bit 24 drops, nor for a
+/// buffer's rebind to bytes at another offset in their page under a texture planned at the old
+/// one, which is a copy without asking. A heap's rebind asks it as a heap's making does. An
+/// import it lets go on that then fails (out of memory, another Vulkan error), of the pointer or
+/// of the dma-bufs of the caller's source, makes the copy all the same. Every copy is announced
 /// (`copied-host-pages`). No Metal counterpart.
 pub type ImportGate = Arc<dyn Fn(ImportRequest) -> bool + Send + Sync + 'static>;
 
