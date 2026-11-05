@@ -793,6 +793,8 @@ mod seq_cst_fences;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod shader_stencil;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+mod shadow_sync_costs;
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod shared_exponent_storage;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod single_sample_passes;
