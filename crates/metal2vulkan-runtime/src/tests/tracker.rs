@@ -4,9 +4,9 @@
 
 use crate::binding::ResidentPrefix;
 use crate::tracker::{
-    merge, ordered, Access, Barrier, EncoderUses, Footprint, GeometryWrites, IndirectReads,
-    LegacyBarrier, Point, Reach, Summary, Tracker, UnorderedWrites, Use, UseRange, Wait,
-    ENTRIES_PER_KEY,
+    join_looked_at, merge, ordered, Access, Barrier, EncoderUses, Footprint, GeometryWrites,
+    IndirectReads, LegacyBarrier, Point, Reach, Summary, Tracker, UnorderedWrites, Use, UseRange,
+    Wait, ENTRIES_PER_KEY,
 };
 use ash::vk;
 use std::ops::Range;
@@ -1649,6 +1649,94 @@ fn a_joined_summary_stays_bounded() {
         let read = bytes(at * 8..at * 8 + 4);
         assert!(joined.uses().iter().any(|used| used.range.contains(&read)));
     }
+}
+
+/// `uses` with `other`'s joined as [`Summary::join`] joins them, each against every known use in
+/// turn: the answer each join must give.
+fn joined_use_by_use(mut uses: Vec<Use<Key>>, other: &[Use<Key>]) -> Vec<Use<Key>> {
+    for used in other.iter().cloned() {
+        let same = |known: &&mut Use<Key>| known.key == used.key && known.range == used.range;
+        if let Some(known) = uses.iter_mut().find(same) {
+            known.read = known.read.union(used.read);
+            known.write = known.write.union(used.write);
+            continue;
+        }
+        let ranges = uses.iter().filter(|known| known.key == used.key).count();
+        let hull = (ranges >= ENTRIES_PER_KEY)
+            .then(|| {
+                uses.iter_mut().find_map(|known| {
+                    let range =
+                        (known.key == used.key).then(|| known.range.hull(&used.range))??;
+                    Some((known, range))
+                })
+            })
+            .flatten();
+        match hull {
+            Some((known, range)) => {
+                known.range = range;
+                known.read = known.read.union(used.read);
+                known.write = known.write.union(used.write);
+            }
+            None => uses.push(used),
+        }
+    }
+    uses.sort_by_key(|used| used.key);
+    uses
+}
+
+/// `count` uses of resources below `keys`, from `seed`: reads and writes of byte ranges and of
+/// image subresources, several of a resource, some of the same range, and some resources past
+/// [`ENTRIES_PER_KEY`] ranges.
+fn mixed_uses(seed: u64, count: usize, keys: u64) -> Vec<Use<Key>> {
+    let mut at = seed;
+    let mut next = move || {
+        at = at
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
+        at >> 33
+    };
+    (0..count)
+        .map(|_| {
+            let key = next() % keys;
+            let start = next() % 24;
+            let range = match next() % 3 {
+                0 => image(vk::ImageAspectFlags::COLOR, 0..1 + (start % 3) as u32, 0..1),
+                _ => bytes(start * 16..start * 16 + 16),
+            };
+            match next() % 2 {
+                0 => reads(key, range, shader_read()),
+                _ => writes(key, range, copy_write()),
+            }
+        })
+        .collect()
+}
+
+/// A summary's join gives what joining each use against every known use in turn gives, over
+/// mixed uses (ranges met again, resources past [`ENTRIES_PER_KEY`] ranges, ranges of two
+/// kinds), and looks at each resource's own uses alone: joining two summaries of 4096 resources
+/// each, one range a resource and half of them in both, looks at fewer known uses than twice the
+/// uses joined, where a scan of every known use for each would look at millions.
+#[test]
+fn a_join_looks_at_each_resource_s_own_uses_alone() {
+    for seed in 0..64 {
+        let known = Summary::outside_encoders(mixed_uses(seed, 200, 24));
+        let other = Summary::outside_encoders(mixed_uses(seed + 1000, 200, 24));
+        let want = joined_use_by_use(known.uses().to_vec(), other.uses());
+        let mut joined = known.clone();
+        joined.join(other);
+        assert_eq!(joined.uses(), want, "seed {seed}");
+    }
+    let one = |keys: Range<u64>| {
+        let uses = keys.map(|key| reads(key, bytes(0..16), shader_read()));
+        Summary::outside_encoders(uses.collect())
+    };
+    let (mut joined, other) = (one(0..4096), one(2048..6144));
+    let want = joined_use_by_use(joined.uses().to_vec(), other.uses());
+    let before = join_looked_at();
+    joined.join(other);
+    let looked = join_looked_at() - before;
+    assert_eq!(joined.uses(), want);
+    assert!(looked < 2 * 4096, "{looked} known uses looked at");
 }
 
 /// A split encoder's commands after the split need no barrier after those before (they run once

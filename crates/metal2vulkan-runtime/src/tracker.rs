@@ -222,7 +222,7 @@ impl UseRange {
     }
 
     /// The smallest range of the same kind holding both, or `None` across kinds.
-    fn hull(&self, other: &UseRange) -> Option<UseRange> {
+    pub(super) fn hull(&self, other: &UseRange) -> Option<UseRange> {
         match (self, other) {
             (UseRange::Bytes(a), UseRange::Bytes(b)) => Some(UseRange::Bytes(hull(a, b))),
             (
@@ -1990,43 +1990,30 @@ impl<K: Copy + Ord> Summary<K> {
     /// Join `other`, the summary of work recorded apart that runs inside the same encoder (an
     /// indirect command buffer's commands, recorded at commit): its stages, fences and tracked
     /// uses, one per resource and range. A resource past [`ENTRIES_PER_KEY`] ranges takes a new
-    /// range into one of the same kind, which claims more and stays exact.
+    /// range into one of the same kind, which claims more and stays exact. Both lists are sorted
+    /// by resource, so each of `other`'s uses meets the known uses of its own resource alone,
+    /// found by a binary search, and those of it joined before it ([`join_use`]): a join costs
+    /// about the uses' count, not their product (`tests::tracker`).
     pub(super) fn join(&mut self, other: Summary<K>) {
         self.stages |= other.stages;
-        for used in other.uses {
-            if let Some(known) = self
-                .uses
-                .iter_mut()
-                .find(|known| known.key == used.key && known.range == used.range)
-            {
-                known.read = known.read.union(used.read);
-                known.write = known.write.union(used.write);
-                continue;
-            }
-            let ranges = self
-                .uses
-                .iter()
-                .filter(|known| known.key == used.key)
-                .count();
-            let hull = (ranges >= ENTRIES_PER_KEY)
-                .then(|| {
-                    self.uses.iter_mut().find_map(|known| {
-                        let range = (known.key == used.key)
-                            .then(|| known.range.hull(&used.range))
-                            .flatten()?;
-                        Some((known, range))
-                    })
-                })
-                .flatten();
-            match hull {
-                Some((known, range)) => {
-                    known.range = range;
-                    known.read = known.read.union(used.read);
-                    known.write = known.write.union(used.write);
-                }
-                None => self.uses.push(used),
+        debug_assert!(other.uses.is_sorted_by_key(|used| used.key));
+        let known = self.uses.len();
+        let mut added = Vec::new();
+        let mut uses = other.uses.into_iter().peekable();
+        while let Some(first) = uses.next() {
+            let key = first.key;
+            let start = self.uses[..known].partition_point(|used| used.key < key);
+            let end = start + self.uses[start..known].partition_point(|used| used.key == key);
+            let from = added.len();
+            let mut next = Some(first);
+            while let Some(used) = next {
+                join_use((&mut self.uses[start..end], &mut added, from), used);
+                next = uses.next_if(|used| used.key == key);
             }
         }
+        // After the known uses, each resource's in the order they were added, as a stable sort
+        // of the uses added after them leaves them.
+        self.uses.append(&mut added);
         self.uses.sort_by_key(|used| used.key);
         for used in other.waits {
             add_fence(&mut self.waits, used);
@@ -2035,6 +2022,55 @@ impl<K: Copy + Ord> Summary<K> {
             add_fence(&mut self.updates, used);
         }
     }
+}
+
+/// Join `used` into the uses of its resource a summary knows (`known`'s, then `added`'s from
+/// `from` on, in that order: [`Summary::join`]): the first of its range takes it; else, where the
+/// resource has [`ENTRIES_PER_KEY`] ranges or more, the first whose range a hull of both is of the
+/// same kind; else it is added. Only uses of its resource are joined into, as a scan of every
+/// known use would find them.
+fn join_use<K: Copy + PartialEq>(
+    (known, added, from): (&mut [Use<K>], &mut Vec<Use<K>>, usize),
+    used: Use<K>,
+) {
+    #[cfg(test)]
+    JOIN_LOOKED_AT.with(|at| at.set(at.get() + (known.len() + added.len() - from) as u64));
+    let key = used.key;
+    let into = |known: &mut Use<K>| {
+        known.read = known.read.union(used.read);
+        known.write = known.write.union(used.write);
+    };
+    let mut theirs = (known.iter_mut()).chain(added[from..].iter_mut());
+    if let Some(same) = theirs.find(|known| known.key == key && known.range == used.range) {
+        into(same);
+        return;
+    }
+    let ranges = (known.iter()).chain(&added[from..]);
+    if ranges.filter(|known| known.key == key).count() >= ENTRIES_PER_KEY {
+        let mut theirs = (known.iter_mut()).chain(added[from..].iter_mut());
+        let hull = theirs.find_map(|known| {
+            let range = (known.key == key).then(|| known.range.hull(&used.range))??;
+            Some((known, range))
+        });
+        if let Some((known, range)) = hull {
+            known.range = range;
+            into(known);
+            return;
+        }
+    }
+    added.push(used);
+}
+
+#[cfg(test)]
+thread_local! {
+    /// The known uses [`join_use`] looked at on this thread, in tests.
+    static JOIN_LOOKED_AT: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// How many known uses joins looked at on this thread so far ([`join_use`]).
+#[cfg(test)]
+pub(super) fn join_looked_at() -> u64 {
+    JOIN_LOOKED_AT.with(std::cell::Cell::get)
 }
 
 impl<K: Copy + Ord + Hash> EncoderUses<K> {
