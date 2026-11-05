@@ -2374,12 +2374,16 @@ fn uses_into(
     let CommandUses {
         uses,
         sources,
+        slots,
         others,
         reaching,
         named_now,
         ..
     } = into;
     uses.reserve(others.len() + command.uses.len());
+    // Listed in uses a caller keeps alone, which alone [`patch_buffer_uses`] patches.
+    slots.clear();
+    let listed = kept.is_some();
     // Every use but those names its resource (a descriptor, a root table's static, a view):
     // the keys of `reaching` named are gathered.
     named_now.clear();
@@ -2392,6 +2396,11 @@ fn uses_into(
         };
         if !reaching.is_empty() && reaching.contains(&used.key) {
             named_now.push(used.key);
+        }
+        if let UseTarget::Slot(slot) = resource.resource {
+            if listed && slot.class == SlotClass::Buffer {
+                slots.push((slot, uses.len() as u32));
+            }
         }
         uses.push(used);
         sources.push(source);
@@ -2599,39 +2608,50 @@ fn bytes_use(
 }
 
 /// Patch in `into`, as [`command_uses_into`] made it of `plan`'s and `command`'s uses, the uses
-/// of the buffer slots `changed`, as `tables` now bind them: whether it did, which it does where
-/// each such slot binds the buffer it bound (its offset may have moved) and `into` holds the uses
-/// that function made alone. Its uses are then those `command_uses_into` makes: every other use
-/// is of a slot, buffer or texture no call changed, and the keys, so the resident ones, are the
-/// same (`render/draw_again/rebound.rs`).
+/// of the buffer slots `changed`, as `tables` now bind them, found by `into`'s list of its uses of
+/// buffer slots (`CommandUses::slots`), looking at no other use: whether it did, which it does
+/// where each such slot binds the buffer it bound (its offset may have moved) and `into` holds the
+/// uses that function made alone. Its uses are then those `command_uses_into` makes: every other
+/// use is of a slot, buffer or texture no call changed, and the keys, so the resident ones, are
+/// the same (`render/draw_again/rebound.rs`). Builds with debug assertions check the list against
+/// the uses, and count the uses it looked at ([`patched_slot_uses`]).
 pub(super) fn patch_buffer_uses(
     (plan, command, tables): (&BindingPlan, &Command<'_>, &Tables<'_>),
     changed: &[SlotRef],
     into: &mut CommandUses,
 ) -> Result<bool, Error> {
+    if into.sources.len() != into.uses.len() {
+        return Ok(false);
+    }
+    #[cfg(debug_assertions)]
+    {
+        slot_uses_listed((plan, command), into);
+        let looked = into.slots.len() as u64;
+        PATCHED_SLOT_USES.with(|patched| {
+            let (calls, walked) = patched.get();
+            patched.set((calls + 1, walked + looked));
+        });
+    }
     let CommandUses {
         uses,
         sources,
-        used: resident,
+        slots,
         ..
     } = into;
-    if sources.len() != uses.len() {
-        return Ok(false);
-    }
-    // The uses of what the encoder made resident, first, are of no slot.
-    for (used, &source) in (uses.iter_mut().zip(sources.iter())).skip(*resident) {
+    for &(slot, at) in slots.iter() {
+        if !changed.contains(&slot) {
+            continue;
+        }
+        let at = at as usize;
+        let (Some(used), Some(&source)) = (uses.get_mut(at), sources.get(at)) else {
+            return Err(internal("a use of a buffer slot past the command's uses"));
+        };
         let source = source as usize;
         let resource = match source.checked_sub(plan.uses.len()) {
             None => plan.uses.get(source),
             Some(at) => command.uses.get(at),
         };
         let resource = resource.ok_or_else(|| internal("a use of a resource use since gone"))?;
-        let UseTarget::Slot(slot) = resource.resource else {
-            continue;
-        };
-        if slot.class != SlotClass::Buffer || !changed.contains(&slot) {
-            continue;
-        }
         let Some((buffer, offset)) = slot_buffer(tables, slot) else {
             return Ok(false);
         };
@@ -2643,6 +2663,43 @@ pub(super) fn patch_buffer_uses(
         *used = now;
     }
     Ok(true)
+}
+
+/// Check that `into`, as [`command_uses_into`] made it of `plan`'s and `command`'s uses, lists
+/// each of its uses of a buffer slot at its position (`CommandUses::slots`): every use past those
+/// of what the encoder made resident (of no slot) of a resource use of a buffer slot. In builds
+/// with debug assertions.
+#[cfg(debug_assertions)]
+fn slot_uses_listed((plan, command): (&BindingPlan, &Command<'_>), into: &CommandUses) {
+    let source = |at: usize| {
+        let source = into.sources[at] as usize;
+        match source.checked_sub(plan.uses.len()) {
+            None => plan.uses.get(source),
+            Some(at) => command.uses.get(at),
+        }
+    };
+    let listed = (into.used..into.uses.len()).filter_map(|at| match source(at)?.resource {
+        UseTarget::Slot(slot) if slot.class == SlotClass::Buffer => Some((slot, at as u32)),
+        _ => None,
+    });
+    assert!(
+        listed.eq(into.slots.iter().copied()),
+        "a command's uses of buffer slots other than it lists"
+    );
+}
+
+#[cfg(debug_assertions)]
+thread_local! {
+    /// The calls of [`patch_buffer_uses`] that reached its uses on this thread, and the uses of
+    /// buffer slots they looked at, in builds with debug assertions.
+    static PATCHED_SLOT_USES: std::cell::Cell<(u64, u64)> = const { std::cell::Cell::new((0, 0)) };
+}
+
+/// How many calls of [`patch_buffer_uses`] reached their uses on this thread so far, and how
+/// many uses of buffer slots they looked at.
+#[cfg(all(test, debug_assertions, any(m2v_gpu, m2v_cpu_icd)))]
+pub(crate) fn patched_slot_uses() -> (u64, u64) {
+    PATCHED_SLOT_USES.with(std::cell::Cell::get)
 }
 
 /// A dispatch's or draw's uses (`command_uses`), for the tracker, and the keys among them that
@@ -2658,6 +2715,11 @@ pub(super) struct CommandUses {
     /// Of each use [`command_uses_into`] made, in order, the index among its plan's and command's
     /// resource uses of the one it was made of: what [`patch_buffer_uses`] patches by.
     sources: Vec<u32>,
+    /// Of each of those uses of a buffer slot, in order, the slot and the use's position, in uses
+    /// a caller keeps ([`command_uses_into`]): where [`patch_buffer_uses`] finds the uses of the
+    /// slots a call changed, looking at no other. Empty in those [`command_uses`] makes, which
+    /// nothing patches.
+    slots: Vec<(SlotRef, u32)>,
     /// How many of `uses` and `sources`, first, are of what the encoder made resident, made for
     /// `of` (`command_uses_into`); and how many of those the last call made (0 where it kept
     /// them: `WorkCounts::resident_uses_made`).

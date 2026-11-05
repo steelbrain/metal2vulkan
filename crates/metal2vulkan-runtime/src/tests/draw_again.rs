@@ -713,6 +713,50 @@ fn sampled_rectangles(
     }
 }
 
+/// Draws rebound after their vertex buffer's offset alone moved patch that slot's use in place,
+/// looking at no other use (`binding::patch_buffer_uses`, which finds the uses of buffer slots in
+/// the list `binding::command_uses_into` keeps of them): each draw of `tob_sample`'s rectangles
+/// also samples a texture, bound once before them, whose use no patch looks at. Builds with debug
+/// assertions, the only builds of this test, count the uses a patch looked at
+/// (`binding::patched_slot_uses`) and check the list against the uses.
+#[cfg(debug_assertions)]
+#[test]
+fn draws_rebound_after_an_offset_moved_patch_that_slot_s_use_alone() {
+    let scratch = Scratch::new("draw-again-patched-slot-uses");
+    let heard = Heard::default();
+    let device = device(&scratch.0, &[], &heard);
+    let state = state(&device, "engine/tob_renders.ll", ("tob_rect", "tob_sample"));
+    let rectangles = rectangles_from_columns(&device);
+    let textures = textures(&device);
+    let sampler = sampler_addressing(&device, SamplerAddressMode::ClampToEdge, f32::MAX);
+    let draws = |encoder: &mut RenderCommandEncoder| {
+        encoder.set_render_pipeline_state(&state).unwrap();
+        encoder.set_vertex_buffer(Some(&rectangles), 0, 0).unwrap();
+        encoder.set_fragment_texture(Some(&textures[0]), 0).unwrap();
+        encoder
+            .set_fragment_sampler_state(Some(&sampler), 0)
+            .unwrap();
+        for at in 0..DRAWS {
+            if at > 0 {
+                encoder.set_vertex_buffer_offset(16 * at, 0).unwrap();
+            }
+            rectangle(encoder);
+        }
+    };
+    warm(&device, draws);
+    let before = (crate::binding::patched_slot_uses(), device.work_counts());
+    run(&device, draws);
+    let after = (crate::binding::patched_slot_uses(), device.work_counts());
+    let (calls, walked) = (after.0 .0 - before.0 .0, after.0 .1 - before.0 .1);
+    let rebound = after.1.draws_rebound - before.1.draws_rebound;
+    assert_eq!(rebound, drawn_alone(HITS));
+    assert!(calls >= rebound, "{calls} patches, {rebound} rebound");
+    assert_eq!(
+        walked, calls,
+        "each patch looks at the vertex buffer's use alone"
+    );
+}
+
 /// Draws after calls that bound other textures and sampler states at the slots their fragment
 /// function samples (`tob_sample`, which samples its 4x4 texture at the pixel's position over the
 /// texture's size: inside it in the target's first four columns, outside it in the others) rebind
