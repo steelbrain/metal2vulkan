@@ -14,19 +14,27 @@
 //! `replayed_frames` does (`REPLAYED-FRAMES` lines); the step's time should grow with the
 //! records, not with them times the resident resources. [`DRAWS_VAR`] and [`BUFFERS_VAR`] set
 //! other counts. It is ignored by default: run it by name with `--run-ignored all`.
+//! [`each_host_step_past_the_first_compares_the_page_s_records_and_copies_none`] runs the page at
+//! two chunks' commands under the validation layer and counts each step's copies and
+//! comparisons of its records.
 
 use super::replayed_frames::{function, indices, measured_device, time_frames, SIDE};
-use super::{buffer_with, read_buffer, Messages, ScratchCache};
+use super::{
+    buffer_with, layer_reported_nothing_at_all, read_buffer, validated_device, Messages,
+    ScratchCache, WAIT,
+};
 use crate::air_library::AirLibrary;
+use crate::gpu::TEST_DEVICE;
+use metal2vulkan::bind::indirect_commands::COMMAND_BYTES;
 use metal2vulkan::metal::{
     IndirectCommandType, PixelFormat, PrimitiveType, RenderStages, ResourceUsage, TextureUsage,
 };
 use metal2vulkan::pipeline::{ColorAttachmentDescriptor, RenderPipelineDescriptor};
 use metal2vulkan_devtools::{engine_dir, llvm_assemble};
 use metal2vulkan_runtime::{
-    BlitOption, Buffer, CommandBuffer, CommandQueue, Device, IndirectCommandBuffer,
-    IndirectCommandBufferDescriptor, LoadAction, Origin, PipelineOptions, Region,
-    RenderPassDescriptor, RenderPipelineState, ResourceOptions, Size, StoreAction, Texture,
+    BlitOption, Buffer, CommandBuffer, CommandBufferStatus, CommandQueue, Device,
+    IndirectCommandBuffer, IndirectCommandBufferDescriptor, LoadAction, Origin, PipelineOptions,
+    Region, RenderPassDescriptor, RenderPipelineState, ResourceOptions, Size, StoreAction, Texture,
     TextureDescriptor,
 };
 
@@ -231,4 +239,45 @@ fn replayed_textured_frames() {
     let pixels = || read_buffer(&page.pixels, 0, SIDE * SIDE * 4).unwrap();
     let frame = |queue: &CommandQueue, _| page.frame(queue);
     time_frames(&device, &page.surface, None, frame, pixels);
+}
+
+/// The page at two chunks' commands (the runtime's `kept_commands::CHUNK` is 256), under the
+/// validation layer: its first host step copies the records it reads for the next step's
+/// comparison; each later step compares them with those and copies none again, whether it keeps
+/// the chunks or records them apart and keeps nothing of them, a chunk that keeps nothing handing
+/// back the read it compared (`render/executions/kept.rs`); each frame draws what the first drew.
+#[test]
+fn each_host_step_past_the_first_compares_the_page_s_records_and_copies_none() {
+    const COMMANDS: usize = 300;
+    let cache = ScratchCache::new().unwrap();
+    let messages = Messages::default();
+    {
+        let device = validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
+        let queue = device.new_command_queue().unwrap();
+        let page = Page::new(&device, COMMANDS, 3 * COMMANDS);
+        let records = (COMMANDS * COMMAND_BYTES) as u64;
+        let mut first = None;
+        for frame in 0..5 {
+            let before = device.work_counts();
+            let command_buffer = page.frame(&queue);
+            command_buffer.wait_until_completed_for(WAIT).unwrap();
+            assert_eq!(command_buffer.status(), CommandBufferStatus::Completed);
+            let after = device.work_counts();
+            let copied = after.indirect_record_bytes_copied - before.indirect_record_bytes_copied;
+            let compared = after.host_step_records_compared - before.host_step_records_compared;
+            let kept = after.host_step_chunks_kept - before.host_step_chunks_kept;
+            println!("frame {frame}: {copied} record bytes copied, {compared} records compared, {kept} chunks kept");
+            let expected = match frame {
+                0 => (records, 0),
+                _ => (0, COMMANDS as u64),
+            };
+            assert_eq!((copied, compared), expected, "frame {frame}");
+            let pixels = read_buffer(&page.pixels, 0, SIDE * SIDE * 4).unwrap();
+            match &first {
+                None => first = Some(pixels),
+                Some(first) => assert!(pixels == *first, "frame {frame}: other pixels"),
+            }
+        }
+    }
+    layer_reported_nothing_at_all(&messages);
 }

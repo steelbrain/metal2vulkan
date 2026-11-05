@@ -37,9 +37,11 @@
 //!   step are read once, as an execution that keeps nothing reads them, and copied for a
 //!   fraction of their chunks a step. Where they hold, the step records apart and keeps each
 //!   chunk it keeps no recording of, with those bytes, and runs a kept one again where its key is
-//!   equal (below), else records it again and keeps that (`host_step_chunks_recorded_again`). No
-//!   write forgets such a chunk, as the comparison decides. Counted:
-//!   `WorkCounts::host_step_chunks_kept`.
+//!   equal (below), else records it again and keeps that (`host_step_chunks_recorded_again`). A
+//!   chunk it records but keeps nothing of (not plain, below, or past one that was not) is recorded
+//!   from the bytes it compared and keeps them, so the next step compares the records again rather
+//!   than copying them, and no step copies records that hold. No write forgets such a chunk, as
+//!   the comparison decides. Counted: `WorkCounts::host_step_chunks_kept`.
 //! - **The key.** A chunk is recorded from its records and from the inputs [`RenderKey`] holds:
 //!   the inherited pipeline state, the instance's compatible pass and shape, the pass's extent,
 //!   layers, samples and sample positions, the attachments that are among the resources made
@@ -550,7 +552,12 @@ impl RenderExecution {
         let mut met = ResidentMet::default();
         let mut draws = Vec::new();
         let mut rest = None;
-        for ((chunk, covered), (kept, read)) in kept_commands::chunks(range.clone()).zip(kept) {
+        // A host step's reads of the chunks it keeps no recording of, handed back for the next
+        // step's comparison: those it recorded apart but kept nothing of, and those past a chunk
+        // that was not plain, which it records from them (below).
+        let mut reads_back = Vec::new();
+        let mut chunks = kept_commands::chunks(range.clone()).zip(kept);
+        for ((chunk, covered), (kept, read)) in chunks.by_ref() {
             let (kept, keeps) = match kept {
                 Kept::Recording(kept) => (Some(kept), true),
                 Kept::Again => (None, true),
@@ -622,6 +629,7 @@ impl RenderExecution {
                 && same_layout(&layout, &encoder.layout);
             if !plain {
                 self.keep_chunk(chunk, None, read_at);
+                reads_back.push((chunk, records));
                 rest = Some((encoder, covered.end, chunk_found));
                 break;
             }
@@ -631,37 +639,45 @@ impl RenderExecution {
             let captured = capture.finish_capture()?;
             let held = captured.retained.all_shared();
             let keeps = captured.plain() && !released && command_buffer.own_reached() == reached;
-            if let (true, Some(held), Some(context)) = (keeps, held, context) {
-                let effects = KeptEffects::new(
-                    captured.summary.clone(),
-                    (captured.keys.clone(), captured.taken.named().clone()),
-                    &held,
-                    captured.executions.clone(),
-                );
-                let kept = KeptChunk::new(
-                    (context, raw),
-                    covered,
-                    Box::new(key.clone()),
-                    (resolved, moved),
-                    effects,
-                    (chunk_found.misses, chunk_found.faults),
-                );
-                let kept = match records {
-                    Some(records) => kept.recorded_from(records),
-                    None => kept,
-                };
-                self.keep_chunk(chunk, Some(Arc::new(kept)), read_at);
+            match (keeps, held, context) {
+                (true, Some(held), Some(context)) => {
+                    let effects = KeptEffects::new(
+                        captured.summary.clone(),
+                        (captured.keys.clone(), captured.taken.named().clone()),
+                        &held,
+                        captured.executions.clone(),
+                    );
+                    let kept = KeptChunk::new(
+                        (context, raw),
+                        covered,
+                        Box::new(key.clone()),
+                        (resolved, moved),
+                        effects,
+                        (chunk_found.misses, chunk_found.faults),
+                    );
+                    let kept = match records {
+                        Some(records) => kept.recorded_from(records),
+                        None => kept,
+                    };
+                    self.keep_chunk(chunk, Some(Arc::new(kept)), read_at);
+                }
+                _ => reads_back.push((chunk, records)),
             }
             core.absorb(captured)?;
             found.misses = found.misses.wrapping_add(chunk_found.misses);
             found.faults = ReplayFaults(found.faults.0 | chunk_found.faults.0);
             draws.push(raw);
         }
+        // The chunks past one that was not plain, which its encoder records (below), with what a
+        // host step compared their records with.
+        let left: Vec<_> =
+            (chunks.map(|((chunk, covered), (kept, read))| (chunk, covered, kept, read))).collect();
         if let Some((live, memo, _)) = carried {
             shared.live_binds.give(live);
             shared.bind_memos.give(memo);
         }
         let Some((mut encoder, from, chunk_found)) = rest else {
+            self.read_back(reads_back);
             let run = Run {
                 draws,
                 other: None,
@@ -681,18 +697,36 @@ impl RenderExecution {
         // execution's own records them.
         found.misses = found.misses.wrapping_add(chunk_found.misses);
         found.faults = ReplayFaults(found.faults.0 | chunk_found.faults.0);
-        // A chunk at a time, as an execution recorded inline reads its range.
-        for piece in kept_commands::pieces(from..range.end, false) {
-            if step {
-                let (commands, written) = self.written_commands(&device, piece, None)?;
-                found.faults = ReplayFaults(found.faults.0 | written.0);
-                self.replay(&mut encoder, commands.iter().flatten(), residency, found)?;
-                continue;
+        // A chunk at a time, as an execution recorded inline reads its range: a host step's from
+        // the bytes it compared the records with, which they hold (`steady`), else as they stand.
+        match step {
+            true => {
+                for (_, covered, kept, read) in &left {
+                    let bytes = match (read, kept) {
+                        (Some(read), _) => Some(&read[..]),
+                        (None, Kept::Recording(kept)) => kept.records(),
+                        (None, Kept::Again | Kept::First) => None,
+                    };
+                    let written = match bytes {
+                        Some(bytes) => self.icb.decode_written(bytes),
+                        None => self.icb.written_records(covered.clone())?,
+                    };
+                    let (commands, faults, _) =
+                        self.named_commands(&device, covered.start, written);
+                    found.faults = ReplayFaults(found.faults.0 | faults.0);
+                    self.replay(&mut encoder, commands.iter().flatten(), residency, found)?;
+                }
             }
-            let (commands, released) = self.icb.render_records(piece, Reader::Commit)?;
-            self.icb.degrade_released(&released);
-            self.replay(&mut encoder, &commands, residency, found)?;
+            false => {
+                for piece in kept_commands::pieces(from..range.end, false) {
+                    let (commands, released) = self.icb.render_records(piece, Reader::Commit)?;
+                    self.icb.degrade_released(&released);
+                    self.replay(&mut encoder, &commands, residency, found)?;
+                }
+            }
         }
+        let left = left.into_iter().map(|(chunk, _, _, read)| (chunk, read));
+        self.read_back(reads_back.into_iter().chain(left).collect());
         let tail = self.finish(encoder, found, rendered, &device)?;
         let Recorded {
             core: capture,
@@ -773,6 +807,18 @@ impl RenderExecution {
             released,
             records,
         })
+    }
+
+    /// Keep `reads`, each chunk's bytes as a host step compared its records with them (`steady`),
+    /// for the chunks it kept no recording of: the next step compares the records with them again
+    /// rather than copying them (`IndirectCommandBuffer::step_reads`).
+    fn read_back(&self, reads: Vec<(u32, Option<Box<[u8]>>)>) {
+        let reads: Vec<_> = (reads.into_iter())
+            .filter_map(|(chunk, read)| Some((chunk, Some(read?), StepCopy::default())))
+            .collect();
+        if !reads.is_empty() {
+            self.icb.step_reads(reads);
+        }
     }
 
     /// Keep `kept`, chunk `chunk`'s recording, or (`None`) note that it was not plain: among the
