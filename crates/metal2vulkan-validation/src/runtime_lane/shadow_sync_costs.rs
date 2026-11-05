@@ -8,7 +8,12 @@
 //! harvest of its dirty log answers later), and that spends 0.4 us a 4 KiB page of each write the
 //! runtime reports to it (`resolving`: a model, ours, of a log that resolves each page of a report
 //! to the guest's, as a VMM's does). The buffer is the pages imported, or a copy of them where
-//! its memory's import gate refuses the import (`copied`, `copied-host-pages`).
+//! its memory's import gate refuses the import (`copied`, `copied-host-pages`). Or the surface lies
+//! in a `Private` buffer the device made (`private buffer`, a consumer's device copy of the
+//! surface), its rows 15360 bytes apart or 15616 (`padded rows`, 256 bytes past each row's texels,
+//! where no image holds the plane and the texture is a shadow on every device); the line names
+//! whether the texture aliased the buffer's memory, or why it is a shadow (the device's
+//! `ShadowedTexture` notice).
 //!
 //! Each shape and form runs on a device of its own, one command buffer a frame (two for
 //! `WriteThenReadApart`), committed with `commit_and_submit` (as the consumer commits), in two
@@ -29,6 +34,8 @@
 //!   read alone.
 //! - `Fill`: a blit fills 64 rows of the surface's bytes, a write into the pages in place (their
 //!   import's), then the read.
+//! - `FillApart`: as `Fill`, the fill in a command buffer of its own on a second queue, committed
+//!   before the frame's (as a host's transfer queue fills a surface's device copy).
 //! - `NewTexture`: as `Write`, through a new texture of the plane made each frame (the last one's
 //!   dropped first), as a host that hands over a new texture over the same bytes each frame.
 //! - `Private`: `Write` into a `Private` texture of the surface's size: the passes alone.
@@ -82,6 +89,7 @@ enum Shape {
     Idle,
     CpuWrite,
     Fill,
+    FillApart,
     NewTexture,
     Private,
 }
@@ -93,7 +101,20 @@ struct Form {
     copied: bool,
     /// The log spends [`RESOLVE`] a page of each write reported to it.
     resolving: bool,
+    /// The surface lies in a `Private` buffer the device made, not in host pages: its rows
+    /// [`PADDED`] bytes apart where `padded`, else [`ROW`].
+    private: Option<Rows>,
 }
+
+/// How far apart a `Private` buffer's plane lays the surface's rows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Rows {
+    Tight,
+    Padded,
+}
+
+/// A padded plane's row pitch: 256 bytes past each row's texels.
+const PADDED: u64 = ROW + 256;
 
 /// What a resolving log spends on each 4 KiB page of a write the runtime reports.
 const RESOLVE: Duration = Duration::from_nanos(400);
@@ -103,6 +124,7 @@ impl Form {
         log: None,
         copied: false,
         resolving: false,
+        private: None,
     };
     const LOGGED: Form = Form {
         log: Some(Duration::ZERO),
@@ -113,8 +135,29 @@ impl Form {
         resolving: true,
         ..Form::LOGGED
     };
+    const PRIVATE: Form = Form {
+        private: Some(Rows::Tight),
+        ..Form::PLAIN
+    };
+    const PRIVATE_PADDED: Form = Form {
+        private: Some(Rows::Padded),
+        ..Form::PLAIN
+    };
+
+    /// The surface's row pitch.
+    fn pitch(self) -> u64 {
+        match self.private {
+            Some(Rows::Padded) => PADDED,
+            _ => ROW,
+        }
+    }
 
     fn name(self) -> String {
+        match self.private {
+            Some(Rows::Tight) => return "private buffer".to_owned(),
+            Some(Rows::Padded) => return "private buffer, padded rows".to_owned(),
+            None => {}
+        }
         let log = match self.log {
             None => "no log".to_owned(),
             Some(Duration::ZERO) => "logged".to_owned(),
@@ -158,7 +201,7 @@ fn configurations() -> Vec<(Shape, Form)> {
                 Form {
                     log,
                     copied: true,
-                    resolving: false,
+                    ..Form::PLAIN
                 },
             ));
         }
@@ -170,10 +213,19 @@ fn configurations() -> Vec<(Shape, Form)> {
                 Form {
                     log: harvest,
                     copied,
-                    resolving: false,
+                    ..Form::PLAIN
                 },
             ));
         }
+    }
+    for shape in [
+        Shape::Write,
+        Shape::WriteThenReadApart,
+        Shape::Idle,
+        Shape::Fill,
+        Shape::FillApart,
+    ] {
+        all.extend([(shape, Form::PRIVATE), (shape, Form::PRIVATE_PADDED)]);
     }
     all.push((Shape::Private, Form::PLAIN));
     all
@@ -358,12 +410,13 @@ fn surface_buffer(
     .unwrap()
 }
 
-fn plane_texture(buffer: &Buffer, usage: TextureUsage) -> Texture {
+/// A texture of the surface's plane over `buffer`, its rows `pitch` bytes apart.
+fn plane_texture(buffer: &Buffer, usage: TextureUsage, pitch: u64) -> Texture {
     let mut d = TextureDescriptor::texture_2d(PixelFormat::BGRA8Unorm, WIDTH, HEIGHT, false);
     d.usage = usage;
     d.resource_options = buffer.resource_options();
     buffer
-        .new_texture_with_iosurface_plane(&d, IoSurfacePlane::new(0, ROW, false))
+        .new_texture_with_iosurface_plane(&d, IoSurfacePlane::new(0, pitch, false))
         .unwrap()
 }
 
@@ -453,7 +506,7 @@ fn per_frame(before: &WorkCounts, after: &WorkCounts) -> String {
          ({:.0} skipped), merged back {:.0}, compared {:.2}; first copied in again {:.0}, \
          recopied beyond held {:.0}, after changes {:.0} (other shadows {:.0}, writes {:.0}); \
          large surfaces' first copies in: carried {:.0}, behind an earlier command buffer's \
-         standing {:.0}, behind none {:.0}, recopied {:.0}; \
+         standing {:.0}, behind none {:.0}, recopied {:.0}; surfaces' first copies in {:.0}; \
          host texture shadows: render target {}, check pending {}, failed {}, unchecked {}, \
          refused pitch {}, placement {}, image {}; device copy textures {}, in place {}",
         per(|c| c.queue_submissions),
@@ -493,6 +546,7 @@ fn per_frame(before: &WorkCounts, after: &WorkCounts) -> String {
         per(|c| c.shadow_texels_first_copied_in_large_surfaces_stood_earlier),
         per(|c| c.shadow_texels_first_copied_in_large_surfaces_unstood),
         per(|c| c.shadow_texels_recopied_in_large_surfaces),
+        per(|c| c.shadow_texels_first_copied_in_surfaces),
         after.host_texture_shadows_render_target,
         after.host_texture_shadows_check_pending,
         after.host_texture_shadows_check_failed,
@@ -510,15 +564,16 @@ fn per_frame(before: &WorkCounts, after: &WorkCounts) -> String {
 #[test]
 #[ignore = "a release-mode measurement: run by name"]
 fn shadow_sync_costs() {
-    let len = ((ROW * HEIGHT) as usize).next_multiple_of(16384);
     for round in 0..2 {
         for (shape, form) in configurations() {
-            frames(round, shape, form, len);
+            frames(round, shape, form);
         }
     }
 }
 
-fn frames(round: usize, shape: Shape, form: Form, len: usize) {
+fn frames(round: usize, shape: Shape, form: Form) {
+    let pitch = form.pitch();
+    let len = ((pitch * HEIGHT) as usize).next_multiple_of(16384);
     let mapping = Mapping::anonymous(len);
     let cache = ScratchCache::new().unwrap();
     let messages = Messages::default();
@@ -538,27 +593,45 @@ fn frames(round: usize, shape: Shape, form: Form, len: usize) {
         resolving: form.resolving,
         ..Log::default()
     });
-    let buffer = surface_buffer(
-        &device,
-        &mapping,
-        len,
-        (form.log.is_some().then_some(&log), form.copied),
-    );
+    let buffer = match form.private {
+        Some(_) => (device.new_buffer(len as u64, ResourceOptions::private())).unwrap(),
+        None => surface_buffer(
+            &device,
+            &mapping,
+            len,
+            (form.log.is_some().then_some(&log), form.copied),
+        ),
+    };
     let surface = match shape {
         Shape::Private => private.clone(),
         _ => plane_texture(
             &buffer,
             TextureUsage::RENDER_TARGET | TextureUsage::SHADER_READ,
+            pitch,
         ),
     };
+    // Whether the surface's texture aliased its buffer's memory, or why it is a shadow: the
+    // device's first `ShadowedTexture` notice, given as the texture was made.
+    let notices = messages.take_notices();
+    let why = (notices.iter()).find(|m| m.text.contains("shadowed-texture"));
+    // SAFETY: the handle is only compared, while the texture lives.
+    let storage = match (form.private, unsafe { surface.vk_image() }.is_some()) {
+        (None, _) => String::new(),
+        (Some(_), true) => ", aliased".to_owned(),
+        (Some(_), false) => match why {
+            Some(why) => format!(", a shadow: {}", why.text),
+            None => ", a shadow".to_owned(),
+        },
+    };
+    messages.restore_notices(notices);
     // The sampled texture's form follows the device's in-place check: a texture over host pages
     // starts it.
     let apart = matches!(shape, Shape::WriteReadApart | Shape::WriteThenReadApart);
     let sampled = apart.then(|| {
-        let first = plane_texture(&buffer, TextureUsage::SHADER_READ);
+        let first = plane_texture(&buffer, TextureUsage::SHADER_READ, pitch);
         drop(first);
         device.settle_in_place_checks(CHECK_WAIT);
-        plane_texture(&buffer, TextureUsage::SHADER_READ)
+        plane_texture(&buffer, TextureUsage::SHADER_READ, pitch)
     });
     // SAFETY: the handle is only compared, while the texture lives.
     let sampled_form = match sampled.as_ref().map(|t| unsafe { t.vk_image() }.is_some()) {
@@ -568,8 +641,10 @@ fn frames(round: usize, shape: Shape, form: Form, len: usize) {
     };
     let named = match shape {
         Shape::Private => "private".to_owned(),
-        _ => format!("shadow, {}{sampled_form}", form.name()),
+        _ => format!("shadow, {}{storage}{sampled_form}", form.name()),
     };
+    // The second queue `FillApart` fills on.
+    let transfer = device.new_command_queue().unwrap();
     let (mut commits, mut submits, mut gpus, mut gaps, mut waits, mut cpus) = (
         Vec::new(),
         Vec::new(),
@@ -631,6 +706,7 @@ fn frames(round: usize, shape: Shape, form: Form, len: usize) {
                 let texture = plane_texture(
                     &buffer,
                     TextureUsage::RENDER_TARGET | TextureUsage::SHADER_READ,
+                    pitch,
                 );
                 drawing.write(&command_buffer, &texture, k % 2, true);
                 drawing.read(&command_buffer, &texture, &target);
@@ -639,9 +715,19 @@ fn frames(round: usize, shape: Shape, form: Form, len: usize) {
             Shape::Fill => {
                 let first = (k as u64 * 97) % (HEIGHT - CPU_ROWS);
                 let mut blit = command_buffer.blit_command_encoder().unwrap();
-                let bytes = first * ROW..(first + CPU_ROWS) * ROW;
+                let bytes = first * pitch..(first + CPU_ROWS) * pitch;
                 blit.fill_buffer(&buffer, bytes, k as u8).unwrap();
                 blit.end_encoding().unwrap();
+                drawing.read(&command_buffer, &surface, &target);
+            }
+            Shape::FillApart => {
+                let first = (k as u64 * 97) % (HEIGHT - CPU_ROWS);
+                let fill = transfer.command_buffer().unwrap();
+                let mut blit = fill.blit_command_encoder().unwrap();
+                let bytes = first * pitch..(first + CPU_ROWS) * pitch;
+                blit.fill_buffer(&buffer, bytes, k as u8).unwrap();
+                blit.end_encoding().unwrap();
+                fill.commit_and_submit().unwrap();
                 drawing.read(&command_buffer, &surface, &target);
             }
         }
