@@ -3,19 +3,31 @@
 //! and `error` reads wait for no GPU work and for no submission in progress.
 //!
 //! GPU busy work is committed first (`first_use::Busy`, released by the test), then on the same
-//! queue one blit encoder of fills of distinct words, whose submission lies between its kernel
-//! start and its kernel end; its fills are doubled until
-//! that span is at least [`LONG_SUBMISSION`]. One thread reads the two kernel times over and over,
-//! from the commit until [`BEHIND_BUSY`] after the submission, while the fills wait behind the busy
-//! work, and another reads `status` and `error` over the same time, each between a read of the
-//! kernel start and a read of the kernel end. The submission may come only as the busy work drains:
-//! where no kernel end was read [`HELD_READS`] after the commit, the reading thread releases the
-//! busy work, and the reads go on until the submission, however late. The claim is structural: each
+//! queue one blit encoder of [`FILLS`] fills of distinct words, whose submission lies between its
+//! kernel start and its kernel end. One thread reads the two kernel times over and over, from the
+//! commit until [`BEHIND_BUSY`] after the submission, while the fills wait behind the busy work,
+//! and another reads `status` and `error` over the same time, each between a read of the kernel
+//! start and a read of the kernel end. The submission may come only as the busy work drains: where
+//! no kernel end was read [`HELD_READS`] after the commit, the reading thread releases the busy
+//! work, and the reads go on until the submission, however late. The claim is structural: each
 //! thread's reads land inside the submission, some answering between a kernel start and no kernel
-//! end yet, where a read that waited for the submission returns only after its kernel end. And each
-//! read is timed: at most one in a thousand of each thread's takes [`SLOW_READ`] or more, a bound a
-//! host that preempts the reading thread now and then keeps, which no longest read is on a loaded
-//! Mac (`PROPERTY-READS`).
+//! end yet, where a read that waited for the submission returns only after its kernel end.
+//!
+//! The submission takes what the device's scheduler takes, and no least span is required: both
+//! kernel times are host times of the CPU's scheduling, as Metal's are, and Metal's own span for
+//! this command buffer is short. On the M3 Max with macOS 27.0.1, Metal's kernel end came 0.04 to
+//! 1.8 ms after its kernel start behind the busy work, and at most 12.7 ms after it for 2^20 fills
+//! alone. Its kernel end was read within 2 ms of the commit while the busy work ran 100 to 300 ms
+//! more. (Metal answers both kernel times at once: none of the 7.0 to 8.5 million reads of each
+//! command buffer answered a start and no end.) The runtime's submission takes 3 ms on the M3 Max
+//! (MoltenVK), and 0.05 to 0.11 ms on the RTX 5080 Laptop GPU and on lavapipe, where 490 to 980 of
+//! a thread's reads land inside it. A thread descheduled through so short a submission reads
+//! nothing inside it, so the test commits up to [`ROUNDS`] such command buffers, each committed
+//! once the last one's work completed, until one has reads of both threads inside its submission.
+//!
+//! And each read is timed: at most one in a thousand of each thread's takes [`SLOW_READ`] or more,
+//! a bound a host that preempts the reading thread now and then keeps, which no longest read is on
+//! a loaded Mac (`PROPERTY-READS`).
 //!
 //! And `status` reads `Completed` before anything else shows the completion, as Metal's does: in
 //! the command buffer's completed handler, once its `wait_until_completed` returned, and in the
@@ -34,13 +46,11 @@ use std::time::{Duration, Instant};
 /// The longest a command buffer here may take.
 const WAIT: Duration = Duration::from_secs(60);
 
-/// The fills the command buffer encodes at first, doubled until its kernel span is at least
-/// [`LONG_SUBMISSION`], up to [`MOST_FILLS`].
+/// The fills each command buffer encodes.
 const FILLS: usize = 1 << 12;
-const MOST_FILLS: usize = 1 << 20;
 
-/// The least kernel span (`kernelEndTime` less `kernelStartTime`) of the command buffer read.
-const LONG_SUBMISSION: Duration = Duration::from_millis(40);
+/// The most command buffers committed for one with reads of both threads inside its submission.
+const ROUNDS: usize = 8;
 
 /// How long the reads go on once the command buffer is submitted, its work behind the busy work.
 const BEHIND_BUSY: Duration = Duration::from_millis(100);
@@ -52,10 +62,9 @@ const BEHIND_BUSY: Duration = Duration::from_millis(100);
 /// after their commit.
 const HELD_READS: Duration = Duration::from_millis(100);
 
-/// A slow read: a quarter of [`LONG_SUBMISSION`]. On the M3 Max beside the full suite, a reading
-/// thread's longest reads took 20 to 54 ms each round, of over a million reads, the thread
-/// descheduled (macOS counts no wait for a CPU to take off); its reads inside the submission
-/// numbered 100,000 to 480,000.
+/// A slow read. On the M3 Max beside the full suite, a reading thread's longest reads took 20 to
+/// 54 ms each round, of over a million reads, the thread descheduled (macOS counts no wait for a
+/// CPU to take off).
 const SLOW_READ: Duration = Duration::from_millis(10);
 
 /// What a reading thread saw.
@@ -145,20 +154,21 @@ fn read_status(command_buffer: &CommandBuffer, committed: Instant, done: &Atomic
 
 /// The module docs: kernel times, status and error read while the command buffer's submission
 /// replays its fills and while its work waits behind busy work: some of each inside the
-/// submission, and at most one in a thousand slow.
+/// submission of one of at most [`ROUNDS`] command buffers, and at most one in a thousand of each
+/// command buffer's slow.
 #[test]
 fn property_reads_wait_for_no_submission_and_no_busy_work() {
     on_device(|device| {
         let queue = device.new_command_queue().unwrap();
         let name = device.name();
         let busy = Busy::new(device, &queue);
-        let mut fills = FILLS;
-        loop {
-            let target = (device.new_buffer(4 * fills as u64, ResourceOptions::private())).unwrap();
+        let mut inside = Vec::new();
+        for round in 1..=ROUNDS {
+            let target = (device.new_buffer(4 * FILLS as u64, ResourceOptions::private())).unwrap();
             let (work, words) = busy.commit(device, &queue);
             let command_buffer = queue.command_buffer().unwrap();
             let mut blit = command_buffer.blit_command_encoder().unwrap();
-            for at in 0..fills as u64 {
+            for at in 0..FILLS as u64 {
                 blit.fill_buffer(&target, 4 * at..4 * at + 4, at as u8)
                     .unwrap();
             }
@@ -185,7 +195,7 @@ fn property_reads_wait_for_no_submission_and_no_busy_work() {
             );
             let ms = |d: Duration| d.as_secs_f64() * 1e3;
             eprintln!(
-                "PROPERTY-READS {name}: {fills} fills, kernel span {:.1} ms, submitted {:?} after \
+                "PROPERTY-READS {name}: round {round}, kernel span {:.3} ms, submitted {:?} after \
                  the commit (the busy work released first: {}); {} kernel time reads, {} inside \
                  the submission, {} slow, the longest {:.3} ms; {} status and error reads, {} \
                  inside, {} slow, the longest {:.3} ms",
@@ -205,23 +215,6 @@ fn property_reads_wait_for_no_submission_and_no_busy_work() {
                 reads.submitted.is_some(),
                 "the fills were not submitted within {WAIT:?} of their commit: {reads:?}"
             );
-            if span < LONG_SUBMISSION && fills < MOST_FILLS {
-                fills *= 2;
-                continue;
-            }
-            assert!(
-                span >= LONG_SUBMISSION,
-                "{MOST_FILLS} fills spanned {span:?} from their kernel start to their kernel end, \
-                 short of {LONG_SUBMISSION:?}"
-            );
-            assert!(
-                reads.inside > 0,
-                "no kernel time read landed inside the submission: {reads:?}"
-            );
-            assert!(
-                status.inside > 0,
-                "no status or error read landed inside the submission: {status:?}"
-            );
             assert!(
                 reads.rarely_slow(),
                 "more than one kernel time read in a thousand took {SLOW_READ:?} or more: {reads:?}"
@@ -231,8 +224,16 @@ fn property_reads_wait_for_no_submission_and_no_busy_work() {
                 "more than one status or error read in a thousand took {SLOW_READ:?} or more: \
                  {status:?}"
             );
-            break;
+            inside.push((reads.inside, status.inside));
+            if reads.inside > 0 && status.inside > 0 {
+                return;
+            }
         }
+        panic!(
+            "in none of {ROUNDS} command buffers did reads of both threads land inside the \
+             submission (each one's kernel time reads and status and error reads inside): \
+             {inside:?}"
+        );
     });
 }
 
