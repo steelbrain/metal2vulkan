@@ -4,7 +4,9 @@
 //! `[air.struct_type_info, !nested] <offset> <size> <array len> <type name> <name> <suffix>*`,
 //! where a suffix is `air.indirect_argument, (!arg | <first id>)`, `air.render_target, <n>`, or
 //! `air.raster_order_group, <n>`. Layouts are decoded once per node into [`AirAbi::structs`]
-//! and shared by reference, so a layout reachable along many paths costs one decode; a layout
+//! and shared by reference, so a layout reachable along many paths costs one decode, and layouts
+//! whose members decode alike are one entry, however the module spells their nodes and the struct
+//! types that hold them (a typed and an opaque spelling of one module decode the same table); a layout
 //! that contains itself is `BadValue`, and one nested deeper than [`Limit::LayoutNesting`] is
 //! refused. The decoder walks nested layouts with an explicit stack (a layout's members are read
 //! first, then the layouts they name are decoded, then the layout is built), so its host stack
@@ -13,6 +15,7 @@
 //! [`AirAbi::structs`]: super::AirAbi::structs
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::hash::{DefaultHasher, Hash, Hasher};
 
 use super::args::{field_holder, key_of, Cx, MemberSpace, Node};
 use super::keys::Key;
@@ -31,6 +34,8 @@ type LayoutKey = (MdId, Option<TypeId>);
 const ACTIVE_ENTRY: usize = 2 * std::mem::size_of::<LayoutKey>();
 /// Ledger charge for one [`Structs::memo`] entry.
 const MEMO_ENTRY: usize = 2 * std::mem::size_of::<(LayoutKey, StructRef)>();
+/// Ledger charge for one [`Structs::by_content`] entry.
+const CONTENT_ENTRY: usize = 2 * std::mem::size_of::<(u64, StructRef)>();
 /// Ledger charge for one frame of the decode stack.
 const FRAME: usize = std::mem::size_of::<Frame>();
 /// Ledger charge for one boxed argument-buffer member node.
@@ -52,6 +57,11 @@ pub(super) struct Structs {
     /// at any depth by value.
     indirect: Vec<bool>,
     memo: BTreeMap<LayoutKey, StructRef>,
+    /// Each built layout of `list` by the hash of its members: a layout whose members equal an
+    /// earlier one's is that layout. Two keys of `memo` can decode alike (one layout node held by
+    /// two struct types, or two nodes a spelling does not unique), and the table depends only on
+    /// what they decode to.
+    by_content: BTreeMap<u64, StructRef>,
     active: BTreeSet<LayoutKey>,
 }
 
@@ -227,22 +237,41 @@ fn finish(cx: &mut Cx<'_, '_>, frame: Frame) -> Result<(StructRef, u32), Error> 
     }
     cx.structs.active.remove(&frame.key);
     cx.meter.release(ACTIVE_ENTRY);
+    let info = StructInfo { members };
+    let mut hasher = DefaultHasher::new();
+    info.hash(&mut hasher);
+    let hash = hasher.finish();
+    if let Some(&same) = cx.structs.by_content.get(&hash) {
+        if cx.structs.list.get(same.0 as usize) == Some(&info) {
+            // Its nested layouts are the same layouts, so its height is the same.
+            cx.meter
+                .release(std::mem::size_of::<Member>().saturating_mul(info.members.len()));
+            cx.meter.charge(MEMO_ENTRY)?;
+            cx.structs.memo.insert(frame.key, same);
+            return Ok((same, cx.structs.height(same)));
+        }
+    }
     let r = u32::try_from(cx.structs.list.len())
         .map(StructRef)
         .map_err(|_| site.err(AbiError::BadValue, key))?;
     // Nested layouts are built before the layouts that hold them, so their flags are known.
-    let indirect = members.iter().any(|mem| {
+    let indirect = info.members.iter().any(|mem| {
         !matches!(mem.kind, MemberKind::Plain)
             || mem.layout.is_some_and(|l| cx.structs.holds_indirect(l))
     });
     cx.meter.reserve(&mut cx.structs.list, 1)?;
     cx.meter.reserve(&mut cx.structs.heights, 1)?;
     cx.meter.reserve(&mut cx.structs.indirect, 1)?;
-    cx.structs.list.push(StructInfo { members });
+    cx.structs.list.push(info);
     cx.structs.heights.push(height);
     cx.structs.indirect.push(indirect);
     cx.meter.charge(MEMO_ENTRY)?;
     cx.structs.memo.insert(frame.key, r);
+    // A hash shared by two unequal layouts keeps the first: the later one is its own entry.
+    if let std::collections::btree_map::Entry::Vacant(slot) = cx.structs.by_content.entry(hash) {
+        cx.meter.charge(CONTENT_ENTRY)?;
+        slot.insert(r);
+    }
     Ok((r, height))
 }
 
