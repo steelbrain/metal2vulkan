@@ -19,7 +19,9 @@
 //! - **plain** work: a blit's fill of a buffer of B's own, read back;
 //! - **stepped** work: an execution of draws of B's own, a host step of its own, read back;
 //! - **ordered** work: a copy out of a texture A rendered into before the held command buffer,
-//!   after waiting for the event A signalled there, read back.
+//!   after waiting for the event A signalled there, read back: A's clear, each channel Metal's
+//!   code, or one of the two codes nearest its scaled value where the device announced its
+//!   conversion of the clear (`device-color-conversion`).
 //!
 //! [`another_queue_goes_on_while_a_host_step_records`] checks each completes, with what it wrote,
 //! while A's step is held, and again once the program let go of every object of A's while the
@@ -31,7 +33,7 @@
 //! device: printed as `STEPS-APART` lines, the median and largest. It is ignored by default: run
 //! it by name with `--run-ignored all`.
 
-use super::degrade_notices::on_device;
+use super::degrade_notices::{counts, on_device};
 use super::indirect_host_steps::encoding_state_set;
 use super::{buffer_with, read_buffer, validated_device_with, Messages, ScratchCache, WAIT};
 use crate::air_library::AirLibrary;
@@ -43,11 +45,11 @@ use metal2vulkan::metal::{
 use metal2vulkan::pipeline::{ColorAttachmentDescriptor, RenderPipelineDescriptor, StageSource};
 use metal2vulkan_devtools::{engine_dir, llvm_assemble};
 use metal2vulkan_runtime::{
-    BlitOption, Buffer, ClearColor, CommandBuffer, CommandBufferStatus, CommandQueue, Device,
-    Event, EventRef, ExecutedCommands, IndirectCommandBuffer, IndirectCommandBufferDescriptor,
-    LoadAction, Origin, PipelineOptions, RecordsRead, Region, RenderPassDescriptor,
-    RenderPipelineState, ResourceOptions, ResourceRef, SamplerState, SamplerStateOptions, Size,
-    StoreAction, Texture, TextureDescriptor,
+    BlitOption, Buffer, ClearColor, CommandBuffer, CommandBufferStatus, CommandQueue, Degradation,
+    Device, Event, EventRef, ExecutedCommands, IndirectCommandBuffer,
+    IndirectCommandBufferDescriptor, LoadAction, Origin, PipelineOptions, RecordsRead, Region,
+    RenderPassDescriptor, RenderPipelineState, ResourceOptions, ResourceRef, SamplerState,
+    SamplerStateOptions, Size, StoreAction, Texture, TextureDescriptor,
 };
 use std::sync::{mpsc, Arc, Condvar, Mutex, PoisonError};
 use std::time::{Duration, Instant};
@@ -59,7 +61,8 @@ const BOUND: Duration = Duration::from_secs(10);
 /// The side of the texture A renders into and B copies out of.
 const SIDE: u64 = 16;
 
-/// The colour A clears that texture to, and the bytes B reads of each texel.
+/// The colour A clears that texture to, and the bytes B reads of each texel (Metal's: each channel
+/// the code nearest its scaled value, 0.5's 127.5 codes to 128).
 const CLEAR: [f64; 4] = [0.25, 0.5, 0.75, 1.0];
 const TEXEL: [u8; 4] = [64, 128, 191, 255];
 
@@ -257,12 +260,16 @@ struct Other<'s> {
     copied: Buffer,
     drawn: Texture,
     rendered: Event,
+    /// Whether the device announced its conversion of A's clear (`device-color-conversion`):
+    /// Vulkan lets it store either code nearest each channel's scaled value (the RTX 5080 Laptop
+    /// GPU stores 0.5 as 127).
+    converted: bool,
 }
 
 impl<'s> Other<'s> {
     /// Queue B's resources, A's texture `drawn` and the event `rendered` A signalled once it
-    /// rendered into it (at value 1).
-    fn new(scene: &'s Scene, drawn: &Texture, rendered: &Event) -> Other<'s> {
+    /// rendered into it (at value 1), and whether the device announced its conversion of the clear.
+    fn new(scene: &'s Scene, (drawn, converted): (&Texture, bool), rendered: &Event) -> Other<'s> {
         let device = &scene.device;
         Other {
             queues: KINDS.map(|_| device.new_command_queue().unwrap()),
@@ -271,6 +278,7 @@ impl<'s> Other<'s> {
             copied: (device.new_buffer(4 * SIDE * SIDE, ResourceOptions::shared())).unwrap(),
             drawn: drawn.clone(),
             rendered: rendered.clone(),
+            converted,
         }
     }
 
@@ -322,7 +330,7 @@ impl<'s> Other<'s> {
             Kind::Stepped => self.stepped.drew(),
             Kind::Ordered => {
                 let bytes = read_buffer(&self.copied, 0, 4 * SIDE * SIDE).unwrap();
-                bytes.chunks(4).all(|texel| texel == TEXEL)
+                bytes.chunks(4).all(|texel| cleared(texel, self.converted))
             }
         }
     }
@@ -339,9 +347,24 @@ impl<'s> Other<'s> {
     }
 }
 
+/// Whether `texel` holds A's clear: [`TEXEL`], or where the device announced its conversion of the
+/// clear (`converted`), each channel one of the two codes nearest [`CLEAR`]'s scaled value.
+fn cleared(texel: &[u8], converted: bool) -> bool {
+    texel == TEXEL
+        || (converted
+            && (texel.iter().zip(CLEAR))
+                .all(|(&code, c)| (f64::from(code) - c * 255.0).abs() < 1.0))
+}
+
 /// A `SIDE`x`SIDE` texture A renders into and B copies out of, cleared to [`CLEAR`] on `queue`,
-/// with `rendered` signalled at 1 after it, waited for.
-fn rendered_texture(device: &Device, queue: &CommandQueue, rendered: &Event) -> Texture {
+/// with `rendered` signalled at 1 after it, waited for; and whether the device announced its
+/// conversion of the clear (`device-color-conversion`, read off `messages`).
+fn rendered_texture(
+    device: &Device,
+    messages: &Messages,
+    queue: &CommandQueue,
+    rendered: &Event,
+) -> (Texture, bool) {
     let mut descriptor = TextureDescriptor::texture_2d(PixelFormat::RGBA8Unorm, SIDE, SIDE, false);
     descriptor.usage = TextureUsage::RENDER_TARGET | TextureUsage::SHADER_READ;
     let drawn = device.new_texture(&descriptor).unwrap();
@@ -358,7 +381,9 @@ fn rendered_texture(device: &Device, queue: &CommandQueue, rendered: &Event) -> 
     command_buffer.commit().unwrap();
     command_buffer.wait_until_completed_for(WAIT).unwrap();
     assert_eq!(command_buffer.status(), CommandBufferStatus::Completed);
-    drawn
+    let converted =
+        counts(&messages.take_notices()).contains_key(&Degradation::DeviceColorConversion);
+    (drawn, converted)
 }
 
 /// What holds a host step in its command buffer's executed-commands handler, on the thread that
@@ -428,12 +453,12 @@ impl Drop for StepHold {
 /// commands, its queue) while the step is held: its completed handler still runs.
 #[test]
 fn another_queue_goes_on_while_a_host_step_records() {
-    on_device(|device, _| {
+    on_device(|device, messages| {
         let scene = Scene::new(device);
         let rendered = device.new_event().unwrap();
         let first = device.new_command_queue().unwrap();
-        let drawn = rendered_texture(device, &first, &rendered);
-        let other = Other::new(&scene, &drawn, &rendered);
+        let (drawn, converted) = rendered_texture(device, messages, &first, &rendered);
+        let other = Other::new(&scene, (&drawn, converted), &rendered);
         // Warm: each kind's variants and pipelines are made once.
         for kind in KINDS {
             assert!(other.run(kind, 1, WAIT).is_some(), "{kind:?} warm");
@@ -568,8 +593,8 @@ fn steps_apart() {
     let scene = Scene::new(&device);
     let a = device.new_command_queue().unwrap();
     let rendered = device.new_event().unwrap();
-    let drawn = rendered_texture(&device, &a, &rendered);
-    let other = Other::new(&scene, &drawn, &rendered);
+    let (drawn, converted) = rendered_texture(&device, &messages, &a, &rendered);
+    let other = Other::new(&scene, (&drawn, converted), &rendered);
     let slow = Draws::new(&scene, n);
     // Warm: A's frame once, each kind once.
     let warm = slow.encode(&a);
