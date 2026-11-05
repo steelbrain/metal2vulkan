@@ -479,7 +479,8 @@ fn frames(round: usize, shape: Shape, form: Form, len: usize) {
         }
         let cpu = process_cpu_us();
         let command_buffer = queue.command_buffer().unwrap();
-        let mut command_buffers = Vec::new();
+        // A second command buffer after the first, for a read apart from the write.
+        let mut then = None;
         match shape {
             Shape::Write | Shape::Private => {
                 drawing.write(&command_buffer, &surface, k % 2, true);
@@ -496,10 +497,9 @@ fn frames(round: usize, shape: Shape, form: Form, len: usize) {
             }
             Shape::WriteThenReadApart => {
                 drawing.write(&command_buffer, &surface, k % 2, true);
-                command_buffers.push(command_buffer);
-                let command_buffer = queue.command_buffer().unwrap();
-                drawing.read(&command_buffer, sampled.as_ref().unwrap(), &target);
-                command_buffers.push(command_buffer);
+                let second = queue.command_buffer().unwrap();
+                drawing.read(&second, sampled.as_ref().unwrap(), &target);
+                then = Some(second);
             }
             Shape::Rewrite => {
                 drawing.write(&command_buffer, &surface, 0, true);
@@ -517,9 +517,7 @@ fn frames(round: usize, shape: Shape, form: Form, len: usize) {
                 drawing.read(&command_buffer, &surface, &target);
             }
         }
-        if command_buffers.is_empty() {
-            command_buffers.push(command_buffer);
-        }
+        let command_buffers: Vec<_> = [command_buffer].into_iter().chain(then).collect();
         let last = command_buffers.last().unwrap();
         let handled = Arc::new(Mutex::new(None::<f64>));
         let at = Arc::clone(&handled);
