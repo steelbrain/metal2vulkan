@@ -623,9 +623,11 @@ struct BuiltFootprint {
 /// `steps_after_the_gpu`), as they were where the footprint was built. A route met since, a
 /// host step or a rewrite moves one; a kept footprint stands only where none moved.
 struct SegmentProbe {
-    work: Deferred,
-    /// Its step inputs, where they are a recording that may come due again.
-    rerecord: Option<StepInputs>,
+    /// Its answers now, asked of the segment's work and step inputs it holds. Held behind a
+    /// trait object, so the command buffer's auto-trait proofs reach no segment's work through
+    /// it: through the work's types they ran past consumers' recursion limit (`Send` of an
+    /// encoder held in a `Mutex`, `tests/consumer_auto_traits.rs`).
+    ask: Box<dyn Fn() -> [bool; 5] + Send + Sync>,
     answers: [bool; 5],
 }
 
@@ -634,17 +636,17 @@ impl SegmentProbe {
         let rerecord = (segment.inputs.as_ref())
             .filter(|inputs| matches!(inputs, StepInputs::Rerecord(_)))
             .cloned();
-        let answers = probe_answers(&segment.work, rerecord.as_ref());
+        let work = segment.work.clone();
+        let ask = move || probe_answers(&work, rerecord.as_ref());
         SegmentProbe {
-            work: segment.work.clone(),
-            rerecord,
-            answers,
+            answers: ask(),
+            ask: Box::new(ask),
         }
     }
 
     /// Whether its answers are as they were.
     fn holds(&self) -> bool {
-        probe_answers(&self.work, self.rerecord.as_ref()) == self.answers
+        (self.ask)() == self.answers
     }
 }
 
