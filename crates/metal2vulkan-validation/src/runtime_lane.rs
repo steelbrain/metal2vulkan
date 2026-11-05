@@ -747,6 +747,8 @@ mod renders;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod replayed_frames;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+mod replayed_textured;
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod resident_draws;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod resolve_rounding;

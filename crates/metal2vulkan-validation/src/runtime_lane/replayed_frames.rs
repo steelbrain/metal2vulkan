@@ -83,7 +83,7 @@ const DRAWS: u32 = 5000;
 const CHECKED_DRAWS: u32 = 256;
 
 /// The target's width and height.
-const SIDE: u64 = 64;
+pub(super) const SIDE: u64 = 64;
 
 /// The most bind shapes a warm frame makes or finds among those its drawing states settled: a
 /// few for each pass (the encoding pass's one state, the execution's five primitive types), not
@@ -138,7 +138,7 @@ fn library(device: &Device) -> Library {
 }
 
 /// `name` of `library`, as a stage's source.
-fn function(library: &Library, name: &str) -> StageSource {
+pub(super) fn function(library: &Library, name: &str) -> StageSource {
     let function = library.new_function_with_name(name).unwrap();
     StageSource::Function(function.function_descriptor())
 }
@@ -411,14 +411,50 @@ fn shapes(before: &WorkCounts, after: &WorkCounts) -> u64 {
 fn replayed_frames() {
     let cache = ScratchCache::new().unwrap();
     let messages = Messages::default();
-    let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), |options| {
+    let device = measured_device(&messages, &cache);
+    let page = Page::new(&device, DRAWS);
+    let changed = Inputs {
+        indices: Some((&page.indices, ZEROS_AT)),
+        ..Inputs::default()
+    };
+    let change_at = change_at();
+    let each = std::env::var_os(EACH_VAR).is_some();
+    let frame = |queue: &CommandQueue, frame: usize| {
+        let changes = change_at.filter(|&at| frame >= at);
+        let inputs = match changes.is_some_and(|at| !each || (frame - at) % 2 == 0) {
+            true => &changed,
+            false => &Inputs::default(),
+        };
+        page.frame_with(queue, inputs)
+    };
+    let pixels = || page.pixels();
+    time_frames(&device, &page.surface, Some(WARM_SHAPES), frame, pixels);
+}
+
+/// A device as a consumer's: without the validation layer, keeping no execution record.
+pub(super) fn measured_device(messages: &Messages, cache: &ScratchCache) -> Device {
+    validated_device_with(TEST_DEVICE, messages, cache.path(), |options| {
         options.layers.clear();
         // A consumer's device keeps no execution record.
         options.record_executions = false;
     })
-    .unwrap();
+    .unwrap()
+}
+
+/// Times [`frames`] frames on `device`, each the command buffer `frame` commits on a queue of its
+/// own (given the frame's index), waited for, while a presenter queue commits a blit that copies
+/// out `surface` and a bystander queue one that fills a buffer of its own, each one at a time,
+/// again as each completes, until the frame completes. Prints a `REPLAYED-FRAMES` line for each
+/// (the module docs), `pixels`' hash after it last; each warm frame makes or finds at most
+/// `warm_shapes` bind shapes, where set.
+pub(super) fn time_frames(
+    device: &Device,
+    surface: &Texture,
+    warm_shapes: Option<u64>,
+    frame: impl Fn(&CommandQueue, usize) -> CommandBuffer,
+    pixels: impl Fn() -> Vec<u8>,
+) {
     let name = device.name().to_owned();
-    let page = Page::new(&device, DRAWS);
     let (page_queue, presenter, bystander) = (
         device.new_command_queue().unwrap(),
         device.new_command_queue().unwrap(),
@@ -430,18 +466,7 @@ fn replayed_frames() {
     let own = device
         .new_buffer(1 << 16, ResourceOptions::shared())
         .unwrap();
-    let changed = Inputs {
-        indices: Some((&page.indices, ZEROS_AT)),
-        ..Inputs::default()
-    };
-    let change_at = change_at();
-    let each = std::env::var_os(EACH_VAR).is_some();
-    for frame in 0..frames() {
-        let changes = change_at.filter(|&at| frame >= at);
-        let inputs = match changes.is_some_and(|at| !each || (frame - at) % 2 == 0) {
-            true => &changed,
-            false => &Inputs::default(),
-        };
+    for index in 0..frames() {
         let done = AtomicBool::new(false);
         let before = device.work_counts();
         let (took, presented, stood) = thread::scope(|scope| {
@@ -450,7 +475,7 @@ fn replayed_frames() {
                     let mut blit = command_buffer.blit_command_encoder().unwrap();
                     let size = Size::new(SIDE, SIDE, 1);
                     blit.copy_from_texture_to_buffer(
-                        &page.surface,
+                        surface,
                         0,
                         0,
                         Origin::new(0, 0, 0),
@@ -473,7 +498,7 @@ fn replayed_frames() {
                 })
             });
             let start = Instant::now();
-            let command_buffer = page.frame_with(&page_queue, inputs);
+            let command_buffer = frame(&page_queue, index);
             command_buffer.wait_until_completed_for(WAIT).unwrap();
             let took = start.elapsed();
             assert_eq!(command_buffer.status(), CommandBufferStatus::Completed);
@@ -482,7 +507,7 @@ fn replayed_frames() {
         });
         let after = device.work_counts();
         println!(
-            "REPLAYED-FRAMES {name} frame {frame}: {:.1} ms (encoding to completion), {}; \
+            "REPLAYED-FRAMES {name} frame {index}: {:.1} ms (encoding to completion), {}; \
              presenter {} command buffers, largest {:.1} ms, mean {:.1} ms; bystander {}, \
              largest {:.1} ms, mean {:.1} ms; pixels {:016x}",
             took.as_secs_f64() * 1e3,
@@ -493,12 +518,12 @@ fn replayed_frames() {
             stood.count,
             stood.largest.as_secs_f64() * 1e3,
             stood.total.as_secs_f64() * 1e3 / stood.count.max(1) as f64,
-            pixels_hash(&page.pixels()),
+            pixels_hash(&pixels()),
         );
         let shapes = shapes(&before, &after);
         assert!(
-            frame == 0 || shapes <= WARM_SHAPES,
-            "warm frame {frame} on {name} made or found {shapes} bind shapes"
+            index == 0 || warm_shapes.is_none_or(|warm| shapes <= warm),
+            "warm frame {index} on {name} made or found {shapes} bind shapes"
         );
     }
 }
