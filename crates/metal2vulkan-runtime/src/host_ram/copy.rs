@@ -10,11 +10,11 @@
 //!   before it ended is one run with it ([`merged`]); a run that starts before (a descending
 //!   neighbour) stays apart. Each run is cut where a chunk ends ([`pieces`]), and each chunk the
 //!   pieces touch is taken, in their order, as an object over it takes it (`RamOnDevice::chunk`,
-//!   `By::Object`): imported first where it is not yet, or its pending import by the device's
-//!   thread waited for, and the thread's window of chunks imported ahead moved past it
-//!   (`host_ram.rs`).
-//!   The copy makes no import of its own: a chunk it imports is the chunk's one import
-//!   (`Device::import_chunk`), made and counted as an object's is.
+//!   `By::Object`), the thread's window of chunks imported ahead moved past it (`host_ram.rs`),
+//!   and imported first where it is not yet, or its pending import by the device's thread waited
+//!   for. The copy makes no import of its own, where an object over a chunk not imported yet is
+//!   bound in an import of its own run (`RamOnDevice::for_object`): a chunk a copy imports is the
+//!   chunk's one import (`Device::import_chunk`), made and counted as an object's is.
 //! - **One dispatch per chunk.** The pieces become a table of 4 KiB pages, each the chunk's page
 //!   and the buffer's ([`plan`]), uploaded into the command buffer's arena, and the pages of each
 //!   chunk one dispatch of `bind::pages_copy_module` (a gather or a scatter) over the chunk's

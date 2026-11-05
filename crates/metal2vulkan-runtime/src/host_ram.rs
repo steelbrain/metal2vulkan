@@ -29,8 +29,9 @@
 //!   window since that take; the objects over the chunk after that are bound in the chunk's
 //!   import. The run's import and the chunk's are two imports of the same pages, as an object's
 //!   own import of a view of pages a chunk holds is; the object's uses order against those of
-//!   every other object over its bytes by their host addresses, whichever import each is bound
-//!   in (`host_aliases.rs`). The run's import is one more allocation, made only where the
+//!   every other object over its bytes, and of every copy of them through the chunk's import
+//!   (`copy.rs`), by their host addresses, whichever import each is bound in
+//!   (`host_aliases.rs`). The run's import is one more allocation, made only where the
 //!   device's allocations leave the margin the thread leaves (below), and goes with its last
 //!   holder. That is the trade for no making waiting: up to one more allocation and one more pin
 //!   of its pages for each object made while its chunk is not imported, for as long as the

@@ -468,14 +468,14 @@ pages then takes a kernel mapping per page) can give the device the guest's RAM 
   its own thread, which faults in and pins its own pages (2 MiB for such a heap), while the thread
   imports the chunk; the objects over the chunk after that are bound in it
   (`run_bound_buffers_made`). Each run's import goes with its object (`run_imports_live`), and its
-  uses order against those of the objects over the same bytes in the chunk by their host addresses,
-  as any two no-copy buffers over shared bytes do. So no object's making waits for a chunk's
-  fault-in. The price is up to one more allocation and pin per object made while its chunk is not
-  imported, for the object's life: a burst of heaps that outruns the thread takes one for each heap
-  over a chunk the thread has not imported yet. Where the thread does not run (it stopped at the
-  allocation limit's margin, below), failed the chunk or gave it back, where the device's
-  allocations are within that margin, where the object's run is the whole chunk, or on a driver
-  whose barriers do not order blits through two imports of the same pages
+  uses order against those of the objects over the same bytes in the chunk, and of the copies of
+  them (below), by their host addresses, as any two no-copy buffers over shared bytes do. So no
+  object's making waits for a chunk's fault-in. The price is up to one more allocation and pin per
+  object made while its chunk is not imported, for the object's life: a burst of heaps that outruns
+  the thread takes one for each heap over a chunk the thread has not imported yet. Where the thread
+  does not run (it stopped at the allocation limit's margin, below), failed the chunk or gave it
+  back, where the device's allocations are within that margin, where the object's run is the whole
+  chunk, or on a driver whose barriers do not order blits through two imports of the same pages
   (`RuntimeDriverDefect::AliasedImportBlitsUnordered`, MoltenVK's: there every object over a chunk
   lies in its one import), the object imports the chunk as it is made, or waits for the import of it
   under way. The thread faults in no more than the window past the objects, and never goes back for
@@ -530,8 +530,9 @@ pages then takes a kernel mapping per page) can give the device the guest's RAM 
   one compute dispatch for each chunk they touch, over the chunk's own `VkBuffer` (more only past
   the device's storage range or workgroup count): never a copy region per run
   (`WorkCounts::host_ram_copies`, `host_ram_copy_bytes`, `host_ram_copy_dispatches`). A copy takes
-  each chunk it touches as an object over it does: a chunk not yet imported is imported first, or
-  the thread's import of it waited for, and the thread's window moves past it. Each copy is ordered
+  each chunk it touches as an object over it does, and the thread's window moves past it; but where
+  an object over a chunk not imported yet is bound in an import of its own run, a copy makes none:
+  the chunk is imported first, or the thread's import of it waited for. Each copy is ordered
   and seen as a copy between the buffer and a no-copy buffer over the pages: the chunk's bytes have
   a hazard-tracking key placed over its host bytes, as a no-copy buffer's are, so the copy is
   ordered against every other copy of those bytes and every no-copy buffer or heap over the RAM's

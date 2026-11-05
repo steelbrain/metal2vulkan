@@ -45,7 +45,9 @@
 //! - **Two imports of the same pages.** A buffer bound in a run's import and one bound in the
 //!   chunk's over the same pages order by their host bytes, a write through either before a read
 //!   through the other, in one blit encoder, in two encoders of one command buffer and across
-//!   queues. Within the allocation limit's margin no run is imported alone. On a driver whose
+//!   queues; so do a buffer bound in a run's import and a copy of its pages through the chunk's
+//!   (`copy_from_host_ram` after a fill through the buffer, `copy_to_host_ram` before a copy out
+//!   of it). Within the allocation limit's margin no run is imported alone. On a driver whose
 //!   barriers do not order blits through two imports of the same pages
 //!   (`RuntimeDriverDefect::AliasedImportBlitsUnordered`, MoltenVK's) no run is imported alone
 //!   either: an object over a chunk not imported imports the chunk, and the tests hold it to that.
@@ -1028,6 +1030,165 @@ fn a_run_bound_and_a_chunk_bound_buffer_over_the_same_pages_order_by_their_host_
         }
     );
     drop((alone, in_chunk, out, long, used, ram));
+    assert!(
+        settles(&dropped),
+        "the keep-alive goes after the last chunk"
+    );
+}
+
+#[test]
+fn a_run_bound_buffer_and_a_copy_of_its_pages_order_by_their_host_bytes() {
+    let Some(device) = ahead_device() else {
+        return;
+    };
+    let (ram, start, dropped) = fresh_ram(4 * 64 * MIB);
+    let before = device.work_counts();
+    let used = device.use_host_ram(&ram).unwrap();
+    let ahead = |counts: &crate::WorkCounts| {
+        counts.host_ram_chunks_imported_ahead - before.host_ram_chunks_imported_ahead
+    };
+    let by_objects = |counts: &crate::WorkCounts| {
+        counts.host_ram_chunks_imported - before.host_ram_chunks_imported - ahead(counts)
+    };
+    settled(&device, |counts| ahead(counts) == 1);
+    let page = device.shared().host_import.as_ref().unwrap().page;
+    let (runs, gates): (Arc<Mutex<_>>, Arc<Mutex<_>>) = Default::default();
+    // Four pages over a chunk not imported: bound in an import of their run, while the thread
+    // imports the chunk (and the one past it), whose import the copies use. On a device whose
+    // barriers do not order blits through two imports of the same pages
+    // (`AliasedImportBlitsUnordered`) the buffer imports the chunk, and lies in the copies' import.
+    let a = runs_alone(&device);
+    let at = start + 2 * 64 * MIB + 8 * page;
+    let alone = buffer(
+        &device,
+        at,
+        4 * page,
+        resolver(&runs, itself),
+        gate(&gates, true),
+    )
+    .unwrap();
+    let made = settled(&device, |counts| ahead(counts) == 2 + a);
+    assert_eq!(
+        (
+            made.run_bound_buffers_made - before.run_bound_buffers_made,
+            made.chunk_bound_buffers_made - before.chunk_bound_buffers_made,
+            by_objects(&made),
+            made.run_imports_live - before.run_imports_live,
+        ),
+        (a, 1 - a, 1 - a, a),
+        "the buffer in its run's import, or in the chunk it imported"
+    );
+    // The copies' run: the buffer's second page.
+    let pages = vec![at + page..at + 2 * page];
+    let out = device.new_buffer(page, ResourceOptions::shared()).unwrap();
+    let source = device.new_buffer(page, ResourceOptions::shared()).unwrap();
+    // The write's work across queues before it: 2 GiB of fills of memory of the device's own.
+    const LONG_BYTES: u64 = 64 * MIB;
+    const LONG_FILLS: u64 = 32;
+    let long = (device.new_buffer(LONG_BYTES, ResourceOptions::private())).unwrap();
+    let queues = [
+        device.new_command_queue().unwrap(),
+        device.new_command_queue().unwrap(),
+    ];
+    // The write: a fill through the buffer, or a scatter of `source` holding `value` (written by
+    // the CPU while no command buffer uses it); the read: a gather of the pages into `out`, or a
+    // copy out of the buffer into it.
+    let write = |encoder: &mut crate::BlitCommandEncoder, scatter: bool, value: u8| match scatter {
+        false => encoder.fill_buffer(&alone, page..2 * page, value).unwrap(),
+        true => {
+            // SAFETY: the buffer's bytes, which no command buffer uses now.
+            unsafe { std::ptr::write_bytes(source.contents().unwrap().as_ptr(), value, page as _) };
+            encoder.copy_to_host_ram(&source, 0, &ram, &pages).unwrap();
+        }
+    };
+    let read = |encoder: &mut crate::BlitCommandEncoder, scatter: bool| match scatter {
+        false => encoder.copy_from_host_ram(&ram, &pages, &out, 0).unwrap(),
+        true => (encoder.copy_from_buffer_to_buffer(&alone, page, &out, 0, page)).unwrap(),
+    };
+    let mut value = 0;
+    for (scatter, way) in [
+        (false, "the buffer's fill to a gather"),
+        (true, "a scatter to the buffer's copy"),
+    ] {
+        // One command buffer, one blit encoder: the read of the bytes the write wrote waits for
+        // it.
+        value += 1;
+        let barriers = device.work_counts().command_barriers;
+        let command_buffer = queues[0].command_buffer().unwrap();
+        let mut encoder = command_buffer.blit_command_encoder().unwrap();
+        write(&mut encoder, scatter, value);
+        read(&mut encoder, scatter);
+        encoder.end_encoding().unwrap();
+        command_buffer.commit().unwrap();
+        command_buffer.wait_until_completed_for(WAIT).unwrap();
+        assert_eq!(command_buffer.status(), CommandBufferStatus::Completed);
+        assert!(
+            device.work_counts().command_barriers > barriers,
+            "{way}: the read waited for the write"
+        );
+        assert!(
+            contents_of(&out, page).iter().all(|&byte| byte == value),
+            "{way}: the read in one encoder read the write"
+        );
+        // Two encoders of one command buffer.
+        value += 1;
+        let command_buffer = queues[0].command_buffer().unwrap();
+        let mut encoder = command_buffer.blit_command_encoder().unwrap();
+        write(&mut encoder, scatter, value);
+        encoder.end_encoding().unwrap();
+        let mut encoder = command_buffer.blit_command_encoder().unwrap();
+        read(&mut encoder, scatter);
+        encoder.end_encoding().unwrap();
+        command_buffer.commit().unwrap();
+        command_buffer.wait_until_completed_for(WAIT).unwrap();
+        assert!(
+            contents_of(&out, page).iter().all(|&byte| byte == value),
+            "{way}: the second encoder read the first's write"
+        );
+        // Across queues, in commit order: the write's command buffer fills memory of the device's
+        // own first, for long enough that a read not ordered after it would read the bytes before
+        // the write; the read's, on the other queue, committed after it, reads once it ran.
+        value += 1;
+        let writing = queues[0].command_buffer().unwrap();
+        let mut encoder = writing.blit_command_encoder().unwrap();
+        for _ in 0..LONG_FILLS {
+            encoder.fill_buffer(&long, 0..LONG_BYTES, value).unwrap();
+        }
+        write(&mut encoder, scatter, value);
+        encoder.end_encoding().unwrap();
+        writing.commit().unwrap();
+        let reading = queues[1].command_buffer().unwrap();
+        let mut encoder = reading.blit_command_encoder().unwrap();
+        read(&mut encoder, scatter);
+        encoder.end_encoding().unwrap();
+        reading.commit().unwrap();
+        writing.wait_until_completed_for(WAIT).unwrap();
+        reading.wait_until_completed_for(WAIT).unwrap();
+        assert_eq!(reading.status(), CommandBufferStatus::Completed);
+        assert!(
+            contents_of(&out, page).iter().all(|&byte| byte == value),
+            "{way}: the read on the other queue read the write"
+        );
+    }
+    let copied = device.work_counts();
+    assert_eq!(
+        (
+            copied.host_ram_copies - before.host_ram_copies,
+            by_objects(&copied),
+            copied.run_imports_live - before.run_imports_live,
+        ),
+        (6, 1 - a, a),
+        "six copies over the chunk's import, which none of them imported"
+    );
+    eprintln!(
+        "HOST-RAM: {} and copies of its pages: ordered both ways in one encoder, two encoders \
+         and across queues",
+        match a {
+            1 => "a buffer in its run's import",
+            _ => "a buffer in the chunk's import (AliasedImportBlitsUnordered)",
+        }
+    );
+    drop((alone, out, source, long, used, ram));
     assert!(
         settles(&dropped),
         "the keep-alive goes after the last chunk"
