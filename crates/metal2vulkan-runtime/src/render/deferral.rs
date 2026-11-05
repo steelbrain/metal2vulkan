@@ -261,6 +261,10 @@ struct SlotState {
     /// Batches lowered, their calls still held until the program's thread empties them as it
     /// takes them to fill (the module docs).
     lowered: Vec<Batch>,
+    /// How long the lowering thread waits before its next turn at the slot: a device test's
+    /// thread run late ([`LoweringSlot::turn_late`]).
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    late: Option<std::time::Duration>,
 }
 
 /// What the lowering thread takes of a slot: a batch handed, or, once none is, the encoder's end
@@ -355,6 +359,10 @@ impl LoweringSlot {
     /// program's thread drains the slot.
     pub(super) fn lower_handed(&self) {
         loop {
+            #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+            if let Some(late) = lock(&self.state).late.take() {
+                std::thread::sleep(late);
+            }
             let (turn, ended) = {
                 let Some(_section) = exit_guard::enter() else {
                     // The process exits: the program's thread lowers what is handed.
@@ -546,6 +554,8 @@ impl DeferredEncoders {
                         panicked: false,
                         ending: None,
                         lowered: Vec::new(),
+                        #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+                        late: None,
                     }),
                     lowerer: Mutex::new(Lowerer {
                         lowering: None,
@@ -637,9 +647,19 @@ impl LoweringSlot {
         f()
     }
 
-    /// The batches of the slot handed to the lowering thread and not taken.
-    pub(crate) fn handed(&self) -> usize {
-        lock(&self.state).handed.len()
+    /// The batches of the slot handed to the lowering thread and not taken, and whether that
+    /// thread lowers one of its batches now, read together. While [`while_held`](Self::while_held)
+    /// holds the slot, a thread that lowers one takes no other, so the batches handed can only
+    /// grow, and at [`HANDED_BATCHES`] the program's thread waits for room until the hold goes.
+    pub(crate) fn handed(&self) -> (usize, bool) {
+        let state = lock(&self.state);
+        (state.handed.len(), state.busy)
+    }
+
+    /// The lowering thread waits `by` before its next turn at the slot, as a thread a loaded host
+    /// runs late.
+    pub(crate) fn turn_late(&self, by: std::time::Duration) {
+        lock(&self.state).late = Some(by);
     }
 }
 

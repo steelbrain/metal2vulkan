@@ -646,6 +646,12 @@ fn a_call_made_while_a_buffer_is_detached_is_lowered_at_the_call() {
 /// the thread held, the program's calls stop at the cap, its log grows no more, and once the hold
 /// goes every call is lowered once, in order (the last draw's color left): by the thread, and what
 /// it had not taken as the encoder ended on the program's thread.
+///
+/// The thread takes its first turn late, as on a loaded host: the program reaches the cap before
+/// the thread took any batch, and goes on by one batch once it takes one. So the calls made are
+/// read only once the thread lowers a batch, which the hold keeps it at, with the cap handed: the
+/// program then waits until the hold goes. Read at the cap alone, they may be read before the
+/// thread's first turn, and the program's batch after it.
 #[test]
 fn a_program_that_outruns_the_lowering_thread_waits_for_it() {
     let scratch = Scratch::new("deferred-outrun");
@@ -694,10 +700,11 @@ fn a_program_that_outruns_the_lowering_thread_waits_for_it() {
     let [slot] = &slots[..] else {
         panic!("{} encoders' slots taken, not one", slots.len());
     };
+    slot.turn_late(Duration::from_millis(100));
     let (stopped, after, handed) = slot.while_held(|| {
         go.send(()).unwrap();
         until("the program's calls stop at the cap", || {
-            slot.handed() == HANDED_BATCHES
+            slot.handed() == (HANDED_BATCHES, true)
         });
         let stopped = made.load(Ordering::SeqCst);
         std::thread::sleep(Duration::from_millis(200));
@@ -709,7 +716,8 @@ fn a_program_that_outruns_the_lowering_thread_waits_for_it() {
         "{stopped} of {draws} draws made at the cap"
     );
     assert_eq!(
-        handed, HANDED_BATCHES,
+        handed,
+        (HANDED_BATCHES, true),
         "batches handed with the thread held"
     );
     let words = encoding.join().unwrap();
