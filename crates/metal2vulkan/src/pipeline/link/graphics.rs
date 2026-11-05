@@ -15,7 +15,8 @@
 //!   `R16Float` attachment, Metal keeps `-0`). An
 //!   attachment that no first (index 0) output of the fragment function names (every attachment of
 //!   a pipeline without a fragment function) gets an empty write mask, so the draw leaves it
-//!   unmodified. That is what Metal does where measured: an unblended attachment the function reads
+//!   unmodified, and an extended-range one no blend (its raw unsigned format blends nothing, and
+//!   nothing is written to blend). That is what Metal does where measured: an unblended attachment the function reads
 //!   through framebuffer fetch but has no output for, which a draw's later fragments read as
 //!   loaded; an attachment without an output whose blend would change it (`Zero`/`Zero`,
 //!   `One`/`One`, a blend-color factor), and one named only by a dual-source second output
@@ -421,6 +422,13 @@ pub fn graphics_state(
                     // input attachment takes no Vulkan blend, and the function's write stores
                     // every raw component (none where it keeps every channel).
                     let input_blend = input_blends.get(&(index as u32)).copied();
+                    // An extended-range attachment no first output writes (every attachment of a
+                    // pipeline without a fragment function) is left as it is, as Metal leaves an
+                    // unwritten attachment (the module docs), so its blend changes nothing: it
+                    // takes none, nor the blend usage its raw unsigned format lacks.
+                    let extended = ExtendedRange::of(a.pixel_format);
+                    let written_here = written.contains(&(index as u32));
+                    let unwritten_extended = extended.is_some() && !written_here;
                     // An attachment held with its channels rotated takes the function's rotated
                     // output, the descriptor's mask rotated, and the blend `rotated_blend`
                     // finds Metal's in Vulkan's factors; one holding Metal's alpha in red
@@ -428,7 +436,10 @@ pub fn graphics_state(
                     // alpha, the mask's alpha bit in red, and Metal's alpha blend in red.
                     let alpha_red = metal::format::alpha_in_red(a.pixel_format, p);
                     let rotated = metal::format::rotated_channels(a.pixel_format) || alpha_red;
-                    let blended = a.blending_enabled && !replaced && input_blend.is_none();
+                    let blended = a.blending_enabled
+                        && !replaced
+                        && input_blend.is_none()
+                        && !unwritten_extended;
                     let mut usages = BTreeSet::from([FormatUsage::ColorAttachment]);
                     if blended {
                         usages.insert(FormatUsage::ColorAttachmentBlend);
@@ -440,8 +451,10 @@ pub fn graphics_state(
                         (false, false) => descriptor_mask,
                     };
                     // An extended-range attachment holds its raw texels, whose components the
-                    // function writes whole.
-                    let descriptor_mask = match (ExtendedRange::of(a.pixel_format), input_blend) {
+                    // function writes whole (`extended_write_mask`). An unwritten attachment's mask
+                    // is empty whatever the descriptor's.
+                    let write_mask = match (extended, input_blend) {
+                        _ if !written_here => vk::ColorComponentFlags::empty(),
                         (Some(form), Some(kept)) => {
                             let stored = match kept == vk::ColorComponentFlags::known_bits() {
                                 true => vk::ColorComponentFlags::empty(),
@@ -452,12 +465,10 @@ pub fn graphics_state(
                         (Some(form), None) => extended_write_mask(form, descriptor_mask)?,
                         (None, _) => descriptor_mask,
                     };
-                    let write_mask = if written.contains(&(index as u32)) {
-                        descriptor_mask
-                    } else {
-                        vk::ColorComponentFlags::empty()
-                    };
-                    let blend = match (replaced || input_blend.is_some(), rotated) {
+                    let blend = match (
+                        replaced || input_blend.is_some() || unwritten_extended,
+                        rotated,
+                    ) {
                         (true, _) => None,
                         (false, false) => blend_factors(a, p)?,
                         (false, true) if alpha_red => alpha_in_red_blend(a, p)?,
@@ -466,9 +477,7 @@ pub fn graphics_state(
                         // there whatever the blend (its mask is empty).
                         (false, true) => match rotated_blend(a, p)? {
                             Some(RotatedBlend::Direct(state)) => Some(state),
-                            Some(RotatedBlend::Synthesized(state, _))
-                                if written.contains(&(index as u32)) =>
-                            {
+                            Some(RotatedBlend::Synthesized(state, _)) if written_here => {
                                 Some(state)
                             }
                             Some(RotatedBlend::Synthesized(..)) | None => None,
@@ -1108,16 +1117,21 @@ fn uniform_blend(
 /// The fragment outputs of `fs` against the color attachments (see the module docs).
 /// The write mask of an attachment held in the raw texels of extended-range `form` whose Metal
 /// mask is `mask` (as Vulkan's channels): every raw component where `mask` keeps every channel the
-/// format has, none where it keeps none of them. A mask of some of its channels is
-/// `NotImplemented(Format)`: Metal keeps a masked channel's code but rewrites the texel's other
-/// bits (`BGRA10_XR`'s alpha clamped even where masked, its low bits and `BGR10_XR`'s top bits
-/// made canonical), which a mask of the raw components cannot express. A padded form's channels are
-/// its raw words, one each, and the mask is theirs: a channel the mask leaves out keeps its word
-/// as the device's pass stores it, where Metal's loading pass that draws keeps the channel's code
-/// and zeroes its word's low six bits, every word of each tile it stores alike (an Apple M3 Max
-/// and an M4, byte-identical; the runtime's `extended-range-bits-kept`). A bfloat form's channels
-/// are its own (red; red and green; all four), each a raw component; a mask of some of them is
-/// unmeasured and refused as above.
+/// format has, none where it keeps none of them. Metal keeps a masked channel's code but its
+/// loading pass that draws rewrites the texel's other bits in each tile it stores (`BGRA10_XR`'s
+/// alpha clamped even where masked, its low bits and `BGR10_XR`'s top bits made canonical), as it
+/// rewrites every texel of such a tile (the runtime's `extended-range-bits-kept`). A form that
+/// holds each channel in a raw component of its own takes the mask of those components: a channel
+/// the mask leaves out keeps its component's bytes as the device's pass stores it, the same bytes
+/// where a Metal write left them. `BGRA10_XR` and its twin hold blue, green, red and alpha in the
+/// fields from the lowest, so the mask's red and blue trade places; a padded form's channels are
+/// its raw words, one each, in Metal's order (Metal's loading pass that draws keeps the channel's
+/// code and zeroes its word's low six bits, every word of each tile it stores alike: an Apple M3
+/// Max and an M4, byte-identical). A mask of some of the channels one component holds
+/// (`BGR10_XR`'s word, `RGB10A2Unorm_sRGB`'s, the two-plane forms' color word) is
+/// `NotImplemented(Format)`: no mask of the raw components keeps one code of a word and writes
+/// another. A bfloat form's channels are its own (red; red and green; all four), each a raw
+/// component; a mask of some of them is unmeasured and refused as above.
 fn extended_write_mask(
     form: ExtendedRange,
     mask: vk::ColorComponentFlags,
@@ -1138,6 +1152,14 @@ fn extended_write_mask(
     // `RGB10A2Unorm_sRGB`'s channels share one word: a mask of some of them is refused as above.
     if form.padded() && form.raw_components() == channels.as_raw().count_ones() {
         return Ok(kept);
+    }
+    // Blue, green, red and alpha in the fields from the lowest: red and blue trade places.
+    if let ExtendedRange::Bgra10 { .. } = form {
+        let swapped = [(C::R, C::B), (C::G, C::G), (C::B, C::R), (C::A, C::A)];
+        return Ok(swapped
+            .into_iter()
+            .filter(|&(channel, _)| kept.contains(channel))
+            .fold(C::empty(), |m, (_, field)| m | field));
     }
     if kept != channels {
         return Err(Unsupported::not_implemented(Feature::Format).into());

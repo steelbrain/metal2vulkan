@@ -12,14 +12,18 @@
 //!   output variable as the raw format's unsigned components, bounds its emission by the plan's
 //!   estimate, and links: the attachment takes the raw format, a write of every raw component
 //!   under a full mask and of none under an empty one, no blend, and both modules pass L3.
-//! - Refused, typed: a blended attachment (`NotImplemented(Format)`, by the lowering and, where
-//!   the function does not write it, by link's format table; where the device orders fetch only
-//!   through the pixel interlock, or through rasterization-order input attachments, the shader
-//!   blends a `half4` or `float4` output into every form by the device's arithmetic, noted
-//!   `ExtendedRangeBlendSource` or `ExtendedRangeFloatBlendSource`), a mask of some of the format's channels
-//!   (`NotImplemented(Format)`; a padded format's are its raw words, so its mask is theirs), an
-//!   integer or a `float` output (Metal's pipeline errors, `ColorAttachment`), a fragment compiled
-//!   without the pipeline's attachments (`NeedsInput(ColorWrites)`).
+//! - A blended attachment the function does not write (no fragment function) links with no blend
+//!   and an empty mask, as Metal leaves an unwritten attachment; one it writes, where the device
+//!   orders fetch only through the pixel interlock, or through rasterization-order input
+//!   attachments, the shader blends a `half4` or `float4` output into every form by the device's
+//!   arithmetic, noted `ExtendedRangeBlendSource` or `ExtendedRangeFloatBlendSource`. A mask of some
+//!   of `BGRA10_XR`'s channels is the mask of its fields (red and blue traded; a padded format's
+//!   are its raw words, so its mask is theirs).
+//! - Refused, typed: a blended attachment the function writes on a device with neither ordering
+//!   (`NotImplemented(Format)`, by the lowering), a mask of some of the codes one word holds
+//!   (`NotImplemented(Format)`), an integer or a `float` output (Metal's pipeline errors,
+//!   `ColorAttachment`), a fragment compiled without the pipeline's attachments
+//!   (`NeedsInput(ColorWrites)`).
 //! - A framebuffer fetch of such an attachment through an input attachment (lavapipe) reads the
 //!   raw format's `uint`s and decodes them: it links, and a fragment compiled without the
 //!   pipeline's attachments does not.
@@ -190,6 +194,11 @@ fn pipeline_of(pf: PixelFormat, mask: ColorWriteMask, blended: bool) -> RenderLi
     let mut r = RenderLinkInputs::new();
     r.color_attachments[0] = Some(a);
     r
+}
+
+/// The form `pf` is held in.
+fn form_of(pf: PixelFormat) -> ExtendedRange {
+    ExtendedRange::of(pf).expect("an extended-range format")
 }
 
 fn render(r: &RenderLinkInputs) -> LinkInputs {
@@ -525,16 +534,51 @@ fn unmodelled_extended_range_targets_are_refused() {
                     assert!(is_format_refusal(&e), "{what} blended: {e}");
                 }
             }
-            // Blended but not written (no fragment function): link's format table refuses the
-            // blend.
-            let e = link(&[&v], &render(&r), &p).expect_err(&what);
-            assert!(is_format_refusal(&e), "{what} blended, unwritten: {e}");
-            // A mask of some channels.
+            // Blended but not written (no fragment function): the draw leaves the attachment as
+            // it is, as Metal leaves an unwritten one, so it takes no blend and an empty mask,
+            // under any descriptor mask. Before, link's format table refused the blend.
+            for mask in [ColorWriteMask::ALL, ColorWriteMask::RED] {
+                let r = pipeline_of(pf, mask, true);
+                let l = link(&[&v], &render(&r), &p)
+                    .unwrap_or_else(|e| panic!("{what} blended, unwritten: {e}"));
+                let a = l.graphics.as_ref().expect("graphics").color_attachments[0]
+                    .expect("attachment");
+                assert_eq!(a.format, form_of(pf).raw_format(), "{what}");
+                assert!(a.write_mask.is_empty(), "{what} blended, unwritten");
+                assert!(a.blend.is_none(), "{what} blended, unwritten");
+            }
+            // A mask of some channels: `BGRA10_XR`'s and its twin's fields are their own raw
+            // components (blue, green, red, alpha), so the mask is theirs, red and blue traded;
+            // a mask of some of the codes one word holds is refused.
             let r = pipeline_of(pf, ColorWriteMask::RED, false);
             let f = compile_with(&bc, "rt6_fill_rgba32float", &p, &fragment_inputs(&r, &p))
                 .unwrap_or_else(|e| panic!("{what}: {e}"));
-            let e = link(&[&v, &f], &render(&r), &p).expect_err(&what);
-            assert!(is_format_refusal(&e), "{what} red mask: {e}");
+            let linked = link(&[&v, &f], &render(&r), &p);
+            match form_of(pf) {
+                ExtendedRange::Bgra10 { .. } => {
+                    let l = linked.unwrap_or_else(|e| panic!("{what} red mask: {e}"));
+                    let a = l.graphics.as_ref().expect("graphics").color_attachments[0]
+                        .expect("attachment");
+                    assert_eq!(a.write_mask, vk::ColorComponentFlags::B, "{what} red mask");
+                    let r =
+                        pipeline_of(pf, ColorWriteMask::BLUE.union(ColorWriteMask::ALPHA), false);
+                    let f = compile_with(&bc, "rt6_fill_rgba32float", &p, &fragment_inputs(&r, &p))
+                        .unwrap_or_else(|e| panic!("{what}: {e}"));
+                    let l = link(&[&v, &f], &render(&r), &p)
+                        .unwrap_or_else(|e| panic!("{what} blue and alpha mask: {e}"));
+                    let a = l.graphics.as_ref().expect("graphics").color_attachments[0]
+                        .expect("attachment");
+                    assert_eq!(
+                        a.write_mask,
+                        vk::ColorComponentFlags::R | vk::ColorComponentFlags::A,
+                        "{what} blue and alpha mask"
+                    );
+                }
+                _ => {
+                    let e = linked.expect_err(&what);
+                    assert!(is_format_refusal(&e), "{what} red mask: {e}");
+                }
+            }
             // Metal's pipeline errors: an integer output, a `float` output to a format of
             // three or four channels.
             let r = pipeline_of(pf, ColorWriteMask::ALL, false);
