@@ -1007,10 +1007,17 @@ else.
   `indirect_commands_kept`). A chunk is recorded to keep from its second execution with no write
   reaching it since (`WorkCounts::kept_contexts_made`); a range's first execution, and one every
   chunk of which a write reached since, records as one that keeps nothing, so a range executed
-  once pays nothing for keeping. Every other execution reads and records each of its commands at
-  each commit: one of a buffer the GPU may write (from its first `use_resource` for writing or blit
-  into it on), one of a buffer of mesh or patch draws alone (neither `DRAW` nor `DRAW_INDEXED` among
-  its command types), a host step, a range read from a buffer, one with a check that may see
+  once pays nothing for keeping. A host step of a render execution of records the GPU may write,
+  whose commands inherit the pipeline state and whose inherited tables bind buffers alone, keeps
+  its chunks so too (`render/executions/kept.rs`), from its second step on: it runs each one an
+  earlier step kept where the records hold the bytes it was recorded from, compared whole, and its
+  inputs are equal (`WorkCounts::host_step_chunks_kept`, `host_step_records_compared`,
+  `host_step_compare_nanos`), and records it again where either differs
+  (`host_step_chunks_recorded_again`); the step's round trip stays. Every other execution reads
+  and records each of its commands at each commit: one of a buffer the GPU may write (from the
+  call at which a route that may write its records met it, or a blit into it, on) at its commit,
+  one of a buffer of mesh or patch draws alone (neither `DRAW` nor `DRAW_INDEXED` among its command
+  types), another host step, a range read from a buffer, one with a check that may see
   something among its commands, a visibility result, tile threadgroup memory, a rasterization-rate
   map, a memoryless attachment, a shadowed texture, or an inherited table that binds anything, one
   in a command buffer with an executed-commands handler, a compute one inside command predication,

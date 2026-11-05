@@ -301,6 +301,7 @@ use crate::executed_commands::{ExecutedCommand, RecordsRead};
 use crate::fragment_imageblock::PassImageblock;
 use crate::indirect_command_buffer::{
     IndirectCommandBuffer, IndirectCommandCheck, IndirectCommandCheckNeeds, NineDraw, Reader,
+    WrittenRecords,
 };
 use crate::indirect_dispatch;
 use crate::indirect_execute::{self, unstrided_buffer, ExecutionRange};
@@ -2039,18 +2040,11 @@ impl RenderExecution {
                 self.record_gpu(core, (command_buffer, residency), form, (storage, rendered))?;
             return self.finish(encoder, found, rendered, &device);
         }
-        // Commands the CPU encoded, which their chunks' kept recordings may run (`kept.rs`).
-        if !step {
-            if let Some(keeping) = self.keeping(command_buffer, residency, rendered) {
-                let rendering = (storage, rendered);
-                return self.record_kept(
-                    core,
-                    (command_buffer, residency),
-                    keeping,
-                    found,
-                    rendering,
-                );
-            }
+        // Commands their chunks' kept recordings may run (`kept.rs`): the CPU's records at
+        // commit, and at the host step those the GPU may write.
+        if let Some(keeping) = self.keeping(command_buffer, residency, rendered, step) {
+            let rendering = (storage, rendered);
+            return self.record_kept(core, (command_buffer, residency), keeping, found, rendering);
         }
         let (range, faults) = self.range.commands(self.icb.size())?;
         if !step && self.range.indirect() {
@@ -2658,13 +2652,26 @@ impl RenderExecution {
             self.icb
                 .check_recorded(check, range.start, &written.records);
         }
+        let (commands, faults, _) = self.named_commands(device, range.start, written);
+        Ok((commands, faults))
+    }
+
+    /// The commands of `written`, the records of commands from `start` as the GPU and the CPU
+    /// left them, each with the state it names, their faults, and whether one named a state the
+    /// program released.
+    fn named_commands(
+        &self,
+        device: &Device,
+        start: u32,
+        written: WrittenRecords,
+    ) -> (Vec<Option<Command>>, ReplayFaults, bool) {
         let states = RenderPipelineState::indirect_states(device);
         // A record naming the ID of the state the CPU set runs its program, else the state of its
         // ID among `states` (`IndirectCommandBuffer::step_render_states`); the commands it runs
         // otherwise than Metal's may are announced, as the CPU's records' are.
         let (named, released) = self
             .icb
-            .step_render_states(range.start, &written.records, &states);
+            .step_render_states(start, &written.records, &states);
         self.icb.degrade_released(&released);
         let commands = written
             .records
@@ -2672,7 +2679,7 @@ impl RenderExecution {
             .zip(named)
             .map(|(record, state)| record.map(|record| (record, state)))
             .collect();
-        Ok((commands, written.faults))
+        (commands, written.faults, !released.is_empty())
     }
 
     /// The command's own buffers of `stage`, below the descriptor's `count` of it, resolved

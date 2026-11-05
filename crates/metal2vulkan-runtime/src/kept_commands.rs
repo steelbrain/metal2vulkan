@@ -314,6 +314,10 @@ pub(super) struct KeptChunk {
     /// The resident-set misses and faults its recording found.
     pub(super) misses: u32,
     pub(super) faults: ReplayFaults,
+    /// The bytes of the records a host step recorded it from, where one did
+    /// (`render/executions/kept.rs`): a later step runs it again only where the records hold them
+    /// still. `None` for a recording of the CPU's records, which a write forgets.
+    records: Option<Box<[u8]>>,
 }
 
 impl KeptChunk {
@@ -337,7 +341,21 @@ impl KeptChunk {
             effects,
             misses,
             faults,
+            records: None,
         }
+    }
+
+    /// It, recorded by a host step from the records that held `records`.
+    pub(super) fn recorded_from(self, records: Box<[u8]>) -> KeptChunk {
+        KeptChunk {
+            records: Some(records),
+            ..self
+        }
+    }
+
+    /// The bytes of the records a host step recorded it from, where one did.
+    pub(super) fn records(&self) -> Option<&[u8]> {
+        self.records.as_deref()
     }
 
     /// The inputs it was recorded from, where they are a `K`.
@@ -459,6 +477,11 @@ impl KeptChunks {
         let state = self.state(chunk);
         state.stepped = false;
         state.kept = Some(kept);
+    }
+
+    /// Forget what chunk `chunk` kept, noting nothing more of it.
+    pub(super) fn forget(&mut self, chunk: u32) {
+        self.state(chunk).kept = None;
     }
 
     /// Note that chunk `chunk`'s recording was not plain.

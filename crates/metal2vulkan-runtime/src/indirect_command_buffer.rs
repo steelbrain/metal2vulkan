@@ -670,7 +670,7 @@ enum CommandState {
 /// What the CPU left beside a buffer's records: the pipeline state it set on each command it
 /// set one on (`CommandState`), by index, none for the rest, so a buffer of commands never
 /// encoded holds nothing for them; the kept recordings of its chunks (`kept_commands.rs`),
-/// which each write of a command forgets; and what the CPU's edits added to what the records may
+/// which each write of a command forgets, and those host steps kept; and what the CPU's edits added to what the records may
 /// hold (`added`).
 #[derive(Default)]
 struct CommandStates {
@@ -678,6 +678,10 @@ struct CommandStates {
     /// reset keeps or drops the one it finds.
     states: BTreeMap<u32, CommandState>,
     kept: KeptChunks,
+    /// The kept recordings of its chunks a host step made from the records as the GPU and the CPU
+    /// left them (`render/executions/kept.rs`), each with the bytes it was recorded from: no write
+    /// forgets them, as a later step compares the records with those bytes.
+    step_kept: KeptChunks,
     /// What the CPU's edits added to what the records may hold, together, as
     /// `WrittenCommands::add_record` took it: part of what the records may hold, which only grows,
     /// so an edit that would add nothing more adds nothing (`IndirectCommandBuffer::add_written`).
@@ -2557,6 +2561,27 @@ impl IndirectCommandBuffer {
         }
     }
 
+    /// What is kept of each chunk of commands `range` (inside the size) for a host step that
+    /// records them from the records as the GPU and the CPU left them (`render/executions/kept.rs`),
+    /// in order, each noted as run now; `None` where none of them ran in such a step before.
+    pub(super) fn step_kept_chunks(&self, range: Range<u32>) -> Option<Vec<Kept>> {
+        let kept = lock(&self.0.pipelines).step_kept.look_up(range);
+        match kept.iter().all(|kept| matches!(kept, Kept::First)) {
+            true => None,
+            false => Some(kept),
+        }
+    }
+
+    /// Keep `kept`, a host step's recording of chunk `chunk`, which holds the bytes of the records
+    /// it was recorded from; or (`None`) forget what the chunk kept, its recording now not plain.
+    pub(super) fn keep_step_chunk(&self, chunk: u32, kept: Option<Arc<KeptChunk>>) {
+        let mut commands = lock(&self.0.pipelines);
+        match kept {
+            Some(kept) => commands.step_kept.keep(chunk, kept),
+            None => commands.step_kept.forget(chunk),
+        }
+    }
+
     /// The records' buffer: what an encoder makes resident for the buffer, and where a function's
     /// command encoders write (`gpu_resource_id`).
     pub(super) fn storage(&self) -> &Buffer {
@@ -2887,6 +2912,33 @@ impl IndirectCommandBuffer {
     /// record that does not decode, or that sets what its descriptor does not allow, is `None`
     /// (`ReplayFaults::RECORD`).
     pub(super) fn written_records(&self, range: Range<u32>) -> Result<WrittenRecords, Error> {
+        if let Some(fault) = self.written_header_fault() {
+            return Ok(WrittenRecords {
+                faults: fault,
+                records: Vec::new(),
+            });
+        }
+        self.device()
+            .shared()
+            .counts
+            .indirect_records_read(range.len() as u64);
+        let mut faults = ReplayFaults::default();
+        let mut records = Vec::with_capacity(range.len());
+        for index in range {
+            let record = self.written_record(&self.record_now(index));
+            if record.is_none() {
+                faults = ReplayFaults(faults.0 | ReplayFaults::RECORD.0);
+            }
+            records.push(record);
+        }
+        Ok(WrittenRecords { faults, records })
+    }
+
+    /// The fault the records' header holds once the work before an execution completed, as
+    /// [`written_records`](Self::written_records) checks it: the producers' sticky encoding fault
+    /// (`ReplayFaults::ENCODING`), or a write that overran it (`ReplayFaults::RECORD`); `None`
+    /// where it holds none.
+    pub(super) fn written_header_fault(&self) -> Option<ReplayFaults> {
         let mut header = [0; COMMAND_BUFFER_HEADER_BYTES];
         // SAFETY: the header lies at the start of the mapped storage; the GPU's writes to it
         // completed (the caller's contract).
@@ -2901,42 +2953,65 @@ impl IndirectCommandBuffer {
             .0
             .records
             .validate_header(&header, self.0.size, self.0.inheritance);
-        let header_fault = match checked {
+        match checked {
             Ok(()) => None,
             Err(CommandBufferError::EncodingFault(_)) => Some(ReplayFaults::ENCODING),
             Err(_) => Some(ReplayFaults::RECORD),
+        }
+    }
+
+    /// One record's `bytes` as [`written_records`](Self::written_records) decodes them: `None`
+    /// where they do not decode, or set what the descriptor does not allow.
+    fn written_record(&self, bytes: &[u8]) -> Option<CommandRecord> {
+        CommandRecord::decode(bytes)
+            .ok()
+            .filter(|record| self.allows(record))
+    }
+
+    /// The bytes of the records of commands `range` (inside the size) as the GPU and the CPU left
+    /// them, copied once the work before an execution completed: what a host step's recording of
+    /// them that is kept compares later records with (`render/executions/kept.rs`).
+    pub(super) fn written_bytes(&self, range: Range<u32>) -> Box<[u8]> {
+        let bytes = record_offset(range.start)..record_offset(range.end);
+        let mut copy = vec![0; bytes.len()].into_boxed_slice();
+        // SAFETY: the records of commands inside the size lie inside the mapped storage. A GPU
+        // write to them meanwhile is the program's race, as on Metal.
+        unsafe {
+            std::ptr::copy_nonoverlapping(
+                self.bytes().add(bytes.start),
+                copy.as_mut_ptr(),
+                copy.len(),
+            );
+        }
+        copy
+    }
+
+    /// Whether the records of commands `range` (inside the size) hold `kept` now, byte for byte:
+    /// [`written_bytes`](Self::written_bytes) of the same range, copied before.
+    pub(super) fn holds_written(&self, range: Range<u32>, kept: &[u8]) -> bool {
+        let bytes = record_offset(range.start)..record_offset(range.end);
+        if bytes.len() != kept.len() {
+            return false;
+        }
+        // SAFETY: as `written_bytes`'s; the slice lives only for the comparison.
+        let now = unsafe { std::slice::from_raw_parts(self.bytes().add(bytes.start), bytes.len()) };
+        now == kept
+    }
+
+    /// The records `bytes` hold, [`written_bytes`](Self::written_bytes) of commands from
+    /// `start`, decoded and checked as [`written_records`](Self::written_records) does, once its
+    /// header holds no fault ([`written_header_fault`](Self::written_header_fault)).
+    pub(super) fn decode_written(&self, bytes: &[u8]) -> WrittenRecords {
+        let (records, _) = bytes.as_chunks::<COMMAND_BYTES>();
+        let records: Vec<Option<CommandRecord>> = (records.iter())
+            .map(|record| self.written_record(record))
+            .collect();
+        (self.device().shared().counts).indirect_records_read(records.len() as u64);
+        let faults = match records.iter().any(Option::is_none) {
+            true => ReplayFaults::RECORD,
+            false => ReplayFaults::default(),
         };
-        if let Some(fault) = header_fault {
-            return Ok(WrittenRecords {
-                faults: fault,
-                records: Vec::new(),
-            });
-        }
-        self.device()
-            .shared()
-            .counts
-            .indirect_records_read(range.len() as u64);
-        let mut faults = ReplayFaults::default();
-        let mut records = Vec::with_capacity(range.len());
-        for index in range {
-            let mut bytes = [0; COMMAND_BYTES];
-            // SAFETY: as `record`'s.
-            unsafe {
-                std::ptr::copy_nonoverlapping(
-                    self.bytes().add(record_offset(index)),
-                    bytes.as_mut_ptr(),
-                    COMMAND_BYTES,
-                );
-            }
-            let record = CommandRecord::decode(&bytes)
-                .ok()
-                .filter(|record| self.allows(record));
-            if record.is_none() {
-                faults = ReplayFaults(faults.0 | ReplayFaults::RECORD.0);
-            }
-            records.push(record);
-        }
-        Ok(WrittenRecords { faults, records })
+        WrittenRecords { faults, records }
     }
 
     /// Whether the descriptor allows what `record` sets: its action and buffers, and a pipeline

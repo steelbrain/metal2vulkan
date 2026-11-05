@@ -1,5 +1,7 @@
-//! An execution of render commands the CPU encoded, recorded chunk by chunk so a later one runs
-//! the chunks no write reached again (`kept_commands.rs`).
+//! An execution of render commands, recorded chunk by chunk so a later one runs the chunks no
+//! write reached again (`kept_commands.rs`): of the records the CPU encoded, at `commit`; and of
+//! those the GPU may write, at the host step, where the records hold the bytes a kept chunk was
+//! recorded from.
 //!
 //! - **Which executions.** One `commit` records from the CPU's records (no host step, no GPU
 //!   form), of a range in the call, of a buffer whose command types hold a draw of primitives
@@ -15,19 +17,36 @@
 //!   no chunk of its range last recorded otherwise than plainly; and a chunk of its range run
 //!   before, no write reaching it since (`kept_commands.rs`, **From the second execution**): a
 //!   range's first execution records as one that keeps nothing.
+//! - **At the host step.** One a host step records from the records as the GPU and the CPU left
+//!   them, of a buffer a route that may write its records met (`IndirectCommandBuffer::gpu_written`),
+//!   under the same rules but three: it inherits the encoder's pipeline state (no record names
+//!   one); its inherited tables bind buffers alone (no bytes, texture, sampler or visible-function
+//!   table), which its key holds; and a record barrier the buffer may hold makes the chunk it lies
+//!   in not plain, as below, rather than ruling the execution out. Its chunks are its own: a
+//!   chunk's first such step records as one that keeps nothing, and its later ones record it apart
+//!   and keep it, with a copy of the bytes of its records (`IndirectCommandBuffer::written_bytes`),
+//!   once the header holds no fault. A later step runs the kept chunk again only where its key is
+//!   equal (below) and its records hold those bytes now, compared whole
+//!   (`IndirectCommandBuffer::holds_written`, `WorkCounts::host_step_records_compared` and
+//!   `host_step_compare_nanos`); else it records the chunk again and keeps that
+//!   (`WorkCounts::host_step_chunks_recorded_again`). No write forgets such a chunk, as the
+//!   comparison decides. Counted: `WorkCounts::host_step_chunks_kept`.
 //! - **The key.** A chunk is recorded from its records and from the inputs [`RenderKey`] holds:
 //!   the inherited pipeline state, the instance's compatible pass and shape, the pass's extent,
 //!   layers, samples and sample positions, the attachments that are among the resources made
 //!   resident, the encoder's state, scissor rectangles, render target array length and
-//!   amplification at the call, whether the pass holds tile imageblock data, and the resources
-//!   made resident (`Residency::kept_key`, one list an execution, compared whole once a list its
-//!   kept chunks hold: `kept_commands::ResidentMet`). A kept chunk runs again only under an equal
-//!   key.
+//!   amplification at the call, whether the pass holds tile imageblock data, the buffers of the
+//!   inherited tables, by key, with their offsets and attribute strides, and the resources made
+//!   resident (`Residency::kept_key`, one list an execution, compared whole once a list its kept
+//!   chunks hold: `kept_commands::ResidentMet`). A kept chunk runs again only under an equal key,
+//!   where every address its commands named resolves as it did and no no-copy buffer moved
+//!   (`KeptChunk::runs_again`).
 //! - **Each chunk** runs its kept recording again, or records apart: its draws into a secondary of
 //!   its own, begun against the instance's compatible pass, through an encoder of the call's
 //!   state over a core of its own (`EncoderCore::capture`), which the pass's core then takes
 //!   (`EncoderCore::absorb`); from a context of its own where an execution ran it before, no
-//!   write reaching it since, else from its command buffer's own, kept by none. Its draws are
+//!   write reaching it since, else from its command buffer's own, kept by none. A host step's
+//!   chunks draw in the large-buffer form (`BufferForms::Large`), as its other draws do. Its draws are
 //!   plain where each one is (`RenderLowering::replay_plain`) and they left the pass's storage
 //!   and layout as they found them in one run: such a chunk's secondary joins the others in the
 //!   execution's first run, and is kept where it was recorded from a context of its own, its
@@ -39,13 +58,15 @@
 //!   too, as the execution's would, its runs after the plain chunks' (its first sharing their
 //!   run, as an execution's first run shares its instance with the encoder's draws before the
 //!   call, which its encoder's state takes for granted), and the chunk is noted, so later
-//!   executions of it record as before until a write reaches it.
+//!   executions of it record as before until a write reaches it; a host step forgets what the
+//!   chunk kept instead, and records it apart again at its next step.
 
 use super::{
     Asked, Command, Draw, ExecutionRange, Found, PassStorage, PointIndices, Recorded,
     RenderExecution, Rendered, Run, Visibility,
 };
 use crate::amplification::Amplification;
+use crate::argument_table::ArgumentTable;
 use crate::command_buffer::CommandBuffer;
 use crate::encoder::EncoderCore;
 use crate::error::{internal, vulkan, Error};
@@ -68,6 +89,7 @@ use std::collections::BTreeSet;
 use std::ops::Range;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::time::Instant;
 
 /// What a chunk of an execution's draws is recorded from beside its records (the module docs).
 #[derive(Clone)]
@@ -88,7 +110,32 @@ pub(super) struct RenderKey {
     render_target_array_length: u32,
     amplification: Amplification,
     tile_imageblock: bool,
+    /// The inherited tables' buffers (vertex, fragment, object, mesh), none where the buffer does
+    /// not inherit them.
+    tables: [TableBuffers; 4],
     resident: ResidentKey,
+}
+
+/// An inherited table's buffers as a [`RenderKey`] holds them: each slot's buffer by its key,
+/// with its bind offset and per-bind attribute stride, in slot order.
+type TableBuffers = Vec<(u32, ResourceKey, u64, Option<u32>)>;
+
+/// `table`'s buffers as a key holds them; `None` where it binds more than buffers (bytes, a
+/// texture, a sampler, a visible-function table), which no kept chunk is recorded under.
+fn table_buffers(table: &ArgumentTable) -> Option<TableBuffers> {
+    let buffers_alone = table.bytes.is_empty()
+        && table.textures.is_empty()
+        && table.samplers.is_empty()
+        && table.function_tables.is_empty()
+        && table.null_tables.is_empty();
+    buffers_alone.then(|| {
+        (table.buffers.iter())
+            .map(|(&index, (buffer, offset))| {
+                let stride = table.attribute_strides.get(&index).copied();
+                (index, buffer.identity().key, *offset, stride)
+            })
+            .collect()
+    })
 }
 
 impl PartialEq for RenderKey {
@@ -106,36 +153,41 @@ impl PartialEq for RenderKey {
             && self.render_target_array_length == other.render_target_array_length
             && self.amplification == other.amplification
             && self.tile_imageblock == other.tile_imageblock
+            && self.tables == other.tables
             && self.resident == other.resident
     }
 }
 
 /// An execution that keeps its commands (the module docs): its key, what is kept of its range's
-/// chunks in order, and the CPU's writes of the buffer as they were looked up.
+/// chunks in order, and the CPU's writes of the buffer as they were looked up (`None` for a host
+/// step's, which compares the records instead).
 pub(super) struct Keeping {
     key: RenderKey,
     kept: Vec<Kept>,
-    read_at: u64,
+    read_at: Option<u64>,
 }
 
 /// A chunk recorded apart: its encoder after its commands, the addresses they named and what
-/// they resolved to, the no-copy buffers' moves before it read its records, and whether a command
-/// of it named a released state.
+/// they resolved to, the no-copy buffers' moves before it read its records, whether a command
+/// of it named a released state, and for a host step the bytes of its records.
 struct Apart {
     encoder: RenderLowering,
     resolved: Vec<Resolution>,
     moved: u64,
     released: bool,
+    records: Option<Box<[u8]>>,
 }
 
 impl RenderExecution {
     /// Whether the execution keeps its commands (the module docs), recorded by `command_buffer`
-    /// against `residency` in a pass `rendered` lays out: its key and its chunks.
+    /// against `residency` in a pass `rendered` lays out, at `commit` or at the host step
+    /// (`step`): its key and its chunks.
     pub(super) fn keeping(
         &self,
         command_buffer: &CommandBuffer,
         residency: &Residency,
         rendered: &Rendered,
+        step: bool,
     ) -> Option<Keeping> {
         let snapshot = &self.snapshot;
         let layout = &snapshot.layout;
@@ -150,6 +202,12 @@ impl RenderExecution {
             &snapshot.mesh,
         ];
         let binds_nothing = tables.iter().all(|table| table.binds_nothing());
+        // The inherited tables' buffers, which the key holds; none where the buffer does not
+        // inherit them.
+        let [vertex, fragment, object, mesh] = tables.map(|table| match inherited {
+            true => table_buffers(table),
+            false => Some(Vec::new()),
+        });
         let colors = layout.colors.iter().flatten();
         let plain_colors = colors
             .clone()
@@ -161,21 +219,24 @@ impl RenderExecution {
         // commands can be no draw of primitives keeps no chunk: recording one apart would only
         // find it not plain.
         let primitives = IndirectCommandType::DRAW.union(IndirectCommandType::DRAW_INDEXED);
+        // A host step's: of a buffer the GPU may write, whose commands inherit the pipeline
+        // state, where a barrier makes its chunk not plain; `commit`'s: of the CPU's records alone.
         let keeps = !range.is_empty()
             && self.icb.descriptor().command_types.intersects(primitives)
-            && !self.icb.gpu_written()
+            && self.icb.gpu_written() == step
+            && (!step || self.pipeline.is_some())
             && !self.check_sees_now()
             && self.lent.is_none()
             && layout.visibility.is_none()
             && self.shadows.is_empty()
-            && !self.icb.may_hold_barriers()
+            && (step || !self.icb.may_hold_barriers())
             && !snapshot.tile_memory.set()
             && !snapshot.tile_memory_reached
             && snapshot.rate_map.is_none()
             && snapshot.geometry_writes.is_empty()
             && snapshot.indirect_reads.is_empty()
             && !snapshot.pass_start.fragment_wrote()
-            && (!inherited || binds_nothing)
+            && (step || !inherited || binds_nothing)
             && rendered.backed.is_empty()
             && plain_colors
             && !memoryless_target
@@ -184,7 +245,16 @@ impl RenderExecution {
         if !keeps {
             return None;
         }
-        let (kept, read_at) = self.icb.kept_chunks(range.clone())?;
+        let tables = [vertex?, fragment?, object?, mesh?];
+        let (kept, read_at) = match step {
+            // Where the header holds no fault: one that does runs no command.
+            true if self.icb.written_header_fault().is_some() => return None,
+            true => (self.icb.step_kept_chunks(range.clone())?, None),
+            false => {
+                let (kept, read_at) = self.icb.kept_chunks(range.clone())?;
+                (kept, Some(read_at))
+            }
+        };
         let resident = ResidentKey::new(residency.kept_key());
         // An attachment is among them as a texture made resident, or in a heap or over a buffer
         // made resident.
@@ -212,6 +282,7 @@ impl RenderExecution {
             render_target_array_length: snapshot.render_target_array_length,
             amplification: snapshot.amplification.clone(),
             tile_imageblock: snapshot.tile_imageblock,
+            tables,
             resident,
         };
         Some(Keeping { key, kept, read_at })
@@ -237,8 +308,12 @@ impl RenderExecution {
             kept,
             read_at,
         } = keeping;
-        // Counted before the records are read: a write meanwhile records it again.
-        self.read_at.store(read_at, Ordering::Release);
+        // Counted before the records are read: a write meanwhile records it again. A host step's
+        // records are compared instead.
+        let step = read_at.is_none();
+        if let Some(read_at) = read_at {
+            self.read_at.store(read_at, Ordering::Release);
+        }
         let layout = rendered.backing(&self.snapshot.layout)?;
         let counts = &device.shared().counts;
         let mut met = ResidentMet::default();
@@ -250,12 +325,25 @@ impl RenderExecution {
                 Kept::Again => (None, true),
                 Kept::First => (None, false),
             };
+            let had = kept.is_some();
             let again = kept.and_then(|kept| {
                 let resident = &kept.key::<RenderKey>()?.resident;
                 if !met.same(&mut key.resident, resident, counts) {
                     return None;
                 }
                 let held = kept.runs_again(command_buffer, (&key, &covered), residency)?;
+                // A host step's records, as the GPU and the CPU left them, hold the bytes it was
+                // recorded from.
+                if step {
+                    let compared = Instant::now();
+                    let holds = (kept.records())
+                        .is_some_and(|bytes| self.icb.holds_written(covered.clone(), bytes));
+                    let records = u64::from(covered.end - covered.start);
+                    counts.host_step_records_compared(records, compared.elapsed());
+                    if !holds {
+                        return None;
+                    }
+                }
                 Some((kept, held))
             });
             if let Some((kept, held)) = again {
@@ -263,9 +351,15 @@ impl RenderExecution {
                 found.misses = found.misses.wrapping_add(kept.misses);
                 found.faults = ReplayFaults(found.faults.0 | kept.faults.0);
                 draws.push(kept.raw);
-                counts.indirect_chunk_kept(u64::from(covered.end - covered.start));
+                match step {
+                    true => counts.host_step_chunk_kept(),
+                    false => counts.indirect_chunk_kept(u64::from(covered.end - covered.start)),
+                }
                 core.retain_shared(kept);
                 continue;
+            }
+            if step && had {
+                counts.host_step_chunk_recorded_again();
             }
             // A chunk's first execution records from its command buffer's own.
             let context = match keeps {
@@ -280,7 +374,7 @@ impl RenderExecution {
             let mut chunk_found = Found::default();
             let apart = self.record_apart(
                 (command_buffer, residency),
-                covered.clone(),
+                (covered.clone(), step),
                 (&storage, &layout),
                 &mut chunk_found,
             );
@@ -292,13 +386,14 @@ impl RenderExecution {
                 resolved,
                 moved,
                 released,
+                records,
             } = apart?;
             let plain = encoder.replay_plain
                 && encoder.earlier.is_empty()
                 && same_storage(&storage, &encoder)
                 && same_layout(&layout, &encoder.layout);
             if !plain {
-                self.icb.keep_chunk(chunk, None, read_at);
+                self.keep_chunk(chunk, None, read_at);
                 rest = Some((encoder, covered.end, chunk_found));
                 break;
             }
@@ -322,7 +417,11 @@ impl RenderExecution {
                     effects,
                     (chunk_found.misses, chunk_found.faults),
                 );
-                self.icb.keep_chunk(chunk, Some(Arc::new(kept)), read_at);
+                let kept = match records {
+                    Some(records) => kept.recorded_from(records),
+                    None => kept,
+                };
+                self.keep_chunk(chunk, Some(Arc::new(kept)), read_at);
             }
             core.absorb(captured)?;
             found.misses = found.misses.wrapping_add(chunk_found.misses);
@@ -351,6 +450,17 @@ impl RenderExecution {
         found.faults = ReplayFaults(found.faults.0 | chunk_found.faults.0);
         // A chunk at a time, as an execution recorded inline reads its range.
         for piece in kept_commands::pieces(from..range.end, false) {
+            if step {
+                let (commands, written) = self.written_commands(&device, piece, None)?;
+                found.faults = ReplayFaults(found.faults.0 | written.0);
+                self.replay(
+                    &mut encoder,
+                    commands.into_iter().flatten(),
+                    residency,
+                    found,
+                )?;
+                continue;
+            }
             let (commands, released) = self.icb.render_records(piece, Reader::Commit)?;
             self.icb.degrade_released(&released);
             self.replay(&mut encoder, commands, residency, found)?;
@@ -379,18 +489,34 @@ impl RenderExecution {
     /// Record commands `covered` apart (the module docs): through an encoder of the call's state
     /// over a core of its own into a secondary of its own, begun against the instance's
     /// compatible pass, over the pass's `storage`, in `layout`, the call's; what their draws found
-    /// noted into `found`.
+    /// noted into `found`. From the CPU's records, or for a host step (`step`) from a copy of the
+    /// records as the GPU and the CPU left them, which it keeps.
     fn record_apart(
         &self,
         (command_buffer, residency): (&CommandBuffer, &Residency),
-        covered: Range<u32>,
+        (covered, step): (Range<u32>, bool),
         (storage, layout): (&PassStorage, &PassLayout),
         found: &mut Found,
     ) -> Result<Apart, Error> {
         let snapshot = &self.snapshot;
+        let device = command_buffer.device();
         let moved = crate::buffer::host_cells_moved();
-        let (commands, released) = self.icb.render_records(covered, Reader::Commit)?;
-        self.icb.degrade_released(&released);
+        let (commands, released, records, forms) = match step {
+            true => {
+                let bytes = self.icb.written_bytes(covered.clone());
+                let written = self.icb.decode_written(&bytes);
+                let (commands, faults, released) =
+                    self.named_commands(device, covered.start, written);
+                found.faults = ReplayFaults(found.faults.0 | faults.0);
+                let commands: Vec<Command> = commands.into_iter().flatten().collect();
+                (commands, released, Some(bytes), BufferForms::Large)
+            }
+            false => {
+                let (commands, released) = self.icb.render_records(covered, Reader::Commit)?;
+                self.icb.degrade_released(&released);
+                (commands, !released.is_empty(), None, BufferForms::Bound)
+            }
+        };
         let resolved = self.resolutions(&commands, residency);
         let draws = command_buffer.begin_draws(&snapshot.compatible)?;
         let raw = command_buffer.device().shared().vk();
@@ -399,15 +525,25 @@ impl RenderExecution {
             EncoderCore::capture(command_buffer),
             (draws, visibility),
             (storage.clone(), layout.clone(), residency),
-            BufferForms::Bound,
+            forms,
         );
         self.replay(&mut encoder, commands, residency, found)?;
         Ok(Apart {
             encoder,
             resolved,
             moved,
-            released: !released.is_empty(),
+            released,
+            records,
         })
+    }
+
+    /// Keep `kept`, chunk `chunk`'s recording, or (`None`) note that it was not plain: among the
+    /// CPU's records' chunks as the CPU's writes `read_at` left them, or (`None`) the host step's.
+    fn keep_chunk(&self, chunk: u32, kept: Option<Arc<KeptChunk>>, read_at: Option<u64>) {
+        match read_at {
+            Some(read_at) => self.icb.keep_chunk(chunk, kept, read_at),
+            None => self.icb.keep_step_chunk(chunk, kept),
+        }
     }
 
     /// End a plain chunk's encoder: its secondary ended. Its core back.

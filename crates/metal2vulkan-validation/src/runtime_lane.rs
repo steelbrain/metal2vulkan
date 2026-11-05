@@ -567,6 +567,8 @@ mod kept_images;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod kept_resolves;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+mod kept_steps;
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod kept_variants;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod kernel_imageblocks;

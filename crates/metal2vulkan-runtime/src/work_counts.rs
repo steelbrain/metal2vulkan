@@ -97,6 +97,10 @@ pub(crate) struct Counters {
     host_steps_recorded: AtomicU64,
     host_step_nanos: AtomicU64,
     host_step_pipelines_made: AtomicU64,
+    host_step_chunks_kept: AtomicU64,
+    host_step_chunks_recorded_again: AtomicU64,
+    host_step_records_compared: AtomicU64,
+    host_step_compare_nanos: AtomicU64,
     creation_pipelines_made: AtomicU64,
     creations_left_making: AtomicU64,
     creation_pipelines_drawn: AtomicU64,
@@ -1260,6 +1264,30 @@ impl Counters {
     pub(crate) fn host_step_recorded(&self, took: std::time::Duration) {
         self.host_steps_recorded.fetch_add(1, Ordering::Relaxed);
         self.host_step_nanos.fetch_add(
+            u64::try_from(took.as_nanos()).unwrap_or(u64::MAX),
+            Ordering::Relaxed,
+        );
+    }
+
+    /// A host step ran a chunk of an indirect command buffer's commands from the recording an
+    /// earlier step kept (`render/executions/kept.rs`), its records and inputs as they were.
+    pub(crate) fn host_step_chunk_kept(&self) {
+        self.host_step_chunks_kept.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A host step recorded a chunk again whose kept recording a record or an input that differed
+    /// ruled out (`render/executions/kept.rs`).
+    pub(crate) fn host_step_chunk_recorded_again(&self) {
+        self.host_step_chunks_recorded_again
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A host step compared `records` records with the bytes a kept chunk was recorded from,
+    /// taking `took` (`render/executions/kept.rs`).
+    pub(crate) fn host_step_records_compared(&self, records: u64, took: std::time::Duration) {
+        self.host_step_records_compared
+            .fetch_add(records, Ordering::Relaxed);
+        self.host_step_compare_nanos.fetch_add(
             u64::try_from(took.as_nanos()).unwrap_or(u64::MAX),
             Ordering::Relaxed,
         );
@@ -3747,6 +3775,19 @@ pub struct WorkCounts {
     /// dispatch's region no earlier dispatch made. Their making's time is part of
     /// [`host_step_nanos`](Self::host_step_nanos).
     pub host_step_pipelines_made: u64,
+    /// Chunks of indirect command buffers' commands a host step ran from the recording an earlier
+    /// step kept, one each time (`render/executions/kept.rs`): their records, as the GPU and the
+    /// CPU left them, held the bytes the recording was made from, and its inputs were equal.
+    pub host_step_chunks_kept: u64,
+    /// Chunks a host step recorded again, one each time, though an earlier step kept a recording
+    /// of them: a record or an input differed from those the recording was made from.
+    pub host_step_chunks_recorded_again: u64,
+    /// Records a host step compared, byte for byte, with those a kept chunk was recorded from,
+    /// one a record each time.
+    pub host_step_records_compared: u64,
+    /// The time those comparisons took, in nanoseconds: part of
+    /// [`host_step_nanos`](Self::host_step_nanos).
+    pub host_step_compare_nanos: u64,
     /// `VkPipeline`s states' creations made: each render state's predicted key
     /// (`pipeline/predicted.rs`), and each compute state's predicted region
     /// (`pipeline/dispatch_making.rs`).
@@ -5999,6 +6040,12 @@ impl Device {
             host_steps_recorded: counters.host_steps_recorded.load(Ordering::Relaxed),
             host_step_nanos: counters.host_step_nanos.load(Ordering::Relaxed),
             host_step_pipelines_made: counters.host_step_pipelines_made.load(Ordering::Relaxed),
+            host_step_chunks_kept: counters.host_step_chunks_kept.load(Ordering::Relaxed),
+            host_step_chunks_recorded_again: counters
+                .host_step_chunks_recorded_again
+                .load(Ordering::Relaxed),
+            host_step_records_compared: counters.host_step_records_compared.load(Ordering::Relaxed),
+            host_step_compare_nanos: counters.host_step_compare_nanos.load(Ordering::Relaxed),
             creation_pipelines_made: counters.creation_pipelines_made.load(Ordering::Relaxed),
             creations_left_making: counters.creations_left_making.load(Ordering::Relaxed),
             creation_pipelines_drawn: counters.creation_pipelines_drawn.load(Ordering::Relaxed),

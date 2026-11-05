@@ -17,7 +17,11 @@
 //! `REPLAYED-FRAMES` lines: the frame's time from commit to completion, the counters' moves that
 //! split it (host steps and their time, pipelines made and their time, records read), and the
 //! presenter's and the bystander's command buffers' times from commit to completion, largest and
-//! count. [`FRAMES_VAR`] sets the frames (4 by default), and [`RESIDENT_VAR`] how many buffers
+//! count, and a hash of the target's pixels after the frame. The step keeps the chunks it records
+//! from the third frame on (the runtime's `render/executions/kept.rs`): each warm frame from then
+//! runs every chunk again, its records compared with those it was recorded from
+//! (`WorkCounts::host_step_chunks_kept`, `host_step_records_compared`, `host_step_compare_nanos`).
+//! [`FRAMES_VAR`] sets the frames (4 by default), and [`RESIDENT_VAR`] how many buffers
 //! and textures, one of each, the execution's pass makes resident besides, as a page's bind
 //! groups do (none by default): the step's time should grow with the records alone, not with
 //! them times the resident resources. Each warm frame makes or finds few of its draws' bind
@@ -31,21 +35,22 @@
 //! behind it only where Metal orders the two, as one writes what the other uses.
 
 use super::{
-    buffer_with, layer_reported_nothing_at_all, validated_device, validated_device_with, Messages,
-    ScratchCache, WAIT,
+    buffer_with, layer_reported_nothing_at_all, read_buffer, validated_device,
+    validated_device_with, Messages, ScratchCache, WAIT,
 };
 use crate::air_library::AirLibrary;
 use crate::gpu::TEST_DEVICE;
 use metal2vulkan::metal::{
-    IndirectCommandType, PixelFormat, PrimitiveType, RenderStages, ResourceUsage, TextureUsage,
+    ColorWriteMask, IndirectCommandType, PixelFormat, PrimitiveType, RenderStages, ResourceUsage,
+    TextureUsage,
 };
 use metal2vulkan::pipeline::{ColorAttachmentDescriptor, RenderPipelineDescriptor, StageSource};
 use metal2vulkan_devtools::{engine_dir, llvm_assemble};
 use metal2vulkan_runtime::{
     BlitOption, Buffer, CommandBuffer, CommandBufferStatus, CommandQueue, Device,
     IndirectCommandBuffer, IndirectCommandBufferDescriptor, Library, LoadAction, Origin,
-    PipelineOptions, RenderPassDescriptor, RenderPipelineState, ResourceOptions, Size, StoreAction,
-    Texture, TextureDescriptor, WorkCounts,
+    PipelineOptions, RenderPassDescriptor, RenderPipelineState, ResourceOptions, ScissorRect, Size,
+    StoreAction, Texture, TextureDescriptor, WorkCounts,
 };
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
@@ -74,7 +79,7 @@ const SIDE: u64 = 64;
 const WARM_SHAPES: u64 = 32;
 
 /// The fixture's states and buffers on a device.
-struct Page {
+pub(super) struct Page {
     /// The commands the pass encodes and the second executes.
     draws: u32,
     encode: RenderPipelineState,
@@ -89,16 +94,75 @@ struct Page {
     /// The buffers and textures the execution's pass makes resident besides, as a page's bind
     /// groups, one of each a draw, do ([`RESIDENT_VAR`]).
     resident: Vec<(Buffer, Texture)>,
+    /// What each frame copies the target's pixels into.
+    pixels: Buffer,
+}
+
+/// What a frame takes in place of the page's own ([`Page::frame_with`]): the inputs a kept host
+/// step's recording is keyed on, one at a time (`kept_steps.rs`). The page's own by default.
+#[derive(Default)]
+pub(super) struct Inputs<'a> {
+    /// The buffer the encoding pass binds the indices from, and its offset there, which the
+    /// records' index addresses follow.
+    pub(super) indices: Option<(&'a Buffer, u64)>,
+    /// The encoding pass leaves the indices' buffer unresident: an execution finds it among the
+    /// device's live buffers.
+    pub(super) indices_unresident: bool,
+    /// The buffer and offset the execution's pass binds for its vertex stage, which the commands
+    /// inherit.
+    pub(super) inherited: Option<(&'a Buffer, u64)>,
+    /// The state the execution's pass sets, which the commands inherit.
+    pub(super) draw: Option<&'a RenderPipelineState>,
+    /// A scissor rectangle the execution's pass sets before the call.
+    pub(super) scissor: Option<ScissorRect>,
+    /// A buffer the execution's pass makes resident besides.
+    pub(super) resident: Option<&'a Buffer>,
+}
+
+/// The fixture's library on `device`.
+fn library(device: &Device) -> Library {
+    let bitcode = llvm_assemble(&engine_dir().join("icb_vertex_encode_indexed.ll")).unwrap();
+    device.new_library_with_air(&bitcode).unwrap()
+}
+
+/// `name` of `library`, as a stage's source.
+fn function(library: &Library, name: &str) -> StageSource {
+    let function = library.new_function_with_name(name).unwrap();
+    StageSource::Function(function.function_descriptor())
+}
+
+/// The state the commands draw with on `device` (`ive_vertex`, `ive_fragment`), its color written
+/// under `mask`.
+pub(super) fn draw_state(device: &Device, mask: ColorWriteMask) -> RenderPipelineState {
+    let library = library(device);
+    let mut descriptor = RenderPipelineDescriptor::new(function(&library, "ive_vertex"));
+    descriptor.fragment = Some(function(&library, "ive_fragment"));
+    let mut color = ColorAttachmentDescriptor::new(PixelFormat::RGBA8Unorm);
+    color.write_mask = mask;
+    descriptor.color_attachments[0] = Some(color);
+    descriptor.support_indirect_command_buffers = true;
+    (device.new_render_pipeline_state(&descriptor, &PipelineOptions::default())).unwrap()
+}
+
+/// The fixture's indices: 6 for each of 64 commands, and 8 past them, which a frame that binds
+/// them at an offset reads.
+pub(super) fn indices(scramble: u16) -> Vec<u8> {
+    (0..64u16 * 6 + 8)
+        .map(|at| (at * scramble + 11) % 64)
+        .flat_map(u16::to_le_bytes)
+        .collect()
+}
+
+/// A hash of `pixels` (FNV-1a), as the lanes print it.
+pub(super) fn pixels_hash(pixels: &[u8]) -> u64 {
+    pixels.iter().fold(0xcbf2_9ce4_8422_2325, |hash, &byte| {
+        (hash ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3)
+    })
 }
 
 impl Page {
-    fn new(device: &Device, draws: u32) -> Page {
-        let bitcode = llvm_assemble(&engine_dir().join("icb_vertex_encode_indexed.ll")).unwrap();
-        let library = device.new_library_with_air(&bitcode).unwrap();
-        let function = |library: &Library, name: &str| {
-            let function = library.new_function_with_name(name).unwrap();
-            StageSource::Function(function.function_descriptor())
-        };
+    pub(super) fn new(device: &Device, draws: u32) -> Page {
+        let library = library(device);
         let rgba = PixelFormat::RGBA8Unorm;
         let mut descriptor = RenderPipelineDescriptor::new(function(&library, "ive_encode"));
         descriptor.rasterization_enabled = false;
@@ -107,13 +171,7 @@ impl Page {
         let encode = device
             .new_render_pipeline_state(&descriptor, &options)
             .unwrap();
-        let mut descriptor = RenderPipelineDescriptor::new(function(&library, "ive_vertex"));
-        descriptor.fragment = Some(function(&library, "ive_fragment"));
-        descriptor.color_attachments[0] = Some(ColorAttachmentDescriptor::new(rgba));
-        descriptor.support_indirect_command_buffers = true;
-        let draw = device
-            .new_render_pipeline_state(&descriptor, &options)
-            .unwrap();
+        let draw = draw_state(device, ColorWriteMask::ALL);
         let mut commands = IndirectCommandBufferDescriptor::new();
         commands.command_types = IndirectCommandType::DRAW_INDEXED;
         commands.inherit_pipeline_state = true;
@@ -122,11 +180,7 @@ impl Page {
             .new_indirect_command_buffer(&commands, u64::from(draws), ResourceOptions::shared())
             .unwrap();
         let table = buffer_with(device, &icb.gpu_resource_id().0.to_le_bytes()).unwrap();
-        let indices: Vec<u8> = (0..64u16 * 6)
-            .map(|at| (at * 37 + 11) % 64)
-            .flat_map(u16::to_le_bytes)
-            .collect();
-        let indices = buffer_with(device, &indices).unwrap();
+        let indices = buffer_with(device, &indices(37)).unwrap();
         let texture = |usage: TextureUsage| {
             let mut descriptor = TextureDescriptor::texture_2d(rgba, SIDE, SIDE, false);
             descriptor.usage = usage;
@@ -153,7 +207,25 @@ impl Page {
             target: texture(TextureUsage::RENDER_TARGET),
             surface: texture(TextureUsage::SHADER_READ),
             resident,
+            pixels: device
+                .new_buffer(SIDE * SIDE * 4, ResourceOptions::shared())
+                .unwrap(),
         }
+    }
+
+    /// The buffer the execution's pass binds for its vertex stage, which the commands inherit.
+    pub(super) fn inherited(&self) -> &Buffer {
+        &self.inherited
+    }
+
+    /// The fixture's indices, which the encoding pass binds.
+    pub(super) fn indices(&self) -> &Buffer {
+        &self.indices
+    }
+
+    /// The target's pixels as the last frame left them.
+    pub(super) fn pixels(&self) -> Vec<u8> {
+        read_buffer(&self.pixels, 0, SIDE * SIDE * 4).unwrap()
     }
 
     fn pass(&self) -> RenderPassDescriptor {
@@ -165,24 +237,30 @@ impl Page {
         pass
     }
 
-    /// One frame on `queue`, committed: the encoding pass, then the execution's.
+    /// One frame on `queue`, committed: the encoding pass, then the execution's, then a copy of
+    /// the target's pixels.
     fn frame(&self, queue: &CommandQueue) -> CommandBuffer {
+        self.frame_with(queue, &Inputs::default())
+    }
+
+    /// [`frame`](Self::frame) with `inputs` in place of the page's own.
+    pub(super) fn frame_with(&self, queue: &CommandQueue, inputs: &Inputs) -> CommandBuffer {
         let command_buffer = queue.command_buffer().unwrap();
         let mut encoder = command_buffer.render_command_encoder(&self.pass()).unwrap();
         let vertex = RenderStages::VERTEX;
+        let (indices, at) = inputs.indices.unwrap_or((&self.indices, 0));
         let uses = [
             (self.icb.as_resource(), ResourceUsage::WRITE),
-            (self.indices.as_resource(), ResourceUsage::READ),
             (self.table.as_resource(), ResourceUsage::READ),
             (self.surface.as_resource(), ResourceUsage::READ),
         ];
-        for (resource, usage) in uses {
+        let indices_use =
+            (!inputs.indices_unresident).then(|| (indices.as_resource(), ResourceUsage::READ));
+        for (resource, usage) in uses.into_iter().chain(indices_use) {
             encoder.use_resource(resource, usage, vertex).unwrap();
         }
         encoder.set_vertex_buffer(Some(&self.table), 0, 0).unwrap();
-        encoder
-            .set_vertex_buffer(Some(&self.indices), 0, 1)
-            .unwrap();
+        encoder.set_vertex_buffer(Some(indices), at, 1).unwrap();
         for draw in 0..self.draws {
             encoder.set_render_pipeline_state(&self.encode).unwrap();
             encoder
@@ -191,22 +269,45 @@ impl Page {
         }
         encoder.end_encoding().unwrap();
         let mut encoder = command_buffer.render_command_encoder(&self.pass()).unwrap();
-        encoder.set_render_pipeline_state(&self.draw).unwrap();
-        encoder
-            .set_vertex_buffer(Some(&self.inherited), 0, 0)
-            .unwrap();
+        let draw = inputs.draw.unwrap_or(&self.draw);
+        encoder.set_render_pipeline_state(draw).unwrap();
+        let (inherited, at) = inputs.inherited.unwrap_or((&self.inherited, 0));
+        encoder.set_vertex_buffer(Some(inherited), at, 0).unwrap();
+        if let Some(rect) = inputs.scissor {
+            encoder.set_scissor_rect(rect).unwrap();
+        }
         let stages = RenderStages::VERTEX | RenderStages::FRAGMENT;
-        for (buffer, texture) in &self.resident {
-            for resource in [buffer.as_resource(), texture.as_resource()] {
-                encoder
-                    .use_resource(resource, ResourceUsage::READ, stages)
-                    .unwrap();
-            }
+        let resident = self.resident.iter();
+        let resident =
+            resident.flat_map(|(buffer, texture)| [buffer.as_resource(), texture.as_resource()]);
+        for resource in resident.chain(inputs.resident.map(Buffer::as_resource)) {
+            encoder
+                .use_resource(resource, ResourceUsage::READ, stages)
+                .unwrap();
         }
         encoder
             .execute_commands_in_buffer(&self.icb, 0..u64::from(self.draws))
             .unwrap();
         encoder.end_encoding().unwrap();
+        let mut blit = command_buffer.blit_command_encoder().unwrap();
+        let size = Size::new(SIDE, SIDE, 1);
+        let (row, image) = (SIDE * 4, SIDE * SIDE * 4);
+        let origin = Origin::new(0, 0, 0);
+        let none = BlitOption::None;
+        (blit.copy_from_texture_to_buffer(
+            &self.target,
+            0,
+            0,
+            origin,
+            size,
+            &self.pixels,
+            0,
+            row,
+            image,
+            none,
+        ))
+        .unwrap();
+        blit.end_encoding().unwrap();
         command_buffer.commit().unwrap();
         command_buffer
     }
@@ -250,7 +351,9 @@ fn split(before: &WorkCounts, after: &WorkCounts) -> String {
     format!(
         "host_steps {} host_step_ms {:.1} render_pipelines_made_ms {:.1} \
          compute_pipelines_made_ms {:.1} variant_pipelines_made {} records_read {} \
-         heads_held_for_host_steps {} heads_held_for_earlier_commits {} shapes_found_or_made {}",
+         heads_held_for_host_steps {} heads_held_for_earlier_commits {} shapes_found_or_made {} \
+         host_step_chunks_kept {} host_step_chunks_recorded_again {} host_step_records_compared {} \
+         host_step_compare_ms {:.2}",
         after.host_steps_recorded - before.host_steps_recorded,
         ms(after.host_step_nanos - before.host_step_nanos),
         ms(after.render_pipeline_create_nanos - before.render_pipeline_create_nanos),
@@ -260,6 +363,10 @@ fn split(before: &WorkCounts, after: &WorkCounts) -> String {
         after.heads_held_for_host_steps - before.heads_held_for_host_steps,
         after.heads_held_for_earlier_commits - before.heads_held_for_earlier_commits,
         shapes(before, after),
+        after.host_step_chunks_kept - before.host_step_chunks_kept,
+        after.host_step_chunks_recorded_again - before.host_step_chunks_recorded_again,
+        after.host_step_records_compared - before.host_step_records_compared,
+        ms(after.host_step_compare_nanos - before.host_step_compare_nanos),
     )
 }
 
@@ -337,7 +444,7 @@ fn replayed_frames() {
         println!(
             "REPLAYED-FRAMES {name} frame {frame}: {:.1} ms (encoding to completion), {}; \
              presenter {} command buffers, largest {:.1} ms, mean {:.1} ms; bystander {}, \
-             largest {:.1} ms, mean {:.1} ms",
+             largest {:.1} ms, mean {:.1} ms; pixels {:016x}",
             took.as_secs_f64() * 1e3,
             split(&before, &after),
             presented.count,
@@ -346,6 +453,7 @@ fn replayed_frames() {
             stood.count,
             stood.largest.as_secs_f64() * 1e3,
             stood.total.as_secs_f64() * 1e3 / stood.count.max(1) as f64,
+            pixels_hash(&page.pixels()),
         );
         let shapes = shapes(&before, &after);
         assert!(
