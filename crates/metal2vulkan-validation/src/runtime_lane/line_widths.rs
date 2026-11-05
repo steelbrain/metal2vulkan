@@ -45,7 +45,7 @@ use super::{
 };
 use crate::air_library::AirLibrary;
 use crate::gpu::TEST_DEVICE;
-use metal2vulkan::device::{DevicePolicy, VkFeature};
+use metal2vulkan::device::{DevicePolicy, VkFeature, WideLinePolicy};
 use metal2vulkan::metal::state::DepthStencilDescriptor;
 use metal2vulkan::metal::{BlendFactor, CompareFunction, CullMode, IndexType, TriangleFillMode};
 use metal2vulkan::metal::{PixelFormat, PrimitiveType, TextureType, TextureUsage, Winding};
@@ -169,13 +169,19 @@ fn metal_width(width: f32) -> f32 {
     }
 }
 
-/// What the device's lines draw: whether it enables `wideLines` and `tessellationShader`, and its
-/// `lineWidthRange`.
+/// What the device's lines draw: whether it enables `wideLines` and `tessellationShader`, its
+/// `lineWidthRange` and `lineWidthGranularity`, whether its lines are strict and its non-strict
+/// wide lines parallelograms, and whether its policy draws a width its lines draw otherwise than
+/// Metal by the band (`WideLinePolicy::Exact`, the lane's devices' `exact_answers`).
 #[derive(Clone, Copy, Debug)]
 struct LineFacts {
     wide_lines: bool,
     tessellates: bool,
     range: [f32; 2],
+    granularity: f32,
+    strict: bool,
+    parallelograms: bool,
+    exact_policy: bool,
 }
 
 impl LineFacts {
@@ -183,11 +189,37 @@ impl LineFacts {
         let compile = device.compile_device();
         let profile = compile.profile();
         let has = |feature| profile.enabled().features.contains(&feature);
+        let limits = profile.limits();
         LineFacts {
             wide_lines: has(VkFeature::WideLines),
             tessellates: has(VkFeature::TessellationShader),
-            range: profile.limits().line_width_range_bits.map(f32::from_bits),
+            range: limits.line_width_range_bits.map(f32::from_bits),
+            granularity: f32::from_bits(limits.line_width_granularity_bits),
+            strict: limits.strict_lines,
+            parallelograms: limits.non_strict_wide_lines_use_parallelogram,
+            exact_policy: compile.policy().wide_lines == WideLinePolicy::Exact,
         }
+    }
+
+    /// Whether the device's own lines draw Metal's `width` as Metal's parallelogram: non-strict
+    /// parallelograms above 1, on the granularity's grid from the range's bottom (the runtime's
+    /// docs, written apart from it).
+    fn draws_as_metal(self, width: f32) -> bool {
+        let w = metal_width(width);
+        let steps = (w - self.range[0]) / self.granularity;
+        self.draws(width)
+            && !self.strict
+            && self.parallelograms
+            && w > 1.0
+            && self.granularity > 0.0
+            && steps == steps.round()
+    }
+
+    /// Whether a draw of `width` takes the device's own lines: where they draw it, as Metal's
+    /// parallelogram or under `WideLinePolicy::Device`, or with no band to draw it (no
+    /// `tessellationShader`).
+    fn device_route(self, width: f32) -> bool {
+        self.draws(width) && (self.draws_as_metal(width) || !self.exact_policy || !self.tessellates)
     }
 
     /// The width nearest the one Metal draws for `width` (1/16 at 0) that the device's lines
@@ -1731,8 +1763,9 @@ fn a_draw_of_no_complete_primitive_draws_nothing() {
 }
 
 /// A whole triangle's edges in fill mode `Lines`, drawn twice. At width 4: by the device's own
-/// lines where they draw width 4 (compared with Metal's where they draw it as Metal does), else as
-/// the band, silent; as Metal's edges at width 4, pixel for pixel. Without `tessellationShader`, at
+/// lines where they draw width 4 as Metal does, or where they draw it otherwise under
+/// `WideLinePolicy::Device` (announced; the lane's devices take `exact_answers`, whose band draws
+/// it), compared with Metal's where they draw it as Metal does; else as the band, silent; as Metal's edges at width 4, pixel for pixel. Without `tessellationShader`, at
 /// width 2: by the device's own lines where they draw it, else by them at the nearest width they
 /// draw, announced and counted at each draw, at width 1 (no `wideLines`: MoltenVK) as Metal's
 /// edges at width 1.
@@ -1772,7 +1805,7 @@ fn edges_draw_as_bands_or_at_the_nearest_width() {
                 let ([differs, nearest, biased], _) = announced_lines(&messages);
                 assert_eq!(biased, 0, "{what}");
                 // The width drawn, where it is Metal's map's.
-                let drawn_at = match (facts.draws(width), tessellated) {
+                let drawn_at = match (facts.device_route(width), tessellated) {
                     (true, _) => {
                         assert_eq!((routes, nearest), ([0, 1, 0], 0), "{what}");
                         (differs == 0).then_some(width)
