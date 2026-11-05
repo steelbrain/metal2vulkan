@@ -12,16 +12,44 @@
 //! its memory, as the consumer's is: a `Shared` buffer, and a no-copy buffer over host pages where
 //! the device imports them. A BC1 block is solid, its two colours one RGB565 value naming the
 //! block, and every block of the surface outside the texture's names none; another texture's
-//! bytes name their offset.
+//! bytes name their offset. The device asks for the validation layer, which reports nothing
+//! (`layer_claim.rs`).
 
-use super::blit_holds::{device, over_host, Host, Scratch, WAIT};
+use super::blit_holds::{over_host, Host, Scratch, WAIT};
+use super::layer_claim::Watched;
 use crate::{
-    BlitCommandEncoder, BlitOption, Buffer, ComputePipelineState, Device, Error, IoSurfacePlane,
-    Origin, PipelineOptions, Region, ResourceOptions, Size, Texture, TextureDescriptor,
+    BlitCommandEncoder, BlitOption, Buffer, ComputePipelineState, Device, DeviceKind,
+    DeviceOptions, Error, IoSurfacePlane, Origin, PipelineOptions, Region, ResourceOptions,
+    ShaderCacheOptions, Size, Texture, TextureDescriptor,
 };
 use metal2vulkan::metal::{PixelFormat, TextureType, TextureUsage};
+use std::path::Path;
 use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
+
+/// The device the cfg selects, its shader cache in `cache`, asking for the validation layer, and
+/// what its instance had the layer report.
+fn watched(cache: &Path) -> (Device, Watched) {
+    let watched = Watched::default();
+    let options = DeviceOptions {
+        kinds: match cfg!(m2v_cpu_icd) {
+            true => vec![DeviceKind::Cpu],
+            false => vec![
+                DeviceKind::Discrete,
+                DeviceKind::Integrated,
+                DeviceKind::Virtual,
+            ],
+        },
+        shader_cache: ShaderCacheOptions {
+            directory: Some(cache.to_owned()),
+            ..ShaderCacheOptions::default()
+        },
+        layers: watched.layers(),
+        messages: Some(watched.sink(|_| {})),
+        ..DeviceOptions::default()
+    };
+    (Device::system_default_with(&options).unwrap(), watched)
+}
 
 /// How a kernel reads a texture of one type: its argument's type, the read's call and
 /// declaration, and whether its grid is 2D.
@@ -660,7 +688,7 @@ fn textures_over_surfaces_take_the_bytes_metal_does() {
     let scratch = Scratch::new("surface-shapes");
     let host = Host::new();
     let runs = Arc::new(AtomicUsize::new(0));
-    let device = device(&scratch.0);
+    let (device, watched) = watched(&scratch.0);
     let name = device.name().to_owned();
     let states: Vec<(TextureType, ComputePipelineState)> = READS
         .iter()
@@ -702,4 +730,5 @@ fn textures_over_surfaces_take_the_bytes_metal_does() {
         eprintln!("SURFACE-SHAPES WRONG {failure}");
     }
     assert!(failures.is_empty(), "{} wrong", failures.len());
+    watched.layer_reported_nothing("every surface shape's commands were valid");
 }
