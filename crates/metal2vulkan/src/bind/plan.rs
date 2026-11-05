@@ -261,6 +261,11 @@ pub(crate) struct MeshTemplate {
     /// stage's limits (`bind::mesh_arguments`).
     #[cfg_attr(feature = "serde", serde(default))]
     pub folded: bool,
+    /// The object function runs a partial threadgroup as Metal does
+    /// (`RuntimeFact::PartialObjectThreadgroups`): a `drawMeshThreads` whose threads leave one
+    /// draws it, its region flagged `lower::dispatch::NONUNIFORM`.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub partial_groups: bool,
     /// An emulated mesh function's records: each draw dispatches its mesh threadgroups and
     /// draws their primitives (`DrawCommands::mesh_dispatch`).
     #[cfg_attr(feature = "serde", serde(default))]

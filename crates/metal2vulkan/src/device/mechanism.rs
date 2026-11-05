@@ -195,6 +195,8 @@ pub fn mechanism(fact: &RuntimeFact, profile: &DeviceProfile) -> Mechanism {
         RuntimeFact::RotatedWeights => Mechanism::Variant,
         // A separate link of the mesh pipeline's synthesized vertex stage.
         RuntimeFact::MeshLastFirst => Mechanism::Variant,
+        // The binder's region flags a draw whose last object threadgroup along an axis is partial.
+        RuntimeFact::PartialObjectThreadgroups => Mechanism::RegionSelected,
         // The binder specializes the lanes from the bound texture's pixel format and swizzle.
         RuntimeFact::ConstantLanes { .. } => Mechanism::Specialization,
         // A separate compile that reads the tables' words through their device addresses, which

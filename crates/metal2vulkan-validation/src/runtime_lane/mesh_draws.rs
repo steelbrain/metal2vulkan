@@ -30,9 +30,9 @@
 //! one of more than 2^29 threadgroups, which Metal's GPU discards (probe 6), failing the command
 //! buffer with Metal's error (`CommandBufferError::GpuRecoveryVictim`), a direct draw's from its
 //! encoder on.
-//! A `drawMeshThreads` that leaves a partial object threadgroup is refused
-//! (`NotImplemented(MeshShading)`); Metal's answers for it are printed (a partial object
-//! threadgroup runs the threads left). What Metal's validation
+//! A `drawMeshThreads` that leaves a partial object threadgroup draws Metal's words: its last
+//! object threadgroup along an axis runs the threads left, and answers their count as its
+//! `threads_per_threadgroup`. What Metal's validation
 //! stops draws as plain Metal does: a threadgroup of more than 1024 threads and a misaligned
 //! argument offset draw nothing, and a draw of the other kind, which stops plain Metal too, is
 //! refused typed.
@@ -43,8 +43,8 @@
 //! arguments), and the mesh function's compute dispatch writes records that a synthesized vertex
 //! stage draws. There indirect draws draw too: an object function's through an object arguments
 //! pass, which reads Metal's arguments, reserves the object threadgroups' slots in the records
-//! pool and writes the object dispatch's grid. A partial object threadgroup is refused
-//! (`NotImplemented(MeshShading)`), as on a device with the extension.
+//! pool and writes the object dispatch's grid. A partial object threadgroup draws Metal's words
+//! there too.
 
 use super::degrade_notices::{assert_made_once, made_mesh_kinds};
 use super::gpu_times::read_kinds;
@@ -57,7 +57,7 @@ use super::{
 use crate::air_library::AirLibrary;
 use crate::gpu::TEST_DEVICE;
 use metal2vulkan::device::{VkExtension, VkFeature};
-use metal2vulkan::error::{BindError, Feature, Needs};
+use metal2vulkan::error::{BindError, Feature};
 use metal2vulkan::metal::{PixelFormat, PrimitiveType};
 use metal2vulkan::pipeline::{ColorAttachmentDescriptor, MeshPipelineDescriptor, StageSource};
 use metal2vulkan_devtools::{engine_dir, llvm_assemble};
@@ -492,8 +492,8 @@ fn mesh_draws_store_metals_words() {
     layer_reported_nothing_at_all(&messages);
 }
 
-/// Each object case draws the words Metal drew (the module docs), but those that leave a partial
-/// object threadgroup, refused, and each of [`OBJECT_PAST_CASES`] nothing; a
+/// Each object case draws the words Metal drew (the module docs), those that leave a partial
+/// object threadgroup too, and each of [`OBJECT_PAST_CASES`] nothing; a
 /// device without `VK_EXT_mesh_shader` announces its emulated draws once ([`EMULATED_MESH`]), and
 /// another none.
 #[test]
@@ -523,17 +523,9 @@ fn object_draws_store_metals_words() {
                 encode(&lane.device, e, draw, &mut held)
             });
             let metals = metals(OBJECT_ANSWERS, case);
-            match (draw, drawn) {
-                (Draw::Threads(..), Err(Error::Bind(BindError::Unsupported(u))))
-                    if u.feature == Feature::MeshShading && u.needs == Needs::NotImplemented =>
-                {
-                    eprintln!(
-                        "{case} on {name}: refused, a partial object threadgroup; Metal's: \
-                         {metals:?}"
-                    )
-                }
-                (_, Ok(lines)) => assert_eq!(lines, metals, "{case} on {name}"),
-                (_, Err(error)) => panic!("{case} on {name}: {error}"),
+            match drawn {
+                Ok(lines) => assert_eq!(lines, metals, "{case} on {name}"),
+                Err(error) => panic!("{case} on {name}: {error}"),
             }
         }
         for (case, ctl, draw) in OBJECT_PAST_CASES {

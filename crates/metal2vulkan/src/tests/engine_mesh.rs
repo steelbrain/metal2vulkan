@@ -1286,19 +1286,41 @@ fn object_records_draws(dev: &crate::device::Device, draws: &crate::library::Lib
             .any(|u| u.resource == UseTarget::Indirect && u.access == AccessSet::READ),
         "{stem}: the pass reads Metal's arguments"
     );
-    // A partial object threadgroup is not implemented.
+    // A `drawMeshThreads` that leaves a partial object threadgroup: its object function, whose
+    // body holds no barrier, runs one, so the draw dispatches the threadgroups its threads fill,
+    // rounded up, its region flagged.
+    assert!(
+        pipeline
+            .dependencies
+            .iter()
+            .any(|d| d.fact == RuntimeFact::PartialObjectThreadgroups),
+        "{stem}"
+    );
     let threads = DrawCall::MeshThreads {
         threads: [6, 1, 1],
         threads_per_object_group: [4, 1, 1],
         threads_per_mesh_group: [8, 1, 1],
     };
-    assert_eq!(
-        plan.instantiate_draw(&state, &threads).err(),
-        Some(crate::error::BindError::Unsupported(
-            crate::error::Unsupported::not_implemented(Feature::MeshShading)
-        )),
-        "{stem}: {threads:?}"
+    let cmds = plan
+        .instantiate_draw(&state, &threads)
+        .unwrap_or_else(|e| panic!("{stem}: a partial object threadgroup: {e}"));
+    let d = cmds.mesh_dispatch.as_ref().expect("the draw's dispatch");
+    assert_eq!(d.object_groups, Some([2, 1, 1]), "{stem}");
+    assert_eq!(d.work[work::OBJECT_GROUPS as usize], 2, "{stem}");
+    assert!(
+        flags_region(&cmds, [6, 1, 1], [4, 1, 1]),
+        "{stem}: {:?}",
+        cmds.push_constants
     );
+}
+
+/// Whether a draw's push constants hold the flagged region of a partial object threadgroup's draw
+/// of `threads` in threadgroups of `l` (`lower::dispatch::partial_region_bytes`).
+fn flags_region(cmds: &crate::bind::DrawCommands, threads: [u32; 3], l: [u32; 3]) -> bool {
+    let flagged = crate::lower::dispatch::partial_region_bytes(threads, l).expect("a region");
+    cmds.push_constants
+        .iter()
+        .any(|w| w.bytes.windows(flagged.len()).any(|b| b == flagged))
 }
 
 /// The binder's draws of mesh pipeline `p` with an object function: each stage's threadgroup size
@@ -1358,6 +1380,44 @@ fn object_draws(dev: &crate::device::Device, p: &crate::pipeline::RenderPipeline
         [Some(8), Some(1), Some(1)],
         "{what}"
     );
+    // A `drawMeshThreads` that leaves a partial object threadgroup, which the object function
+    // (no barrier in its body) runs: the threadgroups its threads fill, rounded up, at their whole
+    // size, the region (or a folded variant's record) flagged.
+    assert!(
+        p.dependencies
+            .iter()
+            .any(|d| d.fact == crate::pipeline::facts::RuntimeFact::PartialObjectThreadgroups),
+        "{what}"
+    );
+    let partial = DrawCall::MeshThreads {
+        threads: [6, 1, 1],
+        threads_per_object_group: [4, 1, 1],
+        threads_per_mesh_group: [8, 1, 1],
+    };
+    let cmds = plan
+        .instantiate_draw(&state, &partial)
+        .unwrap_or_else(|e| panic!("{what}: a partial object threadgroup: {e}"));
+    assert_eq!(
+        cmds.draw,
+        vk::DrawCommand::DrawMeshTasks {
+            group_count_x: 2,
+            group_count_y: 1,
+            group_count_z: 1,
+        },
+        "{what}"
+    );
+    match &cmds.object_fold {
+        Some(fold) => assert_eq!(
+            fold.record,
+            [2, 1, 1, 3, 6, 1, 1, crate::lower::dispatch::NONUNIFORM],
+            "{what}"
+        ),
+        None => assert!(
+            flags_region(&cmds, [6, 1, 1], [4, 1, 1]),
+            "{what}: {:?}",
+            cmds.push_constants
+        ),
+    }
     // Where the device folds object grids, the object function reads its region record, and a
     // grid past the task stage's limits runs in pieces (`bind::mesh_arguments`).
     let folds = crate::lower::mesh::folds_object_grids(dev.profile());
@@ -1822,6 +1882,62 @@ fn a_mesh_functions_buffer_writes_need_no_stage_store_feature() {
             assert!(!r.features.contains(&f), "{stem}: {f:?}");
         }
         check_words_valid(&a.module.words, r, p).unwrap_or_else(|e| panic!("{stem}: L3: {e}"));
+    }
+}
+
+/// An object function whose body holds a threadgroup barrier (`icb_object_threadgroup_object`)
+/// runs no partial threadgroup: its pipeline records no `PartialObjectThreadgroups`, a
+/// `drawMeshThreads` of whole object threadgroups draws, and one that leaves a partial one is
+/// `NotImplemented(MeshShading)`, emulated or not.
+#[test]
+fn a_partial_object_threadgroup_of_a_body_with_a_barrier_is_not_implemented() {
+    use crate::bind::{BindState, DrawCall};
+    use crate::budget::Budget;
+    use crate::error::{BindError, Unsupported};
+    use crate::library::Library;
+    use crate::pipeline::descriptor::{FunctionDescriptor, MeshPipelineDescriptor, StageSource};
+    let Some(bc) = fixture("icb_object_threadgroup") else {
+        return;
+    };
+    let lib = Library::from_air(&bc).expect("library");
+    let function = |name: &str| {
+        StageSource::Function(FunctionDescriptor::new(
+            lib.function(name).expect("function"),
+        ))
+    };
+    let draw = |threads| DrawCall::MeshThreads {
+        threads,
+        threads_per_object_group: [4, 1, 1],
+        threads_per_mesh_group: [8, 1, 1],
+    };
+    for (stem, _) in mesh_profiles().into_iter().chain(emulating_profiles()) {
+        let dev = device(&stem);
+        let mut d = MeshPipelineDescriptor::new(function("icb_object_threadgroup_mesh"));
+        d.object = Some(function("icb_object_threadgroup_object"));
+        d.rasterization_enabled = false;
+        let made = dev
+            .compile_mesh_pipeline(&d, &Budget::standard())
+            .unwrap_or_else(|e| panic!("{stem}: {e}"));
+        assert!(
+            !made
+                .dependencies
+                .iter()
+                .any(|d| d.fact == RuntimeFact::PartialObjectThreadgroups),
+            "{stem}"
+        );
+        let state = BindState::default();
+        let plan = made
+            .plan(&dev, &state.shape())
+            .unwrap_or_else(|e| panic!("{stem}: plan: {e}"));
+        plan.instantiate_draw(&state, &draw([8, 1, 1]))
+            .unwrap_or_else(|e| panic!("{stem}: whole object threadgroups: {e}"));
+        assert_eq!(
+            plan.instantiate_draw(&state, &draw([6, 1, 1])).err(),
+            Some(BindError::Unsupported(Unsupported::not_implemented(
+                Feature::MeshShading
+            ))),
+            "{stem}"
+        );
     }
 }
 

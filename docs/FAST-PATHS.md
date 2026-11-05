@@ -672,6 +672,12 @@ driver's. Each is open work.
   the command buffer of an indirect one past the compute limits with
   `CommandBufferError::MeshGridPastLimits` (ANV's y and z axes stop at 65,535; MoltenVK's limits
   pass every grid Metal runs).
+- **A partial object threadgroup of an object function that waits at a threadgroup barrier.** A
+  `drawMeshThreads` whose threads leave a partial object threadgroup runs it as Metal does, with the
+  threads left, for an object function whose body holds no `threadgroup_barrier`; for one whose body
+  holds one, the draw is refused (`NotImplemented(MeshShading)`), since the invocations past the
+  smaller threadgroup would not reach the barrier. A form that runs such a body predicated, every
+  invocation reaching each barrier, is not built for object functions.
 - **An object threadgroup that sets a mesh grid Metal launches nothing for keeps its own writes.**
   On the M3 Max such a threadgroup's device writes (an atomic add before the set) do not land
   either, while the draw's other threadgroups run; the runtime runs the threadgroup and launches

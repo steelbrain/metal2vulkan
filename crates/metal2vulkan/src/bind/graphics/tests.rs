@@ -1611,7 +1611,10 @@ fn object_template() -> GraphicsTemplate {
 /// stage's threadgroup size under its own keys and writing each stage's `DispatchRegion` (the
 /// object stage's grid; the mesh stage's grid is the object function's to set); a `drawMeshThreads`
 /// whose threads fill whole object threadgroups launches them, and one that leaves a partial object
-/// threadgroup is not implemented; an object threadgroup Metal draws nothing for launches nothing;
+/// threadgroup launches the threadgroups its threads fill, rounded up, under `MultiRegion` 1 with
+/// Metal's threads and the region flagged `NONUNIFORM`, where the object function runs partial
+/// threadgroups (`RuntimeFact::PartialObjectThreadgroups`), and is not implemented where it does
+/// not; an object threadgroup Metal draws nothing for launches nothing;
 /// and each stage's threadgroup, and the object grid, are checked against the device's limits for
 /// its stage.
 #[test]
@@ -1675,15 +1678,62 @@ fn object_draws_specialize_each_stage_within_its_limits() {
             },
         ]
     );
-    // `drawMeshThreads`: whole object threadgroups only (a probe measured partial ones).
+    // `drawMeshThreads` of whole object threadgroups: `MultiRegion` 0, the region unflagged.
     let cmds = instantiate(&t, &state, &threads([8, 4, 1], [4, 2, 1])).expect("whole");
     assert_eq!(cmds.draw, tasks(2, 2, 1));
-    for partial in [threads([6, 1, 1], [4, 1, 1]), threads([5, 3, 1], [4, 2, 1])] {
+    let multi_region = |c: &DrawCommands| {
+        values(c.specialization.as_ref().expect("a mesh draw's key"))
+            .into_iter()
+            .find(|&(id, _)| id == 8)
+            .map(|(_, v)| v)
+    };
+    assert_eq!(multi_region(&cmds), Some(0));
+    assert_eq!(cmds.push_constants[0].bytes, region([8, 4, 1], [4, 2, 1]));
+    // One that leaves a partial object threadgroup, where the object function runs one: the
+    // threadgroups the threads fill, rounded up, Metal's threads, the region flagged.
+    let mut partial_template = t.clone();
+    if let Some(m) = partial_template.mesh.as_mut() {
+        m.partial_groups = true;
+    }
+    for (draw, groups, grid, lo) in [
+        (
+            threads([6, 1, 1], [4, 1, 1]),
+            [2, 1, 1],
+            [6, 1, 1],
+            [4, 1, 1],
+        ),
+        (
+            threads([5, 3, 1], [4, 2, 1]),
+            [2, 2, 1],
+            [5, 3, 1],
+            [4, 2, 1],
+        ),
+    ] {
+        let cmds = instantiate(&partial_template, &state, &draw).expect("a partial draw");
         assert_eq!(
-            instantiate(&t, &state, &partial).err(),
-            Some(not_implemented(Feature::MeshShading)),
-            "{partial:?}"
+            cmds.draw,
+            tasks(groups[0], groups[1], groups[2]),
+            "{draw:?}"
         );
+        assert_eq!(multi_region(&cmds), Some(1), "{draw:?}");
+        let flagged = crate::lower::dispatch::partial_region_bytes(grid, lo).expect("region");
+        assert_eq!(cmds.push_constants[0].bytes, flagged.to_vec(), "{draw:?}");
+        assert_eq!(
+            &flagged[28..],
+            &crate::lower::dispatch::NONUNIFORM.to_le_bytes(),
+            "{draw:?}"
+        );
+        // Where it does not (a body that holds a workgroup barrier): not implemented.
+        assert_eq!(
+            instantiate(&t, &state, &draw).err(),
+            Some(not_implemented(Feature::MeshShading)),
+            "{draw:?}"
+        );
+    }
+    // A partial draw with an axis of no thread draws nothing, as Metal does, either way.
+    for template in [&t, &partial_template] {
+        let cmds = instantiate(template, &state, &threads([6, 0, 1], [4, 1, 1])).expect("nothing");
+        assert_eq!(cmds.draw, tasks(0, 0, 0));
     }
     // Metal draws nothing: an object threadgroup of no thread or past 1024, as a mesh one.
     for draw in [

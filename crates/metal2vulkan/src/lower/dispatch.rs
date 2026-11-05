@@ -48,7 +48,8 @@
 //! - `region[0].xyz`: the region's first threadgroup position in the Metal grid;
 //! - `region[0].w`: Metal's nominal threads per threadgroup `L`, packed as
 //!   `(Lx − 1) | (Ly − 1) << 10 | (Lz − 1) << 20` (each axis is at most 1024 in Metal);
-//! - `region[1].xyz`: Metal's `threads_per_grid`; `region[1].w` is reserved (0).
+//! - `region[1].xyz`: Metal's `threads_per_grid`; `region[1].w` is 0, or [`NONUNIFORM`] for a
+//!   partial object threadgroup's draw (below).
 //!
 //! With `MultiRegion = 0` (single-region `Threadgroups` and every `ThreadgroupsIndirect`) the push
 //! field is not read: the region base is 0, `L = (sx, sy, sz)`, `threadgroups_per_grid =
@@ -62,6 +63,22 @@
 //! `threadgroups_per_grid` is `⌈threads_per_grid / L⌉` too, of `NumWorkgroups · L` wrapped at 2^32
 //! as Metal's object grid is (measured: an indirect draw runs every threadgroup and reports the
 //! grid its wrapped threads fill); it is `NumWorkgroups` wherever no axis wraps.
+//!
+//! **Partial object threadgroups** ([`DispatchPlan::partial_groups`]). Metal's `drawMeshThreads`
+//! with an object function launches the object threadgroups its threads fill, rounded up, the
+//! last along an axis running only the threads left, as `dispatchThreads` runs a kernel's
+//! (measured on an M3 Max, macOS 27.0.1: 6 threads in threadgroups of 4 run a threadgroup of 4
+//! and one of 2, whose `threads_per_threadgroup` is 2). A draw is one dispatch of a local size,
+//! so the binder draws the threadgroups at the whole size `L` with `MultiRegion` 1, Metal's
+//! threads as `region[1].xyz`, and `region[1].w` [`NONUNIFORM`]. Where that flag is set, an
+//! object function whose body holds no workgroup barrier answers its threadgroup's threads,
+//! `min(L, threads_per_grid − position · L)` per axis, as `threads_per_threadgroup` and in its
+//! simdgroup and quadgroup counts, and its position in the threadgroup as `lin` unflattened over
+//! them (Metal's numbering of the smaller threadgroup); an invocation whose `lin` is at or past
+//! their product returns before the body ([`emit_entry`]), so the body runs Metal's threads
+//! alone. Without the flag every answer is the uniform one. A body that holds a workgroup barrier
+//! keeps the uniform form: its returned invocations would not reach the barrier, which Vulkan
+//! leaves undefined (`lower::mesh::plan_partial_groups`).
 //!
 //! **Flat grids**. A flat variant (`LoweringInputs::flat_grid`, of a device replay or not) of a
 //! kernel that does not observe its threadgroup partition runs any grid in threadgroups of its own
@@ -110,7 +127,8 @@ use crate::spirv::builder::{FunctionBuilder, ModuleBuilder};
 use crate::spirv::error::BResult;
 use crate::spirv::ids::{ConstId, DemoteTy, GlobalId, ScalarTy, TypeId, Value as SValue};
 use crate::spirv::ir::{
-    BinOp, ConstBits, Constant, ConvOp, ExecMode, IoDir, MemAccess, StorageClass, Type, UnOp,
+    BinOp, ConstBits, Constant, ConvOp, ExecMode, GlslOp, IoDir, MemAccess, StorageClass, Type,
+    UnOp,
 };
 
 fn not_lowered() -> Error {
@@ -407,6 +425,11 @@ pub struct DispatchPlan {
     /// `NumWorkgroups` unless an axis's threads wrap, as an indirect draw's may (Metal runs every
     /// threadgroup of it and reports the wrapped grid).
     pub object_grid: bool,
+    /// An object function whose body holds no workgroup barrier
+    /// (`lower::mesh::plan_partial_groups`): where its region says so ([`NONUNIFORM`]), its
+    /// threadgroup runs only the threads Metal's partial threadgroup has (the module docs). It
+    /// declares `MultiRegion` and reads the region whatever builtins it reads.
+    pub partial_groups: bool,
 }
 
 /// The words a flat grid adds: its thread's index, position, and early return, derived once for the
@@ -530,7 +553,9 @@ pub fn plan_kernel(cx: &mut SelectCx<'_>, tier: Tier) -> Result<DispatchPlan, Er
         }
     }
     let tile_sized = tile_sized(cx);
-    let multi_region = builtins.any(|b| reads_region(b, tile_sized));
+    // A partial object threadgroup's threads come from the region.
+    let partial_groups = cx.families.mesh.partial_groups;
+    let multi_region = builtins.any(|b| reads_region(b, tile_sized)) || partial_groups;
     // The answers of the builtins its own parameters read follow the pipeline's flag.
     if crate::lower::access::tile::is_tile(cx)
         && params.iter().any(|p| p.builtin.tile_sized_answer())
@@ -559,6 +584,9 @@ pub fn plan_kernel(cx: &mut SelectCx<'_>, tier: Tier) -> Result<DispatchPlan, Er
     if folded_groups {
         cx.facts.insert(RuntimeFact::FoldedGroups);
     }
+    if partial_groups {
+        cx.facts.insert(RuntimeFact::PartialObjectThreadgroups);
+    }
     Ok(DispatchPlan {
         local_size,
         builtins,
@@ -572,6 +600,7 @@ pub fn plan_kernel(cx: &mut SelectCx<'_>, tier: Tier) -> Result<DispatchPlan, Er
         draw_pieces: folded_groups && cx.stage == crate::pipeline::sym::Stage::Object,
         wrapper_groups: crate::lower::mesh::wrapper_groups(&cx.families.mesh),
         object_grid: !folded_groups && cx.stage == crate::pipeline::sym::Stage::Object,
+        partial_groups,
     })
 }
 
@@ -627,6 +656,21 @@ pub fn emit_entry(cx: &mut EmitCx<'_>, fb: &mut FunctionBuilder<'_>) -> BResult<
             Ok(ArmEnd::Exits)
         });
         fb.if_(&mut (), past, leave, None)?;
+    }
+    // An invocation past a partial object threadgroup's threads returns before the body.
+    if plan.partial_groups {
+        let decl: &crate::lower::emit::Declared = cx.decl;
+        let Some(decl) = decl.families.dispatch.kernel.as_ref() else {
+            return Err(cx.fail("partial object threadgroups without the kernel's declarations"));
+        };
+        if let Some(live) = decl.live(fb, &mut |fb| cx.push_field(fb, PushField::DispatchRegion))? {
+            let past = fb.unary(UnOp::LogicalNot, live)?;
+            let leave: ArmFn<'_, ()> = Box::new(|fb, _| {
+                fb.ret(None)?;
+                Ok(ArmEnd::Exits)
+            });
+            fb.if_(&mut (), past, leave, None)?;
+        }
     }
     let entry = cx.entry;
     for p in &plan.params {
@@ -763,6 +807,8 @@ pub struct KernelDecl {
     wrapper: Option<WrapperGroups>,
     /// An unfolded object function's grid ([`DispatchPlan::object_grid`]).
     object_grid: bool,
+    /// An object function whose threadgroup may be partial ([`DispatchPlan::partial_groups`]).
+    partial_groups: bool,
 }
 
 /// The threadgroup position and grid of a kernel whose entry wrapper computes them
@@ -836,6 +882,8 @@ impl Needs {
         }
         let has = |b| dp.builtins.contains(b);
         let local_pos = has(K::ThreadPositionInThreadgroup) || has(K::ThreadPositionInGrid);
+        // A partial object threadgroup counts its threads from its position and its own `lin`.
+        let partial = dp.partial_groups;
         // A folded variant counts its threadgroup from its workgroup's position and the
         // dispatch's size, whatever builtins it reads.
         let folded = dp.folded_groups;
@@ -849,11 +897,13 @@ impl Needs {
         ]
         .into_iter()
         .any(has)
-            || (local_pos && (dp.local_size == LocalSizeForm::Flat || dp.tile));
+            || (local_pos && (dp.local_size == LocalSizeForm::Flat || dp.tile))
+            || partial;
         Needs {
             lin,
             local_pos,
             workgroup_id: folded
+                || partial
                 || has(K::ThreadPositionInGrid)
                 || has(K::ThreadgroupPositionInGrid),
             num_workgroups: folded || has(K::ThreadsPerGrid) || has(K::ThreadgroupsPerGrid),
@@ -863,6 +913,11 @@ impl Needs {
 
 /// The nominal local size packing of `region[0].w`: 10 bits per axis, each `L − 1`.
 pub const NOMINAL_AXIS_BITS: u32 = 10;
+
+/// `region[1].w`'s flag of a draw whose last threadgroup along an axis runs only the threads left
+/// (`drawMeshThreads` with an object function, the module docs): an object function of
+/// [`DispatchPlan::partial_groups`] answers that threadgroup's threads.
+pub const NONUNIFORM: u32 = 1;
 
 /// Pack Metal's nominal threads per threadgroup `l` into `region[0].w` (each axis 1..=1024).
 pub fn pack_nominal(l: [u32; 3]) -> Option<u32> {
@@ -887,6 +942,14 @@ pub fn region_bytes(base: [u32; 3], threads: [u32; 3], l: [u32; 3]) -> Option<[u
     for (chunk, w) in out.as_chunks_mut::<4>().0.iter_mut().zip(words) {
         chunk.copy_from_slice(&w.to_le_bytes());
     }
+    Some(out)
+}
+
+/// The `DispatchRegion` bytes of a draw of the object threadgroups `threads` fill at nominal
+/// size `l`, the last along an axis running only the threads left ([`NONUNIFORM`]).
+pub fn partial_region_bytes(threads: [u32; 3], l: [u32; 3]) -> Option<[u8; 32]> {
+    let mut out = region_bytes([0; 3], threads, l)?;
+    out[28..].copy_from_slice(&NONUNIFORM.to_le_bytes());
     Some(out)
 }
 
@@ -995,6 +1058,7 @@ impl KernelDecl {
             subgroup_local: var(subgroups, B::SubgroupLocalInvocationId, u32_)?,
             wrapper,
             object_grid: dp.object_grid,
+            partial_groups: dp.partial_groups,
         })
     }
 
@@ -1084,14 +1148,19 @@ impl KernelDecl {
     }
 
     /// The position in the threadgroup: a tile function's layout of `lin` ([`Self::tile_pos`]),
-    /// `LocalInvocationId`, or `lin` unflattened over `(sx, sy, sz)`.
-    fn local_pos(&self, fb: &mut FunctionBuilder<'_>) -> BResult<SValue> {
+    /// `LocalInvocationId`, or `lin` unflattened over `(sx, sy, sz)`; in a partial object
+    /// threadgroup, `lin` unflattened over the threads it runs ([`Self::partial_threads`]).
+    fn local_pos(
+        &self,
+        fb: &mut FunctionBuilder<'_>,
+        region: &mut RegionFn<'_>,
+    ) -> BResult<SValue> {
         if self.tile {
             let lin = self.lin(fb)?;
             return self.tile_pos(fb, lin);
         }
-        match self.form {
-            LocalSizeForm::Spec => self.load(fb, self.local_id),
+        let uniform = match self.form {
+            LocalSizeForm::Spec => self.load(fb, self.local_id)?,
             LocalSizeForm::Flat => {
                 let lin = self.lin(fb)?;
                 let sx = fb.module().const_value(self.size[0])?;
@@ -1100,9 +1169,105 @@ impl KernelDecl {
                 let row = fb.binary(BinOp::UDiv, lin, sx)?;
                 let y = fb.binary(BinOp::UMod, row, sy)?;
                 let z = fb.binary(BinOp::UDiv, row, sy)?;
-                fb.composite_construct(self.uvec3, &[x, y, z])
+                fb.composite_construct(self.uvec3, &[x, y, z])?
             }
-        }
+        };
+        let Some((partial, threads)) = self.partial_threads(fb, region)? else {
+            return Ok(uniform);
+        };
+        let lin = self.lin(fb)?;
+        let at = self.unflatten(fb, lin, threads)?;
+        fb.select(partial, at, uniform)
+    }
+
+    /// `lin` unflattened over a threadgroup of `size` threads, `x` fastest; an axis of no thread
+    /// divides as one of 1, so no value is undefined.
+    fn unflatten(
+        &self,
+        fb: &mut FunctionBuilder<'_>,
+        lin: SValue,
+        size: SValue,
+    ) -> BResult<SValue> {
+        let one = Self::k(fb, 1)?;
+        let axis = |fb: &mut FunctionBuilder<'_>, i: u32| -> BResult<SValue> {
+            let n = fb.composite_extract(size, &[i])?;
+            fb.glsl(GlslOp::UMax, &[n, one])
+        };
+        let (sx, sy) = (axis(fb, 0)?, axis(fb, 1)?);
+        let x = fb.binary(BinOp::UMod, lin, sx)?;
+        let row = fb.binary(BinOp::UDiv, lin, sx)?;
+        let y = fb.binary(BinOp::UMod, row, sy)?;
+        let z = fb.binary(BinOp::UDiv, row, sy)?;
+        fb.composite_construct(self.uvec3, &[x, y, z])
+    }
+
+    /// Whether the region says the draw's threadgroups may be partial ([`NONUNIFORM`] under
+    /// `MultiRegion`), and the threads this threadgroup runs: `min(L, threads_per_grid − position ·
+    /// L)` per axis where it does (0 past the grid), `(sx, sy, sz)` where it does not. `None` but
+    /// for an object function of [`DispatchPlan::partial_groups`].
+    fn partial_threads(
+        &self,
+        fb: &mut FunctionBuilder<'_>,
+        region: &mut RegionFn<'_>,
+    ) -> BResult<Option<(SValue, SValue)>> {
+        let (true, Some(mr)) = (self.partial_groups, self.multi_region) else {
+            return Ok(None);
+        };
+        let mr = fb.module().const_value(mr)?;
+        let r = region(fb)?;
+        let r1 = fb.composite_extract(r, &[1])?;
+        let flags = fb.composite_extract(r1, &[3])?;
+        let bit = Self::k(fb, NONUNIFORM)?;
+        let flag = fb.binary(BinOp::BitwiseAnd, flags, bit)?;
+        let zero = Self::k(fb, 0)?;
+        let flagged = fb.binary(BinOp::INotEqual, flag, zero)?;
+        let no = Self::flag(fb, false)?;
+        let partial = fb.select(mr, flagged, no)?;
+        // The threadgroup's position and `L`: a folded variant's from its count (its local size
+        // is `L`), every other's from its region.
+        let (group, l) = if self.folded_groups {
+            (self.folded(fb, region)?.0, self.size3(fb)?)
+        } else {
+            let (base, l) = self.region(fb, region)?;
+            (self.group_pos(fb, base)?, l)
+        };
+        let threads = fb.vector_shuffle(r1, r1, &[0, 1, 2])?;
+        let first = fb.binary(BinOp::IMul, group, l)?;
+        let inside = fb.binary(BinOp::ULessThan, first, threads)?;
+        let left = fb.binary(BinOp::ISub, threads, first)?;
+        let none = self.splat(fb, 0)?;
+        let left = fb.select(inside, left, none)?;
+        let runs = fb.glsl(GlslOp::UMin, &[left, l])?;
+        let s = self.size3(fb)?;
+        Ok(Some((partial, fb.select(partial, runs, s)?)))
+    }
+
+    /// Whether the invocation is one of its threadgroup's threads: `lin` below the threads a
+    /// partial object threadgroup runs ([`Self::partial_threads`]), every invocation elsewhere.
+    /// `None` but for an object function of [`DispatchPlan::partial_groups`].
+    pub fn live(
+        &self,
+        fb: &mut FunctionBuilder<'_>,
+        region: &mut RegionFn<'_>,
+    ) -> BResult<Option<SValue>> {
+        let Some((partial, threads)) = self.partial_threads(fb, region)? else {
+            return Ok(None);
+        };
+        let n = Self::volume(fb, threads)?;
+        let lin = self.lin(fb)?;
+        let below = fb.binary(BinOp::ULessThan, lin, n)?;
+        let yes = Self::flag(fb, true)?;
+        Ok(Some(fb.select(partial, below, yes)?))
+    }
+
+    /// A `bool` constant.
+    fn flag(fb: &mut FunctionBuilder<'_>, v: bool) -> BResult<SValue> {
+        let ty = fb.module().ty(Type::Bool)?;
+        let c = fb.module().constant(Constant::Scalar {
+            ty,
+            bits: ConstBits(u64::from(v)),
+        })?;
+        fb.module().const_value(c)
     }
 
     /// A tile function's position of the thread whose `sg · 32 + lane` is `lin`, in a threadgroup
@@ -1404,8 +1569,8 @@ impl KernelDecl {
     }
 
     /// Metal's threads per threadgroup: the region's nominal size where the tile function's
-    /// threadgroup is the tile (which the binder's regions set to the tile), else the threadgroup
-    /// that runs.
+    /// threadgroup is the tile (which the binder's regions set to the tile), the threads a partial
+    /// object threadgroup runs ([`Self::partial_threads`]), else the threadgroup that runs.
     fn threadgroup_size(
         &self,
         fb: &mut FunctionBuilder<'_>,
@@ -1414,7 +1579,10 @@ impl KernelDecl {
         if self.tile_sized {
             return Ok(self.region(fb, region)?.1);
         }
-        self.size3(fb)
+        match self.partial_threads(fb, region)? {
+            Some((_, threads)) => Ok(threads),
+            None => self.size3(fb),
+        }
     }
 
     /// The threads the threadgroup runs, `(sx, sy, sz)`, whatever threadgroup Metal answers: a
@@ -1446,7 +1614,7 @@ impl KernelDecl {
                     let g = self.folded(fb, region)?.0;
                     let s = self.size3(fb)?;
                     let first = fb.binary(BinOp::IMul, g, s)?;
-                    let pos = self.local_pos(fb)?;
+                    let pos = self.local_pos(fb, region)?;
                     return fb.binary(BinOp::IAdd, first, pos);
                 }
                 _ => {}
@@ -1499,7 +1667,7 @@ impl KernelDecl {
                 self.ceil_div(fb, n, w)
             }
             K::ThreadsPerThreadgroup => self.threadgroup_size(fb, region),
-            K::ThreadPositionInThreadgroup => self.local_pos(fb),
+            K::ThreadPositionInThreadgroup => self.local_pos(fb, region),
             K::ThreadgroupPositionInGrid => {
                 let (base, _) = self.region(fb, region)?;
                 self.group_pos(fb, base)
@@ -1508,7 +1676,7 @@ impl KernelDecl {
                 let (base, l) = self.region(fb, region)?;
                 let g = self.group_pos(fb, base)?;
                 let first = fb.binary(BinOp::IMul, g, l)?;
-                let pos = self.local_pos(fb)?;
+                let pos = self.local_pos(fb, region)?;
                 fb.binary(BinOp::IAdd, first, pos)
             }
             K::DispatchThreadsPerThreadgroup => Ok(self.region(fb, region)?.1),

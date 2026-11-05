@@ -36,12 +36,15 @@ fn plan(form: LocalSizeForm, multi_region: bool) -> DispatchPlan {
         draw_pieces: false,
         wrapper_groups: false,
         object_grid: false,
+        partial_groups: false,
     }
 }
 
 /// A kernel that stores every builtin of `dp` for each invocation at record
 /// `WorkgroupIndex · N + LocalInvocationIndex` of buffer 0 (Vulkan's own numbering, independent
-/// of the derivation under test).
+/// of the derivation under test). Under [`DispatchPlan::partial_groups`] `N` is the threads the
+/// workgroup runs, `sx · sy · sz`, and each record begins with a word that is 1 where the
+/// invocation is live ([`KernelDecl::live`]).
 fn module(dp: &DispatchPlan) -> TypedModule {
     let mut mb = ModuleBuilder::new();
     let decl = KernelDecl::declare(&mut mb, dp, &SpecDefaults::default()).expect("declare");
@@ -137,25 +140,39 @@ fn module(dp: &DispatchPlan) -> TypedModule {
             crate::spirv::error::Dangling::Value(SValue::new(u32::MAX)),
         ))
     };
-    let s = decl.value(f, size, &mut no_region).expect("size");
+    let s = match dp.partial_groups {
+        true => decl.running_threads(f).expect("size"),
+        false => decl.value(f, size, &mut no_region).expect("size"),
+    };
     let n = KernelDecl::volume(f, s).expect("volume");
     let first = f.binary(BinOp::IMul, group, n).expect("mul");
     let li = load(f, index_var);
     let inv = f.binary(BinOp::IAdd, first, li).expect("add");
-    let per = k(f, record_words() as u32);
+    let words = record_words() as u32 + u32::from(dp.partial_groups);
+    let per = k(f, words);
     let mut at = f.binary(BinOp::IMul, inv, per).expect("mul");
     let base = f.module().global_value(out).expect("out");
     let zero = k(f, 0);
     let one = k(f, 1);
+    let mut region = |f: &mut FunctionBuilder<'_>| -> BResult<SValue> {
+        let g = push.expect("a region read without a push block");
+        let p = f.module().global_value(g)?;
+        let idx = f.u32_const(0)?;
+        let idx = f.module().const_value(idx)?;
+        let p = f.access_chain(p, &[idx])?;
+        f.load(p, MemAccess::default())
+    };
+    if dp.partial_groups {
+        let live = decl
+            .live(f, &mut region)
+            .expect("live")
+            .expect("a live flag");
+        let word = f.select(live, one, zero).expect("select");
+        let p = f.access_chain(base, &[zero, at]).expect("chain");
+        f.store(p, word, MemAccess::default()).expect("store");
+        at = f.binary(BinOp::IAdd, at, one).expect("next");
+    }
     for b in KernelBuiltin::ALL {
-        let mut region = |f: &mut FunctionBuilder<'_>| -> BResult<SValue> {
-            let g = push.expect("a region read without a push block");
-            let p = f.module().global_value(g)?;
-            let idx = f.u32_const(0)?;
-            let idx = f.module().const_value(idx)?;
-            let p = f.access_chain(p, &[idx])?;
-            f.load(p, MemAccess::default())
-        };
         let v = decl.value(f, b, &mut region).expect("value");
         let parts: Vec<SValue> = if b.is_vector() {
             (0..3).map(|i| c(f, v, i)).collect()
@@ -428,6 +445,129 @@ fn group_count_splits_match_the_single_dispatch() {
     }
 }
 
+/// A partial object threadgroups module's run of a draw of `threads` threads in threadgroups of
+/// `l` (one dispatch of the threadgroups the threads fill, rounded up, each of `l` invocations,
+/// `MultiRegion` 1), its region flagged where `flagged` ([`partial_region_bytes`]): each
+/// invocation's live word and builtins.
+fn run_partial(
+    m: &TypedModule,
+    form: LocalSizeForm,
+    threads: [u32; 3],
+    l: [u32; 3],
+    flagged: bool,
+    sg: SubgroupSize,
+) -> Vec<(u32, Vec<u32>)> {
+    let groups: [u32; 3] = std::array::from_fn(|i| threads[i].div_ceil(l[i]));
+    let n = l.iter().product::<u32>();
+    let count = groups.iter().product::<u32>() * n;
+    let words = record_words() + 1;
+    let mut spec = BTreeMap::new();
+    for (a, v) in [Axis::X, Axis::Y, Axis::Z].into_iter().zip(l) {
+        spec.insert(SpecKey::LocalSize(a), u64::from(v));
+    }
+    if form == LocalSizeForm::Flat {
+        spec.insert(SpecKey::FlatLocalSize, u64::from(n));
+    }
+    spec.insert(SpecKey::MultiRegion, 1);
+    let push = match flagged {
+        true => partial_region_bytes(threads, l),
+        false => region_bytes([0; 3], threads, l),
+    };
+    let res = Resources {
+        buffers: vec![Buffer {
+            slot: Some(ResourceSlot {
+                stage: Stage::Kernel,
+                kind: ResourceKind::Buffer,
+                index: 0,
+            }),
+            address: None,
+            bytes: vec![0; count as usize * words * 4],
+        }],
+        push: push.expect("pack").to_vec(),
+        spec,
+    };
+    let cfg = Config {
+        workgroups: groups,
+        subgroup: sg,
+        ..Config::default()
+    };
+    let out = run(m, &cfg, res).expect("run");
+    let w: Vec<u32> = out.buffers[0]
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+        .collect();
+    w.chunks(words)
+        .map(|rec| (rec[0], rec[1..].to_vec()))
+        .collect()
+}
+
+/// An object function's partial threadgroups (`DispatchPlan::partial_groups`): a draw of the
+/// threadgroups `threads` fill, rounded up, at the whole size `L` with its region flagged
+/// `NONUNIFORM`, runs every Metal thread of `dispatchThreads(threads, L)` exactly once among its
+/// live invocations, with Metal's builtins (the last threadgroup along an axis answering the
+/// threads left, its positions and index over them), and leaves the rest not live; with the
+/// region unflagged and whole threadgroups, every invocation is live with Metal's answers, in both
+/// local-size forms.
+#[test]
+fn partial_object_threadgroups_match_metal() {
+    for form in [LocalSizeForm::Spec, LocalSizeForm::Flat] {
+        let mut dp = plan(form, true);
+        dp.partial_groups = true;
+        let m = module(&dp);
+        for sg in [SubgroupSize::W32, SubgroupSize::W64] {
+            // Flattened tiers need N % S = 0 (LocalSizeConstraint); 64 fits both widths.
+            let cases: &[([u32; 3], [u32; 3])] = match form {
+                LocalSizeForm::Spec => &[
+                    ([6, 1, 1], [4, 1, 1]),
+                    ([5, 3, 1], [4, 2, 1]),
+                    ([37, 2, 3], [32, 1, 2]),
+                    ([64, 1, 1], [64, 1, 1]),
+                ],
+                LocalSizeForm::Flat => &[
+                    ([100, 1, 1], [64, 1, 1]),
+                    ([70, 3, 1], [32, 2, 1]),
+                    ([37, 2, 3], [32, 1, 2]),
+                ],
+            };
+            for &(threads, l) in cases {
+                let mut seen: BTreeMap<[u32; 3], Vec<u32>> = BTreeMap::new();
+                let mut dead = 0;
+                for (live, rec) in run_partial(&m, form, threads, l, true, sg) {
+                    if live == 0 {
+                        dead += 1;
+                        continue;
+                    }
+                    let p = position(&rec);
+                    assert!(seen.insert(p, rec).is_none(), "{p:?} twice");
+                }
+                let total: u32 = threads.iter().product();
+                let runs: u32 = (0..3).map(|i| threads[i].div_ceil(l[i]) * l[i]).product();
+                assert_eq!(seen.len(), total as usize, "every Metal thread once");
+                assert_eq!(
+                    dead,
+                    runs - total,
+                    "{threads:?} {l:?}: the invocations past them"
+                );
+                for (p, rec) in seen {
+                    assert_eq!(
+                        rec,
+                        metal(p, threads, l),
+                        "{form:?} {threads:?} {l:?}: {p:?}"
+                    );
+                }
+            }
+            // Unflagged, of whole threadgroups: the uniform answers, every invocation live.
+            let (threads, l) = ([64, 4, 2], [32, 2, 1]);
+            for (live, rec) in run_partial(&m, form, threads, l, false, sg) {
+                assert_eq!(live, 1);
+                assert_eq!(rec, metal(position(&rec), threads, l), "{form:?}");
+            }
+        }
+    }
+}
+
 /// The nominal size packs 1..=1024 per axis and refuses 0 or more; the region field is `(base,
 /// nominal)`, `(threads, 0)`.
 #[test]
@@ -542,6 +682,9 @@ fn derivation_modules_are_valid() {
             for mr in [false, true] {
                 assert_valid(module(&plan(form, mr)), &p);
             }
+            let mut dp = plan(form, true);
+            dp.partial_groups = true;
+            assert_valid(module(&dp), &p);
         }
     }
 }

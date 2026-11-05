@@ -24,10 +24,9 @@
 //! what the typed form adds is where the failure points and that the refusals are counted.
 //!
 //! Three families are separate cases because their verdicts mean different things: the grid draws
-//! and the object draws, which match Metal; the grids past Metal's limits, which draw nothing; and
-//! the object draws that leave a partial object threadgroup, which the runtime refuses
-//! (`NotImplemented(MeshShading)`) where Metal draws. Keeping the last apart is the point of the
-//! `Refused` verdict: the lane printed that gap and passed.
+//! and the object draws; the grids past Metal's limits, which draw nothing; and the object draws
+//! that leave a partial object threadgroup, which Metal runs with the threads left over. Each of
+//! the last is a case of its own, so a refusal of one is a `Refused` verdict naming its call.
 //!
 //! Nothing here can fault a GPU: every grid is either small or one Metal and the runtime both
 //! answer by drawing nothing. The lane's other two tests are **not** ported here. Its object-grid
@@ -237,8 +236,8 @@ const OBJECT_ROWS: &[Row] = &[
 ];
 
 /// The probe's object cases whose `drawMeshThreads` leaves a partial object threadgroup (the
-/// lane's `OBJECT_CASES`' two `Threads` rows). Metal draws them, running the threads left; the
-/// runtime refuses them, which is these cases' whole subject.
+/// lane's `OBJECT_CASES`' two `Threads` rows). Metal draws them, its last object threadgroup
+/// along an axis running the threads left, and so does the runtime.
 ///
 /// Each is a case of its own, holding one row. A refused call stops a run, and the run's later
 /// rows are then neither compared nor reported, so two refusing rows in one case would report one

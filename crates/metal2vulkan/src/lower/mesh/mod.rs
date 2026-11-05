@@ -127,7 +127,7 @@ use crate::error::{Capability, Error, Feature, LowerFamily, Unsupported};
 use crate::lower::dispatch::KernelBuiltin;
 use crate::lower::emit::EmitCx;
 use crate::lower::select::{Plan, SelectCx};
-use crate::lower::strategy::FamilyStrategy;
+use crate::lower::strategy::{FamilyStrategy, Strategy};
 use crate::lower::sync::barrier::{memory_model, semantics};
 use crate::lower::sync::memory_model::coherence;
 use crate::memory::arena::{self, WorkgroupLimit};
@@ -266,6 +266,9 @@ pub struct MeshPlan {
     /// An object or mesh function's payload arena's bytes (`arena::payload_bytes` of
     /// [`payload_extent`]), `None` without a payload (`StageInterface::payload`).
     pub payload: Option<u32>,
+    /// An object function whose body holds no workgroup barrier: it runs a partial object
+    /// threadgroup's threads alone where its region says so ([`plan_partial_groups`]).
+    pub partial_groups: bool,
 }
 
 /// The index in [`MeshPlan::outputs`] of every mesh entry's `CullPrimitiveEXT`.
@@ -529,6 +532,33 @@ pub fn check_payload(cx: &SelectCx<'_>, size: u64) -> Result<(), Error> {
         .into());
     }
     workgroup_limit(cx).check(0)
+}
+
+/// Plan an object function's partial threadgroups: where its body holds no workgroup barrier
+/// (`sync::barrier::is_workgroup_barrier`; an object function's barriers keep their scope in
+/// every tier, and it has no emulated simdgroups), it reads its region (`PushField::DispatchRegion`)
+/// and answers a partial threadgroup of a `drawMeshThreads` as Metal runs it, its invocations past
+/// the threadgroup's threads returning before the body (`lower::dispatch`'s partial object
+/// threadgroups; `RuntimeFact::PartialObjectThreadgroups`). A body that holds one is left
+/// uniform: the returned invocations would not reach its barrier, and the binder refuses such a
+/// draw (`NotImplemented(MeshShading)`). Called before the push fields are placed, with the
+/// body's strategies.
+pub fn plan_partial_groups(cx: &mut SelectCx<'_>, strategy: &[Option<Strategy>]) {
+    if cx.stage != Stage::Object {
+        return;
+    }
+    let synchronizes = strategy.iter().flatten().any(|s| {
+        crate::lower::sync::barrier::is_workgroup_barrier(
+            s,
+            Stage::Object,
+            crate::device::subgroup::Tier::NoSubgroup,
+        )
+    });
+    if synchronizes {
+        return;
+    }
+    cx.families.mesh.partial_groups = true;
+    cx.push.insert(PushField::DispatchRegion);
 }
 
 /// Plan the entry: an object function needs `VK_EXT_mesh_shader` and `taskShader` enabled
@@ -2168,9 +2198,13 @@ fn emulated_object_wrapper(
         Ok(())
     })?;
     // Its payload's words, as many as the slot holds (`S − 4`).
+    // Every invocation copies, a partial threadgroup's past its threads too.
     let words = cx.plan.families.mesh.payload_words;
     if words > 0 && cx.decl.families.access.local.payload.is_some() {
-        let n = thread_count(cx, &mut fb)?;
+        let running = k.running_threads(&mut fb)?;
+        let [rx, ry, rz] = [0, 1, 2].map(|i| fb.composite_extract(running, &[i]));
+        let rxy = fb.binary(BinOp::IMul, rx?, ry?)?;
+        let n = fb.binary(BinOp::IMul, rxy, rz?)?;
         let grid_words = k32(&mut fb, work::GRID)?;
         let room = fb.binary(BinOp::ISub, s, grid_words)?;
         let start = fb.binary(BinOp::IAdd, slot, grid_words)?;

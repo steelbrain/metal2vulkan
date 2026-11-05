@@ -202,8 +202,10 @@ impl MeshGridRule {
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ObjectFold {
     /// The 32-byte region record: the threadgroups Metal runs along each axis (in the base's
-    /// words), the packed threads per object threadgroup, Metal's threads per grid, and 0
-    /// ([`metal_object_grid`]).
+    /// words), the packed threads per object threadgroup, Metal's threads per grid
+    /// ([`metal_object_grid`]), and 0, or, for a `drawMeshThreads` that leaves a partial object
+    /// threadgroup, the flag that its last threadgroup along an axis runs only the threads left
+    /// (`lower::dispatch::NONUNIFORM`, 1).
     pub record: [u32; 8],
     /// The group counts of each piece's `VkDrawMeshTasksIndirectCommandEXT`, within the task
     /// stage's limits.
@@ -268,6 +270,38 @@ pub fn fold_object_grid(
 ) -> Option<ObjectFold> {
     let packed = crate::lower::dispatch::pack_nominal(threads)?;
     let (runs, reported) = metal_object_grid(groups, threads, direct)?;
+    fold_runs(runs, reported, packed, 0, task)
+}
+
+/// The fold of a direct `drawMeshThreads` of `threads` threads in object threadgroups of `l`
+/// threads each, on a task stage of `task`'s limits: the threadgroups the threads fill, rounded
+/// up, whose last along an axis runs only the threads left, its record flagged
+/// `lower::dispatch::NONUNIFORM` where one does (the partial object threadgroups the object
+/// function runs, `RuntimeFact::PartialObjectThreadgroups`); `None` when `l` does not pack.
+pub(crate) fn fold_object_threads(
+    threads: [u32; 3],
+    l: [u32; 3],
+    task: MeshGridLimits,
+) -> Option<ObjectFold> {
+    let packed = crate::lower::dispatch::pack_nominal(l)?;
+    let runs = std::array::from_fn(|i| threads[i].div_ceil(l[i]));
+    let partial = (0..3).any(|i| !threads[i].is_multiple_of(l[i]));
+    let flags = match partial {
+        true => crate::lower::dispatch::NONUNIFORM,
+        false => 0,
+    };
+    fold_runs(runs, threads, packed, flags, task)
+}
+
+/// The fold of `runs` threadgroups of Metal's (packed threads per threadgroup `packed`) whose
+/// grid builtins report `reported` threads, its record's last word `flags`.
+fn fold_runs(
+    runs: [u32; 3],
+    reported: [u32; 3],
+    packed: u32,
+    flags: u32,
+    task: MeshGridLimits,
+) -> Option<ObjectFold> {
     let none = |discarded, past| ObjectFold {
         record: [0, 0, 0, packed, 0, 0, 0, 0],
         dispatch: [0; 3],
@@ -293,7 +327,7 @@ pub fn fold_object_grid(
     let [rx, ry, rz] = runs;
     let [tx, ty, tz] = reported;
     Some(ObjectFold {
-        record: [rx, ry, rz, packed, tx, ty, tz, 0],
+        record: [rx, ry, rz, packed, tx, ty, tz, flags],
         dispatch: [nx, ny, 1],
         pieces,
         discarded: false,

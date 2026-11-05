@@ -237,9 +237,13 @@
 //!   (`SpecKey::ObjectLocalSize`): the plan's `specialization` leaves them out, and each draw's
 //!   `DrawCommands::specialization` is the complete key. A direct draw is `vkCmdDrawMeshTasksEXT`
 //!   of the first stage's threadgroups (without an object function, `drawMeshThreads`' threads
-//!   rounded down to whole mesh threadgroups, Metal's answer; with one, its object threadgroups, a
-//!   partial one not implemented) and each stage reads its grid from `NumWorkgroups` (`MultiRegion`
-//!   0, each `DispatchRegion` written all the same); a threadgroup of no thread or of more than
+//!   rounded down to whole mesh threadgroups, Metal's answer; with one, its object threadgroups, of
+//!   `drawMeshThreads` the threads fill, rounded up, the last along an axis running only the
+//!   threads left, as Metal runs it: its region flagged `lower::dispatch::NONUNIFORM`, which an
+//!   object function of `RuntimeFact::PartialObjectThreadgroups` reads, and not implemented for an
+//!   object function whose body holds a workgroup barrier) and each stage reads its grid from
+//!   `NumWorkgroups` (`MultiRegion` 0, each `DispatchRegion` written all the same, but 1 for a
+//!   partial object threadgroup's draw); a threadgroup of no thread or of more than
 //!   Metal's 1024, a grid of none, and indirect arguments at an offset that is not a multiple of 4
 //!   launch nothing, as plain Metal draws nothing. A threadgroup or a grid past the device's limits
 //!   for its stage is `Unsupported{MeshShading}` naming the limit (an object grid only where the
@@ -2375,6 +2379,10 @@ fn plan(p: &RenderPipeline, device: &Device, shape: &BindShape) -> Result<Bindin
             .dependencies
             .iter()
             .any(|d| d.fact == RuntimeFact::FoldedGroups),
+        partial_groups: p
+            .dependencies
+            .iter()
+            .any(|d| d.fact == RuntimeFact::PartialObjectThreadgroups),
         records,
     });
 
@@ -3182,11 +3190,15 @@ fn size_value(keys: &DispatchKeys, key: SpecKey, l: [u32; 3]) -> Option<u64> {
 /// whole threadgroups its threads fill, whose threads are the grid Metal's builtins report
 /// (measured, a probe: 10 by 3 threads in threadgroups of 4 by 2 report a grid of 8 by 2), as
 /// `NumWorkgroups` gives it. With one it launches object threadgroups, each launching the mesh grid
-/// it sets: `drawMeshThreads` launches the threadgroups its threads fill, and one that leaves a
-/// partial object threadgroup is not implemented (Metal runs that threadgroup with the threads
-/// left, probe 4, and splitting the draw by the regions would reorder its primitives in two
-/// dimensions); a draw whose object threadgroup Metal draws nothing for (no thread, or past 1024)
-/// launches nothing. A direct draw's object grid is Metal's ([`metal_object_grid`], measured): each
+/// it sets: `drawMeshThreads` launches the threadgroups its threads fill, rounded up, and one that
+/// leaves a partial object threadgroup runs that threadgroup with the threads left, as Metal does
+/// (probe 4): one draw of whole threadgroups, `MultiRegion` 1, Metal's threads per grid and its
+/// region flagged `lower::dispatch::NONUNIFORM`, whose object function answers the smaller
+/// threadgroup and returns its invocations past it before its body
+/// (`RuntimeFact::PartialObjectThreadgroups`); for an object function whose body holds a
+/// workgroup barrier, which those invocations would not reach, such a draw is not implemented. A
+/// draw whose object threadgroup Metal draws nothing for (no thread, or past 1024) launches
+/// nothing. A direct draw's object grid is Metal's ([`metal_object_grid`], measured): each
 /// axis's threads per grid wrap at 2^32, the draw runs the threadgroups the wrapped threads fill,
 /// and the builtins report the wrapped threads, from the object stage's region (`MultiRegion` 1)
 /// where they leave a partial threadgroup.
@@ -3227,14 +3239,23 @@ fn mesh_draw(
         }
         (None, _) => command,
         (Some(_), _) if mesh_draws_nothing(lo) => mesh_tasks([0; 3], [0; 3]),
+        // The object threadgroups the threads fill, rounded up (`lower::dispatch`'s partial
+        // object threadgroups).
         (Some(_), DrawCall::MeshThreads { threads, .. }) => {
-            if (0..3).any(|i| !threads[i].is_multiple_of(lo[i])) {
-                return Err(not_implemented(Feature::MeshShading));
-            }
-            mesh_tasks(std::array::from_fn(|i| threads[i] / lo[i]), lm)
+            mesh_tasks(std::array::from_fn(|i| threads[i].div_ceil(lo[i])), lm)
         }
         (Some(_), _) => command,
     };
+    // A `drawMeshThreads` of an object function: Metal's threads per grid, which leave a partial
+    // threadgroup where an axis is not whole threadgroups. An object function whose body holds a
+    // workgroup barrier does not run one (`RuntimeFact::PartialObjectThreadgroups`).
+    let asked = match (&t.object, *draw) {
+        (Some(_), DrawCall::MeshThreads { threads, .. }) if !mesh_draws_nothing(lo) => {
+            Some(threads)
+        }
+        _ => None,
+    };
+    let nonuniform = asked.is_some_and(|threads| (0..3).any(|i| !threads[i].is_multiple_of(lo[i])));
     let folded = t.folded && t.object.is_some();
     // An unfolded object stage's direct grid as Metal runs it (`metal_object_grid`): each axis's
     // threads per grid wrap at 2^32, the draw runs the threadgroups the wrapped threads fill, and
@@ -3245,7 +3266,10 @@ fn mesh_draw(
             group_count_y: y,
             group_count_z: z,
         } if t.object.is_some() && !folded => {
-            let (runs, threads) = metal_object_grid([x, y, z], lo, true).unwrap_or_default();
+            let (runs, threads) = match asked {
+                Some(threads) => ([x, y, z], threads),
+                None => metal_object_grid([x, y, z], lo, true).unwrap_or_default(),
+            };
             let n: u64 = runs.iter().map(|&c| u64::from(c)).product();
             let discards = n > u64::from(METAL_OBJECT_GRID_TOTAL);
             let runs = if discards || runs.contains(&0) {
@@ -3267,6 +3291,9 @@ fn mesh_draw(
         other => return Err(internal(format!("a mesh draw of {other:?}"))),
     };
     let launches = groups.is_none_or(|g| !g.contains(&0));
+    if nonuniform && launches && !t.partial_groups {
+        return Err(not_implemented(Feature::MeshShading));
+    }
     // Where the wrapped threads leave a partial threadgroup, `NumWorkgroups · L` passes them: the
     // object stage reads its grid from its region (`MultiRegion` 1).
     let partial = launches
@@ -3320,8 +3347,13 @@ fn mesh_draw(
                 total: o.total.unwrap_or(u32::MAX),
             };
             let g = if launches { g } else { [0; 3] };
-            let fold = fold_object_grid(g, lo, task, true)
-                .ok_or_else(|| internal(format!("a fold of threadgroups of {lo:?} threads")))?;
+            let fold = match asked.filter(|_| launches) {
+                Some(threads) => {
+                    crate::bind::mesh_arguments::fold_object_threads(threads, lo, task)
+                }
+                None => fold_object_grid(g, lo, task, true),
+            }
+            .ok_or_else(|| internal(format!("a fold of threadgroups of {lo:?} threads")))?;
             let command = match fold.pieces {
                 0 | 1 => vk::DrawCommand::DrawMeshTasks {
                     group_count_x: fold.dispatch[0],
@@ -3369,7 +3401,13 @@ fn mesh_draw(
             .ok_or_else(|| internal(format!("a mesh draw's threadgroup of {l:?} threads")))
     };
     let (object_region, mesh_region) = if object {
-        (Some(region(grid, lo)?), region([0; 3], lm)?)
+        // A partial object threadgroup's draw flags its region (`lower::dispatch::NONUNIFORM`).
+        let object_region = match nonuniform && launches {
+            true => crate::lower::dispatch::partial_region_bytes(grid, lo)
+                .ok_or_else(|| internal(format!("a mesh draw's threadgroup of {lo:?} threads")))?,
+            false => region(grid, lo)?,
+        };
+        (Some(object_region), region([0; 3], lm)?)
     } else {
         (None, region(grid, lm)?)
     };

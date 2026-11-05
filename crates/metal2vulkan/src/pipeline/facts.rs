@@ -739,6 +739,14 @@ pub enum RuntimeFact {
         samplers: u32,
         device: bool,
     },
+    /// The object function runs a partial threadgroup of a `drawMeshThreads` as Metal does
+    /// (`lower::dispatch`'s partial object threadgroups): where its `DispatchRegion` (or a folded
+    /// variant's region record) carries `lower::dispatch::NONUNIFORM`, it answers its
+    /// threadgroup's threads, `min(L, threads_per_grid − position · L)` per axis, and its
+    /// invocations past them return before the body. Recorded for an object function whose body
+    /// holds no workgroup barrier; the binder refuses a draw that leaves a partial object
+    /// threadgroup of any other (`NotImplemented(MeshShading)`).
+    PartialObjectThreadgroups,
 }
 
 /// What one compile made of a slot of a `RuntimeFact::UniformViewRange`.

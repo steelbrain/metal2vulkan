@@ -3142,26 +3142,14 @@ fn the_known_gaps_ledger_parses_and_names_real_cases() {
             known.waiting_on
         );
     }
-    // The rows this round left open, and what they are waiting on: `drawMeshThreads` whose
-    // threads leave a partial object threadgroup, which Metal runs with the threads left over.
-    let partial: Vec<&crate::known_gaps::KnownGap> = ledger
-        .iter()
-        .filter(|known| {
-            known
-                .case
-                .starts_with("mesh-object-draws-partial-threadgroup-")
-        })
-        .collect();
-    assert_eq!(partial.len(), 2, "{ledger:?}");
-    for known in partial {
-        assert_eq!(known.expects, crate::known_gaps::Expects::Refused);
-        assert!(known.site.ends_with("drawMeshThreads"), "{known:?}");
-        assert!(
-            known.waiting_on.contains("partial object threadgroup"),
-            "{}",
-            known.waiting_on
-        );
-    }
+    // A `drawMeshThreads` whose threads leave a partial object threadgroup runs as Metal runs it,
+    // so its cases hold no row.
+    assert!(
+        !ledger.iter().any(|known| known
+            .case
+            .starts_with("mesh-object-draws-partial-threadgroup-")),
+        "{ledger:?}"
+    );
     // The divergence rows this round left open: the fragment quad's placement on one lavapipe
     // build, which MoltenVK answers exactly, so the rows are venue-scoped rather than global.
     //

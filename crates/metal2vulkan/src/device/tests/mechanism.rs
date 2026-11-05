@@ -153,6 +153,7 @@ fn every_fact() -> Vec<RuntimeFact> {
         RuntimeFact::FoldedGroups,
         RuntimeFact::ReplayBindings,
         RuntimeFact::MergedDraws,
+        RuntimeFact::PartialObjectThreadgroups,
         RuntimeFact::QuadPrimitiveIds,
         RuntimeFact::RotatedWeights,
         RuntimeFact::PrivateList,
@@ -355,6 +356,7 @@ fn variant(f: &RuntimeFact) -> usize {
         RuntimeFact::PrivateList => 86,
         RuntimeFact::MeshLastFirst => 71,
         RuntimeFact::YCbCrInPlace { .. } => 65,
+        RuntimeFact::PartialObjectThreadgroups => 89,
     }
 }
 
@@ -362,7 +364,7 @@ fn variant(f: &RuntimeFact) -> usize {
 fn mechanism_is_total_over_every_fact_and_profile() {
     let facts = every_fact();
     let covered: std::collections::BTreeSet<usize> = facts.iter().map(variant).collect();
-    assert_eq!(covered, (0..89).collect(), "every_fact misses a variant");
+    assert_eq!(covered, (0..90).collect(), "every_fact misses a variant");
     for (stem, _) in super::committed_profiles() {
         let dev = device(&stem);
         let p = dev.profile();
@@ -410,9 +412,9 @@ fn mechanism_is_total_over_every_fact_and_profile() {
                 | RuntimeFact::HeapWriteRounding { .. }
                 | RuntimeFact::HeapCrossClassNeutral { .. }
                 | RuntimeFact::ObjectThreadgroupArena { .. } => Mechanism::PlanTimeCheck,
-                RuntimeFact::DispatchGrid | RuntimeFact::TileThreadgroup { .. } => {
-                    Mechanism::RegionSelected
-                }
+                RuntimeFact::DispatchGrid
+                | RuntimeFact::TileThreadgroup { .. }
+                | RuntimeFact::PartialObjectThreadgroups => Mechanism::RegionSelected,
                 RuntimeFact::IndirectGroupCount => {
                     if f.limits.max_compute_work_group_count == [u32::MAX; 3] {
                         Mechanism::None
