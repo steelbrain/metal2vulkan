@@ -2434,7 +2434,8 @@ degradations! {
         /// them on every device. Recorded bound: an operand, Metal's but at three ties: of two
         /// NaNs a NaN (Metal: the second operand's bits), of `+0` and `-0` either zero (Metal: the
         /// second), and an `f32` denormal beside a zero or another denormal compared by its value
-        /// where the device keeps denormals (Metal compares it as a zero and answers the second).
+        /// where the device's `NMin` and `NMax` keep denormals, whether or not its arithmetic
+        /// flushes them (Metal compares it as a zero and answers the second).
         NativeMinMax = "native-min-max";
         /// Class: native device maths. The device's `OpDot` answers Metal's `dot` on `float` and
         /// `half` (summed in `float`, rounded once to `half`) on every device but for a `float` one

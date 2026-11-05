@@ -817,16 +817,33 @@ fn half_fused_multiply_adds_the_device_answers_are_metals() {
 
 /// The NaN model's denormal probe (`nan_denormals`, `nan_denormals_fast`): 256 threads of 48
 /// words over operand triples rich in denormals of both signs and the smallest normals; the
-/// second is the first's program under fast math.
-const DENORMAL_PROBES: [&str; 2] = [
-    "nan-model-float-denormals-per-operation",
-    "nan-model-float-denormals-per-operation-under-fast-math",
+/// second is the first's program under fast math. Each with whether its `a < b ? a : b`
+/// ([`DENORMAL_PROBE_SELECT`]) is a minimum function: under fast math Metal's compiler makes it
+/// `llvm.minnum`.
+const DENORMAL_PROBES: [(&str, bool); 2] = [
+    ("nan-model-float-denormals-per-operation", false),
+    (
+        "nan-model-float-denormals-per-operation-under-fast-math",
+        true,
+    ),
 ];
+
+/// `a < b ? a : b`, a word of [`DENORMAL_PROBE_WORDS`]. In `nan_denormals` it is a compare and a
+/// select, which read `float` denormals as Metal does where the profile takes
+/// `DriverDeviation::MetalFloatDenormals`. In `nan_denormals_fast` Metal's compiler makes it
+/// `llvm.minnum`, which is Metal's `fmin` (as `fmin(a, b)`, word 42, which neither probe checks):
+/// the device's `NMin`, Metal's answer where the profile takes `DriverDeviation::MetalMinMax`,
+/// else noted `PrecisionNote::NativeMinMax`, which compares an `f32` denormal beside a zero or
+/// another denormal by its value where the device's minimum keeps it. Under fast math the word is
+/// checked only where the profile takes that deviation. On the RTX 5080 Laptop GPU, whose
+/// arithmetic flushes its denormals as Metal's does, its `NMin` keeps them: 15 lanes of the word
+/// differ from Metal there, as 15 of word 42 do in both probes.
+const DENORMAL_PROBE_SELECT: usize = 45;
 
 /// The words of a [`DENORMAL_PROBES`] thread whose operations read `float` denormals as Metal
 /// does where the profile takes `DriverDeviation::MetalFloatDenormals`: `a + b`, `a - b`, `a * b`,
-/// `0 - a`, `a < b`, `a == b`, `trunc`, `rint`, `ldexp`, `step`, `(a * b) * c`, `a < b ? a : b`,
-/// `-(a * b)` and `fabs(a - b)`; and `sqrt` and `rsqrt` ([`DENORMAL_PROBE_ROOTS`]) where Metal
+/// `0 - a`, `a < b`, `a == b`, `trunc`, `rint`, `ldexp`, `step`, `(a * b) * c`, `a < b ? a : b`
+/// (under fast math a minimum: [`DENORMAL_PROBE_SELECT`]), `-(a * b)` and `fabs(a - b)`; and `sqrt` and `rsqrt` ([`DENORMAL_PROBE_ROOTS`]) where Metal
 /// answers a zero, an infinity or a NaN. Not `round` (15), C99's on every device
 /// (`NativeTranscendentals`), whose zero below zero is `-0` where Metal answers `+0`; not `-a`,
 /// `fabs(a)`, `floor` and `ceil` ([`DENORMAL_PROBE_UNARY`]), the other deviation's; not the
@@ -855,7 +872,9 @@ const DENORMAL_PROBE_UNARY: &[usize] = &[6, 8, 12, 13];
 /// takes `DriverDeviation::MetalUnaryDenormals` (the kernels then require
 /// `VkProperty::MetalUnaryDenormals`), but a NaN's bits, which are the device's where the profile does
 /// not take `DriverDeviation::MetalCanonicalNans` ([`float_word_holds`]): a root of a negative
-/// operand is then any NaN. Elsewhere the denormals are the device's and nothing is checked. The
+/// operand is then any NaN. Elsewhere the denormals are the device's and nothing is checked; so is
+/// the fast probe's [`DENORMAL_PROBE_SELECT`], a minimum, where the profile does not take
+/// `DriverDeviation::MetalMinMax`, and the stage then records `PrecisionNote::NativeMinMax`. The
 /// test prints how many words differ.
 #[test]
 fn float_denormals_read_as_metal_reads_them() {
@@ -867,9 +886,18 @@ fn float_denormals_read_as_metal_reads_them() {
         let metals = takes(&device, DriverDeviation::MetalFloatDenormals);
         let unary = takes(&device, DriverDeviation::MetalUnaryDenormals);
         let canonical = takes(&device, DriverDeviation::MetalCanonicalNans);
+        let min_max = takes(&device, DriverDeviation::MetalMinMax);
         let mut failures = Vec::new();
-        for case_name in DENORMAL_PROBES {
+        for (case_name, select_is_min) in DENORMAL_PROBES {
             let case = public_case(case_name).unwrap();
+            let native_select = select_is_min && !min_max;
+            if native_select {
+                assert!(
+                    case_notes(&device, &case).contains(&PrecisionNote::NativeMinMax),
+                    "{case_name} on {name}: its minimum is the device's, and the stage does not \
+                     record it"
+                );
+            }
             assert_eq!(
                 requires_property(&device, &case, VkProperty::MetalFloatDenormals),
                 metals,
@@ -895,7 +923,8 @@ fn float_denormals_read_as_metal_reads_them() {
                 let w = i % 48;
                 let (got, want) = (word(&run.output, i), word(&metal, i));
                 if (metals
-                    && (DENORMAL_PROBE_WORDS.contains(&w)
+                    && ((DENORMAL_PROBE_WORDS.contains(&w)
+                        && !(native_select && w == DENORMAL_PROBE_SELECT))
                         || (DENORMAL_PROBE_ROOTS.contains(&w) && special(want))))
                     || (unary && DENORMAL_PROBE_UNARY.contains(&w))
                 {

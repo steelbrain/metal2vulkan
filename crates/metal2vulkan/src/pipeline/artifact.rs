@@ -1874,8 +1874,9 @@ pub enum PrecisionNote {
     /// result is one of the operands, the one Metal answers but at three ties: of two NaNs a NaN
     /// (its bits the device's), where Metal answers the second operand's; of `+0` and `-0` either
     /// zero, where Metal answers the second; and an `f32` denormal beside a zero or another
-    /// denormal compared by its value where the device keeps denormals, where Metal compares it as
-    /// a zero and answers the second. Validation derives no tolerance from it.
+    /// denormal compared by its value where the device's `NMin` and `NMax` keep denormals, whether
+    /// or not its arithmetic flushes them, where Metal compares it as a zero and answers the
+    /// second. Validation derives no tolerance from it.
     NativeMinMax,
     /// Native device maths: Metal's `dot` on `float` and `half` is the device's `OpDot` (a `half`
     /// one summed in `float` and rounded once to `half`), not Metal's fused chain of its products,
