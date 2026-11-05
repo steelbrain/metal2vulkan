@@ -458,15 +458,28 @@ pages then takes a kernel mapping per page) can give the device the guest's RAM 
 - One run inside one chunk: the device imports the RAM by host pointer in chunks of 64 MiB, never
   across a range's end, each once (`WorkCounts::host_ram_chunks_imported`, `host_ram_chunk_bytes`,
   `host_ram_chunks_live`). From `use_host_ram` on, a thread of the device's imports chunks ahead
-  of the objects over them (`host_ram_chunks_imported_ahead`): a window of chunks past the one an
-  object last took, one chunk after a take outside the window (and the RAM's first chunk before
-  any take), four once a take lands inside it. So a run of objects over consecutive RAM, as a
-  VMM's 2 MiB heaps over fresh guest RAM are, finds its next chunks imported while it stays
-  inside the window; an object over a chunk outside it imports that chunk as it is made, on its
-  own thread, and one over the chunk the thread is importing waits for that import. A burst of
-  objects that runs more than four chunks past the last one taken before the thread imports them
-  waits at each chunk past the window, one chunk's fault-in each. The thread faults in no more
-  than the window past the objects, and never goes back for a chunk a take skipped. What an
+  of the objects over them (`host_ram_chunks_imported_ahead`): the chunk an object last took, then a
+  window of chunks past it in the direction the takes go, up the RAM or down it, one chunk after a
+  take that starts no run (and the RAM's first chunk before any take), four once a take lands inside
+  the window or next to the chunk last taken. So a run of objects over consecutive RAM, up or down,
+  as a VMM's 2 MiB heaps over fresh guest RAM are, finds its next chunks imported while it stays
+  inside the window. An object over a chunk not imported yet (outside the window, past a burst's
+  reach, or the chunk the thread is importing) is bound in an import of its own run alone, made on
+  its own thread, which faults in and pins its own pages (2 MiB for such a heap), while the thread
+  imports the chunk; the objects over the chunk after that are bound in it
+  (`run_bound_buffers_made`). Each run's import goes with its object (`run_imports_live`), and its
+  uses order against those of the objects over the same bytes in the chunk by their host addresses,
+  as any two no-copy buffers over shared bytes do. So no object's making waits for a chunk's
+  fault-in. The price is up to one more allocation and pin per object made while its chunk is not
+  imported, for the object's life: a burst of heaps that outruns the thread takes one for each heap
+  over a chunk the thread has not imported yet. Where the thread does not run (it stopped at the
+  allocation limit's margin, below), failed the chunk or gave it back, where the device's
+  allocations are within that margin, where the object's run is the whole chunk, or on a driver
+  whose barriers do not order blits through two imports of the same pages
+  (`RuntimeDriverDefect::AliasedImportBlitsUnordered`, MoltenVK's: there every object over a chunk
+  lies in its one import), the object imports the chunk as it is made, or waits for the import of it
+  under way. The thread faults in no more than the window past the objects, and never goes back for
+  a chunk a take skipped. What an
   import costs is faulting in the chunk's fresh pages, not the pin. On an RTX 5080 laptop
   (NVIDIA 615.71.09, Linux 7.2), the import of 64 MiB already resident took 2 to 3 ms; the
   fault-in of 64 MiB of fresh `memfd` RAM under `MADV_HUGEPAGE` took 7.5 ms where free memory
@@ -477,7 +490,13 @@ pages then takes a kernel mapping per page) can give the device the guest's RAM 
   every process on the host stalled on memory for 6.6 to 9.6 s (pressure stall information).
   With the window, 2 GiB of 2 MiB heaps made in bursts of four chunks had 36 chunks faulted in
   ahead, no heap after the first two imported its own chunk, and the host stalled on memory for
-  under 1 s; 16 heaps over scattered chunks had one chunk each faulted in ahead. The thread is
+  under 1 s; 16 heaps over scattered chunks had one chunk each faulted in ahead. With the runs'
+  imports and the window following the takes down the RAM, 256 2 MiB heaps over fresh RAM with
+  free memory holding whole huge pages (27 GB free), in two bursts of four chunks up, the same
+  down, and 256 scattered over 32 chunks 10 ms apart, had no making of 5 ms or more (the slowest
+  1.4, 1.5 and 3.7 ms), where without them 2, 8 and 15 makings each imported a chunk, the slowest
+  8.2 to 8.7 ms (`tests/host_ram_window_bench.rs`); 128 of the upward heaps, about 76 of the
+  downward and 20 of the scattered were bound in their own runs' imports. The thread is
   paced: it runs as the system's batch work (`SCHED_BATCH` on Linux, the utility class on
   Apple's systems), never at a weight the system starves, since it holds a chunk's lock and, as
   it pins, the process's memory map lock; it yields between chunks; and on Linux it faults each
