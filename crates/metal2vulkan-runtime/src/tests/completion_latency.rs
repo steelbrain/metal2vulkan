@@ -16,8 +16,10 @@
 //!   next value (and a fence where the wait is a fence's). Waited for seven ways, each printed
 //!   apart: `vkWaitSemaphores` on the submitting thread once `vkQueueSubmit` returned
 //!   (`timeline`); `vkWaitForFences` there (`fence`); `poll` of a sync file exported from the
-//!   fence (`sync_fd`, Linux, where the driver exports one); `vkWaitSemaphores` on a thread that
-//!   was in it before the submission (`armed`); on a thread asleep on a condition variable that
+//!   fence (`sync_fd`, Linux, where the driver exports one); `vkWaitSemaphores` on a thread asked
+//!   [`ARM_LEAD`] before the submission, so it is in its wait as the submission is made (`armed`,
+//!   the floor of a thread that learns of the completion apart from the submitting one); on a
+//!   thread asleep on a condition variable that
 //!   the submitting thread wakes once `vkQueueSubmit` returned, as the runtime's queue waiter
 //!   wakes for a watched batch (`woken`); and `vkGetSemaphoreCounterValue` read in a loop on the
 //!   submitting thread, the first moment the host can see the value with no sleep (`spin`, a
@@ -35,6 +37,9 @@
 //!   (`command_buffer::completion::trace`): the batch watched, the driver's wait entered and
 //!   returned, the completion turn's `seen` (the command buffer's completion time) and the
 //!   handlers.
+//!
+//! Each line also counts the waits entered after the GPU end: there, the time to the wait's return
+//! holds the wake of the thread that waits, not the driver's wake alone.
 //!
 //! The plain driver's latency less the runtime's is the runtime's own.
 //!
@@ -62,6 +67,10 @@ const GAP: Duration = Duration::from_millis(2);
 
 /// The bytes each fill writes.
 const BYTES: u64 = 4096;
+
+/// How long before its submission the `armed` waiter is asked to wait: longer than its wake takes
+/// (up to about a millisecond at the 99th percentile on the RTX 5080 laptop's host).
+const ARM_LEAD: Duration = Duration::from_millis(1);
 
 /// The longest any wait may take, in nanoseconds.
 const TIMEOUT: u64 = 5_000_000_000;
@@ -502,8 +511,9 @@ impl Raw {
         self.value += 1;
         let value = self.value;
         if wait == RawWait::Armed {
-            // In its wait long before the submission: the caller sleeps a gap after this.
+            // In its wait before the submission is made.
             waiter.unwrap().ask().send(value).unwrap();
+            std::thread::sleep(ARM_LEAD);
         }
         let fence = match wait {
             RawWait::Fence | RawWait::Untimed => self.fence,
@@ -707,14 +717,18 @@ fn raw_completion_latency() {
             Some(_) => line(samples.iter().filter_map(f).collect()),
             None => "-".to_owned(),
         };
+        let late = (samples.iter())
+            .filter(|s| s.gpu_end.is_some_and(|end| s.entered > end))
+            .count();
         eprintln!(
             "COMPLETION-LATENCY raw {} ({}): gpu end -> wait returned {} us; wait entered -> \
-             gpu end {} us; submit returned -> gpu end {} us; submit -> gpu start {} us; \
-             submit -> wait returned {} us; vkQueueSubmit {} us",
+             gpu end {} us ({late} of {} entered after it); submit returned -> gpu end {} us; \
+             submit -> gpu start {} us; submit -> wait returned {} us; vkQueueSubmit {} us",
             wait.name(),
             raw.name,
             gpu(|s| Some(us(s.gpu_end?, s.returned))),
             gpu(|s| Some(us(s.entered, s.gpu_end?))),
+            samples.len(),
             gpu(|s| Some(us(s.submitted, s.gpu_end?))),
             gpu(|s| Some(us(s.submit, s.gpu_start?))),
             of(|s| us(s.submit, s.returned)),
@@ -936,10 +950,14 @@ fn print_runtime(name: &str, shape: &str, calibrated: bool, times: &[&Times]) {
     let ends = match calibrated {
         true => format!(
             "gpu end -> seen handler {} us; gpu end -> wait returned {} us; wait entered -> gpu \
-             end {} us; ",
+             end {} us ({} of {} entered after it); ",
             of(&|t| us(t.gpu_end.unwrap(), t.seen)),
             of(&|t| us(t.gpu_end.unwrap(), t.returned)),
             of(&|t| us(t.entered, t.gpu_end.unwrap())),
+            (times.iter())
+                .filter(|t| t.entered > t.gpu_end.unwrap())
+                .count(),
+            times.len(),
         ),
         false => "no calibrated GPU end; ".to_owned(),
     };
