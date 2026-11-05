@@ -21,6 +21,7 @@ use super::shadow::GatedCopyIn;
 use super::sparse::emulated::Scrub;
 use super::tracker::Summary;
 use super::Device;
+use super::IndirectCommandBuffer;
 use crate::pipeline::budget::Urgency;
 use std::any::Any;
 use std::sync::Arc;
@@ -103,6 +104,27 @@ pub(super) struct Prepared {
     /// Where its host step records it for what the GPU may write, what the step's recording may
     /// use that Metal orders (`Segment::bound`).
     pub(super) bound: Option<Summary<ResourceKey>>,
+    /// `commit`'s recording of it was refused, though a route met later may write the records it
+    /// read first ([`Deferred::prepare`]): its host step records it once the work before it
+    /// completed (`Segment::host`).
+    pub(super) held: bool,
+}
+
+/// Whether `commit`'s refused recording of an execution of `executed`, buffers read from the CPU's
+/// records, is held for its host step: where its command buffer made one of them resident for
+/// writing (`residency`, its), as a route met after the commit may still write the records before
+/// the work runs (another queue's command buffer it waits for through an event, encoded after this
+/// commit: the probe `crates/metal2vulkan-conformance/probes/icb_cross_queue_writes.m`), and Metal
+/// runs what that route wrote. The step records the work from the records as they stand once the
+/// work before it completed, and fails the command buffer, at the batch's submission, only where
+/// they are still refused (`WorkCounts::commit_refusals_held`). A refusal of another buffer's
+/// records stands at `commit`.
+fn held<'a>(
+    residency: &crate::residency::Residency,
+    executed: impl IntoIterator<Item = &'a IndirectCommandBuffer>,
+) -> bool {
+    let writable = residency.writable_indirect_command_buffers();
+    executed.into_iter().any(|icb| writable.contains(icb))
 }
 
 impl Deferred {
@@ -208,6 +230,7 @@ impl Deferred {
                         retained,
                         pipelines: false,
                         bound: None,
+                        held: false,
                     });
                 }
                 let residency = command_buffer.residency()?.kernel();
@@ -220,10 +243,33 @@ impl Deferred {
                     retained: Some(Box::new(variants)),
                     pipelines: false,
                     bound: execute.bound(&residency),
+                    held: false,
                 })
             }
             Deferred::Execute(execute) => {
-                let recorded = execute.record(command_buffer, None)?;
+                let recorded = match execute.record(command_buffer, None) {
+                    Ok(recorded) => recorded,
+                    // Held for its host step (`held`).
+                    Err(error) => {
+                        let residency = command_buffer.residency()?;
+                        if !held(&residency, [&execute.icb]) {
+                            return Err(error);
+                        }
+                        device.shared().counts.commit_refusal_held();
+                        let residency = residency.kernel();
+                        let Settled { states, variants } =
+                            execute.settle(device, execute.states(device), &residency);
+                        return Ok(Prepared {
+                            recorded: None,
+                            for_good: false,
+                            inputs: StepInputs::Settled(states),
+                            retained: Some(Box::new(variants)),
+                            pipelines: false,
+                            bound: execute.bound(&residency),
+                            held: true,
+                        });
+                    }
+                };
                 let residency = command_buffer.residency()?.kernel();
                 let unforeseen = Unforeseen::new(device, execute, residency);
                 execute.icb.watch(&unforeseen);
@@ -234,6 +280,7 @@ impl Deferred {
                     retained: None,
                     pipelines: false,
                     bound: None,
+                    held: false,
                 })
             }
             Deferred::Dispatch(dispatch) if step => Ok(Prepared {
@@ -245,6 +292,7 @@ impl Deferred {
                 )),
                 pipelines: false,
                 bound: None,
+                held: false,
             }),
             Deferred::Dispatch(_) => Err(internal(
                 "an indirect dispatch recorded before the work it waits for completed",
@@ -257,6 +305,7 @@ impl Deferred {
                     retained: None,
                     pipelines: false,
                     bound: None,
+                    held: false,
                 })
             }
             // Recorded now for good where every execution whose records the GPU may write runs
@@ -274,6 +323,7 @@ impl Deferred {
                         retained: None,
                         pipelines: false,
                         bound: None,
+                        held: false,
                     });
                 }
                 pass.make_ahead(command_buffer);
@@ -284,6 +334,7 @@ impl Deferred {
                     retained: Some(Box::new(pass.settle(command_buffer))),
                     pipelines: pass.making() || pass.failed(),
                     bound: pass.bound(device, &command_buffer.residency()?),
+                    held: false,
                 })
             }
             // A pass of draws whose pipelines are being made, or one of which failed, is
@@ -302,15 +353,38 @@ impl Deferred {
                         retained: None,
                         pipelines: true,
                         bound: None,
+                        held: false,
                     });
                 }
+                let recorded = match pass.record(command_buffer, false) {
+                    Ok(recorded) => recorded,
+                    // Held for its host step (`held`), as a step's pass is prepared above.
+                    Err(error) => {
+                        let residency = command_buffer.residency()?;
+                        if !held(&residency, pass.executed()) {
+                            return Err(error);
+                        }
+                        device.shared().counts.commit_refusal_held();
+                        pass.make_ahead(command_buffer);
+                        return Ok(Prepared {
+                            recorded: None,
+                            for_good: false,
+                            inputs: StepInputs::RenderPass,
+                            retained: Some(Box::new(pass.settle(command_buffer))),
+                            pipelines: false,
+                            bound: pass.bound(device, &residency),
+                            held: true,
+                        });
+                    }
+                };
                 Ok(Prepared {
-                    recorded: Some(pass.record(command_buffer, false)?),
+                    recorded: Some(recorded),
                     for_good: false,
                     inputs: StepInputs::RenderPass,
                     retained: None,
                     pipelines: false,
                     bound: None,
+                    held: false,
                 })
             }
             // Its host step reads the unit's halt word once the laying completed.
@@ -321,6 +395,7 @@ impl Deferred {
                 retained: None,
                 pipelines: false,
                 bound: None,
+                held: false,
             }),
             // Recorded now where its pipelines are made; else by a host step once they are,
             // which makes again one whose making failed.
@@ -336,6 +411,7 @@ impl Deferred {
                     retained: None,
                     pipelines: later,
                     bound: None,
+                    held: false,
                 })
             }
         }

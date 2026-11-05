@@ -2519,6 +2519,7 @@ impl EncoderCore {
                     segment.recorded = prepared.recorded;
                     segment.inputs = Some(prepared.inputs);
                     segment.pipelines = prepared.pipelines;
+                    segment.host |= prepared.held;
                     continue;
                 }
                 let recorded = segment.work.record_on_gpu(&open.command_buffer)?;

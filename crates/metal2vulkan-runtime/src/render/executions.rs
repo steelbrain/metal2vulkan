@@ -2873,6 +2873,11 @@ impl DeferredPass {
             .any(|execution| execution.icb.gpu_written() || execution.range.indirect())
     }
 
+    /// The indirect command buffers its executions run.
+    pub(crate) fn executed(&self) -> impl Iterator<Item = &IndirectCommandBuffer> {
+        self.executions.iter().map(|execution| &execution.icb)
+    }
+
     /// Whether a pipeline one of its draws or tile dispatches records is still being made, or one
     /// its executions' settle handed to the device's pool ([`settle`](Self::settle)).
     pub(crate) fn making(&self) -> bool {

@@ -3895,7 +3895,12 @@ each item named states the rule in full.
 - **A render execution records its pass at commit**, from the records as they stand then, as
   Metal's does.
 - **A command's refusal is one typed error wherever it is recorded**: the CPU's records are checked
-  as `commit` records them, and `commit` returns what a command refuses.
+  as `commit` records them, and `commit` returns what a command refuses; but for a buffer the
+  command buffer made resident for writing, as a route met after the commit may still write the
+  records before they run (another queue's command buffer the work waits for through an event,
+  whose writes Metal runs), the host step records them once the work before it completed, and the
+  command buffer fails at that batch's submission only where they are still refused
+  (`WorkCounts::commit_refusals_held`).
 - **A render execution's range read from a buffer is read before its pass**
   (`execute_commands_in_buffer_indirect`).
 - **An indirect command's buffer outside the resident resources misses**: its Metal address

@@ -20,6 +20,10 @@
 //! buffer that inherits the encoder's state may run on the GPU, as draws of the one primitive type
 //! the summary allows (`bind::draw_replay_primitive_type`), the CPU's triangle here, unless the
 //! summary holds the kernel's point too.
+//!
+//! [`a_refused_command_another_queue_writes_again_runs_what_it_wrote`]: a command the runtime
+//! refuses at commit, which a later command buffer of another queue writes again before the
+//! execution runs, runs what that one wrote, as Metal's does.
 
 use super::degrade_notices::on_device;
 use super::{buffer_with, read_buffer, WAIT};
@@ -32,10 +36,10 @@ use metal2vulkan::pipeline::{
 };
 use metal2vulkan_devtools::{engine_dir, llvm_assemble};
 use metal2vulkan_runtime::{
-    Buffer, ClearColor, CommandBuffer, CommandBufferStatus, ComputePipelineState, Device,
+    Buffer, ClearColor, CommandBuffer, CommandBufferStatus, ComputePipelineState, Device, EventRef,
     IndirectCommandBuffer, IndirectCommandBufferDescriptor, Library, LoadAction, PipelineOptions,
     Region, RenderCommandEncoder, RenderPassDescriptor, RenderPipelineState, ResourceOptions, Size,
-    StoreAction, TextureDescriptor,
+    StoreAction, Texture, TextureDescriptor,
 };
 
 /// Where the command buffer makes the indirect command buffer resident for writing.
@@ -125,10 +129,14 @@ impl Scene {
 
     /// A render state of `vertex` and `irw_fragment` that indirect command buffers may run.
     fn render_state(&self, vertex: &str) -> RenderPipelineState {
+        self.render_state_in(vertex, PixelFormat::RGBA8Unorm)
+    }
+
+    /// [`render_state`](Self::render_state), drawing into `format`.
+    fn render_state_in(&self, vertex: &str, format: PixelFormat) -> RenderPipelineState {
         let mut descriptor = RenderPipelineDescriptor::new(self.function(vertex));
         descriptor.fragment = Some(self.function("irw_fragment"));
-        descriptor.color_attachments[0] =
-            Some(ColorAttachmentDescriptor::new(PixelFormat::RGBA8Unorm));
+        descriptor.color_attachments[0] = Some(ColorAttachmentDescriptor::new(format));
         descriptor.support_indirect_command_buffers = true;
         (self.device)
             .new_render_pipeline_state(&descriptor, &PipelineOptions::default())
@@ -143,6 +151,18 @@ impl Scene {
         encode: impl FnOnce(&mut RenderCommandEncoder),
         at: [(u64, u64); N],
     ) -> [[u8; 4]; N] {
+        let (target, pass) = self.target();
+        let mut encoder = command_buffer.render_command_encoder(&pass).unwrap();
+        encode(&mut encoder);
+        encoder.end_encoding().unwrap();
+        command_buffer.commit().unwrap();
+        command_buffer.wait_until_completed_for(WAIT).unwrap();
+        assert_eq!(command_buffer.status(), CommandBufferStatus::Completed);
+        texels(&target, at)
+    }
+
+    /// A new target cleared red, and a pass over it.
+    fn target(&self) -> (Texture, RenderPassDescriptor) {
         let mut target = TextureDescriptor::texture_2d(PixelFormat::RGBA8Unorm, SIDE, SIDE, false);
         target.usage = TextureUsage::RENDER_TARGET;
         target.resource_options = ResourceOptions::shared();
@@ -153,18 +173,7 @@ impl Scene {
         color.load_action = LoadAction::Clear;
         color.clear_color = ClearColor::new(1.0, 0.0, 0.0, 1.0);
         color.store_action = StoreAction::Store;
-        let mut encoder = command_buffer.render_command_encoder(&pass).unwrap();
-        encode(&mut encoder);
-        encoder.end_encoding().unwrap();
-        command_buffer.commit().unwrap();
-        command_buffer.wait_until_completed_for(WAIT).unwrap();
-        assert_eq!(command_buffer.status(), CommandBufferStatus::Completed);
-        at.map(|(x, y)| {
-            let mut texel = [0u8; 4];
-            let region = Region::new_2d(x, y, 1, 1);
-            target.get_bytes(&mut texel, 4, 0, region, 0, 0).unwrap();
-            texel
-        })
+        (target, pass)
     }
 
     /// The render command's run, as `resident` says: the target's centre texel.
@@ -267,6 +276,16 @@ impl Scene {
     }
 }
 
+/// `target`'s texels at `at`.
+fn texels<const N: usize>(target: &Texture, at: [(u64, u64); N]) -> [[u8; 4]; N] {
+    at.map(|(x, y)| {
+        let mut texel = [0u8; 4];
+        let region = Region::new_2d(x, y, 1, 1);
+        target.get_bytes(&mut texel, 4, 0, region, 0, 0).unwrap();
+        texel
+    })
+}
+
 /// Points `(x, y)` as `float4(x, y, 0, 1)`, in a new buffer.
 fn floats(device: &Device, points: &[f32]) -> Buffer {
     let bytes: Vec<u8> = (points.chunks(2))
@@ -331,5 +350,71 @@ fn an_execution_after_its_writer_runs_what_metal_runs() {
         }
         let steps = format!("the inherited state's host steps: {steps:?}");
         assert_eq!(seen, expected, "{steps}");
+    });
+}
+
+/// A render command the CPU wrote with a state that draws into another color format than the
+/// pass's target, which the runtime refuses at commit, executed by a command buffer that waits for
+/// an event and is committed first, its render encoder making the buffer resident for reading and
+/// writing; then, on another queue, a command buffer whose kernel writes the command again (the
+/// valid state, taken from its argument buffer) and which signals the event. Metal runs the
+/// kernel's command (the probe `crates/metal2vulkan-conformance/probes/icb_cross_queue_writes.m`,
+/// `written`, on an M3 Max, macOS 27.0.1: both complete, the target's centre green), so the first
+/// commit holds its refusal for the host step (`WorkCounts::commit_refusals_held`), which records
+/// the kernel's command once the writer completed: both complete, the centre green.
+#[test]
+fn a_refused_command_another_queue_writes_again_runs_what_it_wrote() {
+    on_device(|device, _| {
+        let scene = Scene::new(device);
+        let state = scene.render_state("irw_vertex");
+        let other = scene.render_state_in("irw_vertex", PixelFormat::RGBA16Float);
+        let writer = scene.kernel("irw_encode_draw", false);
+        let mut commands = IndirectCommandBufferDescriptor::new();
+        commands.command_types = IndirectCommandType::DRAW;
+        commands.max_vertex_buffer_bind_count = 1;
+        let icb = device
+            .new_indirect_command_buffer(&commands, 1, ResourceOptions::shared())
+            .unwrap();
+        let corners = floats(device, &[-1.0, -1.0, 3.0, -1.0, -1.0, 3.0]);
+        let cpu = icb.indirect_render_command_at(0).unwrap();
+        cpu.set_render_pipeline_state(&other).unwrap();
+        cpu.set_vertex_buffer(Some(&corners), 0, 0).unwrap();
+        cpu.draw_primitives(PrimitiveType::Triangle, 0, 3, 1, 0)
+            .unwrap();
+        let table = scene.table(&icb, state.gpu_resource_id().0);
+        let (executing, writing) = (
+            device.new_command_queue().unwrap(),
+            device.new_command_queue().unwrap(),
+        );
+        let event = device.new_shared_event().unwrap();
+        let before = device.work_counts().commit_refusals_held;
+        let executes = executing.command_buffer().unwrap();
+        executes
+            .encode_wait_for_event(EventRef::from(&event), 1)
+            .unwrap();
+        let (target, pass) = scene.target();
+        let mut encoder = executes.render_command_encoder(&pass).unwrap();
+        let both = ResourceUsage::READ | ResourceUsage::WRITE;
+        let stages = RenderStages::VERTEX | RenderStages::FRAGMENT;
+        (encoder.use_resource(icb.as_resource(), both, stages)).unwrap();
+        let vertex = RenderStages::VERTEX;
+        (encoder.use_resource(corners.as_resource(), ResourceUsage::READ, vertex)).unwrap();
+        encoder.execute_commands_in_buffer(&icb, 0..1).unwrap();
+        encoder.end_encoding().unwrap();
+        executes.commit().unwrap();
+        let held = device.work_counts().commit_refusals_held - before;
+        let writes = writing.command_buffer().unwrap();
+        Scene::write(&writes, Resident::Same, (&writer, &table, &corners), &icb);
+        writes
+            .encode_signal_event(EventRef::from(&event), 1)
+            .unwrap();
+        writes.commit().unwrap();
+        for command_buffer in [&writes, &executes] {
+            command_buffer.wait_until_completed_for(WAIT).unwrap();
+            assert_eq!(command_buffer.status(), CommandBufferStatus::Completed);
+        }
+        assert_eq!(held, 1, "the commit held its refusal for the host step");
+        let [centre] = texels(&target, [(SIDE / 2, SIDE / 2)]);
+        assert_eq!(centre, [0, 255, 0, 255], "the kernel's command ran");
     });
 }

@@ -1722,7 +1722,9 @@ impl State {
                 retained,
                 pipelines,
                 bound,
+                held,
             } = prepared;
+            segment.host |= held;
             segment.gpu_alone = for_good && recorded.is_some();
             segment.bound = bound;
             segment.recorded = recorded;

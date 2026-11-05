@@ -101,6 +101,7 @@ pub(crate) struct Counters {
     host_step_chunks_recorded_again: AtomicU64,
     host_step_records_compared: AtomicU64,
     host_step_compare_nanos: AtomicU64,
+    commit_refusals_held: AtomicU64,
     creation_pipelines_made: AtomicU64,
     creations_left_making: AtomicU64,
     creation_pipelines_drawn: AtomicU64,
@@ -1291,6 +1292,12 @@ impl Counters {
             u64::try_from(took.as_nanos()).unwrap_or(u64::MAX),
             Ordering::Relaxed,
         );
+    }
+
+    /// A commit's refused recording of an execution of indirect commands was held for its host
+    /// step (`deferred.rs`, `held`).
+    pub(crate) fn commit_refusal_held(&self) {
+        self.commit_refusals_held.fetch_add(1, Ordering::Relaxed);
     }
 
     /// A state's creation made a `VkPipeline` of `predicted` (`pipeline/predicted.rs`,
@@ -3788,6 +3795,13 @@ pub struct WorkCounts {
     /// The time those comparisons took, in nanoseconds: part of
     /// [`host_step_nanos`](Self::host_step_nanos).
     pub host_step_compare_nanos: u64,
+    /// Segments whose recording at `commit` was refused, of an execution of an indirect command
+    /// buffer the command buffer made resident for writing, held for a host step, one each
+    /// (`deferred.rs`): a route met after the commit (another queue's command buffer the work
+    /// waits for) may write the records first, as Metal runs what it wrote. The step records the
+    /// work once the work before it completed, and fails the command buffer only where the records
+    /// are still refused.
+    pub commit_refusals_held: u64,
     /// `VkPipeline`s states' creations made: each render state's predicted key
     /// (`pipeline/predicted.rs`), and each compute state's predicted region
     /// (`pipeline/dispatch_making.rs`).
@@ -6046,6 +6060,7 @@ impl Device {
                 .load(Ordering::Relaxed),
             host_step_records_compared: counters.host_step_records_compared.load(Ordering::Relaxed),
             host_step_compare_nanos: counters.host_step_compare_nanos.load(Ordering::Relaxed),
+            commit_refusals_held: counters.commit_refusals_held.load(Ordering::Relaxed),
             creation_pipelines_made: counters.creation_pipelines_made.load(Ordering::Relaxed),
             creations_left_making: counters.creations_left_making.load(Ordering::Relaxed),
             creation_pipelines_drawn: counters.creation_pipelines_drawn.load(Ordering::Relaxed),
