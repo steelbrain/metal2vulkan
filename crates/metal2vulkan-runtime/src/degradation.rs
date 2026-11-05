@@ -2422,7 +2422,11 @@ degradations! {
         /// code within one of Metal's, apart only near a half-integer; an unpacked value within
         /// 2.5 ulp of the correctly rounded quotient; a decoded sRGB colour within half a
         /// twelve-bit step (`1 / 8190`) of Metal's step `k / 4095`, beyond its division's and
-        /// `Pow`'s bounds; a NaN channel's code the device's, where Metal's is 0.
+        /// `Pow`'s bounds; a NaN channel's code the device's, where Metal's is 0. Also every
+        /// conversion of an extended-range, padded 10-bit or bfloat texel, on every device (no
+        /// Vulkan format holds them): a linear value within one `f32` ulp of Metal's, an encoded
+        /// code within one (`R10Unorm_X6_sRGB`'s and `RGB10A2Unorm_sRGB`'s colour within two
+        /// below `0.0031308`), a `half` result within one `half` ulp.
         DevicePackConversion = "device-pack-conversion";
         /// A render pipeline whose color attachments the device draws in more than one group:
         /// each draw runs once per group, each group's variant over its own copy of the pass's
