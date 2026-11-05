@@ -67,19 +67,15 @@ use metal2vulkan::metal::{PixelFormat, TextureUsage};
 #[cfg(any(m2v_cpu_icd, m2v_gpu_hazards))]
 use metal2vulkan_devtools::llvm_assemble;
 use metal2vulkan_runtime::{
-    Buffer, CommandBuffer, CommandQueue, Device, DeviceOptions, EventRef, HostMemory,
-    ResourceOptions, Texture, TextureDescriptor,
+    Buffer, CommandBuffer, CommandBufferStatus, CommandQueue, Device, DeviceOptions, EventRef,
+    HostMemory, ResourceOptions, Texture, TextureDescriptor,
 };
 #[cfg(any(m2v_cpu_icd, m2v_gpu_hazards))]
-use metal2vulkan_runtime::{
-    CommandBufferStatus, ComputeCommandEncoder, ComputePipelineState, PipelineOptions, Size,
-};
+use metal2vulkan_runtime::{ComputeCommandEncoder, ComputePipelineState, PipelineOptions, Size};
 #[cfg(any(m2v_cpu_icd, m2v_gpu_hazards))]
 use std::path::Path;
 use std::sync::Arc;
-use std::time::Duration;
-#[cfg(any(m2v_cpu_icd, m2v_gpu_hazards))]
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 /// About how long a spin runs on the GPU: far past the CPU's write, made [`SETTLE`] after the
 /// spinning command buffer's work was submitted.
