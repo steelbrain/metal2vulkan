@@ -38,8 +38,9 @@ pub struct BindState {
     /// The consumer lists `used_resources` in token order: each entry's token at least the one
     /// before it, so a token's entries lie together. A heap member then finds its entries by
     /// search, at the logarithm of their count (a debug build asserts the order), rather than
-    /// every command's instantiation reading every entry. Not part of the shape; `false` (the
-    /// default): listed in any order.
+    /// every command's instantiation reading every entry, and a comparison with a shape
+    /// ([`has_shape`](Self::has_shape)) reads the list in place, making none of its shape. Not
+    /// part of the shape; `false` (the default): listed in any order.
     #[cfg_attr(feature = "serde", serde(default))]
     pub used_in_token_order: bool,
     /// The render encoder's vertex amplification (`setVertexAmplificationCount:viewMappings:`);
@@ -736,9 +737,10 @@ impl BindState {
 
     /// Whether `shape` is this state's shape: `self.shape() == *shape`, answered without making
     /// the shape, so a consumer that keeps the shapes it made can find a state's among them
-    /// without allocating. Its used resources' shape alone is made, where it lists any and every
-    /// other field matches; [`position_of_shape`](Self::position_of_shape) makes it once for
-    /// many shapes.
+    /// without allocating. Its used resources' shape alone is made, where it lists any in no
+    /// token order ([`used_in_token_order`](Self::used_in_token_order)) and every other field
+    /// matches; [`position_of_shape`](Self::position_of_shape) makes it once for many shapes. A
+    /// list in token order is compared in place, making nothing.
     pub fn has_shape(&self, shape: &BindShape) -> bool {
         self.is_shape(shape, &mut None)
     }
@@ -746,7 +748,7 @@ impl BindState {
     /// The position among `shapes` of the first that is this state's shape (of which
     /// [`has_shape`](Self::has_shape) answers true), found without making the shape: its used
     /// resources' shape is made at most once, however many shapes it is compared with, and only
-    /// where it lists any and a shape's every other field matches.
+    /// where it lists any in no token order and a shape's every other field matches.
     pub fn position_of_shape<'s>(
         &self,
         shapes: impl IntoIterator<Item = &'s BindShape>,
@@ -758,14 +760,45 @@ impl BindState {
     }
 
     /// Whether `shape` is this state's shape ([`has_shape`](Self::has_shape)), its used
-    /// resources' shape taken from `made`, or made into it where it is needed first.
+    /// resources' compared in place where they are listed in token order, else their shape taken
+    /// from `made`, or made into it where it is needed first.
     fn is_shape(&self, shape: &BindShape, made: &mut Option<BTreeMap<u32, UsedShape>>) -> bool {
         // Last: the one field compared through a shape made of it.
         self.has_shape_beside_used(shape)
-            && match self.used_resources.is_empty() {
-                true => shape.used.is_empty(),
-                false => *made.get_or_insert_with(|| self.used_shape()) == shape.used,
+            && match (self.used_resources.is_empty(), self.used_in_token_order) {
+                (true, _) => shape.used.is_empty(),
+                (false, true) => self.used_in_order_are(&shape.used),
+                (false, false) => *made.get_or_insert_with(|| self.used_shape()) == shape.used,
             }
+    }
+
+    /// Whether `used`, a shape's used resources, is [`used_shape`](Self::used_shape)'s answer for
+    /// `used_resources` listed in token order: each token's entries, which lie together, unioned
+    /// as `used_shape` unions them and compared with the shape's entry of that token, in place.
+    fn used_in_order_are(&self, used: &BTreeMap<u32, UsedShape>) -> bool {
+        let listed = &self.used_resources;
+        debug_assert!(
+            listed.windows(2).all(|w| w[0].token <= w[1].token),
+            "used resources listed in token order are not"
+        );
+        let mut shapes = used.iter();
+        let mut listed = listed.iter().peekable();
+        while let Some(first) = listed.next() {
+            let mut made = UsedShape {
+                class: UsedClass::of(first.class),
+                usage: first.usage,
+                stages: first.stages,
+            };
+            while let Some(again) = listed.next_if(|u| u.token == first.token) {
+                made.usage |= again.usage;
+                made.stages |= again.stages;
+            }
+            match shapes.next() {
+                Some((token, shape)) if *token == first.token && *shape == made => {}
+                Some(_) | None => return false,
+            }
+        }
+        shapes.next().is_none()
     }
 
     /// Whether `shape` is this state's shape but for its used resources' ([`BindShape::used`]),
@@ -836,13 +869,8 @@ impl BindState {
     fn used_shape(&self) -> BTreeMap<u32, UsedShape> {
         let mut used: BTreeMap<u32, UsedShape> = BTreeMap::new();
         for u in &self.used_resources {
-            let class = match u.class {
-                ResourceClass::Buffer => UsedClass::Buffer,
-                ResourceClass::Texture(facts) => UsedClass::Texture(facts.shape()),
-                ResourceClass::Heap => UsedClass::Heap,
-            };
             let e = used.entry(u.token).or_insert(UsedShape {
-                class,
+                class: UsedClass::of(u.class),
                 usage: metal::ResourceUsage::empty(),
                 stages: metal::RenderStages::empty(),
             });
@@ -1910,6 +1938,17 @@ pub enum UsedClass {
     Buffer,
     Texture(TextureShape),
     Heap,
+}
+
+impl UsedClass {
+    /// The kind of a used resource of `class`.
+    fn of(class: ResourceClass) -> UsedClass {
+        match class {
+            ResourceClass::Buffer => UsedClass::Buffer,
+            ResourceClass::Texture(facts) => UsedClass::Texture(facts.shape()),
+            ResourceClass::Heap => UsedClass::Heap,
+        }
+    }
 }
 
 /// The shape of one stage's argument tables.

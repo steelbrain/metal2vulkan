@@ -355,3 +355,84 @@ fn a_state_s_shape_is_found_among_many_with_its_used_resources_made_once() {
     let (found, made) = allocations_during(|| other.position_of_shape(&shapes));
     assert_eq!((found, made), (None, 0), "a state of another field");
 }
+
+/// A state that lists its used resources in token order (`BindState::used_in_token_order`)
+/// compares them with a shape's in place, making nothing: over listings that differ in a token, a
+/// usage, a stage, a class, a token listed twice (whose entries union, the first's class kept) or
+/// one listed more or less, each answers as the same listing in no order does, against the shape
+/// of every other, and is found among them all without allocating.
+#[test]
+fn a_state_listed_in_token_order_compares_its_used_resources_in_place() {
+    use super::constant_blob_footprint::allocations_during;
+    let entry = |class, token, usage, stages| {
+        let mut used = UsedResource::new(class, token);
+        used.usage = usage;
+        used.stages = stages;
+        used
+    };
+    let buffer = ResourceClass::Buffer;
+    let read = |token| entry(buffer, token, ResourceUsage::READ, RenderStages::FRAGMENT);
+    let listing = |change: &dyn Fn(&mut Vec<UsedResource>)| {
+        let mut state = base();
+        state.used_resources = (0..16).map(read).collect();
+        change(&mut state.used_resources);
+        state
+    };
+    let facts = |format| ResourceClass::Texture(TextureFacts::new(TextureType::Type2D, format));
+    let unorm = facts(PixelFormat::RGBA8Unorm);
+    let states = [
+        listing(&|_| {}),
+        listing(&|used| used[15].token = 40),
+        listing(&|used| used[5].usage = ResourceUsage::WRITE),
+        listing(&|used| used[5].stages = RenderStages::VERTEX),
+        listing(&|used| used[7].class = unorm),
+        listing(&|used| used[7].class = facts(PixelFormat::R32Float)),
+        listing(&|used| used.insert(8, read(8))),
+        listing(&|used| {
+            used.insert(
+                9,
+                entry(buffer, 8, ResourceUsage::WRITE, RenderStages::VERTEX),
+            )
+        }),
+        listing(&|used| {
+            used.insert(
+                9,
+                entry(unorm, 8, ResourceUsage::WRITE, RenderStages::VERTEX),
+            )
+        }),
+        listing(&|used| {
+            used[8].usage = ResourceUsage::READ | ResourceUsage::WRITE;
+            used[8].stages = RenderStages::VERTEX | RenderStages::FRAGMENT;
+        }),
+        listing(&|used| {
+            used.remove(10);
+        }),
+        listing(&|used| used.push(read(16))),
+        listing(&|used| used.truncate(1)),
+    ];
+    let shapes: Vec<_> = states.iter().map(BindState::shape).collect();
+    let mut same = 0;
+    for (at, state) in states.iter().enumerate() {
+        let mut ordered = state.clone();
+        ordered.used_in_token_order = true;
+        for (of, shape) in shapes.iter().enumerate() {
+            let equal = shapes[at] == *shape;
+            same += usize::from(equal && at != of);
+            let (has, made) = allocations_during(|| ordered.has_shape(shape));
+            assert_eq!(has, equal, "state {at} in token order, shape {of}");
+            assert_eq!(
+                has,
+                state.has_shape(shape),
+                "state {at} in no order, shape {of}"
+            );
+            assert_eq!(made, 0, "state {at} in token order, shape {of}: made");
+        }
+        let (found, made) = allocations_during(|| ordered.position_of_shape(&shapes));
+        assert_eq!(found, state.position_of_shape(&shapes), "state {at}: found");
+        assert_eq!(made, 0, "state {at}: found among them all, made");
+    }
+    // A token listed twice with the same usage and stages is the listing's shape (one pair); one
+    // listed again with a vertex write, as a buffer or as a texture, is the one listed once that
+    // reads and writes it in both stages (three of one shape).
+    assert_eq!(same, 2 + 3 * 2, "pairs of one shape");
+}
