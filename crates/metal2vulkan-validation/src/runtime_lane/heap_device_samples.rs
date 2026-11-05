@@ -30,7 +30,9 @@ use metal2vulkan_runtime::{
 /// `texture/heap.rs`), and one it counts for none lies in Metal's tiles each way. Then one
 /// Metal keeps compressed (`RGBA8Unorm`, 64 x 64, 4 samples, the property on), whose
 /// `heap-texture-lossless-layout` notice says its image lies in the heap's bytes, not in memory of
-/// its own. `HEAPTEX device-samples` lines print the samples off Metal's tiles.
+/// its own: where the device held the others as shadows of their samples, a shadow of its samples
+/// as Metal lays them out uncompressed (the RTX 5080 Laptop's). `HEAPTEX device-samples` lines
+/// print the samples off Metal's tiles.
 #[test]
 fn device_heap_multisample_colour_textures_lie_where_announced() {
     let messages = Messages::default();
@@ -163,10 +165,16 @@ fn device_heap_multisample_colour_textures_lie_where_announced() {
         .collect();
     eprintln!("HEAPTEX device-samples compressed: {reasons:?}");
     assert_eq!(reasons.len(), 1, "{reasons:?}");
+    // Where the device holds the uncompressed ones as shadows of their samples in Metal's
+    // tiles, it holds this one as a shadow of its uncompressed tiles in the heap's bytes.
+    let shadows = !as_metal && counted < textures;
+    let lies = match shadows {
+        true => "the heap's bytes hold its samples as Metal lays them out uncompressed",
+        false => "its image lies in the heap's bytes",
+    };
     assert!(
-        reasons[0].contains("its image lies in the heap's bytes")
-            && !reasons[0].contains("memory of its own"),
-        "{}",
+        reasons[0].contains(lies) && !reasons[0].contains("memory of its own"),
+        "shadows {shadows}: {}",
         reasons[0]
     );
     drop((texture, heap));
