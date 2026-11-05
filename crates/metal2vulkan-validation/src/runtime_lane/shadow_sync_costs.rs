@@ -505,8 +505,9 @@ fn per_frame(before: &WorkCounts, after: &WorkCounts) -> String {
          ({:.0} skipped), merged back {:.0}, compared {:.2}; first copied in again {:.0}, \
          recopied beyond held {:.0}, after changes {:.0} (other shadows {:.0}, writes {:.0}); \
          large surfaces' first copies in: carried {:.0}, behind an earlier command buffer's \
-         standing {:.0}, behind none {:.0}, recopied {:.0}; surfaces' first copies in {:.0}; \
-         host texture shadows: render target {}, check pending {}, failed {}, unchecked {}, \
+         standing {:.0}, behind none {:.0}, recopied {:.0}; surfaces' first copies in {:.0} \
+         (over private buffers {:.0}); copies in decided against a standing {:.2}, skipped \
+         {:.2} ({:.0} texels); host texture shadows: render target {}, check pending {}, failed {}, unchecked {}, \
          refused pitch {}, placement {}, image {}; device copy textures {}, in place {}",
         per(|c| c.queue_submissions),
         per(|c| c.batch_submit_nanos) / 1e3,
@@ -546,6 +547,10 @@ fn per_frame(before: &WorkCounts, after: &WorkCounts) -> String {
         per(|c| c.shadow_texels_first_copied_in_large_surfaces_unstood),
         per(|c| c.shadow_texels_recopied_in_large_surfaces),
         per(|c| c.shadow_texels_first_copied_in_surfaces),
+        per(|c| c.shadow_texels_first_copied_in_private_surfaces),
+        per(|c| c.shadow_copies_in_against_standing),
+        per(|c| c.shadow_copies_in_skipped_by_standing),
+        per(|c| c.shadow_texels_skipped_by_standing),
         after.host_texture_shadows_render_target,
         after.host_texture_shadows_check_pending,
         after.host_texture_shadows_check_failed,
