@@ -594,6 +594,17 @@ impl Lane {
         (profile.enabled().properties).contains(&VkProperty::MetalSampler)
     }
 
+    /// Whether the device orders a fragment function's fetch through the pixel interlock alone
+    /// (`pixel_interlock` without `rasterization_order_color_access`), where the function blends a
+    /// packed word in the interlocked storage form. A device that orders fetch otherwise (lavapipe,
+    /// through rasterization-order input attachments) refuses such a blend as lacking the format
+    /// (docs/FAST-PATHS.md, a packed 16-bit attachment's blend on a device that does not render
+    /// the format).
+    fn interlock_orders(&self) -> bool {
+        let fragment = self.device.compile_device().profile().fragment();
+        fragment.pixel_interlock && !fragment.rasterization_order_color_access
+    }
+
     /// Whether the device renders `pf` through the view of its word.
     fn word(&self, pf: PixelFormat) -> bool {
         WordAttachment::of(pf, self.device.compile_device().profile()).is_some()
@@ -847,8 +858,9 @@ impl Lane {
         resolves[1] = resolve_against(pf, &what, "load", &load, &loaded, near, wrong);
         // A blend over the loaded samples: Metal's within a code of each field, and a code further
         // for each code the sample it blends over lies from Metal's, where the device makes it. A
-        // word's `R8Unorm_sRGB` and `RGB9E5Float` blend is not built: refused as the
-        // device lacking the format, as a single-sampled one is.
+        // word's `R8Unorm_sRGB` and `RGB9E5Float` blend is not built, nor a packed word's where the
+        // device does not order fetch through the pixel interlock alone: refused as the device
+        // lacking the format, as a single-sampled one is.
         let b = self.pipeline(pf, samples, true);
         let blend = match self
             .device
@@ -857,7 +869,7 @@ impl Lane {
             Ok(blend) => Some(blend),
             Err(Error::Unsupported(u)) if u.feature == Feature::Format => {
                 println!("{name}: {what}: blend refused: {u:?}");
-                if word && packed {
+                if word && packed && self.interlock_orders() {
                     wrong.push(format!("{what}: a packed word's blend refused: {u:?}"));
                 }
                 None
