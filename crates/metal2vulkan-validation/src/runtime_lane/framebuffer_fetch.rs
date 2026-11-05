@@ -1806,6 +1806,37 @@ fn cleared(lane: &Lane, texture: &Texture, clear: ClearColor, bytes: u64) -> Vec
     lane.read(texture, (0, 0), bytes, BlitOption::None)
 }
 
+/// Whether `got`, a fetched attachment's texels of `pf` cleared to `clear`, holds the clear as
+/// `reference` holds it (a pass that only clears, [`cleared`]): byte for byte, but where the
+/// device's clear is not Metal's conversion (no `DriverFact::ColorClearIsMetals`) an 8-bit unorm
+/// channel may hold, in each, either of the two codes nearest the clear's scaled value, which
+/// Vulkan lets a clear store (the RTX 5080 Laptop GPU's load operation of a pass with a draw
+/// stores `RG8Unorm`'s 0.5, 127.5 codes, as 127, and its pass without one as 128).
+fn clears_alike(
+    lane: &Lane,
+    pf: PixelFormat,
+    clear: ClearColor,
+    got: &[u8],
+    reference: &[u8],
+) -> bool {
+    let metals = (lane.device.properties().driver_facts).contains(&DriverFact::ColorClearIsMetals);
+    let channels = match pf {
+        PixelFormat::RG8Unorm => 2,
+        PixelFormat::RGBA8Unorm => 4,
+        _ => return got == reference,
+    };
+    if metals || got.len() != reference.len() {
+        return got == reference;
+    }
+    let values = [clear.red, clear.green, clear.blue, clear.alpha];
+    let near = |code: u8, i: usize| {
+        let r = f64::from((values[i % channels] as f32).clamp(0.0, 1.0)) * 255.0;
+        (f64::from(code) - r).abs() < 1.0
+    };
+    (got.iter().zip(reference).enumerate())
+        .all(|(i, (&g, &r))| g == r || (near(g, i) && near(r, i)))
+}
+
 /// Bytes of one texel of the formats `fetched_attachments_clear_as_the_load_action_does` clears.
 fn texel_bytes(pf: PixelFormat) -> u64 {
     match pf {
@@ -1817,7 +1848,9 @@ fn texel_bytes(pf: PixelFormat) -> u64 {
 }
 
 /// A fetched attachment the function only reads, cleared and stored by a pass of one draw,
-/// holds the texels the clear stores as a load operation, for each format (the module docs).
+/// holds the texels the clear stores as a load operation, for each format (the module docs; an
+/// 8-bit unorm channel of a device whose clear is not Metal's, either code nearest the clear:
+/// [`clears_alike`]).
 /// A format the device does not store, which the interlock form needs, is refused at the
 /// pipeline (`Unsupported`), printed.
 #[test]
@@ -1932,10 +1965,12 @@ fn fetched_attachments_clear_as_the_load_action_does() {
             },
         )
         .unwrap();
-        assert_eq!(
-            lane.read(&extra, (0, 0), bytes, BlitOption::None),
-            reference,
-            "the cleared extra of {pf:?} on {device}"
+        let got = lane.read(&extra, (0, 0), bytes, BlitOption::None);
+        assert!(
+            clears_alike(&lane, pf, extra_clear, &got, &reference),
+            "the cleared extra of {pf:?} on {device}: {:02x?}, the clear alone {:02x?}",
+            &got[..got.len().min(16)],
+            &reference[..reference.len().min(16)]
         );
         eprintln!(
             "framebuffer fetch of a cleared {pf:?} on {device} through {}: the load action's texels",
