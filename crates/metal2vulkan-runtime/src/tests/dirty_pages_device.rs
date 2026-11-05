@@ -56,9 +56,8 @@
 //! fill beneath it is not, so the command buffer lets go of the shadow's hold.
 //!
 //! A blit's fill of such pages imported in place, with no shadow over them, is told to the log
-//! as the consumer's write twice: at the commit, and once after it ran, before the shared event
-//! the command buffer signals at its end reads signalled and before its completed handler runs
-//! (`DirtyShadows::ran`).
+//! as the consumer's write twice: at the commit, and once after it ran, before the wait for the
+//! command buffer returns and before its completed handler runs (`DirtyShadows::ran`).
 //!
 //! One wait for a log's publication serves every gated copy in of a commit, two shadows over one
 //! log among them, and a wait the log answers `false` is not made again for them
@@ -563,14 +562,12 @@ fn a_write_in_place_is_told_at_the_commit_and_once_after_it_ran() {
         return;
     };
     let queue = device.new_command_queue().unwrap();
-    let event = device.new_shared_event().unwrap();
     for round in 0..3 {
         let before = told_row_2(&log);
         let command_buffer = queue.command_buffer().unwrap();
         let mut blit = command_buffer.blit_command_encoder().unwrap();
         blit.fill_buffer(&buffer, 2 * ROW..3 * ROW, 0x55).unwrap();
         blit.end_encoding().unwrap();
-        (command_buffer.encode_signal_event(EventRef::from(&event), round + 1)).unwrap();
         let in_handler = Arc::new(AtomicUsize::new(usize::MAX));
         let (seen, kept) = (Arc::clone(&in_handler), Arc::clone(&log));
         (command_buffer.add_completed_handler(Box::new(move |_| {
@@ -578,15 +575,9 @@ fn a_write_in_place_is_told_at_the_commit_and_once_after_it_ran() {
         })))
         .unwrap();
         command_buffer.commit().unwrap();
-        // Once the event reads signalled, the second report was made.
-        let started = std::time::Instant::now();
-        while event.signaled_value() <= round {
-            assert!(started.elapsed() < WAIT, "the event was signalled");
-            std::thread::yield_now();
-        }
-        let at_signal = told_row_2(&log) - before;
         assert!(command_buffer.wait_until_completed_for(WAIT).is_ok());
         assert_eq!(command_buffer.status(), CommandBufferStatus::Completed);
+        let at_wait = told_row_2(&log) - before;
         // The handler may run after the wait returns.
         let started = std::time::Instant::now();
         while in_handler.load(Ordering::SeqCst) == usize::MAX {
@@ -595,11 +586,11 @@ fn a_write_in_place_is_told_at_the_commit_and_once_after_it_ran() {
         }
         let told = told_row_2(&log) - before;
         eprintln!(
-            "DIRTY-PAGES: round {round}: the fill told {told} times, {at_signal} at the signal"
+            "DIRTY-PAGES: round {round}: the fill told {told} times, {at_wait} as the wait returned"
         );
         assert_eq!(
-            at_signal, 2,
-            "at the commit and once it ran, before the signal reads"
+            at_wait, 2,
+            "at the commit and once it ran, before the wait returns"
         );
         assert_eq!(
             in_handler.load(Ordering::SeqCst) - before,

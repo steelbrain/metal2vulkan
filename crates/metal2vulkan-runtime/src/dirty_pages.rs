@@ -27,9 +27,11 @@
 //! - **The GPU's writes in place** are those a command buffer's commands name (their uses, of a
 //!   buffer over the pages, a heap's buffers or textures, a texture over a buffer's bytes: a
 //!   texture's use names its whole buffer or heap, and so does a command buffer that wrote more
-//!   than 64 ranges of one), reported at its commit and once more after they ran, before
-//!   anything sees its last batch, or a batch that signals an event, complete
-//!   ([`DirtyCommit::report_host_writes`]). Its shadows' copies back and merges into the pages
+//!   than 64 ranges of one), reported at its commit and once more after they ran, as the
+//!   runtime finishes its last batch, or a batch that signals an event, before it marks the
+//!   batch's events reached, tells the scheduler, its waiters and its completed handlers
+//!   ([`DirtyCommit::report_host_writes`]). A read of a shared event's value from its semaphore
+//!   (`signaledValue`, a host wait) can see the GPU's signal before that. Its shadows' copies back and merges into the pages
 //!   are the shadow's own writes on every log of the pages, never the consumer's. Metal's
 //!   contract has a command reach a resource only through a binding or a residency it named.
 //! - **Holds.** A shadow's log holds the stamp as of which its image held every texel of the
@@ -117,9 +119,9 @@ pub struct DirtyStamp(pub u64);
 /// and [`changed_except`](Self::changed_except) on the thread that records its commands for the
 /// GPU, and for copied host buffers on the thread that commits it, [`wrote`](Self::wrote) and
 /// [`wrote_as`](Self::wrote_as) at the commit and once its work ran (on the thread that
-/// finishes its batches, before anything sees its last batch complete). A
-/// [`Watch`](Self::Watch) may be dropped on a completion thread, so its drop takes no lock the
-/// consumer holds while it calls the runtime.
+/// finishes its batches, before its waiters and completed handlers see its last batch
+/// complete). A [`Watch`](Self::Watch) may be dropped on a completion thread, so its drop takes
+/// no lock the consumer holds while it calls the runtime.
 ///
 /// [`HostMemory::with_dirty_pages`]: crate::HostMemory::with_dirty_pages
 /// [`HostMemory::pointer`]: crate::HostMemory::pointer
@@ -836,8 +838,9 @@ impl DirtyShadows {
     /// back and merges are reported again ([`DirtyPages::wrote_as`]), and its writes into logged
     /// host pages imported in place ([`DirtyCommit::report_host_writes`]), now they ran, so a copy
     /// that synced to a stamp asked between the commit and the GPU's write, and read the pages
-    /// before it, finds them changed at its next copy in. Before its event signals, the scheduler,
-    /// its waiters and its completed handlers see it: a copy after any of those finds them too.
+    /// before it, finds them changed at its next copy in. Before the batch's events are marked
+    /// reached and the scheduler, its waiters and its completed handlers see it: a copy after any
+    /// of those finds them too.
     /// Where the batch `ends` the command buffer, every write of it ran.
     pub(crate) fn ran(&self, commit: &mut DirtyCommit, ends: bool) {
         for (log, range) in &commit.wrote {
@@ -1113,7 +1116,7 @@ impl DirtyCommit {
     /// ([`PagesLog::wrote_but`]), which every other copy of the pages counts as changed, and the
     /// shadow's own copies in must not. Twice: at the commit ([`DirtyShadows::committed`]), so a
     /// copy that a later commit's stamp syncs and the device orders after the write takes the
-    /// pages; and once the write ran, before anything sees it complete
+    /// pages; and once the write ran, before the runtime marks it complete
     /// ([`DirtyShadows::ran`]; [`DirtyShadows::completed`] where no batch did), so a copy that
     /// synced between the commit and the write, reading the pages before it, takes them at its
     /// next copy in.
