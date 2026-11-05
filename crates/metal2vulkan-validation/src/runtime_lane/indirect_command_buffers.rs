@@ -465,15 +465,21 @@ fn creation_refuses_what_metal_refuses() {
         // buffer of the device's `max_buffer_length` cannot hold are the gap naming the limit:
         // plain Metal makes such a buffer and lays out no slots in it (16 KiB at 2^31 kernel
         // buffers, whose `setKernelBuffer:atIndex:` at index 2^31 then ends the process), and the
-        // runtime lays out every slot it answers for.
+        // runtime lays out every slot it answers for. The commands are as many as put 2^32 - 1
+        // slots a command past the limit on every device, whatever its `max_buffer_length`: a
+        // slot takes 16 bytes, so `limit / (2^32 - 1) + 1` commands' slots pass it. Two commands'
+        // do not pass 2^40, an NVIDIA RTX 5080 Laptop's limit, and its memory refuses their 128
+        // GiB (`OutOfMemory`, which the runtime documents).
         let [buffers_max, lengths_max, vertex_max, fragment_max] = counts(u32::MAX);
         assert_eq!(icb(device, &lengths_max, 2).size(), 2);
+        let limit = device.properties().max_buffer_length;
+        let past = limit / u64::from(u32::MAX) + 1;
         for descriptor in [buffers_max, vertex_max, fragment_max] {
             assert_eq!(
-                refused(&descriptor, 2, shared),
+                refused(&descriptor, past, shared),
                 Error::NotImplemented(RuntimeGap::IndirectCommandBufferPastMaxBufferLength {
-                    count: 2,
-                    max_buffer_length: device.properties().max_buffer_length,
+                    count: past,
+                    max_buffer_length: limit,
                 })
             );
         }
