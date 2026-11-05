@@ -30,7 +30,8 @@
 //!   output's (held widened, its payload in the significand's top bits) where it takes
 //!   `MetalHalfColorNans`; elsewhere the module records the note (`runtime_lane::color_writes`:
 //!   ANV and RADV store `0xfe00`, lavapipe quiets or canonicalizes a `half` NaN, MoltenVK
-//!   canonicalizes it).
+//!   canonicalizes it). An output every return of which holds a constant none of whose lanes is a
+//!   NaN (`stage_io::returns_no_nan`) stores none, and records no note for one.
 //!
 //! On a profile that stores Metal's codes itself (`VkProperty::MetalColorWrites`) the map holds
 //! only half-float channels (`pipeline::color_writes`): only the NaN note is recorded, and the
@@ -71,8 +72,9 @@ use std::collections::BTreeSet;
 
 /// Plan the write of a fragment function's output of form `f` to color attachment `color`
 /// (dual-source index 0), through an output variable or in the storage form (see the module
-/// docs).
-pub(crate) fn plan(cx: &mut SelectCx<'_>, color: u32, f: Form) {
+/// docs). `nan_free`: every value the function returns there is a constant none of whose lanes is
+/// a NaN, which stores no NaN.
+pub(crate) fn plan(cx: &mut SelectCx<'_>, color: u32, f: Form, nan_free: bool) {
     if cx.stage != Stage::Fragment {
         return;
     }
@@ -106,7 +108,10 @@ pub(crate) fn plan(cx: &mut SelectCx<'_>, color: u32, f: Form) {
     let mut relied = BTreeSet::new();
     for (slot, rule) in lanes.iter_mut().zip(rules).take(usize::from(f.lanes)) {
         let Some(rule) = rule else { continue };
-        nans |= !shader_blended && color_writes::half_float(rule) && !nan_kept(cx, rule, f);
+        nans |= !shader_blended
+            && !nan_free
+            && color_writes::half_float(rule)
+            && !nan_kept(cx, rule, f);
         if sixteen_blended && f.float_fmt() == Some(FloatFmt::F32) {
             match cx
                 .profile
@@ -142,7 +147,7 @@ pub(crate) fn plan(cx: &mut SelectCx<'_>, color: u32, f: Form) {
             (ChannelWrite::Device, _) => device |= !shader_blended,
             (rule, Some(fmt)) => match conversion(cx, rule, fmt, storage, &mut relied) {
                 Conversion::Metal => {}
-                Conversion::MetalButNan => nans |= !shader_blended,
+                Conversion::MetalButNan => nans |= !shader_blended && !nan_free,
                 Conversion::Device => device |= !shader_blended,
             },
         }

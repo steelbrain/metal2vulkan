@@ -736,6 +736,70 @@ pub fn select_return(cx: &mut SelectCx<'_>, _at: InstId, v: Option<Value>) -> Re
     }
 }
 
+/// Whether every value the entry returns holds output field `field` (the whole value where it
+/// returns no struct) as a constant none of whose lanes is a NaN (`texture::holds_no_nan`): a
+/// field built by an insertion of such a constant into the returned struct, or a member of a
+/// constant struct. The output then stores no NaN, so no device's encoding of one can show. Any
+/// other value may hold one, and so may an entry that returns none.
+pub(crate) fn returns_no_nan(cx: &SelectCx<'_>, field: u32) -> bool {
+    use crate::air::ir::{Const, InstKind, Type};
+    let e = cx.entry;
+    let Some(func) = e.module.func(e.func) else {
+        return false;
+    };
+    let Some(body) = func.body.as_ref() else {
+        return false;
+    };
+    let returns_struct = match e.module.types().get(func.ty) {
+        Some(Type::Function { ret, .. }) => {
+            matches!(e.module.types().get(*ret), Some(Type::Struct { .. }))
+        }
+        _ => false,
+    };
+    let consts = e.module.consts();
+    // The value field `field` of the returned value `v` holds, where its insertions or its
+    // constant state it.
+    let member = |mut v: Value| -> Option<Value> {
+        if !returns_struct {
+            return Some(v);
+        }
+        for _ in 0..=body.insts.len() {
+            match v {
+                Value::Inst(i) => match body.insts.get(i).map(|x| &x.kind) {
+                    Some(InstKind::InsertValue { agg, val, indices }) => match indices[..] {
+                        [f] if f == field => return Some(*val),
+                        [f, ..] if f == field => return None,
+                        _ => v = *agg,
+                    },
+                    _ => return None,
+                },
+                Value::Const(c) => {
+                    return match consts.get(c).map(|k| &k.value) {
+                        Some(Const::Aggregate(elems)) => {
+                            elems.get(field as usize).map(|&k| Value::Const(k))
+                        }
+                        _ => None,
+                    };
+                }
+                Value::Arg(_) => return None,
+            }
+        }
+        None
+    };
+    let mut returns = 0;
+    for inst in body.insts.values() {
+        let InstKind::Ret(returned) = &inst.kind else {
+            continue;
+        };
+        let held = (*returned).and_then(&member);
+        if !held.is_some_and(|v| crate::lower::texture::holds_no_nan(cx, v)) {
+            return false;
+        }
+        returns += 1;
+    }
+    returns > 0
+}
+
 /// The varyings vertex function `e`, compiled under `inputs`, writes the same value at every
 /// vertex of a primitive (`StageIo::uniform_outputs`), sorted: its user varyings, and the raw
 /// varyings of the slice and viewport indices it writes (`VaryingKey::render_target_array_index`,

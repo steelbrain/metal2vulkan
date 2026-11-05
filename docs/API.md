@@ -3205,7 +3205,9 @@ bound.
   a fragment function computes into a 16-bit float attachment through the pixel interlock: a NaN
   of the blend is the device's arithmetic's, which the storage image's store converts, where Metal
   stores every NaN of the blend as `0x7e00`. A texture write records it where the stored NaN is the
-  device's: a constant texel none of whose lanes is a NaN records nothing. **Exempt:** a `half`
+  device's: a constant texel none of whose lanes is a NaN records nothing. So does a fragment
+  function's color output where the device's conversion stores its NaN, but one every return of
+  which holds such a constant records nothing. **Exempt:** a `half`
   texel's write to a 32-bit float storage image on a profile that takes
   `DriverDeviation::MetalNanMoves` (the image stores the widened `float`'s bits, Metal's
   `0x7fc00000`; the module requires `VkProperty::MetalNanMoves`), and a `float` or `half` texel's

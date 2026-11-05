@@ -2501,7 +2501,8 @@ pub fn entry(cx: &mut SelectCx<'_>) -> Result<(), Error> {
                 index: 0,
                 ..
             } if cx.stage == Stage::Fragment => {
-                super::color_write::plan(cx, color, link.form);
+                let nan_free = super::returns_no_nan(cx, o.field);
+                super::color_write::plan(cx, color, link.form, nan_free);
                 Some(color)
             }
             _ => None,

@@ -2267,7 +2267,7 @@ pub(super) fn half_write_nans(
 /// Whether texel `value` is a constant none of whose lanes is a NaN: a `half` or `float` scalar or
 /// vector constant whose every lane's bits are not a NaN's. Its write stores no NaN, so no device's
 /// encoding of one can show. An `undef` texel, a composite, and any computed value may hold one.
-fn holds_no_nan(cx: &SelectCx<'_>, value: Value) -> bool {
+pub(crate) fn holds_no_nan(cx: &SelectCx<'_>, value: Value) -> bool {
     use crate::lower::arith::legal::LoweredConst as C;
     use crate::spirv::ids::ScalarTy;
     let nan = |ty: ScalarTy, bits: u64| match ty {

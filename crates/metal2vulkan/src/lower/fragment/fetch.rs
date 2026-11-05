@@ -2100,7 +2100,8 @@ pub fn select_output(
                 .insert(color, rules);
         }
     } else {
-        stage_io::color_write::plan(cx, color, form);
+        let nan_free = stage_io::returns_no_nan(cx, field);
+        stage_io::color_write::plan(cx, color, form, nan_free);
         // An 8-bit unorm blend's result is the storage image's to convert, the device's
         // conversion ([`unorm8_blended`]).
         if sc.view.blend.is_some() && !sc.view.generic_blend && unorm8_format(sc.view.pixel_format)

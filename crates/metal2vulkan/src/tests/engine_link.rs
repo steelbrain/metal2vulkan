@@ -648,6 +648,48 @@ fn half_float_writes_note_the_nan_encoding_where_the_device_rewrites_it() {
     }
 }
 
+/// A fragment function's output every return of which holds a constant none of whose lanes is a
+/// NaN (`stage_io::returns_no_nan`) stores no NaN, so its write to a half-float channel records no
+/// `PrecisionNote::DeviceNanEncoding` where a computed one does: a constant `half4` and `float4`,
+/// and a struct's constant color 0, record none; a constant whose red is a NaN, a computed
+/// `half4` and the struct's computed color 1 record it, on lavapipe and MoltenVK (whose `half`
+/// outputs' NaNs the device canonicalizes).
+#[test]
+fn constant_colors_without_a_nan_record_no_nan_encoding() {
+    use crate::pipeline::artifact::PrecisionNote;
+    let Some(bc) = assemble("ncw_constant_colors.ll") else {
+        return;
+    };
+    let note = PrecisionNote::DeviceNanEncoding;
+    for stem in ["lavapipe", "moltenvk-m3"] {
+        let p = prof(stem);
+        let v = compile(&bc, "ncw_vertex", &p).expect("vertex");
+        for (entry, color, noted) in [
+            ("ncw_constant_half", 0, false),
+            ("ncw_constant_float", 0, false),
+            ("ncw_constant_nan", 0, true),
+            ("ncw_computed_half", 0, true),
+            ("ncw_constant_pair", 0, false),
+            ("ncw_constant_pair", 1, true),
+        ] {
+            let what = format!("{stem} {entry} color {color}");
+            let mut r = RenderLinkInputs::new();
+            r.color_attachments[color] =
+                Some(ColorAttachmentDescriptor::new(PixelFormat::RGBA16Float));
+            let f = compile_with(&bc, entry, &p, &fragment_inputs(&r, &p))
+                .unwrap_or_else(|e| panic!("{what}: {e}"));
+            assert_eq!(
+                f.precision.contains(&note),
+                noted,
+                "{what}: {:?}",
+                f.precision
+            );
+            let l = link(&[&v, &f], &render(&r), &p).unwrap_or_else(|e| panic!("{what}: {e}"));
+            validate_all(&l, &[&v, &f], &p);
+        }
+    }
+}
+
 /// Under `TextureWriteRoundingMode::NearestEven` a `float` output to a half-float attachment rounds
 /// to nearest even in the function on every profile, MoltenVK's included (listed as rounded, no
 /// device conversion noted, the device's blend of one and zero dropped), and the pipeline links
