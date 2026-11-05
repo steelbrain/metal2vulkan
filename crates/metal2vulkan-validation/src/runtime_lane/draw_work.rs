@@ -1243,12 +1243,16 @@ pub(super) fn on_device_both_ways(test: impl Fn(&Device)) {
 
 /// Draws of an unchanged state into one render pass instance record its state commands once:
 /// past the first, a draw records nothing, so no pipeline, descriptor set, push constant, buffer
-/// or dynamic state is set again: where the device binds set 0, each draw past the first binds
-/// the set its last draw wrote, the same descriptors (`WorkCounts::set_zero_sets_reused`), or
-/// draws as its encoder's last draw again (`draws_as_before`), which binds what that draw bound;
-/// and where it pushes set 0 ([`pushes`]), every draw pushes it, its writes the same, a draw
-/// again as the draw it repeats (counted at the encoder's end). The first draw records them all, and the target is the
-/// texture's. Every draw takes its key's own pipeline, made beforehand ([`make`]), none the
+/// or dynamic state is set again. Each draw past the first is drawn as its encoder's last draw
+/// again (`WorkCounts::draws_as_before`), which binds what that draw bound, or takes every step,
+/// its shape found in the encoder's memo (`draw_shapes_reused`): in a build with debug assertions
+/// the first draw again of a kept draw and every second one after it take every step
+/// (`render/draw_again.rs`), so 7 of the 15 are drawn again there, and all 15 elsewhere. A draw
+/// that takes every step binds the set its last draw wrote, the same descriptors
+/// (`set_zero_sets_reused`), where the device binds set 0; where it pushes set 0 ([`pushes`]), it
+/// pushes it, its writes the same, and binds no set. Every draw pushes it there, a draw again as
+/// the draw it repeats (counted at the encoder's end). The first draw records them all, and the
+/// target is the texture's. Every draw takes its key's own pipeline, made beforehand ([`make`]), none the
 /// residual form, so no pipeline is bound again past the first draw. Both ways
 /// ([`on_device_both_ways`]).
 #[test]
@@ -1270,9 +1274,9 @@ fn draws_of_an_unchanged_state_record_its_commands_once() {
         encoder.end_encoding().unwrap();
         let after = device.work_counts();
         let pushed = grew(&before, &after, |c| c.draws_pushing_set_zero);
-        let reused = grew(&before, &after, |c| {
-            c.set_zero_sets_reused + c.draws_as_before
-        });
+        let again = grew(&before, &after, |c| c.draws_as_before);
+        let every_step = grew(&before, &after, |c| c.draw_shapes_reused);
+        let sets_reused = grew(&before, &after, |c| c.set_zero_sets_reused);
         let residual = grew(&before, &after, |c| c.residual_form_draws);
         assert_eq!(
             residual, 0,
@@ -1280,8 +1284,13 @@ fn draws_of_an_unchanged_state_record_its_commands_once() {
         );
         let pushes = pushes(device);
         assert_eq!(pushed, if pushes { DRAWS as u64 } else { 0 }, "{pushes}");
-        let sets = if pushes { 0 } else { DRAWS as u64 - 1 };
-        assert_eq!(reused, sets, "{pushes}");
+        assert_eq!(
+            again + every_step,
+            DRAWS as u64 - 1,
+            "{pushes}: drawn again {again}, every step {every_step}"
+        );
+        let sets = if pushes { 0 } else { every_step };
+        assert_eq!(sets_reused, sets, "{pushes}: every step {every_step}");
         assert!(first > 1, "the first draw recorded {first}");
         assert!(later.iter().all(|&n| n == 0), "{first}, then {later:?}");
         let pixels = scene.pixels(&command_buffer);
