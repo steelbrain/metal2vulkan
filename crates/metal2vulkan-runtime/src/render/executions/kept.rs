@@ -254,7 +254,7 @@ impl StepReads {
     pub(super) fn read(
         self,
         icb: &IndirectCommandBuffer,
-    ) -> Result<(WrittenRecords, ReadRecords), Error> {
+    ) -> Result<(WrittenRecords<RenderPipelineState>, ReadRecords), Error> {
         let range = self.range();
         let read: Vec<(u32, Range<u32>, ReadBytes, StepCopy)> = (self.0.into_iter())
             .map(
@@ -686,17 +686,12 @@ impl RenderExecution {
             if step {
                 let (commands, written) = self.written_commands(&device, piece, None)?;
                 found.faults = ReplayFaults(found.faults.0 | written.0);
-                self.replay(
-                    &mut encoder,
-                    commands.into_iter().flatten(),
-                    residency,
-                    found,
-                )?;
+                self.replay(&mut encoder, commands.iter().flatten(), residency, found)?;
                 continue;
             }
             let (commands, released) = self.icb.render_records(piece, Reader::Commit)?;
             self.icb.degrade_released(&released);
-            self.replay(&mut encoder, commands, residency, found)?;
+            self.replay(&mut encoder, &commands, residency, found)?;
         }
         let tail = self.finish(encoder, found, rendered, &device)?;
         let Recorded {
@@ -735,22 +730,30 @@ impl RenderExecution {
         let snapshot = &self.snapshot;
         let device = command_buffer.device();
         let moved = crate::buffer::host_cells_moved();
-        let (commands, released, records, forms) = match records {
+        // The host step's commands, `None` where a record runs nothing for a fault, or the CPU's.
+        let (stepped, read, released, records, forms) = match records {
             Some(bytes) => {
                 let written = self.icb.decode_written(&bytes);
                 let (commands, faults, released) =
                     self.named_commands(device, covered.start, written);
                 found.faults = ReplayFaults(found.faults.0 | faults.0);
-                let commands: Vec<Command> = commands.into_iter().flatten().collect();
-                (commands, released, Some(bytes), BufferForms::Large)
+                (
+                    commands,
+                    Vec::new(),
+                    released,
+                    Some(bytes),
+                    BufferForms::Large,
+                )
             }
             None => {
                 let (commands, released) = self.icb.render_records(covered, Reader::Commit)?;
                 self.icb.degrade_released(&released);
-                (commands, !released.is_empty(), None, BufferForms::Bound)
+                let released = !released.is_empty();
+                (Vec::new(), commands, released, None, BufferForms::Bound)
             }
         };
-        let resolved = self.resolutions(&commands, residency);
+        let commands = || stepped.iter().flatten().chain(&read);
+        let resolved = self.resolutions(commands(), residency);
         let draws = command_buffer.begin_draws(&snapshot.compatible)?;
         let raw = command_buffer.device().shared().vk();
         let visibility = Visibility::borrowing(None, None, raw, draws);
@@ -762,7 +765,7 @@ impl RenderExecution {
             forms,
         );
         (encoder.live, encoder.bind_memo) = (live, bind_memo);
-        self.replay(&mut encoder, commands, residency, found)?;
+        self.replay(&mut encoder, commands(), residency, found)?;
         Ok(Apart {
             encoder,
             resolved,
@@ -812,7 +815,11 @@ impl RenderExecution {
 
     /// The addresses `commands` name (their buffers', where the buffer does not inherit them,
     /// and their draws'), resolved against `residency` (`kept_commands::resolutions`).
-    fn resolutions(&self, commands: &[Command], residency: &Residency) -> Vec<Resolution> {
+    fn resolutions<'c>(
+        &self,
+        commands: impl Iterator<Item = &'c Command>,
+        residency: &Residency,
+    ) -> Vec<Resolution> {
         let descriptor = self.icb.descriptor();
         let stages = [
             (BufferStage::Vertex, descriptor.max_vertex_buffer_bind_count),
@@ -823,7 +830,7 @@ impl RenderExecution {
             (BufferStage::Object, descriptor.max_object_buffer_bind_count),
             (BufferStage::Mesh, descriptor.max_mesh_buffer_bind_count),
         ];
-        let addresses = commands.iter().flat_map(|(record, _)| {
+        let addresses = commands.flat_map(|(record, _)| {
             let bound = stages
                 .iter()
                 .filter(|_| !descriptor.inherit_buffers)

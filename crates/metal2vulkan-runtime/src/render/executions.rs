@@ -2102,12 +2102,7 @@ impl RenderExecution {
             let (written, copies) = reads.read(&self.icb)?;
             let (commands, written, _) = self.named_commands(&device, range.start, written);
             found.faults = ReplayFaults(found.faults.0 | written.0);
-            self.replay(
-                &mut encoder,
-                commands.into_iter().flatten(),
-                residency,
-                found,
-            )?;
+            self.replay(&mut encoder, commands.iter().flatten(), residency, found)?;
             copies.keep(&self.icb);
             return self.finish(encoder, found, rendered, &device);
         }
@@ -2121,7 +2116,7 @@ impl RenderExecution {
                     let read = (RecordsRead::HostStep, residency);
                     self.report(command_buffer, read, start, executed);
                 }
-                let commands = commands.into_iter().flatten();
+                let commands = commands.iter().flatten();
                 self.replay(&mut encoder, commands, residency, found)?;
                 continue;
             }
@@ -2138,7 +2133,7 @@ impl RenderExecution {
                 let read = (RecordsRead::Commit, residency);
                 self.report(command_buffer, read, start, executed);
             }
-            self.replay(&mut encoder, commands, residency, found)?;
+            self.replay(&mut encoder, &commands, residency, found)?;
         }
         self.finish(encoder, found, rendered, &device)
     }
@@ -2175,10 +2170,10 @@ impl RenderExecution {
     /// Replay `commands` through `encoder` (`record`'s), resolving against `residency`, the
     /// command buffer's, what their draws found noted into `found`. A mesh or patch draw is no
     /// plain draw (`RenderLowering::replay_plain`).
-    fn replay(
+    fn replay<'c>(
         &self,
         encoder: &mut RenderLowering,
-        commands: impl IntoIterator<Item = Command>,
+        commands: impl IntoIterator<Item = &'c Command>,
         residency: &Residency,
         found: &mut Found,
     ) -> Result<(), Error> {
@@ -2210,7 +2205,7 @@ impl RenderExecution {
                     continue;
                 }
             };
-            let Some(pipeline) = self.pipeline.clone().or(own) else {
+            let Some(pipeline) = self.pipeline.as_ref().or(own.as_ref()).cloned() else {
                 continue;
             };
             let draw = match draw.resolve(residency, pipeline_point_index_size(&pipeline)) {
@@ -2239,7 +2234,7 @@ impl RenderExecution {
             // A mesh draw's object function takes the command's threadgroup memory lengths, 0
             // where it set none, never the encoder's (the M3 Max); a patch draw's take none.
             encoder.object_threadgroup_lengths = match &draw {
-                Draw::Mesh(..) => object_threadgroup_lengths(&record),
+                Draw::Mesh(..) => object_threadgroup_lengths(record),
                 Draw::Primitives(..) | Draw::Indexed(..) | Draw::Patches { .. } => BTreeMap::new(),
             };
             let control_points = pipeline_control_points(&pipeline);
@@ -2248,7 +2243,7 @@ impl RenderExecution {
                 let descriptor = self.icb.descriptor();
                 let misses = &mut found.misses;
                 let mut table =
-                    |stage, count| self.buffers(&record, (stage, count), residency, misses);
+                    |stage, count| self.buffers(record, (stage, count), residency, misses);
                 encoder.vertex =
                     table(BufferStage::Vertex, descriptor.max_vertex_buffer_bind_count);
                 encoder.fragment = table(
@@ -2688,23 +2683,15 @@ impl RenderExecution {
         &self,
         device: &Device,
         start: u32,
-        written: WrittenRecords,
+        mut written: WrittenRecords<RenderPipelineState>,
     ) -> (Vec<Option<Command>>, ReplayFaults, bool) {
         let states = RenderPipelineState::indirect_states(device);
         // A record naming the ID of the state the CPU set runs its program, else the state of its
-        // ID among `states` (`IndirectCommandBuffer::step_render_states`); the commands it runs
-        // otherwise than Metal's may are announced, as the CPU's records' are.
-        let (named, released) = self
-            .icb
-            .step_render_states(start, &written.records, &states);
+        // ID among `states` (`IndirectCommandBuffer::step_render_states`), named in place; the
+        // commands it runs otherwise than Metal's may are announced, as the CPU's records' are.
+        let released = (self.icb).step_render_states(start, &mut written.records, &states);
         self.icb.degrade_released(&released);
-        let commands = written
-            .records
-            .into_iter()
-            .zip(named)
-            .map(|(record, state)| record.map(|record| (record, state)))
-            .collect();
-        (commands, written.faults, !released.is_empty())
+        (written.records, written.faults, !released.is_empty())
     }
 
     /// The command's own buffers of `stage`, below the descriptor's `count` of it, resolved

@@ -2267,15 +2267,15 @@ impl IndirectCommandBuffer {
     /// `recorded` is the step's records, `None` for one that faulted; an empty list (a faulted
     /// header) checks nothing. The check reads the step's records, which the step read once the
     /// work before it completed, as the getter would read them then: none is read again.
-    pub(super) fn check_recorded(
+    pub(super) fn check_recorded<S>(
         &self,
         check: &Mutex<IndirectCommandCheck>,
         start: u32,
-        recorded: &[Option<CommandRecord>],
+        recorded: &[Option<(CommandRecord, S)>],
     ) {
         let held = (start..)
             .zip(recorded)
-            .filter_map(|(index, record)| Some((index, record.as_ref()?)))
+            .filter_map(|(index, command)| Some((index, &command.as_ref()?.0)))
             .collect();
         self.check_held(check, held);
     }
@@ -2919,8 +2919,9 @@ impl IndirectCommandBuffer {
     /// producer's storage but command by command: a header that holds the producers' sticky
     /// encoding fault (`ReplayFaults::ENCODING`), or that a write overran, runs none of them; a
     /// record that does not decode, or that sets what its descriptor does not allow, is `None`
-    /// (`ReplayFaults::RECORD`).
-    pub(super) fn written_records(&self, range: Range<u32>) -> Result<WrittenRecords, Error> {
+    /// (`ReplayFaults::RECORD`). Each is read into the list it is returned in, with no state named
+    /// yet (`step_states`, `step_render_states`).
+    pub(super) fn written_records<S>(&self, range: Range<u32>) -> Result<WrittenRecords<S>, Error> {
         let count = range.len();
         Ok(self.written_records_of(count, range.map(|index| self.record_now(index))))
     }
@@ -2929,11 +2930,11 @@ impl IndirectCommandBuffer {
     /// host step reads their records, in order (`render/executions/kept.rs`, `StepReads`): the
     /// copies it read them into, or holds of them, and their storage where it puts a chunk's copy
     /// off. The step reads each record once.
-    pub(super) fn written_records_in(
+    pub(super) fn written_records_in<S>(
         &self,
         range: Range<u32>,
         sources: &[RecordSource<'_>],
-    ) -> Result<WrittenRecords, Error> {
+    ) -> Result<WrittenRecords<S>, Error> {
         let counts = sources.iter().map(|source| match source {
             RecordSource::Bytes(bytes) => {
                 (bytes.len() % COMMAND_BYTES == 0).then_some(bytes.len() / COMMAND_BYTES)
@@ -2962,11 +2963,11 @@ impl IndirectCommandBuffer {
 
     /// [`written_records`](Self::written_records) of `count` commands from `records`, theirs in
     /// order.
-    fn written_records_of(
+    fn written_records_of<S>(
         &self,
         count: usize,
         records: impl Iterator<Item = impl Borrow<[u8; COMMAND_BYTES]>>,
-    ) -> WrittenRecords {
+    ) -> WrittenRecords<S> {
         if let Some(fault) = self.written_header_fault() {
             return WrittenRecords {
                 faults: fault,
@@ -2982,7 +2983,7 @@ impl IndirectCommandBuffer {
             if record.is_none() {
                 faults = ReplayFaults(faults.0 | ReplayFaults::RECORD.0);
             }
-            decoded.push(record);
+            decoded.push(record.map(|record| (record, None)));
         }
         WrittenRecords {
             faults,
@@ -3072,10 +3073,10 @@ impl IndirectCommandBuffer {
     /// The records `bytes` hold, [`written_bytes`](Self::written_bytes) of commands from
     /// `start`, decoded and checked as [`written_records`](Self::written_records) does, once its
     /// header holds no fault ([`written_header_fault`](Self::written_header_fault)).
-    pub(super) fn decode_written(&self, bytes: &[u8]) -> WrittenRecords {
+    pub(super) fn decode_written<S>(&self, bytes: &[u8]) -> WrittenRecords<S> {
         let (records, _) = bytes.as_chunks::<COMMAND_BYTES>();
-        let records: Vec<Option<CommandRecord>> = (records.iter())
-            .map(|record| self.written_record(record))
+        let records: Vec<Option<(CommandRecord, Option<S>)>> = (records.iter())
+            .map(|record| Some((self.written_record(record)?, None)))
             .collect();
         (self.device().shared().counts).indirect_records_read(records.len() as u64);
         let faults = match records.iter().any(Option::is_none) {
@@ -3239,14 +3240,14 @@ impl IndirectCommandBuffer {
 
     /// For a host step: the compute state each of `records` names (commands from `start`, as
     /// the GPU and the CPU left them, `None` where a record runs nothing for a fault), among
-    /// `states` by ID unless it names the state the CPU set (`name_state`); and the commands it
-    /// runs otherwise than Metal's may (`Released`).
+    /// `states` by ID unless it names the state the CPU set (`name_state`), named in place beside
+    /// its record; and the commands it runs otherwise than Metal's may (`Released`).
     pub(super) fn step_states(
         &self,
         start: u32,
-        records: &[Option<CommandRecord>],
+        records: &mut [Option<(CommandRecord, Option<ComputePipelineState>)>],
         states: &[ComputePipelineState],
-    ) -> (Vec<Option<ComputePipelineState>>, Released) {
+    ) -> Released {
         self.written_states(start, records, states, &COMPUTE)
     }
 
@@ -3255,9 +3256,9 @@ impl IndirectCommandBuffer {
     pub(super) fn step_render_states(
         &self,
         start: u32,
-        records: &[Option<CommandRecord>],
+        records: &mut [Option<(CommandRecord, Option<RenderPipelineState>)>],
         states: &[RenderPipelineState],
-    ) -> (Vec<Option<RenderPipelineState>>, Released) {
+    ) -> Released {
         self.written_states(start, records, states, &RENDER)
     }
 
@@ -3290,14 +3291,15 @@ impl IndirectCommandBuffer {
         sets.iter().any(CommandState::released)
     }
 
-    /// The state of kind `of` each of `records`, commands from `start`, names for a host step.
+    /// The state of kind `of` each of `records`, commands from `start`, names for a host step,
+    /// named in place beside its record.
     fn written_states<S: Clone>(
         &self,
         start: u32,
-        records: &[Option<CommandRecord>],
+        records: &mut [Option<(CommandRecord, Option<S>)>],
         states: &[S],
         of: &Of<S>,
-    ) -> (Vec<Option<S>>, Released) {
+    ) -> Released {
         let sets: Vec<Option<CommandState>> = {
             let commands = lock(&self.0.pipelines);
             (start..)
@@ -3306,27 +3308,23 @@ impl IndirectCommandBuffer {
                 .collect()
         };
         let mut unmatched = Vec::new();
-        let named = records
-            .iter()
-            .zip(sets)
-            .zip(start..)
-            .map(|((record, set), index)| {
-                let named = record
-                    .as_ref()?
-                    .bindings
-                    .pipeline
-                    .or(record.as_ref()?.retained_pipeline)?;
-                let holder = || {
-                    states
-                        .iter()
-                        .find(|state| (of.id)(state) == named.get())
-                        .cloned()
-                };
-                let at = (index, named.get());
-                self.name_state(at, Reader::Step, set.as_ref(), of, holder, &mut unmatched)
-            })
-            .collect();
-        (named, Released(unmatched))
+        for ((command, set), index) in records.iter_mut().zip(sets).zip(start..) {
+            let Some((record, state)) = command else {
+                continue;
+            };
+            let Some(named) = record.bindings.pipeline.or(record.retained_pipeline) else {
+                continue;
+            };
+            let holder = || {
+                states
+                    .iter()
+                    .find(|state| (of.id)(state) == named.get())
+                    .cloned()
+            };
+            let at = (index, named.get());
+            *state = self.name_state(at, Reader::Step, set.as_ref(), of, holder, &mut unmatched);
+        }
+        Released(unmatched)
     }
 
     /// The state of kind `of` command `index`'s record runs for `reader`, where it names
@@ -3625,14 +3623,15 @@ pub(super) enum RecordSource<'a> {
 }
 
 /// The records of an execution's commands as the GPU and the CPU left them
-/// ([`IndirectCommandBuffer::written_records`]).
-pub(super) struct WrittenRecords {
+/// ([`IndirectCommandBuffer::written_records`]), each beside the state of kind `S` it names once
+/// a host step named it (`step_states`, `step_render_states`).
+pub(super) struct WrittenRecords<S> {
     /// Why commands run nothing: the header's (then `records` is empty), or the union of the
     /// records' that are `None`.
     pub(super) faults: ReplayFaults,
-    /// Each command's record, in range order; `None` where it does not decode or sets what the
-    /// descriptor does not allow.
-    pub(super) records: Vec<Option<CommandRecord>>,
+    /// Each command's record and the state it names, in range order; `None` where it does not
+    /// decode or sets what the descriptor does not allow.
+    pub(super) records: Vec<Option<(CommandRecord, Option<S>)>>,
 }
 
 /// A buffer a command's setter sets: at `slot` of `stage`, below the descriptor's `limit`, at

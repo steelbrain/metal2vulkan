@@ -635,22 +635,16 @@ impl Execute {
         states: &[ComputePipelineState],
         check: Option<&(Mutex<IndirectCommandCheck>, IndirectCommandCheckNeeds)>,
     ) -> Result<(Vec<Option<Command>>, ReplayFaults), Error> {
-        let written = self.icb.written_records(range.clone())?;
+        let mut written = self.icb.written_records(range.clone())?;
         if let Some((check, _)) = check {
             self.icb
                 .check_recorded(check, range.start, &written.records);
         }
         // A record naming the ID of the state the CPU set runs its program, else the state of its
         // ID among `states` (`IndirectCommandBuffer::step_states`).
-        let (named, released) = self.icb.step_states(range.start, &written.records, states);
+        let released = (self.icb).step_states(range.start, &mut written.records, states);
         self.icb.degrade_released(&released);
-        let commands = written
-            .records
-            .into_iter()
-            .zip(named)
-            .map(|(record, state)| record.map(|record| (record, state)))
-            .collect();
-        Ok((commands, written.faults))
+        Ok((written.records, written.faults))
     }
 
     /// The pipeline state and dispatch of `record`, which names `own`, where it runs on Metal:
