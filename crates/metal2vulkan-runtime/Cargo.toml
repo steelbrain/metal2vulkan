@@ -71,6 +71,13 @@ path = "examples/icb_setters.rs"
 name = "queue_share"
 path = "examples/queue_share.rs"
 
+# Not a consumer's example: what a draw costs the thread that encodes it, in three shapes of a
+# guest's render work: a compositor's binds, many short command buffers, and long ones
+# (examples/draw_costs.rs).
+[[example]]
+name = "draw_costs"
+path = "examples/draw_costs.rs"
+
 [dependencies]
 # The translator, through its public API only: the compiler checks that the runtime
 # reaches nothing else. `ash` gives `ash_interop`'s conversions and `DeviceDescription::query`.
