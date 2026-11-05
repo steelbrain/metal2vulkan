@@ -1357,6 +1357,34 @@ unsafe fn ycbcr_444_supported(instance: &ash::Instance, physical: vk::PhysicalDe
     formats.ycbcr2plane444_formats == vk::TRUE
 }
 
+/// Whether a device that lists `listed` enables `VK_EXT_pageable_device_local_memory` and its
+/// `pageableDeviceLocalMemory`: it lists the extension and `VK_EXT_memory_priority`, which it
+/// requires, and has the feature (`supported`, asked only then).
+pub(crate) fn pageable_device_local_memory(
+    listed: &BTreeSet<CString>,
+    supported: impl FnOnce() -> bool,
+) -> bool {
+    (crate::enables::PAGEABLE_DEVICE_LOCAL_MEMORY.iter()).all(|&name| listed.contains(name))
+        && supported()
+}
+
+/// Whether `physical` has `pageableDeviceLocalMemory`.
+///
+/// # Safety
+///
+/// `physical` was enumerated from `instance`, made at Vulkan 1.1 or later, and lists
+/// `VK_EXT_pageable_device_local_memory`.
+unsafe fn pageable_device_local_memory_supported(
+    instance: &ash::Instance,
+    physical: vk::PhysicalDevice,
+) -> bool {
+    let mut pageable = vk::PhysicalDevicePageableDeviceLocalMemoryFeaturesEXT::default();
+    let mut features = vk::PhysicalDeviceFeatures2::default().push_next(&mut pageable);
+    // SAFETY: the caller's contract; the chain lives for the call.
+    unsafe { instance.get_physical_device_features2(physical, &mut features) };
+    pageable.pageable_device_local_memory == vk::TRUE
+}
+
 /// Whether a device of version `api` (its own, capped by the instance's) that lists `listed`
 /// enables `VK_NV_linear_color_attachment` and its `linearColorAttachment`: it lists the
 /// extension and has what it requires, `VK_KHR_format_feature_flags2` or Vulkan 1.3, where that
@@ -1685,6 +1713,18 @@ fn create_on(
                 && unsafe { ycbcr_444_supported(&instance.raw, physical) });
     if ycbcr_444 && api < ApiVersion::V1_3 {
         enables.enable_ycbcr_2plane_444();
+    }
+    // The runtime's own need, outside the vocabulary, where listed with its feature: the driver
+    // may move device-local memory to host-local memory to make room rather than fail an
+    // allocation, as Metal pages a discrete GPU's resources (`memory.rs`'s
+    // `overflow_candidates`, which places them past a full device-local heap where it fails).
+    let pageable = pageable_device_local_memory(&listed, || {
+        // SAFETY: `physical` was enumerated from the instance, made at Vulkan 1.2, and lists the
+        // extension.
+        unsafe { pageable_device_local_memory_supported(&instance.raw, physical) }
+    });
+    if pageable {
+        enables.enable_pageable_device_local_memory();
     }
     // The runtime's own need, outside the vocabulary: the device's pipelines are cached in the
     // shader cache's records alone, the driver's internal cache off where it allows; else the

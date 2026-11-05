@@ -1,6 +1,6 @@
 use crate::memory::{
-    candidates, host_cached, host_cached_placement, host_incoherent, MemoryClass, Pool,
-    KEPT_EMPTY_BLOCKS, KEPT_EMPTY_FOR,
+    candidates, host_cached, host_cached_placement, host_incoherent, overflow_candidates,
+    MemoryClass, Pool, KEPT_EMPTY_BLOCKS, KEPT_EMPTY_FOR,
 };
 use ash::vk;
 use std::time::Instant;
@@ -53,6 +53,66 @@ fn classes_pick_their_memory_types_best_first() {
         candidates(&types, all, MemoryClass::Memoryless, false),
         [0, 2]
     );
+}
+
+/// A class that requires device-local memory (`Private`, `Memoryless`) overflows, where none of
+/// its own types has room, into every other type the resource takes that is neither device-local,
+/// lazily allocated nor AMD's device-coherent memory, those the host does not map first and
+/// otherwise in Vulkan's order. The host-visible classes, whose own candidates already take every
+/// coherent type the host maps, overflow into none, and no class does on a device whose every
+/// type is device-local.
+#[test]
+fn device_local_classes_overflow_into_system_memory() {
+    use vk::MemoryPropertyFlags as P;
+    let host = P::HOST_VISIBLE | P::HOST_COHERENT;
+    let types = [
+        ty(host | P::HOST_CACHED),
+        ty(P::DEVICE_LOCAL),
+        ty(host),
+        ty(P::empty()),
+        ty(P::DEVICE_LOCAL | host),
+        ty(host | P::HOST_CACHED | P::DEVICE_UNCACHED_AMD),
+        ty(P::DEVICE_LOCAL | P::LAZILY_ALLOCATED),
+    ];
+    let all = (1 << types.len()) - 1;
+    for class in [MemoryClass::Private, MemoryClass::Memoryless] {
+        assert_eq!(
+            overflow_candidates(&types, all, class),
+            [3, 0, 2],
+            "{class:?}"
+        );
+        // Only the types the resource takes.
+        assert_eq!(
+            overflow_candidates(&types, 0b0101, class),
+            [0, 2],
+            "{class:?}"
+        );
+        assert!(
+            overflow_candidates(&types, 0b111_0010, class).is_empty(),
+            "{class:?}"
+        );
+    }
+    for class in [
+        MemoryClass::Shared,
+        MemoryClass::WriteCombined,
+        MemoryClass::Managed,
+    ] {
+        assert!(
+            overflow_candidates(&types, all, class).is_empty(),
+            "{class:?}"
+        );
+    }
+    let unified = [
+        ty(P::DEVICE_LOCAL),
+        ty(P::DEVICE_LOCAL | host | P::HOST_CACHED),
+        ty(P::DEVICE_LOCAL | P::LAZILY_ALLOCATED),
+    ];
+    for class in [MemoryClass::Private, MemoryClass::Memoryless] {
+        assert!(
+            overflow_candidates(&unified, 0b111, class).is_empty(),
+            "{class:?}"
+        );
+    }
 }
 
 /// `Shared` memory prefers a host-cached coherent type, then a device-local one, with unified

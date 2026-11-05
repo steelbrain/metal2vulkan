@@ -367,6 +367,13 @@ const LINEAR_COLOR_ATTACHMENT: [&CStr; 2] = [
     c"VK_KHR_format_feature_flags2",
 ];
 
+/// The names of `VK_EXT_pageable_device_local_memory` and of `VK_EXT_memory_priority`, which it
+/// requires (the registry's `depends`).
+pub(super) const PAGEABLE_DEVICE_LOCAL_MEMORY: [&CStr; 2] = [
+    ash::ext::pageable_device_local_memory::NAME,
+    ash::ext::memory_priority::NAME,
+];
+
 /// The names of `VK_EXT_graphics_pipeline_library` and of `VK_KHR_pipeline_library`, which it
 /// requires (the registry's `depends`).
 pub(super) const GRAPHICS_PIPELINE_LIBRARY: [&CStr; 2] = [
@@ -482,6 +489,9 @@ pub(super) enum Structure {
     /// `VkPhysicalDeviceYcbcr2Plane444FormatsFeaturesEXT`, outside the vocabulary: linked only by
     /// [`Enables::enable_ycbcr_2plane_444`], below Vulkan 1.3.
     Ycbcr2Plane444,
+    /// `VkPhysicalDevicePageableDeviceLocalMemoryFeaturesEXT`, outside the vocabulary: linked
+    /// only by [`Enables::enable_pageable_device_local_memory`].
+    PageableDeviceLocalMemory,
 }
 
 /// Vulkan 1.4.
@@ -561,7 +571,8 @@ impl Structure {
             | Structure::PipelineBinary
             | Structure::InternalCacheControl
             | Structure::GraphicsPipelineLibrary
-            | Structure::Ycbcr2Plane444 => None,
+            | Structure::Ycbcr2Plane444
+            | Structure::PageableDeviceLocalMemory => None,
         }
     }
 
@@ -622,7 +633,8 @@ impl Structure {
             | Structure::PipelineBinary
             | Structure::InternalCacheControl
             | Structure::GraphicsPipelineLibrary
-            | Structure::Ycbcr2Plane444 => &[],
+            | Structure::Ycbcr2Plane444
+            | Structure::PageableDeviceLocalMemory => &[],
         }
     }
 }
@@ -689,6 +701,7 @@ struct FeatureChain {
     internal_cache_control: InternalCacheControl,
     graphics_pipeline_library: vk::PhysicalDeviceGraphicsPipelineLibraryFeaturesEXT<'static>,
     ycbcr_2plane_444: vk::PhysicalDeviceYcbcr2Plane444FormatsFeaturesEXT<'static>,
+    pageable_device_local_memory: vk::PhysicalDevicePageableDeviceLocalMemoryFeaturesEXT<'static>,
 }
 
 /// One `VkBool32` member of a [`FeatureChain`] structure, named by the vocabulary.
@@ -1258,7 +1271,8 @@ macro_rules! link_extensions {
             PipelineBinary => pipeline_binary,
             InternalCacheControl => internal_cache_control,
             GraphicsPipelineLibrary => graphics_pipeline_library,
-            Ycbcr2Plane444 => ycbcr_2plane_444
+            Ycbcr2Plane444 => ycbcr_2plane_444,
+            PageableDeviceLocalMemory => pageable_device_local_memory
         )
     };
     (@ $info:ident, $chain:ident, $linked:ident; $($variant:ident => $field:ident),*) => {
@@ -1363,6 +1377,22 @@ impl Enables {
         self.chain.ycbcr_2plane_444.ycbcr2plane444_formats = vk::TRUE;
         self.linked.insert(Structure::Ycbcr2Plane444);
         self.push_name(ash::ext::ycbcr_2plane_444_formats::NAME.to_owned());
+    }
+
+    /// Enables `VK_EXT_pageable_device_local_memory` and its `pageableDeviceLocalMemory`, with
+    /// `VK_EXT_memory_priority`, which it requires (the registry's `depends`), the runtime's own
+    /// need outside the vocabulary: the driver may move device-local memory to host-local memory
+    /// to make room, rather than fail an allocation (the extension's description), as Metal pages
+    /// a discrete GPU's resources (`memory.rs`'s `overflow_candidates`), on a device that lists
+    /// both and has the feature. Every allocation keeps the default priority.
+    pub(super) fn enable_pageable_device_local_memory(&mut self) {
+        self.chain
+            .pageable_device_local_memory
+            .pageable_device_local_memory = vk::TRUE;
+        self.linked.insert(Structure::PageableDeviceLocalMemory);
+        for name in PAGEABLE_DEVICE_LOCAL_MEMORY {
+            self.push_name(name.to_owned());
+        }
     }
 
     /// Enables the portability subset's `imageViewFormatReinterpretation`, the runtime's own need

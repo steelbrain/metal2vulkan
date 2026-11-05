@@ -2155,13 +2155,20 @@ impl Device {
         let image = image.shared();
         // Its last step that may fail, before the texture takes its ID (`resource_ids.rs`).
         image.start_decoded_twin()?;
-        Ok(Texture::made(
-            self,
-            Storage::Image(image),
-            record,
-            None,
-            id_use,
-        ))
+        let texture = Texture::made(self, Storage::Image(image), record, None, id_use);
+        if texture.overflowed() {
+            self.degrade_overflow(|| {
+                let (format, kind) = (layout.pixel_format, layout.texture_type);
+                let TextureDescriptor {
+                    width,
+                    height,
+                    depth,
+                    ..
+                } = descriptor;
+                format!("a `{storage:?}` {format:?} {kind:?} texture of {width}x{height}x{depth}")
+            });
+        }
+        Ok(texture)
     }
 
     /// A 2D texture or array of `descriptor` (checked as `layout`) over `texels`, for Metal's
@@ -4424,6 +4431,16 @@ impl Texture {
     pub(super) fn linear_image(&self) -> Result<bool, Error> {
         let image = self.image()?;
         Ok(image.linear && lock(&image.detached).is_none())
+    }
+
+    /// Whether the texture's image lies in memory of the runtime's own that overflowed past
+    /// device-local memory into system memory (`memory.rs`'s `overflow_candidates`): false for an
+    /// image in a buffer's, a heap's or the caller's memory, and where
+    /// [`image`](Self::image) refuses.
+    pub(super) fn overflowed(&self) -> bool {
+        self.image().is_ok_and(|image| {
+            matches!(&image.owner, Owner::Runtime { placement, .. } if placement.overflowed())
+        })
     }
 
     /// The bytes of device memory the runtime placed the texture's image in: `None` for an image

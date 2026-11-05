@@ -451,8 +451,9 @@ pub(super) fn on_device_with(
 
 /// Every kind is taken by a lane test's site: listed above, or a stage's precision note or
 /// reconvergence; no kind is in two lists, and no list names a kind twice. `misplaced-notice`
-/// ([`MISPLACED`]) and `copied-host-pages` ([`COPIED_PAGES`]) are taken by the runtime's own tests
-/// instead, as no lane can meet the first and only a refusing gate meets the second.
+/// ([`MISPLACED`]), `copied-host-pages` ([`COPIED_PAGES`]) and `device-memory-overflow`
+/// ([`OVERFLOWED`]) are taken by the runtime's own tests instead, as no lane can meet the first,
+/// only a refusing gate meets the second, and only a full device-local heap the third.
 ///
 /// This module compiles only under the device cfgs, so a kind that lands with no site leaves this
 /// test red where the ordinary gate cannot read it. The runtime crate's
@@ -574,6 +575,7 @@ fn every_kind_has_a_site_a_lane_test_takes() {
         &MISPLACED,
         &STILL_MAKING,
         &COPIED_PAGES,
+        &OVERFLOWED,
         &DEPTH_DENORMALS,
         &SIGNED_DEPTH_TESTS,
         &FIRST_SPARSE,
@@ -800,6 +802,14 @@ const STILL_MAKING: [Degradation; 3] = [
 /// `copied_buffer_is_made_where_an_admitted_import_fails_announced` take its site, the import
 /// failed by the runtime's test hook.
 const COPIED_PAGES: [Degradation; 1] = [Degradation::CopiedHostPages];
+
+/// The kind a `Private` buffer, heap or texture the program makes, or a `Managed` buffer's own
+/// bytes without unified memory, takes where no device-local memory type it takes has room for
+/// it, so that it lies in system memory. Only a device without unified memory whose device-local
+/// heap is full meets it, which no lane fills (a GPU hazard). The runtime's own test
+/// `resources_past_device_local_memory_are_made_used_and_read_back` takes its site, under
+/// `m2v_gpu_hazards` on a GPU.
+const OVERFLOWED: [Degradation; 1] = [Degradation::DeviceMemoryOverflow];
 
 /// The kind Metal's private option bit takes where the GPU's writes reach the memory here
 /// ([`the_private_option_bit_is_announced_on_a_heap_of_the_runtime_s_memory`],

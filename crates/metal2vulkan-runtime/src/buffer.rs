@@ -1989,9 +1989,7 @@ impl Device {
         self.keep_room();
         let options = self.own_memory_options("new_buffer", options)?;
         let (buffer, class) = self.buffer_of_length("new_buffer", length, options, placement)?;
-        self.degrade_system_memory(&buffer, class, || {
-            format!("a `Shared` buffer of {length} bytes")
-        });
+        self.degrade_system_memory(&buffer, class, || format!("buffer of {length} bytes"));
         Ok(self.visible(buffer))
     }
 
@@ -2042,15 +2040,22 @@ impl Device {
         Ok((buffer, class))
     }
 
-    /// Announce [`Degradation::SharedInSystemMemory`] once where `buffer`, which the program made
-    /// (`what` names it) in memory of `class`, is `Shared` memory a device without unified memory
-    /// placed in system memory (`MemoryClass::Shared`). A heap's buffer is its heap's.
+    /// Announce once each where `buffer`, which the program made (`what` names it, after its
+    /// storage mode) in memory of `class`, lies in system memory: its own bytes overflowed past
+    /// device-local memory ([`Device::degrade_overflow`]), or it is `Shared` memory a device
+    /// without unified memory placed there (`MemoryClass::Shared`,
+    /// [`Degradation::SharedInSystemMemory`]). A heap's buffer is its heap's.
     pub(super) fn degrade_system_memory(
         &self,
         buffer: &Buffer,
         class: MemoryClass,
         what: impl FnOnce() -> String,
     ) {
+        let what = || format!("a `{:?}` {}", buffer.storage_mode(), what());
+        if buffer.own_pages_overflowed() {
+            self.degrade_overflow(what);
+            return;
+        }
         if class != MemoryClass::Shared || self.properties().has_unified_memory {
             return;
         }
@@ -2065,6 +2070,23 @@ impl Device {
                      read it, so it lies in host-cached system memory; `Private` or `Managed` \
                      storage, or the write-combined CPU cache mode, puts the GPU's bytes in \
                      device-local memory",
+                    self.name()
+                ),
+            )
+        });
+    }
+
+    /// Announce [`Degradation::DeviceMemoryOverflow`] once for a resource the program made
+    /// (`what` names it) whose memory overflowed past device-local memory into system memory
+    /// (`memory.rs`'s `overflow_candidates`).
+    pub(super) fn degrade_overflow(&self, what: impl FnOnce() -> String) {
+        self.degrade(Degradation::DeviceMemoryOverflow, || {
+            (
+                what(),
+                format!(
+                    "no device-local memory type of {} that it takes has room for it, so it lies \
+                     in system memory, as Metal makes a resource past a discrete GPU's memory \
+                     rather than refuse it",
                     self.name()
                 ),
             )
@@ -2781,6 +2803,18 @@ impl Buffer {
                 ..
             }) => fixed.pages.memory.placement.over_own_pages(),
             Bytes::Own(_) | Bytes::Heap(_) => false,
+        }
+    }
+
+    /// Whether the buffer's own pages, of the runtime's memory, overflowed past device-local memory
+    /// into system memory (`memory.rs`'s `overflow_candidates`); false for a heap's buffer, whose
+    /// bytes are its heap's.
+    pub(super) fn own_pages_overflowed(&self) -> bool {
+        match &self.0.bytes {
+            Bytes::Own(own) => own.with(ReadApart::Binding, |pages| {
+                pages.memory.placement.overflowed()
+            }),
+            Bytes::Heap(_) => false,
         }
     }
 

@@ -3981,6 +3981,14 @@ pub struct WorkCounts {
     /// blocks, pooled or dedicated, freed since or not): none for host memory it imports. A
     /// detach allocates none for the bytes it detaches (`detach.rs`).
     pub device_memory_allocated: u64,
+    /// Placements of a class that requires device-local memory (`Private` resources, a `Managed`
+    /// buffer's own bytes without unified memory, `Memoryless` attachments) that lie in system
+    /// memory, because no device-local memory type the resource takes had room for them
+    /// (`memory.rs`'s `overflow_candidates`): 0 on a device with unified memory, and on one whose
+    /// driver pages device-local memory out to make room (`VK_EXT_pageable_device_local_memory`)
+    /// unless it still fails an allocation. Each is a placement, the runtime's own included; the
+    /// program's resources among them are announced (`Degradation::DeviceMemoryOverflow`).
+    pub device_memory_overflows: u64,
     /// The runtime's live pooled `VkDeviceMemory` blocks with a placement in them (`memory.rs`):
     /// with the blocks below and every dma-buf import, the allocations ANV on i915 lists in each
     /// of its kernel submissions, beside its own buffer objects.
@@ -6102,11 +6110,12 @@ impl Device {
         let command_buffer_spared = counters.command_buffer_wakes_spared.load(Ordering::Relaxed);
         let event_wakes = counters.event_wakes.load(Ordering::Relaxed);
         let event_spared = counters.event_wakes_spared.load(Ordering::Relaxed);
-        let (allocated, census, (parked, waiting), (made, freed), frees) = {
+        let (allocated, overflows, census, (parked, waiting), (made, freed), frees) = {
             let memory = lock(&self.shared().memory);
             let turnover = memory.turnover();
             (
                 memory.allocated(),
+                memory.overflows(),
                 memory.census(),
                 memory.parked(),
                 turnover,
@@ -6248,6 +6257,7 @@ impl Device {
                 .driver_diagnostics_withheld
                 .load(Ordering::Relaxed),
             device_memory_allocated: allocated,
+            device_memory_overflows: overflows,
             memory_blocks_live: census.pooled,
             empty_memory_blocks_live: census.empty,
             pooled_memory_blocks_made: made,

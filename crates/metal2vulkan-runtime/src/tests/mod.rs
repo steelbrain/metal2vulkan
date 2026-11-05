@@ -88,6 +88,8 @@ mod descriptor_key_once;
 #[cfg(any(m2v_cpu_icd, all(m2v_gpu, m2v_gpu_hazards)))]
 mod detach_lost;
 mod device;
+#[cfg(any(m2v_cpu_icd, all(m2v_gpu, m2v_gpu_hazards)))]
+mod device_memory_overflow;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod device_registry;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]

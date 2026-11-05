@@ -902,6 +902,18 @@ degradations! {
              resource: coalesced accesses at the bus's speed, and scattered writes far slower \
              (4-byte stores 12 bytes apart at 0.08 GB/s on an RTX 3090, where device-local \
              memory takes them at 850 GB/s)";
+        /// A `Private` buffer, heap or texture the program makes, or a `Managed` buffer's own bytes
+        /// on a device without unified memory (`managed.rs`), lies in system memory: no
+        /// device-local memory type the resource takes had room for it, and it takes a type that
+        /// is not device-local (`memory.rs`'s `overflow_candidates`), as Metal makes such a
+        /// resource past a discrete GPU's memory rather than refuse it. Each such placement is
+        /// counted (`WorkCounts::device_memory_overflows`). A driver may instead page device-local
+        /// memory out to make room rather than fail the allocation
+        /// (`VK_EXT_pageable_device_local_memory`, enabled where the device lists it with its
+        /// feature); what it pages, it places, and nothing overflows.
+        DeviceMemoryOverflow = "device-memory-overflow", Performance,
+            "the GPU reads and writes it across the bus, at the bus's speed, for as long as it \
+             lives; resources made once device-local memory has room again lie there";
         /// `generate_mipmaps` of a filtered format (not an integer one, whose texels are picked as
         /// plain Metal picks them): each level is the device's linear filter of the one above at
         /// the scaled texel centres, its blit chain (`vkCmdBlitImage` with `VK_FILTER_LINEAR`,

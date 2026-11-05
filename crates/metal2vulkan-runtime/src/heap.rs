@@ -533,7 +533,7 @@ impl Device {
         if let Some(token) = token {
             bytes.keep_range_token(token)?;
         }
-        self.degrade_system_memory(&bytes, class, || format!("a `Shared` heap of {size} bytes"));
+        self.degrade_system_memory(&bytes, class, || format!("heap of {size} bytes"));
         Ok(self.heap_over(bytes, descriptor.heap_type, size))
     }
 

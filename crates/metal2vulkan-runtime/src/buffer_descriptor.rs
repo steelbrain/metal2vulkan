@@ -402,9 +402,7 @@ impl Device {
         placement: impl Into<Place>,
     ) -> Result<Buffer, Error> {
         let (buffer, class) = self.buffer_of_length(call, length, options, placement)?;
-        self.degrade_system_memory(&buffer, class, || {
-            format!("a `Shared` buffer of {length} bytes")
-        });
+        self.degrade_system_memory(&buffer, class, || format!("buffer of {length} bytes"));
         Ok(buffer)
     }
 

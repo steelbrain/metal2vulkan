@@ -104,7 +104,8 @@ pub(super) enum MemoryClass {
     /// words): without unified memory device-local where the device has such
     /// (resizable BAR), else as `Shared`; with unified memory as `Shared` ([`candidates`]).
     WriteCombined,
-    /// Device-local (`Private` storage), host-invisible where the device has a choice.
+    /// Device-local (`Private` storage), host-invisible where the device has a choice; where no
+    /// device-local type has room, system memory ([`overflow_candidates`]).
     Private,
     /// Host-visible and coherent (`Managed` storage), host-cached where the device has such
     /// memory: a managed resource is there for the CPU to read back. On a device with unified
@@ -307,6 +308,55 @@ pub(super) fn candidates(
     // Vulkan lists memory types best first within equal properties; the sort is stable.
     ranked.sort_by_key(|&(rank, _)| rank);
     ranked.into_iter().map(|(_, index)| index).collect()
+}
+
+/// The memory types a resource of `class` overflows into among `types` (the bits of `allowed`)
+/// where none of its own [`candidates`] has room: for a class that requires device-local memory
+/// (`Private`, `Memoryless`), every other type the resource may use that the runtime may allocate
+/// ([`allocatable`]) and that is not lazily allocated, those the host does not map first. Metal
+/// places such a resource on a discrete GPU past the GPU's memory rather than refusing it (on a
+/// 4 GiB Radeon Pro 5300M it made, used and read back 12 GiB of `Managed` buffers, six 1 GiB
+/// `Private` buffers and a 17 GB `Private` heap), so the runtime places it in system memory, which
+/// the GPU reads and writes across its bus (`Degradation::DeviceMemoryOverflow`). None for the
+/// other classes, whose candidates already take every host-visible coherent type.
+pub(super) fn overflow_candidates(
+    types: &[vk::MemoryType],
+    allowed: u32,
+    class: MemoryClass,
+) -> Vec<u32> {
+    use vk::MemoryPropertyFlags as P;
+    if !matches!(class, MemoryClass::Private | MemoryClass::Memoryless) {
+        return Vec::new();
+    }
+    let mut ranked: Vec<(bool, u32)> = types
+        .iter()
+        .enumerate()
+        .filter(|&(index, ty)| {
+            allowed & (1 << index) != 0
+                && allocatable(ty.property_flags)
+                && !ty
+                    .property_flags
+                    .intersects(P::DEVICE_LOCAL | P::LAZILY_ALLOCATED)
+        })
+        .map(|(index, ty)| (ty.property_flags.contains(P::HOST_VISIBLE), index as u32))
+        .collect();
+    // Vulkan lists memory types best first within equal properties; the sort is stable.
+    ranked.sort_by_key(|&(mapped, _)| mapped);
+    ranked.into_iter().map(|(_, index)| index).collect()
+}
+
+/// Where a device's memory may lie ([`Memory::type_view`]), for the crate's device tests.
+#[cfg(all(test, any(m2v_cpu_icd, all(m2v_gpu, m2v_gpu_hazards))))]
+#[derive(Debug)]
+pub(super) struct TypeView {
+    /// The device's memory types.
+    pub(super) types: Vec<vk::MemoryType>,
+    /// Its memory heaps' sizes.
+    pub(super) heap_sizes: Vec<u64>,
+    /// The types a buffer the runtime places takes, as bits.
+    pub(super) buffers: u32,
+    /// The types a color image of optimal tiling takes, as bits.
+    pub(super) images: u32,
 }
 
 /// The block bookkeeping of one memory type: pure, so the CPU tests cover it. `T` is what the
@@ -856,6 +906,9 @@ pub(super) struct Placement {
     own_pages: bool,
     /// It lies in an import of a read-only view of the caller's pages (`read_only_view.rs`).
     read_only_view: bool,
+    /// It lies past its class's own memory types, in one it overflowed into where none of them
+    /// had room ([`overflow_candidates`]).
+    overflowed: bool,
     /// The imports of the caller's dma-bufs the placement lies in, with the source that made them
     /// (`dma_buf.rs`), which no block of the runtime's holds: kept until the placement goes, and
     /// freed, the source dropped, when their last holder goes.
@@ -888,6 +941,7 @@ impl Placement {
             address: None,
             own_pages: false,
             read_only_view: false,
+            overflowed: false,
             #[cfg(unix)]
             dma_buf: None,
             ram_chunk: None,
@@ -916,6 +970,7 @@ impl Placement {
             address: None,
             own_pages: false,
             read_only_view: false,
+            overflowed: false,
             #[cfg(unix)]
             dma_buf: None,
             ram_chunk: Some(chunk),
@@ -947,6 +1002,7 @@ impl Placement {
             address: None,
             own_pages: false,
             read_only_view: false,
+            overflowed: false,
             dma_buf: Some(pages),
             ram_chunk: None,
         }
@@ -993,6 +1049,13 @@ impl Placement {
         self.read_only_view
     }
 
+    /// Whether the placement lies past its class's own memory types, in one it overflowed into
+    /// where none of them had room ([`overflow_candidates`]): system memory, where its class
+    /// requires device-local memory (`Degradation::DeviceMemoryOverflow`).
+    pub(super) fn overflowed(&self) -> bool {
+        self.overflowed
+    }
+
     /// The imports of the caller's dma-bufs the placement lies in, with their source
     /// (`dma_buf.rs`); `None` for any other placement.
     #[cfg(unix)]
@@ -1027,6 +1090,7 @@ impl Placement {
             address: self.address,
             own_pages: self.own_pages,
             read_only_view: self.read_only_view,
+            overflowed: self.overflowed,
             #[cfg(unix)]
             dma_buf: self.dma_buf.clone(),
             ram_chunk: self.ram_chunk.clone(),
@@ -1078,6 +1142,9 @@ pub(super) struct Memory {
     /// ([`binds_wait`]), so an image bound while such work may be queued takes a block of its own
     /// ([`allocate_image_while_queued`]).
     binds_wait: bool,
+    /// The placements so far that lie past their class's own memory types, in one they
+    /// overflowed into ([`overflow_candidates`], `WorkCounts::device_memory_overflows`).
+    overflows: u64,
 }
 
 impl Memory {
@@ -1120,6 +1187,7 @@ impl Memory {
             frees: None,
             heaps,
             binds_wait: binds_wait(driver),
+            overflows: 0,
         }
     }
 
@@ -1154,6 +1222,22 @@ impl Memory {
     /// The device's free thread, once set.
     fn posted_frees(&self) -> Option<Arc<FreeThread>> {
         self.frees.clone()
+    }
+
+    /// The placements so far that lie past their class's own memory types, in one they
+    /// overflowed into ([`overflow_candidates`]).
+    pub(super) fn overflows(&self) -> u64 {
+        self.overflows
+    }
+
+    /// `placement`, marked and counted as overflowed where it lies in a type its class
+    /// overflowed into (`overflowing`, [`place`]).
+    fn mark_overflowed(&mut self, mut placement: Placement, overflowing: bool) -> Placement {
+        if overflowing {
+            placement.overflowed = true;
+            self.overflows += 1;
+        }
+        placement
     }
 
     /// A block of `size` bytes of memory type `type_index` left the heap's live blocks.
@@ -1233,6 +1317,20 @@ impl Memory {
         for ((size, _), &was) in self.heaps.iter_mut().zip(sizes) {
             *size = was;
         }
+    }
+
+    /// Where the device's memory may lie, for the crate's device tests: its memory types, its
+    /// heaps' sizes, and the types a buffer the runtime places and a color image of optimal tiling
+    /// take ([`Memory::kept`]'s queries).
+    #[cfg(all(test, any(m2v_cpu_icd, all(m2v_gpu, m2v_gpu_hazards))))]
+    pub(super) fn type_view(&self, device: &ash::Device) -> Result<TypeView, Error> {
+        let sharing = Sharing::new(&self.families);
+        Ok(TypeView {
+            types: self.types.clone(),
+            heap_sizes: self.heaps.iter().map(|&(size, _)| size).collect(),
+            buffers: buffer_types(device, usage(false), sharing)?,
+            images: color_image_types(device, sharing)?,
+        })
     }
 
     /// Let the blocks that go from now on wait by `parking` (`freed_memory.rs`), as where the
@@ -1459,6 +1557,7 @@ impl Memory {
                 .map(|addresses| addresses.address + offset),
             own_pages: payload.pages.is_some(),
             read_only_view: payload.view.is_some(),
+            overflowed: false,
             #[cfg(unix)]
             dma_buf: None,
             ram_chunk: None,
@@ -2122,7 +2221,7 @@ unsafe fn import_pointer(
 
 /// Place memory meeting a buffer's `requirements` of `class` in `memory`: in a pooled block with
 /// room, else in a new block (dedicated when larger than half a block), trying the class's
-/// memory types best first ([`place`]).
+/// memory types best first, then those it overflows into ([`overflow_candidates`], [`place`]).
 pub(super) fn allocate(
     memory: &Mutex<Memory>,
     device: &ash::Device,
@@ -2237,27 +2336,32 @@ fn place(
 ) -> Result<Placement, Error> {
     let size = requirements.size.max(1);
     let align = requirements.alignment.max(1);
-    let (candidates, maker) = {
+    let (candidates, overflow, maker) = {
         let memory = lock(memory);
         let bits = requirements.memory_type_bits;
         (
             candidates(&memory.types, bits, class, memory.unified),
+            overflow_candidates(&memory.types, bits, class),
             memory.maker(),
         )
     };
-    if candidates.is_empty() {
+    if candidates.is_empty() && overflow.is_empty() {
         return Err(Error::OutOfMemory(MemoryKind::Device));
     }
     let dedicated = fit == Fit::Apart || size > maker.block_bytes / 2;
     let block_size = if dedicated { size } else { maker.block_bytes };
     let mut failure = Error::OutOfMemory(MemoryKind::Device);
-    for type_index in candidates {
+    // The class's own types first, then those it overflows into where none of them has room.
+    let order = (candidates.iter().map(|&type_index| (type_index, false)))
+        .chain(overflow.iter().map(|&type_index| (type_index, true)));
+    for (type_index, overflowing) in order {
         let pool = (holds, type_index);
         if fit == Fit::Pooled {
+            let mut memory = lock(memory);
             if let Some(placement) =
-                lock(memory).place_pooled(device, pool, (size, align), addressed, class)?
+                memory.place_pooled(device, pool, (size, align), addressed, class)?
             {
-                return Ok(placement);
+                return Ok(memory.mark_overflowed(placement, overflowing));
             }
         }
         // Frees posted still count against their heap: where the block would take its heap past
@@ -2280,7 +2384,7 @@ fn place(
                 let index = memory.add_block(pool, block, block_size, dedicated, size);
                 let placement = memory.placement(pool, index, 0, size, addressed.is_some());
                 memory.say_placement("placed", &placement, Some(class));
-                return Ok(placement);
+                return Ok(memory.mark_overflowed(placement, overflowing));
             }
             Err(error @ Error::OutOfMemory(_)) => failure = error,
             Err(error) => return Err(error),

@@ -138,7 +138,8 @@ fn a_physical_device_s_identity_carries_the_bus_address_the_device_answers() {
 use crate::device::create::{
     default_loaders, dma_buf_image_names, dma_buf_names, drops_layers, enable_set, host_image_copy,
     instance_version, layer_settings, layers_dropped, linear_color_attachment, open_loader,
-    queue_plan, setting_values, timeline_difference, QueuePlan, LAYERS_DROPPED,
+    pageable_device_local_memory, queue_plan, setting_values, timeline_difference, QueuePlan,
+    LAYERS_DROPPED,
 };
 use crate::device::create::{extra_queue_places, extra_queues_absent, reserved_queues_absent};
 use crate::enables::host_image_copy_names;
@@ -907,6 +908,36 @@ fn linear_color_attachment_is_enabled_where_the_device_has_it_at_vulkan_1_3() {
         &BTreeSet::new(),
         || panic!("asked without the extension")
     ));
+}
+
+/// The runtime enables `VK_EXT_pageable_device_local_memory` exactly where the device lists it
+/// and `VK_EXT_memory_priority`, which it requires, and has `pageableDeviceLocalMemory`, asked
+/// only then.
+#[test]
+fn pageable_device_local_memory_is_enabled_where_the_device_has_it() {
+    use std::cell::Cell;
+    let listed: BTreeSet<CString> = [
+        c"VK_EXT_pageable_device_local_memory".to_owned(),
+        c"VK_EXT_memory_priority".to_owned(),
+    ]
+    .into();
+    let asked = Cell::new(false);
+    assert!(pageable_device_local_memory(&listed, || {
+        asked.set(true);
+        true
+    }));
+    assert!(asked.get());
+    assert!(
+        !pageable_device_local_memory(&listed, || false),
+        "enabled without the feature"
+    );
+    let alone: BTreeSet<CString> = [c"VK_EXT_pageable_device_local_memory".to_owned()].into();
+    assert!(!pageable_device_local_memory(&alone, || panic!(
+        "asked without VK_EXT_memory_priority"
+    )));
+    assert!(!pageable_device_local_memory(&BTreeSet::new(), || panic!(
+        "asked without the extension"
+    )));
 }
 
 #[test]
