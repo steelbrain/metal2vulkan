@@ -1630,6 +1630,13 @@ impl<K: Copy + Ord + Hash> KeptUses<K> {
         }
     }
 
+    /// Whether one of the kept uses of `used`'s resource is `held` (builds with debug assertions:
+    /// the checks of what adds a draw's uses by their identity).
+    #[cfg(debug_assertions)]
+    fn holds(&self, used: &Use<K>, held: impl Fn(&Use<K>) -> bool) -> bool {
+        (self.uses.get(&used.key)).is_some_and(|known| known.iter().any(held))
+    }
+
     /// The kept uses of `used`'s resource whose ranges overlap its range.
     fn meeting<'a>(&'a self, used: &'a Use<K>) -> impl Iterator<Item = &'a Use<K>> + 'a {
         let known = self.uses.get(&used.key).map(Vec::as_slice).unwrap_or(&[]);
@@ -1646,6 +1653,10 @@ impl<K: Copy + Ord + Hash> KeptUses<K> {
 #[derive(Clone)]
 pub(super) struct IndirectReads<K> {
     reads: KeptUses<K>,
+    /// The identity and count of the uses of what the encoder made resident the last
+    /// [`add_draw`](Self::add_draw) began with (`binding::ResidentPrefix`): each of their reads is
+    /// held, merged or not, while the instance lasts.
+    added: Option<(u64, usize)>,
 }
 
 impl<K: Copy + Ord + Hash> IndirectReads<K> {
@@ -1653,6 +1664,7 @@ impl<K: Copy + Ord + Hash> IndirectReads<K> {
     pub(super) fn new() -> IndirectReads<K> {
         IndirectReads {
             reads: KeptUses::new(),
+            added: None,
         }
     }
 
@@ -1661,18 +1673,44 @@ impl<K: Copy + Ord + Hash> IndirectReads<K> {
         self.reads.is_empty()
     }
 
+    /// Whether [`add`](Self::add) adds `used`: a read of indirect arguments.
+    fn adds(used: &Use<K>) -> bool {
+        (used.read.stages).intersects(vk::PipelineStageFlags2::DRAW_INDIRECT)
+    }
+
     /// Add the indirect argument reads of a draw with `uses`.
     pub(super) fn add(&mut self, uses: &[Use<K>]) {
-        for used in uses.iter().filter(|used| {
-            used.read
-                .stages
-                .intersects(vk::PipelineStageFlags2::DRAW_INDIRECT)
-        }) {
+        for used in uses.iter().filter(|used| Self::adds(used)) {
             self.reads.push(Use {
                 write: Access::NONE,
                 ..used.clone()
             });
         }
+    }
+
+    /// [`add`](Self::add) a draw's `uses`, which begin with the uses of what its encoder made
+    /// resident of the identity `prefix`: those not again where the last call of this began with
+    /// the same, whose reads it holds as they were added (two draws' uses of one identity begin
+    /// with the same uses, each of the same key, range, stages and access types:
+    /// `binding::ResidentPrefix`). Whether it walked them.
+    pub(super) fn add_draw(&mut self, (uses, prefix): (&[Use<K>], ResidentPrefix)) -> bool {
+        let now = Some((prefix.id, prefix.len));
+        let past = match self.added == now {
+            true => prefix.len,
+            false => 0,
+        };
+        #[cfg(debug_assertions)]
+        for used in &uses[..past] {
+            let held =
+                |known: &Use<K>| known.range.contains(&used.range) && known.read.covers(used.read);
+            assert!(
+                !Self::adds(used) || self.reads.holds(used, held),
+                "an instance added a draw's indirect reads by their identity less than its uses"
+            );
+        }
+        self.add(&uses[past..]);
+        self.added = now;
+        past == 0
     }
 
     /// The stages in which a later draw with `uses` writes memory one of the reads read: empty

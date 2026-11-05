@@ -2055,3 +2055,43 @@ fn draws_add_the_writes_of_what_their_encoder_made_resident_once_until_a_barrier
     assert!(unordered.add_draw((&uses, other)));
     assert!(unordered.written(&read(1)));
 }
+
+/// A draw's indirect argument reads of what its encoder made resident, added by their identity
+/// (`IndirectReads::add_draw`), are walked once while the identity holds: the draws after the
+/// first of that identity walk none of them, past the entries a resource keeps, and a later write
+/// of what they read meets them all along; a draw of another identity walks its own, and the
+/// first's walks them again after it. A new instance's reads (`IndirectReads::new`) hold none.
+#[test]
+fn draws_add_the_indirect_reads_of_what_their_encoder_made_resident_once_by_identity() {
+    use vk::AccessFlags2 as A2;
+    use vk::PipelineStageFlags2 as S2;
+    let arguments = Access::new(S2::DRAW_INDIRECT, A2::INDIRECT_COMMAND_READ);
+    let vertex_write = Access::new(S2::VERTEX_SHADER, A2::SHADER_STORAGE_WRITE);
+    let prefix = ResidentPrefix { id: 7, len: 2 };
+    let other = ResidentPrefix { id: 8, len: 2 };
+    let uses = [
+        reads(1, bytes(0..16), arguments),
+        reads(2, bytes(0..16), shader_read()),
+        reads(3, bytes(0..16), arguments),
+    ];
+    let write = |key| [writes(key, bytes(4..8), vertex_write)];
+    let mut known = IndirectReads::new();
+    assert!(known.add_draw((&uses, prefix)));
+    for _ in 0..=ENTRIES_PER_KEY {
+        assert!(!known.add_draw((&uses, prefix)));
+    }
+    assert!(known.written_in(&write(1)) == S2::VERTEX_SHADER);
+    assert!(known.written_in(&write(3)) == S2::VERTEX_SHADER);
+    assert!(
+        known.add_draw((&uses, other)),
+        "another identity walks its own"
+    );
+    assert!(
+        known.add_draw((&uses, prefix)),
+        "and the first's again after it"
+    );
+    let mut next = IndirectReads::new();
+    assert!(next.written_in(&write(1)).is_empty());
+    assert!(next.add_draw((&uses, prefix)));
+    assert!(next.written_in(&write(1)) == S2::VERTEX_SHADER);
+}

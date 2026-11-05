@@ -552,8 +552,14 @@ impl RenderLowering {
                 }
             }
         }
-        self.current.indirect_reads.add(uses);
-        (self.core.device().shared().counts).resident_uses_indirect_reads(resident);
+        match prefix {
+            None => self.current.indirect_reads.add(uses),
+            Some(prefix) => {
+                if self.current.indirect_reads.add_draw((uses, prefix)) {
+                    (self.core.device().shared().counts).resident_uses_indirect_reads(resident);
+                }
+            }
+        }
         self.current.geometry_writes.add(uses);
         (self.core.device().shared().counts).resident_uses_geometry_writes(resident);
         let owned = (live.kept.recording.as_ref())

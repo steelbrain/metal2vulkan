@@ -10014,8 +10014,14 @@ impl RenderLowering {
                     },
                 }
             }
-            self.current.indirect_reads.add(uses);
-            counts.resident_uses_indirect_reads(resident);
+            match uses.prefix() {
+                None => self.current.indirect_reads.add(uses),
+                Some(prefix) => {
+                    if self.current.indirect_reads.add_draw((uses, prefix)) {
+                        counts.resident_uses_indirect_reads(resident);
+                    }
+                }
+            }
             // A draw whose fragment shader reads or writes what an earlier draw of the instance
             // wrote before its fragments records after a memory dependency from those writes
             // (`render_target::after_geometry_writes`): Metal runs every draw's vertex, object
