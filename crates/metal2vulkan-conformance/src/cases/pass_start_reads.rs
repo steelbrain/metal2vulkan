@@ -44,7 +44,11 @@
 //! pass's `DontCare` load, whose draws cover the whole target before the read's pass clears it, and
 //! `shadowed-texture` for the mask over a buffer's bytes. Measured on the Apple M3 Max (MoltenVK)
 //! and on lavapipe (LLVM 23.1.1), under the exact policy and the runtime's defaults alike, with
-//! every texel and every other field of the transcripts compared.
+//! every texel and every other field of the transcripts compared. On the RTX 5080 Laptop, which
+//! renders a target over a buffer's bytes as a linear image (`VK_NV_linear_color_attachment`),
+//! the small rows over a buffer announce `linear-attachment-clear-copies` as well, for a pass that
+//! clears it, and every row announces `shared-in-system-memory`; the display row's read takes no
+//! split there.
 
 use crate::allowance::{Allowance, Justification, Loosening};
 use crate::case::{
@@ -698,10 +702,21 @@ impl Case for PassStartRead {
             allowances.push(notice_allowance(Degradation::DontCareLoadTiles.code()));
             allowances.push(notice_allowance(Degradation::ShadowedTexture.code()));
         }
+        if matches!(
+            self.row.shape,
+            Shape::Small {
+                over_buffer: true,
+                ..
+            }
+        ) {
+            allowances.push(notice_allowance(
+                Degradation::LinearAttachmentClearCopies.code(),
+            ));
+        }
         // Every row reads its answer back through a `Shared` buffer, so on a device without
         // unified memory the runtime announces `shared-in-system-memory`
-        // (`crate::replay::shared_memory_notice` holds the whole reason). No run has announced it
-        // yet: the M3 Max shares its memory, and lavapipe's is the CPU's.
+        // (`crate::replay::shared_memory_notice` holds the whole reason): the RTX 5080 Laptop's
+        // replay announced it on every row.
         allowances.push(crate::replay::shared_memory_notice());
         allowances
     }
