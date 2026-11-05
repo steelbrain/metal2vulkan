@@ -855,8 +855,7 @@ pub enum VkProperty {
     /// [`DriverDeviation::MetalHalfConversion`](crate::error::DriverDeviation::MetalHalfConversion)).
     /// No Vulkan query reports it: without the float controls Vulkan leaves the conversion's
     /// rounding to the device. A module that rounds a `half` through that conversion in those
-    /// forms alone (a texel's value among them: one the module decodes itself, or a merge of
-    /// texels) records no
+    /// forms alone records no
     /// [`PrecisionNote::NativeHalfConversion`](crate::pipeline::PrecisionNote::NativeHalfConversion)
     /// and requires it.
     MetalHalfConversion,

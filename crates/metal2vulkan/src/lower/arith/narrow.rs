@@ -182,8 +182,7 @@ fn converted_pair(fb: &mut FunctionBuilder<'_>, wide: Form, x: Value) -> BResult
 }
 
 /// [`round`] of a `float` the function holds to `half` (an AIR `fptrunc` or `air.convert` of a
-/// `float`, [`resize`], and a texel's value, [`round_texel`]): the conversion Metal's compiler
-/// compiles from the AIR's own, which
+/// `float`, [`resize`]): the conversion Metal's compiler compiles from the AIR's own, which
 /// `DriverDeviation::MetalHalfConversion` measures to be Metal's `half(float)` whatever computed
 /// the `float` ([`rounds_unmeasured`]). In [`QuantizeForm::Converted`] the pair's narrowing is
 /// recorded as measured (`ModuleBuilder::note_measured_rounding`); every other form rounds as
@@ -333,8 +332,8 @@ pub fn rounds_by_conversion(m: &TypedModule, meter: &mut Meter) -> Result<bool, 
 /// Whether module `m` rounds a `half` through [`converted`] in a form
 /// `DriverDeviation::MetalHalfConversion` does not measure: a conversion pair (an `OpFConvert` of
 /// an `f32` to 16 bits whose result another widens back, as [`rounds_by_conversion`] finds them)
-/// whose narrowing is neither recorded as measured ([`round_measured`], [`round_texel`]) nor of a
-/// texel an image instruction hands back. A texel's pair is one whose `f32` is an image read, fetch, sample or
+/// whose narrowing is neither recorded as measured ([`round_measured`]) nor of a texel an image
+/// instruction hands back. A texel's pair is one whose `f32` is an image read, fetch, sample or
 /// gather's result (or a member of a sparse one's), or a parameter of a function every call of
 /// which passes such a texel there (the `half` texel routine, `texture::half`): Metal's compiler
 /// folds such a conversion into the image instruction, whose `half` is Metal's own. One pass over
@@ -459,26 +458,12 @@ pub fn round_texel_words(f: Form) -> u32 {
 /// under the float controls ([`QuantizeForm::Controlled`], `ModuleBuilder::native_half_nans`): the
 /// conversion keeps a NaN a NaN, its bits the device's, as the texel's decode is
 /// (`PrecisionNote::DeviceNanEncoding`, which the access records). Another form is [`round`]ed.
-///
-/// A `half` texel rounds as [`round_measured`] rounds a `float` the function holds: in
-/// [`QuantizeForm::Converted`] the pair's narrowing is recorded as measured
-/// (`ModuleBuilder::note_measured_rounding`), the device's conversion of the texel's `f32` value,
-/// which `DriverDeviation::MetalHalfConversion` measures to be Metal's `half(float)` whatever
-/// computed it, so the module records no `PrecisionNote::NativeHalfConversion` for it there. That
-/// holds for a texel the module decodes itself (`extended_range::decode`) and for a merge of texels
-/// (a heap read's phi of its fetch and its decode routine's texel) as for an image instruction's.
-/// Where Metal's `half` texel is not that rounding of the texel's value, the access records its
-/// own note: `PrecisionNote::HalfTexelConversion` (by the bound class at a slot; outright for a
-/// heap element and a depth texture) or, for a decoded texel, `PrecisionNote::DevicePackConversion`
-/// (whose bound states the `half`'s narrowing against Metal's rounding with ties away from zero).
 pub fn round_texel(fb: &mut FunctionBuilder<'_>, f: Form, x: Value) -> BResult<Value> {
     let native = fb.module().native_half();
     match f.held {
-        Held::Float(FloatFmt::Half) if native || fb.module().native_half_nans() => {
-            round_measured(fb, f, x)
-        }
+        Held::Float(FloatFmt::Half) if native || fb.module().native_half_nans() => round(fb, f, x),
         Held::Float(FloatFmt::Half) => {
-            let r = round_measured(fb, f, x)?;
+            let r = round(fb, f, x)?;
             let u = u32_form(f);
             let ut = ty(fb, u)?;
             let b = fb.convert(ConvOp::Bitcast, x, ut)?;

@@ -171,7 +171,7 @@ fn result(kernel: &str, o: &[f32; 3]) -> f32 {
 
 /// Metal's `half(x)`: to nearest even on the `half` grid, `half` denormals kept, infinity from
 /// 65520 up (`x` not a NaN).
-pub(super) fn half_of(x: f32) -> u16 {
+fn half_of(x: f32) -> u16 {
     let sign = if x.is_sign_negative() { 0x8000 } else { 0 };
     let a = f64::from(x.abs());
     if a >= 65520.0 {
