@@ -1351,6 +1351,8 @@ struct Found {
     /// Cases the band drew with a vertex half a step off the subpixel grid on a driver whose snap
     /// is not measured to be Metal's, announced (`device-subpixel-snap`): left unchecked.
     snaps: usize,
+    /// Of the ties and the snaps, the cases of a triangle's edges at a width other than 1.
+    edges_unchecked: usize,
     /// The device's lines.
     facts: Option<LineFacts>,
 }
@@ -1722,7 +1724,8 @@ fn wide_lines_draw_metal_s_parallelograms() {
     // On a device that tessellates nothing is drawn at the nearest width, and where its own
     // lines differ from Metal's at no width drawn (none without `wideLines`: MoltenVK), every
     // case is drawn as Metal's, the edges at their width too, but a band of edges under a depth
-    // bias that can differ.
+    // bias that can differ and the cases the driver's ties and snap leave unchecked, edges among
+    // them.
     if facts.tessellates {
         assert_eq!(found.nearest, 0, "{found:?}");
     }
@@ -1745,7 +1748,10 @@ fn wide_lines_draw_metal_s_parallelograms() {
 }
 
 /// Every case under `DevicePolicy::exact_answers()`: the band wherever the device's lines differ
-/// from Metal's, so no draw of lines or edges is announced on a device with `tessellationShader`.
+/// from Metal's, so no draw of lines or edges is announced as the device's lines on a device with
+/// `tessellationShader`, and every case, a triangle's edges' included, is Metal's but those of a
+/// band of edges under a depth bias that can differ and those the driver's ties and snap leave
+/// unchecked (`device-line-ties`, `device-subpixel-snap`).
 #[test]
 fn wide_lines_draw_metal_s_parallelograms_under_exact_answers() {
     let found = run(DevicePolicy::default().exact_answers());
