@@ -161,3 +161,79 @@ fn blended_extended_range_pipelines_are_made() {
     eprintln!("made {made}, refused {}", failures.len());
     assert!(failures.is_empty(), "{} refused", failures.len());
 }
+
+/// The other shapes such a client makes: a pipeline without a fragment function, a fragment
+/// function that writes no color (depth alone), and write masks of some channels, blended and not.
+#[test]
+fn other_extended_range_pipeline_shapes_are_made() {
+    let bc = match llvm_assemble(&crate::pipeline::testing::engine_dir().join("rt6_samples.ll")) {
+        Ok(b) => b,
+        Err(AssembleError::Missing(why)) => {
+            eprintln!("SKIPPED: {why}");
+            return;
+        }
+        Err(AssembleError::Rejected(why)) => panic!("llvm-as rejected rt6_samples.ll: {why}"),
+    };
+    let library = Library::from_air(&bc).expect("library");
+    let function = |name: &str| {
+        StageSource::Function(FunctionDescriptor::new(
+            library.function(name).expect("function"),
+        ))
+    };
+    use BlendFactor as F;
+    let masks = [
+        ColorWriteMask::ALL,
+        ColorWriteMask::NONE,
+        ColorWriteMask::RED
+            .union(ColorWriteMask::GREEN)
+            .union(ColorWriteMask::BLUE),
+        ColorWriteMask::ALPHA,
+        ColorWriteMask::RED,
+    ];
+    let mut failures = Vec::new();
+    let mut made = 0;
+    for stem in VENUES {
+        let dev = device(stem);
+        for pf in [PixelFormat::BGRA10XR, PixelFormat::BGRA10XRSRGB] {
+            for blended in [false, true] {
+                for mask in masks {
+                    for fragment in [
+                        None,
+                        Some("rt6_fill_depth32float"),
+                        Some("rt6_fill_rgba16float"),
+                    ] {
+                        for samples in [1, 4] {
+                            let mut a = ColorAttachmentDescriptor::new(pf);
+                            a.blending_enabled = blended;
+                            a.source_rgb_blend_factor = F::One;
+                            a.destination_rgb_blend_factor = F::OneMinusSourceAlpha;
+                            a.source_alpha_blend_factor = F::One;
+                            a.destination_alpha_blend_factor = F::OneMinusSourceAlpha;
+                            a.write_mask = mask;
+                            let mut d = RenderPipelineDescriptor::new(function("rt6_fill_vertex"));
+                            d.fragment = fragment.map(function);
+                            d.color_attachments[0] = Some(a);
+                            d.raster_sample_count = samples;
+                            if fragment == Some("rt6_fill_depth32float") {
+                                d.depth_format = Some(PixelFormat::Depth32Float);
+                            }
+                            let what = format!(
+                                "{stem} {pf:?} blended {blended} mask {} {fragment:?} x{samples}",
+                                mask.as_raw()
+                            );
+                            match dev.compile_render_pipeline(&d, &Budget::standard()) {
+                                Ok(_) => made += 1,
+                                Err(e) => {
+                                    eprintln!("REFUSED {what}: {e:?}");
+                                    failures.push(what);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    eprintln!("made {made}, refused {}", failures.len());
+    assert!(failures.is_empty(), "{} refused", failures.len());
+}
