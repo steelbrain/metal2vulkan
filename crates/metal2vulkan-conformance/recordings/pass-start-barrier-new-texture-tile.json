@@ -62,52 +62,12 @@
                       }
                     },
                     {
-                      "name": "pipeline:psb_solid",
-                      "observed": {
-                        "value": "absent",
-                        "digest": {
-                          "kind": "sha256",
-                          "hex": "c8bbe454bb86a39eea796148d4427b9729d6d29549f11abe6ae42781cbccb60b"
-                        }
-                      }
-                    },
-                    {
                       "name": "pipeline:psb_read",
                       "observed": {
                         "value": "absent",
                         "digest": {
                           "kind": "sha256",
                           "hex": "ebb52f7e5891201601b69e03ba26e07f387c7c5f741165c6d3481450100c4d09"
-                        }
-                      }
-                    },
-                    {
-                      "name": "pipeline:psb_sample",
-                      "observed": {
-                        "value": "absent",
-                        "digest": {
-                          "kind": "sha256",
-                          "hex": "2b5a76d521c93bb416e35c117a5356b671367d79b361b2ed7d8c7ea6fe6f9b55"
-                        }
-                      }
-                    },
-                    {
-                      "name": "pipeline:psb_masked",
-                      "observed": {
-                        "value": "absent",
-                        "digest": {
-                          "kind": "sha256",
-                          "hex": "258370be8469e7539c7c0b47e499f61b06505542d73d008e35d05514ff279c1d"
-                        }
-                      }
-                    },
-                    {
-                      "name": "pipeline:psb_under",
-                      "observed": {
-                        "value": "absent",
-                        "digest": {
-                          "kind": "sha256",
-                          "hex": "ea7a95ec0e937e69975b4f5d1c06879369eee6413489407a6288be42c60c4b44"
                         }
                       }
                     },
@@ -145,51 +105,7 @@
                   }
                 },
                 {
-                  "name": "pipeline:psb_solid",
-                  "observed": {
-                    "value": {
-                      "variant": {
-                        "name": "Ok",
-                        "payload": "absent"
-                      }
-                    }
-                  }
-                },
-                {
                   "name": "pipeline:psb_read",
-                  "observed": {
-                    "value": {
-                      "variant": {
-                        "name": "Ok",
-                        "payload": "absent"
-                      }
-                    }
-                  }
-                },
-                {
-                  "name": "pipeline:psb_sample",
-                  "observed": {
-                    "value": {
-                      "variant": {
-                        "name": "Ok",
-                        "payload": "absent"
-                      }
-                    }
-                  }
-                },
-                {
-                  "name": "pipeline:psb_masked",
-                  "observed": {
-                    "value": {
-                      "variant": {
-                        "name": "Ok",
-                        "payload": "absent"
-                      }
-                    }
-                  }
-                },
-                {
-                  "name": "pipeline:psb_under",
                   "observed": {
                     "value": {
                       "variant": {
@@ -489,18 +405,23 @@
         "commands_recorded.cmd_copy_buffer": 1,
         "commands_recorded.cmd_pipeline_barrier": 7,
         "creation_pipelines_drawn": 1,
+        "creation_pipelines_made": 1,
         "creation_render_pipelines_drawn": 1,
-        "creation_render_pipelines_made": 5,
+        "creation_render_pipelines_made": 1,
+        "descriptor_keys_built": 1,
         "device_memory_allocated": 201326720,
         "draw_shapes_made": 1,
-        "driver_diagnostics_withheld": 5,
-        "functions_translated": 6,
-        "linked_use_questions_asked": 10,
+        "driver_diagnostics_withheld": 1,
+        "functions_translated": 2,
+        "linked_use_questions_asked": 2,
+        "pipeline_layouts_made": 1,
         "queues_sharing_a_vk_queue": 0,
         "render_passes_made": 3,
-        "sampler_sets_made": 1,
-        "stage_entries_shared": 25,
-        "stage_entries_specialized": 6
+        "sampler_sets_made": 0,
+        "shader_modules_made": 2,
+        "stage_entries_shared": 5,
+        "stage_entries_specialized": 2,
+        "variant_pipelines_made": 1
       },
       "ceilings": {
         "addressable_buffers_made": 1,

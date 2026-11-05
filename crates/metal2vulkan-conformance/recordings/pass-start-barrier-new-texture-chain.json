@@ -62,32 +62,12 @@
                       }
                     },
                     {
-                      "name": "pipeline:psb_solid",
-                      "observed": {
-                        "value": "absent",
-                        "digest": {
-                          "kind": "sha256",
-                          "hex": "c8bbe454bb86a39eea796148d4427b9729d6d29549f11abe6ae42781cbccb60b"
-                        }
-                      }
-                    },
-                    {
                       "name": "pipeline:psb_read",
                       "observed": {
                         "value": "absent",
                         "digest": {
                           "kind": "sha256",
                           "hex": "ebb52f7e5891201601b69e03ba26e07f387c7c5f741165c6d3481450100c4d09"
-                        }
-                      }
-                    },
-                    {
-                      "name": "pipeline:psb_sample",
-                      "observed": {
-                        "value": "absent",
-                        "digest": {
-                          "kind": "sha256",
-                          "hex": "2b5a76d521c93bb416e35c117a5356b671367d79b361b2ed7d8c7ea6fe6f9b55"
                         }
                       }
                     },
@@ -195,29 +175,7 @@
                   }
                 },
                 {
-                  "name": "pipeline:psb_solid",
-                  "observed": {
-                    "value": {
-                      "variant": {
-                        "name": "Ok",
-                        "payload": "absent"
-                      }
-                    }
-                  }
-                },
-                {
                   "name": "pipeline:psb_read",
-                  "observed": {
-                    "value": {
-                      "variant": {
-                        "name": "Ok",
-                        "payload": "absent"
-                      }
-                    }
-                  }
-                },
-                {
-                  "name": "pipeline:psb_sample",
                   "observed": {
                     "value": {
                       "variant": {
@@ -864,17 +822,22 @@
         "commands_recorded.cmd_copy_buffer": 2,
         "commands_recorded.cmd_pipeline_barrier": 15,
         "creation_pipelines_drawn": 3,
+        "creation_pipelines_made": 3,
         "creation_render_pipelines_drawn": 3,
-        "creation_render_pipelines_made": 5,
+        "creation_render_pipelines_made": 3,
+        "descriptor_keys_built": 3,
         "device_memory_allocated": 201326720,
-        "driver_diagnostics_withheld": 5,
-        "functions_translated": 6,
-        "linked_use_questions_asked": 10,
+        "driver_diagnostics_withheld": 3,
+        "functions_translated": 4,
+        "linked_use_questions_asked": 6,
+        "pipeline_layouts_made": 2,
         "queues_sharing_a_vk_queue": 0,
         "render_passes_made": 3,
-        "sampler_sets_made": 1,
-        "stage_entries_shared": 25,
-        "stage_entries_specialized": 6
+        "sampler_sets_made": 0,
+        "shader_modules_made": 4,
+        "stage_entries_shared": 15,
+        "stage_entries_specialized": 4,
+        "variant_pipelines_made": 3
       },
       "ceilings": {
         "addressable_buffers_made": 1,
