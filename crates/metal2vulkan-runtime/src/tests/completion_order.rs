@@ -5,7 +5,8 @@
 //! before any of the waiter's. Its completed handlers are dispatched before the waiter's, which run
 //! on another handler thread, as Metal runs two queues' handlers. A blocked handler of the
 //! signaller's queue holds back the signaller's transition and not the other queue's, Metal's
-//! measured order (`contexts/mod.rs`).
+//! measured order (`contexts/mod.rs`); a handler thread of the signaller's queue that the host
+//! keeps off the CPU after an earlier command buffer's wait returned holds back neither.
 //!
 //! Device tests: compiled only under the validation crate's GPU safety cfgs (`m2v_gpu`,
 //! `m2v_cpu_icd`), on the kind of device the cfg selects.
@@ -258,6 +259,65 @@ fn a_command_buffer_that_waited_for_another_queue_completes_after_it() {
     assert!(
         overtaken.is_empty(),
         "B's handlers overtook A's: {overtaken:#?}"
+    );
+}
+
+/// How long a handler thread of A's queue pauses once it let go of what one of its items held
+/// ([`a_handler_thread_held_off_the_cpu_after_a_wait_returned_keeps_the_order`]): far past a
+/// round's commit, work and completion turns.
+const PAUSE: Duration = Duration::from_millis(100);
+
+/// The rounds of that test.
+const PAUSED_ROUNDS: u32 = 8;
+
+/// Each handler thread that ran a transition of A's queue pauses once it let go of the transition's
+/// hold, which lets A's waiters return, as a thread the host takes the CPU from there would
+/// (`Contexts::pause_after_items`); so as each round begins, the thread that ran the round
+/// before's A is still away. A's queue's context ran nothing of that A once its wait returned
+/// (`contexts/mod.rs`), so each round's A leads it as it completes: B, which waited on the GPU
+/// for A's signal, completes after it, A's status `Completed` once B's wait returns and in B's
+/// completion-seen handler, which starts after A's.
+#[test]
+fn a_handler_thread_held_off_the_cpu_after_a_wait_returned_keeps_the_order() {
+    let device = device();
+    let (first, second) = (
+        device.new_command_queue().unwrap(),
+        device.new_command_queue().unwrap(),
+    );
+    let big = device.new_buffer(FILL, ResourceOptions::private()).unwrap();
+    let word = device.new_buffer(256, ResourceOptions::private()).unwrap();
+    let event = device.new_event().unwrap();
+    let contexts = &device.shared().contexts;
+    contexts.pause_after_items(first.id(), PAUSE);
+    let before = device.work_counts();
+    let mut broken = Broken::default();
+    for value in 1..=u64::from(PAUSED_ROUNDS) {
+        let handlers = (Handlers::Both, Handlers::Seen);
+        let shape = (false, &mut broken);
+        round(
+            (&first, &second),
+            (&big, &word),
+            ((&event).into(), value),
+            handlers,
+            shape,
+        );
+    }
+    let after = device.work_counts();
+    let pauses = contexts.pauses_made();
+    eprintln!(
+        "pauses {pauses}, completed after another queue {}",
+        after.command_buffers_completed_after_another_queue
+            - before.command_buffers_completed_after_another_queue
+    );
+    // Each round's A ran on a handler thread, which paused after it.
+    assert!(pauses >= u64::from(PAUSED_ROUNDS), "{pauses} pauses");
+    assert_eq!(
+        (broken.status, broken.seen),
+        (0, 0),
+        "of {PAUSED_ROUNDS} rounds, A not completed in {} and A's completion-seen handler after \
+         B's in {}",
+        broken.status,
+        broken.seen
     );
 }
 

@@ -901,8 +901,8 @@ impl Scheduler {
         // thread: no release of the program's objects (a no-copy buffer's deallocator among them)
         // runs on a thread blocking in `wait_until_completed`, where Metal runs none.
         for buffer in spent.drain(..) {
-            if let Some(last) = buffer.let_go_short_of_last() {
-                device.let_go_elsewhere(Box::new(last));
+            if let Err(last) = buffer.let_go_short_of_last() {
+                device.let_go_elsewhere(last);
             }
         }
         // A command buffer that needs no GPU work, taken with no submission behind no work in
@@ -1758,8 +1758,8 @@ impl AtCommit {
         } = self;
         turns.run(&mut handlers, &mut segments);
         for buffer in spent.drain(..) {
-            if let Some(last) = buffer.let_go_short_of_last() {
-                device.let_go_elsewhere(Box::new(last));
+            if let Err(last) = buffer.let_go_short_of_last() {
+                device.let_go_elsewhere(last);
             }
         }
         check

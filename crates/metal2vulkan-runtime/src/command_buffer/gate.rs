@@ -211,8 +211,8 @@ pub(crate) struct Hold<T> {
     _count: Count,
 }
 
-/// A [`Hold`]'s place in its gate's count.
-struct Count(Arc<Gate>);
+/// A [`Hold`]'s place in its gate's count: the gate opens only once it went.
+pub(crate) struct Count(Arc<Gate>);
 
 impl Drop for Count {
     fn drop(&mut self) {
@@ -235,13 +235,17 @@ impl<T> Hold<T> {
         Arc::ptr_eq(&self.value, &other.value)
     }
 
-    /// Let go of the reference here, and leave the gate after, unless it is the value's last:
-    /// then the value, still counted by the gate, for the caller to let go of on another thread
+    /// Let go of the reference here unless it is the value's last, answering the hold's place in
+    /// its gate's count, which leaves the gate as the caller lets it go. `Err` where it is the
+    /// last: the value, still counted by the gate, for the caller to let go of on another thread
     /// ([`Last`]). Whether it is the last is decided as it goes (`Arc::into_inner`), so another
     /// holder's drop meanwhile never leaves the value's drop here.
-    pub(crate) fn let_go_short_of_last(self) -> Option<Last<T>> {
+    pub(crate) fn let_go_short_of_last(self) -> Result<Count, Box<Last<T>>> {
         let Hold { value, _count } = self;
-        Arc::into_inner(value).map(|value| Last { value, _count })
+        match Arc::into_inner(value) {
+            Some(value) => Err(Box::new(Last { value, _count })),
+            None => Ok(_count),
+        }
     }
 }
 

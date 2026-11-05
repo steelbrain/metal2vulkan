@@ -17,6 +17,13 @@
 //!   ([`Contexts::gate`], [`Contexts::post_behind`]), its place in its context kept, until that
 //!   command buffer's transition, which leads its own context ([`Contexts::leads`]), reaches its
 //!   handlers (`command_buffer/follow.rs`): a gate holds no thread.
+//! - **Done with an item before what it held goes.** The thread that ran an item marks its context
+//!   done with it, and only then lets go of what the item still holds ([`Run::Held`]): a
+//!   transition's hold of its command buffer, whose going lets that command buffer's waiters
+//!   return. So a program whose wait for a command buffer returned finds that command buffer's
+//!   context running nothing of it, however long the host keeps that thread off the CPU after the
+//!   hold went: the transition of the queue's next command buffer leads the context, and another
+//!   queue's command buffer that waited on the GPU for its signal completes after it.
 //! - **Metal's order** (measured on an M4, macOS 27.0.1): while one of a
 //!   queue's handlers blocks, the queue's later transitions wait, even of a command buffer whose
 //!   work already ran; another queue's transitions and handlers go on, on another thread. Metal
@@ -73,8 +80,14 @@ const IDLE: Duration = Duration::from_secs(2);
 /// An item of a queue's context: run once, on one of the device's handler threads, or on the
 /// thread that runs the context itself ([`Contexts::run_here`]).
 pub(crate) trait Run: Send + 'static {
-    /// Run the item; dropping it lets go of what it holds.
-    fn run(self);
+    /// What the item still holds once it ran, which its runner lets go of only once the item's
+    /// context is done with it: what a thread waiting for the item's end waits for (a
+    /// transition's hold of its command buffer, whose going lets that command buffer's waiters
+    /// return). So a thread that saw an item end finds its context running nothing of it.
+    type Held: Send;
+
+    /// Run the item, answering what it still holds ([`Run::Held`]).
+    fn run(self) -> Self::Held;
 
     /// Whether the item runs none of the program's code (no handler, no notice, no release of
     /// the program's), so that a thread that may run none can run it: none by default.
@@ -114,6 +127,22 @@ struct Shared<I> {
     spared: AtomicU64,
     /// The identity the next context takes ([`Contexts::fresh`]).
     next: AtomicU64,
+    /// The context whose items a thread pauses after, once it let go of what one held, before it
+    /// looks at the lines again, and for how long: a test's stand-in for a thread the host took
+    /// the CPU from there ([`Contexts::pause_after_items`]).
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pause: Mutex<Pause>,
+}
+
+/// A test's pause of the pool's threads after the items of one context
+/// ([`Contexts::pause_after_items`]).
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+#[derive(Default)]
+struct Pause {
+    /// The context's logical queue, and how long each pause lasts.
+    after: Option<(u64, Duration)>,
+    /// The pauses made.
+    made: u64,
 }
 
 struct State<I> {
@@ -167,6 +196,8 @@ impl<I: Run> Contexts<I> {
             woke: AtomicU64::new(0),
             spared: AtomicU64::new(0),
             next: AtomicU64::new(0),
+            #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+            pause: Mutex::default(),
             census: Arc::new(Census {
                 count: Mutex::new(Count {
                     threads: 1,
@@ -207,13 +238,12 @@ impl<I: Run> Contexts<I> {
         let Some(before) = lock(&self.shared.state).lines.take_plain(queue, may_run) else {
             return Err(item);
         };
-        for earlier in before {
-            earlier.run();
-        }
-        item.run();
+        let earlier: Vec<I::Held> = before.into_iter().map(Run::run).collect();
+        let held = item.run();
         let mut state = lock(&self.shared.state);
         state.lines.done(queue);
         self.serve(state);
+        drop((earlier, held));
         Ok(())
     }
 
@@ -264,10 +294,11 @@ impl<I: Run> Contexts<I> {
         if !item.plain() || !lock(&self.shared.state).lines.take_idle(queue) {
             return Err(item);
         }
-        item.run();
+        let held = item.run();
         let mut state = lock(&self.shared.state);
         state.lines.done(queue);
         self.serve(state);
+        drop(held);
         Ok(())
     }
 
@@ -334,11 +365,42 @@ impl<I: Run> Contexts<I> {
         }
     }
 
+    /// Make a pool's thread pause for `pause` once it let go of what an item of the context of
+    /// logical queue `queue` held, before it looks at the lines again, as a thread the host took
+    /// the CPU from there would.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) fn pause_after_items(&self, queue: u64, pause: Duration) {
+        lock(&self.shared.pause).after = Some((queue, pause));
+    }
+
+    /// How many pauses the pool's threads made ([`Contexts::pause_after_items`]).
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) fn pauses_made(&self) -> u64 {
+        lock(&self.shared.pause).made
+    }
+
     /// The threads alive and the threads blocked in a wait.
     #[cfg(test)]
     pub(crate) fn census(&self) -> (usize, usize) {
         let count = lock(&self.shared.census.count);
         (count.threads, count.blocked)
+    }
+}
+
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+impl<I> Shared<I> {
+    /// The pause a test asked for once a thread let go of what an item of the context of
+    /// logical queue `queue` held ([`Contexts::pause_after_items`]).
+    fn pause_after_item(&self, queue: u64) {
+        let length = {
+            let mut pause = lock(&self.pause);
+            let Some((_, length)) = pause.after.filter(|&(paused, _)| paused == queue) else {
+                return;
+            };
+            pause.made += 1;
+            length
+        };
+        std::thread::sleep(length);
     }
 }
 
@@ -362,9 +424,13 @@ fn run<I: Run>(shared: &Shared<I>, first: bool) {
         if let Some((queue, item)) = state.lines.take() {
             state.free -= 1;
             drop(state);
-            item.run();
+            let held = item.run();
+            // Its line is done with it before what it holds goes ([`Run::Held`]).
+            lock(&shared.state).lines.done(queue);
+            drop(held);
+            #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+            shared.pause_after_item(queue);
             state = lock(&shared.state);
-            state.lines.done(queue);
             state.free += 1;
             continue;
         }

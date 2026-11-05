@@ -16,11 +16,14 @@
 //!   transitions in their own context: while one of a queue's handlers blocks, another queue's
 //!   transitions go on (`contexts/mod.rs`). So a transition waits for the signaller's only where
 //!   the signaller's transition was posted to its context and no item there runs before it
-//!   ([`Follow::leads`]). That transition runs no code of the program's that may block before its
-//!   completed handlers, so the wait ends once a thread takes it and runs its completion-seen
-//!   handlers, and it holds no thread meanwhile: a gate in the waiting transition's context
-//!   (`contexts/lines.rs`). Behind any other item, the waiting transition goes on, as Metal's
-//!   does. The completion turns take the signaller's batch before the waiting one's
+//!   ([`Follow::leads`]). An earlier command buffer of the signaller's queue whose waiters returned
+//!   runs nothing there any more, however long the host keeps the thread that ran it off the CPU:
+//!   a context is done with an item before the item's hold of its command buffer goes, which lets
+//!   those waiters return (`contexts/mod.rs`). That transition runs no code of the program's that
+//!   may block before its completed handlers, so the wait ends once a thread takes it and runs its
+//!   completion-seen handlers, and it holds no thread meanwhile: a gate in the waiting
+//!   transition's context (`contexts/lines.rs`). Behind any other item, the waiting transition
+//!   goes on, as Metal's does. The completion turns take the signaller's batch before the waiting one's
 //!   (`completion.rs`), so the signaller's transition is posted by the time the waiting one's is.
 //! - **Nothing of the signaller is held.** A [`Follow`] names its command buffer by address alone,
 //!   to pick out its transition among its context's items: the waiter that completes the follower

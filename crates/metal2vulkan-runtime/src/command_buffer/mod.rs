@@ -122,7 +122,7 @@ use batches::Batches;
 use checks::{Checks, SubmissionCheck};
 use completion::Submitted;
 use first_submission::{Listing, Live};
-use gate::{Gate, Hold};
+use gate::{Count, Gate, Hold};
 use hang::{Hang, Held, Later};
 use metal2vulkan::bind::{
     ExecutionStatus, IndexBoundsPass, ReplayFaults, ResidentRange, ResidentSet, RootTable,
@@ -5409,30 +5409,56 @@ impl Transition {
         }
     }
 
-    fn run(self) {
+    fn run(self) -> Kept {
         let on_handler_thread = contexts::on_handler_thread();
-        match self.to {
-            To::Scheduled => self.buffer.run_scheduled(),
+        let Transition { buffer, to, .. } = self;
+        match to {
+            To::Scheduled => buffer.run_scheduled(),
             To::Finished(result) => {
                 if !on_handler_thread {
-                    self.buffer.device.shared().counts.completed_where_seen();
+                    buffer.device.shared().counts.completed_where_seen();
                 }
-                self.buffer.complete(result);
+                buffer.complete(result);
             }
         }
-        // The hold goes here, after the transition: the gate opens then. On a queue's waiter
-        // (`CommandBufferShared::finish_here`) it goes short of the command buffer's last
-        // reference, which holds the device: that last one goes on a handler thread, so the
-        // device's teardown, which stops the waiters, never runs on one, and the waiter holds
-        // nothing of the device once the gate opened, so a program's drop after its wait is the
-        // device's last.
-        if !on_handler_thread {
-            if let Some(last) = self.buffer.let_go_short_of_last() {
+        // The hold goes after the transition, once its context is done with it: the gate opens
+        // then. On a queue's waiter (`CommandBufferShared::finish_here`) it goes short of the
+        // command buffer's last reference, which holds the device: that last one goes on a
+        // handler thread, so the device's teardown, which stops the waiters, never runs on one,
+        // and the waiter holds nothing of the device once the gate opened, so a program's drop
+        // after its wait is the device's last.
+        if on_handler_thread {
+            return Kept {
+                _hold: Some(buffer),
+                _count: None,
+            };
+        }
+        match buffer.let_go_short_of_last() {
+            Ok(count) => Kept {
+                _hold: None,
+                _count: Some(count),
+            },
+            Err(last) => {
                 let (contexts, context) = last.device.elsewhere();
-                contexts.post(context, Item::Release(Box::new(last)));
+                contexts.post(context, Item::Release(last));
+                Kept::default()
             }
         }
     }
+}
+
+/// What an item kept once it ran, which its runner lets go of once the item's context is done
+/// with it (`Run::Held`): a transition's hold of its command buffer, whose going opens the
+/// command buffer's gate where it finished, so its waiters return only once its context runs
+/// nothing of it (`command_buffer/follow.rs`).
+#[derive(Default)]
+pub(crate) struct Kept {
+    /// The hold, on a handler thread: its reference may be the command buffer's last.
+    _hold: Option<Hold<CommandBufferShared>>,
+    /// Elsewhere, the hold's place in its gate's count, its reference let go of short of the last
+    /// (`Hold::let_go_short_of_last`). Neither, for a release, and for a transition whose hold was
+    /// its command buffer's last, which went to a context of its own with its count.
+    _count: Option<Count>,
 }
 
 /// An item of the device's handler threads (`contexts`).
@@ -5460,10 +5486,15 @@ impl Item {
 }
 
 impl Run for Item {
-    fn run(self) {
+    type Held = Kept;
+
+    fn run(self) -> Kept {
         match self {
             Item::Transition(transition) => transition.run(),
-            Item::Release(held) => drop(held),
+            Item::Release(held) => {
+                drop(held);
+                Kept::default()
+            }
         }
     }
 

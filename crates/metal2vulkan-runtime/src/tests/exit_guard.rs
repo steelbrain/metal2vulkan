@@ -1062,6 +1062,8 @@ fn the_threads_that_take_command_buffers_to_their_handlers_run_at_the_user_inter
     /// A pool's item.
     struct Item(Box<dyn FnOnce() + Send>);
     impl Run for Item {
+        type Held = ();
+
         fn run(self) {
             (self.0)();
         }
@@ -1205,6 +1207,8 @@ fn the_threads_that_take_command_buffers_to_their_handlers_run_with_the_utilizat
     /// A pool's item.
     struct Item(Box<dyn FnOnce() + Send>);
     impl Run for Item {
+        type Held = ();
+
         fn run(self) {
             (self.0)();
         }
