@@ -1868,7 +1868,7 @@ impl<K: Copy + Ord + Hash> GeometryWrites<K> {
         let mut found = (Access::NONE, Access::NONE);
         for used in uses {
             let fragment = Self::fragment(used);
-            meet(&self.writes, (&used.key, &used.range), fragment, &mut found);
+            meet_writes(&self.writes, (&used.key, &used.range), fragment, &mut found);
         }
         dependency(found)
     }
@@ -1903,7 +1903,7 @@ impl<K: Copy + Ord + Hash> GeometryWrites<K> {
                 if fragment.is_empty() {
                     continue;
                 }
-                meet(&self.writes, (&used.key, &used.range), fragment, &mut found);
+                meet_writes(&self.writes, (&used.key, &used.range), fragment, &mut found);
                 let ranges = fragments.entry(used.key).or_default();
                 ranges.push((used.range.clone(), fragment));
             }
@@ -1920,7 +1920,7 @@ impl<K: Copy + Ord + Hash> GeometryWrites<K> {
             for key in &checked.written {
                 for (range, fragment) in checked.fragments.get(key).into_iter().flatten() {
                     walked += 1;
-                    meet(&self.writes, (key, range), *fragment, &mut checked.found);
+                    meet_writes(&self.writes, (key, range), *fragment, &mut checked.found);
                 }
             }
             checked.written.clear();
@@ -1928,7 +1928,7 @@ impl<K: Copy + Ord + Hash> GeometryWrites<K> {
         }
         for used in own {
             let fragment = Self::fragment(used);
-            meet(&self.writes, (&used.key, &used.range), fragment, &mut found);
+            meet_writes(&self.writes, (&used.key, &used.range), fragment, &mut found);
         }
         let barrier = dependency(found);
         debug_assert_eq!(
@@ -1956,7 +1956,7 @@ impl<K: Copy + Ord + Hash> GeometryWrites<K> {
 /// Add to `found` (a dependency's source and destination) the writes of `writes` that a use of
 /// `key` and `range` touching `fragment` in the fragment stage meets, and `fragment`, where it
 /// meets one.
-fn meet<K: Copy + Ord + Hash>(
+fn meet_writes<K: Copy + Ord + Hash>(
     writes: &KeptUses<K>,
     (key, range): (&K, &UseRange),
     fragment: Access,
