@@ -28,8 +28,8 @@
 //!   submission is the one the runtime's from the commit compares with.
 //! - **The runtime** (`runtime_completion_latency`): a device of the runtime's, one queue, each
 //!   command buffer a blit encoder's `fill_buffer` with a completion-seen handler and a completed
-//!   handler that note the host time (the consumer's shape), then with the completion-seen
-//!   handler alone, committed and not waited for. From the GPU end
+//!   handler that note the host time (the consumer's shape), and in turn with them every other
+//!   one with the completion-seen handler alone, committed and not waited for. From the GPU end
 //!   (`gpu_end_time`, on a device that calibrates its timestamps) to the completion-seen handler;
 //!   and the runtime's steps between, from its queue waiter's trace
 //!   (`command_buffer::completion::trace`): the batch watched, the driver's wait entered and
@@ -786,27 +786,31 @@ fn runtime_completion_latency() {
             .unwrap();
         sleep_until(next);
     }
-    for completed_handler in [true, false] {
-        let shape = match completed_handler {
-            true => "seen and completed handlers",
-            false => "seen handler alone",
-        };
-        let committed = commit_timed(&fill, completed_handler, &mut next);
-        print_runtime(&name, shape, calibrated, &committed);
+    let committed = commit_timed(&fill, &mut next);
+    let times = times_of(calibrated, &committed);
+    for (completed_handler, shape) in [
+        (true, "seen and completed handlers"),
+        (false, "seen handler alone"),
+    ] {
+        let times: Vec<&Times> = (times.iter())
+            .filter(|t| t.completed.is_some() == completed_handler)
+            .collect();
+        print_runtime(&name, shape, calibrated, &times);
     }
 }
 
-/// [`RUNS`] fills `fill` makes, each with a completion-seen handler and, where
-/// `completed_handler`, a completed handler, committed [`GAP`] apart from `next` on and waited for
-/// at the end, with the queue waiters' steps traced (`trace`).
+/// [`RUNS`] fills `fill` makes of each shape, in turn: each with a completion-seen handler, and
+/// every other one first with a completed handler too, so the shapes meet the same host; committed
+/// [`GAP`] apart from `next` on and waited for at the end, with the queue waiters' steps traced
+/// (`trace`).
 fn commit_timed(
     fill: &dyn Fn(u8) -> CommandBuffer,
-    completed_handler: bool,
     next: &mut Instant,
 ) -> (Vec<Committed>, Vec<Traced>) {
     trace::start();
-    let mut committed = Vec::with_capacity(RUNS);
-    for run in 0..RUNS {
+    let mut committed = Vec::with_capacity(2 * RUNS);
+    for run in 0..2 * RUNS {
+        let completed_handler = run % 2 == 0;
         *next += GAP;
         let command_buffer = fill(run as u8);
         let seen = Arc::new(Mutex::new(None));
@@ -858,13 +862,8 @@ struct Times {
     gpu_end: Option<u64>,
 }
 
-/// Print one shape's lines: `committed`'s command buffers and the steps traced meanwhile.
-fn print_runtime(
-    name: &str,
-    shape: &str,
-    calibrated: bool,
-    (committed, steps): &(Vec<Committed>, Vec<Traced>),
-) {
+/// The times of `committed`'s command buffers, from their handlers and the steps traced meanwhile.
+fn times_of(calibrated: bool, (committed, steps): &(Vec<Committed>, Vec<Traced>)) -> Vec<Times> {
     // Each turn's batch, and the steps of `finish` that follow it, up to the next turn's.
     let mut finished: Vec<(usize, u64, u64, Vec<(&'static str, u64)>)> = Vec::new();
     for step in steps {
@@ -882,7 +881,7 @@ fn print_runtime(
     }
     assert_eq!(
         finished.len(),
-        RUNS,
+        committed.len(),
         "one finished batch ends each timed command buffer"
     );
     // Each command buffer's steps: the latest wait for a value up to its own that returned before
@@ -908,7 +907,7 @@ fn print_runtime(
             _ => None,
         })
     };
-    let times: Vec<Times> = committed
+    committed
         .iter()
         .zip(&finished)
         .map(|(each, (queue, value, turn, turn_steps))| {
@@ -928,8 +927,12 @@ fn print_runtime(
                 gpu_end,
             }
         })
-        .collect();
-    let of = |f: &dyn Fn(&Times) -> f64| line(times.iter().map(f).collect());
+        .collect()
+}
+
+/// Print one shape's lines, of `times`.
+fn print_runtime(name: &str, shape: &str, calibrated: bool, times: &[&Times]) {
+    let of = |f: &dyn Fn(&Times) -> f64| line(times.iter().map(|t| f(t)).collect());
     let ends = match calibrated {
         true => format!(
             "gpu end -> seen handler {} us; gpu end -> wait returned {} us; wait entered -> gpu \
@@ -952,9 +955,10 @@ fn print_runtime(
         None => String::new(),
     };
     eprintln!(
-        "COMPLETION-LATENCY runtime, {shape} ({name}): {RUNS} fills of {BYTES} bytes {GAP:?} \
-         apart: {ends}commit -> watched {} us; watched -> wait entered {} us; wait returned -> \
+        "COMPLETION-LATENCY runtime, {shape} ({name}): {} fills of {BYTES} bytes {GAP:?} apart, \
+         between the other shape's: {ends}commit -> watched {} us; watched -> wait entered {} us; wait returned -> \
          turn {} us; turn -> seen handler {} us; {completed}commit -> seen handler {} us",
+        times.len(),
         of(&|t| us(t.commit, t.watched)),
         of(&|t| us(t.watched, t.entered)),
         of(&|t| us(t.returned, t.turn)),
