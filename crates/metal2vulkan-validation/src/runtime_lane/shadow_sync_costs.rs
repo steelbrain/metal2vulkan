@@ -571,6 +571,57 @@ fn shadow_sync_costs() {
     }
 }
 
+/// Whether a texture of the surface's plane in a `Private` buffer aliases the buffer's memory or
+/// is a shadow, and why (the device's `ShadowedTexture` notice), for each row pitch and usage
+/// below, each on a device of its own (a device announces a kind once): report only.
+#[test]
+#[ignore = "a report of the device's forms: run by name"]
+fn private_surface_forms() {
+    use TextureUsage as U;
+    let usages = [
+        ("ShaderRead", U::SHADER_READ),
+        (
+            "RenderTarget | ShaderRead",
+            U::RENDER_TARGET | U::SHADER_READ,
+        ),
+        (
+            "RenderTarget | ShaderRead | ShaderWrite",
+            U::RENDER_TARGET | U::SHADER_READ | U::SHADER_WRITE,
+        ),
+        (
+            "RenderTarget | ShaderRead | PixelFormatView",
+            U::RENDER_TARGET | U::SHADER_READ | U::PIXEL_FORMAT_VIEW,
+        ),
+    ];
+    for pitch in [ROW, PADDED] {
+        for (name, usage) in usages {
+            let cache = ScratchCache::new().unwrap();
+            let messages = Messages::default();
+            let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), |o| {
+                o.layers.clear();
+            })
+            .unwrap();
+            let len = (pitch * HEIGHT).next_multiple_of(16384);
+            let buffer = (device.new_buffer(len, ResourceOptions::private())).unwrap();
+            let texture = plane_texture(&buffer, usage, pitch);
+            let notices = messages.take_notices();
+            let why = (notices.iter()).find(|m| m.text.contains("shadowed-texture"));
+            // SAFETY: the handle is only compared, while the texture lives.
+            let form = match (unsafe { texture.vk_image() }.is_some(), why) {
+                (true, _) => "aliased".to_owned(),
+                (false, Some(why)) => format!("a shadow: {}", why.text),
+                (false, None) => "a shadow".to_owned(),
+            };
+            println!(
+                "PRIVATE-SURFACE on {}: rows {pitch} bytes apart, {name}: {form}",
+                device.name()
+            );
+            messages.restore_notices(notices);
+            drop((texture, buffer));
+        }
+    }
+}
+
 fn frames(round: usize, shape: Shape, form: Form) {
     let pitch = form.pitch();
     let len = ((pitch * HEIGHT) as usize).next_multiple_of(16384);
