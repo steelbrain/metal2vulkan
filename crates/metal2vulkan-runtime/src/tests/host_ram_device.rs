@@ -1079,7 +1079,8 @@ fn a_run_bound_buffer_and_a_copy_of_its_pages_order_by_their_host_bytes() {
         "the buffer in its run's import, or in the chunk it imported"
     );
     // The copies' run: the buffer's second page.
-    let pages = vec![at + page..at + 2 * page];
+    let run = at + page..at + 2 * page;
+    let pages = std::slice::from_ref(&run);
     let out = device.new_buffer(page, ResourceOptions::shared()).unwrap();
     let source = device.new_buffer(page, ResourceOptions::shared()).unwrap();
     // The write's work across queues before it: 2 GiB of fills of memory of the device's own.
@@ -1098,11 +1099,11 @@ fn a_run_bound_buffer_and_a_copy_of_its_pages_order_by_their_host_bytes() {
         true => {
             // SAFETY: the buffer's bytes, which no command buffer uses now.
             unsafe { std::ptr::write_bytes(source.contents().unwrap().as_ptr(), value, page as _) };
-            encoder.copy_to_host_ram(&source, 0, &ram, &pages).unwrap();
+            encoder.copy_to_host_ram(&source, 0, &ram, pages).unwrap();
         }
     };
     let read = |encoder: &mut crate::BlitCommandEncoder, scatter: bool| match scatter {
-        false => encoder.copy_from_host_ram(&ram, &pages, &out, 0).unwrap(),
+        false => encoder.copy_from_host_ram(&ram, pages, &out, 0).unwrap(),
         true => (encoder.copy_from_buffer_to_buffer(&alone, page, &out, 0, page)).unwrap(),
     };
     let mut value = 0;
