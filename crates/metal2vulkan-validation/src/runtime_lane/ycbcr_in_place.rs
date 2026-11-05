@@ -29,7 +29,7 @@ use metal2vulkan::device::DevicePolicy;
 use metal2vulkan::metal::format::ycbcr_format;
 use metal2vulkan::metal::{PixelFormat, SamplerMinMagFilter, TextureUsage};
 use metal2vulkan::pipeline::{ComputePipelineDescriptor, StageSource};
-use metal2vulkan_devtools::llvm_assemble_text;
+use metal2vulkan_devtools::{engine_dir, llvm_assemble, llvm_assemble_text};
 use metal2vulkan_runtime::{
     Buffer, CommandBufferStatus, ComputePipelineState, Degradation, Device, Error, IoSurfacePlane,
     IoSurfaceYCbCr, PipelineOptions, ResourceOptions, SamplerState, Size, SurfaceYCbCrMatrix,
@@ -553,6 +553,124 @@ fn a_ycbcr_texture_reads_its_planes_in_place_under_the_defaults() {
             ] {
                 assert_eq!(notices.get(&kind), None, "{notices:?}");
             }
+        }
+    });
+}
+
+/// A function that samples one texture and gathers it through one sampler (the fixture
+/// `ycg_sample_gather`'s `ycg_float`: lane `i % 3` a sample, a gather of red, a gather of blue,
+/// at position `i / 3`) reads the planes in place on a device whose memory is the host's: each
+/// dispatch binds the planes and converts nothing, a linear sample at [`ycbcr_textures::BETWEEN`]
+/// past a texel is Metal's filter of Metal's texels, and a gather there is Metal's texels at the
+/// footprint's four taps, `(x, y + 1)`, `(x + 1, y + 1)`, `(x + 1, y)`, `(x, y)` clamped to the
+/// edge; the filter's notices (`ycbcr-filter-not-exact`, `float-sample-filter`) are not announced.
+#[test]
+fn a_ycbcr_texture_sampled_and_gathered_by_one_function_reads_its_planes_in_place() {
+    on_device(|device, messages| {
+        if !reads_in_place(device) {
+            eprintln!("{}: reads no planes in place", device.name());
+            return;
+        }
+        let bitcode = llvm_assemble(&engine_dir().join("ycg_sample_gather.ll")).unwrap();
+        let library = device.new_library_with_air(&bitcode).unwrap();
+        let function = library.new_function_with_name("ycg_float").unwrap();
+        let state = device
+            .new_compute_pipeline_state(
+                &ComputePipelineDescriptor::new(StageSource::Function(
+                    function.function_descriptor(),
+                )),
+                &PipelineOptions::default(),
+            )
+            .unwrap();
+        let linear = sampler(device, SamplerMinMagFilter::Linear);
+        let [a, b] = ycbcr_textures::BETWEEN;
+        for (seed, surface) in (1..).zip(SURFACES) {
+            let what = format!("{:?} {:?}", surface.format, surface.conversion);
+            let bytes = surface.bytes(seed);
+            let buffer = buffer_with(device, &bytes).unwrap();
+            let texture = surface.texture(&buffer, 0).unwrap();
+            let model = surface.model(&bytes);
+            let [w, h] = surface.size;
+            let n = w * h;
+            let positions: Vec<u8> = (0..n)
+                .flat_map(|i| {
+                    let at = |q: u64, k: u32, size: u64| {
+                        ((q as f32 + 0.5 + k as f32 / 256.0) / size as f32).to_le_bytes()
+                    };
+                    [at(i % w, a, w), at(i / w, b, h)]
+                })
+                .flatten()
+                .collect();
+            let positions = buffer_with(device, &positions).unwrap();
+            let out = device
+                .new_buffer(3 * 16 * n, ResourceOptions::shared())
+                .unwrap();
+            let before = device.work_counts();
+            let queue = device.new_command_queue().unwrap();
+            let command_buffer = queue.command_buffer().unwrap();
+            let mut encoder = command_buffer.compute_command_encoder().unwrap();
+            encoder.set_compute_pipeline_state(&state).unwrap();
+            encoder.set_texture(Some(&texture), 0).unwrap();
+            encoder.set_buffer(Some(&out), 0, 0).unwrap();
+            encoder.set_buffer(Some(&positions), 0, 1).unwrap();
+            encoder.set_sampler_state(Some(&linear), 0).unwrap();
+            encoder
+                .dispatch_threads(Size::new(3 * n, 1, 1), Size::new(64, 1, 1))
+                .unwrap();
+            encoder.end_encoding().unwrap();
+            command_buffer.commit().unwrap();
+            command_buffer.wait_until_completed_for(WAIT).unwrap();
+            assert_eq!(command_buffer.status(), CommandBufferStatus::Completed);
+            let work = ycbcr_work(&before, &device.work_counts());
+            assert_eq!(
+                work[2..],
+                [1, 0, 0],
+                "{what}: the planes bound, nothing converted"
+            );
+            let raw = read_buffer(&out, 0, 3 * 16 * n).unwrap();
+            let lanes: Vec<[f32; 4]> = raw
+                .as_chunks::<16>()
+                .0
+                .iter()
+                .map(|t| {
+                    std::array::from_fn(|k| {
+                        f32::from_le_bytes(t[4 * k..4 * k + 4].try_into().unwrap())
+                    })
+                })
+                .collect();
+            for i in 0..n {
+                let (x, y) = (i % w, i / w);
+                let step = |c: usize| filtered(&model, surface.size, (x, y), c);
+                let sample: [f32; 4] =
+                    [step(0), step(1), step(2), 2048].map(|k| f32::from(k) / 2048.0);
+                assert_eq!(
+                    lanes[3 * i as usize],
+                    sample,
+                    "{what}: sample past texel {:?}",
+                    (x, y)
+                );
+                let (x1, y1) = ((x + 1).min(w - 1), (y + 1).min(h - 1));
+                for (lane, c) in [(1, 0), (2, 2)] {
+                    let tap =
+                        |tx: u64, ty: u64| f32::from(model[(ty * w + tx) as usize][c]) / 2048.0;
+                    let want = [tap(x, y1), tap(x1, y1), tap(x1, y), tap(x, y)];
+                    assert_eq!(
+                        lanes[(3 * i + lane) as usize],
+                        want,
+                        "{what}: gather of channel {c} past texel {:?}",
+                        (x, y)
+                    );
+                }
+            }
+        }
+        let notices = counts(&messages.take_notices());
+        eprintln!("YCBCR-IN-PLACE-GATHER notices {notices:?}");
+        for kind in [
+            Degradation::FloatSampleFilter,
+            Degradation::HalfSampleFilter,
+            Degradation::YCbCrFilterNotExact,
+        ] {
+            assert_eq!(notices.get(&kind), None, "{notices:?}");
         }
     });
 }

@@ -193,6 +193,7 @@ pub mod visibility;
 pub mod visible_tables;
 pub mod wide_int_attributes;
 pub mod wide_points;
+pub mod ycbcr_gathers;
 pub mod ycbcr_minify;
 pub mod ycbcr_textures;
 
@@ -478,6 +479,7 @@ pub fn all() -> Vec<Box<dyn Case>> {
     for case in ycbcr_minify::all() {
         cases.push(Box::new(case));
     }
+    cases.extend(ycbcr_gathers::all());
     cases.extend(compute_threadgroups::all());
     cases.extend(buffer_blits::all());
     cases.extend(blit_encoder_commands::all());
