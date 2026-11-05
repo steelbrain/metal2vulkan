@@ -39,8 +39,11 @@
 //!   shadow's merge back: at the commit, stamped after every stamp asked before, and ordered on
 //!   the GPU by the tracker against the copies of the command buffers committed before or after
 //!   it) is such a change: it lets go of no hold, before its copy in in the same command buffer
-//!   or in a later one, and the copy takes the pages it wrote. A write of the shadow itself, and
-//!   one no log of the source keeps whole, lets go of it, and the next copy in moves every row.
+//!   or in a later one, and the copy takes the pages it wrote. A write of the shadow itself, one
+//!   no log of the source keeps whole, and any write of its truth in a command buffer that copies
+//!   it back or merges it (whose own write, reported as the shadow's, would hide a write beneath
+//!   it from the shadow's copies in) let go of it: the next copy in moves every row, unless the
+//!   command buffer's end left the image holding every texel, which then holds from its stamp.
 //!   A merge back cut to a rectangle of the texels names, and reports, the rows of the rectangle
 //!   alone (`shadow_merge.rs`), so another copy of the same pages takes those rows.
 //! - **A waiting writer.** A command buffer that waits for an event or a semaphore may run after
