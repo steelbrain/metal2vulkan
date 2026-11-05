@@ -4,10 +4,13 @@
 //! anonymous pages, with `RenderTarget` and `ShaderRead` usage, as a guest's window surface is:
 //! a shadow on every device (its usage renders into it). Its memory carries a log of the pages'
 //! writes or none (`HostMemory::with_dirty_pages`): the test's own, exact to the page, which keeps
-//! writers apart and publishes at once.
+//! writers apart and publishes at once, or 1 ms after each wait begins (`harvest`, as a VMM's
+//! harvest of its dirty log answers later). The buffer is the pages imported, or a copy of them
+//! where its memory's import gate refuses the import (`copied`, `copied-host-pages`).
 //!
-//! Each shape runs on a device of its own, one command buffer a frame, committed with
-//! `commit_and_submit` (as the consumer commits), in two rounds:
+//! Each shape and form runs on a device of its own, one command buffer a frame (two for
+//! `WriteThenReadApart`), committed with `commit_and_submit` (as the consumer commits), in two
+//! rounds:
 //!
 //! - `Write`: a pass loading the surface draws one opaque 512x512 rectangle inside a scissor of
 //!   its size, its color alternating frame to frame, and a second pass samples the surface whole
@@ -16,16 +19,19 @@
 //! - `WriteReadApart`: as `Write`, the read through a second texture of the plane whose usage only
 //!   samples it (as another process's texture over the same surface): in place where the
 //!   device's check passed, a device copy on a discrete GPU over logged pages.
+//! - `WriteThenReadApart`: as `WriteReadApart`, the write and the read in two command buffers one
+//!   after the other (one process's pass into its window, then the compositor's read of it).
 //! - `Rewrite`: as `Write`, the same color every frame: the GPU writes and no word changes.
 //! - `Idle`: the read alone; nothing writes the surface.
 //! - `CpuWrite`: the CPU writes 64 rows of the surface before the commit, told to the log; the
 //!   read alone.
 //! - `Private`: `Write` into a `Private` texture of the surface's size: the passes alone.
 //!
-//! Printed per round, shape and log (`SHADOW-SYNC`): the medians and 90th percentiles of a frame's
-//! `commit_and_submit` (host), its commit to the kernel's end of submission, its GPU time
-//! (`GPUEndTime` less `GPUStartTime`), the GPU end to its completed handler, and the process's CPU
-//! time; and the work counts per frame.
+//! Printed per round, shape and form (`SHADOW-SYNC`): the medians and 90th percentiles of a frame's
+//! `commit_and_submit` (host; summed over its command buffers), its last commit to the kernel's
+//! end of submission, its GPU time (`GPUEndTime` less `GPUStartTime`, summed), the GPU end of its
+//! last command buffer to that one's completed handler, and the process's CPU time; and the work
+//! counts per frame.
 
 use super::first_use_writes::CHECK_WAIT;
 use super::host_memory::Mapping;
@@ -42,6 +48,7 @@ use metal2vulkan_runtime::{
 use std::num::NonZeroU64;
 use std::ops::Range;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 const WARM: usize = 10;
 const FRAMES: usize = 60;
@@ -61,21 +68,77 @@ enum Shape {
     Write,
     WriteUnscissored,
     WriteReadApart,
+    WriteThenReadApart,
     Rewrite,
     Idle,
     CpuWrite,
     Private,
 }
 
-const SHAPES: [Shape; 7] = [
-    Shape::Write,
-    Shape::WriteUnscissored,
-    Shape::WriteReadApart,
-    Shape::Rewrite,
-    Shape::Idle,
-    Shape::CpuWrite,
-    Shape::Private,
-];
+/// How the surface's buffer holds its bytes, and the log of their writes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Form {
+    log: Option<Duration>,
+    copied: bool,
+}
+
+impl Form {
+    const PLAIN: Form = Form {
+        log: None,
+        copied: false,
+    };
+    const LOGGED: Form = Form {
+        log: Some(Duration::ZERO),
+        copied: false,
+    };
+
+    fn name(self) -> String {
+        let log = match self.log {
+            None => "no log".to_owned(),
+            Some(Duration::ZERO) => "logged".to_owned(),
+            Some(latency) => format!("logged, harvest {} us", latency.as_micros()),
+        };
+        match self.copied {
+            true => format!("copied, {log}"),
+            false => log,
+        }
+    }
+}
+
+/// Each shape and form a round measures.
+fn configurations() -> Vec<(Shape, Form)> {
+    let harvest = Some(Duration::from_millis(1));
+    let mut all = Vec::new();
+    for shape in [
+        Shape::Write,
+        Shape::WriteUnscissored,
+        Shape::WriteReadApart,
+        Shape::WriteThenReadApart,
+        Shape::Rewrite,
+        Shape::Idle,
+        Shape::CpuWrite,
+    ] {
+        all.extend([(shape, Form::PLAIN), (shape, Form::LOGGED)]);
+    }
+    for shape in [Shape::Write, Shape::Idle, Shape::CpuWrite] {
+        for log in [None, Some(Duration::ZERO)] {
+            all.push((shape, Form { log, copied: true }));
+        }
+    }
+    for shape in [Shape::Write, Shape::Idle] {
+        for copied in [false, true] {
+            all.push((
+                shape,
+                Form {
+                    log: harvest,
+                    copied,
+                },
+            ));
+        }
+    }
+    all.push((Shape::Private, Form::PLAIN));
+    all
+}
 
 /// A log of the writes to a mapping's pages, as a consumer keeps one: each write stamped with the
 /// publication it falls in and its writer (0 the consumer's), each stamp the runtime asks for a
@@ -83,6 +146,8 @@ const SHAPES: [Shape; 7] = [
 #[derive(Default)]
 struct Log {
     state: Mutex<LogState>,
+    /// How long each wait takes before it answers.
+    latency: Duration,
 }
 
 #[derive(Default)]
@@ -124,6 +189,9 @@ impl DirtyPages for Log {
     }
 
     fn wait(&self, _: DirtyStamp) -> bool {
+        if !self.latency.is_zero() {
+            std::thread::sleep(self.latency);
+        }
         true
     }
 
@@ -167,18 +235,22 @@ fn median_p90(mut values: Vec<f64>) -> String {
 }
 
 /// The surface's buffer: a `Shared` no-copy buffer over `mapping`'s `len` bytes, its memory
-/// carrying `log` where given.
+/// carrying `log` where given, a copy of them where `copied`.
 fn surface_buffer(
     device: &Device,
     mapping: &Mapping,
     len: usize,
-    log: Option<&Arc<Log>>,
+    (log, copied): (Option<&Arc<Log>>, bool),
 ) -> Buffer {
     // SAFETY: the mapping outlives every buffer over it (the test drops them first).
     let memory = unsafe { HostMemory::new(mapping.pointer()) };
     let memory = match log {
         Some(log) => memory.with_dirty_pages(Arc::clone(log)),
         None => memory,
+    };
+    let memory = match copied {
+        true => memory.with_import_gate(Arc::new(|_| false)),
+        false => memory,
     };
     // SAFETY: as above.
     unsafe {
@@ -278,7 +350,11 @@ fn per_frame(before: &WorkCounts, after: &WorkCounts) -> String {
          skipped {:.2}), bytes copied in {:.0} of {:.0}, log waits {:.2} ({:.0} us), merge words \
          examined {:.0}, merges in blocks {:.2}, merges kept in images {:.2} (images made \
          {:.2}), scratches reused {:.2}, zeroed {:.2}, device memory allocated {:.0} bytes, \
-         internal submissions {:.2}",
+         internal submissions {:.2}; copied host buffers made {}, their copies in {:.0} bytes \
+         ({:.0} skipped), merged back {:.0}, compared {:.2}; first copied in again {:.0}, \
+         recopied beyond held {:.0}, after changes {:.0} (other shadows {:.0}, writes {:.0}); \
+         host texture shadows: render target {}, check pending {}, failed {}, unchecked {}, \
+         refused pitch {}, placement {}, image {}; device copy textures {}, in place {}",
         per(|c| c.queue_submissions),
         per(|c| c.batch_submit_nanos) / 1e3,
         per(|c| c.command_buffers_submitted),
@@ -302,29 +378,42 @@ fn per_frame(before: &WorkCounts, after: &WorkCounts) -> String {
         per(|c| c.shadow_merge_scratches_zeroed),
         per(|c| c.device_memory_allocated),
         per(|c| c.internal_submissions),
+        after.copied_host_buffers_made,
+        per(|c| c.copied_copy_in_bytes),
+        per(|c| c.copied_copy_in_bytes_skipped),
+        per(|c| c.copied_merge_back_bytes),
+        per(|c| c.copied_merges_compared),
+        per(|c| c.shadow_texels_first_copied_in_again),
+        per(|c| c.shadow_texels_recopied_beyond_held),
+        per(|c| c.shadow_texels_recopied_after_changes),
+        per(|c| c.shadow_texels_recopied_after_other_shadows),
+        per(|c| c.shadow_texels_recopied_after_writes),
+        after.host_texture_shadows_render_target,
+        after.host_texture_shadows_check_pending,
+        after.host_texture_shadows_check_failed,
+        after.host_texture_shadows_unchecked,
+        after.host_texture_shadows_refused_pitch,
+        after.host_texture_shadows_refused_placement,
+        after.host_texture_shadows_refused_image,
+        after.device_copy_textures,
+        after.host_textures_in_place,
     )
 }
 
-/// The frames of each [`Shape`] over the surface, with and without a log, each on a device of its
-/// own, interleaved in two rounds.
+/// The frames of each [`Shape`] over the surface in each [`Form`] it takes ([`configurations`]),
+/// each on a device of its own, interleaved in two rounds.
 #[test]
 #[ignore = "a release-mode measurement: run by name"]
 fn shadow_sync_costs() {
     let len = ((ROW * HEIGHT) as usize).next_multiple_of(16384);
     for round in 0..2 {
-        for shape in SHAPES {
-            let logs: &[bool] = match shape {
-                Shape::Private => &[false],
-                _ => &[false, true],
-            };
-            for &logged in logs {
-                frames(round, shape, logged, len);
-            }
+        for (shape, form) in configurations() {
+            frames(round, shape, form, len);
         }
     }
 }
 
-fn frames(round: usize, shape: Shape, logged: bool, len: usize) {
+fn frames(round: usize, shape: Shape, form: Form, len: usize) {
     let mapping = Mapping::anonymous(len);
     let cache = ScratchCache::new().unwrap();
     let messages = Messages::default();
@@ -339,8 +428,16 @@ fn frames(round: usize, shape: Shape, logged: bool, len: usize) {
     d.resource_options = ResourceOptions::private();
     let target = device.new_texture(&d).unwrap();
     let private = device.new_texture(&d).unwrap();
-    let log = Arc::new(Log::default());
-    let buffer = surface_buffer(&device, &mapping, len, logged.then_some(&log));
+    let log = Arc::new(Log {
+        latency: form.log.unwrap_or_default(),
+        ..Log::default()
+    });
+    let buffer = surface_buffer(
+        &device,
+        &mapping,
+        len,
+        (form.log.is_some().then_some(&log), form.copied),
+    );
     let surface = match shape {
         Shape::Private => private.clone(),
         _ => plane_texture(
@@ -350,25 +447,22 @@ fn frames(round: usize, shape: Shape, logged: bool, len: usize) {
     };
     // The sampled texture's form follows the device's in-place check: a texture over host pages
     // starts it.
-    let sampled = (shape == Shape::WriteReadApart).then(|| {
+    let apart = matches!(shape, Shape::WriteReadApart | Shape::WriteThenReadApart);
+    let sampled = apart.then(|| {
         let first = plane_texture(&buffer, TextureUsage::SHADER_READ);
         drop(first);
         device.settle_in_place_checks(CHECK_WAIT);
         plane_texture(&buffer, TextureUsage::SHADER_READ)
     });
-    let log_form = match logged {
-        true => "logged",
-        false => "no log",
-    };
     // SAFETY: the handle is only compared, while the texture lives.
     let sampled_form = match sampled.as_ref().map(|t| unsafe { t.vk_image() }.is_some()) {
         None => "",
         Some(true) => ", read in place",
         Some(false) => ", read through a copy",
     };
-    let form = match shape {
+    let named = match shape {
         Shape::Private => "private".to_owned(),
-        _ => format!("shadow, {log_form}{sampled_form}"),
+        _ => format!("shadow, {}{sampled_form}", form.name()),
     };
     let (mut commits, mut submits, mut gpus, mut gaps, mut waits, mut cpus) = (
         Vec::new(),
@@ -385,6 +479,7 @@ fn frames(round: usize, shape: Shape, logged: bool, len: usize) {
         }
         let cpu = process_cpu_us();
         let command_buffer = queue.command_buffer().unwrap();
+        let mut command_buffers = Vec::new();
         match shape {
             Shape::Write | Shape::Private => {
                 drawing.write(&command_buffer, &surface, k % 2, true);
@@ -398,6 +493,13 @@ fn frames(round: usize, shape: Shape, logged: bool, len: usize) {
                 drawing.write(&command_buffer, &surface, k % 2, true);
                 let sampled = sampled.as_ref().unwrap();
                 drawing.read(&command_buffer, sampled, &target);
+            }
+            Shape::WriteThenReadApart => {
+                drawing.write(&command_buffer, &surface, k % 2, true);
+                command_buffers.push(command_buffer);
+                let command_buffer = queue.command_buffer().unwrap();
+                drawing.read(&command_buffer, sampled.as_ref().unwrap(), &target);
+                command_buffers.push(command_buffer);
             }
             Shape::Rewrite => {
                 drawing.write(&command_buffer, &surface, 0, true);
@@ -415,18 +517,25 @@ fn frames(round: usize, shape: Shape, logged: bool, len: usize) {
                 drawing.read(&command_buffer, &surface, &target);
             }
         }
+        if command_buffers.is_empty() {
+            command_buffers.push(command_buffer);
+        }
+        let last = command_buffers.last().unwrap();
         let handled = Arc::new(Mutex::new(None::<f64>));
         let at = Arc::clone(&handled);
-        (command_buffer.add_completed_handler(Box::new(move |_| {
+        (last.add_completed_handler(Box::new(move |_| {
             *at.lock().unwrap() = Some(host_time());
         })))
         .unwrap();
-        let committed = host_time();
-        command_buffer.commit_and_submit().unwrap();
-        let returned = host_time();
-        command_buffer.wait_until_completed_for(WAIT).unwrap();
+        let mut commit = 0.0;
+        let mut committed = 0.0;
+        for command_buffer in &command_buffers {
+            committed = host_time();
+            command_buffer.commit_and_submit().unwrap();
+            commit += host_time() - committed;
+        }
+        last.wait_until_completed_for(WAIT).unwrap();
         let completed = host_time();
-        assert_eq!(command_buffer.error(), None);
         // The completed handler may run after the wait returns.
         let handler = loop {
             if let Some(at) = *handled.lock().unwrap() {
@@ -435,19 +544,24 @@ fn frames(round: usize, shape: Shape, logged: bool, len: usize) {
             std::thread::yield_now();
         };
         if k >= WARM {
-            let start = command_buffer.gpu_start_time().unwrap();
-            let end = command_buffer.gpu_end_time().unwrap();
-            commits.push((returned - committed) * 1e6);
-            submits.push((command_buffer.kernel_end_time() - committed) * 1e6);
-            gpus.push((end - start) * 1e6);
-            gaps.push((handler - end) * 1e6);
+            let mut gpu = 0.0;
+            for command_buffer in &command_buffers {
+                command_buffer.wait_until_completed_for(WAIT).unwrap();
+                assert_eq!(command_buffer.error(), None);
+                gpu += command_buffer.gpu_end_time().unwrap()
+                    - command_buffer.gpu_start_time().unwrap();
+            }
+            commits.push(commit * 1e6);
+            submits.push((last.kernel_end_time() - committed) * 1e6);
+            gpus.push(gpu * 1e6);
+            gaps.push((handler - last.gpu_end_time().unwrap()) * 1e6);
             waits.push((completed - committed) * 1e6);
             cpus.push(process_cpu_us() - cpu);
         }
     }
     let after = device.work_counts();
     println!(
-        "SHADOW-SYNC on {}: round {round}, {shape:?}, {form}: commit_and_submit {} us, commit to \
+        "SHADOW-SYNC on {}: round {round}, {shape:?}, {named}: commit_and_submit {} us, commit to \
          submitted {} us, GPU {} us, GPU end to completed handler {} us, commit to completion {} \
          us, process CPU {} us; per frame: {}",
         device.name(),
