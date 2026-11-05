@@ -501,6 +501,73 @@ fn replayed_frames() {
     }
 }
 
+/// The encoders of a page's frame ([`Page::frame_with`]): the encoding pass, the executing
+/// pass and the blit that copies out its pixels.
+const FRAME_ENCODERS: u64 = 3;
+
+/// While the page's frame is held for its host step (`WorkCounts::heads_held_for_host_steps`), a
+/// bystander on another queue commits a command buffer at a time, again as each completes, until
+/// the frame completes: each commit and completion makes a pass of the scheduler's, which compares
+/// the bystander's head with the held frame by their footprints (`scheduler/order.rs`). Each
+/// batch's footprint is built once, however many passes look at it, and again only where what it
+/// is built from changed, as where the frame's host step records its batch
+/// (`WorkCounts::footprints_built`): at most one a bystander's command buffer and two for each of
+/// the frame's batches, which its [`FRAME_ENCODERS`] bound; a footprint built at each look builds
+/// one a pass. The validation layer stays silent.
+#[test]
+fn a_batch_s_footprint_is_built_once_however_many_passes_look() {
+    let cache = ScratchCache::new().unwrap();
+    let messages = Messages::default();
+    {
+        let device = validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
+        let name = device.name().to_owned();
+        let page = Page::new(&device, CHECKED_DRAWS);
+        let (page_queue, other) = (
+            device.new_command_queue().unwrap(),
+            device.new_command_queue().unwrap(),
+        );
+        let own = device.new_buffer(256, ResourceOptions::shared()).unwrap();
+        // A first frame makes the pipelines the next one records with.
+        let first = page.frame(&page_queue);
+        first.wait_until_completed_for(WAIT).unwrap();
+        let done = AtomicBool::new(false);
+        let before = device.work_counts();
+        let stood = thread::scope(|scope| {
+            let stood = scope.spawn(|| {
+                commit_until(&other, &done, |command_buffer| {
+                    let mut blit = command_buffer.blit_command_encoder().unwrap();
+                    blit.fill_buffer(&own, 0..256, 7).unwrap();
+                    blit.end_encoding().unwrap();
+                })
+            });
+            let frame = page.frame(&page_queue);
+            frame.wait_until_completed_for(WAIT).unwrap();
+            assert_eq!(frame.status(), CommandBufferStatus::Completed);
+            done.store(true, Ordering::Release);
+            stood.join().unwrap()
+        });
+        let after = device.work_counts();
+        let held = after.heads_held_for_host_steps - before.heads_held_for_host_steps;
+        let built = after.footprints_built - before.footprints_built;
+        let passes = after.scheduler_passes - before.scheduler_passes;
+        let committed = stood.count as u64;
+        eprintln!(
+            "FOOTPRINTS {name}: {built} built in {passes} passes, the frame held {held} times, \
+             {committed} bystander command buffers"
+        );
+        assert!(
+            held > 0,
+            "on {name}: the frame was not held for its host step"
+        );
+        assert!(
+            built <= committed + 2 * FRAME_ENCODERS,
+            "on {name}: {built} footprints built for {committed} bystander command buffers and \
+             the frame, in {passes} passes"
+        );
+    }
+    layer_reported_nothing_at_all(&messages);
+}
+
 /// What another queue's command buffer encodes in a case of
 /// [`a_replayed_execution_holds_only_what_shares_its_resources`].
 type Encode<'a> = dyn Fn(&CommandBuffer) + 'a;

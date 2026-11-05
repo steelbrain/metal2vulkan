@@ -208,6 +208,7 @@ pub(crate) struct Counters {
     scheduler_passes_at_commit: AtomicU64,
     batches_submitted_at_commit: AtomicU64,
     batches_checked_at_commit: AtomicU64,
+    footprints_built: AtomicU64,
     command_buffer_wakes: AtomicU64,
     command_buffer_wakes_spared: AtomicU64,
     event_wakes: AtomicU64,
@@ -1555,6 +1556,12 @@ impl Counters {
     pub(crate) fn waiter_passed(&self, batches: usize) {
         (self.scheduler_passes_by_waiters).fetch_add(1, Ordering::Relaxed);
         (self.batches_submitted_by_waiters).fetch_add(batches as u64, Ordering::Relaxed);
+    }
+
+    /// A batch's footprint for the scheduler's order across queues was built: none was kept, or
+    /// what it is built from changed since (`CommandBufferShared::footprint`).
+    pub(crate) fn footprint_built(&self) {
+        self.footprints_built.fetch_add(1, Ordering::Relaxed);
     }
 
     /// A thread that committed with `CommandBuffer::commit_and_submit` made a pass of its own
@@ -4413,6 +4420,13 @@ pub struct WorkCounts {
     /// device or by the host. A head whose checks wait for a GPU signal to land, or whose checks
     /// the scheduler's thread took first, is left to that thread, uncounted here.
     pub batches_checked_at_commit: u64,
+    /// Footprints of batches the scheduler built to order them across queues
+    /// (`scheduler/order.rs`), one each time: each batch's is built where a pass first compares
+    /// it with another queue's and kept, and built again only where what it is built from
+    /// changed since (its command buffer's recordings, or the summary one of its segments takes,
+    /// as a host step records the segment), or a segment of it takes uses its work knows, which
+    /// are built at each look (`CommandBufferShared::footprint`).
+    pub footprints_built: u64,
     /// Passes the scheduler's thread made over its order (`scheduler/mod.rs`): one takes in what
     /// was committed and submits what is ready; one more follows a submission check or a host
     /// step the thread ran without its lock, a waker's nudge during a pass, and a pass that
@@ -6264,6 +6278,7 @@ impl Device {
                 .batches_submitted_by_waiters
                 .load(Ordering::Relaxed),
             scheduler_passes_at_commit: counters.scheduler_passes_at_commit.load(Ordering::Relaxed),
+            footprints_built: counters.footprints_built.load(Ordering::Relaxed),
             batches_submitted_at_commit: counters
                 .batches_submitted_at_commit
                 .load(Ordering::Relaxed),

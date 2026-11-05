@@ -2325,7 +2325,7 @@ fn gate_heads(state: &mut State, behind: &[u64], left: &mut Left<Work>, awaits: 
 fn is_behind(
     order: &Order<Held>,
     binary: &BinarySignals<vk::Semaphore>,
-    memo: &mut Behind<Option<Footprint<ResourceKey>>>,
+    memo: &mut Behind<Option<Arc<Footprint<ResourceKey>>>>,
     sequence: u64,
 ) -> bool {
     order.is_behind(
@@ -2334,8 +2334,9 @@ fn is_behind(
         (
             &mut |held: &Held| binary.ready(&held.binary_needs) && events_reachable(held),
             &mut |held: &Held| held.buffer.footprint(held.index),
-            &|earlier: &Option<Footprint<ResourceKey>>, later: &Option<Footprint<ResourceKey>>| {
-                tracker::ordered(earlier.as_ref(), later.as_ref())
+            &|earlier: &Option<Arc<Footprint<ResourceKey>>>,
+              later: &Option<Arc<Footprint<ResourceKey>>>| {
+                tracker::ordered(earlier.as_deref(), later.as_deref())
             },
         ),
     )

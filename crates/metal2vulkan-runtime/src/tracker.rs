@@ -1958,6 +1958,16 @@ impl<K: Copy + Ord> Footprint<K> {
     where
         K: 'a,
     {
+        Footprint::gathered(summaries).sorted()
+    }
+
+    /// What these summaries' footprint holds, copied out of them, its uses not sorted yet
+    /// ([`sorted`](Self::sorted)): a caller that must not hold the summaries' lock while it
+    /// sorts gathers under it and sorts after.
+    pub(super) fn gathered<'a>(summaries: impl IntoIterator<Item = &'a Summary<K>>) -> Footprint<K>
+    where
+        K: 'a,
+    {
         let mut footprint = Footprint {
             uses: Vec::new(),
             waits: Vec::new(),
@@ -1972,8 +1982,13 @@ impl<K: Copy + Ord> Footprint<K> {
                 .updates
                 .extend(summary.updates.iter().map(|used| used.fence));
         }
-        footprint.uses.sort_by_key(|used| used.key);
         footprint
+    }
+
+    /// The footprint [`gathered`](Self::gathered) made, its uses sorted by resource.
+    pub(super) fn sorted(mut self) -> Footprint<K> {
+        self.uses.sort_by_key(|used| used.key);
+        self
     }
 
     /// Whether a tracked use of the batch names a resource `named` answers for.

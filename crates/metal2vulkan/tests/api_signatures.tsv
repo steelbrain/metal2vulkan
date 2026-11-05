@@ -2646,6 +2646,7 @@ field	metal2vulkan-runtime::WorkCounts.finales_folded	pub finales_folded: u64
 field	metal2vulkan-runtime::WorkCounts.first_work_order_wait_nanos	pub first_work_order_wait_nanos: u64
 field	metal2vulkan-runtime::WorkCounts.first_work_order_waits	pub first_work_order_waits: u64
 field	metal2vulkan-runtime::WorkCounts.flights_followed	pub flights_followed: u64
+field	metal2vulkan-runtime::WorkCounts.footprints_built	pub footprints_built: u64
 field	metal2vulkan-runtime::WorkCounts.fragment_shader_libraries_made	pub fragment_shader_libraries_made: u64
 field	metal2vulkan-runtime::WorkCounts.free_thread_queue_full	pub free_thread_queue_full: u64
 field	metal2vulkan-runtime::WorkCounts.freed_memory_parked	pub freed_memory_parked: u64

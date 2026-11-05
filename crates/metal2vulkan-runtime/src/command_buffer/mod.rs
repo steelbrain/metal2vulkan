@@ -530,6 +530,63 @@ impl FailedEncoders {
     }
 }
 
+/// A command buffer's ended encoders' recordings, in encoding order, and a revision that every
+/// mutable access to them moves: a batch's footprint built from them is kept while the revision
+/// holds ([`CommandBufferShared::footprint`]), as nothing can change them but through such an
+/// access.
+#[derive(Default)]
+struct Parts {
+    parts: Vec<Recorded>,
+    revision: u64,
+}
+
+impl std::ops::Deref for Parts {
+    type Target = Vec<Recorded>;
+
+    fn deref(&self) -> &Vec<Recorded> {
+        &self.parts
+    }
+}
+
+impl std::ops::DerefMut for Parts {
+    fn deref_mut(&mut self) -> &mut Vec<Recorded> {
+        self.revision += 1;
+        &mut self.parts
+    }
+}
+
+/// A batch's footprint as [`CommandBufferShared::footprint`] built it, with what it was built
+/// from.
+struct BuiltFootprint {
+    from: FootprintSources,
+    footprint: Arc<Footprint<ResourceKey>>,
+}
+
+/// What a batch's footprint is built from: the recordings' revision ([`Parts`]), the batch's
+/// encoders among them, and the summary each of its segments takes, in order. Two equal ones
+/// build equal footprints: every summary taken lies in the recordings, which nothing changes
+/// without moving the revision, and which one a segment takes is what may change while they
+/// stand (a route met since makes the GPU write what its work reads, or outgrows what `commit`
+/// recorded for good; a host step records it; a recording is due again).
+#[derive(PartialEq)]
+struct FootprintSources {
+    revision: u64,
+    range: Range<usize>,
+    taken: Vec<Taken>,
+}
+
+/// The summary a segment's share of its batch's footprint takes
+/// ([`CommandBufferShared::footprint`]).
+#[derive(Clone, Copy, PartialEq)]
+enum Taken {
+    /// A loop's check: what its laying's parts use.
+    Laying,
+    /// Its recording's.
+    Recording,
+    /// What `commit` bounded its host step's recording by.
+    Bound,
+}
+
 /// A command buffer's mutable state.
 pub(super) struct State {
     status: CommandBufferStatus,
@@ -580,7 +637,10 @@ pub(super) struct State {
     /// not kept (`kept_commands.rs`).
     own_reached: u64,
     /// The ended encoders' recordings, in encoding order.
-    recorded: Vec<Recorded>,
+    recorded: Parts,
+    /// Each batch's footprint as the scheduler last had it built, by batch
+    /// ([`CommandBufferShared::footprint`]).
+    footprints: Vec<Option<BuiltFootprint>>,
     /// The last ended encoder's last `VkCommandBuffer`, still recording: its batch's end goes
     /// into it as the batch ends ([`CommandBufferShared::close_tail`]), or it ends as it is where
     /// a later encoder joins its batch.
@@ -1971,7 +2031,8 @@ impl CommandBuffer {
                 rerun_pool: None,
                 kept: None,
                 own_reached: 0,
-                recorded: Vec::new(),
+                recorded: Parts::default(),
+                footprints: Vec::new(),
                 tail: None,
                 folds: Vec::new(),
                 prefix: None,
@@ -3990,41 +4051,85 @@ impl CommandBufferShared {
     /// `None` while some of it is not known: such a segment `commit` could not bound, one its
     /// submission records (a scrub), or a resource state encoder's update, whose uses its
     /// submission adds. A loop's check adds what its laying's parts use, which it may run again.
-    pub(crate) fn footprint(&self, index: usize) -> Option<Footprint<ResourceKey>> {
-        let state = lock(&self.state);
-        let range = state.batch_range(index);
-        let recorded = &state.recorded[range.clone()];
-        let mut summaries = Vec::new();
-        let mut known = Vec::new();
-        for (at, encoder) in recorded.iter().enumerate() {
-            if !encoder.sparse.is_empty() {
-                return None;
-            }
-            summaries.push(&encoder.summary);
-            for segment in &encoder.segments {
-                // A loop's check may run its laying again: what the laying's parts use (`rerun.rs`).
-                if let Deferred::Loop(check) = &segment.work {
-                    let laying = state.recorded.get(check.from()..range.start + at);
-                    summaries.extend(laying.into_iter().flatten().map(|part| &part.summary));
-                    continue;
+    ///
+    /// Built where a pass first asks, and kept (`State::footprints`): a later ask takes the kept
+    /// one while what it was built from holds ([`FootprintSources`]), so the scheduler's passes,
+    /// one at each commit and completion on every queue, build each batch's once, not once a
+    /// pass (`WorkCounts::footprints_built`). Its uses are copied out under the command buffer's
+    /// lock and sorted without it, which a host step's draws take. A footprint a segment's
+    /// known uses join is built at each ask, as those are made from the device's aliases as
+    /// they stand (`DeferredPass::known_summary`).
+    pub(crate) fn footprint(&self, index: usize) -> Option<Arc<Footprint<ResourceKey>>> {
+        let counts = &self.device.shared().counts;
+        let (from, gathered) = {
+            let state = lock(&self.state);
+            let range = state.batch_range(index);
+            let recorded = &state.recorded[range.clone()];
+            let mut summaries = Vec::new();
+            let mut known = Vec::new();
+            let mut taken = Vec::new();
+            for (at, encoder) in recorded.iter().enumerate() {
+                if !encoder.sparse.is_empty() {
+                    return None;
                 }
-                match &segment.recorded {
-                    // One recorded again on the GPU alone uses what its recording does; one a
-                    // route outgrew, what its host step finds.
-                    Some(recording)
-                        if !segment.needs_step()
-                            || (segment.rerecords() && !segment.work.outgrown()) =>
-                    {
-                        summaries.push(&recording.summary)
+                summaries.push(&encoder.summary);
+                for segment in &encoder.segments {
+                    // A loop's check may run its laying again: what the laying's parts use
+                    // (`rerun.rs`).
+                    if let Deferred::Loop(check) = &segment.work {
+                        let laying = state.recorded.get(check.from()..range.start + at);
+                        summaries.extend(laying.into_iter().flatten().map(|part| &part.summary));
+                        taken.push(Taken::Laying);
+                        continue;
                     }
-                    // One its host step records for what the GPU may write: what `commit` bounded
-                    // its recording's uses by, where it could (`Segment::bound`).
-                    _ if segment.steps_after_the_gpu() => summaries.push(segment.bound.as_ref()?),
-                    _ => known.push(segment.known_summary(&self.device)?),
+                    match &segment.recorded {
+                        // One recorded again on the GPU alone uses what its recording does; one a
+                        // route outgrew, what its host step finds.
+                        Some(recording)
+                            if !segment.needs_step()
+                                || (segment.rerecords() && !segment.work.outgrown()) =>
+                        {
+                            summaries.push(&recording.summary);
+                            taken.push(Taken::Recording);
+                        }
+                        // One its host step records for what the GPU may write: what `commit`
+                        // bounded its recording's uses by, where it could (`Segment::bound`).
+                        _ if segment.steps_after_the_gpu() => {
+                            summaries.push(segment.bound.as_ref()?);
+                            taken.push(Taken::Bound);
+                        }
+                        _ => known.push(segment.known_summary(&self.device)?),
+                    }
                 }
             }
+            if !known.is_empty() {
+                counts.footprint_built();
+                let all = summaries.into_iter().chain(&known);
+                return Some(Arc::new(Footprint::of(all)));
+            }
+            let from = FootprintSources {
+                revision: state.recorded.revision,
+                range,
+                taken,
+            };
+            let kept = state.footprints.get(index).and_then(Option::as_ref);
+            if let Some(kept) = kept.filter(|kept| kept.from == from) {
+                return Some(Arc::clone(&kept.footprint));
+            }
+            (from, Footprint::gathered(summaries))
+        };
+        let footprint = Arc::new(gathered.sorted());
+        counts.footprint_built();
+        let mut state = lock(&self.state);
+        // Kept where nothing it was built from changed meanwhile.
+        if state.recorded.revision == from.revision {
+            if state.footprints.len() <= index {
+                state.footprints.resize_with(index + 1, || None);
+            }
+            let footprint = Arc::clone(&footprint);
+            state.footprints[index] = Some(BuiltFootprint { from, footprint });
         }
-        Some(Footprint::of(summaries.into_iter().chain(&known)))
+        Some(footprint)
     }
 
     /// The host step of batch `index` (`deferred.rs`): on the steps' thread (`scheduler/steps.rs`),
