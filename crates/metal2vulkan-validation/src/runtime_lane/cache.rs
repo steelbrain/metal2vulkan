@@ -591,7 +591,8 @@ fn set_mode(dir: &Path, mode: u32) {
 /// An entry the directory will not take is announced once as
 /// [`Degradation::ShaderCacheEntryNotWritten`] and ends nothing: the pipeline state is made, it
 /// runs to the same output as one whose entries were written, and the device counts the failures.
-/// The announcement names the directory and its cap.
+/// The announcement names the directory and its cap. A device without unified memory announces
+/// `SharedInSystemMemory` beside it, for the run's first `Shared` buffer.
 ///
 /// The directory is made writable for the device to open (`Directory::open` checks that it takes
 /// a write and fails the creation otherwise, which is the one shader-cache error there is), and
@@ -608,7 +609,7 @@ fn an_entry_that_cannot_be_written_is_announced_and_ends_nothing() {
     let expected = cache_run(writable.path(), CASE);
     let cache = ScratchCache::new().unwrap();
     let messages = Messages::default();
-    let (statistics, output, notices) = {
+    let (statistics, output, notices, system_memory) = {
         let device = validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
         let build = build_dir(cache.path());
         set_mode(&build, READ_ONLY_DIR);
@@ -640,6 +641,7 @@ fn an_entry_that_cannot_be_written_is_announced_and_ends_nothing() {
             device.shader_cache_statistics(),
             output,
             messages.take_notices(),
+            super::degrade_notices::shared_in_system_memory(&device),
         )
     };
     assert_eq!(
@@ -650,17 +652,28 @@ fn an_entry_that_cannot_be_written_is_announced_and_ends_nothing() {
         statistics.write_failures > 0,
         "the directory must have refused an entry at all: {statistics:?}"
     );
-    let kinds: Vec<Degradation> = notices
+    let mut kinds: Vec<Degradation> = notices
         .iter()
         .filter_map(|notice| notice.degradation.as_ref().map(|d| d.degradation))
         .collect();
+    kinds.sort();
+    let mut expected = UNWRITTEN_ENTRY.to_vec();
+    if system_memory {
+        expected.push(Degradation::SharedInSystemMemory);
+    }
+    expected.sort();
     assert_eq!(
-        kinds, UNWRITTEN_ENTRY,
+        kinds, expected,
         "the kinds a device whose cache entries could not be written announced"
     );
     let notice = notices
         .iter()
-        .find(|notice| notice.degradation.is_some())
+        .find(|notice| {
+            notice
+                .degradation
+                .as_ref()
+                .is_some_and(|d| UNWRITTEN_ENTRY.contains(&d.degradation))
+        })
         .expect("the notice");
     let root = cache.path().display().to_string();
     let cap = metal2vulkan_runtime::DEFAULT_CAPACITY.to_string();

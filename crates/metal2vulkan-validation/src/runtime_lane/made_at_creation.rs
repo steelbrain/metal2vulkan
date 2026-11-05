@@ -8,7 +8,7 @@
 //! `validation/fixtures/public/examples/runtime_examples.ll`, and owned functions reading their
 //! vertices through a vertex descriptor (`LAYOUT_FUNCTIONS`).
 
-use super::degrade_notices::{counts, on_device};
+use super::degrade_notices::{counts, on_device, shared_in_system_memory};
 use super::pixel_samplers::metal_sampler;
 use super::{
     dynamic_input_assembly, layer_reported_nothing_at_all, pipelines_settled,
@@ -303,7 +303,8 @@ fn a_state_s_first_draw_takes_the_pipeline_made_at_its_creation() {
 /// there may hold one (`PrecisionNote::DeviceNanEncoding`, a test of the bound format, which no
 /// pipeline's key carries). Each draw binds an `RGBA16Float` texture, which takes the pipeline
 /// made at creation (`a_draw_binding_a_texture_takes_the_pipeline_made_at_creation`); every kind
-/// the first draw announces is one the stage specializes ([`specialized_kinds`]). On a device that
+/// the first draw announces is one the stage specializes ([`specialized_kinds`]), or, on a device
+/// without unified memory, `SharedInSystemMemory` for the draw's `Shared` buffer. On a device that
 /// samples through Metal's own texture unit the creation makes the predicted key's general form,
 /// and hands the predicted key itself to the pool right after (`pipeline/render/residual.rs`):
 /// both counted once the pool settles, and neither announcing anything before a draw.
@@ -345,9 +346,13 @@ fn a_pipeline_made_at_creation_announces_at_its_first_draw() {
             "the first draw announced the pipeline's notices: {at_draw:?} (creation: \
              {at_creation:?})"
         );
+        // The draw's `Shared` buffer is the device's first: a device without unified memory
+        // announces it as well.
+        let system_memory = shared_in_system_memory(&device);
         let unspecialized: Vec<_> = at_draw
             .keys()
             .filter(|kind| !waits.contains(kind))
+            .filter(|&&kind| !(system_memory && kind == Degradation::SharedInSystemMemory))
             .collect();
         assert!(
             unspecialized.is_empty(),
