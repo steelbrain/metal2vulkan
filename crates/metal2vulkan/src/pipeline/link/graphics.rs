@@ -15,8 +15,8 @@
 //!   `R16Float` attachment, Metal keeps `-0`). An
 //!   attachment that no first (index 0) output of the fragment function names (every attachment of
 //!   a pipeline without a fragment function) gets an empty write mask, so the draw leaves it
-//!   unmodified, and an extended-range one no blend (its raw unsigned format blends nothing, and
-//!   nothing is written to blend). That is what Metal does where measured: an unblended attachment the function reads
+//!   unmodified, and an extended-range one (but a padded or bfloat one, whose blend is not built)
+//!   no blend: its raw unsigned format blends nothing, and nothing is written to blend. That is what Metal does where measured: an unblended attachment the function reads
 //!   through framebuffer fetch but has no output for, which a draw's later fragments read as
 //!   loaded; an attachment without an output whose blend would change it (`Zero`/`Zero`,
 //!   `One`/`One`, a blend-color factor), and one named only by a dual-source second output
@@ -425,10 +425,13 @@ pub fn graphics_state(
                     // An extended-range attachment no first output writes (every attachment of a
                     // pipeline without a fragment function) is left as it is, as Metal leaves an
                     // unwritten attachment (the module docs), so its blend changes nothing: it
-                    // takes none, nor the blend usage its raw unsigned format lacks.
+                    // takes none, nor the blend usage its raw unsigned format lacks. Not a padded
+                    // or bfloat one's, whose blend is not built written or not (Metal's validation
+                    // refuses a bfloat blend).
                     let extended = ExtendedRange::of(a.pixel_format);
                     let written_here = written.contains(&(index as u32));
-                    let unwritten_extended = extended.is_some() && !written_here;
+                    let unwritten_extended = !written_here
+                        && extended.is_some_and(|form| !form.padded() && !form.bfloat());
                     // An attachment held with its channels rotated takes the function's rotated
                     // output, the descriptor's mask rotated, and the blend `rotated_blend`
                     // finds Metal's in Vulkan's factors; one holding Metal's alpha in red

@@ -261,9 +261,18 @@ fn fragment_outputs_to_extended_range_targets_write_raw_texels() {
                     let f = compile_with(&bc, entry, &p, &inputs)
                         .unwrap_or_else(|e| panic!("{what}: {e}"));
                     let linked = link(&[&v, &f], &render(&r), &p);
-                    // A mask of alpha alone keeps some of a four-channel format's channels.
+                    // A mask of alpha alone keeps some of a four-channel format's channels:
+                    // `BGRA10_XR`'s alpha field, a raw component of its own; the two-plane forms'
+                    // alpha byte beside a color word, refused.
                     if mask == ColorWriteMask::ALPHA && !matches!(form, ExtendedRange::Bgr10 { .. })
                     {
+                        if let ExtendedRange::Bgra10 { .. } = form {
+                            let l = linked.unwrap_or_else(|e| panic!("{what}: link: {e}"));
+                            let a = l.graphics.as_ref().expect("graphics").color_attachments[0]
+                                .expect("attachment");
+                            assert_eq!(a.write_mask, vk::ColorComponentFlags::A, "{what}");
+                            continue;
+                        }
                         let e = linked.expect_err(&what);
                         assert!(is_format_refusal(&e), "{what}: {e}");
                         continue;
