@@ -156,11 +156,9 @@ impl RenderLowering {
             .into_iter()
             .filter(|(stage, _)| reads.intersects(*stage))
             .flat_map(|(_, table)| table.textures.values());
-        degrade_unreadable(
-            self.core.device(),
-            self.residency.textures_reached(reads).chain(bound),
-            "a draw or tile dispatch",
-        );
+        let device = self.core.device();
+        let resident = (self.unreadable).reached(device, &self.residency, reads);
+        degrade_unreadable(device, resident.chain(bound), "a draw or tile dispatch");
     }
 }
 

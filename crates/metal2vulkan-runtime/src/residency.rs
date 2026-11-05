@@ -774,12 +774,12 @@ impl Residency {
         self.resident_textures().map(|(texture, ..)| texture)
     }
 
-    /// The textures made resident that a render command whose functions read texture handles
-    /// from memory in render `stages` reaches: those made resident in one of those stages.
-    pub(super) fn textures_reached(&self, stages: RenderStages) -> impl Iterator<Item = &Texture> {
+    /// The textures made resident, each with the render stages it was made resident in: those
+    /// in one of a render command's stages whose functions read texture handles from memory are
+    /// those it reaches (`pvrtc::ResidentUnreadable::reached`).
+    pub(super) fn textures_made_in(&self) -> impl Iterator<Item = (&Texture, RenderStages)> {
         self.resident_textures()
-            .filter(move |(_, _, made)| made.intersects(stages))
-            .map(|(texture, ..)| texture)
+            .map(|(texture, _, stages)| (texture, stages))
     }
 
     /// The textures made resident, each with whether a function's use of it may write: its

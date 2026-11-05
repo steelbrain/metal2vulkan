@@ -169,6 +169,7 @@ struct Drawn {
     geometry: u64,
     heap_parts: u64,
     heap_checked: u64,
+    unreadable_looks: u64,
 }
 
 /// Draw with `draw`, and what that changed.
@@ -198,6 +199,8 @@ fn drawn(device: &Device, draw: impl FnOnce()) -> Drawn {
         geometry: (after.0.resident_uses_geometry_writes) - before.0.resident_uses_geometry_writes,
         heap_parts: after.0.draw_heap_parts_made - before.0.draw_heap_parts_made,
         heap_checked: after.2 - before.2,
+        unreadable_looks: (after.0.draw_resident_textures_looked_at)
+            - before.0.draw_resident_textures_looked_at,
     }
 }
 
@@ -314,6 +317,28 @@ fn draws_keep_their_heap_part_until_what_their_encoder_made_resident_changes() {
             if !made && at != slot_draw {
                 assert!(drawn.heap_checked > 0, "{what}");
             }
+        }
+        assert!(scene.covered() > 0, "encoder {encoder} drew nothing");
+    }
+}
+
+/// The two encoders of the tests above: within each, a draw whose functions read texture handles
+/// looks at the textures its encoder made resident for those whose bytes a carrier holds
+/// (`pvrtc::ResidentUnreadable`) at the encoder's first draw and after the encoder made another
+/// resource resident (the first encoder's fourth), and at no other draw, though each binds other
+/// buffers than the last. The slot shape's draw, whose functions read no handle, looks at none.
+#[test]
+fn draws_look_for_textures_a_carrier_holds_until_what_their_encoder_made_resident_changes() {
+    let scratch = Scratch::new("resident-unreadable");
+    let device = device(&scratch.0, &[], &Heard::default());
+    let scene = Scene::new(&device);
+    for (encoder, corner, later) in [(0, -0.9, 3), (1, 0.1, 0)] {
+        let resources = Resources::new(&scene, corner);
+        let each = encode(&scene, &resources, later);
+        for (at, drawn) in each.iter().enumerate() {
+            let what = format!("encoder {encoder} draw {at}: {drawn:?}");
+            let looked = at == 0 || at == later as usize;
+            assert_eq!(drawn.unreadable_looks, u64::from(looked), "{what}");
         }
         assert!(scene.covered() > 0, "encoder {encoder} drew nothing");
     }

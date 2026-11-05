@@ -527,6 +527,7 @@ struct DrawCounters {
     resident_uses_geometry_writes: AtomicU64,
     resident_uses_geometry_checked: AtomicU64,
     draw_heap_parts_made: AtomicU64,
+    draw_resident_textures_looked_at: AtomicU64,
 }
 
 /// How a render pass took a shadowed texture as a color attachment
@@ -2321,6 +2322,12 @@ impl Counters {
     /// A render draw that worked out its heap part (`WorkCounts::draw_heap_parts_made`).
     pub(crate) fn draw_heap_part_made(&self) {
         (self.draws.mine()).add(|counts| &counts.draw_heap_parts_made, 1);
+    }
+
+    /// A render draw or tile dispatch looked at every texture its encoder made resident for those
+    /// a carrier holds (`WorkCounts::draw_resident_textures_looked_at`).
+    pub(crate) fn draw_resident_textures_looked_at(&self) {
+        (self.draws.mine()).add(|counts| &counts.draw_resident_textures_looked_at, 1);
     }
 
     /// A render draw rebound (`WorkCounts::draws_rebound`), which recorded `states` state
@@ -5272,6 +5279,12 @@ pub struct WorkCounts {
     /// argument samplers and function tables and the same textures at the plan's heap slots,
     /// works out none: its cost is then what it binds, not what its encoder made resident.
     pub draw_heap_parts_made: u64,
+    /// Looks of a render encoder's draws and tile dispatches whose functions read texture handles
+    /// at every texture the encoder made resident, for those whose bytes a carrier holds
+    /// (`pvrtc::ResidentUnreadable`): one at the encoder's first such command after each change of
+    /// what it made resident, none at a command after which it did not change, however many
+    /// textures it made resident.
+    pub draw_resident_textures_looked_at: u64,
     /// Keys an encoder's commands named first, while the device has a buffer over host pages
     /// (`new_buffer_with_bytes_no_copy`), that were looked up among those buffers under the lock
     /// their command buffers' submissions take: the keys of such buffers, and the rare other key
@@ -6679,6 +6692,9 @@ impl Device {
             resident_uses_geometry_writes: draws(|counts| &counts.resident_uses_geometry_writes),
             resident_uses_geometry_checked: draws(|counts| &counts.resident_uses_geometry_checked),
             draw_heap_parts_made: draws(|counts| &counts.draw_heap_parts_made),
+            draw_resident_textures_looked_at: draws(|counts| {
+                &counts.draw_resident_textures_looked_at
+            }),
             host_holds_looked_up: counters.host_holds_looked_up.load(Ordering::Relaxed),
             dispatches_settled_as_before: (counters.dispatches_settled_as_before)
                 .load(Ordering::Relaxed),

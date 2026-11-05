@@ -71,7 +71,7 @@ use super::texture::Texture;
 use super::texture_descriptor::{effective_usage, TextureLayout};
 use metal2vulkan::bind::PvrtcDecode;
 use metal2vulkan::metal::format::{image_type, vk_format, FormatEmulation, FormatMapping};
-use metal2vulkan::metal::{PixelFormat, TextureUsage};
+use metal2vulkan::metal::{PixelFormat, RenderStages, TextureUsage};
 use metal2vulkan::vk::{
     Format, FormatFeatureFlags2, ImageAspectFlags, ImageCreateFlags, ImageUsageFlags,
 };
@@ -278,35 +278,67 @@ pub(super) fn held_for_copies(texture: &Texture) -> Option<Format> {
     (carried && !texture.has_decoded_twin()).then_some(plan.format)
 }
 
-/// The first texture a residency made resident whose bytes a carrier holds for copies alone
-/// ([`held_for_copies`]), kept by an encoder between its commands and found again only where the
-/// residency's generation moved since (`Residency::generation`): whether a carrier holds a
-/// texture's bytes, and whether it has a decoded twin, are fixed at its making.
+/// The textures a residency made resident whose bytes a carrier holds for copies alone
+/// ([`held_for_copies`]), in the order it made them resident, each with the render stages it made
+/// it resident in: kept by an encoder between its commands and found again only where the
+/// residency's generation moved since (`Residency::generation`), as whether a carrier holds a
+/// texture's bytes, and whether it has a decoded twin, are fixed at its making. A command that
+/// reads texture handles looks among them alone, not at every texture made resident.
 #[derive(Default)]
 pub(super) struct ResidentUnreadable {
     found_at: Option<u64>,
-    texture: Option<Texture>,
+    textures: Vec<(Texture, RenderStages)>,
 }
 
 impl ResidentUnreadable {
-    /// That texture among those `residency`, of `device`, made resident, found again where it may
-    /// have changed.
-    pub(super) fn of(&mut self, device: &Device, residency: &Residency) -> Option<&Texture> {
+    /// Find them again among those `residency` made resident where it may have changed, `looked`
+    /// counting the look.
+    fn find(&mut self, residency: &Residency, looked: impl FnOnce()) {
         let generation = residency.generation();
         if self.found_at != Some(generation) {
-            self.texture = (residency.textures())
-                .find(|texture| held_for_copies(texture).is_some())
-                .cloned();
+            self.textures.clear();
+            let carried =
+                |(texture, _): &(&Texture, RenderStages)| held_for_copies(texture).is_some();
+            (self.textures).extend(
+                (residency.textures_made_in())
+                    .filter(carried)
+                    .map(|(texture, stages)| (texture.clone(), stages)),
+            );
             self.found_at = Some(generation);
-            device.shared().counts.resident_textures_looked_at();
+            looked();
         }
-        self.texture.as_ref()
+    }
+
+    /// The first of them among those `residency`, of `device`, made resident: what a dispatch
+    /// reading texture handles reaches.
+    pub(super) fn of(&mut self, device: &Device, residency: &Residency) -> Option<&Texture> {
+        self.find(residency, || {
+            device.shared().counts.resident_textures_looked_at()
+        });
+        self.textures.first().map(|(texture, _)| texture)
+    }
+
+    /// Those of them among those `residency`, of `device`, made resident in one of render
+    /// `stages`: what a draw or tile dispatch whose functions read texture handles in those
+    /// stages reaches, in the order they were made resident.
+    pub(super) fn reached(
+        &mut self,
+        device: &Device,
+        residency: &Residency,
+        stages: RenderStages,
+    ) -> impl Iterator<Item = &Texture> {
+        self.find(residency, || {
+            device.shared().counts.draw_resident_textures_looked_at()
+        });
+        (self.textures.iter())
+            .filter(move |(_, made)| made.intersects(stages))
+            .map(|(texture, _)| texture)
     }
 
     /// Hold none: an ended encoder's, kept for the next (`compute/live.rs`).
     pub(super) fn let_go(&mut self) {
         self.found_at = None;
-        self.texture = None;
+        self.textures.clear();
     }
 }
 

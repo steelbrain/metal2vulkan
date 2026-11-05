@@ -2625,6 +2625,7 @@ field	metal2vulkan-runtime::WorkCounts.dma_buf_memories_live	pub dma_buf_memorie
 field	metal2vulkan-runtime::WorkCounts.dma_buf_sparse_buffers	pub dma_buf_sparse_buffers: u64
 field	metal2vulkan-runtime::WorkCounts.dma_buf_textures_in_place	pub dma_buf_textures_in_place: u64
 field	metal2vulkan-runtime::WorkCounts.draw_heap_parts_made	pub draw_heap_parts_made: u64
+field	metal2vulkan-runtime::WorkCounts.draw_resident_textures_looked_at	pub draw_resident_textures_looked_at: u64
 field	metal2vulkan-runtime::WorkCounts.draw_shapes_carried	pub draw_shapes_carried: u64
 field	metal2vulkan-runtime::WorkCounts.draw_shapes_found	pub draw_shapes_found: u64
 field	metal2vulkan-runtime::WorkCounts.draw_shapes_made	pub draw_shapes_made: u64

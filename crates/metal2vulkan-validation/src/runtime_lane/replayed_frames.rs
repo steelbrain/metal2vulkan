@@ -387,7 +387,8 @@ fn split(before: &WorkCounts, after: &WorkCounts) -> String {
          heap_tables_worked_out {} host_range_lookups {} argument_samplers_taken {} \
          draw_heap_parts_made {} resident_uses_noted {} resident_uses_against_fragments {} \
          resident_uses_unordered_writes {} resident_uses_indirect_reads {} \
-         resident_uses_geometry_writes {} resident_uses_geometry_checked {}",
+         resident_uses_geometry_writes {} resident_uses_geometry_checked {} \
+         draw_resident_textures_looked_at {}",
         after.host_steps_recorded - before.host_steps_recorded,
         ms(after.host_step_nanos - before.host_step_nanos),
         ms(after.render_pipeline_create_nanos - before.render_pipeline_create_nanos),
@@ -423,6 +424,7 @@ fn split(before: &WorkCounts, after: &WorkCounts) -> String {
         after.resident_uses_indirect_reads - before.resident_uses_indirect_reads,
         after.resident_uses_geometry_writes - before.resident_uses_geometry_writes,
         after.resident_uses_geometry_checked - before.resident_uses_geometry_checked,
+        after.draw_resident_textures_looked_at - before.draw_resident_textures_looked_at,
     )
 }
 

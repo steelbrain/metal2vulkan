@@ -1646,6 +1646,9 @@ pub(crate) struct RenderLowering {
     /// The residency's generation as a command last noted the heaps of what it made resident
     /// (`command_encoded`): no command notes them again before it changes.
     heaps_noted: Option<u64>,
+    /// The textures made resident whose bytes a carrier holds, found again as the residency
+    /// changes (`command_encoded`).
+    unreadable: crate::pvrtc::ResidentUnreadable,
     /// Whether the pass's first instance records inline (`render/inline_first.rs`).
     inline: inline_first::Inline,
     /// What the draws recorded inline into the pass's command buffer bound there, in its every
@@ -2140,6 +2143,7 @@ impl RenderLowering {
             shape_memo: ShapeMemo::default(),
             last_retained: LastRetained::default(),
             heaps_noted: None,
+            unreadable: Default::default(),
             inline: match inline {
                 Some(splits) => inline_first::Inline::Open { splits },
                 None => inline_first::Inline::Never,
