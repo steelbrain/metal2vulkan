@@ -128,8 +128,7 @@ impl Form {
     };
     const LOGGED: Form = Form {
         log: Some(Duration::ZERO),
-        copied: false,
-        resolving: false,
+        ..Form::PLAIN
     };
     const RESOLVING: Form = Form {
         resolving: true,
