@@ -42,6 +42,8 @@ mod completion;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod completion_here;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod completion_latency;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod completion_order;
 mod completion_seen;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]

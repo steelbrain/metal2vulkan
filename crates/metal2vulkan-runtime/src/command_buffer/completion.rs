@@ -370,6 +370,12 @@ impl Completion {
     /// Wait for `batch`, just submitted to `VkQueue` `queue` (or a failed command buffer's end,
     /// at the queue's last submitted value).
     pub(crate) fn watch(&self, queue: usize, batch: Submitted) {
+        #[cfg(test)]
+        trace::record(|| trace::Traced::Watched {
+            queue,
+            value: batch.value,
+            at: gpu_time::host_nanos(),
+        });
         let parked = {
             let mut pending = lock(&self.watch.pending);
             pending.queues[queue].push_back(batch);
@@ -599,6 +605,14 @@ fn finish(watch: &Watch, lists: &mut FenceLists, mut finished: Vec<(usize, Submi
     // The host time the batches were seen complete: an uncalibrated command buffer's GPU end
     // (`gpu_time.rs`).
     let seen = gpu_time::host_nanos();
+    #[cfg(test)]
+    for (queue, batch) in finished.iter().filter(|(_, batch)| batch.last) {
+        trace::record(|| trace::Traced::Finished {
+            queue: *queue,
+            value: batch.value,
+            seen,
+        });
+    }
     // The device, held while the batches finish (each holds it meanwhile).
     let Some(device) = finished
         .first()
@@ -1092,6 +1106,8 @@ fn poll(device: &Device, queue: usize, front: Front) -> Result<u64, CommandBuffe
             Err(error) => Err(failure(device, error)),
         }
     };
+    #[cfg(test)]
+    let entered = gpu_time::host_nanos();
     let waited = match front.fence {
         Some(fence) => {
             // SAFETY: the fence is the device's, in a submission made and not yet reset (its
@@ -1112,6 +1128,13 @@ fn poll(device: &Device, queue: usize, front: Front) -> Result<u64, CommandBuffe
             reaches(front.value)?
         }
     };
+    #[cfg(test)]
+    trace::record(|| trace::Traced::Waited {
+        queue,
+        value: front.value,
+        entered,
+        returned: gpu_time::host_nanos(),
+    });
     // SAFETY: the semaphore is the device's timeline, live while the device is (held here).
     let read = unsafe { raw.get_semaphore_counter_value(slot.timeline) };
     exit_guard::called(Call::GetSemaphoreCounterValue);
@@ -1190,5 +1213,54 @@ fn failure(device: &Device, error: vk::Result) -> CommandBufferError {
             CommandBufferError::OutOfMemory
         }
         other => CommandBufferError::Internal(VkResultCode(other.as_raw())),
+    }
+}
+
+/// The host times of each queue waiter's steps, kept while a test asks for them, in test builds
+/// only: the completion latency's measurement reads them (`tests::completion_latency`).
+#[cfg(test)]
+pub(crate) mod trace {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Mutex;
+
+    /// One step, its host time in nanoseconds of the host's clock (`gpu_time::host_nanos`).
+    #[derive(Clone, Copy, Debug)]
+    pub(crate) enum Traced {
+        /// A batch of value `value` was watched on `queue` (`Completion::watch`).
+        Watched { queue: usize, value: u64, at: u64 },
+        /// `queue`'s waiter waited for its front, of value `value`: the driver's wait was entered
+        /// and returned (`poll`).
+        Waited {
+            queue: usize,
+            value: u64,
+            entered: u64,
+            returned: u64,
+        },
+        /// A turn finished the batch of value `value` of `queue` that ends its command buffer;
+        /// `seen` is the command buffer's completion time (`finish`).
+        Finished { queue: usize, value: u64, seen: u64 },
+    }
+
+    static ON: AtomicBool = AtomicBool::new(false);
+    static STEPS: Mutex<Vec<Traced>> = Mutex::new(Vec::new());
+
+    /// Keep the steps from now on.
+    pub(crate) fn start() {
+        STEPS.lock().unwrap().clear();
+        ON.store(true, Ordering::SeqCst);
+    }
+
+    /// Stop keeping steps, and the steps kept.
+    pub(crate) fn stop() -> Vec<Traced> {
+        ON.store(false, Ordering::SeqCst);
+        STEPS.lock().unwrap().drain(..).collect()
+    }
+
+    /// Keep the step `step` makes, while a test asks.
+    pub(super) fn record(step: impl FnOnce() -> Traced) {
+        if ON.load(Ordering::Relaxed) {
+            let step = step();
+            STEPS.lock().unwrap().push(step);
+        }
     }
 }
