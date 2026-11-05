@@ -4,7 +4,9 @@
 //! one with a completed handler, and any while the runtime holds a deallocator of the program's,
 //! finishes on its queue's handler thread (`WorkCounts::completed_where_seen`). One whose only
 //! code of the program's is its completion-seen handlers finishes where seen too, and runs them
-//! there, once its status is final (`WorkCounts::completion_seen_handlers_where_seen`). Likewise
+//! there, once its status is final (`WorkCounts::completion_seen_handlers_where_seen`); so does one
+//! with a completed handler besides, whose completed handler then runs on its queue's handler
+//! thread (`Transition::seen_first`). Likewise
 //! `CommandBufferShared::schedule`: a command buffer with no scheduled handler is scheduled on the
 //! scheduler's thread as its last batch goes, and one with a scheduled handler on its queue's
 //! handler thread (`WorkCounts::scheduled_where_submitted`).
@@ -176,13 +178,13 @@ struct Seen {
 /// [`ROUNDS`] command buffers of `queue`, each a fill of 16 bytes with a completion-seen handler,
 /// and a completed handler where `completed`, each committed and waited for before the next: what
 /// each completion-seen handler saw (each had run by its wait's return), and whether each
-/// completed handler saw its completion-seen handler run before it; and how many of the handlers
-/// the device counted run, and run where seen.
+/// completed handler saw its completion-seen handler run before it, and ran on a handler thread;
+/// and how many of the handlers the device counted run, and run where seen.
 fn seen_handlers(
     device: &Device,
     queue: &CommandQueue,
     completed: bool,
-) -> (Vec<Seen>, Vec<bool>, u64, u64) {
+) -> (Vec<Seen>, Vec<(bool, bool)>, u64, u64) {
     let target = device.new_buffer(16, ResourceOptions::shared()).unwrap();
     let before = device.work_counts();
     let (mut seen, mut ordered) = (Vec::new(), Vec::new());
@@ -218,16 +220,22 @@ fn seen_handlers(
                 }))
                 .unwrap();
         }
-        let saw_seen = Arc::new(AtomicBool::new(false));
+        let (saw_seen, on_handler_thread) = (
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(AtomicBool::new(false)),
+        );
         if completed {
-            let (seen_ran, completed_ran, saw_seen) = (
+            let (seen_ran, completed_ran, saw_seen, on_handler_thread) = (
                 Arc::clone(&seen_ran),
                 Arc::clone(&completed_ran),
                 Arc::clone(&saw_seen),
+                Arc::clone(&on_handler_thread),
             );
             command_buffer
                 .add_completed_handler(Box::new(move |_: &CommandBuffer| {
                     saw_seen.store(seen_ran.load(Ordering::SeqCst), Ordering::SeqCst);
+                    let here = crate::contexts::on_handler_thread();
+                    on_handler_thread.store(here, Ordering::SeqCst);
                     completed_ran.store(true, Ordering::SeqCst);
                 }))
                 .unwrap();
@@ -244,7 +252,10 @@ fn seen_handlers(
         );
         seen.push(record.lock().unwrap().take().unwrap());
         if completed {
-            ordered.push(saw_seen.load(Ordering::SeqCst));
+            ordered.push((
+                saw_seen.load(Ordering::SeqCst),
+                on_handler_thread.load(Ordering::SeqCst),
+            ));
         }
     }
     let after = device.work_counts();
@@ -260,8 +271,9 @@ fn seen_handlers(
 /// seen, and runs the handler there, on its queue's waiter, its status `Completed` and its GPU
 /// times placed: at least one of [`ROUNDS`] (as for a command buffer with no handler, an earlier
 /// transition of its queue may hold the context), each counted, with no handler thread woken.
-/// With a completed handler besides, every one runs on its queue's handler thread, before the
-/// completed handler. A wait in one for what has not happened (its own completion) is refused,
+/// With a completed handler besides, so does it, at least once, before the completed handler,
+/// which runs on its queue's handler thread. A wait in one for what has not happened (its own
+/// completion) is refused,
 /// one for what happened (its own scheduling) returns, and the command buffer's wait returns only
 /// once it ran.
 #[test]
@@ -298,15 +310,26 @@ fn a_completion_seen_handler_runs_where_the_completion_is_seen() {
         assert_eq!(seen.own_scheduled_wait, Ok(()));
     }
     let (seen, ordered, run, where_seen) = seen_handlers(&device, &queue, true);
-    assert_eq!((run, where_seen), (ROUNDS, 0));
+    let on_waiters = seen.iter().filter(|seen| !seen.on_handler_thread).count() as u64;
+    println!(
+        "with a completed handler, completion-seen handlers where seen: {where_seen} of {ROUNDS}"
+    );
+    assert_eq!(run, ROUNDS);
     assert!(
-        seen.iter()
-            .all(|seen| seen.on_handler_thread && !seen.after_completed),
-        "{seen:#?}"
+        where_seen >= 1,
+        "none of {ROUNDS} with a completed handler ran where its completion was seen"
+    );
+    assert_eq!(where_seen, on_waiters, "{seen:#?}");
+    assert!(seen.iter().all(|seen| !seen.after_completed), "{seen:#?}");
+    assert!(
+        ordered.iter().all(|&(ordered, _)| ordered),
+        "a completed handler ran first"
     );
     assert!(
-        ordered.iter().all(|&ordered| ordered),
-        "a completed handler ran first"
+        ordered
+            .iter()
+            .all(|&(_, on_handler_thread)| on_handler_thread),
+        "a completed handler ran off the handler threads"
     );
     for seen in &seen {
         assert_eq!(seen.status, CommandBufferStatus::Completed);
