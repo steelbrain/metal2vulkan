@@ -355,6 +355,10 @@ fn replayed_frames() {
     }
 }
 
+/// What another queue's command buffer encodes in a case of
+/// [`a_replayed_execution_holds_only_what_shares_its_resources`].
+type Encode<'a> = dyn Fn(&CommandBuffer) + 'a;
+
 /// While the page's frame is held for its host step (`WorkCounts::heads_held_for_host_steps`
 /// moves), another queue's command buffer committed after it is held behind it
 /// (`WorkCounts::heads_held_for_earlier_commits`) only where Metal orders the two: a bystander
@@ -403,7 +407,7 @@ fn a_replayed_execution_holds_only_what_shares_its_resources() {
             .unwrap();
             blit.end_encoding().unwrap();
         };
-        let cases: [(&str, bool, &dyn Fn(&CommandBuffer)); 3] = [
+        let cases: [(&str, bool, &Encode); 3] = [
             (
                 "a bystander that fills a buffer of its own",
                 false,
