@@ -30,6 +30,7 @@ use super::degrade_notices::{
 use super::host_memory::Mapping;
 use super::host_memory::Seen;
 use super::indirect_host_steps::{complete, encoding_state_set, HOST_STEPS};
+use super::line_widths::line_ties;
 use super::rebind_reach::{buffer_len, buffer_of, buffer_over, pages};
 use super::rebinds::rebind;
 use super::render_executions::{forced_with, icb};
@@ -387,7 +388,8 @@ fn shape_vertices() -> Vec<[f32; 2]> {
 /// Points, lines and triangles of commands a kernel writes draw in one merged draw what the host
 /// step draws of them (a barrier the CPU set and cleared in a command after the writer's sends
 /// the same commands there): pixel for pixel, a list's trailing vertices drawing nothing. The
-/// merged draws announce nothing; the host steps announce theirs.
+/// merged draws announce only the driver's line ties (`device-line-ties`, where it lacks
+/// `DriverFact::LineTiesAreMetals`); the host steps announce theirs.
 #[test]
 fn merged_draws_draw_what_the_host_step_draws() {
     on_device(|device, messages| {
@@ -430,8 +432,11 @@ fn merged_draws_draw_what_the_host_step_draws() {
                 outputs.push(scene.pixels());
             }
             if !host_step {
+                // The lines' merged draw draws them at width 1: the driver's ties, where they are
+                // not measured to be Metal's.
                 let writers: Vec<&str> = kinds.iter().map(|(kind, _)| *kind).collect();
-                assert_made_once(messages, &[], &made(device, &library, &writers));
+                let made = made(device, &library, &writers);
+                assert_made_once(messages, line_ties(device), &made);
             }
         }
         let host_notices = counts(&messages.take_notices());

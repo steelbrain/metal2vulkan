@@ -81,6 +81,15 @@ pub(super) const WIDE_LINES: [Degradation; 3] = [
 /// (`DriverFact::LineTiesAreMetals`).
 pub(super) const LINE_TIES: [Degradation; 1] = [Degradation::DeviceLineTies];
 
+/// What a lane's draw of the device's lines at width 1 announces on `device`: [`LINE_TIES`] where
+/// its driver lacks `DriverFact::LineTiesAreMetals`, nothing where it has it.
+pub(super) fn line_ties(device: &Device) -> &'static [Degradation] {
+    match (device.properties().driver_facts).contains(&DriverFact::LineTiesAreMetals) {
+        true => &[],
+        false => &LINE_TIES,
+    }
+}
+
 /// Metal's maps the lane does not draw: its width-1 lines on 4 samples, which the device's lines
 /// draw as the runtime's every line, and its filled triangles' depth bias, the device's own.
 const NOT_DRAWN: [&str; 5] = [
