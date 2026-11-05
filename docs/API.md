@@ -1464,8 +1464,10 @@ bound.
   memory, whose `VkBuffer` was never handed out; a command buffer whose commands may reach memory
   no use names (a function that reaches buffers through their addresses, work resolved from
   records) also lets go of every such image, and `WorkCounts::shadow_copies_in_skipped_by_standing`
-  counts each copy in a standing image saved. A render pass that loads it as an attachment, takes it in no other way and draws under
-  scissors copies in only the texels inside them (`WorkCounts::shadow_texels_copied_in`). Over a
+  counts each copy in a standing image saved. A render pass that loads it as an attachment, takes
+  it in no other way and draws under scissors copies in only the texels inside them
+  (`WorkCounts::shadow_texels_copied_in`), but at a command buffer's first use of such a standing
+  image, whose copy in takes every texel and moves none where the image stands. Over a
   buffer's bytes that another writer may
   write while a command buffer runs, the image is kept in a scratch buffer before the first command
   that writes through it (a one-sample colour texture in Metal's tiles, right after its copy in, by

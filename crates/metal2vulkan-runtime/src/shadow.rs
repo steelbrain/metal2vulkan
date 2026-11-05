@@ -3224,10 +3224,16 @@ impl<M: Clone + KeptArea> ShadowSync<M> {
             // it writes (which a copy back moves), where it bounds both and the copies are cut to
             // a rectangle; every texel where it writes through a shadow whose copies back move
             // every texel, or writes the bytes two ways, as the merge after it compares every
-            // texel the keep took; and every texel of a shadow over logged host pages, whose copy
+            // texel the keep took; every texel of a shadow over logged host pages, whose copy
             // in of every texel moves only the rows the log reports changed, and leaves the image
-            // holding every texel for the next command buffer's (`dirty_pages.rs`).
-            let whole = two_ways || !shadow.copies.cuts() || shadow.copies.logged();
+            // holding every texel for the next command buffer's (`dirty_pages.rs`); and every
+            // texel at the command buffer's first use of a shadow that may stand across command
+            // buffers, whose copy in moves nothing where the image stands, and leaves it holding
+            // every texel for this command buffer's later commands and the next command buffer's
+            // (`shadow_standing.rs`).
+            let first_use = self.entries[i].standing == Standing::Unread;
+            let standing = first_use && shadow.copies.stands_across();
+            let whole = two_ways || !shadow.copies.cuts() || shadow.copies.logged() || standing;
             let needs = match whole {
                 true => None,
                 false if shadow.writes && !shadow.copies.cuts_back() => None,

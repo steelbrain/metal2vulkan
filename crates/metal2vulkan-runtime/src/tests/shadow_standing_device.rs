@@ -27,8 +27,8 @@ use super::blit_holds::{device, over_host, Host, Scratch, WAIT};
 use super::encoder_holds::{bytes_of, library};
 use crate::{
     Buffer, CommandQueue, ComputePipelineState, Device, IoSurfacePlane, LoadAction,
-    PipelineOptions, Region, RenderPassDescriptor, RenderPipelineState, ResourceOptions, Size,
-    StoreAction, Texture, TextureDescriptor, WorkCounts,
+    PipelineOptions, Region, RenderPassDescriptor, RenderPipelineState, ResourceOptions,
+    ScissorRect, Size, StoreAction, Texture, TextureDescriptor, WorkCounts,
 };
 use metal2vulkan::metal::{PixelFormat, PrimitiveType, TextureUsage};
 use metal2vulkan::pipeline::{ColorAttachmentDescriptor, RenderPipelineDescriptor, StageSource};
@@ -109,11 +109,12 @@ impl Tools {
         bytes
     }
 
-    /// A pass loading `texture` that draws `value` (every channel) over all of it, in a command
-    /// buffer of its own: the merge dispatches it planned.
-    fn draw(&self, texture: &Texture, value: u8) -> u64 {
+    /// A pass loading `texture` that draws `value` (every channel) over all of it, or inside
+    /// `scissor`, in a command buffer of its own: the merge dispatches it planned, and the counts
+    /// it moved.
+    fn draw(&self, texture: &Texture, value: u8, scissor: Option<ScissorRect>) -> (u64, Stood) {
         let device = self.queue.device();
-        let before = device.work_counts().shadow_merge_dispatches_planned;
+        let before = device.work_counts();
         let command_buffer = self.queue.command_buffer().unwrap();
         let mut pass = RenderPassDescriptor::new();
         let attachment = &mut pass.color_attachments[0];
@@ -122,6 +123,9 @@ impl Tools {
         attachment.store_action = StoreAction::Store;
         let mut encoder = command_buffer.render_command_encoder(&pass).unwrap();
         encoder.set_render_pipeline_state(&self.solid).unwrap();
+        if let Some(scissor) = scissor {
+            encoder.set_scissor_rect(scissor).unwrap();
+        }
         let corners = bytes_of(&[-1.0f32, -1.0, 1.0, 1.0], f32::to_le_bytes);
         encoder.set_vertex_bytes(&corners, 0).unwrap();
         let unorm = f32::from(value) / 255.0;
@@ -131,7 +135,9 @@ impl Tools {
         encoder.end_encoding().unwrap();
         command_buffer.commit().unwrap();
         command_buffer.wait_until_completed_for(WAIT).unwrap();
-        device.work_counts().shadow_merge_dispatches_planned - before
+        let after = device.work_counts();
+        let merges = after.shadow_merge_dispatches_planned - before.shadow_merge_dispatches_planned;
+        (merges, stood(&before, &after))
     }
 
     /// `buffer`'s first `len` bytes, as a blit copy into the read buffer moves them.
@@ -252,8 +258,9 @@ fn a_private_plane_s_image_stands_until_a_command_writes_the_buffer_or_the_textu
     assert_eq!(counts.skipped, 1, "and it stood again");
     // A pass draws 0x99 into every texel: a blit read of the buffer finds it, and the bytes
     // between rows as the fills left them.
-    let merges = plane.tools.draw(&plane.texture, 0x99);
+    let (merges, counts) = plane.tools.draw(&plane.texture, 0x99, None);
     assert_eq!(merges, 0, "a copy back, no merge");
+    assert_eq!(counts.skipped, 1, "the pass's load took the standing image");
     let bytes = plane.tools.bytes(&plane.buffer, LENGTH);
     for y in 0..HEIGHT as usize {
         let at = y * PITCH as usize;
@@ -267,6 +274,26 @@ fn a_private_plane_s_image_stands_until_a_command_writes_the_buffer_or_the_textu
     let (written, counts) = plane.texels();
     assert!(inverted(&written, 0x99), "the read holds the pass's texels");
     assert_eq!(counts.skipped, 1, "the pass's end left the image standing");
+    // A pass that draws 0x33 inside rows 0 to 4 alone: its first copy in still takes (here,
+    // skips) every texel, so its end leaves the image standing whole for the next read.
+    let rows = ScissorRect {
+        x: 0,
+        y: 0,
+        width: WIDTH,
+        height: 4,
+    };
+    let (_, counts) = plane.tools.draw(&plane.texture, 0x33, Some(rows));
+    assert_eq!(
+        counts.skipped, 1,
+        "the scissored pass's load took the standing image"
+    );
+    let (scissored, counts) = plane.texels();
+    assert!(inverted(&scissored[..4 * row], 0x33), "the scissored rows");
+    assert!(inverted(&scissored[4 * row..], 0x99), "and the rest");
+    assert_eq!(
+        counts.skipped, 1,
+        "the scissored pass left the image standing"
+    );
 }
 
 /// A command buffer that fills the buffer and then reads the texture in a later encoder copies
