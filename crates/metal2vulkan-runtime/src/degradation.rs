@@ -275,7 +275,8 @@ degradations! {
         ShadowedTexture = "shadowed-texture", Performance,
             "its texels are copied into an image before each use and back after each write \
              (over a buffer's bytes but a tracked private buffer's, kept before a write and merged \
-             back after it)";
+             back after it; over a tracked private buffer of the runtime's own, copied in again \
+             only once another command buffer wrote it)";
         /// A texture buffer is viewed through a staging buffer: its texels start where the
         /// device views none (`minTexelBufferOffsetAlignment`).
         StagedTextureBuffer = "staged-texture-buffer", Performance,

@@ -1456,9 +1456,15 @@ bound.
   there (the texture's elements, a multisample texture's samples) rather than its rows, and so do
   two textures that would otherwise need no shadow: one whose image the driver keeps GPU-optimized
   where Metal's texture is not (`DriverFact::DepthStencilImagesStayGpuOptimized`), and a
-  multisample texture whose image lies in memory of its own. Cost: its texels are copied into an image before each use and back after each
-  write (over a buffer's bytes but a tracked private buffer's, kept before a write and merged back
-  after it). A render pass that loads it as an attachment, takes it in no other way and draws under
+  multisample texture whose image lies in memory of its own. Cost: its texels are copied into an
+  image before each use and back after each write (over a buffer's bytes but a tracked private
+  buffer's, kept before a write and merged back after it; over a tracked private buffer of the
+  runtime's own, copied in again only once another command buffer wrote it). That buffer is a
+  `Private` or `Memoryless` one the runtime made, of no heap and over none of the caller's memory,
+  whose `VkBuffer` was never handed out; a command buffer whose commands may reach memory no use
+  names (a function that reaches buffers through their addresses, work resolved from records) also
+  lets go of every such image, and `WorkCounts::shadow_copies_in_skipped_by_standing` counts each
+  copy in a standing image saved. A render pass that loads it as an attachment, takes it in no other way and draws under
   scissors copies in only the texels inside them (`WorkCounts::shadow_texels_copied_in`). Over a
   buffer's bytes that another writer may
   write while a command buffer runs, the image is kept in a scratch buffer before the first command

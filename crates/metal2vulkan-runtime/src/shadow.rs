@@ -231,7 +231,7 @@ use super::rotated::{RotatedCopies, Turn};
 use super::row_copies::RowCopies;
 use super::shadow_copy_back::{CopyBack, WordView};
 use super::shadow_merge::{ScratchSpares, ShadowMerge, UnormView};
-use super::shadow_standing::Standing;
+use super::shadow_standing::StandingAcross;
 use super::texture::copy_images::UseMaker;
 use super::texture::heap_tiled::{HeapTiledCopies, SampleMoves};
 use super::texture::heap_two_planes::{HeapPlaneCopies, TwoPlaneHeapLayout};
@@ -275,7 +275,7 @@ pub(super) struct ShadowCopies {
     pub(super) stood: AtomicU64,
     /// Where only the runtime's commands write the truth, the image's standing across command
     /// buffers (`shadow_standing.rs`).
-    pub(super) standing: Standing,
+    pub(super) standing: StandingAcross,
 }
 
 /// The texels of a texture over an IOSurface's plane from which its shadow's copies in count

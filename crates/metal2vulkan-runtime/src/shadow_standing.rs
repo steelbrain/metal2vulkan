@@ -61,7 +61,7 @@ struct Key {
 /// buffer's end last left its image holding every texel of the truth; and, for a shadow over a
 /// buffer of the runtime's own, whether its `VkBuffer` was handed out.
 #[derive(Default)]
-pub(super) struct Standing {
+pub(super) struct StandingAcross {
     stood: Mutex<Option<Stood>>,
     handed_out: Option<Arc<AtomicBool>>,
 }
@@ -72,17 +72,17 @@ struct Stood {
     unnamed: u64,
 }
 
-impl Standing {
+impl StandingAcross {
     /// The standing of a shadow over `buffer`'s bytes: one that may stand where the buffer is a
     /// `Private` or `Memoryless` buffer the runtime made of its own (not a heap's, nor over the
     /// caller's memory), until its `VkBuffer` is handed out; none for any other.
-    pub(super) fn over(buffer: &Buffer) -> Standing {
+    pub(super) fn over(buffer: &Buffer) -> StandingAcross {
         let private = matches!(
             buffer.resource_options().storage_mode(),
             Ok(StorageMode::Private | StorageMode::Memoryless)
         );
         let own = buffer.caller_memory().is_none() && buffer.heap().is_none();
-        Standing {
+        StandingAcross {
             stood: Mutex::new(None),
             handed_out: (private && own).then(|| buffer.handed_out()),
         }

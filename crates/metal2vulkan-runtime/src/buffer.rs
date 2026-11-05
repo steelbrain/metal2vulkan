@@ -2972,7 +2972,7 @@ impl Buffer {
     }
 
     /// Whether its `VkBuffer` was handed out, shared with what watches it
-    /// (`shadow_standing::Standing`).
+    /// (`shadow_standing::StandingAcross`).
     pub(super) fn handed_out(&self) -> Arc<AtomicBool> {
         Arc::clone(&self.0.handed_out)
     }
