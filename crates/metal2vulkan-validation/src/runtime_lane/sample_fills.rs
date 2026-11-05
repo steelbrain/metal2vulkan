@@ -12,7 +12,12 @@
 //! [`METAL_LINES`] beside the first 16 hex digits of their SHA-256, which the probe printed. A
 //! differing case names its first differing line. A sample whose bytes `n · b` of a texel's are 16 or fewer takes its own bytes
 //! of the pattern, past 16 every sample the pattern cut at the texel (`tests::blit_fill` checks
-//! the rule on every measured case without a device). The depths outside `[0, 1]` (`d32-wide-4`)
+//! the rule on every measured case without a device). An `RGBA8Unorm` sample that holds the pass's
+//! clear holds the device's conversion of it where the device announced it
+//! (`device-color-conversion`): its 0.25, 0.5 and 0.75 are 63.75, 127.5 and 191.25 codes, and
+//! Vulkan lets the device store either code nearest each (the RTX 5080 Laptop GPU stores 0.5 as
+//! 127, Metal 128), so such a sample is compared against those codes ([`only_cleared_codes_apart`],
+//! a `SAMPLE-FILLS-CLEAR` line); every other word is Metal's. The depths outside `[0, 1]` (`d32-wide-4`)
 //! are not compared where the device's depth copies go by a draw that announced the values it
 //! changes (`drawn-depth-copy`), whose samples it prints on a `SAMPLE-FILLS-DRAWN` line; a
 //! differing case prints a `SAMPLE-FILLS-DIFFERS` line.
@@ -564,6 +569,38 @@ fn line_words(line: &str) -> Option<(&str, Vec<&str>)> {
     Some((head, words))
 }
 
+/// Metal's word of an `RGBA8Unorm` sample holding the pass's clear `(0.25, 0.5, 0.75, 1)`, as a
+/// read-back line prints it: red in the low byte.
+const CLEARED_RGBA8: &str = "ffbf8040";
+
+/// Whether `lines` differ from Metal's `metal` only in samples Metal holds the pass's clear in
+/// ([`CLEARED_RGBA8`]) whose every channel this device holds as one of the two codes nearest the
+/// clear's scaled value: the device's conversion of a clear, which Vulkan lets store either.
+fn only_cleared_codes_apart(lines: &[String], metal: &[String]) -> bool {
+    let near = |word: &str| {
+        u32::from_str_radix(word, 16).is_ok_and(|word| {
+            let codes = word.to_le_bytes();
+            [0.25f64, 0.5, 0.75, 1.0]
+                .iter()
+                .zip(codes)
+                .all(|(c, code)| (f64::from(code) - c * 255.0).abs() < 1.0)
+        })
+    };
+    lines.len() == metal.len()
+        && lines
+            .iter()
+            .zip(metal)
+            .all(|(got, want)| match (line_words(got), line_words(want)) {
+                (Some((g_head, g)), Some((w_head, w))) => {
+                    g_head == w_head
+                        && g.len() == w.len()
+                        && (g.iter().zip(&w))
+                            .all(|(g, w)| g == w || (*w == CLEARED_RGBA8 && near(g)))
+                }
+                _ => got == want,
+            })
+}
+
 /// Whether Metal's word `want` is a denormal 32-bit float and `got` is its zero, the sign kept.
 fn flushed(got: &str, want: &str) -> bool {
     let (Ok(got), Ok(want)) = (u32::from_str_radix(got, 16), u32::from_str_radix(want, 16)) else {
@@ -633,6 +670,8 @@ fn multisample_fills_write_metal_s_samples() {
     let flushes = loses_depth_denormals(&lane.device, false);
     let mut flushed_cases = 0;
     let mut announced_denormals = false;
+    // Whether the device announced its conversion of a clear (once a device: the first pass's).
+    let mut converted = false;
     for case in &CASES {
         let Some(lines) = run(&lane, case) else {
             continue;
@@ -644,6 +683,7 @@ fn multisample_fills_write_metal_s_samples() {
             .map(|n| n.degradation)
             .collect();
         drawn |= kinds.contains(&Degradation::DrawnDepthCopy);
+        converted |= kinds.contains(&Degradation::DeviceColorConversion);
         announced_denormals |= kinds.contains(&Degradation::DepthDenormals);
         let case_name = case.0;
         let unlike = match metal_lines(case_name) {
@@ -658,6 +698,17 @@ fn multisample_fills_write_metal_s_samples() {
             println!(
                 "SAMPLE-FILLS-DRAWN {name}: {case_name}: the drawn depth copy announced its \
                  changes: {}",
+                lines[1]
+            );
+            continue;
+        }
+        let cleared = converted
+            && PixelFormat::try_from(case.1).is_ok_and(|pf| pf == PixelFormat::RGBA8Unorm)
+            && metal_lines(case_name).is_some_and(|metal| only_cleared_codes_apart(&lines, &metal));
+        if cleared {
+            println!(
+                "SAMPLE-FILLS-CLEAR {name}: {case_name}: the announced conversion of the pass's \
+                 clear stands a nearest code apart from Metal's, every other word Metal's: {}",
                 lines[1]
             );
             continue;
