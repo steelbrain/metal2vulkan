@@ -415,6 +415,7 @@ pub(crate) struct Counters {
     shadow_texels_first_copied_in_aliased_host_pages: AtomicU64,
     shadow_texels_first_copied_in_surfaces: AtomicU64,
     shadow_texels_first_copied_in_large_surfaces: AtomicU64,
+    shadow_texels_first_copied_in_private_surfaces: AtomicU64,
     shadow_texels_first_copy_in_carried: AtomicU64,
     shadow_texels_first_copy_in_carried_large_surfaces: AtomicU64,
     shadow_texels_first_copied_in_large_surfaces_stood_earlier: AtomicU64,
@@ -2964,7 +2965,9 @@ impl Counters {
             (true, Backing::AliasedHostPages) => {
                 &self.shadow_texels_first_copied_in_aliased_host_pages
             }
-            (true, Backing::Surface) => &self.shadow_texels_first_copied_in_surfaces,
+            (true, Backing::Surface | Backing::PrivateSurface) => {
+                &self.shadow_texels_first_copied_in_surfaces
+            }
             (false, Backing::Image) => &self.shadow_texels_recopied_in_images,
             (false, Backing::PrivateBuffer) => &self.shadow_texels_recopied_in_private_buffers,
             (false, Backing::MappedBuffer) => &self.shadow_texels_recopied_in_mapped_buffers,
@@ -2972,8 +2975,13 @@ impl Counters {
             (false, Backing::AliasedHostPages) => {
                 &self.shadow_texels_recopied_in_aliased_host_pages
             }
-            (false, Backing::Surface) => &self.shadow_texels_recopied_in_surfaces,
+            (false, Backing::Surface | Backing::PrivateSurface) => {
+                &self.shadow_texels_recopied_in_surfaces
+            }
         });
+        if first && copies.backing == Backing::PrivateSurface {
+            add(&self.shadow_texels_first_copied_in_private_surfaces);
+        }
         match (large, first) {
             (true, true) => add(&self.shadow_texels_first_copied_in_large_surfaces),
             (true, false) => add(&self.shadow_texels_recopied_in_large_surfaces),
@@ -5811,6 +5819,10 @@ pub struct WorkCounts {
     /// Of `shadow_texels_first_copied_in_surfaces`, those under a texture of 2^20 texels or more
     /// (a 1920x1080 framebuffer's among them).
     pub shadow_texels_first_copied_in_large_surfaces: u64,
+    /// Of `shadow_texels_first_copied_in_surfaces`, those of a plane in a buffer of private or
+    /// memoryless storage the device made, which the CPU never writes; the rest are a plane's in
+    /// host pages or in a buffer the CPU maps.
+    pub shadow_texels_first_copied_in_private_surfaces: u64,
     /// The texels no copy in moved because the encoder's first use of a shadowed texture found
     /// its command buffer already holding that image's truth (`shadow::ShadowCarry`): exactly
     /// what carrying the image across the command buffer's encoders takes off the run. 0 means
@@ -6973,6 +6985,9 @@ impl Device {
                 .load(Ordering::Relaxed),
             shadow_texels_first_copied_in_large_surfaces: counters
                 .shadow_texels_first_copied_in_large_surfaces
+                .load(Ordering::Relaxed),
+            shadow_texels_first_copied_in_private_surfaces: counters
+                .shadow_texels_first_copied_in_private_surfaces
                 .load(Ordering::Relaxed),
             shadow_texels_first_copy_in_carried: counters
                 .shadow_texels_first_copy_in_carried

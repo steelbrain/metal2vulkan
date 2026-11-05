@@ -1314,6 +1314,8 @@ fn one_command_writing_a_texture_and_its_bytes_another_way_keeps_and_merges_it()
 /// merged before the next command. An image's shadow, one whose writes Metal drops, and one over a
 /// tracked `Private` buffer's bytes, which no other writer writes while a command buffer runs,
 /// merge nothing back: the last is copied in and back; an untracked `Private` buffer's merges.
+/// So does an IOSurface plane's in a tracked `Private` buffer (a consumer's device copy of the
+/// surface), where a plane the CPU may write merges.
 #[test]
 fn a_texture_over_a_buffer_s_bytes_is_merged_where_it_would_be_copied_back() {
     let buffer = ResourceKey::new();
@@ -1324,6 +1326,14 @@ fn a_texture_over_a_buffer_s_bytes_is_merged_where_it_would_be_copied_back() {
     assert!(over_private(shadow(buffer, 0..1024), false).merges_back());
     let private = over_private(shadow(buffer, 0..1024), true);
     assert!(!private.merges_back());
+    let with = |backing, tracked| {
+        let mut copies = Arc::into_inner(shadow(buffer, 0..1024)).expect("one holder");
+        (copies.backing, copies.tracked) = (backing, tracked);
+        copies
+    };
+    assert!(!with(Backing::PrivateSurface, true).merges_back());
+    assert!(with(Backing::PrivateSurface, false).merges_back());
+    assert!(with(Backing::Surface, true).merges_back());
     let mut dropped = Arc::into_inner(shadow(buffer, 0..1024)).expect("one holder");
     dropped.drops_writes = true;
     assert!(!dropped.merges_back());

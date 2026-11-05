@@ -291,8 +291,12 @@ pub(super) enum Backing {
     /// Host pages that the texture's own image lies in too (an aliasing image, a pitched host
     /// image among them), a shadow of which reads them as the image left them.
     AliasedHostPages,
-    /// The bytes of an IOSurface's plane.
+    /// The bytes of an IOSurface's plane that the CPU may write: host pages, or a buffer it maps.
     Surface,
+    /// The bytes of an IOSurface's plane in a buffer of private or memoryless storage the runtime
+    /// allocated (a consumer's device copy of the surface): only the runtime's commands write
+    /// them.
+    PrivateSurface,
 }
 
 impl Backing {
@@ -303,6 +307,7 @@ impl Backing {
             Ok(StorageMode::Private | StorageMode::Memoryless)
         );
         match (surface, buffer.caller_memory(), private) {
+            (true, None, true) => Backing::PrivateSurface,
             (true, _, _) => Backing::Surface,
             (false, Some(_), _) => Backing::HostPages,
             (false, None, true) => Backing::PrivateBuffer,
@@ -571,7 +576,20 @@ impl ShadowCopies {
     /// (`WorkCounts::shadow_texels_first_copied_in_large_surfaces` and kin): a texture over an
     /// IOSurface's plane of at least [`LARGE_SURFACE_TEXELS`] texels.
     pub(super) fn large_surface(&self) -> bool {
-        self.backing == Backing::Surface && self.texels() >= LARGE_SURFACE_TEXELS
+        let surface = matches!(self.backing, Backing::Surface | Backing::PrivateSurface);
+        surface && self.texels() >= LARGE_SURFACE_TEXELS
+    }
+
+    /// Whether only the runtime's commands write the shadow's truth, which the tracker orders
+    /// against the commands of every queue: the bytes of a tracked buffer of private or
+    /// memoryless storage the runtime allocated, an IOSurface plane's among them. The CPU reaches
+    /// none of them (`buffer_texture.rs` refuses its access to a `Private` buffer's bytes).
+    pub(super) fn only_commands_write(&self) -> bool {
+        let private = matches!(
+            self.backing,
+            Backing::PrivateBuffer | Backing::PrivateSurface
+        );
+        self.tracked && private
     }
 
     /// Whether a copy in of the shadow's texels is cut to the rectangle of a part of them
@@ -868,14 +886,15 @@ impl ShadowCopies {
     /// (`shadow_merge.rs`): a buffer's bytes that another writer may write beside the commands'
     /// writes while a command buffer runs, whose writes to texels the commands left Metal keeps;
     /// never copied back over those texels (the module's rules). That is every buffer's bytes but
-    /// a tracked `Private` or `Memoryless` buffer's the runtime made: the CPU writes the others
+    /// a tracked `Private` or `Memoryless` buffer's the runtime made, an IOSurface plane's in one
+    /// among them ([`only_commands_write`](Self::only_commands_write)): the CPU writes the others
     /// (a `Shared` or `Managed` buffer's, host pages, the caller's own `VkBuffer`'s memory), and
     /// another queue's commands an untracked buffer's, which the tracker leaves to the program. An
     /// image's shadow, a turned one and two planes take no merge ([`unmerged`](Self::unmerged)),
     /// and writes Metal drops go back no way.
     pub(super) fn merges_back(&self) -> bool {
         let bytes = matches!(&self.source, ShadowSource::Bytes { .. });
-        let other_writer = self.backing != Backing::PrivateBuffer || !self.tracked;
+        let other_writer = !self.only_commands_write();
         bytes && other_writer && !self.drops_writes && self.unmerged().is_none()
     }
 
