@@ -3,7 +3,7 @@
 //! through the runtime's public calls alone, on one thread.
 //!
 //! ```sh
-//! cargo run --release -p metal2vulkan-runtime --example draw_costs [-- [ws|many|10k]... [--runs N] [--metallib PATH]]
+//! cargo run --release -p metal2vulkan-runtime --example draw_costs [-- [ws|many|10k]... [--runs N] [--calls] [--metallib PATH]]
 //! ```
 //!
 //! Each shape is command buffers committed back to back, each of one render pass over a 512x512
@@ -33,6 +33,12 @@
 //! figure a draw, the median over the runs with the lowest and the highest (`DRAW-COST` lines).
 //! Instructions are the figure to compare between builds: a busy host moves them little where it
 //! moves time. The thread asks for the performance cores (`QOS_CLASS_USER_INTERACTIVE`).
+//!
+//! With `--calls`, a run also counts each call's instructions apart, reading the counter around
+//! each call (the read's own cost, measured as the run starts, taken off): printed per call
+//! (`DRAW-CALL` lines), its calls a draw, its instructions a call and its share of a draw, the
+//! median over the runs, with the lowest and highest a call. The reads cost the totals their own
+//! instructions, so a run's totals are read without `--calls`.
 //!
 //! The library is the metallib `--metallib` names, or else `draw_costs.metal` compiled by
 //! `xcrun metal` in a scratch directory, removed once read.
@@ -139,6 +145,53 @@ impl Shape {
         let at = slot * SLOT;
         let chunk = buffer as u64 * self.chunks_a_buffer() + at / CHUNK;
         (chunk as usize, at % CHUNK)
+    }
+}
+
+/// The calls `--calls` counts apart, by their index in a [`Tally`].
+const CALLS: [&str; 11] = [
+    "command_buffer",
+    "render_command_encoder",
+    "set_render_pipeline_state",
+    "set_vertex_buffer",
+    "set_fragment_buffer",
+    "set_fragment_texture",
+    "set_fragment_sampler_states",
+    "draw_primitives",
+    "end_encoding",
+    "add_completed_handler",
+    "commit",
+];
+
+/// Each call's count and instructions, over a run's counted repetitions.
+type Tally = [(u64, u64); CALLS.len()];
+
+/// Run `body` as call `kind`, counting its instructions into `tally` where there is one.
+fn call<T>(tally: &mut Option<&mut Tally>, kind: usize, body: impl FnOnce() -> T) -> T {
+    let Some(tally) = tally else {
+        return body();
+    };
+    let before = instructions_and_cycles();
+    let answer = body();
+    if let Some((after, before)) = instructions_and_cycles().zip(before) {
+        tally[kind].0 += 1;
+        tally[kind].1 += after[0] - before[0];
+    }
+    answer
+}
+
+/// The instructions a read of the counter pair costs between them, the median of many.
+fn read_cost() -> f64 {
+    let pairs = (0..10_000)
+        .filter_map(|_| {
+            let before = instructions_and_cycles()?;
+            let after = instructions_and_cycles()?;
+            Some((after[0] - before[0]) as f64)
+        })
+        .collect::<Vec<_>>();
+    match pairs.is_empty() {
+        true => 0.0,
+        false => spread(pairs).0,
     }
 }
 
@@ -294,39 +347,50 @@ impl Bench {
     }
 
     /// One repetition: every command buffer's calls, counted from the first one's creation
-    /// through the last commit, then each handler waited for.
-    fn repetition(&self, buffers: &[Vec<Step<'_>>]) -> Result<Counts> {
+    /// through the last commit, then each handler waited for; each call counted apart into
+    /// `tally` where there is one.
+    fn repetition(
+        &self,
+        buffers: &[Vec<Step<'_>>],
+        mut tally: Option<&mut Tally>,
+    ) -> Result<Counts> {
         let (sender, completions) = mpsc::channel();
         let start = Counts::now();
         for steps in buffers {
-            let command_buffer = self.queue.command_buffer()?;
-            let mut encoder = command_buffer.render_command_encoder(&self.pass)?;
+            let command_buffer = call(&mut tally, 0, || self.queue.command_buffer())?;
+            let mut encoder = call(&mut tally, 1, || {
+                command_buffer.render_command_encoder(&self.pass)
+            })?;
             for &step in steps {
                 match step {
-                    Step::Pipeline(state) => encoder.set_render_pipeline_state(state),
-                    Step::VertexBuffer(buffer, offset, index) => {
+                    Step::Pipeline(state) => {
+                        call(&mut tally, 2, || encoder.set_render_pipeline_state(state))
+                    }
+                    Step::VertexBuffer(buffer, offset, index) => call(&mut tally, 3, || {
                         encoder.set_vertex_buffer(Some(buffer), offset, index)
-                    }
-                    Step::FragmentBuffer(buffer, offset, index) => {
+                    }),
+                    Step::FragmentBuffer(buffer, offset, index) => call(&mut tally, 4, || {
                         encoder.set_fragment_buffer(Some(buffer), offset, index)
-                    }
-                    Step::FragmentTexture(texture) => {
+                    }),
+                    Step::FragmentTexture(texture) => call(&mut tally, 5, || {
                         encoder.set_fragment_texture(Some(texture), 0)
-                    }
-                    Step::FragmentSampler(sampler) => {
+                    }),
+                    Step::FragmentSampler(sampler) => call(&mut tally, 6, || {
                         encoder.set_fragment_sampler_states(&[Some(sampler)], None, 0)
-                    }
-                    Step::Draw(primitive, count) => {
+                    }),
+                    Step::Draw(primitive, count) => call(&mut tally, 7, || {
                         encoder.draw_primitives(primitive, 0, count, 1, 0)
-                    }
+                    }),
                 }?;
             }
-            encoder.end_encoding()?;
+            call(&mut tally, 8, || encoder.end_encoding())?;
             let sender = sender.clone();
-            command_buffer.add_completed_handler(Box::new(move |done: &CommandBuffer| {
-                let _ = sender.send(done.status());
-            }))?;
-            command_buffer.commit()?;
+            call(&mut tally, 9, || {
+                command_buffer.add_completed_handler(Box::new(move |done: &CommandBuffer| {
+                    let _ = sender.send(done.status());
+                }))
+            })?;
+            call(&mut tally, 10, || command_buffer.commit())?;
         }
         let spent = Counts::now().since(start);
         for _ in buffers {
@@ -416,23 +480,27 @@ fn spread(mut values: Vec<f64>) -> (f64, f64, f64) {
     (median, values[0], values[n - 1])
 }
 
-/// Run `shape` `runs` times and print its figures a draw.
-fn measure(bench: &Bench, shape: Shape, runs: usize) -> Result<()> {
+/// Run `shape` `runs` times and print its figures a draw, and with `calls` each call's.
+fn measure(bench: &Bench, shape: Shape, runs: usize, calls: bool) -> Result<()> {
     let chunks = bench.chunks(shape)?;
     let buffers: Vec<Vec<Step<'_>>> = (0..shape.buffers)
         .map(|buffer| bench.steps(&chunks, shape, buffer))
         .collect();
     let draws = (COUNTED * shape.buffers * shape.draws) as f64;
     let mut seen = Vec::with_capacity(runs);
+    let mut tallies = Vec::with_capacity(runs);
     for _ in 0..runs {
         let mut total: Option<Counts> = None;
+        let mut tally: Tally = [(0, 0); CALLS.len()];
         for repetition in 0..WARM + COUNTED {
-            let spent = bench.repetition(&buffers)?;
-            if repetition >= WARM {
+            let counted = repetition >= WARM;
+            let spent = bench.repetition(&buffers, (calls && counted).then_some(&mut tally))?;
+            if counted {
                 total = Some(total.map_or(spent, |total| total.add(spent)));
             }
         }
         seen.push(total.unwrap_or_default());
+        tallies.push(tally);
     }
     println!(
         "{}: {} command buffers of {} draws, {runs} runs of {COUNTED} counted repetitions; a draw:",
@@ -457,6 +525,31 @@ fn measure(bench: &Bench, shape: Shape, runs: usize) -> Result<()> {
             "DRAW-COST {} {figure} {median:.1} [{low:.1}, {high:.1}]",
             shape.name
         );
+    }
+    if calls && seen.iter().all(|c| c.instructions.is_some()) {
+        let read = read_cost();
+        println!(
+            "{}: a counter read's own instructions: {read:.1}",
+            shape.name
+        );
+        for (kind, name) in CALLS.iter().enumerate() {
+            let made = tallies[0][kind].0;
+            if made == 0 {
+                continue;
+            }
+            let each = tallies
+                .iter()
+                .map(|tally| tally[kind].1 as f64 / tally[kind].0 as f64 - read)
+                .collect();
+            let (median, low, high) = spread(each);
+            let a_draw = made as f64 / draws;
+            println!(
+                "DRAW-CALL {} {name} calls_a_draw {a_draw:.3} a_call {median:.1} [{low:.1}, \
+                 {high:.1}] a_draw {:.1}",
+                shape.name,
+                median * a_draw
+            );
+        }
     }
     Ok(())
 }
@@ -492,11 +585,12 @@ fn compile(scratch: &Path) -> Result<PathBuf> {
 
 fn main() -> Result<()> {
     let mut shapes = Vec::new();
-    let (mut runs, mut metallib) = (RUNS, None);
+    let (mut runs, mut metallib, mut calls) = (RUNS, None, false);
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--runs" => runs = args.next().ok_or("--runs N")?.parse()?,
+            "--calls" => calls = true,
             "--metallib" => metallib = Some(PathBuf::from(args.next().ok_or("--metallib PATH")?)),
             name => shapes.push(
                 *SHAPES
@@ -528,7 +622,7 @@ fn main() -> Result<()> {
     let library = library(&device, metallib.as_deref())?;
     let bench = Bench::new(device, &library)?;
     for shape in shapes {
-        measure(&bench, shape, runs)?;
+        measure(&bench, shape, runs, calls)?;
     }
     println!("notices heard: {}", NOTICES.load(Ordering::Relaxed));
     Ok(())
