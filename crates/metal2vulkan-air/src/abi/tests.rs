@@ -2217,7 +2217,9 @@ fn deeply_nested_layouts_are_refused_without_recursing() {
             [top, leaf_layout(b)]
         })
         .unwrap();
-        assert_eq!(abi.structs.len() as u64, cap + 1);
+        // The second parameter's leaf decodes like the chain's innermost layout, so it is that
+        // entry: the chain's `cap` layouts are the whole table.
+        assert_eq!(abi.structs.len() as u64, cap);
         assert_eq!(
             layout_kernel(|b| {
                 let top = layout_chain(b, cap + 1, wrap);
@@ -2265,10 +2267,11 @@ fn layouts_at_the_nesting_cap_decode_on_a_small_stack() {
                 .join()
                 .unwrap()
         });
+        // The second parameter's leaf is the chain's innermost layout's entry.
         assert_eq!(
             decoded,
             (
-                Ok(cap as usize + 1),
+                Ok(cap as usize),
                 Err(Error::LimitExceeded(Limit::LayoutNesting))
             )
         );
