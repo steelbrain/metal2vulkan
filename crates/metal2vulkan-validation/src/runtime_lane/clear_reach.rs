@@ -15,6 +15,12 @@
 //! is Metal's answer in each tile a draw touches and a near-equivalent elsewhere, announced once
 //! ([`DONT_CARE_LOADS`]). A pass without a draw call that clears and resolves nothing records
 //! nothing at all, its texels kept ([`a_pass_that_changes_no_texel_records_nothing`]).
+//!
+//! The clear's red, 0.5, is a half step between two codes of an 8-bit unorm channel (127.5),
+//! which Metal rounds to even, 128, and Vulkan leaves to the device: on a device whose clear is
+//! not Metal's conversion (no `DriverFact::ColorClearIsMetals`), that channel of a cleared texel
+//! may hold either code, the runtime announcing `device-color-conversion`
+//! ([`Lane::assert_texels`]). Every other channel and texel compares exactly.
 
 use super::degrade_notices::shared_in_system_memory;
 use super::degrade_notices::{assert_made_once, forced, made_render_kinds};
@@ -24,6 +30,7 @@ use super::{
 };
 use crate::air_library::AirLibrary;
 use crate::gpu::TEST_DEVICE;
+use metal2vulkan::device::DriverFact;
 use metal2vulkan::metal::state::{DepthStencilDescriptor, StencilDescriptor};
 use metal2vulkan::metal::{
     ColorWriteMask, CompareFunction, PixelFormat, PrimitiveType, StencilOperation, TextureType,
@@ -45,11 +52,29 @@ pub(super) const DONT_CARE_LOADS: [Degradation; 1] = [Degradation::DontCareLoadT
 pub(super) const SIDE: u64 = 128;
 pub(super) const AREA: u64 = 40;
 
-/// A color's texels: set before the pass, cleared, and drawn.
+/// A color's texels: set before the pass, cleared ([`RED`], Metal's codes for [`CLEAR`]), and
+/// drawn.
 pub(super) const OLD: [u8; 4] = [0x11; 4];
 pub(super) const RED: [u8; 4] = [0x80, 0x00, 0x00, 0xff];
 pub(super) const DRAWN: [u8; 4] = [0x01, 0x00, 0x00, 0xff];
 const ZERO: [u8; 4] = [0; 4];
+
+/// The clear color of a color pass here: its red is a half step between two codes of an 8-bit
+/// unorm channel (127.5), which Metal rounds to even, 128.
+const CLEAR: [f64; 4] = [0.5, 0.0, 0.0, 1.0];
+
+/// The codes an 8-bit unorm channel's clear to `value` may store on a device whose clear is
+/// Metal's conversion (`metals`, `DriverFact::ColorClearIsMetals`) or not: Metal's, but at a half
+/// step on any other device either nearest code, which Vulkan leaves to the device (announced
+/// `device-color-conversion`: `degrade_notices::tie_cleared`).
+fn clear_codes(value: f64, metals: bool) -> Vec<u8> {
+    let scaled = value.clamp(0.0, 1.0) * 255.0;
+    let metal = scaled.round_ties_even() as u8;
+    match !metals && scaled.fract() == 0.5 {
+        true => vec![scaled.floor() as u8, scaled.ceil() as u8],
+        false => vec![metal],
+    }
+}
 
 /// What a pass draws: nothing, a triangle over the whole target, one wholly outside it, or a
 /// draw call of no vertex.
@@ -75,6 +100,44 @@ impl Lane {
             queue: device.new_command_queue().unwrap(),
             library: device.new_library_with_air(&bitcode).unwrap(),
             device,
+        }
+    }
+
+    /// Assert that `observed` is `expected`, texel by texel (4 bytes each), where a texel
+    /// `expected` holds as [`RED`], the clear's, holds each channel at a code [`clear_codes`]
+    /// allows for [`CLEAR`] on the lane's device: Metal's, or either code nearest a half step on a
+    /// device whose clear is not Metal's. Every other texel is held exactly.
+    pub(super) fn assert_texels(&self, observed: &[u8], expected: &[u8], what: &str) {
+        let metals = self
+            .device
+            .properties()
+            .driver_facts
+            .contains(&DriverFact::ColorClearIsMetals);
+        let codes: [Vec<u8>; 4] =
+            std::array::from_fn(|channel| clear_codes(CLEAR[channel], metals));
+        assert_eq!(observed.len(), expected.len(), "{what}: the bytes");
+        let side = (expected.len() / 4).isqrt().max(1);
+        let differ: Vec<(usize, &[u8], &[u8])> = observed
+            .chunks(4)
+            .zip(expected.chunks(4))
+            .enumerate()
+            .filter(|(_, (seen, want))| match *want == RED {
+                true => !seen
+                    .iter()
+                    .zip(&codes)
+                    .all(|(code, held)| held.contains(code)),
+                false => seen != want,
+            })
+            .map(|(at, (seen, want))| (at, seen, want))
+            .collect();
+        if let Some((at, seen, want)) = differ.first() {
+            panic!(
+                "{what}: {} of {} texels differ, the first at ({}, {}): {seen:?} where {want:?}",
+                differ.len(),
+                expected.len() / 4,
+                at % side,
+                at / side
+            );
         }
     }
 
@@ -366,7 +429,7 @@ fn color_pass(texture: &Texture, load: LoadAction, area: [u64; 2]) -> RenderPass
     let target = &mut descriptor.color_attachments[0];
     target.texture = Some(texture.clone());
     target.load_action = load;
-    target.clear_color = ClearColor::new(0.5, 0.0, 0.0, 1.0);
+    target.clear_color = ClearColor::new(CLEAR[0], CLEAR[1], CLEAR[2], CLEAR[3]);
     target.store_action = StoreAction::Store;
     descriptor.render_target_width = area[0];
     descriptor.render_target_height = area[1];
@@ -486,10 +549,10 @@ fn a_clear_reaches_past_the_render_area_as_metal_s() {
         } else {
             &OLD
         };
-        assert_eq!(
-            lane.read(&texture, (0, 0), 4, BlitOption::None),
-            expected(SIDE, area, reach, (drawn, cleared, &OLD)),
-            "{name}"
+        lane.assert_texels(
+            &lane.read(&texture, (0, 0), 4, BlitOption::None),
+            &expected(SIDE, area, reach, (drawn, cleared, &OLD)),
+            name,
         );
     }
     // The render area of a smaller depth attachment.
@@ -513,10 +576,10 @@ fn a_clear_reaches_past_the_render_area_as_metal_s() {
         before,
         "c_rgba8_small_depth_draw: not inline"
     );
-    assert_eq!(
-        lane.read(&texture, (0, 0), 4, BlitOption::None),
-        expected(SIDE, [AREA, AREA], [64, 64], (Some(&DRAWN), &RED, &OLD)),
-        "c_rgba8_small_depth_draw"
+    lane.assert_texels(
+        &lane.read(&texture, (0, 0), 4, BlitOption::None),
+        &expected(SIDE, [AREA, AREA], [64, 64], (Some(&DRAWN), &RED, &OLD)),
+        "c_rgba8_small_depth_draw",
     );
     // Level 1 of a mipmapped 256x256 texture: its level 0 keeps its texels.
     let mipmapped = Shape {
@@ -539,10 +602,10 @@ fn a_clear_reaches_past_the_render_area_as_metal_s() {
         OLD.repeat((4 * SIDE * SIDE) as usize),
         "c_rgba8_level1_draw, level 0"
     );
-    assert_eq!(
-        lane.read(&texture, (1, 0), 4, BlitOption::None),
-        expected(SIDE, [AREA, AREA], [64, 64], (Some(&DRAWN), &RED, &OLD)),
-        "c_rgba8_level1_draw, level 1"
+    lane.assert_texels(
+        &lane.read(&texture, (1, 0), 4, BlitOption::None),
+        &expected(SIDE, [AREA, AREA], [64, 64], (Some(&DRAWN), &RED, &OLD)),
+        "c_rgba8_level1_draw, level 1",
     );
     // A layered pass of two slices that does not draw clears each layer's tiles, not all of it.
     let layered = Shape { slices: 2, ..PLAIN };
@@ -551,10 +614,10 @@ fn a_clear_reaches_past_the_render_area_as_metal_s() {
     descriptor.render_target_array_length = 2;
     lane.run(&descriptor, Draw::None, None);
     for slice in 0..2 {
-        assert_eq!(
-            lane.read(&texture, (0, slice), 4, BlitOption::None),
-            expected(SIDE, [AREA, AREA], [64, 64], (None, &RED, &OLD)),
-            "c_rgba8_layered_nodraw, slice {slice}"
+        lane.assert_texels(
+            &lane.read(&texture, (0, slice), 4, BlitOption::None),
+            &expected(SIDE, [AREA, AREA], [64, 64], (None, &RED, &OLD)),
+            &format!("c_rgba8_layered_nodraw, slice {slice}"),
         );
     }
     // A texture without `RenderTarget` usage, through its stand-in.
@@ -570,10 +633,10 @@ fn a_clear_reaches_past_the_render_area_as_metal_s() {
         before,
         "a stand-in's texture: not inline"
     );
-    assert_eq!(
-        lane.read(&texture, (0, 0), 4, BlitOption::None),
-        expected(SIDE, [AREA, AREA], [64, 64], (Some(&DRAWN), &RED, &OLD)),
-        "a stand-in's texture"
+    lane.assert_texels(
+        &lane.read(&texture, (0, 0), 4, BlitOption::None),
+        &expected(SIDE, [AREA, AREA], [64, 64], (Some(&DRAWN), &RED, &OLD)),
+        "a stand-in's texture",
     );
     quiet(lane, &messages);
 }
@@ -625,7 +688,7 @@ fn colors_whose_clears_reach_alike_record_inline_over_their_reach() {
         let other = &mut pass.color_attachments[1];
         other.texture = Some(second.clone());
         other.load_action = load;
-        other.clear_color = ClearColor::new(0.5, 0.0, 0.0, 1.0);
+        other.clear_color = ClearColor::new(CLEAR[0], CLEAR[1], CLEAR[2], CLEAR[3]);
         other.store_action = StoreAction::Store;
         let (before, unequal_before) = (inline_passes(&lane), unequal(&lane));
         lane.run(&pass, Draw::Full, Some(&pipeline));
@@ -639,19 +702,19 @@ fn colors_whose_clears_reach_alike_record_inline_over_their_reach() {
             u64::from(!inline),
             "{name}: counted by its reach"
         );
-        assert_eq!(
-            lane.read(&first, (0, 0), 4, BlitOption::None),
-            expected(SIDE, area, [64, 32], (Some(&DRAWN), &RED, &OLD)),
-            "{name}: color 0"
+        lane.assert_texels(
+            &lane.read(&first, (0, 0), 4, BlitOption::None),
+            &expected(SIDE, area, [64, 32], (Some(&DRAWN), &RED, &OLD)),
+            &format!("{name}: color 0"),
         );
         let cleared = match load {
             LoadAction::Clear => &RED,
             _ => &OLD,
         };
-        assert_eq!(
-            lane.read(&second, (0, 0), 4, BlitOption::None),
-            expected(shape.side, area, reach, (None, cleared, &OLD)),
-            "{name}: color 1"
+        lane.assert_texels(
+            &lane.read(&second, (0, 0), 4, BlitOption::None),
+            &expected(shape.side, area, reach, (None, cleared, &OLD)),
+            &format!("{name}: color 1"),
         );
     }
     quiet(lane, &messages);
@@ -830,15 +893,15 @@ fn depth_stencil_and_multisampled_clears_reach_past_the_render_area_as_metal_s()
     read.color_attachments[0].store_action = StoreAction::MultisampleResolve;
     read.color_attachments[0].resolve_texture = Some(resolved.clone());
     lane.run(&read, Draw::None, None);
-    assert_eq!(
-        lane.read(&resolved, (0, 0), 4, BlitOption::None),
-        expected(
+    lane.assert_texels(
+        &lane.read(&resolved, (0, 0), 4, BlitOption::None),
+        &expected(
             SIDE,
             area,
             [64, 64],
-            (Some(&DRAWN), &RED, &[0x00, 0x00, 0xff, 0xff])
+            (Some(&DRAWN), &RED, &[0x00, 0x00, 0xff, 0xff]),
         ),
-        "c_rgba8_ms4_draw"
+        "c_rgba8_ms4_draw",
     );
     quiet(lane, &messages);
 }
@@ -916,10 +979,10 @@ fn a_pass_that_changes_no_texel_records_nothing() {
         None,
     );
     assert_eq!(skipped() - before, 0, "a Clear load: passes skipped");
-    assert_eq!(
-        lane.read(&texture, (0, 0), 4, BlitOption::None),
-        RED.repeat((SIDE * SIDE) as usize),
-        "a Clear load: the texels"
+    lane.assert_texels(
+        &lane.read(&texture, (0, 0), 4, BlitOption::None),
+        &RED.repeat((SIDE * SIDE) as usize),
+        "a Clear load: the texels",
     );
     // A draw call of no vertex, and a visibility result buffer: recorded, the texels kept.
     let texture = lane.old_color(rgba8, PLAIN, target);
