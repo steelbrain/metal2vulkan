@@ -23,7 +23,8 @@ use crate::gpu::TEST_DEVICE;
 use metal2vulkan::metal::ColorWriteMask;
 use metal2vulkan_runtime::{
     AddressPlacement, Buffer, BufferContents, BufferDescriptor, CommandBufferStatus, CommandQueue,
-    Deallocator, Device, HostMemory, RenderPipelineState, ResourceOptions, ScissorRect, WorkCounts,
+    Deallocator, Device, GpuAddress, HostMemory, RenderPipelineState, ResourceOptions, ScissorRect,
+    WorkCounts,
 };
 use std::ptr::NonNull;
 
@@ -36,6 +37,10 @@ const CHUNKS: u64 = 2;
 
 /// The target's side ([`replayed_frames`](super::replayed_frames)'s).
 const SIDE: u64 = 64;
+
+/// Where the identity case pins the indices' buffer and the one made again after it: a 32-KiB
+/// granule's first page (`address.rs`), high in the space, far from the ranges the runtime picks.
+const PINNED: GpuAddress = GpuAddress(0x7000_0000_0000);
 
 /// What a frame moved of the kept chunks' counters: chunks run kept, and chunks recorded again
 /// though a recording of them was kept.
@@ -224,13 +229,14 @@ fn live(buffer: &Buffer) -> Inputs<'_> {
     }
 }
 
-/// A buffer holding `bytes` at `placement`.
-fn placed(device: &Device, bytes: &[u8], placement: AddressPlacement) -> Buffer {
+/// A buffer holding `bytes` pinned at [`PINNED`].
+fn pinned(device: &Device, bytes: &[u8]) -> Buffer {
     let descriptor = BufferDescriptor::new(
         bytes.len() as u64,
         ResourceOptions::shared(),
         BufferContents::Copy(bytes),
     );
+    let placement = AddressPlacement::At(PINNED);
     (device.new_buffer_with_descriptor(descriptor.with_placement(placement))).unwrap()
 }
 
@@ -301,12 +307,11 @@ fn a_kept_host_step_records_again_where_one_input_changes() {
         // another buffer.
         let case = "the buffer an index address names";
         let page = Page::new(&device, DRAWS);
-        let first = placed(&device, &indices(37), AddressPlacement::Any);
-        let address = first.gpu_address();
+        let first = pinned(&device, &indices(37));
         let before = steady(&device, &queue, case, &page, &live(&first));
         drop(first);
         let zeros = vec![0; indices(37).len()];
-        let second = placed(&device, &zeros, AddressPlacement::At(address));
+        let second = pinned(&device, &zeros);
         changed(
             &device,
             &queue,

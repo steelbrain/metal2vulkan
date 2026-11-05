@@ -22,8 +22,9 @@
 //! runs every chunk again, its records compared with those it was recorded from
 //! (`WorkCounts::host_step_chunks_kept`, `host_step_records_compared`, `host_step_compare_nanos`).
 //! [`CHANGE_VAR`] sets a frame from which the GPU writes other records (the encoding pass binds the
-//! indices' zero half), which that frame's step records again. [`FRAMES_VAR`] sets the frames (4 by
-//! default), and [`RESIDENT_VAR`] how many buffers
+//! indices' zero half), which that frame's step records again; [`EACH_VAR`] makes them change on
+//! each frame from it (the two halves in turn). [`FRAMES_VAR`] sets the frames (4 by default), and
+//! [`RESIDENT_VAR`] how many buffers
 //! and textures, one of each, the execution's pass makes resident besides, as a page's bind
 //! groups do (none by default): the step's time should grow with the records alone, not with
 //! them times the resident resources. Each warm frame makes or finds few of its draws' bind
@@ -68,6 +69,10 @@ const RESIDENT_VAR: &str = "REPLAYED_FRAMES_RESIDENT";
 /// The variable that sets the frame from which the encoding pass binds the indices' zero half
 /// ([`ZEROS_AT`]), so the GPU writes other records from then on (none by default).
 const CHANGE_VAR: &str = "REPLAYED_FRAMES_CHANGE_AT";
+
+/// The variable that, set, makes the records change on each frame from [`CHANGE_VAR`]'s: the
+/// encoding pass binds the indices' zero half and their first half in turn.
+const EACH_VAR: &str = "REPLAYED_FRAMES_CHANGE_EACH";
 
 /// The commands the pass encodes, one a draw, in [`replayed_frames`].
 const DRAWS: u32 = 5000;
@@ -427,8 +432,10 @@ fn replayed_frames() {
         ..Inputs::default()
     };
     let change_at = change_at();
+    let each = std::env::var_os(EACH_VAR).is_some();
     for frame in 0..frames() {
-        let inputs = match change_at.is_some_and(|at| frame >= at) {
+        let changes = change_at.filter(|&at| frame >= at);
+        let inputs = match changes.is_some_and(|at| !each || (frame - at) % 2 == 0) {
             true => &changed,
             false => &Inputs::default(),
         };
