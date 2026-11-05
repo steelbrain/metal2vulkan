@@ -380,7 +380,10 @@ fn split(before: &WorkCounts, after: &WorkCounts) -> String {
          compute_pipelines_made_ms {:.1} variant_pipelines_made {} records_read {} \
          heads_held_for_host_steps {} heads_held_for_earlier_commits {} shapes_found_or_made {} \
          host_step_chunks_kept {} host_step_chunks_recorded_again {} host_step_records_compared {} \
-         host_step_compare_ms {:.2} scheduler_passes {} footprints_built {}",
+         host_step_compare_ms {:.2} scheduler_passes {} footprints_built {} \
+         root_table_ranges_noted {} resident_uses_made {} resident_uses_gathered {} \
+         resident_address_indexes_made {} stage_tables_read {} draws_rebound {} draws_as_before {} \
+         heap_tables_worked_out {} host_range_lookups {} argument_samplers_taken {}",
         after.host_steps_recorded - before.host_steps_recorded,
         ms(after.host_step_nanos - before.host_step_nanos),
         ms(after.render_pipeline_create_nanos - before.render_pipeline_create_nanos),
@@ -396,6 +399,16 @@ fn split(before: &WorkCounts, after: &WorkCounts) -> String {
         ms(after.host_step_compare_nanos - before.host_step_compare_nanos),
         after.scheduler_passes - before.scheduler_passes,
         after.footprints_built - before.footprints_built,
+        after.root_table_ranges_noted - before.root_table_ranges_noted,
+        after.resident_uses_made - before.resident_uses_made,
+        after.resident_uses_gathered - before.resident_uses_gathered,
+        after.resident_address_indexes_made - before.resident_address_indexes_made,
+        after.stage_tables_read - before.stage_tables_read,
+        after.draws_rebound - before.draws_rebound,
+        after.draws_as_before - before.draws_as_before,
+        after.heap_tables_worked_out - before.heap_tables_worked_out,
+        after.host_range_lookups - before.host_range_lookups,
+        after.argument_samplers_taken - before.argument_samplers_taken,
     )
 }
 
