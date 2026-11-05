@@ -2327,6 +2327,14 @@ pub(super) fn allocate_addressed(
 /// as `fit` says. A new block is made with `memory`'s lock released: the device's other threads'
 /// placements, which the lock orders, wait for no `vkAllocateMemory`, which on NVIDIA's driver
 /// waited 2.37 s for other processes' GPU work.
+///
+/// Where the class's own types have no room, the resource goes to those it overflows into
+/// ([`overflow_candidates`]), each placement trying its own types first again, with no record of
+/// a full heap: a device-local allocation that fails for want of room is cheap. On an RTX 5080
+/// Laptop GPU (Linux) past its full 17.09 GB heap, eight of 48 MiB each answered
+/// `VK_ERROR_OUT_OF_DEVICE_MEMORY` within 4 µs (median under 1 µs), where a 48 MiB `Private`
+/// buffer's whole make took 6.9 ms there (median of 8, longest 7.2 ms; 0.47 ms in device-local
+/// memory) and a 4096 x 4096 `RGBA8Unorm` texture's 9.2 ms (longest 9.5 ms; 0.65 ms).
 fn place(
     memory: &Mutex<Memory>,
     device: &ash::Device,
