@@ -349,6 +349,10 @@ pub(crate) struct QueueSwitch {
     /// (`tests/teardown_threads.rs`).
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     pub(crate) held: crate::freed_memory::held::Held,
+    /// The crate's device tests' timings of the check's last two steps, in nanoseconds: the
+    /// release of its Vulkan objects, and the drop of its shares of the device's parts.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    last_steps: [AtomicU64; 2],
 }
 
 impl QueueSwitch {
@@ -368,6 +372,8 @@ impl QueueSwitch {
             stop_waited: AtomicU64::new(0),
             #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
             held: Default::default(),
+            #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+            last_steps: Default::default(),
         }
     }
 
@@ -446,6 +452,22 @@ impl QueueSwitch {
             0 => None,
             nanos => Some(Duration::from_nanos(nanos)),
         }
+    }
+
+    /// Record that the check's last step `step` (0 its objects' release, 1 its shares' drop) ran
+    /// from `from` until now.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) fn timed_step(&self, step: usize, from: Instant) {
+        let nanos = u64::try_from(from.elapsed().as_nanos()).unwrap_or(u64::MAX);
+        self.last_steps[step].store(nanos.max(1), Ordering::Release);
+    }
+
+    /// How long the check's last two steps took ([`timed_step`](Self::timed_step)).
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) fn last_steps(&self) -> [Duration; 2] {
+        (self.last_steps)
+            .each_ref()
+            .map(|t| Duration::from_nanos(t.load(Ordering::Acquire)))
     }
 
     /// Let the tests' hold of the check go once the device's teardown began, or once it was let

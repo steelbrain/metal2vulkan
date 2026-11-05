@@ -109,7 +109,11 @@ pub(crate) fn start(device: &Device) -> bool {
         let switch = Arc::clone(&parts.switch);
         run(&parts);
         // Its shares go before the teardown that waits for it goes on.
+        #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+        let dropping = Instant::now();
         drop(parts);
+        #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+        switch.timed_step(1, dropping);
         switch.ended();
     });
     if spawned.is_err() {
@@ -230,7 +234,11 @@ fn measure(parts: &Parts, pair: (usize, usize)) -> Result<Option<(i64, i64)>, Er
         Ok(_) => Ok(None),
         Err(error) => Err(error),
     };
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    let releasing = Instant::now();
     objects.release(parts);
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    parts.switch.timed_step(0, releasing);
     gaps
 }
 

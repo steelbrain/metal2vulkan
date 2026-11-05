@@ -612,7 +612,11 @@ fn a_running_queue_switch_check_leaves_the_device_to_the_program_s_thread() {
     let waited = switch
         .stop_waited()
         .expect("the teardown waited for the running check");
-    println!("the last drop took {dropped:?}, of which the wait for the check {waited:?}");
+    let [release, shares] = switch.last_steps();
+    println!(
+        "the last drop took {dropped:?}, of which the wait for the check {waited:?} (its objects' \
+         release {release:?}, its shares' drop {shares:?})"
+    );
     assert!(
         waited < RELEASE,
         "the teardown waited {waited:?} for the check"
