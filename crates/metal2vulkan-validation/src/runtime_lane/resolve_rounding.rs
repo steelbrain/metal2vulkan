@@ -53,6 +53,7 @@ use crate::executor_contract::multisample::{ReadbackView, SampleRead};
 use crate::runtime_lane::buffer_with;
 use metal2vulkan::bind::{SRGB_RESOLVE_LINEAR, SRGB_RESOLVE_THRESHOLDS};
 use metal2vulkan::device::DriverFact;
+use metal2vulkan::metal::format::WordAttachment;
 use metal2vulkan::metal::state::DepthStencilDescriptor;
 use metal2vulkan::metal::{CompareFunction, PixelFormat, PrimitiveType, TextureType, TextureUsage};
 use metal2vulkan::pipeline::{ColorAttachmentDescriptor, RenderPipelineDescriptor, StageSource};
@@ -949,8 +950,10 @@ fn compare_shared(
 }
 
 /// Every closed format at every sample count the device takes resolves by the device's
-/// `AVERAGE` in the pass: nothing announces
-/// `shader-resolve`, and `device-rounded-resolve` is announced exactly where the device's average
+/// `AVERAGE` in the pass, but one the device renders through a word view
+/// (`metal::format::WordAttachment`, as the NVIDIA RTX 5080 Laptop renders `R8Unorm_sRGB`),
+/// whose codes the crate-owned resolve averages: `shader-resolve` is announced, once, exactly
+/// where such a format resolved, and `device-rounded-resolve` exactly where the device's average
 /// is not measured to be Metal's (`DriverFact::ColorResolveAverageIsMetals`, at 2 and 4 samples),
 /// where every channel is Metal's. Elsewhere what the device's average gives against Metal's rule
 /// is printed, a measurement: the channels that differ, those of a code above and below Metal's,
@@ -975,6 +978,10 @@ fn the_device_resolve_rounds_as_announced() {
     let mut differ = Vec::new();
     let mut past_bound = Vec::new();
     let mut resolved_past_metal = false;
+    // A format the device renders through a word view (`WordAttachment::of`), whose codes no
+    // device's average reads, resolved: the crate-owned resolve (`color_resolve::shader_rules`).
+    let profile = lane.device.compile_device().profile();
+    let mut worded = Vec::new();
     for n in [2u32, 4, 8] {
         let supported = lane
             .device
@@ -991,6 +998,9 @@ fn the_device_resolve_rounds_as_announced() {
                 Err(why) => eprintln!("the device's resolve {pf:?} x{n} on {name}: {why}"),
                 Ok(outcome) => {
                     resolved_past_metal |= n > 4;
+                    if WordAttachment::of(pf, profile).is_some() {
+                        worded.push(format!("{pf:?} x{n}"));
+                    }
                     if outcome.differ != 0 && n <= 4 {
                         differ.push(format!("{pf:?} x{n}: {} channels", outcome.differ));
                     }
@@ -1024,9 +1034,10 @@ fn the_device_resolve_rounds_as_announced() {
     }
     let counts = super::degrade_notices::counts(&messages.take_notices());
     eprintln!("the device's resolve on {name}: announced {counts:?}");
+    eprintln!("the device's resolve on {name}: through a word view {worded:?}");
     assert_eq!(
         counts.get(&Degradation::ShaderResolve),
-        None,
+        (!worded.is_empty()).then_some(&1),
         "shader-resolve on {name}"
     );
     // At more than 4 samples no device's average is measured to be Metal's.
