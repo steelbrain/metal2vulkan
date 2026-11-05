@@ -211,7 +211,7 @@
         "submit_infos": 2,
         "trail_waits": 2,
         "wakes_completion_waiters": 2,
-        "wakes_spared": 16
+        "wakes_spared": 17
       },
       "moving": {
         "gate_waits_slept": 0

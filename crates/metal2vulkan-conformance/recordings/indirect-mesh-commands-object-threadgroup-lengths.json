@@ -603,7 +603,7 @@
         "resident_resources_joined": 1,
         "resident_textures_looked_at": 1,
         "scheduled_where_submitted": 1,
-        "scheduler_passes": 2,
+        "scheduler_passes": 1,
         "scheduler_passes_by_waiters": 1,
         "scheduler_sleeps": 1,
         "scheduler_wakes_commit": 1,
@@ -618,7 +618,7 @@
         "trail_waits": 1,
         "variant_pipelines_made": 6,
         "wakes_completion_waiters": 1,
-        "wakes_spared": 8
+        "wakes_spared": 7
       },
       "moving": {
         "gate_waits_slept": 0
