@@ -24,7 +24,12 @@
 //! summed: the recorded bound's measure) and at the stored value's. `HALF-BLEND-SUMMARY` lines
 //! give, per format, the share of the blends Metal measured whose every channel is Metal's, and
 //! the largest distances. A measurement, not a check: it asserts only that each draw completes
-//! and, where the pipeline announces no `half-output-precision`, that every channel is Metal's.
+//! and, where the pipeline announces no `half-output-precision`, that every channel is Metal's,
+//! but for an unblended draw into a 32-bit float format whose fragment stage records
+//! `native-half-conversion`: there the device may hand the attachment the function's `float`
+//! unrounded (the note's bound, the conversion pair dropped, as NVIDIA's 615.71.09 does on the
+//! RTX 5080 Laptop GPU here), so a channel may store a `float` whose `half` (to nearest even or
+//! toward zero) is the 16-bit draw's. `HALF-BLEND-UNROUNDED` lines count those channels.
 //!
 //! The draws run under the device's blend into every format. A `HALF-BLEND-EXACT` line counts the
 //! blended draws whose pipeline announced nothing, which must store Metal's value in every channel.
@@ -601,6 +606,9 @@ struct Tally {
     at_factors: f64,
     /// The largest distance from Metal's value in the format's values.
     at_stored: i64,
+    /// Unblended into a 32-bit float format, the channels that store another `float` than the
+    /// 16-bit draw's `half`, which rounds (to nearest even or toward zero) to that `half`.
+    unrounded: usize,
 }
 
 /// The LCG a probe draws its destinations from: `count` steps of 16 bits.
@@ -763,12 +771,17 @@ fn blends() -> Vec<String> {
         let mut exact = (0usize, 0usize);
         let mut worst = (0f64, 0f64, 0i64);
         for b in &BLENDS {
+            // Unblended, where the stage records native-half-conversion, the device may hand the
+            // attachment the function's `float` unrounded (the note's bound: the conversion pair
+            // dropped), whose `half` is the 16-bit draw's.
+            let mut unrounded_allowed = false;
             if !b.on {
+                let notes = fragment_notes(format, b);
                 println!(
-                    "HALF-BLEND-NOTES {name} | {fname} | {} | fragment notes {:?}",
-                    b.name,
-                    fragment_notes(format, b)
+                    "HALF-BLEND-NOTES {name} | {fname} | {} | fragment notes {notes:?}",
+                    b.name
                 );
+                unrounded_allowed = wide && notes.contains(&PrecisionNote::NativeHalfConversion);
             }
             let made = state(format, Some(b));
             for (k, kind) in [0u32, 4].into_iter().enumerate() {
@@ -797,6 +810,13 @@ fn blends() -> Vec<String> {
                         };
                         t.channels += 1;
                         t.metal += usize::from(got.to_bits() == metal.to_bits());
+                        t.unrounded += usize::from(
+                            !b.on
+                                && wide
+                                && got.to_bits() != metal.to_bits()
+                                && got.is_finite()
+                                && [false, true].iter().any(|&rtz| to_half(got, rtz) == metal),
+                        );
                         t.model += usize::from(got.to_bits() == model.to_bits());
                         t.model_rtz += usize::from(got.to_bits() == model_rtz.to_bits());
                         let apart = (got - metal).abs() / ulp(mag, wide);
@@ -837,7 +857,16 @@ fn blends() -> Vec<String> {
                     quiet.1 += 1;
                     quiet.0 += usize::from(!noted);
                 }
-                if !noted && t.metal != t.channels {
+                if t.unrounded > 0 {
+                    println!(
+                        "HALF-BLEND-UNROUNDED {name} | {fname} | {} k{kind} | {} of {} channels \
+                         store the function's float unrounded, whose half is the 16-bit draw's \
+                         (native-half-conversion recorded {unrounded_allowed})",
+                        b.name, t.unrounded, t.channels
+                    );
+                }
+                let explained = unrounded_allowed && t.metal + t.unrounded == t.channels;
+                if !noted && t.metal != t.channels && !explained {
                     failures.push(format!("{label}: {fname} {} k{kind}", b.name));
                 }
             }

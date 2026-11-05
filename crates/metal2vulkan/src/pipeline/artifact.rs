@@ -1769,7 +1769,10 @@ pub enum PrecisionNote {
     ///   differences from Metal's compound across operations, and a value past the `half`'s range
     ///   stays finite until a `half` store narrows it by the device's conversion (to infinity, or
     ///   to 65504 rounding toward zero). The RTX 5080 Laptop GPU on the
-    ///   same driver rounds here (8192 of 8192 sums Metal's);
+    ///   same driver rounds a computed sum (8192 of 8192 sums Metal's) but drops the pair of a
+    ///   `half` color output converted from `float` that it stores unblended into a 32-bit float
+    ///   attachment: the `float` itself, whose `half` is what it stores into a 16-bit float one
+    ///   (`runtime_lane::half_output_blends`, `R32Float`, `RG32Float` and `RGBA32Float`);
     /// - on a device that rounds toward zero, a finite value from 65520 up is 65504 where
     ///   Metal's is infinity;
     /// - a result below the smallest normal `half` (`2^-14`) may be the zero of its sign on a
