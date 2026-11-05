@@ -396,8 +396,6 @@ mod draw_work;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod driver_deviations;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
-mod dropped_uncommitted;
-#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod dynamic_libraries;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod escaped_slots;

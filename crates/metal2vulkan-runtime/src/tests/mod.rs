@@ -106,6 +106,8 @@ mod driver_defects;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod driver_pipeline_compile;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod dropped_uncommitted;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod dropped_usage;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod dynamic_multi_variable;
