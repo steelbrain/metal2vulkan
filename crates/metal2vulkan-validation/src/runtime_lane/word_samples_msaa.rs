@@ -15,7 +15,9 @@
 //! attachments (`DeviceOptions::withheld_attachment_formats`), which holds each multisampled
 //! texture the device renders in its word's format (`image_plan::word_samples`) where the device
 //! renders the word at the count. Each leg prints which way it held each format. A word's samples
-//! are Metal's words, read as Metal reads them, and its resolve, the crate-owned one, is Metal's
+//! are Metal's words, read as Metal reads them (an sRGB word's by the device's decode,
+//! `srgb-texel-decode`, within a code of the transfer where it is not Metal's: [`read`]), and its
+//! resolve, the crate-owned one, is Metal's
 //! for `R8Unorm_sRGB` and `RGB9E5Float` and within one code of each field of Metal's for the
 //! packed formats, announced as `word-resolve`. A format the device renders itself stores and
 //! resolves by the device's own conversions and average, each within one code (an `RGB9E5Float`
@@ -29,6 +31,7 @@ use super::{
 };
 use crate::air_library::AirLibrary;
 use crate::gpu::TEST_DEVICE;
+use metal2vulkan::device::VkProperty;
 use metal2vulkan::error::Feature;
 use metal2vulkan::metal::format::{direct_format, WordAttachment};
 use metal2vulkan::metal::{
@@ -464,16 +467,27 @@ fn srgb_linear(code: u32) -> f32 {
 }
 
 /// What `texture2d_ms<float>::read` returns for a sample of `pf` holding `word`, as Metal reads it,
-/// and how far the device's own read may be from it: a packed field's code over its largest, an
-/// sRGB code's linear value (the device's decode), `RGB9E5Float`'s value exactly; a channel the
-/// format lacks 0, alpha 1.
-fn read(pf: PixelFormat, word: u32) -> ([f32; 4], f32) {
+/// and how far the device's own read may be from it: a packed field's code over its largest,
+/// `RGB9E5Float`'s value exactly, and an sRGB code's linear value, the device's decode
+/// (`PrecisionNote::SrgbTexelDecode`, for which Vulkan sets no precision): within `1e-3` of the
+/// transfer where the device decodes through Metal's own texture unit (`metal_sampler`,
+/// `VkProperty::MetalSampler`), within a code's `1 / 255` elsewhere (the RTX 5080 rounds its
+/// decode of an `R8_SRGB` sample to a `1 / 256` step: 1.88e-3 from the transfer at most over the
+/// lane's 29 reads of 0b556ddfd6 that a `1e-3` bound refused); a channel the format lacks 0,
+/// alpha 1.
+fn read(pf: PixelFormat, word: u32, metal_sampler: bool) -> ([f32; 4], f32) {
     match WordAttachment::layout(pf).unwrap() {
         WordAttachment::Rgb9e5 => {
             let [r, g, b] = shared_exponent(word);
             ([r, g, b, 1.0], 0.0)
         }
-        WordAttachment::Srgb8 { .. } => ([srgb_linear(word & 255), 0.0, 0.0, 1.0], 1e-3),
+        WordAttachment::Srgb8 { .. } => {
+            let within = match metal_sampler {
+                true => 1e-3,
+                false => 1.0 / 255.0,
+            };
+            ([srgb_linear(word & 255), 0.0, 0.0, 1.0], within)
+        }
         w => {
             let value = |f: Option<metal2vulkan::metal::format::WordField>| {
                 f.map_or(1.0, |f| {
@@ -558,6 +572,13 @@ impl Lane {
                 .unwrap()
                 .function_descriptor(),
         )
+    }
+
+    /// Whether the device decodes sRGB through Metal's own texture unit
+    /// (`VkProperty::MetalSampler`: MoltenVK on Apple's GPU), so its decode is Metal's.
+    fn metal_sampler(&self) -> bool {
+        let profile = self.device.compile_device().profile();
+        (profile.enabled().properties).contains(&VkProperty::MetalSampler)
     }
 
     /// Whether the device renders `pf` through the view of its word.
@@ -781,7 +802,7 @@ impl Lane {
                     "{what}: {at}: word {got:#x} against Metal's {metal:#x}"
                 ));
             }
-            let (expected, within) = read(pf, got);
+            let (expected, within) = read(pf, got, self.metal_sampler());
             let far = value
                 .iter()
                 .zip(expected)
@@ -921,6 +942,14 @@ fn multisampled_word_formats_store_read_resolve_and_blend_as_metal() {
                     // A blended word's samples, through the sample planes.
                     if blended {
                         allowed.insert(Degradation::SamplePlanes);
+                    }
+                    // An sRGB word's reads, the device's decode where it is not Metal's.
+                    let srgb = matches!(
+                        WordAttachment::layout(pf),
+                        Some(WordAttachment::Srgb8 { .. })
+                    );
+                    if srgb && !lane.metal_sampler() {
+                        allowed.insert(Degradation::SrgbTexelDecode);
                     }
                 }
                 false => allowed.extend(resolve_kind(&lane.device, samples)),
