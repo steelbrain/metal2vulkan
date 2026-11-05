@@ -133,7 +133,7 @@ fn device() -> Option<Device> {
 }
 
 /// A device of the cfg's kind, as the product makes it; `None` where it imports no host memory.
-fn ahead_device() -> Option<Device> {
+pub(super) fn ahead_device() -> Option<Device> {
     let options = DeviceOptions {
         kinds: match cfg!(m2v_cpu_icd) {
             true => vec![DeviceKind::Cpu],
@@ -154,7 +154,7 @@ fn ahead_device() -> Option<Device> {
 }
 
 /// A resolver answering `answer` of each window it is asked, each window into `asked`.
-fn resolver(
+pub(super) fn resolver(
     asked: &Arc<Mutex<Vec<(u64, u64)>>>,
     answer: impl Fn(u64, u64) -> Option<Vec<Range<u64>>> + Send + Sync + 'static,
 ) -> RunResolver {
@@ -166,12 +166,12 @@ fn resolver(
 }
 
 /// The pages are their own run of the RAM (the test's views are the RAM itself).
-fn itself(start: u64, length: u64) -> Option<Vec<Range<u64>>> {
+pub(super) fn itself(start: u64, length: u64) -> Option<Vec<Range<u64>>> {
     Some(std::iter::once(start..start + length).collect())
 }
 
 /// A gate answering `answer`, each request into `asked`.
-fn gate(asked: &Arc<Mutex<Vec<ImportRequest>>>, answer: bool) -> ImportGate {
+pub(super) fn gate(asked: &Arc<Mutex<Vec<ImportRequest>>>, answer: bool) -> ImportGate {
     let asked = Arc::clone(asked);
     Arc::new(move |request| {
         asked.lock().unwrap().push(request);
@@ -239,7 +239,7 @@ fn settles(flag: &AtomicBool) -> bool {
 /// Fresh RAM of `length` bytes, never touched: a `memfd` mapped shared and advised for huge pages,
 /// as QEMU's `memory-backend-memfd,share=on` RAM is (anonymous shared memory off Linux), unmapped
 /// by the keep-alive it is given to; its first byte, and whether its keep-alive was dropped.
-fn fresh_ram(length: u64) -> (Arc<HostRam>, u64, Arc<AtomicBool>) {
+pub(super) fn fresh_ram(length: u64) -> (Arc<HostRam>, u64, Arc<AtomicBool>) {
     #[cfg(target_os = "linux")]
     let (flags, fd) = {
         // SAFETY: a name and flags the call takes.
