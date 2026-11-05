@@ -8882,7 +8882,7 @@
         "functions_translated": 29,
         "gate_waits": 29,
         "gate_waits_slept": 29,
-        "heads_held_for_host_steps": 89,
+        "heads_held_for_host_steps": 90,
         "heap_tables_worked_out": 29,
         "host_steps_recorded": 29,
         "new_buffer_bytes_cleared": 34304,
@@ -8898,8 +8898,8 @@
         "queues_sharing_a_vk_queue": 1,
         "resident_textures_looked_at": 29,
         "scheduled_where_submitted": 29,
-        "scheduler_passes": 118,
-        "scheduler_passes_by_waiters": 24,
+        "scheduler_passes": 119,
+        "scheduler_passes_by_waiters": 23,
         "scheduler_sleeps": 93,
         "scheduler_wakes_commit": 29,
         "scheduler_wakes_host": 64,
@@ -8913,7 +8913,7 @@
         "trail_waits": 29,
         "variant_pipelines_made": 29,
         "wakes_completion_waiters": 29,
-        "wakes_spared": 222
+        "wakes_spared": 223
       },
       "moving": {
         "gate_waits_slept": 27,
