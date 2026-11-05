@@ -13,6 +13,9 @@
 //!   its size, its color alternating frame to frame, and a second pass samples the surface whole
 //!   into a `Private` target (one write and one read).
 //! - `WriteUnscissored`: the same rectangle drawn with no scissor.
+//! - `WriteReadApart`: as `Write`, the read through a second texture of the plane whose usage only
+//!   samples it (as another process's texture over the same surface): in place where the
+//!   device's check passed, a device copy on a discrete GPU over logged pages.
 //! - `Rewrite`: as `Write`, the same color every frame: the GPU writes and no word changes.
 //! - `Idle`: the read alone; nothing writes the surface.
 //! - `CpuWrite`: the CPU writes 64 rows of the surface before the commit, told to the log; the
@@ -24,6 +27,7 @@
 //! (`GPUEndTime` less `GPUStartTime`), the GPU end to its completed handler, and the process's CPU
 //! time; and the work counts per frame.
 
+use super::first_use_writes::CHECK_WAIT;
 use super::host_memory::Mapping;
 use super::no_copy_textures::{floats, rects, staged};
 use super::pitched_surfaces::{reading, sampler};
@@ -56,15 +60,17 @@ const PAGE: u64 = 4096;
 enum Shape {
     Write,
     WriteUnscissored,
+    WriteReadApart,
     Rewrite,
     Idle,
     CpuWrite,
     Private,
 }
 
-const SHAPES: [Shape; 6] = [
+const SHAPES: [Shape; 7] = [
     Shape::Write,
     Shape::WriteUnscissored,
+    Shape::WriteReadApart,
     Shape::Rewrite,
     Shape::Idle,
     Shape::CpuWrite,
@@ -181,9 +187,9 @@ fn surface_buffer(
     .unwrap()
 }
 
-fn plane_texture(buffer: &Buffer) -> Texture {
+fn plane_texture(buffer: &Buffer, usage: TextureUsage) -> Texture {
     let mut d = TextureDescriptor::texture_2d(PixelFormat::BGRA8Unorm, WIDTH, HEIGHT, false);
-    d.usage = TextureUsage::RENDER_TARGET | TextureUsage::SHADER_READ;
+    d.usage = usage;
     d.resource_options = buffer.resource_options();
     buffer
         .new_texture_with_iosurface_plane(&d, IoSurfacePlane::new(0, ROW, false))
@@ -270,8 +276,9 @@ fn per_frame(before: &WorkCounts, after: &WorkCounts) -> String {
         "vkQueueSubmit {:.2} ({:.0} us in the driver), command buffers {:.2}, at commit {:.2}, \
          shadow copies {:.2}, texels in {:.0}, back {:.0}, kept {:.0}, gated {:.2} (whole {:.2}, \
          skipped {:.2}), bytes copied in {:.0} of {:.0}, log waits {:.2} ({:.0} us), merge words \
-         examined {:.0}, merges in blocks {:.2}, merges kept in images {:.2}, scratches zeroed \
-         {:.2}",
+         examined {:.0}, merges in blocks {:.2}, merges kept in images {:.2} (images made \
+         {:.2}), scratches reused {:.2}, zeroed {:.2}, device memory allocated {:.0} bytes, \
+         internal submissions {:.2}",
         per(|c| c.queue_submissions),
         per(|c| c.batch_submit_nanos) / 1e3,
         per(|c| c.command_buffers_submitted),
@@ -290,7 +297,11 @@ fn per_frame(before: &WorkCounts, after: &WorkCounts) -> String {
         per(|c| c.shadow_merge_words_examined),
         per(|c| c.shadow_merge_dispatches_in_blocks),
         per(|c| c.shadow_merges_kept_in_images),
+        per(|c| c.shadow_merge_kept_images_made),
+        per(|c| c.shadow_merge_scratches_reused),
         per(|c| c.shadow_merge_scratches_zeroed),
+        per(|c| c.device_memory_allocated),
+        per(|c| c.internal_submissions),
     )
 }
 
@@ -332,12 +343,32 @@ fn frames(round: usize, shape: Shape, logged: bool, len: usize) {
     let buffer = surface_buffer(&device, &mapping, len, logged.then_some(&log));
     let surface = match shape {
         Shape::Private => private.clone(),
-        _ => plane_texture(&buffer),
+        _ => plane_texture(
+            &buffer,
+            TextureUsage::RENDER_TARGET | TextureUsage::SHADER_READ,
+        ),
     };
-    let form = match (shape, logged) {
-        (Shape::Private, _) => "private",
-        (_, true) => "shadow, logged",
-        (_, false) => "shadow, no log",
+    // The sampled texture's form follows the device's in-place check: a texture over host pages
+    // starts it.
+    let sampled = (shape == Shape::WriteReadApart).then(|| {
+        let first = plane_texture(&buffer, TextureUsage::SHADER_READ);
+        drop(first);
+        device.settle_in_place_checks(CHECK_WAIT);
+        plane_texture(&buffer, TextureUsage::SHADER_READ)
+    });
+    let log_form = match logged {
+        true => "logged",
+        false => "no log",
+    };
+    // SAFETY: the handle is only compared, while the texture lives.
+    let sampled_form = match sampled.as_ref().map(|t| unsafe { t.vk_image() }.is_some()) {
+        None => "",
+        Some(true) => ", read in place",
+        Some(false) => ", read through a copy",
+    };
+    let form = match shape {
+        Shape::Private => "private".to_owned(),
+        _ => format!("shadow, {log_form}{sampled_form}"),
     };
     let (mut commits, mut submits, mut gpus, mut gaps, mut waits, mut cpus) = (
         Vec::new(),
@@ -362,6 +393,11 @@ fn frames(round: usize, shape: Shape, logged: bool, len: usize) {
             Shape::WriteUnscissored => {
                 drawing.write(&command_buffer, &surface, k % 2, false);
                 drawing.read(&command_buffer, &surface, &target);
+            }
+            Shape::WriteReadApart => {
+                drawing.write(&command_buffer, &surface, k % 2, true);
+                let sampled = sampled.as_ref().unwrap();
+                drawing.read(&command_buffer, sampled, &target);
             }
             Shape::Rewrite => {
                 drawing.write(&command_buffer, &surface, 0, true);
@@ -423,6 +459,6 @@ fn frames(round: usize, shape: Shape, logged: bool, len: usize) {
         median_p90(cpus),
         per_frame(&before, &after),
     );
-    drop((surface, buffer, private, target));
+    drop((surface, sampled, buffer, private, target));
     drop(mapping);
 }
