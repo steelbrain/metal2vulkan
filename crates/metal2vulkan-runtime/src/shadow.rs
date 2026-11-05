@@ -3145,6 +3145,10 @@ impl<M: Clone + KeptArea> ShadowSync<M> {
                 false if shadow.writes => bounding(shadow.loads, shadow.area),
                 false => shadow.loads,
             };
+            // A rectangle of every texel (a pass whose draws no scissor bounds) is every texel:
+            // the image then holds them all, which a later command that reads anywhere finds
+            // held, in this encoder or one its command buffer carries the image to.
+            let needs = needs.filter(|&area| !shadow.copies.covers(Some(area)));
             let entry = &self.entries[i];
             let beyond_held =
                 entry.standing == Standing::Current && !overwrites && !holds(entry.held, needs);

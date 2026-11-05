@@ -399,12 +399,13 @@ fn a_copy_in_covers_only_where_the_command_reads_and_writes() {
         [('m', None), ('i', None)]
     );
     assert_eq!(back_areas(&mut sync), []);
-    // Past it, unwritten: only the copy in.
+    // Past it, unwritten: only the copy in, of every texel (a rectangle of them all is all of
+    // them, held as such).
     let mut sync = ShadowSync::<u32>::default();
     planned_areas(&mut sync, &[inside(a, false)], std::slice::from_ref(&read));
     assert_eq!(
         planned_areas(&mut sync, &[inside([0, 0, 64, 32], false)], &[read]),
-        [('i', Some([0, 0, 64, 32]))]
+        [('i', None)]
     );
     // Joined with a use that reads anywhere, a use reads anywhere.
     let mut joined = vec![inside(a, true)];
@@ -869,12 +870,12 @@ fn a_copy_back_of_a_part_leaves_a_twin_stale_there_alone() {
             .collect::<Vec<_>>()
     };
     let mut sync = ShadowSync::<u32>::default();
-    let all = Some([0, 0, 64, 32]);
     let a = attachment.shadow_key;
     let (r, o) = (read.shadow_key, other.shadow_key);
+    // It loads every texel: copied in whole.
     assert_eq!(
         instance(&mut sync, [8, 4, 12, 6], &[]),
-        [(a, true, all, false)]
+        [(a, true, None, false)]
     );
     assert_eq!(
         instance(&mut sync, [20, 4, 24, 6], &[&read, &other]),
@@ -935,12 +936,12 @@ fn a_merge_of_a_part_leaves_a_twin_stale_there_alone() {
             .collect::<Vec<_>>()
     };
     let mut sync = ShadowSync::<u32>::default();
-    let all = Some([0, 0, 64, 32]);
     let a = attachment.shadow_key;
     let (r, o) = (read.shadow_key, other.shadow_key);
+    // It loads every texel: copied in whole.
     assert_eq!(
         instance(&mut sync, [8, 4, 12, 6], &[]),
-        [(a, 'i', all, false), (a, 'k', None, false)]
+        [(a, 'i', None, false), (a, 'k', None, false)]
     );
     assert_eq!(
         instance(&mut sync, [20, 4, 24, 6], &[&read, &other]),
@@ -2226,6 +2227,34 @@ fn sampling_a_large_surface_costs_every_texel_whatever_its_pass_repainted() {
     let mut present = Frame::new();
     present.sampling(&s, 1);
     assert_eq!(present.texels, SURFACE_TEXELS);
+}
+
+/// A render pass whose draws no scissor bounds renders every texel of a large surface's texture
+/// as a color attachment it loads: its rectangle is every texel, so its copy in moves them all,
+/// and the image then holds every texel. A later encoder of the command buffer that samples the
+/// plane takes the image the pass left and copies nothing in (`ShadowCarry`), as after a pass
+/// that bounds nothing; one with a scissor of a part of the plane still leaves the sample to copy
+/// every texel in.
+///
+/// The counts are this state machine's, taken by this test; they are no measurement of any
+/// program.
+#[test]
+fn a_pass_over_every_texel_leaves_the_image_holding_every_texel() {
+    let plane = ResourceKey::new();
+    let s = surface_shadow(plane);
+    let every = [0, 0, 3840, 2160];
+    let mut frame = Frame::new();
+    frame.rendering(&s, every).sampling(&s, 1);
+    assert_eq!(frame.texels, SURFACE_TEXELS);
+    // Past the plane's texels too: the rectangle is cut to them.
+    let mut frame = Frame::new();
+    frame.rendering(&s, [0, 0, 4096, 4096]).sampling(&s, 1);
+    assert_eq!(frame.texels, SURFACE_TEXELS);
+    // The control: a part of the plane leaves the sample every texel to copy in.
+    let part = [0, 0, 3840, 2159];
+    let mut frame = Frame::new();
+    frame.rendering(&s, part).sampling(&s, 1);
+    assert_eq!(frame.texels, 3840 * 2159 + SURFACE_TEXELS);
 }
 
 /// An encoder's first copy in of a large IOSurface plane falls in one of three places, which
