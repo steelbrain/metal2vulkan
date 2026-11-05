@@ -814,7 +814,7 @@ impl Case for PassStartRead {
             .ordered()
             .into_iter()
             .flatten()
-            .zip(&targets)
+            .zip(targets.iter().take(self.row.barriered_targets()))
             .enumerate()
             .map(|(at, (bytes, made))| {
                 Allowance::new(
