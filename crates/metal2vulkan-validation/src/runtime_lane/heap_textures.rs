@@ -291,6 +291,11 @@ fn heap(device: &Device, heap_type: HeapType, size: u64, options: ResourceOption
 /// coarser alignment than Metal's modelled answer, which its device's image needs; a depth or
 /// stencil texture whose driver keeps it GPU-optimized and no shadow of Metal's tiles serves; a
 /// shape whose Metal answer the runtime does not model.
+/// The kind a heap texture Metal tiles announces where no image bound in the heap's memory lays
+/// out Metal's tiles and a shadow of them serves (`AliasRoute::Tiled`, `texture/heap.rs`): its
+/// bytes there are Metal's tiles, so it is counted for no layout.
+const TILE_SHADOW: [Degradation; 1] = [Degradation::ShadowedTexture];
+
 const SIZE_NOTICES: [Degradation; 3] = [
     Degradation::HeapTextureLargerThanMetal,
     Degradation::OptimizedDepthStencilTexture,
@@ -375,7 +380,9 @@ fn heap_textures_answer_and_place_as_metal_s_do() {
                 // shadow serves it, `heap-depth-stencil-apart`; and one of [`HEAP_LAYOUTS`] for a
                 // texture whose bytes in the heap the driver is not measured to lay out as Metal's
                 // (a multisample texture, a depth or stencil one, any on a driver without
-                // `DriverFact::ColorImagesLieAsMetalHeapTextures`).
+                // `DriverFact::ColorImagesLieAsMetalHeapTextures`), or for such a texture no image
+                // bound in the heap's memory serves, a shadow of Metal's tiles there
+                // (`shadowed-texture`, `texture/heap_tiled.rs`; the NVIDIA RTX 5080 Laptop's).
                 let facts = &device.properties().driver_facts;
                 let apart = is_depth_stencil(shape.pixel_format)
                     && facts.contains(&DriverFact::DepthStencilImagesLieApart);
@@ -388,6 +395,7 @@ fn heap_textures_answer_and_place_as_metal_s_do() {
                     .into_iter()
                     .chain(apart.then_some(&DEPTH_STENCIL_ROUTES[..]))
                     .chain((!as_metal).then_some(&HEAP_LAYOUTS[..]))
+                    .chain((!as_metal).then_some(&TILE_SHADOW[..]))
                     .flatten();
                 let allowed: BTreeSet<Degradation> =
                     SIZE_NOTICES.iter().chain(routes).copied().collect();
@@ -2494,7 +2502,9 @@ fn heap_multisample_textures_keep_their_samples_in_metal_s_tiles() {
 /// driver whose colour images lie as Metal's heap textures
 /// (`DriverFact::ColorImagesLieAsMetalHeapTextures`: MoltenVK 1.4.2 on the M3 Max), and the device
 /// announces no heap layout there; elsewhere the first announces `heap-texture-untiled-layout`
-/// and each is counted. On every device a texture counted for no layout lies in Metal's tiles.
+/// and each is counted, but one no image bound in the heap's memory serves, a shadow of Metal's
+/// tiles there (`shadowed-texture`, announced: the NVIDIA RTX 5080 Laptop's). On every device a
+/// texture counted for no layout lies in Metal's tiles.
 /// Kept uncompressed by `ShaderRead | ShaderWrite` usage: `RGBA8Unorm` of 64 x 64 and 37 x 5,
 /// `R8Unorm` of 100 x 70 and `RG16Float` of 300 x 200; by `allowGPUOptimizedContents` off:
 /// `RGBA8Unorm` of 64 x 64 of `ShaderRead` usage and of `ShaderRead | RenderTarget`; by a side
@@ -2581,7 +2591,9 @@ fn device_heap_textures_lie_in_metal_s_tiles() {
                  (fact {as_metal}, announced {announced})",
                 answer.size
             );
-            assert_eq!(announced, !as_metal, "{what}: counted untiled");
+            if as_metal {
+                assert!(!announced, "{what}: counted untiled");
+            }
             if !announced {
                 assert_eq!(off, 0, "{what}: texels off Metal's tiles");
             }
@@ -2591,14 +2603,24 @@ fn device_heap_textures_lie_in_metal_s_tiles() {
         drop(kept);
         (as_metal, counted)
     };
+    // The textures not counted on a driver without the fact are shadows of Metal's tiles.
+    let tiled = 7 - counted;
     let notices = counts(&messages.take_notices());
     let layouts: Vec<_> = (notices.iter())
         .filter(|(kind, _)| HEAP_LAYOUTS.contains(kind))
         .collect();
-    eprintln!("HEAPTEX device-tiles: {layouts:?}, {counted} counted");
+    eprintln!("HEAPTEX device-tiles: {layouts:?}, {counted} counted, {tiled} not");
     match as_metal {
         true => assert_eq!((layouts.len(), counted), (0, 0)),
-        false => assert_eq!((layouts, counted), (vec![(&untiled, &1)], 7)),
+        false => {
+            let first = (counted > 0).then_some((&untiled, &1));
+            assert_eq!(layouts, first.into_iter().collect::<Vec<_>>());
+            let shadowed = notices.contains_key(&TILE_SHADOW[0]);
+            assert!(
+                shadowed || tiled == 0,
+                "shadows of Metal's tiles: {notices:?}"
+            );
+        }
     }
     layer_reported_nothing_at_all(&messages);
 }
