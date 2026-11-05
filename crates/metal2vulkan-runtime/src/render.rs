@@ -1189,7 +1189,7 @@ struct Instance {
     /// whose pipeline is being made, or an execution of render commands, that the instance
     /// before would have taken (`render/inline_first.rs`). The shadowed textures' copies take
     /// the two as one: its draws' shadowed textures and uses are gathered into the first of
-    /// them ([`RenderCommandEncoder::gathering`]), copied in before it, and nothing is copied
+    /// them ([`RenderLowering::gathering`]), copied in before it, and nothing is copied
     /// between them.
     continues: bool,
     /// It records inline after a split (`render/inline_splits.rs`): its commands, kept until its
@@ -1526,7 +1526,7 @@ pub(crate) struct RenderLowering {
     /// device announces at every occurrence met (`kept_commands.rs`). A chunk of an execution's
     /// commands whose draws were all plain is kept.
     replay_plain: bool,
-    /// The draw being drawn reached that keep's test and passed it ([`replay_plain`]).
+    /// The draw being drawn reached that keep's test and passed it ([`replay_plain`](Self::replay_plain)).
     plain_drawn: bool,
     /// The heap set versions the plain draws it replayed bound (`heap_sets::Bound`), each once,
     /// which a kept recording of them binds again (`kept_commands::KeptEffects`).
@@ -1965,7 +1965,7 @@ impl CommandBuffer {
 }
 
 /// What a render encoder opens with but its core and the secondary command buffer of its first
-/// instance ([`RenderCommandEncoder::assemble`]): its pass's layout (a color group's, where the
+/// instance ([`RenderLowering::assemble`]): its pass's layout (a color group's, where the
 /// device draws the pass's colors in groups), that layout's shape and compatible pass, its
 /// rasterization-rate map, its extended-range shadows and the extended-range colors whose clear
 /// Metal's tile memory holds off its codes, whether its first instance records inline (and its
@@ -2286,7 +2286,7 @@ impl DrawDynamic {
 }
 
 /// No colors or slots: what a draw's set of them is compared with where it names none
-/// ([`RenderCommandEncoder::settle_draw`]).
+/// ([`RenderLowering::settle_draw`]).
 static NO_INDICES: BTreeSet<u32> = BTreeSet::new();
 
 /// The dynamic states a draw records, beside `VERTEX_INPUT_BINDING_STRIDE` (recorded with the
@@ -2587,7 +2587,7 @@ impl ShapeInputs<'_> {
     /// sample larger than the pass gives ([`pass_sample_length`](Self::pass_sample_length);
     /// measured: "the pipelineState's per sample imageBlock usage(32) is greater than the
     /// encoder's perSample imageBlock usage(4)"). An explicit imageblock standing alone runs in
-    /// a pass of fewer bytes ([`kept_imageblock_bytes`](Self::kept_imageblock_bytes)).
+    /// a pass of fewer bytes ([`kept_imageblock_bytes`](RenderLowering::kept_imageblock_bytes)).
     pub(super) fn check_tile(&self, call: &'static str, state: &TileState) -> Result<(), Error> {
         let descriptor = state.descriptor();
         // Plain Metal runs a tile function whatever the state's color formats (a Metal probe: one
@@ -7578,7 +7578,7 @@ impl RenderLowering {
     /// The bytes of each cell of the tile function's explicit imageblock standing alone that this
     /// pass keeps, where they are fewer than its data (`BindState::kept_imageblock_bytes`);
     /// `None` for every other tile state. Plain Metal keeps the imageblock's bytes that lie below
-    /// the pass's imageblock bytes per sample ([`pass_sample_length`](Self::pass_sample_length))
+    /// the pass's imageblock bytes per sample ([`pass_sample_length`](ShapeInputs::pass_sample_length))
     /// rounded up to 8, the imageblock lying after the colors as the state's
     /// `imageblock_sample_length` places it, and reads every other word as zero, dropping its
     /// writes, a dispatch's own included (Metal probes on two M4s: a 16-byte imageblock after an

@@ -12,7 +12,7 @@
 //!
 //! Statuses follow Metal's: `NotEnqueued`, then `Committed` at `commit`, `Scheduled`, and
 //! `Completed` or `Error`. The transitions after `Committed` run in the queue's serial context on
-//! the device's handler threads ([`contexts`](super::contexts)), in the queue's order: to
+//! the device's handler threads ([`contexts`]), in the queue's order: to
 //! `Scheduled` once its last batch is submitted (every wait of it satisfied), with its scheduled
 //! handlers; to `Completed` once its work completed, with its completed handlers and the release of
 //! what it retained. A transition that runs none of the program's code runs where it is seen
@@ -2254,7 +2254,7 @@ impl CommandBuffer {
     }
 
     /// The state, locked: a lock its encoders on other threads share (counted, in builds with
-    /// debug assertions: [`state_locks`]).
+    /// debug assertions: `state_locks`).
     pub(super) fn state(&self) -> MutexGuard<'_, State> {
         #[cfg(debug_assertions)]
         STATE_LOCKS.with(|locks| locks.set(locks.get() + 1));

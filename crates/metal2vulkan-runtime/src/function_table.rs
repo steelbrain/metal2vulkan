@@ -129,8 +129,8 @@ pub enum FunctionTableProblem {
     /// A render pipeline state's `function_handle` or `new_visible_function_table` for `stage`,
     /// which is not one stage: empty, or more than one. Metal's validation stops each ("stage
     /// invalid"); plain Metal answers the handle nil, and the table of more than one stage (an
-    /// [`Error::Nil`](crate::Error::Nil)), and faults on a table of no stage (an
-    /// [`Error::Invalid`](crate::Error::Invalid); an M4 under macOS 27.0.1). One
+    /// [`Error::Nil`]), and faults on a table of no stage (an
+    /// [`Error::Invalid`]; an M4 under macOS 27.0.1). One
     /// stage the state has no function of answers no handle and makes a table, as plain Metal's.
     ///
     /// Basis: metal-measured (an M4, macOS 27.0.1: plain Metal answers the handle nil and the table

@@ -1084,9 +1084,9 @@ impl RenderPipelineState {
     /// are not Metal's; any other, a tile pipeline's included, a value of one process-wide count
     /// past them, where Metal's is an address that differs from run to run. No state's is measured
     /// to be Metal's number: the first answer announces, once a device,
-    /// [`Degradation::PlainStateUniqueIdentifier`](crate::Degradation::PlainStateUniqueIdentifier)
+    /// [`Degradation::PlainStateUniqueIdentifier`]
     /// for a plain state (a tile state's included) and
-    /// [`Degradation::UnmeasuredUniqueIdentifier`](crate::Degradation::UnmeasuredUniqueIdentifier)
+    /// [`Degradation::UnmeasuredUniqueIdentifier`]
     /// for one with indirect command buffer support.
     pub fn unique_identifier(&self) -> u64 {
         match &self.0 {

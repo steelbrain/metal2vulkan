@@ -3,10 +3,10 @@
 //! its arguments owned, in order, before the call runs.
 //!
 //! - **Encoded again** by opening the pass again from the descriptor
-//!   ([`RenderCommandEncoder::replaying`]: no refusal of a committed command buffer, the residency
+//!   ([`RenderLowering::replaying`]: no refusal of a committed command buffer, the residency
 //!   the encoders ended before it left), running each call again, and ending the pass as
 //!   `end_encoding` ends it, but into the ended encoder's place
-//!   ([`RenderCommandEncoder::finish_replay`]). A call refused as the program made it is refused
+//!   ([`RenderLowering::finish_replay`]). A call refused as the program made it is refused
 //!   again, and the calls after it run ([`RenderLowering::logged`]); one a lowering thread
 //!   refused failed the command buffer, which keeps no log.
 //! - **Kept** as the compute encoder's log is (`EncoderCore::end_with_replay`): where a command

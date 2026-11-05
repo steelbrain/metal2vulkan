@@ -12,7 +12,7 @@
 //! ("Compatible Formats for Depth-Stencil to/from Color Copies"): a colour format of that table
 //! takes one copy; any other colour format of the unit, and a depth/stencil format of another
 //! Vulkan format, take two, through a multisampled colour image of the aspect's bits, the
-//! encoder's own ([`colour_twin`](super::depth_stencil_scratch::colour_twin)): `R32_SFLOAT` for
+//! encoder's own ([`colour_twin`]): `R32_SFLOAT` for
 //! 32-bit depth, `R16_UNORM` for 16-bit, `R8_UNORM` for stencil. The second copy reads what the
 //! first wrote, past a barrier. A copy into a 32-bit float depth image announces
 //! `restricted-depth-upload` where the device may clamp.

@@ -108,7 +108,7 @@ pub enum ArgumentEncoderProblem {
     Layout(Box<ArgumentLayoutError>),
     /// `new_argument_encoder_for_buffer_at_index`: the buffer at `index` points to no argument
     /// buffer, for which Metal answers nil ("No argument buffer at that index"), an
-    /// [`Error::Nil`](crate::Error::Nil).
+    /// [`Error::Nil`].
     ///
     /// Basis: metal-documented (Metal's validation says "No argument buffer at that index", for
     /// which it answers nil).

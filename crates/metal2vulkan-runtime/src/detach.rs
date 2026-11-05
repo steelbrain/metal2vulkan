@@ -308,7 +308,7 @@ impl Device {
     /// buffer bound a heap set (`reaches`) may reach every texture through its resource ID unnamed,
     /// so each texture whose bytes were detached after a submitted command buffer made them
     /// resident is announced now, once
-    /// ([`Degradation::StaleDetachedReach`](super::Degradation::StaleDetachedReach), with its
+    /// ([`Degradation::StaleDetachedReach`], with its
     /// ID), and counted (`WorkCounts::stale_detached_reaches`). Metal's unnamed read of such a
     /// texture reads the pages the program gave back, which a correct program never relies on;
     /// the stand-in's reads zero. The trigger is reachability, not a read. On the submitting
@@ -323,7 +323,7 @@ impl Device {
     /// The storage-sink degrade's trigger, the one place it is decided: a command buffer that bound
     /// a heap set (`reaches`) may reach every texture through its resource ID unnamed, so each
     /// texture over detached bytes whose stand-in has a sink is announced as it commits, once
-    /// ([`Degradation::DetachedStorageKeepsWrites`](super::Degradation::DetachedStorageKeepsWrites),
+    /// ([`Degradation::DetachedStorageKeepsWrites`],
     /// with its ID), and counted (`WorkCounts::detached_storage_reaches`): a read through a
     /// storage-class element there reads what an unnamed write left in the sink, where Metal's
     /// reads zero. In the program's `commit`, with no lock held, so a handler asked for each

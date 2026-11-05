@@ -36,7 +36,7 @@ static DEVICES: Mutex<Vec<(vk::Device, Arc<Allocations>)>> = Mutex::new(Vec::new
 /// One device's live allocations and its limit.
 pub(crate) struct Allocations {
     live: AtomicU32,
-    /// `maxMemoryAllocationCount`, which the tests may lower ([`Allocations::limit_to`]).
+    /// `maxMemoryAllocationCount`, which the tests may lower (`Allocations::limit_to`).
     limit: AtomicU32,
     /// Allocations refused at the limit.
     refused: AtomicU32,

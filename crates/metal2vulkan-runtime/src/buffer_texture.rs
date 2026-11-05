@@ -213,7 +213,7 @@ pub struct IoSurfacePlane {
     /// The value of `kIOSurfaceClientDirection` the surface was made with (an IOSurface
     /// property outside the public SDK's headers), `None` for a surface made without the key. A
     /// surface with it is refused, whatever the value
-    /// ([`AppleOnly::SurfaceClientDirection`](super::AppleOnly::SurfaceClientDirection)).
+    /// ([`AppleOnly::SurfaceClientDirection`]).
     pub client_direction: Option<u64>,
     /// The surface's facts a two-plane YCbCr texture over it reads (its OSType, its chroma plane,
     /// its YCbCr matrix), `None` where the caller gives none: a texture of such a format is then
@@ -321,8 +321,8 @@ impl Buffer {
     /// functions read and write it from the offset rounded down to 16, and blits and the CPU at the
     /// offset, as on plain Metal.
     ///
-    /// Refused: what Metal stops (`Invalid`, with a [`TextureProblem`](super::TextureProblem)
-    /// or a [`BufferTextureProblem`](super::BufferTextureProblem)); a format of which plain
+    /// Refused: what Metal stops (`Invalid`, with a [`TextureProblem`]
+    /// or a [`BufferTextureProblem`]); a format of which plain
     /// Metal makes no texture alone (`Nil`, `TextureProblem::NoTextureOfFormat` or
     /// `Unspecialized`, once every rule Metal stops passed and before the buffer's own: offset,
     /// row pitch, bytes past the buffer); a format with no exact Vulkan format (a 4:2:2 one among
@@ -424,7 +424,7 @@ impl Buffer {
     /// - under 16 bytes a row, the GPU's rows are 16 bytes apart. There Metal's GPU reads every
     ///   row past the first as memory-dependent bytes; the runtime's reads them where its writes
     ///   put them, a near-equivalent announced once
-    ///   ([`Degradation::NarrowSurfaceRows`](super::Degradation::NarrowSurfaceRows));
+    ///   ([`Degradation::NarrowSurfaceRows`]);
     /// - where that pitch is below the row, the GPU's rows share bytes: 1 to 15 of them, a whole
     ///   number of texels, between consecutive rows. A plain plane is made, its shadow's copies
     ///   reproducing the sharing with two regions a slice each way, so that a read sees it as
@@ -433,12 +433,12 @@ impl Buffer {
     ///   follows the command, the GPU pitch and the row count (`linear_plan.rs`'s **Rows that
     ///   overlap**); a kernel, the only writer such a plane takes here, moves its winner with the
     ///   threadgroup shape, so the earlier row's bytes are one of its answers. Announced once by
-    ///   [`Degradation::CollidingSurfaceRowWrites`](super::Degradation::CollidingSurfaceRowWrites).
+    ///   [`Degradation::CollidingSurfaceRowWrites`].
     ///
     /// Refused: a surface made with `kIOSurfaceClientDirection`, SPI
-    /// ([`AppleOnly::SurfaceClientDirection`](super::AppleOnly::SurfaceClientDirection)); what
-    /// Metal stops (`Invalid`, with a [`TextureProblem`](super::TextureProblem) or a
-    /// [`BufferTextureProblem`](super::BufferTextureProblem): over a surface without planes a
+    /// ([`AppleOnly::SurfaceClientDirection`]); what
+    /// Metal stops (`Invalid`, with a [`TextureProblem`] or a
+    /// [`BufferTextureProblem`]: over a surface without planes a
     /// type other than 2D or a texture buffer, more than one level, a pitch below the row, another
     /// pitch or offset, or rows that end past it, which plain Metal asserts on); what Metal makes
     /// over a plane of a surface with planes and lays out no one way across the GPUs measured
@@ -1872,7 +1872,7 @@ pub(super) fn staged_rows_back(layout: &BufferLayout, start: u64, at: u64) -> Ve
 ///   follows the command, the GPU pitch and the row count rather than one rule
 ///   (`linear_plan.rs`'s **Rows that overlap**); a kernel, the only writer such a plane takes,
 ///   moves its winner with the threadgroup shape, so the earlier row's tail is one of its answers
-///   ([`Degradation::CollidingSurfaceRowWrites`](super::Degradation::CollidingSurfaceRowWrites)).
+///   ([`Degradation::CollidingSurfaceRowWrites`]).
 pub(super) fn plane_copy_regions(
     layout: &BufferLayout,
     (texel_bytes, blocks): (u64, Option<Blocks>),

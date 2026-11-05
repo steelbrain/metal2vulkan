@@ -57,7 +57,7 @@
 //!   - **Linux, with the GNU C library**, where it does (`on_exit(3)`, [`exit_handler`]): it waits
 //!     for nothing. Where a section of another thread (a making's included) or a CPU device's work
 //!     (below) is in progress, it ends the process at once with the exit's status
-//!     ([`end_at_once`]): one line on standard error ([`AT_ONCE_NOTICE`]), the C library's output
+//!     (`end_at_once`): one line on standard error (`AT_ONCE_NOTICE`), the C library's output
 //!     streams flushed, `_exit`. The exit handlers registered before the hook's last registration
 //!     (the program's, a terminal's restore) then do not run, where Metal's exit runs them
 //!     (docs/API.md, accepted differences). Measured on the M3 Max (macOS 27.0.1): Metal's process
@@ -65,10 +65,10 @@
 //!     it, or a compile in progress. With the waits below, a lavapipe process took 2 s to exit
 //!     while a thread waited for its work, and under the GPU-assisted validation layer 1.4.357 two
 //!     completion tests' processes hung at exit, the layer deadlocked inside a submission.
-//!   - **Elsewhere** (macOS, where `atexit` gives no status): at most [`BOUND`], and while a
+//!   - **Elsewhere** (macOS, where `atexit` gives no status): at most `BOUND`, and while a
 //!     driver's making of a `VkPipeline` is in progress in a section (a pool's piece's
-//!     `vkCreate*Pipelines`, [`driver_making`]), at most [`MAKING_BOUND`], and it says so on
-//!     standard error as that wait starts: a making outlasts [`BOUND`], and the program need not
+//!     `vkCreate*Pipelines`, [`driver_making`]), at most `MAKING_BOUND`, and it says so on
+//!     standard error as that wait starts: a making outlasts `BOUND`, and the program need not
 //!     wait for the command buffer whose making it is before it exits. Seen: with two seconds, two
 //!     lane processes on ANV ended with `SIGSEGV` and `SIGABRT` inside the validation layer 3 and
 //!     20 s after their test passed, where a bicubic kernel's making took 6.6 s under the lane's

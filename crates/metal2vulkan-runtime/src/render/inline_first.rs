@@ -75,12 +75,12 @@
 //! - **No secondary at the open.** Such a pass begins no secondary for its first instance as it
 //!   opens: one begins where a command records into that instance's secondary (a draw that does
 //!   not record inline, a visibility query, an execution of render commands) or a split keeps the
-//!   instance before the next ([`RenderCommandEncoder::begin_current_draws`]). An instance a new
+//!   instance before the next ([`RenderLowering::begin_current_draws`]). An instance a new
 //!   one replaces, or that the pass ends with nothing recorded, never begins one, and its render
 //!   pass instance runs its loads and stores alone. A secondary begun and ended unused cost every
 //!   such pass a begin, which on ANV resets the command buffer's whole command state.
 //! - **At the first draw that records: the instance allows it**
-//!   ([`RenderCommandEncoder::inline_begin`]). Its pipeline is made; the instance is the pass's
+//!   ([`RenderLowering::inline_begin`]). Its pipeline is made; the instance is the pass's
 //!   first, of no fetched (storage) attachment, view of another format, multiview or
 //!   shader-side test, and the draw writes no memoryless color; nothing the pass's end records
 //!   inside it is pending: no draw whose
@@ -183,7 +183,7 @@ impl Begun {
 }
 
 /// What the first draw that records an inline instance made for it before recording starts
-/// ([`RenderCommandEncoder::inline_begin`]): its render pass and framebuffer, the command
+/// ([`RenderLowering::inline_begin`]): its render pass and framebuffer, the command
 /// buffer the encoder holds for it, and the instance's shape and the layout's `splits`
 /// ([`Begun`]).
 pub(super) struct InlineBegin {

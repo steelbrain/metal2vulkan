@@ -5,7 +5,7 @@
 //! Where the device enables `VK_EXT_graphics_pipeline_library` and links its libraries fast
 //! (`graphicsPipelineLibraryFastLinking`; `device/create.rs`), a render variant's `VkPipeline` of
 //! a graphics key is linked, without link-time optimization, from four libraries, one per part
-//! of the pipeline's state (`graphics.rs`, [`GraphicsContent`]): its vertex input, its
+//! of the pipeline's state (`graphics.rs`, [`GraphicsContent`](super::graphics::GraphicsContent)): its vertex input, its
 //! pre-rasterization shaders, its fragment shader and its fragment output. Each part's library is
 //! the device's, found by the exact content of its part ([`Part`], a digest of everything its
 //! create info holds: the layout's description, each stage's words, the constants its stages

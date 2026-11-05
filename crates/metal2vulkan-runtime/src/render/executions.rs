@@ -11,7 +11,7 @@
 //!   and announcing nothing. A CPU write after the batch was submitted races the GPU, as on
 //!   Metal. So the call records nothing for the commands:
 //!   the instance it is encoded in ends its secondary command buffer there and goes on in a new
-//!   one, the execution's own secondary standing between the two ([`Piece`](super::Piece)).
+//!   one, the execution's own secondary standing between the two ([`Piece`]).
 //!   A secondary command buffer must be recorded before a primary executes it, so a pass with an
 //!   execution leaves its whole pass to record later ([`DeferredPass`]), as a segment of its
 //!   encoder (`encoder.rs`, `deferred.rs`): its begin, every instance's secondaries and the
@@ -799,7 +799,7 @@ impl RenderCommandEncoder {
     /// For a range that is not empty, an inherited state made without
     /// `supportIndirectCommandBuffers` faults Metal's GPU at the encoder: the call is taken, the
     /// encoder runs nothing, not even its load, clear or store actions, and the command buffer
-    /// completes with [`CommandBufferError::PageFault`](crate::CommandBufferError::PageFault), the
+    /// completes with [`CommandBufferError::PageFault`], the
     /// other encoders run and every event signal fires. A buffer of no command types, or of
     /// dispatches beside draws of primitives, runs nothing, as plain Metal's; one of dispatches
     /// alone, or beside other draws (unmeasured in a pass), is
@@ -2577,7 +2577,7 @@ impl RenderExecution {
     }
 
     /// Settle at commit, through an encoder of `core` that records nothing, what the host step's
-    /// draws of the commands compile ([`RenderCommandEncoder::settle_draws`]) for each state the
+    /// draws of the commands compile ([`RenderLowering::settle_draws`]) for each state the
     /// records name as the CPU wrote them, into `made`: the encoder's where the buffer inherits
     /// it, else each live state the CPU set on a command the execution may run
     /// (`IndirectCommandBuffer::set_render_states`: of its range, or of the buffer for a range

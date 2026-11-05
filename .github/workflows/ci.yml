@@ -150,7 +150,7 @@ jobs:
           for row in \
             metal2vulkan=0 \
             metal2vulkan-air=0 \
-            metal2vulkan-runtime=70 \
+            metal2vulkan-runtime=0 \
             metal2vulkan-validation=0 \
             metal2vulkan-conformance=0 \
             metal2vulkan-devtools=0

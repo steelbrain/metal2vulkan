@@ -17,9 +17,9 @@
 //!    dispatch bound (`compute/live.rs`); the pipeline state's kept plans give the plan of its
 //!    shape, on the variant the dispatch runs on (compiled when first needed), and
 //!    `instantiate_dispatch` the command's regions, bytes, and push holes.
-//! 3. [`binding`](super::binding) gives the descriptors, uploads, and push bytes; the variant
+//! 3. [`binding`] gives the descriptors, uploads, and push bytes; the variant
 //!    gives set 0 and one `VkPipeline` per region specialization, and the command buffer set 1,
-//!    the heap, which its dispatches on the variant share ([`heap_sets`](super::heap_sets)).
+//!    the heap, which its dispatches on the variant share ([`heap_sets`]).
 //! 4. Only then is anything recorded, through the tracker's per-command entry
 //!    ([`EncoderCore::command`]) with the buffers the dispatch reads and writes: a serial encoder
 //!    is an ordered one, so a dispatch gets the barrier its uses need after the encoder's earlier

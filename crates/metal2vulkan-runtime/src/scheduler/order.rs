@@ -12,7 +12,7 @@
 //!   for an event (its tracking across queues). The runtime's tracker plans each batch as it is
 //!   submitted, so a batch held for a reason of the runtime's own (its host step, its submission
 //!   checks) must not let a later commit's batch that conflicts with it (a tracked resource's range
-//!   that one of them writes, or a fence) go before it: such a head is [`behind`](Order::behind)
+//!   that one of them writes, or a fence) go before it: such a head is [`behind`](Order::is_behind)
 //!   it, and waits.
 //! - **Which batches keep their place.** Every batch of a line up to the first that waits for
 //!   an event value not yet reached by a submitted signal or the host, or for a binary

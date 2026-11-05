@@ -10,7 +10,7 @@
 //!   every value submitted or set before it, in the scheduler's submission order, so kept values
 //!   rise with their indices; a signal not above them is dropped, as Metal's maximum would make it
 //!   a no-op. A kept signal that follows one still pending on another `VkQueue` waits for that one
-//!   ([`Signal::after`]), so the semaphore's signals execute in index order; on one `VkQueue`,
+//!   ([`Signal::Kept::after`]), so the semaphore's signals execute in index order; on one `VkQueue`,
 //!   Vulkan's signal operation order already does.
 //! - **The host's floor.** A host set never touches the semaphore: it takes effect at once as a
 //!   floor the value never drops below. A GPU wait for a value the floor reached needs no Vulkan

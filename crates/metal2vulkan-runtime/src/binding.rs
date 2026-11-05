@@ -2777,7 +2777,7 @@ fn bytes_use(
 /// uses that function made alone. Its uses are then those `command_uses_into` makes: every other
 /// use is of a slot, buffer or texture no call changed, and the keys, so the resident ones, are
 /// the same (`render/draw_again/rebound.rs`). Builds with debug assertions check the list against
-/// the uses, and count the uses it looked at ([`patched_slot_uses`]).
+/// the uses, and count the uses it looked at (`patched_slot_uses`).
 pub(super) fn patch_buffer_uses(
     (plan, command, tables): (&BindingPlan, &Command<'_>, &Tables<'_>),
     changed: &[SlotRef],

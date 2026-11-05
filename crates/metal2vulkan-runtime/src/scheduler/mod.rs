@@ -59,7 +59,7 @@
 //!   hazard state, in this order: the order Metal follows across queues. A batch held for its host
 //!   step or its checks keeps its place among the tracked accesses: a later commit's batch on
 //!   another queue that conflicts with it waits behind it, its own host step and checks too
-//!   ([`Order::behind`]).
+//!   ([`Order::is_behind`]).
 //! - **Many logical queues on few `VkQueue`s.** A logical queue keeps its `VkQueue` from a
 //!   command buffer's making to its completion, and moves only where it holds no other
 //!   uncompleted one (`queue_share.rs`); each `VkQueue` signals its own timeline semaphore with

@@ -154,7 +154,7 @@ impl Device {
     /// `newLibraryWithSource:options:error:` (and its completion-handler form): a library
     /// compiled from Metal Shading Language source. Not built: the runtime compiles AIR, not
     /// MSL, so every source is refused, `NotImplemented(LibrarySource)`
-    /// ([`RuntimeGap::LibrarySource`](crate::RuntimeGap::LibrarySource)), where Metal compiles it.
+    /// ([`RuntimeGap::LibrarySource`]), where Metal compiles it.
     /// `MTLCompileOptions` has no counterpart: no option changes the answer. Compile the source
     /// ahead of time with Apple's `metal` tool and load the metallib with
     /// [`new_library_with_data`](Self::new_library_with_data).

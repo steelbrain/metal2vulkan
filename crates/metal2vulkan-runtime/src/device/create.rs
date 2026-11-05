@@ -80,13 +80,13 @@ pub struct DeviceOptions {
     /// `unifiedImageLayoutsVideo`) and the device lists it, the device enables the structure's
     /// features too; a device that lacks one Vulkan requires of every device listing the
     /// extension (all of them but `unifiedImageLayoutsVideo`) is refused
-    /// ([`Error::ExtensionFeature`](crate::Error::ExtensionFeature)) rather than enable the
+    /// ([`Error::ExtensionFeature`]) rather than enable the
     /// extension without it. `unifiedImageLayoutsVideo` is enabled where the device has it
     /// (`vkGetPhysicalDeviceFeatures2` on [`DeviceHandles`](crate::DeviceHandles) answers
     /// whether it does). One whose registry dependency names an instance extension the
     /// instance would not enable (`VK_KHR_swapchain` without `VK_KHR_surface` in
     /// `instance_extensions`, for example) refuses the options before the instance is made
-    /// ([`Error::InstanceExtensionRequired`](crate::Error::InstanceExtensionRequired)).
+    /// ([`Error::InstanceExtensionRequired`]).
     pub device_extensions: Vec<CString>,
     /// Device extensions each device enables only where it can, never refused for one: where the
     /// device lists it, the instance enables every instance extension its registry dependency
@@ -171,7 +171,7 @@ pub struct DeviceOptions {
     /// default: each kind once per device). Each occurrence's notice is the same
     /// [`DegradeNotice`] through the same sink (or stderr), on the thread whose call announces
     /// it, so a program that runs tasks on threads over one device sees each task's: where each
-    /// kind's notice surfaces is in its [`Degradation`](crate::Degradation) docs. A kind a
+    /// kind's notice surfaces is in its [`Degradation`] docs. A kind a
     /// pipeline variant's making announces (a stage's precision notes, specialized or not, and
     /// the other kinds its stages or requirements state) occurs at each dispatch or draw that
     /// binds the variant, which announces it on the encoding thread (on the committing or
@@ -501,7 +501,7 @@ pub struct DebugMessage {
     /// `pMessage`; a degrade notice's text.
     pub text: String,
     /// The runtime's own notice of a degradation it takes, once per device and kind: never a
-    /// driver's or a layer's message. Match its [`Degradation`](crate::Degradation), not the text.
+    /// driver's or a layer's message. Match its [`Degradation`], not the text.
     pub degradation: Option<DegradeNotice>,
 }
 

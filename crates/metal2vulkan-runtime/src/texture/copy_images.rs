@@ -4,7 +4,7 @@
 //!
 //! - **Within a copy** ([`Reused`]): a later step of a copy (a band of an interleave copy; the
 //!   next aspect or slice of a heap texture's moves) takes an image an earlier step of it made
-//!   that [covers](covers) the one it needs, where no image of the step took it already. A copy's
+//!   that [covers] the one it needs, where no image of the step took it already. A copy's
 //!   steps are recorded one after another into one command buffer, each of their commands after a
 //!   barrier from every command before it to every command after it (`Barrier::everything`, in
 //!   `InterleaveCopy::record` and `SampleCopy::record`), and a step writes each texel of an image

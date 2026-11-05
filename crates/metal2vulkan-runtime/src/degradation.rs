@@ -9,7 +9,7 @@
 //!
 //! - **One closed vocabulary.** [`Degradation`] lists every kind once, with its code, category
 //!   and cost, in `degradations!`; its precision kinds include one per
-//!   [`PrecisionNote`](metal2vulkan::pipeline::PrecisionNote), named alike, which the macro maps both
+//!   [`PrecisionNote`], named alike, which the macro maps both
 //!   ways, so a note without a kind (or two kinds of one note) does not compile. docs/API.md's
 //!   catalogue lists every code, closed both ways by a test.
 //! - **Codes are a contract.** `metal2vulkan-degrade-<kind>`, never renamed; a new degradation is
@@ -169,9 +169,7 @@ macro_rules! degradations {
                 #[doc = concat!(
                     "A pipeline stage records [`PrecisionNote::",
                     stringify!($note),
-                    "`](metal2vulkan::pipeline::PrecisionNote::",
-                    stringify!($note),
-                    ")."
+                    "`]."
                 )]
                 $(#[doc = $note_doc])*
                 $note,

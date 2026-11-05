@@ -740,7 +740,7 @@ impl Device {
     ///
     /// A runtime extension: Metal makes no texture over a Vulkan image. The descriptor's
     /// `placement` gives the texture's resource ID as `new_texture`'s does
-    /// (`resource_ids.rs`), and [`IdPlacement::Outside`](crate::IdPlacement::Outside) gives it
+    /// (`resource_ids.rs`), and [`IdPlacement::Outside`] gives it
     /// none, as there: it answers 0, holds no slot, and counts in no plain allocation or
     /// reservation, so a swapchain image moves no program texture's ID. Unlike `new_texture`,
     /// the call takes no sampler ID for the device at any placement.

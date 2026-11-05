@@ -23,7 +23,7 @@
 //!   that continue it, `Instance::continues`), which is known only once the next instance
 //!   begins or the pass ends. So the later instance's commands (its draws, and the barriers
 //!   between them) are kept as they come (`Kept`), and recorded into the primary command buffer
-//!   when its group ends ([`RenderCommandEncoder::flush_inline`]): there the end of the
+//!   when its group ends ([`RenderLowering::flush_inline`]): there the end of the
 //!   instance before it, the barrier, the copies, the steps, the render pass instance's begin,
 //!   and its commands, in their order. The encoder's commands meanwhile record into the command
 //!   buffer before the pass, as for the first instance. Every command keeps its place in
@@ -33,7 +33,7 @@
 //!   before's first (the pass's first instance's go before the pass, into the command buffer
 //!   before it), as each instance's group ends. An instance's writes of the colors the pass
 //!   loads are bounded by its draws' scissors as the end bounds them, the pass's drawn area and
-//!   reach taken as far as the pass has gone ([`RenderCommandEncoder::plan_one`]): the next copy
+//!   reach taken as far as the pass has gone ([`RenderLowering::plan_one`]): the next copy
 //!   takes the texels inside them alone. Where the end would find them unbounded by its time, it
 //!   copies more, never fewer. Where neither the instance's draws nor any command of the encoder
 //!   before them used a shadowed texture, nothing is planned: there is nothing to copy, as the
@@ -231,8 +231,8 @@ pub(super) struct Later {
 }
 
 /// The copies of the instance a split ends, planned as the split's draw is admitted
-/// ([`RenderCommandEncoder::inline_split`]), recorded once its new instance is installed
-/// ([`RenderCommandEncoder::begin_inline_split`]); and the new instance's objects and clears
+/// ([`RenderLowering::inline_split`]), recorded once its new instance is installed
+/// ([`RenderLowering::begin_inline_split`]); and the new instance's objects and clears
 /// ([`Kept`]).
 pub(super) struct SplitBegin {
     copies: Vec<ShadowCopy>,

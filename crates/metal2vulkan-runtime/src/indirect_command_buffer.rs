@@ -363,7 +363,7 @@ impl IndirectCommandBufferDescriptor {
 /// plain Metal itself refuses, ending its process or failing the call ([`Error::Invalid`]'s own
 /// doc). What only Metal's API validation layer stops is not here: plain Metal takes it, so the
 /// runtime takes it too, or, where no exact answer is built, names its own gap
-/// ([`RuntimeGap`](crate::RuntimeGap)).
+/// ([`RuntimeGap`]).
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum IndirectCommandBufferProblem {
@@ -1635,7 +1635,7 @@ impl IndirectCommandBuffer {
     /// its targets' sizes and what the device drew before, which the runtime does not model: a
     /// buffer made after a command buffer that encoded a render encoder was scheduled, or after a
     /// resource state encoder opened, announces
-    /// [`Degradation::UnmeasuredUniqueIdentifier`](crate::Degradation::UnmeasuredUniqueIdentifier)
+    /// [`Degradation::UnmeasuredUniqueIdentifier`]
     /// once a device where this answers.
     pub fn unique_identifier(&self) -> u64 {
         self.0
@@ -1648,7 +1648,7 @@ impl IndirectCommandBuffer {
     /// after a command buffer of its device that encoded a render encoder was scheduled, after a
     /// resource state encoder of its device opened, or after Metal's own encoders' ranges passed
     /// what the runtime models, where `unique_identifier` announces
-    /// [`Degradation::UnmeasuredUniqueIdentifier`](crate::Degradation::UnmeasuredUniqueIdentifier);
+    /// [`Degradation::UnmeasuredUniqueIdentifier`];
     /// false where it answers Metal's number. Fixed at the buffer's making; it announces nothing.
     pub fn identifier_unmeasured(&self) -> bool {
         self.0.identifier.degradation().is_some()

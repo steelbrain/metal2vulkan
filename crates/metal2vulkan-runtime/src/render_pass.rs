@@ -333,7 +333,7 @@ pub struct RenderPassDescriptor {
     pub visibility_result_buffer: Option<Buffer>,
     /// `visibilityResultType`: whether the encoder's visibility results replace the words at
     /// their offsets (`Reset`, the default) or are taken into them (`Accumulate`), as an Apple M3
-    /// Max answers it ([`VisibilityResultType`](crate::VisibilityResultType)).
+    /// Max answers it ([`VisibilityResultType`]).
     pub visibility_result_type: VisibilityResultType,
     /// `renderTargetArrayLength`: the layers a layered pass renders (2 or more); 0 or 1 renders
     /// each attachment's slice alone.
@@ -389,7 +389,7 @@ pub enum Attachment {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RenderPassProblem {
     /// No attachment has a texture and the target width or height is 0: Metal answers nil (an
-    /// [`Error::Nil`](crate::Error::Nil)).
+    /// [`Error::Nil`]).
     ///
     /// Basis: metal-measured (an Apple M3 Max, macOS 27.0.1: plain Metal answers its render command
     /// encoder nil for a descriptor with no attachment and a 0 by 0 target).
@@ -528,7 +528,7 @@ pub enum RenderPassProblem {
     MemorylessResolve(Attachment),
     /// A tile size other than 16x16, 32x16 and 32x32, or a tile with one side 0 (measured:
     /// "Invalid tile dimensions (8, 8)"; plain Metal answers its encoder nil, an
-    /// [`Error::Nil`](crate::Error::Nil)).
+    /// [`Error::Nil`]).
     ///
     /// Basis: metal-documented (Metal asserts "Invalid tile dimensions (8, 8)", for which plain
     /// Metal answers its encoder nil).
@@ -539,7 +539,7 @@ pub enum RenderPassProblem {
         height: u64,
     },
     /// A 32x32 tile at 4 samples (measured: "4X MSAA does not support 32 x 32 tiles"), which
-    /// Metal's validation stops, an [`Error::Invalid`](crate::Error::Invalid). Plain Metal
+    /// Metal's validation stops, an [`Error::Invalid`]. Plain Metal
     /// faults there: its command buffer fails, or it makes no encoder (the re-probe on an M4), so
     /// the refusal is Metal's answer.
     ///
@@ -551,7 +551,7 @@ pub enum RenderPassProblem {
     },
     /// Per-sample storage, the imageblock sample length rounded up to 8 bytes, past 64
     /// (measured: "Per sample storage (72) cannot be greater than (64)"; plain Metal answers its
-    /// encoder nil, an [`Error::Nil`](crate::Error::Nil)).
+    /// encoder nil, an [`Error::Nil`]).
     ///
     /// Basis: metal-documented (Metal asserts "Per sample storage (72) cannot be greater than
     /// (64)", for which plain Metal answers its encoder nil).
@@ -561,7 +561,7 @@ pub enum RenderPassProblem {
     },
     /// A threadgroup memory length past 32768 bytes (measured: "Requested threadgroup memory
     /// length exceeds amount supported by device (32768)"; plain Metal answers its encoder nil, an
-    /// [`Error::Nil`](crate::Error::Nil)).
+    /// [`Error::Nil`]).
     ///
     /// Basis: metal-documented (Metal asserts "Requested threadgroup memory length exceeds amount
     /// supported by device (32768)", for which plain Metal answers its encoder nil).
@@ -571,7 +571,7 @@ pub enum RenderPassProblem {
     },
     /// Tile memory, the per-sample storage of each pixel of a tile plus the threadgroup memory
     /// length, past 32768 bytes (measured: "Total allocated tile memory (40960) cannot be greater
-    /// than (32768)"; plain Metal answers its encoder nil, an [`Error::Nil`](crate::Error::Nil)).
+    /// than (32768)"; plain Metal answers its encoder nil, an [`Error::Nil`]).
     ///
     /// Basis: metal-documented (Metal asserts "Total allocated tile memory (40960) cannot be
     /// greater than (32768)", for which plain Metal answers its encoder nil).

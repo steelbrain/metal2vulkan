@@ -30,7 +30,7 @@
 //! - **Where the compile is this crate's bound.** Metal takes a screen of up to 32768 pixels a
 //!   side and any samples; the compile layer compiles only where Apple's compile is measured,
 //!   and refuses the rest, `Error::RateMap` with its
-//!   [`UnpinnedCompile`](metal2vulkan::bind::UnpinnedCompile): a screen past 16384 a side (where Apple's
+//!   [`UnpinnedCompile`]: a screen past 16384 a side (where Apple's
 //!   compile crashes or corrupts the map) and sample densities whose compile is not measured. An
 //!   axis of no screen pixels is not among them: it has one tile of no screen and no physical
 //!   pixels whatever its samples, so no coordinate reads its quality function and the density

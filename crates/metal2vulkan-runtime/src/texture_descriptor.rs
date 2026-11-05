@@ -738,7 +738,7 @@ pub enum TextureProblem {
     /// there first).
     ViewOnlyFormat,
     /// An extent the pixel format does not take: a PVRTC texture that is not square with a
-    /// power-of-two side, or a 4:2:2 texture of odd width; and, an [`Error::Nil`](crate::Error::Nil)
+    /// power-of-two side, or a 4:2:2 texture of odd width; and, an [`Error::Nil`]
     /// of plain Metal, a render target of a 4:2:0 or 4:2:2 two-plane YCbCr format over a surface
     /// whose width or height is odd.
     ///
@@ -754,7 +754,7 @@ pub enum TextureProblem {
     /// Basis: metal-measured (an Apple M4, macOS 27.0.1: plain Metal's descriptor validation
     /// asserts over `ShaderAtomic` of an extended-range format).
     UsageForFormat,
-    /// `Unspecialized`, of which Metal makes no texture, an [`Error::Nil`](crate::Error::Nil):
+    /// `Unspecialized`, of which Metal makes no texture, an [`Error::Nil`]:
     /// plain Metal answers nil for the texture, a heap's and a buffer's, in every storage mode
     /// and usage (an M3 Max under macOS 26.7, the consumer's report), once every rule Metal stops
     /// passed, where [`Device::heap_texture_size_and_align`] answers 0 bytes at the alignment
@@ -791,7 +791,7 @@ pub enum TextureProblem {
     /// A format of which Metal makes no texture from a descriptor alone: the 69 two-plane YCbCr
     /// formats (`metal::format::ycbcr_format`, which it makes over an IOSurface's planes,
     /// [`Buffer::new_texture_with_iosurface_plane`]), `RGBA16Float_XR`, `AnyDepth` and
-    /// `AnyStencil`, an [`Error::Nil`](crate::Error::Nil). Plain Metal answers nil (an Apple M4
+    /// `AnyStencil`, an [`Error::Nil`]. Plain Metal answers nil (an Apple M4
     /// under macOS 27.0.1; with an M3 Max under 26.7): from the device, a heap and a buffer (the
     /// linear SPI's too), for every texture type the format takes (a two-plane YCbCr format no
     /// multisample one, `AnyDepth` and `AnyStencil` a 2D, 2D array, cube and cube array one, which

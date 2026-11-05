@@ -117,7 +117,7 @@ fn undefined(ty: &'static str, raw: u64) -> Error {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SparseProblem {
     /// A texture type a sparse heap makes no texture of: 1D, 1D array and texture buffers, for
-    /// which Metal answers nil (an [`Error::Nil`](crate::Error::Nil)).
+    /// which Metal answers nil (an [`Error::Nil`]).
     ///
     /// Basis: unknown (plain Metal's nil for a 1D, 1D array or buffer texture of a sparse heap is
     /// not on record with a device or release).

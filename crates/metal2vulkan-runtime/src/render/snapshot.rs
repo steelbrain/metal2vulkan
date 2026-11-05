@@ -115,7 +115,7 @@ use metal2vulkan::pipeline::{SlotClass, SlotRef, SnapshotForm, Stage};
 use std::collections::BTreeSet;
 
 /// What a draw asks to read through snapshots, before its plan
-/// ([`RenderCommandEncoder::snapshot_wanted`]): the fragment slots, and the colors they read.
+/// ([`RenderLowering::snapshot_wanted`]): the fragment slots, and the colors they read.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(super) struct Wanted {
     pub(super) slots: BTreeSet<u32>,
@@ -532,7 +532,7 @@ pub(super) fn is_snapshot_slot(slots: &BTreeSet<u32>, slot: &SlotRef) -> bool {
     slot.stage == Stage::Fragment && slot.class == SlotClass::Texture && slots.contains(&slot.index)
 }
 
-/// [`RenderCommandEncoder::snapshot_fallback`]'s message, from anywhere the device is known.
+/// [`RenderLowering::snapshot_fallback`]'s message, from anywhere the device is known.
 pub(super) fn snapshot_fallback(device: &crate::Device, reason: &'static str) {
     if !crate::pipeline::creation_log_enabled() {
         return;

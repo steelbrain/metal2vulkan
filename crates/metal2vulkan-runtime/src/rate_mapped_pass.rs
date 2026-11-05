@@ -138,7 +138,7 @@ use metal2vulkan::pipeline::GraphicsState;
 use std::sync::Arc;
 
 /// Why a draw in a rate-mapped pass is not drawn region by region: the compile layer's
-/// [`RegionError`](metal2vulkan::bind::RegionError), by kind (the module docs).
+/// [`RegionError`], by kind (the module docs).
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RegionRefusal {

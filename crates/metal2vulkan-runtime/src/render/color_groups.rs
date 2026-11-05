@@ -250,7 +250,7 @@ struct First {
     set: Option<DrawingState>,
 }
 
-/// A decisive call's turn in a pass drawn in groups ([`RenderCommandEncoder::group_turn`]).
+/// A decisive call's turn in a pass drawn in groups ([`RenderLowering::group_turn`]).
 #[derive(Clone, Copy)]
 pub(super) enum Turn {
     /// A pass of one group: the call runs as in any pass.
@@ -766,7 +766,7 @@ impl RenderLowering {
     }
 }
 
-/// A resource a draw of a pass drawn in groups may not read ([`RenderCommandEncoder::watched`]).
+/// A resource a draw of a pass drawn in groups may not read ([`RenderLowering::watched`]).
 struct Watched {
     key: ResourceKey,
     range: UseRange,
