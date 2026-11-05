@@ -28,7 +28,8 @@
 //!   submission is the one the runtime's from the commit compares with.
 //! - **The runtime** (`runtime_completion_latency`): a device of the runtime's, one queue, each
 //!   command buffer a blit encoder's `fill_buffer` with a completion-seen handler and a completed
-//!   handler that note the host time, committed and not waited for. From the GPU end
+//!   handler that note the host time (the consumer's shape), then with the completion-seen
+//!   handler alone, committed and not waited for. From the GPU end
 //!   (`gpu_end_time`, on a device that calibrates its timestamps) to the completion-seen handler;
 //!   and the runtime's steps between, from its queue waiter's trace
 //!   (`command_buffer::completion::trace`): the batch watched, the driver's wait entered and
@@ -785,10 +786,28 @@ fn runtime_completion_latency() {
             .unwrap();
         sleep_until(next);
     }
+    for completed_handler in [true, false] {
+        let shape = match completed_handler {
+            true => "seen and completed handlers",
+            false => "seen handler alone",
+        };
+        let committed = commit_timed(&fill, completed_handler, &mut next);
+        print_runtime(&name, shape, calibrated, &committed);
+    }
+}
+
+/// [`RUNS`] fills `fill` makes, each with a completion-seen handler and, where
+/// `completed_handler`, a completed handler, committed [`GAP`] apart from `next` on and waited for
+/// at the end, with the queue waiters' steps traced (`trace`).
+fn commit_timed(
+    fill: &dyn Fn(u8) -> CommandBuffer,
+    completed_handler: bool,
+    next: &mut Instant,
+) -> (Vec<Committed>, Vec<Traced>) {
     trace::start();
     let mut committed = Vec::with_capacity(RUNS);
     for run in 0..RUNS {
-        next += GAP;
+        *next += GAP;
         let command_buffer = fill(run as u8);
         let seen = Arc::new(Mutex::new(None));
         let completed = Arc::new(Mutex::new(None));
@@ -798,12 +817,14 @@ fn runtime_completion_latency() {
                 *noted.lock().unwrap() = Some(host_nanos());
             }))
             .unwrap();
-        let noted = Arc::clone(&completed);
-        command_buffer
-            .add_completed_handler(Box::new(move |_: &CommandBuffer| {
-                *noted.lock().unwrap() = Some(host_nanos());
-            }))
-            .unwrap();
+        if completed_handler {
+            let noted = Arc::clone(&completed);
+            command_buffer
+                .add_completed_handler(Box::new(move |_: &CommandBuffer| {
+                    *noted.lock().unwrap() = Some(host_nanos());
+                }))
+                .unwrap();
+        }
         let commit = host_nanos();
         command_buffer.commit().unwrap();
         committed.push(Committed {
@@ -812,17 +833,41 @@ fn runtime_completion_latency() {
             seen,
             completed,
         });
-        sleep_until(next);
+        sleep_until(*next);
     }
     for each in &committed {
         each.command_buffer
             .wait_until_completed_for(Duration::from_secs(5))
             .unwrap();
     }
-    let steps = trace::stop();
+    (committed, trace::stop())
+}
+
+/// One command buffer's host times, nanoseconds, from its commit to its handlers, and its GPU
+/// end where the device calibrates its timestamps.
+struct Times {
+    commit: u64,
+    watched: u64,
+    entered: u64,
+    returned: u64,
+    turn: u64,
+    /// The turn's steps of `finish` (`trace::step`), in order.
+    turn_steps: Vec<(&'static str, u64)>,
+    seen: u64,
+    completed: Option<u64>,
+    gpu_end: Option<u64>,
+}
+
+/// Print one shape's lines: `committed`'s command buffers and the steps traced meanwhile.
+fn print_runtime(
+    name: &str,
+    shape: &str,
+    calibrated: bool,
+    (committed, steps): &(Vec<Committed>, Vec<Traced>),
+) {
     // Each turn's batch, and the steps of `finish` that follow it, up to the next turn's.
     let mut finished: Vec<(usize, u64, u64, Vec<(&'static str, u64)>)> = Vec::new();
-    for step in &steps {
+    for step in steps {
         match *step {
             Traced::Finished { queue, value, seen } => {
                 finished.push((queue, value, seen, Vec::new()));
@@ -863,18 +908,6 @@ fn runtime_completion_latency() {
             _ => None,
         })
     };
-    struct Times {
-        commit: u64,
-        watched: u64,
-        entered: u64,
-        returned: u64,
-        turn: u64,
-        /// The turn's steps of `finish` (`trace::step`), in order.
-        turn_steps: Vec<(&'static str, u64)>,
-        seen: u64,
-        completed: u64,
-        gpu_end: Option<u64>,
-    }
     let times: Vec<Times> = committed
         .iter()
         .zip(&finished)
@@ -890,12 +923,8 @@ fn runtime_completion_latency() {
                 returned,
                 turn,
                 turn_steps: turn_steps.clone(),
-                seen: each
-                    .seen
-                    .lock()
-                    .unwrap()
-                    .expect("its completion-seen handler ran"),
-                completed: (each.completed.lock().unwrap()).expect("its completed handler ran"),
+                seen: (each.seen.lock().unwrap()).expect("its completion-seen handler ran"),
+                completed: *each.completed.lock().unwrap(),
                 gpu_end,
             }
         })
@@ -911,40 +940,62 @@ fn runtime_completion_latency() {
         ),
         false => "no calibrated GPU end; ".to_owned(),
     };
+    let completed = match times[0].completed {
+        Some(_) => format!(
+            "seen handler -> completed handler {} us; ",
+            line(
+                (times.iter())
+                    .map(|t| us(t.seen, t.completed.expect("its completed handler ran")))
+                    .collect()
+            )
+        ),
+        None => String::new(),
+    };
     eprintln!(
-        "COMPLETION-LATENCY runtime ({name}): {RUNS} fills of {BYTES} bytes {GAP:?} apart: \
-         {ends}commit -> watched {} us; watched -> wait entered {} us; wait returned -> turn {} \
-         us; turn -> seen handler {} us; seen handler -> completed handler {} us; commit -> seen \
-         handler {} us",
+        "COMPLETION-LATENCY runtime, {shape} ({name}): {RUNS} fills of {BYTES} bytes {GAP:?} \
+         apart: {ends}commit -> watched {} us; watched -> wait entered {} us; wait returned -> \
+         turn {} us; turn -> seen handler {} us; {completed}commit -> seen handler {} us",
         of(&|t| us(t.commit, t.watched)),
         of(&|t| us(t.watched, t.entered)),
         of(&|t| us(t.returned, t.turn)),
         of(&|t| us(t.turn, t.seen)),
-        of(&|t| us(t.seen, t.completed)),
         of(&|t| us(t.commit, t.seen)),
     );
     // The turn's steps, each from the one before it (the turn first) and the last to the
     // completion-seen handler: the first of each name after the turn's batch, which a turn of
-    // batches that end no command buffer may follow before the next one's.
+    // batches that end no command buffer may follow before the next one's. Each over the turns
+    // that marked both its ends.
     const NAMES: [&str; 3] = ["events reached", "fences settled", "times placed"];
     let at = |t: &Times, name: &str| {
         (t.turn_steps.iter())
             .find(|&&(what, _)| what == name)
             .map(|&(_, at)| at)
-            .expect("each step of the turn's finish")
     };
     let mut split = String::new();
     for step in 0..=NAMES.len() {
-        let from = |t: &Times| step.checked_sub(1).map_or(t.turn, |s| at(t, NAMES[s]));
-        let to = |t: &Times| NAMES.get(step).map_or(t.seen, |name| at(t, name));
+        let from = |t: &Times| match step.checked_sub(1) {
+            None => Some(t.turn),
+            Some(s) => at(t, NAMES[s]),
+        };
+        let to = |t: &Times| match NAMES.get(step) {
+            None => Some(t.seen),
+            Some(name) => at(t, name),
+        };
         let (from_name, to_name) = (
             step.checked_sub(1).map_or("turn", |s| NAMES[s]),
             NAMES.get(step).copied().unwrap_or("seen handler"),
         );
-        split.push_str(&format!(
-            "; {from_name} -> {to_name} {} us",
-            of(&|t| us(from(t), to(t)))
-        ));
+        let spans: Vec<f64> = (times.iter())
+            .filter_map(|t| Some(us(from(t)?, to(t)?)))
+            .collect();
+        match spans.is_empty() {
+            true => split.push_str(&format!("; {from_name} -> {to_name} none")),
+            false => split.push_str(&format!(
+                "; {from_name} -> {to_name} {} us ({} turns)",
+                line(spans.clone()),
+                spans.len()
+            )),
+        }
     }
-    eprintln!("COMPLETION-LATENCY runtime turn ({name}){split}");
+    eprintln!("COMPLETION-LATENCY runtime turn, {shape} ({name}){split}");
 }
