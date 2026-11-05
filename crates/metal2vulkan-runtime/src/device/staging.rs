@@ -356,8 +356,8 @@ impl Device {
 
     /// The staging queue's last submission while the host has not seen it complete: what every
     /// other submission of the device's waits for on the GPU, or follows on its `VkQueue` a wait
-    /// for (the module docs), as what it copied may be among what it uses. The host sees it complete once a wait of no time returned for
-    /// it.
+    /// for (the module docs), as what it copied may be among what it uses. The host sees it
+    /// complete once a wait of no time returned for it.
     pub(crate) fn staging_wait(&self) -> Option<(vk::Semaphore, u64)> {
         let shared = self.shared();
         let staging = shared.staging.as_ref()?;
