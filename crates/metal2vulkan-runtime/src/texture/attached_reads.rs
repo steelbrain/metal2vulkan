@@ -37,8 +37,19 @@
 //!   load actions before the draws after it (`fence.rs`): a draw after it that samples the
 //!   texture of a color the pass clears ([`Texture::cleared_in`]) reads the clear on a Mac2 GPU,
 //!   where the copy taken ahead of the pass's load actions holds the texels from before the pass.
-//!   It records into an instance after the pass's first, which runs the pass's load actions and
-//!   draws nothing where no draw came before (`render.rs`, `WorkCounts::attachment_read_splits`),
+//!   Before any draw of the pass has recorded, the copy holds nothing but the clear there, so
+//!   where it can be cleared to it ([`Texture::cleared_copy`]: the copy is an image of its own,
+//!   the texture a single-sampled 2D one of one level and slice that one color renders whole, in
+//!   place, in the image's format, inside the render area, with no clear whose note the load
+//!   withholds, `ColorTarget::withheld_clear`), the copy in before the pass is a clear of it to the
+//!   pass's clear value (`vkCmdClearColorImage`, which Vulkan converts as the load operation, the
+//!   pass's `device-color-conversion` note the same), and the draw stays in the pass's first
+//!   instance (`WorkCounts::attachment_read_clears`): no instance of the clear alone, no store and
+//!   load of the attachment between two, and no copy. Later draws of that instance read the same
+//!   copy, as they would read the copy after the clear's instance. Otherwise, and once a draw has
+//!   recorded (it may have written the attachment, which the copy must then hold), it records
+//!   into an instance after the pass's first, which runs the pass's load actions and draws
+//!   nothing where no draw came before (`render.rs`, `WorkCounts::attachment_read_splits`),
 //!   before which the copy is taken, or reads through snapshots inside its instance (below). A
 //!   draw that samples a color the pass loads, or none, records as with no barrier: the copy
 //!   ahead of the load holds what it loads.
@@ -113,6 +124,7 @@ use crate::error::Error;
 use crate::image_plan::ImagePlan;
 use crate::render_pass::{ColorTarget, PassLayout};
 use crate::render_values::LoadAction;
+use crate::resource::ResourceKey;
 use crate::texture_descriptor::TextureDescriptor;
 use crate::tracker::{Access, Use};
 use crate::values::ResourceOptions;
@@ -170,6 +182,58 @@ impl Texture {
     /// (the module docs).
     pub(crate) fn cleared_in(&self, layout: &PassLayout) -> bool {
         self.attached_where(layout, |color| color.load == LoadAction::Clear)
+    }
+
+    /// The copy a draw's sampled slot binding of the texture reads, and the clear it reads there,
+    /// after a memory barrier before its pass's first draw and before any draw of the pass, where
+    /// that copy may be cleared to it instead of the pass splitting (the module docs): the
+    /// texture's shadow ([`usage_shadow_copies`](Self::usage_shadow_copies)) is an image of its
+    /// own that a clear in clears (`ShadowCopies::cleared_image`), and the texture a
+    /// single-sampled 2D one of one level and slice, presented whole in its image's format, that
+    /// exactly one color attachment of `layout` renders in place, all of it inside the render
+    /// area, in that format, loading it `Clear` with a value the device's own clear converts as
+    /// its load operation does (no clear whose note the load withholds,
+    /// `ColorTarget::withheld_clear`, nor an extended-range route) and no stand-in or sample
+    /// planes. `None` elsewhere: the pass splits as before.
+    pub(crate) fn cleared_copy(
+        &self,
+        layout: &PassLayout,
+    ) -> Option<(ResourceKey, vk::ClearColorValue)> {
+        let copies = self.usage_shadow_copies()?;
+        copies.cleared_image()?;
+        let image = self.image().ok()?;
+        let plan = image.plan();
+        let record = &self.0.record;
+        let whole_texture = record.texture_type == TextureType::Type2D
+            && plan.image_type == ImageType::TYPE_2D
+            && plan.samples == SampleCountFlags::TYPE_1
+            && plan.levels == 1
+            && plan.layers == 1
+            && (record.base_level, record.level_count) == (0, 1)
+            && (record.base_layer, record.layer_count) == (0, 1)
+            && record.read_as.is_none()
+            && record.pixel_format == plan.pixel_format;
+        if !whole_texture {
+            return None;
+        }
+        let mut rendering = (layout.colors.iter().flatten()).filter(|color| {
+            (color.target.texture.image())
+                .is_ok_and(|other| other.identity.key == image.identity.key)
+        });
+        let color = rendering.next()?;
+        let target = &color.target;
+        let whole = (target.level, target.layer, target.layers) == (0, 0, 1)
+            && target.extent == layout.extent
+            && target.extent == [plan.extent[0], plan.extent[1]]
+            && target.format == plan.format
+            && target.texture.pixel_format() == plan.pixel_format;
+        let plain = color.load == LoadAction::Clear
+            && !color.memoryless
+            && color.stand_in.is_none()
+            && color.planes.is_none()
+            && color.withheld_clear.is_none()
+            && color.straight_clear.is_none();
+        (rendering.next().is_none() && whole && plain).then_some((copies.shadow_key, color.clear))
     }
 
     /// [`attached_in`](Self::attached_in) of the color attachments of `layout` that `keep`

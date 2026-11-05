@@ -180,6 +180,7 @@ impl RunMerge {
             area: None,
             cause: None,
             moves: None,
+            clear: None,
         })
     }
 

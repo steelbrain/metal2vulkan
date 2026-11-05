@@ -46,9 +46,11 @@
 //!   the pass's load actions, which write its render targets ahead of every draw, before the
 //!   draws after it, as Mac2 GPUs answer (measured: an Intel UHD 630 read the clear after one and
 //!   the texels from before the pass without one, an AMD Radeon Pro 5300M the clear either way):
-//!   a draw after it that samples the texture of a color the pass clears records into an instance
-//!   after the pass's first, which runs the clear alone, or reads through snapshots
-//!   (`texture/attached_reads.rs`). A pass with no such draw records as with no barrier.
+//!   a draw after it that samples the texture of a color the pass clears reads a copy cleared to
+//!   the clear before the pass, in the pass's first instance, where it comes before any draw of
+//!   the pass and the copy can be cleared so; else it records into an instance after the pass's
+//!   first, which runs the clear alone, or reads through snapshots (`texture/attached_reads.rs`).
+//!   A pass with no such draw records as with no barrier.
 //! - **Barriers over the render targets on Apple GPUs.** The Metal Feature Set Tables give that
 //!   scope to Mac2 GPUs, not to Apple3 to Apple10 ones: on the M3 Max under macOS 27.0.1 (probe
 //!   `rtbarrier`), a draw after one read its own pixel's texels from before the pass, as with no

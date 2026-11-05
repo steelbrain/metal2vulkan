@@ -736,6 +736,7 @@ impl RenderLowering {
                     area: None,
                     loads: None,
                     tile_stores: false,
+                    cleared: None,
                 };
                 shadow::join(&mut shadows, &used);
             }

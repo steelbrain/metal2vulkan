@@ -548,6 +548,25 @@ impl ShadowStaging {
 }
 
 impl ShadowCopies {
+    /// The image a clear in of the shadow clears ([`ShadowCopy::clear`]): an image's shadow of
+    /// its own format (one copied image to image, not through a buffer), or a 2D texture's image
+    /// over a buffer's bytes; `None` for every other shadow (a staging buffer, a rotated, tiled or
+    /// planar image, a conversion's).
+    pub(super) fn cleared_image(&self) -> Option<vk::Image> {
+        match &self.source {
+            ShadowSource::Image {
+                shadow,
+                through: None,
+                ..
+            } => Some(*shadow),
+            ShadowSource::Bytes {
+                target: ShadowTarget::Image { image, .. },
+                ..
+            } => Some(*image),
+            _ => None,
+        }
+    }
+
     /// Whether the shadow is a large IOSurface plane's, from which its copies in count apart
     /// (`WorkCounts::shadow_texels_first_copied_in_large_surfaces` and kin): a texture over an
     /// IOSurface's plane of at least [`LARGE_SURFACE_TEXELS`] texels.
@@ -1140,6 +1159,10 @@ pub(super) struct ShadowCopy<M = Arc<ShadowMerge>> {
     /// takes, planned as the encoder takes the copy (`EncoderCore::sample_moves`); `None` for
     /// every other texture, and where none could be planned (failing the command buffer).
     pub(super) moves: Option<Arc<SampleMoves>>,
+    /// A copy in made as a clear of the shadow's image ([`ShadowCopies::cleared_image`]) to this
+    /// value, its one level and slice, reading nothing of the truth ([`ShadowUse::cleared`]);
+    /// `None` for every other step.
+    pub(super) clear: Option<vk::ClearColorValue>,
 }
 
 /// Why a copy in is made, as `WorkCounts` counts its texels.
@@ -1213,6 +1236,9 @@ impl<M> ShadowCopy<M> {
     /// bytes (as [`texels_in`](Self::texels_in) counts them) or of an image's shadow (its every
     /// region's, or its one region's inside [`area`](Self::area)): 0 for every other copy.
     pub(super) fn texels_copied_in(&self) -> u64 {
+        if self.clear.is_some() {
+            return 0;
+        }
         match (&self.step, &self.copies.source) {
             (Step::Into, ShadowSource::Image { regions, .. }) => {
                 match (self.area, self.copies.cuts(), one_image_copy(regions)) {
@@ -1240,6 +1266,7 @@ impl<M> ShadowCopy<M> {
     /// [`texels_back`](Self::texels_back) counts them: 0 for every other copy.
     pub(super) fn texels_in(&self) -> u64 {
         match self.step {
+            Step::Into if self.clear.is_some() => 0,
             Step::Into => self.image_texels(),
             _ => 0,
         }
@@ -1509,6 +1536,9 @@ impl ShadowCopy {
             &self.copies.source,
             ShadowSource::YCbCrWrite { write_back, .. } if write_back.loads()
         );
+        if self.clear.is_some() {
+            return vk::PipelineStageFlags2::CLEAR;
+        }
         match self.step {
             Step::Merge(_) => {
                 vk::PipelineStageFlags2::TRANSFER | vk::PipelineStageFlags2::COMPUTE_SHADER
@@ -1547,6 +1577,19 @@ impl ShadowCopy {
             vk::PipelineStageFlags2::COPY,
             vk::AccessFlags2::TRANSFER_WRITE,
         );
+        // A clear of the shadow's image: nothing of the truth is read.
+        if self.clear.is_some() {
+            let clear = Access::new(
+                vk::PipelineStageFlags2::CLEAR,
+                vk::AccessFlags2::TRANSFER_WRITE,
+            );
+            return vec![Use::writes(
+                c.shadow_key,
+                c.tracked,
+                c.shadow_range.clone(),
+                clear,
+            )];
+        }
         let (truth, range) = c.truth();
         if let ShadowSource::Converted { conversion, .. } = &c.source {
             // The planes' bytes are copied (a whole conversion) or read by the refresh's
@@ -1672,6 +1715,27 @@ impl ShadowCopy {
         gate: Option<Arc<CopyInGate>>,
     ) {
         let c = &self.copies;
+        if let (Some(value), Some(image)) = (&self.clear, c.cleared_image()) {
+            let range = vk::ImageSubresourceRange {
+                aspect_mask: vk::ImageAspectFlags::COLOR,
+                base_mip_level: 0,
+                level_count: 1,
+                base_array_layer: 0,
+                layer_count: 1,
+            };
+            // SAFETY: the caller's contract; the shadow takes transfer writes, as every copy in
+            // writes it, and the range is its one level and slice ([`ShadowUse::cleared`]).
+            unsafe {
+                device.cmd_clear_color_image(
+                    command_buffer,
+                    image,
+                    vk::ImageLayout::GENERAL,
+                    value,
+                    &[range],
+                );
+            }
+            return;
+        }
         let moves = self.moves.as_deref();
         let into_shadow = match &self.step {
             Step::Into => true,
@@ -2290,6 +2354,7 @@ pub(super) fn copies_used<'a>(
             area: None,
             loads: None,
             tile_stores: false,
+            cleared: None,
         });
     }
     shadows
@@ -2320,6 +2385,7 @@ pub(super) fn join(shadows: &mut Vec<ShadowUse>, shadow: &ShadowUse) {
             other.writes |= shadow.writes;
             other.overwrites &= shadow.overwrites;
             other.kept &= shadow.kept;
+            other.cleared = other.cleared.or(shadow.cleared);
         }
         None => shadows.push(ShadowUse {
             copies: Arc::clone(&shadow.copies),
@@ -2329,6 +2395,7 @@ pub(super) fn join(shadows: &mut Vec<ShadowUse>, shadow: &ShadowUse) {
             area: shadow.area,
             loads: shadow.loads,
             tile_stores: shadow.tile_stores,
+            cleared: shadow.cleared,
         }),
     }
 }
@@ -2478,6 +2545,14 @@ pub(super) struct ShadowUse {
     /// its merge stores whole blocks of the rectangle's rows (the module's **Stored
     /// attachments**).
     pub(super) tile_stores: bool,
+    /// The command reads the texture's texels only as the clear a render pass's load action
+    /// writes over all of them ahead of every read: the first instance of a pass whose draws
+    /// sample a color it clears, the whole of a one-level, one-slice texture, after a memory
+    /// barrier before the pass's first draw and before any draw of it
+    /// (`texture/attached_reads.rs`). Its copy in is a clear of the shadow's image to this value
+    /// ([`ShadowCopy::clear`]), whatever the image held, after which the image holds the truth
+    /// nowhere, so its next use copies in again.
+    pub(super) cleared: Option<vk::ClearColorValue>,
 }
 
 /// The rectangle bounding `a` and `b`, each `[x0, y0, x1, y1)`; `None` (anywhere) where either is.
@@ -2850,6 +2925,7 @@ impl<M: Clone + KeptArea> ShadowSync<M> {
             area,
             cause: None,
             moves: None,
+            clear: None,
         });
         for (j, other) in self.entries.iter_mut().enumerate() {
             if j != i && other.copies.shares_truth(&written) {
@@ -3028,6 +3104,29 @@ impl<M: Clone + KeptArea> ShadowSync<M> {
             // Made here, or for a keep's scratch above: not copied in yet, so its copy in is the
             // encoder's first.
             let i = self.entry(&shadow.copies);
+            // Cleared to what the command reads instead (`ShadowUse::cleared`): the image holds
+            // the truth nowhere after, whatever it held, so no carry takes it and the next use
+            // copies in.
+            if let Some(value) = shadow
+                .cleared
+                .filter(|_| shadow.copies.cleared_image().is_some())
+            {
+                copies.push(ShadowCopy {
+                    copies: Arc::clone(&shadow.copies),
+                    step: Step::Into,
+                    kept: false,
+                    area: None,
+                    cause: None,
+                    moves: None,
+                    clear: Some(value),
+                });
+                let entry = &mut self.entries[i];
+                entry.carried = false;
+                entry.held = None;
+                entry.stale = None;
+                entry.lose(Lost::Written);
+                continue;
+            }
             let two_ways = kept
                 .iter()
                 .any(|(copies, _)| copies.shadow_key == shadow.copies.shadow_key);
@@ -3088,6 +3187,7 @@ impl<M: Clone + KeptArea> ShadowSync<M> {
                         area: needs,
                         cause: Some(cause),
                         moves: None,
+                        clear: None,
                     });
                 }
                 entry.standing = Standing::Current;
@@ -3117,6 +3217,7 @@ impl<M: Clone + KeptArea> ShadowSync<M> {
                         area: Some(area),
                         cause: Some(CopyCause::Bounded),
                         moves: None,
+                        clear: None,
                     });
                 }
             }
@@ -3134,6 +3235,7 @@ impl<M: Clone + KeptArea> ShadowSync<M> {
                     area: needs,
                     cause: Some(CopyCause::First),
                     moves: None,
+                    clear: None,
                 };
                 copy.texels_copied_in()
             });
@@ -3172,6 +3274,7 @@ impl<M: Clone + KeptArea> ShadowSync<M> {
                 area: None,
                 cause: None,
                 moves: None,
+                clear: None,
             });
         }
         for (shadow, merge) in kept {
@@ -3185,6 +3288,7 @@ impl<M: Clone + KeptArea> ShadowSync<M> {
                 area: None,
                 cause: None,
                 moves: None,
+                clear: None,
             });
         }
         Ok(copies)

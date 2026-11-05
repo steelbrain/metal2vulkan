@@ -2046,6 +2046,7 @@ impl Gpu for Runtime {
                 c.attachment_reads_through_copies,
             ),
             ("attachment_read_splits", c.attachment_read_splits),
+            ("attachment_read_clears", c.attachment_read_clears),
             ("reading_draws_snapshotted", c.reading_draws_snapshotted),
             ("snapshot_inline_splits", c.snapshot_inline_splits),
             ("feedback_loop_alias_images", c.feedback_loop_alias_images),

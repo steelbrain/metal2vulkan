@@ -2500,6 +2500,7 @@ field	metal2vulkan-runtime::WorkCounts.argument_samplers_taken	pub argument_samp
 field	metal2vulkan-runtime::WorkCounts.argument_tables_held_at_bind	pub argument_tables_held_at_bind: u64
 field	metal2vulkan-runtime::WorkCounts.argument_tables_retained	pub argument_tables_retained: u64
 field	metal2vulkan-runtime::WorkCounts.attachment_clears_recorded	pub attachment_clears_recorded: u64
+field	metal2vulkan-runtime::WorkCounts.attachment_read_clears	pub attachment_read_clears: u64
 field	metal2vulkan-runtime::WorkCounts.attachment_read_splits	pub attachment_read_splits: u64
 field	metal2vulkan-runtime::WorkCounts.attachment_reads_through_copies	pub attachment_reads_through_copies: u64
 field	metal2vulkan-runtime::WorkCounts.baked_sampler_dispatches_apart	pub baked_sampler_dispatches_apart: u64

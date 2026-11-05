@@ -1725,6 +1725,18 @@ impl EncoderCore {
             if taken.contains(&i) {
                 continue;
             }
+            // A copy in made as a clear of the shadow's image (`ShadowUse::cleared`).
+            if copy.clear.is_some() {
+                let uses = copy.uses();
+                let record = |device: &Vk, raw: vk::CommandBuffer| {
+                    // SAFETY: the encoder's command buffer is recording outside a render pass;
+                    // its commands retain the shadowed texture (and its image) until it
+                    // completes, and every image rests in the `GENERAL` layout.
+                    unsafe { copy.record_gated(device, raw, None, None) }
+                };
+                self.shadow_command(&mut run, (copy.stages(), &uses, false), record);
+                continue;
+            }
             if let Some((keep, both, uses)) = keep_with_copy_in(&device, copies, i) {
                 taken.push(keep);
                 let record = |device: &Vk, raw: vk::CommandBuffer| {
@@ -2991,7 +3003,9 @@ fn keep_with_copy_in(
 pub(super) fn count_shadow_copies(counts: &Counters, copies: &[ShadowCopy]) {
     let texels_in = copies.iter().map(ShadowCopy::texels_in).sum();
     let texels_back = copies.iter().map(ShadowCopy::texels_back).sum();
-    counts.shadow_copies_planned(copies.len(), texels_in, texels_back);
+    // A clear in copies nothing (`ShadowUse::cleared`).
+    let copied = copies.iter().filter(|copy| copy.clear.is_none()).count();
+    counts.shadow_copies_planned(copied, texels_in, texels_back);
     for copy in copies {
         counts.shadow_copy_in_planned(copy);
     }

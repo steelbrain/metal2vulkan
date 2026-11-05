@@ -470,6 +470,7 @@ pub(crate) struct Counters {
     view_shadows: AtomicU64,
     attachment_reads_through_copies: AtomicU64,
     attachment_read_splits: AtomicU64,
+    attachment_read_clears: AtomicU64,
     reading_draws_snapshotted: AtomicU64,
     snapshot_inline_splits: AtomicU64,
     feedback_loop_alias_images: AtomicU64,
@@ -3173,6 +3174,13 @@ impl Counters {
     /// pass recorded into a new instance (`texture/attached_reads.rs`).
     pub(crate) fn attachment_read_split(&self) {
         self.attachment_read_splits.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A draw that samples a color its render pass clears, after a memory barrier before the
+    /// pass's first draw, read copies cleared to the clear in its instance instead of a split
+    /// (`texture/attached_reads.rs`).
+    pub(crate) fn attachment_read_cleared(&self) {
+        self.attachment_read_clears.fetch_add(1, Ordering::Relaxed);
     }
 
     /// A draw that samples a color attachment's texture after a memory barrier of its render
@@ -5994,8 +6002,16 @@ pub struct WorkCounts {
     /// alone), whose copy holds what the draws before the barrier wrote; and those that sample a
     /// color the pass clears after a barrier before its first draw, each recorded into an
     /// instance after the pass's first, which runs the clear, whose copy holds it
-    /// (`texture/attached_reads.rs`).
+    /// (`texture/attached_reads.rs`). Those of the second kind that `attachment_read_clears`
+    /// counts split nothing.
     pub attachment_read_splits: u64,
+    /// Draws that sample a color their render pass clears after a memory barrier before its
+    /// first draw, before any draw of the pass, that read the color's copy in the pass's first
+    /// instance, the copy cleared to the clear before the pass, instead of splitting it: one per
+    /// draw that brought new such copies, each a whole one-level, one-slice texture the pass
+    /// clears in place (`texture/attached_reads.rs`). Not in `attachment_read_splits`, and the
+    /// clears are not in `shadow_copies`.
+    pub attachment_read_clears: u64,
     /// Draws that sample a color attachment's texture after a memory barrier of their render
     /// pass, each reading it through a snapshot inside its instance in place of a split: drawn
     /// twice, first copying each fragment's texel into the snapshot, then reading the snapshot
@@ -6816,6 +6832,7 @@ impl Device {
                 .attachment_reads_through_copies
                 .load(Ordering::Relaxed),
             attachment_read_splits: counters.attachment_read_splits.load(Ordering::Relaxed),
+            attachment_read_clears: counters.attachment_read_clears.load(Ordering::Relaxed),
             reading_draws_snapshotted: counters.reading_draws_snapshotted.load(Ordering::Relaxed),
             snapshot_inline_splits: counters.snapshot_inline_splits.load(Ordering::Relaxed),
             feedback_loop_alias_images: counters.feedback_loop_alias_images.load(Ordering::Relaxed),

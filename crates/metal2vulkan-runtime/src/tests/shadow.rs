@@ -124,6 +124,7 @@ fn through(texture: &Arc<ShadowCopies>, writes: bool) -> (ShadowUse, Use<Resourc
             area: None,
             loads: None,
             tile_stores: false,
+            cleared: None,
         },
         used,
     )
@@ -262,6 +263,7 @@ fn a_copy_back_covers_only_where_the_commands_wrote() {
         area,
         loads: None,
         tile_stores: false,
+        cleared: None,
     };
     let (_, written) = through(&t, true);
     let run = |areas: &[Option<[u32; 4]>]| {
@@ -373,6 +375,7 @@ fn a_copy_in_covers_only_where_the_command_reads_and_writes() {
         area: writes.then_some(area),
         loads: Some(area),
         tile_stores: false,
+        cleared: None,
     };
     let a = [8, 4, 40, 20];
     let mut sync = ShadowSync::<u32>::default();
@@ -447,6 +450,7 @@ fn a_copy_in_covers_only_where_the_command_reads_and_writes() {
         area: Some(a),
         cause: Some(CopyCause::First),
         moves: None,
+        clear: None,
     };
     assert_eq!((copy.texels_in(), copy.texels_back()), (32 * 16, 0));
     assert_eq!(copy.texels_copied_in(), 32 * 16);
@@ -774,6 +778,7 @@ fn a_read_inside_a_rectangle_leaves_the_other_changed_texels_to_the_next_read() 
             area: None,
             loads: Some(area),
             tile_stores: false,
+            cleared: None,
         };
         within_command(sync, &[reader], &[], std::slice::from_ref(&read))
     };
@@ -840,6 +845,7 @@ fn a_copy_back_of_a_part_leaves_a_twin_stale_there_alone() {
             area: Some(area),
             loads: Some([0, 0, 64, 32]),
             tile_stores: false,
+            cleared: None,
         }];
         let mut uses = vec![written.clone()];
         for texture in also {
@@ -913,6 +919,7 @@ fn a_merge_of_a_part_leaves_a_twin_stale_there_alone() {
             area: Some(area),
             loads: Some([0, 0, 64, 32]),
             tile_stores: false,
+            cleared: None,
         }];
         let mut uses = vec![written.clone()];
         for texture in also {
@@ -1057,6 +1064,7 @@ fn a_use_that_overwrites_every_texel_takes_no_copy_in() {
         area: None,
         loads: None,
         tile_stores: false,
+        cleared: None,
     };
     let (_, written) = through(&t, true);
     for stores in [true, false] {

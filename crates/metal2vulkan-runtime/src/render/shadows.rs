@@ -101,6 +101,10 @@ pub(super) struct InstanceShadows {
     /// gathered stays until it is cleared, so a draw that begins with the same gathered those
     /// already.
     last_prefix: Option<(u64, usize)>,
+    /// The shadows whose copy in is a clear to the value given (`shadow::ShadowUse::cleared`):
+    /// the pass's first instance's, of textures its draws sample whose color it clears, after a
+    /// memory barrier before its first draw (`texture/attached_reads.rs`).
+    clears: Vec<(ResourceKey, vk::ClearColorValue)>,
 }
 
 /// `range` of the buffer `key` as a use, read or written (`write`), for `shadow.rs`, which reads
@@ -369,6 +373,22 @@ impl InstanceShadows {
         self.images.clear();
         self.last.clear();
         self.last_prefix = None;
+        self.clears.clear();
+    }
+
+    /// Make the copy in of each shadow among `clears` a clear to its value
+    /// ([`clears`](Self::clears)).
+    pub(super) fn clear_in(&mut self, clears: &[(ResourceKey, vk::ClearColorValue)]) {
+        for &(key, value) in clears {
+            if !self.clears_in(key) {
+                self.clears.push((key, value));
+            }
+        }
+    }
+
+    /// Whether the copy in of the shadow `key` is a clear ([`clear_in`](Self::clear_in)).
+    pub(super) fn clears_in(&self, key: ResourceKey) -> bool {
+        self.clears.iter().any(|&(cleared, _)| cleared == key)
     }
 
     /// How many uses [`uses`](Self::uses) gives.
@@ -467,6 +487,13 @@ pub(super) fn plan<'a>(
         let mut shadows = Vec::with_capacity(attachments.len() + instance.shadows.len());
         for shadow in attachments.iter().chain(&instance.shadows) {
             shadow::join(&mut shadows, shadow);
+        }
+        for shadow in &mut shadows {
+            let key = shadow.copies.shadow_key;
+            if let Some(&(_, value)) = instance.clears.iter().find(|&&(cleared, _)| cleared == key)
+            {
+                shadow.cleared = Some(value);
+            }
         }
         // Sized once: the chained iterators tell no exact length, which would grow the list as
         // it fills.
@@ -662,6 +689,7 @@ fn attachment_shadows(
                     area: None,
                     loads: None,
                     tile_stores: false,
+                    cleared: None,
                 };
                 shadow::join(&mut shadows, &used);
             }
@@ -681,6 +709,7 @@ fn attachment_shadows(
                     area: None,
                     loads: None,
                     tile_stores: false,
+                    cleared: None,
                 };
                 shadow::join(&mut shadows, &used);
             }
@@ -713,6 +742,7 @@ fn attachment_shadows(
                     // A color it loads and stores inside its draws' scissors: Metal's store
                     // writes back each tile its draws reach whole (`shadow.rs`).
                     tile_stores: stores && area.is_some(),
+                    cleared: None,
                 };
                 shadow::join(&mut shadows, &used);
             }
@@ -732,6 +762,7 @@ fn attachment_shadows(
                     area: None,
                     loads: None,
                     tile_stores: false,
+                    cleared: None,
                 };
                 shadow::join(&mut shadows, &used);
             }

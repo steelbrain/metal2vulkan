@@ -133,7 +133,8 @@
 //!   level and layer is the whole render area, cleared by `vkCmdClearColorImage` with the value
 //!   the load operation would take; Vulkan converts both alike), and the draw is not one that
 //!   samples a color the pass clears after a memory barrier before its first draw, whose copy
-//!   must follow the clear (`texture/attached_reads.rs`); otherwise the pass splits, and
+//!   must follow the clear (`texture/attached_reads.rs`; one whose copy is cleared to it instead
+//!   records in its instance); otherwise the pass splits, and
 //!   the new instance follows the current one after a barrier from everything before to
 //!   everything after. A split pass renders its memoryless attachments into stand-ins
 //!   (`attachment_stand_in.rs`), since its instances keep their contents in memory. A query
@@ -7091,28 +7092,61 @@ impl RenderLowering {
         plan: &BindingPlan,
         presents: fn(&Texture, &PassLayout) -> bool,
     ) -> bool {
-        plan.descriptors.iter().any(|write| {
+        (self.sampled_textures(plan)).any(|texture| presents(texture, &self.layout))
+    }
+
+    /// The textures a draw of `plan` samples at slots of its tables: through a sampled image or
+    /// combined image sampler binding, not a storage one.
+    fn sampled_textures<'a>(&'a self, plan: &'a BindingPlan) -> impl Iterator<Item = &'a Texture> {
+        plan.descriptors.iter().filter_map(|write| {
             let slot = match &write.source {
                 WriteSource::Texture { slot, .. } => slot,
                 WriteSource::CombinedImageSampler {
                     image: ImageSource::Texture { slot, .. },
                     ..
                 } => slot,
-                _ => return false,
+                _ => return None,
             };
             let table = match slot.stage {
                 Stage::Vertex => &self.vertex,
                 Stage::Fragment => &self.fragment,
                 Stage::Object => &self.object,
                 Stage::Mesh => &self.mesh,
-                _ => return false,
+                _ => return None,
             };
-            write.ty != metal2vulkan::vk::DescriptorType::STORAGE_IMAGE
-                && table
-                    .textures
-                    .get(&slot.index)
-                    .is_some_and(|texture| presents(texture, &self.layout))
+            if write.ty == metal2vulkan::vk::DescriptorType::STORAGE_IMAGE {
+                return None;
+            }
+            table.textures.get(&slot.index)
         })
+    }
+
+    /// The clears a draw of `plan` that samples a color the pass clears after a memory barrier
+    /// before its first draw reads through copies cleared to them, in its instance, instead of
+    /// the pass splitting (`texture/attached_reads.rs`): each texture it samples that such a
+    /// color renders, by its shadow ([`Texture::cleared_copy`]), but those the pass's first
+    /// instance clears in already. `None` where one may not be cleared so, where the pass split
+    /// or ran a tile dispatch, or where one is new and a draw recorded into the pass already: a
+    /// draw that wrote the attachment may have left what the copy must then hold. Such a draw
+    /// splits the pass as before.
+    fn cleared_copies(
+        &self,
+        plan: &BindingPlan,
+    ) -> Option<Vec<(ResourceKey, vk::ClearColorValue)>> {
+        if !self.earlier.is_empty() || !self.dispatches.is_empty() || self.rerouting {
+            return None;
+        }
+        let mut clears: Vec<(ResourceKey, vk::ClearColorValue)> = Vec::new();
+        for texture in self.sampled_textures(plan) {
+            if !texture.cleared_in(&self.layout) {
+                continue;
+            }
+            let (key, value) = texture.cleared_copy(&self.layout)?;
+            if !self.current.shadows.clears_in(key) && clears.iter().all(|&(had, _)| had != key) {
+                clears.push((key, value));
+            }
+        }
+        (clears.is_empty() || !self.current.recorded).then_some(clears)
     }
 
     /// Whether the pass renders a color over a buffer's bytes through a copied stand-in, or will
@@ -8479,14 +8513,19 @@ impl RenderLowering {
         // draw records into a new one (`render/snapshot.rs`). So does a draw that binds a texture
         // the current instance holds in that layout as a storage image.
         // After a memory barrier before the pass's first draw, one that samples a color the pass
-        // clears records into an instance after the pass's first, which runs the clear, so its
-        // copy holds it (`texture/attached_reads.rs`): the pass's load actions are behind the
-        // barrier.
+        // clears reads a copy that holds the clear (`texture/attached_reads.rs`): the pass's load
+        // actions are behind the barrier. The copy is cleared to it before the pass where that can
+        // be, before any draw of the pass; else the draw records into an instance after the
+        // pass's first, which runs the clear, and the copy is taken between.
         let attached = !self.replaying
             && snapshot.is_none()
             && self.samples_attachment(&plan, Texture::attached_in);
         let behind_loads =
             attached && self.loads_ordered && self.samples_attachment(&plan, Texture::cleared_in);
+        // Where each such color's copy can be cleared to the clear instead, before any draw of the
+        // pass, the draw stays in its instance and reads it there (`texture/attached_reads.rs`).
+        let copy_clears = behind_loads.then(|| self.cleared_copies(&plan)).flatten();
+        let behind_loads = behind_loads && copy_clears.is_none();
         let after_barrier = (attached && (self.current.barriers || self.barrier)) || behind_loads;
         let snapshot_split = snapshot.as_ref().is_some_and(|w| self.snapshot_apart(w));
         let storage_colors = self.storage_colors(&plan);
@@ -9919,6 +9958,10 @@ impl RenderLowering {
         self.tile_memory_splits += usize::from(tile_memory_split);
         self.barrier_splits += usize::from(run_barrier_split);
         self.run_barrier = false;
+        if let Some(clears) = copy_clears.as_deref().filter(|clears| !clears.is_empty()) {
+            self.gathering().clear_in(clears);
+            device.shared().counts.attachment_read_cleared();
+        }
         match uses.prefix() {
             None => self.gathering().add(&draw_shadows, uses),
             Some(prefix) => {
