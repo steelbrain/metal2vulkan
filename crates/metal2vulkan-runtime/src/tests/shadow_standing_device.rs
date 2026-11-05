@@ -7,17 +7,20 @@
 //! Each leg checks both halves: the bytes read are the buffer's as every write left them, and
 //! the counts say which copies in moved nothing (`WorkCounts::shadow_copies_in_skipped_by_standing`).
 //! A standing that never held leaves the bytes right and the counts wrong; one that held over a
-//! write leaves the counts right and the bytes wrong.
+//! write leaves the counts right and the bytes wrong. A shadowed render target over host pages a
+//! no-copy buffer imports, whose CPU writes no count sees, never stands.
 //!
 //! Device tests: compiled only under the validation crate's GPU safety cfgs (`m2v_gpu`,
 //! `m2v_cpu_icd`), on the kind of device the cfg selects. Blits alone: no function.
 
-use super::blit_holds::{device, Scratch, WAIT};
+use super::blit_holds::{device, over_host, Host, Scratch, WAIT};
 use crate::{
     BlitOption, Buffer, CommandQueue, Device, IoSurfacePlane, Origin, ResourceOptions, Size,
     Texture, TextureDescriptor, WorkCounts,
 };
 use metal2vulkan::metal::{PixelFormat, TextureUsage};
+use std::sync::atomic::AtomicUsize;
+use std::sync::Arc;
 
 /// The plane: `WIDTH` texels a row, `HEIGHT` rows, rows of `PITCH` bytes, 64 past each row's
 /// texels.
@@ -68,34 +71,9 @@ impl Plane {
         command_buffer.wait_until_completed_for(WAIT).unwrap();
     }
 
-    /// The texture's texels as a command buffer of its own reads them, row after row, and the
-    /// counts it moved.
+    /// The texture's texels as a command buffer of its own reads them, and the counts it moved.
     fn texels(&self) -> (Vec<u8>, Stood) {
-        let before = self.device.work_counts();
-        let command_buffer = self.queue.command_buffer().unwrap();
-        let mut blit = command_buffer.blit_command_encoder().unwrap();
-        let size = Size::new(WIDTH, HEIGHT, 1);
-        let at = Origin::new(0, 0, 0);
-        let row = WIDTH * 4;
-        let none = BlitOption::None;
-        (blit.copy_from_texture_to_buffer(
-            &self.texture,
-            0,
-            0,
-            at,
-            size,
-            &self.read,
-            0,
-            row,
-            0,
-            none,
-        ))
-        .unwrap();
-        blit.end_encoding().unwrap();
-        command_buffer.commit().unwrap();
-        command_buffer.wait_until_completed_for(WAIT).unwrap();
-        let bytes = self.read_back((WIDTH * 4 * HEIGHT) as usize);
-        (bytes, stood(&before, &self.device.work_counts()))
+        texels(&self.queue, &self.texture, &self.read)
     }
 
     /// The buffer's own bytes, as a copy into the read buffer moves them.
@@ -106,13 +84,7 @@ impl Plane {
         blit.end_encoding().unwrap();
         command_buffer.commit().unwrap();
         command_buffer.wait_until_completed_for(WAIT).unwrap();
-        self.read_back(LENGTH as usize)
-    }
-
-    fn read_back(&self, len: usize) -> Vec<u8> {
-        let bytes = self.read.contents().unwrap().as_ptr();
-        // SAFETY: the read buffer's first `len` bytes, which no command writes now.
-        unsafe { std::slice::from_raw_parts(bytes, len) }.to_vec()
+        read_back(&self.read, LENGTH as usize)
     }
 
     /// A write of `value` into every texel through the texture, from a `Shared` buffer.
@@ -136,6 +108,32 @@ impl Plane {
         command_buffer.commit().unwrap();
         command_buffer.wait_until_completed_for(WAIT).unwrap();
     }
+}
+
+/// `texture`'s texels as a command buffer of `queue`'s reads them into `read`, row after row, and
+/// the counts it moved.
+fn texels(queue: &CommandQueue, texture: &Texture, read: &Buffer) -> (Vec<u8>, Stood) {
+    let device = queue.device();
+    let before = device.work_counts();
+    let command_buffer = queue.command_buffer().unwrap();
+    let mut blit = command_buffer.blit_command_encoder().unwrap();
+    let size = Size::new(WIDTH, HEIGHT, 1);
+    let at = Origin::new(0, 0, 0);
+    let row = WIDTH * 4;
+    let none = BlitOption::None;
+    (blit.copy_from_texture_to_buffer(texture, 0, 0, at, size, read, 0, row, 0, none)).unwrap();
+    blit.end_encoding().unwrap();
+    command_buffer.commit().unwrap();
+    command_buffer.wait_until_completed_for(WAIT).unwrap();
+    let bytes = read_back(read, (row * HEIGHT) as usize);
+    (bytes, stood(&before, &device.work_counts()))
+}
+
+/// The first `len` bytes of `read`, a `Shared` buffer.
+fn read_back(read: &Buffer, len: usize) -> Vec<u8> {
+    let bytes = read.contents().unwrap().as_ptr();
+    // SAFETY: the buffer's first `len` bytes, which no command writes now.
+    unsafe { std::slice::from_raw_parts(bytes, len) }.to_vec()
 }
 
 /// The standing's counts between two snapshots of a device's.
@@ -241,7 +239,7 @@ fn a_private_plane_copies_in_after_its_own_command_buffer_s_write_and_once_hande
     command_buffer.commit().unwrap();
     command_buffer.wait_until_completed_for(WAIT).unwrap();
     let counts = stood(&before, &plane.device.work_counts());
-    let read = plane.read_back((row * HEIGHT) as usize);
+    let read = read_back(&plane.read, (row * HEIGHT) as usize);
     assert!(
         all(&read[..row as usize], 0x77),
         "the read took its own command buffer's fill"
@@ -253,4 +251,36 @@ fn a_private_plane_copies_in_after_its_own_command_buffer_s_write_and_once_hande
     let _ = plane.texels();
     let (_, counts) = plane.texels();
     assert_eq!(counts.against, 0, "handed out, it never stands");
+}
+
+/// A shadowed render target over host pages a no-copy buffer imports (the shape a host's window
+/// takes) never stands: no count sees the CPU's writes. A CPU write between two command buffers
+/// reaches the second one's read, and no copy in of either is decided against a standing.
+#[test]
+fn a_render_target_over_host_pages_never_stands() {
+    let host = Host::new();
+    let scratch = Scratch::new("shadow-standing-host");
+    let device = device(&scratch.0);
+    let runs = Arc::new(AtomicUsize::new(0));
+    let Some(buffer) = over_host(&device, &host, &runs) else {
+        return;
+    };
+    let mut descriptor =
+        TextureDescriptor::texture_2d(PixelFormat::BGRA8Unorm, WIDTH, HEIGHT, false);
+    descriptor.usage = TextureUsage::SHADER_READ | TextureUsage::RENDER_TARGET;
+    let texture = buffer.new_texture(&descriptor, 0, WIDTH * 4).unwrap();
+    assert!(
+        texture.shadow().is_some(),
+        "a render target over host pages"
+    );
+    let queue = device.new_command_queue().unwrap();
+    let read = (device.new_buffer(WIDTH * 4 * HEIGHT, ResourceOptions::shared())).unwrap();
+    host.fill(0x1111_1111);
+    let (first, counts) = texels(&queue, &texture, &read);
+    assert!(all(&first, 0x11), "the first read takes the pages");
+    assert_eq!((counts.against, counts.skipped), (0, 0));
+    host.fill(0x5A5A_5A5A);
+    let (second, counts) = texels(&queue, &texture, &read);
+    assert!(all(&second, 0x5A), "the second read takes the CPU's write");
+    assert_eq!((counts.against, counts.skipped), (0, 0), "nothing stands");
 }
