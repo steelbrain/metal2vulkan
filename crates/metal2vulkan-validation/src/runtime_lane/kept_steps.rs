@@ -39,6 +39,11 @@ const DRAWS: u32 = 512;
 /// The chunks of [`DRAWS`] commands.
 const CHUNKS: u64 = 2;
 
+/// The frames [`changing`] gives records that hold again, after changing at each step, to be kept:
+/// each chunk's copy, put off, is made at a step of its own among the next eight and compared at
+/// the one after.
+const SETTLE: u64 = 10;
+
 /// The target's side ([`replayed_frames`](super::replayed_frames)'s).
 const SIDE: u64 = 64;
 
@@ -169,8 +174,13 @@ fn changed(
 
 /// Frames 3 to 6 of `page`, whose records change at each: the indices' zero half and their first
 /// half in turn. The first forgets the kept recordings; each records inline, keeping nothing, from
-/// its records copied once (`WorkCounts::indirect_record_bytes_copied`), the copy the next step
-/// compares with, and draws what a fresh page draws under its inputs.
+/// its records read once (`WorkCounts::indirect_record_bytes_copied`): at frame 3 into the copy
+/// the next step compares with, from frame 4 on, the records having changed at two steps in a
+/// row, in place, each chunk's copy put off (`WorkCounts::host_step_chunk_copies_put_off`) until a
+/// step of its own among the next eight. Each draws what a fresh page draws under its inputs.
+/// Then the records hold from frame 7: within [`SETTLE`] frames, each chunk copied at its own step
+/// and compared at the next, a step records every chunk apart and keeps it, and the next runs
+/// them kept.
 fn changing(device: &Device, queue: &CommandQueue, page: &Page) {
     let case = "records that change at each step";
     let zeros = Inputs {
@@ -180,17 +190,24 @@ fn changing(device: &Device, queue: &CommandQueue, page: &Page) {
     let first = Inputs::default();
     for at in 3..7 {
         let inputs = if at % 2 == 1 { &zeros } else { &first };
-        let before = device.work_counts().indirect_record_bytes_copied;
+        let before = device.work_counts();
         let (counts, pixels) = frame(device, queue, page, inputs);
-        let copied = device.work_counts().indirect_record_bytes_copied - before;
+        let after = device.work_counts();
+        let copied = after.indirect_record_bytes_copied - before.indirect_record_bytes_copied;
+        let put_off = after.host_step_chunk_copies_put_off - before.host_step_chunk_copies_put_off;
         let again = if at == 3 { CHUNKS } else { 0 };
         let expected = Moved { again, ..INLINE };
         assert_eq!(counts, expected, "{case}: frame {at}");
-        // The step reads each record once, into the copy the next step compares with.
+        // The step reads each record once, into the copy the next step compares with or in place.
         assert_eq!(
             copied,
             u64::from(DRAWS) * COMMAND_BYTES as u64,
-            "{case}: frame {at} copies each record once"
+            "{case}: frame {at} reads each record once"
+        );
+        let expected = if at == 3 { 0 } else { CHUNKS };
+        assert_eq!(
+            put_off, expected,
+            "{case}: frame {at} puts each chunk's copy off"
         );
         assert_eq!(
             pixels_hash(&pixels),
@@ -198,6 +215,28 @@ fn changing(device: &Device, queue: &CommandQueue, page: &Page) {
             "{case}: frame {at} draws what a page that kept nothing draws"
         );
     }
+    let case = "records that hold again after changing at each step";
+    let kept_at = (7..7 + SETTLE).find(|at| {
+        let (counts, pixels) = frame(device, queue, page, &first);
+        assert_eq!(
+            pixels_hash(&pixels),
+            pixels_hash(&fresh(device, queue, case, &first)),
+            "{case}: frame {at} draws what a page that kept nothing draws"
+        );
+        assert!(
+            counts == KEEPS || counts == INLINE,
+            "{case}: frame {at} moved {counts:?}"
+        );
+        counts == KEEPS
+    });
+    let kept_at = kept_at.unwrap_or_else(|| panic!("{case}: no frame of {SETTLE} kept a chunk"));
+    let (counts, _) = frame(device, queue, page, &first);
+    assert_eq!(
+        counts,
+        KEPT,
+        "{case}: frame {} after the one that kept",
+        kept_at + 1
+    );
 }
 
 /// An input a case changes, of the page's own resources and those [`Others`] holds.

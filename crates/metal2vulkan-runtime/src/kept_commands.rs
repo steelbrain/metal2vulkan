@@ -59,6 +59,11 @@ use std::sync::{Arc, Mutex, Weak};
 /// compute chunk's dispatches into one primary.
 pub(super) const CHUNK: u32 = 256;
 
+/// How often a host step copies, for the next step's comparison, the records of a chunk that
+/// changed at two steps in a row ([`StepCopy`]): at one step in this many, each chunk at a step of
+/// its own among them.
+const COPY_EVERY: u8 = 8;
+
 /// The chunks `range` falls into, in order: each chunk's index and the commands of `range` it
 /// covers.
 pub(super) fn chunks(range: Range<u32>) -> impl Iterator<Item = (u32, Range<u32>)> {
@@ -430,13 +435,72 @@ struct ChunkState {
     /// read them (`IndirectCommandBuffer::written_bytes`), which the next step compares the
     /// records with before it keeps one (`render/executions/kept.rs`).
     read: Option<Box<[u8]>>,
+    /// A host step's: when the next step copies its records ([`StepCopy`]).
+    copy: StepCopy,
 }
 
-/// What a host step finds of a chunk ([`KeptChunks::look_up_step`]): what is kept of it, and the
-/// bytes of its records as the last step that kept no recording of them read them, taken.
+/// When a host step that records a chunk inline copies its records, for the next step's
+/// comparison (`render/executions/kept.rs`): where they hold the bytes the last step read, it
+/// copies nothing, those bytes being the records; where they changed since, it copies them again,
+/// but where they changed at the step before too, it puts the copy off, reading them in place as a
+/// step that keeps nothing does, and copies them at one step in [`COPY_EVERY`] only, each chunk at
+/// a step of its own among them, until a comparison finds them as the step before read them.
+/// Records the GPU writes otherwise at each step are so copied for a fraction of their chunks a
+/// step, and a chunk whose records stop changing is compared again within [`COPY_EVERY`] steps. A
+/// write of the CPU's to the chunk, or a recording of it kept or forgotten, starts it over.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) struct StepCopy {
+    /// The steps in a row whose comparison found its records changed.
+    changed: u8,
+    /// The steps that put its copy off still before one copies its records.
+    wait: u8,
+}
+
+impl StepCopy {
+    /// What a step that records chunk `chunk` inline does with its records, its comparison having
+    /// found them as the bytes it compared them with (`Some(true)`), changed (`Some(false)`), or
+    /// made none, the chunk holding no bytes to compare them with (`None`): whether it copies them
+    /// (the type's docs), and what the next step finds.
+    pub(super) fn step(self, chunk: u32, compared: Option<bool>) -> (bool, StepCopy) {
+        match compared {
+            Some(true) => (false, StepCopy::default()),
+            Some(false) if self.changed == 0 => (
+                true,
+                StepCopy {
+                    changed: 1,
+                    wait: 0,
+                },
+            ),
+            Some(false) => {
+                // The chunk's own step among the next `COPY_EVERY`, at the first copy put off;
+                // after that, the same step of each `COPY_EVERY`: copied at the last, compared at
+                // this one.
+                let wait = match self.changed {
+                    1 => COPY_EVERY - 1 - (chunk % u32::from(COPY_EVERY)) as u8,
+                    _ => COPY_EVERY - 2,
+                };
+                let changed = self.changed.saturating_add(1);
+                (false, StepCopy { changed, wait })
+            }
+            None if self.wait == 0 => (true, self),
+            None => (
+                false,
+                StepCopy {
+                    wait: self.wait - 1,
+                    ..self
+                },
+            ),
+        }
+    }
+}
+
+/// What a host step finds of a chunk ([`KeptChunks::look_up_step`]): what is kept of it, the
+/// bytes of its records as the last step that kept no recording of them read them, taken, and
+/// when it copies them ([`StepCopy`]).
 pub(super) struct StepChunk {
     pub(super) kept: Kept,
     pub(super) read: Option<Box<[u8]>>,
+    pub(super) copy: StepCopy,
 }
 
 impl KeptChunks {
@@ -481,17 +545,23 @@ impl KeptChunks {
     /// bytes it last read of each taken ([`StepChunk`]).
     pub(super) fn look_up_step(&mut self, range: Range<u32>) -> Vec<StepChunk> {
         let kept = self.look_up(range.clone());
-        let reads: Vec<_> =
-            (chunks(range).map(|(chunk, _)| self.state(chunk).read.take())).collect();
+        let reads: Vec<_> = (chunks(range).map(|(chunk, _)| {
+            let state = self.state(chunk);
+            (state.read.take(), state.copy)
+        }))
+        .collect();
         (kept.into_iter().zip(reads))
-            .map(|(kept, read)| StepChunk { kept, read })
+            .map(|(kept, (read, copy))| StepChunk { kept, read, copy })
             .collect()
     }
 
-    /// A host step read `bytes` of chunk `chunk`'s records and kept no recording of them: the
-    /// next step compares the records with them.
-    pub(super) fn read(&mut self, chunk: u32, bytes: Box<[u8]>) {
-        self.state(chunk).read = Some(bytes);
+    /// A host step kept no recording of chunk `chunk` and read `bytes` of its records, which the
+    /// next step compares the records with, or none, its copy put off; `copy` is when the next
+    /// step copies them ([`StepCopy`]).
+    pub(super) fn read(&mut self, chunk: u32, bytes: Option<Box<[u8]>>, copy: StepCopy) {
+        let state = self.state(chunk);
+        state.read = bytes;
+        state.copy = copy;
     }
 
     /// Whether an execution last recorded a chunk of `range` otherwise than plainly.
@@ -505,11 +575,14 @@ impl KeptChunks {
         let state = self.state(chunk);
         state.stepped = false;
         state.kept = Some(kept);
+        state.copy = StepCopy::default();
     }
 
     /// Forget what chunk `chunk` kept, noting nothing more of it.
     pub(super) fn forget(&mut self, chunk: u32) {
-        self.state(chunk).kept = None;
+        let state = self.state(chunk);
+        state.kept = None;
+        state.copy = StepCopy::default();
     }
 
     /// Note that chunk `chunk`'s recording was not plain.
@@ -538,7 +611,55 @@ impl KeptChunks {
 
 #[cfg(test)]
 mod tests {
-    use super::{chunks, chunks_of, pieces, Kept, KeptChunks, CHUNK};
+    use super::{chunks, chunks_of, pieces, Kept, KeptChunks, StepCopy, CHUNK, COPY_EVERY};
+
+    /// Records that change at each step are copied at a chunk's first read and first change, then
+    /// at one step in `COPY_EVERY`, each chunk at a step of its own: from the step after the first
+    /// copy put off, one chunk in `COPY_EVERY` a step. A comparison that finds them held starts it
+    /// over, as does a write (`KeptChunks::wrote`).
+    #[test]
+    fn records_that_change_at_each_step_are_copied_at_one_step_in_eight_a_chunk() {
+        let every = u32::from(COPY_EVERY);
+        let steps = 4 * every;
+        // The steps that copy chunk `chunk`'s records: each copy compared changed at the next
+        // step, none compared after a step that put the copy off.
+        let copied = |chunk: u32| {
+            let (mut copy, mut compared, mut at) = (StepCopy::default(), None, Vec::new());
+            for step in 0..steps {
+                let (copies, next) = copy.step(chunk, compared);
+                copy = next;
+                compared = copies.then_some(false);
+                if copies {
+                    at.push(step);
+                }
+            }
+            at
+        };
+        assert_eq!(copied(0), [0, 1, 10, 18, 26]);
+        assert_eq!(copied(every - 1), [0, 1, 3, 11, 19, 27]);
+        for step in 3..steps {
+            let copying = (0..every).filter(|&chunk| copied(chunk).contains(&step));
+            assert_eq!(copying.count(), 1, "step {step}");
+        }
+        let (copies, after) = StepCopy {
+            changed: 3,
+            wait: 2,
+        }
+        .step(0, Some(true));
+        assert_eq!((copies, after), (false, StepCopy::default()), "held");
+        let mut kept = KeptChunks::default();
+        kept.read(
+            2,
+            None,
+            StepCopy {
+                changed: 3,
+                wait: 2,
+            },
+        );
+        kept.wrote(CHUNK * 2..CHUNK * 2 + 1);
+        let found = kept.look_up_step(CHUNK * 2..CHUNK * 3);
+        assert_eq!(found[0].copy, StepCopy::default(), "written");
+    }
 
     /// A write looks at the states of the chunks it covers alone, however many others hold one,
     /// and at none while no chunk holds a state; it forgets those, and no other.

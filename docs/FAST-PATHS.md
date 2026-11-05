@@ -1016,7 +1016,11 @@ else.
   (`WorkCounts::host_step_chunks_kept`) and records apart and keeps the others; one whose records
   changed records inline as before, from its records read once into the copy the next step
   compares with, forgetting the recordings whose records changed
-  (`host_step_chunks_recorded_again`). The step's round trip stays. Every other execution reads
+  (`host_step_chunks_recorded_again`), but a chunk whose records changed at two steps in a row
+  reads them in place and is copied at one step in eight only, each chunk at a step of its own
+  (`host_step_chunk_copies_put_off`), so records that change at each step cost a copy of an
+  eighth of them a step, and a chunk whose records stop changing is copied again within eight
+  steps, then compared at the next. The step's round trip stays. Every other execution reads
   and records each of its commands at each commit: one of a buffer the GPU may write (from the
   call at which a route that may write its records met it, or a blit into it, on) at its commit,
   one of a buffer of mesh or patch draws alone (neither `DRAW` nor `DRAW_INDEXED` among its command

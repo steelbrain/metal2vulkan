@@ -71,7 +71,7 @@ use super::device::lock;
 use super::error::{internal, invalid, Error, MemoryKind, Problem, RuntimeGap};
 use super::families::GpuFamily;
 use super::indirect_execute::Unforeseen;
-use super::kept_commands::{Kept, KeptChunk, KeptChunks, StepChunk};
+use super::kept_commands::{Kept, KeptChunk, KeptChunks, StepChunk, StepCopy};
 use super::memory::MemoryClass;
 use super::pipeline::{
     ComputePipelineState, ComputeProgram, RenderPipelineState, RenderProgram, RenderStateKind,
@@ -101,6 +101,7 @@ use metal2vulkan::metal::{
     Winding,
 };
 use metal2vulkan::pipeline::CommandWrites;
+use std::borrow::{Borrow, Cow};
 use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroU64;
 use std::ops::Range;
@@ -2570,10 +2571,14 @@ impl IndirectCommandBuffer {
         lock(&self.0.pipelines).step_kept.look_up_step(range)
     }
 
-    /// A host step read `bytes` of the records of chunk `chunk` and kept no recording of them:
-    /// the next step compares the records with them.
-    pub(super) fn step_read(&self, chunk: u32, bytes: Box<[u8]>) {
-        lock(&self.0.pipelines).step_kept.read(chunk, bytes);
+    /// A host step kept no recording of the chunks `reads` names, and read each one's records
+    /// into the bytes it gives, which the next step compares the records with, or into none, its
+    /// copy put off; with when the next step copies them (`StepCopy`).
+    pub(super) fn step_reads(&self, reads: Vec<(u32, Option<Box<[u8]>>, StepCopy)>) {
+        let mut commands = lock(&self.0.pipelines);
+        for (chunk, bytes, copy) in reads {
+            commands.step_kept.read(chunk, bytes, copy);
+        }
     }
 
     /// Keep `kept`, a host step's recording of chunk `chunk`, which holds the bytes of the records
@@ -2920,23 +2925,38 @@ impl IndirectCommandBuffer {
         Ok(self.written_records_of(count, range.map(|index| self.record_now(index))))
     }
 
-    /// [`written_records`](Self::written_records) of commands `range` from `bytes`, the copies
-    /// of their records a host step read them into, in order (`render/executions/kept.rs`,
-    /// `StepReads`): the step reads each record once, into the copy the next step compares
-    /// with.
+    /// [`written_records`](Self::written_records) of commands `range` from `sources`, where a
+    /// host step reads their records, in order (`render/executions/kept.rs`, `StepReads`): the
+    /// copies it read them into, or holds of them, and their storage where it puts a chunk's copy
+    /// off. The step reads each record once.
     pub(super) fn written_records_in(
         &self,
         range: Range<u32>,
-        bytes: &[&[u8]],
+        sources: &[RecordSource<'_>],
     ) -> Result<WrittenRecords, Error> {
-        let whole = bytes.iter().all(|bytes| bytes.len() % COMMAND_BYTES == 0);
-        let total: usize = bytes.iter().map(|bytes| bytes.len()).sum();
-        if !whole || total != range.len() * COMMAND_BYTES {
+        let counts = sources.iter().map(|source| match source {
+            RecordSource::Bytes(bytes) => {
+                (bytes.len() % COMMAND_BYTES == 0).then_some(bytes.len() / COMMAND_BYTES)
+            }
+            RecordSource::Storage(commands) => Some(commands.len()),
+        });
+        if counts.sum::<Option<usize>>() != Some(range.len()) {
             return Err(internal(
-                "a host step's copies of its records not one a command",
+                "a host step's reads of its records not one a command",
             ));
         }
-        let records = (bytes.iter()).flat_map(|bytes| bytes.as_chunks::<COMMAND_BYTES>().0);
+        let records = sources.iter().flat_map(|source| {
+            let (bytes, storage) = match source {
+                RecordSource::Bytes(bytes) => (*bytes, 0..0),
+                RecordSource::Storage(commands) => (&[][..], commands.clone()),
+            };
+            let copied = bytes
+                .as_chunks::<COMMAND_BYTES>()
+                .0
+                .iter()
+                .map(Cow::Borrowed);
+            copied.chain(storage.map(|index| Cow::Owned(self.record_now(index))))
+        });
         Ok(self.written_records_of(range.len(), records))
     }
 
@@ -2945,7 +2965,7 @@ impl IndirectCommandBuffer {
     fn written_records_of(
         &self,
         count: usize,
-        records: impl Iterator<Item = impl AsRef<[u8]>>,
+        records: impl Iterator<Item = impl Borrow<[u8; COMMAND_BYTES]>>,
     ) -> WrittenRecords {
         if let Some(fault) = self.written_header_fault() {
             return WrittenRecords {
@@ -2957,7 +2977,8 @@ impl IndirectCommandBuffer {
         let mut faults = ReplayFaults::default();
         let mut decoded = Vec::with_capacity(count);
         for bytes in records {
-            let record = self.written_record(bytes.as_ref());
+            let bytes: &[u8; COMMAND_BYTES] = bytes.borrow();
+            let record = self.written_record(bytes);
             if record.is_none() {
                 faults = ReplayFaults(faults.0 | ReplayFaults::RECORD.0);
             }
@@ -3591,6 +3612,16 @@ impl IndirectCommandBuffer {
         }
         Ok(answer)
     }
+}
+
+/// Where a host step reads the records of a chunk of its commands
+/// ([`IndirectCommandBuffer::written_records_in`]).
+pub(super) enum RecordSource<'a> {
+    /// Bytes of them it read before, whole records in order.
+    Bytes(&'a [u8]),
+    /// Their storage, commands `range` (inside the size), read record by record now, as an
+    /// execution that keeps nothing reads them.
+    Storage(Range<u32>),
 }
 
 /// The records of an execution's commands as the GPU and the CPU left them

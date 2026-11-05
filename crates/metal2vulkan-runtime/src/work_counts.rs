@@ -99,6 +99,7 @@ pub(crate) struct Counters {
     host_step_pipelines_made: AtomicU64,
     host_step_chunks_kept: AtomicU64,
     host_step_chunks_recorded_again: AtomicU64,
+    host_step_chunk_copies_put_off: AtomicU64,
     host_step_records_compared: AtomicU64,
     host_step_compare_nanos: AtomicU64,
     commit_refusals_held: AtomicU64,
@@ -1289,6 +1290,13 @@ impl Counters {
     /// ruled out (`render/executions/kept.rs`).
     pub(crate) fn host_step_chunk_recorded_again(&self) {
         self.host_step_chunks_recorded_again
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A host step that records inline read a chunk's records in place, its copy for the next
+    /// step's comparison put off (`kept_commands::StepCopy`).
+    pub(crate) fn host_step_chunk_copy_put_off(&self) {
+        self.host_step_chunk_copies_put_off
             .fetch_add(1, Ordering::Relaxed);
     }
 
@@ -3811,6 +3819,12 @@ pub struct WorkCounts {
     /// of them: a record or an input differed from those the recording was made from (a step
     /// whose records changed records them inline, and forgets the recording).
     pub host_step_chunks_recorded_again: u64,
+    /// Chunks of render commands a host step that records inline read in place, as an execution
+    /// that keeps nothing reads them, one a chunk each time: their records changed at two steps in
+    /// a row, so it copies them for the next step's comparison at one step in eight only, each
+    /// chunk at a step of its own among them, until a comparison finds them as the step before
+    /// read them.
+    pub host_step_chunk_copies_put_off: u64,
     /// Records a host step compared, byte for byte, with those a kept chunk was recorded from or
     /// those the last step read, one a record each time.
     pub host_step_records_compared: u64,
@@ -6099,6 +6113,9 @@ impl Device {
             host_step_chunks_kept: counters.host_step_chunks_kept.load(Ordering::Relaxed),
             host_step_chunks_recorded_again: counters
                 .host_step_chunks_recorded_again
+                .load(Ordering::Relaxed),
+            host_step_chunk_copies_put_off: counters
+                .host_step_chunk_copies_put_off
                 .load(Ordering::Relaxed),
             host_step_records_compared: counters.host_step_records_compared.load(Ordering::Relaxed),
             host_step_compare_nanos: counters.host_step_compare_nanos.load(Ordering::Relaxed),

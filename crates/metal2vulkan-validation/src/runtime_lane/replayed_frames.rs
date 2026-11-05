@@ -379,8 +379,9 @@ fn split(before: &WorkCounts, after: &WorkCounts) -> String {
         "host_steps {} host_step_ms {:.1} render_pipelines_made_ms {:.1} \
          compute_pipelines_made_ms {:.1} variant_pipelines_made {} records_read {} \
          heads_held_for_host_steps {} heads_held_for_earlier_commits {} shapes_found_or_made {} \
-         host_step_chunks_kept {} host_step_chunks_recorded_again {} host_step_records_compared {} \
-         host_step_compare_ms {:.2} scheduler_passes {} footprints_built {} footprint_lock_waits {} \
+         host_step_chunks_kept {} host_step_chunks_recorded_again {} \
+         host_step_chunk_copies_put_off {} host_step_records_compared {} \
+         host_step_compare_ms {:.2} indirect_record_bytes_copied {} scheduler_passes {} footprints_built {} footprint_lock_waits {} \
          root_table_ranges_noted {} resident_uses_made {} resident_uses_gathered {} \
          resident_address_indexes_made {} stage_tables_read {} draws_rebound {} draws_as_before {} \
          heap_tables_worked_out {} host_range_lookups {} argument_samplers_taken {}",
@@ -395,8 +396,10 @@ fn split(before: &WorkCounts, after: &WorkCounts) -> String {
         shapes(before, after),
         after.host_step_chunks_kept - before.host_step_chunks_kept,
         after.host_step_chunks_recorded_again - before.host_step_chunks_recorded_again,
+        after.host_step_chunk_copies_put_off - before.host_step_chunk_copies_put_off,
         after.host_step_records_compared - before.host_step_records_compared,
         ms(after.host_step_compare_nanos - before.host_step_compare_nanos),
+        after.indirect_record_bytes_copied - before.indirect_record_bytes_copied,
         after.scheduler_passes - before.scheduler_passes,
         after.footprints_built - before.footprints_built,
         after.footprint_lock_waits - before.footprint_lock_waits,
