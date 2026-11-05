@@ -138,7 +138,7 @@ use std::any::Any;
 use std::collections::{BTreeMap, BTreeSet, HashSet, VecDeque};
 use std::ops::Range;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
-use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock, TryLockError};
 use std::time::{Duration, Instant};
 
 /// No batch's host step is handed to the steps' thread (`CommandBufferShared::stepping`).
@@ -307,6 +307,9 @@ pub(super) struct CommandBufferShared {
     /// Its commands' reads and writes of new textures' unwritten patterns, in encode order, which
     /// its commit takes (`fresh_unwritten.rs`). Apart from the state: its encoders log into it.
     fresh: FreshLog,
+    /// Its batches' footprints as the scheduler had them built, apart from the state: a kept one
+    /// is read without its lock ([`CommandBufferShared::footprint`]).
+    footprints: Footprints,
 }
 
 /// The word [`CommandBufferShared::status`] holds for `status`: its raw value.
@@ -530,61 +533,130 @@ impl FailedEncoders {
     }
 }
 
-/// A command buffer's ended encoders' recordings, in encoding order, and a revision that every
-/// mutable access to them moves: a batch's footprint built from them is kept while the revision
-/// holds ([`CommandBufferShared::footprint`]), as nothing can change them but through such an
-/// access.
-#[derive(Default)]
-struct Parts {
-    parts: Vec<Recorded>,
-    revision: u64,
+/// A part of a command buffer's state that its batches' footprints are built from (its ended
+/// encoders' recordings, its batches), with a revision that every mutable access to it moves,
+/// shared by both parts ([`Footprints::revision`]): a footprint built from them is kept while the
+/// revision holds ([`CommandBufferShared::footprint`]), as nothing changes them but through such
+/// an access, which holds the state's lock. Moved before the access returns, so a read of the
+/// revision that sees it unmoved, with or without the lock, reads it before the change.
+struct Revised<T> {
+    value: T,
+    revision: Arc<AtomicU64>,
 }
 
-impl std::ops::Deref for Parts {
-    type Target = Vec<Recorded>;
-
-    fn deref(&self) -> &Vec<Recorded> {
-        &self.parts
+impl<T> Revised<T> {
+    fn new(value: T, revision: &Arc<AtomicU64>) -> Revised<T> {
+        Revised {
+            value,
+            revision: Arc::clone(revision),
+        }
     }
 }
 
-impl std::ops::DerefMut for Parts {
-    fn deref_mut(&mut self) -> &mut Vec<Recorded> {
-        self.revision += 1;
-        &mut self.parts
+impl<T> std::ops::Deref for Revised<T> {
+    type Target = T;
+
+    fn deref(&self) -> &T {
+        &self.value
+    }
+}
+
+impl<T> std::ops::DerefMut for Revised<T> {
+    fn deref_mut(&mut self) -> &mut T {
+        self.revision.fetch_add(1, Ordering::AcqRel);
+        &mut self.value
+    }
+}
+
+/// Each batch's footprint as the scheduler last had it built ([`CommandBufferShared::footprint`]),
+/// apart from the state: a kept one is read without the state's lock, which a host step's draws
+/// and a commit's work take, so the scheduler's passes, one at each commit and completion on
+/// every queue, wait for neither.
+#[derive(Default)]
+struct Footprints {
+    /// The revision of what they are built from, which the state's [`Revised`] parts move.
+    revision: Arc<AtomicU64>,
+    /// By batch.
+    kept: Mutex<Vec<Option<BuiltFootprint>>>,
+}
+
+impl Footprints {
+    /// Batch `index`'s kept footprint, where what it was built from holds: the revision it was
+    /// built at, and each of its segments' answers ([`SegmentProbe`]).
+    fn kept(&self, index: usize) -> Option<Arc<Footprint<ResourceKey>>> {
+        let revision = self.revision.load(Ordering::Acquire);
+        let kept = lock(&self.kept);
+        let built = kept.get(index)?.as_ref()?;
+        let holds = built.revision == revision && built.probes.iter().all(SegmentProbe::holds);
+        holds.then(|| Arc::clone(&built.footprint))
+    }
+
+    /// Keep `built` as batch `index`'s, where nothing it was built from moved since.
+    fn keep(&self, index: usize, built: BuiltFootprint) {
+        let mut kept = lock(&self.kept);
+        if self.revision.load(Ordering::Acquire) != built.revision {
+            return;
+        }
+        if kept.len() <= index {
+            kept.resize_with(index + 1, || None);
+        }
+        kept[index] = Some(built);
     }
 }
 
 /// A batch's footprint as [`CommandBufferShared::footprint`] built it, with what it was built
-/// from.
+/// from: the revision of its command buffer's recordings and batches ([`Revised`]), and what its
+/// segments' shares turn on besides ([`SegmentProbe`]). Two equal ones build equal footprints:
+/// every summary taken lies in the recordings, and which one a segment takes turns on its own
+/// fields, which the revision covers, and on its work's and step inputs' answers, which the
+/// probes ask again.
 struct BuiltFootprint {
-    from: FootprintSources,
+    revision: u64,
+    probes: Vec<SegmentProbe>,
     footprint: Arc<Footprint<ResourceKey>>,
 }
 
-/// What a batch's footprint is built from: the recordings' revision ([`Parts`]), the batch's
-/// encoders among them, and the summary each of its segments takes, in order. Two equal ones
-/// build equal footprints: every summary taken lies in the recordings, which nothing changes
-/// without moving the revision, and which one a segment takes is what may change while they
-/// stand (a route met since makes the GPU write what its work reads, or outgrows what `commit`
-/// recorded for good; a host step records it; a recording is due again).
-#[derive(PartialEq)]
-struct FootprintSources {
-    revision: u64,
-    range: Range<usize>,
-    taken: Vec<SegmentShare>,
+/// What the summary a segment's share of its batch's footprint takes turns on that may move
+/// without its command buffer's state: its work's answers (whether the GPU may write what it
+/// reads, the CPU rewrote its records, a route encoded since outgrew its recording, its step
+/// holds the batch) and whether its recording is due again (`Segment::needs_step`, `rerecords`,
+/// `steps_after_the_gpu`), as they were where the footprint was built. A route met since, a
+/// host step or a rewrite moves one; a kept footprint stands only where none moved.
+struct SegmentProbe {
+    work: Deferred,
+    /// Its step inputs, where they are a recording that may come due again.
+    rerecord: Option<StepInputs>,
+    answers: [bool; 5],
 }
 
-/// The summary a segment's share of its batch's footprint takes
-/// ([`CommandBufferShared::footprint`]).
-#[derive(Clone, Copy, PartialEq)]
-enum SegmentShare {
-    /// A loop's check: what its laying's parts use.
-    Laying,
-    /// Its recording's.
-    Recording,
-    /// What `commit` bounded its host step's recording by.
-    Bound,
+impl SegmentProbe {
+    fn of(segment: &Segment) -> SegmentProbe {
+        let rerecord = (segment.inputs.as_ref())
+            .filter(|inputs| matches!(inputs, StepInputs::Rerecord(_)))
+            .cloned();
+        let answers = probe_answers(&segment.work, rerecord.as_ref());
+        SegmentProbe {
+            work: segment.work.clone(),
+            rerecord,
+            answers,
+        }
+    }
+
+    /// Whether its answers are as they were.
+    fn holds(&self) -> bool {
+        probe_answers(&self.work, self.rerecord.as_ref()) == self.answers
+    }
+}
+
+/// [`SegmentProbe`]'s answers of `work` and `rerecord`.
+fn probe_answers(work: &Deferred, rerecord: Option<&StepInputs>) -> [bool; 5] {
+    [
+        work.gpu_written(),
+        work.rewritten(),
+        work.outgrown(),
+        work.holds(),
+        rerecord.is_some_and(StepInputs::rerecords),
+    ]
 }
 
 /// A command buffer's mutable state.
@@ -637,10 +709,7 @@ pub(super) struct State {
     /// not kept (`kept_commands.rs`).
     own_reached: u64,
     /// The ended encoders' recordings, in encoding order.
-    recorded: Parts,
-    /// Each batch's footprint as the scheduler last had it built, by batch
-    /// ([`CommandBufferShared::footprint`]).
-    footprints: Vec<Option<BuiltFootprint>>,
+    recorded: Revised<Vec<Recorded>>,
     /// The last ended encoder's last `VkCommandBuffer`, still recording: its batch's end goes
     /// into it as the batch ends ([`CommandBufferShared::close_tail`]), or it ends as it is where
     /// a later encoder joins its batch.
@@ -654,7 +723,7 @@ pub(super) struct State {
     /// (`submit.rs`).
     pub(super) prefix: Option<vk::CommandBuffer>,
     /// The encoders split at the event and binary semaphore waits and signals.
-    batches: Batches<Arc<EventShared>, vk::Semaphore>,
+    batches: Revised<Batches<Arc<EventShared>, vk::Semaphore>>,
     /// Its scheduled signals, in the order encoded
     /// ([`CommandBuffer::encode_signal_event_scheduled`]).
     scheduled_signals: Vec<(Arc<EventShared>, u64)>,
@@ -2010,6 +2079,7 @@ fn write_fields(upload: &Upload, table: u64, set: u64, count: u64) -> Result<(),
 impl CommandBuffer {
     /// A new command buffer of `queue`, holding `slot` of it.
     pub(super) fn new(queue: &CommandQueue, slot: Slot) -> CommandBuffer {
+        let footprints = Footprints::default();
         CommandBuffer(Arc::new(CommandBufferShared {
             device: queue.device().clone(),
             queue: queue.clone(),
@@ -2031,12 +2101,11 @@ impl CommandBuffer {
                 rerun_pool: None,
                 kept: None,
                 own_reached: 0,
-                recorded: Parts::default(),
-                footprints: Vec::new(),
+                recorded: Revised::new(Vec::new(), &footprints.revision),
                 tail: None,
                 folds: Vec::new(),
                 prefix: None,
-                batches: Batches::default(),
+                batches: Revised::new(Batches::default(), &footprints.revision),
                 scheduled_signals: Vec::new(),
                 scheduled: VecDeque::new(),
                 submission: VecDeque::new(),
@@ -2132,6 +2201,7 @@ impl CommandBuffer {
             error: OnceLock::new(),
             group_hold: AtomicU8::new(0),
             fresh: FreshLog::default(),
+            footprints,
         }))
     }
 
@@ -2245,6 +2315,20 @@ impl CommandBuffer {
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     pub(crate) fn fail_draw_making(&self, error: Error) {
         self.state().making_failure_injected = Some(error);
+    }
+
+    /// Its state, locked, as a host step's draw or a commit's work holds it: a device test's
+    /// (`tests::footprint_locks`).
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) fn locked_state(&self) -> MutexGuard<'_, State> {
+        lock(&self.0.state)
+    }
+
+    /// Batch `index`'s footprint as the scheduler asks for it
+    /// ([`CommandBufferShared::footprint`]): a device test's (`tests::footprint_locks`).
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) fn footprint(&self, index: usize) -> Option<Arc<Footprint<ResourceKey>>> {
+        self.0.footprint(index)
     }
 
     /// The bytes its upload arena's regions took: a device test's measure (`tests::rerun_arenas`).
@@ -4052,34 +4136,48 @@ impl CommandBufferShared {
     /// submission records (a scrub), or a resource state encoder's update, whose uses its
     /// submission adds. A loop's check adds what its laying's parts use, which it may run again.
     ///
-    /// Built where a pass first asks, and kept (`State::footprints`): a later ask takes the kept
-    /// one while what it was built from holds ([`FootprintSources`]), so the scheduler's passes,
-    /// one at each commit and completion on every queue, build each batch's once, not once a
-    /// pass (`WorkCounts::footprints_built`). Its uses are copied out under the command buffer's
-    /// lock and sorted without it, which a host step's draws take. A footprint a segment's
+    /// Built where a pass first asks, and kept ([`Footprints`]): a later ask takes the kept one
+    /// while what it was built from holds ([`BuiltFootprint`]), so the scheduler's passes, one at
+    /// each commit and completion on every queue, build each batch's once, not once a pass
+    /// (`WorkCounts::footprints_built`). A kept one is read without the command buffer's state
+    /// lock, which a host step's draws and a commit's work take, so an ask waits for neither; a
+    /// build copies its uses out under the lock (an ask that found it taken counted,
+    /// `WorkCounts::footprint_lock_waits`) and sorts them without it. A footprint a segment's
     /// known uses join is built at each ask, as those are made from the device's aliases as
     /// they stand (`DeferredPass::known_summary`).
     pub(crate) fn footprint(&self, index: usize) -> Option<Arc<Footprint<ResourceKey>>> {
+        if let Some(kept) = self.footprints.kept(index) {
+            return Some(kept);
+        }
         let counts = &self.device.shared().counts;
-        let (from, gathered) = {
-            let state = lock(&self.state);
+        let (built, gathered) = {
+            let state = match self.state.try_lock() {
+                Ok(state) => state,
+                Err(TryLockError::Poisoned(poisoned)) => poisoned.into_inner(),
+                Err(TryLockError::WouldBlock) => {
+                    counts.footprint_lock_waited();
+                    lock(&self.state)
+                }
+            };
+            // Read under the lock, before anything it is built from: a change since moves it.
+            let revision = self.footprints.revision.load(Ordering::Acquire);
             let range = state.batch_range(index);
             let recorded = &state.recorded[range.clone()];
             let mut summaries = Vec::new();
             let mut known = Vec::new();
-            let mut taken = Vec::new();
+            let mut probes = Vec::new();
             for (at, encoder) in recorded.iter().enumerate() {
                 if !encoder.sparse.is_empty() {
                     return None;
                 }
                 summaries.push(&encoder.summary);
                 for segment in &encoder.segments {
+                    probes.push(SegmentProbe::of(segment));
                     // A loop's check may run its laying again: what the laying's parts use
                     // (`rerun.rs`).
                     if let Deferred::Loop(check) = &segment.work {
                         let laying = state.recorded.get(check.from()..range.start + at);
                         summaries.extend(laying.into_iter().flatten().map(|part| &part.summary));
-                        taken.push(SegmentShare::Laying);
                         continue;
                     }
                     match &segment.recorded {
@@ -4090,13 +4188,11 @@ impl CommandBufferShared {
                                 || (segment.rerecords() && !segment.work.outgrown()) =>
                         {
                             summaries.push(&recording.summary);
-                            taken.push(SegmentShare::Recording);
                         }
                         // One its host step records for what the GPU may write: what `commit`
                         // bounded its recording's uses by, where it could (`Segment::bound`).
                         _ if segment.steps_after_the_gpu() => {
-                            summaries.push(segment.bound.as_ref()?);
-                            taken.push(SegmentShare::Bound);
+                            summaries.push(segment.bound.as_ref()?)
                         }
                         _ => known.push(segment.known_summary(&self.device)?),
                     }
@@ -4107,28 +4203,18 @@ impl CommandBufferShared {
                 let all = summaries.into_iter().chain(&known);
                 return Some(Arc::new(Footprint::of(all)));
             }
-            let from = FootprintSources {
-                revision: state.recorded.revision,
-                range,
-                taken,
-            };
-            let kept = state.footprints.get(index).and_then(Option::as_ref);
-            if let Some(kept) = kept.filter(|kept| kept.from == from) {
-                return Some(Arc::clone(&kept.footprint));
-            }
-            (from, Footprint::gathered(summaries))
+            let built = (revision, probes);
+            (built, Footprint::gathered(summaries))
         };
         let footprint = Arc::new(gathered.sorted());
         counts.footprint_built();
-        let mut state = lock(&self.state);
-        // Kept where nothing it was built from changed meanwhile.
-        if state.recorded.revision == from.revision {
-            if state.footprints.len() <= index {
-                state.footprints.resize_with(index + 1, || None);
-            }
-            let footprint = Arc::clone(&footprint);
-            state.footprints[index] = Some(BuiltFootprint { from, footprint });
-        }
+        let (revision, probes) = built;
+        let kept = BuiltFootprint {
+            revision,
+            probes,
+            footprint: Arc::clone(&footprint),
+        };
+        self.footprints.keep(index, kept);
         Some(footprint)
     }
 

@@ -209,6 +209,7 @@ pub(crate) struct Counters {
     batches_submitted_at_commit: AtomicU64,
     batches_checked_at_commit: AtomicU64,
     footprints_built: AtomicU64,
+    footprint_lock_waits: AtomicU64,
     command_buffer_wakes: AtomicU64,
     command_buffer_wakes_spared: AtomicU64,
     event_wakes: AtomicU64,
@@ -1562,6 +1563,12 @@ impl Counters {
     /// what it is built from changed since (`CommandBufferShared::footprint`).
     pub(crate) fn footprint_built(&self) {
         self.footprints_built.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// An ask of a batch's footprint found its command buffer's state locked and waited for it
+    /// (`CommandBufferShared::footprint`).
+    pub(crate) fn footprint_lock_waited(&self) {
+        self.footprint_lock_waits.fetch_add(1, Ordering::Relaxed);
     }
 
     /// A thread that committed with `CommandBuffer::commit_and_submit` made a pass of its own
@@ -4426,10 +4433,15 @@ pub struct WorkCounts {
     /// Footprints of batches the scheduler built to order them across queues
     /// (`scheduler/order.rs`), one each time: each batch's is built where a pass first compares
     /// it with another queue's and kept, and built again only where what it is built from
-    /// changed since (its command buffer's recordings, or the summary one of its segments takes,
-    /// as a host step records the segment), or a segment of it takes uses its work knows, which
-    /// are built at each look (`CommandBufferShared::footprint`).
+    /// changed since (its command buffer's recordings or batches, or an answer the summary one of
+    /// its segments takes turns on, as a host step records the segment), or a segment of it takes
+    /// uses its work knows, which are built at each look (`CommandBufferShared::footprint`).
     pub footprints_built: u64,
+    /// Asks of a batch's footprint by the scheduler that found its command buffer's state locked
+    /// (by a host step's draws, a commit's work) and waited for the lock
+    /// (`CommandBufferShared::footprint`): only a build takes it, a kept footprint is read
+    /// without it.
+    pub footprint_lock_waits: u64,
     /// Passes the scheduler's thread made over its order (`scheduler/mod.rs`): one takes in what
     /// was committed and submits what is ready; one more follows a submission check or a host
     /// step the thread ran without its lock, a waker's nudge during a pass, and a pass that
@@ -6282,6 +6294,7 @@ impl Device {
                 .load(Ordering::Relaxed),
             scheduler_passes_at_commit: counters.scheduler_passes_at_commit.load(Ordering::Relaxed),
             footprints_built: counters.footprints_built.load(Ordering::Relaxed),
+            footprint_lock_waits: counters.footprint_lock_waits.load(Ordering::Relaxed),
             batches_submitted_at_commit: counters
                 .batches_submitted_at_commit
                 .load(Ordering::Relaxed),
