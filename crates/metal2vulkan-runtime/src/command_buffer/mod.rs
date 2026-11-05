@@ -3734,9 +3734,7 @@ impl CommandBuffer {
 
     /// `kernelStartTime`: the host time, in seconds of [`host_time`](super::host_time)'s clock,
     /// at which the device's scheduler began submitting the command buffer's work to Vulkan; 0
-    /// before, and until its [`kernel_end_time`](Self::kernel_end_time) is known: as Metal's, no
-    /// read shows a start without an end. Like Metal's, the read waits for no submission in
-    /// progress and no GPU work.
+    /// before. Like Metal's, the read waits for no submission in progress and no GPU work.
     pub fn kernel_start_time(&self) -> f64 {
         gpu_time::seconds(self.0.kernel.start())
     }
@@ -5585,7 +5583,7 @@ fn submission_error(device: &Device, error: vk::Result) -> CommandBufferError {
 /// timestamps are checked against it (`gpu_time.rs`, `GpuClock::span`).
 fn life(kernel: &KernelTimes, times: &Times) -> Life {
     Life {
-        kernel_start: kernel.began(),
+        kernel_start: kernel.start(),
         completed: times.completed,
     }
 }

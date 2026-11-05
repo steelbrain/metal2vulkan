@@ -547,7 +547,7 @@ impl CommandBufferShared {
         let completed = shared.queues[queue].completed_value();
         (shared.counts).batch_submitted_behind(scheduler.values[queue].saturating_sub(completed));
         // One a hang's thread made `Scheduled` early began then (`hang.rs`).
-        if index == 0 && self.kernel.began() == 0 {
+        if index == 0 && self.kernel.start() == 0 {
             self.kernel.begin();
         }
         let slot = state
@@ -1231,7 +1231,7 @@ impl CommandBufferShared {
     ) -> Submission {
         let device = &self.device;
         let queue = self.queue.vk_queue();
-        if index == 0 && self.kernel.began() == 0 {
+        if index == 0 && self.kernel.start() == 0 {
             self.kernel.begin();
         }
         // What it holds until it completes, as a submitted batch takes it.

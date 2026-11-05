@@ -98,7 +98,7 @@ pub(super) fn injected(error: CommandBufferError) -> Option<Recovery> {
 
 /// The first recovery of `buffer`'s device since its first submission (the module docs).
 pub(super) fn recovered(buffer: &CommandBufferShared) -> Option<Recovery> {
-    let since = buffer.kernel.began();
+    let since = buffer.kernel.start();
     buffer.device.shared().recoveries.since(since)
 }
 

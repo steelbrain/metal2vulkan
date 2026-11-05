@@ -109,9 +109,7 @@
 //!   buffer's first batch and finished submitting its last. They are kept apart from the command
 //!   buffer's state ([`KernelTimes`]), which the scheduler holds while it records the batch's
 //!   own command buffers and submits it: a read waits for no submission in
-//!   progress and for no GPU work, as Metal's reads wait for none. The start shows only once the
-//!   end is known, so no read sees a start without an end, as none of Metal's does (measured on
-//!   the M3 Max).
+//!   progress and for no GPU work, as Metal's reads wait for none.
 //! - **No encoder, no timestamps**. A command buffer that encoded nothing and waits for no event or
 //!   semaphore takes no slot and writes no timestamps. Its GPU start and end are both where its
 //!   queue reached it: its kernel end time, or the GPU end of the queue's command buffer before it
@@ -935,8 +933,7 @@ unsafe fn calibration(
 }
 
 /// A command buffer's kernel times, in nanoseconds of the host's clock, 0 until known: apart
-/// from its state, so a read waits for no submission in progress (the module docs). The start is
-/// shown with the end alone ([`start`](Self::start)), as Metal shows them.
+/// from its state, so a read waits for no submission in progress (the module docs).
 #[derive(Debug, Default)]
 pub(crate) struct KernelTimes {
     /// The scheduler began submitting its first batch.
@@ -951,29 +948,13 @@ impl KernelTimes {
         self.start.store(host_nanos(), Ordering::Release);
     }
 
-    /// The scheduler finished submitting the last batch at host time `at`, after it began
-    /// ([`begin`](Self::begin)): the start, stored before, is shown from now on.
+    /// The scheduler finished submitting the last batch at host time `at`.
     pub(crate) fn end_at(&self, at: u64) {
         self.end.store(at, Ordering::Release);
     }
 
-    /// When the scheduler began submitting the first batch, as `kernelStartTime` shows it: 0
-    /// until the end is known too, so that no read sees a start without an end, in either order
-    /// of the two reads (a start shown means a later read of the end sees it, and an end seen
-    /// means the start is shown). Metal's reads never see one (measured on the M3 Max under macOS
-    /// 27.0.1: in 7 to 8.5 million reads of each command buffer's pair while it was committed,
-    /// never a start without an end). The end's acquire load orders the start's after it: the
-    /// start was stored before the end ([`end_at`](Self::end_at)).
+    /// When the scheduler began submitting the first batch; 0 before.
     pub(crate) fn start(&self) -> u64 {
-        match self.end.load(Ordering::Acquire) {
-            0 => 0,
-            _ => self.began(),
-        }
-    }
-
-    /// When the scheduler began submitting the first batch, whether or not it finished: the
-    /// scheduler's own reads; 0 before.
-    pub(crate) fn began(&self) -> u64 {
         self.start.load(Ordering::Acquire)
     }
 
