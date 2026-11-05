@@ -1377,6 +1377,12 @@ engine/icb_vertex_encode_indexed.air.ll	ive_fragment	ok	ok	ok	ok	ok	ok	ok	ok	ok	
 engine/icb_vertex_encode_indexed.ll	ive_encode	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	Unsupported{GpuEncodedIndirectCommands; AnyOf[[Feature(BufferDeviceAddress), Feature(ShaderInt64)]]}	ok	ok	ok	ok	Unsupported{GpuEncodedIndirectCommands; AnyOf[[Feature(ShaderInt64)]]}	Unsupported{GpuEncodedIndirectCommands; AnyOf[[Feature(ShaderInt64)]]}	Unsupported{GpuEncodedIndirectCommands; AnyOf[[Feature(BufferDeviceAddress), Feature(ShaderInt64)]]}
 engine/icb_vertex_encode_indexed.ll	ive_vertex	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/icb_vertex_encode_indexed.ll	ive_fragment	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/icb_vertex_encode_textured.air.ll	ivt_encode	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	Unsupported{DereferenceLoadedPointer; AnyOf[[Feature(BufferDeviceAddress), Feature(ShaderInt64)]]}	ok	ok	ok	ok	Unsupported{DereferenceLoadedPointer; AnyOf[[Feature(ShaderInt64)]]}	Unsupported{DereferenceLoadedPointer; AnyOf[[Feature(ShaderInt64)]]}	Unsupported{DereferenceLoadedPointer; AnyOf[[Feature(BufferDeviceAddress), Feature(ShaderInt64)]]}
+engine/icb_vertex_encode_textured.air.ll	ivt_vertex	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/icb_vertex_encode_textured.air.ll	ivt_fragment	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	Unsupported{ArgumentBufferTextures; AnyOf[[Feature(RuntimeDescriptorArray), Feature(DescriptorBindingPartiallyBound), Feature(ShaderSampledImageArrayNonUniformIndexing), Feature(DescriptorBindingSampledImageUpdateAfterBind)]]}
+engine/icb_vertex_encode_textured.ll	ivt_encode	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	Unsupported{DereferenceLoadedPointer; AnyOf[[Feature(BufferDeviceAddress), Feature(ShaderInt64)]]}	ok	ok	ok	ok	Unsupported{DereferenceLoadedPointer; AnyOf[[Feature(ShaderInt64)]]}	Unsupported{DereferenceLoadedPointer; AnyOf[[Feature(ShaderInt64)]]}	Unsupported{DereferenceLoadedPointer; AnyOf[[Feature(BufferDeviceAddress), Feature(ShaderInt64)]]}
+engine/icb_vertex_encode_textured.ll	ivt_vertex	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/icb_vertex_encode_textured.ll	ivt_fragment	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	Unsupported{ArgumentBufferTextures; AnyOf[[Feature(RuntimeDescriptorArray), Feature(DescriptorBindingPartiallyBound), Feature(ShaderSampledImageArrayNonUniformIndexing), Feature(DescriptorBindingSampledImageUpdateAfterBind)]]}
 engine/ido_draw_order.air.ll	ido_samples	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/ido_draw_order.air.ll	ido_full	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/ido_draw_order.air.ll	ido_triple	NeedsInput{FramebufferFetch}	NeedsInput{FramebufferFetch}	NeedsInput{FramebufferFetch}	NeedsInput{FramebufferFetch}	ok	ok	NeedsInput{FramebufferFetch}	NeedsInput{FramebufferFetch}	NeedsInput{FramebufferFetch}	NeedsInput{FramebufferFetch}	ok	Unsupported{FramebufferFetch; AnyOf[[Feature(RasterizationOrderColorAttachmentAccess)], [Feature(FragmentShaderPixelInterlock)]]}	NeedsInput{FramebufferFetch}	NeedsInput{FramebufferFetch}	NeedsInput{FramebufferFetch}	NeedsInput{FramebufferFetch}	Unsupported{FramebufferFetch; AnyOf[[Feature(RasterizationOrderColorAttachmentAccess)], [Feature(FragmentShaderPixelInterlock)]]}	ok	Unsupported{FramebufferFetch; AnyOf[[Feature(RasterizationOrderColorAttachmentAccess)], [Feature(FragmentShaderPixelInterlock), Feature(FragmentStoresAndAtomics)]]}
@@ -1695,6 +1701,18 @@ engine/nan_signbits.air.ll	nan_signbits	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	o
 engine/nan_signbits.ll	nan_signbits	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/nan_signbits_fast.air.ll	nan_signbits_fast	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/nan_signbits_fast.ll	nan_signbits_fast	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/ncw_constant_colors.air.ll	ncw_vertex	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/ncw_constant_colors.air.ll	ncw_constant_half	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/ncw_constant_colors.air.ll	ncw_constant_float	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/ncw_constant_colors.air.ll	ncw_constant_nan	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/ncw_constant_colors.air.ll	ncw_constant_pair	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/ncw_constant_colors.air.ll	ncw_computed_half	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/ncw_constant_colors.ll	ncw_vertex	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/ncw_constant_colors.ll	ncw_constant_half	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/ncw_constant_colors.ll	ncw_constant_float	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/ncw_constant_colors.ll	ncw_constant_nan	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/ncw_constant_colors.ll	ncw_constant_pair	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/ncw_constant_colors.ll	ncw_computed_half	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/not_mipmapped_anisotropic.air.ll	anisotropic_mixed_filters	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/not_mipmapped_anisotropic.air.ll	anisotropic_equal_filters	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/not_mipmapped_anisotropic.air.ll	anisotropic_mipmapped_mixed	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
@@ -2845,6 +2863,10 @@ engine/xrb_dual.air.ll	xrb_dual_float	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	
 engine/xrb_dual.ll	xrb_dual_vertex	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/xrb_dual.ll	xrb_dual_half	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	Unsupported{DualSourceBlending; AnyOf[[Feature(DualSrcBlend)]]}	Unsupported{DualSourceBlending; AnyOf[[Feature(DualSrcBlend)]]}	Unsupported{DualSourceBlending; AnyOf[[Feature(DualSrcBlend)]]}
 engine/xrb_dual.ll	xrb_dual_float	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	Unsupported{DualSourceBlending; AnyOf[[Feature(DualSrcBlend)]]}	Unsupported{DualSourceBlending; AnyOf[[Feature(DualSrcBlend)]]}	Unsupported{DualSourceBlending; AnyOf[[Feature(DualSrcBlend)]]}
+engine/ycg_sample_gather.air.ll	ycg_float	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/ycg_sample_gather.air.ll	ycg_half	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/ycg_sample_gather.ll	ycg_float	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/ycg_sample_gather.ll	ycg_half	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/zwd_shapes.air.ll	zwd_quad	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/zwd_shapes.air.ll	zwd_none	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/zwd_shapes.air.ll	zwd_path_v0	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
