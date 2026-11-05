@@ -2807,14 +2807,15 @@ impl Buffer {
     }
 
     /// Whether the buffer's own pages, of the runtime's memory, overflowed past device-local memory
-    /// into system memory (`memory.rs`'s `overflow_candidates`); false for a heap's buffer, whose
-    /// bytes are its heap's.
+    /// into system memory (`memory.rs`'s `overflow_candidates`): false for a buffer over host
+    /// pages, which are imported, and for a heap's buffer, whose bytes are its heap's.
     pub(super) fn own_pages_overflowed(&self) -> bool {
         match &self.0.bytes {
-            Bytes::Own(own) => own.with(ReadApart::Binding, |pages| {
-                pages.memory.placement.overflowed()
-            }),
-            Bytes::Heap(_) => false,
+            Bytes::Own(OwnBytes {
+                lie: Lie::Fixed(fixed),
+                ..
+            }) => fixed.pages.memory.placement.overflowed(),
+            Bytes::Own(_) | Bytes::Heap(_) => false,
         }
     }
 
