@@ -720,11 +720,11 @@
         "resident_textures_looked_at": 6,
         "sampler_sets_made": 1,
         "scheduled_where_submitted": 4,
-        "scheduler_passes": 4,
+        "scheduler_passes": 5,
         "scheduler_passes_by_waiters": 4,
-        "scheduler_sleeps": 6,
+        "scheduler_sleeps": 7,
         "scheduler_wakes_commit": 4,
-        "scheduler_wakes_host": 2,
+        "scheduler_wakes_host": 3,
         "shader_modules_made": 3,
         "slot_returns": 4,
         "spare_command_pools_taken": 4,
@@ -735,6 +735,9 @@
         "variants_taken_back": 3,
         "wakes_completion_waiters": 4,
         "wakes_spared": 29
+      },
+      "moving": {
+        "batches_submitted_by_waiters": 2
       },
       "composed": {
         "batches_submitted_by_waiters": 1,

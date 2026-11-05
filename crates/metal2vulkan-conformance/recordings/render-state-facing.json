@@ -465,7 +465,7 @@
         "variant_pipelines_made": 2,
         "wakes_completion_waiters": 1,
         "wakes_handler_threads": 1,
-        "wakes_spared": 8
+        "wakes_spared": 9
       },
       "composed": {
         "addressable_buffers_made": 1,

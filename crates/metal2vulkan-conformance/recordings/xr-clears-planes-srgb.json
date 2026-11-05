@@ -502,7 +502,7 @@
         "command_buffers_begun_segments": 64,
         "command_buffers_deferred": 1580,
         "command_buffers_submitted": 2058,
-        "commands_recorded.begin_command_buffer": 2436,
+        "commands_recorded.begin_command_buffer": 2448,
         "commands_recorded.cmd_begin_render_pass": 484,
         "commands_recorded.cmd_bind_descriptor_sets": 484,
         "commands_recorded.cmd_bind_pipeline": 484,

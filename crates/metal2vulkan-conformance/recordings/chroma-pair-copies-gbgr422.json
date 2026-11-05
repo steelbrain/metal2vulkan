@@ -1237,7 +1237,7 @@
         "completion_waiter_parks": 21,
         "device_memory_allocated": 268435456,
         "encoder_command_buffers_begun": 21,
-        "encoder_primaries_begun_ahead": 1,
+        "encoder_primaries_begun_ahead": 2,
         "fence_waits": 21,
         "finales_folded": 21,
         "gate_waits": 21,
@@ -1274,6 +1274,7 @@
         "slot_returns": 21,
         "spare_command_pools_taken": 21,
         "submit_infos": 30,
+        "submit_stalls_on_work": 1,
         "trail_waits": 21,
         "wakes_completion_waiters": 21,
         "wakes_spared": 147

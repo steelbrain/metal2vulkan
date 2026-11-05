@@ -680,7 +680,6 @@
         "completion_waiter_parks": 10,
         "device_memory_allocated": 201326592,
         "encoder_command_buffers_begun": 10,
-        "encoder_primaries_begun_ahead": 1,
         "fence_waits": 10,
         "finales_folded": 10,
         "gate_waits": 10,

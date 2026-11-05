@@ -325,6 +325,7 @@
         "row_copies": 8,
         "row_copy_regions": 28,
         "scheduled_where_submitted": 5,
+        "scheduler_passes": 3,
         "scheduler_passes_by_waiters": 5,
         "scheduler_sleeps": 5,
         "scheduler_wakes_commit": 5,
@@ -337,7 +338,7 @@
         "wakes_spared": 35
       },
       "moving": {
-        "batches_submitted_by_waiters": 3,
+        "batches_submitted_by_waiters": 2,
         "gate_waits_slept": 4
       },
       "composed": {

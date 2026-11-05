@@ -485,6 +485,7 @@
         "new_buffer_bytes_cleared": 4096,
         "object_churn.buffers_evicted": 2,
         "object_churn.buffers_parked": 2,
+        "object_churn.buffers_recycled": 1,
         "object_churn.images_evicted": 2,
         "object_churn.images_other": 1,
         "object_churn.images_own_memory": 1,
