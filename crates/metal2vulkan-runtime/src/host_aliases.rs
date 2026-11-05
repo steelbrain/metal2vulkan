@@ -67,11 +67,13 @@
 //!   use of a key's bytes carries a use of its range's key and of the key of each other range those
 //!   bytes overlap, clipped to them ([`HostAliases::augment`]). So two keys over overlapping bytes
 //!   are ordered where they overlap, whatever made them, at a cost of one lookup a use while no two
-//!   ranges meet, and of one use added per range met otherwise. Each range keeps the ranges that
-//!   meet it, so a use reads them there rather than looking them up by address, but where they
-//!   outnumber the classes of length that lookup visits ([`Placements::sharing`]). A remap
-//!   reported keeps a placement: it orders more than the pages need, never less. A heap's own
-//!   buffer is placed as a buffer is.
+//!   ranges meet, and of one use added per range met otherwise. An encoder keeps the keys it
+//!   found to take no other use ([`Quiet`]): while no buffer joins a memory, is placed, moves or
+//!   goes, its commands whose uses of bytes name only those look nothing up and take no lock.
+//!   Each range keeps the ranges that meet it, so a use reads them there rather than looking them
+//!   up by address, but where they outnumber the classes of length that lookup visits
+//!   ([`Placements::sharing`]). A remap reported keeps a placement: it orders more than the pages
+//!   need, never less. A heap's own buffer is placed as a buffer is.
 //! - **Same address, same pages.** Sharing an import assumes the pages at the bytes' addresses
 //!   are the ones the import holds: Metal's `newBufferWithBytesNoCopy:` wires the pages at the
 //!   address when it makes each buffer, so a buffer made after the caller replaced the pages
@@ -135,9 +137,39 @@ pub(super) struct HostAliases<I = HostImport> {
     placed: AtomicUsize,
     /// How many times the buffers that joined a memory or the placements changed: while it
     /// stands, [`augment`](Self::augment) gives the same uses for the same uses
-    /// (`noted_apart.rs`). Each change counts once it is made, under the lock.
+    /// (`noted_apart.rs`, [`Quiet`]). Each change counts once it is made, under the lock.
     version: AtomicU64,
+    /// How many times uses were looked up under the lock ([`augment_into`](Self::augment_into),
+    /// `WorkCounts::host_alias_lookups`).
+    lookups: AtomicU64,
     inner: Mutex<Inner<I>>,
+}
+
+/// The keys found to take no other use while the host aliases stood at `version`
+/// ([`HostAliases::augment_into`]): no buffer joined another's memory under them, and the range
+/// of bytes each lies over, if any, holds no other key and meets no other range
+/// ([`Placed::crowded`]). An encoder keeps them, so a command whose uses of bytes name only such
+/// keys looks nothing up and takes no lock while no buffer joins a memory, is placed, moves or
+/// goes; a change of the version forgets them.
+#[derive(Default)]
+pub(super) struct Quiet {
+    version: u64,
+    keys: KeyMap<ResourceKey, ()>,
+}
+
+impl Quiet {
+    /// Forget the keys found while the host aliases stood at a version other than `version`.
+    fn stand(&mut self, version: u64) {
+        if self.version != version {
+            self.keys.clear();
+            self.version = version;
+        }
+    }
+
+    /// Whether `used` takes no other use as it is: it is of no bytes, or of a key found quiet.
+    fn holds(&self, used: &Use<ResourceKey>) -> bool {
+        !matches!(used.range, UseRange::Bytes(_)) || self.keys.contains_key(&used.key)
+    }
 }
 
 impl<I> Default for HostAliases<I> {
@@ -148,6 +180,7 @@ impl<I> Default for HostAliases<I> {
             noted: AtomicUsize::new(0),
             placed: AtomicUsize::new(0),
             version: AtomicU64::new(0),
+            lookups: AtomicU64::new(0),
             inner: Mutex::new(Inner {
                 made_over: KeyMap::default(),
                 memories: Memories::default(),
@@ -426,16 +459,20 @@ impl<I> HostAliases<I> {
     /// as they are).
     pub(super) fn augment(&self, uses: &[Use<ResourceKey>]) -> Option<Vec<Use<ResourceKey>>> {
         let mut all = Vec::new();
-        self.augment_into(uses, &mut all).then_some(all)
+        self.augment_into(uses, &mut all, None).then_some(all)
     }
 
     /// [`augment`](Self::augment) into `all`, emptied first: whether a use took another (`all`
     /// then holds `uses` and the uses they took; else it stays empty), so a caller that keeps
-    /// `all` makes no vector at each call.
+    /// `all` makes no vector at each call. The keys a given `quiet` holds while the version
+    /// stands take no other use, and the keys found to take none join them, so a caller that
+    /// keeps `quiet` too looks up no command whose uses of bytes name only such keys: one load of
+    /// the version.
     pub(super) fn augment_into(
         &self,
         uses: &[Use<ResourceKey>],
         all: &mut Vec<Use<ResourceKey>>,
+        mut quiet: Option<&mut Quiet>,
     ) -> bool {
         all.clear();
         let joined = self.any.load(Ordering::Relaxed);
@@ -443,10 +480,24 @@ impl<I> HostAliases<I> {
         if !joined && !crowded {
             return false;
         }
+        if let Some(quiet) = quiet.as_deref_mut() {
+            // Read before the lock: a change made after it forgets the keys at the next command.
+            quiet.stand(self.version());
+            if uses.iter().all(|used| quiet.holds(used)) {
+                return false;
+            }
+        }
+        self.lookups.fetch_add(1, Ordering::Relaxed);
         let inner = lock(&self.inner);
         let aliases = joined.then_some(&*inner.aliases);
         let placements = crowded.then_some(&inner.placements);
-        augmented(aliases, placements, uses, all)
+        augmented((aliases, placements), uses, all, quiet)
+    }
+
+    /// How many times [`augment_into`](Self::augment_into) looked uses up under the lock
+    /// (`WorkCounts::host_alias_lookups`).
+    pub(super) fn lookups(&self) -> u64 {
+        self.lookups.load(Ordering::Relaxed)
     }
 }
 
@@ -467,12 +518,13 @@ fn release<I>(memories: &mut Memories<Memory<I>>, over: Over) {
 
 /// [`HostAliases::augment_into`] over, where given, `aliases` (the buffers that joined a memory)
 /// and `placements`, into `all`, empty: the uses added follow `uses`, which go in at the first.
-/// Whether any was added.
+/// Whether any was added. The uses of keys `quiet` holds are passed over, and the keys of the
+/// others that take no use, whatever their bytes, join them.
 pub(super) fn augmented(
-    aliases: Option<&KeyMap<ResourceKey, Alias>>,
-    placements: Option<&Placements>,
+    (aliases, placements): (Option<&KeyMap<ResourceKey, Alias>>, Option<&Placements>),
     uses: &[Use<ResourceKey>],
     all: &mut Vec<Use<ResourceKey>>,
+    mut quiet: Option<&mut Quiet>,
 ) -> bool {
     let mut add = |added: Use<ResourceKey>| {
         if all.is_empty() {
@@ -485,6 +537,9 @@ pub(super) fn augmented(
         let UseRange::Bytes(bytes) = &used.range else {
             continue;
         };
+        if quiet.as_deref().is_some_and(|quiet| quiet.holds(used)) {
+            continue;
+        }
         let joined = aliases
             .and_then(|aliases| aliases.get(&used.key))
             .map(|alias| alias.key);
@@ -494,19 +549,23 @@ pub(super) fn augmented(
                 ..used.clone()
             });
         }
-        let Some(placements) = placements else {
-            continue;
-        };
-        placements.sharing(used.key, bytes, |key, range| {
-            // The memory's key carries the same bytes already.
-            if Some(key) != joined || range != *bytes {
-                add(Use {
-                    key,
-                    range: UseRange::Bytes(range),
-                    ..used.clone()
-                });
-            }
+        let shares = placements.is_some_and(|placements| {
+            placements.sharing(used.key, bytes, |key, range| {
+                // The memory's key carries the same bytes already.
+                if Some(key) != joined || range != *bytes {
+                    add(Use {
+                        key,
+                        range: UseRange::Bytes(range),
+                        ..used.clone()
+                    });
+                }
+            })
         });
+        if joined.is_none() && !shares {
+            if let Some(quiet) = quiet.as_deref_mut() {
+                quiet.keys.insert(used.key, ());
+            }
+        }
     }
     !all.is_empty()
 }
@@ -648,27 +707,28 @@ impl Placements {
     /// meet the key's own range, which it keeps: they are read from there while no more than the
     /// classes of length the lookup by address visits (a range query each, where a kept range is
     /// a comparison); a use of a range met by more, as one over many others' bytes is, looks up
-    /// those its bytes meet (`WorkCounts::host_range_lookups`).
+    /// those its bytes meet (`WorkCounts::host_range_lookups`). Whether the key's uses may share
+    /// another's at all: it lies over a crowded range ([`Placed::crowded`]), whatever `bytes`.
     pub(super) fn sharing(
         &self,
         key: ResourceKey,
         bytes: &std::ops::Range<u64>,
         mut each: impl FnMut(ResourceKey, std::ops::Range<u64>),
-    ) {
+    ) -> bool {
         let Some(&at) = self.at.get(&key) else {
-            return;
+            return false;
         };
         let Some(own) = self.ranges.get(at) else {
-            return;
+            return false;
         };
         if !own.crowded() {
-            return;
+            return false;
         }
         if own.key != key {
             each(own.key, bytes.clone());
         }
         if own.meets.is_empty() {
-            return;
+            return true;
         }
         // The host bytes the use covers, within the key's own.
         let start = at.0.saturating_add(bytes.start.min(at.1));
@@ -684,7 +744,7 @@ impl Placements {
             for &(other, key) in &own.meets {
                 clipped(other, key);
             }
-            return;
+            return true;
         }
         self.looked_up.set(self.looked_up.get() + 1);
         for other in self.ranges.overlapping(start, end) {
@@ -695,6 +755,7 @@ impl Placements {
                 clipped(other, range.key);
             }
         }
+        true
     }
 }
 

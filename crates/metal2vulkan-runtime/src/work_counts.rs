@@ -4135,6 +4135,12 @@ pub struct WorkCounts {
     /// bytes meet (`host_aliases.rs`): a use of a range met by no more ranges than the classes of
     /// length that lookup visits reads those its range keeps instead.
     pub host_range_lookups: u64,
+    /// Times the host aliases looked uses up under their lock (`host_aliases.rs`): once a buffer
+    /// joined another's memory or two ranges of placed bytes crowd, at each recorded command, but
+    /// one whose every use of bytes names a buffer an earlier command of its encoder found to
+    /// take no other use, with no buffer joined, placed, moved or gone since, and at each other
+    /// reading of a command's uses (an execution's, a shadow's).
+    pub host_alias_lookups: u64,
     /// Textures made in heaps laid out as Metal tiles them, each a shadow of its elements (a
     /// multisample texture's samples) in the heap's bytes (`texture/heap_tiled.rs`): in a heap over
     /// host pages, a depth or stencil texture in any heap on a driver that lays such images apart
@@ -6406,6 +6412,7 @@ impl Device {
             heap_slots_rewritten: counters.heap_slots_rewritten.load(Ordering::Relaxed),
             heap_slot_writes_deferred: counters.heap_slot_writes_deferred.load(Ordering::Relaxed),
             host_range_lookups: self.shared().aliases.range_lookups(),
+            host_alias_lookups: self.shared().aliases.lookups(),
             heap_textures_tiled: counters.heap_textures_tiled.load(Ordering::Relaxed),
             heap_sample_move_images_made: counters
                 .heap_sample_move_images_made

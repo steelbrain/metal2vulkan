@@ -1,6 +1,6 @@
 //! No-copy buffers over the same host memory (`host_aliases.rs`).
 
-use super::super::host_aliases::{Alias, HostAliases, Kind, Memories};
+use super::super::host_aliases::{Alias, HostAliases, Kind, Memories, Quiet};
 use super::super::memory::MemoryClass;
 use super::super::resource::ResourceKey;
 use super::super::tracker::{Access, Use, UseRange};
@@ -786,4 +786,67 @@ fn the_version_counts_each_change_augment_reads() {
     changed("unplaced");
     aliases.forget(second);
     changed("forgotten");
+}
+
+/// An encoder's commands whose uses of bytes name only keys an earlier one found to take no other
+/// use look nothing up (`host_aliases::Quiet`, `WorkCounts::host_alias_lookups`), while a key
+/// that takes one is looked up at each command; a buffer placed over bytes a quiet key lies
+/// over, or a quiet key joining another's memory, between two commands makes the second carry
+/// the use it takes now.
+#[test]
+fn a_quiet_key_is_looked_up_again_once_a_buffer_moves_or_joins() {
+    let aliases = Aliases::default();
+    let mut quiet = Quiet::default();
+    let mut all = Vec::new();
+    let mut augment =
+        |uses: &[Use<ResourceKey>]| match aliases.augment_into(uses, &mut all, Some(&mut quiet)) {
+            true => Some(all.clone()),
+            false => None,
+        };
+    let (first, second, alone, moved) = (
+        ResourceKey::new(),
+        ResourceKey::new(),
+        ResourceKey::new(),
+        ResourceKey::new(),
+    );
+    // Two keys over one range crowd the device's placements; a third lies alone.
+    aliases.place(first, (0x10_0000, 0x1000));
+    aliases.place(second, (0x10_0000, 0x1000));
+    aliases.place(alone, (0x40_0000, 0x1000));
+    let used = [write(alone, 0x800..0x840)];
+    for _ in 0..3 {
+        assert_eq!(augment(&used), None);
+    }
+    assert_eq!(aliases.lookups(), 1, "a quiet key is looked up once");
+    let crowded = [write(second, 0..0x40)];
+    for _ in 0..3 {
+        assert_eq!(
+            augment(&crowded),
+            Some(vec![crowded[0].clone(), write(first, 0..0x40)])
+        );
+    }
+    assert_eq!(
+        aliases.lookups(),
+        4,
+        "a key that takes a use is looked up each time"
+    );
+    // A buffer placed over the second half of the lone key's bytes.
+    aliases.place(moved, (0x40_0800, 0x1000));
+    assert_eq!(
+        augment(&used),
+        Some(vec![used[0].clone(), write(moved, 0..0x40)])
+    );
+    // A key found quiet, then joining a live buffer's memory.
+    let (owner, joining) = (ResourceKey::new(), ResourceKey::new());
+    assert_eq!(join(&aliases, owner, (0x80_0000, 0x1000)), None);
+    let joined = [write(joining, 0..0x40)];
+    assert_eq!(augment(&joined), None);
+    assert_eq!(
+        join(&aliases, joining, (0x80_0000, 0x1000)),
+        Some(Alias { key: owner })
+    );
+    assert_eq!(
+        augment(&joined),
+        Some(vec![joined[0].clone(), write(owner, 0..0x40)])
+    );
 }

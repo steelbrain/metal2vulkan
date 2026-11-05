@@ -38,6 +38,7 @@ use super::error::{internal, invalid, vulkan, CommandBufferError, Error, Problem
 use super::execution::Execution;
 use super::fresh_unwritten::{FreshRead, FreshUnwritten};
 use super::heap::Heap;
+use super::host_aliases::Quiet;
 use super::index_bounds::{BoundsRunRequest, BoundsSlot};
 use super::index_rewrite::{
     self, CommandedList, GatherHeld, GatherRequest, GatherRuns, GatheredList,
@@ -305,6 +306,9 @@ pub(super) struct EncoderCore {
     /// The uses of the command [`note_reaching`](Self::note_reaching) notes, with those of the
     /// host memory beside them ([`aliased`](Self::aliased)): kept, so a draw makes no vector.
     aliased_uses: Vec<Use<ResourceKey>>,
+    /// The keys its commands' uses named that took no use of the host memory's, while nothing
+    /// joined, moved or went since (`host_aliases::Quiet`): a command over those looks nothing up.
+    aliases_quiet: Quiet,
     /// The open runs of the index gather pass ([`gather`](Self::gather)), which record before
     /// the encoder's next command, and before its `VkCommandBuffer` ends.
     gathers: GatherRuns,
@@ -568,6 +572,7 @@ impl EncoderCore {
             twin_writes: Vec::new(),
             unattached_as_called: false,
             aliased_uses: Vec::new(),
+            aliases_quiet: Quiet::default(),
             gathers: GatherRuns::default(),
             id: CORES.fetch_add(1, Ordering::Relaxed),
             replaying: false,
@@ -711,6 +716,7 @@ impl EncoderCore {
             twin_writes: Vec::new(),
             unattached_as_called: false,
             aliased_uses: Vec::new(),
+            aliases_quiet: Quiet::default(),
             gathers: GatherRuns::default(),
             id: CORES.fetch_add(1, Ordering::Relaxed),
             // A segment a rebind records again, its command buffer committed.
@@ -1629,7 +1635,8 @@ impl EncoderCore {
     /// keeps for them.
     fn record_aliased(&mut self, stages: vk::PipelineStageFlags2, uses: &[Use<ResourceKey>]) {
         let aliases = &self.open.command_buffer.device().shared().aliases;
-        let all = match aliases.augment_into(uses, &mut self.aliased_uses) {
+        let quiet = Some(&mut self.aliases_quiet);
+        let all = match aliases.augment_into(uses, &mut self.aliased_uses, quiet) {
             true => &self.aliased_uses[..],
             false => uses,
         };

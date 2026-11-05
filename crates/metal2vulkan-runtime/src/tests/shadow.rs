@@ -1194,7 +1194,7 @@ fn textures_over_two_buffers_of_one_memory_see_each_others_writes() {
     let aliases: KeyMap<_, _> = [(second, Alias { key: first })].into_iter().collect();
     let augmented = |uses: &[Use<ResourceKey>]| {
         let mut all = Vec::new();
-        match host_aliases::augmented(Some(&aliases), None, uses, &mut all) {
+        match host_aliases::augmented((Some(&aliases), None), uses, &mut all, None) {
             true => all,
             false => uses.to_vec(),
         }
