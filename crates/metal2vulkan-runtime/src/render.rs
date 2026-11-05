@@ -7121,10 +7121,10 @@ impl RenderLowering {
         })
     }
 
-    /// The clears a draw of `plan` that samples a color the pass clears after a memory barrier
-    /// before its first draw reads through copies cleared to them, in its instance, instead of
-    /// the pass splitting (`texture/attached_reads.rs`): each texture it samples that such a
-    /// color renders, by its shadow ([`Texture::cleared_copy`]), but those the pass's first
+    /// The clears a draw `call` of `plan` that samples a color the pass clears after a memory
+    /// barrier before its first draw reads through copies cleared to them, in its instance,
+    /// instead of the pass splitting (`texture/attached_reads.rs`): each texture it samples that
+    /// such a color renders, by its shadow ([`Texture::cleared_copy`]), but those the pass's first
     /// instance clears in already. `None` where one may not be cleared so, where the pass split
     /// or ran a tile dispatch, or where one is new and a draw recorded into the pass already: a
     /// draw that wrote the attachment may have left what the copy must then hold. Such a draw
@@ -7132,6 +7132,7 @@ impl RenderLowering {
     fn cleared_copies(
         &self,
         plan: &BindingPlan,
+        call: &'static str,
     ) -> Option<Vec<(ResourceKey, vk::ClearColorValue)>> {
         if !self.earlier.is_empty() || !self.dispatches.is_empty() || self.rerouting {
             return None;
@@ -7141,7 +7142,7 @@ impl RenderLowering {
             if !texture.cleared_in(&self.layout) {
                 continue;
             }
-            let (key, value) = texture.cleared_copy(&self.layout)?;
+            let (key, value) = texture.cleared_copy(&self.layout, call)?;
             if !self.current.shadows.clears_in(key) && clears.iter().all(|&(had, _)| had != key) {
                 clears.push((key, value));
             }
@@ -8524,7 +8525,9 @@ impl RenderLowering {
             attached && self.loads_ordered && self.samples_attachment(&plan, Texture::cleared_in);
         // Where each such color's copy can be cleared to the clear instead, before any draw of the
         // pass, the draw stays in its instance and reads it there (`texture/attached_reads.rs`).
-        let copy_clears = behind_loads.then(|| self.cleared_copies(&plan)).flatten();
+        let copy_clears = behind_loads
+            .then(|| self.cleared_copies(&plan, call))
+            .flatten();
         let behind_loads = behind_loads && copy_clears.is_none();
         let after_barrier = (attached && (self.current.barriers || self.barrier)) || behind_loads;
         let snapshot_split = snapshot.as_ref().is_some_and(|w| self.snapshot_apart(w));

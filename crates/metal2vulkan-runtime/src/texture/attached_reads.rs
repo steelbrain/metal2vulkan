@@ -184,11 +184,12 @@ impl Texture {
         self.attached_where(layout, |color| color.load == LoadAction::Clear)
     }
 
-    /// The copy a draw's sampled slot binding of the texture reads, and the clear it reads there,
-    /// after a memory barrier before its pass's first draw and before any draw of the pass, where
-    /// that copy may be cleared to it instead of the pass splitting (the module docs): the
-    /// texture's shadow ([`usage_shadow_copies`](Self::usage_shadow_copies)) is an image of its
-    /// own that a clear in clears (`ShadowCopies::cleared_image`), and the texture a
+    /// The copy a sampled slot binding of the texture by the draw `call` reads, and the clear it
+    /// reads there, after a memory barrier before its pass's first draw and before any draw of the
+    /// pass, where that copy may be cleared to it instead of the pass splitting (the module docs):
+    /// the texture's shadow, made here where the draw's binding has not made it yet
+    /// ([`attached_shadow_copies`](Self::attached_shadow_copies)), is an image of its own that a
+    /// clear in clears (`ShadowCopies::cleared_image`), and the texture a
     /// single-sampled 2D one of one level and slice, presented whole in its image's format, that
     /// exactly one color attachment of `layout` renders in place, all of it inside the render
     /// area, in that format, loading it `Clear` with a value the device's own clear converts as
@@ -198,9 +199,8 @@ impl Texture {
     pub(crate) fn cleared_copy(
         &self,
         layout: &PassLayout,
+        call: &'static str,
     ) -> Option<(ResourceKey, vk::ClearColorValue)> {
-        let copies = self.usage_shadow_copies()?;
-        copies.cleared_image()?;
         let image = self.image().ok()?;
         let plan = image.plan();
         let record = &self.0.record;
@@ -233,7 +233,14 @@ impl Texture {
             && color.planes.is_none()
             && color.withheld_clear.is_none()
             && color.straight_clear.is_none();
-        (rendering.next().is_none() && whole && plain).then_some((copies.shadow_key, color.clear))
+        if rendering.next().is_some() || !whole || !plain {
+            return None;
+        }
+        // Last, as the shadow is made where no binding made it yet: the draw's own binding makes
+        // it in any case, as the texture presents an attachment of its instance.
+        let copies = self.attached_shadow_copies(call)?;
+        copies.cleared_image()?;
+        Some((copies.shadow_key, color.clear))
     }
 
     /// [`attached_in`](Self::attached_in) of the color attachments of `layout` that `keep`

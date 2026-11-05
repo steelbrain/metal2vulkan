@@ -190,6 +190,15 @@ impl Texture {
         })
     }
 
+    /// The copies of the shadow a sampled slot binding of `call` takes in the texture's place
+    /// where it presents a color attachment of the draw's render pass instance (the module docs),
+    /// made now where no binding made it yet, as that binding makes it. `None` where it is not
+    /// served or could not be made: the binding then binds as it would, and answers for the
+    /// failure.
+    pub(crate) fn attached_shadow_copies(&self, call: &'static str) -> Option<Arc<ShadowCopies>> {
+        (self.usage_shadow(call).ok()).map(|shadow| Arc::clone(&shadow.copies))
+    }
+
     /// The copies of the texture's shadow, where a binding made it.
     pub(crate) fn usage_shadow_copies(&self) -> Option<Arc<ShadowCopies>> {
         (self.0.usage_shadow.get()).map(|shadow| Arc::clone(&shadow.copies))
