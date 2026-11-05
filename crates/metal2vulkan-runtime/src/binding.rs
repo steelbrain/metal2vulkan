@@ -34,11 +34,14 @@
 //! - **The heap** (set 1): the device's heap set of the command's layout, which holds every live
 //!   texture at its resource ID and each array's neutral at element 0 (`heap_sets.rs`), so a heap
 //!   entry writes nothing: the texture it names (made resident, or bound at a slot) is checked as a
-//!   slot's view is. It holds every live sampler state at its element too, so an argument sampler
-//!   writes nothing either. A texture handle table is the device's texture table
+//!   slot's view is, and nor does any other image element (an array's neutral where a member's
+//!   texture does not fit its class). It holds every live sampler state at its element too, so an
+//!   argument sampler writes nothing either. A texture handle table is the device's texture table
 //!   (`heap_sets::texture_table`), and a sampler table the device's sampler table of the layout's
 //!   kind (`heap_sets::sampler_table`), so a handle reaches every live texture and sampler state
-//!   by its ID as the command runs, as Metal's does.
+//!   by its ID as the command runs, as Metal's does. A draw whose caller keeps its heap part
+//!   (`render/heap_part.rs`) writes, after one draw checked each entry, only the plan's writes
+//!   past the heap's entries that draw listed ([`PastHeap`]).
 //! - **Function tables** an argument buffer names: a set-1 element takes a listed table's words
 //!   buffer whole. On a device without the function-table array's features the stage's snapshot
 //!   takes the listed tables' words copied into the arena (`function_table.rs`), which the command
@@ -52,10 +55,11 @@ use super::address_map::SamplerMaps;
 use super::argument_table::{ArgumentTable, InlineBytes};
 use super::buffer::Buffer;
 use super::command_buffer::{NotedTable, State};
+use super::degradation::EachWatch;
 use super::device::lock;
 use super::error::{internal, Error, RuntimeGap};
 use super::function_table::{self, TableSnapshot, VisibleFunctionTable};
-use super::heap_sets::{Keeper, SamplerTable, TextureTable, HEAP_SET};
+use super::heap_sets::{self, Keeper, SamplerTable, TextureTable, HEAP_SET};
 use super::key_hash::KeyMap;
 use super::render_pass::{PassLayout, Target};
 use super::render_target;
@@ -398,6 +402,10 @@ impl<'a> Tables<'a> {
 /// What one command's instantiation gives the binder, a dispatch's or a draw's alike.
 pub(super) struct Command<'a> {
     pub(super) descriptor_bytes: &'a [DescriptorBytes],
+    /// The plan's heap tables, where its caller keeps them apart from the command's other
+    /// descriptor bytes (`BindingPlan::heap_tables_into`, `render/heap_part.rs`): empty where
+    /// they are among those.
+    pub(super) heap_tables: &'a [DescriptorBytes],
     pub(super) descriptor_ranges: &'a [DescriptorRange],
     /// Each stage's root table, by the stages its push hole names.
     pub(super) root_tables: Vec<(metal2vulkan::vk::ShaderStageFlags, &'a RootTable)>,
@@ -737,6 +745,7 @@ pub(super) fn bind(
         state,
         (plan, command, tables),
         (memo, writes, &mut samplers),
+        None,
     )?;
     bound.samplers = samplers;
     Ok(bound)
@@ -744,7 +753,9 @@ pub(super) fn bind(
 
 /// [`bind`]'s, the samplers the writes name in `samplers`, emptied first (its [`Bound`]'s
 /// `samplers` left empty), so a caller that keeps the vector fills each command's into the last
-/// one's storage (a draw's, `LiveBind::samplers`).
+/// one's storage (a draw's, `LiveBind::samplers`). With `past`, where the command has a heap and
+/// its caller keeps its heap part (`render/heap_part.rs`): the writes it lists, where it lists
+/// them, alone, else every write, listed there (the module docs).
 pub(super) fn bind_into(
     call: &'static str,
     device: &Device,
@@ -755,80 +766,79 @@ pub(super) fn bind_into(
         &mut Vec<Write>,
         &mut Vec<Arc<OwnedSampler>>,
     ),
+    past: Option<&mut PastHeap>,
 ) -> Result<Bound, Error> {
     writes.clear();
     writes.reserve(plan.descriptors.len());
     samplers.clear();
-    for write in &plan.descriptors {
-        let element = match tables.heap {
-            Some(heap) => match heap.element(write) {
-                Some(element) => element,
-                // No handle reaches it.
-                None => continue,
-            },
-            None => write.array_element,
-        };
-        let ty: vk::DescriptorType = write.ty.into();
-        // The device's heap set holds every texture, every sampler state and the neutrals (the
-        // module docs): a texture the command names is checked as a slot's view, and nothing is
-        // written.
-        if tables.heap.is_some() && write.set == HEAP_SET {
-            if let WriteSource::HeapEntry { source, view, .. } = &write.source {
-                let storage = ty == vk::DescriptorType::STORAGE_IMAGE;
-                heap_texture(tables, *source)?.bound_view(call, view, storage)?;
-                continue;
-            }
-            if let WriteSource::ArgumentSampler { .. } = write.source {
-                continue;
-            }
-            if element == metal2vulkan::bind::NEUTRAL_HEAP_ELEMENT {
-                continue;
-            }
-        }
-        let info = match (&write.source, ty) {
-            (WriteSource::HeapEntry { .. }, _) => {
-                return Err(internal("a heap entry outside the heap set"))
-            }
-            (_, ty) => match ty {
-                vk::DescriptorType::UNIFORM_BUFFER | vk::DescriptorType::STORAGE_BUFFER => {
-                    Info::Buffer(descriptor(device, state, command, tables, write)?)
+    match past.filter(|_| tables.heap.is_some()) {
+        Some(PastHeap(Some(listed))) => {
+            // Checked against the writes listed again, in place: a draw's allocations are
+            // bounded in builds with debug assertions too (`runtime_lane::frame_costs`).
+            #[cfg(debug_assertions)]
+            {
+                let mut kept = listed.iter();
+                for (at, write) in plan.descriptors.iter().enumerate() {
+                    if written_at(call, tables, write, false)?.is_some() {
+                        assert_eq!(
+                            kept.next(),
+                            Some(&(at as u32)),
+                            "a command's writes past its kept heap that are not its own"
+                        );
+                    }
                 }
-                vk::DescriptorType::UNIFORM_TEXEL_BUFFER
-                | vk::DescriptorType::STORAGE_TEXEL_BUFFER => {
-                    let storage = ty == vk::DescriptorType::STORAGE_TEXEL_BUFFER;
-                    Info::Texel(texel_descriptor(device, command, tables, write, storage)?)
-                }
-                _ => Info::Image(image_descriptor(
+                assert_eq!(
+                    kept.next(),
+                    None,
+                    "a command's writes past its kept heap that are not its own"
+                );
+            }
+            for &at in listed.iter() {
+                let write = (plan.descriptors.get(at as usize))
+                    .ok_or_else(|| internal("a listed write past the plan's"))?;
+                let element = written_at(call, tables, write, false)?
+                    .ok_or_else(|| internal("a listed write the command does not write"))?;
+                let kept = (&mut *samplers, memo.as_deref_mut());
+                let write = written(
                     call,
                     device,
-                    tables,
-                    write,
-                    ty,
-                    (samplers, memo.as_deref_mut()),
-                )?),
-            },
-        };
-        // What keeps an argument sampler's `VkSampler` or a function table's words while the
-        // heap set holds them.
-        let held: Option<Keeper> = match (&write.source, &info) {
-            (WriteSource::ArgumentSampler { .. }, Info::Image(image)) => samplers
-                .iter()
-                .find(|kept| kept.raw() == image.sampler)
-                .map(|kept| Box::new(Arc::clone(kept)) as Keeper),
-            (WriteSource::FunctionTable { index }, _) => tables
-                .function_tables
-                .get(*index as usize)
-                .map(|table| Box::new(table.words().clone()) as Keeper),
-            _ => None,
-        };
-        writes.push(Write {
-            set: write.set,
-            binding: write.binding,
-            element,
-            ty,
-            info,
-            held,
-        });
+                    state,
+                    (command, tables),
+                    (write, element),
+                    kept,
+                )?;
+                writes.push(write);
+            }
+        }
+        past => {
+            // A check that announced a notice its device announces at every occurrence lists
+            // nothing: the next command meets it again.
+            let watch = EachWatch::start();
+            let mut listing = past.is_some().then(Vec::new);
+            for (at, write) in plan.descriptors.iter().enumerate() {
+                let Some(element) = written_at(call, tables, write, true)? else {
+                    continue;
+                };
+                if let Some(listing) = &mut listing {
+                    listing.push(at as u32);
+                }
+                let kept = (&mut *samplers, memo.as_deref_mut());
+                let write = written(
+                    call,
+                    device,
+                    state,
+                    (command, tables),
+                    (write, element),
+                    kept,
+                )?;
+                writes.push(write);
+            }
+            if let (Some(past), Some(listing)) = (past, listing) {
+                if !watch.met() {
+                    past.0 = Some(listing);
+                }
+            }
+        }
     }
     let mut roots = Vec::with_capacity(command.root_tables.len());
     for &(stages, table) in &command.root_tables {
@@ -897,11 +907,114 @@ pub(super) fn bind_into(
     })
 }
 
-/// Make the device's neutral images, texel buffers and samplers that [`bind`] may write for
-/// `plan`: at its unbound texture, sampler and texel slots, its heap elements whose texture it
-/// cannot present, and its argument sampler elements past the states listed. So binding a command
-/// of the plan later makes none: a host step runs no submission of its own and makes no neutral,
-/// which it refuses (`neutral.rs`).
+/// The indices of a plan's descriptor writes that a command whose caller keeps its heap part
+/// writes past its heap's entries (`render/heap_part.rs`): listed by [`bind_into`] at a command
+/// that checked each entry and met no notice its device announces at every occurrence, so a
+/// later command of the same plan under the same heap part writes those alone. They are a
+/// function of the plan and of where its heap writes go (`metal2vulkan::bind::HeapElements`),
+/// and an entry's check of its texture and the plan's view, which no call changes.
+#[derive(Default)]
+pub(super) struct PastHeap(Option<Vec<u32>>);
+
+/// Where `write`, one of its plan's descriptor writes, is written for a command over `tables`:
+/// its element, or `None` where the command writes nothing there. A heap's write no handle
+/// reaches is none, and in the device's heap set, which holds every texture, every sampler state
+/// and the neutrals (the module docs), so are a heap entry, its texture checked as a slot's view
+/// is where `check` says so, every other image element (an array's neutral where a member's
+/// texture does not fit its class), an argument sampler, and a neutral element
+/// (`heap_sets::holds_element`).
+fn written_at(
+    call: &'static str,
+    tables: &Tables<'_>,
+    write: &DescriptorWrite,
+    check: bool,
+) -> Result<Option<u32>, Error> {
+    let Some(heap) = tables.heap else {
+        return Ok(Some(write.array_element));
+    };
+    // No handle reaches it.
+    let Some(element) = heap.element(write) else {
+        return Ok(None);
+    };
+    if write.set != HEAP_SET {
+        return Ok(Some(element));
+    }
+    match &write.source {
+        WriteSource::HeapEntry { source, view, .. } => {
+            if check {
+                let ty: vk::DescriptorType = write.ty.into();
+                let storage = ty == vk::DescriptorType::STORAGE_IMAGE;
+                heap_texture(tables, *source)?.bound_view(call, view, storage)?;
+            }
+            Ok(None)
+        }
+        WriteSource::ArgumentSampler { .. } => Ok(None),
+        _ if heap_sets::holds_element(write.ty.into(), element) => Ok(None),
+        _ => Ok(Some(element)),
+    }
+}
+
+/// The write of `write`, one of its plan's descriptor writes, at `element`, for `command` over
+/// `tables` ([`bind_into`]): its image descriptor's sampler kept in `samplers`, through `memo`.
+fn written(
+    call: &'static str,
+    device: &Device,
+    state: &mut State,
+    (command, tables): (&Command<'_>, &Tables<'_>),
+    (write, element): (&DescriptorWrite, u32),
+    (samplers, memo): (&mut Vec<Arc<OwnedSampler>>, Option<&mut BindMemo>),
+) -> Result<Write, Error> {
+    let ty: vk::DescriptorType = write.ty.into();
+    let info = match (&write.source, ty) {
+        (WriteSource::HeapEntry { .. }, _) => {
+            return Err(internal("a heap entry outside the heap set"))
+        }
+        (_, ty) => match ty {
+            vk::DescriptorType::UNIFORM_BUFFER | vk::DescriptorType::STORAGE_BUFFER => {
+                Info::Buffer(descriptor(device, state, command, tables, write)?)
+            }
+            vk::DescriptorType::UNIFORM_TEXEL_BUFFER | vk::DescriptorType::STORAGE_TEXEL_BUFFER => {
+                let storage = ty == vk::DescriptorType::STORAGE_TEXEL_BUFFER;
+                Info::Texel(texel_descriptor(device, command, tables, write, storage)?)
+            }
+            _ => Info::Image(image_descriptor(
+                call,
+                device,
+                tables,
+                write,
+                ty,
+                (samplers, memo),
+            )?),
+        },
+    };
+    // What keeps an argument sampler's `VkSampler` or a function table's words while the
+    // heap set holds them.
+    let held: Option<Keeper> = match (&write.source, &info) {
+        (WriteSource::ArgumentSampler { .. }, Info::Image(image)) => samplers
+            .iter()
+            .find(|kept| kept.raw() == image.sampler)
+            .map(|kept| Box::new(Arc::clone(kept)) as Keeper),
+        (WriteSource::FunctionTable { index }, _) => tables
+            .function_tables
+            .get(*index as usize)
+            .map(|table| Box::new(table.words().clone()) as Keeper),
+        _ => None,
+    };
+    Ok(Write {
+        set: write.set,
+        binding: write.binding,
+        element,
+        ty,
+        info,
+        held,
+    })
+}
+
+/// Make the device's neutral images, texel buffers and samplers that [`bind`] may write or check
+/// for `plan`: at its unbound texture, sampler and texel slots, its heap elements whose texture it
+/// cannot present (which the device's heap sets hold, so [`bind`] writes none), and its argument
+/// sampler elements past the states listed. So binding a command of the plan later makes none: a
+/// host step runs no submission of its own and makes no neutral, which it refuses (`neutral.rs`).
 pub(super) fn make_neutrals(device: &Device, plan: &BindingPlan) -> Result<(), Error> {
     for write in &plan.descriptors {
         let ty: vk::DescriptorType = write.ty.into();
@@ -2009,9 +2122,8 @@ fn descriptor(
     let key = (write.set, write.binding);
     let ty: vk::DescriptorType = write.ty.into();
     let bytes = || {
-        command
-            .descriptor_bytes
-            .iter()
+        (command.descriptor_bytes.iter())
+            .chain(command.heap_tables)
             .find(|d| (d.set, d.binding) == key)
             .map(|d| d.bytes.as_slice())
             .ok_or_else(|| internal("a table write without its bytes"))

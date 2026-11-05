@@ -396,6 +396,7 @@ impl RenderLowering {
         let commands = &live.commands;
         let command = binding::Command {
             descriptor_bytes: &commands.descriptor_bytes,
+            heap_tables: &[],
             descriptor_ranges: &commands.descriptor_ranges,
             root_tables: Vec::new(),
             push_holes: &commands.push_holes,

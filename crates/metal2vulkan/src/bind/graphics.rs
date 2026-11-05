@@ -440,7 +440,9 @@ pub enum DrawCall {
 pub struct DrawCommands {
     /// One write per stage with push fields, covering the stage's whole push range.
     pub push_constants: Vec<PushConstantWrite>,
-    /// Each stage's `ArgumentTable` contents and handle table.
+    /// Each stage's `ArgumentTable` contents, then the plan's heap tables (its handle tables,
+    /// sampler tables and function-table directories), which
+    /// [`BindingPlan::instantiate_draw_apart_into`] leaves out.
     pub descriptor_bytes: Vec<DescriptorBytes>,
     /// Vertex-buffer offsets by Vulkan vertex binding (`vkCmdBindVertexBuffers`).
     pub buffer_offsets: Vec<(u32, u64)>,
@@ -2768,6 +2770,29 @@ impl BindingPlan {
         draw: &DrawCall,
         commands: &mut DrawCommands,
     ) -> Result<(), BindError> {
+        instantiate(self.drawn(draw)?, state, draw, commands, Heap::Written)
+    }
+
+    /// [`instantiate_draw_into`](Self::instantiate_draw_into)'s commands of `draw` of `state`, but
+    /// for the plan's heap tables, written over `commands`: every field is set as that method sets
+    /// it but `descriptor_bytes`, which holds the stage tables alone, without the heap tables that
+    /// method writes after them ([`heap_tables_into`](Self::heap_tables_into)'s for `state`). So a
+    /// consumer that keeps a state's heap tables binds every later command of a state whose heap
+    /// inputs are the same with them, and works them out once rather than at each command: their
+    /// cost grows with the resources the state makes resident and the textures its slots bind
+    /// that a handle names, a draw's other commands' with what the draw binds. An error is one
+    /// `instantiate_draw_into` answers for `state`, but for those `heap_tables_into` answers.
+    pub fn instantiate_draw_apart_into(
+        &self,
+        state: &BindState,
+        draw: &DrawCall,
+        commands: &mut DrawCommands,
+    ) -> Result<(), BindError> {
+        instantiate(self.drawn(draw)?, state, draw, commands, Heap::Apart)
+    }
+
+    /// The render template `draw` instantiates: this plan's, where the draw runs on its variant.
+    fn drawn(&self, draw: &DrawCall) -> Result<&GraphicsTemplate, BindError> {
         let t = self
             .graphics
             .as_ref()
@@ -2790,7 +2815,7 @@ impl BindingPlan {
                 });
             }
         }
-        instantiate(t, state, draw, commands)
+        Ok(t)
     }
 
     /// [`instantiate_draw_into`](Self::instantiate_draw_into)'s commands of `state`, written over
@@ -4217,14 +4242,23 @@ fn deindexed_draw(
     })
 }
 
+/// Whether a draw's commands hold the plan's heap tables (`BindingPlan::instantiate_draw_into`)
+/// or leave them to the consumer (`BindingPlan::instantiate_draw_apart_into`).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Heap {
+    Written,
+    Apart,
+}
+
 /// The commands of `draw` of `state`, written over `out` (`BindingPlan::instantiate_draw_into`):
 /// each of its fields set, its vectors cleared or their values overwritten in place, never
-/// replaced.
+/// replaced; the heap tables among its descriptor bytes where `heap` writes them.
 fn instantiate(
     t: &GraphicsTemplate,
     state: &BindState,
     draw: &DrawCall,
     out: &mut DrawCommands,
+    heap: Heap,
 ) -> Result<(), BindError> {
     let DrawCommands {
         push_constants,
@@ -4270,7 +4304,10 @@ fn instantiate(
     extents.clear();
     let bound = bind_buffers(&t.buffers, state, descriptor_ranges, extents)?;
     descriptor_ranges.extend(crate::bind::instantiate::texel_ranges(&t.resources, state)?);
-    let tables = crate::bind::heap::table_bytes(&t.resources, state)?;
+    let tables = match heap {
+        Heap::Written => crate::bind::heap::table_bytes(&t.resources, state)?,
+        Heap::Apart => Vec::new(),
+    };
     // A patch draw: a native pipeline's control stage's writes, or an emulated one's scan.
     let (control, scan) = match t.tessellation.map(|t| t.site) {
         Some(FactorSite::Scan { kernel, .. }) => {

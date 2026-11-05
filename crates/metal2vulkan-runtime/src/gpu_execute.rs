@@ -701,6 +701,7 @@ fn variant_uses(
     let tables = binding::Tables::new(&stages).with_residency(residency);
     let none = binding::Command {
         descriptor_bytes: &[],
+        heap_tables: &[],
         descriptor_ranges: &[],
         root_tables: Vec::new(),
         push_holes: &[],

@@ -384,7 +384,10 @@ fn split(before: &WorkCounts, after: &WorkCounts) -> String {
          host_step_compare_ms {:.2} indirect_record_bytes_copied {} scheduler_passes {} footprints_built {} footprint_lock_waits {} \
          root_table_ranges_noted {} resident_uses_made {} resident_uses_gathered {} \
          resident_address_indexes_made {} stage_tables_read {} draws_rebound {} draws_as_before {} \
-         heap_tables_worked_out {} host_range_lookups {} argument_samplers_taken {}",
+         heap_tables_worked_out {} host_range_lookups {} argument_samplers_taken {} \
+         draw_heap_parts_made {} resident_uses_noted {} resident_uses_against_fragments {} \
+         resident_uses_unordered_writes {} resident_uses_indirect_reads {} \
+         resident_uses_geometry_writes {} resident_uses_geometry_checked {}",
         after.host_steps_recorded - before.host_steps_recorded,
         ms(after.host_step_nanos - before.host_step_nanos),
         ms(after.render_pipeline_create_nanos - before.render_pipeline_create_nanos),
@@ -413,6 +416,13 @@ fn split(before: &WorkCounts, after: &WorkCounts) -> String {
         after.heap_tables_worked_out - before.heap_tables_worked_out,
         after.host_range_lookups - before.host_range_lookups,
         after.argument_samplers_taken - before.argument_samplers_taken,
+        after.draw_heap_parts_made - before.draw_heap_parts_made,
+        after.resident_uses_noted - before.resident_uses_noted,
+        after.resident_uses_against_fragments - before.resident_uses_against_fragments,
+        after.resident_uses_unordered_writes - before.resident_uses_unordered_writes,
+        after.resident_uses_indirect_reads - before.resident_uses_indirect_reads,
+        after.resident_uses_geometry_writes - before.resident_uses_geometry_writes,
+        after.resident_uses_geometry_checked - before.resident_uses_geometry_checked,
     )
 }
 

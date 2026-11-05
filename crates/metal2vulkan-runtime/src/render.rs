@@ -401,6 +401,7 @@ mod draw_room;
 mod draw_shape;
 mod executions;
 mod extended_shadow;
+mod heap_part;
 mod inline_first;
 mod inline_splits;
 mod late_resolve;
@@ -439,6 +440,9 @@ pub(crate) use draw_again::KeptStorage;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 pub(crate) use draw_room::made as draw_rooms_made;
 pub(crate) use draw_room::SpareDrawRooms;
+#[cfg(all(test, debug_assertions, any(m2v_gpu, m2v_cpu_icd)))]
+pub(crate) use heap_part::kept_heap_checks;
+pub(crate) use heap_part::KeptHeap;
 pub(crate) use inline_splits::SpareKept;
 use replay::{
     DrawIndexed, DrawIndexedIndirect, DrawIndexedPatches, DrawIndexedPatchesIndirect, DrawPatches,
@@ -8014,13 +8018,14 @@ impl RenderLowering {
                 return Err(Error::NotImplemented(RuntimeGap::ImageblockMasters));
             }
         }
-        // Over the last draw's commands, in their storage (`LiveBind::commands`).
+        // Over the last draw's commands, in their storage (`LiveBind::commands`), but for the heap
+        // tables, which its heap part holds (below).
         // A private type's list in the private list form is drawn without indices (`listed_call`).
         let bound = match (private.private_list, restarted) {
             (true, Some(restarted)) => listed_call(restarted.program, &draw),
             _ => draw,
         };
-        plan.instantiate_draw_into(&live.state, &bound, &mut live.commands)
+        plan.instantiate_draw_apart_into(&live.state, &bound, &mut live.commands)
             .map_err(Error::Bind)?;
         // A mesh draw's own key, its residual form where the plan's is (`RenderVariant::plan`).
         if let Some(own) = live.commands.specialization.as_mut() {
@@ -8064,9 +8069,19 @@ impl RenderLowering {
             self.core.command_buffer().state().mesh_grid_past_limits();
         }
         // Set 1, the heap: its writes at the elements of their resource IDs, and the device's
-        // texture and sampler tables at the handle tables.
+        // texture and sampler tables at the handle tables. Its heap part kept while what it is
+        // made of holds (`render/heap_part.rs`).
         let compiled = variant.pipeline();
-        let heap = heap_sets::heap_elements(&compiled.layout, &plan, &live.state)?;
+        let heap = live.heap.bring_in(
+            &self.core.device().shared().counts,
+            heap_part::HeapInputs {
+                plan: &plan,
+                layout: &compiled.layout,
+                generation: self.residency.generation(),
+                listed_at: live.listed_at,
+                state: &live.state,
+            },
+        )?;
         let texture_table = heap_sets::texture_table(self.core.device(), &compiled.layout)?;
         let sampler_table =
             heap_sets::sampler_table(self.core.device(), &compiled.layout, &compiled.dependencies)?;
@@ -8812,8 +8827,12 @@ impl RenderLowering {
                 blobs.push((stage, blob));
             }
         }
+        // Its heap part's heap tables, and its writes past the heap's entries listed of it
+        // (`render/heap_part.rs`).
+        let (heap_tables, past_heap) = live.heap.brought_in()?;
         let command = binding::Command {
             descriptor_bytes: &commands.descriptor_bytes,
+            heap_tables,
             descriptor_ranges: &commands.descriptor_ranges,
             root_tables: commands
                 .root_tables
@@ -9247,6 +9266,7 @@ impl RenderLowering {
                 &mut state,
                 (&plan, &command, &tables),
                 (memo, &mut writes, &mut samplers),
+                Some(past_heap),
             )?
         };
         // The draw's push bytes, filled in place, over the last draw's (`LiveBind::pushes`).

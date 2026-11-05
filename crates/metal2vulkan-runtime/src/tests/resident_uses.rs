@@ -24,6 +24,7 @@ use super::blit_holds::{Scratch, WAIT};
 use super::draw_again::{device, Heard};
 use super::encoder_holds::{pass, render_state};
 use crate::binding::kept_resident_checks;
+use crate::render::kept_heap_checks;
 use crate::{
     Buffer, CommandBufferStatus, Degradation, Device, Region, RenderCommandEncoder,
     RenderPipelineState, ResourceOptions, ResourceRef, SamplerState, SamplerStateOptions, Texture,
@@ -166,13 +167,23 @@ struct Drawn {
     unordered: u64,
     indirect: u64,
     geometry: u64,
+    heap_parts: u64,
+    heap_checked: u64,
 }
 
 /// Draw with `draw`, and what that changed.
 fn drawn(device: &Device, draw: impl FnOnce()) -> Drawn {
-    let before = (device.work_counts(), kept_resident_checks());
+    let before = (
+        device.work_counts(),
+        kept_resident_checks(),
+        kept_heap_checks(),
+    );
     draw();
-    let after = (device.work_counts(), kept_resident_checks());
+    let after = (
+        device.work_counts(),
+        kept_resident_checks(),
+        kept_heap_checks(),
+    );
     Drawn {
         made: after.0.resident_uses_made - before.0.resident_uses_made,
         checked: after.1 - before.1,
@@ -185,6 +196,8 @@ fn drawn(device: &Device, draw: impl FnOnce()) -> Drawn {
             - before.0.resident_uses_unordered_writes,
         indirect: after.0.resident_uses_indirect_reads - before.0.resident_uses_indirect_reads,
         geometry: (after.0.resident_uses_geometry_writes) - before.0.resident_uses_geometry_writes,
+        heap_parts: after.0.draw_heap_parts_made - before.0.draw_heap_parts_made,
+        heap_checked: after.2 - before.2,
     }
 }
 
@@ -272,6 +285,34 @@ fn draws_keep_the_uses_of_what_their_encoder_made_resident_until_it_or_their_pla
                     assert_eq!(walked, [0; 8], "{what}");
                     assert!(drawn.checked > 0, "{what}");
                 }
+            }
+        }
+        assert!(scene.covered() > 0, "encoder {encoder} drew nothing");
+    }
+}
+
+/// The two encoders of the test above: within each, a draw works out its heap part (its plan's
+/// heap tables, where its heap writes go and its writes past the heap's entries:
+/// `render/heap_part.rs`) at the encoder's first draw and after the encoder made another
+/// resource resident (the first encoder's fourth), and keeps it at every other, though each
+/// binds other buffers than the last; each kept part is checked against one worked out whole.
+/// The slot shape's draw, whose plan reads no handle, works none out, and the entry shape's draw
+/// after it keeps the entry plan's part, kept beside it.
+#[test]
+fn draws_keep_their_heap_part_until_what_their_encoder_made_resident_changes() {
+    let scratch = Scratch::new("resident-heap-parts");
+    let device = device(&scratch.0, &[], &Heard::default());
+    let scene = Scene::new(&device);
+    for (encoder, corner, later) in [(0, -0.9, 3), (1, 0.1, 0)] {
+        let resources = Resources::new(&scene, corner);
+        let each = encode(&scene, &resources, later);
+        let slot_draw = POSITIONS as usize;
+        for (at, drawn) in each.iter().enumerate() {
+            let what = format!("encoder {encoder} draw {at}: {drawn:?}");
+            let made = at == 0 || at == later as usize;
+            assert_eq!(drawn.heap_parts, u64::from(made), "{what}");
+            if !made && at != slot_draw {
+                assert!(drawn.heap_checked > 0, "{what}");
             }
         }
         assert!(scene.covered() > 0, "encoder {encoder} drew nothing");

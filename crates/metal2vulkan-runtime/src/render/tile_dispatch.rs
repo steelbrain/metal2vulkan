@@ -1048,6 +1048,7 @@ impl RenderLowering {
         let pipeline_stage = &variant.pipeline().stage;
         let command = binding::Command {
             descriptor_bytes: &commands.descriptor_bytes,
+            heap_tables: &[],
             descriptor_ranges: &commands.descriptor_ranges,
             root_tables: commands
                 .root_table

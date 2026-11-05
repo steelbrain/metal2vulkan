@@ -521,6 +521,7 @@ struct DrawCounters {
     resident_uses_indirect_reads: AtomicU64,
     resident_uses_geometry_writes: AtomicU64,
     resident_uses_geometry_checked: AtomicU64,
+    draw_heap_parts_made: AtomicU64,
 }
 
 /// How a render pass took a shadowed texture as a color attachment
@@ -2310,6 +2311,11 @@ impl Counters {
         if walked > 0 {
             (self.draws.mine()).add(|counts| &counts.resident_uses_geometry_checked, walked);
         }
+    }
+
+    /// A render draw that worked out its heap part (`WorkCounts::draw_heap_parts_made`).
+    pub(crate) fn draw_heap_part_made(&self) {
+        (self.draws.mine()).add(|counts| &counts.draw_heap_parts_made, 1);
     }
 
     /// A render draw rebound (`WorkCounts::draws_rebound`), which recorded `states` state
@@ -5196,6 +5202,14 @@ pub struct WorkCounts {
     /// draws' checks against what earlier draws of their render pass instance wrote before their
     /// fragments walked, a rebound draw's check whether it may rebind included.
     pub resident_uses_geometry_checked: u64,
+    /// Render draws of a plan that reads handles that worked out its heap part: its heap tables
+    /// (`BindingPlan::heap_tables_into`), where its heap writes go
+    /// (`BindingPlan::heap_elements`), and the check of each texture a handle names that its
+    /// view is one the texture presents. A draw whose bind state's last draw of its pipeline
+    /// state worked them out for the same plan, under a residency of the same generation, the same
+    /// argument samplers and function tables and the same textures at the plan's heap slots,
+    /// works out none: its cost is then what it binds, not what its encoder made resident.
+    pub draw_heap_parts_made: u64,
     /// Keys an encoder's commands named first, while the device has a buffer over host pages
     /// (`new_buffer_with_bytes_no_copy`), that were looked up among those buffers under the lock
     /// their command buffers' submissions take: the keys of such buffers, and the rare other key
@@ -6576,6 +6590,7 @@ impl Device {
             resident_uses_indirect_reads: draws(|counts| &counts.resident_uses_indirect_reads),
             resident_uses_geometry_writes: draws(|counts| &counts.resident_uses_geometry_writes),
             resident_uses_geometry_checked: draws(|counts| &counts.resident_uses_geometry_checked),
+            draw_heap_parts_made: draws(|counts| &counts.draw_heap_parts_made),
             host_holds_looked_up: counters.host_holds_looked_up.load(Ordering::Relaxed),
             dispatches_settled_as_before: (counters.dispatches_settled_as_before)
                 .load(Ordering::Relaxed),

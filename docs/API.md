@@ -1075,6 +1075,18 @@ device address, an argument or root table, a vertex binding of a per-bind stride
 buffer's texel range, a YCbCr texture's planes, a mesh, patch or de-indexed draw) or a uniform
 view a written slot may alias; then instantiate the draw whole.
 
+A plan that reads handles (a texture's or sampler state's resource ID, a visible function table's)
+writes heap tables among its descriptor bytes, after the stage tables: its handle tables, sampler
+tables and function-table directories. Their bytes grow with the resources the state lists as
+used and the textures its slots bind that a handle names, and they depend on nothing else of the
+state but its argument samplers, function tables and heap placement. `heap_tables_into` writes them
+alone, and `instantiate_draw_apart_into` writes every other command of a draw, its descriptor bytes
+the stage tables alone. Keep a state's heap tables while those inputs hold (the used resources, the
+textures at the plan's `heap_slots`, the argument samplers, the function tables and the
+placement), and instantiate each draw apart: draws that rebind only buffers then cost what they
+bind, not what the state made resident. `heap_elements` is the same kind of function of the same
+inputs and the heap's capacity.
+
 A dispatch is one or more regions (a grid that is not whole threadgroups adds edge regions), each
 with its group count, specialization and push constants: create one `VkPipeline` per distinct
 specialization. A kernel that steps a stage-in attribute by thread position, or reads

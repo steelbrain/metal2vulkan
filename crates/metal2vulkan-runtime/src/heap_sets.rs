@@ -2221,11 +2221,7 @@ pub(super) fn bind(
         let staged: Vec<HeapWrite> = writes
             .into_iter()
             .filter(|write| {
-                write.element != 0
-                    && !matches!(
-                        write.ty,
-                        vk::DescriptorType::SAMPLED_IMAGE | vk::DescriptorType::STORAGE_IMAGE
-                    )
+                !holds_element(write.ty, write.element)
                     && !entry
                         .written
                         .get(&(write.binding, write.element))
@@ -2248,6 +2244,18 @@ pub(super) fn bind(
         heap.versions.push(version);
     }
     Ok(raw)
+}
+
+/// Whether every heap set holds what a command's write of type `ty` at `element` of one of its
+/// arrays would write, so the command writes nothing there ([`bind`]; `binding::bind_into` makes
+/// no such write): the neutral element, and every image element, which holds the texture at its
+/// ID as the array's class takes it, written as the texture takes the slot (the module docs).
+pub(super) fn holds_element(ty: vk::DescriptorType, element: u32) -> bool {
+    element == metal2vulkan::bind::NEUTRAL_HEAP_ELEMENT
+        || matches!(
+            ty,
+            vk::DescriptorType::SAMPLED_IMAGE | vk::DescriptorType::STORAGE_IMAGE
+        )
 }
 
 /// Whether two descriptors name the same objects (each held while a set holds it, so a handle
@@ -2281,12 +2289,21 @@ fn argument_sampler(sampler: &SamplerState) -> ArgumentSampler {
 /// Whether `kept` is `samplers` [`listed`], bit for bit (a float of the other sign, which
 /// compares equal, is another listing): what a kept bind state need not take again.
 pub(super) fn lists(kept: &[ArgumentSampler], samplers: &[SamplerState]) -> bool {
-    let bits = |s: &ArgumentSampler| [s.desc.lod_min_clamp, s.desc.lod_max_clamp].map(f32::to_bits);
     kept.len() == samplers.len()
-        && kept.iter().zip(samplers).all(|(kept, sampler)| {
-            let listed = argument_sampler(sampler);
-            *kept == listed && bits(kept) == bits(&listed)
-        })
+        && (kept.iter().zip(samplers))
+            .all(|(kept, sampler)| same_sampler(kept, &argument_sampler(sampler)))
+}
+
+/// Whether two listings of argument samplers are one, bit for bit ([`lists`]).
+pub(super) fn same_listing(a: &[ArgumentSampler], b: &[ArgumentSampler]) -> bool {
+    a.len() == b.len() && a.iter().zip(b).all(|(a, b)| same_sampler(a, b))
+}
+
+/// Whether two argument samplers are one, bit for bit: a float of the other sign, which compares
+/// equal, is another.
+fn same_sampler(a: &ArgumentSampler, b: &ArgumentSampler) -> bool {
+    let bits = |s: &ArgumentSampler| [s.desc.lod_min_clamp, s.desc.lod_max_clamp].map(f32::to_bits);
+    a == b && bits(a) == bits(b)
 }
 
 /// Where `plan`'s heap writes go for `state`, each heap array holding the capacity of set 1 of
@@ -2296,13 +2313,18 @@ pub(super) fn heap_elements(
     plan: &BindingPlan,
     state: &BindState,
 ) -> Result<Option<HeapElements>, Error> {
-    let Some(set) = layout.sets.get(1) else {
+    let Some(capacity) = capacity(layout) else {
         return Ok(None);
     };
-    let capacity = set.bindings.iter().map(|b| b.count).min().unwrap_or(0);
     plan.heap_elements(state, capacity)
         .map(Some)
         .map_err(Error::Bind)
+}
+
+/// The capacity of each heap array of set 1 of `layout`, `None` for a layout without a heap.
+pub(super) fn capacity(layout: &PipelineLayout) -> Option<u32> {
+    let set = layout.sets.get(1)?;
+    Some(set.bindings.iter().map(|b| b.count).min().unwrap_or(0))
 }
 
 /// Whether every one of `samplers` (the argument samplers a command lists) has an element in

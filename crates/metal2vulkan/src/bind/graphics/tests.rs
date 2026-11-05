@@ -20,12 +20,22 @@ fn instantiate(
     draw: &DrawCall,
 ) -> Result<DrawCommands, BindError> {
     let mut fresh = DrawCommands::default();
-    let made = super::instantiate(t, state, draw, &mut fresh).map(|()| fresh);
+    let made = super::instantiate(t, state, draw, &mut fresh, Heap::Written).map(|()| fresh);
     KEPT.with(|kept| {
         let mut kept = kept.borrow_mut();
-        let over = super::instantiate(t, state, draw, &mut kept).map(|()| kept.clone());
+        let over =
+            super::instantiate(t, state, draw, &mut kept, Heap::Written).map(|()| kept.clone());
         assert_eq!(over, made, "the commands written over those before");
     });
+    // Apart from the heap tables (`BindingPlan::instantiate_draw_apart_into`), the same commands
+    // but for those, which follow the stage tables.
+    if let Ok(made) = &made {
+        let mut apart = DrawCommands::default();
+        super::instantiate(t, state, draw, &mut apart, Heap::Apart).expect("the commands apart");
+        let heap = crate::bind::heap::table_bytes(&t.resources, state).expect("the heap tables");
+        apart.descriptor_bytes.extend(heap);
+        assert_eq!(&apart, made, "the commands apart from their heap tables");
+    }
     made
 }
 

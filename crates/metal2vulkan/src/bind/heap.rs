@@ -1928,6 +1928,42 @@ fn relisted_sampler_tables(
 }
 
 impl BindingPlan {
+    /// This plan's heap tables for `state`, written over `tables` (emptied first): the bytes of
+    /// its handle tables, sampler tables and function-table directories, which
+    /// [`instantiate_draw_into`](Self::instantiate_draw_into) writes after a draw's stage tables
+    /// and [`instantiate_draw_apart_into`](Self::instantiate_draw_apart_into) leaves out. They
+    /// are a function of the plan and of the state's heap inputs alone: its used resources (and
+    /// whether it lists them in token order), the textures it binds at the plan's
+    /// [`heap_slots`](Self::heap_slots), its argument samplers, its function tables and its heap
+    /// placement. Their cost grows with the used resources and those slots. A state of another
+    /// shape than the plan's is an internal error, a list past a table's planned entries
+    /// [`BindError::HeapTooLarge`], and a function-table directory the plan cannot represent the
+    /// consumer's [`BindError::Unsupported`] (`DynamicCall`); on an error `tables` holds none.
+    pub fn heap_tables_into(
+        &self,
+        state: &BindState,
+        tables: &mut Vec<crate::bind::instantiate::DescriptorBytes>,
+    ) -> Result<(), BindError> {
+        tables.clear();
+        let template = self
+            .resource_template()
+            .ok_or_else(|| internal("a plan without a template"))?;
+        tables.extend(table_bytes(template, state)?);
+        Ok(())
+    }
+
+    /// The texture slots whose textures this plan's heap tables and heap elements read
+    /// ([`heap_tables_into`](Self::heap_tables_into), [`heap_elements`](Self::heap_elements)):
+    /// those of its heap members a slot binds, beside the used resources. None for a plan whose
+    /// handles name used resources alone, or that reads no handle.
+    pub fn heap_slots(&self) -> impl Iterator<Item = SlotRef> + '_ {
+        let members = self.resource_template().map(|t| &t.heap_members);
+        (members.into_iter().flatten()).filter_map(|m| match m.source {
+            HeapSource::Bound(slot) => Some(slot),
+            HeapSource::Used(_) => None,
+        })
+    }
+
     /// Where this plan's heap writes go for `state` ([`HeapElements`]), each heap array having
     /// `capacity` elements (the layout's set-1 count). Under [`HeapPlacement::ResourceId`] a
     /// member's element is its resource ID and a listed sampler's its

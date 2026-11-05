@@ -2618,6 +2618,7 @@ field	metal2vulkan-runtime::WorkCounts.dma_buf_imports	pub dma_buf_imports: u64
 field	metal2vulkan-runtime::WorkCounts.dma_buf_memories_live	pub dma_buf_memories_live: u64
 field	metal2vulkan-runtime::WorkCounts.dma_buf_sparse_buffers	pub dma_buf_sparse_buffers: u64
 field	metal2vulkan-runtime::WorkCounts.dma_buf_textures_in_place	pub dma_buf_textures_in_place: u64
+field	metal2vulkan-runtime::WorkCounts.draw_heap_parts_made	pub draw_heap_parts_made: u64
 field	metal2vulkan-runtime::WorkCounts.draw_shapes_carried	pub draw_shapes_carried: u64
 field	metal2vulkan-runtime::WorkCounts.draw_shapes_found	pub draw_shapes_found: u64
 field	metal2vulkan-runtime::WorkCounts.draw_shapes_made	pub draw_shapes_made: u64
@@ -8496,8 +8497,11 @@ method	metal2vulkan::bind::BindState::view_base_alignment_of	pub fn view_base_al
 method	metal2vulkan::bind::BindingPlan::content_digest	pub fn content_digest(&self) -> Result<crate::cache::Hash256, String>
 method	metal2vulkan::bind::BindingPlan::dispatch_variant	pub fn dispatch_variant(&self, dispatch: &Dispatch) -> Result<VariantKey, BindError>
 method	metal2vulkan::bind::BindingPlan::heap_elements	pub fn heap_elements(&self, state: &BindState, capacity: u32) -> Result<HeapElements, BindError>
+method	metal2vulkan::bind::BindingPlan::heap_slots	pub fn heap_slots(&self) -> impl Iterator<Item = SlotRef> + '_
+method	metal2vulkan::bind::BindingPlan::heap_tables_into	pub fn heap_tables_into(&self, state: &BindState, tables: &mut Vec<crate::bind::instantiate::DescriptorBytes>) -> Result<(), BindError>
 method	metal2vulkan::bind::BindingPlan::instantiate_dispatch	pub fn instantiate_dispatch(&self, state: &BindState, dispatch: &Dispatch) -> Result<DispatchCommands, BindError>
 method	metal2vulkan::bind::BindingPlan::instantiate_draw	pub fn instantiate_draw(&self, state: &BindState, draw: &DrawCall) -> Result<DrawCommands, BindError>
+method	metal2vulkan::bind::BindingPlan::instantiate_draw_apart_into	pub fn instantiate_draw_apart_into(&self, state: &BindState, draw: &DrawCall, commands: &mut DrawCommands) -> Result<(), BindError>
 method	metal2vulkan::bind::BindingPlan::instantiate_draw_into	pub fn instantiate_draw_into(&self, state: &BindState, draw: &DrawCall, commands: &mut DrawCommands) -> Result<(), BindError>
 method	metal2vulkan::bind::BindingPlan::instantiate_replay	pub fn instantiate_replay(&self, state: &BindState, threads_per_group: [u32; 3]) -> Result<DispatchCommands, BindError>
 method	metal2vulkan::bind::BindingPlan::rebind_draw_slots_into	pub fn rebind_draw_slots_into(&self, state: &BindState, slots: &[SlotRef], commands: &mut DrawCommands) -> Result<bool, BindError>

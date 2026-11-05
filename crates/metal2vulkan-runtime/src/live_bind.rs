@@ -75,6 +75,12 @@
 //!   moved, as a compute encoder keeps them (`compute/live.rs`): a draw's look at them costs
 //!   their count, not the resident textures'. They hold the copies, so they go as the encoder
 //!   ends ([`SpareLiveBinds::give`]).
+//! - **The heap parts kept while what they are made of holds.** A draw's heap tables, where its
+//!   heap writes go and its writes past the heap's entries (`render/heap_part.rs`) are kept here
+//!   for the plans the encoder's draws drew through lately, each while the residency's
+//!   generation, the argument samplers, the function tables and what its plan's heap slots bind
+//!   hold: a draw that keeps its part costs what it binds, not the textures made resident. They
+//!   go as the encoder ends ([`SpareLiveBinds::give`]).
 
 use ash::vk;
 use metal2vulkan::bind::{BindShape, BindState, DrawCommands};
@@ -91,7 +97,7 @@ use super::binding::{CommandUses, PushWrite, SetWrite, Write};
 use super::device::lock;
 use super::noted_apart::NotedApart;
 use super::pipeline::{BufferForms, GraphicsState, ProgramName, Settled};
-use super::render::KeptStorage;
+use super::render::{KeptHeap, KeptStorage};
 use super::sampler::OwnedSampler;
 use super::shadow::ResidentShadows;
 use super::work_counts::Counters;
@@ -248,6 +254,9 @@ pub(super) struct LiveBind {
     /// The shadows' copies of the textures its encoder made resident, listed once per change (the
     /// module docs).
     pub(super) shadows: ResidentShadows,
+    /// The heap parts its draws worked out lately, each kept while what it is made of holds (the
+    /// module docs).
+    pub(super) heap: KeptHeap,
 }
 
 /// The shapes a state took since it last listed other used resources (`BindState::used_resources`),
@@ -426,11 +435,12 @@ impl ReadFrom {
 }
 
 impl LiveBind {
-    /// Its encoder ended: what its draws settled, and the shadows' copies listed, go with the
-    /// encoder (the module docs), so the next encoder may start from it.
+    /// Its encoder ended: what its draws settled, the shadows' copies listed and the heap parts
+    /// kept go with the encoder (the module docs), so the next encoder may start from it.
     pub(super) fn end_encoder(&mut self) {
         self.forget_settles();
         self.shadows.let_go();
+        self.heap.let_go();
     }
 
     /// Start a draw through `interface` from the state that pipeline state's last draw left, where
