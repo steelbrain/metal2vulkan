@@ -50,6 +50,11 @@
 //! which lets go of no other shadow's hold (`dirty_pages.rs`, **Holds**). With nothing written
 //! since, the reader copies nothing.
 //!
+//! A command buffer whose pass draws into such a render target inside rows 0 to 8, merged back,
+//! and then fills row 2 of its bytes with a blit, leaves the next command buffer's copy in to take
+//! the fill: the merge back is the shadow's own write, which its copies in leave out, but the
+//! fill beneath it is not, so the command buffer lets go of the shadow's hold.
+//!
 //! One wait for a log's publication serves every gated copy in of a commit, two shadows over one
 //! log among them, and a wait the log answers `false` is not made again for them
 //! (`WorkCounts::dirty_waits`).
@@ -499,6 +504,87 @@ fn draw_then_invert(
     command_buffer.commit().unwrap();
     assert!(command_buffer.wait_until_completed_for(WAIT).is_ok());
     assert_eq!(command_buffer.status(), CommandBufferStatus::Completed);
+}
+
+/// One command buffer: a pass that loads `target` and draws `color` inside rows 0 to 8 (the
+/// scissor), then a blit that fills row 2 of `buffer` with `fill`, to completion.
+fn draw_then_fill(
+    device: &Device,
+    target: &Texture,
+    color: [f32; 4],
+    (buffer, fill): (&Buffer, u8),
+) {
+    let state = render_state(device, "engine/tob_renders.ll", "tob_rect", "tob_solid");
+    let queue = device.new_command_queue().unwrap();
+    let command_buffer = queue.command_buffer().unwrap();
+    let mut pass = RenderPassDescriptor::new();
+    let attachment = &mut pass.color_attachments[0];
+    attachment.texture = Some(target.clone());
+    attachment.load_action = LoadAction::Load;
+    attachment.store_action = StoreAction::Store;
+    let mut encoder = command_buffer.render_command_encoder(&pass).unwrap();
+    encoder.set_render_pipeline_state(&state).unwrap();
+    (encoder.set_scissor_rect(ScissorRect::new(0, 0, SIDE, 8))).unwrap();
+    let corners = bytes_of(&[-1.0f32, -1.0, 1.0, 1.0], f32::to_le_bytes);
+    encoder.set_vertex_bytes(&corners, 0).unwrap();
+    let color = bytes_of(&color, f32::to_le_bytes);
+    encoder.set_fragment_bytes(&color, 0).unwrap();
+    (encoder.draw_primitives(PrimitiveType::Triangle, 0, 6, 1, 0)).unwrap();
+    encoder.end_encoding().unwrap();
+    let mut blit = command_buffer.blit_command_encoder().unwrap();
+    blit.fill_buffer(buffer, 2 * ROW..3 * ROW, fill).unwrap();
+    blit.end_encoding().unwrap();
+    command_buffer.commit().unwrap();
+    assert!(command_buffer.wait_until_completed_for(WAIT).is_ok());
+    assert_eq!(command_buffer.status(), CommandBufferStatus::Completed);
+}
+
+#[test]
+fn a_fill_beneath_a_merge_reaches_the_shadows_next_copy_in() {
+    let scratch = Scratch::new("dirty-pages-beneath");
+    let host = Host::new();
+    let device = device(&scratch.0);
+    eprintln!("DIRTY-PAGES: device {:?}", device.name());
+    let log = Arc::new(Log::default());
+    let Some(buffer) = over_logged(&device, &host, &log) else {
+        return;
+    };
+    host.fill(0x1010_1010);
+    let shadows = device.work_counts().shadowed_textures;
+    let mut descriptor = TextureDescriptor::texture_2d(PixelFormat::RGBA8Unorm, SIDE, SIDE, false);
+    descriptor.usage = TextureUsage::RENDER_TARGET | TextureUsage::SHADER_READ;
+    let drawn = buffer.new_texture(&descriptor, 0, ROW).unwrap();
+    let shadowed = device.work_counts().shadowed_textures - shadows;
+    eprintln!("DIRTY-PAGES: {shadowed} render shadow made");
+    if shadowed == 0 {
+        return;
+    }
+    let mut plain = TextureDescriptor::texture_2d(PixelFormat::RGBA8Unorm, SIDE, SIDE, false);
+    plain.usage = TextureUsage::SHADER_READ | TextureUsage::SHADER_WRITE;
+    plain.resource_options = ResourceOptions::shared();
+    let target = device.new_texture(&plain).unwrap();
+    let invert = state(&device, "invert_texels");
+    let inverted = |t: [u8; 4]| [255 - t[0], 255 - t[1], 255 - t[2], t[3]];
+    draw_in_scissor(&device, &drawn, [1.0, 0.0, 0.0, 1.0]);
+    draw_then_fill(&device, &drawn, [0.0, 1.0, 0.0, 1.0], (&buffer, 0x55));
+    let before = counts(&device);
+    run(&device, &invert, &drawn, &target);
+    let after = delta(&device, before);
+    eprintln!("DIRTY-PAGES: beneath a merge {after:?}");
+    assert_eq!(texel(&target, 2), inverted([0x55; 4]), "the fill's row");
+    assert_eq!(
+        texel(&target, 0),
+        inverted([0, 255, 0, 255]),
+        "the pass's row"
+    );
+    assert_eq!(
+        texel(&target, 20),
+        inverted([0x10; 4]),
+        "a row neither wrote"
+    );
+    drop(drawn);
+    drop(buffer);
+    drop(device);
 }
 
 #[test]

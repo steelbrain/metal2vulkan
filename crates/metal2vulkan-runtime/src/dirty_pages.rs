@@ -1020,15 +1020,22 @@ impl DirtyCommit {
 
     /// Whether a write noted so far meets `copies`' truth or its shadow where it is not reported
     /// to `source` whole: a write of the shadow itself, or of a truth's bytes that no log of
-    /// `source` over host pages imported in place keeps ([`DirtyCommit::report_host_writes`]).
-    /// A write so reported reaches a copy in that asks `source` what changed after it.
+    /// `source` over host pages imported in place keeps ([`DirtyCommit::report_host_writes`]),
+    /// or any write of the truth where the shadow copies back or merges into it in the command
+    /// buffer, whose own write the report names it the writer of over the bytes beneath it, a
+    /// command's write there among them, so its own copies in would leave them out. A write so
+    /// reported reaches a copy in that asks `source` what changed after it.
     fn wrote_unreported(&self, copies: &ShadowCopies, source: &Arc<DirtySource>) -> bool {
+        let backs = (self.wrote.iter()).any(|(log, _)| std::ptr::eq(log.copies.as_ptr(), copies));
         (self.written.iter().zip(&self.reported)).any(|(used, reported)| {
             if used.key == copies.shadow_key {
                 return true;
             }
             if !copies.meets(used) {
                 return false;
+            }
+            if backs {
+                return true;
             }
             let bytes = written_bytes(used);
             let reaches = |&at: &usize| self.host[at].0.logs_all_of(source, &bytes);
