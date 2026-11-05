@@ -844,6 +844,66 @@ fn a_texture_an_argument_buffer_holds_is_read_in_its_own_class() {
     assert!(compiled > 0, "no committed profile has the sampled heap");
 }
 
+/// A `half` read of a texture an argument buffer holds merges its class arms as the texel's `half`
+/// bits (`emit::read_crossed`), widened once after the merge: on every committed profile with a
+/// sampled heap, the module merges a vector of four `u32`s and merges no texel struct, stays inside
+/// the plan's word estimate and passes L3. A member of another class then keeps its words' low 16
+/// bits wherever the value is stored unchanged, where a merge of each arm's widened `half` selected
+/// against a null handle's zero is a move Metal's compiler does not fold back to the bits (on the
+/// Apple M3 Max a NaN's bits became `0x7E00`). A `float` read, which widens nothing, still merges
+/// its texel structs.
+#[test]
+fn an_argument_buffer_half_read_merges_its_arms_bits() {
+    use crate::error::{Error, Feature, Unsupported};
+    use crate::spirv::ir::Type as SType;
+    let inputs = LowerInputs::new();
+    let mut compiled = 0;
+    for ty in [Ty::Half, Ty::Float] {
+        let name = format!("held read {ty:?}");
+        let Some(bc) = assemble(&name, &held_kernel(Held::Read, ty)) else {
+            return;
+        };
+        for (stem, p) in crate::spirv::testing::committed_profiles().expect("profiles") {
+            let what = format!("{name} on {stem}");
+            let m = match typed_module_with(&bc, "k", &p, &inputs) {
+                Ok((_, m)) => m,
+                Err(Error::Unsupported(Unsupported {
+                    feature: Feature::ArgumentBufferTextures,
+                    ..
+                })) => continue,
+                Err(e) => panic!("{what}: {e}"),
+            };
+            validate(&bc, &inputs, &p, &what);
+            let phis: Vec<&SType> = m
+                .blocks()
+                .iter()
+                .flat_map(|b| &b.phis)
+                .map(|phi| {
+                    let ty = m.value(phi.result).expect("a phi's value").ty;
+                    m.types().get(ty).expect("a phi's type")
+                })
+                .collect();
+            let bits = phis.iter().any(|t| match t {
+                SType::Vector { elem, len: 4 } => matches!(
+                    m.types().get(*elem),
+                    Ok(SType::Int {
+                        width: 32,
+                        signed: false
+                    })
+                ),
+                _ => false,
+            });
+            let texels = phis.iter().any(|t| matches!(t, SType::Struct { .. }));
+            match ty {
+                Ty::Half => assert!(bits && !texels, "{what}: {phis:?}"),
+                _ => assert!(texels, "{what}: {phis:?}"),
+            }
+            compiled += 1;
+        }
+    }
+    assert!(compiled > 0, "no committed profile has the sampled heap");
+}
+
 /// A kernel writing the `ty` texel `src[gid.x + 16 gid.y]` (buffer 0) to `access::write` texture
 /// slot 0 at its thread's texel `gid`.
 fn write_kernel(ty: Ty) -> String {

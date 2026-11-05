@@ -335,7 +335,8 @@ pub struct Read {
     /// The read, of a sampled color heap group of one sample, reads a member of another numeric
     /// class than its own in that class where the handle's class index names one
     /// (`metal::texel_format::heap_numeric_base`, or a float format's own class): one sibling
-    /// read per other class, the read itself for every other member.
+    /// read per other class, the read itself for every other member. A `half` read's arms merge
+    /// the texel's `half` bits, widened once after the merge (`emit::read_crossed`).
     pub heap_cross: Vec<Read>,
 }
 
@@ -347,7 +348,7 @@ pub struct Read {
 /// clamp-to-edge read's size query, offset, and signed clamp; a `half` texel's call of the
 /// conversion routine or exact rounding, or an sRGB texel's raw decode; the lanes Metal reads as
 /// constants; the reinterpretation of another class's words; and each sibling of a heap read with
-/// its class test and branch.
+/// its class test and branch, and a `half` read's merge of its arms' bits.
 fn read_words(r: &Read) -> u32 {
     let own = 64
         + if r.checked() { 80 } else { 0 }
@@ -382,7 +383,18 @@ fn read_words(r: &Read) -> u32 {
         };
     let declared = if r.declared.is_some() { 16 } else { 0 };
     let siblings: u32 = r.heap_cross.iter().map(|x| read_words(x) + 24).sum();
-    own + declared + siblings
+    // A `half` read with siblings merges its arms' bits (`emit::read_crossed`): each arm's
+    // narrowing (or its noted bits' mask) and null select, and one widening after the merge.
+    let half_bits = match (r.heap_cross.len() as u32, r.texel.conv) {
+        (0, _) => 0,
+        (n, TexelConv::F16) => {
+            let lanes =
+                u32::from(r.texel.lanes) * crate::lower::arith::narrow::bits_words(r.texel.half());
+            (n + 1) * (lanes + 32) + lanes
+        }
+        _ => 0,
+    };
+    own + declared + siblings + half_bits
 }
 
 /// A Metal 4.1 `read(sampler s, ...)` through a constexpr clamp-to-edge sampler (MSL 4.1

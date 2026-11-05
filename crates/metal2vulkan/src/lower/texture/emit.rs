@@ -2273,7 +2273,25 @@ pub(crate) fn with_word(
     }
 }
 
+/// The texel a read hands the function, before a heap element's null handle zeroes it: the held
+/// texel, the heap element's liveness where the image is one, and the sparse arm's status word
+/// where the function observes it.
+struct ReadTexel {
+    texel: SValue,
+    live: Option<SValue>,
+    word: Option<SValue>,
+}
+
 fn read(cx: &mut EmitCx<'_>, fb: &mut FunctionBuilder<'_>, r: &Read) -> BResult<SValue> {
+    let ReadTexel { texel, live, word } = read_texel(cx, fb, r)?;
+    let texel = live_or_zero(fb, live, texel)?;
+    // `{T, i8}`: the status word is the sparse arm's where the function observes it, else 0,
+    // Metal's for a resident access.
+    with_word(cx, fb, &r.result, texel, word)
+}
+
+/// [`read`]'s texel ([`ReadTexel`]).
+fn read_texel(cx: &mut EmitCx<'_>, fb: &mut FunctionBuilder<'_>, r: &Read) -> BResult<ReadTexel> {
     // A two-plane 3D texture's read takes its first texel ([`planes_volume`]).
     let volume = decl_of(cx, &r.image).is_some_and(|d| planes_volume(&d));
     // A storage read's level is its level views'; a sampled read's, its `Lod`.
@@ -2546,10 +2564,7 @@ fn read(cx: &mut EmitCx<'_>, fb: &mut FunctionBuilder<'_>, r: &Read) -> BResult<
         Some(declared) => reinterpret(fb, r.texel, declared, texel)?,
         None => texel,
     };
-    let texel = live_or_zero(fb, live, texel)?;
-    // `{T, i8}`: the status word is the sparse arm's where the function observes it, else 0,
-    // Metal's for a resident access.
-    with_word(cx, fb, &r.result, texel, word)
+    Ok(ReadTexel { texel, live, word })
 }
 
 /// The texel of heap read `r` (`Read::heap_raw`) where its handle's class index names a form a
@@ -2723,6 +2738,17 @@ fn names_class(fb: &mut FunctionBuilder<'_>, index: SValue, class: TexelClass) -
 /// the handle's class index names ([`names_class`]), its words handed back as `r`'s, else `r`
 /// itself: Metal reads a member of another class in its own class and hands back the words, as
 /// at a slot.
+///
+/// A `half` read's arms hand the merge their texel's `half` bits ([`ArmValue::HalfBits`]), which
+/// it carries as integers, and one widening after it reads them as the value (`narrow::from_bits`):
+/// a sibling's `half` is its words' low 16 bits widened where the merge ends, as a slot's read of
+/// another class widens them (`reinterpret`), so a store of it moves those bits as the slot's
+/// does, a NaN's included. Merged as values, each arm's `half` would be the device's widening of
+/// its bits, selected against the zero a null handle reads and merged with the other arms'; Metal's
+/// compiler does not fold the widening of such a merge back to the bits (`narrow::moves_unfolded`),
+/// and on the Apple M3 Max a NaN's bits became `0x7E00` there. The own arm's bits are its texel's
+/// narrowing (`narrow::to_bits`), the device's conversion of a `half` value, which a store of the
+/// merged value took before.
 fn read_crossed(cx: &mut EmitCx<'_>, fb: &mut FunctionBuilder<'_>, r: &Read) -> BResult<SValue> {
     let ImageRef::Heap { handle, .. } = r.image else {
         return read(cx, fb, r);
@@ -2732,29 +2758,70 @@ fn read_crossed(cx: &mut EmitCx<'_>, fb: &mut FunctionBuilder<'_>, r: &Read) -> 
     }
     let h = cx.operand(fb, handle)?;
     let index = heap_class_field(fb, h)?;
-    read_arms(cx, fb, index, &r.heap_cross, r)
+    if r.texel.conv != TexelConv::F16 {
+        return read_arms(cx, fb, index, (&r.heap_cross, r), ArmValue::Read);
+    }
+    let half = r.texel.half();
+    let bits = read_arms(cx, fb, index, (&r.heap_cross, r), ArmValue::HalfBits(half))?;
+    let texel = narrow::from_bits(fb, half, bits)?;
+    with_word(cx, fb, &r.result, texel, None)
 }
 
-/// The first of `siblings` whose class `index` names, read, else the rest's, else `own`.
+/// What each arm of a heap read with siblings hands its merge ([`read_crossed`]).
+#[derive(Clone, Copy)]
+enum ArmValue {
+    /// The read's value ([`read`]).
+    Read,
+    /// The `half` texel's bits in `u32` lanes, zero-extended, of the texel's form, zero where the
+    /// handle is null: a `half` read's. A heap read has no status word.
+    HalfBits(crate::lower::arith::legal::Form),
+}
+
+/// Arm `r`'s value for its merge ([`ArmValue`]).
+fn arm_value(
+    cx: &mut EmitCx<'_>,
+    fb: &mut FunctionBuilder<'_>,
+    r: &Read,
+    what: ArmValue,
+) -> BResult<SValue> {
+    match what {
+        ArmValue::Read => read(cx, fb, r),
+        ArmValue::HalfBits(half) => {
+            let ReadTexel { texel, live, word } = read_texel(cx, fb, r)?;
+            if word.is_some() {
+                return Err(cx.fail("a heap read's status word"));
+            }
+            let bits = narrow::to_bits(fb, half, texel)?;
+            live_or_zero(fb, live, bits)
+        }
+    }
+}
+
+/// The first of `siblings` whose class `index` names, its arm's value ([`arm_value`]), else the
+/// rest's, else `own`'s.
 fn read_arms(
     cx: &mut EmitCx<'_>,
     fb: &mut FunctionBuilder<'_>,
     index: SValue,
-    siblings: &[Read],
-    own: &Read,
+    (siblings, own): (&[Read], &Read),
+    what: ArmValue,
 ) -> BResult<SValue> {
     let Some((first, rest)) = siblings.split_first() else {
-        return read(cx, fb, own);
+        return arm_value(cx, fb, own, what);
     };
     let Some(class) = first.heap_class else {
         return Err(cx.fail("a heap read's sibling without its class"));
     };
     let named = names_class(fb, index, class)?;
     let then: ArmFn<'_, EmitCx<'_>> =
-        Box::new(move |fb, cx| Ok(ArmEnd::FallThrough(vec![read(cx, fb, first)?])));
+        Box::new(move |fb, cx| Ok(ArmEnd::FallThrough(vec![arm_value(cx, fb, first, what)?])));
     let other: ArmFn<'_, EmitCx<'_>> = Box::new(move |fb, cx| {
         Ok(ArmEnd::FallThrough(vec![read_arms(
-            cx, fb, index, rest, own,
+            cx,
+            fb,
+            index,
+            (rest, own),
+            what,
         )?]))
     });
     let Merged(merged) = fb.if_(cx, named, then, Some(other))?;
