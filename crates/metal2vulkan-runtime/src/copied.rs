@@ -156,8 +156,8 @@ impl Written {
     }
 
     /// Whether a command may have written the copy whose uses take `keys`.
-    fn meets(&self, keys: &[ResourceKey]) -> bool {
-        self.all || keys.iter().any(|key| self.keys.contains_key(key))
+    fn meets(&self, keys: &[(ResourceKey, usize)]) -> bool {
+        self.all || keys.iter().any(|(key, _)| self.keys.contains_key(key))
     }
 }
 
@@ -185,10 +185,12 @@ struct Entry {
     /// The logs of the writes to the pages, where their memory came with one, and the writer its
     /// merges back are reported as ([`Copied::set_log`]).
     log: Option<CopyLog>,
-    /// The keys whose uses' writes reach the copy: the buffer's, or the heap's bytes' (whose
-    /// buffers' and textures' uses carry it), the buffer's again after a rebind
-    /// ([`Copied::name`]).
-    keys: Vec<ResourceKey>,
+    /// The keys whose uses' writes reach the copy, each with how many pages lying in it named it
+    /// ([`Copied::name`]): the buffer's, or the heap's bytes' (whose buffers' and textures' uses
+    /// carry it), each buffer's that lies in it besides (`host_aliases.rs`), a buffer's again after
+    /// a rebind. A key goes with the last pages that named it ([`Copied::unname`]), so the keys are
+    /// those of the buffers lying in the copy now, however many came and went.
+    keys: Vec<(ResourceKey, usize)>,
 }
 
 /// A copy's logs of its pages, and its writer in them.
@@ -273,14 +275,39 @@ impl Copied {
 
     /// The uses of `key` (a buffer's or a heap's bytes' lying in the copy) write the copy: a
     /// completion turn merges it back only where a batch it finishes wrote one of its keys, or
-    /// may have written memory its uses do not name ([`CopiedBuffers::merge_back`]).
+    /// may have written memory its uses do not name ([`CopiedBuffers::merge_back`]). Named once
+    /// by each pages lying in the copy, until they go ([`Copied::unname`]).
     pub(crate) fn name(&self, key: ResourceKey) {
         let mut entries = lock(&self.buffers.entries);
         if let Some(entry) = entries.iter_mut().find(|entry| entry.id == self.id) {
-            if !entry.keys.contains(&key) {
-                entry.keys.push(key);
+            match entry.keys.iter_mut().find(|(named, _)| *named == key) {
+                Some((_, count)) => *count += 1,
+                None => entry.keys.push((key, 1)),
             }
         }
+    }
+
+    /// Pages that named `key` ([`Copied::name`]) went: no command writes the copy through them
+    /// from now on, as every command buffer that used them completed, its batches' writes merged
+    /// back first (`command_buffer/completion.rs`). The key goes with the last such pages.
+    pub(crate) fn unname(&self, key: ResourceKey) {
+        let mut entries = lock(&self.buffers.entries);
+        if let Some(entry) = entries.iter_mut().find(|entry| entry.id == self.id) {
+            if let Some(at) = entry.keys.iter().position(|(named, _)| *named == key) {
+                entry.keys[at].1 -= 1;
+                if entry.keys[at].1 == 0 {
+                    entry.keys.swap_remove(at);
+                }
+            }
+        }
+    }
+
+    /// How many keys the copy holds ([`Copied::name`]).
+    #[cfg(test)]
+    pub(crate) fn keys(&self) -> usize {
+        let entries = lock(&self.buffers.entries);
+        let entry = entries.iter().find(|entry| entry.id == self.id);
+        entry.map_or(0, |entry| entry.keys.len())
     }
 }
 

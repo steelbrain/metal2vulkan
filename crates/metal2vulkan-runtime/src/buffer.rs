@@ -646,6 +646,9 @@ pub(super) struct HostPages {
     /// The guest RAM their caller resolved them to and the runs of it they are, in their byte
     /// order (`HostMemory::with_runs`, `host_ram.rs`), kept until the rebind or the release.
     ram_runs: OnceLock<(Arc<RamOnDevice>, Box<[Range<u64>]>)>,
+    /// The key they named to their copy, where they lie in one ([`HostPages::copied_as`]): its
+    /// naming goes as they go.
+    named: OnceLock<ResourceKey>,
 }
 
 impl HostPages {
@@ -662,6 +665,7 @@ impl HostPages {
             listed: AtomicUsize::new(0),
             dirty: OnceLock::new(),
             ram_runs: OnceLock::new(),
+            named: OnceLock::new(),
         }
     }
 
@@ -686,10 +690,13 @@ impl HostPages {
     }
 
     /// Name `key`, a buffer's (or a heap's bytes') lying in them, to their copy, where they are
-    /// one: its merges back compare the copy where a batch wrote that key (`copied.rs`).
+    /// one: its merges back compare the copy where a batch wrote that key (`copied.rs`), until
+    /// they go. Once: a second call names nothing.
     pub(super) fn copied_as(&self, key: ResourceKey) {
         if let Some(copied) = self.import.copied.get() {
-            copied.name(key);
+            if self.named.set(key).is_ok() {
+                copied.name(key);
+            }
         }
     }
 
@@ -1535,6 +1542,10 @@ impl Drop for AfterFree {
 
 impl Drop for HostPages {
     fn drop(&mut self) {
+        // No command writes their copy through them from now on (`copied.rs`).
+        if let (Some(key), Some(copied)) = (self.named.get(), self.import.copied.get()) {
+            copied.unname(*key);
+        }
         // The images and views a rebind or a detach parked go first: they may hold the import.
         lock(&self.parked).clear();
         let others = self.import.lying.fetch_sub(1, Ordering::AcqRel) > 1;

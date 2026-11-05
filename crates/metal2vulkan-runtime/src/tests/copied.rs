@@ -500,3 +500,48 @@ fn a_merge_back_compares_only_the_copies_its_batches_wrote() {
     assert_eq!(pages_y[400], 2, "and then none again");
     drop((x, y));
 }
+
+/// A copy's keys are those of the pages lying in it now: each pages' naming of a key counts, and
+/// goes as those pages go (`Copied::unname`), so a copy that buffers come and go in (a new buffer
+/// over a surface's pages at each present, `host_aliases.rs`) holds no more keys than lie in it,
+/// and a merge back compares it for a write through a key named still, not one gone.
+#[test]
+fn a_copy_s_keys_are_those_of_the_pages_lying_in_it() {
+    let length = 4096;
+    let buffers = Arc::new(CopiedBuffers::default());
+    let counts = Counters::default();
+    let read = |pages: NonNull<u8>, into: &mut [u8]| {
+        // SAFETY: the test's pages, `into.len()` bytes.
+        unsafe { std::ptr::copy_nonoverlapping(pages.as_ptr(), into.as_mut_ptr(), into.len()) };
+        true
+    };
+    let (mut pages, mut copy) = (vec![1_u8; length], vec![0_u8; length]);
+    // SAFETY: the copy and the pages are the test's, of `length` bytes, live past the answer.
+    let copied = unsafe { buffers.add_reading(at(&mut pages), at(&mut copy), length, read, false) };
+    let copied = copied.unwrap();
+    let first = ResourceKey::new();
+    copied.name(first);
+    // A thousand presents, each a buffer lying in the copy and gone.
+    for _ in 0..1000 {
+        let frame = ResourceKey::new();
+        copied.name(frame);
+        copied.unname(frame);
+    }
+    assert_eq!(copied.keys(), 1, "only the first buffer's key is left");
+    // A key two pages named stays until both went.
+    let rebound = ResourceKey::new();
+    copied.name(rebound);
+    copied.name(rebound);
+    copied.unname(rebound);
+    let mut written = Written::default();
+    written.wrote(rebound);
+    copy[10] = 0xAB;
+    buffers.merge_back(&counts, &written);
+    assert_eq!(pages[10], 0xAB, "a key named still is compared");
+    copied.unname(rebound);
+    copy[20] = 0xCD;
+    buffers.merge_back(&counts, &written);
+    assert_eq!(pages[20], 1, "a key gone is not");
+    assert_eq!(copied.keys(), 1);
+    drop(copied);
+}
