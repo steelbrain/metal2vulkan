@@ -2,7 +2,7 @@
 //! alignment, where Metal lays a texture out in its buffer and which textures it refuses, as
 //! probes 9 to 9f measured them on an Apple M3 Max (macOS 26.7) and an M4 (27.0.1).
 
-use super::super::buffer_texture::{plane_copy_regions, staged_rows_back};
+use super::super::buffer_texture::{plane_copy_regions, staged_rows_back, Blocks};
 use super::super::image_plan::plan_image;
 use super::super::linear_plan::{
     aliases, check_linear_limits, holding, is_linear, linear_alignment, linear_lack,
@@ -1556,16 +1556,15 @@ fn a_planar_surface_s_depth_or_stencil_texture_is_laid_out_as_a_colour_one() {
                 "{pf:?} {call:?}"
             );
         }
-        // Metal's own stops of the descriptor come first.
+        // Metal makes a mipmapped texture over a plane and lays out no one place for its later
+        // levels (`surface_texture_envelope`): the runtime's gap.
         let levels = Case {
             levels: 2,
             ..case(planar)
         };
         assert_eq!(
             placed(levels).map(|_| ()),
-            Err(BufferRefusal::Metal(
-                BufferTextureProblem::MipmapLevelCount { count: 2 }
-            )),
+            Err(BufferRefusal::PlaneShape),
             "{pf:?}"
         );
         let memoryless = Case {
@@ -1578,6 +1577,417 @@ fn a_planar_surface_s_depth_or_stencil_texture_is_laid_out_as_a_colour_one() {
             "{pf:?}"
         );
     }
+}
+
+/// The textures over an IOSurface plane beyond a 2D one of its rows that Metal makes, as
+/// `oracle_surftex` lists them (its case numbers below) and `surface_texture_envelope` measured
+/// their bytes: a texture buffer, a 1D texture whose row fits and a 2D array of one slice lie as
+/// the 2D texture's rows do; every other shape over a planar surface's plane is the runtime's gap
+/// (`PlaneShape`), where over a surface without planes Metal itself stops it.
+#[test]
+fn a_surface_plane_s_other_shapes_follow_the_probe() {
+    use BufferTextureProblem as Pr;
+    let plane = |texture_type, pf, (width, height), (offset, bpr), planar, length| Case {
+        call: BufferTextureCall::IoSurfacePlane { planar },
+        texture_type,
+        pixel_format: pf,
+        ..texture(width, height, offset, bpr, length)
+    };
+    let one_row = |offset, row_bytes| BufferLayout {
+        offset,
+        row_pitch: row_bytes,
+        slice_pitch: row_bytes,
+        row_bytes,
+        rows: 1,
+        slices: 1,
+    };
+    let rows = |offset, pitch, row_bytes, rows| BufferLayout {
+        offset,
+        row_pitch: pitch,
+        slice_pitch: pitch * rows,
+        row_bytes,
+        rows,
+        slices: 1,
+    };
+    let (bgra, r8) = (P::BGRA8Unorm, P::R8Unorm);
+    let (tb, d1, d2) = (
+        TextureType::TextureBuffer,
+        TextureType::Type1D,
+        TextureType::Type2D,
+    );
+    let a = TextureType::Type2DArray;
+    // Made, each laid out as the 2D texture's rows from the plane's offset.
+    let made = [
+        // 35 bgra.typebuffer, over a surface without planes.
+        (
+            plane(tb, bgra, (64, 1), (0, 256), false, 16384),
+            one_row(0, 256),
+        ),
+        // 121 bgra1.typebuffer, and one past its row over a planar surface's plane.
+        (
+            plane(tb, bgra, (64, 1), (0, 256), true, 16384),
+            one_row(0, 256),
+        ),
+        (
+            plane(tb, bgra, (128, 1), (0, 256), true, 32768),
+            one_row(0, 512),
+        ),
+        // 129 420v.p0.typebuffer, at the x86 Macs' plane offset of 32.
+        (
+            plane(tb, r8, (64, 1), (32, 64), true, 6432),
+            one_row(32, 64),
+        ),
+        // 116 bgra1.type1d.
+        (
+            plane(d1, bgra, (64, 1), (0, 256), true, 16384),
+            one_row(0, 256),
+        ),
+        // 117 bgra1.type2darray and 127 420v.p0.type2darray, of one slice.
+        (
+            plane(a, bgra, (64, 64), (0, 256), true, 16384),
+            rows(0, 256, 256, 64),
+        ),
+        (
+            plane(a, r8, (64, 64), (32, 64), true, 6432),
+            rows(32, 64, 64, 64),
+        ),
+    ];
+    for (case, at) in made {
+        let placed = placed(case).unwrap_or_else(|refusal| panic!("{case:?}: {refusal:?}"));
+        // One row's pitch is no part of where its texels lie.
+        let pitch = |layout: BufferLayout| (layout.rows > 1).then_some(layout.row_pitch);
+        let lies = |layout: BufferLayout| {
+            let BufferLayout {
+                offset,
+                row_bytes,
+                rows,
+                slices,
+                ..
+            } = layout;
+            (offset, row_bytes, rows, slices, pitch(layout))
+        };
+        assert_eq!(lies(placed.cpu), lies(at), "{case:?}");
+        assert_eq!(lies(placed.gpu), lies(at), "{case:?}");
+    }
+    let gap = Err(BufferRefusal::PlaneShape);
+    let stopped = |problem| Err(BufferRefusal::Metal(problem));
+    let refused = [
+        // 17 bgra1.65x64 and 21 420v.p1.33x32: rows wider than the plane's.
+        (plane(d2, bgra, (65, 64), (0, 256), true, 32768), gap),
+        (
+            plane(d2, P::RG8Unorm, (33, 32), (4128, 64), true, 6432),
+            gap,
+        ),
+        // 123 bgra1.mips2 and 42 420v.p0.mips2.
+        (
+            Case {
+                levels: 2,
+                ..plane(d2, bgra, (64, 64), (0, 256), true, 32768)
+            },
+            gap,
+        ),
+        (
+            Case {
+                levels: 2,
+                ..plane(d2, r8, (64, 64), (32, 64), true, 6432)
+            },
+            gap,
+        ),
+        // 118 bgra1.type2darray.a2, 120 bgra1.type3d.d2, 119 bgra1.typecube and 122
+        // bgra1.type2dms.private.
+        (
+            Case {
+                slices: 2,
+                ..plane(a, bgra, (64, 32), (0, 256), true, 32768)
+            },
+            gap,
+        ),
+        (
+            plane(TextureType::Type3D, bgra, (64, 32), (0, 256), true, 32768),
+            gap,
+        ),
+        (
+            plane(TextureType::Cube, bgra, (64, 64), (0, 256), true, 32768),
+            gap,
+        ),
+        (
+            plane(
+                TextureType::Type2DMultisample,
+                bgra,
+                (64, 64),
+                (0, 256),
+                true,
+                32768,
+            ),
+            gap,
+        ),
+        // A 1D texture wider than the plane's row.
+        (plane(d1, bgra, (128, 1), (0, 256), true, 32768), gap),
+        // A texture buffer over a plane off 16 bytes, unmeasured.
+        (plane(tb, r8, (64, 1), (36, 64), true, 6432), gap),
+        // Over a surface without planes Metal stops them: 136 bgra.typebuffer.65, 12 bgra.65x64,
+        // 25 bgra.type1d, 27 bgra.type2darray and 38 bgra.mips2.
+        (
+            plane(tb, bgra, (65, 1), (0, 256), false, 16384),
+            stopped(Pr::RowPitch {
+                bytes_per_row: 256,
+                row_bytes: 260,
+            }),
+        ),
+        (
+            plane(d2, bgra, (65, 64), (0, 256), false, 16384),
+            stopped(Pr::RowPitch {
+                bytes_per_row: 256,
+                row_bytes: 260,
+            }),
+        ),
+        (
+            plane(d1, bgra, (64, 1), (0, 256), false, 16384),
+            stopped(Pr::TextureType { texture_type: d1 }),
+        ),
+        (
+            plane(a, bgra, (64, 64), (0, 256), false, 16384),
+            stopped(Pr::TextureType { texture_type: a }),
+        ),
+        (
+            Case {
+                levels: 2,
+                ..plane(d2, bgra, (64, 64), (0, 256), false, 16384)
+            },
+            stopped(Pr::MipmapLevelCount { count: 2 }),
+        ),
+    ];
+    for (case, expected) in refused {
+        assert_eq!(placed(case).map(|_| ()), expected, "{case:?}");
+    }
+}
+
+/// A BC texture over a surface's rows, which the x86 Macs make (`oracle_surftex` 66, 67, 125,
+/// 131, 147, 148) and lay out a row of blocks to the surface's `bytesPerRow`
+/// (`surface_texture_envelope`): its rows are rows of blocks, each block its format's bytes, the
+/// last of a row the texture's last texels alone; over a surface without planes Metal stops rows
+/// of blocks wider than the surface's and rows of texels past them (132 to 135). Every other
+/// compressed format over a surface stays no buffer's.
+#[test]
+fn a_bc_texture_over_a_surface_lies_a_row_of_blocks_a_row() {
+    use BufferTextureProblem as Pr;
+    let bc = |pf, (width, height), (offset, bpr), planar, length| Case {
+        call: BufferTextureCall::IoSurfacePlane { planar },
+        pixel_format: pf,
+        ..texture(width, height, offset, bpr, length)
+    };
+    let blocks = |offset, pitch, row_bytes, rows| BufferLayout {
+        offset,
+        row_pitch: pitch,
+        slice_pitch: pitch * rows,
+        row_bytes,
+        rows,
+        slices: 1,
+    };
+    let made = [
+        // 66 bgra.fmt.bc1 and 148 bgra.fmt.bc1.private (storage is no part of the plan).
+        (
+            bc(P::BC1RGBA, (64, 64), (0, 256), false, 16384),
+            blocks(0, 256, 128, 16),
+        ),
+        // 67 bgra.fmt.bc7.
+        (
+            bc(P::BC7RGBAUnorm, (64, 64), (0, 256), false, 16384),
+            blocks(0, 256, 256, 16),
+        ),
+        // 131 bgra.fmt.bc1.128x64: a row of blocks as long as the surface's.
+        (
+            bc(P::BC1RGBA, (128, 64), (0, 256), false, 16384),
+            blocks(0, 256, 256, 16),
+        ),
+        // 147 bgra.fmt.bc1.62x64: its last block of a row partly the texture's.
+        (
+            bc(P::BC1RGBA, (62, 64), (0, 256), false, 16384),
+            blocks(0, 256, 128, 16),
+        ),
+        // The padded surface's 512-byte rows (surface_texture_envelope bgrapad.bc1).
+        (
+            bc(P::BC1RGBA, (64, 64), (0, 512), false, 32768),
+            blocks(0, 512, 128, 16),
+        ),
+        // 125 bgra1.fmt.bc1, over a planar surface's plane, and over the x86 Macs' 420v
+        // planes at 32 and 4128.
+        (
+            bc(P::BC1RGBA, (64, 64), (0, 256), true, 16384),
+            blocks(0, 256, 128, 16),
+        ),
+        (
+            bc(P::BC1RGBA, (16, 64), (32, 64), true, 6432),
+            blocks(32, 64, 32, 16),
+        ),
+        (
+            bc(P::BC1RGBA, (16, 32), (4128, 64), true, 6432),
+            blocks(4128, 64, 32, 8),
+        ),
+        // The rest of the family, of 8- and 16-byte blocks.
+        (
+            bc(P::BC4RSnorm, (64, 64), (0, 256), false, 16384),
+            blocks(0, 256, 128, 16),
+        ),
+        (
+            bc(P::BC6HRGBFloat, (64, 64), (0, 256), false, 16384),
+            blocks(0, 256, 256, 16),
+        ),
+    ];
+    for (case, at) in made {
+        let placed = placed(case).unwrap_or_else(|refusal| panic!("{case:?}: {refusal:?}"));
+        assert_eq!(placed.cpu, at, "{case:?}");
+        assert_eq!(placed.gpu, at, "{case:?}");
+    }
+    let stopped = |problem| Err(BufferRefusal::Metal(problem));
+    let refused = [
+        // 132 bgra.fmt.bc1.132x64 and 133 bgra.fmt.bc7.68x64: "Descriptor rowBytes (264) >
+        // IOSurface rowBytes (256)".
+        (
+            bc(P::BC1RGBA, (132, 64), (0, 256), false, 16384),
+            stopped(Pr::RowPitch {
+                bytes_per_row: 256,
+                row_bytes: 264,
+            }),
+        ),
+        (
+            bc(P::BC7RGBAUnorm, (68, 64), (0, 256), false, 16384),
+            stopped(Pr::RowPitch {
+                bytes_per_row: 256,
+                row_bytes: 272,
+            }),
+        ),
+        // 135 bgra.fmt.bc1.64x68 and 134 bgra.fmt.bc1.64x256: "Descriptor height*arrayLength >
+        // IOSurface height", counted in rows of texels.
+        (
+            bc(P::BC1RGBA, (64, 68), (0, 256), false, 16384),
+            stopped(Pr::PastBuffer {
+                counted: 67 * 256 + 128,
+                length: 16384,
+            }),
+        ),
+        (
+            bc(P::BC1RGBA, (64, 256), (0, 256), false, 16384),
+            stopped(Pr::PastBuffer {
+                counted: 255 * 256 + 128,
+                length: 16384,
+            }),
+        ),
+        // Over a plane: rows of blocks wider than its rows, another type, an offset off 16.
+        (
+            bc(P::BC1RGBA, (132, 64), (0, 256), true, 32768),
+            Err(BufferRefusal::PlaneShape),
+        ),
+        (
+            Case {
+                texture_type: TextureType::Type2DArray,
+                ..bc(P::BC1RGBA, (64, 64), (0, 256), true, 16384)
+            },
+            Err(BufferRefusal::PlaneShape),
+        ),
+        (
+            bc(P::BC1RGBA, (16, 16), (40, 64), true, 6432),
+            Err(BufferRefusal::PlaneShape),
+        ),
+        // Past the buffer standing for a planar surface.
+        (
+            bc(P::BC1RGBA, (16, 256), (4128, 64), true, 6432),
+            Err(BufferRefusal::TexelsPastLength),
+        ),
+        // ASTC and ETC2 over a surface: no buffer's, measured or not.
+        (
+            bc(P::ASTC4x4LDR, (64, 64), (0, 256), false, 16384),
+            stopped(Pr::NotLinear {
+                pixel_format: P::ASTC4x4LDR,
+            }),
+        ),
+        (
+            bc(P::ETC2RGB8, (64, 64), (0, 256), true, 16384),
+            stopped(Pr::NotLinear {
+                pixel_format: P::ETC2RGB8,
+            }),
+        ),
+        // Over a buffer, no BC texture at all.
+        (
+            Case {
+                call: BufferTextureCall::Texture,
+                ..bc(P::BC1RGBA, (64, 64), (0, 256), false, 16384)
+            },
+            stopped(Pr::NotLinear {
+                pixel_format: P::BC1RGBA,
+            }),
+        ),
+    ];
+    for (case, expected) in refused {
+        assert_eq!(placed(case).map(|_| ()), expected, "{case:?}");
+    }
+}
+
+/// A BC texture's shadow copies its rows of blocks as the texels they hold: one region a slice,
+/// its row length the blocks of the surface's pitch in texels, its extent the texture's own
+/// texels, a last block of a row partly past them (`VUID-vkCmdCopyBufferToImage-imageExtent-00207`
+/// lets that region end at the image's edge).
+#[test]
+fn a_bc_shadow_copies_its_rows_of_blocks_as_texels() {
+    let layout = |row_bytes, rows| BufferLayout {
+        offset: 0,
+        row_pitch: 256,
+        slice_pitch: 256 * rows,
+        row_bytes,
+        rows,
+        slices: 1,
+    };
+    // (block bytes, the texture's texels, its layout, the row length and extent copied)
+    let cases = [
+        (8, [64, 64], layout(128, 16), 128, [64, 64]),
+        (8, [62, 64], layout(128, 16), 128, [62, 64]),
+        (8, [64, 62], layout(128, 16), 128, [64, 62]),
+        (16, [64, 64], layout(256, 16), 64, [64, 64]),
+        (8, [128, 64], layout(256, 16), 128, [128, 64]),
+    ];
+    for (bytes, texels, layout, row_length, [width, height]) in cases {
+        let blocks = Blocks {
+            extent: [4, 4],
+            texels,
+        };
+        let (into, back) = plane_copy_regions(
+            &layout,
+            (bytes, Some(blocks)),
+            64,
+            vk::ImageAspectFlags::COLOR,
+        );
+        let regions = |r: &[vk::BufferImageCopy]| {
+            (r.iter())
+                .map(|r| (r.buffer_offset, r.buffer_row_length, r.image_extent.width))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(regions(&into), regions(&back), "{texels:?}");
+        let [region] = into.as_slice() else {
+            panic!("{texels:?}: {into:?}");
+        };
+        assert_eq!(region.buffer_offset, 64, "{texels:?}");
+        assert_eq!(region.buffer_row_length, row_length, "{texels:?}");
+        assert_eq!(
+            (region.image_extent.width, region.image_extent.height),
+            (width, height),
+            "{texels:?}"
+        );
+        assert_eq!(
+            (region.image_offset.x, region.image_offset.y),
+            (0, 0),
+            "{texels:?}"
+        );
+    }
+    // An uncompressed texture's region is its rows of texels.
+    let (into, _) = plane_copy_regions(&layout(256, 64), (4, None), 0, vk::ImageAspectFlags::COLOR);
+    assert_eq!(
+        (
+            into[0].buffer_row_length,
+            into[0].image_extent.width,
+            into[0].image_extent.height
+        ),
+        (64, 64, 64)
+    );
 }
 
 /// A render target's linear image serves it where the device enabled `linearColorAttachment` and
