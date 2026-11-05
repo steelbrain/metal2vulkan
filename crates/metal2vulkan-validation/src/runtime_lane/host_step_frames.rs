@@ -156,6 +156,9 @@ impl Frames {
             .iter()
             .flat_map(|i| i.to_le_bytes())
             .collect();
+        let extra = (0..extra)
+            .map(|_| buffer_with(&device, &window).unwrap())
+            .collect();
         Frames {
             short_indices: buffer_with(&device, &shorts).unwrap(),
             wide_indices: buffer_with(&device, &wides).unwrap(),
@@ -165,9 +168,7 @@ impl Frames {
             icb,
             arguments,
             own,
-            extra: (0..extra)
-                .map(|_| buffer_with(&device, &window).unwrap())
-                .collect(),
+            extra,
             writes: !matches!(shape, Shape::Bundle { writes: false, .. }),
             stages: match shape {
                 Shape::Bundle { fragment: true, .. } => {
