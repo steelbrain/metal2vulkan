@@ -199,7 +199,7 @@ struct Apart {
 /// Whether an execution keeps its commands ([`RenderExecution::keeping`]).
 pub(super) enum Keeps {
     /// It does: its key and its chunks.
-    Kept(Keeping),
+    Kept(Box<Keeping>),
     /// It records inline, as one that keeps nothing, at a host step that keeps its chunks from
     /// its records read as [`StepReads`] says, where it gives some.
     Inline(Option<StepReads>),
@@ -413,7 +413,7 @@ impl RenderExecution {
             tables,
             resident,
         };
-        Keeps::Kept(Keeping { key, kept, read_at })
+        Keeps::Kept(Box::new(Keeping { key, kept, read_at }))
     }
 
     /// What a host step that keeps its commands finds of each chunk of commands `range`, where

@@ -2936,9 +2936,7 @@ impl IndirectCommandBuffer {
                 "a host step's copies of its records not one a command",
             ));
         }
-        let records = bytes
-            .iter()
-            .flat_map(|bytes| bytes.chunks_exact(COMMAND_BYTES));
+        let records = (bytes.iter()).flat_map(|bytes| bytes.as_chunks::<COMMAND_BYTES>().0);
         Ok(self.written_records_of(range.len(), records))
     }
 

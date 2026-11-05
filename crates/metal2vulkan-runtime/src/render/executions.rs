@@ -2048,7 +2048,7 @@ impl RenderExecution {
             Keeps::Kept(keeping) => {
                 let rendering = (storage, rendered);
                 let at = (command_buffer, residency);
-                return self.record_kept(core, at, keeping, found, rendering);
+                return self.record_kept(core, at, *keeping, found, rendering);
             }
             Keeps::Inline(reads) => reads,
         };
