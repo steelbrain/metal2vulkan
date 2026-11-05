@@ -42,9 +42,10 @@
 //!   pass's stages before its fragments as work of their own.
 //! - **A draw's uses of what its encoder made resident** (`binding::ResidentPrefix`), which begin
 //!   its uses, are checked and noted once while what they meet stands: a draw that begins with the
-//!   uses the last draw began with, by identity, notes none of them again while no list merged its
-//!   ranges (each is held as it was noted), and checks none again where none of them had anything
-//!   to announce and the bytes the fragment stages wrote and read are as they were then.
+//!   uses the last draw began with, by identity, notes none of them again (a list holds each range
+//!   it took, a range it covers adding nothing, until the pass's lists are cleared), and checks
+//!   none again where none of them had anything to announce and the bytes the fragment stages
+//!   wrote and read are as they were then.
 
 use crate::argument_table::ArgumentTable;
 use crate::binding::ResidentPrefix;
@@ -78,15 +79,22 @@ const MESH_STAGES: vk::PipelineStageFlags2 = vk::PipelineStageFlags2::from_raw(
 
 /// Byte ranges of buffers, tracked or not, by key, in its order: the first `held` lists, each
 /// with its ranges; those past them are lists left empty with their room
-/// ([`clear`](Self::clear)), which the next keys take.
+/// ([`clear`](Self::clear)), which the next keys take. What it answers is whether a range
+/// overlaps one it took ([`overlaps`](Self::overlaps)): a range inside one it holds adds nothing,
+/// and a merge of a key's ranges into their hull covers each, so each range it took is held, by
+/// one that covers it, until it is cleared.
 #[derive(Clone, Default)]
 struct Written {
     lists: Vec<(ResourceKey, Vec<Range<u64>>)>,
     held: usize,
-    /// How often it took a range it held none equal to, and how often it merged a key's ranges
-    /// into their hull: what [`overlaps`](Self::overlaps) answers stands while the first does,
-    /// and each range it took is held as it was taken while the second does.
-    changes: (u64, u64),
+    /// How often it took a range no range it held covered: what
+    /// [`overlaps`](Self::overlaps) answers stands while it does.
+    changes: u64,
+}
+
+/// Whether one of `ranges` covers `range`.
+fn covers(ranges: &[Range<u64>], range: &Range<u64>) -> bool {
+    (ranges.iter()).any(|held| held.start <= range.start && range.end <= held.end)
 }
 
 impl Written {
@@ -105,28 +113,28 @@ impl Written {
             }
         };
         let ranges = &mut self.lists[at].1;
-        // A range held already adds nothing: a pass's draws mostly name the same bytes again.
-        if ranges.contains(range) {
+        // A range inside one held adds nothing: a pass's draws mostly name the same bytes again,
+        // or bytes inside those a resident use named.
+        if covers(ranges, range) {
             return;
         }
         ranges.push(range.clone());
-        self.changes.0 += 1;
+        self.changes += 1;
         if ranges.len() > RANGES_PER_KEY {
             let start = ranges.iter().map(|r| r.start).min().unwrap_or(0);
             let end = ranges.iter().map(|r| r.end).max().unwrap_or(0);
             ranges.clear();
             ranges.push(start..end);
-            self.changes.1 += 1;
         }
     }
 
-    /// Whether it holds `range` of `key` as it was taken: adding it again changes nothing
-    /// (builds with debug assertions: [`PassStartReads::add`]'s check).
+    /// Whether it holds `range` of `key`, by a range that covers it: adding it again changes
+    /// nothing (builds with debug assertions: [`PassStartReads::add_draw`]'s check).
     #[cfg(debug_assertions)]
     fn holds(&self, key: ResourceKey, range: &Range<u64>) -> bool {
         let held = &self.lists[..self.held];
         let at = held.binary_search_by_key(&key, |&(at, _)| at).ok();
-        at.is_some_and(|at| held[at].1.contains(range))
+        at.is_some_and(|at| covers(&held[at].1, range))
     }
 
     fn overlaps(&self, key: ResourceKey, range: &Range<u64>) -> bool {
@@ -238,10 +246,9 @@ pub(super) struct PassStartReads {
     other: Written,
     copies: Vec<PassStartCopy>,
     /// The identity and count of the uses of what the encoder made resident the last
-    /// [`add_draw`](Self::add_draw) began with, where no list merged its ranges as it noted
-    /// them, and the lists' merges then: each of those uses' ranges is held as it was taken while
-    /// the lists merge no more, as only a merge drops one.
-    added: Option<(u64, usize, u64)>,
+    /// [`add_draw`](Self::add_draw) began with: each of those uses' ranges is held until the
+    /// lists are cleared ([`Written`]).
+    added: Option<(u64, usize)>,
     /// Those the last [`check`](Self::check) began with, where none of them had anything to
     /// announce, with its `compute_after` and the changes then of the bytes the fragment stages
     /// wrote, and read where one of those uses writes in a stage whose writes count: none has
@@ -316,14 +323,13 @@ impl PassStartReads {
 
     /// [`add`](Self::add) a draw's `uses`, which begin with the uses of what its encoder made
     /// resident of the identity `prefix`: those not again where the last call of this began with
-    /// the same and no list merged since it noted them (the module docs). Whether it walked them.
+    /// the same (the module docs). Whether it walked them.
     pub(super) fn add_draw(
         &mut self,
         (uses, prefix): (&[Use<ResourceKey>], ResidentPrefix),
     ) -> bool {
-        let merges = self.merges();
-        let now = (prefix.id, prefix.len, merges);
-        let past = match self.added == Some(now) {
+        let now = Some((prefix.id, prefix.len));
+        let past = match self.added == now {
             true => prefix.len,
             false => 0,
         };
@@ -335,21 +341,12 @@ impl PassStartReads {
             );
         }
         self.add(&uses[past..]);
-        // Each use's range is held as it was taken where no list merged as it noted, while no
-        // list merges.
-        let now = self.merges();
-        self.added = (now == merges).then_some((prefix.id, prefix.len, now));
+        self.added = now;
         past == 0
     }
 
-    /// How often its lists merged a key's ranges.
-    fn merges(&self) -> u64 {
-        let lists = [&self.fragment, &self.fragment_reads, &self.other];
-        lists.iter().map(|list| list.changes.1).sum()
-    }
-
-    /// Whether its lists hold `used`'s range as they took it, where they note it: noting it
-    /// again changes nothing (builds with debug assertions: [`add`](Self::add)'s check).
+    /// Whether its lists hold `used`'s range, where they note it: noting it again changes
+    /// nothing (builds with debug assertions: [`add_draw`](Self::add_draw)'s check).
     #[cfg(debug_assertions)]
     fn holds(&self, used: &Use<ResourceKey>) -> bool {
         let Some(range) = bytes(used) else {
@@ -633,7 +630,7 @@ impl PassStartReads {
         (uses, prefix): (&[Use<ResourceKey>], ResidentPrefix),
         compute_after: bool,
     ) -> (Found, bool) {
-        let changes = (self.fragment.changes.0, self.fragment_reads.changes.0);
+        let changes = (self.fragment.changes, self.fragment_reads.changes);
         let held = |(id, len, after, (wrote, read)): (u64, usize, bool, (u64, Option<u64>))| {
             let same = (prefix.id, prefix.len) == (id, len);
             let stand = wrote == changes.0 && read.is_none_or(|read| read == changes.1);
@@ -780,11 +777,11 @@ mod tests {
     }
 
     /// A draw's uses of what its encoder made resident are noted once while the pass's lists
-    /// hold each as it was noted: a draw whose own uses past them merge a list's ranges into
-    /// their hull is followed by one that notes them again (builds with debug assertions check
-    /// each held whenever it is not).
+    /// hold them: a draw whose own uses past them merge a list's ranges into their hull leaves
+    /// them held, by the hull, so later draws note none of them (builds with debug assertions
+    /// check each held where it is not noted), until the lists are cleared.
     #[test]
-    fn a_draw_notes_its_resident_uses_again_once_a_list_merged_their_ranges() {
+    fn a_draw_notes_its_resident_uses_once_though_a_list_merged_their_ranges() {
         let fragment = vk::PipelineStageFlags2::FRAGMENT_SHADER;
         let key = ResourceKey::new();
         let mut pass = PassStartReads::default();
@@ -800,11 +797,13 @@ mod tests {
                 pass.add_draw((&draw, prefix(2, 1)))
             })
             .collect();
-        let merged = super::RANGES_PER_KEY;
         let noted: Vec<usize> = (walked.iter().enumerate())
             .filter_map(|(at, walked)| walked.then_some(at))
             .collect();
-        assert_eq!(noted, [0, merged], "{walked:?}");
+        assert_eq!(noted, [0], "{walked:?}");
+        pass.clear();
+        let draw = [used(key, 0..16, fragment, false)];
+        assert!(pass.add_draw((&draw, prefix(2, 1))), "cleared");
     }
 
     /// A buffer's written ranges overlap what they meet and nothing else, by buffer; cleared,
