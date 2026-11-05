@@ -2940,6 +2940,16 @@ bound.
   not announced. Cost: the edges' fragments are biased by another depth than Metal's, along the
   edges as their slope along them differs from the triangle's, and near a vertex of a smaller depth
   exponent than the triangle's largest by a smaller unit.
+- `metal2vulkan-degrade-device-line-ties` (precision). `DeviceLineTies`: A draw whose lines, or a
+  triangle's edges in fill mode `Lines`, the device's own lines draw at width 1 (Metal's default
+  width, or the nearest width a device without `wideLines` draws), on a driver without
+  `DriverFact::LineTiesAreMetals` (measured: MoltenVK on the M3 Max, lavapipe). Metal rasterizes a
+  line by the diamond-exit rule and covers the lower of two pixels whose diamonds share a vertex
+  the line runs through; Vulkan's diamond is open, so neither pixel is required there and the
+  driver chooses (NVIDIA's 615.71.09 on the RTX 5080 Laptop GPU covers the upper one). Cost: a line
+  through a vertex two pixels' diamonds share covers the pixel the device chooses, where Metal
+  covers the lower one, so such a pixel, and the rest of a line that runs along such vertices, can
+  lie a row or a column from Metal's.
 - `metal2vulkan-degrade-provoking-vertex-lines` (precision). `ProvokingVertexLines`: A draw of
   lines, or an emulated mesh draw of lines, under Apple's last provoking vertex
   (`setProvokingVertexMode:` 1), of a pipeline state that reads it (a flat input, or a slice or

@@ -416,6 +416,7 @@ const BLENDLESS: DriverFact = DriverFact::BlendlessColorAttachmentsWarn;
 const HEAP_COLORS: DriverFact = DriverFact::ColorImagesLieAsMetalHeapTextures;
 const HEAP_MULTISAMPLE_COLORS: DriverFact =
     DriverFact::MultisampleColorImagesLieAsMetalHeapTextures;
+const LINE_TIES: DriverFact = DriverFact::LineTiesAreMetals;
 
 /// Each committed profile's driver has the runtime's driver facts its rows name, on its vendor and
 /// GPU, at its release as at any other.
@@ -469,11 +470,15 @@ fn the_committed_profiles_drivers_have_their_facts() {
         ("amd-rdna3-radv", vec![ZERO]),
         (
             "gate-lavapipe",
-            vec![DENORMALS, FRAGDEPTH, DEPTH16, FETCH, BC6H, MERGES, FOLLOWS],
+            vec![
+                DENORMALS, FRAGDEPTH, DEPTH16, FETCH, BC6H, MERGES, FOLLOWS, LINE_TIES,
+            ],
         ),
         (
             "gate-lavapipe-x86_64",
-            vec![DENORMALS, FRAGDEPTH, DEPTH16, FETCH, BC6H, MERGES, FOLLOWS],
+            vec![
+                DENORMALS, FRAGDEPTH, DEPTH16, FETCH, BC6H, MERGES, FOLLOWS, LINE_TIES,
+            ],
         ),
         (
             "intel-arl-anv",
@@ -521,7 +526,9 @@ fn the_committed_profiles_drivers_have_their_facts() {
         ),
         (
             "lavapipe",
-            vec![DENORMALS, FRAGDEPTH, DEPTH16, FETCH, BC6H, MERGES, FOLLOWS],
+            vec![
+                DENORMALS, FRAGDEPTH, DEPTH16, FETCH, BC6H, MERGES, FOLLOWS, LINE_TIES,
+            ],
         ),
         (
             "moltenvk-m3",
@@ -551,6 +558,7 @@ fn the_committed_profiles_drivers_have_their_facts() {
                 TILE_STORE,
                 HEAP_COLORS,
                 HEAP_MULTISAMPLE_COLORS,
+                LINE_TIES,
             ],
         ),
         ("nvidia-pascal-linux", vec![DENORMALS, PLANES]),

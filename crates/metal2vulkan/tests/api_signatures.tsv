@@ -5113,6 +5113,7 @@ macro-member	metal2vulkan-runtime::Degradation::DeviceDenormals	DeviceDenormals 
 macro-member	metal2vulkan-runtime::Degradation::DeviceFilteredMipmaps	DeviceFilteredMipmaps = "device-filtered-mipmaps", Precision,
 macro-member	metal2vulkan-runtime::Degradation::DeviceInterpolation	DeviceInterpolation = "device-interpolation";
 macro-member	metal2vulkan-runtime::Degradation::DeviceInterpolationOffset	DeviceInterpolationOffset = "device-interpolation-offset";
+macro-member	metal2vulkan-runtime::Degradation::DeviceLineTies	DeviceLineTies = "device-line-ties", Precision,
 macro-member	metal2vulkan-runtime::Degradation::DeviceMemoryOverflow	DeviceMemoryOverflow = "device-memory-overflow", Performance,
 macro-member	metal2vulkan-runtime::Degradation::DeviceNanEncoding	DeviceNanEncoding = "device-nan-encoding";
 macro-member	metal2vulkan-runtime::Degradation::DevicePackConversion	DevicePackConversion = "device-pack-conversion";
@@ -11411,6 +11412,7 @@ variant	metal2vulkan-runtime::DriverFact::FragmentDepthStoresUnchanged	FragmentD
 variant	metal2vulkan-runtime::DriverFact::HostTransferImagesKeepTheirBytes	HostTransferImagesKeepTheirBytes
 variant	metal2vulkan-runtime::DriverFact::InterlockOrdersDraws	InterlockOrdersDraws
 variant	metal2vulkan-runtime::DriverFact::InterlockedPassSplitNoSlower	InterlockedPassSplitNoSlower
+variant	metal2vulkan-runtime::DriverFact::LineTiesAreMetals	LineTiesAreMetals
 variant	metal2vulkan-runtime::DriverFact::MultisampleColorImagesLieAsMetalHeapTextures	MultisampleColorImagesLieAsMetalHeapTextures
 variant	metal2vulkan-runtime::DriverFact::MultisampledDepthFasterOutOfGeneral	MultisampledDepthFasterOutOfGeneral
 variant	metal2vulkan-runtime::DriverFact::PointerImportsFollowTheirAddress	PointerImportsFollowTheirAddress
@@ -12663,6 +12665,7 @@ variant	metal2vulkan::device::DriverFact::FragmentDepthStoresUnchanged	FragmentD
 variant	metal2vulkan::device::DriverFact::HostTransferImagesKeepTheirBytes	HostTransferImagesKeepTheirBytes
 variant	metal2vulkan::device::DriverFact::InterlockOrdersDraws	InterlockOrdersDraws
 variant	metal2vulkan::device::DriverFact::InterlockedPassSplitNoSlower	InterlockedPassSplitNoSlower
+variant	metal2vulkan::device::DriverFact::LineTiesAreMetals	LineTiesAreMetals
 variant	metal2vulkan::device::DriverFact::MultisampleColorImagesLieAsMetalHeapTextures	MultisampleColorImagesLieAsMetalHeapTextures
 variant	metal2vulkan::device::DriverFact::MultisampledDepthFasterOutOfGeneral	MultisampledDepthFasterOutOfGeneral
 variant	metal2vulkan::device::DriverFact::PointerImportsFollowTheirAddress	PointerImportsFollowTheirAddress

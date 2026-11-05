@@ -882,7 +882,9 @@ driver's. Each is open work.
   it: Metal draws the lower one and this driver draws the upper one. Vulkan's Bresenham diamond is
   open (`|p - x| + |q - y| < 0.5`), so a line that only touches a vertex exits no diamond and
   neither pixel is required; both choices conform and there is no Vulkan control over the tie, so
-  this is the driver's and not ours. RADV and ANV unrun.
+  this is the driver's and not ours. Announced (`device-line-ties`) at each draw the device's lines
+  draw at width 1 on a driver without `DriverFact::LineTiesAreMetals` (MoltenVK on the M3 Max and
+  lavapipe have it); RADV and ANV unrun, so announced there.
 
 - **Lines under Apple's `setLineWidth:` at a width other than 1 that neither route draws as Metal**
   (`render/line_width.rs`). Drawn by the device's own lines at the nearest width they draw (1 pixel

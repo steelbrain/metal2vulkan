@@ -34,7 +34,11 @@
 //! (lines and edges without `tessellationShader` the device's lines do not draw, and those of a
 //! pipeline state whose band the translator refuses) runs the device's lines at the nearest width
 //! they draw, announced (`lines-at-nearest-width`) and counted at each draw; where that width is 1
-//! it is compared with Metal's map of the same geometry at width 1. Nothing is refused. A draw of
+//! it is compared with Metal's map of the same geometry at width 1. A draw the device's lines draw
+//! at width 1 on a driver not measured to break a tie at a vertex two pixels' diamonds share as
+//! Metal does (`DriverFact::LineTiesAreMetals`: the RTX 5080 Laptop GPU draws the lane's strip's
+//! diagonal a row higher) is announced (`device-line-ties`) and left unchecked, and only there.
+//! Nothing is refused. A draw of
 //! no complete primitive (the consumer's triangles of 1 and 2 vertices, by vertices and by
 //! indices, under the last provoking vertex) draws nothing and takes no route. Not covered:
 //! Metal's width-1 lines on 4 samples (the probe's `msaa` width 1 and diagonal cases) where the
@@ -45,7 +49,7 @@ use super::{
 };
 use crate::air_library::AirLibrary;
 use crate::gpu::TEST_DEVICE;
-use metal2vulkan::device::{DevicePolicy, VkFeature, WideLinePolicy};
+use metal2vulkan::device::{DevicePolicy, DriverFact, VkFeature, WideLinePolicy};
 use metal2vulkan::metal::state::DepthStencilDescriptor;
 use metal2vulkan::metal::{BlendFactor, CompareFunction, CullMode, IndexType, TriangleFillMode};
 use metal2vulkan::metal::{PixelFormat, PrimitiveType, TextureType, TextureUsage, Winding};
@@ -70,6 +74,11 @@ pub(super) const WIDE_LINES: [Degradation; 3] = [
     Degradation::LinesAtNearestWidth,
     Degradation::WideEdgeDepthBias,
 ];
+
+/// The kind a draw the device's lines draw at width 1 announces on a driver not measured to break
+/// a tie at a vertex two pixels' diamonds share as Metal does
+/// (`DriverFact::LineTiesAreMetals`).
+pub(super) const LINE_TIES: [Degradation; 1] = [Degradation::DeviceLineTies];
 
 /// Metal's maps the lane does not draw: its width-1 lines on 4 samples, which the device's lines
 /// draw as the runtime's every line, and its filled triangles' depth bias, the device's own.
@@ -182,6 +191,8 @@ struct LineFacts {
     strict: bool,
     parallelograms: bool,
     exact_policy: bool,
+    /// The driver breaks a tie at a vertex two pixels' diamonds share as Metal does.
+    ties: bool,
 }
 
 impl LineFacts {
@@ -198,6 +209,7 @@ impl LineFacts {
             strict: limits.strict_lines,
             parallelograms: limits.non_strict_wide_lines_use_parallelogram,
             exact_policy: compile.policy().wide_lines == WideLinePolicy::Exact,
+            ties: (device.properties().driver_facts).contains(&DriverFact::LineTiesAreMetals),
         }
     }
 
@@ -1307,13 +1319,17 @@ struct Found {
     /// Of them, the cases drawn at width 1 as Metal drew the same geometry at width 1, pixel for
     /// pixel.
     nearest_matched: usize,
+    /// Cases the device's lines drew at width 1 on a driver whose ties are not measured to be
+    /// Metal's, announced (`device-line-ties`): left unchecked.
+    ties: usize,
     /// The device's lines.
     facts: Option<LineFacts>,
 }
 
 /// The notices among `messages`' since the last take: the `DeviceWideLines`,
-/// `LinesAtNearestWidth` and `WideEdgeDepthBias` ones, and the reasons of the nearest-width ones.
-fn announced_lines(messages: &Messages) -> ([usize; 3], Vec<String>) {
+/// `LinesAtNearestWidth`, `WideEdgeDepthBias` and `DeviceLineTies` ones, and the reasons of the
+/// nearest-width ones.
+fn announced_lines(messages: &Messages) -> ([usize; 4], Vec<String>) {
     let notices = messages.take_notices();
     let notices: Vec<_> = notices
         .iter()
@@ -1325,7 +1341,8 @@ fn announced_lines(messages: &Messages) -> ([usize; 3], Vec<String>) {
         .filter(|n| n.degradation == Degradation::LinesAtNearestWidth)
         .map(|n| n.reason.clone())
         .collect();
-    (WIDE_LINES.map(count), reasons)
+    let [wide, nearest, biased] = WIDE_LINES.map(count);
+    ([wide, nearest, biased, count(LINE_TIES[0])], reasons)
 }
 
 /// The draws of each route between two work counts: the band's, the device's lines' at Metal's
@@ -1375,9 +1392,10 @@ fn printed(drawn: &Drawn, shot: &Shot, check: Check, blocks: &[String]) -> Vec<S
 
 /// Every case of [`MEASURED`] on the cfg's device under `policy`: drawn as Metal drew it, or
 /// announced (where the device's lines draw it otherwise than Metal, where a band of edges takes
-/// a depth bias that can differ from Metal's, or where the device's lines draw it at another width
-/// than Metal's, compared with Metal's map at width 1 where that width is 1); and each draw at a
-/// width other than 1 counted by a route. Nothing is refused.
+/// a depth bias that can differ from Metal's, where the device's lines draw it at another width
+/// than Metal's, compared with Metal's map at width 1 where that width is 1, or where they draw it
+/// at width 1 on a driver whose ties are not measured to be Metal's, `device-line-ties`, announced
+/// exactly there); and each draw at a width other than 1 counted by a route. Nothing is refused.
 fn run(policy: DevicePolicy) -> Found {
     let cache = ScratchCache::new().unwrap();
     let messages = Messages::default();
@@ -1385,7 +1403,7 @@ fn run(policy: DevicePolicy) -> Found {
     {
         let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), |options| {
             options.policy = policy;
-            options.announce_each = WIDE_LINES.into_iter().collect();
+            options.announce_each = WIDE_LINES.into_iter().chain(LINE_TIES).collect();
         })
         .unwrap();
         let facts = LineFacts::of(&device);
@@ -1444,7 +1462,7 @@ fn run(policy: DevicePolicy) -> Found {
             bands += band;
             device_lines += own;
             nearest_lines += nearest;
-            let ([announced, announced_nearest, biased], _) = announced_lines(&messages);
+            let ([announced, announced_nearest, biased, ties], _) = announced_lines(&messages);
             assert_eq!(
                 band + own + nearest,
                 shot.wide_draws(),
@@ -1464,6 +1482,16 @@ fn run(policy: DevicePolicy) -> Found {
                     drawn.green.iter().all(|&g| g == 0),
                     "{name}: {key}: back-facing fragments"
                 );
+            }
+            // Width-1 device lines whose ties the driver breaks are announced on a driver
+            // without the fact, and nowhere else.
+            if ties > 0 {
+                assert!(
+                    !facts.ties,
+                    "{name}: {key}: line ties announced with the fact"
+                );
+                found.ties += 1;
+                continue;
             }
             if announced > 0 {
                 found.announced += 1;
@@ -1541,8 +1569,16 @@ fn run(policy: DevicePolicy) -> Found {
                 first_last.push((first, last));
             }
             match announced_lines(&messages).0 {
-                [0, 0, 0] => {}
-                [_, 0, _] => {
+                [_, _, _, ties] if ties > 0 => {
+                    assert!(
+                        !facts.ties,
+                        "{name}: width {width}: line ties announced with the fact"
+                    );
+                    found.ties += 1;
+                    continue;
+                }
+                [0, 0, 0, _] => {}
+                [_, 0, _, _] => {
                     found.announced += 1;
                     continue;
                 }
@@ -1558,10 +1594,12 @@ fn run(policy: DevicePolicy) -> Found {
         }
         found.cases = cases.len() + quantized.len();
         assert_eq!(
-            found.matched + found.announced + found.biased + found.nearest,
+            found.matched + found.announced + found.biased + found.nearest + found.ties,
             found.cases,
             "{found:?}"
         );
+        // The width-1 cases announce the driver's ties exactly where it lacks the fact.
+        assert_eq!(found.ties > 0, !facts.ties, "{found:?}");
         // Every measured map was drawn, but those the lane leaves to other lanes.
         let undrawn: Vec<&str> = (blocks.keys())
             .filter(|key| !accounted.contains(*key))
@@ -1606,7 +1644,11 @@ fn wide_lines_draw_metal_s_parallelograms() {
         assert_eq!(found.nearest, 0, "{found:?}");
     }
     if facts.tessellates && found.announced == 0 {
-        assert_eq!(found.matched, found.cases - found.biased, "{found:?}");
+        assert_eq!(
+            found.matched,
+            found.cases - found.biased - found.ties,
+            "{found:?}"
+        );
         assert!(found.edges_matched > 0, "{found:?}");
         assert_eq!(found.edges_matched + found.biased, found.edges, "{found:?}");
     }
@@ -1624,7 +1666,11 @@ fn wide_lines_draw_metal_s_parallelograms_under_exact_answers() {
     let facts = found.facts.unwrap();
     if facts.tessellates {
         assert_eq!((found.announced, found.nearest), (0, 0), "{found:?}");
-        assert_eq!(found.matched, found.cases - found.biased, "{found:?}");
+        assert_eq!(
+            found.matched,
+            found.cases - found.biased - found.ties,
+            "{found:?}"
+        );
         assert_eq!(found.edges_matched + found.biased, found.edges, "{found:?}");
     }
 }
@@ -1687,7 +1733,7 @@ fn without_tessellation_lines_draw_at_the_nearest_width() {
                 .draw(&shot)
                 .unwrap_or_else(|e| panic!("{name}: width {width}: {e}"));
             let [band, own, nearest] = routed(&before, &lane.device.work_counts());
-            let ([_, announced, _], _) = announced_lines(&messages);
+            let ([_, announced, _, _], _) = announced_lines(&messages);
             assert_eq!(band, 0, "{name}: a band without tessellationShader");
             let drawable = facts.draws(width);
             let (expected_own, expected_nearest) = if width == 1.0 {
@@ -1754,7 +1800,8 @@ fn a_draw_of_no_complete_primitive_draws_nothing() {
                         "{name}: {shot:?}: drew"
                     );
                     assert_eq!(routes, [0, 0, 0], "{name}: {shot:?}: a route of the width");
-                    assert_eq!(announced_lines(&messages).0, [0; 3], "{name}: {shot:?}");
+                    let [wide, nearest, biased, _] = announced_lines(&messages).0;
+                    assert_eq!([wide, nearest, biased], [0; 3], "{name}: {shot:?}");
                 }
             }
         }
@@ -1802,7 +1849,7 @@ fn edges_draw_as_bands_or_at_the_nearest_width() {
                 let before = lane.device.work_counts();
                 let drawn = lane.draw(&shot).unwrap_or_else(|e| panic!("{what}: {e}"));
                 let routes = routed(&before, &lane.device.work_counts());
-                let ([differs, nearest, biased], _) = announced_lines(&messages);
+                let ([differs, nearest, biased, _], _) = announced_lines(&messages);
                 assert_eq!(biased, 0, "{what}");
                 // The width drawn, where it is Metal's map's.
                 let drawn_at = match (facts.device_route(width), tessellated) {
@@ -1868,7 +1915,7 @@ fn a_refused_band_draws_at_the_nearest_width() {
                     .draw(&shot)
                     .unwrap_or_else(|e| panic!("{what}: refused: {e}"));
                 let routes = routed(&before, &lane.device.work_counts());
-                let ([_, announced, _], reasons) = announced_lines(&messages);
+                let ([_, announced, _, _], reasons) = announced_lines(&messages);
                 assert_eq!((routes, announced), ([0, 0, 1], 1), "{what}");
                 assert!(
                     drawn.ids.chunks(4).any(|t| t[3] != 0),

@@ -460,7 +460,8 @@ pub fn set_past_layout_notice() -> crate::allowance::Allowance {
 ///   each step to `half`);
 /// - **resolves**: `device-rounded-resolve`;
 /// - **coverage**: the device's own conversion of a fragment's alpha to its coverage under
-///   alpha-to-coverage (`device-alpha-coverage`).
+///   alpha-to-coverage (`device-alpha-coverage`), and its choice of the pixel a width-1 line covers
+///   at a vertex two pixels' diamonds share (`device-line-ties`).
 ///
 /// **What is not here**, and stays each case's to declare: a note of what the device **lacks**
 /// (`device-signed-zero-inf-nan`, `device-anisotropic-filter`, `device-point-size`,
@@ -513,6 +514,7 @@ pub const NATIVE_NOTES: &[metal2vulkan_runtime::Degradation] = {
         D::ExtendedRangeFloatBlendSource,
         D::DeviceRoundedResolve,
         D::DeviceAlphaCoverage,
+        D::DeviceLineTies,
     ]
 };
 

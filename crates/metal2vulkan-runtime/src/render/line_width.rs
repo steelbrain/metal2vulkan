@@ -9,7 +9,11 @@
 //! - Metal draws `w' = floor(16 w) / 16`, clamped to `[0, 16]`: a negative width, `-0` and NaN
 //!   draw as 0, and 16 and above, infinity among them, as 16 ([`LineWidth::of`]).
 //! - At `w' = 1` a line is Metal's ordinary line, the half-open diamond-exit rule (the runtime's
-//!   Bresenham lines). At every other `w'`, below 1 too, it is the parallelogram Vulkan's
+//!   Bresenham lines), which covers the lower of two pixels whose diamonds share a vertex the line
+//!   runs through. Vulkan's diamond is open, so that tie is the driver's: a draw the device's lines
+//!   draw at width 1 on a driver not measured to break it as Metal does
+//!   (`DriverFact::LineTiesAreMetals`) is announced (`Degradation::DeviceLineTies`, at each
+//!   draw). At every other `w'`, below 1 too, it is the parallelogram Vulkan's
 //!   non-strict wide lines may be: its major axis the larger of the segment's framebuffer extents,
 //!   x on a tie; its two minor-axis edges through the endpoints, each `w'` long and centred on
 //!   its endpoint; its other two edges parallel to the segment; the ends not extended; a pixel
@@ -102,7 +106,7 @@ use crate::degradation::Degradation;
 use crate::error::Error;
 use crate::pipeline::{FixedState, GraphicsState as DrawingState};
 use metal2vulkan::bind::{DrawCall, RewriteProgram};
-use metal2vulkan::device::{DeviceProfile, VkFeature, WideLinePolicy};
+use metal2vulkan::device::{DeviceProfile, DriverFact, VkFeature, WideLinePolicy};
 use metal2vulkan::error::Feature;
 use metal2vulkan::metal::state::DepthBias;
 use metal2vulkan::metal::{PixelFormat, PrimitiveType, TriangleFillMode};
@@ -387,8 +391,9 @@ fn route(
 impl ShapeInputs<'_> {
     /// The route `call`'s draw of `pipeline` as `assembly` draws its lines by at the encoder's
     /// width (the module docs), of a draw that may draw a primitive where `primitives`
-    /// ([`draws_primitives`]); announcing a device line that differs from Metal's, and one at
-    /// the nearest width, where `announce`.
+    /// ([`draws_primitives`]); announcing a device line that differs from Metal's, one at the
+    /// nearest width, and the device's lines at width 1 on a driver whose ties are not measured to
+    /// be Metal's, where `announce`.
     pub(super) fn line_route(
         &self,
         call: &'static str,
@@ -434,8 +439,32 @@ impl ShapeInputs<'_> {
             }
             _ => {}
         }
+        // The device's lines at width 1: Metal's plain lines, or the nearest width that is 1.
+        let width_one = match route {
+            LineRoute::Plain => drawn != Drawn::Nothing,
+            LineRoute::Nearest { width, .. } => width == 1.0,
+            LineRoute::Device { .. } | LineRoute::Band { .. } => false,
+        };
+        let ties = (self.device.properties().driver_facts).contains(&DriverFact::LineTiesAreMetals);
+        if announce && width_one && !ties {
+            announce_line_ties(self.device, call);
+        }
         route
     }
+}
+
+/// Announce `call`'s draw of the device's lines at width 1 on a driver not measured to break a
+/// tie at a vertex two pixels' diamonds share as Metal does (the module docs).
+fn announce_line_ties(device: &crate::Device, call: &'static str) {
+    device.degrade(Degradation::DeviceLineTies, || {
+        (
+            format!("{call}: a draw of lines at width 1"),
+            "the device's driver is not measured to break a tie at a vertex two pixels' \
+             diamonds share as Metal does (DriverFact::LineTiesAreMetals): Metal covers the lower \
+             pixel, and Vulkan's open diamond leaves the choice to the driver"
+                .to_owned(),
+        )
+    });
 }
 
 /// Announce `call`'s draw of lines `w` pixels wide by the device's own lines, which differ from

@@ -187,7 +187,7 @@ use super::indirect_dispatches::INDIRECT_DISPATCHES;
 use super::indirect_executions::{NIL_OFFSETS, RELEASED_STATES};
 use super::indirect_host_steps::HOST_STEPS;
 use super::kept_buffer_bytes::KEPT_BYTES;
-use super::line_widths::WIDE_LINES;
+use super::line_widths::{LINE_TIES, WIDE_LINES};
 use super::linear_attachments::{CHOSEN_COPIES, LINEAR_COPIES};
 use super::memoryless::MEMORYLESS_TEXEL_BUFFERS;
 use super::mesh_draws::EMULATED_MESH;
@@ -526,6 +526,7 @@ fn every_kind_has_a_site_a_lane_test_takes() {
         &EMULATED_MESH,
         &PROVOKING,
         &WIDE_LINES,
+        &LINE_TIES,
         &CAPPED_ANISOTROPY,
         &NOT_MIPMAPPED_ANISOTROPY,
         &IN_PLACE,

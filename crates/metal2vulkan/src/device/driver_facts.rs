@@ -1506,6 +1506,14 @@ pub enum DriverFact {
     /// where Metal's layout is not the image's (a texture Metal keeps losslessly compressed,
     /// `heap-texture-lossless-layout`; a layout not measured).
     MultisampleColorImagesLieAsMetalHeapTextures,
+    /// The driver's lines of width 1, as the runtime draws them (Bresenham's mode,
+    /// `VK_LINE_RASTERIZATION_MODE_BRESENHAM_EXT`, where the pipeline's multisample state allows
+    /// it), cover the pixel Metal's do where a line runs through a vertex shared by two pixels'
+    /// diamonds: Metal covers the lower one. Vulkan's diamond is open, so a line that only touches
+    /// such a vertex exits neither diamond and the tie is the driver's, with no Vulkan control
+    /// over it. On a driver without it the runtime announces `device-line-ties` at each draw whose
+    /// lines or edges the device's lines draw at width 1 (`render/line_width.rs`).
+    LineTiesAreMetals,
 }
 
 impl DriverFact {
@@ -1976,6 +1984,14 @@ const DYNAMIC_RESTART_WARNING: DriverDiagnostic = DriverDiagnostic {
 /// per sample or blitted, every sample there). It decides a notice, not an answer, so the M4 is
 /// not measured. Every other driver is unmeasured.
 ///
+/// `LineTiesAreMetals`, measured by `runtime_lane::line_widths` (Metal's maps of the probe's
+/// width-1 lines and strips, pixel for pixel) and the conformance case
+/// `primitive-type-restart-indices` (a line through the shared vertex (3.5, 1.0)): MoltenVK 1.4.2
+/// on the M3 Max under macOS 27.0.1, whose lines are Metal's own, and lavapipe (llvmpipe on LLVM
+/// 23.1.1, Mesa 26.2.4), which covers the lower pixel there as Metal does. NVIDIA's 615.71.09 on
+/// the RTX 5080 Laptop GPU covers the upper one (the case's two texels, and the lane's
+/// three-vertex strip at width 1, its diagonal a row higher). Every other driver is unmeasured.
+///
 /// MoltenVK 1.4.2 on the M3 Max under macOS 27.0.1 (2026-10-21, the runtime lanes in release
 /// builds under `--cfg m2v_gpu`, each fact taken):
 /// - Measured by the lane that measured its 1.4.1 row, which passed: `DepthImageKeepsDenormals`
@@ -2362,6 +2378,16 @@ pub(crate) const MEASURED: &[Measured<DriverFact>] = &[
     Measured {
         device: Some(APPLE9),
         ..moltenvk_on_apple(DriverFact::MultisampleColorImagesLieAsMetalHeapTextures)
+    },
+    Measured {
+        device: Some(APPLE9),
+        ..moltenvk_on_apple(DriverFact::LineTiesAreMetals)
+    },
+    Measured {
+        fact: DriverFact::LineTiesAreMetals,
+        driver: DriverId::MESA_LLVMPIPE,
+        vendor: None,
+        device: None,
     },
 ];
 

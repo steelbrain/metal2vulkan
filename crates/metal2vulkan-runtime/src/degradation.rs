@@ -2174,6 +2174,17 @@ degradations! {
             "the edges' fragments are biased by another depth than Metal's, along the edges as \
              their slope along them differs from the triangle's, and near a vertex of a smaller \
              depth exponent than the triangle's largest by a smaller unit";
+        /// A draw whose lines, or a triangle's edges in fill mode `Lines`, the device's own lines
+        /// draw at width 1 (Metal's default width, or the nearest width a device without
+        /// `wideLines` draws) on a driver not measured to break a tie at a vertex two pixels'
+        /// diamonds share as Metal does
+        /// ([`metal2vulkan::device::DriverFact::LineTiesAreMetals`], `render/line_width.rs`): a
+        /// line through such a vertex exits neither pixel's diamond, which Vulkan's rule leaves
+        /// open, so the driver chooses the pixel it covers, where Metal covers the lower one.
+        DeviceLineTies = "device-line-ties", Precision,
+            "a line through a vertex two pixels' diamonds share covers the pixel the device \
+             chooses, where Metal covers the lower one, so such a pixel, and the rest of a line \
+             that runs along such vertices, can lie a row or a column from Metal's";
         /// A draw of lines, or an emulated mesh draw of lines, under Apple's last provoking vertex
         /// (`setProvokingVertexMode:` 1), of a pipeline state that reads it (a flat input, or a
         /// slice or viewport its vertex function selects), on a device without
