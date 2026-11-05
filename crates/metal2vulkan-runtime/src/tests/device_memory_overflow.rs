@@ -19,9 +19,10 @@
 //!   made and read back, and nothing overflows or is announced.
 //!
 //! The test prints the device's memory types and heaps, what each resource past the fill lies in,
-//! and how long the makes of [`SAMPLES`] small `Private` buffers and textures take before the
-//! fill and past a full heap, with a failing device-local allocation of a block alone
-//! (`VRAM-OVERFLOW`): past a full heap each such placement first fails a new device-local block.
+//! and how long the makes of [`SAMPLES`] `Private` buffers of [`TIMED`] bytes and textures of
+//! [`TIMED_SIDE`] squared texels take, each in a block of its own, before the fill and past a full
+//! heap, where each first fails its device-local block, with that failing allocation alone
+//! (`VRAM-OVERFLOW`).
 //!
 //! A GPU hazard (it allocates up to the device's memory): compiled on a GPU only under
 //! `m2v_gpu_hazards`, and under `m2v_cpu_icd`, where lavapipe's memory is unified.
@@ -48,9 +49,13 @@ const PAST: u64 = 64 << 20;
 /// The side of each texture past the fill, `RGBA8Unorm`: 4 MiB.
 const SIDE: u64 = 1024;
 const TEXTURE_BYTES: u64 = SIDE * SIDE * 4;
-/// The small `Private` buffers (1 MiB) and textures (256 x 256 `RGBA8Unorm`) whose makes are
-/// timed before the fill and past it.
-const SAMPLES: usize = 32;
+/// The `Private` buffers and textures whose makes are timed before the fill and past it.
+const SAMPLES: usize = 8;
+/// The bytes of each timed buffer: past half a block (`memory::BLOCK_BYTES`), so that each makes a
+/// block of its own.
+const TIMED: u64 = 48 << 20;
+/// The side of each timed texture, `RGBA8Unorm`: 64 MiB, a block of its own.
+const TIMED_SIDE: u64 = 4096;
 
 /// The notices the device announced, by kind.
 type Heard = Arc<Mutex<Vec<Degradation>>>;
@@ -114,47 +119,53 @@ fn spread(mut times: Vec<Duration>) -> (u128, u128) {
     (micros(times.get(times.len() / 2)), micros(times.last()))
 }
 
-/// How long each make of [`SAMPLES`] small `Private` buffers and textures took, as their medians
-/// and longest; the resources go into `kept`, so that each is a placement of its own.
-fn make_times(device: &Device, kept: &mut Vec<(Buffer, Texture)>) -> [(u128, u128); 2] {
-    let mut descriptor = TextureDescriptor::texture_2d(PixelFormat::RGBA8Unorm, 256, 256, false);
+/// How long each make of [`SAMPLES`] timed `Private` buffers and textures took, as their medians
+/// and longest, and how many of their placements overflowed; the resources go into `kept`.
+fn make_times(device: &Device, kept: &mut Vec<(Buffer, Texture)>) -> ([(u128, u128); 2], u64) {
+    let mut descriptor =
+        TextureDescriptor::texture_2d(PixelFormat::RGBA8Unorm, TIMED_SIDE, TIMED_SIDE, false);
     descriptor.resource_options = private();
+    let start = overflows(device);
     let (mut buffers, mut textures) = (Vec::new(), Vec::new());
     for _ in 0..SAMPLES {
         let made = Instant::now();
-        let buffer = device.new_buffer(1 << 20, private()).unwrap();
+        let buffer = device.new_buffer(TIMED, private()).unwrap();
         buffers.push(made.elapsed());
         let made = Instant::now();
         let texture = device.new_texture(&descriptor).unwrap();
         textures.push(made.elapsed());
         kept.push((buffer, texture));
     }
-    [spread(buffers), spread(textures)]
+    (
+        [spread(buffers), spread(textures)],
+        overflows(device) - start,
+    )
 }
 
-/// How long each of 8 allocations of a block of the device-local memory type `type_index` took,
-/// as their median and longest, and how many failed: past a full heap, what each placement that
-/// overflows tries first. One that is made is freed at once.
-fn failing_block_times(device: &Device, type_index: u32) -> ((u128, u128), usize) {
+/// How long each of [`SAMPLES`] allocations of [`TIMED`] bytes of the device-local memory type
+/// `type_index` took, as their median and longest, with what each answered: past a full heap, what
+/// each placement that overflows tries first. One that is made is freed at once.
+fn block_times(device: &Device, type_index: u32) -> ((u128, u128), Vec<vk::Result>) {
     let raw = device.shared().vk();
     let info = vk::MemoryAllocateInfo::default()
-        .allocation_size(crate::memory::BLOCK_BYTES)
+        .allocation_size(TIMED)
         .memory_type_index(type_index);
-    let (mut times, mut failed) = (Vec::new(), 0);
-    for _ in 0..8 {
+    let (mut times, mut answers) = (Vec::new(), Vec::new());
+    for _ in 0..SAMPLES {
         let made = Instant::now();
         // SAFETY: the device is live, `info` valid and the type the device's.
         let memory = unsafe { crate::creation::allocate_memory(raw, &info) };
         times.push(made.elapsed());
         match memory {
-            // SAFETY: nothing uses the memory.
-            Ok(memory) => unsafe {
-                crate::release::object(raw, memory);
-            },
-            Err(_) => failed += 1,
+            Ok(memory) => {
+                answers.push(vk::Result::SUCCESS);
+                // SAFETY: nothing uses the memory.
+                unsafe { crate::release::object(raw, memory) };
+            }
+            Err(error) => answers.push(error),
         }
     }
-    (spread(times), failed)
+    (spread(times), answers)
 }
 
 /// Commit one command buffer of `queue` with a blit encoder for each of `encodes`, in order, and
@@ -306,7 +317,7 @@ fn resources_past_device_local_memory_are_made_used_and_read_back() {
         view.images,
     );
     let mut sampled = Vec::new();
-    let [before_buffers, before_textures] = make_times(&device, &mut sampled);
+    let ([before_buffers, before_textures], _) = make_times(&device, &mut sampled);
     let start = overflows(&device);
     let mut filled = Vec::new();
     if !unified && !buffer_types.is_empty() {
@@ -321,13 +332,21 @@ fn resources_past_device_local_memory_are_made_used_and_read_back() {
         filled.len(),
     );
     if full {
-        let [buffers, textures] = make_times(&device, &mut sampled);
-        let failing = own.first().map(|&best| failing_block_times(&device, best));
+        // Topped up with timed buffers until one overflows, so that no block of their size has
+        // room in device-local memory.
+        let topped = overflows(&device);
+        while overflows(&device) == topped && filled.len() < 256 {
+            filled.push(device.new_buffer(TIMED, private()).unwrap());
+        }
+        let ([buffers, textures], overflowed) = make_times(&device, &mut sampled);
+        let failing = own.first().map(|&best| block_times(&device, best));
         eprintln!(
-            "VRAM-OVERFLOW: makes in microseconds (median, longest) of {SAMPLES} 1 MiB Private \
-             buffers and 256x256 textures: before the fill {before_buffers:?} and \
-             {before_textures:?}, past the full heap {buffers:?} and {textures:?}; a \
-             device-local block allocation past it (median, longest), failed of 8: {failing:?}"
+            "VRAM-OVERFLOW: makes in microseconds (median, longest) of {SAMPLES} Private buffers \
+             of {TIMED} bytes and {TIMED_SIDE}x{TIMED_SIDE} textures, each a block of its own: \
+             before the fill {before_buffers:?} and {before_textures:?}, past the full heap \
+             {buffers:?} and {textures:?} ({overflowed} of their placements overflowed); a \
+             device-local allocation of {TIMED} bytes past it (median, longest) and its \
+             answers: {failing:?}"
         );
     }
     let past = overflows(&device);
