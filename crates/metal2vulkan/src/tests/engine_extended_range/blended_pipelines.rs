@@ -7,15 +7,15 @@
 //! and write masks of some channels.
 //!
 //! On the profiles of the reported device's family (`nvidia-rtx50-linux`, `nvidia-rtx5080-laptop`),
-//! on MoltenVK's and on lavapipe's, every pipeline is made, a written blended attachment in the
-//! shader's blend (the interlocked storage form, or over the input attachment on lavapipe), an
-//! unwritten one with no blend and an empty mask, a partly masked one under the mask of its fields.
-//! The committed lavapipe profile states no multisampled color attachment of the raw format
-//! (`R16G16B16A16_UINT`: its `framebufferIntegerColorSampleCounts` is one sample, and it records no
-//! count of that format's own), so a pipeline of four samples is refused there naming the
-//! properties it needs. Before, a blended
-//! attachment the function does not write and a mask of some channels were each refused
-//! `NotImplemented(Format)` at `Color(0)`, the reported refusal. No GPU is used.
+//! on MoltenVK's and on lavapipe's, every pipeline is made (but lavapipe's of four samples, below):
+//! a written blended attachment in the shader's blend (the interlocked storage form, or over the
+//! input attachment on lavapipe), an unwritten one with no blend and an empty mask, a partly masked
+//! one under the mask of its fields. The committed lavapipe profile states no multisampled color
+//! attachment of the raw format (`R16G16B16A16_UINT`: its `framebufferIntegerColorSampleCounts` is
+//! one sample, and it records no count of that format's own), so a pipeline of four samples is
+//! refused there naming the properties it needs. Before, a blended attachment the function does
+//! not write and a mask of some channels were each refused `NotImplemented(Format)` at `Color(0)`,
+//! the reported refusal. No GPU is used.
 //!
 //! `llvm-as` assembles the fixture `rt6_samples`; without it the tests skip visibly.
 
