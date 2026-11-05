@@ -110,9 +110,10 @@ pub(super) fn degrade_nan_clears(device: &Device, layout: &PassLayout, drew: boo
 }
 
 /// Whether Metal's NaN clear of `target`, in a pass with a draw call where `called`, keeps a
-/// `half` NaN's sign (the module docs): on a device that presents an Apple silicon Mac's
-/// compression (`Device::metal_compresses_textures`; on one that presents a Mac keeping none, as
-/// a Mac with an Intel or AMD GPU does, never: expected rather than measured), its texture (a view's first
+/// `half` NaN's sign (the module docs), which is also whether its clear takes the straight route
+/// (`render.rs`): on a device that presents an Apple silicon Mac's compression
+/// (`Device::metal_compresses_textures`; on one that presents a Mac keeping none, as a Mac with
+/// an Intel or AMD GPU does, never: expected rather than measured), its texture (a view's first
 /// texture) is one Metal keeps losslessly compressed (`heap_tiled::metal_compresses`: not over a
 /// buffer, of no usage Metal keeps uncompressed, optimized contents allowed), the attachment's
 /// level is 16 texels or more a side, counted in pixels at any sample count, and the pass has no

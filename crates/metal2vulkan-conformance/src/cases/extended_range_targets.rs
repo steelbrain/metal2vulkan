@@ -1069,6 +1069,13 @@ impl Case for ClearRoutes {
         named.extend(super::compressed_blits::kept_encoding_notice(
             self.format.format.as_raw(),
         ));
+        // On a venue that presents no texture compression the blit that reads `plain-16` back,
+        // through the texture the recording's Mac compressed, keeps the device's encoding where
+        // the recording holds the compressor's canonical one, and the runtime rewrites none
+        // under the suite's exact policy (`compressed_blits`'s declaration says why). Measured on
+        // the RTX 5080 Laptop: `case/plain-16/texels/*` alone differ against the recording with
+        // the key and matched before it.
+        named.push(crate::replay::without_compression("plain-16"));
         named
     }
 

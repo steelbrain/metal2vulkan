@@ -359,11 +359,19 @@ const M3_CODES: [[u16; 4]; 2] = [
 /// (`ClearRoute::Straight`) for a 16 x 16 private target of plain usage in a pass with no draw
 /// call, and through `half` (`ClearRoute::ThroughHalf`) for an 8 x 8 one, one of `ShaderWrite` or
 /// `PixelFormatView` usage, and one whose pass draws into another attachment. Every texel of the
-/// target is checked.
+/// target is checked. On a device that presents a Mac keeping no texture compressed
+/// (`DeviceProperties::lossless_compression` false) the 16 x 16 one is not compressed either, so
+/// it takes the route of the uncompressed ones, through `half` (`nan_clear::keeps_nan_sign`;
+/// expected, not measured on such a Mac).
 #[test]
 fn bfloat_clears_take_metal_s_route() {
     let (messages, _cache, lane) = lane_with(|_| {});
     let plain = TextureUsage::RENDER_TARGET | TextureUsage::SHADER_READ;
+    // The route of the shape Metal keeps compressed, where the device presents the compression.
+    let compressed = match lane.device.properties().lossless_compression {
+        true => ClearRoute::Straight,
+        false => ClearRoute::ThroughHalf,
+    };
     let library = library(&lane.device).unwrap();
     let function = |name: &str| {
         StageSource::Function(
@@ -385,7 +393,7 @@ fn bfloat_clears_take_metal_s_route() {
             .new_render_pipeline_state(&state, &PipelineOptions::default())
             .unwrap_or_else(|e| panic!("{pf:?}: the pipeline: {e}"));
         for (side, usage, draws, route) in [
-            (16, plain, false, ClearRoute::Straight),
+            (16, plain, false, compressed),
             (8, plain, false, ClearRoute::ThroughHalf),
             (
                 16,

@@ -4056,8 +4056,9 @@ each item named states the rule in full.
     both; a `Depth32Float` one never read the released clear.
   - a GPU blit or fill through any texture keeps its bytes, with no `extended-range-bits-kept`,
     `device-nan-encoding` or `shared-exponent-kept` note for it and no rewrite under
-    `ExtendedRangeBlitPolicy::Canonical`, and a `half` NaN clear keeps no sign. Expected, not
-    measured on such a Mac.
+    `ExtendedRangeBlitPolicy::Canonical`, and a clear of any texture takes the route of Metal's
+    uncompressed one, through `half`, so a `half` NaN clear keeps no sign and an extended-range
+    or bfloat clear rounds as through `half`. Expected, not measured on such a Mac.
 
   Metal leaves a new texture's contents undefined, and zero and a released texture's texels are
   both what such a Mac reads, so this trades no accuracy and no `DevicePolicy` switch fills the

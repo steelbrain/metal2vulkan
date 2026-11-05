@@ -852,11 +852,19 @@ const ROUTE_COLORS: [[f64; 4]; 4] = [
 ];
 
 /// A `Clear` of each single-plane extended-range format stores Metal's route's texel in every
-/// texel of the target (the module docs).
+/// texel of the target (the module docs). On a device that presents a Mac keeping no texture
+/// compressed (`DeviceProperties::lossless_compression` false) the 16 x 16 plain target is not
+/// compressed either, so it takes the route of the uncompressed ones, through `half`
+/// (`nan_clear::keeps_nan_sign`; expected, not measured on such a Mac).
 #[test]
 fn clears_take_metal_s_route() {
     let (messages, _cache, lane) = lane();
     let plain = TextureUsage::RENDER_TARGET | TextureUsage::SHADER_READ;
+    // The route of the shape Metal keeps compressed, where the device presents the compression.
+    let compressed = match lane.device.properties().lossless_compression {
+        true => ClearRoute::Straight,
+        false => ClearRoute::ThroughHalf,
+    };
     let library = library(&lane.device).unwrap();
     let function = |name: &str| {
         StageSource::Function(
@@ -878,7 +886,7 @@ fn clears_take_metal_s_route() {
             .unwrap_or_else(|e| panic!("{:?}: the pipeline: {e}", f.pf));
         let size = texel_size(f.form);
         for (side, usage, draws, route) in [
-            (16, plain, false, ClearRoute::Straight),
+            (16, plain, false, compressed),
             (8, plain, false, ClearRoute::ThroughHalf),
             (
                 16,
