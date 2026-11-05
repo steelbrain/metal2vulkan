@@ -276,6 +276,7 @@ class DeriveTest(unittest.TestCase):
         doc = self.derive({"VkPhysicalDeviceVulkan11Properties": {"subgroupSize": 1}})
         block = doc["capabilities"][regen.UNREQUIRED_PROPERTIES_BLOCK]
         self.assertEqual(block, {"properties": {
+            "VkPhysicalDeviceProperties": {"limits": {"strictLines": False}},
             "VkPhysicalDeviceVulkan11Properties": {"subgroupQuadOperationsInAllStages": False}}})
         [profile] = doc["profiles"].values()
         self.assertIn(regen.UNREQUIRED_PROPERTIES_BLOCK, profile["capabilities"])
@@ -285,6 +286,14 @@ class DeriveTest(unittest.TestCase):
         stated = {"VkPhysicalDeviceVulkan11Properties": {"subgroupQuadOperationsInAllStages": True}}
         with self.assertRaises(SystemExit):
             self.derive(stated)
+        with self.assertRaises(SystemExit):
+            self.derive({"VkPhysicalDeviceProperties": {"limits": {"strictLines": True}}})
+
+    def test_a_limit_is_told_apart_from_the_limits_a_base_states(self):
+        doc = self.derive({"VkPhysicalDeviceProperties": {"limits": {"maxImageDimension1D": 4096}}})
+        block = doc["capabilities"][regen.UNREQUIRED_PROPERTIES_BLOCK]
+        self.assertEqual(block["properties"]["VkPhysicalDeviceProperties"],
+                         {"limits": {"strictLines": False}})
 
 
 PRESENTATION_REGISTRY = b"""<registry>

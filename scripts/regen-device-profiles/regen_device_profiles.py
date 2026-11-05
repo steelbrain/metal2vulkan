@@ -81,6 +81,7 @@ GPUINFO_DISPLAY = "https://vulkan.gpuinfo.org/displayreport.php?id={}"
 # and keeps the device's value whatever a profile states.
 UNREQUIRED_PROPERTIES_BLOCK = "m2v_unrequired_properties"
 UNREQUIRED_PROPERTIES = {
+    "VkPhysicalDeviceProperties": {"limits": {"strictLines": False}},
     "VkPhysicalDeviceVulkan11Properties": {"subgroupQuadOperationsInAllStages": False},
 }
 
@@ -1309,10 +1310,15 @@ def derive(registry, data, source, formats):
         "dropped_features": sorted(dropped),
         "spec_corrections": sorted(corrected),
     }
+    def flattened(struct, members):
+        nested = members.get("limits") if struct == "VkPhysicalDeviceProperties" else None
+        return nested if nested is not None else members
+
     stated = {(struct, member) for block in capabilities.values()
-              for struct, members in block.get("properties", {}).items() for member in members}
+              for struct, members in block.get("properties", {}).items()
+              for member in flattened(struct, members)}
     restated = sorted(f"{struct}.{member}" for struct, members in UNREQUIRED_PROPERTIES.items()
-                      for member in members if (struct, member) in stated)
+                      for member in flattened(struct, members) if (struct, member) in stated)
     if restated:
         raise SystemExit(f"{source['name']}: the base profile now states {restated}")
     capabilities[UNREQUIRED_PROPERTIES_BLOCK] = {

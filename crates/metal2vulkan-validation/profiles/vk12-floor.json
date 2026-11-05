@@ -1013,6 +1013,11 @@
     },
     "m2v_unrequired_properties": {
       "properties": {
+        "VkPhysicalDeviceProperties": {
+          "limits": {
+            "strictLines": false
+          }
+        },
         "VkPhysicalDeviceVulkan11Properties": {
           "subgroupQuadOperationsInAllStages": false
         }
