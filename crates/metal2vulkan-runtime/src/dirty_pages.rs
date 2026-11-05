@@ -31,9 +31,10 @@
 //!   runtime finishes its last batch, or a batch that signals an event, before it marks the
 //!   batch's events reached, tells the scheduler, its waiters and its completed handlers
 //!   ([`DirtyCommit::report_host_writes`]). A read of a shared event's value from its semaphore
-//!   (`signaledValue`, a host wait) can see the GPU's signal before that. Its shadows' copies back and merges into the pages
-//!   are the shadow's own writes on every log of the pages, never the consumer's. Metal's
-//!   contract has a command reach a resource only through a binding or a residency it named.
+//!   (`signaledValue`, a host wait) can see the GPU's signal before that. Its shadows' copies
+//!   back and merges into the pages are the shadow's own writes on every log of the pages, never
+//!   the consumer's. Metal's contract has a command reach a resource only through a binding or a
+//!   residency it named.
 //! - **Holds.** A shadow's log holds the stamp as of which its image held every texel of the
 //!   truth, set at the commit of a command buffer whose end left it so ([`ShadowLog`]), and its
 //!   next copy in takes only the pages changed since. A write of the truth reported to the same
