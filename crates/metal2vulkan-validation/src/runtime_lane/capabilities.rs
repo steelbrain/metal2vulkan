@@ -125,7 +125,20 @@ fn a_runtime_device_answers_its_queries_and_the_apple_only_calls() {
         assert_eq!(p.vendor_id, d.vendor_id);
         assert_eq!(p.device_id, d.device_id);
         assert_eq!(p.api_version, d.api_version);
-        assert_eq!(p.max_buffer_length, metal.max_buffer_length);
+        // The compile layer's answer, at most three quarters of the device's largest device-local
+        // heap, to 16 KiB (`DeviceProperties::max_buffer_length`).
+        println!(
+            "CAPABILITIES {}: max_buffer_length {} of the compile layer's {}",
+            p.name, p.max_buffer_length, metal.max_buffer_length
+        );
+        assert!(
+            p.max_buffer_length == metal.max_buffer_length
+                || (p.max_buffer_length < metal.max_buffer_length
+                    && p.max_buffer_length.is_multiple_of(16 << 10)),
+            "max_buffer_length {} against the compile layer's {}",
+            p.max_buffer_length,
+            metal.max_buffer_length
+        );
         let [width, height, depth] = metal.max_threads_per_threadgroup.map(u64::from);
         assert_eq!(
             p.max_threads_per_threadgroup,

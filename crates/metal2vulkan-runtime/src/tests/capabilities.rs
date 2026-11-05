@@ -5,7 +5,7 @@ use std::path::PathBuf;
 
 use crate::capabilities::{
     amplification_count_supported, rate_map_layers_supported, sample_count_supported,
-    DeviceIdentity, RATE_MAP_LAYERS,
+    working_set_buffer_bound, DeviceIdentity, RATE_MAP_LAYERS,
 };
 use crate::{
     BufferTextureProblem, DeviceKind, DeviceProperties, Error, Invalid, MacClass, Problem, Query,
@@ -81,6 +81,7 @@ fn identity(stem: &str) -> DeviceIdentity {
         gpu_core_count: None,
         sampled_sample_counts: profile_counts(stem, "sampledImageColorSampleCounts")
             & profile_counts(stem, "sampledImageDepthSampleCounts"),
+        device_local_heap: None,
     }
 }
 
@@ -173,6 +174,44 @@ fn lossless_compression_is_the_presented_mac_class() {
             );
             assert_eq!(p.has_unified_memory, kind.has_unified_memory(), "{kind:?}");
         }
+    }
+}
+
+/// Metal's rule for `maxBufferLength`, three quarters of the working set to 16 KiB, gives what
+/// Metal answered: an AMD Radeon Pro 5300M (4 GiB, macOS 26.7.1) of `recommendedMaxWorkingSetSize`
+/// 4,278,190,080 and an Apple M3 Max (64 GiB, macOS 27.0.1) of 55,662,788,608. A device's answer
+/// is the compile layer's bound by its largest device-local heap's (a 16 GiB heap's 12 GiB, a heap
+/// of the limit's size three quarters of it), and the compile layer's where the bound lies above
+/// it or no heap was read.
+#[test]
+fn max_buffer_length_is_three_quarters_of_the_device_local_heap_at_most() {
+    assert_eq!(working_set_buffer_bound(4_278_190_080), 3_208_642_560);
+    assert_eq!(working_set_buffer_bound(55_662_788_608), 41_747_087_360);
+    let (stem, desc) = &committed_descriptions()[0];
+    let policy = DevicePolicy::UNTRUSTED;
+    let enabled = desc
+        .clone()
+        .with_enabled(&desc.recommended_enables(&policy))
+        .unwrap_or_else(|e| panic!("{stem}: {e}"));
+    let compile = Device::new(enabled.clone(), policy).unwrap_or_else(|e| panic!("{stem}: {e}"));
+    let limit = compile.metal_properties().max_buffer_length;
+    for heap in [
+        None,
+        Some(16 << 30),
+        Some(64 << 30),
+        Some(limit),
+        Some(u64::MAX),
+    ] {
+        let identity = DeviceIdentity {
+            device_local_heap: heap,
+            ..identity(stem)
+        };
+        let p = DeviceProperties::new(identity, enabled.clone(), &compile, None);
+        let want = heap.map_or(limit, |heap| {
+            limit.min(heap / 4 * 3 / (16 << 10) * (16 << 10))
+        });
+        assert_eq!(p.max_buffer_length, want, "{stem}: heap {heap:?}");
+        assert!(p.max_buffer_length <= limit, "{stem}: heap {heap:?}");
     }
 }
 

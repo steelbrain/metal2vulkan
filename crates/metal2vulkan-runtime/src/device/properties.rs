@@ -152,6 +152,15 @@ pub(super) unsafe fn query(
     let core = properties.properties;
     // SAFETY: the caller's contract.
     let (pci_bus, drm_render) = unsafe { bus_addresses(instance, physical) };
+    // SAFETY: the caller's contract.
+    let memory = unsafe { instance.get_physical_device_memory_properties(physical) };
+    let heaps =
+        &memory.memory_heaps[..(memory.memory_heap_count as usize).min(vk::MAX_MEMORY_HEAPS)];
+    let device_local_heap = heaps
+        .iter()
+        .filter(|heap| heap.flags.contains(vk::MemoryHeapFlags::DEVICE_LOCAL))
+        .map(|heap| heap.size)
+        .max();
     let identity = DeviceIdentity {
         name: core
             .device_name_as_c_str()
@@ -173,6 +182,7 @@ pub(super) unsafe fn query(
                 & core.limits.sampled_image_depth_sample_counts)
                 .as_raw(),
         ),
+        device_local_heap,
     };
     (identity, v11.max_memory_allocation_size)
 }

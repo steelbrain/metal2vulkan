@@ -39,6 +39,7 @@ fn identity(
         max_viewports: 16,
         gpu_core_count: None,
         sampled_sample_counts: SampleCountFlags::empty(),
+        device_local_heap: None,
     }
 }
 

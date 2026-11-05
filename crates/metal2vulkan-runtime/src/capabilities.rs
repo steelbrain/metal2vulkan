@@ -107,10 +107,16 @@ pub struct DeviceProperties {
     pub drm_render: Option<(i64, i64)>,
     /// The Vulkan version the device runs at: the lower of the instance's and the device's.
     pub api_version: ApiVersion,
-    /// `maxBufferLength`: the longest buffer a shader can bind whole, the compile layer's answer:
-    /// `maxStorageBufferRange` where buffers are reached through descriptors only, else the lower
-    /// of `maxBufferSize` and `maxMemoryAllocationSize` (the device's allocation sizes, which
-    /// follow its machine's memory on integrated GPUs, as Metal's answer does).
+    /// `maxBufferLength`: the longest buffer a shader can bind whole, the compile layer's answer
+    /// (`maxStorageBufferRange` where buffers are reached through descriptors only, else the lower
+    /// of `maxBufferSize` and `maxMemoryAllocationSize`), at most three quarters of the device's
+    /// largest device-local heap, rounded down to 16 KiB ([`working_set_buffer_bound`]). Metal
+    /// answers three quarters of its `recommendedMaxWorkingSetSize`: 3,208,642,560 of 4,278,190,080
+    /// on an AMD Radeon Pro 5300M (4 GiB, macOS 26.7.1), and 41,747,087,360 of 55,662,788,608, to
+    /// 16 KiB, on an Apple M3 Max (64 GiB, macOS 27.0.1); the runtime holds no working set size and
+    /// takes the heap for it, so a discrete GPU's answer follows its memory, as Metal's does, where
+    /// its Vulkan limits alone allow far more (`maxBufferSize` 1 TiB on NVIDIA's 615.71.09). On
+    /// MoltenVK the bound is above the compile layer's answer, Metal's own.
     pub max_buffer_length: u64,
     /// `maxThreadsPerThreadgroup`: per axis, `maxComputeWorkGroupSize` capped by
     /// `maxComputeWorkGroupInvocations` and by an Apple GPU's 1024.
@@ -197,6 +203,16 @@ pub(crate) struct DeviceIdentity {
     /// The sample counts every color and depth image can be sampled at:
     /// `sampledImageColorSampleCounts & sampledImageDepthSampleCounts`.
     pub sampled_sample_counts: SampleCountFlags,
+    /// The size of the device's largest `DEVICE_LOCAL` memory heap, where it was read
+    /// (`VkPhysicalDeviceMemoryProperties`): what bounds [`DeviceProperties::max_buffer_length`].
+    pub device_local_heap: Option<u64>,
+}
+
+/// The longest buffer Metal's rule allows a device whose working set is `working_set` bytes:
+/// three quarters of it, rounded down to 16 KiB ([`DeviceProperties::max_buffer_length`]).
+pub(crate) fn working_set_buffer_bound(working_set: u64) -> u64 {
+    const PAGE: u64 = 16 << 10;
+    working_set / 4 * 3 / PAGE * PAGE
 }
 
 /// The class of Mac a device presents, whose GPU decides answers Metal gives without a property
@@ -264,6 +280,11 @@ impl DeviceProperties {
     ) -> DeviceProperties {
         let lossless_compression = presents_lossless_compression(&identity, mac_class);
         let metal = compile.metal_properties();
+        let max_buffer_length = identity
+            .device_local_heap
+            .map_or(metal.max_buffer_length, |heap| {
+                metal.max_buffer_length.min(working_set_buffer_bound(heap))
+            });
         let [width, height, depth] = metal.max_threads_per_threadgroup.map(u64::from);
         let texture_sample_counts = metal.raster_sample_counts & identity.sampled_sample_counts;
         let max_vertex_amplification_count = if description.has(VkFeature::Multiview) {
@@ -282,7 +303,7 @@ impl DeviceProperties {
             pci_bus: identity.pci_bus,
             drm_render: identity.drm_render,
             api_version: identity.api_version,
-            max_buffer_length: metal.max_buffer_length,
+            max_buffer_length,
             max_threads_per_threadgroup: Size::new(width, height, depth),
             max_threadgroup_memory_length: u64::from(metal.max_threadgroup_memory_length),
             argument_buffers_support: metal.argument_buffers_tier,
