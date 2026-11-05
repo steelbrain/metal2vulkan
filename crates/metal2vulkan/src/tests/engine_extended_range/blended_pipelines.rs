@@ -142,7 +142,7 @@ fn blended_extended_range_pipelines_are_made() {
                                 }
                                 let what = format!(
                                     "{stem} {pf:?} {name} mask {:?} {ds:?} x{samples} {fill}",
-                                    mask.bits()
+                                    mask.as_raw()
                                 );
                                 match dev.compile_render_pipeline(&d, &Budget::standard()) {
                                     Ok(_) => made += 1,
