@@ -54,19 +54,22 @@ static const uint8_t kReadMarker = 0xC1;
 static const uint8_t kWriteMarker = 0xD7;
 
 // Byte `offset % 4` of the tag of word `offset / 4` under `marker`: the marker, then the word's
-// index 6 bits a byte with the top bit set, so no tag byte is 0 and only a marker is 0xC0 or more.
+// index 6 bits a byte, over 0x80 in the surface's tag and over 0x40 in a write's. No tag byte is 0,
+// only a marker is 0xC0 or more, and no byte of a write's tag equals any byte of the surface's, so
+// every byte a write reaches reads as changed.
 static uint8_t tag_byte(uint8_t marker, uint64_t offset)
 {
 	uint64_t word = offset / 4;
+	uint8_t base = marker == kReadMarker ? 0x80 : 0x40;
 	switch (offset % 4) {
 	case 0:
 		return marker;
 	case 1:
-		return (uint8_t)(0x80 | (word & 0x3f));
+		return (uint8_t)(base | (word & 0x3f));
 	case 2:
-		return (uint8_t)(0x80 | ((word >> 6) & 0x3f));
+		return (uint8_t)(base | ((word >> 6) & 0x3f));
 	default:
-		return (uint8_t)(0x80 | ((word >> 12) & 0x3f));
+		return (uint8_t)(base | ((word >> 12) & 0x3f));
 	}
 }
 
