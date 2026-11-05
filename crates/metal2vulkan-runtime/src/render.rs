@@ -10090,7 +10090,9 @@ impl RenderLowering {
             // (`render_target::after_geometry_writes`): Metal runs every draw's vertex, object
             // and mesh functions before any draw's fragments.
             let mut geometry_barrier = None;
-            counts.resident_uses_geometry_checked(resident);
+            if !self.current.geometry_writes.is_empty() {
+                counts.resident_uses_geometry_checked(resident);
+            }
             if let Some(barrier) = self.current.geometry_writes.barrier_before(uses) {
                 barriered = true;
                 let view_mask = self.current.shape.view_mask;

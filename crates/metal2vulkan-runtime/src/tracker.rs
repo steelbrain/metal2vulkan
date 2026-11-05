@@ -1819,6 +1819,10 @@ impl<K: Copy + Ord + Hash> GeometryWrites<K> {
     /// shader touches none of it.
     pub(super) fn barrier_before(&self, uses: &[Use<K>]) -> Option<Barrier> {
         const FRAGMENT: vk::PipelineStageFlags2 = vk::PipelineStageFlags2::FRAGMENT_SHADER;
+        // Where it holds no write, no use meets one: it walks none of them.
+        if self.writes.is_empty() {
+            return None;
+        }
         let mut src = Access::NONE;
         let mut dst = Access::NONE;
         for used in uses {

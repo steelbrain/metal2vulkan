@@ -2145,3 +2145,26 @@ fn draws_add_the_geometry_writes_of_what_their_encoder_made_resident_once_by_ide
         barrier(vertex_write, fragment_read)
     );
 }
+
+/// A render pass instance whose draws wrote nothing before their fragments answers no barrier
+/// before a later draw's fragments, walking none of its uses (`GeometryWrites::barrier_before`,
+/// counted only where it walks: `WorkCounts::resident_uses_geometry_checked`); once a draw wrote,
+/// the later draw's fragment read of it waits for the write.
+#[test]
+fn an_instance_without_geometry_writes_answers_no_barrier_before_fragments() {
+    use vk::AccessFlags2 as A2;
+    use vk::PipelineStageFlags2 as S2;
+    let vertex_write = Access::new(S2::VERTEX_SHADER, A2::SHADER_STORAGE_WRITE);
+    let fragment_read = Access::new(FRAGMENT, A2::SHADER_STORAGE_READ);
+    let mut known = GeometryWrites::new();
+    let read = [reads(1, bytes(0..16), fragment_read)];
+    assert!(known.is_empty());
+    assert_eq!(known.barrier_before(&read), None);
+    known.add(&[reads(1, bytes(0..16), shader_read())]);
+    assert!(known.is_empty(), "a read before the fragments is no write");
+    known.add(&[writes(1, bytes(0..16), vertex_write)]);
+    assert_eq!(
+        known.barrier_before(&read),
+        barrier(vertex_write, fragment_read)
+    );
+}

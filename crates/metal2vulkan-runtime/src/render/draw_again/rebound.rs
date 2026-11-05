@@ -485,7 +485,9 @@ impl RenderLowering {
         let counts = &self.core.device().shared().counts;
         crate::shadow::shadow_uses(textures, uses).is_empty()
             && {
-                counts.resident_uses_geometry_checked(resident);
+                if !self.current.geometry_writes.is_empty() {
+                    counts.resident_uses_geometry_checked(resident);
+                }
                 self.current.geometry_writes.barrier_before(uses).is_none()
             }
             && !self.core.would_skip(named)

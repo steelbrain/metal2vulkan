@@ -167,6 +167,7 @@ struct Drawn {
     unordered: u64,
     indirect: u64,
     geometry: u64,
+    geometry_checked: u64,
     again: u64,
     heap_parts: u64,
     heap_checked: u64,
@@ -201,6 +202,8 @@ fn drawn(device: &Device, draw: impl FnOnce()) -> Drawn {
             - before.0.resident_uses_unordered_writes,
         indirect: after.0.resident_uses_indirect_reads - before.0.resident_uses_indirect_reads,
         geometry: (after.0.resident_uses_geometry_writes) - before.0.resident_uses_geometry_writes,
+        geometry_checked: (after.0.resident_uses_geometry_checked)
+            - before.0.resident_uses_geometry_checked,
         again: after.0.resident_uses_again_checked - before.0.resident_uses_again_checked,
         heap_parts: after.0.draw_heap_parts_made - before.0.draw_heap_parts_made,
         heap_checked: after.2 - before.2,
@@ -274,6 +277,8 @@ fn draws_keep_the_uses_of_what_their_encoder_made_resident_until_it_or_their_pla
         let made_again = [0, later as usize, entry_draws + 1];
         for (at, drawn) in each.iter().enumerate() {
             let what = format!("encoder {encoder} draw {at}: {drawn:?}");
+            // No draw of the scene writes before its fragments: none checks against such writes.
+            assert_eq!(drawn.geometry_checked, 0, "{what}");
             let walked = [
                 drawn.made,
                 drawn.gathered,
