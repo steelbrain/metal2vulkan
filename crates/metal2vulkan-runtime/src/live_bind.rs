@@ -267,8 +267,8 @@ impl RecentShapes {
 
     /// The one of them that is `state`'s shape, where one is.
     fn find(&self, state: &BindState) -> Option<Arc<BindShape>> {
-        let found = self.0.iter().rev();
-        found
+        let mut latest_first = self.0.iter().rev();
+        latest_first
             .find(|shape| state.has_shape_beside_used(shape))
             .cloned()
     }
