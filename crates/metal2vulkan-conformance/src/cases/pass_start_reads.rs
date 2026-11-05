@@ -10,6 +10,7 @@
 //! | `pass-start-barrier-display-masked-read` | a display-sized compositor target holding an earlier `DontCare` pass's leftovers, cleared, the barrier, and a read at its own pixels through a 453x100 scissor beside an `A8Unorm` mask over a buffer at texture 3 |
 //! | `pass-start-barrier-new-texture-chain` | two new 896x576 textures, each cleared, the barrier, and a read at its own pixels through an 841x521 scissor (the second beside the first at texture 3), then a target over a buffer, loaded, the barrier, and a read of the second at texture 3 over it |
 //! | `pass-start-barrier-new-texture-tile` | a new 448x576 texture cleared, the barrier, and a read at its own pixels over all of it |
+//! | `pass-start-barrier-private-composited` | a compositor's pass twice in a command buffer over a 64x40 target: cleared, the barrier, a sample of the target in pixel coordinates over a quad of a quarter of it, then three blended quads that sample three other textures |
 //!
 //! Every target is `BGRA8Unorm` with render-target and shader-read usage; a private one is a new
 //! texture of the case's, which holds before its first pass what Metal gives a new texture. The
@@ -57,12 +58,12 @@ use crate::case::{
 use crate::fixture::{Fixture, METAL_TEXT, RUNTIME_TEXT};
 use crate::recording::ShaderRef;
 use crate::render::{
-    ColorState, OverBuffer, PassColor, Plane, ReadAt, RenderPass, RenderPipelineSpec, RenderStep,
-    RenderWork, ScissorBox, TargetSpec,
+    Blend, ColorState, OverBuffer, PassColor, Plane, ReadAt, RenderPass, RenderPipelineSpec,
+    RenderStep, RenderWork, ScissorBox, TargetSpec,
 };
 use crate::replay::notice_allowance;
 use crate::transcript::{Digest, Node, Observed, Sites, Value};
-use metal2vulkan::metal::{BarrierScope, PixelFormat, PrimitiveType, RenderStages};
+use metal2vulkan::metal::{BarrierScope, BlendFactor, PixelFormat, PrimitiveType, RenderStages};
 use metal2vulkan_runtime::Degradation;
 
 /// The owned fixture of the rectangle and the reads.
@@ -87,6 +88,12 @@ const TEXEL: usize = 4;
 
 /// The one colour attachment every pipeline carries.
 const COLOR_STATE: [Option<ColorState>; 1] = [Some(ColorState::new(FORMAT))];
+
+/// The composited row's blended attachment: the source over the destination by the source's
+/// alpha. Every source it draws is opaque, so a blend of any precision writes the source's codes.
+const BLENDED_STATE: [Option<ColorState>; 1] = [Some(ColorState::new(FORMAT).blended(
+    Blend::added(BlendFactor::SourceAlpha, BlendFactor::OneMinusSourceAlpha),
+))];
 
 /// The slug of `docs/API.md`'s accepted difference the rows with a barrier name.
 pub const MAC2_BARRIER: &str =
@@ -143,6 +150,27 @@ const TILE: [u32; 2] = [448, 576];
 
 /// What the chain's panel, a target over a buffer, holds before its pass, as `BGRA8Unorm` bytes.
 const PANEL: [u8; TEXEL] = [0x50, 0x60, 0x70, 0xc0];
+
+/// The composited row's target, the quad of a quarter of it its sample of itself covers, and the
+/// compositor's passes over it, each cleared to [`CLEAR`]. Before them an earlier pass leaves it
+/// as the small rows' targets are left: [`BEFORE`], and [`BAND`] over its left half.
+const COMPOSITED: [u32; 2] = [64, 40];
+const QUAD: ScissorBox = ScissorBox::new(16, 10, 32, 20);
+const COMPOSITES: usize = 2;
+
+/// The composited row's three other textures, each a target of [`COMPOSITED`]'s size cleared to
+/// its color by a pass of its own, and the areas of the blended quads that sample them, drawn in
+/// this order after the sample of the target: each overlaps [`QUAD`], and the third the second.
+const LAYER_COLORS: [[f64; 4]; 3] = [
+    [10.0 / 255.0, 70.0 / 255.0, 250.0 / 255.0, 1.0],
+    [250.0 / 255.0, 120.0 / 255.0, 20.0 / 255.0, 1.0],
+    [60.0 / 255.0, 180.0 / 255.0, 140.0 / 255.0, 1.0],
+];
+const LAYERS: [ScissorBox; 3] = [
+    ScissorBox::new(0, 0, 24, 16),
+    ScissorBox::new(40, 24, 24, 16),
+    ScissorBox::new(8, 28, 48, 8),
+];
 
 /// The code a store of `channel` keeps.
 fn code(channel: f64) -> u8 {
@@ -242,6 +270,10 @@ fn pipeline(fragment: &str) -> RenderPipelineSpec<'_> {
 /// The fragment functions a case draws with, in the order [`Handles::pipelines`] holds them.
 const FUNCTIONS: [&str; 5] = [SOLID, READ, SAMPLE, MASKED, UNDER];
 
+/// The site and input of the composited row's blended [`SAMPLE`] pipeline, which no other row
+/// makes.
+const BLENDED: &str = "psb_sample-blended";
+
 /// What a small row's read pass encodes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Small {
@@ -268,6 +300,7 @@ enum Shape {
     Display,
     Chain,
     Tile,
+    Composited,
 }
 
 /// A row: its case's name and its shape.
@@ -277,7 +310,7 @@ struct Row {
 }
 
 /// Every row.
-const ROWS: [Row; 13] = [
+const ROWS: [Row; 14] = [
     small_row(
         "pass-start-barrier-private-barrier-read",
         false,
@@ -324,6 +357,10 @@ const ROWS: [Row; 13] = [
         case: "pass-start-barrier-new-texture-tile",
         shape: Shape::Tile,
     },
+    Row {
+        case: "pass-start-barrier-private-composited",
+        shape: Shape::Composited,
+    },
 ];
 
 const fn small_row(case: &'static str, over_buffer: bool, read: Small) -> Row {
@@ -349,6 +386,8 @@ pub struct PassStartRead {
 /// buffers its shape makes.
 struct Handles {
     pipelines: [Handle; 5],
+    /// The composited row's [`BLENDED`] pipeline.
+    blended: Handle,
     /// The targets the row reads back, in order, and the buffer each is read into.
     targets: Vec<(Handle, Handle)>,
     /// The display row's mask, or the chain's panel's buffer.
@@ -360,6 +399,7 @@ impl Handles {
     fn placeholders(targets: usize) -> Self {
         Self {
             pipelines: [Handle(0); 5],
+            blended: Handle(0),
             targets: vec![(Handle(0), Handle(0)); targets],
             extra: Handle(0),
         }
@@ -375,6 +415,7 @@ impl Handles {
 }
 
 /// A target's spec and size, as a row makes it.
+#[derive(Clone)]
 struct Made {
     size: [u32; 2],
     /// The bytes of the buffer the target lies over, where it does.
@@ -424,6 +465,23 @@ impl Row {
                 size: TILE,
                 over: None,
             }],
+            Shape::Composited => vec![
+                Made {
+                    size: COMPOSITED,
+                    over: None,
+                };
+                1 + LAYERS.len()
+            ],
+        }
+    }
+
+    /// How many of [`Row::targets`], from the first, a read after a barrier renders: those
+    /// [`Row::ordered`] states an answer for. The composited row's other textures are read back
+    /// too, and hold their clears on every GPU.
+    fn barriered_targets(&self) -> usize {
+        match self.shape {
+            Shape::Composited => 1,
+            _ => self.targets().len(),
         }
     }
 
@@ -555,6 +613,42 @@ impl Row {
                     RenderPass::clearing(vec![PassColor::cleared(target(0), ZERO)]).drawing(steps),
                 ));
             }
+            Shape::Composited => {
+                let quad = |pipeline: Handle, texture: Handle, area: ScissorBox| {
+                    vec![
+                        RenderStep::Pipeline(pipeline),
+                        RenderStep::VertexBytes {
+                            bytes: corners(COMPOSITED, area),
+                            index: 0,
+                        },
+                        RenderStep::FragmentTexture { texture, index: 0 },
+                        RenderStep::Scissor(area),
+                        RECT_DRAW,
+                    ]
+                };
+                for (at, color) in LAYER_COLORS.iter().enumerate() {
+                    work.push(RenderWork::Pass(RenderPass::clearing(vec![
+                        PassColor::cleared(target(1 + at), *color),
+                    ])));
+                }
+                let half =
+                    ScissorBox::new(0, 0, u64::from(COMPOSITED[0] / 2), u64::from(COMPOSITED[1]));
+                work.push(RenderWork::Pass(
+                    RenderPass::clearing(vec![PassColor::cleared(target(0), BEFORE)])
+                        .drawing(solid(BAND, COMPOSITED, half)),
+                ));
+                for _ in 0..COMPOSITES {
+                    let mut steps = vec![BARRIER];
+                    steps.extend(quad(h.pipeline(SAMPLE), target(0), QUAD));
+                    for (at, area) in LAYERS.iter().enumerate() {
+                        steps.extend(quad(h.blended, target(1 + at), *area));
+                    }
+                    work.push(RenderWork::Pass(
+                        RenderPass::clearing(vec![PassColor::cleared(target(0), CLEAR)])
+                            .drawing(steps),
+                    ));
+                }
+            }
         }
         for (at, made) in made.iter().enumerate() {
             work.push(RenderWork::ReadTexture {
@@ -581,9 +675,9 @@ impl Row {
         )
     }
 
-    /// What a Mac2 GPU's barrier answers for each target the row reads back, in order (the module
-    /// docs): the clear, or the solid draw's color, where each read draw reads. `None` for a row
-    /// with no barrier.
+    /// What a Mac2 GPU's barrier answers for each of the row's [`Row::barriered_targets`], in
+    /// order (the module docs): the clear, or the solid draw's color, where each read draw reads.
+    /// `None` for a row with no barrier.
     fn ordered(&self) -> Option<Vec<Vec<u8>>> {
         if !self.barriered() {
             return None;
@@ -624,8 +718,22 @@ impl Row {
                 ]
             }
             Shape::Tile => vec![image(TILE, |_, _| reordered(zero))],
+            Shape::Composited => vec![composited(|_, _| reordered(texel(CLEAR)))],
         })
     }
+}
+
+/// The composited row's target after its passes, where the sample of itself wrote `sampled(x,
+/// y)` at the pixels of [`QUAD`] no later quad covers: [`CLEAR`] outside every quad, and where a
+/// blended quad is the last drawn over the pixel, its texture's color as [`SAMPLE`] reorders it.
+fn composited(sampled: impl Fn(u32, u32) -> [u8; TEXEL]) -> Vec<u8> {
+    image(COMPOSITED, |x, y| {
+        match LAYERS.iter().rposition(|area| inside(*area, x, y)) {
+            Some(at) => reordered(texel(LAYER_COLORS[at])),
+            None if inside(QUAD, x, y) => sampled(x, y),
+            None => texel(CLEAR),
+        }
+    })
 }
 
 /// The site a target's texels are recorded at.
@@ -695,7 +803,7 @@ impl Case for PassStartRead {
             .collect();
         // The notices the runtime announces for the row's shape (the module docs). Each loosens
         // the notices site alone, so every texel still compares.
-        if self.row.barriered() {
+        if self.row.barriered() && !matches!(self.row.shape, Shape::Composited) {
             allowances.push(notice_allowance(Degradation::RenderPassSplit.code()));
         }
         if matches!(self.row.shape, Shape::Display) {
@@ -756,6 +864,12 @@ impl Case for PassStartRead {
                 &pipeline(function).words(),
             ));
         }
+        if matches!(self.row.shape, Shape::Composited) {
+            inputs.push(Input::bytes(
+                format!("pipeline:{BLENDED}"),
+                &RenderPipelineSpec::new(RECT, SAMPLE, &BLENDED_STATE).words(),
+            ));
+        }
         let targets = self.row.targets();
         for (at, made) in targets.iter().enumerate() {
             inputs.push(Input::bytes(
@@ -796,6 +910,17 @@ impl Case for PassStartRead {
                 side.render_pipeline(library, &pipeline(function)),
             )?;
         }
+        let blended = match self.row.shape {
+            Shape::Composited => made(
+                sites,
+                &format!("pipeline:{BLENDED}"),
+                side.render_pipeline(
+                    library,
+                    &RenderPipelineSpec::new(RECT, SAMPLE, &BLENDED_STATE),
+                ),
+            )?,
+            _ => Handle(0),
+        };
         let made_targets = self.row.targets();
         let mut targets = Vec::new();
         let mut panel = None;
@@ -843,6 +968,7 @@ impl Case for PassStartRead {
         };
         let handles = Handles {
             pipelines,
+            blended,
             targets,
             extra,
         };
@@ -905,7 +1031,7 @@ mod tests {
             let targets = row.targets();
             match row.ordered() {
                 Some(answers) => {
-                    assert_eq!(answers.len(), targets.len(), "{}", row.case);
+                    assert_eq!(answers.len(), row.barriered_targets(), "{}", row.case);
                     for (answer, made) in answers.iter().zip(&targets) {
                         let [width, height] = made.size;
                         assert_eq!(answer.len(), width as usize * height as usize * TEXEL);
@@ -938,6 +1064,88 @@ mod tests {
         for color in [CLEAR, DRAWN] {
             for channel in color {
                 assert_eq!(f64::from(code(channel)), channel * 255.0);
+            }
+        }
+    }
+
+    /// What the M3 Max's answer is for the composited row (the module docs): each pass's sample
+    /// reads the texels from before its pass, so after the second the quad holds the earlier pass's
+    /// texels reordered twice.
+    fn composited_on_the_m3() -> Vec<u8> {
+        composited(|x, _| {
+            let before = match x < COMPOSITED[0] / 2 {
+                true => texel(BAND),
+                false => texel(BEFORE),
+            };
+            (0..COMPOSITES).fold(before, |seen, _| reordered(seen))
+        })
+    }
+
+    /// The composited row's answers are apart: every color its quads write differs from the
+    /// clear and from each other, both answers have pixels of the sample of the target's own, and
+    /// the two answers differ only there.
+    #[test]
+    fn the_composited_rows_answers_differ_only_where_it_samples_its_target() {
+        let written: BTreeSet<[u8; TEXEL]> = LAYER_COLORS
+            .iter()
+            .map(|color| reordered(texel(*color)))
+            .chain([
+                texel(CLEAR),
+                reordered(texel(CLEAR)),
+                reordered(reordered(texel(BAND))),
+                reordered(reordered(texel(BEFORE))),
+            ])
+            .collect();
+        assert_eq!(written.len(), LAYER_COLORS.len() + 4);
+        let row = ROWS
+            .iter()
+            .find(|row| matches!(row.shape, Shape::Composited))
+            .expect("the composited row");
+        let [mac2] = row
+            .ordered()
+            .expect("a barrier row")
+            .try_into()
+            .expect("one answer");
+        let m3 = composited_on_the_m3();
+        let mut apart = 0;
+        for (at, (ours, theirs)) in mac2.chunks(TEXEL).zip(m3.chunks(TEXEL)).enumerate() {
+            let (x, y) = (at as u32 % COMPOSITED[0], at as u32 / COMPOSITED[0]);
+            let sampled = inside(QUAD, x, y) && !LAYERS.iter().any(|area| inside(*area, x, y));
+            assert_eq!(ours != theirs, sampled, "({x}, {y})");
+            apart += usize::from(sampled);
+        }
+        assert!(apart > 0);
+    }
+
+    /// Metal's recorded answer on the composited row: [`composited_on_the_m3`] for the target, and
+    /// its clear for each other texture.
+    #[test]
+    fn metal_reads_the_texels_from_before_each_pass_on_the_composited_row() {
+        let row = ROWS
+            .iter()
+            .find(|row| matches!(row.shape, Shape::Composited))
+            .expect("the composited row");
+        let Ok(recording) = crate::recording::read(row.case) else {
+            println!("{}: no recording in the tree yet", row.case);
+            return;
+        };
+        let mut want = vec![texel_rows(&composited_on_the_m3(), COMPOSITED[0])];
+        for color in LAYER_COLORS {
+            want.push(texel_rows(
+                &image(COMPOSITED, |_, _| texel(color)),
+                COMPOSITED[0],
+            ));
+        }
+        for answer in &recording.answers {
+            for outcome in &answer.outcomes {
+                for (at, want) in want.iter().enumerate() {
+                    let node = outcome
+                        .transcript
+                        .root
+                        .child(&texels_site(at))
+                        .expect("no texels site");
+                    assert_eq!(node.observed.value, *want, "{} texels {at}", row.case);
+                }
             }
         }
     }
