@@ -924,22 +924,22 @@ fn runtime_completion_latency() {
         of(&|t| us(t.commit, t.seen)),
     );
     // The turn's steps, each from the one before it (the turn first) and the last to the
-    // completion-seen handler.
-    let names: Vec<&str> = times[0].turn_steps.iter().map(|&(what, _)| what).collect();
-    assert!(
-        (times.iter()).all(|t| t.turn_steps.iter().map(|&(what, _)| what).eq(names.clone())),
-        "every turn took the same steps"
-    );
+    // completion-seen handler: the first of each name after the turn's batch, which a turn of
+    // batches that end no command buffer may follow before the next one's.
+    const NAMES: [&str; 3] = ["events reached", "fences settled", "times placed"];
+    let at = |t: &Times, name: &str| {
+        (t.turn_steps.iter())
+            .find(|&&(what, _)| what == name)
+            .map(|&(_, at)| at)
+            .expect("each step of the turn's finish")
+    };
     let mut split = String::new();
-    for at in 0..=names.len() {
-        let from = |t: &Times| match at {
-            0 => t.turn,
-            at => t.turn_steps[at - 1].1,
-        };
-        let to = |t: &Times| t.turn_steps.get(at).map_or(t.seen, |&(_, to)| to);
+    for step in 0..=NAMES.len() {
+        let from = |t: &Times| step.checked_sub(1).map_or(t.turn, |s| at(t, NAMES[s]));
+        let to = |t: &Times| NAMES.get(step).map_or(t.seen, |name| at(t, name));
         let (from_name, to_name) = (
-            at.checked_sub(1).map_or("turn", |at| names[at]),
-            names.get(at).copied().unwrap_or("seen handler"),
+            step.checked_sub(1).map_or("turn", |s| NAMES[s]),
+            NAMES.get(step).copied().unwrap_or("seen handler"),
         );
         split.push_str(&format!(
             "; {from_name} -> {to_name} {} us",
