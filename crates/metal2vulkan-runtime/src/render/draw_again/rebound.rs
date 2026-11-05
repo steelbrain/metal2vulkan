@@ -560,8 +560,14 @@ impl RenderLowering {
                 }
             }
         }
-        self.current.geometry_writes.add(uses);
-        (self.core.device().shared().counts).resident_uses_geometry_writes(resident);
+        match prefix {
+            None => self.current.geometry_writes.add(uses),
+            Some(prefix) => {
+                if self.current.geometry_writes.add_draw((uses, prefix)) {
+                    (self.core.device().shared().counts).resident_uses_geometry_writes(resident);
+                }
+            }
+        }
         let owned = (live.kept.recording.as_ref())
             .ok_or_else(|| crate::error::internal("a draw rebound without its recording"))?;
         let shared = self.core.device().shared();

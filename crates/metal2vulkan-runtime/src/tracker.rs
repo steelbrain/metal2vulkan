@@ -1744,6 +1744,10 @@ pub(super) const PRE_RASTERIZATION_WRITES: vk::PipelineStageFlags2 =
 #[derive(Clone)]
 pub(super) struct GeometryWrites<K> {
     writes: KeptUses<K>,
+    /// The identity and count of the uses of what the encoder made resident the last
+    /// [`add_draw`](Self::add_draw) began with (`binding::ResidentPrefix`): each of their writes
+    /// before their fragments is held, merged or not, while the instance lasts.
+    added: Option<(u64, usize)>,
 }
 
 impl<K: Copy + Ord + Hash> GeometryWrites<K> {
@@ -1751,6 +1755,7 @@ impl<K: Copy + Ord + Hash> GeometryWrites<K> {
     pub(super) fn new() -> GeometryWrites<K> {
         GeometryWrites {
             writes: KeptUses::new(),
+            added: None,
         }
     }
 
@@ -1764,16 +1769,48 @@ impl<K: Copy + Ord + Hash> GeometryWrites<K> {
     /// claims more and stays exact.
     pub(super) fn add(&mut self, uses: &[Use<K>]) {
         for used in uses {
-            let stages = used.write.stages & PRE_RASTERIZATION_WRITES;
-            if stages.is_empty() {
+            let Some(write) = Self::adds(used) else {
                 continue;
-            }
+            };
             self.writes.push(Use {
                 read: Access::NONE,
-                write: Access::new(stages, used.write.access),
+                write,
                 ..used.clone()
             });
         }
+    }
+
+    /// What [`add`](Self::add) adds of `used`: its write in the stages before its fragments,
+    /// `None` where it writes in none.
+    fn adds(used: &Use<K>) -> Option<Access> {
+        let stages = used.write.stages & PRE_RASTERIZATION_WRITES;
+        (!stages.is_empty()).then(|| Access::new(stages, used.write.access))
+    }
+
+    /// [`add`](Self::add) a draw's `uses`, which begin with the uses of what its encoder made
+    /// resident of the identity `prefix`: those not again where the last call of this began with
+    /// the same, whose writes it holds as they were added (two draws' uses of one identity begin
+    /// with the same uses, each of the same key, range, stages and access types:
+    /// `binding::ResidentPrefix`). Whether it walked them.
+    pub(super) fn add_draw(&mut self, (uses, prefix): (&[Use<K>], ResidentPrefix)) -> bool {
+        let now = Some((prefix.id, prefix.len));
+        let past = match self.added == now {
+            true => prefix.len,
+            false => 0,
+        };
+        #[cfg(debug_assertions)]
+        for used in &uses[..past] {
+            let held = |write: Access| {
+                move |known: &Use<K>| known.range.contains(&used.range) && known.write.covers(write)
+            };
+            assert!(
+                Self::adds(used).is_none_or(|write| self.writes.holds(used, held(write))),
+                "an instance added a draw's geometry writes by their identity less than its uses"
+            );
+        }
+        self.add(&uses[past..]);
+        self.added = now;
+        past == 0
     }
 
     /// The memory dependency a later draw with `uses` needs before its fragment shader reads or

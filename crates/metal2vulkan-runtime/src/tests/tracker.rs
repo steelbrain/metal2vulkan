@@ -2095,3 +2095,53 @@ fn draws_add_the_indirect_reads_of_what_their_encoder_made_resident_once_by_iden
     assert!(next.add_draw((&uses, prefix)));
     assert!(next.written_in(&write(1)) == S2::VERTEX_SHADER);
 }
+
+/// A draw's writes before its fragments of what its encoder made resident, added by their identity
+/// (`GeometryWrites::add_draw`), are walked once while the identity holds: the draws after the
+/// first of that identity walk none of them, past the entries a resource keeps, and a later
+/// draw's fragment read of what they wrote waits for them all along; a draw of another identity
+/// walks its own, and the first's walks them again after it. A new instance's writes
+/// (`GeometryWrites::new`) hold none.
+#[test]
+fn draws_add_the_geometry_writes_of_what_their_encoder_made_resident_once_by_identity() {
+    use vk::AccessFlags2 as A2;
+    use vk::PipelineStageFlags2 as S2;
+    let vertex_write = Access::new(S2::VERTEX_SHADER, A2::SHADER_STORAGE_WRITE);
+    let fragment_read = Access::new(FRAGMENT, A2::SHADER_STORAGE_READ);
+    let prefix = ResidentPrefix { id: 7, len: 2 };
+    let other = ResidentPrefix { id: 8, len: 2 };
+    let uses = [
+        writes(1, bytes(0..16), vertex_write),
+        reads(2, bytes(0..16), shader_read()),
+        writes(3, bytes(0..16), vertex_write),
+    ];
+    let read = |key| [reads(key, bytes(4..8), fragment_read)];
+    let mut known = GeometryWrites::new();
+    assert!(known.add_draw((&uses, prefix)));
+    for _ in 0..=ENTRIES_PER_KEY {
+        assert!(!known.add_draw((&uses, prefix)));
+    }
+    assert_eq!(
+        known.barrier_before(&read(1)),
+        barrier(vertex_write, fragment_read)
+    );
+    assert_eq!(
+        known.barrier_before(&read(3)),
+        barrier(vertex_write, fragment_read)
+    );
+    assert!(
+        known.add_draw((&uses, other)),
+        "another identity walks its own"
+    );
+    assert!(
+        known.add_draw((&uses, prefix)),
+        "and the first's again after it"
+    );
+    let mut next = GeometryWrites::new();
+    assert_eq!(next.barrier_before(&read(1)), None);
+    assert!(next.add_draw((&uses, prefix)));
+    assert_eq!(
+        next.barrier_before(&read(1)),
+        barrier(vertex_write, fragment_read)
+    );
+}

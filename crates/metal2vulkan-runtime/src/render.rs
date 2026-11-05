@@ -10051,8 +10051,14 @@ impl RenderLowering {
                     },
                 }
             }
-            self.current.geometry_writes.add(uses);
-            counts.resident_uses_geometry_writes(resident);
+            match uses.prefix() {
+                None => self.current.geometry_writes.add(uses),
+                Some(prefix) => {
+                    if self.current.geometry_writes.add_draw((uses, prefix)) {
+                        counts.resident_uses_geometry_writes(resident);
+                    }
+                }
+            }
             if imageblock_use.is_some() {
                 self.current.imageblock = true;
             }
