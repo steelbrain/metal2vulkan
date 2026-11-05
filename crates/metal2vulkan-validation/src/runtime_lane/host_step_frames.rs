@@ -13,21 +13,28 @@
 //! - **`alone`**: the frames on a device that runs nothing else.
 //! - **`beside_queues`**: a second queue's thread commits a small compute command buffer every
 //!   millisecond meanwhile, each waited for.
+//! - **`bundle`**: as a browser's render bundle: the commands inherit nothing, the CPU set the
+//!   template's state on each, and each command's vertex buffer 0 is a buffer of its own (a copy
+//!   of the first window of `params`), every one of which the render encoder makes resident.
+//! - **`bundle_no_copy`**: as `bundle`, each command's own buffer a no-copy buffer over host
+//!   pages of its own, as a guest's buffers reach the runtime.
 //!
 //! Printed as `HOST-STEP-FRAMES` lines: per frame, its commit to its kernel start (the scheduler's
 //! first submission), the kernel start to the kernel end (its last batch submitted), the end to its
 //! completion, and the work counts that moved over the frame.
 
+use super::host_memory::{no_copy, Mapping, GUEST_PAGE};
 use super::indirect_host_steps;
 use super::render_executions::{icb, pass, Setup, WINDOW};
-use super::{buffer_with, validated_device_with, Messages, ScratchCache, WAIT};
+use super::{buffer_with, read_buffer, validated_device_with, Messages, ScratchCache, WAIT};
 use crate::gpu::TEST_DEVICE;
 use metal2vulkan::metal::{IndirectCommandType, RenderStages, ResourceUsage};
 use metal2vulkan_runtime::{
     host_time, Buffer, CommandBufferStatus, CommandQueue, ComputePipelineState, Device,
-    IndirectCommandBuffer, IndirectCommandBufferDescriptor, Size, WorkCounts,
+    IndirectCommandBuffer, IndirectCommandBufferDescriptor, ResourceOptions, Size, WorkCounts,
 };
 use std::collections::BTreeMap;
+use std::ptr::NonNull;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
@@ -38,8 +45,18 @@ const COMMANDS: u64 = 5001;
 /// The frames each stream runs.
 const FRAMES: usize = 6;
 
+/// How the commands are set up (the module docs).
+#[derive(Clone, Copy, PartialEq)]
+enum Shape {
+    /// The encoder's state inherited, `params`' windows shared.
+    Inherited,
+    /// Nothing inherited, a buffer of each command's own, a no-copy one where `no_copy`.
+    Bundle { no_copy: bool },
+}
+
 /// What every frame uses: the template's setup, the writer, the buffer of commands, the writer's
-/// argument (the buffer's ID) and the two index buffers its draws read.
+/// argument (the buffer's ID), the two index buffers its draws read, and each command's own
+/// buffer (with the host pages under them, for the no-copy ones).
 struct Frames {
     device: Device,
     setup: Setup,
@@ -48,24 +65,65 @@ struct Frames {
     arguments: Buffer,
     short_indices: Buffer,
     wide_indices: Buffer,
+    own: Vec<Buffer>,
+    _pages: Option<Mapping>,
 }
 
 impl Frames {
-    fn new(device: Device) -> Frames {
+    fn new(device: Device, shape: Shape) -> Frames {
         let setup = Setup::new(&device);
         let writer = indirect_host_steps::state(&device, "icb_render_indexed_encode", false);
         let mut descriptor = IndirectCommandBufferDescriptor::new();
         descriptor.command_types = IndirectCommandType::DRAW_INDEXED;
-        descriptor.inherit_pipeline_state = true;
+        descriptor.inherit_pipeline_state = shape == Shape::Inherited;
         descriptor.max_vertex_buffer_bind_count = 2;
         descriptor.max_fragment_buffer_bind_count = 1;
         let icb = icb(&device, &descriptor, COMMANDS);
+        let window = read_buffer(&setup.params, 0, (WINDOW * 4) as u64).unwrap();
+        let (own, pages) = match shape {
+            Shape::Inherited => (Vec::new(), None),
+            Shape::Bundle { no_copy: false } => (
+                (0..COMMANDS)
+                    .map(|_| buffer_with(&device, &window).unwrap())
+                    .collect(),
+                None,
+            ),
+            Shape::Bundle { no_copy: true } => {
+                let pages = Mapping::anonymous(COMMANDS as usize * GUEST_PAGE);
+                let own = (0..COMMANDS as usize)
+                    .map(|index| {
+                        let at = index * GUEST_PAGE;
+                        pages.write(at, &window);
+                        // SAFETY: a page of the mapping of its own, which outlives the buffer
+                        // (`Frames` drops the buffers first).
+                        unsafe {
+                            let pointer = NonNull::new_unchecked(pages.pointer().as_ptr().add(at));
+                            no_copy(
+                                &device,
+                                pointer,
+                                GUEST_PAGE,
+                                ResourceOptions::shared(),
+                                None,
+                            )
+                        }
+                        .unwrap()
+                    })
+                    .collect();
+                (own, Some(pages))
+            }
+        };
         for index in 0..COMMANDS {
             let command = icb.indirect_render_command_at(index).unwrap();
             let offset = ((index as usize % 4) * WINDOW * 4) as u64;
-            command
-                .set_vertex_buffer(Some(&setup.params), offset, 0)
-                .unwrap();
+            match own.get(index as usize) {
+                Some(buffer) => {
+                    command.set_render_pipeline_state(&setup.state).unwrap();
+                    command.set_vertex_buffer(Some(buffer), 0, 0).unwrap();
+                }
+                None => command
+                    .set_vertex_buffer(Some(&setup.params), offset, 0)
+                    .unwrap(),
+            }
             command
                 .set_vertex_buffer(Some(&setup.out), offset, 1)
                 .unwrap();
@@ -88,6 +146,8 @@ impl Frames {
             writer,
             icb,
             arguments,
+            own,
+            _pages: pages,
         }
     }
 
@@ -123,6 +183,12 @@ impl Frames {
                 )
                 .unwrap();
         }
+        if !self.own.is_empty() {
+            let own: Vec<_> = self.own.iter().map(Buffer::as_resource).collect();
+            encoder
+                .use_resources(&own, ResourceUsage::READ, RenderStages::VERTEX)
+                .unwrap();
+        }
         encoder
             .execute_commands_in_buffer(&self.icb, 0..COMMANDS)
             .unwrap();
@@ -141,8 +207,8 @@ impl Frames {
     }
 }
 
-/// The streams' frames, printed (the module docs).
-fn measure(beside_queues: bool) {
+/// The stream's frames, printed (the module docs).
+fn measure(stream: &str, shape: Shape, beside_queues: bool) {
     let cache = ScratchCache::new().unwrap();
     let messages = Messages::default();
     let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), |options| {
@@ -152,11 +218,7 @@ fn measure(beside_queues: bool) {
     })
     .unwrap();
     let name = device.name().to_owned();
-    let frames = Frames::new(device);
-    let stream = match beside_queues {
-        true => "beside_queues",
-        false => "alone",
-    };
+    let frames = Frames::new(device, shape);
     let stop = Arc::new(AtomicBool::new(false));
     let beside = beside_queues.then(|| {
         let device = frames.device.clone();
@@ -248,11 +310,23 @@ fn fields(counts: &WorkCounts) -> BTreeMap<String, u64> {
 #[test]
 #[ignore = "a measurement: run it alone, in release"]
 fn host_step_frames_alone() {
-    measure(false);
+    measure("alone", Shape::Inherited, false);
 }
 
 #[test]
 #[ignore = "a measurement: run it alone, in release"]
 fn host_step_frames_beside_queues() {
-    measure(true);
+    measure("beside_queues", Shape::Inherited, true);
+}
+
+#[test]
+#[ignore = "a measurement: run it alone, in release"]
+fn host_step_frames_bundle() {
+    measure("bundle", Shape::Bundle { no_copy: false }, false);
+}
+
+#[test]
+#[ignore = "a measurement: run it alone, in release"]
+fn host_step_frames_bundle_no_copy() {
+    measure("bundle_no_copy", Shape::Bundle { no_copy: true }, false);
 }
