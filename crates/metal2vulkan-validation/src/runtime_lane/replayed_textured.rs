@@ -17,6 +17,7 @@
 
 use super::replayed_frames::{function, indices, measured_device, time_frames, SIDE};
 use super::{buffer_with, read_buffer, Messages, ScratchCache};
+use crate::air_library::AirLibrary;
 use metal2vulkan::metal::{
     IndirectCommandType, PixelFormat, PrimitiveType, RenderStages, ResourceUsage, TextureUsage,
 };
@@ -172,7 +173,7 @@ impl Page {
             .set_vertex_buffer(Some(&self.indices), 0, 1)
             .unwrap();
         encoder.set_vertex_buffer(Some(&self.slots), 0, 2).unwrap();
-        for draw in 0..self.draws as u64 {
+        for draw in 0..self.draws as u32 {
             encoder.set_render_pipeline_state(&self.encode).unwrap();
             encoder
                 .draw_primitives(PrimitiveType::Point, 0, 1, 1, draw)
