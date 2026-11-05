@@ -21,6 +21,13 @@
 //! - **Several, one a plan.** It keeps the parts of the last [`KEPT_PARTS`] plans its draws
 //!   drew through, the one drawn through longest ago given up first: draws that switch between
 //!   pipeline states, or whose primitive types take plans of their own, each keep their own.
+//! - **In kept recordings.** A recording of an execution's draws kept for a later host step
+//!   (`render/executions/kept.rs`) holds the tables and writes of its draws' parts: its key holds
+//!   what those parts are made of that may differ from step to step, the pipeline state (the
+//!   plan, the capacity, the function tables), the resources made resident (the used resources
+//!   and their order) and the count of the sampler IDs' slots' changes (the argument samplers); a
+//!   host step's tables bind no texture, so no heap slot of its draws binds one, and a replayed
+//!   draw whose tables bind one there is not kept ([`KeptHeap::binds_slot_textures`]).
 //! - **Checked in builds with debug assertions.** A draw that keeps one works the tables and
 //!   elements out again and compares them, and lists its writes past the heap's entries again
 //!   and compares them (`binding::bind_into`).
@@ -180,6 +187,13 @@ impl KeptHeap {
         let elements = part.heap.then(|| Arc::clone(&part.elements));
         self.parts.push(part);
         Ok(elements)
+    }
+
+    /// Whether the part the last draw brought in reads a texture its tables bind at a heap slot
+    /// (`BindingPlan::heap_slots`).
+    pub(crate) fn binds_slot_textures(&self) -> bool {
+        (self.parts.last())
+            .is_some_and(|part| part.of.slots.iter().any(|(_, bound)| bound.is_some()))
     }
 
     /// The heap tables of the part the last draw brought in, and the writes past its heap's

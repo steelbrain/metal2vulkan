@@ -47,11 +47,15 @@
 //!   layers, samples and sample positions, the attachments that are among the resources made
 //!   resident, the encoder's state, scissor rectangles, render target array length and
 //!   amplification at the call, whether the pass holds tile imageblock data, the buffers of the
-//!   inherited tables, by key, with their offsets and attribute strides, and the resources made
+//!   inherited tables, by key, with their offsets and attribute strides, the resources made
 //!   resident (`Residency::kept_key`, one list an execution, compared whole once a list its kept
-//!   chunks hold: `kept_commands::ResidentMet`). A kept chunk runs again only under an equal key,
-//!   where every address its commands named resolves as it did and no no-copy buffer moved
-//!   (`KeptChunk::runs_again`).
+//!   chunks hold: `kept_commands::ResidentMet`), and the count of the device's sampler IDs' slots'
+//!   changes, at which a draw that reads the heap lists the argument samplers its heap part is made
+//!   of (`render/heap_part.rs`; the rest of what that part is made of are the pipeline state, the
+//!   resources made resident and the textures the tables bind at heap slots, which a host step's
+//!   do not bind, and a draw whose tables do is not plain, below). A kept
+//!   chunk runs again only under an equal key, where every address its commands named resolves as
+//!   it did and no no-copy buffer moved (`KeptChunk::runs_again`).
 //! - **Each chunk** runs its kept recording again, or records apart: its draws into a secondary of
 //!   its own, begun against the instance's compatible pass, through an encoder of the call's
 //!   state over a core of its own (`EncoderCore::capture`), which the pass's core then takes
@@ -65,6 +69,23 @@
 //!   reached nothing its command buffer alone holds (`CommandBuffer::own_reached`). Plain draws
 //!   write no memory, so no draw of a later chunk depends on them but through the attachments,
 //!   which the chunks' order in their subpass keeps.
+//! - **Draws that read the heap** (set 1, `heap_sets.rs`) and the device's texture table are plain
+//!   where a run of their kept recording binds the heap set again as their binding did
+//!   (`heap_sets::Bound`): the set's one version, which a texture's placement writes in place, so
+//!   the run reads every texture at its ID as a fresh draw would; the texture table is the
+//!   device's one buffer, written in place likewise. The chunk keeps the versions weakly
+//!   (`KeptEffects`); a run needs each to be still its set's one version, announcing nothing a
+//!   binding would, and its command buffer binds them until it completes (`heap_sets::bound_again`,
+//!   `HeapUse`). Every image rests in `GENERAL` outside its own instance's attachments, the layout
+//!   every heap element names (`heap_sets::image_info`, `texture/first_move.rs`), so the layouts a
+//!   run reads are a fresh draw's; and a run notes the uses its recording noted
+//!   (`EncoderCore::run_kept`), so the tracker orders it after earlier writers as it orders a fresh
+//!   recording. Such a draw stays not plain where (`heap_sets::Unkept`, each counted:
+//!   `WorkCounts::replayed_heap_draws_unshared` and the four fields after it) the device lacks
+//!   `descriptorBindingUpdateUnusedWhilePending`, so each command buffer binds a version of the set
+//!   of its own; it writes elements of its own into the set (a function table's); the set holds a
+//!   shadowed texture, a decoded twin or a raw read, which a binding announces; it reads the
+//!   device's sampler tables; or its tables bind a texture at a slot its heap part reads.
 //! - **A chunk that is not plain** is no more apart: its encoder records the rest of the range
 //!   too, as the execution's would, its runs after the plain chunks' (its first sharing their
 //!   run, as an execution's first run shares its instance with the encoder's draws before the
@@ -128,6 +149,10 @@ pub(super) struct RenderKey {
     /// not inherit them.
     tables: [TableBuffers; 4],
     resident: ResidentKey,
+    /// The count of the device's sampler IDs' slots' changes (`Device::sampler_slots_changed`),
+    /// at which a draw that reads the heap lists the argument samplers its heap part is made of
+    /// (`render/heap_part.rs`): a change records the chunks again.
+    samplers: u64,
 }
 
 /// An inherited table's buffers as a [`RenderKey`] holds them: each slot's buffer by its key,
@@ -169,6 +194,7 @@ impl PartialEq for RenderKey {
             && self.tile_imageblock == other.tile_imageblock
             && self.tables == other.tables
             && self.resident == other.resident
+            && self.samplers == other.samplers
     }
 }
 
@@ -412,6 +438,9 @@ impl RenderExecution {
                 (kept, Some(read_at))
             }
         };
+        // Read before the chunks are recorded: a sampler state made meanwhile leaves a key no later
+        // execution's equals.
+        let samplers = command_buffer.device().sampler_slots_changed();
         let resident = ResidentKey::new(residency.kept_key());
         // An attachment is among them as a texture made resident, or in a heap or over a buffer
         // made resident.
@@ -441,6 +470,7 @@ impl RenderExecution {
             tile_imageblock: snapshot.tile_imageblock,
             tables,
             resident,
+            samplers,
         };
         Keeps::Kept(Box::new(Keeping { key, kept, read_at }))
     }
@@ -634,6 +664,7 @@ impl RenderExecution {
                 break;
             }
             let raw = encoder.current.draws;
+            let heaps = encoder.replayed_heaps.clone();
             let (capture, back) = self.end_apart(encoder, &device)?;
             carried = Some(back);
             let captured = capture.finish_capture()?;
@@ -644,7 +675,7 @@ impl RenderExecution {
                     let effects = KeptEffects::new(
                         captured.summary.clone(),
                         (captured.keys.clone(), captured.taken.named().clone()),
-                        &held,
+                        (&held, &heaps),
                         captured.executions.clone(),
                     );
                     let kept = KeptChunk::new(

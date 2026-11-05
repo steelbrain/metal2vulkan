@@ -2578,13 +2578,16 @@ fn record(
     };
     let copies = core.plan_shadows(&shadows, &uses)?;
     let heap_set = match heap {
-        Some(_) => Some(heap_sets::bind(
-            &device,
-            &objects,
-            &mut core.command_buffer().state().heaps,
-            heap_writes,
-            &uses,
-        )?),
+        Some(_) => Some(
+            heap_sets::bind(
+                &device,
+                &objects,
+                &mut core.command_buffer().state().heaps,
+                heap_writes,
+                &uses,
+            )?
+            .set,
+        ),
         None => None,
     };
     // A dispatch that records later goes on in a new `VkCommandBuffer`, made now.

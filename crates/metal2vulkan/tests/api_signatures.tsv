@@ -2899,6 +2899,11 @@ field	metal2vulkan-runtime::WorkCounts.render_pipeline_create_nanos	pub render_p
 field	metal2vulkan-runtime::WorkCounts.replay_log_bytes	pub replay_log_bytes: u64
 field	metal2vulkan-runtime::WorkCounts.replay_logs_kept	pub replay_logs_kept: u64
 field	metal2vulkan-runtime::WorkCounts.replay_tables_pointed	pub replay_tables_pointed: u64
+field	metal2vulkan-runtime::WorkCounts.replayed_heap_draws_noted	pub replayed_heap_draws_noted: u64
+field	metal2vulkan-runtime::WorkCounts.replayed_heap_draws_over_sampler_tables	pub replayed_heap_draws_over_sampler_tables: u64
+field	metal2vulkan-runtime::WorkCounts.replayed_heap_draws_table_textures	pub replayed_heap_draws_table_textures: u64
+field	metal2vulkan-runtime::WorkCounts.replayed_heap_draws_unshared	pub replayed_heap_draws_unshared: u64
+field	metal2vulkan-runtime::WorkCounts.replayed_heap_draws_writing	pub replayed_heap_draws_writing: u64
 field	metal2vulkan-runtime::WorkCounts.requirement_images_made	pub requirement_images_made: u64
 field	metal2vulkan-runtime::WorkCounts.requirement_limits_asked	pub requirement_limits_asked: u64
 field	metal2vulkan-runtime::WorkCounts.resident_address_indexes_made	pub resident_address_indexes_made: u64

@@ -47,15 +47,18 @@
 //!   the device has `descriptorBindingUpdateUnusedWhilePending`, `UPDATE_UNUSED_WHILE_PENDING`
 //!   (`pipeline::link`): every command binds the set's one version ([`SetVersion`]), and a
 //!   texture made while command buffers run writes its elements while they are pending, before
-//!   the table names them, so a command reads them only once they hold it. Where the device lacks
-//!   the feature, nothing writes a set a committed command buffer binds: each command buffer binds
-//!   a version of its own, made as it first binds the set, every element a texture's ID does not
-//!   name the neutral and every other the set's ([`SetEntry::written`]), announced
-//!   ([`Degradation::HeapSetCopied`]). Writes go to every version whose command buffer has not
-//!   committed, and a committed one keeps its elements (a texture made after is the neutral
-//!   there). A gone texture's elements turn neutral in every version no submission of its command
-//!   buffer took yet, committed or not: its set is `UPDATE_AFTER_BIND`, and nothing pending binds
-//!   it.
+//!   the table names them, so a command reads them only once they hold it. A kept recording of
+//!   commands (`kept_commands.rs`) binds that version again in each command buffer that runs it,
+//!   which holds it until it completes as a command's binding does ([`bound_again`],
+//!   [`HeapUse::bind_again`]): it reads every element written in place as the commands would.
+//!   Where the device lacks the feature, nothing writes a set a committed command buffer binds:
+//!   each command buffer binds a version of its own, made as it first binds the set, every element
+//!   a texture's ID does not name the neutral and every other the set's ([`SetEntry::written`]),
+//!   announced ([`Degradation::HeapSetCopied`]). Writes go to every version whose command buffer
+//!   has not committed, and a committed one keeps its elements (a texture made after is the
+//!   neutral there). A gone texture's elements turn neutral in every version no submission of its
+//!   command buffer took yet, committed or not: its set is `UPDATE_AFTER_BIND`, and nothing
+//!   pending binds it.
 //! - **Retirement.** A texture going clears its table entry. A command buffer submitted before
 //!   then may still read the element, so the texture's image (which holds the view) is kept
 //!   until every such command buffer completed: each command buffer that binds a heap set, or
@@ -1043,6 +1046,12 @@ struct Written {
 }
 
 impl SetEntry {
+    /// Whether a command that binds it finds nothing to announce of what it holds: no shadowed
+    /// texture, decoded twin or raw read ([`bind`]).
+    fn notes_nothing(&self) -> bool {
+        self.shadows.is_empty() && self.twins.is_empty() && self.raws.is_empty()
+    }
+
     /// Note texture `texture` at ID `id` among the shadowed textures the set holds a view of
     /// where `shadow` (its arrays' writes hold its shadow image's view), else not.
     fn shadow(&mut self, id: u64, texture: &Texture, shadow: bool) {
@@ -1946,6 +1955,16 @@ impl HeapUse {
         !self.versions.is_empty()
     }
 
+    /// A kept recording's run bound `versions` again ([`bound_again`]), as its commands' [`bind`]
+    /// did: each held until the command buffer completes.
+    pub(super) fn bind_again(&mut self, versions: Vec<Arc<SetVersion>>) {
+        for version in versions {
+            if !self.versions.iter().any(|v| Arc::ptr_eq(v, &version)) {
+                self.versions.push(version);
+            }
+        }
+    }
+
     /// As the command buffer commits, before it is submitted, where its commands or its host
     /// steps may read the heap: its ticket for what a rebind or a detach replaces, which it holds
     /// until it completes; its first submission takes its ticket for gone textures and sampler
@@ -2279,14 +2298,15 @@ impl HeapTables {
 /// (`binding::command_uses`): a shadowed texture the set holds a view of that they neither name nor
 /// make resident is announced (`Degradation::UnnamedShadowedTexture`): the command's function may
 /// read its shadow through its ID, which the command's copies do not bring up to date, where a
-/// texture they name or make resident has its shadow copied in.
+/// texture they name or make resident has its shadow copied in. With the set, the version a kept
+/// recording of the command binds again, where one may ([`Bound`]).
 pub(super) fn bind(
     device: &Device,
     objects: &VariantObjects,
     heap: &mut HeapUse,
     writes: Vec<Write>,
     uses: &[Use<ResourceKey>],
-) -> Result<vk::DescriptorSet, Error> {
+) -> Result<Bound, Error> {
     if objects.set_count() != HEAP_SET as usize + 1 {
         return Err(internal("a heap in a layout of other than two sets"));
     }
@@ -2295,7 +2315,7 @@ pub(super) fn bind(
     }
     let set = objects.heap_set()?;
     let mut notes = Notes::default();
-    let version = {
+    let (version, again) = {
         let mut heaps = lock(&device.shared().heaps);
         let entry = heaps
             .sets
@@ -2324,6 +2344,13 @@ pub(super) fn bind(
             (None, Some(own)) => own,
             (None, None) => entry.own_version(device, &mut notes)?,
         };
+        let held = (writes.iter()).all(|write| holds_element(write.ty, write.element));
+        let again = match &entry.shared {
+            None => Err(Unkept::Unshared),
+            Some(_) if !held => Err(Unkept::Writes),
+            Some(_) if !entry.notes_nothing() => Err(Unkept::Noted),
+            Some(shared) => Ok(Arc::downgrade(shared)),
+        };
         let staged: Vec<HeapWrite> = writes
             .into_iter()
             .filter(|write| {
@@ -2342,14 +2369,68 @@ pub(super) fn bind(
             })
             .collect();
         entry.write(device, staged)?;
-        version
+        (version, again)
     };
     notes.announce(device);
     let raw = version.set;
     if !heap.versions.iter().any(|v| Arc::ptr_eq(v, &version)) {
         heap.versions.push(version);
     }
-    Ok(raw)
+    Ok(Bound { set: raw, again })
+}
+
+/// What a command's [`bind`] bound: the heap set, and the version a kept recording of the command
+/// binds again in a later command buffer (`kept_commands::KeptEffects`, [`bound_again`]), else why
+/// it may not.
+pub(super) struct Bound {
+    pub(super) set: vk::DescriptorSet,
+    pub(super) again: Result<Weak<SetVersion>, Unkept>,
+}
+
+/// Why a command that binds a heap set may not run again from a kept recording in a later command
+/// buffer (`render/executions/kept.rs`): what a kept recording's run would not do as the
+/// command's [`bind`] does.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Unkept {
+    /// The device lacks `descriptorBindingUpdateUnusedWhilePending`: each command buffer binds a
+    /// version of its own (the module docs), which no other command buffer may bind.
+    Unshared,
+    /// It writes elements of its own into the set (a function table's), which a later command of
+    /// another table may have written over.
+    Writes,
+    /// The set holds a shadowed texture, a decoded twin or a raw read, which a command's binding
+    /// announces (`Degradation::UnnamedShadowedTexture`, `decoded-texel-precision`).
+    Noted,
+    /// The command reads the device's sampler tables ([`sampler_table`]): no draw over them is
+    /// kept (`docs/FAST-PATHS.md`, known gaps).
+    SamplerTable,
+    /// Its tables bind a texture at a slot its heap part reads (`render/heap_part.rs`), which no
+    /// kept key holds: a host step's tables bind none.
+    TableTextures,
+}
+
+/// The versions `kept` that a kept recording's commands bound ([`Bound`]), where a later command
+/// buffer's run of the recording binds them again as its commands' [`bind`] would: each lives, is
+/// still its set's one version, and its set announces nothing a binding would ([`Unkept::Noted`]).
+/// `None` where one is not. Taken under the `heaps` lock once a run, and dropped with none held.
+pub(super) fn bound_again(
+    device: &Device,
+    kept: &[Weak<SetVersion>],
+) -> Option<Vec<Arc<SetVersion>>> {
+    if kept.is_empty() {
+        return Some(Vec::new());
+    }
+    let versions: Vec<Arc<SetVersion>> = kept.iter().map(Weak::upgrade).collect::<Option<_>>()?;
+    let binds = {
+        let heaps = lock(&device.shared().heaps);
+        versions.iter().all(|version| {
+            heaps.sets.get(&version.key).is_some_and(|entry| {
+                let shared = entry.shared.as_ref();
+                shared.is_some_and(|shared| Arc::ptr_eq(shared, version)) && entry.notes_nothing()
+            })
+        })
+    };
+    binds.then_some(versions)
 }
 
 /// Whether every heap set holds what a command's write of type `ty` at `element` of one of its

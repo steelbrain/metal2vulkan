@@ -167,7 +167,7 @@ impl Execute {
                     let effects = KeptEffects::new(
                         part.summary.clone(),
                         (part.keys.clone(), part.taken.named().clone()),
-                        &held,
+                        (&held, &[]),
                         part.executions.clone(),
                     );
                     let kept = KeptChunk::new(

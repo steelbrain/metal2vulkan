@@ -24,9 +24,11 @@
 //!   execution compares its own with each distinct list among its kept chunks' keys once, whole,
 //!   and with the rest by pointer ([`ResidentMet`]).
 //! - **Run again.** A later execution of the chunk's commands under equal inputs, where every
-//!   address resolves as it did, nothing moved, nothing it named is detached and everything it
-//!   held lives, runs the kept command buffer: its command buffer notes the uses again, keeps the
-//!   keys, holds what the recording held and the chunk, and adds the execution records, as the
+//!   address resolves as it did, nothing moved, nothing it named is detached, everything it held
+//!   lives and every heap set version its draws bound is still its set's one version, announcing
+//!   nothing a binding would (`heap_sets::bound_again`), runs the kept command buffer: its command
+//!   buffer notes the uses again, keeps the keys, holds what the recording held and the chunk,
+//!   binds the heap set versions (`heap_sets::HeapUse`), and adds the execution records, as the
 //!   recording's own did, and counts it (`WorkCounts::indirect_chunks_kept`,
 //!   `indirect_commands_kept`). Its records are not read.
 //! - **Forgotten** at the CPU's every write of one of the chunk's commands (a setter, a reset, a
@@ -42,6 +44,7 @@ use crate::descriptor_arena::DescriptorArena;
 use crate::device::{lock, Device};
 use crate::error::Error;
 use crate::execution::Execution;
+use crate::heap_sets::{self, SetVersion};
 use crate::residency::Residency;
 use crate::resource::ResourceKey;
 use crate::spares::CommandPool;
@@ -177,17 +180,24 @@ pub(super) struct KeptEffects {
     /// What it held until its command buffer completed: weakly, so a kept chunk holds nothing a
     /// program let go of.
     held: Vec<Weak<dyn Any + Send + Sync>>,
+    /// The heap set versions its draws bound (`heap_sets::Bound`), each its set's one version:
+    /// weakly, as what it held.
+    heaps: Vec<Weak<SetVersion>>,
     /// Its execution records, where the device keeps them.
     pub(super) executions: Vec<Execution>,
 }
 
+/// What a command buffer that runs a kept chunk again holds of it ([`KeptChunk::runs_again`]):
+/// what its recording held, and the heap set versions its draws bound, upgraded.
+pub(super) type Held = (Vec<Arc<dyn Any + Send + Sync>>, Vec<Arc<SetVersion>>);
+
 impl KeptEffects {
-    /// The effects of a recording that noted `summary`, kept `keys`, named `named`, held `held`
-    /// and recorded `executions`.
+    /// The effects of a recording that noted `summary`, kept `keys`, named `named`, held `held`,
+    /// bound the heap set versions `heaps` and recorded `executions`.
     pub(super) fn new(
         summary: Summary<ResourceKey>,
         (keys, named): (BTreeSet<ResourceKey>, BTreeSet<ResourceKey>),
-        held: &[Arc<dyn Any + Send + Sync>],
+        (held, heaps): (&[Arc<dyn Any + Send + Sync>], &[Weak<SetVersion>]),
         executions: Vec<Execution>,
     ) -> KeptEffects {
         KeptEffects {
@@ -195,6 +205,7 @@ impl KeptEffects {
             keys,
             named,
             held: held.iter().map(Arc::downgrade).collect(),
+            heaps: heaps.to_vec(),
             executions,
         }
     }
@@ -369,14 +380,14 @@ impl KeptChunk {
     }
 
     /// What a command buffer of `command_buffer`'s queue family that runs it again under `key`,
-    /// resolving against `residency`, holds of it: what its recording held, upgraded; `None`
-    /// where it may not run again (the module docs).
+    /// resolving against `residency`, holds of it ([`Held`]); `None` where it may not run again
+    /// (the module docs).
     pub(super) fn runs_again<K: PartialEq + 'static>(
         &self,
         command_buffer: &CommandBuffer,
         (key, covered): (&K, &Range<u32>),
         residency: &Residency,
-    ) -> Option<Vec<Arc<dyn Any + Send + Sync>>> {
+    ) -> Option<Held> {
         let same = self.covered == *covered
             && self.context.family == command_buffer.queue_family()
             && self.key.downcast_ref::<K>() == Some(key)
@@ -394,7 +405,9 @@ impl KeptChunk {
         if rebinds.any_detached(self.effects.keys.iter().copied()) {
             return None;
         }
-        self.effects.held()
+        let held = self.effects.held()?;
+        let heaps = heap_sets::bound_again(command_buffer.device(), &self.effects.heaps)?;
+        Some((held, heaps))
     }
 }
 

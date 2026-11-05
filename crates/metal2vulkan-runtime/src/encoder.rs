@@ -43,7 +43,7 @@ use super::index_rewrite::{
     self, CommandedList, GatherHeld, GatherRequest, GatherRuns, GatheredList,
     IndirectGatherRequest, RewriteRunRequest,
 };
-use super::kept_commands::KeptEffects;
+use super::kept_commands::{Held, KeptEffects};
 use super::noted_apart::{NotedApart, NotedInto};
 use super::pending_dispatch::PendingDispatch;
 use super::pipeline::VariantObjects;
@@ -2778,11 +2778,12 @@ impl EncoderCore {
     /// buffer runs again: note its uses, those of keys it did not name as reached through the
     /// resident set alone (`note_reaching`, which holds the pages of buffers over host pages and
     /// names the rest, as its commands did); keep its keys; hold `held`, what it held, upgraded;
-    /// and add its execution records where the device keeps them. An unordered core's alone.
+    /// bind `heaps` again, the heap set versions its draws bound (`heap_sets::HeapUse`); and add
+    /// its execution records where the device keeps them. An unordered core's alone.
     pub(super) fn run_kept(
         &mut self,
         effects: &KeptEffects,
-        held: Vec<Arc<dyn Any + Send + Sync>>,
+        (held, heaps): Held,
     ) -> Result<(), Error> {
         let summary = &effects.summary;
         let resident: BTreeSet<ResourceKey> = summary
@@ -2793,6 +2794,9 @@ impl EncoderCore {
         self.touch_keys(effects.keys.iter().copied());
         for object in held {
             self.retain_shared(object);
+        }
+        if !heaps.is_empty() {
+            self.command_buffer().state().heaps.bind_again(heaps);
         }
         if self.records_executions() {
             self.executions.extend(effects.executions.iter().cloned());

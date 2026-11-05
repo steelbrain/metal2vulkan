@@ -1038,7 +1038,15 @@ else.
   reads them in place and is copied at one step in eight only, each chunk at a step of its own
   (`host_step_chunk_copies_put_off`), so records that change at each step cost a copy of an
   eighth of them a step, and a chunk whose records stop changing is copied again within eight
-  steps, then compared at the next. The step's round trip stays. Every other execution reads
+  steps, then compared at the next. Draws that read textures through the heap (set 1's heap set
+  and the device's texture table) are kept too, at `commit` and at a host step, where the device
+  has `descriptorBindingUpdateUnusedWhilePending`, the draw writes no set elements of its own (a
+  function table's), its set holds no shadowed texture, decoded twin or raw read, it reads no
+  sampler table, and its tables bind no texture its heap part reads; the rest are counted by why
+  (`WorkCounts::replayed_heap_draws_unshared`, `replayed_heap_draws_writing`,
+  `replayed_heap_draws_noted`, `replayed_heap_draws_over_sampler_tables`,
+  `replayed_heap_draws_table_textures`). A sampler state made or released records the kept
+  chunks again. The step's round trip stays. Every other execution reads
   and records each of its commands at each commit: one of a buffer the GPU may write (from the
   call at which a route that may write its records met it, or a blit into it, on) at its commit,
   one of a buffer of mesh or patch draws alone (neither `DRAW` nor `DRAW_INDEXED` among its command

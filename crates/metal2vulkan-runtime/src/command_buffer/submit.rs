@@ -227,6 +227,35 @@ use crate::work_counts::Begun;
 use ash::vk;
 use std::collections::BTreeSet;
 use std::sync::Arc;
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+use {crate::tracker::Footprint, std::sync::Mutex};
+
+/// The command buffers a device test watches (`tests::kept_heap_uses`), by the address of their
+/// shared state, and the footprints of the batches the scheduler planned of each, in order.
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+static PLANNED: Mutex<Vec<(usize, Vec<Footprint<ResourceKey>>)>> = Mutex::new(Vec::new());
+
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+impl super::CommandBuffer {
+    /// Note the footprint of each batch of it the scheduler plans from now on: a device test's
+    /// (`tests::kept_heap_uses`), before its commit.
+    pub(crate) fn watch_planned(&self) {
+        lock(&PLANNED).push((Arc::as_ptr(&self.0) as usize, Vec::new()));
+    }
+
+    /// The footprints of its batches the scheduler planned since [`watch_planned`]: their tracked
+    /// uses, as the tracker planned them. Watched no more.
+    ///
+    /// [`watch_planned`]: Self::watch_planned
+    pub(crate) fn planned(&self) -> Vec<Footprint<ResourceKey>> {
+        let mut planned = lock(&PLANNED);
+        let at = Arc::as_ptr(&self.0) as usize;
+        match planned.iter().position(|(of, _)| *of == at) {
+            Some(index) => planned.swap_remove(index).1,
+            None => Vec::new(),
+        }
+    }
+}
 
 /// The lists a batch's submission fills and empties, kept in the scheduler's state from batch to
 /// batch with their room, so that a submission allocates none of them once they have room for
@@ -646,6 +675,18 @@ impl CommandBufferShared {
             let moved = moved.get(at).and_then(Option::as_ref);
             moved.unwrap_or(&recorded.summary)
         });
+        #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+        {
+            let summaries = (encoders.iter().enumerate()).map(|(at, recorded)| {
+                let moved = moved.get(at).and_then(Option::as_ref);
+                moved.unwrap_or(&recorded.summary)
+            });
+            let address = Arc::as_ptr(self) as usize;
+            let mut planned = lock(&PLANNED);
+            if let Some((_, batches)) = planned.iter_mut().find(|(of, _)| *of == address) {
+                batches.push(Footprint::of(entry.iter().chain(summaries).chain(&exit)));
+            }
+        }
         let plan = scheduler
             .tracker
             .plan(entry.iter().chain(summaries).chain(&exit), at);

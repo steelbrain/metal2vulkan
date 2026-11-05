@@ -297,7 +297,7 @@ use super::fragment_imageblock::PassImageblock;
 use super::framebuffer_fetch;
 use super::fresh_unwritten::FreshUnwritten;
 use super::function_table::VisibleFunctionTable;
-use super::heap_sets;
+use super::heap_sets::{self, SetVersion, Unkept};
 use super::index_bounds::{self, Bounded, BoundsPass, BoundsSteps};
 use super::index_rewrite::{self, Listed, RewritePass, RewriteSteps, WrittenList};
 use super::kept_bytes;
@@ -389,7 +389,7 @@ use provoking::ProvokingForms;
 use shadows::InstanceShadows;
 use std::collections::{BTreeMap, BTreeSet};
 use std::marker::PhantomData;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock, Weak};
 use tile_dispatch::{ScratchEdges, TileDispatch};
 
 mod arguments;
@@ -1528,6 +1528,9 @@ pub(crate) struct RenderLowering {
     replay_plain: bool,
     /// The draw being drawn reached that keep's test and passed it ([`replay_plain`]).
     plain_drawn: bool,
+    /// The heap set versions the plain draws it replayed bound (`heap_sets::Bound`), each once,
+    /// which a kept recording of them binds again (`kept_commands::KeptEffects`).
+    replayed_heaps: Vec<Weak<SetVersion>>,
     /// The place among the command buffer's ended encoders of the encoder whose execution it
     /// replays (`RenderExecution`), which names a draw of the commands it drops
     /// (`CommandBuffer::drop_late_draw`); `None` where it replays none.
@@ -2118,6 +2121,7 @@ impl RenderLowering {
             replaying: false,
             replay_plain: false,
             plain_drawn: false,
+            replayed_heaps: Vec::new(),
             executing_encoder: None,
             rerouting: false,
             forms: BufferForms::Bound,
@@ -8120,6 +8124,9 @@ impl RenderLowering {
                 state: &live.state,
             },
         )?;
+        // Whether it reads a texture its tables bind at a heap slot, which a kept recording's key
+        // does not hold (`render/heap_part.rs`).
+        let slot_textures = live.heap.binds_slot_textures();
         let texture_table = heap_sets::texture_table(self.core.device(), &compiled.layout)?;
         let sampler_table =
             heap_sets::sampler_table(self.core.device(), &compiled.layout, &compiled.dependencies)?;
@@ -9613,15 +9620,18 @@ impl RenderLowering {
             }
             Some(prefix) => (self.pass_start).draw(&device, (uses, prefix), mesh_before),
         }
-        let heap_set = match heap {
-            Some(_) => Some(heap_sets::bind(
-                &device,
-                &objects,
-                &mut self.core.command_buffer().state().heaps,
-                heap_writes,
-                uses,
-            )?),
-            None => None,
+        let (heap_set, heap_again) = match heap {
+            Some(_) => {
+                let bound = heap_sets::bind(
+                    &device,
+                    &objects,
+                    &mut self.core.command_buffer().state().heaps,
+                    heap_writes,
+                    uses,
+                )?;
+                (Some(bound.set), Some(bound.again))
+            }
+            None => (None, None),
         };
         // The query that resumes the active one after a draw whose fragments Vulkan would count
         // and Metal does not.
@@ -10369,7 +10379,7 @@ impl RenderLowering {
         let extended = |c: &render_pass::ColorTarget| {
             ExtendedRange::of(c.target.texture.pixel_format()).is_some()
         };
-        let plain = stepless
+        let plain_but_heap = stepless
             && !barriered
             && !empty
             && !culled
@@ -10393,9 +10403,6 @@ impl RenderLowering {
             && tests_use.is_none()
             && imageblock_use.is_none()
             && tile_buffer.is_none()
-            && heap.is_none()
-            && texture_table.is_none()
-            && sampler_table.is_none()
             && unlisted.is_none()
             && bound_each.is_none()
             && !reads_tile_memory
@@ -10425,9 +10432,34 @@ impl RenderLowering {
             && !plan.variant.extended_range.values().any(planes)
             && !(self.layout.colors.iter().flatten()).any(extended)
             && !facts.ycbcr();
+        let plain =
+            plain_but_heap && heap.is_none() && texture_table.is_none() && sampler_table.is_none();
+        // A replayed draw that reads the heap is plain where a kept recording of it binds the heap
+        // set again as it did (`heap_sets::Bound`), it reads no sampler table and its tables bind
+        // no texture its heap part reads; the texture table is the device's one buffer, which a
+        // kept recording reads as a fresh draw does. A direct draw kept for drawing again binds
+        // none of them (`render/draw_again.rs`).
+        let heap_kept = match (sampler_table.is_some(), slot_textures, heap_again) {
+            (true, _, _) => Err(Unkept::SamplerTable),
+            (false, true, _) => Err(Unkept::TableTextures),
+            (false, false, Some(again)) => again.map(Some),
+            (false, false, None) => Ok(None),
+        };
         // A replayed draw plain so would be kept but for its being replayed: a chunk of its
-        // execution's commands whose draws all are is kept (`kept_commands.rs`).
-        self.plain_drawn = plain;
+        // execution's commands whose draws all are is kept (`kept_commands.rs`). One the heap
+        // alone keeps from it is counted by why.
+        self.plain_drawn = plain_but_heap && heap_kept.is_ok();
+        match heap_kept {
+            Err(unkept) if plain_but_heap && self.replaying => {
+                device.shared().counts.replayed_heap_draw_unkept(unkept);
+            }
+            Ok(Some(version))
+                if self.plain_drawn && !self.replayed_heaps.iter().any(|v| v.ptr_eq(&version)) =>
+            {
+                self.replayed_heaps.push(version);
+            }
+            _ => {}
+        }
         // Its uses noted as the next draw would find them noted (`noted_apart.rs`).
         let keeps = plain && !self.replaying && self.core.noted_now(&live.noted);
         if keeps {

@@ -1192,13 +1192,16 @@ impl RenderLowering {
         self.unordered.add(&uses);
         self.unordered_dispatches.add(&uses);
         let heap_set = match heap {
-            Some(_) => Some(heap_sets::bind(
-                &device,
-                &objects,
-                &mut self.core.command_buffer().state().heaps,
-                heap_writes,
-                &uses,
-            )?),
+            Some(_) => Some(
+                heap_sets::bind(
+                    &device,
+                    &objects,
+                    &mut self.core.command_buffer().state().heaps,
+                    heap_writes,
+                    &uses,
+                )?
+                .set,
+            ),
             None => None,
         };
         // Recording starts here: nothing below can be refused.

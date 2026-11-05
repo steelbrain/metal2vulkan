@@ -2526,6 +2526,7 @@ impl RenderExecution {
             replaying: true,
             replay_plain: true,
             plain_drawn: false,
+            replayed_heaps: Vec::new(),
             executing_encoder: Some(self.encoder),
             rerouting: false,
             forms,

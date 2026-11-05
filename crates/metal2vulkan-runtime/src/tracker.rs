@@ -2143,6 +2143,12 @@ impl<K: Copy + Ord> Footprint<K> {
         footprint
     }
 
+    /// Its tracked uses, sorted by resource: a device test's (`tests::kept_heap_uses`).
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(super) fn uses(&self) -> &[Use<K>] {
+        &self.uses
+    }
+
     /// The footprint [`gathered`](Self::gathered) made, its uses sorted by resource.
     pub(super) fn sorted(mut self) -> Footprint<K> {
         self.uses.sort_by_key(|used| used.key);

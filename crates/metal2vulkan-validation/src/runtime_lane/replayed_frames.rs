@@ -388,7 +388,10 @@ fn split(before: &WorkCounts, after: &WorkCounts) -> String {
          draw_heap_parts_made {} resident_uses_noted {} resident_uses_against_fragments {} \
          resident_uses_unordered_writes {} resident_uses_indirect_reads {} \
          resident_uses_geometry_writes {} resident_uses_geometry_checked {} \
-         resident_uses_again_checked {} draw_resident_textures_looked_at {}",
+         resident_uses_again_checked {} draw_resident_textures_looked_at {} \
+         replayed_heap_draws_unshared {} replayed_heap_draws_writing {} \
+         replayed_heap_draws_noted {} replayed_heap_draws_over_sampler_tables {} \
+         replayed_heap_draws_table_textures {}",
         after.host_steps_recorded - before.host_steps_recorded,
         ms(after.host_step_nanos - before.host_step_nanos),
         ms(after.render_pipeline_create_nanos - before.render_pipeline_create_nanos),
@@ -426,6 +429,12 @@ fn split(before: &WorkCounts, after: &WorkCounts) -> String {
         after.resident_uses_geometry_checked - before.resident_uses_geometry_checked,
         after.resident_uses_again_checked - before.resident_uses_again_checked,
         after.draw_resident_textures_looked_at - before.draw_resident_textures_looked_at,
+        after.replayed_heap_draws_unshared - before.replayed_heap_draws_unshared,
+        after.replayed_heap_draws_writing - before.replayed_heap_draws_writing,
+        after.replayed_heap_draws_noted - before.replayed_heap_draws_noted,
+        after.replayed_heap_draws_over_sampler_tables
+            - before.replayed_heap_draws_over_sampler_tables,
+        after.replayed_heap_draws_table_textures - before.replayed_heap_draws_table_textures,
     )
 }
 

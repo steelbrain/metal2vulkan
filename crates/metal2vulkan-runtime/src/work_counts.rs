@@ -9,6 +9,7 @@ use super::buffer::{KeptBecause, ReadApart};
 use super::command_buffer::GroupEnd;
 use super::degradation::Degradation;
 use super::device::lock;
+use super::heap_sets::Unkept;
 use super::memory::FreeCause;
 use super::recorder::CommandsRecorded;
 use super::scheduler::HeldFor;
@@ -102,6 +103,11 @@ pub(crate) struct Counters {
     host_step_chunk_copies_put_off: AtomicU64,
     host_step_records_compared: AtomicU64,
     host_step_compare_nanos: AtomicU64,
+    replayed_heap_draws_unshared: AtomicU64,
+    replayed_heap_draws_writing: AtomicU64,
+    replayed_heap_draws_noted: AtomicU64,
+    replayed_heap_draws_over_sampler_tables: AtomicU64,
+    replayed_heap_draws_table_textures: AtomicU64,
     commit_refusals_held: AtomicU64,
     creation_pipelines_made: AtomicU64,
     creations_left_making: AtomicU64,
@@ -1321,6 +1327,19 @@ impl Counters {
             u64::try_from(took.as_nanos()).unwrap_or(u64::MAX),
             Ordering::Relaxed,
         );
+    }
+
+    /// An execution's replay recorded a draw, plain in every other respect, that reading the heap
+    /// kept from being plain, for `unkept` (`render.rs`, `heap_sets::Unkept`).
+    pub(crate) fn replayed_heap_draw_unkept(&self, unkept: Unkept) {
+        let counter = match unkept {
+            Unkept::Unshared => &self.replayed_heap_draws_unshared,
+            Unkept::Writes => &self.replayed_heap_draws_writing,
+            Unkept::Noted => &self.replayed_heap_draws_noted,
+            Unkept::SamplerTable => &self.replayed_heap_draws_over_sampler_tables,
+            Unkept::TableTextures => &self.replayed_heap_draws_table_textures,
+        };
+        counter.fetch_add(1, Ordering::Relaxed);
     }
 
     /// A commit's refused recording of an execution of indirect commands was held for its host
@@ -3929,6 +3948,22 @@ pub struct WorkCounts {
     /// The time those comparisons took, in nanoseconds: part of
     /// [`host_step_nanos`](Self::host_step_nanos).
     pub host_step_compare_nanos: u64,
+    /// Draws an execution's replay recorded, plain in every other respect, that a chunk kept no
+    /// recording of for their heap set alone, one each (`render/executions/kept.rs`): the device
+    /// lacks `descriptorBindingUpdateUnusedWhilePending`, so each command buffer binds a version
+    /// of the set of its own.
+    pub replayed_heap_draws_unshared: u64,
+    /// Such draws, kept from being plain as they write elements of their own into the heap set
+    /// (a function table's), which a later command of another table may have written over.
+    pub replayed_heap_draws_writing: u64,
+    /// Such draws, kept from being plain as their heap set holds a shadowed texture, a decoded
+    /// twin or a raw read, which a draw's binding of it announces.
+    pub replayed_heap_draws_noted: u64,
+    /// Such draws, kept from being plain as they read the device's sampler tables.
+    pub replayed_heap_draws_over_sampler_tables: u64,
+    /// Such draws, kept from being plain as their tables bind a texture at a slot their heap part
+    /// reads, which no kept recording's key holds (a host step's tables bind none).
+    pub replayed_heap_draws_table_textures: u64,
     /// Segments whose recording at `commit` was refused, of an execution of an indirect command
     /// buffer the command buffer made resident for writing, held for a host step, one each
     /// (`deferred.rs`): a route met after the commit (another queue's command buffer the work
@@ -6297,6 +6332,19 @@ impl Device {
                 .load(Ordering::Relaxed),
             host_step_records_compared: counters.host_step_records_compared.load(Ordering::Relaxed),
             host_step_compare_nanos: counters.host_step_compare_nanos.load(Ordering::Relaxed),
+            replayed_heap_draws_unshared: counters
+                .replayed_heap_draws_unshared
+                .load(Ordering::Relaxed),
+            replayed_heap_draws_writing: counters
+                .replayed_heap_draws_writing
+                .load(Ordering::Relaxed),
+            replayed_heap_draws_noted: counters.replayed_heap_draws_noted.load(Ordering::Relaxed),
+            replayed_heap_draws_over_sampler_tables: counters
+                .replayed_heap_draws_over_sampler_tables
+                .load(Ordering::Relaxed),
+            replayed_heap_draws_table_textures: counters
+                .replayed_heap_draws_table_textures
+                .load(Ordering::Relaxed),
             commit_refusals_held: counters.commit_refusals_held.load(Ordering::Relaxed),
             creation_pipelines_made: counters.creation_pipelines_made.load(Ordering::Relaxed),
             creations_left_making: counters.creations_left_making.load(Ordering::Relaxed),

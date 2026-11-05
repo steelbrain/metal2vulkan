@@ -20,12 +20,13 @@
 
 use super::replayed_frames::{function, indices, measured_device, time_frames, SIDE};
 use super::{
-    buffer_with, layer_reported_nothing_at_all, read_buffer, validated_device, Messages,
+    buffer_with, layer_reported_nothing_at_all, read_buffer, validated_device_with, Messages,
     ScratchCache, WAIT,
 };
 use crate::air_library::AirLibrary;
 use crate::gpu::TEST_DEVICE;
 use metal2vulkan::bind::indirect_commands::COMMAND_BYTES;
+use metal2vulkan::device::VkFeature;
 use metal2vulkan::metal::{
     IndirectCommandType, PixelFormat, PrimitiveType, RenderStages, ResourceUsage, TextureUsage,
 };
@@ -52,7 +53,7 @@ const DRAWS: usize = 5001;
 const BUFFERS: usize = 15018;
 
 /// The fixture's states and resources on a device.
-struct Page {
+pub(super) struct Page {
     draws: usize,
     encode: RenderPipelineState,
     draw: RenderPipelineState,
@@ -76,8 +77,28 @@ fn count(var: &str, default: usize) -> usize {
     std::env::var(var).map_or(default, |count| count.trim().parse().expect(var))
 }
 
+/// Texel (0, 0) of command `at`'s texture, of `shade` (every texel of it is this one): its index
+/// in red and green, `shade` in blue.
+fn texel(at: usize, shade: u8) -> [u8; 4] {
+    [(at % 251) as u8, (at / 251 % 251) as u8, shade, 0xff]
+}
+
+/// Command `at`'s texture, 4x4 `RGBA8Unorm`, every texel [`texel`]`(at, shade)`.
+pub(super) fn page_texture(device: &Device, at: usize, shade: u8) -> Texture {
+    let mut descriptor = TextureDescriptor::texture_2d(PixelFormat::RGBA8Unorm, 4, 4, false);
+    descriptor.usage = TextureUsage::SHADER_READ;
+    descriptor.resource_options = ResourceOptions::shared();
+    let texture = device.new_texture(&descriptor).unwrap();
+    let texels = texel(at, shade).repeat(16);
+    (texture.replace_region(Region::new_2d(0, 0, 4, 4), 0, 0, &texels, 16, 0)).unwrap();
+    texture
+}
+
+/// The blue of every texel of a page's textures as it makes them ([`texel`]).
+const SHADE: u8 = 0x80;
+
 impl Page {
-    fn new(device: &Device, draws: usize, buffers: usize) -> Page {
+    pub(super) fn new(device: &Device, draws: usize, buffers: usize) -> Page {
         let bitcode = llvm_assemble(&engine_dir().join("icb_vertex_encode_textured.ll")).unwrap();
         let library = device.new_library_with_air(&bitcode).unwrap();
         let rgba = PixelFormat::RGBA8Unorm;
@@ -108,16 +129,7 @@ impl Page {
         .unwrap();
         let table = buffer_with(device, &icb.gpu_resource_id().0.to_le_bytes()).unwrap();
         let textures: Vec<_> = (0..draws)
-            .map(|at| {
-                let mut descriptor = TextureDescriptor::texture_2d(rgba, 4, 4, false);
-                descriptor.usage = TextureUsage::SHADER_READ;
-                descriptor.resource_options = ResourceOptions::shared();
-                let texture = device.new_texture(&descriptor).unwrap();
-                let texel = [(at % 251) as u8, (at / 251 % 251) as u8, 0x80, 0xff];
-                let texels = texel.repeat(16);
-                (texture.replace_region(Region::new_2d(0, 0, 4, 4), 0, 0, &texels, 16, 0)).unwrap();
-                texture
-            })
+            .map(|at| page_texture(device, at, SHADE))
             .collect();
         let entries = textures.iter().map(|texture| {
             buffer_with(device, &texture.gpu_resource_id().0.to_le_bytes()).unwrap()
@@ -162,7 +174,18 @@ impl Page {
 
     /// One frame on `queue`, committed: the encoding pass, then the execution's, then a copy of
     /// the target's pixels.
-    fn frame(&self, queue: &CommandQueue) -> CommandBuffer {
+    pub(super) fn frame(&self, queue: &CommandQueue) -> CommandBuffer {
+        self.frame_with(queue, None)
+    }
+
+    /// [`frame`](Self::frame), its execution's pass making `swap`'s texture resident in place of
+    /// the texture of the command it names, at that texture's place among those it makes
+    /// resident.
+    pub(super) fn frame_with(
+        &self,
+        queue: &CommandQueue,
+        swap: Option<(usize, &Texture)>,
+    ) -> CommandBuffer {
         let command_buffer = queue.command_buffer().unwrap();
         let mut encoder = command_buffer.render_command_encoder(&self.pass()).unwrap();
         let vertex = RenderStages::VERTEX;
@@ -192,7 +215,15 @@ impl Page {
         encoder.set_render_pipeline_state(&self.draw).unwrap();
         let stages = RenderStages::VERTEX | RenderStages::FRAGMENT;
         let buffers = self.buffers.iter().map(Buffer::as_resource);
-        for resource in buffers.chain(self.textures.iter().map(Texture::as_resource)) {
+        let textures = self
+            .textures
+            .iter()
+            .enumerate()
+            .map(|(at, texture)| match swap {
+                Some((swapped, by)) if swapped == at => by,
+                _ => texture,
+            });
+        for resource in buffers.chain(textures.map(Texture::as_resource)) {
             encoder
                 .use_resource(resource, ResourceUsage::READ, stages)
                 .unwrap();
@@ -223,6 +254,57 @@ impl Page {
         command_buffer.commit().unwrap();
         command_buffer
     }
+
+    /// The target's pixels the last frame copied out, once it completed.
+    pub(super) fn pixels(&self) -> Vec<u8> {
+        read_buffer(&self.pixels, 0, SIDE * SIDE * 4).unwrap()
+    }
+
+    /// The commands' textures, command `i`'s at `i`.
+    pub(super) fn textures(&self) -> &[Texture] {
+        &self.textures
+    }
+
+    /// Every texel of each command's texture, in command order, [`texel`] of `shade`: 64 bytes a
+    /// texture, rows of 16.
+    pub(super) fn texels(&self, shade: u8) -> Vec<u8> {
+        (0..self.draws)
+            .flat_map(|at| texel(at, shade).repeat(16))
+            .collect()
+    }
+
+    /// Write every texel of each command's texture from the host, [`texel`] of `shade`, no frame
+    /// pending.
+    pub(super) fn shade(&self, shade: u8) {
+        for (at, texture) in self.textures.iter().enumerate() {
+            let texels = texel(at, shade).repeat(16);
+            (texture.replace_region(Region::new_2d(0, 0, 4, 4), 0, 0, &texels, 16, 0)).unwrap();
+        }
+    }
+
+    /// Have command `command`'s argument buffer's entry name `texture` by its resource ID, no frame
+    /// pending.
+    pub(super) fn name(&self, command: usize, texture: &Texture) {
+        let entry = &self.buffers[command];
+        let id = texture.gpu_resource_id().0.to_le_bytes();
+        let contents = entry.contents().unwrap();
+        // SAFETY: the entry holds 8 bytes at `contents`, and no pending command reads them.
+        unsafe { std::ptr::copy_nonoverlapping(id.as_ptr(), contents.as_ptr(), id.len()) };
+    }
+
+    /// Let command `at`'s texture go, and make another, of `shade`, which takes the gone one's
+    /// resource ID (the lowest free one, `resource_ids.rs`), no frame pending: the command's entry
+    /// names it.
+    pub(super) fn replace_texture(&mut self, device: &Device, at: usize, shade: u8) {
+        let id = self.textures.remove(at).gpu_resource_id();
+        let texture = page_texture(device, at, shade);
+        assert_eq!(
+            texture.gpu_resource_id(),
+            id,
+            "the new texture takes the gone one's ID"
+        );
+        self.textures.insert(at, texture);
+    }
 }
 
 #[test]
@@ -242,17 +324,25 @@ fn replayed_textured_frames() {
 }
 
 /// The page at two chunks' commands (the runtime's `kept_commands::CHUNK` is 256), under the
-/// validation layer: its first host step copies the records it reads for the next step's
-/// comparison; each later step compares them with those and copies none again, whether it keeps
-/// the chunks or records them apart and keeps nothing of them, a chunk that keeps nothing handing
-/// back the read it compared (`render/executions/kept.rs`); each frame draws what the first drew.
+/// validation layer, on a device made without `descriptorBindingUpdateUnusedWhilePending`, so
+/// each command buffer binds a heap set of its own, no draw is plain and no chunk kept (the
+/// runtime's `heap_sets.rs`): its first host step copies the records it reads for the next step's
+/// comparison; each later step compares them with those and copies none again, recording the
+/// first chunk apart, keeping nothing of it, and the rest past it from the bytes it compared, a
+/// chunk that keeps nothing handing back the read it compared (`render/executions/kept.rs`); each
+/// frame draws what the first drew.
 #[test]
 fn each_host_step_past_the_first_compares_the_page_s_records_and_copies_none() {
     const COMMANDS: usize = 300;
     let cache = ScratchCache::new().unwrap();
     let messages = Messages::default();
     {
-        let device = validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
+        // Every draw not plain, so each step records the first chunk apart and the rest past it.
+        let unshared = VkFeature::DescriptorBindingUpdateUnusedWhilePending;
+        let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), |options| {
+            options.withheld_features.insert(unshared);
+        })
+        .unwrap();
         let queue = device.new_command_queue().unwrap();
         let page = Page::new(&device, COMMANDS, 3 * COMMANDS);
         let records = (COMMANDS * COMMAND_BYTES) as u64;
@@ -268,10 +358,10 @@ fn each_host_step_past_the_first_compares_the_page_s_records_and_copies_none() {
             let kept = after.host_step_chunks_kept - before.host_step_chunks_kept;
             println!("frame {frame}: {copied} record bytes copied, {compared} records compared, {kept} chunks kept");
             let expected = match frame {
-                0 => (records, 0),
-                _ => (0, COMMANDS as u64),
+                0 => (records, 0, 0),
+                _ => (0, COMMANDS as u64, 0),
             };
-            assert_eq!((copied, compared), expected, "frame {frame}");
+            assert_eq!((copied, compared, kept), expected, "frame {frame}");
             let pixels = read_buffer(&page.pixels, 0, SIDE * SIDE * 4).unwrap();
             match &first {
                 None => first = Some(pixels),
