@@ -355,6 +355,8 @@ mod cause;
 mod gpu;
 mod kept;
 
+use kept::Keeps;
+
 /// The call an execution's refusals name.
 const CALL: &str = "execute_commands_in_buffer";
 
@@ -2042,10 +2044,14 @@ impl RenderExecution {
         }
         // Commands their chunks' kept recordings may run (`kept.rs`): the CPU's records at
         // commit, and at the host step those the GPU may write.
-        if let Some(keeping) = self.keeping(command_buffer, residency, rendered, step) {
-            let rendering = (storage, rendered);
-            return self.record_kept(core, (command_buffer, residency), keeping, found, rendering);
-        }
+        let reads = match self.keeping(command_buffer, residency, rendered, step) {
+            Keeps::Kept(keeping) => {
+                let rendering = (storage, rendered);
+                let at = (command_buffer, residency);
+                return self.record_kept(core, at, keeping, found, rendering);
+            }
+            Keeps::Inline(reads) => reads,
+        };
         let (range, faults) = self.range.commands(self.icb.size())?;
         if !step && self.range.indirect() {
             return Err(internal(
@@ -2087,6 +2093,22 @@ impl RenderExecution {
         if !step {
             // Counted before the records are read: a write meanwhile records it again.
             self.read_at.store(self.icb.cpu_writes(), Ordering::Release);
+        }
+        // A host step that keeps its chunks, recording inline: its records read once, into the
+        // copies the next step compares with (`kept::StepReads`), the whole range at once as a
+        // step reads it, with no check and no handler to hear of them (`keeping`).
+        if let Some(reads) = reads.filter(|reads| step && reads.range() == range) {
+            let (written, copies) = reads.read(&self.icb)?;
+            let (commands, written, _) = self.named_commands(&device, range.start, written);
+            found.faults = ReplayFaults(found.faults.0 | written.0);
+            self.replay(
+                &mut encoder,
+                commands.into_iter().flatten(),
+                residency,
+                found,
+            )?;
+            copies.keep(&self.icb);
+            return self.finish(encoder, found, rendered, &device);
         }
         for piece in kept_commands::pieces(range, whole) {
             let start = piece.start;

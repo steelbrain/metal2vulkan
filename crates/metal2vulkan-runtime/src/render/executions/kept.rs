@@ -27,11 +27,12 @@
 //!   the chunk was recorded from or else those the last step read, compared whole
 //!   (`RenderExecution::steady`, `IndirectCommandBuffer::holds_written`,
 //!   `WorkCounts::host_step_records_compared` and `host_step_compare_nanos`), once the header
-//!   holds no fault. Else the step records the execution inline, as one that keeps nothing, and
-//!   copies each chunk's records for the next step's comparison
-//!   (`IndirectCommandBuffer::written_bytes_into`), forgetting a recording whose records changed
-//!   (`WorkCounts::host_step_chunks_recorded_again`): records the GPU writes otherwise at each
-//!   step cost a step one copy of them. Where they hold, the step records apart and keeps each
+//!   holds no fault. Else the step records the execution inline, as one that keeps nothing, from
+//!   each chunk's records copied for the next step's comparison
+//!   (`IndirectCommandBuffer::written_bytes_into`, [`StepReads`]), forgetting a recording whose
+//!   records changed (`WorkCounts::host_step_chunks_recorded_again`): records the GPU writes
+//!   otherwise at each step are read once, as an execution that keeps nothing reads them. Where
+//!   they hold, the step records apart and keeps each
 //!   chunk it keeps no recording of, with those bytes, and runs a kept one again where its key is
 //!   equal (below), else records it again and keeps that (`host_step_chunks_recorded_again`). No
 //!   write forgets such a chunk, as the comparison decides. Counted:
@@ -76,7 +77,7 @@ use crate::binding::BindMemo;
 use crate::command_buffer::CommandBuffer;
 use crate::encoder::EncoderCore;
 use crate::error::{internal, vulkan, Error};
-use crate::indirect_command_buffer::Reader;
+use crate::indirect_command_buffer::{IndirectCommandBuffer, Reader, WrittenRecords};
 use crate::kept_commands::{
     self, Kept, KeptChunk, KeptContext, KeptEffects, ResidentKey, ResidentMet, Resolution,
     StepChunk,
@@ -195,6 +196,105 @@ struct Apart {
     records: Option<Box<[u8]>>,
 }
 
+/// Whether an execution keeps its commands ([`RenderExecution::keeping`]).
+pub(super) enum Keeps {
+    /// It does: its key and its chunks.
+    Kept(Keeping),
+    /// It records inline, as one that keeps nothing, at a host step that keeps its chunks from
+    /// its records read as [`StepReads`] says, where it gives some.
+    Inline(Option<StepReads>),
+}
+
+/// What a host step that records inline reads its records into, chunk by chunk
+/// ([`RenderExecution::steady`]): the copy the next step compares them with, which the step's
+/// recording reads too, so records that change at each step are read once.
+pub(super) struct StepReads(Vec<StepRead>);
+
+/// A chunk's part of [`StepReads`].
+struct StepRead {
+    chunk: u32,
+    covered: Range<u32>,
+    from: ReadFrom,
+}
+
+/// Where a chunk of [`StepReads`] reads its records.
+enum ReadFrom {
+    /// Copied from the records' storage, into the bytes the last step read where it has them.
+    Copy(Option<Box<[u8]>>),
+    /// The bytes its kept recording was recorded from, which the records hold still.
+    Kept(Arc<KeptChunk>),
+}
+
+/// A host step's copies of its chunks' records ([`StepReads::read`]), for the next step's
+/// comparison once it recorded from them.
+pub(super) struct ReadRecords(Vec<(u32, Box<[u8]>)>);
+
+impl StepReads {
+    /// The commands it reads.
+    pub(super) fn range(&self) -> Range<u32> {
+        let start = self.0.first().map_or(0, |read| read.covered.start);
+        start..self.0.last().map_or(start, |read| read.covered.end)
+    }
+
+    /// The records of its commands, in order, as the GPU and the CPU left them, read once: each
+    /// chunk's copied (`IndirectCommandBuffer::written_bytes_into`), else its kept recording's,
+    /// and decoded from those bytes (`IndirectCommandBuffer::written_records_in`); with the
+    /// copies.
+    pub(super) fn read(
+        self,
+        icb: &IndirectCommandBuffer,
+    ) -> Result<(WrittenRecords, ReadRecords), Error> {
+        let range = self.range();
+        let read: Vec<(u32, ReadBytes)> = (self.0.into_iter())
+            .map(|read| {
+                let bytes = match read.from {
+                    ReadFrom::Copy(into) => {
+                        ReadBytes::Copied(icb.written_bytes_into(read.covered, into))
+                    }
+                    ReadFrom::Kept(kept) => ReadBytes::Kept(kept),
+                };
+                (read.chunk, bytes)
+            })
+            .collect();
+        let bytes: Vec<&[u8]> = read.iter().map(|(_, bytes)| bytes.bytes()).collect();
+        let written = icb.written_records_in(range, &bytes)?;
+        let copies = read.into_iter().filter_map(|(chunk, bytes)| match bytes {
+            ReadBytes::Copied(copy) => Some((chunk, copy)),
+            ReadBytes::Kept(_) => None,
+        });
+        Ok((written, ReadRecords(copies.collect())))
+    }
+}
+
+/// A chunk's records as [`StepReads::read`] read them.
+enum ReadBytes {
+    /// Copied from their storage.
+    Copied(Box<[u8]>),
+    /// Its kept recording's, which they hold still.
+    Kept(Arc<KeptChunk>),
+}
+
+impl ReadBytes {
+    fn bytes(&self) -> &[u8] {
+        match self {
+            ReadBytes::Copied(copy) => copy,
+            // A kept recording a step reads from holds them (`RenderExecution::steady`); one that
+            // held none would read as no record, which the decode refuses.
+            ReadBytes::Kept(kept) => kept.records().unwrap_or_default(),
+        }
+    }
+}
+
+impl ReadRecords {
+    /// Keep each copy as the bytes its chunk's records were last read as
+    /// (`IndirectCommandBuffer::step_read`).
+    pub(super) fn keep(self, icb: &IndirectCommandBuffer) {
+        for (chunk, bytes) in self.0 {
+            icb.step_read(chunk, bytes);
+        }
+    }
+}
+
 impl RenderExecution {
     /// Whether the execution keeps its commands (the module docs), recorded by `command_buffer`
     /// against `residency` in a pass `rendered` lays out, at `commit` or at the host step
@@ -205,11 +305,11 @@ impl RenderExecution {
         residency: &Residency,
         rendered: &Rendered,
         step: bool,
-    ) -> Option<Keeping> {
+    ) -> Keeps {
         let snapshot = &self.snapshot;
         let layout = &snapshot.layout;
         let ExecutionRange::Fixed(range) = &self.range else {
-            return None;
+            return Keeps::Inline(None);
         };
         let inherited = self.icb.descriptor().inherit_buffers;
         let tables = [
@@ -259,19 +359,26 @@ impl RenderExecution {
             && !memoryless_target
             && !crate::replay::is_replaying()
             && !command_buffer.reports_executed();
-        if !keeps {
-            return None;
-        }
-        let tables = [vertex?, fragment?, object?, mesh?];
+        let (true, [Some(vertex), Some(fragment), Some(object), Some(mesh)]) =
+            (keeps, [vertex, fragment, object, mesh])
+        else {
+            return Keeps::Inline(None);
+        };
+        let tables = [vertex, fragment, object, mesh];
         let (kept, read_at) = match step {
             // Where the header holds no fault: one that does runs no command.
-            true if self.icb.written_header_fault().is_some() => return None,
+            true if self.icb.written_header_fault().is_some() => return Keeps::Inline(None),
             true => {
                 let counts = &command_buffer.device().shared().counts;
-                (self.steady(range.clone(), counts)?, None)
+                match self.steady(range.clone(), counts) {
+                    Ok(kept) => (kept, None),
+                    Err(reads) => return Keeps::Inline(Some(reads)),
+                }
             }
             false => {
-                let (kept, read_at) = self.icb.kept_chunks(range.clone())?;
+                let Some((kept, read_at)) = self.icb.kept_chunks(range.clone()) else {
+                    return Keeps::Inline(None);
+                };
                 let kept = kept.into_iter().map(|kept| (kept, None)).collect();
                 (kept, Some(read_at))
             }
@@ -306,25 +413,25 @@ impl RenderExecution {
             tables,
             resident,
         };
-        Some(Keeping { key, kept, read_at })
+        Keeps::Kept(Keeping { key, kept, read_at })
     }
 
     /// What a host step that keeps its commands finds of each chunk of commands `range`, where
     /// the records hold, chunk by chunk, the bytes a kept recording of the chunk was recorded from
     /// or else the bytes of them the last step read, compared whole
     /// (`IndirectCommandBuffer::holds_written`, `WorkCounts::host_step_records_compared`): what is
-    /// kept of each, with those bytes it read. Else `None`, the records changing (or read by no
-    /// step before): the execution records inline, as one that keeps nothing, each chunk's records
-    /// copied for the next step's comparison (into the bytes it last read) but where a kept
-    /// recording's records hold still, and a recording whose records changed is forgotten
-    /// (`WorkCounts::host_step_chunks_recorded_again`). So a step records apart and keeps only
-    /// what two steps read alike, and records whose bytes change at each step cost the step
-    /// one copy of them beside its recording inline.
+    /// kept of each, with those bytes it read. Else, the records changing (or read by no step
+    /// before), what the execution reads its records into as it records inline, as one that
+    /// keeps nothing ([`StepReads`]): each chunk's into the bytes it last read, for the next
+    /// step's comparison, but where a kept recording's records hold still; and a recording whose
+    /// records changed is forgotten (`WorkCounts::host_step_chunks_recorded_again`). So a step
+    /// records apart and keeps only what two steps read alike, and records whose bytes change at
+    /// each step are read once, into the copy the next step compares with.
     fn steady(
         &self,
         range: Range<u32>,
         counts: &crate::work_counts::Counters,
-    ) -> Option<Vec<(Kept, Option<Box<[u8]>>)>> {
+    ) -> Result<Vec<(Kept, Option<Box<[u8]>>)>, StepReads> {
         let found = self.icb.step_kept_chunks(range.clone());
         let compared = Instant::now();
         let mut records = 0;
@@ -343,21 +450,26 @@ impl RenderExecution {
         counts.host_step_records_compared(records, compared.elapsed());
         if holds.iter().all(|&holds| holds) {
             let found = found.into_iter().map(|found| (found.kept, found.read));
-            return Some(found.collect());
+            return Ok(found.collect());
         }
         let chunks = kept_commands::chunks(range).zip(found).zip(holds);
-        for (((chunk, covered), StepChunk { kept, read }), holds) in chunks {
-            if let Kept::Recording(_) = kept {
-                if holds {
-                    continue;
+        let reads = chunks.map(|(((chunk, covered), StepChunk { kept, read }), holds)| {
+            let from = match kept {
+                Kept::Recording(kept) if holds && kept.records().is_some() => ReadFrom::Kept(kept),
+                Kept::Recording(_) => {
+                    counts.host_step_chunk_recorded_again();
+                    self.icb.keep_step_chunk(chunk, None);
+                    ReadFrom::Copy(read)
                 }
-                counts.host_step_chunk_recorded_again();
-                self.icb.keep_step_chunk(chunk, None);
+                Kept::Again | Kept::First => ReadFrom::Copy(read),
+            };
+            StepRead {
+                chunk,
+                covered,
+                from,
             }
-            let bytes = self.icb.written_bytes_into(covered, read);
-            self.icb.step_read(chunk, bytes);
-        }
-        None
+        });
+        Err(StepReads(reads.collect()))
     }
 
     /// Record the commands chunk by chunk through `core`, the pass's (the module docs), into

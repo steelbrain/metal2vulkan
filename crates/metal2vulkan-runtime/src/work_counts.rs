@@ -157,6 +157,7 @@ pub(crate) struct Counters {
     indirect_draws_recorded: AtomicU64,
     indirect_records_read: AtomicU64,
     indirect_record_runs_read: AtomicU64,
+    indirect_record_bytes_copied: AtomicU64,
     indirect_write_residencies_unmarked: AtomicU64,
     indirect_chunks_kept: AtomicU64,
     indirect_commands_kept: AtomicU64,
@@ -1180,6 +1181,12 @@ impl Counters {
     pub(crate) fn dispatch_dropped_still_making(&self) {
         self.dispatches_dropped_still_making
             .fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// `bytes` of an indirect command buffer's records were copied out of its storage
+    /// (`indirect_command_buffer.rs`).
+    pub(crate) fn indirect_record_bytes_copied(&self, bytes: u64) {
+        (self.indirect_record_bytes_copied).fetch_add(bytes, Ordering::Relaxed);
     }
 
     /// `count` records of an indirect command buffer's commands were read from its storage and
@@ -4105,6 +4112,11 @@ pub struct WorkCounts {
     /// (`kept_commands::pieces`), or whole where its check, or its command buffer's
     /// executed-commands handlers, see every command before any is recorded.
     pub indirect_record_runs_read: u64,
+    /// Bytes of indirect command buffers' records the host copied out of their storage, to decode
+    /// them or to keep them for a comparison: a record a host step reads is copied once, into
+    /// the copy the next step compares its records with where its execution keeps its chunks
+    /// (`render/executions/kept.rs`), and decoded from there.
+    pub indirect_record_bytes_copied: u64,
     /// Indirect command buffers a committed command buffer made resident for writing
     /// (`use_resource` or `use_resources` with `ResourceUsage::WRITE`, in any of its encoders) and
     /// left unmarked (`IndirectCommandBuffer::gpu_written` still `false`): it set no pipeline state
@@ -6201,6 +6213,8 @@ impl Device {
             indirect_draws_recorded: counters.indirect_draws_recorded.load(Ordering::Relaxed),
             indirect_records_read: counters.indirect_records_read.load(Ordering::Relaxed),
             indirect_record_runs_read: counters.indirect_record_runs_read.load(Ordering::Relaxed),
+            indirect_record_bytes_copied: (counters.indirect_record_bytes_copied)
+                .load(Ordering::Relaxed),
             indirect_write_residencies_unmarked: (counters.indirect_write_residencies_unmarked)
                 .load(Ordering::Relaxed),
             indirect_chunks_kept: counters.indirect_chunks_kept.load(Ordering::Relaxed),

@@ -1490,6 +1490,7 @@ impl IndirectCommandBuffer {
 
     /// The bytes of command `index`'s record (below the size), as they are now.
     fn record_now(&self, index: u32) -> [u8; COMMAND_BYTES] {
+        (self.device().shared().counts).indirect_record_bytes_copied(COMMAND_BYTES as u64);
         let mut bytes = [0; COMMAND_BYTES];
         // SAFETY: the record of a command below the size lies inside the mapped storage. A GPU
         // write to it meanwhile is the program's race, as on Metal.
@@ -2915,26 +2916,59 @@ impl IndirectCommandBuffer {
     /// record that does not decode, or that sets what its descriptor does not allow, is `None`
     /// (`ReplayFaults::RECORD`).
     pub(super) fn written_records(&self, range: Range<u32>) -> Result<WrittenRecords, Error> {
+        let count = range.len();
+        Ok(self.written_records_of(count, range.map(|index| self.record_now(index))))
+    }
+
+    /// [`written_records`](Self::written_records) of commands `range` from `bytes`, the copies
+    /// of their records a host step read them into, in order (`render/executions/kept.rs`,
+    /// `StepReads`): the step reads each record once, into the copy the next step compares
+    /// with.
+    pub(super) fn written_records_in(
+        &self,
+        range: Range<u32>,
+        bytes: &[&[u8]],
+    ) -> Result<WrittenRecords, Error> {
+        let whole = bytes.iter().all(|bytes| bytes.len() % COMMAND_BYTES == 0);
+        let total: usize = bytes.iter().map(|bytes| bytes.len()).sum();
+        if !whole || total != range.len() * COMMAND_BYTES {
+            return Err(internal(
+                "a host step's copies of its records not one a command",
+            ));
+        }
+        let records = bytes
+            .iter()
+            .flat_map(|bytes| bytes.chunks_exact(COMMAND_BYTES));
+        Ok(self.written_records_of(range.len(), records))
+    }
+
+    /// [`written_records`](Self::written_records) of `count` commands from `records`, theirs in
+    /// order.
+    fn written_records_of(
+        &self,
+        count: usize,
+        records: impl Iterator<Item = impl AsRef<[u8]>>,
+    ) -> WrittenRecords {
         if let Some(fault) = self.written_header_fault() {
-            return Ok(WrittenRecords {
+            return WrittenRecords {
                 faults: fault,
                 records: Vec::new(),
-            });
+            };
         }
-        self.device()
-            .shared()
-            .counts
-            .indirect_records_read(range.len() as u64);
+        (self.device().shared().counts).indirect_records_read(count as u64);
         let mut faults = ReplayFaults::default();
-        let mut records = Vec::with_capacity(range.len());
-        for index in range {
-            let record = self.written_record(&self.record_now(index));
+        let mut decoded = Vec::with_capacity(count);
+        for bytes in records {
+            let record = self.written_record(bytes.as_ref());
             if record.is_none() {
                 faults = ReplayFaults(faults.0 | ReplayFaults::RECORD.0);
             }
-            records.push(record);
+            decoded.push(record);
         }
-        Ok(WrittenRecords { faults, records })
+        WrittenRecords {
+            faults,
+            records: decoded,
+        }
     }
 
     /// The fault the records' header holds once the work before an execution completed, as
@@ -2987,6 +3021,7 @@ impl IndirectCommandBuffer {
         into: Option<Box<[u8]>>,
     ) -> Box<[u8]> {
         let bytes = record_offset(range.start)..record_offset(range.end);
+        (self.device().shared().counts).indirect_record_bytes_copied(bytes.len() as u64);
         let mut copy = match into {
             Some(into) if into.len() == bytes.len() => into,
             Some(_) | None => vec![0; bytes.len()].into_boxed_slice(),

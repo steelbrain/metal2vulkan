@@ -1014,9 +1014,9 @@ else.
   last step read, compared whole (`WorkCounts::host_step_records_compared`,
   `host_step_compare_nanos`), runs each kept one whose inputs are equal
   (`WorkCounts::host_step_chunks_kept`) and records apart and keeps the others; one whose records
-  changed records inline as before and copies them for the next step's comparison, forgetting the
-  recordings whose records changed (`host_step_chunks_recorded_again`). The step's round trip
-  stays. Every other execution reads
+  changed records inline as before, from its records read once into the copy the next step
+  compares with, forgetting the recordings whose records changed
+  (`host_step_chunks_recorded_again`). The step's round trip stays. Every other execution reads
   and records each of its commands at each commit: one of a buffer the GPU may write (from the
   call at which a route that may write its records met it, or a blit into it, on) at its commit,
   one of a buffer of mesh or patch draws alone (neither `DRAW` nor `DRAW_INDEXED` among its command

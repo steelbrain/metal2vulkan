@@ -11,7 +11,7 @@
 //! next runs the new recording kept, but where the records changed, which the changed frame
 //! records inline and the next one records apart and keeps, as two steps read them alike
 //! (`WorkCounts::kept_contexts_made`). Records that change at each step record inline each,
-//! keeping nothing. The inputs, a case each: the records the GPU wrote (the encoding pass binds the indices' zero
+//! keeping nothing, each record read once. The inputs, a case each: the records the GPU wrote (the encoding pass binds the indices' zero
 //! half, so every index address moves); the buffer
 //! the commands inherit, and its offset; the pipeline state they inherit; the encoder's scissor
 //! rectangle; the resources the command buffer made resident; the buffer an index address names,
@@ -23,6 +23,7 @@ use super::host_memory::{not_importable, Mapping, GUEST_PAGE};
 use super::replayed_frames::{draw_state, indices, pixels_hash, Inputs, Page, ZEROS_AT};
 use super::{layer_reported_nothing_at_all, validated_device, Messages, ScratchCache, WAIT};
 use crate::gpu::TEST_DEVICE;
+use metal2vulkan::bind::indirect_commands::COMMAND_BYTES;
 use metal2vulkan::metal::ColorWriteMask;
 use metal2vulkan_runtime::{
     AddressPlacement, Buffer, BufferContents, BufferDescriptor, CommandBufferStatus, CommandQueue,
@@ -167,8 +168,9 @@ fn changed(
 }
 
 /// Frames 3 to 6 of `page`, whose records change at each: the indices' zero half and their first
-/// half in turn. The first forgets the kept recordings; each records inline, keeping nothing, and
-/// draws what a fresh page draws under its inputs.
+/// half in turn. The first forgets the kept recordings; each records inline, keeping nothing, from
+/// its records copied once (`WorkCounts::indirect_record_bytes_copied`), the copy the next step
+/// compares with, and draws what a fresh page draws under its inputs.
 fn changing(device: &Device, queue: &CommandQueue, page: &Page) {
     let case = "records that change at each step";
     let zeros = Inputs {
@@ -178,10 +180,18 @@ fn changing(device: &Device, queue: &CommandQueue, page: &Page) {
     let first = Inputs::default();
     for at in 3..7 {
         let inputs = if at % 2 == 1 { &zeros } else { &first };
+        let before = device.work_counts().indirect_record_bytes_copied;
         let (counts, pixels) = frame(device, queue, page, inputs);
+        let copied = device.work_counts().indirect_record_bytes_copied - before;
         let again = if at == 3 { CHUNKS } else { 0 };
         let expected = Moved { again, ..INLINE };
         assert_eq!(counts, expected, "{case}: frame {at}");
+        // The step reads each record once, into the copy the next step compares with.
+        assert_eq!(
+            copied,
+            u64::from(DRAWS) * COMMAND_BYTES as u64,
+            "{case}: frame {at} copies each record once"
+        );
         assert_eq!(
             pixels_hash(&pixels),
             pixels_hash(&fresh(device, queue, case, inputs)),
