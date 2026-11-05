@@ -39,6 +39,10 @@
 //! (`psb_masked`, beside an `A8Unorm` mask over a buffer) or sampling in pixel coordinates
 //! (`psb_sample`), through a scissor, with the barrier and without it.
 //!
+//! `pass_start_clear_read_costs` weighs the same barrier in a compositor's shape: many passes in
+//! one command buffer over one 4K-wide private target, each clearing it, its first draw sampling a
+//! quarter of it and three blended draws sampling other textures.
+//!
 //! Ignored by default: measurements, not checks. Run them by name with `--run-ignored all`.
 
 use super::attachment_reads::{floats, function};
@@ -46,11 +50,13 @@ use super::host_memory::{no_copy, Mapping, GUEST_PAGE};
 use super::{open_device, WAIT};
 use crate::gpu::TEST_DEVICE;
 use metal2vulkan::bind::SamplerDescriptor;
-use metal2vulkan::metal::{BarrierScope, PixelFormat, PrimitiveType, RenderStages, TextureUsage};
+use metal2vulkan::metal::{
+    BarrierScope, BlendFactor, PixelFormat, PrimitiveType, RenderStages, TextureUsage,
+};
 use metal2vulkan::pipeline::{ColorAttachmentDescriptor, RenderPipelineDescriptor};
 use metal2vulkan_runtime::{
-    Buffer, CommandBuffer, CommandQueue, Device, DeviceOptions, IoSurfacePlane, LoadAction,
-    PipelineOptions, RenderCommandEncoder, RenderPassDescriptor, RenderPipelineState,
+    Buffer, ClearColor, CommandBuffer, CommandQueue, Device, DeviceOptions, IoSurfacePlane,
+    LoadAction, PipelineOptions, RenderCommandEncoder, RenderPassDescriptor, RenderPipelineState,
     ResourceOptions, SamplerState, ScissorRect, StoreAction, Texture, TextureDescriptor,
     WorkCounts,
 };
@@ -676,4 +682,132 @@ fn pass_start_barrier_costs() {
             ),
         );
     }
+}
+
+/// The target of `pass_start_clear_read_costs`: a 4K-wide private `BGRA8Unorm` texture.
+const CLEAR_READ_TARGET: [u64; 2] = [3840, 2400];
+/// Its passes in one command buffer, and the command buffers timed after one untimed.
+const CLEAR_READ_PASSES: usize = 60;
+const CLEAR_READ_FRAMES: usize = 12;
+
+/// What a memory barrier over the render targets at the start of a pass that clears its target
+/// costs where the pass's first draw samples the target (`texture/attached_reads.rs`), in a
+/// compositor's shape: [`CLEAR_READ_PASSES`] passes in one command buffer over one
+/// [`CLEAR_READ_TARGET`] private `BGRA8Unorm` target, each loading `Clear` (to whole codes) and
+/// storing, its first command the barrier (after the fragment stage and before it), then a quad
+/// over a quarter of the target that samples the target itself (`psb_sample`), then three blended
+/// quads that sample other textures. Printed (`PASS-START-CLEAR-READ-COST`): the median GPU time
+/// per pass over [`CLEAR_READ_FRAMES`] command buffers, the CPU time per pass from the command
+/// buffer's making through its commit, and per pass the splits, render pass instances begun and
+/// texels copied in.
+#[test]
+#[ignore = "a release-mode measurement: run by name"]
+fn pass_start_clear_read_costs() {
+    let device = open_device(TEST_DEVICE, DeviceOptions::default()).unwrap();
+    let bgra = PixelFormat::BGRA8Unorm;
+    let psb = |name: &str, blended: bool| {
+        let mut d = RenderPipelineDescriptor::new(function(&device, "psb_rect", "psb_reads.ll"));
+        d.fragment = Some(function(&device, name, "psb_reads.ll"));
+        let mut color = ColorAttachmentDescriptor::new(bgra);
+        if blended {
+            color.blending_enabled = true;
+            color.source_rgb_blend_factor = BlendFactor::SourceAlpha;
+            color.destination_rgb_blend_factor = BlendFactor::OneMinusSourceAlpha;
+            color.source_alpha_blend_factor = BlendFactor::One;
+            color.destination_alpha_blend_factor = BlendFactor::OneMinusSourceAlpha;
+        }
+        d.color_attachments[0] = Some(color);
+        device
+            .new_render_pipeline_state(&d, &PipelineOptions::default())
+            .unwrap()
+    };
+    let (read, blend) = (psb("psb_sample", false), psb("psb_sample", true));
+    let [width, height] = CLEAR_READ_TARGET;
+    let mut d = TextureDescriptor::texture_2d(bgra, width, height, false);
+    d.usage = TextureUsage::RENDER_TARGET | TextureUsage::SHADER_READ;
+    d.resource_options = ResourceOptions::private();
+    let target = device.new_texture(&d).unwrap();
+    let others: Vec<Texture> = (0..3)
+        .map(|_| {
+            let mut d = TextureDescriptor::texture_2d(bgra, 1024, 1024, false);
+            d.usage = TextureUsage::SHADER_READ;
+            d.resource_options = ResourceOptions::private();
+            device.new_texture(&d).unwrap()
+        })
+        .collect();
+    let ndc = |[x0, y0, x1, y1]: [u64; 4]| {
+        let x = |p: u64| p as f32 / width as f32 * 2.0 - 1.0;
+        let y = |p: u64| 1.0 - p as f32 / height as f32 * 2.0;
+        floats([x(x0), y(y1), x(x1), y(y0)])
+    };
+    let quads = [
+        [width / 4, height / 4, 3 * width / 4, 3 * height / 4],
+        [0, 0, width / 2, height / 2],
+        [width / 2, 0, width, height / 2],
+        [width / 4, height / 2, 3 * width / 4, height],
+    ];
+    let queue = device.new_command_queue().unwrap();
+    let mut gpu = Vec::new();
+    let mut cpu = Vec::new();
+    let mut moved = None;
+    for frame in 0..=CLEAR_READ_FRAMES {
+        let before = device.work_counts();
+        let started = Instant::now();
+        let command_buffer = queue.command_buffer().unwrap();
+        for _ in 0..CLEAR_READ_PASSES {
+            let mut d = RenderPassDescriptor::new();
+            let color = &mut d.color_attachments[0];
+            color.texture = Some(target.clone());
+            color.load_action = LoadAction::Clear;
+            color.store_action = StoreAction::Store;
+            color.clear_color = ClearColor::new(0.0, 0.0, 0.0, 1.0);
+            let mut encoder = command_buffer.render_command_encoder(&d).unwrap();
+            barrier(&mut encoder);
+            encoder.set_render_pipeline_state(&read).unwrap();
+            encoder.set_fragment_texture(Some(&target), 0).unwrap();
+            encoder.set_vertex_bytes(&ndc(quads[0]), 0).unwrap();
+            encoder
+                .draw_primitives(PrimitiveType::Triangle, 0, 6, 1, 0)
+                .unwrap();
+            encoder.set_render_pipeline_state(&blend).unwrap();
+            for (quad, other) in quads[1..].iter().zip(&others) {
+                encoder.set_fragment_texture(Some(other), 0).unwrap();
+                encoder.set_vertex_bytes(&ndc(*quad), 0).unwrap();
+                encoder
+                    .draw_primitives(PrimitiveType::Triangle, 0, 6, 1, 0)
+                    .unwrap();
+            }
+            encoder.end_encoding().unwrap();
+        }
+        command_buffer.commit().unwrap();
+        let encoded = started.elapsed().as_secs_f64();
+        command_buffer.wait_until_completed_for(WAIT).unwrap();
+        assert_eq!(command_buffer.error(), None);
+        let after = device.work_counts();
+        if frame == 0 {
+            continue;
+        }
+        if frame == 1 {
+            moved = Some((before, after));
+        }
+        gpu.push(command_buffer.gpu_end_time().unwrap() - command_buffer.gpu_start_time().unwrap());
+        cpu.push(encoded);
+    }
+    let (before, after) = moved.unwrap();
+    let per = |a: u64, b: u64| (b - a) as f64 / CLEAR_READ_PASSES as f64;
+    let begun = |c: &WorkCounts| c.render_passes_begun_instances + c.render_passes_begun_inline;
+    println!(
+        "PASS-START-CLEAR-READ-COST {} {width}x{height}, {CLEAR_READ_PASSES} passes a command \
+         buffer: GPU {:.1} us/pass, CPU {:.1} us/pass; per pass: splits {:.2}, instances begun \
+         {:.2}, texels copied in {:.0}",
+        device.name(),
+        median(gpu) * 1e6 / CLEAR_READ_PASSES as f64,
+        median(cpu) * 1e6 / CLEAR_READ_PASSES as f64,
+        per(before.attachment_read_splits, after.attachment_read_splits),
+        per(begun(&before), begun(&after)),
+        per(
+            before.shadow_texels_copied_in + before.shadow_texels_copied_in_images,
+            after.shadow_texels_copied_in + after.shadow_texels_copied_in_images
+        ),
+    );
 }

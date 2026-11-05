@@ -47,8 +47,12 @@
 //!   to [`CLEAR`] and begins with a memory barrier over the render targets (the scope alone, with
 //!   the textures, or the target named), then one draw through [`READ_AREA`] that reads the target
 //!   at its own pixel (`psb_read`) or samples it at its pixel's center in pixel coordinates
-//!   (`psb_sample`): the draw reads the clear, its instance after the pass's first, which runs the
+//!   (`psb_sample`): the draw reads the clear, through its copy cleared to it in the pass's first
+//!   instance (`attachment_read_clears`), in an instance after the pass's first, which runs the
 //!   clear alone (`attachment_read_splits`), or through a snapshot.
+//! - [`a_draw_after_one_that_wrote_behind_a_pass_start_barrier_reads_what_it_wrote`]: the same
+//!   with draw A between the barrier and the read reads A's red inside A's block, the clear
+//!   around it, and takes no cleared copy.
 //! - [`a_draw_after_a_clear_with_no_barrier_reads_the_texels_from_before_the_pass`]: the same with
 //!   no barrier reads the red from before the pass, with no split.
 //! - [`a_barrier_at_the_pass_start_costs_nothing_without_a_read_of_a_cleared_color`]: a pass that
@@ -222,14 +226,16 @@ pub(super) fn red(bytes: &[u8], x: u64, y: u64) -> u8 {
     bytes[((y * SIDE + x) * 4) as usize]
 }
 
-/// What the pass moved of the counts: its draws' splits for attachment reads, their reads
-/// through snapshots inside their instances, their reads through copies, the encoders' shadow
+/// What the pass moved of the counts: its draws' splits for attachment reads, their reads of
+/// copies cleared to the pass's clear in place of a split, their reads through snapshots inside
+/// their instances, their reads through copies, the encoders' shadow
 /// copies, of those the copies in of what changed within a rectangle alone, the texels the copies
 /// in of buffers' textures moved and those of images' shadows, the texels the encoder's first
 /// copy in moved of a truth that is an image and of one in a mapped buffer, and whether the pass
 /// rendered the target through a copied stand-in.
 struct Moved {
     splits: u64,
+    cleared: u64,
     snapshotted: u64,
     reads: u64,
     copies: u64,
@@ -243,6 +249,7 @@ struct Moved {
 fn moved(before: &WorkCounts, after: &WorkCounts) -> Moved {
     Moved {
         splits: after.attachment_read_splits - before.attachment_read_splits,
+        cleared: after.attachment_read_clears - before.attachment_read_clears,
         snapshotted: after.reading_draws_snapshotted - before.reading_draws_snapshotted,
         reads: after.attachment_reads_through_copies - before.attachment_reads_through_copies,
         copies: after.shadow_copies - before.shadow_copies,
@@ -261,16 +268,18 @@ fn moved(before: &WorkCounts, after: &WorkCounts) -> Moved {
 }
 
 /// Hold `moved` to a pass whose draws C sample the target `name`, after `barriers` barriers, one
-/// before each, or none: through a copy, taken after a split where a barrier came first, or a
-/// draw after a barrier that reads at its own pixel alone through a snapshot inside its instance
-/// (`snapshot_reads.rs`), where the pass renders the target itself; in place where it renders
-/// through a stand-in.
+/// before each, or none: through a copy, taken after a split where a barrier came first or
+/// cleared to the pass's clear where one came before any draw of a pass that clears the target,
+/// or a draw after a barrier that reads at its own pixel alone through a snapshot inside its
+/// instance (`snapshot_reads.rs`), where the pass renders the target itself; in place where it
+/// renders through a stand-in.
 fn check(name: &str, moved: &Moved, barriers: u64) {
     eprintln!(
-        "attachment reads, {name}, barriers {barriers}: splits {}, snapshotted {}, reads through \
-         copies {}, shadow copies {} (bounded {}, texels in {} and {} of images, first in \
-         {:?}), through a stand-in {}",
+        "attachment reads, {name}, barriers {barriers}: splits {}, cleared copies {}, snapshotted \
+         {}, reads through copies {}, shadow copies {} (bounded {}, texels in {} and {} of \
+         images, first in {:?}), through a stand-in {}",
         moved.splits,
+        moved.cleared,
         moved.snapshotted,
         moved.reads,
         moved.copies,
@@ -288,12 +297,14 @@ fn check(name: &str, moved: &Moved, barriers: u64) {
         return;
     }
     assert_eq!(
-        moved.splits + moved.snapshotted,
+        moved.splits + moved.cleared + moved.snapshotted,
         barriers,
-        "{name}: a split or a snapshot for each read after a barrier"
+        "{name}: a split, a cleared copy or a snapshot for each read after a barrier"
     );
     if moved.snapshotted < barriers.max(1) {
         assert!(moved.reads >= 1, "{name}: the draw read no copy");
+    }
+    if moved.snapshotted + moved.cleared < barriers.max(1) {
         assert!(moved.copies >= 1, "{name}: no copy was taken");
         // The encoder's first copy in, counted by what holds the target's texels: its own image,
         // or the shared buffer's bytes.
@@ -852,13 +863,13 @@ fn psb_state(device: &Device, fragment: &str) -> RenderPipelineState {
 }
 
 /// One pass over `target`, loaded by `load` (to [`CLEAR`] where it clears) and stored: `start`
-/// first, then one draw of `state` over the whole target through [`READ_AREA`], `read` at its
-/// fragment texture 0; and the target's bytes, tight rows, read back.
+/// first, then draw A of `fill` where given (red [`DRAWN`] over `[8, 16)²`), then one draw of
+/// `state` over the whole target through [`READ_AREA`], `read` at its fragment texture 0; and the
+/// target's bytes, tight rows, read back.
 fn started_pass(
     queue: &CommandQueue,
     target: &Texture,
-    load: LoadAction,
-    start: Start,
+    (load, start, fill): (LoadAction, Start, Option<&RenderPipelineState>),
     (state, read): (&RenderPipelineState, &Texture),
 ) -> Vec<u8> {
     let device = queue.device();
@@ -881,6 +892,19 @@ fn started_pass(
         Start::Resources => encoder
             .memory_barrier_with_resources(&[ResourceRef::Texture(target)], fragment, fragment)
             .unwrap(),
+    }
+    if let Some(fill) = fill {
+        encoder.set_render_pipeline_state(fill).unwrap();
+        encoder
+            .set_vertex_bytes(&corners([8, 8, 16, 16]), 0)
+            .unwrap();
+        let red = f32::from(DRAWN) / 255.0;
+        encoder
+            .set_fragment_bytes(&floats([red, 0.0, 0.0, 1.0]), 0)
+            .unwrap();
+        encoder
+            .draw_primitives(PrimitiveType::Triangle, 0, 6, 1, 0)
+            .unwrap();
     }
     encoder.set_render_pipeline_state(state).unwrap();
     encoder
@@ -973,10 +997,12 @@ const STARTS: [Start; 3] = [
 /// the fragment stage and before it: its draw reads, at its own pixel (`psb_read`) or sampling at
 /// its pixel's center in pixel coordinates (`psb_sample`), the clear, as a Mac2 GPU orders the
 /// barrier (the pass's load actions are behind it; an M3 Max, whose GPU does not support the
-/// scope, reads the texels from before the pass, `fence.rs`). It records into an instance after
-/// the pass's first, which runs the clear alone (`attachment_read_splits`,
-/// `instance_splits_attached_read`), or reads through a snapshot inside the first
-/// (`reading_draws_snapshotted`).
+/// scope, reads the texels from before the pass, `fence.rs`). Before any draw of the pass, it
+/// reads its copy cleared to the clear in the pass's first instance (`attachment_read_clears`),
+/// which the texture of its own image always takes, a whole one-level, one-slice texture the
+/// pass clears in place to whole codes; or it records into an instance after the pass's first,
+/// which runs the clear alone (`attachment_read_splits`, `instance_splits_attached_read`), or
+/// reads through a snapshot inside the first (`reading_draws_snapshotted`).
 #[test]
 fn a_draw_after_a_barrier_at_the_pass_start_reads_the_clear() {
     on_device(|device, messages| {
@@ -990,8 +1016,12 @@ fn a_draw_after_a_barrier_at_the_pass_start_reads_the_clear() {
                     let name = format!("{name}, {fragment}, {start:?}");
                     messages.take_notices();
                     let counted = device.work_counts();
-                    let bytes =
-                        started_pass(&queue, &target, LoadAction::Clear, start, (&state, &target));
+                    let bytes = started_pass(
+                        &queue,
+                        &target,
+                        (LoadAction::Clear, start, None),
+                        (&state, &target),
+                    );
                     let after = device.work_counts();
                     // The split's notice names the read behind the barrier as its cause.
                     let notice = messages
@@ -1022,6 +1052,13 @@ fn a_draw_after_a_barrier_at_the_pass_start_reads_the_clear() {
                         assert_eq!(attached, moved.splits, "{name}: splits for the read");
                         assert_eq!(splits, moved.splits, "{name}: no other split");
                     }
+                    if name.starts_with("its own image") && moved.snapshotted == 0 {
+                        assert_eq!(
+                            (moved.cleared, splits, begun),
+                            (1, 0, 1),
+                            "{name}: the copy cleared, in the pass's one instance"
+                        );
+                    }
                     split_any |= splits > 0;
                     announced |= notice.is_some();
                 }
@@ -1046,8 +1083,7 @@ fn a_draw_after_a_clear_with_no_barrier_reads_the_texels_from_before_the_pass() 
                 let bytes = started_pass(
                     &queue,
                     &target,
-                    LoadAction::Clear,
-                    Start::Nothing,
+                    (LoadAction::Clear, Start::Nothing, None),
                     (&state, &target),
                 );
                 let after = device.work_counts();
@@ -1055,6 +1091,55 @@ fn a_draw_after_a_clear_with_no_barrier_reads_the_texels_from_before_the_pass() 
                 let moved = moved(&counted, &after);
                 check(&name, &moved, 0);
                 assert_eq!(instances(&counted, &after)[0], 0, "{name}: a split");
+            }
+        }
+    });
+}
+
+/// After a memory barrier at the start of a pass that clears its target, draw A fills its block,
+/// then the draw reads the target through [`READ_AREA`]: it reads A's red inside A's block and the
+/// clear around it, as the copy after the instance A drew in holds (a Mac2 GPU orders A's write
+/// before the read nowhere; the copy holds what the draws between the barrier and the read
+/// wrote, `texture/attached_reads.rs`). A drew before it, so its copy is no copy cleared to the
+/// clear (`attachment_read_clears`), but a split's or a snapshot.
+#[test]
+fn a_draw_after_one_that_wrote_behind_a_pass_start_barrier_reads_what_it_wrote() {
+    on_device(|device, _messages| {
+        let queue = device.new_command_queue().unwrap();
+        let fill = state(device, "tob_solid", "tob_renders.ll");
+        for fragment in ["psb_read", "psb_sample"] {
+            let state = psb_state(device, fragment);
+            for (name, target, _buffer) in targets(device) {
+                let name = format!("{name}, {fragment}");
+                let counted = device.work_counts();
+                let start = Start::Scope(BarrierScope::RENDER_TARGETS);
+                let bytes = started_pass(
+                    &queue,
+                    &target,
+                    (LoadAction::Clear, start, Some(&fill)),
+                    (&state, &target),
+                );
+                let after = device.work_counts();
+                let block = |x: u64, y: u64| (8..16).contains(&x) && (8..16).contains(&y);
+                let area = |x: u64, y: u64| {
+                    let (x0, y0) = (READ_AREA.x, READ_AREA.y);
+                    (x0..x0 + READ_AREA.width).contains(&x)
+                        && (y0..y0 + READ_AREA.height).contains(&y)
+                };
+                for y in 0..SIDE {
+                    for x in 0..SIDE {
+                        let want = match (area(x, y), block(x, y)) {
+                            (true, true) => reordered([DRAWN, 0, 0, 255]),
+                            (true, false) => reordered(CLEAR),
+                            (false, _) => CLEAR,
+                        };
+                        let at = ((y * SIDE + x) * 4) as usize;
+                        assert_eq!(bytes[at..at + 4], want, "{name}: pixel ({x}, {y})");
+                    }
+                }
+                let moved = moved(&counted, &after);
+                assert_eq!(moved.cleared, 0, "{name}: a copy cleared after A drew");
+                check(&name, &moved, 1);
             }
         }
     });
@@ -1114,7 +1199,8 @@ fn a_barrier_at_the_pass_start_costs_nothing_without_a_read_of_a_cleared_color()
                             .unwrap();
                     }
                     let counted = device.work_counts();
-                    let bytes = started_pass(&queue, &target, load, start, (&read, texture));
+                    let bytes =
+                        started_pass(&queue, &target, (load, start, None), (&read, texture));
                     let after = device.work_counts();
                     hold_area(&name, &bytes, reordered([BEFORE, 0, 0, 255]), outside);
                     let moved = moved(&counted, &after);
