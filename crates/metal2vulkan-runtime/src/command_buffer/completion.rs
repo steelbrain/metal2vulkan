@@ -374,7 +374,7 @@ impl Completion {
     /// Wait for `batch`, just submitted to `VkQueue` `queue` (or a failed command buffer's end,
     /// at the queue's last submitted value).
     pub(crate) fn watch(&self, queue: usize, batch: Submitted) {
-        #[cfg(test)]
+        #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
         trace::record(|| trace::Traced::Watched {
             queue,
             value: batch.value,
@@ -609,7 +609,7 @@ fn finish(watch: &Watch, lists: &mut FenceLists, mut finished: Vec<(usize, Submi
     // The host time the batches were seen complete: an uncalibrated command buffer's GPU end
     // (`gpu_time.rs`).
     let seen = gpu_time::host_nanos();
-    #[cfg(test)]
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     for (queue, batch) in finished.iter().filter(|(_, batch)| batch.last) {
         trace::record(|| trace::Traced::Finished {
             queue: *queue,
@@ -670,7 +670,7 @@ fn finish(watch: &Watch, lists: &mut FenceLists, mut finished: Vec<(usize, Submi
     }
     // A batch held at its gate, or for a GPU signal to land, may now go (`scheduler`).
     device.shared().scheduler.completions(&device);
-    #[cfg(test)]
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     trace::step("events reached");
     // Every finished batch's fence is waited for: where a queue's failures are relayed each
     // batch has one (`device/relay.rs`), signaled after the driver reported its failure.
@@ -694,7 +694,7 @@ fn finish(watch: &Watch, lists: &mut FenceLists, mut finished: Vec<(usize, Submi
         }
     }
     let settled = settle(&device, lists);
-    #[cfg(test)]
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     trace::step("fences settled");
     // Their GPU times' timestamps are read, and their slots given back, and their GPU times
     // placed among their queues' in order, before their transitions are posted: a completed
@@ -709,7 +709,7 @@ fn finish(watch: &Watch, lists: &mut FenceLists, mut finished: Vec<(usize, Submi
             buffer.place_gpu_times();
         }
     }
-    #[cfg(test)]
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     trace::step("times placed");
     drop(device);
     match settled {
@@ -1116,7 +1116,7 @@ fn poll(device: &Device, queue: usize, front: Front) -> Result<u64, CommandBuffe
             Err(error) => Err(failure(device, error)),
         }
     };
-    #[cfg(test)]
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     let entered = gpu_time::host_nanos();
     let waited = match front.fence {
         Some(fence) => {
@@ -1138,7 +1138,7 @@ fn poll(device: &Device, queue: usize, front: Front) -> Result<u64, CommandBuffe
             reaches(front.value)?
         }
     };
-    #[cfg(test)]
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     trace::record(|| trace::Traced::Waited {
         queue,
         value: front.value,
@@ -1226,9 +1226,10 @@ fn failure(device: &Device, error: vk::Result) -> CommandBufferError {
     }
 }
 
-/// The host times of each queue waiter's steps, kept while a test asks for them, in test builds
-/// only: the completion latency's measurement reads them (`tests::completion_latency`).
-#[cfg(test)]
+/// The host times of each queue waiter's steps, kept while a test asks for them, in the device
+/// tests' builds only: the completion latency's measurement reads them
+/// (`tests::completion_latency`).
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 pub(crate) mod trace {
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Mutex;
