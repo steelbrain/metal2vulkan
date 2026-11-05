@@ -36,6 +36,7 @@ use super::host_memory::{gpu_read, host_page, no_copy, not_importable, on_device
 use super::host_memory::{Mapping, Seen};
 use super::no_copy_heaps::{no_copy_heap, shared, HEAP};
 use super::predication::{kernel, EQUAL, NOT_EQUAL};
+use super::property_reads::{batches_submitted, first_batch_submitted};
 use super::rebinds::{rebind, rebind_heap};
 use super::resource_ids::DELAYED_DEALLOCATORS;
 use super::shared_kinds;
@@ -246,12 +247,13 @@ pub(super) fn walk(
             }))
             .unwrap();
     }
+    let before = batches_submitted(device);
     command_buffer.commit().unwrap();
     if wait {
         between();
         assert_eq!(
-            command_buffer.kernel_start_time(),
-            0.0,
+            batches_submitted(device),
+            before,
             "a batch was submitted before the event"
         );
         event.set_signaled_value(1);
@@ -1528,15 +1530,9 @@ fn a_rebind_between_submissions_reaches_the_new_pages_in_the_later_named_use() {
         let mut encoder = command_buffer.compute_command_encoder().unwrap();
         encode_case(&mut encoder, &state, &walker.compute, &later, &holding).unwrap();
         encoder.end_encoding().unwrap();
+        let before = batches_submitted(device);
         command_buffer.commit().unwrap();
-        let deadline = Instant::now() + WAIT;
-        while command_buffer.kernel_start_time() == 0.0 {
-            assert!(
-                Instant::now() < deadline,
-                "the first batch was never submitted"
-            );
-            std::thread::sleep(Duration::from_millis(1));
-        }
+        first_batch_submitted(device, before);
         drop(rebind_to(&member, B));
         std::thread::sleep(Duration::from_millis(50));
         assert_eq!(
@@ -1637,15 +1633,9 @@ fn released_while_listed(keep_alive: bool) {
         let mut blit = command_buffer.blit_command_encoder().unwrap();
         blit.fill_buffer(&unrelated, 0..16, 0x3c).unwrap();
         blit.end_encoding().unwrap();
+        let before = batches_submitted(device);
         command_buffer.commit().unwrap();
-        let deadline = Instant::now() + WAIT;
-        while command_buffer.kernel_start_time() == 0.0 {
-            assert!(
-                Instant::now() < deadline,
-                "the first batch was never submitted"
-            );
-            std::thread::sleep(Duration::from_millis(1));
-        }
+        first_batch_submitted(device, before);
         let before = device.work_counts();
         drop(listed);
         let after = device.work_counts();
@@ -1751,15 +1741,9 @@ fn a_named_buffer_released_while_its_command_buffer_waits_goes_unannounced_as_it
         command_buffer
             .encode_wait_for_event(EventRef::from(&event), 1)
             .unwrap();
+        let before = batches_submitted(device);
         command_buffer.commit().unwrap();
-        let deadline = Instant::now() + WAIT;
-        while command_buffer.kernel_start_time() == 0.0 {
-            assert!(
-                Instant::now() < deadline,
-                "the first batch was never submitted"
-            );
-            std::thread::sleep(Duration::from_millis(1));
-        }
+        first_batch_submitted(device, before);
         let before = device.work_counts();
         drop(buffers);
         drop(named);

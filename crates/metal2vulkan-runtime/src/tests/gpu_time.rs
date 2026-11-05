@@ -3,12 +3,13 @@
 //! places them outside the command buffer's life by more than its deviation and the clocks'
 //! drift allow set aside for the completion; the pair, the
 //! reading of the least deviation; the host time domain a calibration reads; the extension's
-//! preferred form; and the device's timestamp pools, their slots held by the command buffers in
-//! flight, made as those need them up to the most.
+//! preferred form; the device's timestamp pools, their slots held by the command buffers in
+//! flight, made as those need them up to the most; and the kernel times, the start shown with the
+//! end alone.
 
 use crate::gpu_time::{
-    host_domain, host_time, least_deviation, Extension, GpuClock, Life, Pair, Placement, Pool,
-    Pools, Reading, DRIFT_PPM, PLAIN, PREFIXED, SLOTS,
+    host_domain, host_time, least_deviation, Extension, GpuClock, KernelTimes, Life, Pair,
+    Placement, Pool, Pools, Reading, DRIFT_PPM, PLAIN, PREFIXED, SLOTS,
 };
 use ash::vk;
 use std::collections::BTreeSet;
@@ -420,4 +421,31 @@ fn a_refused_pool_ends_the_making_and_scarce_pools_are_one() {
     assert!(!asked);
     assert_eq!(scarce.slots(), SLOTS as usize);
     drop(held);
+}
+
+/// A command buffer's kernel start shows only once its end is known (`kernelStartTime`), as no
+/// read of Metal's sees a start without an end: between the first batch's start and the last
+/// batch's end (while the last batch is submitted, or waits for an event), the shown start reads 0
+/// and the scheduler's own read (`start`) has it; once the end is stored, both reads of the pair,
+/// in either order, see both.
+#[test]
+fn a_kernel_start_shows_with_its_end_alone() {
+    let kernel = KernelTimes::default();
+    assert_eq!(
+        (kernel.shown_start(), kernel.end(), kernel.start()),
+        (0, 0, 0)
+    );
+    kernel.begin();
+    let began = kernel.start();
+    assert_ne!(began, 0, "the scheduler's own read of the start");
+    assert_eq!(
+        (kernel.shown_start(), kernel.end()),
+        (0, 0),
+        "a start shown before its end"
+    );
+    kernel.end_at(began + 7);
+    let (end, start) = (kernel.end(), kernel.shown_start());
+    assert_eq!((start, end), (began, began + 7));
+    let (start, end) = (kernel.shown_start(), kernel.end());
+    assert_eq!((start, end), (began, began + 7));
 }

@@ -711,6 +711,10 @@ driver's. Each is open work.
   answers GPU times from the host clock and spares them. An empty command buffer is not submitted
   (`WorkCounts::command_buffers_unsubmitted`): its commit and wait took 2.6 µs on an RTX 5080 and
   1.8 µs on an M3.
+- **The kernel start of a command buffer whose first command waits for an event** is its first
+  batch's submission, after the signal (`gpu_time.rs`). Metal's is the time it began scheduling
+  the command buffer, 13 to 39 us after its commit on the M3 Max under macOS 27.0.1, however long
+  the wait; both show only with the kernel end, after the signal.
 - **A texture made while a batch is submitted waits for that submission on a device without
   `descriptorBindingUpdateUnusedWhilePending`** (the `vk12-floor` profile), where its making
   registers a first move (a `Private` texture's): the registration takes the first-move order,

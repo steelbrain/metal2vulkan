@@ -109,7 +109,17 @@
 //!   buffer's first batch and finished submitting its last. They are kept apart from the command
 //!   buffer's state ([`KernelTimes`]), which the scheduler holds while it records the batch's
 //!   own command buffers and submits it: a read waits for no submission in
-//!   progress and for no GPU work, as Metal's reads wait for none.
+//!   progress and for no GPU work, as Metal's reads wait for none. The start shows only once the
+//!   end is known ([`KernelTimes::shown_start`]): no read sees a start without an end, while the
+//!   last batch is submitted, nor while it waits for an event and the batches before the wait
+//!   were submitted. Metal shows neither before both, so (the M3 Max under macOS 27.0.1): of
+//!   3,900 to 240,000 reads of each command buffer that waited for nothing, from its commit
+//!   until it completed, and 4.6 to 4.7 million of each one that waited 200 ms for an `MTLEvent`
+//!   or an `MTLSharedEvent` (after a blit encoder, before one, or alone), no read of the start
+//!   and then the end answered a start and no end; the waiting ones read both 0 until 50 to 160
+//!   us after the signal. Metal's start there is the time it began scheduling the command
+//!   buffer, 13 to 39 us after its commit, whatever it waits for first: the runtime's, where the
+//!   first batch waits for the event, is that batch's submission, after the signal.
 //! - **No encoder, no timestamps**. A command buffer that encoded nothing and waits for no event or
 //!   semaphore takes no slot and writes no timestamps. Its GPU start and end are both where its
 //!   queue reached it: its kernel end time, or the GPU end of the queue's command buffer before it
@@ -933,7 +943,8 @@ unsafe fn calibration(
 }
 
 /// A command buffer's kernel times, in nanoseconds of the host's clock, 0 until known: apart
-/// from its state, so a read waits for no submission in progress (the module docs).
+/// from its state, so a read waits for no submission in progress (the module docs). The start is
+/// shown with the end alone ([`shown_start`](Self::shown_start)), as Metal shows them.
 #[derive(Debug, Default)]
 pub(crate) struct KernelTimes {
     /// The scheduler began submitting its first batch.
@@ -953,9 +964,23 @@ impl KernelTimes {
         self.end.store(at, Ordering::Release);
     }
 
-    /// When the scheduler began submitting the first batch; 0 before.
+    /// When the scheduler began submitting the first batch, whether or not it finished
+    /// submitting the last: the scheduler's own reads; 0 before.
     pub(crate) fn start(&self) -> u64 {
         self.start.load(Ordering::Acquire)
+    }
+
+    /// When the scheduler began submitting the first batch, as `kernelStartTime` shows it: 0
+    /// until the end is known too, so that no read sees a start without an end, in either order
+    /// of the two reads (the module docs). The start is stored before the end on every path
+    /// ([`begin`](Self::begin) before [`end_at`](Self::end_at)), so the end's acquire load orders
+    /// the start's after it: a start shown means a later read of the end sees it, and an end seen
+    /// means a later read of the start shows it.
+    pub(crate) fn shown_start(&self) -> u64 {
+        match self.end.load(Ordering::Acquire) {
+            0 => 0,
+            _ => self.start(),
+        }
     }
 
     /// When the scheduler finished submitting the last batch; 0 before.

@@ -3734,9 +3734,13 @@ impl CommandBuffer {
 
     /// `kernelStartTime`: the host time, in seconds of [`host_time`](super::host_time)'s clock,
     /// at which the device's scheduler began submitting the command buffer's work to Vulkan; 0
-    /// before. Like Metal's, the read waits for no submission in progress and no GPU work.
+    /// before, and until its [`kernel_end_time`](Self::kernel_end_time) is known, also while it
+    /// waits for an event: as Metal's, no read shows a start without an end. Where its first
+    /// command waits for an event, the start is the submission after the event's signal; Metal's
+    /// is the time it began scheduling the command buffer, at about its commit. Like Metal's, the
+    /// read waits for no submission in progress and no GPU work.
     pub fn kernel_start_time(&self) -> f64 {
-        gpu_time::seconds(self.0.kernel.start())
+        gpu_time::seconds(self.0.kernel.shown_start())
     }
 
     /// `kernelEndTime`: the host time at which the device's scheduler finished submitting the
