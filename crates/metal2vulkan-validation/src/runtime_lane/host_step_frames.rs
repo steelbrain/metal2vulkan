@@ -18,6 +18,9 @@
 //!   of the first window of `params`), every one of which the render encoder makes resident.
 //! - **`bundle_no_copy`**: as `bundle`, each command's own buffer a no-copy buffer over host
 //!   pages of its own, as a guest's buffers reach the runtime.
+//! - **`bundle_read`**: as `bundle`, the encoder making nothing resident for writing.
+//!
+//! [`EXTRA_VAR`] has the render encoder make that many more buffers resident for reading.
 //!
 //! Printed as `HOST-STEP-FRAMES` lines: per frame, its commit to its kernel start (the scheduler's
 //! first submission), the kernel start to the kernel end (its last batch submitted), the end to its
@@ -50,9 +53,14 @@ const FRAMES: usize = 6;
 enum Shape {
     /// The encoder's state inherited, `params`' windows shared.
     Inherited,
-    /// Nothing inherited, a buffer of each command's own, a no-copy one where `no_copy`.
-    Bundle { no_copy: bool },
+    /// Nothing inherited, a buffer of each command's own, a no-copy one where `no_copy`; `out`
+    /// made resident for the vertex stage's writes where `writes`.
+    Bundle { no_copy: bool, writes: bool },
 }
+
+/// The variable that sets how many buffers of no command's the render encoder makes resident
+/// for reading besides (0 by default).
+const EXTRA_VAR: &str = "HOST_STEP_EXTRA_RESIDENT";
 
 /// What every frame uses: the template's setup, the writer, the buffer of commands, the writer's
 /// argument (the buffer's ID), the two index buffers its draws read, and each command's own
@@ -66,11 +74,13 @@ struct Frames {
     short_indices: Buffer,
     wide_indices: Buffer,
     own: Vec<Buffer>,
+    extra: Vec<Buffer>,
+    writes: bool,
     _pages: Option<Mapping>,
 }
 
 impl Frames {
-    fn new(device: Device, shape: Shape) -> Frames {
+    fn new(device: Device, shape: Shape, extra: usize) -> Frames {
         let setup = Setup::new(&device);
         let writer = indirect_host_steps::state(&device, "icb_render_indexed_encode", false);
         let mut descriptor = IndirectCommandBufferDescriptor::new();
@@ -82,13 +92,13 @@ impl Frames {
         let window = read_buffer(&setup.params, 0, (WINDOW * 4) as u64).unwrap();
         let (own, pages) = match shape {
             Shape::Inherited => (Vec::new(), None),
-            Shape::Bundle { no_copy: false } => (
+            Shape::Bundle { no_copy: false, .. } => (
                 (0..COMMANDS)
                     .map(|_| buffer_with(&device, &window).unwrap())
                     .collect(),
                 None,
             ),
-            Shape::Bundle { no_copy: true } => {
+            Shape::Bundle { no_copy: true, .. } => {
                 let pages = Mapping::anonymous(COMMANDS as usize * GUEST_PAGE);
                 let own = (0..COMMANDS as usize)
                     .map(|index| {
@@ -147,6 +157,10 @@ impl Frames {
             icb,
             arguments,
             own,
+            extra: (0..extra)
+                .map(|_| buffer_with(&device, &window).unwrap())
+                .collect(),
+            writes: !matches!(shape, Shape::Bundle { writes: false, .. }),
             _pages: pages,
         }
     }
@@ -173,7 +187,9 @@ impl Frames {
         encoder
             .set_render_pipeline_state(&self.setup.state)
             .unwrap();
-        self.setup.resident(&mut encoder);
+        if self.writes {
+            self.setup.resident(&mut encoder);
+        }
         for indices in [&self.short_indices, &self.wide_indices] {
             encoder
                 .use_resource(
@@ -183,8 +199,10 @@ impl Frames {
                 )
                 .unwrap();
         }
-        if !self.own.is_empty() {
-            let own: Vec<_> = self.own.iter().map(Buffer::as_resource).collect();
+        if !self.own.is_empty() || !self.extra.is_empty() {
+            let own: Vec<_> = (self.own.iter().chain(&self.extra))
+                .map(Buffer::as_resource)
+                .collect();
             encoder
                 .use_resources(&own, ResourceUsage::READ, RenderStages::VERTEX)
                 .unwrap();
@@ -218,7 +236,12 @@ fn measure(stream: &str, shape: Shape, beside_queues: bool) {
     })
     .unwrap();
     let name = device.name().to_owned();
-    let frames = Frames::new(device, shape);
+    let extra = std::env::var(EXTRA_VAR)
+        .ok()
+        .map(|text| text.parse::<usize>().expect(EXTRA_VAR))
+        .unwrap_or(0);
+    let frames = Frames::new(device, shape, extra);
+    eprintln!("HOST-STEP-FRAMES {name}: {stream}: {extra} more buffers resident");
     let stop = Arc::new(AtomicBool::new(false));
     let beside = beside_queues.then(|| {
         let device = frames.device.clone();
@@ -322,11 +345,38 @@ fn host_step_frames_beside_queues() {
 #[test]
 #[ignore = "a measurement: run it alone, in release"]
 fn host_step_frames_bundle() {
-    measure("bundle", Shape::Bundle { no_copy: false }, false);
+    measure(
+        "bundle",
+        Shape::Bundle {
+            no_copy: false,
+            writes: true,
+        },
+        false,
+    );
 }
 
 #[test]
 #[ignore = "a measurement: run it alone, in release"]
 fn host_step_frames_bundle_no_copy() {
-    measure("bundle_no_copy", Shape::Bundle { no_copy: true }, false);
+    measure(
+        "bundle_no_copy",
+        Shape::Bundle {
+            no_copy: true,
+            writes: true,
+        },
+        false,
+    );
+}
+
+#[test]
+#[ignore = "a measurement: run it alone, in release"]
+fn host_step_frames_bundle_read() {
+    measure(
+        "bundle_read",
+        Shape::Bundle {
+            no_copy: false,
+            writes: false,
+        },
+        false,
+    );
 }
