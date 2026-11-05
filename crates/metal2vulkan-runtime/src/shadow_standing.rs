@@ -18,9 +18,12 @@
 //!   key, whatever the range) lets go of the standing: another shadow's copy back over the same
 //!   bytes, a blit's or a pass's write, a copy in that a command buffer's end did not leave
 //!   standing. So does any batch of a command buffer whose commands may reach memory no use names
-//!   (a root table, an execution resolved from records: `State::reaches_unnamed`, or one that
-//!   noted nothing as it encoded), for every shadow. A shadow over a buffer whose `VkBuffer` was
-//!   handed out (`Buffer::vk_buffer`), which the caller's own work may write, never stands.
+//!   (a root table, an execution resolved from records: `State::reaches_unnamed`), for every
+//!   shadow. Every other command's tracked uses are in its encoder's summary, whether or not the
+//!   device's logs of host pages collected them (`CommandBuffer::note_dirty`). A shadow over a
+//!   buffer whose uses are untracked, whose writes no summary holds, never stands; nor does one
+//!   over a buffer whose `VkBuffer` was handed out (`Buffer::vk_buffer`), which the caller's own
+//!   work may write.
 //! - **The copy in.** A command buffer's first copy in of such a shadow, before any command of
 //!   its encoder wrote what it reads, goes to its batch's submission (`shadow::GatedCopyIn`), and
 //!   copies nothing there where the shadow stands and no earlier encoder of the command buffer
@@ -32,7 +35,7 @@ use super::key_hash::KeyMap;
 use super::resource::ResourceKey;
 use super::shadow::ShadowCopies;
 use super::tracker::Summary;
-use super::values::StorageMode;
+use super::values::{HazardTrackingMode, StorageMode};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, Weak};
 
@@ -74,17 +77,18 @@ struct Stood {
 
 impl StandingAcross {
     /// The standing of a shadow over `buffer`'s bytes: one that may stand where the buffer is a
-    /// `Private` or `Memoryless` buffer the runtime made of its own (not a heap's, nor over the
-    /// caller's memory), until its `VkBuffer` is handed out; none for any other.
+    /// tracked `Private` or `Memoryless` buffer the runtime made of its own (not a heap's, nor
+    /// over the caller's memory), until its `VkBuffer` is handed out; none for any other.
     pub(super) fn over(buffer: &Buffer) -> StandingAcross {
         let private = matches!(
             buffer.resource_options().storage_mode(),
             Ok(StorageMode::Private | StorageMode::Memoryless)
         );
         let own = buffer.caller_memory().is_none() && buffer.heap().is_none();
+        let tracked = buffer.hazard_tracking_mode() == HazardTrackingMode::Tracked;
         StandingAcross {
             stood: Mutex::new(None),
-            handed_out: (private && own).then(|| buffer.handed_out()),
+            handed_out: (private && own && tracked).then(|| buffer.handed_out()),
         }
     }
 

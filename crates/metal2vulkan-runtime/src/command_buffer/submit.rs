@@ -227,7 +227,6 @@ use crate::tracker::{Barrier, Point, Summary};
 use crate::work_counts::Begun;
 use ash::vk;
 use std::collections::BTreeSet;
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 use {crate::tracker::Footprint, std::sync::Mutex};
@@ -1160,7 +1159,7 @@ impl CommandBufferShared {
         // (`shadow_standing.rs`): its writes let go of those they meet; then, where it ends the
         // command buffer with its last encoder and nothing failed it or reached memory unnamed,
         // the shadows its end left holding every texel of their truth stand.
-        let unnamed = state.reaches_unnamed || self.unnoted.load(Ordering::Relaxed);
+        let unnamed = state.reaches_unnamed;
         let clean = state.failure.is_none()
             && state.fails_from.is_none()
             && state.faulted.is_empty()
@@ -1484,10 +1483,9 @@ impl CommandBufferShared {
     /// names.
     fn stands(&self, state: &State, encoder: usize, copies: &ShadowCopies) -> bool {
         let keys = copies.standing_keys();
-        let unnamed = state.reaches_unnamed || self.unnoted.load(Ordering::Relaxed);
         let wrote =
             (state.recorded[..encoder].iter()).any(|recorded| recorded.summary.writes_any(&keys));
-        !unnamed && !wrote && self.device.shared().standings.stands(copies)
+        !state.reaches_unnamed && !wrote && self.device.shared().standings.stands(copies)
     }
 
     /// Record the decodes into ASTC carriers' second decoded twins (`texture/decoded_twin.rs`) of
