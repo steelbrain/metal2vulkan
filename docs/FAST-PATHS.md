@@ -1006,6 +1006,16 @@ else.
   read settles nothing. A rotated plane never reaches any of this: its
   `bytesPerRow` must be a multiple of 16, so its GPU rows lie at the pitch itself and share no
   byte.
+- **Textures over an IOSurface plane past one 2D image of its rows are refused.** Over a plane of
+  a surface with planes Metal makes a texture of any type, extent and levels, but its GPUs lay out
+  alike only a texture buffer, a 1D texture whose row fits and a 2D array of one slice
+  (`probes/surface_texture_envelope.m`, an AMD Radeon Pro 5300M, an Intel UHD 630 and an Apple M3
+  Max); rows wider than the plane's, more levels, slices, a 3D, cube or multisample texture, and
+  a texture buffer or BC texture at an offset or pitch off 16 are
+  `NotImplemented(SurfacePlaneShape)`, and rows past the surface's end
+  `NotImplemented(TexelsPastBufferLength)`. A texture taller than its plane, inside the surface,
+  is held as the M3 Max lays it out (its rows on at the plane's pitch); the x86 Macs' GPUs keep it
+  to the plane, which the runtime cannot, as `IoSurfacePlane` gives no plane height.
 - **A shadow's merge back to host pages stores each changed word alone after a command that
   leaves texels it does not write** (a kernel's or a blit's partial writes among them; a render
   pass that loads and stores its attachment inside its scissors, and a command that replaces

@@ -395,10 +395,13 @@ impl Buffer {
     }
 
     /// The stand-in for `newTextureWithDescriptor:iosurface:plane:` over the caller's memory: a
-    /// 2D texture of `descriptor` whose texels are `plane`'s, the buffer standing for the
-    /// IOSurface (a no-copy buffer over the surface's pages, `IOSurfaceGetBaseAddress` for
-    /// `IOSurfaceGetAllocSize` bytes, or a buffer holding them). Metal's IOSurface rules apply,
-    /// measured on the M3 Max and an M4, not [`new_texture`](Self::new_texture)'s buffer rules:
+    /// texture of `descriptor` whose texels are `plane`'s, the buffer standing for the IOSurface
+    /// (a no-copy buffer over the surface's pages, `IOSurfaceGetBaseAddress` for
+    /// `IOSurfaceGetAllocSize` bytes, or a buffer holding them): a 2D texture or a texture buffer,
+    /// and over a plane of a surface with planes also a 1D texture whose row fits and a 2D array
+    /// of one slice, laid out as the 2D texture of their rows (a texture buffer's texels run on
+    /// from such a plane's offset however wide). Metal's IOSurface rules apply, measured on the M3
+    /// Max and an M4, not [`new_texture`](Self::new_texture)'s buffer rules:
     ///
     /// - the texture takes and reports the descriptor's resource options, whatever the buffer's
     ///   (its default hazard tracking mode resolves to tracked), as an M4's plain run and its
@@ -435,9 +438,13 @@ impl Buffer {
     /// Refused: a surface made with `kIOSurfaceClientDirection`, SPI
     /// ([`AppleOnly::SurfaceClientDirection`](super::AppleOnly::SurfaceClientDirection)); what
     /// Metal stops (`Invalid`, with a [`TextureProblem`](super::TextureProblem) or a
-    /// [`BufferTextureProblem`](super::BufferTextureProblem): a type other than 2D, more than one
-    /// level, a pitch below the row, a surface without planes at another pitch or offset, or one
-    /// whose rows end past it, which plain Metal asserts on); `Memoryless` storage, which plain
+    /// [`BufferTextureProblem`](super::BufferTextureProblem): over a surface without planes a
+    /// type other than 2D or a texture buffer, more than one level, a pitch below the row, another
+    /// pitch or offset, or rows that end past it, which plain Metal asserts on); what Metal makes
+    /// over a plane of a surface with planes and lays out no one way across the GPUs measured
+    /// (`NotImplemented(SurfacePlaneShape)`, which carries the measurements: rows wider than the
+    /// plane's, more than one level, another type, a 2D array of slices, a texture buffer or BC
+    /// texture at an offset or pitch off 16 bytes); `Memoryless` storage, which plain
     /// Metal makes and serves on the CPU while its GPU uses fail the command buffer
     /// (`NotImplemented(MemorylessSurfacePlane)`, which carries the measurement); rows that
     /// overlap on Metal's GPU where no shadow of the runtime's holds them
@@ -458,6 +465,14 @@ impl Buffer {
     /// the runtime's gap (`NotImplemented(SurfaceDepthStencil)`), with what
     /// `texture/surface_depth.rs` lists. Over a surface without planes Metal stops it (`Invalid`,
     /// `BufferTextureProblem::NotLinear`).
+    ///
+    /// A BC1 to BC7 texture over a surface's rows (2D, over a plane of a surface with planes at an
+    /// offset and pitch that are multiples of 16) is made as the x86 Macs make it, where the M3
+    /// Max answers nil: row `j` of its blocks at the plane's offset + `j` x `bytes_per_row`, which
+    /// its samples, blits and CPU calls take (`linear_plan.rs`'s **Block-compressed surfaces**).
+    /// Over a surface without planes Metal stops a row of blocks wider than the surface's
+    /// (`RowPitch`) and rows of texels past it (`PastBuffer`). Every other compressed format is
+    /// stopped as over a buffer (`NotLinear`).
     ///
     /// A plane of a 4:2:2 format (`GBGR422`, `BGRG422`: a CoreVideo `2vuy` or `yuvs` surface's)
     /// is made as Metal makes it, 2 bytes a texel, copied as a 4:2:2 texture of the device's is

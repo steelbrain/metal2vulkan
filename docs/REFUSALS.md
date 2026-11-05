@@ -28,7 +28,7 @@ Columns:
 | Kind | Variants | With a site | Reach system | Reach app | Reach rare | Reach none | Unassessed |
 |---|---|---|---|---|---|---|---|
 | Translator and front-end refusals | 128 | 128 | 6 | 32 | 71 | 19 | 0 |
-| Runtime gaps | 73 | 73 | 1 | 8 | 46 | 18 | 0 |
+| Runtime gaps | 74 | 74 | 1 | 8 | 47 | 18 | 0 |
 | Apple-only calls | 4 | 4 | 0 | 0 | 0 | 4 | 0 |
 | Binder refusals at a device limit | 9 | 9 | 0 | 1 | 7 | 1 | 0 |
 | Translation caps | 14 | 14 | 0 | 0 | 7 | 7 | 0 |
@@ -42,7 +42,7 @@ Columns:
 | Kind | `metal-measured` | `metal-documented` | `metal-takes` | `device` | `ours` | `unknown` | `delegated` | `-` |
 |---|---|---|---|---|---|---|---|---|
 | Translator and front-end refusals | 0 | 0 | 0 | 48 | 57 | 0 | 0 | 23 |
-| Runtime gaps | 0 | 0 | 0 | 0 | 73 | 0 | 0 | 0 |
+| Runtime gaps | 0 | 0 | 0 | 0 | 74 | 0 | 0 | 0 |
 | Apple-only calls | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 4 |
 | Binder refusals at a device limit | 0 | 0 | 0 | 9 | 0 | 0 | 0 | 0 |
 | Translation caps | 0 | 0 | 0 | 0 | 14 | 0 | 0 | 0 |
@@ -208,6 +208,7 @@ Columns:
 | `TexelsPastBufferLength` | A texture over a buffer whose texels run past the buffer's length, which Metal makes over bytes its buffer's allocation has past the length (a 2D... | every device (runtime piece not built) | `ours` | 2: `crates/metal2vulkan-runtime/src/buffer_texture.rs (refusal_error)`, `crates/metal2vulkan-runtime/src/texture/surface_depth.rs (surface_depth_twin)` | `rare`: a texture over a buffer past its length |
 | `OverlappingSurfaceRows` | A texture of an IOSurface plane (`Buffer::new_texture_with_iosurface_plane`, the stand-in for `newTextureWithDescriptor:iosurface:plane:`) whose... | every device (runtime piece not built) | `ours` | 4: `crates/metal2vulkan-runtime/src/blit_plan.rs (plan_texels_rows_copy)`, `crates/metal2vulkan-runtime/src/blit_texture.rs (buffer_into_texture)` (+2) | `rare`: an IOSurface plane whose rows overlap |
 | `MemorylessSurfacePlane` | A texture of an IOSurface plane (`Buffer::new_texture_with_iosurface_plane`, the stand-in for `newTextureWithDescriptor:iosurface:plane:`) whose... | every device (runtime piece not built) | `ours` | 1: `crates/metal2vulkan-runtime/src/buffer_texture.rs (refusal_error)` | `rare`: a memoryless texture over an IOSurface plane |
+| `SurfacePlaneShape` | A texture over a plane of an IOSurface with planes (`Buffer::new_texture_with_iosurface_plane`, the stand-in for... | every device (runtime piece not built) | `ours` | 1: `crates/metal2vulkan-runtime/src/buffer_texture.rs (refusal_error)` | `rare`: a texture over an IOSurface plane past one 2D image of its rows |
 | `IndirectCommandPastSize` | A command of an indirect command buffer at or past its size (`indirectComputeCommandAtIndex:`, `indirectRenderCommandAtIndex:`) | every device (runtime piece not built) | `ours` | 1: `crates/metal2vulkan-runtime/src/indirect_command_buffer.rs (command_at)` | `none`: an indirect command at or past the buffer's size |
 | `ExecutionRangePastBuffer` | An `MTLIndirectCommandBufferExecutionRange` whose 8 bytes run past the buffer it is read from (`execute_commands_in_buffer_indirect`, a compute... | every device (runtime piece not built) | `ours` | 1: `crates/metal2vulkan-runtime/src/indirect_execute.rs (check_range_buffer)` | `rare`: an execution range whose 8 bytes run past its buffer |
 | `ExecutionRangeOffFour` | An `MTLIndirectCommandBufferExecutionRange` read at an offset that is not a multiple of 4 bytes (`execute_commands_in_buffer_indirect`, a compute... | every device (runtime piece not built) | `ours` | 1: `crates/metal2vulkan-runtime/src/indirect_execute.rs (check_range_buffer)` | `rare`: an execution range at an offset off 4 bytes |
@@ -714,6 +715,7 @@ Each refusal's sites, with the function that builds it.
 - `gap::TexelsPastBufferLength`: `crates/metal2vulkan-runtime/src/buffer_texture.rs (refusal_error)`; `crates/metal2vulkan-runtime/src/texture/surface_depth.rs (surface_depth_twin)`
 - `gap::OverlappingSurfaceRows`: `crates/metal2vulkan-runtime/src/blit_plan.rs (plan_texels_rows_copy)`; `crates/metal2vulkan-runtime/src/blit_texture.rs (buffer_into_texture)`; `crates/metal2vulkan-runtime/src/blit_texture.rs (texel_copies)`; `crates/metal2vulkan-runtime/src/buffer_texture.rs (refusal_error)`
 - `gap::MemorylessSurfacePlane`: `crates/metal2vulkan-runtime/src/buffer_texture.rs (refusal_error)`
+- `gap::SurfacePlaneShape`: `crates/metal2vulkan-runtime/src/buffer_texture.rs (refusal_error)`
 - `gap::IndirectCommandPastSize`: `crates/metal2vulkan-runtime/src/indirect_command_buffer.rs (command_at)`
 - `gap::ExecutionRangePastBuffer`: `crates/metal2vulkan-runtime/src/indirect_execute.rs (check_range_buffer)`
 - `gap::ExecutionRangeOffFour`: `crates/metal2vulkan-runtime/src/indirect_execute.rs (check_range_buffer)`

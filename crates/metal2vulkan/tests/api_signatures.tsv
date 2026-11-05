@@ -12150,6 +12150,7 @@ variant	metal2vulkan-runtime::RuntimeGap::SparseHeaps	SparseHeaps
 variant	metal2vulkan-runtime::RuntimeGap::SparseTileMaps	SparseTileMaps
 variant	metal2vulkan-runtime::RuntimeGap::StageInFetchPast4GiB	StageInFetchPast4GiB { buffer_index: u32, reach: u64 }
 variant	metal2vulkan-runtime::RuntimeGap::SurfaceDepthStencil	SurfaceDepthStencil { pixel_format: PixelFormat }
+variant	metal2vulkan-runtime::RuntimeGap::SurfacePlaneShape	SurfacePlaneShape
 variant	metal2vulkan-runtime::RuntimeGap::TexelsPastBufferLength	TexelsPastBufferLength
 variant	metal2vulkan-runtime::RuntimeGap::TextureAccessCounters	TextureAccessCounters
 variant	metal2vulkan-runtime::RuntimeGap::TextureBufferLevels	TextureBufferLevels

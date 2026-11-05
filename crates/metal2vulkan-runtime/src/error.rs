@@ -1403,8 +1403,13 @@ pub enum RuntimeGap {
     /// bytes its buffer's allocation has past the length (a 2D texture, a texture buffer and a 2D
     /// array alike, up to the allocation, past which Metal answers nil:
     /// [`Problem::BufferTexture`]'s `PastAllocation`), or a texture over a plane of a surface
-    /// with planes whose rows or GPU texels run past the buffer standing for the surface, which
-    /// Metal reads as zeros there: the runtime's buffers have no bytes there.
+    /// with planes whose rows or GPU texels run past the buffer standing for the surface: the
+    /// runtime's buffers have no bytes there. Metal lays those in no one place
+    /// (`metal2vulkan-conformance/probes/surface_texture_envelope.m`, an Apple M3 Max under
+    /// macOS 27.0.1): its blits read zeros past the surface, its kernels zeros and, 32 KiB on, the
+    /// surface's first bytes again, its `getBytes` other memory, and its blits and
+    /// `replaceRegion` write the surface's bytes alone. The x86 Macs' are not measured, as a read
+    /// past a surface can fault their GPUs.
     TexelsPastBufferLength,
     /// A texture of an IOSurface plane (`Buffer::new_texture_with_iosurface_plane`, the stand-in
     /// for `newTextureWithDescriptor:iosurface:plane:`) whose rows overlap on Metal's GPU: more
@@ -1434,7 +1439,7 @@ pub enum RuntimeGap {
     /// the stand-in for `newTextureWithDescriptor:iosurface:plane:`) that Metal makes and whose
     /// texels it lays out no one way: rows wider than the plane's `bytesPerRow`, more than one mip
     /// level, a 2D array of more than one slice, a 3D, cube or multisample texture or any other
-    /// type but 2D, a texture buffer, 1D and a 2D array of one slice, a 1D texture wider than the
+    /// type but 2D, a texture buffer, 1D or a 2D array of one slice, a 1D texture wider than the
     /// plane's row, a BC texture of another type than 2D or wider than the plane's rows, and a
     /// texture buffer or BC texture over a plane at an offset or `bytesPerRow` off 16 bytes.
     ///

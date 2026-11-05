@@ -158,6 +158,43 @@
 //!   (`texture/surface_depth.rs`, which lists what stays the runtime's gap,
 //!   `NotImplemented(RuntimeGap::SurfaceDepthStencil)`, with a blit of the stencil of
 //!   `Depth32Float_Stencil8`).
+//! - **Block-compressed surfaces** (an AMD Radeon Pro 5300M and an Intel UHD 630 under macOS
+//!   26.7.1, `metal2vulkan-conformance/probes/surface_texture_envelope.m`; the consumer's
+//!   `oracle_surftex` 66, 67, 125, 131 to 135, 147 and 148). The x86 Macs make a BC1 to BC7
+//!   texture over a surface's rows wherever they fit, over a surface with planes or without, in
+//!   `Managed` or `Private` storage; the M3 Max answers nil. Their blits (a `Private`
+//!   texture's too), `getBytes`, the UHD 630's `replaceRegion` and both GPUs' samples take block
+//!   row `j` at the plane's offset + `j` × `bytesPerRow`, the row its blocks' bytes (8 or 16 a
+//!   block, [`surface_blocks`]), a last block of a row or column whole however few of its texels
+//!   the texture covers. Over a surface without planes Metal stops a row of blocks wider than the
+//!   surface's ("Descriptor rowBytes (264) > IOSurface rowBytes (256)": `RowPitch`) and texels
+//!   past the surface's rows, counted in rows of texels ("Descriptor height*arrayLength >
+//!   IOSurface height": `PastBuffer`). The runtime lays such a texture out as those rows of blocks
+//!   (a shadow image, or an aliasing one where the device's linear image holds the format): its
+//!   shadow copies them as the texels they hold (`plane_copy_regions`), and its blits and CPU calls
+//!   count a region in blocks (`blit_plan::texel_rows`, `Texels::region_layout`). Over a plane of
+//!   a surface with planes it holds a 2D one at an offset and `bytesPerRow` that are multiples of
+//!   16, the planes measured; any other is the runtime's gap ([`BufferRefusal::PlaneShape`]). Two
+//!   answers of the 5300M's are not reproduced: its `replaceRegion` wrote other bytes than the
+//!   texture's past the first row of blocks, and some of its blits into a BC texture over a
+//!   surface, and of its `replaceRegion` calls, ended the process. Every other compressed format
+//!   over a surface is no buffer's (`NotLinear`).
+//! - **Beyond the plane's rows** (the same probe, on those two and the M3 Max under macOS
+//!   27.0.1). Over a plane of a surface with planes Metal makes a texture of any type, extent and
+//!   levels (`oracle_surftex` 17, 21, 42, 116 to 123, 127, 129), but the three GPUs and their CPU
+//!   calls lay out alike only a texture buffer (its texels contiguous from the plane's offset,
+//!   however wide: past the plane's row too on the M3 Max and the 5300M, where the UHD 630's
+//!   kernels read other bytes), a 1D texture whose row fits and a 2D array of one slice, each
+//!   where the 2D texture of its rows lies; the runtime makes those. Every other shape lies
+//!   differently on each, or was not measured: [`BufferRefusal::PlaneShape`]
+//!   ([`RuntimeGap::SurfacePlaneShape`](crate::RuntimeGap::SurfacePlaneShape), which carries the
+//!   measurements). A texture taller than its plane is held as the M3 Max's GPU and CPU lay it
+//!   out, its rows past the plane at the plane's pitch, inside the surface; the x86 Macs' GPUs
+//!   keep it to the plane (the UHD 630's reads other bytes there and drops the writes, the 5300M's
+//!   reads zeros and its blit into it writes nothing), which the runtime does not, as it is given
+//!   no plane's height. Rows past the surface's end lie in no one place either (the M3 Max's
+//!   blits read zeros there, its kernels wrap to the surface's start 32 KiB on, its `getBytes`
+//!   reads other memory, and its writes keep to the surface): [`BufferRefusal::TexelsPastLength`].
 //!
 //! The runtime holds both layouts: the GPU's ([`Placed::gpu`]) is the texture's texels for every
 //! command, the copies of its shadow, an aliasing image and their hazards; the CPU's
