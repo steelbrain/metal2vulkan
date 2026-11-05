@@ -1,0 +1,349 @@
+{
+  "format": 1,
+  "case": "xr-gamut-bgra10xr-srgb-over-float-x1",
+  "suite_version": 1,
+  "shaders": [
+    {
+      "fixture": "rt6_samples.ll",
+      "entry": "rt6_fill_vertex",
+      "source_sha256": "857adcbb6951b3d5348087377c099c2b2b4733fe56cc754501b605496cb30fb9"
+    },
+    {
+      "fixture": "rt6_samples.air.ll",
+      "entry": "rt6_fill_vertex",
+      "source_sha256": "50449c6cad01f47ad3407cbf3bbbdfa4405c43f2cae14639e56d71b307a41d2c"
+    },
+    {
+      "fixture": "rt6_samples.ll",
+      "entry": "rt6_fill_rgba32float",
+      "source_sha256": "857adcbb6951b3d5348087377c099c2b2b4733fe56cc754501b605496cb30fb9"
+    },
+    {
+      "fixture": "rt6_samples.air.ll",
+      "entry": "rt6_fill_rgba32float",
+      "source_sha256": "50449c6cad01f47ad3407cbf3bbbdfa4405c43f2cae14639e56d71b307a41d2c"
+    }
+  ],
+  "answers": [
+    {
+      "key": {
+        "chip": "apple-m3-max",
+        "os_version": "27.0.1",
+        "os_build": "26A434",
+        "metal_level": "27.0.1"
+      },
+      "provenance": "metal_run",
+      "device": "Apple M3 Max",
+      "runs": 3,
+      "outcomes": [
+        {
+          "runs": 3,
+          "transcript": {
+            "root": {
+              "name": "case",
+              "observed": {
+                "value": "absent"
+              },
+              "children": [
+                {
+                  "name": "inputs",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "fills:air",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "857adcbb6951b3d5348087377c099c2b2b4733fe56cc754501b605496cb30fb9"
+                        }
+                      }
+                    },
+                    {
+                      "name": "fills:air-typed",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "50449c6cad01f47ad3407cbf3bbbdfa4405c43f2cae14639e56d71b307a41d2c"
+                        }
+                      }
+                    },
+                    {
+                      "name": "format",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "864c40623b03145ce67869dafdfddff484cb6b6922763d6acdcdcef5a33a6f1e"
+                        }
+                      }
+                    },
+                    {
+                      "name": "blend",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "4e4c7eacf3c90cb6bcbb1b319f4974ca3753209e44cdb2e941e37a4722aaae40"
+                        }
+                      }
+                    },
+                    {
+                      "name": "pipeline",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "2c17d7ac95fa029ff78bf3eb859e407e644c5f08e64f5d17a24e0b5751994d25"
+                        }
+                      }
+                    },
+                    {
+                      "name": "target",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "ec44df352bb02c5dc2b4b6db7ef93098c6ba8b5e36b118abc23818827857eaaf"
+                        }
+                      }
+                    },
+                    {
+                      "name": "clear",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "9b379a0cc4cc709fe1347fbd87d3851bacaf03d381ab36c62ccb2c702ea323bf"
+                        }
+                      }
+                    },
+                    {
+                      "name": "buffer:values-0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "7ba3d8282f06f3ad0f0c3e06714f4cdba16e642a052fb0948ae29caf9600153e"
+                        }
+                      }
+                    },
+                    {
+                      "name": "buffer:values-1",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "0e7bf2de4325236903954447f9aea4589f64dd1b74c9d1bfab98afe2fa6d54c4"
+                        }
+                      }
+                    },
+                    {
+                      "name": "buffer:shape",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "77e90905067e9de41b0ceac40a2b316362c400e828a946ecdf5033b8e51935e0"
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "library/fills",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "pipeline",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer/values-0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer/values-1",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer/shape",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "target",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer/texels",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "render",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "program",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "status",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Completed",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "read-back",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "texels",
+                  "observed": {
+                    "value": {
+                      "bytes": "gKAA5YApgNwA0UC9gL1AzMDZgMUAusC9wNfAzsCnwM4AuIDSAA6A3wDQwLlAp4ClABQAv0DUgNdAowCTANXA3oDMANcAuYDQALpAZ0DEQNxA0sCrQK8ArUDagNCASMDIgO+AskDdgNmA3MCuQJsA1oDMgL3AQcC+wN9AxMB2AM4AzADigCdAz0C+wLwAuoC3gNqApYCcgMIA4sBqgLeA30DWQL/AvICwANZAmwDJwLsAyoC0gLTAswC6gLTA1wDHgK7AwsCHgLjA5YDogNQA0QCvAO+Ay8DbgMlASEC+gMsA0UDFwJqAsMDSAMLAK0DHAOzACkDKAN7A3cDMANGA3wDoAJeA2ADTgDeAz8AOgN8A0wDGAKjAqwCdQBrA1IDZAORA0wC3AMmAx8CqwFdA2IAuwMiA4gDSQKSAw4DVgN8A3IDqwEAA2sCvAOdAGoDfAOaAiMDNwM/AuQDJQKQAxEC+gOuAcIDfQNlAe0CIgNFA0YCjgLJAuECNAKbAvEDNwNqA7UDSAN1A3cDIgI7AvoDRgMfAwEDagMWAnEDKQMnA88AggDeA38CewMCAu0DZQIpAIoBNANTAfoCnAOoA1QAzwI1AHIDSgIoARoDOgNGAuoDVQKqAyoDQwMSAuQC3gNAAxYC5wMJAxADCwKYA2EDtAKJAtQDcQM0Au4CkQKkA04CogMNA1ICGgMCA24DcAKdA1UDQQNFA3YDNQKxAxYDWQK/AuEDfgM8AoEClQL2A34C3AOEA3EDiQGoA0gDJQONAKsAIgNuA5QDhgL8A1YB6QKvArYDIAMUAq0DPwL5AqwDrAB4A1UC3QLYAmIC7QM9AxQCngLuAzIDEQJ2Ap0DLAMNA4EDMQNAAxECHANGA4cCpwLhA2wCVgM8AosDagMyAuMClAK0AvsCZwOeA2YDBwLgArUDRAKpA4gDFwMXArMCtgMdA2QDvALhAm0DWgMuA00CoAL5Ax8C8AMuA2AC2QMeArYDBgHhA38AfgNjApEDWQKfA14C1gKOAsMDPgM5AwkCswKXAvQDKgD1A2IDkgAWA3YDfwLOALcDYgN+AyMDKgJCAyYDRAMoAyMDBANBAqYDSwNEAkkBEAA7A3YDAANVAy0DGgF8A5kDCwNkA0QCwQLeAxAB7QM7AtQDSAO3A2UCsgN3A2sCyQO0A2EDHQL4AOYDQgJbAjMDUwMnA6EDIwMkA1oCbQFYA10DLwOIAx4C5wLvApUDYQDPAvQDnANVA1EDfgN8AVIDCANmAusC4QLQAz0C7wM8AzgC+AJNAmkDPgMMAtgC0QCuAzwCQgLpAqsDCAJAAvUCxANkA20C7gJ+AzADCwDAA7UDfQNtAuUD1gN/AxcDMwLGAtcAlwO+AsUDdAOEAbgDBwMkAzkDUgKfAwICSgM/AjEDNwNtA14DkAM/A1kCKgNOA3wDHAMMAuQDFANNAwsBQgLiAN4CGQKnA1sDXwOrA3EDWwM2A0gCvgL2ArwDPgDEAyYDagN+AYMDbQOOAKoDfgNQA3YDEgMYAt8AuwAxA4QDeALtAxACdwMIAksDBwNbA14DRgCmA7YDfQNLA0sDMwMCAywC8QKhAuQDHwMrAHMDUADmA1sCGQNQAtUBpAPVA3sDaQNCAqMDAgI1A4ACXwN7AmIArANhA1IC9gJfAu8DIgNwArYA2QMfApsCcwK8AyEDxQJoAzIDegLtA1sAswNcAvQBNAKOA38CxgMvArUDPAKxA14DhQN7A4MCgwNSA0oC6gL0AmQC+QL1AGQAcAN6A3QDEwMeAx8C6ACOAKYDfwKKArgB9wM4AuUDEAA9A3cCygDoAyQDfgMXAgwDHgM1A4gDhgLjA1ACuwNFAQMDUgI1AvIC3QN1A0UCqQJHAzEDXgOpAL4DfgMCAyYCFgMuAgwAbAOUA2IDZgORA0kDUAMMAqMDUwM0AzYCUgL5A3sDBQN4Ai4C/wMuAt4DMwNcAzwCnAIWAv0DewNQAzsDPwNHAsoCugLUAzQC7gK/Aq0CFwN7A14DbgNqAzQCxgNeAoEDjwMtAyEDIwLaArwCtgPSAJEA+wNsAGwDvgJsA2gCvAK1Am4DNQEuAKIDaAN7AtUDRgIqAx4CQQNhA1gDbgLSA0MCcQL/An4CvwL3AwoAKwAyAhoDfQMzAvoDEgM2AFwCRwMqA3oDTQDRAwcDJQIsAu0CmQNtAg0BBgOdA0cDCwJ8Ay4C/wIOAucDPgN8AKEA0ABaA2QAigD0A10DdAJ+AzYDiQM/AlkDIwL8A1YCdAMIAk4DZAM9AwoDGwNbApIDEwJXAz0CaAAyA60DcgMUAzAC/gNsAjADGQNBAyEDKgCEAhsDXAEHAi8DIgNeAs4DUwJwAtsAnAMmAEYDVgMmAmECQgMPANoCJgLYA14CugLuAvIC2wMWAuEC/wMtALoDDgOnA1ADUQLKApcCpANIAxgCXwLDAt8DKwC6A34CNQMvAukDGQKsAvADiANYA0kDIwIBAvUC0wMPAxUC6QNMAzMC7gLfAz8CgAIGA0ICzQMmA0oDLAN5AzwC4QL/AxcB0wCYA1cDUQLRAq4DFAEuA0cCswNOA5kAfgNgA3QDTgOUA7sDWwKgA1QC2gMJAIIDiQHiA3YD3QPNADYDfQOCAOgDJwMzA5sBmALcA20C2AJFA28DYANLA2ECJANYAlwDGQNVA1EC7wL6AtoC9gN9AyoC/wNNAsYC+gLrAt0AzgCmAHYDfwPIAoUDcQNyAm8CHwMSA38DOgL3AvsC4gNyA0YDBQNOAgYDigMIA2wDbAOLAv8DQgMZAq8DIgLgA6kC/AKKAx4CvQKjAzIDLwLbAucDawNfAqoC6wA/A2oDQwKjAlsCwQK7A1ABmgNIArIDMACUAykC2gM9ApQDDANTAugCqQKmAykDswOZA3oDiQLsAyADZANgAxUCyANbAiQCUQKrA2ADZgOrA2cDaQO5AqIATANpAx8CmQBgA2MC7wIyALgDbQKvAt0CJwNUA58DMgOrA3UDugEIAtADfAMTAw0CzAK8A6sDigGpA1oDIQNRAtUDGwNqAq0DvwNpA2YC4AOBA3MDTQMsAqEDKwOqAMcChQMxAt0DRQMxA38DYwIhAywDfQNTAvsC1wLsAtUDugNuA34DgwKAAzcDAgLWA2YDGQNYASsDJANKA2YC9wKgAuYDBQN9AzkDVQMhANQCUgClA34DxgL4Ad8DbwMlAxMCygKlAukCbQMgAycDIALXA0IDQQHYA3oDXgNBAysAugCVA3gCTwPGA4ADeQLXAaEDGQNOAG4DHQN/A2YBlQKaA0ADXwJvAvUDWQNpAtkBhQJJAz0C7gILAL0DTABuAdECkAN5AIICGQNSA38C3ALHAqcDWgNdA2wB1gMTAv4C1QKQAvAC+ADLANYDPwNTAzEDDALPA2UCCQCJA1AA+gLxAeUDPQM9AvACawMmAs0A6wMMA3UC7gMEAxUDegLRAr8CogMEAzcC/AKaApUDGAKXAxcC+QMZAyICtQK2A5sCrQMoA0QCzQOsAvMDYgHTA4ACMQM+AqgC9gOCA1gAgQLzA0sDYgOfAw0DLgN7AvACYwOIA38DaQJsA7oDWQIlA2QAewNuA10CQgMBA2EA0wMuA08DbANxAsMC6wLuAzUCzwLbAsEB9wMjA6ADewMTAwoCdwLsA2MCkgMlA10CawLNA1QDLQJMAyIC0gMEAvQC/wMVAxQBPgKCAYQDagK5ArcCoQNjA20C8QLiAtgDEgLSAhQC1QNSAvQDZAN6A3UCoQNkAxoCzQOsAQ4DewNtANkA9AN2AlsCdwMCA34DEQAeAooDdAMuAw0CcgKkAygDAwLeAvgB3wM5AFMDVwM3AgoDkQNqAy8AwQD9A0cCnwEYAicDOQOAAiMCiANxAJkASgOxA2oDNAIqAugDJwMxAucCjgKfAvYDHQKPAuEC3QJ8AlEC8AMUAw0CRQNSAM0DlQCAA30DnQKdA1YDZgKmAkIDJgNgANkDiAAvA2kC7wKuAw8DCAAhAzkDqAN7Ax8DGgNYAx8CxANdAo4DRQKQAmEB8gM/A8MCxwMaA30DQgM5AegDPwNRAHMCZgN/AL8DvANDA2kDgQNoAy8C/QMhA0YDFgNTAusBAANUA3kC5AN0A2IDVgLaAxUCpALWAvwCvAHkAvsCkwN1A10DXgMBAlYBCANwA44CZgM7AwoC0QMlAoUDPwMOAtICZwK2Ag8BxABCA14DUwJjAz0DLgKIAjQDZANtA3wCswLbA3YA6ABCAG0DWQMxAyQC7QLLA4wCegFRA3ADJQMKAqUCrQNCAvUCcgKWAxcCdQKXAtYBugN4A6YDaQMfAuACcwLlAqYCHANMA38DegKtAz8DGwL1AqYA2ANJAwkCiQMQA3gDRALJAucCtAM6AqoDcgMPAyEAsAMeA3wCmwCYA4EDQAD5AykCTgN6AzYC3wJ6Ay0DZAL/ApMC1QNSAfUCQwMyAz4DDAKnApQDjgKMAScC7AMLA6UAWgNZAzEC0gNvA1wDbgMfAC0DeAOUAwYCjgM0ApkDRgNSAyQDMQLfAksC1AEYAe8CxwNqAyAAfQNPA3gC9QOCANIDaQEYA5sC0QNEAxQCwAJ3AqUDSgK3AoAC0wN2AzADfwNjAyMDRwJQAxEDKwDZAzkDMQLnAwkDNALwAwQDZgDKAycDaQM5AxoDbAN+AygDRQNZA1EC9AOCA1sC0gMEAm8CyQM3AEUDcgN+A04CsgMEA3UDTgJ0AvsC3ALtAxUCdQLJA3ICjAK8A3gC7AO/A6UDdgMeAxYCiAK3AwgDQwMAAz8DDQLXA2ADDAMpAvYCSgLuA2QDdwLhAx0DNwMbAkwC/QL9ApACoAMTA5ECIQNDAzwDLAKsAyIDDAMIAvQDCQMDAt0CgwMlAzwC+gEiAiIDMAKJAVkDRgMJA4EDbAEbAyYAawOhAB4DeQMtA8kCOgN/AzAC6wNaA00DjwDHAxgDOgJgAsMBVANvA6kCpwNeA0MDVQM5AvUDNwNGAvMCnQKtAIEDVwHuA14DJgL5AyUC9ANEAJQDQgNaA6MC0ACCA1IC7ANoAt4DfANdAcsDaAN4AyADQQIOAz8CLQLXAxQDJwGCAaQB0gN4AzgDCgKnAo0DZgLpAx8DLgNDAxAB9ANkA6EDqAC5A3gDOALDAn4C2gMnAkQCJQMQAvkC0gJ2AzcDFwMjAqsCvgNSAXgDmANiAncDjwA6A3YDMALuAncCnAOAAywDDANEA3IC0AMMAw8DLQL2AtYC/AKdAloDYANXA0QDAgKxAq4DcQMcAjYDKwM1A0QBCgMPA4UDAwOIA24DJADBALIDUQMtA0UCzALmAs0BtAKWAwgDpANSAssDagMDAyUDRQMpA1sDIgKUArQDMQMsAKADYwK0A3MCDgNzA6ADJQO2A3IDeALJAwEDNQMpAwUCiAK1A3YDMwJgAt4C6wPaA7QDeQNwA1MCyALvA6oCogNTAzoDdwLdAd8DRQM4AqUC0wLMAxcDAAJfAq0DmQMgAwQDdgO3AmoDqwNgA3gCaQEeA14C6wNjA1ADbAO4A6AAhQNyAjgAowPBA3gCSQL5AmoDDgDGA04A3wNOAt4DXAEKA3UAnQNaAFIDdANgATACzAN7AzgCwwMUAw4DMAL+AloCwgNiAwYDEQMhA6EBPwMjA1MBqAIeAJADVgL5AdkDIAN+A1kDPQKLA0YC8AHHAF0DdQLhAuoDAgNIA3wDSwOlA1MDGQMFAqYDLgJPAk4DVgN7A8kC/wNRA3kCXgCKA0YDeAMPAywCogM1As0DPQOCA0sCbwMDAxkDcANLAwsCagNNAiwCyQMGA1YDrgOqAtIDSAOmAscCcANYAnADtQONA2kDOgN9Av4DaQPGAP8C5AN3AucC9gKtA04DNANaAugDXAKrAKkBHgNWAtsDTAKZAwcC5wMSAx0DJwNaAw4CjwL5A2wDPgLQA1QBzAPGAigDbQNXAuoDogNTAwMDFwMAAxEAXQKKA4YDXQL0As8DXANrAtoDggKQAyEDvwLnA2UDeQHmAvkDNgNBAwoDGQI1AwcC+AItAvEDHwM8AxMDuANwA1MC0ALNAqYC3QMEA4oDUAOMAqICUANLAykCegMUAxkD2gOmAvsDewMSAtkCxQKvA18CbQOqA1kB9AJEA4kDcwOSA1sDJwMxArYAogOEA18DdAMTAs0DWwLdAyoB9wLxAkkDkwOiA2gDtANSAoQDTAK1Aq0CuQLcASQBxAOnA2MC4wMYAtkDbAM+AhwCkQMcA38DiQMkA3gCpQLiAhgC5wBVA6sDigNXArsDYgKKAxsDKgBSA1gDYgNgAw8CwQLrAuUCiANaAzkCywLFAnwC/gEuAvMDTgNBArwBGwMnA0sDaANnAO4DRANBArgCJAM7AtwDDQLzAwgDtgErAw4DSwAcA0YCWAN3AMkCtQJwA3oDewKtAekDdwK0AtAC7ANGA7gDoABiA3kCcwBlA1gDdALPAmcC/gMKAxsCmgI7AtYDugHfAuYDSQLeAnkCFQM9A3YC+QJ+A1wCyQKfAH4DfwM2AvUDVgN6AgsCsgNjA2oCVgLNAM0DZwNuA5QCggNQAyQCQwNGA0gChAMFAxoDOgJUAtIDIAMmAwECUgKfA0wDOwNIAuwDIgMCAgkCrQNvAysDdAKxAygDogMuAVwDXAOZAw0A1QNdAzQCmwN5A3oDSgO/ApsDcgO1ApsA1QN/AlwDKgNdAx0DNAL1ARMDdwMRAoICxwLPAPADQwNwA3ADBwLkAoUCvQNUApUDAgLYAo8AeANlA2EDQgMYAtcC7gNPArsCaQLxAycCPQMYA2IDfwLXAt4DDQCPA3cAMAN5AjsBbwJ8A3QDBQLxApYCwgDRAyoArgN6A2IBPwOOA3MDDgNCAqAC2QM+ArMDZgNKAlECvwJNA3QDbgLzAiMC1gLtAuMDEwLNAbUDBAN3A2wAsQNzAtoDRQMqA2YDugN8A5IAKwMYA3gDWALSAtIDWANaAoQDRgMxA5YDBAKGA3wDJAI+AnYDVwOsA5oDPgM+AmUC7AL8A10DNAMEAycC8QM0A08C/QMRA38B6AJ1A3sC/gKfAmkDAgMtAvgCzQLQAyEDwgNgA28AIwOTAwIDfQPXAJ4D0QN3AzMDBAJ+A1wDGALxAkgDOwM3Av4ChwKFAygCuwKNAuEDLAMLApcDGgLuA1EDcwNrAe8CggLmA20DAQK0ANADVgM/AOYCpAMsAywDggL9A3ECxQM+A2UDawNdAvgDyQNtAloCjgLBA2MC+wIhA1YDdANDA1oCrgNLALAC6wNBA30CoAJEALsDPAKWAnIAYAN4AFQDggAxA28DOAJeAnkDKAOdAs4CWAN2A34DlwIqAz0CwgLZAlIDeABnA9kDtgN8AxQBuANtA1IC3gLhAL0DFAJnA5kCJQN0ALMBIQC9A2gDBQNwAy0DIwL/AwACeAK2A3UCyALwAyIDBwNJA3cDOAOKAxMDewNrAmQCQACaA2cDbQKrAucDCQOpAasAWwN6AzcDLAK3AuMDKAK6A00DIQDOArYB4gNkA2IDJgO1A2wDTAL6As4CnAB1AqwDJQNyA1UDgAOvA2ADOAMtA0MDBQO6AI0B/QNlAy0DlwCeA38DhQK/A60DaQNDAtcDGwNNAz0C5ALdArwCcQLiABoDegM1AH4BygNbANoAZANVA08DiALFAo4DAQNsAuMCmwLiAnoCqQM0A28DZAMRAwYC1QOxAHEDSwN1AuACigCQA0wCzQN4AuwDAQNxAwACawN2AK4DhQOBA2wCnAKuAwIDBgMjArIDNwNoApYDTwJTAzYDagNCAOMC8QNfAsMCtwLcAwYC4wIvAwMDQAChA2QDOgOOA08BFQM4AGsDaAL8A18DIwEiApEDaALRAmYC6ALxA48C3wIVAxkDQAKJAisDJwNgAsUDDALNAr4DZgJSA1UDWQOyAWIDfQNgA04DWQNdA2ACZQLkA3kDCANQAoEDHAN6A7AA2wNQAx0DDgMPAtcCkwJZAzEDIgNdA0UC1QMEArsDkwNLAzADbwNuARIDDALwA0YCzgLaAwQCRwMnA2MDkwNdA1oDGgDYA4oAZgN/Aw4CegMCA38DhQBmAhwDfQMKAocDCQMCALkAcAM+A3ICLAIkAwoDfwM5ApwC/gLaAiwAUACeA30DgQNQA1MDPQI8Ar8DcwN4AroDFABqA1ECTALKAiQDIgMvAxkC2QMmA0wDVgNpAxIDeQDeAy0DYQMGAv4CqwKsAxkCzQKyA38CzwMAAukC6QLxAekCjgL/ApgDAAMvA08DHwLsAQcDTANlA1cCkwNqAv4ChwMeAxEDSgNGAIcDVQDwA5UCJgNuA4oDZAEcA0gCmwN0AnIDSgNuAy0CaQL2AzIAZAKAA3sCzAO0Ax0DeANJAxsCBwLrA1QDCALHArgDywKaA2EDeAKbAvsDOANrAycDbQM1Ay8DOwIzAlwC/QNdA48AmQNsAboAoQNwA3IDSgLYApoCnQL6ArEDWgN5AqgDWwNEAw0DkQLdAtQDegL/AzICvALeAv8DQQItAuoDawD/AsIDOwKBA1MAXQNVArwDLgM+A2kDXAM+AmADRQOMAjsDAANUA48C4AMKA2IDWwNbAj0DYALsAyYC1QMVA74DJANIA34DHQDyA1cDZwO+A9MCyQN7Au4DAQMKA0ACtQOVAv0DIALFAtICQgMxAv8C8wKeA3IDrwK3AyMDSALxAjECYAN0A18CswMyAwYDcgM/AqgDXAL9Au4CnQLGAuQDnQCuA20CnwDBA4YDcQL+ASUAyAMyAxgDHwMZAvQC4ALMAuQC2wNAAg8AiQNxAg8C1gCcA1oDRQI4AzADfgNCAu0CqgKUA0cDAQKrAo4C7gL9AiADGAISA4IAsANwA0gC4wKXAqYDLwLDAv0DZgNKA3cBJQMTAvkDWgK6AxkDEgKPA64DfwLtA2MDFQNlAJYDpQEGA3MDuQLQAMIDagOiA00ClANXA2wDGQNKAzUD0AKJA7YDfAKfArUA6gNUA0QC/wKbAocAzgNMArgDbQNlA2MDQgMRA6IDHQNPA0QCyQMeARIDUQPRAjoDegN4ACcDmwC2A3QCJAKrAwgDJQKZAsEDewNGAyUCtwLUArwDaACZA3ADYwKgAL4C6QN9A0wAvAIxA28CowBaAOgDcgNFAwYClAK2A38CVQFSA3wDJgOEAzkDYwBrAoMC+gNnA2wCuAHQA2sDggLlAzEDRAMoAwUCogNkAt4DHwNmA24COgNTAo8DJAMzA7sDrgNvAHsBQwOJA3gDHwKHAcYDaQCxA7EDKgN8AnsDYQOIA2wC/gMqAi4C/QN/AzkDdQM9A08DLAN9A0cDdgKEA0wDMwL8AuECvwMjAzAC7QKaApUDWAL3AsgC/gKPAzoCwQMYA1IDMAMoA3gCnAKXAzwDJgO6At4CRANqAxIBAwJ8A2sC7QKVALcDUgNXAvcDNQM+AuMDzAL6A3YDRQLuApcChALLAvAC0gM1A4YDbgKgA10AdABbAtYDfgMuA0QCdQLIAkwCrwOWA2ADuwMeALYDYQHpAMwD3gN9AwADGgN0A2MCAgCaAvwDQgNAAtEDiwM9Au8AxwMyA0gDUwM6AvMDRgM6A1sDJALmArkChALdA0wDagLQAKADJwKOAz8DoANWAGQDegNjA1cCyAG5AiQDYAMsAWUDqwNwA1sDfwLqA3wDqgIjAoMDYQM0AzECXQLTA50CbgM1A0wC2QOPAsIDKwKtAzIDRAMlAjYAZwKMA2gDVQKoAqQCvwObA7gDBgNjAtkBDwJiAy4DDwKmAkADZQOxADgDbwN4AzADAAMvAyAAwALKAgkDWQLeArQByQN0AusA5wBAA34DDwNQA1QDYgNNA6ADBgNHAHQDGgOeA1UDUQNNAnYDWANXAjYCnANqA1cC9QD/AvAC5gN2AOEDXgMdAr4CiAK+A0AC5gJ/ApQDgAMEAlsDaQNJAuECZALwAcgCrANLA3sCfwOpAkMDeQNgAHACSANrA3IDYwNXAzkDkgKFA40DRQO2AykDjgN8A1IC3gKnA04CGgNXAzEDfQMgAxACeQMVAzQC6ALOAp0C5wNSA1wDCQNfAs8CqgMVAsIAWgH8A3oDhAMDAH0DbAL5A4UAjwNTAdEDnwAlA20DkwOwA3UDUgDGA3YDXAN2Ao4DvQMuA3UDjQLmAsoDfAPRA7UC3wNpA4cC/QKxA3sDUAMkAxADMQEdApgAlQNQAz0DCwJ3As4CwwCKAyIDaQO6AM8DFAN8AvgDEwMHA28CagKQA3oDdQMJAPgAvgNTA2IAgAK6A20CCAOnApMDdQJtAnUDTAMMA5sC3QKNA2EDKQMKAI4DQwB9AkEDJANsAt8DDwMWA04DqgNwAm4DSQM4ApYDCQN6A5YCuAJ3A0ICfAM+A14DCwOqAv4C4gNNAP0DVQOgA3MDPgKfArYC6QNpAwgCcwLzAtEAPQImA2oC9wKvAd8DdQPCA0UDyQN4AsoBUgOYA2QDNwKjA1IDGAL4AwkC8wK9A0sDIAJpAuIDTQDBAUgDVAMBAvoAogNpAxgCTwOeA3wAdAN9AmIDfwK4AVwDfgNiAyQDdAMeA2IDOgLhAyMC4AK2AwYCvQNGAugCegKoA2gCrwLFALEDZANPAx0BSgMoA0sBLgCUAyUDnQJpAuoDRQItAgQDkgNFA1oDLQMQA3YCkgMAA00DHAMGAxUC2QLkAO4DdALKA0UAtQDnAtYDTABeA7cC5QNyA4wCzAOCA2UC9gLFAeoDEAMTAzMCYQMWA28C3QMDA3cDKQM+AoEDAQL5ANgC8ANbAyQDZgM/AvICVADHA2oDcADJAtwCmQNqA44ArAF3A3ADIwOFAKIDSALOA3AAzgNuArADCwMZA1IDLwMCAosCjwJGAxkC4gN+A1wC/gJeAu8DOAMjAH8DXwMkArUCjAMM="
+                    },
+                    "shape": {
+                      "bytes": {
+                        "region": {
+                          "texture": {
+                            "level": 0,
+                            "slice": 0,
+                            "aspect": "color",
+                            "sample": 0,
+                            "origin": [
+                              0,
+                              0,
+                              0
+                            ],
+                            "size": [
+                              32,
+                              32,
+                              1
+                            ]
+                          }
+                        },
+                        "element": "u16",
+                        "row_offset": 0,
+                        "row_elements": 128,
+                        "row_pitch": 256,
+                        "rows": 32,
+                        "image_pitch": 8192,
+                        "images": 1,
+                        "gaps": "ignored"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "notices",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "set",
+                      "observed": {
+                        "value": {
+                          "nothing": "announced_nothing"
+                        }
+                      }
+                    },
+                    {
+                      "name": "counts",
+                      "observed": {
+                        "value": {
+                          "fields": {}
+                        }
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "validated": {
+        "stopped": {
+          "call": "render",
+          "message": "Set Render Pipeline State Validation\nredundant setRenderPipelineState.\nredundant setting of <AGXG15XFamilyBuffer: 0xADDR>\n    label = <none>\n    length = 8\n    cpuCacheMode = MTLCPUCacheModeDefaultCache\n    storageMode = MTLStorageModeShared\n    hazardTrackingMode = MTLHazardTrackingModeTracked\n    resourceOptions = MTLResourceCPUCacheModeDefaultCache MTLResourceStorageModeShared MTLResourceHazardTrackingModeTracked\n    purgeableState = MTLPurgeableStateNonVolatile\n    label = <none>."
+        }
+      }
+    }
+  ]
+}

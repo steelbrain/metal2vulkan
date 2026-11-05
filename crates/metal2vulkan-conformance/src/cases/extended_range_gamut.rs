@@ -321,8 +321,34 @@ impl Case for GamutDraw {
         MetalSource::Run
     }
 
+    /// At four samples, beside the family's notices, what the pass's shape announces:
+    /// `shader-resolve` and `extended-range-resolve` (no device's resolve averages the codes, so
+    /// the runtime's own resolve does, `BGRA10_XR`'s alpha and an sRGB twin's color from the codes
+    /// where Metal averages finer values), `extended-range-blends-stored-codes` (the second draw
+    /// blends over the codes the first stored, where Metal's tile holds `half`s through the pass:
+    /// the `half` shadow that keeps them is single-sampled), `dont-care-store` (the multisampled
+    /// attachment of `MultisampleResolve`, and the depth and stencil stored `DontCare`, on a driver
+    /// measured to keep one of Metal's answers), and on a device without multisampled storage
+    /// images `sample-planes` and `fetch-through-scratch` (the interlocked blend reads and writes
+    /// the samples as planes, through a scratch image the target's usage needs). None loosens a
+    /// code: every texel still compares exactly.
     fn allowances(&self) -> Vec<Allowance> {
-        notices(&self.format)
+        let mut named = notices(&self.format);
+        if self.samples > 1 {
+            named.extend(
+                [
+                    Degradation::ShaderResolve,
+                    Degradation::ExtendedRangeResolve,
+                    Degradation::ExtendedRangeBlendsStoredCodes,
+                    Degradation::DontCareStore,
+                    Degradation::SamplePlanes,
+                    Degradation::FetchThroughScratch,
+                ]
+                .into_iter()
+                .map(|kind| crate::replay::notice_allowance(kind.code())),
+            );
+        }
+        named
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {
