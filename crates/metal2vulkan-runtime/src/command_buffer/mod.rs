@@ -227,7 +227,7 @@ impl WeakCommandBuffer {
 pub(super) struct CommandBufferShared {
     device: Device,
     queue: CommandQueue,
-    state: Mutex<State>,
+    state: StateLock,
     /// Signaled when the command buffer's status changes (`wait_until_scheduled` waits on it).
     changed: Condvar,
     /// What `wait_until_completed` waits for: the command buffer finished, and the runtime's
@@ -660,6 +660,35 @@ fn probe_answers(work: &Deferred, rerecord: Option<&StepInputs>) -> [bool; 5] {
         rerecord.is_some_and(StepInputs::rerecords),
     ]
 }
+
+/// A command buffer's [`State`] behind its lock (`CommandBufferShared::state`): a `Mutex<State>`
+/// whose `Send` and `Sync` are written out (below).
+struct StateLock(Mutex<State>);
+
+impl std::ops::Deref for StateLock {
+    type Target = Mutex<State>;
+
+    fn deref(&self) -> &Mutex<State> {
+        &self.0
+    }
+}
+
+// SAFETY: a `StateLock` is a `Mutex<State>`, which is `Send` and `Sync` for every `State: Send`;
+// the constant below makes the compiler prove `State: Send` from its fields, so these impls claim
+// nothing it does not check. Written out, they end the compiler's walk of a command buffer's
+// fields at its state where a program's crate proves its own objects' `Send` and `Sync`: the walk
+// from an encoder through its command buffer's state, down its recordings, runs past rustc's
+// default recursion limit (`recursion_depth_exceeding_limit`), which a program's crate keeps
+// (`tests/consumer_auto_traits.rs`).
+unsafe impl Send for StateLock {}
+// SAFETY: as for `Send` above.
+unsafe impl Sync for StateLock {}
+
+// The compiler's proof of what `StateLock`'s `Send` and `Sync` impls rest on.
+const _: () = {
+    const fn sent<T: Send>() {}
+    sent::<State>();
+};
 
 /// A command buffer's mutable state.
 pub(super) struct State {
@@ -2085,7 +2114,7 @@ impl CommandBuffer {
         CommandBuffer(Arc::new(CommandBufferShared {
             device: queue.device().clone(),
             queue: queue.clone(),
-            state: Mutex::new(State {
+            state: StateLock(Mutex::new(State {
                 status: CommandBufferStatus::NotEnqueued,
                 error: None,
                 encoder_open: false,
@@ -2183,7 +2212,7 @@ impl CommandBuffer {
                 replaying_predication: None,
                 predicated: false,
                 trail_mark: 0,
-            }),
+            })),
             changed: Condvar::new(),
             gate: Arc::default(),
             relayed: Arc::default(),
