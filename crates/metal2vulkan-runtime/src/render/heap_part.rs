@@ -67,7 +67,11 @@ pub(crate) struct KeptHeap {
 struct HeapPart {
     of: HeapOf,
     tables: Vec<DescriptorBytes>,
-    elements: Option<Arc<HeapElements>>,
+    /// Where its heap writes go, where `heap`: kept allocated whatever plan the part is worked
+    /// out for next, so a part worked out again allocates none of its own.
+    elements: Arc<HeapElements>,
+    /// Whether its layout has a heap, so its draws write `elements`.
+    heap: bool,
     past: PastHeap,
 }
 
@@ -167,13 +171,13 @@ impl KeptHeap {
                     false => self.spare.pop().unwrap_or_default(),
                 };
                 part.fill(&inputs, capacity)?;
-                if !part.tables.is_empty() || part.elements.is_some() {
+                if !part.tables.is_empty() || part.heap {
                     counts.draw_heap_part_made();
                 }
                 part
             }
         };
-        let elements = part.elements.clone();
+        let elements = part.heap.then(|| Arc::clone(&part.elements));
         self.parts.push(part);
         Ok(elements)
     }
@@ -204,12 +208,12 @@ impl HeapPart {
             .map_err(Error::Bind)?;
         let elements = heap_sets::heap_elements(inputs.layout, plan, state)?;
         // Into the elements' own allocation where no draw holds them still.
-        match (elements, &mut self.elements) {
-            (Some(made), Some(held)) => match Arc::get_mut(held) {
+        self.heap = elements.is_some();
+        if let Some(made) = elements {
+            match Arc::get_mut(&mut self.elements) {
                 Some(held) => *held = made,
-                None => *held = Arc::new(made),
-            },
-            (made, held) => *held = made.map(Arc::new),
+                None => self.elements = Arc::new(made),
+            }
         }
         self.of.fill(inputs, capacity);
         self.past.forget();
@@ -235,7 +239,7 @@ impl HeapPart {
         plan.heap_tables_into(state, tables).map_err(Error::Bind)?;
         let elements = heap_sets::heap_elements(inputs.layout, plan, state)?;
         assert!(
-            *tables == self.tables && elements.as_ref() == self.elements.as_deref(),
+            *tables == self.tables && elements.as_ref() == self.heap.then_some(&*self.elements),
             "a draw's kept heap part that is not its own"
         );
         KEPT_HEAP_CHECKS.with(|checks| checks.set(checks.get() + 1));
