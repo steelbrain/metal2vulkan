@@ -572,13 +572,13 @@ struct BuiltFootprint {
 struct FootprintSources {
     revision: u64,
     range: Range<usize>,
-    taken: Vec<Taken>,
+    taken: Vec<SegmentShare>,
 }
 
 /// The summary a segment's share of its batch's footprint takes
 /// ([`CommandBufferShared::footprint`]).
 #[derive(Clone, Copy, PartialEq)]
-enum Taken {
+enum SegmentShare {
     /// A loop's check: what its laying's parts use.
     Laying,
     /// Its recording's.
@@ -4079,7 +4079,7 @@ impl CommandBufferShared {
                     if let Deferred::Loop(check) = &segment.work {
                         let laying = state.recorded.get(check.from()..range.start + at);
                         summaries.extend(laying.into_iter().flatten().map(|part| &part.summary));
-                        taken.push(Taken::Laying);
+                        taken.push(SegmentShare::Laying);
                         continue;
                     }
                     match &segment.recorded {
@@ -4090,13 +4090,13 @@ impl CommandBufferShared {
                                 || (segment.rerecords() && !segment.work.outgrown()) =>
                         {
                             summaries.push(&recording.summary);
-                            taken.push(Taken::Recording);
+                            taken.push(SegmentShare::Recording);
                         }
                         // One its host step records for what the GPU may write: what `commit`
                         // bounded its recording's uses by, where it could (`Segment::bound`).
                         _ if segment.steps_after_the_gpu() => {
                             summaries.push(segment.bound.as_ref()?);
-                            taken.push(Taken::Bound);
+                            taken.push(SegmentShare::Bound);
                         }
                         _ => known.push(segment.known_summary(&self.device)?),
                     }
