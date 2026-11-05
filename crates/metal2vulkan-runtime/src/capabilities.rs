@@ -110,7 +110,7 @@ pub struct DeviceProperties {
     /// `maxBufferLength`: the longest buffer a shader can bind whole, the compile layer's answer
     /// (`maxStorageBufferRange` where buffers are reached through descriptors only, else the lower
     /// of `maxBufferSize` and `maxMemoryAllocationSize`), at most three quarters of the device's
-    /// largest device-local heap, rounded down to 16 KiB ([`working_set_buffer_bound`]). Metal
+    /// largest device-local heap, rounded down to 16 KiB (`working_set_buffer_bound`). Metal
     /// answers three quarters of its `recommendedMaxWorkingSetSize`: 3,208,642,560 of 4,278,190,080
     /// on an AMD Radeon Pro 5300M (4 GiB, macOS 26.7.1), and 41,747,087,360 of 55,662,788,608, to
     /// 16 KiB, on an Apple M3 Max (64 GiB, macOS 27.0.1); the runtime holds no working set size and

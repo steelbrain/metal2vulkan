@@ -570,12 +570,8 @@ fn line_words(line: &str) -> Option<(&str, Vec<&str>)> {
     Some((head, words))
 }
 
-/// Metal's word of an `RGBA8Unorm` sample holding the pass's clear `(0.25, 0.5, 0.75, 1)`, as a
-/// read-back line prints it: red in the low byte.
-const CLEARED_RGBA8: &str = "ffbf8040";
-
 /// Whether `lines` differ from Metal's `metal` only in samples that hold the pass's clear
-/// (`(0.25, 0.5, 0.75, 1)`, Metal's [`CLEARED_RGBA8`]) or the case's colour fill (`fill`), whose
+/// (`(0.25, 0.5, 0.75, 1)`, Metal's word `ffbf8040`) or the case's colour fill (`fill`), whose
 /// every channel this device and Metal each hold as one of the two codes nearest that colour's
 /// scaled value: the device's conversion of a clear or a plain colour fill, which Vulkan lets
 /// store either.
