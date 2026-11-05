@@ -381,10 +381,14 @@ Calls Metal does not have, for a consumer that emulates a Metal device:
   status, error and GPU times final, on the runtime's thread that saw it complete (its queue's
   waiter) where its transition to `Completed` runs there, before its completed handlers and
   before `wait_until_completed` returns: one with no completed handler then finishes with no
-  handler thread woken. It runs on the queue's handler thread where the transition does (a
-  completed handler, an earlier transition of the queue still there, or the transition of another
-  queue's command buffer whose GPU signal it waited for not yet at that one's handlers: it
-  completes after that one, as Metal's completion follows the GPU's). It must be short and never
+  handler thread woken. One with completed handlers too has its status made final and these run
+  there, and the rest of its transition (its completed handlers on) goes to its queue's handler
+  thread, where its queue's later transitions follow it; unless another queue's command buffer
+  may complete after it (it signals an event at its end). It runs on the queue's handler thread
+  where the transition does (an earlier transition of the queue still there, a command buffer that
+  signals an event at its end with completed handlers, or the transition of another queue's
+  command buffer whose GPU signal it waited for not yet at that one's handlers: it completes after
+  that one, as Metal's completion follows the GPU's). It must be short and never
   block; a wait in it for what has not happened is refused
   (`DeadlockCause::CompletionSeenHandler`).
 - `CommandBuffer::commit_and_submit` commits as `commit` does, then submits on the calling thread

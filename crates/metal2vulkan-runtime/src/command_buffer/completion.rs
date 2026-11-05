@@ -29,8 +29,12 @@
 //!   thread itself. Its completion-seen handlers (`CommandBuffer::add_completion_seen_handler`)
 //!   then run on the waiter too, once its status is final, for a program that answers the
 //!   completion where it is seen: one wake where a completed handler's is two (counted:
-//!   `WorkCounts::completion_seen_handlers_where_seen`). Everywhere else it is posted, as before,
-//!   and they run in it on the handler thread. Beside the
+//!   `WorkCounts::completion_seen_handlers_where_seen`). A command buffer with completed handlers
+//!   too, and no event signal at its end that another queue's command buffer may wait for, runs
+//!   there to its completion-seen handlers, and the rest, its completed handlers on, is posted
+//!   to its queue's context, which the waiter runs meanwhile, so the queue's later transitions
+//!   follow it (`Transition::seen_first`). Everywhere else it is posted, as before, and they run
+//!   in it on the handler thread. Beside the
 //!   runtime lane's tests on the M3 Max at the utility clamp, the handler thread's wake between
 //!   the turn and the program's thread took up to 13 to 55 ms at a light burst's 99th percentile
 //!   of the queue storm (`runtime_lane::queue_storms`), over Metal's one wake from its completion;

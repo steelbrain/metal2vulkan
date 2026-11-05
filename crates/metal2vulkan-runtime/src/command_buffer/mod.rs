@@ -2769,11 +2769,15 @@ impl CommandBuffer {
     /// - **The thread.** The queue's waiter that saw the command buffer's work complete; for one
     ///   that needs no GPU work (nothing it encoded recorded work, and it waits for and signals no
     ///   event), taken with no submission where its queue had no work in flight, the scheduler's
-    ///   thread that took it. Where its transition to `Completed` runs on its queue's handler
-    ///   thread instead, so do these handlers, at the same point of it: where it has a completed
-    ///   handler, an earlier
-    ///   transition of its queue still runs or waits there (a scheduled or completed handler), or
-    ///   the runtime holds a deallocator of the program's
+    ///   thread that took it. A command buffer with completed handlers too runs these there all
+    ///   the same, its status final, and the rest of its transition, its completed handlers on,
+    ///   goes to its queue's handler thread, where its queue's later transitions wait for it (one
+    ///   wake fewer before these handlers; counted: `WorkCounts::completed_where_seen`). Where its
+    ///   transition to `Completed` runs on its queue's handler thread instead, so do these
+    ///   handlers, at the same point of it: where it has a completed handler and signals at its
+    ///   end an event that another queue's command buffer may wait for (that one completes after
+    ///   it, `follow.rs`), an earlier transition of its queue still runs or waits there (a
+    ///   scheduled or completed handler), or the runtime holds a deallocator of the program's
     ///   ([`Device::new_buffer_with_bytes_no_copy`](super::Device::new_buffer_with_bytes_no_copy)),
     ///   which no thread that sees command buffers complete may run (counted:
     ///   `WorkCounts::completion_seen_handlers_run` and
@@ -5036,9 +5040,18 @@ impl CommandBufferShared {
             contexts.open(queue, gate);
             return;
         }
-        let item = Item::Transition(Transition::finished(buffer, result));
-        // A thread that may block for a command buffer runs none of the program's code here.
-        let may_run: fn(&Item) -> bool = match exit_guard::serving_completion() {
+        // A thread that may block for a command buffer runs none of the program's code here. A
+        // queue's waiter runs a transition with no completed handler here, and, of one with
+        // completed handlers and completion-seen handlers and no other queue's command buffer to
+        // complete after it (no `Follow`), its part to those handlers, posting the rest
+        // (`Transition::seen_first`): the handlers that may block run on the handler thread, and
+        // those that answer the completion where it is seen run where it is.
+        let serving = exit_guard::serving_completion();
+        let item = match serving && own.is_none() && seen_first(&lock(&buffer.state)) {
+            true => Item::Transition(Transition::seen_first(buffer, result)),
+            false => Item::Transition(Transition::finished(buffer, result)),
+        };
+        let may_run: fn(&Item) -> bool = match serving {
             true => Item::runs_where_seen,
             false => Item::plain,
         };
@@ -5053,17 +5066,26 @@ impl CommandBufferShared {
             }
             None => item,
         };
-        contexts.post(queue, item);
+        contexts.post(queue, item.whole());
         posted();
     }
 
     /// Finish the command buffer with `result` (or the failure of a batch): take the device's
-    /// trail mark (`trails.rs`), set its status, decode its status words, run its completed
-    /// handlers on this thread, give its queue's slot back, release its uploads, pools and heap
-    /// versions, what it retained and its encoders' logs, then open its gate, which releases its
-    /// waiters once the transition's [`Hold`] (and every other) is gone, and they wait for the
-    /// trails below the mark. Waits from inside these steps answer as [`own`] says.
+    /// trail mark (`trails.rs`), set its status, decode its status words, run its completion-seen
+    /// handlers ([`complete_seen`](Self::complete_seen)), then its completed handlers on this
+    /// thread, give its queue's slot back, release its uploads, pools and heap versions, what it
+    /// retained and its encoders' logs, then open its gate, which releases its waiters once the
+    /// transition's [`Hold`] (and every other) is gone, and they wait for the trails below the
+    /// mark ([`complete_rest`](Self::complete_rest)). Waits from inside these steps answer as
+    /// [`own`] says.
     fn complete(self: &Arc<Self>, result: Result<(), CommandBufferError>) {
+        let rest = self.complete_seen(result);
+        self.complete_rest(rest);
+    }
+
+    /// The first part of [`complete`](Self::complete), to its completion-seen handlers: its
+    /// status final, they ran. What the rest needs is answered.
+    fn complete_seen(self: &Arc<Self>, result: Result<(), CommandBufferError>) -> Rest {
         // A thread sleeps on `changed`, as the state's lock below reads.
         let parked;
         // Its command pool, where it settled, whose primary the device's spares begin ahead once
@@ -5255,6 +5277,21 @@ impl CommandBufferShared {
                 exit_guard::program(|| handler(&buffer));
             }
         }
+        Rest {
+            settled_pool,
+            released_versions,
+        }
+    }
+
+    /// The rest of [`complete`](Self::complete), once its status is final and its completion-seen
+    /// handlers ran ([`complete_seen`](Self::complete_seen)): its completed handlers, its queue's
+    /// slot, its releases and its gate.
+    fn complete_rest(self: &Arc<Self>, rest: Rest) {
+        let Rest {
+            settled_pool,
+            released_versions,
+        } = rest;
+        let buffer = CommandBuffer(Arc::clone(self));
         // Its status is final and its completion-seen handlers, which never block, ran: the
         // command buffers of other queues that waited on the GPU for its signals complete from here
         // on, after it, as its completed handlers start, which may block (`follow.rs`).
@@ -5379,8 +5416,8 @@ pub(crate) struct Transition {
     plain: bool,
     /// It runs none of the program's code but that and its completion-seen handlers, which a
     /// thread that saw its command buffer complete may run
-    /// ([`CommandBuffer::add_completion_seen_handler`]): plain, or a transition to `Completed`
-    /// with no completed handler.
+    /// ([`CommandBuffer::add_completion_seen_handler`]): plain, a transition to `Completed`
+    /// with no completed handler, or one that runs to its completion-seen handlers ([`To::Seen`]).
     where_seen: bool,
 }
 
@@ -5389,6 +5426,23 @@ enum To {
     Scheduled,
     /// `Completed`, or `Error`.
     Finished(Result<(), CommandBufferError>),
+    /// `Completed`, or `Error`, run by a queue's waiter to its completion-seen handlers, the rest
+    /// posted to its queue's context behind it ([`Transition::seen_first`]). Never posted itself:
+    /// where it cannot run where seen it goes whole ([`Item::whole`]).
+    Seen(Result<(), CommandBufferError>),
+    /// The rest of a transition to `Completed` or `Error` that ran to its completion-seen handlers
+    /// where seen: its completed handlers, its releases and its gate, on a handler thread.
+    Rest(Rest),
+}
+
+/// What a command buffer's transition to `Completed` or `Error` still does once its status is
+/// final and its completion-seen handlers ran (`CommandBufferShared::complete_rest`).
+pub(crate) struct Rest {
+    /// Its command pool, where it settled, whose primary the device's spares begin ahead once its
+    /// completed handlers ran.
+    settled_pool: Option<vk::CommandPool>,
+    /// The heap versions its commands bound, let go of once its completed handlers ran.
+    released_versions: Vec<Arc<super::heap_sets::SetVersion>>,
 }
 
 impl Transition {
@@ -5409,6 +5463,23 @@ impl Transition {
         }
     }
 
+    /// The transition of the command buffer `buffer` holds to `Completed` or `Error`, with
+    /// `result`, for a queue's waiter to run where its command buffer has completed handlers and
+    /// completion-seen handlers: its status and completion-seen handlers where seen, the rest
+    /// ([`To::Rest`]) posted to its queue's context, which it runs, so the queue's later items wait
+    /// for it (`CommandBufferShared::finish_here`).
+    fn seen_first(
+        buffer: Hold<CommandBufferShared>,
+        result: Result<(), CommandBufferError>,
+    ) -> Self {
+        Transition {
+            buffer,
+            to: To::Seen(result),
+            plain: false,
+            where_seen: true,
+        }
+    }
+
     fn run(self) -> Kept {
         let on_handler_thread = contexts::on_handler_thread();
         let Transition { buffer, to, .. } = self;
@@ -5420,6 +5491,21 @@ impl Transition {
                 }
                 buffer.complete(result);
             }
+            To::Seen(result) => {
+                buffer.device.shared().counts.completed_where_seen();
+                let rest = buffer.complete_seen(result);
+                // Posted while this thread runs the queue's context (`Contexts::run_here`): it
+                // runs there next, on a handler thread, and the queue's later items after it. Its
+                // own hold keeps the gate shut until it ran.
+                let rest = Item::Transition(Transition {
+                    buffer: buffer.hold(),
+                    to: To::Rest(rest),
+                    plain: false,
+                    where_seen: false,
+                });
+                (buffer.device.shared().contexts).post(buffer.queue.id(), rest);
+            }
+            To::Rest(rest) => buffer.complete_rest(rest),
         }
         // The hold goes after the transition, once its context is done with it: the gate opens
         // then. On a queue's waiter (`CommandBufferShared::finish_here`) it goes short of the
@@ -5472,8 +5558,29 @@ pub(crate) enum Item {
 }
 
 impl Item {
+    /// The item to post where a queue's waiter could not run it: a transition to its
+    /// completion-seen handlers ([`To::Seen`]) goes whole, its completed handlers and all, to its
+    /// queue's handler thread.
+    fn whole(self) -> Item {
+        match self {
+            Item::Transition(Transition {
+                buffer,
+                to: To::Seen(result),
+                ..
+            }) => Item::Transition(Transition {
+                buffer,
+                to: To::Finished(result),
+                plain: false,
+                where_seen: false,
+            }),
+            item => item,
+        }
+    }
+
     /// Whether it is the transition to `Completed` or `Error` of the command buffer at the address
-    /// `buffer` (`follow.rs`).
+    /// `buffer` (`follow.rs`). A command buffer whose transition runs to its completion-seen
+    /// handlers where seen ([`To::Seen`]) has no [`Follow`]: no other queue's command buffer
+    /// looks for its transition.
     fn finishes(&self, buffer: usize) -> bool {
         match self {
             Item::Transition(transition) => {
@@ -5511,6 +5618,14 @@ impl Run for Item {
             Item::Release(_) => false,
         }
     }
+}
+
+/// Whether a queue's waiter runs a command buffer's transition to `Completed` or `Error` to its
+/// completion-seen handlers and posts the rest ([`Transition::seen_first`]): it has completed
+/// handlers, which may block, and completion-seen handlers, which answer the completion where it
+/// is seen. None is added after the commit.
+fn seen_first(state: &State) -> bool {
+    !state.completed.is_empty() && !state.seen.is_empty()
 }
 
 /// Whether a command buffer's transition runs none of the program's code ([`Transition::plain`]):
