@@ -349,6 +349,9 @@ pub fn all() -> Vec<Box<dyn Case>> {
     for case in pixel_samplers::all() {
         cases.push(Box::new(case));
     }
+    for case in pixel_samplers::subnormals() {
+        cases.push(Box::new(case));
+    }
     for case in pixel_downscales::all() {
         cases.push(Box::new(case));
     }

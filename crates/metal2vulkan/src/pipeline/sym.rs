@@ -820,6 +820,16 @@ pub enum SpecKey {
     /// which a driver can load into registers ahead of the shader (Mesa's ANV does so only for a
     /// uniform load at a constant offset); elsewhere at the residual plus the offset.
     RangeAtBindOffset(SlotRef),
+    /// The word of the runtime sampler bound to the slot (`u32`: its whole
+    /// [`SamplerWord`](crate::metal::sampler::SamplerWord), its address modes as the bound
+    /// texture's map sends them), read by a specialized note's test alone
+    /// ([`SpecTest`](crate::pipeline::SpecTest)): no stage declares it as a constant and no
+    /// pipeline's key carries it, so the bound sampler decides the note without a `VkPipeline` of
+    /// its own. A plan gives it (`BindingPlan::specialized_value`), and the runtime reads such a
+    /// test at each draw or dispatch (`StageModule::note_clauses_bound`); where the sampler is not
+    /// known (a reading of the module alone, `StageModule::precision_notes_under`), such a test
+    /// holds. A slot bound to no sampler takes 0.
+    BoundSamplerWord(SlotRef),
 }
 
 impl SpecKey {

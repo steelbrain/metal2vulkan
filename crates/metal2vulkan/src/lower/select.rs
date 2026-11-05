@@ -1751,13 +1751,15 @@ fn finish(
 /// The constant a [`NoteTest`] reads: a sampler slot's `SamplerState` word or its
 /// `NearestPixelSampler` boolean, by the function's slot index, or a texture slot's
 /// `UnmeasuredTexels` boolean, or the class of the format bound at a texture slot, which no
-/// constant carries (`SpecKey::BoundTexelFormat`).
+/// constant carries (`SpecKey::BoundTexelFormat`), or the whole word of the sampler bound at a
+/// sampler slot, which none carries either (`SpecKey::BoundSamplerWord`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum NoteOn {
     Sampler(u32),
     NearestPixel(u32),
     Unmeasured(u32),
     Bound(u32),
+    BoundSampler(u32),
 }
 
 /// A test of one slot's specialization constant `v`: it holds where `(v & mask == bits) == equal`,
@@ -1814,7 +1816,8 @@ pub(crate) fn any_of(tests: impl IntoIterator<Item = NoteTest>) -> Vec<NoteClaus
 /// The declared constant `t` reads, as its [`SpecTest`], or `None` where the function declares no
 /// such constant, or a sampler word whose fields leave out a bit the test reads. A texture slot's
 /// bound format class (`NoteOn::Bound`) is no constant: its test reads `SpecKey::BoundTexelFormat`,
-/// which the runtime takes from the bound texture.
+/// which the runtime takes from the bound texture; nor is a sampler slot's bound word
+/// (`NoteOn::BoundSampler`), whose test reads `SpecKey::BoundSamplerWord`, which the plan gives.
 fn declared(families: &FamilyPlans, t: NoteTest) -> Option<SpecTest> {
     let key = match t.on {
         NoteOn::Unmeasured(index) => {
@@ -1823,6 +1826,10 @@ fn declared(families: &FamilyPlans, t: NoteTest) -> Option<SpecTest> {
         }
         // Read from the bound texture by the runtime, never a constant: every slot has one.
         NoteOn::Bound(index) => SpecKey::BoundTexelFormat(families.texture.slots.get(&index)?.slot),
+        // Given by the plan from the bound sampler, never a constant: every runtime slot has one.
+        NoteOn::BoundSampler(index) => {
+            SpecKey::BoundSamplerWord(families.sampler.slots.get(&index)?.slot)
+        }
         NoteOn::Sampler(index) => {
             let r = families.sampler.slots.get(&index)?;
             let fields = r.fields();

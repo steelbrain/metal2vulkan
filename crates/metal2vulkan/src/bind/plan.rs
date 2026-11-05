@@ -62,9 +62,10 @@ pub struct BindingPlan {
 
 impl BindingPlan {
     /// The value this plan's bound resources give `key` where a stage reads it as data
-    /// (`PushField::Specialized`), the value instantiation pushes; `None` for a key no stage reads
-    /// so. A pipeline's key no longer carries such a value, so a runtime reads a stage's notes that
-    /// test it through `StageModule::precision_notes_bound` with this.
+    /// (`PushField::Specialized`), the value instantiation pushes, or where a stage's specialized
+    /// note alone tests it (`SpecKey::BoundSamplerWord`, the bound sampler's word), which nothing
+    /// pushes; `None` for any other key. A pipeline's key carries no such value, so a runtime
+    /// reads a stage's notes that test it through `StageModule::precision_notes_bound` with this.
     pub fn specialized_value(&self, key: SpecKey) -> Option<u64> {
         let resources = match (&self.compute, &self.graphics) {
             (Some(c), _) => &c.resources,
@@ -461,7 +462,8 @@ pub(crate) struct ResourceTemplate {
     pub texture_integer_channels: Vec<(SlotRef, u32)>,
     /// The value the binder pushes for each key a function reads as a push field
     /// (`PushField::Specialized`): its specialization constant's, from the bound resources
-    /// (`slots::bound_value`).
+    /// (`slots::bound_value`); and the value of each key a specialized note's test alone reads
+    /// (`SpecKey::BoundSamplerWord`), which nothing pushes (`slots::record_noted`).
     #[cfg_attr(feature = "serde", serde(default))]
     pub specialized: Vec<(crate::pipeline::sym::SpecKey, u32)>,
     /// Each stage's sampler table.

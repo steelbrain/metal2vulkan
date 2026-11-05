@@ -14032,6 +14032,7 @@ variant	metal2vulkan::pipeline::SnapshotForm::Unorm16	Unorm16
 variant	metal2vulkan::pipeline::SnapshotForm::Unorm8	Unorm8
 variant	metal2vulkan::pipeline::SpecKey::AmplificationCount	AmplificationCount
 variant	metal2vulkan::pipeline::SpecKey::BicubicTexels	BicubicTexels(SlotRef)
+variant	metal2vulkan::pipeline::SpecKey::BoundSamplerWord	BoundSamplerWord(SlotRef)
 variant	metal2vulkan::pipeline::SpecKey::BoundTexelFormat	BoundTexelFormat(SlotRef)
 variant	metal2vulkan::pipeline::SpecKey::ConstantLanes	ConstantLanes(SlotRef)
 variant	metal2vulkan::pipeline::SpecKey::FlatLocalSize	FlatLocalSize

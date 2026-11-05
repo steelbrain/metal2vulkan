@@ -2004,8 +2004,9 @@ fn select_one(
     // does, where Metal's sampler reads its texel from `x` itself: the zero of either sign is
     // texel 0, and a negative subnormal texel -1. So does a pixel fetch's texel `floor(x) + k`,
     // where an offset moves that texel off the edge the clamp sends both to. The note holds where
-    // the centre can be the sample's coordinate (`centre_denormals`).
-    let when = centre_denormals(pixel, position);
+    // the centre can be the sample's coordinate under a mode that reads texel -1 apart from texel
+    // 0 (`centre_denormals`).
+    let when = centre_denormals(pixel, position, stat.map(|(r, _)| r))?;
     cx.note_when(PrecisionNote::DeviceDenormals, when, m)?;
     if matches!(op, SampleOp::PixelFetch { offset: Some(_) }) {
         cx.precision.insert(PrecisionNote::DeviceDenormals);
@@ -2471,16 +2472,22 @@ fn pixel_note(pixel: Pixel, position: PixelPosition) -> Vec<crate::lower::select
     }
 }
 
-/// Where a sampling through a sampler of pixel coordinates `pixel` at `position` hands the device
-/// its texel's centre, `floor(x) + 0.5`, whose `floor` reads a subnormal `x` by the device's float
-/// controls (`PrecisionNote::DeviceDenormals`): the clauses of the arms that do (empty: none).
-/// Code behind a constant that no other state takes cannot change that state's answer, so:
+/// Where a sampling through a sampler of pixel coordinates `pixel` (the static sampler `stat`) at
+/// `position` hands the device its texel's centre, `floor(x) + 0.5`, whose `floor` reads a
+/// subnormal `x` by the device's float controls (`PrecisionNote::DeviceDenormals`): the clauses of
+/// the arms that do (empty: none). Metal's sampler reads a negative subnormal as texel -1, and a
+/// `floor` that reads it as a zero makes it texel 0: an address mode that reads texel -1 as texel 0
+/// ([`centre_parts`] false: clamp to edge, mirror clamp to edge, mirrored repeat) answers alike, so
+/// a clause holds only where the `s` or `t` axis takes another mode. Code behind a constant that
+/// no other state takes cannot change that state's answer, so:
 ///
 /// - a constexpr sampler's centre ([`PixelPosition::Texel`], [`PixelPosition::UnnormalizedTexel`]):
-///   always;
+///   where its `s` or `t` mode parts the two texels;
 /// - a runtime sampler slot's: where its word states pixel coordinates (an integer texture's
 ///   centre, [`PixelPosition::Texel`]), or where its `NearestPixelSampler` specialization holds
-///   ([`PixelPosition::TexelBySpec`]), never under a normalized state;
+///   ([`PixelPosition::TexelBySpec`]), never under a normalized state, and where the bound
+///   sampler's `s` or `t` mode parts them (`NoteOn::BoundSampler`, the word the plan gives at each
+///   draw or dispatch, which no pipeline's key carries);
 /// - an argument buffer's sampler's ([`PixelPosition::TexelByWord`]): never here, its table entry's
 ///   word deciding it where no specialization can; `PrecisionNote::ArgumentPixelSamplerScaling`,
 ///   which the runtime announces only while a state of pixel coordinates lives, records it
@@ -2488,24 +2495,59 @@ fn pixel_note(pixel: Pixel, position: PixelPosition) -> Vec<crate::lower::select
 fn centre_denormals(
     pixel: Pixel,
     position: PixelPosition,
-) -> Vec<crate::lower::select::NoteClause> {
+    stat: Option<SamplerRef>,
+) -> Result<Vec<crate::lower::select::NoteClause>, Error> {
     use crate::lower::select::NoteClause;
-    match (pixel, position) {
-        (Pixel::Spec(n), PixelPosition::Texel) => vec![NoteClause::from([NoteTest::differ(
-            NoteOn::Sampler(n),
-            SamplerWord::PIXEL_COORDINATES,
-            0,
-        )])],
+    use crate::metal::SamplerAddressMode as M;
+    // The clauses of `held` on a runtime slot `n`, one per axis whose bound mode parts the texels:
+    // that axis's mode is none of the three that do not.
+    let parted = |n: u32, held: NoteTest| -> Vec<NoteClause> {
+        (0..2)
+            .map(|axis| {
+                let mut clause = NoteClause::from([held]);
+                for mode in [M::ClampToEdge, M::MirrorClampToEdge, M::MirrorRepeat] {
+                    let bits = mode.as_raw() << SamplerWord::ADDRESS_SHIFT[axis];
+                    clause.insert(NoteTest::differ(
+                        NoteOn::BoundSampler(n),
+                        SamplerWord::ADDRESS[axis],
+                        bits,
+                    ));
+                }
+                clause
+            })
+            .collect()
+    };
+    Ok(match (pixel, position) {
+        (Pixel::Spec(n), PixelPosition::Texel) => parted(
+            n,
+            NoteTest::differ(NoteOn::Sampler(n), SamplerWord::PIXEL_COORDINATES, 0),
+        ),
         (Pixel::Spec(n), PixelPosition::TexelBySpec) => {
-            vec![NoteClause::from([NoteTest::equal(
-                NoteOn::NearestPixel(n),
-                1,
-                1,
-            )])]
+            parted(n, NoteTest::equal(NoteOn::NearestPixel(n), 1, 1))
         }
         (Pixel::Heap(_), _) => Vec::new(),
-        (_, PixelPosition::Texel | PixelPosition::UnnormalizedTexel) => vec![NoteClause::new()],
+        (_, PixelPosition::Texel | PixelPosition::UnnormalizedTexel) => match stat {
+            Some(SamplerRef::Constexpr(words)) => {
+                let s = super::state_of(words)?;
+                match centre_parts(s.address_s) || centre_parts(s.address_t) {
+                    true => vec![NoteClause::new()],
+                    false => Vec::new(),
+                }
+            }
+            _ => vec![NoteClause::new()],
+        },
         _ => Vec::new(),
+    })
+}
+
+/// Whether address mode `mode` reads texel -1 apart from texel 0 (repeat, clamp to zero, clamp to
+/// the border), where a negative subnormal coordinate's centre that a `floor` reads as a zero
+/// samples another texel than Metal's sampler; clamp to edge and mirrored repeat read texel -1 as
+/// texel 0.
+fn centre_parts(mode: AddressMode) -> bool {
+    match mode {
+        AddressMode::ClampToEdge | AddressMode::MirroredRepeat => false,
+        AddressMode::ClampToZero | AddressMode::Repeat | AddressMode::ClampToBorder => true,
     }
 }
 

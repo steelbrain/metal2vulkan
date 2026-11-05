@@ -807,6 +807,21 @@ fn the_version_377_member_round_trips() {
     }
 }
 
+/// The member format version 485 appends encodes and decodes as itself: the word of the sampler
+/// bound at a slot, which a specialized note's test alone reads.
+#[test]
+fn the_version_485_member_round_trips() {
+    use crate::pipeline::sym::SpecKey;
+    let slot = SlotRef {
+        stage: Stage::Fragment,
+        class: SlotClass::Sampler,
+        index: 2,
+    };
+    let key = SpecKey::BoundSamplerWord(slot);
+    assert_eq!(decode::<SpecKey>(&encode(&key)), Ok(key));
+    assert_ne!(encode(&key), encode(&SpecKey::NearestPixelSampler(slot)));
+}
+
 /// The members format versions 153, 154, 155, 157 and 161 joined from every side encode and
 /// decode together in one render pipeline: `PrecisionNote::CubeGradientFootprint` and
 /// `CombinedSampler`, `RuntimeFact::InterlockedFramebufferFetch` and

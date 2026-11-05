@@ -62,8 +62,8 @@ use super::resources::{separate_samplers, ResourcePlanner};
 use super::slots::{
     address_map_variant, anisotropic_variant, bindings, bound_value, buffer_use, check_slots,
     check_sparse_textures, cross_variant, cubic_variant, mark_disjoint, plan_buffer, psb_variant,
-    record_specialized, srgb_variant, storage_view_variant, used_uses, ycbcr_in_place_variant,
-    ycbcr_planes_sampled_variant,
+    record_noted, record_specialized, srgb_variant, storage_view_variant, used_uses,
+    ycbcr_in_place_variant, ycbcr_planes_sampled_variant,
 };
 use super::{
     BindingPlan, BoundKind, ComputeTemplate, DescriptorWrite, FieldLocation, LocalRules,
@@ -711,6 +711,7 @@ fn plan(p: &ComputePipeline, device: &Device, shape: &BindShape) -> Result<Bindi
         fixed.push((c.key, v));
     }
     record_specialized(&push, shape, &mut resources)?;
+    record_noted([&p.stage], shape, &mut resources)?;
     // Emulated simdgroups: the reported static length also counts the scratch of the most threads,
     // so the arena's own static part comes from the fact.
     let emulation = p.dependencies.iter().find_map(|d| match d.fact {

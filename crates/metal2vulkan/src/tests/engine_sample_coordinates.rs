@@ -670,6 +670,96 @@ fn a_runtime_samplers_gather_and_sample_read_only_its_coordinates() {
     }
 }
 
+/// A nearest pixel sample at its texel's centre notes `DeviceDenormals` only where an address mode
+/// reads texel -1 apart from texel 0 (repeat, clamp to zero, clamp to the border), on every
+/// committed profile: Metal's sampler reads a negative subnormal coordinate as texel -1, which the
+/// centre's `floor` may read as a zero, and clamp to edge, mirror clamp to edge and mirrored repeat
+/// read both texels alike. Through a constexpr sampler of an array (its centre: one `Floor`) the
+/// module decides it from the sampler's `s` and `t` modes, its `r` (the layer's) apart; through a
+/// runtime sampler slot its specialized note holds exactly under the slot's
+/// `NearestPixelSampler` specialization and a bound word (`SpecKey::BoundSamplerWord`, which the
+/// plan gives at each draw or dispatch) whose `s` or `t` mode parts the two, and tests nothing
+/// else.
+#[test]
+fn a_texel_centre_notes_denormals_only_where_its_mode_parts_texel_minus_one() {
+    use crate::metal::sampler::SamplerWord;
+    use crate::metal::SamplerAddressMode as M;
+    use crate::pipeline::sym::SpecKey;
+    let profiles = crate::spirv::testing::committed_profiles().expect("profiles");
+    for (address, noted) in [
+        ([ZERO, EDGE, EDGE], true),
+        ([EDGE, REPEAT, EDGE], true),
+        ([MIRROR, EDGE, ZERO], false),
+        ([EDGE, MIRROR, MIRROR], false),
+    ] {
+        let name = format!("pixel nearest array {address:?}");
+        let words = sampler(0, 0, address, true);
+        let Some(bc) = assemble(&name, &kernel(Op::SampleArray, Some(words))) else {
+            return;
+        };
+        for (stem, p) in &profiles {
+            let what = format!("{name} on {stem}");
+            let a = compile(&bc, "k", p).unwrap_or_else(|e| panic!("{what}: {e}"));
+            link_and_validate(&a, p).unwrap_or_else(|e| panic!("{what}: {e}"));
+            assert_eq!(glsl_count(&a, GLSL_FLOOR), 1, "{what}: the centre's floor");
+            assert_eq!(
+                a.precision.contains(&PrecisionNote::DeviceDenormals),
+                noted,
+                "{what}"
+            );
+        }
+    }
+    let modes = [
+        M::ClampToEdge,
+        M::MirrorClampToEdge,
+        M::Repeat,
+        M::MirrorRepeat,
+        M::ClampToZero,
+        M::ClampToBorderColor,
+    ];
+    let parts = |m: M| matches!(m, M::Repeat | M::ClampToZero | M::ClampToBorderColor);
+    let Some(bc) = assemble("runtime sample", &kernel(Op::Sample2D, None)) else {
+        return;
+    };
+    for (stem, p) in &profiles {
+        let what = format!("runtime sample on {stem}");
+        let a = compile(&bc, "k", p).unwrap_or_else(|e| panic!("{what}: {e}"));
+        assert!(
+            a.precision.contains(&PrecisionNote::DeviceDenormals),
+            "{what}"
+        );
+        let note = a
+            .specialized
+            .iter()
+            .find(|s| s.note == PrecisionNote::DeviceDenormals)
+            .unwrap_or_else(|| panic!("{what}: DeviceDenormals is not specialized"));
+        let holds = |nearest: u64, word: u32| {
+            note.when.iter().any(|c| {
+                c.all.iter().all(|t| {
+                    let v = match t.key {
+                        SpecKey::NearestPixelSampler(_) => nearest,
+                        SpecKey::BoundSamplerWord(_) => u64::from(word),
+                        other => panic!("{what}: a test of {other:?}"),
+                    };
+                    (v & u64::from(t.mask) == u64::from(t.bits)) == t.equal
+                })
+            })
+        };
+        for s in modes {
+            for t in modes {
+                let word = SamplerWord::PIXEL_COORDINATES
+                    | s.as_raw() << SamplerWord::ADDRESS_SHIFT[0]
+                    | t.as_raw() << SamplerWord::ADDRESS_SHIFT[1];
+                assert_eq!(holds(1, word), parts(s) || parts(t), "{what}: {s:?}, {t:?}");
+                assert!(
+                    !holds(0, word),
+                    "{what}: {s:?}, {t:?} under a normalized state"
+                );
+            }
+        }
+    }
+}
+
 /// Whether every coordinate operand of every sample and gather in the module `words` is the
 /// coordinate the kernel loaded, its bits unchanged: built from the loaded words by bit moves alone
 /// (loads, bitcasts, the extraction, construction and shuffle of lanes, constants), and an array's

@@ -199,8 +199,9 @@ pub(crate) fn range_at_bind_offset(
 /// The value of `key` for a draw or dispatch of `shape`, whose resources `resources` plans, where
 /// the bound resources decide it: a slot's presence, a bound sampler's words, a bound texture's
 /// class, swizzle, sparseness and view axes. It is what a specialization constant of `key` is set
-/// to, the one place a plan computes it. `None` for a key the bound resources do not decide (a
-/// threadgroup's, a tile's, a pass's).
+/// to, the one place a plan computes it, and the bound sampler's whole word a specialized note's
+/// test alone reads (`SpecKey::BoundSamplerWord`). `None` for a key the bound resources do not
+/// decide (a threadgroup's, a tile's, a pass's).
 pub(crate) fn bound_value(
     key: SpecKey,
     shape: &BindShape,
@@ -212,6 +213,9 @@ pub(crate) fn bound_value(
         SpecKey::SamplerMinLevel(slot) => resources.sampler_min_level(slot),
         SpecKey::SamplerAnisotropy(slot) => resources.sampler_anisotropy(slot),
         SpecKey::NearestPixelSampler(slot) => resources.nearest_pixel_sampler(slot),
+        SpecKey::BoundSamplerWord(slot) => {
+            resources.sampler_state(slot, metal::sampler::SamplerWord::FIELDS)
+        }
         // An unbound slot, or one bound to a placeholder format, reads its neutral: its
         // out-of-bounds texel is all zero.
         SpecKey::OutOfBoundsAlpha(slot) => bound_texture(shape, slot)
@@ -259,6 +263,42 @@ pub(crate) fn record_specialized(
         if !recorded.iter().any(|(k, _)| *k == key) {
             recorded.push((key, value));
         }
+    }
+    Ok(())
+}
+
+/// Record in `resources`' template the value of each key a specialized note of `stages` tests that
+/// no constant and no push carries but the bound resources decide (`SpecKey::BoundSamplerWord`),
+/// which `BindingPlan::specialized_value` gives the runtime at each draw or dispatch, where it
+/// reads such a note (`StageModule::note_clauses_bound`). Nothing pushes it: instantiation writes
+/// only the keys its push fields name.
+pub(crate) fn record_noted<'a>(
+    stages: impl IntoIterator<Item = &'a crate::pipeline::StageModule>,
+    shape: &BindShape,
+    resources: &mut ResourcePlanner<'_>,
+) -> Result<(), BindError> {
+    let tested: Vec<SpecKey> = stages
+        .into_iter()
+        .flat_map(|stage| &stage.specialized_notes)
+        .flat_map(|note| &note.when)
+        .flat_map(|clause| &clause.all)
+        .map(|test| test.key)
+        .filter(|key| matches!(key, SpecKey::BoundSamplerWord(_)))
+        .collect();
+    for key in tested {
+        if resources
+            .template
+            .specialized
+            .iter()
+            .any(|(k, _)| *k == key)
+        {
+            continue;
+        }
+        let value = bound_value(key, shape, resources)?
+            .ok_or_else(|| internal(format!("a noted {key:?}, which no bound resource decides")))?;
+        let value = u32::try_from(value)
+            .map_err(|_| internal(format!("a noted {key:?} of {value}, past a word")))?;
+        resources.template.specialized.push((key, value));
     }
     Ok(())
 }

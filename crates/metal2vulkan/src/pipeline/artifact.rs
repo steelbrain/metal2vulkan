@@ -233,9 +233,10 @@ impl StageModule {
 
     /// The stage's precision notes where a pipeline creates it under `specialization` and a draw
     /// or dispatch binds the values `bound` gives: as
-    /// [`precision_notes_under`](Self::precision_notes_under), where a test of a key the stage
-    /// reads as data (`PushField::Specialized`), which no pipeline's key carries, reads the value
-    /// `bound` gives for it, the one the binder pushes; a test of a key neither gives holds.
+    /// [`precision_notes_under`](Self::precision_notes_under), where a test of a key no pipeline's
+    /// key carries (one the stage reads as data, `PushField::Specialized`, the value the binder
+    /// pushes; or a bound sampler's word, `SpecKey::BoundSamplerWord`) reads the value `bound`
+    /// gives for it (`BindingPlan::specialized_value`); a test of a key neither gives holds.
     pub fn precision_notes_bound(
         &self,
         specialization: &SpecializationKey,
@@ -308,8 +309,8 @@ impl StageModule {
     }
 
     /// Whether every test of `clause` holds under `specialization`, a constant the key does not
-    /// give reading its default, and a key the stage reads as data reading the value `bound`
-    /// gives.
+    /// give reading its default, and a key no pipeline's key carries (one the stage reads as data,
+    /// a bound sampler's word) reading the value `bound` gives.
     fn clause_holds(
         &self,
         clause: &SpecClause,
@@ -337,7 +338,7 @@ impl StageModule {
             // A test of a constant the stage does not declare and `bound` does not give holds:
             // the conservative answer (a runtime gives the bound format's class,
             // `SpecKey::BoundTexelFormat`, through `bound_format_clauses`, and the keys the stage
-            // reads as data through `bound`).
+            // reads as data and the bound samplers' words through `bound`).
             None => true,
             Some(v) => (v & u64::from(t.mask) == u64::from(t.bits)) == t.equal,
         })
@@ -437,11 +438,15 @@ impl SpecClause {
             .all(|t| matches!(t.key, SpecKey::BoundTexelFormat(_)))
     }
 
-    /// Whether a test reads a value the function reads as data (`SpecKey::read_as_data`), which
-    /// no pipeline's key carries: a clause a runtime reads at each draw or dispatch, from the
-    /// values its plan pushes ([`StageModule::note_clauses_bound`]).
+    /// Whether a test reads a value no pipeline's key carries that a plan gives
+    /// (`BindingPlan::specialized_value`): one the function reads as data
+    /// (`SpecKey::read_as_data`), or the word of the sampler bound at a slot
+    /// (`SpecKey::BoundSamplerWord`). A runtime reads such a clause at each draw or dispatch, from
+    /// the values its plan gives ([`StageModule::note_clauses_bound`]).
     pub fn tests_bound_values(&self) -> bool {
-        self.all.iter().any(|t| t.key.read_as_data())
+        self.all
+            .iter()
+            .any(|t| t.key.read_as_data() || matches!(t.key, SpecKey::BoundSamplerWord(_)))
     }
 
     /// Whether every test of the bound formats holds where `bound` gives the class of the format
@@ -638,12 +643,16 @@ pub enum PrecisionNote {
     /// `floor(x) + 0.5`, and a pixel fetch's texel `floor(x) + k` under an offset, records it for
     /// that `floor`: Metal's sampler reads a subnormal `x` itself, a negative one as texel -1,
     /// where the device's `floor` reads it by its float controls (MoltenVK's as the zero of its
-    /// sign, texel 0, measured on an Apple M3 Max). Recorded only where the centre can be the
-    /// sample's coordinate: through a constexpr sampler always, through a runtime sampler slot
-    /// held where the bound state is a nearest pixel sampler (`SpecKey::NearestPixelSampler`; for
-    /// an integer texture, where it states pixel coordinates), never under a normalized state;
-    /// through an argument buffer's sampler [`PrecisionNote::ArgumentPixelSamplerScaling`]
-    /// records it instead. Validation derives no tolerance and no explanation from it: every
+    /// sign, texel 0, measured on an Apple M3 Max). An address mode that reads texel -1 as texel 0
+    /// (clamp to edge, mirror clamp to edge, mirrored repeat) answers alike, so the note holds
+    /// only where the centre can be the sample's coordinate and the `s` or `t` axis takes another
+    /// mode (repeat, clamp to zero, clamp to the border): through a constexpr sampler where its
+    /// modes are such, through a runtime sampler slot held where the bound state is a nearest
+    /// pixel sampler (`SpecKey::NearestPixelSampler`; for an integer texture, where it states
+    /// pixel coordinates) and its word states such a mode (`SpecKey::BoundSamplerWord`, which the
+    /// runtime reads at each draw or dispatch), never under a normalized state; through an
+    /// argument buffer's sampler [`PrecisionNote::ArgumentPixelSamplerScaling`] records it
+    /// instead. A pixel fetch under an offset records it outright. Validation derives no tolerance and no explanation from it: every
     /// `float` computation is exposed to it.
     DeviceDenormals,
     /// A pixel-coordinate sampler's coordinate reaches the device's normalized sampler divided by

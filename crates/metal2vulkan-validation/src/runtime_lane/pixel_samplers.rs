@@ -801,3 +801,55 @@ fn the_argument_buffer_note_waits_for_a_pixel_state() {
     }
     layer_reported_nothing_at_all(&messages);
 }
+
+/// `device-denormals` of a nearest pixel sample through a runtime sampler slot, whose texel's
+/// centre `floor(x) + 0.5` reads a negative subnormal coordinate by the device's `floor`, waits for
+/// a dispatch through a state whose `s` or `t` mode reads texel -1 apart from texel 0: its stage
+/// records the note held under the bound word (`SpecKey::BoundSamplerWord`), the pipeline's making
+/// announces nothing, dispatches at subnormal coordinates through clamp to edge and mirror clamp to
+/// edge announce nothing, and the next, through clamp to zero, announces it once.
+#[test]
+fn a_texel_centre_s_denormals_wait_for_a_mode_that_parts_texel_minus_one() {
+    let cache = ScratchCache::new().unwrap();
+    let messages = Messages::default();
+    let kind = Degradation::DeviceDenormals;
+    {
+        let device = validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
+        let bitcode = llvm_assemble_text(&kernel(false, Through::Runtime, false, false)).unwrap();
+        assert!(
+            stage_notes(&device, &bitcode, "k").contains(&PrecisionNote::DeviceDenormals),
+            "a runtime slot's nearest sample records the note"
+        );
+        let slot = pipeline_of(&device, &bitcode, "k");
+        let made = counts(&messages.take_notices());
+        assert!(!made.contains_key(&kind), "made: {made:?}");
+        let texture = texture(&device, PixelFormat::RGBA8Unorm);
+        let below = -f32::from_bits(1);
+        let jobs = [[below, 1.5, 0.0, 0.0], [2.5, below, 0.0, 0.0]];
+        for (address, noted) in [
+            (SamplerAddressMode::ClampToEdge, false),
+            (SamplerAddressMode::MirrorClampToEdge, false),
+            (SamplerAddressMode::ClampToZero, true),
+        ] {
+            let state = sampler(&device, SamplerMinMagFilter::Nearest, address, false);
+            run_held(
+                &device,
+                (&texture, Held::Slot, Some(&state)),
+                &slot,
+                &jobs,
+                1,
+            );
+            let after = counts(&messages.take_notices());
+            eprintln!(
+                "TEXEL-CENTRE-DENORMALS {}: {address:?}: {after:?}",
+                device.name()
+            );
+            assert_eq!(
+                after.get(&kind).copied(),
+                noted.then_some(1),
+                "{address:?}: {after:?}"
+            );
+        }
+    }
+    layer_reported_nothing_at_all(&messages);
+}

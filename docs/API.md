@@ -3026,10 +3026,15 @@ bound.
   Metal flushes (`float-tininess-after-rounding`). A nearest pixel-coordinate sample at its texel's
   centre `floor(x) + 0.5`, and a pixel fetch at `floor(x) + k` under an offset, records it for that
   `floor`: Metal's sampler reads a negative subnormal `x` as texel -1, where MoltenVK's `floor`
-  reads it as the zero of its sign, texel 0 (an Apple M3 Max). Through a constexpr sampler always;
-  through a runtime sampler slot only under a pipeline made for a nearest pixel state
-  (`SpecKey::NearestPixelSampler`), never under a normalized one; through an argument buffer's
-  sampler `argument-pixel-sampler-scaling` records it instead.
+  reads it as the zero of its sign, texel 0 (an Apple M3 Max). An address mode that reads texel -1
+  as texel 0 (clamp to edge, mirror clamp to edge, mirrored repeat) answers alike, so the sample
+  records it only where its `s` or `t` mode is repeat, clamp to zero or clamp to the border: through
+  a constexpr sampler of such a mode; through a runtime sampler slot only under a pipeline made for
+  a nearest pixel state (`SpecKey::NearestPixelSampler`), never under a normalized one, and
+  announced at a draw or dispatch that binds a state of such a mode there
+  (`SpecKey::BoundSamplerWord`); through an argument buffer's sampler
+  `argument-pixel-sampler-scaling` records it instead. A pixel fetch under an offset records it
+  outright.
 - `metal2vulkan-degrade-pixel-sampler-scaling` (precision). `PrecisionNote::PixelSamplerScaling`:
   A pixel-coordinate sampler's coordinate reaches the device's normalized sampler divided by the
   texture's level-0 size in the shader, and the device reads its texels and weights from that

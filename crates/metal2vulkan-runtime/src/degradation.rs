@@ -3617,9 +3617,10 @@ impl Device {
 
     /// Announce, at a draw or dispatch that binds a pipeline of `stages` made under
     /// `specialization`, each specialized note one of whose clauses tests a value its function
-    /// reads as data (`SpecClause::tests_bound_values`: a bound texture's format class) and
-    /// holds where the draw's plan pushes the values `bound` gives
-    /// (`BindingPlan::specialized_value`; `StageModule::note_clauses_bound`). No pipeline's key
+    /// reads as data or a bound sampler's word (`SpecClause::tests_bound_values`: a bound
+    /// texture's format class, `SpecKey::BoundSamplerWord`) and holds where the draw's plan gives
+    /// the values `bound` gives (`BindingPlan::specialized_value`;
+    /// `StageModule::note_clauses_bound`). No pipeline's key
     /// carries those values, so no making can announce such a clause: one `VkPipeline` serves
     /// every bound value. The reason names each texture slot a holding clause tests and, where
     /// the command knows them (`formats`), the format it binds there. A kind already announced
@@ -3660,7 +3661,7 @@ impl Device {
                     &clauses,
                     formats,
                     Occurrence::Drawn,
-                    "under the formats it binds",
+                    "under the formats and samplers it binds",
                 );
             }
         }
