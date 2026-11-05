@@ -174,6 +174,7 @@
         "queue_submissions": 20,
         "queues_sharing_a_vk_queue": 1,
         "scheduled_where_submitted": 20,
+        "scheduler_passes": 1,
         "scheduler_passes_by_waiters": 20,
         "scheduler_sleeps": 20,
         "scheduler_wakes_commit": 20,

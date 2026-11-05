@@ -564,9 +564,9 @@
         "scheduled_where_submitted": 8,
         "scheduler_passes": 5,
         "scheduler_passes_by_waiters": 8,
-        "scheduler_sleeps": 11,
+        "scheduler_sleeps": 10,
         "scheduler_wakes_commit": 8,
-        "scheduler_wakes_host": 3,
+        "scheduler_wakes_host": 2,
         "set_zero_sets_found": 476,
         "shader_modules_made": 2,
         "slot_returns": 8,
@@ -574,12 +574,11 @@
         "stage_entries_shared": 1,
         "stage_entries_specialized": 1,
         "submit_infos": 9,
-        "submit_stalls_on_work": 2,
         "trail_waits": 8,
         "variant_pipelines_made": 2,
         "variants_taken_back": 2,
         "wakes_completion_waiters": 8,
-        "wakes_spared": 119
+        "wakes_spared": 120
       },
       "moving": {
         "batches_submitted_by_waiters": 5,

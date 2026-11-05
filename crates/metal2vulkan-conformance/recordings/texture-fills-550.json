@@ -183,7 +183,6 @@
         "requirement_images_made": 4,
         "requirement_limits_asked": 4,
         "scheduled_where_submitted": 75,
-        "scheduler_passes": 1,
         "scheduler_passes_by_waiters": 75,
         "scheduler_sleeps": 75,
         "scheduler_wakes_commit": 75,

@@ -268,6 +268,9 @@
         "queues_sharing_a_vk_queue": 8,
         "slot_waits": 5
       },
+      "moving": {
+        "slot_waits": 4
+      },
       "composed": {
         "addressable_buffers_made": 2,
         "device_memory_allocated": 201326592,
