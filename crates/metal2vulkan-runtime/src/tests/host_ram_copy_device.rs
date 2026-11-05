@@ -18,10 +18,17 @@
 //!   reads what the GPU wrote through it.
 //! - **Refused**: runs off the page, empty or outside the RAM, a RAM the device does not use (or
 //!   no longer does), bytes past the buffer and an offset off a word; no runs copy nothing.
+//! - **A chunk taken as an object takes it**, on a device whose thread imports ahead: a gather
+//!   from the RAM's first chunk finds it imported ahead and opens the full window past it, and a
+//!   scatter into a chunk past the window imports that chunk itself; the thread imports nothing
+//!   past the window.
+//!
+//! Every other test holds the device's thread back (`Device::hold_host_ram_imports`).
 //!
 //! Device tests: compiled only under the GPU safety cfgs (`m2v_gpu`, `m2v_cpu_icd`), on the kind
 //! of device the cfg selects. A device that imports no host memory says so and passes.
 
+use crate::host_ram::AHEAD_CHUNKS;
 use crate::{
     Buffer, CommandBuffer, CommandBufferStatus, Device, DeviceKind, DeviceOptions, DirtyPages,
     DirtyStamp, Error, HostBacking, HostMemory, HostRam, ImportGate, KeepAlive, Problem,
@@ -32,7 +39,7 @@ use std::ops::Range;
 use std::ptr::NonNull;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 const WAIT: Duration = Duration::from_secs(60);
 const MIB: u64 = 1 << 20;
@@ -58,11 +65,16 @@ impl Drop for Mapping {
 
 /// A RAM of `RAM_BYTES`, its writes logged to `log` where given, and its first byte.
 fn new_ram(log: Option<Arc<Log>>) -> (Arc<HostRam>, u64) {
+    ram_of(RAM_BYTES, log)
+}
+
+/// A RAM of `length` bytes, its writes logged to `log` where given, and its first byte.
+fn ram_of(length: u64, log: Option<Arc<Log>>) -> (Arc<HostRam>, u64) {
     // SAFETY: a fresh private anonymous mapping.
     let start = unsafe {
         libc::mmap(
             std::ptr::null_mut(),
-            RAM_BYTES as usize,
+            length as usize,
             libc::PROT_READ | libc::PROT_WRITE,
             libc::MAP_PRIVATE | libc::MAP_ANON,
             -1,
@@ -71,13 +83,10 @@ fn new_ram(log: Option<Arc<Log>>) -> (Arc<HostRam>, u64) {
     };
     assert_ne!(start, libc::MAP_FAILED);
     let start = start as u64;
-    let keep: KeepAlive = Box::new(Mapping {
-        start,
-        length: RAM_BYTES,
-    });
+    let keep: KeepAlive = Box::new(Mapping { start, length });
     let at = NonNull::new(start as *mut u8).unwrap();
     // SAFETY: the mapping is readable and writable until the keep-alive unmaps it.
-    let ram = unsafe { HostRam::new(&[(at, RAM_BYTES)], Some(keep)) }.unwrap();
+    let ram = unsafe { HostRam::new(&[(at, length)], Some(keep)) }.unwrap();
     let ram = match log {
         Some(log) => ram.with_dirty_pages(log),
         None => ram,
@@ -89,6 +98,13 @@ fn new_ram(log: Option<Arc<Log>>) -> (Arc<HostRam>, u64) {
 /// (`Device::hold_host_ram_imports`): each chunk is imported by the first copy or object over
 /// it. `None` where it imports no host memory.
 fn device() -> Option<Device> {
+    let device = ahead_device()?;
+    device.hold_host_ram_imports();
+    Some(device)
+}
+
+/// A device of the cfg's kind, as the product makes it; `None` where it imports no host memory.
+fn ahead_device() -> Option<Device> {
     let options = DeviceOptions {
         kinds: match cfg!(m2v_cpu_icd) {
             true => vec![DeviceKind::Cpu],
@@ -105,7 +121,6 @@ fn device() -> Option<Device> {
         eprintln!("HOST-RAM-COPY: the device imports no host memory here; nothing to test");
         return None;
     }
-    device.hold_host_ram_imports();
     Some(device)
 }
 
@@ -645,4 +660,94 @@ fn copies_off_the_page_outside_the_ram_or_past_the_buffer_are_refused() {
             true
         ));
     });
+}
+
+/// The counts once `done` holds of them (at most [`WAIT`]) and a while has passed with the
+/// device's thread free to go on, so that a thread importing past where it should shows.
+fn settled(device: &Device, done: impl Fn(&crate::WorkCounts) -> bool) -> crate::WorkCounts {
+    let started = Instant::now();
+    let reached = loop {
+        let counts = device.work_counts();
+        if done(&counts) || started.elapsed() > WAIT {
+            break counts;
+        }
+        std::thread::sleep(Duration::from_millis(2));
+    };
+    std::thread::sleep(Duration::from_millis(300));
+    let later = device.work_counts();
+    assert_eq!(
+        later.host_ram_chunks_imported_ahead, reached.host_ram_chunks_imported_ahead,
+        "the device's thread went on past the window"
+    );
+    later
+}
+
+#[test]
+fn a_copy_takes_its_chunks_as_an_object_does_and_the_window_ahead_moves_past_them() {
+    let Some(device) = ahead_device() else {
+        return;
+    };
+    const WINDOW: u64 = AHEAD_CHUNKS as u64;
+    // The start's chunk, a full window past it, and one chunk past that.
+    const CHUNKS: u64 = 2 + WINDOW;
+    let (ram, start) = ram_of(CHUNKS * 64 * MIB, None);
+    let before = device.work_counts();
+    let used = device.use_host_ram(&ram).unwrap();
+    let ahead = |counts: &crate::WorkCounts| {
+        counts.host_ram_chunks_imported_ahead - before.host_ram_chunks_imported_ahead
+    };
+    let by_copies = |counts: &crate::WorkCounts| {
+        counts.host_ram_chunks_imported - before.host_ram_chunks_imported - ahead(counts)
+    };
+    let page_of = |chunk: u64| {
+        let at = start + chunk * 64 * MIB;
+        one(at..at + PAGE)
+    };
+    // Before any take: the RAM's first chunk, and none past it.
+    let first = settled(&device, |counts| ahead(counts) == 1);
+    assert_eq!(ahead(&first), 1, "one chunk from the RAM's start");
+    // A gather from it takes it inside the window: it finds the chunk imported, and the full
+    // window past it is imported ahead.
+    let first_page = page_of(0);
+    write_pattern(first_page[0].clone(), 7);
+    let out = shared(&device, PAGE, |_| 0);
+    blit(&device, |encoder| {
+        encoder
+            .copy_from_host_ram(&ram, &first_page, &out, 0)
+            .unwrap();
+    });
+    assert!(contents(&out) == gathered(&first_page), "the gathered page");
+    let opened = settled(&device, |counts| ahead(counts) == 1 + WINDOW);
+    assert_eq!(
+        ahead(&opened),
+        1 + WINDOW,
+        "a full window past the copy's take"
+    );
+    assert_eq!(
+        by_copies(&opened),
+        0,
+        "the copy found its chunk imported ahead"
+    );
+    // A scatter into the chunk past the window: the copy imports it itself, and the window past
+    // it is the RAM's end.
+    let last_page = page_of(CHUNKS - 1);
+    blit(&device, |encoder| {
+        encoder.copy_to_host_ram(&out, 0, &ram, &last_page).unwrap();
+    });
+    assert!(
+        bytes(last_page[0].clone()) == gathered(&first_page),
+        "the scattered page"
+    );
+    let jumped = settled(&device, |counts| by_copies(counts) == 1);
+    assert_eq!(
+        by_copies(&jumped),
+        1,
+        "the copy outside the window imported its chunk"
+    );
+    assert_eq!(ahead(&jumped), 1 + WINDOW, "nothing past the RAM's end");
+    assert_eq!(
+        jumped.host_ram_chunks_live - before.host_ram_chunks_live,
+        CHUNKS
+    );
+    drop((used, ram));
 }
