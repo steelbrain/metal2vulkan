@@ -7,7 +7,9 @@
 //! binds entry `i` of an argument table (its position's address, a texture's resource ID and a
 //! sampler's), as a page's render bundle binds a bind group a draw, each position in a buffer of
 //! its own, and the pass makes the positions, the table and the texture resident, and the
-//! commands resident for writing, so a host step records their execution.
+//! commands resident for writing beside a state that may encode set in an encoder before it
+//! (`indirect_host_steps::encoding_state_set`), so the GPU may write the records and a host step
+//! records their execution.
 //!
 //! Queue A's command buffer executes such draws; its executed-commands handler, which the runtime
 //! calls on the thread that reads the records, inside the step, holds the step until the test lets
@@ -30,6 +32,7 @@
 //! it by name with `--run-ignored all`.
 
 use super::degrade_notices::on_device;
+use super::indirect_host_steps::encoding_state_set;
 use super::{buffer_with, read_buffer, validated_device_with, Messages, ScratchCache, WAIT};
 use crate::air_library::AirLibrary;
 use crate::gpu::TEST_DEVICE;
@@ -194,9 +197,11 @@ impl<'s> Draws<'s> {
     }
 
     /// Encode into `command_buffer` a pass that clears `target`, makes the draws' resources
-    /// resident, and the commands resident for writing, and executes every command: a host step
+    /// resident, and the commands resident for writing, and executes every command, after an
+    /// encoder that sets a state that may encode: the GPU may write the records, so a host step
     /// records them.
     fn pass(&self, command_buffer: &CommandBuffer, target: &Texture) {
+        encoding_state_set(command_buffer);
         let mut pass = RenderPassDescriptor::new();
         let color = &mut pass.color_attachments[0];
         color.texture = Some(target.clone());
