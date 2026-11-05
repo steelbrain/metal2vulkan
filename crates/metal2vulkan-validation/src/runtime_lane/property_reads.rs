@@ -3,12 +3,9 @@
 //! and `error` reads wait for no GPU work and for no submission in progress.
 //!
 //! GPU busy work is committed first (`first_use::Busy`, released by the test), then on the same
-//! queue one command buffer of a blit encoder of [`FILLS`] fills of distinct words and a spin of
-//! the busy kernel held on a flag of its own (`Busy::hold`), whose submission lies between its
-//! kernel start and its kernel end. The reading thread releases the spin [`LONG_SUBMISSION`] after
-//! it first read a kernel start, so that span is at least [`LONG_SUBMISSION`] on every GPU, however
-//! fast its fills (an RTX 5080 Laptop GPU ran 2^20 of them in 0.22 ms); the spin's cap ends it where
-//! the release is not seen, or never comes. One thread reads the two kernel times over and over,
+//! queue one blit encoder of fills of distinct words, whose submission lies between its kernel
+//! start and its kernel end; its fills are doubled until
+//! that span is at least [`LONG_SUBMISSION`]. One thread reads the two kernel times over and over,
 //! from the commit until [`BEHIND_BUSY`] after the submission, while the fills wait behind the busy
 //! work, and another reads `status` and `error` over the same time, each between a read of the
 //! kernel start and a read of the kernel end. The submission may come only as the busy work drains:
@@ -37,8 +34,10 @@ use std::time::{Duration, Instant};
 /// The longest a command buffer here may take.
 const WAIT: Duration = Duration::from_secs(60);
 
-/// The fills the command buffer encodes before its held spin.
+/// The fills the command buffer encodes at first, doubled until its kernel span is at least
+/// [`LONG_SUBMISSION`], up to [`MOST_FILLS`].
 const FILLS: usize = 1 << 12;
+const MOST_FILLS: usize = 1 << 20;
 
 /// The least kernel span (`kernelEndTime` less `kernelStartTime`) of the command buffer read.
 const LONG_SUBMISSION: Duration = Duration::from_millis(40);
@@ -76,9 +75,6 @@ struct Reads {
     /// The kernel times' thread released the busy work, no kernel end read [`HELD_READS`] after
     /// the commit.
     released: bool,
-    /// When, after the commit, the kernel times' thread released the command buffer's held
-    /// spin: [`LONG_SUBMISSION`] after it first read a kernel start.
-    spin_released: Option<Duration>,
 }
 
 impl Reads {
@@ -99,16 +95,9 @@ impl Reads {
 
 /// Read `command_buffer`'s kernel times over and over from `committed` on, until [`BEHIND_BUSY`]
 /// after a read first answered its kernel end, or [`WAIT`] after `committed` where none did;
-/// releasing the busy work of `words` where none did [`HELD_READS`] after `committed`, and the
-/// command buffer's held spin of `hold` [`LONG_SUBMISSION`] after a read first answered its kernel
-/// start.
-fn read(
-    command_buffer: &CommandBuffer,
-    committed: Instant,
-    (words, hold): (&Buffer, &Buffer),
-) -> Reads {
+/// releasing the busy work of `words` where none did [`HELD_READS`] after `committed`.
+fn read(command_buffer: &CommandBuffer, committed: Instant, words: &Buffer) -> Reads {
     let mut reads = Reads::default();
-    let mut started = None;
     loop {
         let before = Instant::now();
         let start = command_buffer.kernel_start_time();
@@ -120,15 +109,6 @@ fn read(
             start != 0.0 && end == 0.0,
         );
         let since = after.duration_since(committed);
-        if start != 0.0 && started.is_none() {
-            started = Some(since);
-        }
-        if let (Some(at), None) = (started, reads.spin_released) {
-            if since >= at + LONG_SUBMISSION {
-                release(hold);
-                reads.spin_released = Some(since);
-            }
-        }
         match reads.submitted {
             None if end != 0.0 => reads.submitted = Some(since),
             None if since >= WAIT => return reads,
@@ -172,83 +152,87 @@ fn property_reads_wait_for_no_submission_and_no_busy_work() {
         let queue = device.new_command_queue().unwrap();
         let name = device.name();
         let busy = Busy::new(device, &queue);
-        let target = (device.new_buffer(4 * FILLS as u64, ResourceOptions::private())).unwrap();
-        let (work, words) = busy.commit(device, &queue);
-        let command_buffer = queue.command_buffer().unwrap();
-        let mut blit = command_buffer.blit_command_encoder().unwrap();
-        for at in 0..FILLS as u64 {
-            blit.fill_buffer(&target, 4 * at..4 * at + 4, at as u8)
-                .unwrap();
-        }
-        blit.end_encoding().unwrap();
-        let hold = busy.hold(device, &command_buffer);
-        let committed = Instant::now();
-        let done = AtomicBool::new(false);
-        let (reads, status) = std::thread::scope(|scope| {
-            let reader = scope.spawn(|| {
-                let reads = read(&command_buffer, committed, (&words, &hold));
-                done.store(true, Ordering::Release);
-                reads
+        let mut fills = FILLS;
+        loop {
+            let target = (device.new_buffer(4 * fills as u64, ResourceOptions::private())).unwrap();
+            let (work, words) = busy.commit(device, &queue);
+            let command_buffer = queue.command_buffer().unwrap();
+            let mut blit = command_buffer.blit_command_encoder().unwrap();
+            for at in 0..fills as u64 {
+                blit.fill_buffer(&target, 4 * at..4 * at + 4, at as u8)
+                    .unwrap();
+            }
+            blit.end_encoding().unwrap();
+            let committed = Instant::now();
+            let done = AtomicBool::new(false);
+            let (reads, status) = std::thread::scope(|scope| {
+                let reader = scope.spawn(|| {
+                    let reads = read(&command_buffer, committed, &words);
+                    done.store(true, Ordering::Release);
+                    reads
+                });
+                let status = scope.spawn(|| read_status(&command_buffer, committed, &done));
+                command_buffer.commit().unwrap();
+                (reader.join().unwrap(), status.join().unwrap())
             });
-            let status = scope.spawn(|| read_status(&command_buffer, committed, &done));
-            command_buffer.commit().unwrap();
-            (reader.join().unwrap(), status.join().unwrap())
-        });
-        release(&words);
-        release(&hold);
-        work.wait_until_completed_for(WAIT).unwrap();
-        command_buffer.wait_until_completed_for(WAIT).unwrap();
-        assert_eq!(work.error(), None, "the busy work");
-        assert_eq!(command_buffer.error(), None, "the fills");
-        let span = Duration::from_secs_f64(
-            command_buffer.kernel_end_time() - command_buffer.kernel_start_time(),
-        );
-        let ms = |d: Duration| d.as_secs_f64() * 1e3;
-        eprintln!(
-            "PROPERTY-READS {name}: {FILLS} fills and a held spin, kernel span {:.1} ms, the \
-             spin released {:?} and submitted {:?} after the commit (the busy work released \
-             first: {}); {} kernel time reads, {} inside \
-             the submission, {} slow, the longest {:.3} ms; {} status and error reads, {} \
-             inside, {} slow, the longest {:.3} ms",
-            ms(span),
-            reads.spin_released,
-            reads.submitted,
-            reads.released,
-            reads.count,
-            reads.inside,
-            reads.slow,
-            ms(reads.longest),
-            status.count,
-            status.inside,
-            status.slow,
-            ms(status.longest),
-        );
-        assert!(
-            reads.submitted.is_some(),
-            "the fills were not submitted within {WAIT:?} of their commit: {reads:?}"
-        );
-        assert!(
-            span >= LONG_SUBMISSION,
-            "the command buffer spanned {span:?} from its kernel start to its kernel end, \
-             short of {LONG_SUBMISSION:?}: {reads:?}"
-        );
-        assert!(
-            reads.inside > 0,
-            "no kernel time read landed inside the submission: {reads:?}"
-        );
-        assert!(
-            status.inside > 0,
-            "no status or error read landed inside the submission: {status:?}"
-        );
-        assert!(
-            reads.rarely_slow(),
-            "more than one kernel time read in a thousand took {SLOW_READ:?} or more: {reads:?}"
-        );
-        assert!(
-            status.rarely_slow(),
-            "more than one status or error read in a thousand took {SLOW_READ:?} or more: \
-             {status:?}"
-        );
+            release(&words);
+            work.wait_until_completed_for(WAIT).unwrap();
+            command_buffer.wait_until_completed_for(WAIT).unwrap();
+            assert_eq!(work.error(), None, "the busy work");
+            assert_eq!(command_buffer.error(), None, "the fills");
+            let span = Duration::from_secs_f64(
+                command_buffer.kernel_end_time() - command_buffer.kernel_start_time(),
+            );
+            let ms = |d: Duration| d.as_secs_f64() * 1e3;
+            eprintln!(
+                "PROPERTY-READS {name}: {fills} fills, kernel span {:.1} ms, submitted {:?} after \
+                 the commit (the busy work released first: {}); {} kernel time reads, {} inside \
+                 the submission, {} slow, the longest {:.3} ms; {} status and error reads, {} \
+                 inside, {} slow, the longest {:.3} ms",
+                ms(span),
+                reads.submitted,
+                reads.released,
+                reads.count,
+                reads.inside,
+                reads.slow,
+                ms(reads.longest),
+                status.count,
+                status.inside,
+                status.slow,
+                ms(status.longest),
+            );
+            assert!(
+                reads.submitted.is_some(),
+                "the fills were not submitted within {WAIT:?} of their commit: {reads:?}"
+            );
+            if span < LONG_SUBMISSION && fills < MOST_FILLS {
+                fills *= 2;
+                continue;
+            }
+            assert!(
+                span >= LONG_SUBMISSION,
+                "{MOST_FILLS} fills spanned {span:?} from their kernel start to their kernel end, \
+                 short of {LONG_SUBMISSION:?}"
+            );
+            assert!(
+                reads.inside > 0,
+                "no kernel time read landed inside the submission: {reads:?}"
+            );
+            assert!(
+                status.inside > 0,
+                "no status or error read landed inside the submission: {status:?}"
+            );
+            assert!(
+                reads.rarely_slow(),
+                "more than one kernel time read in a thousand took {SLOW_READ:?} or more: {reads:?}"
+            );
+            assert!(
+                status.rarely_slow(),
+                "more than one status or error read in a thousand took {SLOW_READ:?} or more: \
+                 {status:?}"
+            );
+            break;
+        }
     });
 }
 

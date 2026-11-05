@@ -256,15 +256,6 @@ impl Busy {
         (BusyWork { links }, words)
     }
 
-    /// Encode into `command_buffer` one spin of the busy work's (at most `BUSY / LINKS`), held on a
-    /// flag of its own: the buffer of that flag, which [`release`] raises.
-    pub(super) fn hold(&self, device: &Device, command_buffer: &CommandBuffer) -> Buffer {
-        let words = buffer_with(device, &[0; 8]).unwrap();
-        let cap = buffer_with(device, &self.cap.to_le_bytes()).unwrap();
-        self.spin(device, command_buffer, &words, &cap);
-        words
-    }
-
     /// Encode one spin into `command_buffer`: one threadgroup with a ticket of its own (the kernel
     /// takes the ticket's value and raises it), spinning on `words`' flag for at most `cap`'s loads.
     fn spin(&self, device: &Device, command_buffer: &CommandBuffer, words: &Buffer, cap: &Buffer) {
