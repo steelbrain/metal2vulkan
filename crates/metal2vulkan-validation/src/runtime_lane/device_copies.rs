@@ -356,16 +356,26 @@ fn a_gpu_write_of_the_pages_reaches_the_device_copy() {
         .all(|&byte| byte == 0x5a));
     let counted = copied(&start, &device.work_counts());
     eprintln!(
-        "DEVICE-COPY on {}: after the fill gated {}, whole {}",
+        "DEVICE-COPY on {}: after the fill gated {}, whole {}, bytes {}",
         device.name(),
         counted[1],
-        counted[2]
+        counted[2],
+        counted[4]
     );
     if copies_on(&device) {
+        // The runtime reports its own write of the pages to their log (`dirty_pages.rs`), so the
+        // next copy in is gated to the pages the fill wrote: no whole copy, and at least the
+        // fill's rows but no more than the pages they lie in.
         assert_eq!(
             counted[1..3],
-            [1, 1],
-            "the fill let go of the hold: every row"
+            [1, 0],
+            "the fill's pages, gated: no whole copy"
+        );
+        let fill = 8 * bpr;
+        assert!(
+            (fill..=fill + 2 * GUEST_PAGE as u64).contains(&counted[4]),
+            "the fill's pages alone: bytes {}",
+            counted[4]
         );
     }
     drop((texture, buffer, target));
