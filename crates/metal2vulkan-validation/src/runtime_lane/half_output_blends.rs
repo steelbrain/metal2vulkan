@@ -57,6 +57,8 @@ use metal2vulkan::metal::{
 use metal2vulkan::pipeline::{
     ColorAttachmentDescriptor, PrecisionNote, RenderPipelineDescriptor, StageSource,
 };
+use metal2vulkan::vk;
+use metal2vulkan::Budget;
 use metal2vulkan_devtools::llvm_assemble_text;
 use metal2vulkan_runtime::{
     CommandBufferStatus, CommandQueue, Degradation, Device, LoadAction, PipelineOptions, Region,
@@ -698,7 +700,7 @@ fn blends() -> Vec<String> {
                 .function_descriptor(),
         )
     };
-    let state = |format: P, b: Option<&Blend>| {
+    let descriptor = |format: P, b: Option<&Blend>| {
         let mut d = RenderPipelineDescriptor::new(function("vs"));
         d.fragment = Some(function("sw_half"));
         let mut c = ColorAttachmentDescriptor::new(format);
@@ -712,9 +714,26 @@ fn blends() -> Vec<String> {
             c.alpha_blend_operation = b.op;
         }
         d.color_attachments[0] = Some(c);
+        d
+    };
+    let state = |format: P, b: Option<&Blend>| {
         device
-            .new_render_pipeline_state(&d, &PipelineOptions::default())
+            .new_render_pipeline_state(&descriptor(format, b), &PipelineOptions::default())
             .unwrap()
+    };
+    // The notes the compile layer records for the fragment stage of `format` under `b`, printed
+    // beside the draws (`HALF-BLEND-NOTES`).
+    let fragment_notes = |format: P, b: &Blend| {
+        let compiled = device
+            .compile_device()
+            .compile_render_pipeline(&descriptor(format, Some(b)), &Budget::standard())
+            .unwrap();
+        compiled
+            .stages
+            .iter()
+            .filter(|s| s.stage == vk::ShaderStage::FRAGMENT)
+            .flat_map(|s| s.precision_notes.iter().copied())
+            .collect::<Vec<_>>()
     };
     let s16 = steps(N * 4);
     let halves: Vec<u8> = s16
@@ -744,6 +763,13 @@ fn blends() -> Vec<String> {
         let mut exact = (0usize, 0usize);
         let mut worst = (0f64, 0f64, 0i64);
         for b in &BLENDS {
+            if !b.on {
+                println!(
+                    "HALF-BLEND-NOTES {name} | {fname} | {} | fragment notes {:?}",
+                    b.name,
+                    fragment_notes(format, b)
+                );
+            }
             let made = state(format, Some(b));
             for (k, kind) in [0u32, 4].into_iter().enumerate() {
                 let _ = messages.take_notices();
