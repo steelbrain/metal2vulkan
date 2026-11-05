@@ -2918,6 +2918,8 @@ field	metal2vulkan-runtime::WorkCounts.row_copies	pub row_copies: u64
 field	metal2vulkan-runtime::WorkCounts.row_copies_dispatched	pub row_copies_dispatched: u64
 field	metal2vulkan-runtime::WorkCounts.row_copy_regions	pub row_copy_regions: u64
 field	metal2vulkan-runtime::WorkCounts.row_copy_regions_most	pub row_copy_regions_most: u64
+field	metal2vulkan-runtime::WorkCounts.run_bound_buffers_made	pub run_bound_buffers_made: u64
+field	metal2vulkan-runtime::WorkCounts.run_imports_live	pub run_imports_live: u64
 field	metal2vulkan-runtime::WorkCounts.sampler_sets_destroyed	pub sampler_sets_destroyed: u64
 field	metal2vulkan-runtime::WorkCounts.sampler_sets_made	pub sampler_sets_made: u64
 field	metal2vulkan-runtime::WorkCounts.sampler_sets_shared	pub sampler_sets_shared: u64

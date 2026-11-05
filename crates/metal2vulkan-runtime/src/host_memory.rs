@@ -416,10 +416,12 @@ impl HostMemory {
     /// `VkBuffer` bound in that chunk's import, at the run, sized and bound against the object's
     /// own pages as an import of them would be, so no access through the buffer reaches the rest
     /// of the chunk: no import of its own, no kernel mapping of the pages, and the import gate
-    /// ([`HostMemory::with_import_gate`]) is not asked. Pages of more than one run, or of a run
-    /// crossing a chunk's end, take the runtime's other paths (the gate, then an import or a
-    /// copy), the runs kept with the object. Counted: `WorkCounts::chunk_bound_buffers_made`. No
-    /// Metal counterpart.
+    /// ([`HostMemory::with_import_gate`]) is not asked. Where the chunk is not imported yet and
+    /// the device's thread imports it, the buffer is bound in an import of the run alone, the
+    /// gate not asked either, so that its making waits for no chunk's import. Pages of more than
+    /// one run, or of a run crossing a chunk's end, take the runtime's other paths (the gate,
+    /// then an import or a copy), the runs kept with the object. Counted:
+    /// `WorkCounts::chunk_bound_buffers_made`, `run_bound_buffers_made`. No Metal counterpart.
     pub fn with_runs(self, resolver: RunResolver) -> HostMemory {
         HostMemory {
             runs: Some(resolver),
