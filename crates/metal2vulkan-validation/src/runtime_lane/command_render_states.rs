@@ -32,6 +32,7 @@
 
 use super::render_state::{quiet, rows, validated, Pipe, Probe, EMPTY, FULL, PASS, WHITE};
 use crate::air_library::AirLibrary;
+use metal2vulkan::device::VkProperty;
 use metal2vulkan::error::{Feature, Needs};
 use metal2vulkan::metal::{
     CompareFunction, CullMode, DepthClipMode, IndirectCommandType, PixelFormat, PrimitiveType,
@@ -40,7 +41,7 @@ use metal2vulkan::metal::{
 use metal2vulkan::pipeline::{ComputePipelineDescriptor, StageSource};
 use metal2vulkan_devtools::llvm_assemble_text;
 use metal2vulkan_runtime::{
-    Buffer, Error, GpuFamily, IndirectCommandBuffer, IndirectCommandBufferDescriptor,
+    Buffer, Device, Error, GpuFamily, IndirectCommandBuffer, IndirectCommandBufferDescriptor,
     IndirectCommandBufferProblem, Invalid, PipelineOptions, Problem, RenderCommandEncoder,
     ResourceOptions, RuntimeGap, ScissorRect, Viewport,
 };
@@ -105,6 +106,24 @@ fn command(
 /// The encoder's states before the command, set by a case: `Err` where the device refuses one.
 type Setup = fn(&Probe, &mut RenderCommandEncoder, &mut Vec<Buffer>) -> Result<(), Error>;
 
+/// Whether `seen` holds Metal's texels `metal`, where a channel Metal stores as `0x80`, its code
+/// for `rt6_half`'s 0.5, a half step between two codes (127.5), may hold either nearest code on a
+/// device whose color writes are not Metal's (no `VkProperty::MetalColorWrites`: the pipeline
+/// records `PrecisionNote::DeviceColorConversion`). Every other channel compares exactly.
+fn metals_texels(device: &Device, seen: &[u8], metal: &[u8]) -> bool {
+    let metals = device
+        .compile_device()
+        .profile()
+        .enabled()
+        .properties
+        .contains(&VkProperty::MetalColorWrites);
+    seen.len() == metal.len()
+        && seen
+            .iter()
+            .zip(metal)
+            .all(|(&code, &want)| code == want || (!metals && want == 0x80 && code == 0x7f))
+}
+
 /// The white draw at depth 0.5 of `rt6_half`'s 0x80 texels, under `Less` with writes.
 fn half_first(probe: &Probe, e: &mut RenderCommandEncoder, held: &mut Vec<Buffer>) {
     e.set_depth_stencil_state(&probe.state(CompareFunction::Less, true, None))
@@ -119,7 +138,9 @@ fn half_first(probe: &Probe, e: &mut RenderCommandEncoder, held: &mut Vec<Buffer
 /// draw at the same depth nothing, and through a bias of -1000 everything; culled, wound and
 /// filled as the encoder's draw; at depth 1.5 in clamp mode everything; and through the encoder's
 /// left-half viewport and top-half scissor rectangle as its draw. A device that refuses fill mode
-/// `Lines` or clip mode `Clamp` skips that case.
+/// `Lines` or clip mode `Clamp` skips that case. The earlier draw's 0.5 is a half step between two
+/// codes, held to Metal's code where the device's color writes are Metal's and to either nearest
+/// one elsewhere ([`metals_texels`]).
 #[test]
 fn commands_that_do_not_inherit_render_states_draw_with_the_encoder_s() {
     let (messages, _cache, probe) = validated();
@@ -256,7 +277,11 @@ fn commands_that_do_not_inherit_render_states_draw_with_the_encoder_s() {
             drop((icb, depth));
         }
         if let Some(metal) = metal {
-            assert_eq!(direct.color, metal, "{name}: {case}: Metal's texels");
+            assert!(
+                metals_texels(&probe.device, &direct.color, &metal),
+                "{name}: {case}: Metal's texels {metal:?}, the encoder's draw {:?}",
+                direct.color
+            );
         }
     }
     quiet(probe, &messages);
