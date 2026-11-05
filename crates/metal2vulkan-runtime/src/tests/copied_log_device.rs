@@ -326,7 +326,10 @@ fn a_gpu_write_in_place_reaches_a_logged_copy_of_the_same_pages() {
 }
 
 /// A fill in place that a host wait on its command buffer's event saw before the runtime reported
-/// it (the module docs) reaches a copied buffer over the same pages at the next commit.
+/// it (the module docs) reaches a copied buffer over the same pages at the next commit. The
+/// fill's command buffer waits for nothing itself (one that does is a waiting writer, whose
+/// writes every copy in compares until it completes): it runs behind one of its queue that waits
+/// for an event the host sets once a copy synced past the fill's commit.
 #[test]
 fn a_copy_committed_once_a_host_wait_saw_a_fill_s_signal_takes_the_fill() {
     let pages = Pages::new();
@@ -357,14 +360,17 @@ fn a_copy_committed_once_a_host_wait_saw_a_fill_s_signal_takes_the_fill() {
         device.new_shared_event().unwrap(),
         device.new_shared_event().unwrap(),
     );
+    let waiting = queue.command_buffer().unwrap();
+    (waiting.encode_wait_for_event(EventRef::from(&go), 1)).unwrap();
+    waiting.commit().unwrap();
     let command_buffer = queue.command_buffer().unwrap();
-    (command_buffer.encode_wait_for_event(EventRef::from(&go), 1)).unwrap();
     let mut blit = command_buffer.blit_command_encoder().unwrap();
     blit.fill_buffer(&in_place, 4096..8192, 0x7E).unwrap();
     blit.end_encoding().unwrap();
     (command_buffer.encode_signal_event(EventRef::from(&done), 1)).unwrap();
     command_buffer.commit().unwrap();
-    // A commit while the fill waits: the copy syncs past the fill's commit, before its run.
+    // A commit while the fill waits behind the wait: the copy syncs past the fill's commit,
+    // before its run.
     let before = read_back(&reader, &copy, half);
     assert!(
         before[4096..8192].iter().all(|b| *b == 0),
@@ -381,6 +387,7 @@ fn a_copy_committed_once_a_host_wait_saw_a_fill_s_signal_takes_the_fill() {
         "the copy took the fill"
     );
     assert!(command_buffer.wait_until_completed_for(WAIT).is_ok());
+    assert!(waiting.wait_until_completed_for(WAIT).is_ok());
     drop((in_place, copy, queue, reader));
 }
 
