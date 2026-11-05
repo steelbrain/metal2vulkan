@@ -2596,6 +2596,7 @@ field	metal2vulkan-runtime::WorkCounts.descriptor_keys_built	pub descriptor_keys
 field	metal2vulkan-runtime::WorkCounts.detached_storage_reaches	pub detached_storage_reaches: u64
 field	metal2vulkan-runtime::WorkCounts.device_copy_textures	pub device_copy_textures: u64
 field	metal2vulkan-runtime::WorkCounts.device_memory_allocated	pub device_memory_allocated: u64
+field	metal2vulkan-runtime::WorkCounts.device_memory_overflows	pub device_memory_overflows: u64
 field	metal2vulkan-runtime::WorkCounts.device_wide_line_draws	pub device_wide_line_draws: u64
 field	metal2vulkan-runtime::WorkCounts.dirty_copies_in_gated	pub dirty_copies_in_gated: u64
 field	metal2vulkan-runtime::WorkCounts.dirty_copies_in_skipped	pub dirty_copies_in_skipped: u64
@@ -5107,6 +5108,7 @@ macro-member	metal2vulkan-runtime::Degradation::DeviceDenormals	DeviceDenormals 
 macro-member	metal2vulkan-runtime::Degradation::DeviceFilteredMipmaps	DeviceFilteredMipmaps = "device-filtered-mipmaps", Precision,
 macro-member	metal2vulkan-runtime::Degradation::DeviceInterpolation	DeviceInterpolation = "device-interpolation";
 macro-member	metal2vulkan-runtime::Degradation::DeviceInterpolationOffset	DeviceInterpolationOffset = "device-interpolation-offset";
+macro-member	metal2vulkan-runtime::Degradation::DeviceMemoryOverflow	DeviceMemoryOverflow = "device-memory-overflow", Performance,
 macro-member	metal2vulkan-runtime::Degradation::DeviceNanEncoding	DeviceNanEncoding = "device-nan-encoding";
 macro-member	metal2vulkan-runtime::Degradation::DevicePackConversion	DevicePackConversion = "device-pack-conversion";
 macro-member	metal2vulkan-runtime::Degradation::DevicePointSize	DevicePointSize = "device-point-size";
