@@ -400,9 +400,13 @@ impl super::DeviceShared {
             if let Some((fence, flights)) = logged {
                 flights.push(fence, By::Batch(Arc::clone(failed)));
             }
+            #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+            crate::command_buffer::completion::trace::submitting("submit called");
             let entered = crate::gpu_time::host_nanos();
             let submitted = f(vk_queue);
             let end = crate::gpu_time::host_nanos();
+            #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+            crate::command_buffer::completion::trace::submitting("submit returned");
             let nanos = end.saturating_sub(entered);
             (self.counts).batch_submitted_in(nanos);
             if submitted.is_ok() && period.called(Caller::Work, nanos, end) {

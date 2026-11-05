@@ -1252,6 +1252,9 @@ pub(crate) mod trace {
         Finished { queue: usize, value: u64, seen: u64 },
         /// The turn that finished the batches reached step `what` of `finish`.
         Step { what: &'static str, at: u64 },
+        /// A commit's way to its submission reached step `what`: posted to the scheduler, its
+        /// thread woken, taken in by a pass, the driver's submission called and returned.
+        Submitting { what: &'static str, at: u64 },
     }
 
     static ON: AtomicBool = AtomicBool::new(false);
@@ -1272,6 +1275,14 @@ pub(crate) mod trace {
     /// Keep the turn's step `what`, now.
     pub(super) fn step(what: &'static str) {
         record(|| Traced::Step {
+            what,
+            at: crate::gpu_time::host_nanos(),
+        });
+    }
+
+    /// Keep the commit's step `what` on its way to its submission, now.
+    pub(crate) fn submitting(what: &'static str) {
+        record(|| Traced::Submitting {
             what,
             at: crate::gpu_time::host_nanos(),
         });

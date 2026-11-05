@@ -179,6 +179,8 @@ pub(super) mod left;
 pub(super) mod order;
 mod steps;
 
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+use super::command_buffer::completion::trace;
 use super::command_buffer::gate::Hold;
 use super::command_buffer::kept_barriers::KeptBarriers;
 use super::command_buffer::BatchLists;
@@ -850,10 +852,16 @@ impl Scheduler {
         buffer.device().shared().counts.commit_handed_off();
         if hand == Hand::Pass {
             shared.inbox.post_quietly(committed);
+            #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+            trace::submitting("posted");
             return;
         }
         if shared.inbox.post(committed) {
+            #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+            trace::submitting("posted");
             shared.wake_thread(Woken::Commit, shared.nudge.get());
+            #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+            trace::submitting("woke the thread");
         }
     }
 
@@ -1215,6 +1223,8 @@ fn run(shared: &Arc<SchedulerShared>) {
             shared.sleeps.fetch_add(1, Ordering::Relaxed);
             if let Some(nudge) = on_gpu {
                 state = wait_for_gpu(shared, (state, sleep), nudge, &mut gpu, (slice, short));
+                #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+                trace::submitting("thread woke");
                 continue;
             }
             sleep.asleep = true;
@@ -1236,6 +1246,8 @@ fn run(shared: &Arc<SchedulerShared>) {
             };
             sleep.asleep = false;
             drop(sleep);
+            #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+            trace::submitting("thread woke");
             if timed_out && !short {
                 shared.wakings[Woken::Slice as usize].fetch_add(1, Ordering::Relaxed);
             }
@@ -1402,6 +1414,10 @@ struct Passed {
 /// ([`SchedulerShared::took_in`]).
 fn take_in(state: &mut State, commits: &mut Vec<Committed>, spent: &mut Spent) -> usize {
     let taken = commits.len();
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    if taken > 0 {
+        trace::submitting("taken in");
+    }
     for Committed {
         buffer,
         queue,

@@ -30,13 +30,15 @@
 //!   submission is the one the runtime's from the commit compares with.
 //! - **The runtime** (`runtime_completion_latency`): a device of the runtime's, one queue, each
 //!   command buffer a blit encoder's `fill_buffer` with a completion-seen handler and a completed
-//!   handler that note the host time (the consumer's shape), and in turn with them every other
-//!   one with the completion-seen handler alone, committed and not waited for. From the GPU end
-//!   (`gpu_end_time`, on a device that calibrates its timestamps) to the completion-seen handler;
-//!   and the runtime's steps between, from its queue waiter's trace
-//!   (`command_buffer::completion::trace`): the batch watched, the driver's wait entered and
-//!   returned, the completion turn's `seen` (the command buffer's completion time) and the
-//!   handlers.
+//!   handler that note the host time, committed with `commit` (the consumer's shape), and in turn
+//!   with them one with the completion-seen handler alone, so committed, and one so committed with
+//!   `commit_and_submit`; none waited for. From the GPU end (`gpu_end_time`, on a device that
+//!   calibrates its timestamps) to the completion-seen handler; and the runtime's steps between,
+//!   from its trace (`command_buffer::completion::trace`): on the commit's way to the
+//!   `VkQueue`, the commit posted to the scheduler, its thread woken by the commit and waking,
+//!   the commit taken in by a pass, the driver's submission called and returned; then the batch
+//!   watched, the driver's wait entered and returned, the completion turn's `seen` (the command
+//!   buffer's completion time) and the handlers.
 //!
 //! Each line also counts the waits entered after the GPU end: there, the time to the wait's return
 //! holds the wake of the thread that waits, not the driver's wake alone.
@@ -747,10 +749,11 @@ impl Drop for Scratch {
 }
 
 /// One of the runtime's command buffers as its handlers saw it: host nanoseconds of its commit
-/// call, its completion-seen handler and its completed handler.
+/// call and the call's return, its completion-seen handler and its completed handler.
 struct Committed {
     command_buffer: CommandBuffer,
     commit: u64,
+    committed: u64,
     seen: Arc<Mutex<Option<u64>>>,
     completed: Arc<Mutex<Option<u64>>>,
 }
@@ -802,29 +805,51 @@ fn runtime_completion_latency() {
     }
     let committed = commit_timed(&fill, &mut next);
     let times = times_of(calibrated, &committed);
-    for (completed_handler, shape) in [
-        (true, "seen and completed handlers"),
-        (false, "seen handler alone"),
-    ] {
-        let times: Vec<&Times> = (times.iter())
-            .filter(|t| t.completed.is_some() == completed_handler)
-            .collect();
-        print_runtime(&name, shape, calibrated, &times);
+    for (index, shape) in SHAPES.iter().enumerate() {
+        let times: Vec<&Times> = (times.iter()).skip(index).step_by(SHAPES.len()).collect();
+        print_runtime(&name, shape.name, calibrated, &times);
     }
 }
 
-/// [`RUNS`] fills `fill` makes of each shape, in turn: each with a completion-seen handler, and
-/// every other one first with a completed handler too, so the shapes meet the same host; committed
-/// [`GAP`] apart from `next` on and waited for at the end, with the queue waiters' steps traced
-/// (`trace`).
+/// One shape of the runtime's command buffers (the module docs).
+struct Shape {
+    name: &'static str,
+    /// It has a completed handler besides its completion-seen handler.
+    completed_handler: bool,
+    /// It is committed with `commit_and_submit`, else with `commit`.
+    and_submit: bool,
+}
+
+/// The shapes, committed in turn.
+const SHAPES: [Shape; 3] = [
+    Shape {
+        name: "seen and completed handlers",
+        completed_handler: true,
+        and_submit: false,
+    },
+    Shape {
+        name: "seen handler alone",
+        completed_handler: false,
+        and_submit: false,
+    },
+    Shape {
+        name: "seen handler alone, commit_and_submit",
+        completed_handler: false,
+        and_submit: true,
+    },
+];
+
+/// [`RUNS`] fills `fill` makes of each of the [`SHAPES`], in turn, so the shapes meet the same
+/// host; committed [`GAP`] apart from `next` on and waited for at the end, with the runtime's
+/// steps traced (`trace`).
 fn commit_timed(
     fill: &dyn Fn(u8) -> CommandBuffer,
     next: &mut Instant,
 ) -> (Vec<Committed>, Vec<Traced>) {
     trace::start();
-    let mut committed = Vec::with_capacity(2 * RUNS);
-    for run in 0..2 * RUNS {
-        let completed_handler = run % 2 == 0;
+    let mut committed = Vec::with_capacity(SHAPES.len() * RUNS);
+    for run in 0..SHAPES.len() * RUNS {
+        let shape = &SHAPES[run % SHAPES.len()];
         *next += GAP;
         let command_buffer = fill(run as u8);
         let seen = Arc::new(Mutex::new(None));
@@ -835,7 +860,7 @@ fn commit_timed(
                 *noted.lock().unwrap() = Some(host_nanos());
             }))
             .unwrap();
-        if completed_handler {
+        if shape.completed_handler {
             let noted = Arc::clone(&completed);
             command_buffer
                 .add_completed_handler(Box::new(move |_: &CommandBuffer| {
@@ -844,10 +869,15 @@ fn commit_timed(
                 .unwrap();
         }
         let commit = host_nanos();
-        command_buffer.commit().unwrap();
+        match shape.and_submit {
+            true => command_buffer.commit_and_submit().unwrap(),
+            false => command_buffer.commit().unwrap(),
+        }
+        let returned = host_nanos();
         committed.push(Committed {
             command_buffer,
             commit,
+            committed: returned,
             seen,
             completed,
         });
@@ -865,6 +895,11 @@ fn commit_timed(
 /// end where the device calibrates its timestamps.
 struct Times {
     commit: u64,
+    /// The commit call returned.
+    committed: u64,
+    /// The steps on the commit's way to its submission (`trace::submitting`), in order, between
+    /// its commit call and its batch's watch.
+    submitting: Vec<(&'static str, u64)>,
     watched: u64,
     entered: u64,
     returned: u64,
@@ -929,9 +964,20 @@ fn times_of(calibrated: bool, (committed, steps): &(Vec<Committed>, Vec<Traced>)
             let (entered, returned) = waited(queue, value, turn).expect("a wait before the turn");
             let gpu_end = calibrated
                 .then(|| (each.command_buffer.gpu_end_time().unwrap() * 1e9).round() as u64);
+            let watched = watched(queue, value).expect("its batch watched");
+            let submitting = (steps.iter())
+                .filter_map(|step| match *step {
+                    Traced::Submitting { what, at } if (each.commit..=watched).contains(&at) => {
+                        Some((what, at))
+                    }
+                    _ => None,
+                })
+                .collect();
             Times {
                 commit: each.commit,
-                watched: watched(queue, value).expect("its batch watched"),
+                committed: each.committed,
+                submitting,
+                watched,
                 entered,
                 returned,
                 turn,
@@ -974,9 +1020,11 @@ fn print_runtime(name: &str, shape: &str, calibrated: bool, times: &[&Times]) {
     };
     eprintln!(
         "COMPLETION-LATENCY runtime, {shape} ({name}): {} fills of {BYTES} bytes {GAP:?} apart, \
-         between the other shape's: {ends}commit -> watched {} us; watched -> wait entered {} us; wait returned -> \
-         turn {} us; turn -> seen handler {} us; {completed}commit -> seen handler {} us",
+         between the other shapes': {ends}commit -> commit returned {} us; commit -> watched {} us; \
+         watched -> wait entered {} us; wait returned -> turn {} us; turn -> seen handler {} us; \
+         {completed}commit -> seen handler {} us",
         times.len(),
+        of(&|t| us(t.commit, t.committed)),
         of(&|t| us(t.commit, t.watched)),
         of(&|t| us(t.watched, t.entered)),
         of(&|t| us(t.returned, t.turn)),
@@ -1020,4 +1068,46 @@ fn print_runtime(name: &str, shape: &str, calibrated: bool, times: &[&Times]) {
         }
     }
     eprintln!("COMPLETION-LATENCY runtime turn, {shape} ({name}){split}");
+    // The commit's way to its submission, each step from the one before it that the command
+    // buffer marked (the commit call first), and the last to its batch's watch: the first of each
+    // name after the commit call. Each over the command buffers that marked it.
+    const WAY: [&str; 6] = [
+        "posted",
+        "woke the thread",
+        "thread woke",
+        "taken in",
+        "submit called",
+        "submit returned",
+    ];
+    let mut way = String::new();
+    for step in 0..=WAY.len() {
+        let to_name = WAY.get(step).copied().unwrap_or("watched");
+        let spans: Vec<f64> = (times.iter())
+            .filter_map(|t| {
+                let at = |name: &str| {
+                    (t.submitting.iter())
+                        .find(|&&(what, _)| what == name)
+                        .map(|&(_, at)| at)
+                };
+                let to = match WAY.get(step) {
+                    None => t.watched,
+                    Some(name) => at(name)?,
+                };
+                // The latest step before it that this command buffer marked, else its commit.
+                let from = (WAY[..step].iter().rev())
+                    .find_map(|name| at(name))
+                    .unwrap_or(t.commit);
+                Some(us(from, to))
+            })
+            .collect();
+        match spans.is_empty() {
+            true => way.push_str(&format!("; -> {to_name} none")),
+            false => way.push_str(&format!(
+                "; -> {to_name} {} us ({} commits)",
+                line(spans.clone()),
+                spans.len()
+            )),
+        }
+    }
+    eprintln!("COMPLETION-LATENCY runtime commit, {shape} ({name}){way}");
 }
