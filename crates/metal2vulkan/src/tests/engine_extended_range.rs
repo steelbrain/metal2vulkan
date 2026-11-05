@@ -46,6 +46,7 @@ use crate::spirv::interp::{run_with_images, Buffer, Config, Image, Order, Resour
 use crate::spirv::ir::TypedModule;
 
 mod bicubic;
+mod blended_pipelines;
 mod heap;
 mod levels;
 mod planes_volumes;
