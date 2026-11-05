@@ -39,33 +39,118 @@ fn blended_extended_range_pipelines_are_made() {
             library.function(name).expect("function"),
         ))
     };
+    use BlendFactor as F;
+    // Impeller's pipeline blends (`ContentContextOptions::ApplyToPipelineDescriptor`): source
+    // and destination factors for color and alpha alike, and the straight alpha-over.
+    let blends = [
+        (
+            "source-over",
+            F::One,
+            F::OneMinusSourceAlpha,
+            F::One,
+            F::OneMinusSourceAlpha,
+        ),
+        (
+            "straight-over",
+            F::SourceAlpha,
+            F::OneMinusSourceAlpha,
+            F::One,
+            F::OneMinusSourceAlpha,
+        ),
+        ("clear", F::Zero, F::Zero, F::Zero, F::Zero),
+        (
+            "destination-over",
+            F::OneMinusDestinationAlpha,
+            F::One,
+            F::OneMinusDestinationAlpha,
+            F::One,
+        ),
+        (
+            "source-in",
+            F::DestinationAlpha,
+            F::Zero,
+            F::DestinationAlpha,
+            F::Zero,
+        ),
+        (
+            "destination-in",
+            F::Zero,
+            F::SourceAlpha,
+            F::Zero,
+            F::SourceAlpha,
+        ),
+        (
+            "source-out",
+            F::OneMinusDestinationAlpha,
+            F::Zero,
+            F::OneMinusDestinationAlpha,
+            F::Zero,
+        ),
+        (
+            "destination-out",
+            F::Zero,
+            F::OneMinusSourceAlpha,
+            F::Zero,
+            F::OneMinusSourceAlpha,
+        ),
+        (
+            "source-atop",
+            F::DestinationAlpha,
+            F::OneMinusSourceAlpha,
+            F::DestinationAlpha,
+            F::OneMinusSourceAlpha,
+        ),
+        (
+            "xor",
+            F::OneMinusDestinationAlpha,
+            F::OneMinusSourceAlpha,
+            F::OneMinusDestinationAlpha,
+            F::OneMinusSourceAlpha,
+        ),
+        ("plus", F::One, F::One, F::One, F::One),
+        ("modulate", F::Zero, F::SourceColor, F::Zero, F::SourceAlpha),
+    ];
     let mut failures = Vec::new();
+    let mut made = 0;
     for stem in VENUES {
         let dev = device(stem);
         for pf in [PixelFormat::BGRA10XR, PixelFormat::BGRA10XRSRGB] {
-            for (src, name) in [
-                (BlendFactor::One, "premultiplied"),
-                (BlendFactor::SourceAlpha, "straight"),
-            ] {
-                for samples in [1, 4] {
-                    for fill in ["rt6_fill_rgba16float", "rt6_fill_rgba32float"] {
-                        let mut a = ColorAttachmentDescriptor::new(pf);
-                        a.blending_enabled = true;
-                        a.source_rgb_blend_factor = src;
-                        a.source_alpha_blend_factor = BlendFactor::One;
-                        a.destination_rgb_blend_factor = BlendFactor::OneMinusSourceAlpha;
-                        a.destination_alpha_blend_factor = BlendFactor::OneMinusSourceAlpha;
-                        a.write_mask = ColorWriteMask::ALL;
-                        let mut d = RenderPipelineDescriptor::new(function("rt6_fill_vertex"));
-                        d.fragment = Some(function(fill));
-                        d.color_attachments[0] = Some(a);
-                        d.raster_sample_count = samples;
-                        let what = format!("{stem} {pf:?} {name} x{samples} {fill}");
-                        match dev.compile_render_pipeline(&d, &Budget::standard()) {
-                            Ok(_) => eprintln!("{what}: made"),
-                            Err(e) => {
-                                eprintln!("{what}: {e:?}");
-                                failures.push(what);
+            for &(name, src, dst, src_a, dst_a) in &blends {
+                for mask in [ColorWriteMask::ALL, ColorWriteMask::NONE] {
+                    for ds in [
+                        None,
+                        Some(PixelFormat::Stencil8),
+                        Some(PixelFormat::Depth32FloatStencil8),
+                    ] {
+                        for samples in [1, 4] {
+                            for fill in ["rt6_fill_rgba16float", "rt6_fill_rgba32float"] {
+                                let mut a = ColorAttachmentDescriptor::new(pf);
+                                a.blending_enabled = true;
+                                a.source_rgb_blend_factor = src;
+                                a.destination_rgb_blend_factor = dst;
+                                a.source_alpha_blend_factor = src_a;
+                                a.destination_alpha_blend_factor = dst_a;
+                                a.write_mask = mask;
+                                let mut d =
+                                    RenderPipelineDescriptor::new(function("rt6_fill_vertex"));
+                                d.fragment = Some(function(fill));
+                                d.color_attachments[0] = Some(a);
+                                d.raster_sample_count = samples;
+                                d.stencil_format = ds;
+                                if ds == Some(PixelFormat::Depth32FloatStencil8) {
+                                    d.depth_format = ds;
+                                }
+                                let what = format!(
+                                    "{stem} {pf:?} {name} mask {:?} {ds:?} x{samples} {fill}",
+                                    mask.bits()
+                                );
+                                match dev.compile_render_pipeline(&d, &Budget::standard()) {
+                                    Ok(_) => made += 1,
+                                    Err(e) => {
+                                        eprintln!("REFUSED {what}: {e:?}");
+                                        failures.push(what);
+                                    }
+                                }
                             }
                         }
                     }
@@ -73,5 +158,6 @@ fn blended_extended_range_pipelines_are_made() {
             }
         }
     }
-    assert!(failures.is_empty(), "{failures:#?}");
+    eprintln!("made {made}, refused {}", failures.len());
+    assert!(failures.is_empty(), "{} refused", failures.len());
 }
