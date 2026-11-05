@@ -4082,7 +4082,10 @@ pub struct WorkCounts {
     pub query_result_copies_recorded: u64,
     /// Visibility result modes set other than `Disabled`, each beginning an occlusion query.
     pub visibility_queries_begun: u64,
-    /// `vkCmdDrawIndirect` and `vkCmdDrawIndexedIndirect` recorded (`render.rs`).
+    /// `vkCmdDrawIndirect` and `vkCmdDrawIndexedIndirect` recorded (`render.rs`): a draw from an
+    /// indirect buffer. A command of an indirect command buffer that a host step or a commit
+    /// replays from its record is recorded as a direct draw, counted not here but in
+    /// [`indirect_records_read`](Self::indirect_records_read)'s read of it.
     pub indirect_draws_recorded: u64,
     /// Records of indirect command buffers' commands read from their storage and decoded, one a
     /// command each time an execution recorded at its commit, a host step (its check included,
