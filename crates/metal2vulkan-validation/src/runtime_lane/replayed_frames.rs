@@ -22,7 +22,7 @@
 //! runs every chunk again, its records compared with those it was recorded from
 //! (`WorkCounts::host_step_chunks_kept`, `host_step_records_compared`, `host_step_compare_nanos`).
 //! [`CHANGE_VAR`] sets a frame from which the GPU writes other records (the encoding pass binds the
-//! indices two on), which that frame's step records again. [`FRAMES_VAR`] sets the frames (4 by
+//! indices' zero half), which that frame's step records again. [`FRAMES_VAR`] sets the frames (4 by
 //! default), and [`RESIDENT_VAR`] how many buffers
 //! and textures, one of each, the execution's pass makes resident besides, as a page's bind
 //! groups do (none by default): the step's time should grow with the records alone, not with
@@ -65,8 +65,8 @@ const FRAMES_VAR: &str = "REPLAYED_FRAMES_FRAMES";
 /// besides (none by default).
 const RESIDENT_VAR: &str = "REPLAYED_FRAMES_RESIDENT";
 
-/// The variable that sets the frame from which the encoding pass binds the indices two on, so the
-/// GPU writes other records from then on (none by default).
+/// The variable that sets the frame from which the encoding pass binds the indices' zero half
+/// ([`ZEROS_AT`]), so the GPU writes other records from then on (none by default).
 const CHANGE_VAR: &str = "REPLAYED_FRAMES_CHANGE_AT";
 
 /// The commands the pass encodes, one a draw, in [`replayed_frames`].
@@ -150,11 +150,18 @@ pub(super) fn draw_state(device: &Device, mask: ColorWriteMask) -> RenderPipelin
     (device.new_render_pipeline_state(&descriptor, &PipelineOptions::default())).unwrap()
 }
 
-/// The fixture's indices: 6 for each of 64 commands, and 8 past them, which a frame that binds
-/// them at an offset reads.
+/// The indices of [`indices`] each half holds: 6 for each of 64 commands.
+const HALF: usize = 64 * 6;
+
+/// Where the zero half of [`indices`] starts, in bytes: a frame that binds the indices there
+/// draws every command's primitives at vertex 0, so the GPU writes other records and the target
+/// shows other pixels.
+pub(super) const ZEROS_AT: u64 = (HALF * 2) as u64;
+
+/// The fixture's indices: `scramble`'s, 6 for each of 64 commands, then as many zeros.
 pub(super) fn indices(scramble: u16) -> Vec<u8> {
-    (0..64u16 * 6 + 8)
-        .map(|at| (at * scramble + 11) % 64)
+    let scrambled = (0..HALF as u16).map(|at| (at * scramble + 11) % 64);
+    (scrambled.chain([0; HALF]))
         .flat_map(u16::to_le_bytes)
         .collect()
 }
@@ -416,7 +423,7 @@ fn replayed_frames() {
         .new_buffer(1 << 16, ResourceOptions::shared())
         .unwrap();
     let changed = Inputs {
-        indices: Some((&page.indices, 4)),
+        indices: Some((&page.indices, ZEROS_AT)),
         ..Inputs::default()
     };
     let change_at = change_at();

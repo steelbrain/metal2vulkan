@@ -9,15 +9,15 @@
 //! (`WorkCounts::host_step_chunks_recorded_again`) and draws what a page that kept nothing draws
 //! under the new inputs (where the change shows in the pixels, other pixels than before); the
 //! second runs the new recording kept. The inputs, a case each: the records the GPU wrote (the
-//! encoding pass binds the indices at another offset, so every index address moves); the buffer
+//! encoding pass binds the indices' zero half, so every index address moves); the buffer
 //! the commands inherit, and its offset; the pipeline state they inherit; the encoder's scissor
 //! rectangle; the resources the command buffer made resident; the buffer an index address names,
 //! at the same address (the indices found among the device's live buffers, released and made
-//! again, other indices, pinned where they were); and the pages of the buffer the commands inherit
+//! again, all zeros, pinned where they were); and the pages of the buffer the commands inherit
 //! (a no-copy buffer rebound to other host memory), where the device imports host memory.
 
 use super::host_memory::{not_importable, Mapping, GUEST_PAGE};
-use super::replayed_frames::{draw_state, indices, pixels_hash, Inputs, Page};
+use super::replayed_frames::{draw_state, indices, pixels_hash, Inputs, Page, ZEROS_AT};
 use super::{layer_reported_nothing_at_all, validated_device, Messages, ScratchCache, WAIT};
 use crate::gpu::TEST_DEVICE;
 use metal2vulkan::metal::ColorWriteMask;
@@ -181,9 +181,9 @@ impl Change {
     fn inputs<'a>(self, page: &'a Page, others: &'a Others) -> Inputs<'a> {
         let none = Inputs::default();
         match self {
-            // Two indices on: every record's index address moves, inside the same buffer.
+            // The indices' zero half: every record's index address moves, inside the same buffer.
             Change::Records => Inputs {
-                indices: Some((page.indices(), 4)),
+                indices: Some((page.indices(), ZEROS_AT)),
                 ..none
             },
             Change::InheritedBuffer => Inputs {
@@ -305,7 +305,8 @@ fn a_kept_host_step_records_again_where_one_input_changes() {
         let address = first.gpu_address();
         let before = steady(&device, &queue, case, &page, &live(&first));
         drop(first);
-        let second = placed(&device, &indices(29), AddressPlacement::At(address));
+        let zeros = vec![0; indices(37).len()];
+        let second = placed(&device, &zeros, AddressPlacement::At(address));
         changed(
             &device,
             &queue,
