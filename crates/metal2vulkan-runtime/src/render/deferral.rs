@@ -360,9 +360,7 @@ impl LoweringSlot {
     pub(super) fn lower_handed(&self) {
         loop {
             #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
-            if let Some(late) = lock(&self.state).late.take() {
-                std::thread::sleep(late);
-            }
+            self.wait_late();
             let (turn, ended) = {
                 let Some(_section) = exit_guard::enter() else {
                     // The process exits: the program's thread lowers what is handed.
@@ -660,6 +658,16 @@ impl LoweringSlot {
     /// runs late.
     pub(crate) fn turn_late(&self, by: std::time::Duration) {
         lock(&self.state).late = Some(by);
+    }
+
+    /// The lowering thread's wait before its turn at the slot where [`turn_late`](Self::turn_late)
+    /// asked for one: taken under the slot's lock and waited without it, so the program's calls
+    /// go on meanwhile.
+    fn wait_late(&self) {
+        let late = lock(&self.state).late.take();
+        if let Some(late) = late {
+            std::thread::sleep(late);
+        }
     }
 }
 
