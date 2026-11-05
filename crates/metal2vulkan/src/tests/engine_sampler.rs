@@ -458,10 +458,14 @@ fn runtime_pixel_accesses_hand_the_device_the_scaled_coordinate() {
                 "{what}: {held:?}"
             );
             // The centre's `floor` reads a subnormal by the device's float controls: noted only
-            // under the specialization that runs it.
+            // under the specialization that runs it, one clause per axis whose bound mode parts
+            // texel -1 from texel 0 (each other test the bound word's mode differing from one
+            // that does not, `SpecKey::BoundSamplerWord`).
             let centre = |t: &crate::pipeline::SpecTest| {
                 t.key == SpecKey::NearestPixelSampler(s) && t.mask == 1 && t.bits == 1 && t.equal
             };
+            let bound =
+                |t: &crate::pipeline::SpecTest| t.key == SpecKey::BoundSamplerWord(s) && !t.equal;
             let denormals: Vec<&SpecializedNote> = a
                 .specialized
                 .iter()
@@ -470,7 +474,9 @@ fn runtime_pixel_accesses_hand_the_device_the_scaled_coordinate() {
             match nearest {
                 true => assert!(
                     denormals.len() == 1
-                        && denormals[0].when.iter().all(|c| c.all.iter().all(centre)),
+                        && denormals[0].when.len() == 2
+                        && denormals[0].when.iter().all(|c| c.all.iter().any(centre)
+                            && c.all.iter().all(|t| centre(t) || bound(t))),
                     "{what}: {denormals:?}"
                 ),
                 false => assert!(

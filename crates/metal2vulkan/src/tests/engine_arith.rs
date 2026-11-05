@@ -3240,9 +3240,10 @@ fn a_float_nan_is_the_device_s_on_every_profile() {
 /// result are the device's products, `math::ldexp_bits`), which then read them as Metal does;
 /// elsewhere they are the device's, noted `DeviceDenormals` (`sqrt`, the device's maths function,
 /// off Metal's own functions notes them beside its precision on either). `floor` and `ceil` are
-/// the device's
-/// whatever the fact, noted: no device measured reads their operand as Metal does. Flipping the
-/// fact changes the requirement and the note, never the module. The interpreter keeps denormals as
+/// the device's whatever the fact: noted, but on a profile that takes the unary deviation
+/// `MetalUnaryDenormals` (moltenvk-m3), which requires its property instead and reads them as the
+/// zero of their sign as Metal does. Flipping the fact changes the requirement and the note, never
+/// the module. The interpreter keeps denormals as
 /// lavapipe does. The operands are bits (`llvm.umin` of constants), so each kernel's float
 /// operation is its only one.
 #[test]
@@ -3381,6 +3382,9 @@ fn float_denormals_are_the_devices_and_noted_off_the_device_fact() {
                 let (_, words) =
                     link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
                 let never = matches!(kk.name, "den_floor" | "den_ceil");
+                // Floor and ceiling follow the unary deviation alone.
+                let unary =
+                    p.takes_driver_deviation(crate::error::DriverDeviation::MetalUnaryDenormals);
                 // The device's `Sqrt`, a maths function off Metal's own functions, records its
                 // denormals with its precision.
                 let function = kk.name == "den_sqrt"
@@ -3392,9 +3396,22 @@ fn float_denormals_are_the_devices_and_noted_off_the_device_fact() {
                     fact && !never,
                     "{what}"
                 );
+                if never {
+                    assert_eq!(
+                        a.requirements.properties.contains(
+                            &crate::device::requirements::VkProperty::MetalUnaryDenormals
+                        ),
+                        unary,
+                        "{what}"
+                    );
+                }
+                let noted = match never {
+                    true => !unary,
+                    false => function || !fact,
+                };
                 assert_eq!(
                     a.precision.contains(&PrecisionNote::DeviceDenormals),
-                    never || function || !fact,
+                    noted,
                     "{what}: {:?}",
                     a.precision
                 );

@@ -2536,8 +2536,11 @@ fn unary_denormals_follow_their_deviation() {
         lanes: 1,
     };
     for unary in [false, true] {
+        // A profile that takes the unary deviation (MoltenVK on an Apple9 GPU) takes
+        // `MetalFloatFunctions` too: its `fabs` is one of Metal's functions.
         let facts = super::FloatFacts {
             unary_denormals: unary,
+            metal_functions: unary,
             ..KHR_FACTS
         };
         for op in [FloatFn::Floor, FloatFn::Ceil, FloatFn::Abs, FloatFn::Trunc] {
