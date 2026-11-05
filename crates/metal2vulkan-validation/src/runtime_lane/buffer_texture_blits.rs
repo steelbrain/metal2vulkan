@@ -935,7 +935,9 @@ pub(super) const NARROW_ROWS: [Degradation; 1] = [Degradation::NarrowSurfaceRows
 /// consumer's three-plane '420v' backing ([`iosurface_420v`]); and the refusals of a surface
 /// without planes at 4 bytes a row (Metal asserts) and of rows that overlap on the GPU. The
 /// device announces `NarrowSurfaceRows` once, for the planes under 16 bytes a row, and where they
-/// force it a plane's shadow ([`linear_rows_differ`]) and the `Shared` buffers' system memory.
+/// force it a plane's shadow ([`linear_rows_differ`]), the `Shared` buffers' system memory, and
+/// the planes' clear's conversion on a driver whose clears take either nearest code
+/// (`DriverFact::ColorClearTakesEitherCode`).
 #[test]
 fn iosurface_planes_lie_where_metal_puts_them() {
     let messages = Messages::default();
@@ -1011,12 +1013,17 @@ fn iosurface_planes_lie_where_metal_puts_them() {
         let shadowed = planes
             .iter()
             .any(|&(pf, texel, _, bpr)| linear_rows_differ(&device, pf, [4, 4], texel, bpr));
+        // The planes' clear to (0.2, 0.4, 0.6, 0.8), each scaled `float` a hair off a whole code,
+        // where the device's clear may store either code nearest it.
+        let either = (device.properties().driver_facts)
+            .contains(&metal2vulkan::device::DriverFact::ColorClearTakesEitherCode);
         let first = forced(&[
             (Degradation::ShadowedTexture, shadowed),
             (
                 Degradation::SharedInSystemMemory,
                 shared_in_system_memory(&device),
             ),
+            (Degradation::DeviceColorConversion, either),
         ]);
         assert_made_once(&messages, &NARROW_ROWS, &first);
     }
