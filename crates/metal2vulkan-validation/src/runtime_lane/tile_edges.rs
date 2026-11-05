@@ -93,7 +93,10 @@ fn texels(target: &Texture) -> Vec<[u8; 4]> {
         .collect()
 }
 
-/// Each cell's codes in a buffer `cfb_tn_read4` filled: each value is a code's, `c / 255`.
+/// Each cell's codes in a buffer `cfb_tn_read4` filled: each value is a code's, `c / 255`, as the
+/// device converts it to `float`, within `f32::EPSILON` of the quotient, relative (the RTX 5080 Laptop GPU
+/// reads 200's as 0.7843138, the quotient's next `f32` up, as a product by `1 / 255` gives it;
+/// Vulkan states the conversion, not its precision).
 fn codes(buffer: &Buffer) -> Vec<[u8; 4]> {
     let bytes = read_buffer(buffer, 0, CELLS * 16).unwrap();
     bytes
@@ -106,8 +109,10 @@ fn codes(buffer: &Buffer) -> Vec<[u8; 4]> {
             for (k, lane) in cell.as_chunks::<4>().0.iter().enumerate() {
                 let value = f32::from_le_bytes([lane[0], lane[1], lane[2], lane[3]]);
                 let code = (value * 255.0).round();
+                let quotient = code / 255.0;
                 assert!(
-                    (0.0..=255.0).contains(&code) && value == code / 255.0,
+                    (0.0..=255.0).contains(&code)
+                        && (value - quotient).abs() <= f32::EPSILON * quotient,
                     "cell {i} channel {k}: {value} is no code's"
                 );
                 codes[k] = code as u8;
