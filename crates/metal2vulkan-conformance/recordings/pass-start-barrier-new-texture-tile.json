@@ -288,11 +288,25 @@
                             "at": {
                               "uint": 0
                             },
-                            "texel": {
-                              "bytes": "AP///w=="
+                            "rows": {
+                              "uint": 576
                             },
                             "texels": {
-                              "uint": 258048
+                              "list": [
+                                {
+                                  "fields": {
+                                    "at": {
+                                      "uint": 0
+                                    },
+                                    "texel": {
+                                      "bytes": "AP///w=="
+                                    },
+                                    "texels": {
+                                      "uint": 448
+                                    }
+                                  }
+                                }
+                              ]
                             }
                           }
                         }
