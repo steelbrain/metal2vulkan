@@ -351,6 +351,7 @@
       "venue": "Apple M3 Max",
       "runs": 8,
       "measured": "8 run(s) of the whole selection on Apple M3 Max, in the case set's own order, the largest each count reached",
+      "contrasted": "8 run(s) of each case on its own on Apple M3 Max, nothing before it on the device, the largest each count reached",
       "degraded": [
         "metal2vulkan-degrade-half-output-fast-math-blend"
       ],
@@ -430,6 +431,7 @@
         "gate_waits_slept": 1,
         "graphics_pipelines_looked_up": 2,
         "heap_tables_worked_out": 4,
+        "host_steps_recorded": 1,
         "linked_use_questions_asked": 2,
         "live_tables_uploaded": 1,
         "memory_blocks_live": 3,
@@ -484,6 +486,9 @@
         "command_buffers_begun_secondaries": 4,
         "commands_recorded.end_command_buffer": 11,
         "encoder_command_buffers_begun": 8
+      },
+      "composed": {
+        "host_steps_recorded": 1
       },
       "per_state": {
         "pipelines": 3,
