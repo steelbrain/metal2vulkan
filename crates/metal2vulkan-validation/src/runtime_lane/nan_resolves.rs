@@ -17,10 +17,12 @@
 //! resolved by a pass that loads it. Each row prints `RESOLVE-NANINF`: how many sets resolve as
 //! the rule says, the first that do not, and whether the device announced
 //! `device-rounded-resolve`. A row that differs unannounced fails. (the coordinator's question:) so
-//! does a drawn sample stored other than as written where the device announced no
+//! does a drawn sample stored other than as written where the device announced neither
 //! `device-nan-encoding` (the fragment function's note, a `half` output's NaN the device stores as
-//! it converts it), or where a stored channel differs from the written one other than as one NaN
-//! for another; each row prints whether the notice came.
+//! it converts it) nor `native-nan-encoding` (the fill's read of a `half` from its bits is the
+//! device's widening, a NaN to the device's NaN, which the store keeps: NVIDIA's 615.71.09 on the
+//! RTX 5080 Laptop GPU stores `0x7fff` for every one), or where a stored channel differs from the
+//! written one other than as one NaN for another; each row prints whether the notices came.
 
 use super::degrade_notices::counts;
 use super::renders::{blit_read, run, small_nan};
@@ -297,6 +299,9 @@ fn drawn_nan_and_infinite_samples_resolve_by_metal_s_rule() {
     // The notice comes once a device: whether it came by this row.
     let mut announced = false;
     let mut nan_announced = false;
+    // Whether the fill's fragment function announced `native-nan-encoding`: its read of a `half`
+    // from its bits is the device's widening, a NaN to the device's NaN, which the store keeps.
+    let mut widened_own = false;
     for row in rows() {
         for samples in [2u32, 4] {
             let label = format!("{:?} {samples}x", row.pf);
@@ -366,6 +371,7 @@ fn drawn_nan_and_infinite_samples_resolve_by_metal_s_rule() {
             let notices = counts(&messages.take_notices());
             announced |= notices.contains_key(&Degradation::DeviceRoundedResolve);
             nan_announced |= notices.contains_key(&Degradation::DeviceNanEncoding);
+            widened_own |= notices.contains_key(&Degradation::NativeNanEncoding);
             // A channel's bytes: a `float`'s 4, a `half`'s 2 (a packed format's word is one).
             let channel = match row.pf {
                 PixelFormat::R32Float | PixelFormat::RG11B10Float => 4,
@@ -410,8 +416,13 @@ fn drawn_nan_and_infinite_samples_resolve_by_metal_s_rule() {
                 if rewritten > 0 {
                     format!(
                         " ({rewritten} sets' samples not stored as written, device-nan-encoding \
-                         {})",
+                         {}, native-nan-encoding {})",
                         if nan_announced {
+                            "announced"
+                        } else {
+                            "not announced"
+                        },
+                        if widened_own {
                             "announced"
                         } else {
                             "not announced"
@@ -433,7 +444,7 @@ fn drawn_nan_and_infinite_samples_resolve_by_metal_s_rule() {
             if !differ.is_empty() && !announced {
                 silent.push(format!("{label}: {}", differ.join("; ")));
             }
-            if rewritten > 0 && !nan_announced {
+            if rewritten > 0 && !(nan_announced || widened_own) {
                 silent.push(format!(
                     "{label}: {rewritten} sets stored unlike written, unannounced"
                 ));

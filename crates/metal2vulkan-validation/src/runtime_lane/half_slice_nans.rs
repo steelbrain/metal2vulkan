@@ -20,9 +20,11 @@
 //! `ShaderWrite` (`0x10007`, `0x7`). A blit reads every level back: every channel must hold the
 //! half written (a level not written its fill), but for a NaN the device stores as another NaN
 //! where the dispatch announces `device-nan-encoding` (the device's write of a NaN, its native
-//! answer); the making may announce only the notes its kernels' stages record (the device's own
-//! answers, [`recorded`]), and the dispatch nothing else. `read` then reads level 0 back through a `texture2d<half, access::read>` and
-//! stores the half's bits: each must be the half stored, or the read announces
+//! answer) or the kernel's stage records `native-nan-encoding` (its read of the buffer's half is
+//! the device's widening, a NaN to the device's NaN: NVIDIA's 615.71.09 on the RTX 5080 Laptop
+//! GPU stores `0x7fff` for every one); the making may announce only the notes its kernels' stages
+//! record (the device's own answers, [`recorded`]), and the dispatch nothing else. `read` then
+//! reads level 0 back through a `texture2d<half, access::read>` and stores the half's bits: each must be the half stored, or the read announces
 //! `device-nan-encoding` (a read's NaN is the device's decode). The host's buffers are
 //! write-combined, which a device without unified memory places in device-local memory.
 //!
@@ -470,7 +472,8 @@ fn read_half(x: u64, y: u64, c: usize, rgbx: bool) -> u16 {
 
 /// Every channel of every texel of both levels holds the half the blur's slice write and the
 /// plain write stored, a NaN's sign and payload included, with no notice at the making or the
-/// dispatch, on every 16-bit float format and both usages (the module docs). Level 0 read back
+/// dispatch but the notes its stages record, on every 16-bit float format and both usages, or a
+/// NaN where the dispatch or the kernel's stage announces the device's (the module docs). Level 0 read back
 /// through `access::read` gives the halves stored, or the read announces `device-nan-encoding`.
 #[test]
 fn half_nans_written_through_the_blur_keep_their_bits() {
@@ -496,9 +499,14 @@ fn half_nans_written_through_the_blur_keep_their_bits() {
         },
         |device, messages| {
             let names = Kind::ALL.map(Kind::name);
+            // Whether kernel `name`'s read of the buffer's half is the device's widening, a NaN
+            // to the device's NaN, where its stage records `native-nan-encoding`.
+            let widens_own =
+                |name: &str| recorded(device, &[name]).contains(&Degradation::NativeNanEncoding);
             let recorded = recorded(device, &[names.as_slice(), &["read"]].concat());
             for kind in Kind::ALL {
                 let name = kind.name();
+                let widened_own = widens_own(name);
                 for (format, channels) in formats {
                     let rgbx = format == PixelFormat::RGBX16Float;
                     for usage in usages {
@@ -560,8 +568,8 @@ fn half_nans_written_through_the_blur_keep_their_bits() {
                             let dispatch_kinds: Vec<_> = dispatched.keys().copied().collect();
                             let dispatch_announced =
                                 dispatch_kinds == [Degradation::DeviceNanEncoding];
-                            let stored_unexplained =
-                                !differ.is_empty() && !(nans_only && dispatch_announced);
+                            let stored_unexplained = !differ.is_empty()
+                                && !(nans_only && (dispatch_announced || widened_own));
                             if stored_unexplained
                                 || made_unrecorded
                                 || !(dispatch_kinds.is_empty() || dispatch_announced)
