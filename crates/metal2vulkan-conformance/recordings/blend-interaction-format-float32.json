@@ -1551,6 +1551,7 @@
         "render_encoders_ended": 12,
         "render_passes_begun_inline": 12,
         "render_passes_made": 4,
+        "resident_textures_looked_at": 12,
         "scheduled_where_submitted": 1,
         "scheduler_passes": 1,
         "scheduler_passes_by_waiters": 1,

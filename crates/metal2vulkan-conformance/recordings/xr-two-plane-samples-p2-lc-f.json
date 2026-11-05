@@ -594,7 +594,8 @@
         "wakes_spared": 23
       },
       "moving": {
-        "batches_submitted_by_waiters": 0
+        "batches_submitted_by_waiters": 0,
+        "host_steps_recorded": 1
       },
       "composed": {
         "addressable_buffers_made": 1,

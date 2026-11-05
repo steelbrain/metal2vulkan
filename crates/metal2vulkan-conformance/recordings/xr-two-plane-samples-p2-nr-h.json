@@ -455,7 +455,7 @@
         "functions_translated": 4,
         "gate_waits": 2,
         "gate_waits_slept": 2,
-        "heads_held_for_host_steps": 4,
+        "heads_held_for_host_steps": 3,
         "heap_tables_worked_out": 2,
         "host_steps_recorded": 2,
         "host_texel_copies": 2,

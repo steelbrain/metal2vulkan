@@ -394,6 +394,7 @@
         "dispatch_used_resources_listed": 1,
         "dispatches_planned_as_before": 1,
         "encoder_command_buffers_begun": 4,
+        "encoder_primaries_begun_ahead": 1,
         "fence_waits": 2,
         "finales_folded": 2,
         "functions_shared": 1,
@@ -415,7 +416,7 @@
         "object_churn.vk_images_made": 2,
         "pipeline_layouts_made": 1,
         "pooled_memory_blocks_made": 3,
-        "primaries_begun_ahead": 1,
+        "primaries_begun_ahead": 2,
         "queue_submissions": 2,
         "queues_sharing_a_vk_queue": 1,
         "resident_textures_looked_at": 2,
@@ -437,7 +438,7 @@
       },
       "moving": {
         "batches_submitted_by_waiters": 0,
-        "gate_waits_slept": 1
+        "gate_waits_slept": 0
       },
       "composed": {
         "batches_submitted_by_waiters": 1,

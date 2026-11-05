@@ -1856,6 +1856,7 @@
         "render_encoders_ended": 15,
         "render_passes_begun_inline": 15,
         "render_passes_made": 3,
+        "resident_textures_looked_at": 15,
         "scheduled_where_submitted": 1,
         "scheduler_passes_by_waiters": 1,
         "scheduler_sleeps": 1,

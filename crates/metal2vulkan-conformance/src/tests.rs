@@ -6917,25 +6917,11 @@ fn every_case_carries_a_cost_recording() {
     /// produces a record, so a case is covered only where a later whole-set run includes it, and
     /// the next one empties the list again.
     ///
-    /// The pass-start barrier family, authored after the last whole-set run.
+    /// Empty: the last whole-set run covered every case.
     ///
     /// A whole-set run is the only shape that pays a record: a case's counts depend on what ran
     /// before it in the same process, so a selection cannot pay one however many cases it names.
-    const AFTER_THE_LAST_RUN: [&str; 13] = [
-        "pass-start-barrier-private-barrier-read",
-        "pass-start-barrier-private-barrier-sample",
-        "pass-start-barrier-private-read",
-        "pass-start-barrier-private-sample",
-        "pass-start-barrier-private-draw-barrier-read",
-        "pass-start-barrier-over-buffer-barrier-read",
-        "pass-start-barrier-over-buffer-barrier-sample",
-        "pass-start-barrier-over-buffer-read",
-        "pass-start-barrier-over-buffer-sample",
-        "pass-start-barrier-over-buffer-draw-barrier-read",
-        "pass-start-barrier-display-masked-read",
-        "pass-start-barrier-new-texture-chain",
-        "pass-start-barrier-new-texture-tile",
-    ];
+    const AFTER_THE_LAST_RUN: [&str; 0] = [];
 
     /// Cases a whole-set run did not cover although they were committed before it ran.
     ///

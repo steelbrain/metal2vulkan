@@ -2082,6 +2082,7 @@
         "render_encoders_ended": 17,
         "render_passes_begun_inline": 17,
         "render_passes_made": 2,
+        "resident_textures_looked_at": 17,
         "scheduled_where_submitted": 1,
         "scheduler_passes_by_waiters": 1,
         "scheduler_sleeps": 1,

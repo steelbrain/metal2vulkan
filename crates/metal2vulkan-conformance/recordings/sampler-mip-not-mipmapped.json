@@ -1077,6 +1077,7 @@
         "dispatch_used_resources_listed": 1,
         "dispatches_planned_as_before": 3,
         "encoder_command_buffers_begun": 10,
+        "encoder_primaries_begun_ahead": 1,
         "fence_waits": 8,
         "finales_apart": 1,
         "finales_folded": 7,
@@ -1100,16 +1101,17 @@
         "object_churn.vk_images_made": 1,
         "pipeline_layouts_made": 1,
         "pooled_memory_blocks_made": 4,
+        "primaries_begun_ahead": 1,
         "queue_submissions": 8,
         "queues_sharing_a_vk_queue": 1,
         "resident_textures_looked_at": 8,
         "sampler_sets_made": 1,
         "scheduled_where_submitted": 8,
-        "scheduler_passes": 10,
+        "scheduler_passes": 8,
         "scheduler_passes_by_waiters": 8,
-        "scheduler_sleeps": 10,
+        "scheduler_sleeps": 11,
         "scheduler_wakes_commit": 8,
-        "scheduler_wakes_host": 2,
+        "scheduler_wakes_host": 3,
         "shader_modules_made": 1,
         "slot_returns": 8,
         "spare_command_pools_taken": 8,
@@ -1122,7 +1124,8 @@
       },
       "moving": {
         "batches_submitted_by_waiters": 1,
-        "gate_waits_slept": 6
+        "gate_waits_slept": 6,
+        "host_steps_recorded": 0
       },
       "composed": {
         "batches_submitted_by_waiters": 6,

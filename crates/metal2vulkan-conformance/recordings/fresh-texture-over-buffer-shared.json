@@ -241,7 +241,6 @@
         "row_copies": 2,
         "row_copy_regions": 2,
         "scheduled_where_submitted": 3,
-        "scheduler_passes": 1,
         "scheduler_passes_by_waiters": 3,
         "scheduler_sleeps": 3,
         "scheduler_wakes_commit": 3,

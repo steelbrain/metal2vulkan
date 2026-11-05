@@ -477,7 +477,6 @@
         "dispatch_shapes_made": 1,
         "dispatch_used_resources_listed": 1,
         "encoder_command_buffers_begun": 3,
-        "encoder_primaries_begun_ahead": 1,
         "fence_waits": 1,
         "finales_folded": 1,
         "functions_shared": 1,
