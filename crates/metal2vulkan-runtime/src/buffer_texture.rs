@@ -1495,7 +1495,7 @@ impl Texels {
                     staging,
                     // A block-compressed texture is no color attachment, whose copies alone are
                     // bounded.
-                    texel: Some(self.texel_bytes).filter(|_| self.blocks.is_none()),
+                    texel: self.blocks.is_none().then_some(self.texel_bytes),
                 },
                 alias: self.buffer.alias().map(|alias| alias.key),
             },

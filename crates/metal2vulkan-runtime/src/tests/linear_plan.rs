@@ -1963,7 +1963,7 @@ fn a_bc_shadow_copies_its_rows_of_blocks_as_texels() {
         };
         assert_eq!(regions(&into), regions(&back), "{texels:?}");
         let [region] = into.as_slice() else {
-            panic!("{texels:?}: {into:?}");
+            panic!("{texels:?}: {} regions", into.len());
         };
         assert_eq!(region.buffer_offset, 64, "{texels:?}");
         assert_eq!(region.buffer_row_length, row_length, "{texels:?}");
