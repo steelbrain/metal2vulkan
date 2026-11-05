@@ -2,6 +2,7 @@
 //! logical copies.
 
 use crate::spirv::builder::function::FunctionBuilder;
+use crate::spirv::builder::module::StructOp;
 use crate::spirv::builder::ops::{err, index};
 use crate::spirv::error::{BResult, OperandRule};
 use crate::spirv::ids::{TypeId, Value};
@@ -20,7 +21,9 @@ impl FunctionBuilder<'_> {
         for p in parts {
             part_tys.push(self.value_ty(*p)?);
         }
-        let expected: Vec<TypeId> = match self.mb().types().get(ty)?.clone() {
+        let ty_def = self.mb().types().get(ty)?.clone();
+        let is_struct = matches!(ty_def, Type::Struct { .. });
+        let expected: Vec<TypeId> = match ty_def {
             Type::Vector { elem, len } => {
                 if parts.len() < 2 {
                     return Err(err(OP, OperandRule::Arity));
@@ -61,12 +64,16 @@ impl FunctionBuilder<'_> {
         if let Some(i) = parts.iter().position(|p| self.mb().non_uniform.contains(p)) {
             return Err(err(OP, OperandRule::NonUniform(index(i))));
         }
-        self.emit(
+        let y = self.emit(
             Inst::CompositeConstruct {
                 parts: parts.into(),
             },
             ty,
-        )
+        )?;
+        if is_struct {
+            self.note_struct(y, StructOp::Construct(parts.into()));
+        }
+        Ok(y)
     }
 
     /// The type reached by walking `indices` (literal indices) from composite type `ty`. Every
@@ -103,14 +110,20 @@ impl FunctionBuilder<'_> {
     /// `OpCompositeExtract`: the result has the type at `indices`.
     pub fn composite_extract(&mut self, composite: Value, indices: &[u32]) -> BResult<Value> {
         const OP: crate::spv::Op = crate::spv::Op::CompositeExtract;
-        let ty = self.walk_literal(OP, self.value_ty(composite)?, indices)?;
-        self.emit(
+        let of = self.value_ty(composite)?;
+        let ty = self.walk_literal(OP, of, indices)?;
+        let y = self.emit(
             Inst::CompositeExtract {
                 composite,
                 indices: indices.into(),
             },
             ty,
-        )
+        )?;
+        if matches!(self.mb().types().get(of)?, Type::Struct { .. }) {
+            let indices = indices.into();
+            self.note_struct(y, StructOp::Extract { composite, indices });
+        }
+        Ok(y)
     }
 
     /// `OpCompositeInsert`: `object` must have the type at `indices`; the result has the
@@ -136,14 +149,26 @@ impl FunctionBuilder<'_> {
         if self.mb().non_uniform.contains(&object) {
             return Err(err(OP, OperandRule::NonUniform(0)));
         }
-        self.emit(
+        let y = self.emit(
             Inst::CompositeInsert {
                 object,
                 composite,
                 indices: indices.into(),
             },
             ty,
-        )
+        )?;
+        if matches!(self.mb().types().get(ty)?, Type::Struct { .. }) {
+            let indices = indices.into();
+            self.note_struct(
+                y,
+                StructOp::Insert {
+                    object,
+                    composite,
+                    indices,
+                },
+            );
+        }
+        Ok(y)
     }
 
     /// `OpVectorExtractDynamic`: `index` is an integer scalar. Result: the component type.

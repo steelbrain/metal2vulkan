@@ -419,7 +419,10 @@ pub(crate) fn among<F: Copy + Ord>(
 /// pattern through Metal's compiler, with and without fast math): a merge of a select of the
 /// widened `half` against a constant (`b ? float(h) : 0.0`, as the translation's bounds check
 /// selects a read) with another widened value answers 2045 of the 2046 NaNs `0x7E00`
-/// (`narrow::merges_mixed_selects`), where the select merged with a constant, a select of two
+/// (`narrow::merges::merges_mixed_selects`, followed member by member where a struct, an array or
+/// a vector carries the select and the other value, as a texel read's `{T, i8}` does: not measured
+/// through a struct, whose members' merges are the measured shape), where the select merged with a
+/// constant, a select of two
 /// widened values merged with a third, a merge then a select, two selects and two merges keep
 /// every NaN's bits. One row per GPU, as measured.
 ///

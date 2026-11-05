@@ -3677,7 +3677,8 @@ bound.
   device's widening (its conversion with `shaderFloat16`, `UnpackHalf2x16` without): a NaN's bits
   the device's, where Metal widens every `half` NaN to `0x7fc00000` and moves one it does not
   widen with its bits. And wherever a `half` is encoded to its bits (a store, a reinterpretation, a
-  texel's bits) where they are not the bits it was read from, on every device, since the encode is
+  texel's bits) where they are not the bits it was read from (a `half` moved unchanged from its
+  read keeps them, through a struct's member too), on every device, since the encode is
   the device's narrowing (its conversion with `shaderFloat16`, `PackHalf2x16` without): a NaN's
   bits the device's, where Metal keeps a `half` NaN's sign and payload. **Exempt:** on a profile
   that takes `DriverDeviation::MetalNanMoves`, MoltenVK on Apple's GPUs of the Apple M3 Max's
@@ -3691,8 +3692,12 @@ bound.
   output or a variable other than a function's `float` one, a call, a return, a group or atomic
   operation, an image operation but a texture write of it, whose store the write's own
   `PrecisionNote::DeviceNanEncoding` accounts for), reads its widened bits (a bitcast but to store
-  them to memory, `frexp`, `modf`, `ldexp`), or holds a `float` NaN constant other than
-  `0x7fc00000`: such a module records the note there too. A `half` `fneg` records it on every
+  them to memory, `frexp`, `modf`, `ldexp`), holds a `float` NaN constant other than
+  `0x7fc00000`, or merges a select of a widened `half` against a value it does not hold widened
+  with another widened `half` at a phi or in a function's `float` variable, member by member where
+  a struct, an array or a vector carries them (Metal's compiler answers 2045 of the 2046 `half`
+  NaNs of that merge `0x7e00`, measured on the M3 Max): such a module records the note there
+  too. A `half` `fneg` records it on every
   device.
 - `metal2vulkan-degrade-native-min-max` (precision). `PrecisionNote::NativeMinMax`: Native device
   maths: Metal's `fmin`, `fmax`, `min3`, `max3`, `clamp` or `saturate` (its `clamp(x, +0, 1)`) on

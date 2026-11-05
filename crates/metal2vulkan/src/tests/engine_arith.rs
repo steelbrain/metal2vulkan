@@ -3778,7 +3778,9 @@ fn half_sign_operations_keep_a_nan_s_payload_on_every_profile() {
 /// payload (held widened as a `float` NaN that no conversion of the device made) is not in the
 /// measurement, and records the note on both, requiring nothing (`narrow::moves_unfolded`); so
 /// is a phi of a select of the `half` against a constant with the `half` itself, which Metal's
-/// compiler is measured not to fold, where a phi of that select with a constant is folded.
+/// compiler is measured not to fold, where a phi of that select with a constant is folded. A
+/// `half` inserted into a struct (`{half, i8}`, a texel's shape) and extracted is the `half`
+/// itself: stored with its own bits, never widened.
 #[test]
 fn half_moves_are_metals_only_where_the_device_folds_them() {
     let hx = oh("hx", 0xFE01);
@@ -3822,6 +3824,13 @@ fn half_moves_are_metals_only_where_the_device_folds_them() {
             ),
             None,
         ),
+        half_nan_kernel(
+            "member_kept",
+            format!(
+                "{hx}  %m = insertvalue {{ half, i8 }} undef, half %hx, 0\n  %mw = insertvalue {{ half, i8 }} %m, i8 0, 1\n  %s = extractvalue {{ half, i8 }} %mw, 0\n"
+            ),
+            Some(0xFE01),
+        ),
     ];
     let Some(bitcode) = assemble("nan-half-moves", &module(&ks)) else {
         return;
@@ -3838,8 +3847,9 @@ fn half_moves_are_metals_only_where_the_device_folds_them() {
                 .unwrap_or_else(|e| panic!("{what}: {e:?}"));
             let widens = crate::lower::arith::narrow::widens_bits(&m, &mut meter())
                 .unwrap_or_else(|e| panic!("{what}: {e:?}"));
-            // A `half` stored as itself is never widened; each select reads it by the widening.
-            assert_eq!(widens, kk.name != "kept", "{what}");
+            // A `half` stored as itself is never widened, out of a struct too; each select reads
+            // it by the widening.
+            assert_eq!(widens, !matches!(kk.name, "kept" | "member_kept"), "{what}");
             let folded = moves && !matches!(kk.name, "payload_constant" | "merged_selection");
             assert_eq!(
                 a.precision.contains(&PrecisionNote::NativeNanEncoding),

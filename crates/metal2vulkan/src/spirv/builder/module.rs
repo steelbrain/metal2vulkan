@@ -134,6 +134,14 @@ pub struct ModuleBuilder {
     /// The vector, lane value, and lane index of each narrow lane insert the lowering noted
     /// (`FunctionBuilder::note_insert`).
     pub(super) inserts: HashMap<Value, (Value, Value, u32)>,
+    /// How each struct the builder made holds its members, and what each extract from a struct
+    /// reads (`FunctionBuilder::member_source`): every `OpCompositeConstruct` and
+    /// `OpCompositeInsert` of a struct type and every `OpCompositeExtract` from one, by result.
+    /// Nothing here changes the IR.
+    pub(super) structs: HashMap<Value, StructOp>,
+    /// The heap bytes of [`ModuleBuilder::structs`]' parts and paths, for
+    /// [`ModuleBuilder::footprint`].
+    pub(super) struct_bytes: usize,
     /// The 16-bit integer each zero extension to 32 bits the lowering noted widens
     /// (`FunctionBuilder::note_widened16`).
     pub(super) widened16: HashMap<Value, Value>,
@@ -235,6 +243,25 @@ pub enum QuantizeForm {
 pub enum NarrowFmt {
     Half,
     BFloat,
+}
+
+/// How a struct value holds its members, or which member of a struct a value reads
+/// ([`ModuleBuilder::structs`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) enum StructOp {
+    /// An `OpCompositeConstruct` of the struct from these members.
+    Construct(Box<[Value]>),
+    /// An `OpCompositeInsert` of `object` at `indices` into struct `composite`.
+    Insert {
+        object: Value,
+        composite: Value,
+        indices: Box<[u32]>,
+    },
+    /// An `OpCompositeExtract` of the member at `indices` of struct `composite`.
+    Extract {
+        composite: Value,
+        indices: Box<[u32]>,
+    },
 }
 
 /// Noted format bits of a value: each lane's low 16 bits are the format bits of that lane of
@@ -370,6 +397,8 @@ impl ModuleBuilder {
             + map_bytes(&self.bits)
             + map_bytes(&self.lanes)
             + map_bytes(&self.inserts)
+            + map_bytes(&self.structs)
+            + self.struct_bytes
             + map_bytes(&self.widened16)
             + map_bytes(&self.widened_halves)
             + self.narrowed_floats.capacity() * std::mem::size_of::<Value>()

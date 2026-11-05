@@ -3,13 +3,17 @@
 //! in `constructs.rs`; they extend this type in their own files.
 
 use crate::spirv::builder::constructs::ConstructState;
-use crate::spirv::builder::module::{ModuleBuilder, NarrowFmt, NotedBits};
+use crate::spirv::builder::module::{ModuleBuilder, NarrowFmt, NotedBits, StructOp};
 use crate::spirv::error::{BResult, BuildError, ControlRule, Dangling, OperandRule, TypeRule};
 use crate::spirv::ids::{BlockId, ConstId, FuncId, TypeId, Value, VarId};
 use crate::spirv::ir::{
     Inst, InstNode, LocalVar, MemAccess, Merge, Shape, StorageClass, Terminator, Type, TypeFacts,
     ValueOrigin,
 };
+
+/// The most struct constructs, inserts and extracts [`FunctionBuilder::member_source`] follows
+/// for one value: a bound on the walk (a longer chain stands for no known member).
+const MEMBER_STEPS: usize = 64;
 
 /// Builds one function of a [`ModuleBuilder`]. The cursor is the open block that instructions
 /// append to; a terminator closes it. Call [`FunctionBuilder::finish`] when done: a function that
@@ -169,6 +173,64 @@ impl<'m> FunctionBuilder<'m> {
     /// The vector, lane value, and lane index `y` was noted to insert.
     pub fn insert_of(&self, y: Value) -> Option<(Value, Value, u32)> {
         self.m.inserts.get(&y).copied()
+    }
+
+    /// Record how struct `y` holds its members, or which member of a struct it reads
+    /// ([`FunctionBuilder::member_source`]).
+    pub(super) fn note_struct(&mut self, y: Value, op: StructOp) {
+        let heap = match &op {
+            StructOp::Construct(parts) => std::mem::size_of_val::<[Value]>(parts),
+            StructOp::Insert { indices, .. } | StructOp::Extract { indices, .. } => {
+                std::mem::size_of_val::<[u32]>(indices)
+            }
+        };
+        self.m.struct_bytes = self.m.struct_bytes.saturating_add(heap);
+        self.m.structs.insert(y, op);
+    }
+
+    /// The value `y` holds where it is a member of a struct the builder made: `y` extracts the
+    /// member at a path of a struct whose constructs and inserts, through further extracts of
+    /// structs, supply that member wholly from one value, which dominates `y` (each is an operand
+    /// of the instructions that made the struct). `None` where the member is no such value (a
+    /// struct the builder did not make, a load or a phi of one, a path into a vector, a later
+    /// insert into part of it), or past [`MEMBER_STEPS`] steps.
+    pub fn member_source(&self, y: Value) -> Option<Value> {
+        let Some(StructOp::Extract { composite, indices }) = self.m.structs.get(&y) else {
+            return None;
+        };
+        let (mut at, mut path) = (*composite, indices.to_vec());
+        for _ in 0..MEMBER_STEPS {
+            let Some((&first, rest)) = path.split_first() else {
+                return Some(at);
+            };
+            match self.m.structs.get(&at)? {
+                StructOp::Construct(parts) => {
+                    at = *parts.get(first as usize)?;
+                    path = rest.to_vec();
+                }
+                StructOp::Insert {
+                    object,
+                    composite,
+                    indices,
+                } => {
+                    if path.starts_with(indices) {
+                        at = *object;
+                        path.drain(..indices.len());
+                    } else if indices.starts_with(&path) {
+                        return None;
+                    } else {
+                        at = *composite;
+                    }
+                }
+                StructOp::Extract { composite, indices } => {
+                    let mut full = indices.to_vec();
+                    full.extend_from_slice(&path);
+                    path = full;
+                    at = *composite;
+                }
+            }
+        }
+        None
     }
 
     /// A new group for [`FunctionBuilder::offer`].
