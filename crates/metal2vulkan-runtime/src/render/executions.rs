@@ -2477,6 +2477,7 @@ impl RenderExecution {
             barrier: false,
             loads_ordered: false,
             barrier_splits: 0,
+            attached_read_splits: 0,
             driver_restarts: false,
             tile_memory_splits: 0,
             // The pass's buffer of every tile's memory, with the arguments the encoder set at the

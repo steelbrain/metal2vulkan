@@ -526,9 +526,11 @@ degradations! {
         /// amplification as multiview, or a view mapping that moves a draw to one layer), each run
         /// of them in an instance over those layers; or a memory barrier over buffers or textures
         /// orders its draws after it behind those before it, which a barrier between instances
-        /// does. Not where the interlock alone splits the pass, on a device whose driver ran such a
-        /// pass no slower split than whole (`DriverFact::InterlockedPassSplitNoSlower`): its faster
-        /// form.
+        /// does; or a draw reads a color attachment's texture after a memory barrier, and reads
+        /// what the pass's load actions and earlier draws stored where the barrier orders them
+        /// (`texture/attached_reads.rs`). Not where the interlock alone splits the pass, on a
+        /// device whose driver ran such a pass no slower split than whole
+        /// (`DriverFact::InterlockedPassSplitNoSlower`): its faster form.
         RenderPassSplit = "render-pass-split", Performance,
             "each instance after the first loads the attachments and each before the last \
              stores them, with a barrier from everything before to everything after between \
@@ -4473,6 +4475,10 @@ pub(super) struct SplitCauses {
     /// The splits between draws that reach the pass's tile threadgroup memory
     /// (`render/tile_memory.rs`).
     pub(super) tile_memory: usize,
+    /// The splits before a draw that reads a color attachment's texture after a memory barrier,
+    /// the pass's load actions included where the barrier came before its first draw
+    /// (`texture/attached_reads.rs`).
+    pub(super) attached_reads: usize,
     /// Some of its instances render some of its layers.
     pub(super) viewed: bool,
 }
@@ -4501,6 +4507,7 @@ impl Device {
             dispatches,
             barriers,
             tile_memory,
+            attached_reads,
             viewed,
         } = causes;
         let instances = shapes.len();
@@ -4553,7 +4560,8 @@ impl Device {
             && !shader_tests
             && dispatches == 0
             && barriers == 0
-            && tile_memory == 0;
+            && tile_memory == 0
+            && attached_reads == 0;
         if instances > 1 && !chosen {
             let color = changed.and_then(|(index, interlock)| {
                 let color = layout.colors.get(index as usize)?.as_ref()?;
@@ -4611,6 +4619,12 @@ impl Device {
                          writes in order, which Vulkan gives one draw of another's storage writes \
                          across render pass instances alone, ending {tile_memory} of them, so it \
                          runs as {instances} Vulkan render pass instances"
+                    ),
+                    None if attached_reads > 0 => format!(
+                        "draws that read a color attachment's texture after a memory barrier read \
+                         what its load actions and the draws before the barrier stored, in a \
+                         Vulkan render pass instance after theirs, ending {attached_reads} of \
+                         them, so it runs as {instances} Vulkan render pass instances"
                     ),
                     None if viewed => format!(
                         "some of its draws render some of its layers (vertex amplification as \

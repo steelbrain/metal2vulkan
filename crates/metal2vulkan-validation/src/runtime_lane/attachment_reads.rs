@@ -979,17 +979,36 @@ const STARTS: [Start; 3] = [
 /// (`reading_draws_snapshotted`).
 #[test]
 fn a_draw_after_a_barrier_at_the_pass_start_reads_the_clear() {
-    on_device(|device, _messages| {
+    on_device(|device, messages| {
         let queue = device.new_command_queue().unwrap();
+        // Whether a pass split, and whether the device announced a split: once, at its first.
+        let (mut split_any, mut announced) = (false, false);
         for fragment in ["psb_read", "psb_sample"] {
             let state = psb_state(device, fragment);
             for start in STARTS {
                 for (name, target, _buffer) in targets(device) {
                     let name = format!("{name}, {fragment}, {start:?}");
+                    messages.take_notices();
                     let counted = device.work_counts();
                     let bytes =
                         started_pass(&queue, &target, LoadAction::Clear, start, (&state, &target));
                     let after = device.work_counts();
+                    // The split's notice names the read behind the barrier as its cause.
+                    let notice = messages
+                        .take_notices()
+                        .into_iter()
+                        .filter_map(|message| message.degradation)
+                        .find(|notice| notice.degradation == Degradation::RenderPassSplit);
+                    if let Some(split) = &notice {
+                        assert!(
+                            split.reason.contains(
+                                "draws that read a color attachment's texture after a memory \
+                                 barrier read what its load actions"
+                            ),
+                            "{name}: {}",
+                            split.reason
+                        );
+                    }
                     hold_area(&name, &bytes, reordered(CLEAR), CLEAR);
                     let moved = moved(&counted, &after);
                     let [splits, begun] = instances(&counted, &after);
@@ -1003,9 +1022,12 @@ fn a_draw_after_a_barrier_at_the_pass_start_reads_the_clear() {
                         assert_eq!(attached, moved.splits, "{name}: splits for the read");
                         assert_eq!(splits, moved.splits, "{name}: no other split");
                     }
+                    split_any |= splits > 0;
+                    announced |= notice.is_some();
                 }
             }
         }
+        assert_eq!(announced, split_any, "the split's notice");
     });
 }
 

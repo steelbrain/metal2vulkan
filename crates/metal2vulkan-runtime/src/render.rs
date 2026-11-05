@@ -1481,6 +1481,9 @@ pub(crate) struct RenderLowering {
     loads_ordered: bool,
     /// The splits such barriers made, for the split's degrade notice.
     barrier_splits: usize,
+    /// The splits before a draw that reads a color attachment's texture after a memory barrier
+    /// (`Split::AttachedRead`), for the split's degrade notice.
+    attached_read_splits: usize,
     /// What MoltenVK restarts its Metal render pass for inside the subpass, storing the
     /// attachments there, was recorded: a barrier between draws whose destination reads input
     /// attachments (`barrier_between_draws`), or a tessellated draw (`Device::degrade_pass`).
@@ -2087,6 +2090,7 @@ impl RenderLowering {
             barrier: false,
             loads_ordered: false,
             barrier_splits: 0,
+            attached_read_splits: 0,
             driver_restarts: false,
             tile_memory_splits: 0,
             tile_memory: tile_memory::TileMemory::default(),
@@ -4116,6 +4120,7 @@ impl RenderLowering {
             depth_stand_in,
             imageblock,
             barrier_splits,
+            attached_read_splits,
             driver_restarts,
             tile_memory_splits,
             tile_memory,
@@ -5953,6 +5958,7 @@ impl RenderLowering {
                 dispatches: dispatch_count,
                 barriers: barrier_splits,
                 tile_memory: tile_memory_splits,
+                attached_reads: attached_read_splits,
                 viewed: views,
             },
         );
@@ -6847,6 +6853,7 @@ impl RenderLowering {
                 let previous = std::mem::replace(&mut self.current, *instance);
                 self.earlier.push(previous);
                 self.barrier_splits += usize::from(self.barrier);
+                self.attached_read_splits += usize::from(cause == Split::AttachedRead);
                 // The instance after the one that ran the pass's load actions behind a barrier
                 // before its first draw follows that barrier too.
                 if self.barrier || self.loads_ordered {

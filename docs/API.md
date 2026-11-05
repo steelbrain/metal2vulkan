@@ -1689,12 +1689,13 @@ bound.
   attachment of the later draws' subpass alone; or a tile dispatch runs between two instances; or
   some of its draws render some of its layers, each run of them in an instance over those layers; or
   a memory barrier over buffers or textures orders its draws after it behind those before it, which
-  a barrier between instances does. Not where the pixel interlock alone splits the pass on a device
-  whose driver ran such a pass no slower split than whole
-  (`DriverFact::InterlockedPassSplitNoSlower`): the split is then its faster form. Cost: each
-  instance after the first loads the attachments and each before the last stores them, with a
-  barrier from everything before to everything after between them: on a tiler, a tile flush per
-  split.
+  a barrier between instances does; or a draw reads a color attachment's texture after a memory
+  barrier, and reads what the pass's load actions and earlier draws stored where the barrier orders
+  them. Not where the pixel interlock alone splits the pass on a device whose driver ran such a pass
+  no slower split than whole (`DriverFact::InterlockedPassSplitNoSlower`): the split is then its
+  faster form. Cost: each instance after the first loads the attachments and each before the last
+  stores them, with a barrier from everything before to everything after between them: on a tiler,
+  a tile flush per split.
 - `metal2vulkan-degrade-amplification-draws` (performance). `AmplificationDraws`: A draw under
   vertex amplification that Vulkan multiview cannot express (view mappings that offset the viewport
   or name layers out of order, more amplifications than the device's views, or a pipeline that
