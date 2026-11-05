@@ -162,10 +162,11 @@ impl<'a> Members<'a> {
                 composite,
                 indices,
             }) => {
+                let inside = path.strip_prefix(*indices).map(<[u32]>::to_vec);
                 if path.is_empty() {
                     own
-                } else if path.starts_with(indices) {
-                    self.widened_in(*object, path[indices.len()..].to_vec(), seen, steps)
+                } else if let Some(inside) = inside {
+                    self.widened_in(*object, inside, seen, steps)
                 } else if indices.starts_with(&path) {
                     self.widened_in(*object, Vec::new(), seen, steps)
                         || self.widened_in(*composite, path, seen, steps)
@@ -222,8 +223,9 @@ impl<'a> Members<'a> {
                     composite,
                     indices,
                 }) => {
-                    if !path.is_empty() && path.starts_with(indices) {
-                        (*object, path[indices.len()..].to_vec())
+                    let inside = path.strip_prefix(*indices).map(<[u32]>::to_vec);
+                    if let (false, Some(inside)) = (path.is_empty(), inside) {
+                        (*object, inside)
                     } else if indices.starts_with(&path) {
                         return false;
                     } else {
@@ -276,10 +278,9 @@ impl<'a> Members<'a> {
     /// itself). Only widened values take part: a value holding a widened member is widened. A
     /// type of more than [`NODES`] members merges wherever two of them are widened.
     fn merges(&self, values: &[Value], at: usize, distinct: bool) -> bool {
-        let s = values[at];
-        if !has_bit(self.widened, s) {
+        let Some(&s) = values.get(at).filter(|s| has_bit(self.widened, **s)) else {
             return false;
-        }
+        };
         let others = || {
             values.iter().enumerate().filter(move |&(j, v)| {
                 has_bit(self.widened, *v) && if distinct { *v != s } else { j != at }
