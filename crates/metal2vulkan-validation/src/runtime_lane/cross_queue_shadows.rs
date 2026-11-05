@@ -36,7 +36,10 @@
 //!   Z run there beside Y, none long. Y is held until X's signal was submitted, so it goes after
 //!   X's first batch on that `VkQueue`: the read after the signal holds Y's fill, X's hold is
 //!   still withheld while Y has not completed, and Z's read holds the fill. Where the device
-//!   shares no `VkQueue` the cases run on two and say so.
+//!   shares no `VkQueue` the cases run on two and say so. A join needs queue 1's oldest fill in
+//!   flight younger than 0.5 ms as queue 2 looks: queue 1's fills done first, or other processes'
+//!   work on the GPU, deny one try, so a try that did not join is said and made again with two
+//!   new queues.
 //!
 //! The spin is the owned fixture `kernel_spin_on_an_unraised_word`, dispatched again and again to
 //! a cap of loads timed on the device beforehand ([`Spin`]). The GPU does not see a CPU store to
@@ -283,39 +286,100 @@ fn sharing_lane(messages: &Messages, cache: &ScratchCache) -> (Device, TexelKern
     (device, kernels, shares)
 }
 
-/// Keep `busy`'s `VkQueue` busy with short fills of `scratch`, then make `joiner`'s command buffer,
-/// which joins that `VkQueue` where the device shares (the module docs): the command buffer, and
-/// the fills, to be waited for once the case ran. Where it shares, both queues are on one
-/// `VkQueue` and neither is long.
+/// How long [`joined`] tries for a join where the device shares.
+const JOINING: Duration = Duration::from_secs(20);
+
+/// Two new command queues, the busy one and the joiner: the busy one's `VkQueue` kept busy with
+/// short fills of a scratch buffer, then the joiner's command buffer made, which joins that
+/// `VkQueue` where the device shares (the module docs). With them the command buffer, and the
+/// fills, to be waited for once the case ran. Where it shares, both queues are on one `VkQueue`
+/// and neither is long. A join needs the busy `VkQueue`'s oldest batch in flight younger than
+/// 0.5 ms as the joiner looks, and no long queue there (`queue_share.rs`), which the fills done
+/// first, or other processes' work on the GPU, can deny one try: a try that did not join is said
+/// and tried again with two new queues, for up to [`JOINING`].
 fn joined(
     device: &Device,
-    busy: &CommandQueue,
-    joiner: &CommandQueue,
     shares: bool,
-) -> (CommandBuffer, Vec<CommandBuffer>) {
+) -> (
+    CommandQueue,
+    CommandQueue,
+    CommandBuffer,
+    Vec<CommandBuffer>,
+) {
     let scratch = device
         .new_buffer(16 << 20, ResourceOptions::private())
         .unwrap();
-    let fills: Vec<CommandBuffer> = (0..24)
-        .map(|_| {
-            let command_buffer = busy.command_buffer().unwrap();
-            let mut blit = command_buffer.blit_command_encoder().unwrap();
-            blit.fill_buffer(&scratch, 0..(16 << 20), 0x77).unwrap();
-            blit.end_encoding().unwrap();
-            command_buffer.commit().unwrap();
-            command_buffer
-        })
-        .collect();
-    fills.last().unwrap().wait_until_scheduled().unwrap();
-    let joins = device.work_counts().queue_joins;
-    let made = joiner.command_buffer().unwrap();
-    let (on, with) = (joiner.vk_queue_sharing(), busy.vk_queue_sharing());
-    if shares {
-        assert!(device.work_counts().queue_joins > joins, "the queue joined");
-        assert_eq!(on, with, "both queues on one VkQueue, neither long");
-        assert!(!on.1, "neither queue is long");
+    let start = Instant::now();
+    for tries in 1.. {
+        let (busy, joiner) = (
+            device.new_command_queue().unwrap(),
+            device.new_command_queue().unwrap(),
+        );
+        let fills: Vec<CommandBuffer> = (0..24)
+            .map(|_| {
+                let command_buffer = busy.command_buffer().unwrap();
+                let mut blit = command_buffer.blit_command_encoder().unwrap();
+                blit.fill_buffer(&scratch, 0..(16 << 20), 0x77).unwrap();
+                blit.end_encoding().unwrap();
+                command_buffer.commit().unwrap();
+                command_buffer
+            })
+            .collect();
+        fills.last().unwrap().wait_until_scheduled().unwrap();
+        let before = device.work_counts();
+        let seen = (fills.iter())
+            .filter(|fill| fill.status() == CommandBufferStatus::Completed)
+            .count();
+        let looked = metal2vulkan_runtime::host_time();
+        let made = joiner.command_buffer().unwrap();
+        let after = device.work_counts();
+        let (on, with) = (joiner.vk_queue_sharing(), busy.vk_queue_sharing());
+        if !shares || after.queue_joins > before.queue_joins {
+            if shares {
+                println!("JOINED on {} at try {tries}", device.name());
+                assert_eq!(on, with, "both queues on one VkQueue, neither long");
+                assert!(!on.1, "neither queue is long");
+            }
+            return (busy, joiner, made, fills);
+        }
+        made.commit().unwrap();
+        for command_buffer in fills.iter().chain([&made]) {
+            completed(command_buffer);
+        }
+        let times: Vec<(f64, f64)> = (fills.iter())
+            .map(|fill| (fill.gpu_start_time().unwrap(), fill.gpu_end_time().unwrap()))
+            .collect();
+        let ms = |seconds: f64| seconds * 1e3;
+        let longest = times
+            .iter()
+            .map(|(start, end)| end - start)
+            .fold(0.0, f64::max);
+        // The oldest fill the GPU had not finished as the joiner looked, and how long before that
+        // the GPU finished the one before it (or started it, for the first).
+        let head = times.iter().position(|&(_, end)| end > looked);
+        let head_age =
+            head.map(|at| ms(looked - at.checked_sub(1).map_or(times[at].0, |i| times[i].1)));
+        println!(
+            "JOIN-MISS on {} at try {tries}: {seen} of {} fills seen complete as the joiner \
+             looked; the GPU's last fill end {:+.3} ms from the look; the oldest unfinished fill \
+             {head:?}, its head age about {head_age:.3?} ms; the longest fill {:.3} ms; moves +{}, \
+             joins +{}, queues gone long +{}, joins withheld from unshared +{}; the joiner {on:?}, \
+             the busy queue {with:?}",
+            device.name(),
+            fills.len(),
+            ms(times.last().unwrap().1 - looked),
+            ms(longest),
+            after.queue_moves - before.queue_moves,
+            after.queue_joins - before.queue_joins,
+            after.queues_gone_long - before.queues_gone_long,
+            after.joins_withheld_from_unshared - before.joins_withheld_from_unshared,
+        );
+        assert!(
+            start.elapsed() < JOINING,
+            "the queue joined within {JOINING:?}: {tries} tries did not"
+        );
     }
-    (made, fills)
+    unreachable!("the tries end in a join or a failed assertion")
 }
 
 /// [`an_encoder_after_a_signal_reads_what_another_queue_wrote_after_it`] with the two queues on
@@ -325,17 +389,13 @@ fn an_encoder_after_a_signal_reads_another_queue_s_write_on_one_vk_queue() {
     let messages = Messages::default();
     let cache = ScratchCache::new().unwrap();
     let (device, kernels, shares) = sharing_lane(&messages, &cache);
-    let (first, second) = (
-        device.new_command_queue().unwrap(),
-        device.new_command_queue().unwrap(),
-    );
     let initial = Rng(0x5162).bytes(BYTES);
     let (row, value) = (6, 0x4d);
     let truth = buffer_with(&device, &initial).unwrap();
     let texture = shadowed(&device, &truth);
     let event = device.new_event().unwrap();
     let reads = [(); 2].map(|_| read_target(&device));
-    let (y, fills) = joined(&device, &first, &second, shares);
+    let (first, second, y, fills) = joined(&device, shares);
     y.encode_wait_for_event(EventRef::Event(&event), 1).unwrap();
     fill_row(&y, &truth, row, value);
     y.commit().unwrap();
@@ -376,10 +436,6 @@ fn a_waiting_writer_s_hold_is_withheld_on_one_vk_queue() {
     let messages = Messages::default();
     let cache = ScratchCache::new().unwrap();
     let (device, kernels, shares) = sharing_lane(&messages, &cache);
-    let (first, second) = (
-        device.new_command_queue().unwrap(),
-        device.new_command_queue().unwrap(),
-    );
     let mapping = Mapping::anonymous(GUEST_PAGE);
     let initial = Rng(0x9A6F).bytes(BYTES);
     mapping.write(0, &initial);
@@ -403,7 +459,7 @@ fn a_waiting_writer_s_hold_is_withheld_on_one_vk_queue() {
     let reads = [(); 2].map(|_| read_target(&device));
     let before = gated(&device.work_counts());
     let withheld = device.work_counts().dirty_holds_withheld;
-    let (y, fills) = joined(&device, &first, &second, shares);
+    let (first, second, y, fills) = joined(&device, shares);
     y.encode_wait_for_event(EventRef::Event(&event), 1).unwrap();
     fill_row(&y, &pages, row, value);
     y.commit().unwrap();
