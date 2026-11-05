@@ -36,7 +36,8 @@
 //! end of submission, its GPU time (`GPUEndTime` less `GPUStartTime`, summed), the GPU end of its
 //! last command buffer to that one's completed handler, and the process's CPU time; and the work
 //! counts per frame, with the writes the runtime reported to the log a frame (as the consumer's
-//! and named), their bytes, and the time the log spent on them.
+//! and named), their bytes, and the time the log spent on them on the runtime's queue waiters,
+//! its completed handlers' thread and the others (the committing thread's).
 
 use super::first_use_writes::CHECK_WAIT;
 use super::host_memory::Mapping;
@@ -185,10 +186,30 @@ struct Log {
     /// It spends [`RESOLVE`] a page of each reported write.
     resolving: bool,
     /// The writes reported to it ([`DirtyPages::wrote`], [`DirtyPages::wrote_as`]): their count
-    /// and bytes, as the consumer's and named, and the nanoseconds it spent on them.
+    /// and bytes, as the consumer's and named, and the nanoseconds it spent on them on each of
+    /// [`Thread`]'s threads.
     told: [AtomicU64; 2],
     told_bytes: [AtomicU64; 2],
-    told_nanos: AtomicU64,
+    told_nanos: [AtomicU64; 3],
+}
+
+/// The threads a report to the log comes on: the runtime's queue waiters, its completed
+/// handlers' thread, and any other (the committing thread's among them).
+#[derive(Clone, Copy)]
+enum Thread {
+    Waiter,
+    Handlers,
+    Other,
+}
+
+impl Thread {
+    fn current() -> Thread {
+        match std::thread::current().name() {
+            Some(name) if name.starts_with("metal2vulkan-queue-wait") => Thread::Waiter,
+            Some("metal2vulkan-handlers") => Thread::Handlers,
+            _ => Thread::Other,
+        }
+    }
 }
 
 #[derive(Default)]
@@ -220,19 +241,21 @@ impl Log {
         }
         self.note(range, writer);
         let nanos = u64::try_from(started.elapsed().as_nanos()).unwrap_or(u64::MAX);
-        self.told_nanos.fetch_add(nanos, Ordering::Relaxed);
+        self.told_nanos[Thread::current() as usize].fetch_add(nanos, Ordering::Relaxed);
     }
 
     /// Its reported writes so far: the consumer's and named, each count and bytes, and the
-    /// nanoseconds spent.
-    fn reports(&self) -> [u64; 5] {
+    /// nanoseconds spent on the waiters, the handlers' thread and any other.
+    fn reports(&self) -> [u64; 7] {
         let load = |a: &AtomicU64| a.load(Ordering::Relaxed);
         [
             load(&self.told[0]),
             load(&self.told_bytes[0]),
             load(&self.told[1]),
             load(&self.told_bytes[1]),
-            load(&self.told_nanos),
+            load(&self.told_nanos[Thread::Waiter as usize]),
+            load(&self.told_nanos[Thread::Handlers as usize]),
+            load(&self.told_nanos[Thread::Other as usize]),
         ]
     }
 
@@ -648,7 +671,8 @@ fn frames(round: usize, shape: Shape, form: Form, len: usize) {
         "SHADOW-SYNC on {}: round {round}, {shape:?}, {named}: commit_and_submit {} us, commit to \
          submitted {} us, GPU {} us, GPU end to completed handler {} us, commit to completion {} \
          us, process CPU {} us; per frame: {}; log told {:.2} writes ({:.0} bytes) as the \
-         consumer's, {:.2} ({:.0} bytes) named, {:.0} us in the log",
+         consumer's, {:.2} ({:.0} bytes) named; in the log {:.0} us on the queue waiters, {:.0} us \
+         on the handlers' thread, {:.0} us on others",
         device.name(),
         median_p90(commits),
         median_p90(submits),
@@ -662,6 +686,8 @@ fn frames(round: usize, shape: Shape, form: Form, len: usize) {
         told[2],
         told[3],
         told[4] / 1e3,
+        told[5] / 1e3,
+        told[6] / 1e3,
     );
     drop((surface, sampled, buffer, private, target));
     drop(mapping);
