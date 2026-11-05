@@ -67,6 +67,7 @@ use super::{
 };
 use crate::amplification::Amplification;
 use crate::argument_table::ArgumentTable;
+use crate::binding::BindMemo;
 use crate::command_buffer::CommandBuffer;
 use crate::encoder::EncoderCore;
 use crate::error::{internal, vulkan, Error};
@@ -74,6 +75,7 @@ use crate::indirect_command_buffer::Reader;
 use crate::kept_commands::{
     self, Kept, KeptChunk, KeptContext, KeptEffects, ResidentKey, ResidentMet, Resolution,
 };
+use crate::live_bind::LiveBind;
 use crate::pipeline::{BufferForms, RenderPipelineState};
 use crate::render::{memoryless, RenderLowering};
 use crate::render_pass::PassLayout;
@@ -88,7 +90,7 @@ use metal2vulkan::metal::IndirectCommandType;
 use std::collections::BTreeSet;
 use std::ops::Range;
 use std::sync::atomic::Ordering;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 /// What a chunk of an execution's draws is recorded from beside its records (the module docs).
@@ -166,6 +168,13 @@ pub(super) struct Keeping {
     kept: Vec<Kept>,
     read_at: Option<u64>,
 }
+
+/// The bind state and bind memo a chunk recorded apart starts from (`live_bind.rs`,
+/// `binding::BindMemo`): those the chunk before it left, the first chunk's the device's spares'.
+/// An execution's chunks share one residency, so a chunk's first draw lists its used resources
+/// again only where the one before it did not list them (a render encoder's first draw lists the
+/// residency's whole: thousands of resources).
+type Carried = (Arc<Mutex<LiveBind>>, BindMemo);
 
 /// A chunk recorded apart: its encoder after its commands, the addresses they named and what
 /// they resolved to, the no-copy buffers' moves before it read its records, whether a command
@@ -315,7 +324,9 @@ impl RenderExecution {
             self.read_at.store(read_at, Ordering::Release);
         }
         let layout = rendered.backing(&self.snapshot.layout)?;
-        let counts = &device.shared().counts;
+        let shared = device.shared();
+        let counts = &shared.counts;
+        let mut carried = Some((shared.live_binds.take(), shared.bind_memos.take()));
         let mut met = ResidentMet::default();
         let mut draws = Vec::new();
         let mut rest = None;
@@ -372,10 +383,11 @@ impl RenderExecution {
             }
             let reached = command_buffer.own_reached();
             let mut chunk_found = Found::default();
+            let start = carried.take().unwrap_or_default();
             let apart = self.record_apart(
                 (command_buffer, residency),
                 (covered.clone(), step),
-                (&storage, &layout),
+                (&storage, &layout, start),
                 &mut chunk_found,
             );
             if context.is_some() {
@@ -398,7 +410,8 @@ impl RenderExecution {
                 break;
             }
             let raw = encoder.current.draws;
-            let capture = self.end_apart(encoder, &device)?;
+            let (capture, back) = self.end_apart(encoder, &device)?;
+            carried = Some(back);
             let captured = capture.finish_capture()?;
             let held = captured.retained.all_shared();
             let keeps = captured.plain() && !released && command_buffer.own_reached() == reached;
@@ -427,6 +440,10 @@ impl RenderExecution {
             found.misses = found.misses.wrapping_add(chunk_found.misses);
             found.faults = ReplayFaults(found.faults.0 | chunk_found.faults.0);
             draws.push(raw);
+        }
+        if let Some((live, memo)) = carried {
+            shared.live_binds.give(live);
+            shared.bind_memos.give(memo);
         }
         let Some((mut encoder, from, chunk_found)) = rest else {
             let run = Run {
@@ -488,14 +505,15 @@ impl RenderExecution {
 
     /// Record commands `covered` apart (the module docs): through an encoder of the call's state
     /// over a core of its own into a secondary of its own, begun against the instance's
-    /// compatible pass, over the pass's `storage`, in `layout`, the call's; what their draws found
-    /// noted into `found`. From the CPU's records, or for a host step (`step`) from a copy of the
-    /// records as the GPU and the CPU left them, which it keeps.
+    /// compatible pass, over the pass's `storage`, in `layout`, the call's, from the bind state
+    /// `carried` holds; what their draws found noted into `found`. From the CPU's records, or for
+    /// a host step (`step`) from a copy of the records as the GPU and the CPU left them, which it
+    /// keeps.
     fn record_apart(
         &self,
         (command_buffer, residency): (&CommandBuffer, &Residency),
         (covered, step): (Range<u32>, bool),
-        (storage, layout): (&PassStorage, &PassLayout),
+        (storage, layout, carried): (&PassStorage, &PassLayout, Carried),
         found: &mut Found,
     ) -> Result<Apart, Error> {
         let snapshot = &self.snapshot;
@@ -527,6 +545,7 @@ impl RenderExecution {
             (storage.clone(), layout.clone(), residency),
             forms,
         );
+        (encoder.live, encoder.bind_memo) = carried;
         self.replay(&mut encoder, commands, residency, found)?;
         Ok(Apart {
             encoder,
@@ -546,24 +565,32 @@ impl RenderExecution {
         }
     }
 
-    /// End a plain chunk's encoder: its secondary ended. Its core back.
+    /// End a plain chunk's encoder: its secondary ended. Its core back, and the bind state the
+    /// next chunk starts from, its encoder ended (`LiveBind::end_encoder`).
     fn end_apart(
         &self,
         encoder: RenderLowering,
         device: &crate::Device,
-    ) -> Result<EncoderCore, Error> {
+    ) -> Result<(EncoderCore, Carried), Error> {
         let raw = device.shared().vk();
         let RenderLowering {
             core,
             current,
             mut visibility,
+            mut live,
+            bind_memo,
             ..
         } = encoder;
         visibility.end(raw, current.draws);
         visibility.close_spares(raw, current.draws);
         // SAFETY: only this recording records the secondary command buffer.
         unsafe { core.command_buffer().end_raw(current.draws) }.map_err(vulkan)?;
-        Ok(core)
+        // No draw holds it once its encoder ended; one that did leaves the next chunk a new one.
+        match Arc::get_mut(&mut live).map(Mutex::get_mut) {
+            Some(Ok(state)) => state.end_encoder(),
+            Some(Err(_)) | None => live = Arc::default(),
+        }
+        Ok((core, (live, bind_memo)))
     }
 
     /// The addresses `commands` name (their buffers', where the buffer does not inherit them,

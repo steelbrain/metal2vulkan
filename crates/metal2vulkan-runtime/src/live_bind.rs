@@ -426,6 +426,13 @@ impl ReadFrom {
 }
 
 impl LiveBind {
+    /// Its encoder ended: what its draws settled, and the shadows' copies listed, go with the
+    /// encoder (the module docs), so the next encoder may start from it.
+    pub(super) fn end_encoder(&mut self) {
+        self.forget_settles();
+        self.shadows.let_go();
+    }
+
     /// Start a draw through `interface` from the state that pipeline state's last draw left, where
     /// one is set aside: it and the state in place change places. Where none is, the state in
     /// place changes places with the one set aside longest, which the draw starts from. Both are
@@ -593,11 +600,8 @@ impl SpareLiveBinds {
             return;
         };
         cell.clear_poison();
-        // What its draws settled, and the shadows' copies listed, go with the encoder (the module
-        // docs).
         if let Ok(state) = cell.get_mut() {
-            state.forget_settles();
-            state.shadows.let_go();
+            state.end_encoder();
         }
         let mut spare = lock(&self.0);
         if spare.len() < SPARE_LIVE_BINDS {
