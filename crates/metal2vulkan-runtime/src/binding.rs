@@ -2443,7 +2443,9 @@ pub(crate) fn kept_resident_checks() -> u64 {
 struct ResidentOf {
     plan: Weak<BindingPlan>,
     generation: Option<u64>,
-    compared: Vec<(Weak<BindingPlan>, bool)>,
+    /// Held in place, so a command that switches plan allocates nothing for them: one whose
+    /// plan lists other uses makes its uses again, and its own `ResidentOf`.
+    compared: [Option<(Weak<BindingPlan>, bool)>; COMPARED_PLANS],
 }
 
 /// The most plans a [`ResidentOf`] keeps compared with its own: draws of one pipeline state whose
@@ -2464,12 +2466,13 @@ impl ResidentOf {
         if self.plan.as_ptr() == at {
             return true;
         }
-        if let Some(&(_, alike)) = self.compared.iter().find(|(of, _)| of.as_ptr() == at) {
+        let found = (self.compared.iter().flatten()).find(|(of, _)| of.as_ptr() == at);
+        if let Some(&(_, alike)) = found {
             return alike;
         }
         let alike = (self.plan.upgrade()).is_some_and(|made| made.uses == plan.uses);
-        if self.compared.len() < COMPARED_PLANS {
-            self.compared.push((Arc::downgrade(plan), alike));
+        if let Some(free) = self.compared.iter_mut().find(|slot| slot.is_none()) {
+            *free = Some((Arc::downgrade(plan), alike));
         }
         alike
     }
@@ -2509,7 +2512,7 @@ fn uses_into(
             into.of = kept.map(|plan| ResidentOf {
                 plan: Arc::downgrade(plan),
                 generation,
-                compared: Vec::new(),
+                compared: Default::default(),
             });
             // Kept from one command to the next alone, so the identity of those kept alone
             // (none where there are none: `prefix` reads it only where there are some).
