@@ -1768,12 +1768,17 @@ pub enum PrecisionNote {
     /// [`DriverDeviation::MetalHalfConversion`](crate::error::DriverDeviation::MetalHalfConversion)
     /// (MoltenVK on the Apple M3 Max's macOS 27 identity) where every `half` the module rounds
     /// through the conversion is a conversion of a `float` the function holds (an AIR `fptrunc` or
-    /// `air.convert` from `float`, whatever computed the `float`) or of a texel an image instruction
-    /// hands back, measured to answer Metal's there; the module then requires
-    /// `VkProperty::MetalHalfConversion`. A `half` operation or function the module computes in
-    /// `float` and rounds keeps it there too (Metal's `half` `tanh` answers 7 of the 65,536
-    /// `half`s otherwise than the conversion of its `float` `tanh`), as do a texel the module
-    /// decodes itself and every other rounding (`lower::arith::narrow::rounds_unmeasured`).
+    /// `air.convert` from `float`, whatever computed the `float`) or of a texel's value, measured to
+    /// answer Metal's `half(float)` there; the module then requires
+    /// `VkProperty::MetalHalfConversion`. A texel's value is an image instruction's texel, a texel
+    /// the module decodes itself (an extended-range, padded or bfloat code) or a merge of texels (a
+    /// heap read's fetched texel and its decode routine's): where Metal's `half` texel is not that
+    /// rounding of the value, the access records its own note ([`PrecisionNote::HalfTexelConversion`],
+    /// outright for a heap element; [`PrecisionNote::DevicePackConversion`] for a decoded texel). A
+    /// `half` operation or function the module computes in `float` and rounds keeps this note
+    /// there (Metal's `half` `tanh` answers 7 of the 65,536 `half`s otherwise than the conversion
+    /// of its `float` `tanh`), as does every other rounding
+    /// (`lower::arith::narrow::rounds_unmeasured`).
     ///
     /// Every `half` a module reads from its bits (a load, a reinterpretation, a texel's bits) is
     /// the device's widening of them, on every device: an `OpFConvert` to 32 bits of the bits read

@@ -38,8 +38,14 @@
 //! `HEAP-SAMPLE-DIFFERS` line. A command whose function samples such a texture otherwise (a mip
 //! filter, a `half` gather, a runtime sampler with a mip filter) is refused at bind, printed on a
 //! `HEAP-SAMPLE-REFUSED` line.
+//!
+//! A `half` read through an argument buffer of every code of such a texture is the device's `float`
+//! read of it rounded to the nearest even `half`, and the slot's `half` read, where the stage
+//! records no `PrecisionNote::NativeHalfConversion`, which it does not where the profile takes
+//! `DriverDeviation::MetalHalfConversion` ([`heap_half_reads_of_every_code_round_their_float`]).
 
 use super::degrade_notices::on_device;
+use super::half_conversions;
 use super::host_memory::{not_importable, Mapping, GUEST_PAGE};
 use super::Messages;
 use super::{buffer_with, read_buffer};
@@ -1087,5 +1093,115 @@ fn heap_rgbx_reads_are_the_slot_s() {
         );
         assert!(tally.checked > 0);
         assert_eq!(tally.differ, 0, "heap reads differ from the slot's");
+    });
+}
+
+/// A 256 x 256 texture of `format` (texels of `bytes` bytes, one level) whose texel `n` holds
+/// `n` in each of its 16-bit units: every code of each of the format's channels, whether a
+/// channel is a 16-bit unit (a bfloat code, a 10-bit code in its 16-bit container) or a 10-bit
+/// field of a packed 32-bit word (`BGR10_XR`'s, at bits 0, 10 and 20).
+fn every_code(device: &Device, format: PixelFormat, bytes: u64) -> Result<Texture, Error> {
+    let mut descriptor = TextureDescriptor::texture_2d(format, 256, 256, false);
+    descriptor.usage = TextureUsage::SHADER_READ;
+    descriptor.resource_options = ResourceOptions::shared();
+    let texture = device.new_texture(&descriptor)?;
+    let units = bytes / 2;
+    let texels: Vec<u8> = (0..=u16::MAX)
+        .flat_map(|n| (0..units).flat_map(move |_| n.to_le_bytes()))
+        .collect();
+    texture
+        .replace_region(
+            Region::new_2d(0, 0, 256, 256),
+            0,
+            0,
+            &texels,
+            256 * bytes,
+            0,
+        )
+        .unwrap();
+    Ok(texture)
+}
+
+/// A `half` read through an argument buffer of every code of each texture a heap holds by its raw
+/// texels alone ([`RAW_HELD`], [`every_code`]) is the device's `float` read of the same texel
+/// rounded to the nearest even `half` (`half_conversions::half_of`, Metal's `half(float)`), each
+/// lane bit for bit (a NaN a NaN), and the slot's `half` read, where the heap read's stage records
+/// no `PrecisionNote::NativeHalfConversion`: the device's conversion of the decoded texel's
+/// `float` (`narrow::round_texel`). Where the profile takes `DriverDeviation::MetalHalfConversion`
+/// (`VkProperty::MetalHalfConversion`; MoltenVK on the Apple M3 Max's macOS 27 identity) the
+/// stage records no such note. A lane that differs where the stage records it is counted on a
+/// `HEAP-HALF-ROUNDING` line. The padded formats, whose creation the runtime refuses, never reach
+/// a read.
+#[test]
+fn heap_half_reads_of_every_code_round_their_float() {
+    use metal2vulkan::device::VkProperty;
+    on_device(|device, _| {
+        let measured = device
+            .compile_device()
+            .profile()
+            .enabled()
+            .properties
+            .contains(&VkProperty::MetalHalfConversion);
+        let notes = stage_notes(device, true, Texel::Half);
+        let noted = notes.contains(&PrecisionNote::NativeHalfConversion);
+        assert!(
+            !measured || !noted,
+            "NativeHalfConversion recorded where the profile takes MetalHalfConversion: {notes:?}"
+        );
+        let lanes: Vec<[u32; 4]> = (0..256u32 * 256)
+            .map(|i| [i % 256, i / 256, 0, 0])
+            .collect();
+        let float_heap = pipeline(device, true, Texel::Float);
+        let half_heap = pipeline(device, true, Texel::Half);
+        let half_slot = pipeline(device, false, Texel::Half);
+        let mut checked = 0;
+        for (format, bytes) in RAW_HELD {
+            let texture =
+                every_code(device, format, bytes).unwrap_or_else(|e| panic!("{format:?}: {e}"));
+            let read = |state: &ComputePipelineState, heap: bool| {
+                dispatch_with(device, (state, heap), (&texture, None), &lanes)
+                    .unwrap_or_else(|e| panic!("{format:?}: {e}"))
+            };
+            let (floats, halves, slot) = (
+                read(&float_heap, true),
+                read(&half_heap, true),
+                read(&half_slot, false),
+            );
+            let mut differ = 0;
+            for (i, ((f, h), s)) in floats.iter().zip(&halves).zip(&slot).enumerate() {
+                for c in 0..4 {
+                    let (f, h) = (f32::from_bits(f[c]), f32::from_bits(h[c]));
+                    let same = match f.is_nan() {
+                        true => h.is_nan(),
+                        false => {
+                            !h.is_nan()
+                                && half_conversions::half_of(h) == half_conversions::half_of(f)
+                        }
+                    };
+                    let slot_same =
+                        s[c] == f32::to_bits(h) || (h.is_nan() && f32::from_bits(s[c]).is_nan());
+                    if same && slot_same {
+                        continue;
+                    }
+                    assert!(
+                        noted,
+                        "{format:?} texel {i} channel {c}: heap half {h:?} ({:#010x}), its float \
+                         {f:?} ({:#010x}), the slot's half {:#010x} (notes {notes:?})",
+                        h.to_bits(),
+                        f.to_bits(),
+                        s[c]
+                    );
+                    differ += 1;
+                }
+            }
+            checked += 4 * lanes.len();
+            println!(
+                "HEAP-HALF-ROUNDING {} {format:?}: {differ} of {} channels not the float's nearest \
+                 even half, note {noted}",
+                device.name(),
+                4 * lanes.len()
+            );
+        }
+        assert!(checked > 0);
     });
 }
