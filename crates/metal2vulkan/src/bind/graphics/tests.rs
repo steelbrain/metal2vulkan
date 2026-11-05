@@ -1543,6 +1543,7 @@ fn mesh_template(flat: bool, multiples: Vec<u32>) -> GraphicsTemplate {
             },
             object: None,
             folded: false,
+            partial_groups: false,
             records: None,
         }),
         shader_tests: None,
