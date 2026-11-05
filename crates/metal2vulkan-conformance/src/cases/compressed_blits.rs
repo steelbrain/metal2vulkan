@@ -674,18 +674,18 @@ impl Case for CompressedBlits {
             crate::replay::notice_allowance(Degradation::ShadowedTexture.code()),
         ];
         allowances.extend(kept_encoding_notice(self.format().format.as_raw()));
-        // On a venue that presents no texture compression no texture is compressed, so the
-        // runtime writes no `BGRA10_XR` texel in Metal's canonical encoding, even under the suite's
-        // exact policy, and each site a blit reaches through the compressed texture holds the
-        // bytes the device's copy kept ([`COMPRESSED_SITES`]). Expected, not yet run on such a
-        // venue. The other two formats' blits write no canonical encoding of the runtime's own.
-        if self.format().note == Degradation::ExtendedRangeBitsKept {
-            allowances.extend(
-                COMPRESSED_SITES
-                    .iter()
-                    .map(|site| crate::replay::without_compression(site)),
-            );
-        }
+        // On a venue that presents no texture compression no texture is compressed: Metal's own
+        // uncompressed texture keeps its bytes through every blit, so each site a blit reaches
+        // through the texture the recording's Mac compressed holds the bytes the device's copy
+        // kept ([`COMPRESSED_SITES`]), where the recording holds the compressor's canonical
+        // encoding, and the runtime announces no note for it and, under the suite's exact policy,
+        // rewrites no `BGRA10_XR` texel. Every format's: the RTX 5080's run differs at exactly
+        // these seven sites for each.
+        allowances.extend(
+            COMPRESSED_SITES
+                .iter()
+                .map(|site| crate::replay::without_compression(site)),
+        );
         allowances
     }
 
@@ -759,15 +759,13 @@ mod tests {
             }
             let allowances = case.allowances();
             // The value declarations of a venue without the compression, at the sites a blit
-            // reaches through it, of the formats whose canonical encoding the runtime writes.
+            // reaches through the texture the recording's Mac compressed, for every format.
             let venue: Vec<_> = (allowances.iter())
                 .filter(|allowance| {
                     matches!(allowance.justified_by, Justification::WithoutCompression(_))
                 })
                 .collect();
-            let extended = note == Degradation::ExtendedRangeBitsKept;
-            let sites = if extended { COMPRESSED_SITES.len() } else { 0 };
-            assert_eq!(venue.len(), sites, "{}", case.name());
+            assert_eq!(venue.len(), COMPRESSED_SITES.len(), "{}", case.name());
             for (allowance, site) in venue.iter().zip(COMPRESSED_SITES) {
                 assert_eq!(**allowance, crate::replay::without_compression(site));
             }
