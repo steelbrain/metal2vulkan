@@ -417,6 +417,7 @@ const HEAP_COLORS: DriverFact = DriverFact::ColorImagesLieAsMetalHeapTextures;
 const HEAP_MULTISAMPLE_COLORS: DriverFact =
     DriverFact::MultisampleColorImagesLieAsMetalHeapTextures;
 const LINE_TIES: DriverFact = DriverFact::LineTiesAreMetals;
+const SUBPIXEL_SNAP: DriverFact = DriverFact::SubpixelSnapIsMetals;
 
 /// Each committed profile's driver has the runtime's driver facts its rows name, on its vendor and
 /// GPU, at its release as at any other.
@@ -553,6 +554,7 @@ fn the_committed_profiles_drivers_have_their_facts() {
                 HEAP_COLORS,
                 HEAP_MULTISAMPLE_COLORS,
                 LINE_TIES,
+                SUBPIXEL_SNAP,
             ],
         ),
         ("nvidia-pascal-linux", vec![DENORMALS, PLANES]),

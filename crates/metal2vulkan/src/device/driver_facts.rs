@@ -1514,6 +1514,15 @@ pub enum DriverFact {
     /// over it. On a driver without it the runtime announces `device-line-ties` at each draw whose
     /// lines or edges the device's lines draw at width 1 (`render/line_width.rs`).
     LineTiesAreMetals,
+    /// The driver's rasterizer snaps a vertex half a step off its 1/256-pixel subpixel grid as
+    /// Metal snaps a line's endpoint there: up. The runtime's band of a line or an edge
+    /// (`pipeline::link::band`) places its corners at the endpoint offset by a multiple of 1/32
+    /// pixel and leaves their snap to the rasterizer, where Metal snaps the endpoint first and
+    /// then offsets it: the two agree on the grid, and at a half step only where the driver
+    /// rounds it up. Vulkan leaves the rounding to the implementation. On a driver without it
+    /// the runtime announces `device-subpixel-snap` at each draw whose lines or edges the band
+    /// draws (`render/line_width.rs`).
+    SubpixelSnapIsMetals,
 }
 
 impl DriverFact {
@@ -1994,6 +2003,14 @@ const DYNAMIC_RESTART_WARNING: DriverDiagnostic = DriverDiagnostic {
 /// such a vertex (3.5, 1.0), which Metal covers, so it does not take the fact. Every other driver
 /// is unmeasured.
 ///
+/// `SubpixelSnapIsMetals`, measured by `runtime_lane::line_widths` (Metal's maps of the probe's
+/// lines at widths 0 and 1/16 offset from rows and columns of centres by `(r - 32) / 512` pixel,
+/// half of them half a step off the grid, which the band draws): MoltenVK 1.4.2 on the M3 Max
+/// under macOS 27.0.1, every map Metal's. NVIDIA's 615.71.09 on the RTX 5080 Laptop GPU and
+/// lavapipe (llvmpipe on LLVM 23.1.1, Mesa 26.2.4) both draw the rows' map a row lower than
+/// Metal's (rows 18 to 49 where Metal draws 17 to 48), as a half step rounded down gives, so
+/// neither takes the fact. Every other driver is unmeasured.
+///
 /// MoltenVK 1.4.2 on the M3 Max under macOS 27.0.1 (2026-10-21, the runtime lanes in release
 /// builds under `--cfg m2v_gpu`, each fact taken):
 /// - Measured by the lane that measured its 1.4.1 row, which passed: `DepthImageKeepsDenormals`
@@ -2384,6 +2401,10 @@ pub(crate) const MEASURED: &[Measured<DriverFact>] = &[
     Measured {
         device: Some(APPLE9),
         ..moltenvk_on_apple(DriverFact::LineTiesAreMetals)
+    },
+    Measured {
+        device: Some(APPLE9),
+        ..moltenvk_on_apple(DriverFact::SubpixelSnapIsMetals)
     },
 ];
 

@@ -38,7 +38,12 @@
 //! at width 1 on a driver not measured to break a tie at a vertex two pixels' diamonds share as
 //! Metal does (`DriverFact::LineTiesAreMetals`: the RTX 5080 Laptop GPU draws the lane's strip's
 //! diagonal a row higher, and lavapipe, Mesa 26.2.4, leaves out its first pixel) is announced
-//! (`device-line-ties`) and left unchecked, and only there.
+//! (`device-line-ties`) and left unchecked, and only there. A draw the band draws on a driver not
+//! measured to snap a vertex half a step off its 1/256-pixel subpixel grid as Metal snaps a line's
+//! endpoint (`DriverFact::SubpixelSnapIsMetals`: the RTX 5080 Laptop GPU and lavapipe draw the
+//! lines offset from rows of centres by `(r - 32) / 512` a row lower) is announced
+//! (`device-subpixel-snap`) and, where a vertex lies half a step off the grid, left unchecked;
+//! every other such case is compared as any other.
 //! Nothing is refused. A draw of
 //! no complete primitive (the consumer's triangles of 1 and 2 vertices, by vertices and by
 //! indices, under the last provoking vertex) draws nothing and takes no route. Not covered:
@@ -80,6 +85,11 @@ pub(super) const WIDE_LINES: [Degradation; 3] = [
 /// a tie at a vertex two pixels' diamonds share as Metal does
 /// (`DriverFact::LineTiesAreMetals`).
 pub(super) const LINE_TIES: [Degradation; 1] = [Degradation::DeviceLineTies];
+
+/// The kind a draw the band draws announces on a driver not measured to snap a vertex half a step
+/// off its 1/256-pixel subpixel grid as Metal snaps a line's endpoint
+/// (`DriverFact::SubpixelSnapIsMetals`).
+pub(super) const SUBPIXEL_SNAP: [Degradation; 1] = [Degradation::DeviceSubpixelSnap];
 
 /// What a lane's draw of the device's lines at width 1 announces on `device`: [`LINE_TIES`] where
 /// its driver lacks `DriverFact::LineTiesAreMetals`, nothing where it has it.
@@ -203,6 +213,9 @@ struct LineFacts {
     exact_policy: bool,
     /// The driver breaks a tie at a vertex two pixels' diamonds share as Metal does.
     ties: bool,
+    /// The driver snaps a vertex half a step off its subpixel grid as Metal snaps a line's
+    /// endpoint.
+    snaps: bool,
 }
 
 impl LineFacts {
@@ -220,6 +233,7 @@ impl LineFacts {
             parallelograms: limits.non_strict_wide_lines_use_parallelogram,
             exact_policy: compile.policy().wide_lines == WideLinePolicy::Exact,
             ties: (device.properties().driver_facts).contains(&DriverFact::LineTiesAreMetals),
+            snaps: (device.properties().driver_facts).contains(&DriverFact::SubpixelSnapIsMetals),
         }
     }
 
@@ -1332,14 +1346,17 @@ struct Found {
     /// Cases the device's lines drew at width 1 on a driver whose ties are not measured to be
     /// Metal's, announced (`device-line-ties`): left unchecked.
     ties: usize,
+    /// Cases the band drew with a vertex half a step off the subpixel grid on a driver whose snap
+    /// is not measured to be Metal's, announced (`device-subpixel-snap`): left unchecked.
+    snaps: usize,
     /// The device's lines.
     facts: Option<LineFacts>,
 }
 
 /// The notices among `messages`' since the last take: the `DeviceWideLines`,
-/// `LinesAtNearestWidth`, `WideEdgeDepthBias` and `DeviceLineTies` ones, and the reasons of the
-/// nearest-width ones.
-fn announced_lines(messages: &Messages) -> ([usize; 4], Vec<String>) {
+/// `LinesAtNearestWidth`, `WideEdgeDepthBias`, `DeviceLineTies` and `DeviceSubpixelSnap` ones, and
+/// the reasons of the nearest-width ones.
+fn announced_lines(messages: &Messages) -> ([usize; 5], Vec<String>) {
     let notices = messages.take_notices();
     let notices: Vec<_> = notices
         .iter()
@@ -1352,7 +1369,28 @@ fn announced_lines(messages: &Messages) -> ([usize; 4], Vec<String>) {
         .map(|n| n.reason.clone())
         .collect();
     let [wide, nearest, biased] = WIDE_LINES.map(count);
-    ([wide, nearest, biased, count(LINE_TIES[0])], reasons)
+    let [ties, snaps] = [LINE_TIES[0], SUBPIXEL_SNAP[0]].map(count);
+    ([wide, nearest, biased, ties, snaps], reasons)
+}
+
+/// Whether a vertex of `shot`'s draws lies half a 1/256-pixel step off the subpixel grid, in the
+/// framebuffer of `shot.side` pixels a side: an odd multiple of 1/512 pixel, where the band's
+/// corners, snapped by the device's rasterizer, can lie a step from Metal's.
+fn half_step_vertex(shot: &Shot) -> bool {
+    let half_side = shot.side as f32 / 2.0;
+    let half_step = |p: f32| {
+        let steps = p * 512.0;
+        steps == steps.round() && (steps as i64).rem_euclid(2) == 1
+    };
+    (shot.encoders.iter().flatten()).any(|draw| {
+        draw.points.iter().any(|&[x, y]| {
+            let [x, y] = match draw.clip {
+                true => [(x + 1.0) * half_side, (1.0 - y) * half_side],
+                false => [x, y],
+            };
+            half_step(x) || half_step(y)
+        })
+    })
 }
 
 /// The draws of each route between two work counts: the band's, the device's lines' at Metal's
@@ -1405,7 +1443,9 @@ fn printed(drawn: &Drawn, shot: &Shot, check: Check, blocks: &[String]) -> Vec<S
 /// a depth bias that can differ from Metal's, where the device's lines draw it at another width
 /// than Metal's, compared with Metal's map at width 1 where that width is 1, or where they draw it
 /// at width 1 on a driver whose ties are not measured to be Metal's, `device-line-ties`, announced
-/// exactly there); and each draw at a width other than 1 counted by a route. Nothing is refused.
+/// exactly there, or where the band draws a vertex half a step off the subpixel grid on a driver
+/// whose snap is not measured to be Metal's, `device-subpixel-snap`, announced at every band
+/// draw there); and each draw at a width other than 1 counted by a route. Nothing is refused.
 fn run(policy: DevicePolicy) -> Found {
     let cache = ScratchCache::new().unwrap();
     let messages = Messages::default();
@@ -1413,7 +1453,10 @@ fn run(policy: DevicePolicy) -> Found {
     {
         let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), |options| {
             options.policy = policy;
-            options.announce_each = WIDE_LINES.into_iter().chain(LINE_TIES).collect();
+            options.announce_each = (WIDE_LINES.into_iter())
+                .chain(LINE_TIES)
+                .chain(SUBPIXEL_SNAP)
+                .collect();
         })
         .unwrap();
         let facts = LineFacts::of(&device);
@@ -1472,7 +1515,8 @@ fn run(policy: DevicePolicy) -> Found {
             bands += band;
             device_lines += own;
             nearest_lines += nearest;
-            let ([announced, announced_nearest, biased, ties], _) = announced_lines(&messages);
+            let ([announced, announced_nearest, biased, ties, snaps], _) =
+                announced_lines(&messages);
             assert_eq!(
                 band + own + nearest,
                 shot.wide_draws(),
@@ -1502,6 +1546,19 @@ fn run(policy: DevicePolicy) -> Found {
                 );
                 found.ties += 1;
                 continue;
+            }
+            // The band's draws are announced on a driver without the fact, and nowhere else; a
+            // case of a vertex half a step off the grid is left unchecked there, every other one
+            // is Metal's.
+            if snaps > 0 {
+                assert!(
+                    band > 0 && !facts.snaps,
+                    "{name}: {key}: a subpixel snap notice"
+                );
+                if half_step_vertex(shot) {
+                    found.snaps += 1;
+                    continue;
+                }
             }
             if announced > 0 {
                 found.announced += 1;
@@ -1578,8 +1635,9 @@ fn run(policy: DevicePolicy) -> Found {
                 };
                 first_last.push((first, last));
             }
+            // Their endpoints lie on the subpixel grid, so a band's snap notice leaves them Metal's.
             match announced_lines(&messages).0 {
-                [_, _, _, ties] if ties > 0 => {
+                [_, _, _, ties, _] if ties > 0 => {
                     assert!(
                         !facts.ties,
                         "{name}: width {width}: line ties announced with the fact"
@@ -1587,8 +1645,8 @@ fn run(policy: DevicePolicy) -> Found {
                     found.ties += 1;
                     continue;
                 }
-                [0, 0, 0, _] => {}
-                [_, 0, _, _] => {
+                [0, 0, 0, _, _] => {}
+                [_, 0, _, _, _] => {
                     found.announced += 1;
                     continue;
                 }
@@ -1604,12 +1662,23 @@ fn run(policy: DevicePolicy) -> Found {
         }
         found.cases = cases.len() + quantized.len();
         assert_eq!(
-            found.matched + found.announced + found.biased + found.nearest + found.ties,
+            found.matched
+                + found.announced
+                + found.biased
+                + found.nearest
+                + found.ties
+                + found.snaps,
             found.cases,
             "{found:?}"
         );
-        // The width-1 cases announce the driver's ties exactly where it lacks the fact.
+        // The width-1 cases announce the driver's ties exactly where it lacks the fact, and the
+        // band's half-step cases its snap, where the band draws them.
         assert_eq!(found.ties > 0, !facts.ties, "{found:?}");
+        if facts.snaps || !tessellates {
+            assert_eq!(found.snaps, 0, "{found:?}");
+        } else {
+            assert!(found.snaps > 0, "{found:?}");
+        }
         // Every measured map was drawn, but those the lane leaves to other lanes.
         let undrawn: Vec<&str> = (blocks.keys())
             .filter(|key| !accounted.contains(*key))
@@ -1656,7 +1725,7 @@ fn wide_lines_draw_metal_s_parallelograms() {
     if facts.tessellates && found.announced == 0 {
         assert_eq!(
             found.matched,
-            found.cases - found.biased - found.ties,
+            found.cases - found.biased - found.ties - found.snaps,
             "{found:?}"
         );
         assert!(found.edges_matched > 0, "{found:?}");
@@ -1678,7 +1747,7 @@ fn wide_lines_draw_metal_s_parallelograms_under_exact_answers() {
         assert_eq!((found.announced, found.nearest), (0, 0), "{found:?}");
         assert_eq!(
             found.matched,
-            found.cases - found.biased - found.ties,
+            found.cases - found.biased - found.ties - found.snaps,
             "{found:?}"
         );
         assert_eq!(found.edges_matched + found.biased, found.edges, "{found:?}");

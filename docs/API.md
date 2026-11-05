@@ -2951,6 +2951,19 @@ bound.
   through a vertex two pixels' diamonds share covers the pixel the device chooses, where Metal
   covers the lower one, so such a pixel, and the rest of a line that runs along such vertices, can
   lie a row or a column from Metal's.
+- `metal2vulkan-degrade-device-subpixel-snap` (precision). `DeviceSubpixelSnap`: A draw whose
+  lines, or a triangle's edges in fill mode `Lines`, the runtime's band draws (a width other than 1
+  that the device's own lines do not draw as Metal's), on a driver without
+  `DriverFact::SubpixelSnapIsMetals` (measured: MoltenVK on the M3 Max). Metal snaps a line's
+  endpoints to 1/256 pixel, a half step rounded up, then offsets them by half the width; the band
+  offsets them and leaves its corners' snap to the device's rasterizer, whose rounding of a half
+  step Vulkan leaves to the implementation. The two agree but where an endpoint lies half a step off
+  the grid (on NVIDIA's 615.71.09 on the RTX 5080 Laptop GPU and on lavapipe, lines offset from
+  rows of centres by odd multiples of 1/512 pixel draw a row lower, as a half step rounded down
+  gives). Cost: a line's band whose
+  endpoint lies half a 1/256-pixel step off the subpixel grid is snapped the way the device rounds,
+  where Metal rounds the endpoint up, so a pixel whose centre lies within that half step of the
+  band's edge can be drawn, or left out, a row or a column from Metal's.
 - `metal2vulkan-degrade-provoking-vertex-lines` (precision). `ProvokingVertexLines`: A draw of
   lines, or an emulated mesh draw of lines, under Apple's last provoking vertex
   (`setProvokingVertexMode:` 1), of a pipeline state that reads it (a flat input, or a slice or

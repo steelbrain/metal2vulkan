@@ -33,7 +33,9 @@
 //!   `(sx, sy)` the draw pushes beside `h` (`PushField::LineBand`, the stage's own push range). The
 //!   rasterizer snaps each corner to the device's subpixel grid, where Metal snaps the endpoints to
 //!   1/256 pixel and then offsets them: on a grid of 1/256 the two agree, `h` being a multiple of
-//!   1/32 pixel.
+//!   1/32 pixel, but for an endpoint half a step off the grid, which Metal rounds up and the
+//!   device's rasterizer as it rounds (`DriverFact::SubpixelSnapIsMetals`; the runtime announces
+//!   the band's draws on a driver without it).
 //!
 //! A line's corner `(u, v)` lies at endpoint `u` (0 the first, 1 the second), offset by `(2v - 1)
 //! h`, so the two triangles cover the parallelogram exactly and wind alike in every direction

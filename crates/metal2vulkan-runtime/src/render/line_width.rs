@@ -67,7 +67,12 @@
 //!   either way, and a triangle rotated faces alike. The band's depth bias is the device's, of
 //!   each of its triangles' own slope and depths, where Metal's is the triangle's: a draw of
 //!   edges as the band under a slope factor, or a constant factor over a float depth, is announced
-//!   (`Degradation::WideEdgeDepthBias`).
+//!   (`Degradation::WideEdgeDepthBias`). The band's corners, its endpoints offset by a multiple of
+//!   1/32 pixel, are snapped by the device's rasterizer, where Metal snaps the endpoints first: the
+//!   two agree but for an endpoint half a 1/256-pixel step off the grid, which Metal rounds up and
+//!   the device as it rounds, so a draw the band draws on a driver not measured to round it up
+//!   (`DriverFact::SubpixelSnapIsMetals`) is announced (`Degradation::DeviceSubpixelSnap`, at each
+//!   draw).
 //! - **Nearest**: the device's own lines at the width nearest Metal's they draw (`w'`, 1/16 at 0,
 //!   clamped into `lineWidthRange` where it enables `wideLines`, else 1), where neither route above
 //!   draws `w'`, announced (`Degradation::LinesAtNearestWidth`, with why): a mesh draw's lines and
@@ -392,8 +397,9 @@ impl ShapeInputs<'_> {
     /// The route `call`'s draw of `pipeline` as `assembly` draws its lines by at the encoder's
     /// width (the module docs), of a draw that may draw a primitive where `primitives`
     /// ([`draws_primitives`]); announcing a device line that differs from Metal's, one at the
-    /// nearest width, and the device's lines at width 1 on a driver whose ties are not measured to
-    /// be Metal's, where `announce`.
+    /// nearest width, the device's lines at width 1 on a driver whose ties are not measured to be
+    /// Metal's, and the band on a driver whose subpixel snap is not measured to be Metal's, where
+    /// `announce`.
     pub(super) fn line_route(
         &self,
         call: &'static str,
@@ -445,9 +451,13 @@ impl ShapeInputs<'_> {
             LineRoute::Nearest { width, .. } => width == 1.0,
             LineRoute::Device { .. } | LineRoute::Band { .. } => false,
         };
-        let ties = (self.device.properties().driver_facts).contains(&DriverFact::LineTiesAreMetals);
-        if announce && width_one && !ties {
+        let facts = &self.device.properties().driver_facts;
+        if announce && width_one && !facts.contains(&DriverFact::LineTiesAreMetals) {
             announce_line_ties(self.device, call);
+        }
+        let banded = matches!(route, LineRoute::Band { .. });
+        if announce && banded && !facts.contains(&DriverFact::SubpixelSnapIsMetals) {
+            announce_subpixel_snap(self.device, call);
         }
         route
     }
@@ -462,6 +472,21 @@ fn announce_line_ties(device: &crate::Device, call: &'static str) {
             "the device's driver is not measured to break a tie at a vertex two pixels' \
              diamonds share as Metal does (DriverFact::LineTiesAreMetals): Metal covers the lower \
              pixel, and Vulkan's open diamond leaves the choice to the driver"
+                .to_owned(),
+        )
+    });
+}
+
+/// Announce `call`'s draw of lines or edges as bands on a driver not measured to snap a vertex
+/// half a step off its subpixel grid as Metal snaps a line's endpoint (the module docs).
+fn announce_subpixel_snap(device: &crate::Device, call: &'static str) {
+    device.degrade(Degradation::DeviceSubpixelSnap, || {
+        (
+            format!("{call}: a draw of lines or edges as bands"),
+            "the device's driver is not measured to snap a vertex half a step off its \
+             1/256-pixel subpixel grid as Metal snaps a line's endpoint \
+             (DriverFact::SubpixelSnapIsMetals): the band's corners are snapped by the device's \
+             rasterizer, Metal's endpoints up before they are offset"
                 .to_owned(),
         )
     });

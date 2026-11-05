@@ -5123,6 +5123,7 @@ macro-member	metal2vulkan-runtime::Degradation::DeviceRoundedResolve	DeviceRound
 macro-member	metal2vulkan-runtime::Degradation::DeviceSampleLevel	DeviceSampleLevel = "device-sample-level";
 macro-member	metal2vulkan-runtime::Degradation::DeviceSampling	DeviceSampling = "device-sampling";
 macro-member	metal2vulkan-runtime::Degradation::DeviceSignedZeroInfNan	DeviceSignedZeroInfNan = "device-signed-zero-inf-nan";
+macro-member	metal2vulkan-runtime::Degradation::DeviceSubpixelSnap	DeviceSubpixelSnap = "device-subpixel-snap", Precision,
 macro-member	metal2vulkan-runtime::Degradation::DeviceTexelConversion	DeviceTexelConversion = "device-texel-conversion";
 macro-member	metal2vulkan-runtime::Degradation::DeviceTranscendentals	DeviceTranscendentals = "device-transcendentals";
 macro-member	metal2vulkan-runtime::Degradation::DeviceVertexConversion	DeviceVertexConversion = "device-vertex-conversion";
@@ -11427,6 +11428,7 @@ variant	metal2vulkan-runtime::DriverFact::ShadowCopyBackDispatchFaster	ShadowCop
 variant	metal2vulkan-runtime::DriverFact::ShadowCopyInDispatchFaster	ShadowCopyInDispatchFaster
 variant	metal2vulkan-runtime::DriverFact::SignallingSubmitsStallEvery1024	SignallingSubmitsStallEvery1024
 variant	metal2vulkan-runtime::DriverFact::SubmissionsWithoutSignalsMerge	SubmissionsWithoutSignalsMerge
+variant	metal2vulkan-runtime::DriverFact::SubpixelSnapIsMetals	SubpixelSnapIsMetals
 variant	metal2vulkan-runtime::DriverFact::TileStoreIsMetals	TileStoreIsMetals
 variant	metal2vulkan-runtime::DriverFact::TimestampPoolsAreCounterSampleBuffers	TimestampPoolsAreCounterSampleBuffers
 variant	metal2vulkan-runtime::DriverFact::TimestampsWaitForEveryQueue	TimestampsWaitForEveryQueue
@@ -12680,6 +12682,7 @@ variant	metal2vulkan::device::DriverFact::ShadowCopyBackDispatchFaster	ShadowCop
 variant	metal2vulkan::device::DriverFact::ShadowCopyInDispatchFaster	ShadowCopyInDispatchFaster
 variant	metal2vulkan::device::DriverFact::SignallingSubmitsStallEvery1024	SignallingSubmitsStallEvery1024
 variant	metal2vulkan::device::DriverFact::SubmissionsWithoutSignalsMerge	SubmissionsWithoutSignalsMerge
+variant	metal2vulkan::device::DriverFact::SubpixelSnapIsMetals	SubpixelSnapIsMetals
 variant	metal2vulkan::device::DriverFact::TileStoreIsMetals	TileStoreIsMetals
 variant	metal2vulkan::device::DriverFact::TimestampPoolsAreCounterSampleBuffers	TimestampPoolsAreCounterSampleBuffers
 variant	metal2vulkan::device::DriverFact::TimestampsWaitForEveryQueue	TimestampsWaitForEveryQueue

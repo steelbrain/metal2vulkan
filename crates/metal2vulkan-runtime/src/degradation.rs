@@ -2185,6 +2185,15 @@ degradations! {
             "a line through a vertex two pixels' diamonds share covers the pixel the device \
              chooses, where Metal covers the lower one, so such a pixel, and the rest of a line \
              that runs along such vertices, can lie a row or a column from Metal's";
+        /// A draw whose lines, or a triangle's edges in fill mode `Lines`, the runtime's band draws
+        /// (a width other than 1 the device's own lines do not draw as Metal's) on a driver not
+        /// measured to snap a vertex half a step off its 1/256-pixel subpixel grid as Metal snaps
+        /// a line's endpoint ([`metal2vulkan::device::DriverFact::SubpixelSnapIsMetals`],
+        /// `render/line_width.rs`): the band's corners, the endpoints offset by a multiple of 1/32
+        /// pixel, are snapped by the device's rasterizer, where Metal snaps the endpoints up first,
+        /// so the two differ only where an endpoint lies half a step off the grid.
+        DeviceSubpixelSnap = "device-subpixel-snap", Precision,
+            "a line's band whose endpoint lies half a 1/256-pixel step off the subpixel grid is              snapped the way the device rounds, where Metal rounds the endpoint up, so a pixel              whose centre lies within that half step of the band's edge can be drawn, or left              out, a row or a column from Metal's";
         /// A draw of lines, or an emulated mesh draw of lines, under Apple's last provoking vertex
         /// (`setProvokingVertexMode:` 1), of a pipeline state that reads it (a flat input, or a
         /// slice or viewport its vertex function selects), on a device without

@@ -888,6 +888,15 @@ driver's. Each is open work.
   of the line lane's strip, which starts on such a vertex, so it announces too; RADV and ANV unrun,
   so announced there.
 
+- **A line band's endpoint half a subpixel step off the grid off the M3 Max**
+  (`runtime_lane::line_widths`, the lines offset from rows and columns of centres by
+  `(r - 32) / 512`): the band leaves its corners' snap to 1/256 pixel to the device's rasterizer,
+  where Metal snaps the endpoints first, a half step rounded up. NVIDIA's 615.71.09 on the RTX 5080
+  Laptop GPU and lavapipe (Mesa 26.2.4) draw those lines a row lower than Metal's, as a half step
+  rounded down gives. Vulkan leaves that rounding to the implementation. Announced (`device-subpixel-snap`) at
+  each band draw on a driver without `DriverFact::SubpixelSnapIsMetals` (MoltenVK on the M3 Max has
+  it); RADV and ANV unrun, so announced there.
+
 - **Lines under Apple's `setLineWidth:` at a width other than 1 that neither route draws as Metal**
   (`render/line_width.rs`). Drawn by the device's own lines at the nearest width they draw (1 pixel
   without `wideLines`), announced `lines-at-nearest-width`: a mesh draw's lines and edges and a
