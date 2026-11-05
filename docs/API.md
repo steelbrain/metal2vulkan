@@ -2000,15 +2000,16 @@ bound.
   it across the bus, as a discrete Mac's GPU does a shared resource: coalesced accesses at the bus's
   speed, and scattered writes far slower (4-byte stores 12 bytes apart at 0.08 GB/s on an RTX 3090,
   where device-local memory takes them at 850 GB/s).
-- `metal2vulkan-degrade-device-memory-overflow` (performance). `DeviceMemoryOverflow`: A `Private`
-  buffer, heap or texture the program makes, or a `Managed` buffer's own bytes on a device without
-  unified memory, lies in system memory: no device-local memory type the resource takes had room
-  for it, so it takes one that is not device-local, as Metal makes such a resource past a discrete
-  GPU's memory rather than refuse it. `WorkCounts::device_memory_overflows` counts each such
-  placement. A driver that pages device-local memory (`VK_EXT_pageable_device_local_memory`, which
-  the runtime enables where listed with its feature) may page memory out to make room instead, and
-  then nothing overflows. Cost: the GPU reads and writes it across the bus, at the bus's speed, for
-  as long as it lives; resources made once device-local memory has room again lie there.
+- `metal2vulkan-degrade-device-memory-overflow` (performance). `DeviceMemoryOverflow`: A buffer or
+  heap of `Private` storage the program makes, a `Managed` buffer's own bytes on a device without
+  unified memory, or a texture's image, of any storage mode, lies in system memory: no
+  device-local memory type the resource takes had room for it, so it takes one that is not
+  device-local, as Metal makes such a resource past a discrete GPU's memory rather than refuse it.
+  `WorkCounts::device_memory_overflows` counts each such placement. A driver that pages
+  device-local memory (`VK_EXT_pageable_device_local_memory`, which the runtime enables where
+  listed with its feature) may page memory out to make room instead, and then nothing overflows.
+  Cost: the GPU reads and writes it across the bus, at the bus's speed, for as long as it lives;
+  resources made once device-local memory has room again lie there.
 - `metal2vulkan-degrade-device-filtered-mipmaps` (precision). `DeviceFilteredMipmaps`:
   `generate_mipmaps` of a filtered format (an integer format's texels are picked as plain Metal
   picks them): each level is the device's linear filter of the one above at the scaled texel

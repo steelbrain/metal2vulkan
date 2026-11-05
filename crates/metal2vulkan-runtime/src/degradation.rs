@@ -902,8 +902,9 @@ degradations! {
              resource: coalesced accesses at the bus's speed, and scattered writes far slower \
              (4-byte stores 12 bytes apart at 0.08 GB/s on an RTX 3090, where device-local \
              memory takes them at 850 GB/s)";
-        /// A `Private` buffer, heap or texture the program makes, or a `Managed` buffer's own bytes
-        /// on a device without unified memory (`managed.rs`), lies in system memory: no
+        /// A buffer or heap of `Private` storage the program makes, a `Managed` buffer's own bytes
+        /// on a device without unified memory (`managed.rs`), or a texture's image, of any storage
+        /// mode (`image_plan.rs` places each in `Private` memory), lies in system memory: no
         /// device-local memory type the resource takes had room for it, and it takes a type that
         /// is not device-local (`memory.rs`'s `overflow_candidates`), as Metal makes such a
         /// resource past a discrete GPU's memory rather than refuse it. Each such placement is

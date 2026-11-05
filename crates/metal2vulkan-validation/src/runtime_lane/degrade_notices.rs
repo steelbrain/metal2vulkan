@@ -803,8 +803,8 @@ const STILL_MAKING: [Degradation; 3] = [
 /// failed by the runtime's test hook.
 const COPIED_PAGES: [Degradation; 1] = [Degradation::CopiedHostPages];
 
-/// The kind a `Private` buffer, heap or texture the program makes, or a `Managed` buffer's own
-/// bytes without unified memory, takes where no device-local memory type it takes has room for
+/// The kind a `Private` buffer or heap the program makes, a texture's image, or a `Managed`
+/// buffer's own bytes without unified memory, takes where no device-local memory type it takes has room for
 /// it, so that it lies in system memory. Only a device without unified memory whose device-local
 /// heap is full meets it, which no lane fills (a GPU hazard). The runtime's own test
 /// `resources_past_device_local_memory_are_made_used_and_read_back` takes its site, under

@@ -259,9 +259,9 @@ the runtime made.
   unified memory a `Managed` buffer has two copies, as on a Mac with a discrete GPU
   (`did_modify_range` and a blit's `synchronize_resource` move the bytes), and a `Shared` resource
   lies in host-cached system memory (announced once, `shared-in-system-memory`).
-- **Past device-local memory.** Where no device-local memory type a `Private` buffer, heap or
-  texture (or a `Managed` buffer's own bytes, without unified memory) takes has room, it lies in
-  system memory, as Metal makes such resources past a discrete GPU's memory rather than refusing
+- **Past device-local memory.** Where no device-local memory type a `Private` buffer or heap, a
+  texture's image or (without unified memory) a `Managed` buffer's own bytes takes has room, it
+  lies in system memory, as Metal makes such resources past a discrete GPU's memory rather than refusing
   them (announced once, `device-memory-overflow`; counted in
   `WorkCounts::device_memory_overflows`). Where the device lists
   `VK_EXT_pageable_device_local_memory`, the runtime enables it and the driver may page memory out
