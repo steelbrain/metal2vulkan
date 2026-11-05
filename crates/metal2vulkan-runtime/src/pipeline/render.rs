@@ -57,7 +57,7 @@ use crate::degradation::{BoundFormats, CompiledPipeline, Degradation, Occurrence
 use crate::device::{device_error, lock, shared_draw_lock};
 use crate::error::{internal, invalid, ArchivedPipeline, Error, Problem, RuntimeGap};
 use crate::released_programs::KeptProgram;
-use crate::render::KeptShapes;
+use crate::render::{KeptShapes, PlanFacts};
 use crate::render_pass::MAX_COLOR_ATTACHMENTS;
 use crate::render_target::RenderPassObject;
 use crate::residency::{every_render_stage, handle_stages};
@@ -321,6 +321,8 @@ pub(crate) struct Settled {
     pub(crate) shape: Arc<BindShape>,
     pub(crate) variant: Arc<RenderVariant>,
     pub(crate) plan: Arc<BindingPlan>,
+    /// What a draw asks of the plan's descriptor writes, worked out with the settle.
+    pub(crate) facts: Arc<PlanFacts>,
 }
 
 /// The most settles a state keeps (`GraphicsState::settle_shape`). A window server's draws of one
@@ -2272,6 +2274,7 @@ impl GraphicsState {
         let settled = Settled {
             shape: Arc::clone(shape),
             variant,
+            facts: Arc::new(PlanFacts::of(&plan)),
             plan,
         };
         let mut kept = lock(&self.0.settled);

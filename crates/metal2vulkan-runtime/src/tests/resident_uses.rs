@@ -24,7 +24,7 @@ use super::blit_holds::{Scratch, WAIT};
 use super::draw_again::{device, Heard};
 use super::encoder_holds::{pass, render_state};
 use crate::binding::kept_resident_checks;
-use crate::render::kept_heap_checks;
+use crate::render::{kept_heap_checks, plan_facts_made};
 use crate::{
     Buffer, CommandBufferStatus, Degradation, Device, Region, RenderCommandEncoder,
     RenderPipelineState, ResourceOptions, ResourceRef, SamplerState, SamplerStateOptions, Texture,
@@ -170,6 +170,7 @@ struct Drawn {
     heap_parts: u64,
     heap_checked: u64,
     unreadable_looks: u64,
+    facts_made: u64,
 }
 
 /// Draw with `draw`, and what that changed.
@@ -178,12 +179,14 @@ fn drawn(device: &Device, draw: impl FnOnce()) -> Drawn {
         device.work_counts(),
         kept_resident_checks(),
         kept_heap_checks(),
+        plan_facts_made(),
     );
     draw();
     let after = (
         device.work_counts(),
         kept_resident_checks(),
         kept_heap_checks(),
+        plan_facts_made(),
     );
     Drawn {
         made: after.0.resident_uses_made - before.0.resident_uses_made,
@@ -201,6 +204,7 @@ fn drawn(device: &Device, draw: impl FnOnce()) -> Drawn {
         heap_checked: after.2 - before.2,
         unreadable_looks: (after.0.draw_resident_textures_looked_at)
             - before.0.draw_resident_textures_looked_at,
+        facts_made: after.3 - before.3,
     }
 }
 
@@ -339,6 +343,32 @@ fn draws_look_for_textures_a_carrier_holds_until_what_their_encoder_made_residen
             let what = format!("encoder {encoder} draw {at}: {drawn:?}");
             let looked = at == 0 || at == later as usize;
             assert_eq!(drawn.unreadable_looks, u64::from(looked), "{what}");
+        }
+        assert!(scene.covered() > 0, "encoder {encoder} drew nothing");
+    }
+}
+
+/// The two encoders of the tests above: what a draw asks of its plan's descriptor writes, which
+/// number the device's textures (`render/plan_facts.rs`), is worked out as its pipeline state
+/// settles the plan for its bind shape: at most at the entry shape's first draw, after the
+/// encoder made another resource resident (the first encoder's fourth: the used resources are
+/// the shape's), and at the slot shape's draw, and at no other draw, though each binds other
+/// buffers than the last.
+#[test]
+fn draws_work_out_what_they_ask_of_their_plan_s_writes_once_a_settle() {
+    let scratch = Scratch::new("resident-plan-facts");
+    let device = device(&scratch.0, &[], &Heard::default());
+    let scene = Scene::new(&device);
+    for (encoder, corner, later) in [(0, -0.9, 3), (1, 0.1, 0)] {
+        let resources = Resources::new(&scene, corner);
+        let each = encode(&scene, &resources, later);
+        let slot_draw = POSITIONS as usize;
+        for (at, drawn) in each.iter().enumerate() {
+            let what = format!("encoder {encoder} draw {at}: {drawn:?}");
+            match at == 0 || at == later as usize || at == slot_draw {
+                true => assert!(drawn.facts_made <= 1, "{what}"),
+                false => assert_eq!(drawn.facts_made, 0, "{what}"),
+            }
         }
         assert!(scene.covered() > 0, "encoder {encoder} drew nothing");
     }

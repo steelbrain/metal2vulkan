@@ -343,7 +343,13 @@ impl RenderLowering {
         let kept = settles_kept(self, live)
             .then_some(live.settled.as_ref())
             .flatten();
-        let Some(Settled { variant, plan, .. }) = kept.map(|here| here.settled()) else {
+        let Some(Settled {
+            variant,
+            plan,
+            facts,
+            ..
+        }) = kept.map(|here| here.settled())
+        else {
             return false;
         };
         let slots = changed.list();
@@ -371,8 +377,8 @@ impl RenderLowering {
         // texture is bound through a shadow (`LiveBind`'s state), as for the kept draw.
         let images = changed.images();
         if images
-            && (self.samples_attachment(plan, Texture::attached_in)
-                || self.storage_colors(plan) != 0
+            && (self.samples_attachment(facts, Texture::attached_in)
+                || self.storage_colors(facts) != 0
                 || !live.state.extended_shadows.is_empty())
         {
             return false;

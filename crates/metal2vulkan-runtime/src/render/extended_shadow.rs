@@ -57,7 +57,7 @@ use crate::tracker::{Access, Barrier, Use};
 use crate::values::ResourceOptions;
 use crate::Device;
 use ash::vk;
-use metal2vulkan::bind::{BindState, BindingPlan, ExtendedShadowModule, WriteSource};
+use metal2vulkan::bind::{BindState, ExtendedShadowModule};
 use metal2vulkan::metal::format::{ExtendedRange, FormatMapping};
 use metal2vulkan::metal::{PixelFormat, TextureType, TextureUsage};
 use metal2vulkan::pipeline::GraphicsState;
@@ -193,21 +193,14 @@ impl ExtendedShadows {
             .collect()
     }
 
-    /// A draw's uses of the shadows `plan` binds: the fragment shader reads and writes each.
-    pub(super) fn draw_uses(&self, plan: &BindingPlan) -> Result<Vec<Use<ResourceKey>>, Error> {
+    /// A draw's uses of the shadows of `colors` its plan binds (ascending, `PlanFacts::extended`):
+    /// the fragment shader reads and writes each.
+    pub(super) fn draw_uses(&self, colors: &[u32]) -> Result<Vec<Use<ResourceKey>>, Error> {
         let stage = vk::PipelineStageFlags2::FRAGMENT_SHADER;
         let read = Access::new(stage, vk::AccessFlags2::SHADER_STORAGE_READ);
         let write = Access::new(stage, vk::AccessFlags2::SHADER_STORAGE_WRITE);
-        let bound: BTreeSet<u32> = plan
-            .descriptors
-            .iter()
-            .filter_map(|w| match w.source {
-                WriteSource::ExtendedShadow { color_index } => Some(color_index),
-                _ => None,
-            })
-            .collect();
         let mut uses = Vec::new();
-        for c in bound {
+        for &c in colors {
             let target = self
                 .made
                 .get(&c)

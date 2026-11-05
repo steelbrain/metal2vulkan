@@ -102,7 +102,7 @@
 //!   share of their colors' pixels and texel bytes, a line at 64 of them, each power of two
 //!   after, and as the device ends (`metal2vulkan-snapshot-readers`, `reader_sizes.rs`).
 
-use super::{Reformat, RenderLowering};
+use super::{PlanFacts, Reformat, RenderLowering};
 use crate::copy_plan::block_bytes;
 use crate::dynamic_state::ColorWriteMasks;
 use crate::pipeline::{GraphicsState as DrawingState, Settled};
@@ -473,21 +473,15 @@ impl RenderLowering {
             .is_some_and(|texture| texture.attached_in(&self.layout))
     }
 
-    /// The pass's colors (a mask of their indices) whose images a draw of `plan` binds as a
-    /// storage image: the feedback loop layout serves no storage access ("This layout must only
+    /// The pass's colors (a mask of their indices) whose images a draw of a plan of `facts` binds
+    /// as a storage image: the feedback loop layout serves no storage access ("This layout must only
     /// be used as either a color attachment or depth/stencil attachment and/or read-only access
     /// in a shader as a sampled image, combined image/sampler, or input attachment", the
     /// `VK_IMAGE_LAYOUT_ATTACHMENT_FEEDBACK_LOOP_OPTIMAL_EXT` layout), so such a draw records
     /// apart from an instance that holds one of them so (the module docs).
-    pub(super) fn storage_colors(&self, plan: &BindingPlan) -> u32 {
+    pub(super) fn storage_colors(&self, facts: &PlanFacts) -> u32 {
         let mut colors = 0;
-        for write in &plan.descriptors {
-            let WriteSource::Texture { slot, .. } = &write.source else {
-                continue;
-            };
-            if write.ty != metal2vulkan::vk::DescriptorType::STORAGE_IMAGE {
-                continue;
-            }
+        for slot in facts.stored() {
             let Some(image) = self.slot_texture(slot).and_then(|t| t.raw_image().ok()) else {
                 continue;
             };

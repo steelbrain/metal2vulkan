@@ -414,6 +414,7 @@ mod pass_start_reads;
 mod pass_steps;
 mod pending;
 mod pending_tile;
+mod plan_facts;
 mod provoking;
 mod queued_commits;
 mod replay;
@@ -445,6 +446,9 @@ pub(crate) use draw_room::SpareDrawRooms;
 pub(crate) use heap_part::kept_heap_checks;
 pub(crate) use heap_part::KeptHeap;
 pub(crate) use inline_splits::SpareKept;
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+pub(crate) use plan_facts::plan_facts_made;
+pub(crate) use plan_facts::PlanFacts;
 use replay::{
     DrawIndexed, DrawIndexedIndirect, DrawIndexedPatches, DrawIndexedPatchesIndirect, DrawPatches,
     DrawPatchesIndirect, Samplers,
@@ -7087,30 +7091,22 @@ impl RenderLowering {
         bounded
     }
 
-    /// Whether a draw of `plan` samples, at a slot of its tables, a texture that presents a color
-    /// attachment of the pass (`texture/attached_reads.rs`) as `presents` tells
+    /// Whether a draw of a plan of `facts` samples, at a slot of its tables, a texture that
+    /// presents a color attachment of the pass (`texture/attached_reads.rs`) as `presents` tells
     /// (`Texture::attached_in`, or `Texture::cleared_in` for one the pass clears): a sampled image
     /// or combined image sampler binding, not a storage one.
     fn samples_attachment(
         &self,
-        plan: &BindingPlan,
+        facts: &PlanFacts,
         presents: fn(&Texture, &PassLayout) -> bool,
     ) -> bool {
-        (self.sampled_textures(plan)).any(|texture| presents(texture, &self.layout))
+        (self.sampled_textures(facts)).any(|texture| presents(texture, &self.layout))
     }
 
-    /// The textures a draw of `plan` samples at slots of its tables: through a sampled image or
-    /// combined image sampler binding, not a storage one.
-    fn sampled_textures<'a>(&'a self, plan: &'a BindingPlan) -> impl Iterator<Item = &'a Texture> {
-        plan.descriptors.iter().filter_map(|write| {
-            let slot = match &write.source {
-                WriteSource::Texture { slot, .. } => slot,
-                WriteSource::CombinedImageSampler {
-                    image: ImageSource::Texture { slot, .. },
-                    ..
-                } => slot,
-                _ => return None,
-            };
+    /// The textures a draw of a plan of `facts` samples at slots of its tables: through a
+    /// sampled image or combined image sampler binding, not a storage one.
+    fn sampled_textures<'a>(&'a self, facts: &'a PlanFacts) -> impl Iterator<Item = &'a Texture> {
+        facts.sampled().iter().filter_map(|slot| {
             let table = match slot.stage {
                 Stage::Vertex => &self.vertex,
                 Stage::Fragment => &self.fragment,
@@ -7118,31 +7114,28 @@ impl RenderLowering {
                 Stage::Mesh => &self.mesh,
                 _ => return None,
             };
-            if write.ty == metal2vulkan::vk::DescriptorType::STORAGE_IMAGE {
-                return None;
-            }
             table.textures.get(&slot.index)
         })
     }
 
-    /// The clears a draw `call` of `plan` that samples a color the pass clears after a memory
-    /// barrier before its first draw reads through copies cleared to them, in its instance,
-    /// instead of the pass splitting (`texture/attached_reads.rs`): each texture it samples that
-    /// such a color renders, by its shadow ([`Texture::cleared_copy`]), but those the pass's first
-    /// instance clears in already. `None` where one may not be cleared so, where the pass split
-    /// or ran a tile dispatch, or where one is new and a draw recorded into the pass already: a
-    /// draw that wrote the attachment may have left what the copy must then hold. Such a draw
-    /// splits the pass as before.
+    /// The clears a draw `call` of a plan of `facts` that samples a color the pass clears after a
+    /// memory barrier before its first draw reads through copies cleared to them, in its
+    /// instance, instead of the pass splitting (`texture/attached_reads.rs`): each texture it
+    /// samples that such a color renders, by its shadow ([`Texture::cleared_copy`]), but those the
+    /// pass's first instance clears in already. `None` where one may not be cleared so, where the
+    /// pass split or ran a tile dispatch, or where one is new and a draw recorded into the pass
+    /// already: a draw that wrote the attachment may have left what the copy must then hold. Such
+    /// a draw splits the pass as before.
     fn cleared_copies(
         &self,
-        plan: &BindingPlan,
+        facts: &PlanFacts,
         call: &'static str,
     ) -> Option<Vec<(ResourceKey, vk::ClearColorValue)>> {
         if !self.earlier.is_empty() || !self.dispatches.is_empty() || self.rerouting {
             return None;
         }
         let mut clears: Vec<(ResourceKey, vk::ClearColorValue)> = Vec::new();
-        for texture in self.sampled_textures(plan) {
+        for texture in self.sampled_textures(facts) {
             if !texture.cleared_in(&self.layout) {
                 continue;
             }
@@ -7933,6 +7926,7 @@ impl RenderLowering {
             shape,
             variant,
             plan,
+            facts,
         } = settled;
         let RoutedDraw {
             provoking,
@@ -8084,7 +8078,7 @@ impl RenderLowering {
             ),
             None => None,
         };
-        self.reaches_unnamed |= !commands.root_tables.is_empty() || reads_handles(&plan);
+        self.reaches_unnamed |= !commands.root_tables.is_empty() || facts.reads_handles();
         // A mesh draw the binder launches no threadgroup of (as plain Metal draws nothing).
         let empty = empty
             || matches!(
@@ -8524,18 +8518,18 @@ impl RenderLowering {
         // pass's first, which runs the clear, and the copy is taken between.
         let attached = !self.replaying
             && snapshot.is_none()
-            && self.samples_attachment(&plan, Texture::attached_in);
+            && self.samples_attachment(&facts, Texture::attached_in);
         let behind_loads =
-            attached && self.loads_ordered && self.samples_attachment(&plan, Texture::cleared_in);
+            attached && self.loads_ordered && self.samples_attachment(&facts, Texture::cleared_in);
         // Where each such color's copy can be cleared to the clear instead, before any draw of the
         // pass, the draw stays in its instance and reads it there (`texture/attached_reads.rs`).
         let copy_clears = behind_loads
-            .then(|| self.cleared_copies(&plan, call))
+            .then(|| self.cleared_copies(&facts, call))
             .flatten();
         let behind_loads = behind_loads && copy_clears.is_none();
         let after_barrier = (attached && (self.current.barriers || self.barrier)) || behind_loads;
         let snapshot_split = snapshot.as_ref().is_some_and(|w| self.snapshot_apart(w));
-        let storage_colors = self.storage_colors(&plan);
+        let storage_colors = self.storage_colors(&facts);
         let apart = snapshot_split || storage_colors & self.current.feedback.0 != 0;
         // A draw that writes a memoryless color the pass renders in place, which no instance
         // recorded inline writes: the pass's first draw that records keeps its first instance in
@@ -8682,13 +8676,7 @@ impl RenderLowering {
             None => None,
         };
         // The pass's tile memory, made at its first draw or dispatch that reads it.
-        let tile_buffer = plan
-            .descriptors
-            .iter()
-            .find_map(|write| match write.source {
-                WriteSource::TileMemory { bytes } => Some(bytes),
-                _ => None,
-            })
+        let tile_buffer = (facts.tile_memory())
             .map(|bytes| self.tile_memory.buffer(&device, bytes))
             .transpose()?;
         // A draw that reads through snapshots binds each slot's snapshot in the form its plan
@@ -8939,7 +8927,7 @@ impl RenderLowering {
         if let Some(stand_in) = stand_in {
             uses.extend(stand_in.draw_uses()?);
         }
-        uses.extend(self.extended.draw_uses(&plan)?);
+        uses.extend(self.extended.draw_uses(facts.extended())?);
         if let Some(imageblock) = imageblock {
             uses.extend(imageblock.draw_uses()?);
         }
@@ -10354,12 +10342,6 @@ impl RenderLowering {
             });
             (unwritten, reads_images)
         };
-        let ycbcr = |write: &metal2vulkan::bind::DescriptorWrite| {
-            matches!(
-                write.source,
-                WriteSource::YCbCrInPlace { .. } | WriteSource::YCbCrPlanesImage { .. }
-            )
-        };
         let extended = |c: &render_pass::ColorTarget| {
             ExtendedRange::of(c.target.texture.pixel_format()).is_some()
         };
@@ -10418,7 +10400,7 @@ impl RenderLowering {
             && live.state.extended_shadows.is_empty()
             && !plan.variant.extended_range.values().any(planes)
             && !(self.layout.colors.iter().flatten()).any(extended)
-            && !plan.descriptors.iter().any(ycbcr);
+            && !facts.ycbcr();
         // A replayed draw plain so would be kept but for its being replayed: a chunk of its
         // execution's commands whose draws all are is kept (`kept_commands.rs`).
         self.plain_drawn = plain;
