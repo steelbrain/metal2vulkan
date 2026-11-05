@@ -332,6 +332,54 @@ pub(super) struct ResourceIds {
     sampler_slots_changed: Arc<AtomicU64>,
 }
 
+// SAFETY: a `ResourceIds` is `Send` and `Sync` exactly when each of its fields is; the constant
+// below makes the compiler prove that of each, its pattern naming every field (one added fails it
+// until it is proved too), so these impls claim nothing it does not check. Written out, they end
+// the compiler's walk of an object's fields at the IDs where a program's crate proves its own
+// objects' `Send` and `Sync`: every object that holds an ID or a numbered sampler reaches this
+// table, and from it, through its holders' weak references, nearly every other object, a walk
+// that ran within four levels of rustc's default recursion limit
+// (`recursion_depth_exceeding_limit`), which a program's crate keeps
+// (`tests/consumer_auto_traits.rs`).
+unsafe impl Send for ResourceIds {}
+// SAFETY: as for `Send` above.
+unsafe impl Sync for ResourceIds {}
+
+// The compiler's proof of what `ResourceIds`'s `Send` and `Sync` impls rest on: each field's.
+const _: fn(&ResourceIds) = |ids| {
+    fn shared<T: Send + Sync>(_: &T) {}
+    let ResourceIds {
+        textures,
+        samplers,
+        function_tables,
+        pipelines,
+        sampler_elements,
+        counter,
+        device_sampler,
+        released_pipelines,
+        pipeline_holders,
+        numbered,
+        libraries,
+        functions,
+        sampler_ids_live,
+        sampler_slots_changed,
+    } = ids;
+    shared(textures);
+    shared(samplers);
+    shared(function_tables);
+    shared(pipelines);
+    shared(sampler_elements);
+    shared(counter);
+    shared(device_sampler);
+    shared(released_pipelines);
+    shared(pipeline_holders);
+    shared(numbered);
+    shared(libraries);
+    shared(functions);
+    shared(sampler_ids_live);
+    shared(sampler_slots_changed);
+};
+
 /// What a device reads of its sampler IDs without their lock: the live count and the sampler
 /// pool's size (the module docs), each changed under the lock by the step that changes it.
 #[derive(Clone, Debug)]
