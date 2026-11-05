@@ -706,8 +706,16 @@ impl Lane {
         encoder.set_compute_pipeline_state(&state).unwrap();
         encoder.set_buffer(Some(&out), 0, 0).unwrap();
         encoder.set_texture(Some(t), 0).unwrap();
+        // One threadgroup of whole simdgroups, the threads past the row returning: a threadgroup
+        // of the row's 16 threads is a partial simdgroup, which a device whose simdgroups are its
+        // subgroups runs on the kernel's emulated-simdgroups variant (announced), a route this
+        // lane does not read.
+        let width = u64::from(state.thread_execution_width());
         encoder
-            .dispatch_threads(Size::new(WIDTH, 1, 1), Size::new(WIDTH, 1, 1))
+            .dispatch_threadgroups(
+                Size::new(1, 1, 1),
+                Size::new(WIDTH.div_ceil(width) * width, 1, 1),
+            )
             .unwrap();
         encoder.end_encoding().unwrap();
         command_buffer.commit().unwrap();
