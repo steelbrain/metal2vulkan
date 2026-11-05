@@ -373,3 +373,84 @@ fn heap_samples_reach_a_raw_member_through_the_unsigned_twin() {
         );
     }
 }
+
+/// A `half` read, nearest sample or gather of a texture an argument buffer holds rounds its texel
+/// through the device's conversion of the texel's `f32` value (`narrow::round_texel`): the
+/// fetched texel's, merged with the decode routine's texel of a form a heap reads. On
+/// `moltenvk-m3`, which takes `DriverDeviation::MetalHalfConversion`, the module records no
+/// `NativeHalfConversion` for it and requires `VkProperty::MetalHalfConversion`, and it records
+/// `HalfTexelConversion`, which states a heap element's `half` against Metal's; without the
+/// deviation (the same profile with it dropped) it records the note and requires nothing. A
+/// linear sample's filter sum is computed by the device's arithmetic and rounded by
+/// `narrow::round`, which keeps the note on both.
+#[test]
+fn heap_half_texels_round_by_the_measured_conversion() {
+    use crate::device::requirements::VkProperty;
+    use crate::error::DriverDeviation;
+    use crate::pipeline::PrecisionNote;
+    let consts = FunctionConstantValues::defaults();
+    let entry = EntryRef::Name("k");
+    let inputs = LowerInputs::new();
+    // (what, the kernel, whether every rounding is a texel's).
+    let cases = [
+        ("read", kernel(Use::Half), true),
+        (
+            "nearest sample",
+            sampling_kernel(Sampling::HalfSample(words(false, false))),
+            true,
+        ),
+        (
+            "gather",
+            sampling_kernel(Sampling::HalfGather(words(false, false))),
+            true,
+        ),
+        (
+            "linear sample",
+            sampling_kernel(Sampling::HalfSample(words(true, false))),
+            false,
+        ),
+    ];
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../metal2vulkan-validation/profiles/moltenvk-m3.json");
+    let text = std::fs::read_to_string(&path).expect("profile");
+    for (name, source, texels) in &cases {
+        let Some(bc) = assemble("heap_half", source) else {
+            return;
+        };
+        for taken in [true, false] {
+            let desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
+            let p = Device::with_deviation(
+                desc,
+                DevicePolicy::default(),
+                DriverDeviation::MetalHalfConversion,
+                taken,
+            )
+            .expect("device")
+            .profile()
+            .clone();
+            let what = format!("{name}, the deviation taken: {taken}");
+            let a = compile_bitcode(&bc, entry, &consts, &p, &inputs, &mut meter(), SPIRV_WORDS)
+                .unwrap_or_else(|e| panic!("{what}: {e}"));
+            link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
+            let exempt = taken && *texels;
+            assert_eq!(
+                a.precision.contains(&PrecisionNote::NativeHalfConversion),
+                !exempt,
+                "{what}: {:?}",
+                a.precision
+            );
+            assert!(
+                a.precision.contains(&PrecisionNote::HalfTexelConversion),
+                "{what}: {:?}",
+                a.precision
+            );
+            assert_eq!(
+                a.requirements
+                    .properties
+                    .contains(&VkProperty::MetalHalfConversion),
+                exempt,
+                "{what}"
+            );
+        }
+    }
+}

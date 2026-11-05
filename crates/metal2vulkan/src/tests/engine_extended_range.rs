@@ -1099,3 +1099,67 @@ fn ycbcr_write_slots_store_each_texel_s_bits_and_mark() {
         }
     }
 }
+
+/// A `half` read of a slot bound in an extended-range form decodes the texel's codes and rounds
+/// the decoded `f32` through the device's conversion (`narrow::round_texel`). On `moltenvk-m3`,
+/// which takes `DriverDeviation::MetalHalfConversion`, the module records no
+/// `NativeHalfConversion` for it and requires `VkProperty::MetalHalfConversion`; it records
+/// `DevicePackConversion`, which states the decoded `half` against Metal's. Without the deviation
+/// (the same profile with it dropped) it records the note and requires nothing.
+#[test]
+fn decoded_half_texels_round_by_the_measured_conversion() {
+    use crate::device::requirements::VkProperty;
+    use crate::error::DriverDeviation;
+    use crate::pipeline::artifact::PrecisionNote;
+    let Some(bc) = assemble("decoded-halves", &kernel(Source::Read, true, 0)) else {
+        return;
+    };
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../metal2vulkan-validation/profiles/moltenvk-m3.json");
+    let text = std::fs::read_to_string(&path).expect("profile");
+    for form in FORMS {
+        let i = inputs(form, Source::Read);
+        for taken in [true, false] {
+            let desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
+            let p = Device::with_deviation(
+                desc,
+                DevicePolicy::default(),
+                DriverDeviation::MetalHalfConversion,
+                taken,
+            )
+            .expect("device")
+            .profile()
+            .clone();
+            let what = format!("{form:?}, the deviation taken: {taken}");
+            let a = compile_bitcode(
+                &bc,
+                EntryRef::Name("k"),
+                &FunctionConstantValues::defaults(),
+                &p,
+                &i,
+                &mut meter(),
+                SPIRV_WORDS,
+            )
+            .unwrap_or_else(|e| panic!("{what}: {e}"));
+            link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
+            assert_eq!(
+                a.precision.contains(&PrecisionNote::NativeHalfConversion),
+                !taken,
+                "{what}: {:?}",
+                a.precision
+            );
+            assert!(
+                a.precision.contains(&PrecisionNote::DevicePackConversion),
+                "{what}: {:?}",
+                a.precision
+            );
+            assert_eq!(
+                a.requirements
+                    .properties
+                    .contains(&VkProperty::MetalHalfConversion),
+                taken,
+                "{what}"
+            );
+        }
+    }
+}

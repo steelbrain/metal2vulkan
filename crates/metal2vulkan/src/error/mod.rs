@@ -857,9 +857,11 @@ pub enum DriverDeviation {
     /// where the `float` is an image instruction's texel, Metal's own `half` result of that access,
     /// into which Metal's compiler folds the conversion. Where the profile takes it, a module whose
     /// every `half` rounding through that conversion (`QuantizeForm::Converted`) is a conversion of
-    /// a `float` the function holds (an AIR `fptrunc` or `air.convert` from `float`) or of a texel
-    /// an image instruction hands back records no `PrecisionNote::NativeHalfConversion` and
-    /// requires the property. A `half` a function or an operation computes in `float` and rounds
+    /// a `float` the function holds (an AIR `fptrunc` or `air.convert` from `float`) or of a
+    /// texel's value (an image instruction's texel, one the module decodes itself, or a merge of
+    /// them, whose `half` the access's own texel notes state against Metal's) records no
+    /// `PrecisionNote::NativeHalfConversion` and requires the property. A `half` a function or an
+    /// operation computes in `float` and rounds
     /// keeps the note on every profile: Metal computes it otherwise (its `half` `tanh` answers 7
     /// of the 65,536 `half`s otherwise than the nearest even `half` of its `float` `tanh`, which the
     /// device's conversion answers). Unmeasured, each records it.
