@@ -459,6 +459,19 @@ pub(crate) struct DirtyTally {
     pub(crate) holds_withheld: AtomicU64,
 }
 
+/// How long [`DirtyShadows::ran`] waits before it reports a command buffer's writes in place, in
+/// milliseconds: set by a test, so a host wait sees the batch's signal well before the report
+/// (`tests::copied_log_device`). Never set outside tests.
+#[cfg(test)]
+static REPORT_DELAY_MS: AtomicU64 = AtomicU64::new(0);
+
+/// Make [`DirtyShadows::ran`] wait `ms` milliseconds before each report of writes in place in
+/// this process ([`REPORT_DELAY_MS`]).
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+pub(crate) fn delay_reports(ms: u64) {
+    REPORT_DELAY_MS.store(ms, Ordering::SeqCst);
+}
+
 /// The writers no other shadow or copy in the process is ever given.
 static NEXT_WRITER: AtomicU64 = AtomicU64::new(1);
 
@@ -844,6 +857,11 @@ impl DirtyShadows {
     /// of those finds them too.
     /// Where the batch `ends` the command buffer, every write of it ran.
     pub(crate) fn ran(&self, commit: &mut DirtyCommit, ends: bool) {
+        #[cfg(test)]
+        if !commit.host.is_empty() {
+            let delay = REPORT_DELAY_MS.load(Ordering::SeqCst);
+            std::thread::sleep(std::time::Duration::from_millis(delay));
+        }
         for (log, range) in &commit.wrote {
             log.wrote_back(range.clone());
         }

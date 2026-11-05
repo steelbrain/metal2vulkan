@@ -16,6 +16,12 @@
 //!   compared only the pages the log reported (`WorkCounts::copied_copy_in_bytes_skipped`).
 //! - **A `replaceRegion` of a copied heap's texture, then a read of the heap's bytes**: the
 //!   heap's own copy takes the texels at the next commit.
+//! - **A GPU write in place seen through an event before its report**: a fill in place in a
+//!   command buffer that waits for an event the host sets and then signals another, a copy over
+//!   the same pages committed while the fill waited (so it synced past the fill's commit), then a
+//!   host wait for the second event, which reads the event's semaphore and so may return before
+//!   the runtime reports the fill as run (the test delays that report,
+//!   `dirty_pages::delay_reports`), and a commit of a read of the copy: the copy holds the fill.
 //!
 //! The log is the test's own (`copied_log::TestLog`): it records what it is told.
 //!
@@ -25,8 +31,8 @@
 use super::blit_holds::WAIT;
 use super::copied_log::TestLog;
 use crate::{
-    Buffer, CommandQueue, Device, DeviceKind, DeviceOptions, HostMemory, ImportGate, Region,
-    ResourceOptions,
+    Buffer, CommandQueue, Device, DeviceKind, DeviceOptions, EventRef, HostMemory, ImportGate,
+    Region, ResourceOptions,
 };
 use metal2vulkan::bind::ArgumentDescriptor;
 use metal2vulkan::metal::{DataType, PixelFormat, TextureUsage};
@@ -317,6 +323,65 @@ fn a_gpu_write_in_place_reaches_a_logged_copy_of_the_same_pages() {
     eprintln!("COPIED-LOG: the copies in skipped {skipped} bytes");
     assert!(skipped > 0, "the copies in were gated by the log");
     drop((in_place, copy, queue));
+}
+
+/// A fill in place that a host wait on its command buffer's event saw before the runtime reported
+/// it (the module docs) reaches a copied buffer over the same pages at the next commit.
+#[test]
+fn a_copy_committed_once_a_host_wait_saw_a_fill_s_signal_takes_the_fill() {
+    let pages = Pages::new();
+    let Some(device) = device() else {
+        return;
+    };
+    let log = Arc::new(TestLog::default());
+    let in_place = pages.buffer(&device, &log, Some(true));
+    let half = (LENGTH / 2) as u64;
+    let memory = pages.memory(&log, Some(false));
+    // SAFETY: as in `Pages::memory`.
+    let copy = unsafe {
+        device.new_buffer_with_bytes_no_copy(memory, half, ResourceOptions::default(), None)
+    };
+    let copy = copy.unwrap();
+    if in_place.copied() || !copy.copied() {
+        eprintln!("COPIED-LOG: the device copies the admitted pages; nothing in place to test");
+        return;
+    }
+    crate::dirty_pages::delay_reports(500);
+    let (queue, reader) = (
+        device.new_command_queue().unwrap(),
+        device.new_command_queue().unwrap(),
+    );
+    // A first copy in compares every byte, and syncs the copy to a stamp.
+    assert_eq!(read_back(&reader, &copy, half), vec![0; half as usize]);
+    let (go, done) = (
+        device.new_shared_event().unwrap(),
+        device.new_shared_event().unwrap(),
+    );
+    let command_buffer = queue.command_buffer().unwrap();
+    (command_buffer.encode_wait_for_event(EventRef::from(&go), 1)).unwrap();
+    let mut blit = command_buffer.blit_command_encoder().unwrap();
+    blit.fill_buffer(&in_place, 4096..8192, 0x7E).unwrap();
+    blit.end_encoding().unwrap();
+    (command_buffer.encode_signal_event(EventRef::from(&done), 1)).unwrap();
+    command_buffer.commit().unwrap();
+    // A commit while the fill waits: the copy syncs past the fill's commit, before its run.
+    let before = read_back(&reader, &copy, half);
+    assert!(
+        before[4096..8192].iter().all(|b| *b == 0),
+        "the fill has not run"
+    );
+    go.set_signaled_value(1);
+    assert!(
+        done.wait_until_signaled_value(1, WAIT),
+        "the fill's command buffer signalled"
+    );
+    let after = read_back(&reader, &copy, half);
+    assert!(
+        after[4096..8192].iter().all(|b| *b == 0x7E),
+        "the copy took the fill"
+    );
+    assert!(command_buffer.wait_until_completed_for(WAIT).is_ok());
+    drop((in_place, copy, queue, reader));
 }
 
 /// A `replaceRegion` of a texture of a copied no-copy heap over logged pages writes the heap's
