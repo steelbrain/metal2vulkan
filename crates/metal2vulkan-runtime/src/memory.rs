@@ -317,8 +317,11 @@ pub(super) fn candidates(
 /// places such a resource on a discrete GPU past the GPU's memory rather than refusing it (on a
 /// 4 GiB Radeon Pro 5300M it made, used and read back 12 GiB of `Managed` buffers, six 1 GiB
 /// `Private` buffers and a 17 GB `Private` heap), so the runtime places it in system memory, which
-/// the GPU reads and writes across its bus (`Degradation::DeviceMemoryOverflow`). None for the
-/// other classes, whose candidates already take every host-visible coherent type.
+/// the GPU reads and writes across its bus (`Degradation::DeviceMemoryOverflow`). On an RTX 5080
+/// Laptop GPU (Linux), a buffer the runtime places overflows into its types 0, 2 and 3 (system
+/// memory the host does not map, then the uncached and cached kinds it maps), and an optimal color
+/// image into type 0. None for the other classes, whose candidates already take every host-visible
+/// coherent type, nor on a device whose every type is device-local (MoltenVK on an M3 Max).
 pub(super) fn overflow_candidates(
     types: &[vk::MemoryType],
     allowed: u32,

@@ -1717,7 +1717,9 @@ fn create_on(
     // The runtime's own need, outside the vocabulary, where listed with its feature: the driver
     // may move device-local memory to host-local memory to make room rather than fail an
     // allocation, as Metal pages a discrete GPU's resources (`memory.rs`'s
-    // `overflow_candidates`, which places them past a full device-local heap where it fails).
+    // `overflow_candidates`, which places them past a full device-local heap where it fails). On
+    // an RTX 5080 Laptop GPU (Linux) with it, 72 `Private` buffers of 256 MiB, past its 17.09 GB
+    // device-local heap, were made in device-local memory; without it the 60th overflowed.
     let pageable = pageable_device_local_memory(&listed, || {
         // SAFETY: `physical` was enumerated from the instance, made at Vulkan 1.2, and lists the
         // extension.
