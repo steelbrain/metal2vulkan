@@ -5,8 +5,10 @@
 //! a shadow on every device (its usage renders into it). Its memory carries a log of the pages'
 //! writes or none (`HostMemory::with_dirty_pages`): the test's own, exact to the page, which keeps
 //! writers apart and publishes at once, or 1 ms after each wait begins (`harvest`, as a VMM's
-//! harvest of its dirty log answers later). The buffer is the pages imported, or a copy of them
-//! where its memory's import gate refuses the import (`copied`, `copied-host-pages`).
+//! harvest of its dirty log answers later), and that spends 0.4 us a 4 KiB page of each write the
+//! runtime reports to it (`resolving`: a model, ours, of a log that resolves each page of a report
+//! to the guest's, as a VMM's does). The buffer is the pages imported, or a copy of them where
+//! its memory's import gate refuses the import (`copied`, `copied-host-pages`).
 //!
 //! Each shape and form runs on a device of its own, one command buffer a frame (two for
 //! `WriteThenReadApart`), committed with `commit_and_submit` (as the consumer commits), in two
@@ -25,13 +27,16 @@
 //! - `Idle`: the read alone; nothing writes the surface.
 //! - `CpuWrite`: the CPU writes 64 rows of the surface before the commit, told to the log; the
 //!   read alone.
+//! - `Fill`: a blit fills 64 rows of the surface's bytes, a write into the pages in place (their
+//!   import's), then the read.
 //! - `Private`: `Write` into a `Private` texture of the surface's size: the passes alone.
 //!
 //! Printed per round, shape and form (`SHADOW-SYNC`): the medians and 90th percentiles of a frame's
 //! `commit_and_submit` (host; summed over its command buffers), its last commit to the kernel's
 //! end of submission, its GPU time (`GPUEndTime` less `GPUStartTime`, summed), the GPU end of its
 //! last command buffer to that one's completed handler, and the process's CPU time; and the work
-//! counts per frame.
+//! counts per frame, with the writes the runtime reported to the log a frame (as the consumer's
+//! and named), their bytes, and the time the log spent on them.
 
 use super::first_use_writes::CHECK_WAIT;
 use super::host_memory::Mapping;
@@ -47,6 +52,7 @@ use metal2vulkan_runtime::{
 };
 use std::num::NonZeroU64;
 use std::ops::Range;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -72,6 +78,7 @@ enum Shape {
     Rewrite,
     Idle,
     CpuWrite,
+    Fill,
     Private,
 }
 
@@ -80,16 +87,27 @@ enum Shape {
 struct Form {
     log: Option<Duration>,
     copied: bool,
+    /// The log spends [`RESOLVE`] a page of each write reported to it.
+    resolving: bool,
 }
+
+/// What a resolving log spends on each 4 KiB page of a write the runtime reports.
+const RESOLVE: Duration = Duration::from_nanos(400);
 
 impl Form {
     const PLAIN: Form = Form {
         log: None,
         copied: false,
+        resolving: false,
     };
     const LOGGED: Form = Form {
         log: Some(Duration::ZERO),
         copied: false,
+        resolving: false,
+    };
+    const RESOLVING: Form = Form {
+        resolving: true,
+        ..Form::LOGGED
     };
 
     fn name(self) -> String {
@@ -97,6 +115,10 @@ impl Form {
             None => "no log".to_owned(),
             Some(Duration::ZERO) => "logged".to_owned(),
             Some(latency) => format!("logged, harvest {} us", latency.as_micros()),
+        };
+        let log = match self.resolving {
+            true => format!("{log}, resolving"),
+            false => log,
         };
         match self.copied {
             true => format!("copied, {log}"),
@@ -117,12 +139,23 @@ fn configurations() -> Vec<(Shape, Form)> {
         Shape::Rewrite,
         Shape::Idle,
         Shape::CpuWrite,
+        Shape::Fill,
     ] {
         all.extend([(shape, Form::PLAIN), (shape, Form::LOGGED)]);
     }
+    for shape in [Shape::Write, Shape::WriteThenReadApart, Shape::Fill] {
+        all.push((shape, Form::RESOLVING));
+    }
     for shape in [Shape::Write, Shape::Idle, Shape::CpuWrite] {
         for log in [None, Some(Duration::ZERO)] {
-            all.push((shape, Form { log, copied: true }));
+            all.push((
+                shape,
+                Form {
+                    log,
+                    copied: true,
+                    resolving: false,
+                },
+            ));
         }
     }
     for shape in [Shape::Write, Shape::Idle] {
@@ -132,6 +165,7 @@ fn configurations() -> Vec<(Shape, Form)> {
                 Form {
                     log: harvest,
                     copied,
+                    resolving: false,
                 },
             ));
         }
@@ -148,6 +182,13 @@ struct Log {
     state: Mutex<LogState>,
     /// How long each wait takes before it answers.
     latency: Duration,
+    /// It spends [`RESOLVE`] a page of each reported write.
+    resolving: bool,
+    /// The writes reported to it ([`DirtyPages::wrote`], [`DirtyPages::wrote_as`]): their count
+    /// and bytes, as the consumer's and named, and the nanoseconds it spent on them.
+    told: [AtomicU64; 2],
+    told_bytes: [AtomicU64; 2],
+    told_nanos: AtomicU64,
 }
 
 #[derive(Default)]
@@ -162,6 +203,37 @@ impl Log {
     /// Note the CPU's write of the bytes `range`, whole pages.
     fn mark(&self, range: Range<u64>) {
         self.note(range, 0);
+    }
+
+    /// A write of `range` the runtime reported, by `writer`.
+    fn reported(&self, range: Range<u64>, writer: u64) {
+        let started = std::time::Instant::now();
+        let named = usize::from(writer != 0);
+        self.told[named].fetch_add(1, Ordering::Relaxed);
+        self.told_bytes[named].fetch_add(range.end - range.start, Ordering::Relaxed);
+        if self.resolving {
+            let pages = range.end.div_ceil(PAGE) - range.start / PAGE;
+            let until = started + RESOLVE * u32::try_from(pages).unwrap_or(u32::MAX);
+            while std::time::Instant::now() < until {
+                std::hint::spin_loop();
+            }
+        }
+        self.note(range, writer);
+        let nanos = u64::try_from(started.elapsed().as_nanos()).unwrap_or(u64::MAX);
+        self.told_nanos.fetch_add(nanos, Ordering::Relaxed);
+    }
+
+    /// Its reported writes so far: the consumer's and named, each count and bytes, and the
+    /// nanoseconds spent.
+    fn reports(&self) -> [u64; 5] {
+        let load = |a: &AtomicU64| a.load(Ordering::Relaxed);
+        [
+            load(&self.told[0]),
+            load(&self.told_bytes[0]),
+            load(&self.told[1]),
+            load(&self.told_bytes[1]),
+            load(&self.told_nanos),
+        ]
     }
 
     fn note(&self, range: Range<u64>, writer: u64) {
@@ -202,11 +274,11 @@ impl DirtyPages for Log {
     }
 
     fn wrote(&self, range: Range<u64>) {
-        self.note(range, 0);
+        self.reported(range, 0);
     }
 
     fn wrote_as(&self, range: Range<u64>, writer: NonZeroU64) {
-        self.note(range, writer.get());
+        self.reported(range, writer.get());
     }
 
     fn changed_except(&self, since: DirtyStamp, writer: NonZeroU64, out: &mut Vec<Range<u64>>) {
@@ -430,6 +502,7 @@ fn frames(round: usize, shape: Shape, form: Form, len: usize) {
     let private = device.new_texture(&d).unwrap();
     let log = Arc::new(Log {
         latency: form.log.unwrap_or_default(),
+        resolving: form.resolving,
         ..Log::default()
     });
     let buffer = surface_buffer(
@@ -473,9 +546,11 @@ fn frames(round: usize, shape: Shape, form: Form, len: usize) {
         Vec::new(),
     );
     let mut before = device.work_counts();
+    let mut reports = log.reports();
     for k in 0..WARM + FRAMES {
         if k == WARM {
             before = device.work_counts();
+            reports = log.reports();
         }
         let cpu = process_cpu_us();
         let command_buffer = queue.command_buffer().unwrap();
@@ -514,6 +589,14 @@ fn frames(round: usize, shape: Shape, form: Form, len: usize) {
                     &vec![k as u8; (CPU_ROWS * ROW) as usize],
                 );
                 log.mark(bytes);
+                drawing.read(&command_buffer, &surface, &target);
+            }
+            Shape::Fill => {
+                let first = (k as u64 * 97) % (HEIGHT - CPU_ROWS);
+                let mut blit = command_buffer.blit_command_encoder().unwrap();
+                let bytes = first * ROW..(first + CPU_ROWS) * ROW;
+                blit.fill_buffer(&buffer, bytes, k as u8).unwrap();
+                blit.end_encoding().unwrap();
                 drawing.read(&command_buffer, &surface, &target);
             }
         }
@@ -558,10 +641,14 @@ fn frames(round: usize, shape: Shape, form: Form, len: usize) {
         }
     }
     let after = device.work_counts();
+    let told: Vec<f64> = (log.reports().iter().zip(reports))
+        .map(|(now, then)| (now - then) as f64 / FRAMES as f64)
+        .collect();
     println!(
         "SHADOW-SYNC on {}: round {round}, {shape:?}, {named}: commit_and_submit {} us, commit to \
          submitted {} us, GPU {} us, GPU end to completed handler {} us, commit to completion {} \
-         us, process CPU {} us; per frame: {}",
+         us, process CPU {} us; per frame: {}; log told {:.2} writes ({:.0} bytes) as the \
+         consumer's, {:.2} ({:.0} bytes) named, {:.0} us in the log",
         device.name(),
         median_p90(commits),
         median_p90(submits),
@@ -570,6 +657,11 @@ fn frames(round: usize, shape: Shape, form: Form, len: usize) {
         median_p90(waits),
         median_p90(cpus),
         per_frame(&before, &after),
+        told[0],
+        told[1],
+        told[2],
+        told[3],
+        told[4] / 1e3,
     );
     drop((surface, sampled, buffer, private, target));
     drop(mapping);
