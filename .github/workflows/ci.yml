@@ -149,7 +149,7 @@ jobs:
           status=0
           for row in \
             metal2vulkan=0 \
-            metal2vulkan-air=3 \
+            metal2vulkan-air=0 \
             metal2vulkan-runtime=70 \
             metal2vulkan-validation=0 \
             metal2vulkan-conformance=0 \

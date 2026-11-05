@@ -15,7 +15,7 @@
 //! The recursive MSL type descriptor of a stitching type is only required to be a node: it
 //! describes the value for a stitching graph, which no translation reads (the helper functions
 //! are ordinary functions of the module). Everything else is strict: an unknown key, a missing
-//! operand, or a repeated attribute is an [`AbiError`](crate::error::AbiError).
+//! operand, or a repeated attribute is an [`AbiError`].
 
 use super::keys::Key;
 use super::md::{kept_diag, node_ops, Ops, Site, Tok};

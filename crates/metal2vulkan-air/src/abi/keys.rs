@@ -317,7 +317,7 @@ const KEYS: &[(&str, Key)] = &[
 impl Key {
     /// The key spelled `bytes`, if it is one.
     ///
-    /// A `match` on the spellings rather than a scan of [`KEYS`]: rustc compiles it to a switch on
+    /// A `match` on the spellings rather than a scan of `KEYS`: rustc compiles it to a switch on
     /// the length and a comparison tree, where the scan compared up to 114 strings. Both are read
     /// once per attribute of every node of every entry point, so the scans dominated the metadata
     /// decoder (488,125 calls over 1,267 entry points of the public fixtures, 35.1 million table

@@ -14,7 +14,7 @@
 //!
 //! Attributes may come in any order and each at most once. An unknown key, a key the role does
 //! not define, a repeated or conflicting key, or a missing required key is an
-//! [`AbiError`](crate::error::AbiError). The parameter bindings, the output, each role's IR
+//! [`AbiError`]. The parameter bindings, the output, each role's IR
 //! type, and (for typed-pointer bitcode) a pointer's size against its pointee are cross-checked
 //! against the function by `abi::check`.
 
