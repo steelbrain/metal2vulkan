@@ -423,11 +423,20 @@ impl CopiedBuffers {
     /// Every write made before this call is in a publication the wait found, so the copy takes
     /// each. Every byte is compared where the copy has no earlier copy in to count on, or a log
     /// answered `false`. `tally` counts the stamps and waits (`WorkCounts::dirty_stamps_asked`
-    /// and kin).
-    pub(crate) fn copy_in(&self, counts: &Counters, tally: &DirtyTally) {
+    /// and kin). A logged copy also compares the bytes at the host addresses `in_flight` gives,
+    /// asked before the stamps: those committed command buffers wrote in place whose writes were
+    /// not reported as run yet (`DirtyShadows::in_flight`), which the program may know ran (a
+    /// host wait for an event they signal) before the logs hear it.
+    pub(crate) fn copy_in(
+        &self,
+        counts: &Counters,
+        tally: &DirtyTally,
+        in_flight: impl FnOnce() -> Vec<Range<u64>>,
+    ) {
         if self.live.load(Ordering::Relaxed) == 0 {
             return;
         }
+        let in_flight = in_flight();
         let asked: Vec<Asked> = (lock(&self.entries).iter())
             .filter_map(|entry| {
                 let log = entry.log.as_ref()?;
@@ -442,7 +451,7 @@ impl CopiedBuffers {
                 })
             })
             .collect();
-        let plans = planned(asked, tally);
+        let plans = planned(asked, tally, &in_flight);
         let (mut moved, mut skipped) = (0u64, 0u64);
         for entry in lock(&self.entries).iter_mut() {
             let plan = match &entry.log {
@@ -582,8 +591,9 @@ struct Stamped {
 /// The copies in of the copies `asked`, by their ids, in order: a stamp of each log asked, then
 /// waited for (counted in `tally`); the pages each log reports written since a copy's stamp
 /// asked once per log and stamp (or for one copy, of a copy whose merge back wrote its pages),
-/// with no lock of the copies' held.
-fn planned(asked: Vec<Asked>, tally: &DirtyTally) -> Vec<(u64, Plan)> {
+/// with no lock of the copies' held; and the bytes at the host addresses `in_flight`
+/// ([`CopiedBuffers::copy_in`]).
+fn planned(asked: Vec<Asked>, tally: &DirtyTally, in_flight: &[Range<u64>]) -> Vec<(u64, Plan)> {
     let mut stamped: Vec<Stamped> = Vec::new();
     for source in asked.iter().flat_map(|asked| asked.pages.sources()) {
         if !stamped.iter().any(|s| Arc::ptr_eq(&s.source, source)) {
@@ -646,6 +656,7 @@ fn planned(asked: Vec<Asked>, tally: &DirtyTally) -> Vec<(u64, Plan)> {
                     };
                     asked.pages.bytes_of(index, changed, |run| bytes.push(run));
                 }
+                bytes.extend(in_flight.iter().filter_map(|at| asked.pages.bytes_at(at)));
                 Some(blocks(bytes, asked.length))
             }
             _ => None,

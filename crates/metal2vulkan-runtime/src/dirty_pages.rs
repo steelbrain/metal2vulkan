@@ -31,7 +31,10 @@
 //!   runtime finishes its last batch, or a batch that signals an event, before it marks the
 //!   batch's events reached, tells the scheduler, its waiters and its completed handlers
 //!   ([`DirtyCommit::report_host_writes`]). A read of a shared event's value from its semaphore
-//!   (`signaledValue`, a host wait) can see the GPU's signal before that. Its shadows' copies
+//!   (`signaledValue`, a host wait) can see the GPU's signal before that, so a copy of the pages
+//!   made on the CPU at a commit (a copied host buffer's) also compares the bytes written in place
+//!   by every command buffer not yet so reported ([`DirtyShadows::in_flight`]); a copy on the GPU
+//!   is ordered after the write by the tracker. Its shadows' copies
 //!   back and merges into the pages are the shadow's own writes on every log of the pages, never
 //!   the consumer's. Metal's contract has a command reach a resource only through a binding or a
 //!   residency it named.
@@ -414,6 +417,11 @@ pub(crate) struct DirtyShadows {
     /// The writes of the committed command buffers not yet completed that wait for an event or a
     /// semaphore ([`DirtyShadows::committed`]), each one's apart.
     waiting: Mutex<Vec<Arc<WaitingWrites>>>,
+    /// The host addresses each committed command buffer wrote in place, from its commit until its
+    /// writes were reported as run ([`DirtyShadows::in_flight`]), by its number.
+    in_flight: Mutex<Vec<(u64, Box<[Range<u64>]>)>>,
+    /// The number the next such command buffer takes.
+    next_in_flight: AtomicU64,
 }
 
 /// A committed command buffer's writes, kept while it waits for an event or a semaphore and has
@@ -674,9 +682,15 @@ impl PagesLog {
         }
     }
 
+    /// The host addresses of the object's bytes `bytes`, cut to the object's.
+    fn addresses(&self, bytes: &Range<u64>) -> Range<u64> {
+        let (start, end) = (bytes.start.min(self.length), bytes.end.min(self.length));
+        self.pointer + start..self.pointer + end
+    }
+
     /// The object's bytes at the host addresses `addresses`, cut to the object's; `None` where
     /// none lies there.
-    fn bytes_at(&self, addresses: &Range<u64>) -> Option<Range<u64>> {
+    pub(crate) fn bytes_at(&self, addresses: &Range<u64>) -> Option<Range<u64>> {
         let start = (addresses.start.saturating_sub(self.pointer)).min(self.length);
         let end = (addresses.end.saturating_sub(self.pointer)).min(self.length);
         (start < end).then_some(start..end)
@@ -867,6 +881,9 @@ impl DirtyShadows {
         }
         commit.report_host_writes();
         commit.ran |= ends;
+        if ends {
+            self.reported(commit);
+        }
     }
 
     /// A command buffer whose commit was `commit` completed, `failed` or not: its writes are
@@ -880,6 +897,7 @@ impl DirtyShadows {
             }
             commit.report_host_writes();
         }
+        self.reported(commit);
         // Its writes ran and were reported again, stamped after them: the logs they met may hold
         // again from the next commit on.
         if let Some(writes) = &commit.waiting {
@@ -993,7 +1011,36 @@ impl DirtyShadows {
                 }
             }
         }
+        if !commit.host.is_empty() {
+            let number = self.next_in_flight.fetch_add(1, Ordering::Relaxed);
+            let addresses: Box<[Range<u64>]> = (commit.host.iter())
+                .flat_map(|(pages, ranges)| ranges.iter().map(|bytes| pages.addresses(bytes)))
+                .collect();
+            lock(&self.in_flight).push((number, addresses));
+            commit.in_flight = Some(number);
+        }
         commit.report_host_writes();
+    }
+
+    /// The host addresses the committed command buffers wrote in place whose writes were not yet
+    /// reported as run ([`ran`](Self::ran)): a copy of the pages made on the CPU at a commit
+    /// compares them whatever the logs say (`copied.rs`). The GPU may have written them already,
+    /// and a host wait for an event (`signaledValue`, `waitUntilSignaledValue`) reads its
+    /// semaphore, so the program may know it before the report, and commit work that reads the
+    /// copy. Taken before the copy asks the logs for a stamp: a command buffer gone from here was
+    /// reported before that stamp.
+    pub(crate) fn in_flight(&self) -> Vec<Range<u64>> {
+        let in_flight = lock(&self.in_flight);
+        (in_flight.iter())
+            .flat_map(|(_, addresses)| addresses.iter().cloned())
+            .collect()
+    }
+
+    /// `commit`'s writes were reported as run: no copy needs to compare them apart any more.
+    fn reported(&self, commit: &DirtyCommit) {
+        if let Some(number) = commit.in_flight {
+            lock(&self.in_flight).retain(|(kept, _)| *kept != number);
+        }
     }
 }
 
@@ -1019,6 +1066,9 @@ pub(crate) struct DirtyCommit {
     host: Vec<(Arc<PagesLog>, Vec<Range<u64>>)>,
     /// The logs heard of its writes after they all ran ([`DirtyShadows::ran`]).
     ran: bool,
+    /// Its number among the command buffers whose writes in place were not reported as run yet
+    /// ([`DirtyShadows::in_flight`]), from its commit.
+    in_flight: Option<u64>,
 }
 
 /// The most writes a command buffer keeps apart, past which they are one write of everything.

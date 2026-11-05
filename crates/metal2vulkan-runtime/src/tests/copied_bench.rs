@@ -179,7 +179,7 @@ fn bench(logged: bool, named: bool) {
         for _ in 0..RUNS {
             change_cpu(&mut pairs, &mut rng, &tell);
             let started = Instant::now();
-            buffers.copy_in(&counts, &tally);
+            buffers.copy_in(&counts, &tally, Vec::new);
             ins.push(started.elapsed().as_secs_f64() * 1e3);
             let changed = change_gpu(&mut pairs, &mut rng, &|_| {});
             let written = written(&changed);
@@ -196,9 +196,9 @@ fn bench(logged: bool, named: bool) {
         );
     };
     // Every byte agrees first, and the logged copies hold a stamp.
-    buffers.copy_in(&counts, &tally);
+    buffers.copy_in(&counts, &tally, Vec::new);
     buffers.merge_back(&counts, &Written::all());
-    buffers.copy_in(&counts, &tally);
+    buffers.copy_in(&counts, &tally, Vec::new);
     let mut nothing = |_: &mut [Pair], _: &mut Rng, _: &dyn Fn(Range<u64>)| Vec::new();
     let mut nothing_either = |_: &mut [Pair], _: &mut Rng, _: &dyn Fn(Range<u64>)| Vec::new();
     report("(a) nothing changed", &mut nothing, &mut nothing_either);

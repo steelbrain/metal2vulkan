@@ -107,7 +107,7 @@ fn copied_merge_back_of_unwritable_pages_drops_the_gpu_s_writes() {
     assert_eq!(copy, original, "the copy holds the pages' bytes again");
     // A CPU write to the pages reaches the copy at the next commit.
     pages[7] = !pages[7];
-    buffers.copy_in(&counts, &DirtyTally::default());
+    buffers.copy_in(&counts, &DirtyTally::default(), Vec::new);
     assert_eq!(copy[7], pages[7]);
     drop(copied);
     // A copy of writable pages merges the GPU's writes back.

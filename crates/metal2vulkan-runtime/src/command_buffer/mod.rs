@@ -3288,7 +3288,11 @@ impl CommandBuffer {
         // Every byte the CPU changed in a copied host buffer's pages is in its copy before any of
         // this command buffer's work is submitted (`copied.rs`): copied in with no lock of the
         // command buffer's held, as a copy over logged pages waits for the log's publication.
-        shared.copied.copy_in(&shared.counts, shared.dirty.tally());
+        shared
+            .copied
+            .copy_in(&shared.counts, shared.dirty.tally(), || {
+                shared.dirty.in_flight()
+            });
         let (waits, away, reaches, unreplayable, reset) = {
             let mut state = self.state();
             state.committing = false;
