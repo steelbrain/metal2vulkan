@@ -17,7 +17,8 @@
 //! (`device-color-conversion`): its 0.25, 0.5 and 0.75 are 63.75, 127.5 and 191.25 codes, and
 //! Vulkan lets the device store either code nearest each (the RTX 5080 Laptop GPU stores 0.5 as
 //! 127, Metal 128), so such a sample is compared against those codes ([`only_cleared_codes_apart`],
-//! a `SAMPLE-FILLS-CLEAR` line); every other word is Metal's. The depths outside `[0, 1]` (`d32-wide-4`)
+//! a `SAMPLE-FILLS-CLEAR` line), and so is a sample a colour fill wrote; every other word is
+//! Metal's. The depths outside `[0, 1]` (`d32-wide-4`)
 //! are not compared where the device's depth copies go by a draw that announced the values it
 //! changes (`drawn-depth-copy`), whose samples it prints on a `SAMPLE-FILLS-DRAWN` line; a
 //! differing case prints a `SAMPLE-FILLS-DIFFERS` line.
@@ -573,19 +574,21 @@ fn line_words(line: &str) -> Option<(&str, Vec<&str>)> {
 /// read-back line prints it: red in the low byte.
 const CLEARED_RGBA8: &str = "ffbf8040";
 
-/// Whether `lines` differ from Metal's `metal` only in samples Metal holds the pass's clear in
-/// ([`CLEARED_RGBA8`]) whose every channel this device holds as one of the two codes nearest the
-/// clear's scaled value: the device's conversion of a clear, which Vulkan lets store either.
-fn only_cleared_codes_apart(lines: &[String], metal: &[String]) -> bool {
-    let near = |word: &str| {
+/// Whether `lines` differ from Metal's `metal` only in samples that hold the pass's clear
+/// (`(0.25, 0.5, 0.75, 1)`, Metal's [`CLEARED_RGBA8`]) or the case's colour fill (`fill`), whose
+/// every channel this device and Metal each hold as one of the two codes nearest that colour's
+/// scaled value: the device's conversion of a clear or a plain colour fill, which Vulkan lets
+/// store either.
+fn only_cleared_codes_apart(lines: &[String], metal: &[String], fill: Option<[f64; 4]>) -> bool {
+    let near = |word: &str, color: [f64; 4]| {
         u32::from_str_radix(word, 16).is_ok_and(|word| {
             let codes = word.to_le_bytes();
-            [0.25f64, 0.5, 0.75, 1.0]
-                .iter()
-                .zip(codes)
-                .all(|(c, code)| (f64::from(code) - c * 255.0).abs() < 1.0)
+            (color.iter().zip(codes)).all(|(c, code)| (f64::from(code) - c * 255.0).abs() < 1.0)
         })
     };
+    let colors = [Some([0.25, 0.5, 0.75, 1.0]), fill];
+    let converted =
+        |g: &str, w: &str| (colors.iter().flatten()).any(|&color| near(g, color) && near(w, color));
     lines.len() == metal.len()
         && lines
             .iter()
@@ -594,8 +597,7 @@ fn only_cleared_codes_apart(lines: &[String], metal: &[String]) -> bool {
                 (Some((g_head, g)), Some((w_head, w))) => {
                     g_head == w_head
                         && g.len() == w.len()
-                        && (g.iter().zip(&w))
-                            .all(|(g, w)| g == w || (*w == CLEARED_RGBA8 && near(g)))
+                        && (g.iter().zip(&w)).all(|(g, w)| g == w || converted(g, w))
                 }
                 _ => got == want,
             })
@@ -704,11 +706,18 @@ fn multisample_fills_write_metal_s_samples() {
         }
         let cleared = converted
             && PixelFormat::try_from(case.1).is_ok_and(|pf| pf == PixelFormat::RGBA8Unorm)
-            && metal_lines(case_name).is_some_and(|metal| only_cleared_codes_apart(&lines, &metal));
+            && metal_lines(case_name).is_some_and(|metal| {
+                let fill = match case.7 {
+                    Fill::Color(color) => Some(color),
+                    Fill::Bytes(_) => None,
+                };
+                only_cleared_codes_apart(&lines, &metal, fill)
+            });
         if cleared {
             println!(
                 "SAMPLE-FILLS-CLEAR {name}: {case_name}: the announced conversion of the pass's \
-                 clear stands a nearest code apart from Metal's, every other word Metal's: {}",
+                 clear or the colour fill stands a nearest code apart from Metal's, every other \
+                 word Metal's: {}",
                 lines[1]
             );
             continue;
