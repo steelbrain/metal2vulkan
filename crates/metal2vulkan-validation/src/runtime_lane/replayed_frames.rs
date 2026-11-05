@@ -380,7 +380,7 @@ fn split(before: &WorkCounts, after: &WorkCounts) -> String {
          compute_pipelines_made_ms {:.1} variant_pipelines_made {} records_read {} \
          heads_held_for_host_steps {} heads_held_for_earlier_commits {} shapes_found_or_made {} \
          host_step_chunks_kept {} host_step_chunks_recorded_again {} host_step_records_compared {} \
-         host_step_compare_ms {:.2}",
+         host_step_compare_ms {:.2} scheduler_passes {} footprints_built {}",
         after.host_steps_recorded - before.host_steps_recorded,
         ms(after.host_step_nanos - before.host_step_nanos),
         ms(after.render_pipeline_create_nanos - before.render_pipeline_create_nanos),
@@ -394,6 +394,8 @@ fn split(before: &WorkCounts, after: &WorkCounts) -> String {
         after.host_step_chunks_recorded_again - before.host_step_chunks_recorded_again,
         after.host_step_records_compared - before.host_step_records_compared,
         ms(after.host_step_compare_nanos - before.host_step_compare_nanos),
+        after.scheduler_passes - before.scheduler_passes,
+        after.footprints_built - before.footprints_built,
     )
 }
 
