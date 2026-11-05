@@ -1351,8 +1351,6 @@ struct Found {
     /// Cases the band drew with a vertex half a step off the subpixel grid on a driver whose snap
     /// is not measured to be Metal's, announced (`device-subpixel-snap`): left unchecked.
     snaps: usize,
-    /// Of the ties and the snaps, the cases of a triangle's edges at a width other than 1.
-    edges_unchecked: usize,
     /// The device's lines.
     facts: Option<LineFacts>,
 }
