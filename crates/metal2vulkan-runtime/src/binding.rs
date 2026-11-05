@@ -2410,13 +2410,19 @@ pub(super) fn command_uses_into(
     let kept = (&**plan, Some(plan), command, tables);
     let keeps = uses_into(call, kept, (index, indirect), into)?;
     if cfg!(debug_assertions) && keeps {
-        let whole = command_uses(call, plan, command, tables, index, indirect)?;
-        let same = (into.uses == whole.uses && into.sources == whole.sources)
-            && (into.used == whole.used && into.resident == whole.resident);
-        assert!(
-            same,
-            "a command kept uses of what the encoder made resident not its own"
-        );
+        // Made whole over the last check's storage: a draw's allocations are bounded in builds
+        // with debug assertions too (`runtime_lane::frame_costs`).
+        WHOLE_USES.with_borrow_mut(|whole| {
+            let made = (&**plan, None, command, tables);
+            uses_into(call, made, (index, indirect), whole)?;
+            let same = (into.uses == whole.uses && into.sources == whole.sources)
+                && (into.used == whole.used && into.resident == whole.resident);
+            assert!(
+                same,
+                "a command kept uses of what the encoder made resident not its own"
+            );
+            Ok::<_, Error>(())
+        })?;
         KEPT_RESIDENT_CHECKS.with(|checks| checks.set(checks.get() + 1));
     }
     Ok(())
@@ -2426,6 +2432,10 @@ thread_local! {
     /// The commands whose uses of what the encoder made resident this thread kept (none, where
     /// their plan lists none) and checked against those made whole ([`command_uses_into`]), in builds with debug assertions.
     static KEPT_RESIDENT_CHECKS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    /// The uses [`command_uses_into`]'s check last made whole on this thread, whose storage its
+    /// next check makes them in ([`command_uses`]'s, as each is made for no kept plan).
+    static WHOLE_USES: std::cell::RefCell<CommandUses> =
+        std::cell::RefCell::new(CommandUses::default());
 }
 
 /// How many commands' kept uses of what the encoder made resident this thread checked so far
