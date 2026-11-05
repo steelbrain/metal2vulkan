@@ -546,8 +546,9 @@ driver's. Each is open work.
   (`A1BGR5Unorm`, `ABGR4Unorm` on the RTX 5080). Its word view (`WordAttachment`) takes writes
   (blended and partly masked ones through the pixel interlock, the row above), color inputs and
   resolves; a blend of an output of fewer than four lanes is `NotImplemented`, and a blend of the
-  second source, or a blend or partial mask on a device without the interlock, is refused as the
-  device lacking the format.
+  second source, or a blend or partial mask on a device without the interlock or on one that
+  orders fetch through rasterization-order input attachments (lavapipe: the function blends and
+  merges no packed word over its input attachment), is refused as the device lacking the format.
 - **A blended or fetched one- or two-channel 8-bit sRGB attachment on a device that does not
   render the format** (`R8Unorm_sRGB`, `RG8Unorm_sRGB` on the RTX 5080 and ANV). Its word view
   takes writes (partly masked ones through the pixel interlock, or over the attachment's input
