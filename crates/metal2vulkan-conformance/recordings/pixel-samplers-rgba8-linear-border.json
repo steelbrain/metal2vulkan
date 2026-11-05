@@ -700,7 +700,7 @@
         "functions_translated": 3,
         "gate_waits": 4,
         "gate_waits_slept": 4,
-        "heads_held_for_host_steps": 4,
+        "heads_held_for_host_steps": 3,
         "heap_tables_worked_out": 3,
         "host_steps_recorded": 3,
         "host_texel_copies": 1,

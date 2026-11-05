@@ -372,6 +372,7 @@
         "render_passes_made": 2,
         "resident_textures_looked_at": 1,
         "scheduled_where_submitted": 1,
+        "scheduler_passes": 1,
         "scheduler_passes_by_waiters": 1,
         "scheduler_sleeps": 1,
         "scheduler_wakes_commit": 1,
@@ -387,6 +388,9 @@
         "variants_taken_back": 1,
         "wakes_completion_waiters": 1,
         "wakes_spared": 7
+      },
+      "moving": {
+        "batches_submitted_by_waiters": 0
       },
       "composed": {
         "argument_samplers_taken": 1,

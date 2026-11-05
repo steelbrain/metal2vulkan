@@ -650,7 +650,7 @@
         "unrun_instances_ended": 1,
         "variant_pipelines_made": 3,
         "wakes_completion_waiters": 2,
-        "wakes_spared": 17
+        "wakes_spared": 16
       },
       "moving": {
         "gate_waits_slept": 1
