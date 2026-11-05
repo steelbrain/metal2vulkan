@@ -19,6 +19,8 @@
 //! - **`bundle_no_copy`**: as `bundle`, each command's own buffer a no-copy buffer over host
 //!   pages of its own, as a guest's buffers reach the runtime.
 //! - **`bundle_read`**: as `bundle`, the encoder making nothing resident for writing.
+//! - **`bundle_both`**: as `bundle`, what the encoder makes resident made so for the vertex and
+//!   fragment stages, as a browser's bind groups visible to both are.
 //!
 //! [`EXTRA_VAR`] has the render encoder make that many more buffers resident for reading.
 //!
@@ -54,8 +56,13 @@ enum Shape {
     /// The encoder's state inherited, `params`' windows shared.
     Inherited,
     /// Nothing inherited, a buffer of each command's own, a no-copy one where `no_copy`; `out`
-    /// made resident for the vertex stage's writes where `writes`.
-    Bundle { no_copy: bool, writes: bool },
+    /// made resident for the vertex stage's writes where `writes`; what is made resident for
+    /// the fragment stage too where `fragment`, as a browser's bind groups are.
+    Bundle {
+        no_copy: bool,
+        writes: bool,
+        fragment: bool,
+    },
 }
 
 /// The variable that sets how many buffers of no command's the render encoder makes resident
@@ -76,6 +83,7 @@ struct Frames {
     own: Vec<Buffer>,
     extra: Vec<Buffer>,
     writes: bool,
+    stages: RenderStages,
     _pages: Option<Mapping>,
 }
 
@@ -161,6 +169,12 @@ impl Frames {
                 .map(|_| buffer_with(&device, &window).unwrap())
                 .collect(),
             writes: !matches!(shape, Shape::Bundle { writes: false, .. }),
+            stages: match shape {
+                Shape::Bundle { fragment: true, .. } => {
+                    RenderStages::VERTEX | RenderStages::FRAGMENT
+                }
+                _ => RenderStages::VERTEX,
+            },
             _pages: pages,
         }
     }
@@ -189,6 +203,13 @@ impl Frames {
             .unwrap();
         if self.writes {
             self.setup.resident(&mut encoder);
+            encoder
+                .use_resource(
+                    self.setup.out.as_resource(),
+                    ResourceUsage::WRITE,
+                    self.stages,
+                )
+                .unwrap();
         }
         for indices in [&self.short_indices, &self.wide_indices] {
             encoder
@@ -204,7 +225,7 @@ impl Frames {
                 .map(Buffer::as_resource)
                 .collect();
             encoder
-                .use_resources(&own, ResourceUsage::READ, RenderStages::VERTEX)
+                .use_resources(&own, ResourceUsage::READ, self.stages)
                 .unwrap();
         }
         encoder
@@ -350,6 +371,7 @@ fn host_step_frames_bundle() {
         Shape::Bundle {
             no_copy: false,
             writes: true,
+            fragment: false,
         },
         false,
     );
@@ -363,6 +385,7 @@ fn host_step_frames_bundle_no_copy() {
         Shape::Bundle {
             no_copy: true,
             writes: true,
+            fragment: false,
         },
         false,
     );
@@ -376,6 +399,21 @@ fn host_step_frames_bundle_read() {
         Shape::Bundle {
             no_copy: false,
             writes: false,
+            fragment: false,
+        },
+        false,
+    );
+}
+
+#[test]
+#[ignore = "a measurement: run it alone, in release"]
+fn host_step_frames_bundle_both() {
+    measure(
+        "bundle_both",
+        Shape::Bundle {
+            no_copy: false,
+            writes: true,
+            fragment: true,
         },
         false,
     );
