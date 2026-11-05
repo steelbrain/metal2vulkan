@@ -24,10 +24,10 @@ use super::rebind_behind_a_wait::{Page, BYTES};
 #[cfg(debug_assertions)]
 use crate::render::dynamic_compares;
 use crate::{
-    BlitOption, Buffer, CommandBufferStatus, Degradation, DegradeNotice, Device, DeviceKind,
-    DeviceOptions, Error, MessageSink, Origin, PipelineOptions, Region, RenderCommandEncoder,
-    RenderPipelineState, ResourceOptions, SamplerState, ShaderCacheOptions, Size, Texture,
-    TextureDescriptor, WorkCounts,
+    BlitOption, Buffer, CommandBufferStatus, CommandQueue, Degradation, DegradeNotice, Device,
+    DeviceKind, DeviceOptions, Error, MessageSink, Origin, PipelineOptions, Region,
+    RenderCommandEncoder, RenderPipelineState, ResourceOptions, SamplerState, ShaderCacheOptions,
+    Size, Texture, TextureDescriptor, WorkCounts,
 };
 use metal2vulkan::bind::SamplerDescriptor;
 use metal2vulkan::metal::{
@@ -146,8 +146,24 @@ fn commands(device: &Device) -> BTreeMap<String, u64> {
 }
 
 /// Encode `encode` in one pass into a new cleared `RGBA8Unorm` target, commit and wait: what it
-/// recorded and drew.
+/// recorded and drew. Its primary counts as begun (`begin_command_buffer`) whether its encoder
+/// began it or took it begun ahead (`WorkCounts::encoder_primaries_begun_ahead`): the thread that
+/// completed the command buffer before begins one of its pool's primaries for the next to take
+/// where no thread waited for it (`spares.rs`), so which of the two a run takes follows how the
+/// GPU's completion of the run before met that run's wait.
 pub(super) fn run(device: &Device, encode: impl Fn(&mut RenderCommandEncoder)) -> Ran {
+    let queue = device.new_command_queue().unwrap();
+    run_on(device, &queue, encode, true)
+}
+
+/// [`run`] on `queue`, its command buffer's completion waited for where `waited`, else its status
+/// read until it completed, no thread waiting for it.
+fn run_on(
+    device: &Device,
+    queue: &CommandQueue,
+    encode: impl Fn(&mut RenderCommandEncoder),
+    waited: bool,
+) -> Ran {
     let mut descriptor = TextureDescriptor::texture_2d(PixelFormat::RGBA8Unorm, SIDE, SIDE, false);
     descriptor.usage = TextureUsage::RENDER_TARGET;
     descriptor.resource_options = ResourceOptions::private();
@@ -155,7 +171,6 @@ pub(super) fn run(device: &Device, encode: impl Fn(&mut RenderCommandEncoder)) -
     let back = device
         .new_buffer(SIDE * SIDE * 4, ResourceOptions::shared())
         .unwrap();
-    let queue = device.new_command_queue().unwrap();
     let command_buffer = queue.command_buffer().unwrap();
     let (before, recorded) = (device.work_counts(), commands(device));
     let mut encoder = command_buffer
@@ -164,11 +179,16 @@ pub(super) fn run(device: &Device, encode: impl Fn(&mut RenderCommandEncoder)) -
     encode(&mut encoder);
     encoder.end_encoding().unwrap();
     let after = device.work_counts();
+    let ahead = after.encoder_primaries_begun_ahead - before.encoder_primaries_begun_ahead;
     let commands = commands(device)
         .into_iter()
         .map(|(name, count)| {
             let before = recorded.get(&name).copied().unwrap_or(0);
-            (name, count - before)
+            let begun = match name == "begin_command_buffer" {
+                true => ahead,
+                false => 0,
+            };
+            (name, count - before + begun)
         })
         .collect();
     let mut blit = command_buffer.blit_command_encoder().unwrap();
@@ -187,8 +207,12 @@ pub(super) fn run(device: &Device, encode: impl Fn(&mut RenderCommandEncoder)) -
     .unwrap();
     blit.end_encoding().unwrap();
     command_buffer.commit().unwrap();
-    command_buffer.wait_until_completed_for(WAIT).unwrap();
-    assert_eq!(command_buffer.status(), CommandBufferStatus::Completed);
+    let completed = || command_buffer.status() == CommandBufferStatus::Completed;
+    match waited {
+        true => command_buffer.wait_until_completed_for(WAIT).unwrap(),
+        false => until("the command buffer completed, no thread waiting", completed),
+    }
+    assert!(completed());
     Ran {
         commands,
         words: words_of(&back),
@@ -209,6 +233,51 @@ pub(super) fn warm(device: &Device, encode: impl Fn(&mut RenderCommandEncoder)) 
     until("the pipeline pool idle", || {
         device.work_counts().pipeline_pool_busy == 0
     });
+}
+
+/// A run's commands count its primary as begun whether its encoder began it or took it begun
+/// ahead ([`run`]): a run after a command buffer that completed while no thread waited for it,
+/// whose pool's primary its completing thread began ahead (`WorkCounts::primaries_begun_ahead`)
+/// and the run's encoder took, counts the commands of a run whose encoder began its own.
+#[test]
+fn a_run_counts_its_primary_begun_by_its_encoder_or_ahead_alike() {
+    let scratch = Scratch::new("draw-again-begun-ahead");
+    let heard = Heard::default();
+    let device = device(&scratch.0, &[], &heard);
+    let state = adding_state(&device);
+    let plain = |encoder: &mut RenderCommandEncoder| rectangles(encoder, &state, |_| {});
+    warm(&device, plain);
+    let taken = |ran: &Ran| ran.counted(|counts| counts.encoder_primaries_begun_ahead);
+    // A run whose encoder began its own primary, as one after a command buffer a thread waited
+    // for at its completion does.
+    let own = std::cell::RefCell::new(None);
+    until("a run whose encoder began its own primary", || {
+        let ran = run(&device, plain);
+        let began = taken(&ran) == 0;
+        if began {
+            own.replace(Some(ran));
+        }
+        began
+    });
+    let own = own.into_inner().unwrap();
+    // A run that completes while no thread waits for it, then the primary its pool's completing
+    // thread begins ahead, and a run on the same queue: a pool serves its queue family's command
+    // buffers alone, and a new queue may lie in another family.
+    let ahead = |counts: &WorkCounts| counts.primaries_begun_ahead;
+    let begun = ahead(&device.work_counts());
+    let queue = device.new_command_queue().unwrap();
+    run_on(&device, &queue, plain, false);
+    until("its pool's primary begun ahead", || {
+        ahead(&device.work_counts()) > begun
+    });
+    let after_ahead = run_on(&device, &queue, plain, true);
+    assert_eq!(
+        taken(&after_ahead),
+        1,
+        "the encoder took the primary begun ahead"
+    );
+    assert_eq!(after_ahead.commands, own.commands);
+    assert_eq!(after_ahead.commands["begin_command_buffer"], 1);
 }
 
 /// Set `state`, the rectangle over the whole target and its color, `1 / 64` in each channel.
