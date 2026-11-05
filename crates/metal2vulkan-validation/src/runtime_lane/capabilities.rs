@@ -10,8 +10,8 @@ use metal2vulkan::error::{Capability, Feature, Unsupported};
 use metal2vulkan::metal::{PixelFormat, TextureType, TextureUsage};
 use metal2vulkan::vk::SampleCountFlags;
 use metal2vulkan_runtime::{
-    CommandBufferStatus, CopyProblem, Device, DeviceProperties, Error, Invalid, Problem, Query,
-    ResourceOptions, RuntimeGap, Size, Texture, TextureDescriptor, TextureProblem,
+    CommandBufferStatus, CopyProblem, Device, DeviceProperties, Error, Invalid, Nil, Problem,
+    Query, ResourceOptions, RuntimeGap, Size, Texture, TextureDescriptor, TextureProblem,
     DEFAULT_PROTECTION_OPTIONS,
 };
 use std::time::Duration;
@@ -446,6 +446,75 @@ fn textures_are_made_as_the_texture_queries_answer() {
 /// driver reports (`DeviceProperties::gpu_core_count`) or none, never Apple's GPU's; each private
 /// property with no answer gives none, and they are announced once, naming them, however often
 /// the properties are read.
+/// A buffer one byte past `max_buffer_length` is nil, as plain Metal answers
+/// (`newBufferWithLength:options:` past `maxBufferLength`), in every storage mode, and the
+/// longest Metal's rule allows is its compile layer's answer or three quarters of the device's
+/// largest device-local heap, to 16 KiB (`DeviceProperties::max_buffer_length`), printed as
+/// `MAX-BUFFER-LENGTH`. `Shared` and `Private` storage are refused alike.
+#[test]
+fn a_buffer_past_max_buffer_length_is_nil() {
+    let cache = ScratchCache::new().unwrap();
+    let messages = Messages::default();
+    {
+        let device = validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
+        let cap = device.properties().max_buffer_length;
+        let limit = device.compile_device().metal_properties().max_buffer_length;
+        println!(
+            "MAX-BUFFER-LENGTH {}: {cap} ({:.3} GiB) of the compile layer's {limit}",
+            device.name(),
+            cap as f64 / f64::from(1u32 << 30)
+        );
+        for options in [ResourceOptions::shared(), ResourceOptions::private()] {
+            let past = device.new_buffer(cap + 1, options);
+            assert_eq!(
+                past.err(),
+                Some(Error::Nil(Nil::new(
+                    "new_buffer",
+                    Problem::BufferLength { length: cap + 1 }
+                ))),
+                "{options:?}"
+            );
+        }
+    }
+    layer_reported_nothing_at_all(&messages);
+}
+
+/// A `Private` buffer of `max_buffer_length` bytes is made where the device's heap bounds the
+/// length (below the compile layer's answer, the RTX 5080 Laptop GPU's), and one byte more is nil.
+/// It takes three quarters of the device's memory, so it runs only by name.
+#[test]
+#[ignore = "allocates three quarters of the device's memory: run by name with --run-ignored all"]
+fn a_buffer_of_max_buffer_length_is_made_where_the_heap_bounds_it() {
+    let cache = ScratchCache::new().unwrap();
+    let messages = Messages::default();
+    {
+        let device = validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
+        let cap = device.properties().max_buffer_length;
+        let limit = device.compile_device().metal_properties().max_buffer_length;
+        if cap == limit {
+            println!(
+                "SKIPPED {}: no heap bounds max_buffer_length ({cap})",
+                device.name()
+            );
+            return;
+        }
+        let made = device.new_buffer(cap, ResourceOptions::private());
+        println!(
+            "MAX-BUFFER-LENGTH {}: a Private buffer of {cap} bytes made: {}",
+            device.name(),
+            made.is_ok()
+        );
+        let made = made.unwrap_or_else(|e| panic!("a buffer of {cap} bytes: {e}"));
+        assert_eq!(made.length(), cap);
+        drop(made);
+        assert!(matches!(
+            device.new_buffer(cap + 1, ResourceOptions::private()),
+            Err(Error::Nil(_))
+        ));
+    }
+    layer_reported_nothing_at_all(&messages);
+}
+
 #[test]
 fn the_device_reports_its_own_core_count() {
     use metal2vulkan_runtime::{Degradation, PrivateCount};

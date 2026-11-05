@@ -4126,6 +4126,13 @@ each item named states the rule in full.
   follows its usage bits and shape; the bookkeeping answer follows the measured rule.
 - **Apple's private texture usage bits are kept** in `TextureUsage` (`NO_CONCURRENT_ACCESS`,
   `VIDEO`, `BLOCK_WRITES_ONLY`).
+- **`max_buffer_length` takes the largest device-local heap for Metal's working set**
+  (`DeviceProperties::max_buffer_length`, Metal's `maxBufferLength`). Metal answers three quarters
+  of `recommendedMaxWorkingSetSize`, to 16 KiB, on the Radeon Pro 5300M and the M3 Max
+  (measured), and Vulkan has no working-set query, so the runtime answers the smaller of the
+  compile layer's length and three quarters of the largest `DEVICE_LOCAL` heap, to 16 KiB: about
+  12 GiB on a 16 GiB card, where the device's own `maxBufferSize` is 2^40. A longer buffer is nil,
+  as Metal's is.
 - **A heap larger than the device's `maxBufferSize` is refused**: a heap's buffers live in one
   `VkBuffer` over the heap's allocation.
 - **A `Shared` heap's textures are linear images** where the device's optimal images take no
