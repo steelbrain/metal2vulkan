@@ -791,7 +791,7 @@ pub(crate) fn returns_no_nan(cx: &SelectCx<'_>, field: u32) -> bool {
         let InstKind::Ret(returned) = &inst.kind else {
             continue;
         };
-        let held = (*returned).and_then(&member);
+        let held = (*returned).and_then(member);
         if !held.is_some_and(|v| crate::lower::texture::holds_no_nan(cx, v)) {
             return false;
         }

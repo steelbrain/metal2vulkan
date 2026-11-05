@@ -2524,16 +2524,15 @@ fn centre_denormals(
     // The clauses of `held` on a runtime slot `n`, one per axis whose bound mode parts the texels:
     // that axis's mode is none of the three that do not.
     let parted = |n: u32, held: NoteTest| -> Vec<NoteClause> {
-        (0..2)
-            .map(|axis| {
+        // The s and t axes' fields of the word.
+        (SamplerWord::ADDRESS_SHIFT.iter())
+            .zip(SamplerWord::ADDRESS)
+            .take(2)
+            .map(|(&shift, mask)| {
                 let mut clause = NoteClause::from([held]);
                 for mode in [M::ClampToEdge, M::MirrorClampToEdge, M::MirrorRepeat] {
-                    let bits = mode.as_raw() << SamplerWord::ADDRESS_SHIFT[axis];
-                    clause.insert(NoteTest::differ(
-                        NoteOn::BoundSampler(n),
-                        SamplerWord::ADDRESS[axis],
-                        bits,
-                    ));
+                    let bits = mode.as_raw() << shift;
+                    clause.insert(NoteTest::differ(NoteOn::BoundSampler(n), mask, bits));
                 }
                 clause
             })
