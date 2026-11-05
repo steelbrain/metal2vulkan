@@ -347,7 +347,6 @@ pub(super) fn overflow_candidates(
 
 /// Where a device's memory may lie ([`Memory::type_view`]), for the crate's device tests.
 #[cfg(all(test, any(m2v_cpu_icd, all(m2v_gpu, m2v_gpu_hazards))))]
-#[derive(Debug)]
 pub(super) struct TypeView {
     /// The device's memory types.
     pub(super) types: Vec<vk::MemoryType>,

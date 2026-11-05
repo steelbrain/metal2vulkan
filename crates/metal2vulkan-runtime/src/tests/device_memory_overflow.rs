@@ -237,7 +237,7 @@ fn resources_past_device_local_memory_are_made_used_and_read_back() {
     let heap_bytes = heap.map_or(0, |heap| view.heap_sizes[heap]);
     let pageable = device.enables_extension(ash::ext::pageable_device_local_memory::NAME);
     let types: Vec<String> = (view.types.iter())
-        .map(|ty| format!("{:?}@{}", ty.property_flags, ty.heap_index))
+        .map(|ty| format!("{:#x}@{}", ty.property_flags.as_raw(), ty.heap_index))
         .collect();
     eprintln!(
         "VRAM-OVERFLOW on {}: unified {unified}, pageable {pageable}, types {types:?}, heaps {:?}, \
