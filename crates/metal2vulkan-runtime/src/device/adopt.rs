@@ -145,6 +145,7 @@ impl std::fmt::Debug for RawDevice {
             .field("view_format_reinterpretation", view_format_reinterpretation)
             .field("host_image_copy", host_image_copy)
             .field("gpu_times_from_host", gpu_times_from_host)
+            .field("mac_class", mac_class)
             .field("announce_each", announce_each)
             .field("lowering_refuses", lowering_refuses)
             .field(
