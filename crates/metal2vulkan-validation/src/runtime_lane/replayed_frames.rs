@@ -21,7 +21,9 @@
 //! from the third frame on (the runtime's `render/executions/kept.rs`): each warm frame from then
 //! runs every chunk again, its records compared with those it was recorded from
 //! (`WorkCounts::host_step_chunks_kept`, `host_step_records_compared`, `host_step_compare_nanos`).
-//! [`FRAMES_VAR`] sets the frames (4 by default), and [`RESIDENT_VAR`] how many buffers
+//! [`CHANGE_VAR`] sets a frame from which the GPU writes other records (the encoding pass binds the
+//! indices two on), which that frame's step records again. [`FRAMES_VAR`] sets the frames (4 by
+//! default), and [`RESIDENT_VAR`] how many buffers
 //! and textures, one of each, the execution's pass makes resident besides, as a page's bind
 //! groups do (none by default): the step's time should grow with the records alone, not with
 //! them times the resident resources. Each warm frame makes or finds few of its draws' bind
@@ -62,6 +64,10 @@ const FRAMES_VAR: &str = "REPLAYED_FRAMES_FRAMES";
 /// The variable that sets how many buffers and textures the execution's pass makes resident
 /// besides (none by default).
 const RESIDENT_VAR: &str = "REPLAYED_FRAMES_RESIDENT";
+
+/// The variable that sets the frame from which the encoding pass binds the indices two on, so the
+/// GPU writes other records from then on (none by default).
+const CHANGE_VAR: &str = "REPLAYED_FRAMES_CHANGE_AT";
 
 /// The commands the pass encodes, one a draw, in [`replayed_frames`].
 const DRAWS: u32 = 5000;
@@ -345,6 +351,14 @@ fn frames() -> usize {
     std::env::var(FRAMES_VAR).map_or(4, |count| count.trim().parse().expect(FRAMES_VAR))
 }
 
+/// The frame from which the GPU writes other records, where [`CHANGE_VAR`] sets one.
+fn change_at() -> Option<usize> {
+    let set = std::env::var(CHANGE_VAR)
+        .ok()
+        .filter(|at| !at.trim().is_empty());
+    set.map(|at| at.trim().parse().expect(CHANGE_VAR))
+}
+
 /// What `after` moved past `before` of the counters that split a frame.
 fn split(before: &WorkCounts, after: &WorkCounts) -> String {
     let ms = |nanos: u64| nanos as f64 / 1e6;
@@ -401,7 +415,16 @@ fn replayed_frames() {
     let own = device
         .new_buffer(1 << 16, ResourceOptions::shared())
         .unwrap();
+    let changed = Inputs {
+        indices: Some((&page.indices, 4)),
+        ..Inputs::default()
+    };
+    let change_at = change_at();
     for frame in 0..frames() {
+        let inputs = match change_at.is_some_and(|at| frame >= at) {
+            true => &changed,
+            false => &Inputs::default(),
+        };
         let done = AtomicBool::new(false);
         let before = device.work_counts();
         let (took, presented, stood) = thread::scope(|scope| {
@@ -433,7 +456,7 @@ fn replayed_frames() {
                 })
             });
             let start = Instant::now();
-            let command_buffer = page.frame(&page_queue);
+            let command_buffer = page.frame_with(&page_queue, inputs);
             command_buffer.wait_until_completed_for(WAIT).unwrap();
             let took = start.elapsed();
             assert_eq!(command_buffer.status(), CommandBufferStatus::Completed);
