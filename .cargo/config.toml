@@ -14,8 +14,16 @@ profile-rustflags = true
 # (`0`). Profile rustflags are added to `RUSTFLAGS` rather than replaced by it, so the GPU lanes'
 # `--cfg m2v_gpu` and CI's `-Dwarnings` keep it. `test`, `bench` and `debugger` inherit it from
 # `dev` and `release`.
+#
+# Dev and test builds take sync unwind tables (`-Zuse-sync-unwind`), which hold every rule an
+# unwind from a call needs (a panic's, a backtrace's). The async ones add each function's epilogue
+# rules, which Mach-O's compact unwind table cannot encode, so on macOS every such function took a
+# DWARF entry in `__eh_frame`: 24.3 MB of them in the validation lib test under `--cfg m2v_gpu`,
+# past the 16 MB the table can point into (ld: "__eh_frame section too large (max 16MB) to encode
+# dwarf unwind offsets in compact unwind table, performance of exception handling might be
+# affected"), against 3.6 MB, and a binary 23 MB smaller, with sync tables.
 [profile.dev]
-rustflags = ["-Zthreads=0"]
+rustflags = ["-Zthreads=0", "-Zuse-sync-unwind=yes"]
 
 [profile.release]
 rustflags = ["-Zthreads=0"]
