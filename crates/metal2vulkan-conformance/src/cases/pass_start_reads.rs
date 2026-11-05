@@ -267,7 +267,8 @@ fn pipeline(fragment: &str) -> RenderPipelineSpec<'_> {
     RenderPipelineSpec::new(RECT, fragment, &COLOR_STATE)
 }
 
-/// The fragment functions a case draws with, in the order [`Handles::pipelines`] holds them.
+/// The fragment functions of the fixture, in the order [`Handles::pipelines`] holds them. A row
+/// makes the pipelines of those it draws with alone ([`Row::functions`]).
 const FUNCTIONS: [&str; 5] = [SOLID, READ, SAMPLE, MASKED, UNDER];
 
 /// The site and input of the composited row's blended [`SAMPLE`] pipeline, which no other row
@@ -382,7 +383,8 @@ pub struct PassStartRead {
     row: &'static Row,
 }
 
-/// The handles a row's work names: its pipelines in [`FUNCTIONS`]' order, and the textures and
+/// The handles a row's work names: its pipelines in [`FUNCTIONS`]' order (`Handle(0)` for one the
+/// row does not make), and the textures and
 /// buffers its shape makes.
 struct Handles {
     pipelines: [Handle; 5],
@@ -483,6 +485,27 @@ impl Row {
             Shape::Composited => 1,
             _ => self.targets().len(),
         }
+    }
+
+    /// The fragment functions of [`FUNCTIONS`] the row draws with, in that order: the pipelines it
+    /// makes. A pipeline made and never drawn with would cost its creation's prediction for nothing
+    /// (`cost::the_creation_prediction`), and no row asks a question of one.
+    fn functions(&self) -> Vec<&'static str> {
+        let drawn: &[&str] = match self.shape {
+            Shape::Small {
+                read: Small::BarrierSample | Small::Sample,
+                ..
+            } => &[SOLID, SAMPLE],
+            Shape::Small { .. } => &[SOLID, READ],
+            Shape::Display => &[SOLID, MASKED],
+            Shape::Chain => &[READ, MASKED, UNDER],
+            Shape::Tile => &[READ],
+            Shape::Composited => &[SOLID, SAMPLE],
+        };
+        FUNCTIONS
+            .into_iter()
+            .filter(|function| drawn.contains(function))
+            .collect()
     }
 
     /// The mask's bytes: row `y` all [`mask_code`]`(y)`, padded to [`MASK_ROW`].
@@ -858,7 +881,7 @@ impl Case for PassStartRead {
                 digest: Digest::sha256(fixture.text(METAL_TEXT)?.as_bytes()),
             },
         ];
-        for function in FUNCTIONS {
+        for function in self.row.functions() {
             inputs.push(Input::bytes(
                 format!("pipeline:{function}"),
                 &pipeline(function).words(),
@@ -904,6 +927,9 @@ impl Case for PassStartRead {
         let library = made(sites, "library", side.library(&loaded.source()))?;
         let mut pipelines = [Handle(0); 5];
         for (at, function) in FUNCTIONS.iter().enumerate() {
+            if !self.row.functions().contains(function) {
+                continue;
+            }
             pipelines[at] = made(
                 sites,
                 &format!("pipeline:{function}"),
@@ -1039,6 +1065,42 @@ mod tests {
                 }
                 None => assert!(!row.barriered(), "{}", row.case),
             }
+        }
+    }
+
+    /// Each row makes the pipelines its work draws with and no other: a pipeline made and never
+    /// drawn with costs its creation's prediction for nothing (`Row::functions`).
+    #[test]
+    fn every_row_makes_the_pipelines_it_draws_with_alone() {
+        for row in &ROWS {
+            let targets = row.targets().len();
+            let handles = Handles {
+                pipelines: [1, 2, 3, 4, 5].map(Handle),
+                blended: Handle(6),
+                targets: (0..targets as u32)
+                    .map(|at| (Handle(100 + 2 * at), Handle(101 + 2 * at)))
+                    .collect(),
+                extra: Handle(99),
+            };
+            let mut drawn = BTreeSet::new();
+            for work in row.work(&handles) {
+                let RenderWork::Pass(pass) = work else {
+                    continue;
+                };
+                for step in &pass.steps {
+                    if let RenderStep::Pipeline(Handle(at)) = step {
+                        drawn.insert(*at);
+                    }
+                }
+            }
+            let mut made: BTreeSet<u32> = (FUNCTIONS.iter().zip(1..))
+                .filter(|(function, _)| row.functions().contains(function))
+                .map(|(_, at)| at)
+                .collect();
+            if matches!(row.shape, Shape::Composited) {
+                made.insert(6);
+            }
+            assert_eq!(made, drawn, "{}", row.case);
         }
     }
 
