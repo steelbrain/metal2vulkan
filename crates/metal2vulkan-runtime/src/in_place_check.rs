@@ -40,14 +40,18 @@
 //!   device's life. A forced failure is kept nowhere.
 //! - **Its thread.** Each round's Vulkan work (the buffer, the texture, the submission and its
 //!   wait, the releases) runs inside a section of the exit guard (`exit_guard.rs`), as every
-//!   runtime thread's does; the check holds its device weakly between rounds, so a device the
-//!   program lets go of goes, and the check ends unrecorded.
+//!   runtime thread's does. It holds its device through the registry of the runtime's own holds
+//!   for each class (`device/holds.rs`), weakly between classes, and reads the stop before each
+//!   round: the program's last drop stops it there and waits for its round in progress and its
+//!   release of its buffer, so the device goes on the program's thread, and the check ends
+//!   unrecorded.
 //! - **Its dma-bufs.** The runtime runs no `udmabuf` code, so the dma-buf class's pages are an
 //!   allocation of the device's own, host-visible and exported as a dma-buf, mapped: the device
 //!   refuses their pointer (a driver that takes it leaves the class unchecked), and the check's
 //!   source answers each request over them with that dma-buf. The image and its first move are
 //!   the product's.
 
+use crate::device::holds::Holder;
 use crate::exit_guard;
 use crate::host_memory::HostMemory;
 use crate::in_place::{encode, mark_checking, record_name, PagesClass, Verdict};
@@ -150,21 +154,21 @@ fn run(weak: crate::device::WeakDevice) {
     mark_checking();
     let started = Instant::now();
     for class in PagesClass::ALL {
-        let Some(device) = weak.upgrade() else {
+        let Some(device) = weak.hold() else {
             return;
         };
         if device.shared().in_place.verdict(class) != Verdict::Pending {
             continue;
         }
         let Some(verdict) = check_class(&device, class) else {
-            // The process is exiting: nothing is kept.
+            // The process is exiting, or the program let the device go: nothing is kept.
             return;
         };
         let checks = &device.shared().in_place;
         checks.set(class, verdict);
         device.shared().counts.in_place_check_ran(verdict);
     }
-    let Some(device) = weak.upgrade() else {
+    let Some(device) = weak.hold() else {
         return;
     };
     let checks = &device.shared().in_place;
@@ -183,7 +187,8 @@ fn run(weak: crate::device::WeakDevice) {
 }
 
 /// The verdict of `class` on `device`: every shape's rounds, until one fails. `None` where the
-/// process is exiting.
+/// process is exiting, or the program's last drop stopped the device's holds before a round
+/// (`device/holds.rs`).
 fn check_class(device: &Device, class: PagesClass) -> Option<Verdict> {
     let page = host_page();
     let Some(pages) = ClassPages::make(device, class, BUFFER_BYTES) else {
@@ -195,6 +200,9 @@ fn check_class(device: &Device, class: PagesClass) -> Option<Verdict> {
             continue;
         }
         for round in 0..ROUNDS {
+            if !device.holds_go_on(Holder::InPlaceCheck) {
+                return None;
+            }
             let outcome = {
                 let _busy = exit_guard::enter()?;
                 check_round(&pages, shape, round, page)

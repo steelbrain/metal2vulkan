@@ -7,8 +7,10 @@
 //!   the utility class (`exit_guard::lower_to_utility`); its pipeline makings rank below every
 //!   other making of the process ([`Urgency::Warm`](crate::pipeline::budget::Urgency::Warm)),
 //!   on its thread and in the pieces it hands the device's pool, which run as part of the pass
-//!   ([`within`]). It holds its device only while it warms a record, so a device the program let
-//!   go goes, and the pass with it.
+//!   ([`within`]). It holds its device only while it warms a record, through the registry of the
+//!   runtime's own holds (`device/holds.rs`), and reads the stop before each: the program's last
+//!   drop stops the pass there and waits for the record being made, so the device goes on the
+//!   program's thread, and the pass with it.
 //! - **The creation itself** (`pipeline::warm`). Each record is read back (its libraries from the
 //!   shader cache directory, `shader_cache/libraries.rs`, unless it was made in this process) and
 //!   created as the program created it, under the default options, inside one exit-guard section;
@@ -41,6 +43,7 @@
 
 use super::codec;
 use super::{PipelineRecord, WarmStatistics};
+use crate::device::holds::Holder;
 use crate::device::{lock, Device, WeakDevice};
 use crate::exit_guard;
 use metal2vulkan::cache::Hash256;
@@ -261,7 +264,7 @@ impl Device {
 fn run(device: &WeakDevice) {
     exit_guard::lower_to_utility();
     loop {
-        let Some(held) = device.upgrade() else {
+        let Some(held) = device.hold() else {
             return;
         };
         let call = {
@@ -289,9 +292,12 @@ fn warm_call(device: &WeakDevice, call: Call) {
     } = call;
     let total = records.len();
     for (at, record) in records.iter().enumerate() {
-        let Some(held) = device.upgrade() else {
+        let Some(held) = device.hold() else {
             return;
         };
+        if !held.holds_go_on(Holder::WarmPass) {
+            return;
+        }
         let warmer = &held.shared().warmer;
         if pass.bytes.load(Ordering::Relaxed) >= byte_budget {
             warmer.not_run(total - at);

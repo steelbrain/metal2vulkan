@@ -639,6 +639,11 @@ thread_local! {
     static LOWERING: Cell<usize> = const { Cell::new(0) };
 }
 
+/// Whether this thread is one of the runtime's own ([`spawn`]), whatever code it runs now.
+pub(crate) fn on_runtime_thread() -> bool {
+    RUNTIME.with(Cell::get)
+}
+
 /// Whether this thread runs inside a call of the program's: one of the program's own threads,
 /// a runtime thread running the program's code ([`program`]), which may call the runtime, or one
 /// lowering the program's calls that returned ([`lowering_program_calls`]).

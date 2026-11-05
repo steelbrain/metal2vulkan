@@ -22,6 +22,7 @@ pub(super) mod create;
 pub(super) mod float_tininess;
 pub(super) mod functions;
 pub(crate) mod handles;
+pub(crate) mod holds;
 pub(super) mod instance_requirements;
 pub(super) mod keeper;
 pub(super) mod prime;
@@ -98,17 +99,32 @@ use std::time::Instant;
 use submit::{Internal, OwnTimeline};
 
 /// A Metal device (`MTLDevice`) on a Vulkan device. Cheap to clone (a retain); `Send + Sync`.
-#[derive(Clone)]
-pub struct Device(Arc<DeviceShared>);
+///
+/// The program's last drop of its handles (the device's own and its objects'), on a thread of the
+/// program's, stops the runtime's own background work on the device and waits for it: at most the
+/// round of its check of textures over host pages in progress, or the record its warm pass is
+/// making ([`Device::warm`]). So the device is torn down on that thread before the drop returns,
+/// and a consumer that adopted the `VkDevice` ([`Device::from_raw`]) may destroy it then.
+pub struct Device(
+    Arc<DeviceShared>,
+    /// The handle's place in the registry of the runtime's own holds (`holds.rs`).
+    holds::Share,
+);
 
-/// A handle on a device that does not keep it ([`Device::downgrade`]).
+/// A handle on a device that does not keep it ([`Device::downgrade`]), with the registry of its
+/// holds (`holds.rs`).
 #[derive(Clone)]
-pub(crate) struct WeakDevice(Weak<DeviceShared>);
+pub(crate) struct WeakDevice(Weak<DeviceShared>, Arc<holds::Holds>);
 
 impl WeakDevice {
     /// The device, while it lives.
     pub(crate) fn upgrade(&self) -> Option<Device> {
-        self.0.upgrade().map(Device)
+        holds::upgrade(self)
+    }
+
+    /// Whether the device lives.
+    pub(super) fn lives(&self) -> bool {
+        self.0.strong_count() > 0
     }
 }
 
@@ -562,6 +578,9 @@ pub(super) struct DeviceShared {
     pub(crate) pipeline_recording: crate::warm::Recording,
     /// Its warm calls: the records queued, its warm thread, and the counts (`warm/pass.rs`).
     pub(crate) warmer: crate::warm::Warmer,
+    /// The registry of the runtime's own holds of the device, which its handles share
+    /// (`holds.rs`).
+    pub(crate) holds: Arc<holds::Holds>,
 }
 
 impl DeviceShared {
@@ -1060,7 +1079,7 @@ impl Device {
 
     /// A handle on the device that does not keep it.
     pub(crate) fn downgrade(&self) -> WeakDevice {
-        WeakDevice(Arc::downgrade(&self.0))
+        WeakDevice(Arc::downgrade(&self.0), Arc::clone(&self.0.holds))
     }
 
     /// The compile-and-plan device this device compiles and plans for. No Metal counterpart.
@@ -1926,6 +1945,7 @@ impl Device {
             views_epoch: AtomicU64::new(0),
             pipeline_recording: crate::warm::Recording::new(pipeline_records),
             warmer: crate::warm::Warmer::default(),
+            holds: holds::holds(),
             device_address,
             upload_alignment,
             dynamic_buffers: [
@@ -2073,7 +2093,7 @@ impl Device {
                 shared.scheduler.take_stalls_idle(idle);
             }
         }
-        let device = Device(shared);
+        let device = holds::first(shared);
         // What the device allocated ahead goes back once its allocations come near the limit.
         device.give_back_ahead_near_the_limit();
         // The verdicts of its check of textures over host pages, where a record holds them.

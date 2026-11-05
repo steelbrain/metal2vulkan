@@ -32,7 +32,7 @@
 use super::instance_requirements::instance_requirements_met;
 use super::keeper::keep_drivers_loaded;
 use super::properties::{DeviceKind, PhysicalDeviceIdentity};
-use super::{device_error, lock, Device, DeviceShared, InstanceShared, Parts};
+use super::{device_error, lock, Device, InstanceShared, Parts, WeakDevice};
 use crate::degradation::{Degradation, DegradeNotice};
 use crate::enables::{host_image_copy_names, listed_reported, listed_structures, Enables};
 use crate::error::{vulkan, Error, InstanceApiVersion, LoaderNotFound};
@@ -1900,7 +1900,7 @@ struct Made {
     /// The options' pipeline records' hook, which each of the group's devices holds.
     records: Option<std::sync::Weak<dyn Fn(crate::PipelineRecord) + Send + Sync>>,
     instance: Weak<InstanceShared>,
-    devices: Vec<(vk::PhysicalDevice, Weak<DeviceShared>)>,
+    devices: Vec<(vk::PhysicalDevice, WeakDevice)>,
 }
 
 impl Made {
@@ -1925,8 +1925,7 @@ impl Made {
         self.devices
             .iter()
             .find(|(of, _)| *of == physical)
-            .and_then(|(_, device)| device.upgrade())
-            .map(Device)
+            .and_then(|(_, device)| device.revive())
     }
 }
 
@@ -1940,9 +1939,7 @@ pub(crate) fn live_devices_with(options: &DeviceOptions) -> usize {
         .find(|group| group.instance_for(options).is_some());
     of.map_or(0, |group| {
         let devices = group.devices.iter();
-        devices
-            .filter(|(_, device)| device.strong_count() > 0)
-            .count()
+        devices.filter(|(_, device)| device.lives()).count()
     })
 }
 
@@ -2041,8 +2038,8 @@ fn device_of(
         return Ok(device);
     }
     let device = create_on(instance, physical, options, cache)?;
-    group.devices.retain(|(_, weak)| weak.strong_count() > 0);
-    group.devices.push((physical, Arc::downgrade(&device.0)));
+    group.devices.retain(|(_, weak)| weak.lives());
+    group.devices.push((physical, device.downgrade()));
     Ok(device)
 }
 

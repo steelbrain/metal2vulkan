@@ -161,7 +161,7 @@ fn make(
 
 /// The records a device over `cache` hands over for [`make_states`]; the device is gone when
 /// this returns, so its cache thread wrote what it was handed.
-fn recorded(cache: &Path) -> Vec<PipelineRecord> {
+pub(super) fn recorded(cache: &Path) -> Vec<PipelineRecord> {
     let records = Arc::new(Mutex::new(Vec::new()));
     let device = device(cache, Some(&records), None);
     drop(make_states(&device));

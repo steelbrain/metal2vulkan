@@ -197,7 +197,10 @@ the instance and its version, the physical device, the device, the queue family 
 exactly what the device enabled (an `EnableSet`), plus what the runtime may use outside that
 vocabulary (calibrated timestamps, sparse features, view format reinterpretation, host image copy)
 and the same per-device choices as `DeviceOptions`. Dropping the runtime device destroys only what
-the runtime made.
+the runtime made. The program's last drop of the device and its objects, on a thread of the
+program's, returns once that is done: it stops the runtime's own background work on the device (its
+check of textures over host pages, its warm pass) and waits for it, at most a round of the check or
+the record the pass is making.
 
 **The Vulkan objects underneath** (no Metal counterpart; each call is `unsafe`):
 

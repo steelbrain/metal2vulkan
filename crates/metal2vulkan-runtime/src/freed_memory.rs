@@ -592,6 +592,11 @@ pub(crate) mod held {
             }
         }
 
+        /// How many wait at the hold now.
+        pub(crate) fn waiting(&self) -> usize {
+            lock(&self.state).1
+        }
+
         /// As a watch or release begins: wait while held, counted.
         pub(crate) fn pass(&self) {
             let mut state = lock(&self.state);

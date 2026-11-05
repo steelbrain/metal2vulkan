@@ -49,6 +49,12 @@
 //!   most one step and its release of its objects, within the 16 ms the owner allows a wait. A
 //!   device that runs no check (one family of one `VkQueue`, or no calibrated timestamps) skips
 //!   it, saying so.
+//! - **Not the runtime's own holders' threads**: the check of textures over host pages
+//!   (`in_place_check.rs`), held before a round while it holds the device, and the warm pass
+//!   (`warm/pass.rs`), held before a record while it holds it. The program's last drop stops the
+//!   holds and waits for them (`device/holds.rs`), so the device is torn down on the program's
+//!   thread before that drop returns. A device whose check makes no round (its policy takes no
+//!   texture in place, or it makes no class's pages) skips the check's case, saying so.
 //!
 //! The teardown's end is seen through the device's message sink, whose last share the instance
 //! drops after `vkDestroyInstance`, the teardown's last step: the sink owns a value that, dropped,
@@ -61,6 +67,7 @@
 use super::dispatch_pending as pending;
 use super::freed_memory::{unused, Host, Runs};
 use super::layer_claim::Watched;
+use crate::device::holds::Holder;
 use crate::device::lock;
 use crate::device::prime::SHADER;
 use crate::exit_guard;
@@ -613,4 +620,111 @@ fn a_running_queue_switch_check_leaves_the_device_to_the_program_s_thread() {
     ending
         .watched
         .layer_reported_nothing("the teardown that stopped the check left no object and used none");
+}
+
+/// The device whose holds `holder` takes, `holder` held at its next step while it holds the device
+/// (`device/holds.rs`); `start` sets it going. `None` where it ended without reaching the hold,
+/// which `ended` answers.
+fn held_at_a_step(
+    device: &Device,
+    holder: Holder,
+    start: impl FnOnce(),
+    ended: impl Fn() -> bool,
+) -> Option<Arc<crate::device::holds::Holds>> {
+    let holds = Arc::clone(&device.shared().holds);
+    let held = holds.held(holder);
+    held.hold();
+    start();
+    let started = Instant::now();
+    while held.waiting() == 0 {
+        if ended() {
+            held.release();
+            return None;
+        }
+        assert!(
+            started.elapsed() < WAIT,
+            "{holder:?} never reached its hold"
+        );
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    Some(holds)
+}
+
+/// Drop `device`, the program's last handle, while `holder` holds it at its hold, letting the
+/// hold go once the drop stopped the holds: the device is torn down on this thread before the
+/// drop returns, having waited for the holder, and nothing failed meanwhile.
+fn dropped_while_held(
+    device: Device,
+    ending: &Ending,
+    holds: &Arc<crate::device::holds::Holds>,
+    holder: Holder,
+) {
+    let releasing = std::thread::spawn({
+        let holds = Arc::clone(holds);
+        move || holds.release_once_stopping(holder)
+    });
+    let dropping = Instant::now();
+    drop(device);
+    let dropped = dropping.elapsed();
+    let torn_down = ending.thread.try_recv();
+    holds.held(holder).release();
+    releasing.join().unwrap();
+    assert_eq!(
+        torn_down,
+        Ok(program_thread()),
+        "the device was not torn down on this thread before its last drop returned"
+    );
+    let waited = holds.waited().expect("the last drop waited for the holder");
+    println!("the last drop took {dropped:?}, of which the wait for {holder:?} {waited:?}");
+    ending.watched.layer_reported_nothing(&format!(
+        "the teardown that stopped {holder:?} left no object and used none"
+    ));
+}
+
+/// A device whose check of textures over host pages runs (`in_place_check.rs`), held before one
+/// of its rounds, while it holds the device and its class's buffer: the program's last drop stops
+/// the check there and waits for it to let them go, so the device is torn down on the program's
+/// thread before the drop returns. Without the wait the check's thread lets the device go last,
+/// after the drop returned.
+#[test]
+fn a_running_in_place_check_leaves_the_device_to_the_program_s_thread() {
+    let scratch = Scratch::new("in-place");
+    let (device, ending) = watched(&scratch.0);
+    let policy = device.compile_device().policy().host_page_textures;
+    if policy != metal2vulkan::device::HostPageTexturePolicy::InPlace {
+        println!(
+            "SKIPPED {}: the device takes no texture in place ({policy:?})",
+            device.name()
+        );
+        return;
+    }
+    let checks = |device: &Device| device.shared().in_place.wait(Duration::ZERO);
+    let start = || {
+        device.settle_in_place_checks(Duration::ZERO);
+    };
+    let Some(holds) = held_at_a_step(&device, Holder::InPlaceCheck, start, || checks(&device))
+    else {
+        println!(
+            "SKIPPED {}: the device's check of textures in place made no round ({:?})",
+            device.name(),
+            device.in_place_check_report()
+        );
+        return;
+    };
+    dropped_while_held(device, &ending, &holds, Holder::InPlaceCheck);
+}
+
+/// A device's warm pass over records an earlier device made over the same directory, held before
+/// its first record while it holds the device (`warm/pass.rs`): the program's last drop stops the
+/// pass there and waits for it to let the device go, so the device is torn down on the program's
+/// thread before the drop returns.
+#[test]
+fn a_running_warm_pass_leaves_the_device_to_the_program_s_thread() {
+    let scratch = Scratch::new("warm");
+    let records = super::warm::recorded(&scratch.0);
+    let (device, ending) = watched(&scratch.0);
+    let start = || device.warm(records, u64::MAX);
+    let holds = held_at_a_step(&device, Holder::WarmPass, start, || false)
+        .expect("the warm pass reaches its hold");
+    dropped_while_held(device, &ending, &holds, Holder::WarmPass);
 }
