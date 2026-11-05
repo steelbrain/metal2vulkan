@@ -25,7 +25,13 @@
 //! Metal's answer: the SHA-256 of each output, the same on an Apple M3 Max (macOS 26.7) and an
 //! Apple M4 (macOS 27.0.1), plain and under Metal's validation layer alike: the textures' and the
 //! plane views' from our probes, which keep the bytes. A differing output is
-//! printed whole, on one `XR-TWO-PLANES-DIFFERS` line.
+//! printed whole, on one `XR-TWO-PLANES-DIFFERS` line. Plane 1's stores are Metal's code of each
+//! lane written: clamped to `[0, 1]`, scaled by 255 and rounded to nearest even, NaN 0 (the
+//! digests of the buffer's bytes after the `half` writes are those codes'). A store the device
+//! took as the other of the two codes nearest the scaled value, which Vulkan's conversion lets it
+//! take, where it announced `device-color-conversion`, is replaced by Metal's code in the buffer's
+//! bytes and in plane 1's reads after it ([`plane_1_as_metal`], counted on an
+//! `XR-TWO-PLANES` line): the RTX 5080 Laptop GPU stored the `half` 0x1820 (0.514 codes) as 0.
 
 use super::degrade_notices::{counts, on_device};
 use super::extended_range_targets::{half_bits, half_value};
@@ -2014,7 +2020,9 @@ fn two_plane_surface_textures_keep_their_texels_in_the_surface_s_planes() {
 /// texture unit, a read of plane 1 is the device's conversion of its codes (announced
 /// `device-texel-conversion`): one that differs from Metal's holds where each value within the
 /// conversion's bound of a code's Metal value, replaced by it, gives Metal's output
-/// ([`as_metal_codes`]), counted.
+/// ([`as_metal_codes`]), counted. A plane 1 store the device took as the other code nearest the
+/// value written, where it announced `device-color-conversion`, holds as Metal's code in the
+/// buffer's bytes and in the reads after ([`plane_1_as_metal`]), counted.
 #[test]
 fn plane_views_over_a_buffer_read_and_write_as_metal_does() {
     on_device(|device, messages| {
@@ -2022,7 +2030,7 @@ fn plane_views_over_a_buffer_read_and_write_as_metal_does() {
         let kernels = Kernels::new(device);
         let exact = metal_sampler(device);
         let mut converted = Vec::new();
-        let (mut wrong, mut moved) = (Vec::new(), 0);
+        let (mut wrong, mut moved, mut stored) = (Vec::new(), 0, 0);
         let steps = [
             (halves(GRID, |n, c| 32 * n + 16384 * c + 7 * c), true),
             (floats(GRID, 32), false),
@@ -2054,28 +2062,42 @@ fn plane_views_over_a_buffer_read_and_write_as_metal_does() {
                 // Plane 0's reads, each lane the device's conversion within its bound of Metal's
                 // codes `codes` replaced by Metal's read (`as_metal_reads`); plane 1's as read. The
                 // texels the bound moved.
-                let push_reads =
-                    |outputs: &mut Vec<(String, Vec<u8>)>, s: usize, codes: &[[Option<u32>; 4]]| {
-                        let mut moved = 0;
-                        for (p, plane) in planes.iter().enumerate() {
-                            let [h, f] = reads(device, &queue, &kernels, plane, Dispatch::Consumer);
-                            let (f, h) = match p {
-                                0 => {
-                                    let (f, h, n) = as_metal_reads(form, (&f, &h), codes);
-                                    moved += n;
-                                    (f, h)
+                let push_reads = |outputs: &mut Vec<(String, Vec<u8>)>,
+                                  s: usize,
+                                  codes: &[[Option<u32>; 4]],
+                                  stored: &[Stored]| {
+                    let mut moved = 0;
+                    for (p, plane) in planes.iter().enumerate() {
+                        let [mut h, mut f] =
+                            reads(device, &queue, &kernels, plane, Dispatch::Consumer);
+                        let (f, h) = match p {
+                            0 => {
+                                let (f, h, n) = as_metal_reads(form, (&f, &h), codes);
+                                moved += n;
+                                (f, h)
+                            }
+                            _ => {
+                                // Metal's read of each code its store took (`plane_1_as_metal`).
+                                for &(t, c, code) in stored {
+                                    let at = 4 * t + c;
+                                    let value = f32::from(code) / 255.0;
+                                    h[2 * at..2 * at + 2]
+                                        .copy_from_slice(&half_bits(value).to_le_bytes());
+                                    f[4 * at..4 * at + 4].copy_from_slice(&value.to_le_bytes());
                                 }
-                                _ => (f, h),
-                            };
-                            outputs.push((format!("R{s}P{p}H"), h));
-                            outputs.push((format!("R{s}P{p}F"), f));
-                        }
-                        moved
-                    };
+                                (f, h)
+                            }
+                        };
+                        outputs.push((format!("R{s}P{p}H"), h));
+                        outputs.push((format!("R{s}P{p}F"), f));
+                    }
+                    moved
+                };
                 moved += push_reads(
                     &mut outputs,
                     0,
                     &view_codes(form, &initial, view_texels, row),
+                    &[],
                 );
                 for (s, (values, half)) in steps.iter().enumerate() {
                     let s = s + 1;
@@ -2107,8 +2129,10 @@ fn plane_views_over_a_buffer_read_and_write_as_metal_does() {
                             moved += 1;
                         }
                     }
+                    let took = plane_1_as_metal(&mut bytes, (values, *half), view_texels, row);
+                    stored += took.len();
                     outputs.push((format!("W{s}BUF"), bytes));
-                    moved += push_reads(&mut outputs, s, &codes);
+                    moved += push_reads(&mut outputs, s, &codes, &took);
                 }
                 for (tag, bytes) in outputs {
                     let plane_1_read = tag.contains("P1");
@@ -2138,6 +2162,10 @@ fn plane_views_over_a_buffer_read_and_write_as_metal_does() {
             "XR-TWO-PLANES {}: {moved} plane 0 texels within the device's conversion of Metal's",
             device.name()
         );
+        println!(
+            "XR-TWO-PLANES {}: {stored} plane 1 stores the other code nearest the value",
+            device.name()
+        );
         let notices = counts(&messages.take_notices());
         if !converted.is_empty() {
             assert!(
@@ -2145,9 +2173,67 @@ fn plane_views_over_a_buffer_read_and_write_as_metal_does() {
                 "{notices:?}"
             );
         }
+        if stored > 0 {
+            assert!(
+                notices.contains_key(&Degradation::DeviceColorConversion),
+                "{stored} plane 1 stores off Metal's code, unannounced: {notices:?}"
+            );
+        }
         report(device, &wrong);
         assert_counted(&notices, moved, "the plane views");
     });
+}
+
+/// A plane 1 store [`plane_1_as_metal`] replaced: the grid thread, the lane (red, green, blue,
+/// alpha) and Metal's code.
+type Stored = (usize, usize, u8);
+
+/// Metal's code of an 8-bit normalized lane written `v`: clamped to `[0, 1]`, scaled by 255 and
+/// rounded to nearest even; NaN 0 (the module docs).
+fn unorm8_code(v: f32) -> u8 {
+    match v.is_nan() {
+        true => 0,
+        false => (v.clamp(0.0, 1.0) * 255.0).round_ties_even() as u8,
+    }
+}
+
+/// Plane 1's bytes in `bytes`, the plane views' buffer (`ARGB8Unorm` at [`PLANE_1`], `width` x
+/// `height` texels with rows `row` bytes apart) after the grid wrote `values` (`half4`s where
+/// `half`, else `float4`s, by grid thread): each byte the device stored as the other of the two
+/// codes nearest its lane's scaled value, which Vulkan's conversion to a normalized code lets a
+/// store take, replaced by Metal's code ([`unorm8_code`]); the stores replaced.
+fn plane_1_as_metal(
+    bytes: &mut [u8],
+    (values, half): (&[u8], bool),
+    (width, height): (usize, usize),
+    row: u64,
+) -> Vec<Stored> {
+    let lane = |t: usize, c: usize| match half {
+        true => half_value(u16::from_le_bytes([
+            values[8 * t + 2 * c],
+            values[8 * t + 2 * c + 1],
+        ])),
+        false => f32::from_le_bytes(std::array::from_fn(|i| values[16 * t + 4 * c + i])),
+    };
+    let mut took = Vec::new();
+    for t in 0..GRID {
+        let (x, y) = (t % GRID_WIDTH as usize, t / GRID_WIDTH as usize);
+        if x >= width || y >= height {
+            continue;
+        }
+        let at = PLANE_1 as usize + y * row as usize + 4 * x;
+        // `ARGB8Unorm`'s bytes: alpha, red, green, blue.
+        for (byte, c) in [3, 0, 1, 2].into_iter().enumerate() {
+            let v = lane(t, c);
+            let (metal, got) = (unorm8_code(v), bytes[at + byte]);
+            let scaled = v.clamp(0.0, 1.0) * 255.0;
+            if got != metal && !v.is_nan() && (f32::from(got) - scaled).abs() < 1.0 {
+                bytes[at + byte] = metal;
+                took.push((t, c, metal));
+            }
+        }
+    }
+    took
 }
 
 /// The codes of a `BGR10_XR` (or `_sRGB`) view of `width` x `height` texels over `bytes` with rows
