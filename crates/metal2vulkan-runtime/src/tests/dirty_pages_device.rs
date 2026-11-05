@@ -43,6 +43,13 @@
 //! the completion, merges in whole blocks of the square's rows alone: each of those texels ends
 //! holding the CPU's last write (`DIRTY-BESIDE`).
 //!
+//! Two shadowed textures over the same logged bytes, a render target a pass draws into inside rows
+//! 0 to 8 and a texture a kernel reads: the reader's copy in after the pass takes those rows alone,
+//! in a later command buffer and in the pass's own, and reads the pass's texels there: the pass's
+//! merge back is a write the log is told of (cut to the rows of its rectangle, as its merge is),
+//! which lets go of no other shadow's hold (`dirty_pages.rs`, **Holds**). With nothing written
+//! since, the reader copies nothing.
+//!
 //! One wait for a log's publication serves every gated copy in of a commit, two shadows over one
 //! log among them, and a wait the log answers `false` is not made again for them
 //! (`WorkCounts::dirty_waits`).
@@ -454,6 +461,118 @@ fn a_logged_render_target_loaded_in_a_scissor_copies_only_the_changed_rows() {
     eprintln!("DIRTY-PAGES: scissor frame 3 {third:?}");
     assert_eq!(third[2], 1, "nothing copied in");
     drop(target);
+    drop(buffer);
+    drop(device);
+}
+
+/// One command buffer: a pass that loads `target` and draws `color` inside rows 0 to 8 (the
+/// scissor), then a kernel that inverts `source`'s texels into `inverted`, to completion.
+fn draw_then_invert(
+    device: &Device,
+    target: &Texture,
+    color: [f32; 4],
+    (kernel, source, inverted): (&ComputePipelineState, &Texture, &Texture),
+) {
+    let state = render_state(device, "engine/tob_renders.ll", "tob_rect", "tob_solid");
+    let queue = device.new_command_queue().unwrap();
+    let command_buffer = queue.command_buffer().unwrap();
+    let mut pass = RenderPassDescriptor::new();
+    let attachment = &mut pass.color_attachments[0];
+    attachment.texture = Some(target.clone());
+    attachment.load_action = LoadAction::Load;
+    attachment.store_action = StoreAction::Store;
+    let mut encoder = command_buffer.render_command_encoder(&pass).unwrap();
+    encoder.set_render_pipeline_state(&state).unwrap();
+    (encoder.set_scissor_rect(ScissorRect::new(0, 0, SIDE, 8))).unwrap();
+    let corners = bytes_of(&[-1.0f32, -1.0, 1.0, 1.0], f32::to_le_bytes);
+    encoder.set_vertex_bytes(&corners, 0).unwrap();
+    let color = bytes_of(&color, f32::to_le_bytes);
+    encoder.set_fragment_bytes(&color, 0).unwrap();
+    (encoder.draw_primitives(PrimitiveType::Triangle, 0, 6, 1, 0)).unwrap();
+    encoder.end_encoding().unwrap();
+    let mut encoder = command_buffer.compute_command_encoder().unwrap();
+    encoder.set_compute_pipeline_state(kernel).unwrap();
+    encoder.set_texture(Some(source), 0).unwrap();
+    encoder.set_texture(Some(inverted), 1).unwrap();
+    (encoder.dispatch_threads(Size::new(SIDE, SIDE, 1), Size::new(8, 8, 1))).unwrap();
+    encoder.end_encoding().unwrap();
+    command_buffer.commit().unwrap();
+    assert!(command_buffer.wait_until_completed_for(WAIT).is_ok());
+    assert_eq!(command_buffer.status(), CommandBufferStatus::Completed);
+}
+
+#[test]
+fn a_second_shadow_of_logged_pages_copies_in_only_the_rows_a_pass_merged() {
+    let scratch = Scratch::new("dirty-pages-twins");
+    let host = Host::new();
+    let device = device(&scratch.0);
+    eprintln!("DIRTY-PAGES: device {:?}", device.name());
+    let log = Arc::new(Log::default());
+    let Some(buffer) = over_logged(&device, &host, &log) else {
+        return;
+    };
+    host.fill(0x1010_1010);
+    let shadows = device.work_counts().shadowed_textures;
+    let mut descriptor = TextureDescriptor::texture_2d(PixelFormat::RGBA8Unorm, SIDE, SIDE, false);
+    descriptor.usage = TextureUsage::RENDER_TARGET | TextureUsage::SHADER_READ;
+    let drawn = buffer.new_texture(&descriptor, 0, ROW).unwrap();
+    descriptor.usage = TextureUsage::SHADER_READ | TextureUsage::SHADER_WRITE;
+    let read = buffer.new_texture(&descriptor, 0, ROW).unwrap();
+    let shadowed = device.work_counts().shadowed_textures - shadows;
+    eprintln!("DIRTY-PAGES: {shadowed} shadows made");
+    if shadowed < 2 {
+        return;
+    }
+    let mut plain = TextureDescriptor::texture_2d(PixelFormat::RGBA8Unorm, SIDE, SIDE, false);
+    plain.usage = TextureUsage::SHADER_READ | TextureUsage::SHADER_WRITE;
+    plain.resource_options = ResourceOptions::shared();
+    let target = device.new_texture(&plain).unwrap();
+    let invert = state(&device, "invert_texels");
+    let inverted = |t: [u8; 4]| [255 - t[0], 255 - t[1], 255 - t[2], t[3]];
+    let old = [0x10; 4];
+    // The reader's first copy in, every row; the pass's first, every row too.
+    run(&device, &invert, &read, &target);
+    draw_in_scissor(&device, &drawn, [1.0, 0.0, 0.0, 1.0]);
+    // A later command buffer: the rows the pass merged alone, read as it drew them.
+    let before = counts(&device);
+    run(&device, &invert, &read, &target);
+    let later = delta(&device, before);
+    eprintln!("DIRTY-PAGES: twins, a later command buffer {later:?}");
+    assert_eq!(
+        texel(&target, 0),
+        inverted([255, 0, 0, 255]),
+        "the pass's row"
+    );
+    assert_eq!(texel(&target, 20), inverted(old), "a row the pass left");
+    assert_eq!((later[0], later[1]), (1, 0), "gated, not whole");
+    assert_eq!(later[4], 8 * ROW, "the pass's eight rows");
+    // Nothing written since: nothing.
+    let before = counts(&device);
+    run(&device, &invert, &read, &target);
+    let idle = delta(&device, before);
+    eprintln!("DIRTY-PAGES: twins, nothing written {idle:?}");
+    assert_eq!(idle[2], 1, "nothing copied in");
+    // The pass's own command buffer: its eight rows again, after the pass; the pass's own copy in
+    // takes nothing (its merge back is its own write).
+    let before = counts(&device);
+    draw_then_invert(
+        &device,
+        &drawn,
+        [0.0, 1.0, 0.0, 1.0],
+        (&invert, &read, &target),
+    );
+    let same = delta(&device, before);
+    eprintln!("DIRTY-PAGES: twins, the pass's own command buffer {same:?}");
+    assert_eq!(
+        texel(&target, 0),
+        inverted([0, 255, 0, 255]),
+        "the pass's row"
+    );
+    assert_eq!(texel(&target, 20), inverted(old), "a row the pass left");
+    assert_eq!((same[0], same[1]), (2, 0), "both gated, neither whole");
+    assert_eq!(same[2], 1, "the pass's copy in, nothing to take");
+    assert_eq!(same[4], 8 * ROW, "the pass's eight rows, for the reader");
+    drop((drawn, read));
     drop(buffer);
     drop(device);
 }

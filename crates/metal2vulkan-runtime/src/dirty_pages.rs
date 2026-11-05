@@ -31,6 +31,17 @@
 //!   batches complete, and at its completion ([`DirtyCommit::report_host_writes`]), but for the
 //!   bytes its shadows' copies back report as their own. Metal's contract has a command reach a
 //!   resource only through a binding or a residency it named.
+//! - **Holds.** A shadow's log holds the stamp as of which its image held every texel of the
+//!   truth, set at the commit of a command buffer whose end left it so ([`ShadowLog`]), and its
+//!   next copy in takes only the pages changed since. A write of the truth reported to the same
+//!   source over every byte it names (a command's write into the pages imported in place, a
+//!   shadow's merge back: at the commit, stamped after every stamp asked before, and ordered on
+//!   the GPU by the tracker against the copies of the command buffers committed before or after
+//!   it) is such a change: it lets go of no hold, before its copy in in the same command buffer
+//!   or in a later one, and the copy takes the pages it wrote. A write of the shadow itself, and
+//!   one no log of the source keeps whole, lets go of it, and the next copy in moves every row.
+//!   A merge back cut to a rectangle of the texels names, and reports, the rows of the rectangle
+//!   alone (`shadow_merge.rs`), so another copy of the same pages takes those rows.
 //! - **A waiting writer.** A command buffer that waits for an event or a semaphore may run after
 //!   work committed after it. Its writes into the pages are reported at its commit, before that
 //!   work's stamps, so a hold a later commit takes (its image holding the truth as of its stamp)
@@ -582,6 +593,30 @@ impl PagesLog {
         unlogged
     }
 
+    /// Whether its log of `source` keeps every byte of the object's `bytes` (cut to its length):
+    /// a write of them it reports ([`DirtyCommit::report_host_writes`]) reaches `source` whole.
+    fn logs_all_of(&self, source: &Arc<DirtySource>, bytes: &Range<u64>) -> bool {
+        let (start, end) = (bytes.start, bytes.end.min(self.length));
+        if start >= end {
+            return true;
+        }
+        let of_source = self
+            .logs
+            .iter()
+            .filter(|log| Arc::ptr_eq(&log.source, source));
+        of_source.into_iter().any(|log| {
+            // The runs are in the object's order, apart.
+            let mut at = start;
+            for (first, offsets) in log.runs.iter() {
+                let stop = first + (offsets.end - offsets.start);
+                if *first <= at && at < stop {
+                    at = stop;
+                }
+            }
+            at >= end
+        })
+    }
+
     /// Each run of the object's bytes that `changed`, the runs log `index` (of [`sources`]'
     /// order) reported changed, sorted by start and apart, meets, to `each`.
     ///
@@ -813,12 +848,7 @@ impl DirtyShadows {
             lock(&self.waiting).push(Arc::clone(&writes));
             commit.waiting = Some(writes);
         }
-        let DirtyCommit {
-            written,
-            gates,
-            wrote,
-            ..
-        } = commit;
+        let DirtyCommit { gates, wrote, .. } = &*commit;
         // Whether the writes of a command buffer that waits and has not completed, this one among
         // them, meet `log`'s truth or shadow.
         let waited = |log: &ShadowLog| {
@@ -852,14 +882,15 @@ impl DirtyShadows {
         for (log, range) in wrote.iter() {
             log.wrote_back(range.clone());
         }
+        // A write the logs will report lets go of no hold: a later copy in takes the pages it
+        // wrote as changed since (the module docs' **Holds**). Writes kept not all apart meet
+        // every log.
         let logs: Vec<Arc<ShadowLog>> = lock(&self.logs).clone();
         for log in &logs {
             let Some(copies) = log.copies.upgrade() else {
                 continue;
             };
-            let meets =
-                |used: &Use<ResourceKey>| used.key == copies.shadow_key || copies.meets(used);
-            if written.iter().any(meets) {
+            if overflowed || commit.wrote_unreported(&copies, &log.source) {
                 *lock(&log.hold) = None;
             }
         }
@@ -888,6 +919,9 @@ impl DirtyShadows {
 #[derive(Default)]
 pub(crate) struct DirtyCommit {
     written: Vec<Use<ResourceKey>>,
+    /// For each of `written`, the logs of host pages imported in place its write is reported to
+    /// ([`DirtyCommit::report_host_writes`]): indices into `host`.
+    reported: Vec<Vec<usize>>,
     gates: Vec<Arc<CopyInGate>>,
     wrote: Vec<(Arc<ShadowLog>, Range<u64>)>,
     /// Its writes as the device keeps them while it waits for an event or a semaphore
@@ -904,6 +938,15 @@ pub(crate) struct DirtyCommit {
 /// The most writes a command buffer keeps apart, past which they are one write of everything.
 const WRITES: usize = 4096;
 
+/// The bytes a write `used` names: its range's, or every byte for an image's levels and layers,
+/// which name no bytes.
+fn written_bytes(used: &Use<ResourceKey>) -> Range<u64> {
+    match &used.range {
+        UseRange::Bytes(bytes) => bytes.clone(),
+        UseRange::Image { .. } => 0..u64::MAX,
+    }
+}
+
 /// The most ranges of one host pages' a command buffer keeps apart, past which it wrote them
 /// whole.
 const HOST_RANGES: usize = 64;
@@ -916,21 +959,27 @@ impl DirtyCommit {
         for used in uses.iter().filter(|used| !used.write.is_empty()) {
             let seen = (self.written.iter().rev().take(8))
                 .any(|w| w.key == used.key && w.range == used.range);
-            match (seen, self.written.len() < WRITES) {
-                (true, _) => {}
-                (false, true) => self.written.push(used.clone()),
-                (false, false) => self.overflowed = true,
-            }
+            let kept = match (seen, self.written.len() < WRITES) {
+                (true, _) => None,
+                (false, true) => {
+                    self.written.push(used.clone());
+                    self.reported.push(Vec::new());
+                    Some(self.written.len() - 1)
+                }
+                (false, false) => {
+                    self.overflowed = true;
+                    None
+                }
+            };
             let Some(logs) = imports.as_ref().and_then(|i| i.by_key.get(&used.key)) else {
                 continue;
             };
-            let bytes = match &used.range {
-                UseRange::Bytes(bytes) => bytes.clone(),
-                // An image's levels and layers, which name no bytes: all of them.
-                UseRange::Image { .. } => 0..u64::MAX,
-            };
+            let bytes = written_bytes(used);
             for log in logs.iter().filter_map(Weak::upgrade) {
-                self.wrote_host(log, bytes.clone());
+                let at = self.wrote_host(log, bytes.clone());
+                if let Some(kept) = kept {
+                    self.reported[kept].push(at);
+                }
             }
         }
     }
@@ -947,8 +996,9 @@ impl DirtyCommit {
         }
     }
 
-    /// Note a write of `bytes` of the host pages `log` keeps the writes to.
-    fn wrote_host(&mut self, log: Arc<PagesLog>, bytes: Range<u64>) {
+    /// Note a write of `bytes` of the host pages `log` keeps the writes to: where it lies in
+    /// `host`.
+    fn wrote_host(&mut self, log: Arc<PagesLog>, bytes: Range<u64>) -> usize {
         let at = match (self.host.iter()).position(|(kept, _)| Arc::ptr_eq(kept, &log)) {
             Some(at) => at,
             None => {
@@ -959,12 +1009,31 @@ impl DirtyCommit {
         let ranges = &mut self.host[at].1;
         let whole = 0..u64::MAX;
         if ranges.first() == Some(&whole) || ranges.iter().rev().take(8).any(|r| *r == bytes) {
-            return;
+            return at;
         }
         match ranges.len() < HOST_RANGES {
             true => ranges.push(bytes),
             false => *ranges = vec![whole],
         }
+        at
+    }
+
+    /// Whether a write noted so far meets `copies`' truth or its shadow where it is not reported
+    /// to `source` whole: a write of the shadow itself, or of a truth's bytes that no log of
+    /// `source` over host pages imported in place keeps ([`DirtyCommit::report_host_writes`]).
+    /// A write so reported reaches a copy in that asks `source` what changed after it.
+    fn wrote_unreported(&self, copies: &ShadowCopies, source: &Arc<DirtySource>) -> bool {
+        (self.written.iter().zip(&self.reported)).any(|(used, reported)| {
+            if used.key == copies.shadow_key {
+                return true;
+            }
+            if !copies.meets(used) {
+                return false;
+            }
+            let bytes = written_bytes(used);
+            let reaches = |&at: &usize| self.host[at].0.logs_all_of(source, &bytes);
+            !reported.iter().any(reaches)
+        })
     }
 
     /// Report its writes into logged host pages imported in place to their logs, as the
@@ -989,10 +1058,11 @@ impl DirtyCommit {
         }
     }
 
-    /// Whether a write noted so far meets `copies`' truth or its shadow.
-    fn wrote_over(&self, copies: &ShadowCopies) -> bool {
-        self.written.len() >= WRITES
-            || (self.written.iter()).any(|used| used.key == copies.shadow_key || copies.meets(used))
+    /// Whether a write noted so far meets `copies`' truth or its shadow where `source`'s log is
+    /// not told of it ([`wrote_unreported`](Self::wrote_unreported)); every one where they were
+    /// more than [`WRITES`].
+    fn wrote_over(&self, copies: &ShadowCopies, source: &Arc<DirtySource>) -> bool {
+        self.overflowed || self.written.len() >= WRITES || self.wrote_unreported(copies, source)
     }
 
     /// A gate for a copy in of `log`'s shadow `copies` recorded now ([`CopyInGate`]), counted in
@@ -1002,11 +1072,12 @@ impl DirtyCommit {
         (log, copies, texel): (Arc<ShadowLog>, &ShadowCopies, u64),
         shadows: &DirtyShadows,
     ) -> Arc<CopyInGate> {
+        let written_before = self.wrote_over(copies, &log.source);
         let gate = Arc::new(CopyInGate {
             log,
             texel,
             tally: Arc::clone(&shadows.tally),
-            written_before: self.wrote_over(copies),
+            written_before,
             decision: Mutex::new(None),
         });
         self.gates.push(Arc::clone(&gate));

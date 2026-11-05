@@ -1360,7 +1360,11 @@ impl ShadowCopy {
             return None;
         };
         let log = device.shared().dirty.kept(c)?;
-        let bytes = copied_bytes(regions, (*texel)?)?;
+        // A merge cut to a rectangle writes inside its rows alone.
+        let bytes = match &self.step {
+            Step::Merge(merge) => merge.written_in_buffer(),
+            _ => copied_bytes(regions, (*texel)?)?,
+        };
         Some((log, bytes))
     }
 

@@ -259,6 +259,10 @@ struct Merged {
     bytes: Range<u64>,
     /// Where the texture's first byte lies in `buffer`.
     first: u64,
+    /// The bytes of `bytes` it may write: the rows of the rectangle a merge in place is cut to,
+    /// from the rectangle's first word to its last (its kernel writes words of the rectangle
+    /// alone, the module docs), else every byte of the texture's.
+    written: Range<u64>,
 }
 
 /// The rectangle of a shadow's texels a merge is cut to (the module docs).
@@ -357,11 +361,12 @@ impl ShadowMerge {
             // only a buffer's bytes merge back (`ShadowCopies::merges_back`).
             return Err(internal("a merge of an image's shadow"));
         };
-        let merged = Merged {
+        let mut merged = Merged {
             buffer: buffer.raw(),
             key: *key,
             bytes: bytes.clone(),
             first,
+            written: bytes.clone(),
         };
         let span = merged.bytes.end - merged.bytes.start;
         // A window binds the bytes only while they lie in pages: a detached buffer's `VkBuffer` is
@@ -402,6 +407,13 @@ impl ShadowMerge {
             None => rounded,
         }
         .next_multiple_of(PART_ALIGNMENT);
+        // A cut to a part of the texels writes inside its rows alone: its geometry's first byte
+        // lies in `buffer` as the texture's first does in `bytes`, past it.
+        if let Some((Cut { whole: false, .. }, geometry, ..)) = &cut {
+            let start = bytes.start + (geometry.first - first);
+            let end = start + (geometry.rows - 1) * geometry.pitch + geometry.row_bytes;
+            merged.written = start..end.min(bytes.end);
+        }
         let fetched = cut.as_ref().and_then(|(.., view)| *view);
         // A merge that fetches through the unsigned-integer view keeps the texels in an image of
         // its format at their own coordinates, copied from the shadow, where the copy in never
@@ -873,6 +885,19 @@ impl ShadowMerge {
             .map(|cut| cut.area)
     }
 
+    /// The bytes of its buffer's `VkBuffer` it may write ([`Merged::written`]): what its copy
+    /// back reports to a log of the pages as the shadow's own write (`dirty_pages.rs`).
+    pub(super) fn written_in_buffer(&self) -> Range<u64> {
+        let Merged {
+            ref bytes,
+            first,
+            ref written,
+            ..
+        } = self.merged;
+        let at = |offset: u64| first + (offset - bytes.start);
+        at(written.start)..at(written.end)
+    }
+
     /// Whether it was made for a command whose merge stores whole blocks (`MergeFor::blocks`).
     pub(super) fn in_blocks(&self) -> bool {
         self.blocks
@@ -1014,7 +1039,7 @@ impl ShadowMerge {
             Use {
                 key: self.merged.key,
                 tracked: copies.tracked,
-                range: UseRange::Bytes(self.merged.bytes.clone()),
+                range: UseRange::Bytes(self.merged.written.clone()),
                 read,
                 write,
             },
