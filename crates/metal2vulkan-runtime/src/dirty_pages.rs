@@ -835,12 +835,13 @@ impl DirtyShadows {
     /// that synced to a stamp asked between the commit and the GPU's write, and read the pages
     /// before it, finds them changed at its next copy in. Before its event signals, the scheduler,
     /// its waiters and its completed handlers see it: a copy after any of those finds them too.
-    pub(crate) fn ran(&self, commit: &mut DirtyCommit) {
+    /// Where the batch `ends` the command buffer, every write of it ran.
+    pub(crate) fn ran(&self, commit: &mut DirtyCommit, ends: bool) {
         for (log, range) in &commit.wrote {
             log.wrote_back(range.clone());
         }
         commit.report_host_writes();
-        commit.ran = true;
+        commit.ran |= ends;
     }
 
     /// A command buffer whose commit was `commit` completed, `failed` or not: its writes are
@@ -991,7 +992,7 @@ pub(crate) struct DirtyCommit {
     /// and the bytes written, in order, at most [`HOST_RANGES`] of them, past which the pages
     /// are written whole.
     host: Vec<(Arc<PagesLog>, Vec<Range<u64>>)>,
-    /// The logs heard of its writes after they ran ([`DirtyShadows::ran`]).
+    /// The logs heard of its writes after they all ran ([`DirtyShadows::ran`]).
     ran: bool,
 }
 

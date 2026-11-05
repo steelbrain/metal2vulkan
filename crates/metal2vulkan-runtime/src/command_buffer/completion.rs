@@ -632,7 +632,7 @@ fn finish(watch: &Watch, lists: &mut FenceLists, mut finished: Vec<(usize, Submi
     if dirty.collects() {
         for (_, batch) in &finished {
             if batch.last || !batch.signals.is_empty() {
-                dirty.ran(&mut lock(&batch.buffer.dirty));
+                dirty.ran(&mut lock(&batch.buffer.dirty), batch.last);
             }
         }
     }
