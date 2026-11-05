@@ -22,7 +22,8 @@
 //! - **`bundle_both`**: as `bundle`, what the encoder makes resident made so for the vertex and
 //!   fragment stages, as a browser's bind groups visible to both are.
 //!
-//! [`EXTRA_VAR`] has the render encoder make that many more buffers resident for reading.
+//! [`EXTRA_VAR`] has the render encoder make that many more buffers resident for reading, and
+//! [`FRAMES_VAR`] sets the frames a stream runs.
 //!
 //! Printed as `HOST-STEP-FRAMES` lines: per frame, its commit to its kernel start (the scheduler's
 //! first submission), the kernel start to the kernel end (its last batch submitted), the end to its
@@ -47,8 +48,11 @@ use std::sync::Arc;
 /// guest's page executes.
 const COMMANDS: u64 = 5001;
 
-/// The frames each stream runs.
+/// The frames each stream runs, unless [`FRAMES_VAR`] says otherwise.
 const FRAMES: usize = 6;
+
+/// The variable that sets how many frames each stream runs (a profiler's run).
+const FRAMES_VAR: &str = "HOST_STEP_FRAMES";
 
 /// How the commands are set up (the module docs).
 #[derive(Clone, Copy, PartialEq)]
@@ -293,7 +297,11 @@ fn measure(stream: &str, shape: Shape, beside_queues: bool) {
         })
     });
     let queue = frames.device.new_command_queue().unwrap();
-    for frame in 0..FRAMES {
+    let count = std::env::var(FRAMES_VAR)
+        .ok()
+        .map(|text| text.parse::<usize>().expect(FRAMES_VAR))
+        .unwrap_or(FRAMES);
+    for frame in 0..count {
         let before = fields(&frames.device.work_counts());
         let (to_start, submitting, to_completion) = frames.frame(&queue);
         let after = fields(&frames.device.work_counts());
