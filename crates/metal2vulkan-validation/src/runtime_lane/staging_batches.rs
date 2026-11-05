@@ -1,8 +1,8 @@
 //! Bursts of host calls on `Shared` and `Managed` color textures, as a guest process makes them at
-//! its start (the consumer's Safari GPU process: 1776 `replaceRegion`s back to back), on whichever
-//! path the device copies through: on the host (`texture/host_copy.rs` in the runtime), or on its
-//! staging queue (`texture/staging_copy.rs`), where a burst's copies are queued and carried by one
-//! submission there. Metal's contract holds either way, and each test checks it:
+//! its start (1776 `replaceRegion`s back to back, each into a small texture of its own), on
+//! whichever path the device copies through: on the host (`texture/host_copy.rs` in the runtime),
+//! or on its staging queue (`texture/staging_copy.rs`), where a burst's copies are queued and
+//! carried by one submission there. Metal's contract holds either way, and each test checks it:
 //!
 //! - the call copies the caller's bytes before it returns: the caller may change or free them;
 //! - every later command buffer's GPU use of the texture sees them, through the texture or a view
@@ -16,7 +16,7 @@
 //! Where the device copies on its staging queue, the counts show the batching
 //! (`WorkCounts::staging_moves_queued`, `staging_copies_queued`, `staging_flushes`,
 //! `staging_gpu_waits`): no submission during a burst, one that carries it all, waited for on the
-//! GPU by the batch that reads it.
+//! GPU by the first batch on each `VkQueue` after it.
 //! Each test prints the path it saw (`STAGING-BATCH` lines).
 
 use super::host_memory::on_device;
