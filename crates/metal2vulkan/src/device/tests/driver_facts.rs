@@ -366,7 +366,7 @@ fn the_profile_takes_the_deviations_its_driver_is_measured_with() {
     let mut later = laptop.clone();
     later.driver_version += 1 << 6;
     let mut rtx_3090_measured = nvidia_measured.clone();
-    rtx_3090_measured.insert(3, D::MetalSmallFloatColorWrites);
+    rtx_3090_measured.insert(2, D::MetalSmallFloatColorWrites);
     assert_eq!(taken(&profile_of(rtx_3090)), rtx_3090_measured);
     assert_eq!(taken(&profile_of(desktop)), Vec::new());
     assert_eq!(taken(&profile_of(later)), nvidia_measured);
