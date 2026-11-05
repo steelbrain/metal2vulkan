@@ -3340,7 +3340,9 @@ bound.
   lavapipe against plain Metal on an Apple M3 Max: a blend into an 8-bit unorm attachment
   (`RGBA8Unorm`, `ARGB8Unorm`) within 2 codes of Metal's; a fragment function that fetches an 8-bit
   sRGB attachment and writes it again, within 2 codes once a later draw reads an earlier one's code
-  (with `srgb-texel-decode`); a blend into an 8-bit sRGB attachment, within 4 codes. Another device
+  (with `srgb-texel-decode`); a blend into an 8-bit sRGB attachment, within 4 codes; a blend into a
+  4-sample `A1BGR5Unorm` attachment the device renders itself (Mesa 26.2.4), within 2 codes, over a
+  sample whose fill it stored a code from Metal's. Another device
   is not bounded past one code (an NVIDIA RTX 5080 Laptop GPU's blend into an 8-bit sRGB attachment
   stored up to 11 codes from Metal's).
   Also a render pass's clear of a normalized, sRGB,

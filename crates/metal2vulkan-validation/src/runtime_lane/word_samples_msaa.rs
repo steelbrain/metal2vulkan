@@ -23,8 +23,12 @@
 //! for `R8Unorm_sRGB` and `RGB9E5Float` and within one code of each field of Metal's for the
 //! packed formats, announced as `word-resolve`. A format the device renders itself stores and
 //! resolves by the device's own conversions and average, each within one code (an `RGB9E5Float`
-//! channel within its mantissa's last bits) of Metal's. A sample count the device's textures or
-//! pipelines lack is skipped with a printed line, and the other counts are checked.
+//! channel within its mantissa's last bits) of Metal's. A blend is within one code of Metal's, and
+//! further by as far as the sample it blends over lies from Metal's: the device's blend over the
+//! device's stored code, each its own arithmetic (`device-color-conversion`; lavapipe, Mesa 26.2.4,
+//! blends an `A1BGR5Unorm` sample at 4 samples two codes from Metal's over a sample its fill
+//! stored a code from Metal's). A sample count the device's textures or pipelines lack is skipped
+//! with a printed line, and the other counts are checked.
 
 use super::degrade_notices::{assert_once_allowing, made_render_kinds, resolve_kind};
 use super::{
@@ -841,8 +845,9 @@ impl Lane {
         let near = u32::from(!rule);
         resolves[0] = resolve_against(pf, &what, "fill", &fill, &resolved, near, wrong);
         resolves[1] = resolve_against(pf, &what, "load", &load, &loaded, near, wrong);
-        // A blend over the loaded samples: Metal's within a code of each field, where the device
-        // makes it. A word's `R8Unorm_sRGB` and `RGB9E5Float` blend is not built: refused as the
+        // A blend over the loaded samples: Metal's within a code of each field, and a code further
+        // for each code the sample it blends over lies from Metal's, where the device makes it. A
+        // word's `R8Unorm_sRGB` and `RGB9E5Float` blend is not built: refused as the
         // device lacking the format, as a single-sampled one is.
         let b = self.pipeline(pf, samples, true);
         let blend = match self
@@ -862,11 +867,14 @@ impl Lane {
         if let Some(blend) = &blend {
             made.extend(made_render_kinds(&self.device, &b));
             let got = self.pass(&ms, Some((blend, &blend_colors)), false);
-            let (words, _) = self.read_samples(&ms, &view);
-            for (i, (&got, &metal)) in words.iter().zip(blended).enumerate() {
+            let (blended_words, _) = self.read_samples(&ms, &view);
+            let under = words.iter().zip(stored).map(|(&w, &m)| apart(pf, w, m));
+            for (i, ((&got, &metal), under)) in
+                blended_words.iter().zip(blended).zip(under).enumerate()
+            {
                 let off = apart(pf, got, metal);
                 exact[2] += usize::from(off == 0);
-                if off > 1 {
+                if off > 1 + under {
                     wrong.push(format!(
                         "{what}: blend, pixel {} sample {}: word {got:#x} against Metal's \
                          {metal:#x}",

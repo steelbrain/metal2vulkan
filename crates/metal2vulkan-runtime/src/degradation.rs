@@ -2311,7 +2311,9 @@ degradations! {
         /// store the other one. Recorded bound past one code, on lavapipe against plain Metal on
         /// an Apple M3 Max: a blend into an 8-bit unorm attachment within 2 codes; a function that
         /// fetches an 8-bit sRGB attachment and writes it again within 2 codes; a blend into an
-        /// 8-bit sRGB attachment within 4 codes. Another device is not bounded past one code.
+        /// 8-bit sRGB attachment within 4 codes; a blend into a multisampled packed 16-bit
+        /// attachment within 2 codes over a sample stored a code from Metal's. Another device is
+        /// not bounded past one code.
         DeviceColorConversion = "device-color-conversion";
         DeviceInterpolation = "device-interpolation";
         DeviceInterpolationOffset = "device-interpolation-offset";

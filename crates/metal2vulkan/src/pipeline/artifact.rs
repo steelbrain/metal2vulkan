@@ -1124,7 +1124,10 @@ pub enum PrecisionNote {
     /// fragment function that fetches an 8-bit sRGB attachment and writes it again, within 2 codes
     /// once a later draw reads an earlier one's code (the device's decode,
     /// [`PrecisionNote::SrgbTexelDecode`], beside its encode); a blend into an 8-bit sRGB
-    /// attachment, within 4 codes. Another device is not bounded past one code: an NVIDIA RTX 5080
+    /// attachment, within 4 codes. On lavapipe (Mesa 26.2.4, LLVM 23.1.1), against the probe
+    /// `msaa_word_formats.m` on that M3 Max: a blend into a 4-sample `A1BGR5Unorm` attachment the
+    /// device renders itself, within 2 codes of Metal's, over a sample whose fill it stored a code
+    /// from Metal's. Another device is not bounded past one code: an NVIDIA RTX 5080
     /// Laptop GPU's blend into an 8-bit sRGB attachment stored up to 11 codes from Metal's in the
     /// same suite.
     ///
