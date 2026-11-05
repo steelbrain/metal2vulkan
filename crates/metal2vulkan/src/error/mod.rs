@@ -874,6 +874,15 @@ pub enum DriverDeviation {
     /// answers Metal's, a widened `half` written there moves its NaN as measured
     /// (`lower::arith::narrow::moves_unfolded`). Unmeasured, the write records the note.
     MetalSmallFloatNans,
+    /// The device's `float` negation, absolute value, floor and ceiling (`OpFNegate`, `FAbs`,
+    /// `Floor` and `Ceil`) read an `f32` denormal as Metal does (`VkProperty::MetalUnaryDenormals`):
+    /// a negation and an absolute value move the sign bit alone, keeping the denormal, and a floor
+    /// and a ceiling read it as the zero of its sign (`floor(-2^-149)` is `-0`, `ceil(2^-149)` is
+    /// `+0`). Where the profile takes it, those operations record no
+    /// `PrecisionNote::DeviceDenormals` and the module requires the property. A texel centre's
+    /// `floor` stays noted where its address mode parts texel -1 from texel 0: Metal's sampler
+    /// reads its coordinate unflushed. Unmeasured, each records the note.
+    MetalUnaryDenormals,
 }
 
 /// A defect of a device's driver in a command the runtime records for itself, never in a

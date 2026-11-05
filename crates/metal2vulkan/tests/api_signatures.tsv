@@ -13152,6 +13152,7 @@ variant	metal2vulkan::device::VkProperty::MetalPackConversions	MetalPackConversi
 variant	metal2vulkan::device::VkProperty::MetalSampler	MetalSampler
 variant	metal2vulkan::device::VkProperty::MetalSmallFloatColorWrites	MetalSmallFloatColorWrites
 variant	metal2vulkan::device::VkProperty::MetalSmallFloatNans	MetalSmallFloatNans
+variant	metal2vulkan::device::VkProperty::MetalUnaryDenormals	MetalUnaryDenormals
 variant	metal2vulkan::device::VkProperty::MetalVertexSimdgroups	MetalVertexSimdgroups
 variant	metal2vulkan::device::VkProperty::ProvokingVertexModePerPipeline	ProvokingVertexModePerPipeline
 variant	metal2vulkan::device::VkProperty::RequiredSubgroupSizeStage	RequiredSubgroupSizeStage(Stage)
@@ -13326,6 +13327,7 @@ variant	metal2vulkan::error::DriverDeviation::MetalPackConversions	MetalPackConv
 variant	metal2vulkan::error::DriverDeviation::MetalSampler	MetalSampler
 variant	metal2vulkan::error::DriverDeviation::MetalSmallFloatColorWrites	MetalSmallFloatColorWrites
 variant	metal2vulkan::error::DriverDeviation::MetalSmallFloatNans	MetalSmallFloatNans
+variant	metal2vulkan::error::DriverDeviation::MetalUnaryDenormals	MetalUnaryDenormals
 variant	metal2vulkan::error::DriverDeviation::MetalVertexSimdgroups	MetalVertexSimdgroups
 variant	metal2vulkan::error::DriverDeviation::SampleFragCoordDepth	SampleFragCoordDepth
 variant	metal2vulkan::error::DriverDeviation::SimdgroupLockstep	SimdgroupLockstep

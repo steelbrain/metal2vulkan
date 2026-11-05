@@ -351,6 +351,10 @@ impl DeviceProfile {
                 .enabled
                 .properties
                 .contains(&VkProperty::MetalSmallFloatNans),
+            DriverDeviation::MetalUnaryDenormals => f
+                .enabled
+                .properties
+                .contains(&VkProperty::MetalUnaryDenormals),
         }
     }
 

@@ -3012,9 +3012,11 @@ bound.
   measured to read them as Metal does: `+ - *`, the comparisons, `fma`, `dot`, `sqrt`, `rsqrt`,
   `trunc`, `rint` and `ldexp` on `float` (by the device's products) but on a device that takes the
   measured
-  `DriverDeviation::MetalFloatDenormals`; and on every device the divisions and the remainder,
-  `floor`, `ceil` and `fneg`, the device's maths functions (`fast::fmod`'s fused multiply-add,
-  `fabs`, `sign` and `fract` among them), `mix` by `FMix`, `fast::sqrt` by `Sqrt`, `dot` of
+  `DriverDeviation::MetalFloatDenormals`; `fneg`, `fabs`, `floor` and `ceil` on `float` but on a
+  device that takes the measured `DriverDeviation::MetalUnaryDenormals` (MoltenVK on the Apple M3
+  Max's macOS 27 identity, whose module then requires `VkProperty::MetalUnaryDenormals`); and on
+  every device the divisions and the remainder, the device's maths functions (`fast::fmod`'s fused
+  multiply-add, `sign` and `fract` among them), `mix` by `FMix`, `fast::sqrt` by `Sqrt`, `dot` of
   vectors of other than two to four lanes, whose chunks' products the device sums where Metal
   flushes each one below `2^-126`, and a conversion to or from `double`, where Metal's reading is
   not measured. The operations that read a denormal on its bits answer Metal on every device:

@@ -4085,8 +4085,10 @@ fn half_conversions_are_metals_where_measured() {
 /// answers `0x7FFFFFFF`, RADV and ANV flush a denormal): no NaN is selected and nothing moves on
 /// the bits, the NaN noted `NativeNanEncoding` but where the device's are measured to be Metal's
 /// (`DriverDeviation::MetalNanMoves`, on `moltenvk-m3`), where the module requires that, and
-/// `fneg`'s denormal `DeviceDenormals`. The interpreter keeps the payload and the denormal, as a
-/// device may.
+/// `fneg`'s denormal `DeviceDenormals` but where the device keeps it as Metal does
+/// (`DriverDeviation::MetalUnaryDenormals`, on `moltenvk-m3`), where the module requires that and
+/// `fabs` records no `DeviceDenormals` either. The interpreter keeps the payload and the
+/// denormal, as a device may.
 #[test]
 fn float_sign_operations_are_the_devices_on_every_profile() {
     let snan = ob("x", 0x7F80_0001);
@@ -4185,11 +4187,25 @@ fn float_sign_operations_are_the_devices_on_every_profile() {
                     "{what}"
                 );
             }
-            if neg {
-                assert!(
-                    a.precision.contains(&PrecisionNote::DeviceDenormals),
-                    "{what}: {:?}",
-                    a.precision
+            // A denormal is the device's but where it is measured to keep it as Metal does
+            // (`DriverDeviation::MetalUnaryDenormals`), which the module then requires.
+            if neg || abs {
+                let unary =
+                    p.takes_driver_deviation(crate::error::DriverDeviation::MetalUnaryDenormals);
+                if neg || unary {
+                    assert_eq!(
+                        a.precision.contains(&PrecisionNote::DeviceDenormals),
+                        !unary,
+                        "{what}: {:?}",
+                        a.precision
+                    );
+                }
+                assert_eq!(
+                    a.requirements
+                        .properties
+                        .contains(&crate::device::requirements::VkProperty::MetalUnaryDenormals),
+                    unary,
+                    "{what}"
                 );
             }
             let got = interpret(&bitcode, kk.name, &p);

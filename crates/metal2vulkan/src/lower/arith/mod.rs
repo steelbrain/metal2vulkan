@@ -688,6 +688,10 @@ pub struct ArithPlan {
     /// reads them as Metal does ([`denormal::device_flushes`]), recorded at selection: the module
     /// then requires `VkProperty::MetalFloatDenormals`.
     pub device_denormals: bool,
+    /// Whether a `float` negation, absolute value, floor or ceiling leaves its `f32` denormals to
+    /// the device because the device reads them as Metal does ([`denormal::unary_kept`]),
+    /// recorded at selection: the module then requires `VkProperty::MetalUnaryDenormals`.
+    pub unary_denormals: bool,
     /// How the module rounds an `f32` to `half` ([`narrow::round`]), decided by [`finish`] from
     /// the profile ([`narrow::quantize_form`]): the device's conversion to 16 bits and its
     /// widening under the float controls that make it Metal's, else that conversion as it is
@@ -1271,18 +1275,25 @@ fn note_native_nan(cx: &mut SelectCx<'_>, answer: Option<nan::NanAnswer>) {
 
 /// Leave an operation's `f32` denormals (on `float` lanes of form `f`) to the device: where the
 /// device is measured to read them as Metal does and the operation is one the measured deviation
-/// covers (`covered`, [`denormal::device_flushes`]), the module requires the property; elsewhere
-/// they are the device's own, noted `DeviceDenormals` (as the operation's notes record it).
+/// covers (`covered`: [`denormal::device_flushes`], or [`denormal::unary_kept`] for a negation, a
+/// floor and a ceiling), the module requires the deviation's property; elsewhere they are the
+/// device's own, noted `DeviceDenormals` (as the operation's notes record it).
 /// Another format leaves nothing: a `half` is held widened, never an `f32` denormal, and Metal's
 /// `bfloat` and `double` environments are not measured.
 pub(super) fn leave_denormals(cx: &mut SelectCx<'_>, f: Form, covered: denormal::Covered) {
     if f.float_fmt() != Some(FloatFmt::F32) {
         return;
     }
-    if covered == denormal::Covered::Deviation && denormal::device_flushes(cx.profile) {
-        cx.families.arith.device_denormals = true;
-    } else {
-        cx.precision.insert(PrecisionNote::DeviceDenormals);
+    match covered {
+        denormal::Covered::Deviation if denormal::device_flushes(cx.profile) => {
+            cx.families.arith.device_denormals = true;
+        }
+        denormal::Covered::Unary if denormal::unary_kept(cx.profile) => {
+            cx.families.arith.unary_denormals = true;
+        }
+        _ => {
+            cx.precision.insert(PrecisionNote::DeviceDenormals);
+        }
     }
 }
 
@@ -1460,9 +1471,10 @@ fn select_in(
             let f = form_in(cx, *v, chunk)?;
             // The device's sign flip: it makes no NaN. Metal's `float` `fneg` flips the sign bit
             // alone, keeping a NaN's payload and a denormal, whatever the flags; Vulkan lets
-            // `OpFNegate` flush a denormal (`DeviceDenormals`), and states no NaN's bits, noted
+            // `OpFNegate` flush a denormal (`DeviceDenormals` but where the device is measured to
+            // keep it, [`denormal::Covered::Unary`]), and states no NaN's bits, noted
             // `NativeNanEncoding` where Metal answers one ([`nan::fneg_answer`]).
-            device_float(cx, f, true, false);
+            leave_denormals(cx, f, denormal::Covered::Unary);
             fp_env(cx, *fmf, f);
             let nan = f.float_fmt().and_then(nan::fneg_answer);
             // A `float` one's NaN is Metal's where the device's negation is measured to be
@@ -1952,6 +1964,11 @@ fn select_float_fn(
         let arith = &mut cx.families.arith;
         arith.fmod_uses |= fmod;
         arith.device_min_max |= device_min_max(cx.profile, op, f);
+        // `fabs` keeps a denormal as Metal's does where the device is measured to
+        // ([`denormal::moves_sign`]): its notes leave it out ([`float_call_of`]).
+        arith.unary_denormals |= facts.unary_denormals
+            && denormal::moves_sign(op)
+            && f.float_fmt() == Some(FloatFmt::F32);
     }
     if facts.nan_moves && moves_nan(lowered.how, f) {
         match f.float_fmt() {
@@ -2003,11 +2020,12 @@ fn call_coverage(how: FloatLowering, facts: FloatFacts) -> Option<denormal::Cove
 
 /// Whether the device leaves a call lowered as `how` (on lanes of form `f`) its `f32` denormals
 /// on a profile with float facts `facts`, as [`leave_denormals`] notes them: where its reading is
-/// covered ([`call_coverage`]) but not by the profile's deviation (`facts.device_denormals`).
+/// covered ([`call_coverage`]) but not by the profile's deviation (`facts.device_denormals`, or
+/// `facts.unary_denormals` for a floor and a ceiling).
 fn coverage_left(how: FloatLowering, f: Form, facts: FloatFacts) -> bool {
     f.float_fmt() == Some(FloatFmt::F32)
         && call_coverage(how, facts)
-            .is_some_and(|c| !(c == denormal::Covered::Deviation && facts.device_denormals))
+            .is_some_and(|c| !c.holds(facts.device_denormals, facts.unary_denormals))
 }
 
 /// Whether Metal's minimum and maximum function `op` on lanes of form `f` takes the device's
@@ -2119,6 +2137,9 @@ struct FloatFacts {
     metal_functions: bool,
     /// Whether the device reads `f32` denormals as Metal does ([`denormal::device_flushes`]).
     device_denormals: bool,
+    /// Whether the device's negation, absolute value, floor and ceiling read `f32` denormals as
+    /// Metal's do ([`denormal::unary_kept`]).
+    unary_denormals: bool,
     /// Which NaN the device's arithmetic answers ([`nan::encoding`]).
     nans: NanEncoding,
     /// Whether Metal's minimum and maximum functions are the device's not measured to be Metal's:
@@ -2136,6 +2157,7 @@ impl FloatFacts {
             routes: fma::routes(p),
             metal_functions: p.fields().float_functions == FloatFunctions::Metal,
             device_denormals: denormal::device_flushes(p),
+            unary_denormals: denormal::unary_kept(p),
             nans: nan::encoding(p),
             native_min_max: !p.takes_driver_deviation(crate::error::DriverDeviation::MetalMinMax),
             nan_moves: nan::moves_answered(p),
@@ -2421,7 +2443,10 @@ fn float_call_of(
         f,
         metal_functions,
         (
-            !op.metal_denormals() && denormal::coverage(op).is_none() && !fast_pi,
+            !op.metal_denormals()
+                && denormal::coverage(op).is_none()
+                && !fast_pi
+                && !(facts.unary_denormals && denormal::moves_sign(op)),
             !metal_nans && answer.is_none(),
         ),
     );

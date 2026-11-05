@@ -868,6 +868,15 @@ pub enum VkProperty {
     /// [`PrecisionNote::DeviceNanEncoding`](crate::pipeline::PrecisionNote::DeviceNanEncoding)
     /// for it and requires it.
     MetalSmallFloatNans,
+    /// The device's `float` `OpFNegate` and `FAbs` keep an `f32` denormal and its `Floor` and
+    /// `Ceil` read one as the zero of its sign, as Metal's `-x`, `fabs`, `floor` and `ceil` do (the
+    /// driver's measured deviation
+    /// [`DriverDeviation::MetalUnaryDenormals`](crate::error::DriverDeviation::MetalUnaryDenormals)).
+    /// Vulkan lets a device keep or flush them. A module that leaves those operations' denormals to
+    /// the device records no
+    /// [`PrecisionNote::DeviceDenormals`](crate::pipeline::PrecisionNote::DeviceDenormals) for
+    /// them and requires it.
+    MetalUnaryDenormals,
     /// `GLSL.std.450 InterpolateAtOffset` at offset `v` reads Metal's `interpolate_at_offset` at
     /// `v + 7/16`, measured from the pixel's upper-left corner: a device whose description reports
     /// a MoltenVK driver, whose SPIRV-Cross hands the instruction to Metal so at any release

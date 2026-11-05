@@ -2460,6 +2460,7 @@ const KHR_FACTS: super::FloatFacts = super::FloatFacts {
     },
     metal_functions: false,
     device_denormals: false,
+    unary_denormals: false,
     nans: crate::device::profile::NanEncoding::Native,
     native_min_max: false,
     nan_moves: false,
@@ -2522,6 +2523,37 @@ fn precise_pow_notes_its_measured_nan_as_the_devices() {
 
 /// Class E: Metal's `float` `fneg` and `fabs` flip or clear the sign bit alone, a NaN's payload and
 /// a denormal kept (`nan_signbits`, `nan_signbits_fast`). The lowering takes the device's
+/// `floor`, `ceil` and `fabs` on `float` leave their denormals to the device, noted
+/// `DeviceDenormals`, but where the profile takes `DriverDeviation::MetalUnaryDenormals`
+/// (`denormal::Covered::Unary`, `denormal::moves_sign`); `trunc` follows the other deviation
+/// alone, in either mode.
+#[test]
+fn unary_denormals_follow_their_deviation() {
+    use crate::air::ir::FastMath;
+    use crate::pipeline::artifact::PrecisionNote;
+    let f = Form {
+        held: Held::Float(FloatFmt::F32),
+        lanes: 1,
+    };
+    for unary in [false, true] {
+        let facts = super::FloatFacts {
+            unary_denormals: unary,
+            ..KHR_FACTS
+        };
+        for op in [FloatFn::Floor, FloatFn::Ceil, FloatFn::Abs, FloatFn::Trunc] {
+            for fast in [false, true] {
+                let call = super::float_call(op, fast, FastMath::NONE, f, facts)
+                    .unwrap_or_else(|| panic!("{op:?}: no float call"));
+                assert_eq!(
+                    call.notes.always.contains(&PrecisionNote::DeviceDenormals),
+                    !(unary && op != FloatFn::Trunc),
+                    "{op:?}, fast {fast}, unary {unary}"
+                );
+            }
+        }
+    }
+}
+
 /// `OpFNegate` and `FAbs` on every format, whose NaN is the device's: a `float` `fabs` answers
 /// Metal's operand NaN by none of its own, noted `NativeNanEncoding` (and a `half` one Metal's
 /// canonical NaN, class D), and off Metal's own functions records the device's precision and

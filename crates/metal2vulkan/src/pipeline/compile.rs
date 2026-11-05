@@ -2860,6 +2860,13 @@ fn compile_kept<K>(
             .properties
             .insert(crate::device::requirements::VkProperty::MetalFloatDenormals);
     }
+    // The negations, absolute values, floors and ceilings whose `float` denormals the device
+    // reads as Metal does.
+    if plan.families.arith.unary_denormals {
+        requirements
+            .properties
+            .insert(crate::device::requirements::VkProperty::MetalUnaryDenormals);
+    }
     // Center varyings read as they are as their pixel form, because the device reads them at
     // the pixel center as Metal does.
     if plan.families.stage_io.center_varyings_by_device {

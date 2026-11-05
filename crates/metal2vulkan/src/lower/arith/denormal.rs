@@ -1,8 +1,9 @@
 //! How Metal reads `f32` denormals, per operation, against the device: where the device reads them
 //! as Metal does, an `f32` denormal operand as the zero of its sign and a denormal result flushed
-//! to one (`DriverDeviation::MetalFloatDenormals`, a measured driver fact), the module leaves them
-//! to it and requires the property; elsewhere they are the device's own, noted
-//! (`PrecisionNote::DeviceDenormals`). Only `float` operations are listed: a widened `half` is
+//! to one (`DriverDeviation::MetalFloatDenormals`, a measured driver fact), or, for a negation, an
+//! absolute value, a floor and a ceiling, as Metal's (`DriverDeviation::MetalUnaryDenormals`),
+//! the module leaves them to it and requires the property; elsewhere they are the device's own,
+//! noted (`PrecisionNote::DeviceDenormals`). Only `float` operations are listed: a widened `half` is
 //! never an `f32` denormal, and Metal's `bfloat` and `double` environments are not measured.
 
 use crate::device::DeviceProfile;
@@ -17,16 +18,47 @@ pub fn device_flushes(p: &DeviceProfile) -> bool {
     p.takes_driver_deviation(DriverDeviation::MetalFloatDenormals)
 }
 
+/// Whether profile `p`'s device reads the denormals of the operations [`Covered::Unary`] names as
+/// Metal does: a negation and an absolute value keep one, a floor and a ceiling read one as the
+/// zero of its sign (`DriverDeviation::MetalUnaryDenormals`, a measured driver fact). Elsewhere
+/// they are the device's own (`PrecisionNote::DeviceDenormals`).
+pub fn unary_kept(p: &DeviceProfile) -> bool {
+    p.takes_driver_deviation(DriverDeviation::MetalUnaryDenormals)
+}
+
 /// Where an operation the device computes reads its `f32` denormals as Metal does.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Covered {
     /// On a device with the measured deviation ([`device_flushes`]); elsewhere they are the
     /// device's own.
     Deviation,
-    /// On no device measured: the device's own on every profile. `Floor` and `Ceil` of a denormal
+    /// On a device with the measured deviation of the sign moves and the floor and ceiling
+    /// ([`unary_kept`]); elsewhere they are the device's own. `Floor` and `Ceil` of a denormal
     /// give `-1` and `1` on NVIDIA's 615.71.09 and on lavapipe, where Metal reads the operand as a
-    /// zero (`floor(-2^-149)` is `-0`, `ceil(2^-149)` is `+0`).
+    /// zero (`floor(-2^-149)` is `-0`, `ceil(2^-149)` is `+0`), and RADV and ANV flush a negated
+    /// one, which Metal keeps.
+    Unary,
+    /// On no device measured: the device's own on every profile (a quotient).
     Never,
+}
+
+impl Covered {
+    /// Whether a device whose readings `flushes` ([`device_flushes`]) and `unary`
+    /// ([`unary_kept`]) state reads an operation of this class's denormals as Metal does.
+    pub fn holds(self, flushes: bool, unary: bool) -> bool {
+        match self {
+            Covered::Deviation => flushes,
+            Covered::Unary => unary,
+            Covered::Never => false,
+        }
+    }
+}
+
+/// Whether float function `op` moves its operand's sign bit alone, keeping a denormal where Metal's
+/// does on a device measured to ([`Covered::Unary`]): `fabs`. Its notes otherwise follow the
+/// device's own functions (`function_notes`).
+pub fn moves_sign(op: FloatFn) -> bool {
+    op == FloatFn::Abs
 }
 
 /// Where the device's instruction for float function `op` (on `float` lanes, where the lowering
@@ -37,7 +69,7 @@ pub enum Covered {
 ///
 /// | function | where the device's reading is Metal's |
 /// |---|---|
-/// | `floor`, `ceil` | no device measured |
+/// | `floor`, `ceil` | the unary deviation |
 /// | `trunc`, `rint` | the deviation |
 /// | `sqrt`, `rsqrt`, `fast::rsqrt` | the deviation |
 /// | `dot` | the deviation |
@@ -61,7 +93,7 @@ pub enum Covered {
 pub fn coverage(op: FloatFn) -> Option<Covered> {
     use FloatFn as F;
     Some(match op {
-        F::Floor | F::Ceil => Covered::Never,
+        F::Floor | F::Ceil => Covered::Unary,
         F::Trunc
         | F::Rint
         | F::Sqrt

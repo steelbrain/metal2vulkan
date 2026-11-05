@@ -472,6 +472,19 @@ pub(crate) fn among<F: Copy + Ord>(
 /// and `RGBA16Float` a `half` NaN's payload differs (the device stores `0x7e00`), which
 /// `MetalHalfTexelWrites` would state, so outside it. One row per GPU, as measured.
 ///
+/// `MetalUnaryDenormals`: MoltenVK 1.4.2's `OpFNegate`, `FAbs`, `Floor` and `Ceil` on 32-bit
+/// floats, which SPIRV-Cross writes as Metal's `-x`, `fabs`, `floor` and `ceil`. On the M3 Max
+/// under macOS 27.0.1, against plain Metal's rows: the gate lane
+/// `runtime_lane::driver_deviations::float_denormals_read_as_metal_reads_them` checks the
+/// denormal probes' (`nan_denormals`, `nan_denormals_fast`: 256 lanes of operand triples rich in
+/// denormals of both signs and the smallest normals) words of `-a`, `fabs(a)`, `floor(a)` and
+/// `ceil(a)` beside `0 - a` and `-(a * b)`, and
+/// `runtime_lane::driver_deviations::owned_float_fixtures_answer_metal` the owned fixtures'
+/// `floor` and `ceil` rows of every pair of a 32-value pool; the committed MoltenVK rows of all
+/// four cases are Metal's, word for word. NVIDIA's 615.71.09 and lavapipe answer `floor` and `ceil`
+/// of a denormal as `-1` and `1`, and RADV and ANV flush a negated denormal, so they are not
+/// listed. One row per GPU, as measured.
+///
 /// Another driver has none of them, as Vulkan states, and a listed driver on another vendor's GPU
 /// (or another GPU than a row's) is unmeasured: the profile then takes each one's route without
 /// it, which the deviation's docs name (`derive.rs`).
@@ -673,6 +686,10 @@ pub(crate) const DEVIATIONS: &[Measured<DriverDeviation>] = &[
     Measured {
         device: Some(APPLE9),
         ..moltenvk_on_apple(DriverDeviation::MetalSmallFloatNans)
+    },
+    Measured {
+        device: Some(APPLE9),
+        ..moltenvk_on_apple(DriverDeviation::MetalUnaryDenormals)
     },
 ];
 
