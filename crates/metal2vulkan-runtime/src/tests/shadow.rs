@@ -97,6 +97,7 @@ fn shadow_in(
         backing: Backing::MappedBuffer,
         merge_scratch: ScratchSpares::default(),
         stood: AtomicU64::new(0),
+        standing: Default::default(),
     })
 }
 
@@ -1454,6 +1455,7 @@ fn view_of(image: ResourceKey, levels: Range<u32>, layers: Range<u32>) -> Arc<Sh
         backing: Backing::Image,
         merge_scratch: ScratchSpares::default(),
         stood: AtomicU64::new(0),
+        standing: Default::default(),
     })
 }
 

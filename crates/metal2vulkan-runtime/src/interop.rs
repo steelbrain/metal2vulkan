@@ -194,12 +194,16 @@ impl Buffer {
     /// buffer bound below an unaligned pointer. No Metal counterpart: an interop hook. A buffer the
     /// runtime placed in its own memory has no `SHADER_DEVICE_ADDRESS` usage of its own (it takes
     /// its address from its memory block's buffer), so the caller asks it for no device address.
+    /// Once it was handed out, a shadowed texture over a `Private` buffer's bytes copies them in
+    /// at each command buffer's first use, as one over the CPU's bytes does: the caller's own
+    /// work may write them.
     ///
     /// # Safety
     ///
     /// The `VkBuffer` stays the runtime's: the caller does not destroy it, and uses it only while
     /// the buffer lives, ordered against the runtime's work on it.
     pub unsafe fn vk_buffer(&self) -> (vk::Buffer, u64) {
+        self.hand_out();
         self.at_for(0, ReadApart::VkBuffer)
     }
 

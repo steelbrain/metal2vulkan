@@ -217,6 +217,7 @@ use crate::gpu_time;
 use crate::release;
 use crate::resource::ResourceKey;
 use crate::scheduler;
+use crate::shadow::ShadowCopies;
 use crate::sparse::bind::{bind_batch, BindFailure, Bound};
 use crate::sparse::encoder::SparseUpdate;
 use crate::texture::decoded_twin::{SecondDecode, TwinWrite};
@@ -226,6 +227,7 @@ use crate::tracker::{Barrier, Point, Summary};
 use crate::work_counts::Begun;
 use ash::vk;
 use std::collections::BTreeSet;
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 use {crate::tracker::Footprint, std::sync::Mutex};
@@ -1154,6 +1156,23 @@ impl CommandBufferShared {
         let handlers = (schedules && !state.submission.is_empty()) || forms;
         state.submitting = handlers;
         scheduler.tracker.apply(plan);
+        // The standings across command buffers, in the order the tracker took the batch
+        // (`shadow_standing.rs`): its writes let go of those they meet; then, where it ends the
+        // command buffer with its last encoder and nothing failed it or reached memory unnamed,
+        // the shadows its end left holding every texel of their truth stand.
+        let unnamed = state.reaches_unnamed || self.unnoted.load(Ordering::Relaxed);
+        let clean = state.failure.is_none()
+            && state.fails_from.is_none()
+            && state.faulted.is_empty()
+            && state.hang.is_none()
+            && !rebound;
+        let ends = last && start < end && end == state.recorded.len() && clean && !unnamed;
+        let held = match (ends, &state.shadow_carry) {
+            (true, Some(carry)) => carry.held_whole(),
+            _ => Vec::new(),
+        };
+        let summaries = (state.recorded[start..end].iter()).map(|recorded| &recorded.summary);
+        shared.standings.submitted(summaries, unnamed, &held);
         held_moves.submitted();
         shared.counts.held_depths_released(held_moves.released);
         let several = shared.queues.len() > 1;
@@ -1411,6 +1430,13 @@ impl CommandBufferShared {
                     continue;
                 }
             }
+            // A copy in its shadow's standing decides moves nothing where the image stands now
+            // (`shadow_standing.rs`).
+            let standing = match &work {
+                Deferred::GatedCopyIn(copy) => copy.standing(),
+                _ => None,
+            };
+            let stands = standing.is_some_and(|copies| self.stands(state, encoder, copies));
             let raw = self.record_raw(state, |state, buffer| {
                 match &work {
                     // SAFETY: the command buffer is recording; the texture is live (its encoder's
@@ -1425,7 +1451,7 @@ impl CommandBufferShared {
                     // shadowed texture is live (its encoder's command buffer holds it), its
                     // image in `GENERAL`.
                     Deferred::GatedCopyIn(copy) => unsafe {
-                        copy.record(device.shared().vk(), buffer)
+                        copy.record(device.shared().vk(), buffer, stands)
                     },
                     // SAFETY: the command buffer is recording, outside a render pass; the merge,
                     // its images and its scratch are held until it completes (its pass's encoder
@@ -1445,8 +1471,23 @@ impl CommandBufferShared {
             })?;
             state.recorded[encoder].segments[at].recorded =
                 Some(RecordedSegment::submitted(vec![raw]));
+            if let (Some(_), Deferred::GatedCopyIn(copy)) = (standing, &work) {
+                (device.shared().counts).shadow_copy_in_against_standing(stands, copy.texels());
+            }
         }
         Ok(())
+    }
+
+    /// Whether `copies`' image stands across command buffers (`shadow_standing.rs`) for a copy
+    /// in of encoder `encoder`, submitted now: it stands, no earlier encoder of the command
+    /// buffer wrote the truth or the image, and none of its commands may reach memory no use
+    /// names.
+    fn stands(&self, state: &State, encoder: usize, copies: &ShadowCopies) -> bool {
+        let keys = copies.standing_keys();
+        let unnamed = state.reaches_unnamed || self.unnoted.load(Ordering::Relaxed);
+        let wrote =
+            (state.recorded[..encoder].iter()).any(|recorded| recorded.summary.writes_any(&keys));
+        !unnamed && !wrote && self.device.shared().standings.stands(copies)
     }
 
     /// Record the decodes into ASTC carriers' second decoded twins (`texture/decoded_twin.rs`) of

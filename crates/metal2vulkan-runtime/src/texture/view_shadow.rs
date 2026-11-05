@@ -485,6 +485,7 @@ impl Device {
                     backing: Backing::Image,
                     merge_scratch: ScratchSpares::default(),
                     stood: AtomicU64::new(0),
+                    standing: Default::default(),
                 };
                 Owner::ViewShadow(Box::new(ViewShadow {
                     placement,

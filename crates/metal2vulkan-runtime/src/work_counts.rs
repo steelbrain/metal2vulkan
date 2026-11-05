@@ -406,6 +406,9 @@ pub(crate) struct Counters {
     new_buffer_bytes_cleared: AtomicU64,
     new_buffer_zero_fills: AtomicU64,
     shadow_copies: AtomicU64,
+    shadow_copies_in_against_standing: AtomicU64,
+    shadow_copies_in_skipped_by_standing: AtomicU64,
+    shadow_texels_skipped_by_standing: AtomicU64,
     shadow_texels_copied_in: AtomicU64,
     shadow_texels_first_copied_in: AtomicU64,
     shadow_texels_first_copied_in_images: AtomicU64,
@@ -2920,6 +2923,17 @@ impl Counters {
             .fetch_add(texels_in, Ordering::Relaxed);
         self.shadow_texels_copied_back
             .fetch_add(texels_back, Ordering::Relaxed);
+    }
+
+    /// A command buffer's first copy in of a shadow that may stand across command buffers was
+    /// decided as its batch was submitted (`shadow_standing.rs`): it moved nothing where the
+    /// image stood (`skipped`), its `texels` with it.
+    pub(crate) fn shadow_copy_in_against_standing(&self, skipped: bool, texels: u64) {
+        (self.shadow_copies_in_against_standing).fetch_add(1, Ordering::Relaxed);
+        if skipped {
+            (self.shadow_copies_in_skipped_by_standing).fetch_add(1, Ordering::Relaxed);
+            (self.shadow_texels_skipped_by_standing).fetch_add(texels, Ordering::Relaxed);
+        }
     }
 
     /// An encoder planned `copy`, a copy in of a shadowed texture: its texels
@@ -5781,6 +5795,18 @@ pub struct WorkCounts {
     /// texture that merges back (`shadow_merge.rs`). Each is a command of its encoder over the
     /// texture's texels.
     pub shadow_copies: u64,
+    /// Of the copies in of `shadow_copies`, command buffers' first ones of a shadow whose truth
+    /// only the runtime's commands write (a tracked `Private` buffer's bytes the device made, an
+    /// IOSurface plane's among them), decided as their batches were submitted against the
+    /// image's standing across command buffers (`shadow_standing.rs`).
+    pub shadow_copies_in_against_standing: u64,
+    /// Of those, the ones that moved nothing: the image held every texel of the truth, as an
+    /// earlier command buffer's end left it, and nothing submitted since wrote the truth or the
+    /// image.
+    pub shadow_copies_in_skipped_by_standing: u64,
+    /// The texels those would have moved; they are among `shadow_texels_copied_in` and its
+    /// split, which count every copy in as it is planned.
+    pub shadow_texels_skipped_by_standing: u64,
     /// The texels those copies in move from a 2D texture's buffer's bytes to its image (a texture
     /// over a buffer, a no-copy buffer or an IOSurface plane): every texel, or those inside the
     /// rectangle bounding a pass's draws' scissors over an attachment it loads and takes in no
@@ -5835,7 +5861,10 @@ pub struct WorkCounts {
     pub shadow_texels_first_copy_in_carried_large_surfaces: u64,
     /// The second: the texels an encoder's first copy in of such a plane moved where the image's
     /// last standing was an earlier command buffer's. Metal shows a later command buffer a CPU
-    /// write made since the commit, so it requires these and no rule removes them.
+    /// write made since the commit, so it requires these where the CPU may write the plane;
+    /// where only the runtime's commands write it, those the image's standing across command
+    /// buffers took off as their batches were submitted are counted here too, and apart in
+    /// `shadow_texels_skipped_by_standing`.
     pub shadow_texels_first_copied_in_large_surfaces_stood_earlier: u64,
     /// The third: the texels an encoder's first copy in of such a plane moved where the image
     /// never held a standing of any command buffer. Unavoidable under any rule.
@@ -6961,6 +6990,15 @@ impl Device {
             own_pixel_reads: counters.own_pixel_reads.load(Ordering::Relaxed),
             shadows_zeroed: counters.shadows_zeroed.load(Ordering::Relaxed),
             shadow_copies: counters.shadow_copies.load(Ordering::Relaxed),
+            shadow_copies_in_against_standing: counters
+                .shadow_copies_in_against_standing
+                .load(Ordering::Relaxed),
+            shadow_copies_in_skipped_by_standing: counters
+                .shadow_copies_in_skipped_by_standing
+                .load(Ordering::Relaxed),
+            shadow_texels_skipped_by_standing: counters
+                .shadow_texels_skipped_by_standing
+                .load(Ordering::Relaxed),
             shadow_texels_copied_in: counters.shadow_texels_copied_in.load(Ordering::Relaxed),
             shadow_texels_first_copied_in: counters
                 .shadow_texels_first_copied_in

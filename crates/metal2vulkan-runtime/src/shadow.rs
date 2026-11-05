@@ -23,7 +23,10 @@
 //!   its batch's earlier encoder left holding the truth and copies nothing in ([`ShadowCarry`]); an
 //!   encoder that starts another batch, after a signal, a wait or a host step, copies in again
 //!   before its first command that uses the texture, which runs after the commands before it; and
-//!   a later command buffer copies in the bytes Metal would read there. A copy in
+//!   a later command buffer copies in the bytes Metal would read there, but where only the
+//!   runtime's commands write them (a tracked `Private` buffer's, `shadow_standing.rs`): there
+//!   its first copy in moves nothing where the image an earlier command buffer's end left
+//!   holding them still holds them as its batch is submitted. A copy in
 //!   of a one-level, one-slice texture's image moves only the texels inside the rectangle its
 //!   command reads and writes them in, where the command bounds that ([`ShadowUse::loads`]: a
 //!   pass's attachment it loads and takes no other way, inside its draws' scissors). The image's
@@ -228,6 +231,7 @@ use super::rotated::{RotatedCopies, Turn};
 use super::row_copies::RowCopies;
 use super::shadow_copy_back::{CopyBack, WordView};
 use super::shadow_merge::{ScratchSpares, ShadowMerge, UnormView};
+use super::shadow_standing::Standing;
 use super::texture::copy_images::UseMaker;
 use super::texture::heap_tiled::{HeapTiledCopies, SampleMoves};
 use super::texture::heap_two_planes::{HeapPlaneCopies, TwoPlaneHeapLayout};
@@ -269,6 +273,9 @@ pub(super) struct ShadowCopies {
     /// serve is counted as one an earlier command buffer's standing stands behind, or as one of a
     /// shadow that never held a standing ([`CarryTally`]).
     pub(super) stood: AtomicU64,
+    /// Where only the runtime's commands write the truth, the image's standing across command
+    /// buffers (`shadow_standing.rs`).
+    pub(super) standing: Standing,
 }
 
 /// The texels of a texture over an IOSurface's plane from which its shadow's copies in count
@@ -882,6 +889,23 @@ impl ShadowCopies {
         }
     }
 
+    /// Whether the image may keep a standing across command buffers (`shadow_standing.rs`): a
+    /// shadow of a buffer's bytes that only the runtime's commands write
+    /// ([`only_commands_write`](Self::only_commands_write)), whose writes reach them, over a
+    /// buffer of the runtime's own whose `VkBuffer` was never handed out.
+    pub(super) fn stands_across(&self) -> bool {
+        let bytes = matches!(self.source, ShadowSource::Bytes { .. });
+        bytes && self.only_commands_write() && !self.drops_writes && self.standing.may_stand()
+    }
+
+    /// The keys a write of which lets go of the image's standing across command buffers: the
+    /// truth's, the host memory it joined, and the image's own.
+    pub(super) fn standing_keys(&self) -> Vec<ResourceKey> {
+        let mut keys = vec![self.truth().0, self.shadow_key];
+        keys.extend(self.alias());
+        keys
+    }
+
     /// Whether what the commands write through the shadow goes back into its truth as a merge
     /// (`shadow_merge.rs`): a buffer's bytes that another writer may write beside the commands'
     /// writes while a command buffer runs, whose writes to texels the commands left Metal keeps;
@@ -1126,34 +1150,65 @@ pub(super) enum Step<M> {
     Merge(M),
 }
 
-/// A shadow's copy in over host pages a consumer logs (`dirty_pages.rs`), left by its encoder
-/// to its batch's submission (`Deferred::GatedCopyIn`): the commit asks the log for a stamp, and
+/// A shadow's copy in left by its encoder to its batch's submission (`Deferred::GatedCopyIn`):
+/// over host pages a consumer logs (`dirty_pages.rs`), the commit asks the log for a stamp, and
 /// the copy's regions are those the log says changed once that stamp is published, which only a
-/// recording after the commit can know. Recorded in a command buffer of its own between the
-/// encoder's, behind a barrier from everything before it and before one to everything after it,
-/// so it keeps its place among the encoder's commands.
+/// recording after the commit can know; a command buffer's first copy in of a shadow that may
+/// stand across command buffers (`shadow_standing.rs`) moves nothing where the image stands as
+/// the batch is submitted, in the scheduler's order. Recorded in a command buffer of its own
+/// between the encoder's, behind a barrier from everything before it and before one to
+/// everything after it, so it keeps its place among the encoder's commands.
 pub(super) struct GatedCopyIn {
     copy: ShadowCopy,
-    gate: Arc<CopyInGate>,
+    gate: CopyGate,
+}
+
+/// What decides a copy in as its batch is submitted.
+pub(super) enum CopyGate {
+    /// Its regions: those its log says changed (`dirty_pages.rs`).
+    Log(Arc<CopyInGate>),
+    /// Whether it moves anything: nothing where the image stands across command buffers
+    /// (`shadow_standing.rs`).
+    Standing,
 }
 
 impl GatedCopyIn {
-    /// `copy`, its regions decided by `gate`.
-    pub(super) fn new(copy: ShadowCopy, gate: Arc<CopyInGate>) -> GatedCopyIn {
+    /// `copy`, decided by `gate`.
+    pub(super) fn new(copy: ShadowCopy, gate: CopyGate) -> GatedCopyIn {
         GatedCopyIn { copy, gate }
     }
 
-    /// Record it into `command_buffer`, its regions decided now.
+    /// The shadow whose standing decides it, where that does.
+    pub(super) fn standing(&self) -> Option<&Arc<ShadowCopies>> {
+        matches!(self.gate, CopyGate::Standing).then_some(&self.copy.copies)
+    }
+
+    /// The texels it moves where it moves any.
+    pub(super) fn texels(&self) -> u64 {
+        self.copy.texels_copied_in()
+    }
+
+    /// Record it into `command_buffer`, decided now: nothing of a copy its standing decides
+    /// where the image `stands`.
     ///
     /// # Safety
     ///
     /// `command_buffer` is recording, outside a render pass; the copy's texture is live (its
     /// encoder's command buffer holds it), its image in the `GENERAL` layout.
-    pub(super) unsafe fn record(&self, device: &Vk, command_buffer: vk::CommandBuffer) {
+    pub(super) unsafe fn record(
+        &self,
+        device: &Vk,
+        command_buffer: vk::CommandBuffer,
+        stands: bool,
+    ) {
+        let gate = match &self.gate {
+            CopyGate::Log(gate) => Some(Arc::clone(gate)),
+            CopyGate::Standing if stands => return,
+            CopyGate::Standing => None,
+        };
         // SAFETY: the caller's.
         unsafe {
             Barrier::everything().record(device, command_buffer);
-            let gate = Some(Arc::clone(&self.gate));
             self.copy.record_gated(device, command_buffer, None, gate);
             Barrier::everything().record(device, command_buffer);
         }
@@ -1327,6 +1382,15 @@ fn image_copy_texels(region: &vk::ImageCopy) -> u64 {
 }
 
 impl ShadowCopy {
+    /// Whether the copy goes to its batch's submission, there to move nothing where the image
+    /// stands across command buffers (`shadow_standing.rs`): an encoder's first copy in of a
+    /// shadow that may stand, moving the truth's texels (no clear, no heap tile moves).
+    pub(super) fn left_to_standing(&self) -> bool {
+        let first = matches!(self.cause, Some(CopyCause::First));
+        let moves = self.clear.is_none() && self.moves.is_none();
+        matches!(self.step, Step::Into) && first && moves && self.copies.stands_across()
+    }
+
     /// The log of a copy in of every texel of a tracked 2D texture's image straight from a
     /// buffer over host pages a consumer logs (`dirty_pages.rs`), made or kept by `device`, and
     /// the bytes of one texel: what may decide the copy's regions as its batch is submitted
@@ -2795,7 +2859,9 @@ pub(super) struct CarryTally {
     pub(super) carried_large: u64,
     /// The texels an encoder's first copy in of a large plane moved where the image's last
     /// standing was an earlier command buffer's: Metal shows a later command buffer a CPU write
-    /// made since the commit, so it requires this one.
+    /// made since the commit, so it requires this one where the CPU may write the plane; where
+    /// only the runtime's commands do, the standing across command buffers may take it off as
+    /// the batch is submitted (`shadow_standing.rs`).
     pub(super) stood_earlier_large: u64,
     /// The texels an encoder's first copy in of a large plane moved where the image never held a
     /// standing: unavoidable under any rule.

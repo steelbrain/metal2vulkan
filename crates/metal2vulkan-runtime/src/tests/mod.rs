@@ -341,6 +341,8 @@ mod shadow_host_writes;
 mod shadow_merge_read;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod shadow_runs;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod shadow_standing_device;
 mod shadow_stencil;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod shadow_twins;

@@ -2970,7 +2970,9 @@ field	metal2vulkan-runtime::WorkCounts.shadow_attachment_tiles_bounded	pub shado
 field	metal2vulkan-runtime::WorkCounts.shadow_attachment_tiles_covered	pub shadow_attachment_tiles_covered: u64
 field	metal2vulkan-runtime::WorkCounts.shadow_copies	pub shadow_copies: u64
 field	metal2vulkan-runtime::WorkCounts.shadow_copies_back_dispatched	pub shadow_copies_back_dispatched: u64
+field	metal2vulkan-runtime::WorkCounts.shadow_copies_in_against_standing	pub shadow_copies_in_against_standing: u64
 field	metal2vulkan-runtime::WorkCounts.shadow_copies_in_dispatched	pub shadow_copies_in_dispatched: u64
+field	metal2vulkan-runtime::WorkCounts.shadow_copies_in_skipped_by_standing	pub shadow_copies_in_skipped_by_standing: u64
 field	metal2vulkan-runtime::WorkCounts.shadow_keeps	pub shadow_keeps: super::churn_counts::ShadowKeeps
 field	metal2vulkan-runtime::WorkCounts.shadow_keeps_from_staging	pub shadow_keeps_from_staging: u64
 field	metal2vulkan-runtime::WorkCounts.shadow_merge_copies_dispatched	pub shadow_merge_copies_dispatched: u64
@@ -3017,6 +3019,7 @@ field	metal2vulkan-runtime::WorkCounts.shadow_texels_recopied_in_large_surfaces	
 field	metal2vulkan-runtime::WorkCounts.shadow_texels_recopied_in_mapped_buffers	pub shadow_texels_recopied_in_mapped_buffers: u64
 field	metal2vulkan-runtime::WorkCounts.shadow_texels_recopied_in_private_buffers	pub shadow_texels_recopied_in_private_buffers: u64
 field	metal2vulkan-runtime::WorkCounts.shadow_texels_recopied_in_surfaces	pub shadow_texels_recopied_in_surfaces: u64
+field	metal2vulkan-runtime::WorkCounts.shadow_texels_skipped_by_standing	pub shadow_texels_skipped_by_standing: u64
 field	metal2vulkan-runtime::WorkCounts.shadowed_textures	pub shadowed_textures: u64
 field	metal2vulkan-runtime::WorkCounts.shadows_over_fresh_pages	pub shadows_over_fresh_pages: u64
 field	metal2vulkan-runtime::WorkCounts.shadows_sharing_truth	pub shadows_sharing_truth: u64

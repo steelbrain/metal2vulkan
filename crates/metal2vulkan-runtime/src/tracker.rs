@@ -2118,6 +2118,18 @@ impl<K: Copy + Ord> Summary<K> {
         self.uses.iter().map(|used| used.key)
     }
 
+    /// The resources the tracked uses write, in order, each once per range written.
+    pub(super) fn written_keys(&self) -> impl Iterator<Item = K> + '_ {
+        (self.uses.iter())
+            .filter(|used| !used.write.is_empty())
+            .map(|used| used.key)
+    }
+
+    /// Whether a tracked use writes one of `keys`.
+    pub(super) fn writes_any(&self, keys: &[K]) -> bool {
+        self.written_keys().any(|key| keys.contains(&key))
+    }
+
     /// Join `other`, the summary of work recorded apart that runs inside the same encoder (an
     /// indirect command buffer's commands, recorded at commit): its stages, fences and tracked
     /// uses, one per resource and range. A resource past [`ENTRIES_PER_KEY`] ranges takes a new

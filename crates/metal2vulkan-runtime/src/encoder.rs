@@ -33,7 +33,6 @@ use super::churn_counts::KeepBy;
 use super::command_buffer::rebound_use::Unlogged;
 use super::command_buffer::{recording_error, CommandBuffer};
 use super::deferred::{Deferred, StepInputs};
-use super::dirty_pages::CopyInGate;
 use super::error::{internal, invalid, vulkan, CommandBufferError, Error, Problem};
 use super::execution::Execution;
 use super::fresh_unwritten::{FreshRead, FreshUnwritten};
@@ -55,7 +54,7 @@ use super::resource::ResourceKey;
 use super::retained::Retained;
 use super::row_copies::RowCopies;
 use super::shadow::{
-    CopyCause, GatedCopyIn, ShadowCopies, ShadowCopy, ShadowSync, ShadowUse, Step, Within,
+    CopyCause, CopyGate, GatedCopyIn, ShadowCopies, ShadowCopy, ShadowSync, ShadowUse, Step, Within,
 };
 use super::shadow_copy_in::CopyIn;
 use super::shadow_merge::{MergeLease, ShadowMerge};
@@ -1872,13 +1871,23 @@ impl EncoderCore {
                 ),
             };
             // A copy in over host pages a consumer logs takes the regions its gate decides as its
-            // batch is submitted (`dirty_pages.rs`, `shadow::GatedCopyIn`).
+            // batch is submitted (`dirty_pages.rs`, `shadow::GatedCopyIn`); a command buffer's
+            // first copy in of a shadow that may stand across command buffers, before any command
+            // of the encoder wrote what it reads, moves nothing where the image stands then
+            // (`shadow_standing.rs`).
             let gate = match &dispatched {
                 Some(_) => None,
-                None => copy.gate_log(&device).map(|(log, texel)| {
-                    let shadows = &device.shared().dirty;
-                    (self.open.command_buffer.dirty()).gate((log, &copy.copies, texel), shadows)
-                }),
+                None => match copy.gate_log(&device) {
+                    Some((log, texel)) => {
+                        let shadows = &device.shared().dirty;
+                        let dirty = self.open.command_buffer.dirty();
+                        Some(CopyGate::Log(
+                            dirty.gate((log, &copy.copies, texel), shadows),
+                        ))
+                    }
+                    None => (copy.left_to_standing() && !self.uses.written(&uses))
+                        .then_some(CopyGate::Standing),
+                },
             };
             // A keep may copy the staging buffer its copy in filled only where that copy in
             // copies the texture's bytes whole: recorded here, ungated.
@@ -1973,7 +1982,7 @@ impl EncoderCore {
     /// ahead of the pass's draws that read the copy. Recorded whole here instead inside a
     /// predicated loop's laying, which its check may submit again, or where no new
     /// `VkCommandBuffer` can be made.
-    fn defer_copy_in(&mut self, copy: &ShadowCopy, gate: Arc<CopyInGate>) {
+    fn defer_copy_in(&mut self, copy: &ShadowCopy, gate: CopyGate) {
         let laying = (self.open.command_buffer.state().predication_mut()).laying();
         let next = match laying {
             true => None,

@@ -49,6 +49,7 @@ use super::shadow::{
 use super::shadow_copy_back::WordView;
 use super::shadow_merge::ScratchSpares;
 use super::shadow_merge::UnormView;
+use super::shadow_standing::Standing;
 use super::texture::surface_two_planes;
 use super::texture::{IdUse, Texture};
 use super::texture_descriptor::{
@@ -1183,6 +1184,7 @@ impl Texels {
             backing: self.backing(),
             merge_scratch: ScratchSpares::default(),
             stood: AtomicU64::new(0),
+            standing: Default::default(),
         })
     }
 
@@ -1352,6 +1354,7 @@ impl Texels {
             backing: texels.backing(),
             merge_scratch: ScratchSpares::default(),
             stood: AtomicU64::new(0),
+            standing: Default::default(),
         };
         texels.staged = Some(Arc::new(copies));
         let (offset, alignment) = (
@@ -1481,6 +1484,7 @@ impl Texels {
             backing: self.backing(),
             merge_scratch: ScratchSpares::default(),
             stood: AtomicU64::new(0),
+            standing: Standing::over(&self.buffer),
         })
     }
 

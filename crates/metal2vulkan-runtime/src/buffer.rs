@@ -94,6 +94,10 @@ struct BufferShared {
     bytes: Bytes,
     /// The encoder core that holds it from an argument table's retain (`retained::HeldBy`).
     held_by: HeldBy,
+    /// Its `VkBuffer` was handed out (`Buffer::vk_buffer`): the caller's own work may write its
+    /// bytes, so no shadow over them keeps a standing across command buffers
+    /// (`shadow_standing.rs`).
+    handed_out: Arc<AtomicBool>,
 }
 
 /// Where a buffer's bytes are.
@@ -2593,6 +2597,7 @@ impl Device {
             attributes: ResourceAttributes::new(),
             bytes: Bytes::Own(own),
             held_by: HeldBy::default(),
+            handed_out: Arc::default(),
         }))
     }
 
@@ -2789,6 +2794,7 @@ impl Heap {
                 aliasable: AtomicBool::new(self.heap_type() == HeapType::Placement),
             }),
             held_by: HeldBy::default(),
+            handed_out: Arc::default(),
         }))
     }
 }
@@ -2963,6 +2969,17 @@ impl Buffer {
     /// a no-copy buffer's ([`Buffer::base`]), and a heap buffer's, which is its heap's.
     pub(super) fn at(&self, offset: u64) -> (vk::Buffer, u64) {
         self.at_for(offset, ReadApart::Binding)
+    }
+
+    /// Whether its `VkBuffer` was handed out, shared with what watches it
+    /// (`shadow_standing::Standing`).
+    pub(super) fn handed_out(&self) -> Arc<AtomicBool> {
+        Arc::clone(&self.0.handed_out)
+    }
+
+    /// Note that its `VkBuffer` was handed out (`Buffer::vk_buffer`).
+    pub(super) fn hand_out(&self) {
+        self.0.handed_out.store(true, Ordering::Release);
     }
 
     /// [`Buffer::at`] for `reason`, which a no-copy buffer's import counts its read apart for

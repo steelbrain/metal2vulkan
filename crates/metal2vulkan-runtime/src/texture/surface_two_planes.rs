@@ -239,6 +239,7 @@ impl Device {
             backing: texels.backing(),
             merge_scratch: ScratchSpares::default(),
             stood: AtomicU64::new(0),
+            standing: Default::default(),
         };
         self.degrade(Degradation::ShadowedTexture, || {
             let [width, height, _] = layout.extent;

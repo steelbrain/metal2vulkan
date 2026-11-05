@@ -485,6 +485,9 @@ pub(super) struct DeviceShared {
     /// The logs of its shadows over host pages a consumer logs the writes to
     /// (`dirty_pages.rs`).
     pub(super) dirty: super::dirty_pages::DirtyShadows,
+    /// The writes that let go of its shadows' standings across command buffers
+    /// (`shadow_standing.rs`).
+    pub(super) standings: super::shadow_standing::Standings,
     /// The new textures that read zero where Metal reads its pattern, until a command observes
     /// or covers that (`fresh_unwritten.rs`).
     pub(super) fresh: super::fresh_unwritten::FreshUnwritten,
@@ -2039,6 +2042,7 @@ impl Device {
             #[cfg(test)]
             linear_rule_forced: Default::default(),
             dirty: Default::default(),
+            standings: Default::default(),
             fresh: Default::default(),
             owners: Default::default(),
             live_buffers: Default::default(),
