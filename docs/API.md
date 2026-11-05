@@ -4006,7 +4006,10 @@ each item named states the rule in full.
   draws wrote before the barrier. The runtime orders the draws after such a barrier, or one over
   the texture, after the fragment stage, behind the draws before it and, where it comes before
   the pass's first draw, behind the pass's load actions: that draw reads what the draws before the
-  barrier wrote, or the clear (the runtime's `fence.rs` and `texture/attached_reads.rs`). With no
+  barrier wrote, or the clear (the runtime's `fence.rs` and `texture/attached_reads.rs`). A draw
+  that reads the clear before any draw of the pass reads its copy cleared to the clear in the
+  pass's first instance, where the copy can be so (`WorkCounts::attachment_read_clears`), else
+  an instance after one of the clear alone. With no
   barrier it reads the texels from before the pass at its own pixel, the M3 Max's answer. The
   conformance cases `pass-start-barrier-*` keep the M3 Max's texels and take the Mac2 answer as
   the one other.
