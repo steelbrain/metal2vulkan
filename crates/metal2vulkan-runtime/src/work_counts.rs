@@ -522,6 +522,7 @@ struct DrawCounters {
     draws_as_before: AtomicU64,
     draws_rebound: AtomicU64,
     resident_uses_made: AtomicU64,
+    resident_keys_settled: AtomicU64,
     argument_tables_held_at_bind: AtomicU64,
     bound_offsets_moved: AtomicU64,
     resident_uses_gathered: AtomicU64,
@@ -2280,6 +2281,14 @@ impl Counters {
     /// (`WorkCounts::resident_uses_made`).
     pub(crate) fn resident_uses_made(&self, made: u64) {
         (self.draws.mine()).add(|counts| &counts.resident_uses_made, made);
+    }
+
+    /// `moved` keys a draw's working out of what it reaches through what its render encoder made
+    /// resident alone moved (`WorkCounts::resident_keys_settled`).
+    pub(crate) fn resident_keys_settled(&self, moved: u64) {
+        if moved > 0 {
+            (self.draws.mine()).add(|counts| &counts.resident_keys_settled, moved);
+        }
     }
 
     /// `walked` uses of what a render encoder made resident that a draw's gathering for its
@@ -5281,6 +5290,14 @@ pub struct WorkCounts {
     /// widened, or heap used), and works out none then, a draw rebound or drawn again included;
     /// another works out each its plan lists.
     pub resident_uses_made: u64,
+    /// The keys of the buffers among the uses of resources a render encoder made resident
+    /// (`resident_uses_made`) that its draws reach through the resident set alone, which no other
+    /// use of theirs names, as their draws worked those keys out for hazard tracking: a draw
+    /// that works out its uses of what the encoder made resident counts each of them; one that
+    /// keeps the last draw's counts only the keys its other uses name and those the last draw's
+    /// did, and none where those are the same. A draw's cost here is what it binds, not what its
+    /// encoder made resident.
+    pub resident_keys_settled: u64,
     /// The uses of resources a render encoder made resident (`resident_uses_made`) that its
     /// draws' gathering walked: compared with the last draw's and gathered into what its render
     /// pass instance's draws use, which the shadowed textures they use are copied around. A draw
@@ -6749,6 +6766,7 @@ impl Device {
             draws_as_before: draws(|counts| &counts.draws_as_before),
             draws_rebound: draws(|counts| &counts.draws_rebound),
             resident_uses_made: draws(|counts| &counts.resident_uses_made),
+            resident_keys_settled: draws(|counts| &counts.resident_keys_settled),
             resident_uses_gathered: draws(|counts| &counts.resident_uses_gathered),
             resident_uses_against_fragments: draws(|counts| {
                 &counts.resident_uses_against_fragments

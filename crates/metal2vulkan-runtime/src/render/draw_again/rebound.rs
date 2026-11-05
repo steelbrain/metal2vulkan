@@ -442,8 +442,12 @@ impl RenderLowering {
             return false;
         }
         let made = live.uses.made() as u64;
-        if !patched && made > 0 {
-            self.core.device().shared().counts.resident_uses_made(made);
+        if !patched {
+            let counts = &self.core.device().shared().counts;
+            if made > 0 {
+                counts.resident_uses_made(made);
+            }
+            counts.resident_keys_settled(live.uses.settled() as u64);
         }
         // Its fixed-function vertex buffers at the changed slots, in the plan's order.
         for (bind, at) in plan.vertex_buffers.iter().zip(&mut live.vertex_buffers) {

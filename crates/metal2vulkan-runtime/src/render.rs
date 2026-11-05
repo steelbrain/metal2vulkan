@@ -8909,6 +8909,7 @@ impl RenderLowering {
         if resident_made > 0 {
             device.shared().counts.resident_uses_made(resident_made);
         }
+        (device.shared().counts).resident_keys_settled(live.uses.settled() as u64);
         // How many it holds of its plan's alone: a draw rebound works out those alone.
         let plan_uses = live.uses.len();
         let uses = &mut live.uses;

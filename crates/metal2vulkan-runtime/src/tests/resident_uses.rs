@@ -6,7 +6,9 @@
 //! what its pass's fragment stages wrote and read (`WorkCounts::resident_uses_against_fragments`,
 //! `render/pass_start_reads.rs`) or its attachments
 //! (`WorkCounts::resident_uses_against_attachments`, `Device::degrade_attachment_reads`), or
-//! notes them for hazard tracking (`WorkCounts::resident_uses_noted`, `noted_apart.rs`), and
+//! notes them for hazard tracking (`WorkCounts::resident_uses_noted`, `noted_apart.rs`), nor
+//! works out again the keys it reaches through what the encoder made resident alone but those
+//! its bound buffers name and the last draw's named (`WorkCounts::resident_keys_settled`), and
 //! builds with debug assertions check each draw's kept uses against those it would make whole
 //! (`binding::kept_resident_checks`), and its gathering, checks and noting against those of its
 //! whole uses. The draws read through a root table and a handle table, so no draw of theirs is kept to
@@ -159,6 +161,7 @@ impl Resources {
 #[derive(Debug, Default)]
 struct Drawn {
     made: u64,
+    settled: u64,
     checked: u64,
     gathered: u64,
     against: u64,
@@ -192,6 +195,7 @@ fn drawn(device: &Device, draw: impl FnOnce()) -> Drawn {
     );
     Drawn {
         made: after.0.resident_uses_made - before.0.resident_uses_made,
+        settled: after.0.resident_keys_settled - before.0.resident_keys_settled,
         checked: after.1 - before.1,
         gathered: after.0.resident_uses_gathered - before.0.resident_uses_gathered,
         against: after.0.resident_uses_against_fragments - before.0.resident_uses_against_fragments,
@@ -262,7 +266,9 @@ fn encode(scene: &Scene, resources: &Resources, later: u64) -> Vec<Drawn> {
 /// another resource resident (the first encoder's fourth) and after a draw of another plan (the
 /// last), and only those walk them as they gather them for their render pass instance, check
 /// them against its fragment stages and attachments, and note them; every other draw keeps them,
-/// and its kept uses are those it would make whole. The second encoder's first draw, of the plan
+/// and its kept uses are those it would make whole, and of the keys it reaches through the
+/// resident set alone moves only the two tables, the one it binds and the one the last draw
+/// bound, however many the encoder made resident. The second encoder's first draw, of the plan
 /// of the first's last (the second makes every resource resident before it) under another
 /// residency, works them out again.
 #[test]
@@ -292,13 +298,19 @@ fn draws_keep_the_uses_of_what_their_encoder_made_resident_until_it_or_their_pla
             ];
             match at {
                 // The slot shape's plan lists none.
-                at if at == entry_draws => assert_eq!(walked, [0; 9], "{what}"),
+                at if at == entry_draws => {
+                    assert_eq!(walked, [0; 9], "{what}");
+                    assert_eq!(drawn.settled, 0, "{what}");
+                }
                 at if made_again.contains(&at) => {
-                    assert!(walked.iter().all(|walked| *walked > 0), "{what}")
+                    assert!(walked.iter().all(|walked| *walked > 0), "{what}");
+                    // The positions and the tables, worked out whole.
+                    assert!(drawn.settled > POSITIONS, "{what}");
                 }
                 _ => {
                     assert_eq!(walked, [0; 9], "{what}");
                     assert!(drawn.checked > 0, "{what}");
+                    assert_eq!(drawn.settled, 2, "{what}");
                 }
             }
         }

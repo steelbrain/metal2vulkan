@@ -2570,7 +2570,7 @@ fn uses_into(
     }
     named_now.sort_unstable();
     named_now.dedup();
-    into.settle_resident(!keeps);
+    into.settled = into.settle_resident(!keeps);
     Ok(keeps)
 }
 
@@ -2888,6 +2888,9 @@ pub(super) struct CommandUses {
     /// them: `WorkCounts::resident_uses_made`).
     used: usize,
     made: usize,
+    /// The keys the last call moved into or out of `resident`
+    /// ([`settle_resident`](Self::settle_resident)).
+    settled: usize,
     of: Option<ResidentOf>,
     /// The positions among the plan's uses of those of anything but what the encoder made
     /// resident, ascending.
@@ -2898,9 +2901,9 @@ pub(super) struct CommandUses {
     reaching: BTreeSet<ResourceKey>,
     named: Vec<ResourceKey>,
     named_now: Vec<ResourceKey>,
-    /// Whether `resident` is other than `reaching` less `named`: a use added since the last call
-    /// ([`push`](Self::push)) took a key out of it.
-    taken: bool,
+    /// The keys a use added since the last call ([`push`](Self::push)) took out of `resident`,
+    /// which is `reaching` less `named` and these.
+    taken: Vec<ResourceKey>,
     /// The identity of the uses of what the encoder made resident ([`ResidentPrefix`]), 0 where
     /// they have none: given where [`command_uses_into`] made them, from [`IDENTITIES`].
     prefix: u64,
@@ -2946,7 +2949,9 @@ pub(super) struct ReachingPrefix {
 impl CommandUses {
     /// Add `used`, which names its key.
     pub(super) fn push(&mut self, used: Use<ResourceKey>) {
-        self.taken |= self.resident.remove(&used.key);
+        if self.resident.remove(&used.key) {
+            self.taken.push(used.key);
+        }
         self.uses.push(used);
     }
 
@@ -2967,7 +2972,7 @@ impl CommandUses {
         let prefix = self.prefix()?;
         let resident = self.resident_at;
         let stages = self.prefix_stages;
-        (resident != 0 && !self.taken).then_some(ReachingPrefix {
+        (resident != 0 && self.taken.is_empty()).then_some(ReachingPrefix {
             prefix,
             resident,
             stages,
@@ -2997,19 +3002,41 @@ impl CommandUses {
         self.made
     }
 
+    /// How many keys the last call moved into or out of those the command reaches through the
+    /// resident set alone ([`resident`](Self::resident)): 0 where they are the last command's.
+    pub(super) fn settled(&self) -> usize {
+        self.settled
+    }
+
     /// Set `resident` to `reaching` less `named_now`, which becomes `named`: worked out again
     /// only where one of those changed (`made_again`: the uses of what the encoder made resident
-    /// were), or a use added since took a key out of it.
-    fn settle_resident(&mut self, made_again: bool) {
-        if !made_again && !self.taken && self.named == self.named_now {
-            return;
+    /// were), or a use added since took a key out of it. Made whole from `reaching` only where it
+    /// is new; else only the keys that changed move, so a draw that names other keys of a large
+    /// resident set than the last one costs the keys named, not the set
+    /// (`WorkCounts::resident_keys_settled` counts the keys each way moves).
+    fn settle_resident(&mut self, made_again: bool) -> usize {
+        if !made_again && self.taken.is_empty() && self.named == self.named_now {
+            return 0;
         }
-        self.resident.clone_from(&self.reaching);
+        let moved = match made_again {
+            true => {
+                self.resident.clone_from(&self.reaching);
+                self.taken.clear();
+                self.reaching.len()
+            }
+            // `reaching` is the last call's: the keys the last call's other uses named, and those
+            // a use added since took, are each one of it, back in `resident`.
+            false => {
+                let back = self.named.len() + self.taken.len();
+                self.resident.extend(self.named.iter().copied());
+                self.resident.extend(self.taken.drain(..));
+                back
+            }
+        };
         for key in &self.named_now {
             self.resident.remove(key);
         }
         self.named.clone_from(&self.named_now);
-        self.taken = false;
         // Their identity, where the uses of what the encoder made resident have one.
         if self.used > 0 {
             self.resident_at = match self.prefix {
@@ -3017,6 +3044,7 @@ impl CommandUses {
                 _ => identity(),
             };
         }
+        moved + self.named_now.len()
     }
 
     /// Add each of `uses`, which name their keys.
