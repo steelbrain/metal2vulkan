@@ -55,6 +55,10 @@
 //! the fill: the merge back is the shadow's own write, which its copies in leave out, but the
 //! fill beneath it is not, so the command buffer lets go of the shadow's hold.
 //!
+//! A blit's fill of such pages imported in place, with no shadow over them, is told to the log
+//! as the consumer's write twice: at the commit, and once after it ran, before the command
+//! buffer's completed handler runs (`DirtyShadows::ran`).
+//!
 //! One wait for a log's publication serves every gated copy in of a commit, two shadows over one
 //! log among them, and a wait the log answers `false` is not made again for them
 //! (`WorkCounts::dirty_waits`).
@@ -537,6 +541,59 @@ fn draw_then_fill(
     command_buffer.commit().unwrap();
     assert!(command_buffer.wait_until_completed_for(WAIT).is_ok());
     assert_eq!(command_buffer.status(), CommandBufferStatus::Completed);
+}
+
+/// How often `log` was told of a write by the consumer (writer 0) that meets row 2.
+fn told_row_2(log: &Log) -> usize {
+    let writes = log.writes.lock().unwrap();
+    (writes.iter())
+        .filter(|w| w.2 == 0 && w.1.start < 3 * ROW && 2 * ROW < w.1.end)
+        .count()
+}
+
+#[test]
+fn a_write_in_place_is_told_at_the_commit_and_once_after_it_ran() {
+    let scratch = Scratch::new("dirty-pages-told");
+    let host = Host::new();
+    let device = device(&scratch.0);
+    eprintln!("DIRTY-PAGES: device {:?}", device.name());
+    let log = Arc::new(Log::default());
+    let Some(buffer) = over_logged(&device, &host, &log) else {
+        return;
+    };
+    let queue = device.new_command_queue().unwrap();
+    for round in 0..3 {
+        let before = told_row_2(&log);
+        let command_buffer = queue.command_buffer().unwrap();
+        let mut blit = command_buffer.blit_command_encoder().unwrap();
+        blit.fill_buffer(&buffer, 2 * ROW..3 * ROW, 0x55).unwrap();
+        blit.end_encoding().unwrap();
+        let in_handler = Arc::new(AtomicUsize::new(usize::MAX));
+        let (seen, kept) = (Arc::clone(&in_handler), Arc::clone(&log));
+        (command_buffer.add_completed_handler(Box::new(move |_| {
+            seen.store(told_row_2(&kept), Ordering::SeqCst);
+        })))
+        .unwrap();
+        command_buffer.commit().unwrap();
+        assert!(command_buffer.wait_until_completed_for(WAIT).is_ok());
+        assert_eq!(command_buffer.status(), CommandBufferStatus::Completed);
+        // The handler may run after the wait returns.
+        let started = std::time::Instant::now();
+        while in_handler.load(Ordering::SeqCst) == usize::MAX {
+            assert!(started.elapsed() < WAIT, "the completed handler ran");
+            std::thread::yield_now();
+        }
+        let told = told_row_2(&log) - before;
+        eprintln!("DIRTY-PAGES: round {round}: the fill told {told} times");
+        assert_eq!(
+            in_handler.load(Ordering::SeqCst) - before,
+            2,
+            "at the commit and once it ran, before the completed handler"
+        );
+        assert_eq!(told, 2, "and no more after it");
+    }
+    drop(buffer);
+    drop(device);
 }
 
 #[test]

@@ -623,11 +623,17 @@ fn finish(watch: &Watch, lists: &mut FenceLists, mut finished: Vec<(usize, Submi
         }
         copied.merge_back(&device.shared().counts, &written);
     }
-    // So do their writes into logged host pages imported in place, to the pages' logs, again now
-    // they ran (`dirty_pages.rs`, `DirtyCommit::report_host_writes`).
-    if device.shared().dirty.in_place() {
+    // So do their command buffers' shadows' copies back and merges and writes into logged host
+    // pages imported in place, to the pages' logs, again now they ran (`dirty_pages.rs`,
+    // `DirtyShadows::ran`): once a command buffer, at the batch that ends it, and at one before
+    // it that signals an event, which a copy may follow before the command buffer ends. A batch
+    // before it that signals nothing tells nothing outside the command buffer that its work ran.
+    let dirty = &device.shared().dirty;
+    if dirty.collects() {
         for (_, batch) in &finished {
-            lock(&batch.buffer.dirty).report_host_writes();
+            if batch.last || !batch.signals.is_empty() {
+                dirty.ran(&mut lock(&batch.buffer.dirty));
+            }
         }
     }
     // The holds of the batches that end no command buffer go first, their work completed: a

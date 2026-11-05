@@ -5089,8 +5089,8 @@ impl CommandBufferShared {
                 (None, None) => result,
             };
             // The logs of host pages hear of its shadows' copies back and its writes in place
-            // again, now they ran, and let go of the holds a failed one's copies in set
-            // (`dirty_pages.rs`).
+            // again where its last batch's completion did not tell them (`completion.rs`), and let
+            // go of the holds a failed one's copies in set (`dirty_pages.rs`).
             if self.device.shared().dirty.collects() {
                 let dirty = lock(&self.dirty);
                 (self.device.shared().dirty).completed(&dirty, result.is_err());
