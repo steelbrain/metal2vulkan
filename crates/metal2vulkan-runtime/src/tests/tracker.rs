@@ -2,9 +2,11 @@
 //! resources, byte ranges and image subresources, fences, retirement, the order across
 //! `VkQueue`s, and the legacy masks.
 
+use crate::binding::ResidentPrefix;
 use crate::tracker::{
     merge, ordered, Access, Barrier, EncoderUses, Footprint, GeometryWrites, IndirectReads,
-    LegacyBarrier, Point, Reach, Summary, Tracker, Use, UseRange, Wait, ENTRIES_PER_KEY,
+    LegacyBarrier, Point, Reach, Summary, Tracker, UnorderedWrites, Use, UseRange, Wait,
+    ENTRIES_PER_KEY,
 };
 use ash::vk;
 use std::ops::Range;
@@ -2009,4 +2011,47 @@ fn merging_in_place_keeps_each_key_and_range_once_in_order() {
         merge(&mut merged);
         assert_eq!(merged, reference(&uses), "{uses:?}");
     }
+}
+
+/// A draw's writes of what its encoder made resident, added by their identity
+/// (`UnorderedWrites::add_draw`), are walked once until a memory barrier clears them: the draws
+/// after the first of that identity walk none of them, past the entries a resource keeps, and a
+/// later read of what they wrote meets them all along; after the clear, the next draw of that
+/// identity walks them again, and the read meets them again. A draw of another identity walks its
+/// own, and the writes after them are added at every draw.
+#[test]
+fn draws_add_the_writes_of_what_their_encoder_made_resident_once_until_a_barrier() {
+    let prefix = ResidentPrefix { id: 7, len: 2 };
+    let uses = [
+        writes(1, bytes(0..16), shader_write()),
+        reads(2, bytes(0..16), shader_read()),
+        writes(3, bytes(0..8), shader_write()),
+    ];
+    let read = |key| [reads(key, bytes(4..8), shader_read())];
+    let mut unordered = UnorderedWrites::new();
+    assert!(unordered.add_draw((&uses, prefix)));
+    for _ in 0..=ENTRIES_PER_KEY {
+        assert!(!unordered.add_draw((&uses, prefix)));
+    }
+    assert!(unordered.written(&read(1)) && unordered.written(&read(3)));
+    unordered.clear();
+    assert!(!unordered.written(&read(1)) && !unordered.written(&read(3)));
+    assert!(
+        unordered.add_draw((&uses, prefix)),
+        "the draw after the barrier walks them again"
+    );
+    assert!(unordered.written(&read(1)) && unordered.written(&read(3)));
+    let other = ResidentPrefix { id: 8, len: 2 };
+    assert!(
+        unordered.add_draw((&uses, other)),
+        "another identity walks its own"
+    );
+    assert!(
+        unordered.add_draw((&uses, prefix)),
+        "and the first's again after it"
+    );
+    unordered.clear();
+    unordered.add(&uses[2..]);
+    assert!(unordered.add_draw((&uses, other)));
+    assert!(unordered.written(&read(1)));
 }

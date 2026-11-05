@@ -527,10 +527,16 @@ impl RenderLowering {
                 (self.core).note_draw(reaching, &mut live.noted)?;
             }
         }
-        self.unordered.add(uses);
         let resident = uses.prefix().map_or(0, |prefix| prefix.len as u64);
-        (self.core.device().shared().counts).resident_uses_unordered_writes(resident);
         let prefix = uses.prefix();
+        match prefix {
+            None => self.unordered.add(uses),
+            Some(prefix) => {
+                if self.unordered.add_draw((uses, prefix)) {
+                    (self.core.device().shared().counts).resident_uses_unordered_writes(resident);
+                }
+            }
+        }
         match prefix {
             None => {
                 self.pass_start.announce(self.core.device(), uses, false);

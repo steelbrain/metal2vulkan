@@ -9535,12 +9535,18 @@ impl RenderLowering {
                 self.core.note_draw(reaching, &mut live.noted)?;
             }
         }
-        self.unordered.add(uses);
         // The uses of what the encoder made resident each tracker below walks
         // (`WorkCounts::resident_uses_unordered_writes` and kin).
         let resident = uses.prefix().map_or(0, |prefix| prefix.len as u64);
         let counts = &device.shared().counts;
-        counts.resident_uses_unordered_writes(resident);
+        match uses.prefix() {
+            None => self.unordered.add(uses),
+            Some(prefix) => {
+                if self.unordered.add_draw((uses, prefix)) {
+                    counts.resident_uses_unordered_writes(resident);
+                }
+            }
+        }
         match uses.prefix() {
             None => {
                 self.pass_start.announce(&device, uses, mesh_before);

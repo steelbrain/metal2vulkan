@@ -80,6 +80,7 @@
 //! `VkQueue`'s listed in its submission order as their plans were applied, not every resource the
 //! state holds.
 
+use super::binding::ResidentPrefix;
 use crate::device::functions::Vk;
 use crate::key_hash::KeyMap;
 use ash::vk;
@@ -1512,6 +1513,10 @@ impl<K> fmt::Debug for EncoderUses<K> {
 /// as [`EncoderUses`] merges its own, which claims more and stays exact.
 pub(super) struct UnorderedWrites<K> {
     writes: KeyMap<K, Vec<Use<K>>>,
+    /// The identity and count of the uses of what the encoder made resident the last
+    /// [`add_draw`](Self::add_draw) since the last [`clear`](Self::clear) began with
+    /// (`binding::ResidentPrefix`): each of their writes is held, merged or not, until it clears.
+    added: Option<(u64, usize)>,
 }
 
 impl<K: Copy + Ord + Hash> UnorderedWrites<K> {
@@ -1519,15 +1524,18 @@ impl<K: Copy + Ord + Hash> UnorderedWrites<K> {
     pub(super) fn new() -> UnorderedWrites<K> {
         UnorderedWrites {
             writes: KeyMap::default(),
+            added: None,
         }
+    }
+
+    /// Whether [`add`](Self::add) adds `used`: a tracked write of something.
+    fn adds(used: &Use<K>) -> bool {
+        used.tracked && !used.write.is_empty() && !used.range.is_empty()
     }
 
     /// Add the tracked writes of a command with `uses`.
     pub(super) fn add(&mut self, uses: &[Use<K>]) {
-        for used in uses
-            .iter()
-            .filter(|used| used.tracked && !used.write.is_empty() && !used.range.is_empty())
-        {
+        for used in uses.iter().filter(|used| Self::adds(used)) {
             let ranges = self.writes.entry(used.key).or_default();
             ranges.push(Use {
                 read: Access::NONE,
@@ -1539,9 +1547,44 @@ impl<K: Copy + Ord + Hash> UnorderedWrites<K> {
         }
     }
 
+    /// [`add`](Self::add) a draw's `uses`, which begin with the uses of what its encoder made
+    /// resident of the identity `prefix`: those not again where the last call of this since the
+    /// last [`clear`](Self::clear) began with the same, whose writes it holds as they were added
+    /// (two draws' uses of one identity begin with the same uses, each of the same key, range,
+    /// stages and access types: `binding::ResidentPrefix`). Whether it walked them.
+    pub(super) fn add_draw(&mut self, (uses, prefix): (&[Use<K>], ResidentPrefix)) -> bool {
+        let now = Some((prefix.id, prefix.len));
+        let past = match self.added == now {
+            true => prefix.len,
+            false => 0,
+        };
+        #[cfg(debug_assertions)]
+        for used in &uses[..past] {
+            assert!(
+                self.holds(used),
+                "an encoder added a draw's writes by their identity less than its uses"
+            );
+        }
+        self.add(&uses[past..]);
+        self.added = now;
+        past == 0
+    }
+
+    /// Whether it holds `used`'s write, where [`add`](Self::add) adds it: adding it again changes
+    /// nothing a query reads (builds with debug assertions: [`add_draw`](Self::add_draw)'s
+    /// check).
+    #[cfg(debug_assertions)]
+    fn holds(&self, used: &Use<K>) -> bool {
+        let held =
+            |known: &Use<K>| known.range.contains(&used.range) && known.write.covers(used.write);
+        !Self::adds(used)
+            || (self.writes.get(&used.key)).is_some_and(|known| known.iter().any(held))
+    }
+
     /// A memory barrier orders every write so far before the commands after it.
     pub(super) fn clear(&mut self) {
         self.writes.clear();
+        self.added = None;
     }
 
     /// Whether one of the writes overlaps memory one of `uses` reads, as

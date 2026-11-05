@@ -163,6 +163,7 @@ struct Drawn {
     against: u64,
     attachments: u64,
     noted: u64,
+    unordered: u64,
 }
 
 /// Draw with `draw`, and what that changed.
@@ -178,6 +179,8 @@ fn drawn(device: &Device, draw: impl FnOnce()) -> Drawn {
         attachments: (after.0.resident_uses_against_attachments)
             - before.0.resident_uses_against_attachments,
         noted: after.0.resident_uses_noted - before.0.resident_uses_noted,
+        unordered: (after.0.resident_uses_unordered_writes)
+            - before.0.resident_uses_unordered_writes,
     }
 }
 
@@ -251,15 +254,16 @@ fn draws_keep_the_uses_of_what_their_encoder_made_resident_until_it_or_their_pla
                 drawn.against,
                 drawn.attachments,
                 drawn.noted,
+                drawn.unordered,
             ];
             match at {
                 // The slot shape's plan lists none.
-                at if at == entry_draws => assert_eq!(walked, [0; 5], "{what}"),
+                at if at == entry_draws => assert_eq!(walked, [0; 6], "{what}"),
                 at if made_again.contains(&at) => {
                     assert!(walked.iter().all(|walked| *walked > 0), "{what}")
                 }
                 _ => {
-                    assert_eq!(walked, [0; 5], "{what}");
+                    assert_eq!(walked, [0; 6], "{what}");
                     assert!(drawn.checked > 0, "{what}");
                 }
             }
