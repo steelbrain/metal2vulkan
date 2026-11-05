@@ -9508,7 +9508,7 @@ struct	metal2vulkan-runtime::CopySite	#[derive(Clone, Copy, Debug, Default, Part
 struct	metal2vulkan-runtime::DebugMessage	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct DebugMessage
 struct	metal2vulkan-runtime::DegradeNotice	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct DegradeNotice
 struct	metal2vulkan-runtime::DepthStencilState	#[derive(Clone)] pub struct DepthStencilState(Arc<Shared>)
-struct	metal2vulkan-runtime::Device	#[derive(Clone)] pub struct Device(Arc<DeviceShared>)
+struct	metal2vulkan-runtime::Device	pub struct Device(Arc<DeviceShared>, holds::Share)
 struct	metal2vulkan-runtime::DeviceHandles	#[derive(Clone, Copy)] #[non_exhaustive] pub struct DeviceHandles<'a>
 struct	metal2vulkan-runtime::DeviceOptions	#[derive(Clone, Default)] #[non_exhaustive] pub struct DeviceOptions
 struct	metal2vulkan-runtime::DeviceProperties	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct DeviceProperties
@@ -10020,6 +10020,8 @@ trait-impl	metal2vulkan-runtime::DeadlockCause impl From<Exiting>	impl From<Exit
 trait-impl	metal2vulkan-runtime::DeadlockCause impl fmt::Display	impl fmt::Display for DeadlockCause
 trait-impl	metal2vulkan-runtime::DepthStencilState impl PartialEq	impl PartialEq for DepthStencilState
 trait-impl	metal2vulkan-runtime::DepthStencilState impl std::fmt::Debug	impl std::fmt::Debug for DepthStencilState
+trait-impl	metal2vulkan-runtime::Device impl Clone	impl Clone for Device
+trait-impl	metal2vulkan-runtime::Device impl Drop	impl Drop for Device
 trait-impl	metal2vulkan-runtime::Device impl ImageMaker	impl ImageMaker for Device
 trait-impl	metal2vulkan-runtime::Device impl std::fmt::Debug	impl std::fmt::Debug for Device
 trait-impl	metal2vulkan-runtime::DeviceHandles impl std::fmt::Debug	impl std::fmt::Debug for DeviceHandles<'_>
