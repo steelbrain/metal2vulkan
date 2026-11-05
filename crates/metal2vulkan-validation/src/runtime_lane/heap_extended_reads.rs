@@ -23,8 +23,11 @@
 //! (`metal::format::srgb_raw_twin`) read through a heap pipeline whose stage records
 //! `PrecisionNote::SrgbTexelDecode`, which the device announced, decodes on the device where a slot
 //! of a format the device holds as its UNORM twin decodes the codes by the device's transfer (a slot
-//! of a format the device samples decodes on the device too, the same words); every other
-//! difference fails. The extended-range
+//! of a format the device samples decodes on the device too, the same words). So is a `half`
+//! read's where the heap pipeline's stage records `PrecisionNote::NativeHalfConversion`, announced,
+//! and the two words narrow to the same `half` within a unit in its last place, or are both NaNs
+//! ([`narrowed_alike`]): the device's narrowing of the `f32` texel, which its compiler may fold
+//! away at one access and not the other. Every other difference fails. The extended-range
 //! `_sRGB` twins, which a heap does not hold (`ExtendedRange::HEAP_READ`), are not read so yet:
 //! their heap dispatch is printed on a `HEAP-READ-UNCOVERED` line, refused or not, and not
 //! counted. A texture the
@@ -35,9 +38,13 @@
 //! slot too, where the function emulates it (`sampler::heap_raw`): a 2D sample or gather through a
 //! constexpr sampler without a mip filter or anisotropy (a `half` gather's of a bfloat form alone),
 //! or through a runtime sampler whose bound state says the same. A difference is printed on a
-//! `HEAP-SAMPLE-DIFFERS` line. A command whose function samples such a texture otherwise (a mip
-//! filter, a `half` gather, a runtime sampler with a mip filter) is refused at bind, printed on a
-//! `HEAP-SAMPLE-REFUSED` line.
+//! `HEAP-SAMPLE-DIFFERS` line, but two the heap pipeline's announced notes explain, printed on a
+//! `HEAP-SAMPLE-ANNOUNCED` line and counted apart: a `half` result's narrowing, as a read's, and a
+//! linear sample of a `BGRA10_XR` or `BGR10_XR` form whose stage records
+//! `PrecisionNote::BicubicFilterArithmetic`, where each blends the same taps by the device's
+//! arithmetic and the words lie within `2^-21` of each other ([`blended_alike`]). A command whose
+//! function samples such a texture otherwise (a mip filter, a `half` gather, a runtime sampler
+//! with a mip filter) is refused at bind, printed on a `HEAP-SAMPLE-REFUSED` line.
 //!
 //! A `half` read through an argument buffer of every code of such a texture is the device's `float`
 //! read of it rounded to the nearest even `half`, and the slot's `half` read, where the stage
@@ -460,12 +467,72 @@ fn made(device: &Device, format: PixelFormat, bytes: u64) -> Result<Texture, Err
     Ok(texture)
 }
 
+/// The note of a `half` result the device narrows from its `f32` value (`narrow::converted`).
+const NATIVE_HALF: PrecisionNote = PrecisionNote::NativeHalfConversion;
+
+/// The note of an emulated filter's blend of its taps by the device's arithmetic
+/// (`sampler::extended`).
+const FILTER_ARITHMETIC: PrecisionNote = PrecisionNote::BicubicFilterArithmetic;
+
+/// Whether a stage whose notes are `noted` records `note`, and the device announced it.
+fn recorded(
+    noted: &BTreeSet<PrecisionNote>,
+    announced: &BTreeSet<Degradation>,
+    note: PrecisionNote,
+) -> bool {
+    noted.contains(&note) && announced.contains(&Degradation::from_precision_note(note))
+}
+
+/// Whether two results of the same `half` read, sample or gather (four texel words, then any
+/// query words) are the device's narrowing of one value, as `PrecisionNote::NativeHalfConversion`
+/// bounds it: the queries alike, and each texel word the same `half` to within one unit in its
+/// last place, or both a NaN. The device may narrow a `f32` to `half` or keep it unrounded,
+/// whichever its compiler folds the conversion into: the NVIDIA RTX 5080 Laptop rounds a heap
+/// read's texel to nearest even and keeps a slot read's unrounded (`3f10a000` where the slot's is
+/// `3f109091`, the `RGBA8Unorm` code 144), a value past the `half`'s range infinite or finite.
+fn narrowed_alike(a: &[u32], b: &[u32]) -> bool {
+    let steps = |bits: u32| {
+        let h = super::extended_range_targets::half_bits(f32::from_bits(bits));
+        let magnitude = i32::from(h & 0x7fff);
+        if h & 0x8000 == 0 {
+            magnitude
+        } else {
+            -magnitude
+        }
+    };
+    a[4..] == b[4..]
+        && a[..4].iter().zip(&b[..4]).all(|(&x, &y)| {
+            let nan = |w: u32| f32::from_bits(w).is_nan();
+            x == y || (nan(x) && nan(y)) || (steps(x) - steps(y)).abs() <= 1
+        })
+}
+
+/// Whether two `float` results of the same linear sample of a `BGRA10_XR` or `BGR10_XR` form are
+/// the device's blend of one footprint's taps, each by its own arithmetic
+/// (`PrecisionNote::BicubicFilterArithmetic`: its `FMix`, which a compiler may fuse or not): every
+/// word within `2^-21` of the other's. The forms' values lie within `[-0.753, 1.251]`, so two
+/// blends of the same taps rounded apart differ by a few units of `2^-23`; a tap read amiss moves
+/// the blend by its weight (at least `1/256`) times a code (`1/510`), `7.7e-6` at least.
+fn blended_alike(a: &[u32], b: &[u32]) -> bool {
+    a[4..] == b[4..]
+        && a[..4]
+            .iter()
+            .zip(&b[..4])
+            .all(|(&x, &y)| (f32::from_bits(x) - f32::from_bits(y)).abs() <= 2f32.powi(-21))
+}
+
 /// The precision notes the stage of kernel `k` of [`kernel`] records as the device compiles it
 /// under the empty variant key: those the runtime announces as it makes the pipeline state.
 fn stage_notes(device: &Device, heap: bool, texel: Texel) -> BTreeSet<PrecisionNote> {
+    notes_of(device, &kernel(heap, texel))
+}
+
+/// The precision notes the stage of kernel `k` of `text` ([`kernel`]'s or [`sample_kernel`]'s)
+/// records as the device compiles it under the empty variant key.
+fn notes_of(device: &Device, text: &str) -> BTreeSet<PrecisionNote> {
     let compile = device.compile_device();
     let budget = Budget::standard();
-    let bitcode = llvm_assemble_text(&kernel(heap, texel)).unwrap();
+    let bitcode = llvm_assemble_text(text).unwrap();
     let library = Library::from_air(&bitcode).unwrap();
     let function = FunctionDescriptor::new(library.function("k").unwrap());
     let inputs = VariantKey::new().lowering_inputs(Stage::Kernel);
@@ -620,6 +687,8 @@ fn compare(
             let decodes = srgb_raw_twin(format).is_some()
                 && noted.contains(&srgb)
                 && announced.contains(&Degradation::from_precision_note(srgb));
+            // The device's narrowing of a `half` texel, announced.
+            let narrows = texel == Texel::Half && recorded(noted, &announced, NATIVE_HALF);
             let slot = dispatch(device, (&at_slot, false), &texture)
                 .unwrap_or_else(|e| panic!("{format:?} {texel:?} at a slot: {e}"));
             let held = match dispatch(device, (&at_heap, true), &texture) {
@@ -667,27 +736,27 @@ fn compare(
                     device.name()
                 );
             }
-            if let Some(&i) = wrong.first() {
-                let mark = match decodes {
-                    true => {
-                        tally.announced += wrong.len();
-                        "HEAP-READ-ANNOUNCED"
-                    }
-                    false => {
-                        tally.differ += wrong.len();
-                        "HEAP-READ-DIFFERS"
-                    }
-                };
-                println!(
-                    "{mark} {}: {format:?} {texel:?}: {} of {} lanes, first at {:?}: {:08x?}, \
-                     the slot's {:08x?}",
-                    device.name(),
-                    wrong.len(),
-                    lanes.len(),
-                    lanes[i],
-                    held[i],
-                    slot[i]
-                );
+            let (explained, differing): (Vec<usize>, Vec<usize>) = wrong
+                .into_iter()
+                .partition(|&i| decodes || (narrows && narrowed_alike(&held[i], &slot[i])));
+            tally.announced += explained.len();
+            tally.differ += differing.len();
+            for (mark, wrong) in [
+                ("HEAP-READ-ANNOUNCED", &explained),
+                ("HEAP-READ-DIFFERS", &differing),
+            ] {
+                if let Some(&i) = wrong.first() {
+                    println!(
+                        "{mark} {}: {format:?} {texel:?}: {} of {} lanes, first at {:?}: \
+                         {:08x?}, the slot's {:08x?}",
+                        device.name(),
+                        wrong.len(),
+                        lanes.len(),
+                        lanes[i],
+                        held[i],
+                        slot[i]
+                    );
+                }
             }
         }
     }
@@ -864,11 +933,21 @@ fn heap_extended_samples_are_the_slot_s() {
             Op::Sample,
             true,
         ));
-        let (mut checked, mut differ) = (0, 0);
+        let (mut checked, mut differ, mut explained) = (0, 0, 0);
+        let mut announced = BTreeSet::new();
         let _ = messages.take_notices();
         for (name, through, op, half) in &cases {
             let at_slot = pipeline_of(device, &sample_kernel(false, *through, *op, *half));
-            let at_heap = pipeline_of(device, &sample_kernel(true, *through, *op, *half));
+            let heap_kernel = sample_kernel(true, *through, *op, *half);
+            let at_heap = pipeline_of(device, &heap_kernel);
+            announced.extend(notices(messages).into_iter().map(|(kind, _)| kind));
+            let noted = notes_of(device, &heap_kernel);
+            // The device's narrowing of a `half` result, and its blend of a linear sample's taps,
+            // each announced.
+            let narrows = *half && recorded(&noted, &announced, NATIVE_HALF);
+            let filtered = matches!(op, Op::Sample)
+                && (name.contains("linear") || matches!(through, Through::Slot))
+                && recorded(&noted, &announced, FILTER_ARITHMETIC);
             let sampler = matches!(through, Through::Slot).then_some(&runtime);
             for &(format, bytes) in &RAW_HELD {
                 let texture = made(device, format, bytes).unwrap();
@@ -878,25 +957,38 @@ fn heap_extended_samples_are_the_slot_s() {
                     .unwrap_or_else(|e| panic!("{format:?} {name} {op:?} through a heap: {e}"));
                 checked += lanes.len();
                 let wrong: Vec<usize> = (0..lanes.len()).filter(|&i| held[i] != slot[i]).collect();
-                if let Some(&i) = wrong.first() {
-                    differ += wrong.len();
-                    println!(
-                        "HEAP-SAMPLE-DIFFERS {}: {format:?} {name} {op:?} half {half}: {} of {} \
-                         lanes, first at {:?}: {:08x?}, the slot's {:08x?}",
-                        device.name(),
-                        wrong.len(),
-                        lanes.len(),
-                        lanes[i],
-                        &held[i][..4],
-                        &slot[i][..4]
-                    );
+                let blended =
+                    filtered && matches!(format, PixelFormat::BGRA10XR | PixelFormat::BGR10XR);
+                let (alike, differing): (Vec<usize>, Vec<usize>) =
+                    wrong.into_iter().partition(|&i| {
+                        let (a, b) = (&held[i], &slot[i]);
+                        (narrows && narrowed_alike(a, b)) || (blended && blended_alike(a, b))
+                    });
+                explained += alike.len();
+                differ += differing.len();
+                for (mark, wrong) in [
+                    ("HEAP-SAMPLE-ANNOUNCED", &alike),
+                    ("HEAP-SAMPLE-DIFFERS", &differing),
+                ] {
+                    if let Some(&i) = wrong.first() {
+                        println!(
+                            "{mark} {}: {format:?} {name} {op:?} half {half}: {} of {} lanes, \
+                             first at {:?}: {:08x?}, the slot's {:08x?}",
+                            device.name(),
+                            wrong.len(),
+                            lanes.len(),
+                            lanes[i],
+                            &held[i][..4],
+                            &slot[i][..4]
+                        );
+                    }
                 }
             }
         }
-        let announced = notices(messages);
+        announced.extend(notices(messages).into_iter().map(|(kind, _)| kind));
         println!(
             "HEAP-SAMPLE extended {}: {} cases, {checked} lanes checked, {differ} differ, \
-             announced {announced:?}",
+             {explained} announced, announced {announced:?}",
             device.name(),
             cases.len()
         );
