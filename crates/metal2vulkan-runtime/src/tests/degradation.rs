@@ -56,6 +56,15 @@ fn codes_are_distinct_and_decode() {
         assert_eq!(seen.insert(code, kind), None, "{code} names two kinds");
         assert_eq!(Degradation::from_code(code), Some(kind));
         assert!(!kind.cost().is_empty(), "{kind:?}");
+        // Its name, code and cost read with single spaces: a string literal continued onto the
+        // next line without a `\` keeps the line's break and indent, which every relayed notice
+        // line would carry.
+        for text in [format!("{kind:?}"), code.to_owned(), kind.cost().to_owned()] {
+            assert!(
+                !text.contains("  ") && !text.contains(['\n', '\t']),
+                "{kind:?}: {text:?} holds two spaces, a newline or a tab"
+            );
+        }
     }
     assert_eq!(Degradation::from_code("metal2vulkan-degrade-"), None);
 }

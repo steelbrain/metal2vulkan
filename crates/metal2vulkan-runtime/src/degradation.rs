@@ -2193,7 +2193,10 @@ degradations! {
         /// pixel, are snapped by the device's rasterizer, where Metal snaps the endpoints up first,
         /// so the two differ only where an endpoint lies half a step off the grid.
         DeviceSubpixelSnap = "device-subpixel-snap", Precision,
-            "a line's band whose endpoint lies half a 1/256-pixel step off the subpixel grid is              snapped the way the device rounds, where Metal rounds the endpoint up, so a pixel              whose centre lies within that half step of the band's edge can be drawn, or left              out, a row or a column from Metal's";
+            "a line's band whose endpoint lies half a 1/256-pixel step off the subpixel grid is \
+             snapped the way the device rounds, where Metal rounds the endpoint up, so a pixel \
+             whose centre lies within that half step of the band's edge can be drawn, or left \
+             out, a row or a column from Metal's";
         /// A draw of lines, or an emulated mesh draw of lines, under Apple's last provoking vertex
         /// (`setProvokingVertexMode:` 1), of a pipeline state that reads it (a flat input, or a
         /// slice or viewport its vertex function selects), on a device without
