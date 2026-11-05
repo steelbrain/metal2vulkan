@@ -11,9 +11,10 @@
 //! scout's rows). The module hands back the device's texel: on MoltenVK, Metal's own; on a device
 //! whose texture unit is not Metal's (no `VkProperty::MetalSampler`), the device's NaN, which
 //! its precision note records (`PrecisionNote::DeviceTexelConversion`), and the lane takes any NaN
-//! for Metal's there. The note's bound also leaves a 32-bit float texel's NaN in a gather to the
-//! device (NVIDIA's 615.71.09 on the RTX 5080 Laptop GPU gathers every one as `0x7fffffff`, where
-//! its reads and samples hand back the stored words), which the lane takes for Metal's too.
+//! for Metal's there. The note's bound also leaves a 32-bit float texel's NaN and denormal in a
+//! gather to the device (NVIDIA's 615.71.09 on the RTX 5080 Laptop GPU gathers every NaN as
+//! `0x7fffffff` and every denormal as a zero of its sign, where its reads and samples hand back
+//! the stored words), which the lane takes for Metal's too.
 //!
 //! The kernels are this lane's own AIR: each reads texel `(x, 0)` of an [`N`] by 1 texture whose
 //! texel `x` holds [`word`]'s channels (a texture buffer's element `x`), samples it at the texel's
@@ -403,7 +404,7 @@ fn dispatch(
 /// Every access of [`OPS`] to every format of [`FORMATS`] hands back Metal's words: a half-float
 /// texel's NaN as `0x7fc00000` (a NaN of the device's encoding where its texture unit is not
 /// Metal's), a 32-bit float texel's words as stored (a gathered NaN of the device's encoding
-/// there).
+/// there, and a gathered denormal a zero of its sign).
 #[test]
 fn half_float_reads_hand_back_metals_nans() {
     let mut report = Vec::new();
@@ -435,7 +436,15 @@ fn half_float_reads_hand_back_metals_nans() {
                         // The device's NaN: a half-float texel's, and a 32-bit float texel's in a
                         // gather (`PrecisionNote::DeviceTexelConversion`'s bound).
                         let device_nan = own && nans && (f.half || matches!(op, Op::Gather));
-                        if g != w && !device_nan {
+                        // A 32-bit float texel's denormal in a gather, flushed to a zero of its
+                        // sign (the same bound).
+                        let denormal = f32::from_bits(w).is_subnormal();
+                        let flushed = own
+                            && !f.half
+                            && matches!(op, Op::Gather)
+                            && denormal
+                            && g == w & 0x8000_0000;
+                        if g != w && !device_nan && !flushed {
                             differ.push(format!("texel {x} lane {k}: {g:08x} (Metal {w:08x})"));
                         }
                     }
