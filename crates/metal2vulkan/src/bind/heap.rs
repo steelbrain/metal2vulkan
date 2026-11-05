@@ -115,6 +115,7 @@
 //!   directory's entry holds the table's address in its element and flags words, and a listed table
 //!   without one cannot be represented.
 
+use std::cell::Cell;
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::bind::neutral::image_classes;
@@ -1492,11 +1493,38 @@ pub(crate) fn planner<'p, 'a>(
 
 /// The used resources of a bind state by token, in the state's order: a list the consumer gives
 /// in token order (`BindState::used_in_token_order`), whose entries of a token a heap member finds
-/// by search, at the logarithm of their count; else gathered by token once per instantiation, so
-/// each heap member finds its entries without rescanning the state.
+/// by search forward from where the last member's ended (a plan's members ascend by token,
+/// [`members`]), so a plan's members together cost about the list's length; else gathered by
+/// token once per instantiation, so each heap member finds its entries without rescanning the
+/// state.
 enum UsedByToken<'s> {
-    Listed(&'s [UsedResource]),
+    /// The list, and where the last lookup's entries ended in it.
+    Listed(&'s [UsedResource], Cell<usize>),
     Gathered(BTreeMap<u32, Vec<&'s UsedResource>>),
+}
+
+#[cfg(test)]
+thread_local! {
+    /// The entries of a listed state that lookups of its used resources compared
+    /// ([`forward`]), on this thread.
+    static LISTED_LOOKED_AT: Cell<u64> = const { Cell::new(0) };
+}
+
+/// The partition point of `items` under `below`, which holds of a prefix of them: found by
+/// doubling a bound from their start, then searching under it, at the logarithm of the point
+/// rather than of their count.
+fn forward<T>(items: &[T], below: impl Fn(&T) -> bool) -> usize {
+    let below = |item: &T| {
+        #[cfg(test)]
+        LISTED_LOOKED_AT.with(|looked| looked.set(looked.get() + 1));
+        below(item)
+    };
+    let mut end = 1;
+    while end <= items.len() && below(&items[end - 1]) {
+        end *= 2;
+    }
+    let start = end / 2;
+    start + items[start..end.min(items.len())].partition_point(below)
 }
 
 impl<'s> UsedByToken<'s> {
@@ -1508,7 +1536,7 @@ impl<'s> UsedByToken<'s> {
                 used.windows(2).all(|w| w[0].token <= w[1].token),
                 "used resources listed in token order are not"
             );
-            return UsedByToken::Listed(used);
+            return UsedByToken::Listed(used, Cell::new(0));
         }
         let mut gathered: BTreeMap<u32, Vec<&UsedResource>> = BTreeMap::new();
         for u in used {
@@ -1517,12 +1545,20 @@ impl<'s> UsedByToken<'s> {
         UsedByToken::Gathered(gathered)
     }
 
-    /// The entries of `token`, in the state's order; `None` where it lists none.
+    /// The entries of `token`, in the state's order; `None` where it lists none. A listed
+    /// state's are searched forward from where the last lookup's ended, where they lie past it,
+    /// else from the list's start.
     fn get(&self, token: u32) -> Option<impl Iterator<Item = &'s UsedResource> + '_> {
         let (listed, gathered): (&'s [UsedResource], &[&'s UsedResource]) = match self {
-            UsedByToken::Listed(used) => {
-                let start = used.partition_point(|u| u.token < token);
-                let end = start + used[start..].partition_point(|u| u.token == token);
+            UsedByToken::Listed(used, from) => {
+                let before = from.get().checked_sub(1).and_then(|at| used.get(at));
+                let base = match before {
+                    Some(before) if before.token < token => from.get(),
+                    Some(_) | None => 0,
+                };
+                let start = base + forward(&used[base..], |u| u.token < token);
+                let end = start + forward(&used[start..], |u| u.token == token);
+                from.set(end);
                 (&used[start..end], &[])
             }
             UsedByToken::Gathered(gathered) => (&[], gathered.get(&token)?),

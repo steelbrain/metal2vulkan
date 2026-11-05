@@ -1472,7 +1472,7 @@ fn a_state_in_token_order_finds_its_members_by_search() {
     };
     let mut ordered = state.clone();
     ordered.used_in_token_order = true;
-    assert!(matches!(UsedByToken::of(&ordered), UsedByToken::Listed(_)));
+    assert!(matches!(UsedByToken::of(&ordered), UsedByToken::Listed(..)));
     assert!(matches!(UsedByToken::of(&state), UsedByToken::Gathered(_)));
     let tables = |state: &BindState| handle_table_bytes(&template.heap_members, &[planned], state);
     let elements = |state: &BindState| heap_elements(&template, state, 1024);
@@ -1502,4 +1502,63 @@ fn a_state_in_token_order_finds_its_members_by_search() {
         assert!(matches!(tables(&missing), Err(BindError::Internal(_))));
         assert!(matches!(elements(&missing), Err(BindError::Internal(_))));
     }
+}
+
+/// A state listed in token order finds its heap members' entries searching forward from where
+/// the last member's ended, the plan's members ascending by token (`members`): 4096 textures,
+/// each beside a buffer, compare a few entries a member (an upper bound of 8), not the logarithm
+/// of the 8192 listed twice over, for the tables and for the elements; each answering as the same
+/// state in no order does. A member past an out-of-order lookup is searched from the list's start
+/// and found alike.
+#[test]
+fn a_state_in_token_order_finds_its_members_searching_forward() {
+    const MEMBERS: u32 = 4096;
+    let t2d = shape(TextureType::Type2D, PixelFormat::RGBA8Unorm, 1, READ);
+    let mut state = BindState::default();
+    let mut template = ResourceTemplate::default();
+    for member in 0..MEMBERS {
+        let token = 2 * member + 1;
+        state
+            .used_resources
+            .push(UsedResource::new(ResourceClass::Buffer, token - 1));
+        let class = ResourceClass::Texture(TextureFacts::new(
+            TextureType::Type2D,
+            PixelFormat::RGBA8Unorm,
+        ));
+        let mut texture = UsedResource::new(class, token);
+        texture.resource_id = Some(u64::from(token) + 1);
+        state.used_resources.push(texture);
+        template.heap_members.push(HeapMember {
+            source: HeapSource::Used(token),
+            shape: t2d,
+            stages: vec![Stage::Kernel],
+        });
+    }
+    state.heap_placement = HeapPlacement::ResourceId;
+    let planned = PlannedHandleTable {
+        set: 0,
+        binding: 4,
+        stage: Stage::Kernel,
+        entries: 2 * MEMBERS + 8,
+    };
+    let mut ordered = state.clone();
+    ordered.used_in_token_order = true;
+    let looked_at = |work: &dyn Fn()| {
+        LISTED_LOOKED_AT.with(|looked| looked.set(0));
+        work();
+        LISTED_LOOKED_AT.with(Cell::get)
+    };
+    let tables = |state: &BindState| handle_table_bytes(&template.heap_members, &[planned], state);
+    let elements = |state: &BindState| heap_elements(&template, state, 4 * MEMBERS);
+    let bound = 8 * u64::from(MEMBERS);
+    let looked = looked_at(&|| assert_eq!(tables(&ordered).unwrap(), tables(&state).unwrap()));
+    assert!(looked <= bound, "the tables' lookups compared {looked}");
+    let looked = looked_at(&|| assert_eq!(elements(&ordered).unwrap(), elements(&state).unwrap()));
+    assert!(looked <= bound, "the elements' lookups compared {looked}");
+    // The members in another order: each found from the list's start where it lies before the
+    // last, as the same state in no order finds it.
+    let mut shuffled = template.clone();
+    shuffled.heap_members.reverse();
+    let elements = |state: &BindState| heap_elements(&shuffled, state, 4 * MEMBERS);
+    assert_eq!(elements(&ordered).unwrap(), elements(&state).unwrap());
 }
