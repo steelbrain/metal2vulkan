@@ -206,7 +206,7 @@ impl Texture {
         let record = &self.0.record;
         let whole_texture = record.texture_type == TextureType::Type2D
             && plan.image_type == ImageType::TYPE_2D
-            && plan.samples == SampleCountFlags::TYPE_1
+            && plan.samples.as_raw() == 1
             && plan.levels == 1
             && plan.layers == 1
             && (record.base_level, record.level_count) == (0, 1)
