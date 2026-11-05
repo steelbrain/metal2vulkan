@@ -2546,19 +2546,19 @@ mod the_creation_prediction {
     ///
     /// | class | rows | made | taken | by none | taken |
     /// |---|---|---|---|---|---|
-    /// | draws and no dispatch | 166 | 813 | 766 | 47 | 94.2% |
+    /// | draws and no dispatch | 183 | 882 | 796 | 86 | 90.2% |
     /// | dispatches and no draw | 223 | 386 | 0 | 386 | 0.0% |
     /// | both kinds | 63 | 81 | 49 | 32 | 60.5% |
     /// | no command at all | 59 | 64 | 0 | 64 | 0.0% |
-    /// | all | 511 | 1,344 | 815 | 529 | 60.6% |
+    /// | all | 528 | 1,413 | 845 | 568 | 59.8% |
     ///
     /// **So the two predictions are nothing like each other, and the total hides it.** The render
-    /// prediction is taken 766 times in 813 on the cases that draw, and its 47 misses are spread
+    /// prediction is taken 796 times in 882 on the cases that draw. 47 of its 86 misses are spread
     /// one or two to a row over 44 rows led by `sample-positions-*` and the `a2c-*` sweeps — the
     /// shape this module's docs already name as unpredictable, since `GraphicsKey` carries
-    /// `sample_positions` and the pass. The compute prediction is taken **0** times in 386 over
-    /// 223 rows. 386 of the 529 is one prediction, and 379 of those 386 are rows that make no
-    /// render pass at all.
+    /// `sample_positions` and the pass — and 39 are the `pass-start-barrier-*` family's (below).
+    /// The compute prediction is taken **0** times in 386 over 223 rows. 386 of the 568 is one
+    /// prediction, and 379 of those 386 are rows that make no render pass at all.
     ///
     /// **Two of the draws class's 47 are an open bug, not coverage.**
     /// `render-then-sample-magnified-nearest` and `-linear` each make one pipeline no draw takes,
@@ -2566,7 +2566,16 @@ mod the_creation_prediction {
     /// makes its predicted key's general form at its creation and hands the predicted key itself
     /// to the pool, and their draws take the predicted key, so the general form is made for
     /// nothing. Not making the general form where the prediction is plain is the fix, and lowers
-    /// this class's ceiling to 45.
+    /// this class's ceiling by 2.
+    ///
+    /// **39 more are an open bug: the `pass-start-barrier-*` family's.** Each of its 13 cases makes
+    /// 5 creation pipelines and draws with 1 to 3 of them (`-new-texture-tile` 1,
+    /// `-new-texture-chain` 3, the other 11 2): cases that draw, so these are mispredictions, not
+    /// rows that run no draw.
+    /// Why the creation prediction misses their draws' keys is not read yet; the first suspect is
+    /// the split a pass that starts with a barrier and reads its own attachment takes, whose
+    /// instances' passes the prediction made at creation may not foresee. The fix lowers this
+    /// class's ceiling back to 47.
     ///
     /// # Why the total cannot hold this
     ///
@@ -2580,7 +2589,7 @@ mod the_creation_prediction {
     /// the rows that grew rows that run no command of that kind — legitimate — or rows that
     /// mispredict a command they do run.
     const WASTED_BY_CLASS: [(Speculated, u64); 4] = [
-        (Speculated::Draws, 47),
+        (Speculated::Draws, 86),
         (Speculated::Dispatches, 461),
         (Speculated::Both, 46),
         (Speculated::NoCommand, 79),
