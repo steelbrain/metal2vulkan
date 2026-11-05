@@ -1241,19 +1241,20 @@ pub(super) fn on_device_both_ways(test: impl Fn(&Device)) {
     );
 }
 
-/// Draws of an unchanged state into one render pass instance record its state commands once:
-/// past the first, a draw records nothing, so no pipeline, descriptor set, push constant, buffer
-/// or dynamic state is set again. Each draw past the first is drawn as its encoder's last draw
-/// again (`WorkCounts::draws_as_before`), which binds what that draw bound, or takes every step,
-/// its shape found in the encoder's memo (`draw_shapes_reused`): in a build with debug assertions
-/// the first draw again of a kept draw and every second one after it take every step
-/// (`render/draw_again.rs`), so 7 of the 15 are drawn again there, and all 15 elsewhere. A draw
-/// that takes every step binds the set its last draw wrote, the same descriptors
-/// (`set_zero_sets_reused`), where the device binds set 0; where it pushes set 0 ([`pushes`]), it
-/// pushes it, its writes the same, and binds no set. Every draw pushes it there, a draw again as
-/// the draw it repeats (counted at the encoder's end). The first draw records them all, and the
-/// target is the texture's. Every draw takes its key's own pipeline, made beforehand ([`make`]), none the
-/// residual form, so no pipeline is bound again past the first draw. Both ways
+/// Draws of an unchanged state into one render pass instance record its state commands once: past
+/// the first, a draw records nothing, so no pipeline, descriptor set, push constant, buffer or
+/// dynamic state is set again. Each draw past the first is drawn as its encoder's last draw again
+/// (`WorkCounts::draws_as_before`), which binds what that draw bound, or takes every step, its
+/// shape found in the encoder's memo (`draw_shapes_reused`, counted past the first draw, which
+/// takes its shape from the earlier encoder's draw, `draw_shapes_carried`, and counts it reused
+/// too): in a build with debug assertions the first draw again of a kept draw and every second one
+/// after it take every step (`render/draw_again.rs`), so 7 of the 15 are drawn again there, and all
+/// 15 elsewhere. A draw that takes every step binds the set its last draw wrote, the same
+/// descriptors (`set_zero_sets_reused`), where the device binds set 0; where it pushes set 0
+/// ([`pushes`]), it pushes it, its writes the same, and binds no set. Every draw pushes it there, a
+/// draw again as the draw it repeats (counted at the encoder's end). The first draw records them
+/// all, and the target is the texture's. Every draw takes its key's own pipeline, made beforehand
+/// ([`make`]), none the residual form, so no pipeline is bound again past the first draw. Both ways
 /// ([`on_device_both_ways`]).
 #[test]
 fn draws_of_an_unchanged_state_record_its_commands_once() {
@@ -1268,15 +1269,16 @@ fn draws_of_an_unchanged_state_record_its_commands_once() {
         encoder.set_fragment_texture(Some(&red), 0).unwrap();
         let before = device.work_counts();
         let first = recorded_by(device, &mut encoder);
+        let past_first = device.work_counts();
         let later: Vec<u64> = (1..DRAWS)
             .map(|_| recorded_by(device, &mut encoder))
             .collect();
         encoder.end_encoding().unwrap();
         let after = device.work_counts();
         let pushed = grew(&before, &after, |c| c.draws_pushing_set_zero);
-        let again = grew(&before, &after, |c| c.draws_as_before);
-        let every_step = grew(&before, &after, |c| c.draw_shapes_reused);
-        let sets_reused = grew(&before, &after, |c| c.set_zero_sets_reused);
+        let again = grew(&past_first, &after, |c| c.draws_as_before);
+        let every_step = grew(&past_first, &after, |c| c.draw_shapes_reused);
+        let sets_reused = grew(&past_first, &after, |c| c.set_zero_sets_reused);
         let residual = grew(&before, &after, |c| c.residual_form_draws);
         assert_eq!(
             residual, 0,
