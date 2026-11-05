@@ -1751,6 +1751,18 @@ engine/primitive_ids.ll	pi_attrib	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	o
 engine/primitive_ids.ll	pi_counts	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	Unsupported{StageStoresAndAtomics; AnyOf[[Feature(VertexPipelineStoresAndAtomics)]]}	ok	Unsupported{StageStoresAndAtomics; AnyOf[[Feature(VertexPipelineStoresAndAtomics)]]}
 engine/primitive_ids.ll	pi_ids	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/primitive_ids.ll	pi_five	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	Unsupported{InterfaceComponents; AnyOf[[Limit { limit: MaxFragmentOutputAttachments, required: 5, available: 4 }]]}	ok	Unsupported{InterfaceComponents; AnyOf[[Limit { limit: MaxFragmentOutputAttachments, required: 5, available: 4 }]]}
+engine/psb_reads.air.ll	psb_rect	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/psb_reads.air.ll	psb_solid	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/psb_reads.air.ll	psb_read	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/psb_reads.air.ll	psb_sample	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/psb_reads.air.ll	psb_masked	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/psb_reads.air.ll	psb_under	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/psb_reads.ll	psb_rect	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/psb_reads.ll	psb_solid	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/psb_reads.ll	psb_read	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/psb_reads.ll	psb_sample	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/psb_reads.ll	psb_masked	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/psb_reads.ll	psb_under	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/psc_sample_coverage.air.ll	psc_read_samples	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/psc_sample_coverage.air.ll	psc_read	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/psc_sample_coverage.air.ll	psc_read_depth_samples	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
