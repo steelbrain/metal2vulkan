@@ -11,7 +11,9 @@
 //!   probe's tables): per vertex, 8 points, which fixed-function input fetches in the format's
 //!   `USCALED` or `SSCALED` form where the device can (the executed pipeline's vertex input says
 //!   which; printed), and with the constant step, 8 draws of one point bound at each record, which
-//!   the shader pulls and converts. Each row's `float4` is compared bit for bit, but a `half`
+//!   the shader pulls and converts, or fixed-function input fetches in the scaled form by a zero
+//!   divisor on a binding of stride 0 where the device has one (`metal::vertex::attribute_fetch`;
+//!   the NVIDIA RTX 5080 Laptop does). Each row's `float4` is compared bit for bit, but a `half`
 //!   one's where the stage rounds by the device's conversion (`native-half-conversion`, announced):
 //!   within its bound (`half_within`), counted.
 //! - `label_vertex` and `label_fragment`, a text label pipeline's shape (eight attributes, a
@@ -243,8 +245,8 @@ fn drawn(
 }
 
 /// Every 8- and 16-bit integer format read into a `float4` and a `half4` attribute, per vertex
-/// and with the constant step, reads Metal's values; the per-vertex fetch is fixed function in
-/// the format's scaled form wherever the device fetches one, and the constant step's is pulled.
+/// and with the constant step, reads Metal's values; each fetch is pulled or fixed function in the
+/// format's scaled form, as the device fetches it.
 #[test]
 fn integer_formats_read_into_float_attributes_take_metal_s_values() {
     let cache = ScratchCache::new().unwrap();
@@ -278,10 +280,8 @@ fn integer_formats_read_into_float_attributes_take_metal_s_values() {
                         "INT-ATTR {}: {function} {format:?} {step:?}: {form}",
                         device.name()
                     );
-                    if constant {
-                        assert_eq!(form, "pulled", "{function} {format:?}");
-                    } else if form != "pulled" {
-                        assert_eq!(form, scaled, "{function} {format:?}");
+                    if form != "pulled" {
+                        assert_eq!(form, scaled, "{function} {format:?} {step:?}");
                         fixed += 1;
                     }
                     for (r, got) in rows.iter().enumerate() {
@@ -305,8 +305,8 @@ fn integer_formats_read_into_float_attributes_take_metal_s_values() {
             println!("INT-ATTR-DIFFERS {}: {line}", device.name());
         }
         println!(
-            "INT-ATTR {}: {} rows checked, {} differ, {native} half rows the device's rounding; per \
-             vertex fixed function in {fixed} of 32 pipelines",
+            "INT-ATTR {}: {} rows checked, {} differ, {native} half rows the device's rounding; \
+             fixed function in {fixed} of 64 pipelines",
             device.name(),
             FORMATS.len() * 2 * 2 * ROWS,
             wrong.len()
