@@ -458,7 +458,9 @@ pub(crate) fn among<F: Copy + Ord>(
 /// `runtime_lane::heap_extended_reads::heap_half_reads_of_every_code_round_their_float` reads every
 /// code of the five forms a heap holds by its raw texels that the runtime makes, as `half` through
 /// an argument buffer, against the nearest even `half` of the same read as `float` and the slot's
-/// `half` read. One row per GPU, as measured.
+/// `half` read: on the M3 Max under macOS 27.0.1 (2026-11-05), none of the 262,144 channels of
+/// `BGRA10_XR`, `BGR10_XR`, `R16Bfloat`, `RG16Bfloat` and `RGBA16Bfloat` each differs. One row per
+/// GPU, as measured.
 ///
 /// `MetalSmallFloatNans`: MoltenVK 1.4.2 hands a storage image write to Metal's own texture
 /// write. On the M3 Max under macOS 27.0.1 (2026-11-03), byte for byte against plain Metal, a
