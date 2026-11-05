@@ -37,7 +37,8 @@
 //! it is compared with Metal's map of the same geometry at width 1. A draw the device's lines draw
 //! at width 1 on a driver not measured to break a tie at a vertex two pixels' diamonds share as
 //! Metal does (`DriverFact::LineTiesAreMetals`: the RTX 5080 Laptop GPU draws the lane's strip's
-//! diagonal a row higher) is announced (`device-line-ties`) and left unchecked, and only there.
+//! diagonal a row higher, and lavapipe, Mesa 26.2.4, leaves out its first pixel) is announced
+//! (`device-line-ties`) and left unchecked, and only there.
 //! Nothing is refused. A draw of
 //! no complete primitive (the consumer's triangles of 1 and 2 vertices, by vertices and by
 //! indices, under the last provoking vertex) draws nothing and takes no route. Not covered:

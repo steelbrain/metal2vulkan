@@ -470,15 +470,11 @@ fn the_committed_profiles_drivers_have_their_facts() {
         ("amd-rdna3-radv", vec![ZERO]),
         (
             "gate-lavapipe",
-            vec![
-                DENORMALS, FRAGDEPTH, DEPTH16, FETCH, BC6H, MERGES, FOLLOWS, LINE_TIES,
-            ],
+            vec![DENORMALS, FRAGDEPTH, DEPTH16, FETCH, BC6H, MERGES, FOLLOWS],
         ),
         (
             "gate-lavapipe-x86_64",
-            vec![
-                DENORMALS, FRAGDEPTH, DEPTH16, FETCH, BC6H, MERGES, FOLLOWS, LINE_TIES,
-            ],
+            vec![DENORMALS, FRAGDEPTH, DEPTH16, FETCH, BC6H, MERGES, FOLLOWS],
         ),
         (
             "intel-arl-anv",
@@ -526,9 +522,7 @@ fn the_committed_profiles_drivers_have_their_facts() {
         ),
         (
             "lavapipe",
-            vec![
-                DENORMALS, FRAGDEPTH, DEPTH16, FETCH, BC6H, MERGES, FOLLOWS, LINE_TIES,
-            ],
+            vec![DENORMALS, FRAGDEPTH, DEPTH16, FETCH, BC6H, MERGES, FOLLOWS],
         ),
         (
             "moltenvk-m3",

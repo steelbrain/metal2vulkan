@@ -1987,10 +1987,12 @@ const DYNAMIC_RESTART_WARNING: DriverDiagnostic = DriverDiagnostic {
 /// `LineTiesAreMetals`, measured by `runtime_lane::line_widths` (Metal's maps of the probe's
 /// width-1 lines and strips, pixel for pixel) and the conformance case
 /// `primitive-type-restart-indices` (a line through the shared vertex (3.5, 1.0)): MoltenVK 1.4.2
-/// on the M3 Max under macOS 27.0.1, whose lines are Metal's own, and lavapipe (llvmpipe on LLVM
-/// 23.1.1, Mesa 26.2.4), which covers the lower pixel there as Metal does. NVIDIA's 615.71.09 on
-/// the RTX 5080 Laptop GPU covers the upper one (the case's two texels, and the lane's
-/// three-vertex strip at width 1, its diagonal a row higher). Every other driver is unmeasured.
+/// on the M3 Max under macOS 27.0.1, whose lines are Metal's own. NVIDIA's 615.71.09 on the RTX
+/// 5080 Laptop GPU covers the other pixel (the case's two texels, and the lane's three-vertex
+/// strip at width 1, its diagonal a row higher). lavapipe (llvmpipe on LLVM 23.1.1, Mesa 26.2.4)
+/// draws the case's line as Metal does but leaves out the strip's first pixel, where it starts at
+/// such a vertex (3.5, 1.0), which Metal covers, so it does not take the fact. Every other driver
+/// is unmeasured.
 ///
 /// MoltenVK 1.4.2 on the M3 Max under macOS 27.0.1 (2026-10-21, the runtime lanes in release
 /// builds under `--cfg m2v_gpu`, each fact taken):
@@ -2382,12 +2384,6 @@ pub(crate) const MEASURED: &[Measured<DriverFact>] = &[
     Measured {
         device: Some(APPLE9),
         ..moltenvk_on_apple(DriverFact::LineTiesAreMetals)
-    },
-    Measured {
-        fact: DriverFact::LineTiesAreMetals,
-        driver: DriverId::MESA_LLVMPIPE,
-        vendor: None,
-        device: None,
     },
 ];
 

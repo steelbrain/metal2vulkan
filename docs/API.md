@@ -2943,10 +2943,11 @@ bound.
 - `metal2vulkan-degrade-device-line-ties` (precision). `DeviceLineTies`: A draw whose lines, or a
   triangle's edges in fill mode `Lines`, the device's own lines draw at width 1 (Metal's default
   width, or the nearest width a device without `wideLines` draws), on a driver without
-  `DriverFact::LineTiesAreMetals` (measured: MoltenVK on the M3 Max, lavapipe). Metal rasterizes a
+  `DriverFact::LineTiesAreMetals` (measured: MoltenVK on the M3 Max). Metal rasterizes a
   line by the diamond-exit rule and covers the lower of two pixels whose diamonds share a vertex
   the line runs through; Vulkan's diamond is open, so neither pixel is required there and the
-  driver chooses (NVIDIA's 615.71.09 on the RTX 5080 Laptop GPU covers the upper one). Cost: a line
+  driver chooses (NVIDIA's 615.71.09 on the RTX 5080 Laptop GPU covers the upper one along a strip's
+  diagonal; lavapipe leaves out a strip's first pixel where it starts on such a vertex). Cost: a line
   through a vertex two pixels' diamonds share covers the pixel the device chooses, where Metal
   covers the lower one, so such a pixel, and the rest of a line that runs along such vertices, can
   lie a row or a column from Metal's.
