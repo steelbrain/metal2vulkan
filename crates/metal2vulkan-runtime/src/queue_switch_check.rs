@@ -33,19 +33,39 @@
 //!   it is made and runs no check. A failed run is kept nowhere.
 //! - **Its thread.** Each reach of the device runs inside a section of the exit guard
 //!   (`exit_guard.rs`), as every runtime thread's does: the objects' making, the submissions, each
-//!   wait of at most [`WAIT_SLICE`], and the releases. The check holds its device for its run, a
-//!   few milliseconds, so its objects never outlive it; once the process is exiting it ends,
-//!   unrecorded, and leaves them to the process's end. A submission refused still opens its
+//!   wait of at most [`WAIT_SLICE`], and the releases. Once the process is exiting it ends,
+//!   unrecorded, and leaves its objects to the process's end. A submission refused still opens its
 //!   round's gate, so no batch submitted waits for good.
+//! - **Holding nothing of the device.** The check holds only the parts of the device it works
+//!   with ([`Parts`]), never a handle: a check that held one for its run would hold the device's
+//!   last once the program dropped its own while the check ran (the first moments of a device
+//!   that makes a command queue and goes), and the device would go on the check's thread after
+//!   the program's last drop returned, where a consumer that adopted its `VkDevice` destroys it
+//!   then ("Host access to `device` must be externally synchronized", and every object made from
+//!   it is destroyed before it: VUID-vkDestroyDevice-device-05137). So the program's last drop
+//!   tears the device down before it returns. The teardown first stops the check
+//!   (`QueueSwitch::stop`): the check reads that between its steps, before its objects' making,
+//!   before each round and before it reads the timestamps, so the teardown waits for at most one
+//!   step (a round's two batches, which complete as soon as the GPU reaches them, or the making),
+//!   then for the check to let its objects go, unrecorded and its verdict `Unchecked`, before the
+//!   check's thread drops its shares of the device's parts and ends.
 
-use crate::device::relay::By;
+use crate::command_buffer::fences::Fences;
+use crate::device::functions::{Functions, Vk};
+use crate::device::relay::{By, QueueUses};
 use crate::device::submit_stalls::Uses;
-use crate::device::Device;
+use crate::device::{Device, QueueSlot};
 use crate::error::{vulkan, Error};
 use crate::exit_guard::{self, Call};
-use crate::queue_share::{encode, record_name, Verdict, SWITCH_IDLES};
+use crate::freed_memory::Parking;
+use crate::in_place::DriverIdentity;
+use crate::loader_word::LoaderWord;
+use crate::queue_share::{encode, record_name, QueueSwitch, Verdict, SWITCH_IDLES};
 use crate::release;
+use crate::shader_cache::store::Store;
+use crate::work_counts::Counters;
 use ash::vk;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 /// The rounds of each kind, the two `VkQueue`s' and the one's.
@@ -78,28 +98,108 @@ pub(crate) fn timed(device: &Device) -> bool {
             .is_some_and(|clock| clock.calibration.is_some())
 }
 
-/// Start the check on a thread of its own: whether it started.
+/// Start the check on a thread of its own: whether it started. The thread holds `device`'s
+/// [`Parts`], never a handle (the module docs).
 pub(crate) fn start(device: &Device) -> bool {
-    let weak = device.downgrade();
+    let parts = Parts::of(device);
+    let switch = Arc::clone(&parts.switch);
+    switch.began();
     let builder = std::thread::Builder::new().name("m2v-queue-switch-check".to_owned());
-    exit_guard::spawn(builder, move || run(weak)).is_ok()
+    let spawned = exit_guard::spawn(builder, move || {
+        let switch = Arc::clone(&parts.switch);
+        run(&parts);
+        // Its shares go before the teardown that waits for it goes on.
+        drop(parts);
+        switch.ended();
+    });
+    if spawned.is_err() {
+        switch.ended();
+    }
+    spawned.is_ok()
 }
 
-/// The check's thread: the measurement, the verdict, the record.
-fn run(weak: crate::device::WeakDevice) {
+/// The parts of a device its check works with, none of which holds the device (the module docs):
+/// shares of its functions, its `VkQueue`s, its parking, its counts, its fences, its loader word,
+/// its sharing and its shader cache's store, and what it reads of the device as the check
+/// starts.
+struct Parts {
+    functions: Arc<Functions>,
+    queues: Arc<[QueueSlot]>,
+    parking: Option<Arc<Parking>>,
+    counts: Arc<Counters>,
+    fences: Arc<Fences>,
+    loader_word: Arc<LoaderWord>,
+    switch: Arc<QueueSwitch>,
+    store: Arc<Store>,
+    /// The primary family, its pool's.
+    family: u32,
+    /// How many of the device's `VkQueue`s, the first, the round robin lends.
+    round_robin: usize,
+    /// The two `VkQueue`s it measures ([`pair`]), where it measures.
+    pair: Option<(usize, usize)>,
+    /// Nanoseconds per timestamp tick, and the bits a timestamp holds.
+    clock: (f64, u32),
+    identity: DriverIdentity,
+}
+
+impl Parts {
+    /// `device`'s.
+    fn of(device: &Device) -> Parts {
+        let shared = device.shared();
+        let clock = shared.timing.clock();
+        Parts {
+            functions: shared.functions(),
+            queues: Arc::clone(&shared.queues),
+            parking: shared.parking.get().cloned(),
+            counts: Arc::clone(&shared.counts),
+            fences: Arc::clone(&shared.fences),
+            loader_word: Arc::clone(&shared.loader_word),
+            switch: Arc::clone(&shared.queue_switch),
+            store: shared.shader_cache.content_store_share(),
+            family: shared.queue_family,
+            round_robin: shared.round_robin(),
+            pair: pair(device).filter(|_| timed(device)),
+            clock: clock.map_or((0.0, 64), |clock| (clock.period, clock.valid_bits)),
+            identity: device.driver_identity(),
+        }
+    }
+
+    /// The device's functions.
+    fn vk(&self) -> &Vk {
+        self.functions.get()
+    }
+
+    /// What a use of one of the device's `VkQueue`s reaches.
+    fn queue_uses(&self) -> QueueUses<'_> {
+        QueueUses {
+            queues: &self.queues,
+            parking: self.parking.as_deref(),
+            counts: &self.counts,
+            fences: &self.fences,
+            functions: &self.functions,
+        }
+    }
+
+    /// Settle the device's verdict (`Device::settle_queue_switch`).
+    fn settle(&self, verdict: Verdict, cost: i64, took: Option<Duration>) {
+        let slots = &self.queues[..self.round_robin];
+        self.switch.settle_over(slots, verdict, cost, took);
+    }
+}
+
+/// The check's thread: the measurement, the verdict, the record. Stopped by the device's
+/// teardown, it settles `Unchecked` and records nothing.
+fn run(parts: &Parts) {
     let started = Instant::now();
-    let Some(device) = weak.upgrade() else {
+    let Some(pair) = parts.pair else {
+        parts.settle(Verdict::Unchecked, 0, None);
         return;
     };
-    let Some(pair) = pair(&device).filter(|_| timed(&device)) else {
-        device.settle_queue_switch(Verdict::Unchecked, 0, None);
-        return;
-    };
-    let measured = measure(&device, pair);
-    device.shared().counts.queue_switch_check_ran();
+    let measured = measure(parts, pair);
+    parts.counts.queue_switch_check_ran();
     let took = Some(started.elapsed());
     let Ok(Some((alternated, alone))) = measured else {
-        device.settle_queue_switch(Verdict::Unchecked, 0, took);
+        parts.settle(Verdict::Unchecked, 0, took);
         return;
     };
     let cost = alternated - alone;
@@ -107,27 +207,30 @@ fn run(weak: crate::device::WeakDevice) {
         true => Verdict::Idles,
         false => Verdict::DoesNotIdle,
     };
-    let identity = device.driver_identity();
+    let identity = &parts.identity;
     // A failed write leaves the verdict to the device's life alone.
-    let _ = (device.shared().shader_cache.content_store())
-        .write_record_soon(&record_name(&identity), encode(&identity, verdict, cost));
-    device.settle_queue_switch(verdict, cost, took);
+    let _ =
+        (parts.store).write_record_soon(&record_name(identity), encode(identity, verdict, cost));
+    parts.settle(verdict, cost, took);
 }
 
 /// The median gap, in nanoseconds, between batches on the two `VkQueue`s of `pair` and between
-/// batches on one: `Ok(None)` where too few rounds' timestamps were written or the process is
-/// exiting, `Err` where a Vulkan call refused.
-fn measure(device: &Device, pair: (usize, usize)) -> Result<Option<(i64, i64)>, Error> {
-    let Some(mut objects) = Objects::make(device, 4 * ROUNDS)? else {
+/// batches on one: `Ok(None)` where too few rounds' timestamps were written, the process is
+/// exiting or the device's teardown stopped the check, `Err` where a Vulkan call refused.
+fn measure(parts: &Parts, pair: (usize, usize)) -> Result<Option<(i64, i64)>, Error> {
+    if parts.switch.stopping() {
+        return Ok(None);
+    }
+    let Some(mut objects) = Objects::make(parts, 4 * ROUNDS)? else {
         return Ok(None);
     };
-    let ran = objects.run(device, pair);
+    let ran = objects.run(parts, pair);
     let gaps = match ran {
-        Ok(true) => objects.gaps(device),
-        Ok(false) => Ok(None),
+        Ok(true) if !parts.switch.stopping() => objects.gaps(parts),
+        Ok(_) => Ok(None),
         Err(error) => Err(error),
     };
-    objects.release(device);
+    objects.release(parts);
     gaps
 }
 
@@ -149,15 +252,14 @@ impl Objects {
     /// The objects for `batches` batches, each command buffer recorded: its two queries reset,
     /// then a timestamp at the top of the pipe and one at the bottom. `Ok(None)` where the process
     /// is exiting.
-    fn make(device: &Device, batches: usize) -> Result<Option<Objects>, Error> {
+    fn make(parts: &Parts, batches: usize) -> Result<Option<Objects>, Error> {
         let Some(_busy) = exit_guard::enter() else {
             return Ok(None);
         };
-        let shared = device.shared();
-        let raw = shared.vk();
+        let raw = parts.vk();
         let pool_info = vk::CommandPoolCreateInfo::default()
             .flags(vk::CommandPoolCreateFlags::TRANSIENT)
-            .queue_family_index(shared.queue_family);
+            .queue_family_index(parts.family);
         // SAFETY: the device is live, inside a section.
         let pool = unsafe { raw.create_command_pool(&pool_info, None) }.map_err(vulkan)?;
         exit_guard::called(Call::CreateCommandPool);
@@ -169,12 +271,12 @@ impl Objects {
             done: [vk::Semaphore::null(); 2],
             settled: true,
         };
-        let made = objects.fill(device, batches);
+        let made = objects.fill(parts, batches);
         drop(_busy);
         match made {
             Ok(()) => Ok(Some(objects)),
             Err(error) => {
-                objects.release(device);
+                objects.release(parts);
                 Err(error)
             }
         }
@@ -182,13 +284,21 @@ impl Objects {
 
     /// Make the pool's command buffers, the query pool and the timelines, and record the command
     /// buffers, inside the caller's section.
-    fn fill(&mut self, device: &Device, batches: usize) -> Result<(), Error> {
-        let raw = device.shared().vk();
+    fn fill(&mut self, parts: &Parts, batches: usize) -> Result<(), Error> {
+        let raw = parts.vk();
         let allocate = vk::CommandBufferAllocateInfo::default()
             .command_pool(self.pool)
             .level(vk::CommandBufferLevel::PRIMARY)
             .command_buffer_count(batches as u32);
-        self.buffers = device.allocate_command_buffers(&allocate)?;
+        // SAFETY: the device is live (its teardown waits for the check), and the pool is the
+        // check's, which this thread alone uses; its loader word is put back first
+        // (`loader_word.rs`).
+        let allocated = unsafe {
+            parts.loader_word.restore();
+            raw.allocate_command_buffers(&allocate)
+        };
+        exit_guard::called(Call::AllocateCommandBuffers);
+        self.buffers = allocated.map_err(vulkan)?;
         let info = vk::QueryPoolCreateInfo::default()
             .query_type(vk::QueryType::TIMESTAMP)
             .query_count(2 * batches as u32);
@@ -229,10 +339,16 @@ impl Objects {
     }
 
     /// Submit every round's batches on `pair`, and wait for each round's: whether every batch
-    /// completed (false once the process is exiting, the objects then left to its end).
-    fn run(&mut self, device: &Device, pair: (usize, usize)) -> Result<bool, Error> {
+    /// completed (false once the process is exiting, the objects then left to its end, and once
+    /// the device's teardown stopped the check before a round, every batch submitted completed).
+    fn run(&mut self, parts: &Parts, pair: (usize, usize)) -> Result<bool, Error> {
         let mut done = [0u64; 2];
         for round in 0..2 * ROUNDS {
+            #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+            parts.switch.held.pass();
+            if parts.switch.stopping() {
+                return Ok(false);
+            }
             let queues = match round % 2 {
                 0 => [pair.0, pair.1],
                 _ => [pair.0, pair.0],
@@ -249,7 +365,7 @@ impl Objects {
                     signal: (self.done[lane], done[lane]),
                 });
             }
-            if !self.round(device, &batches, gate, done)? {
+            if !self.round(parts, &batches, gate, done)? {
                 return Ok(false);
             }
         }
@@ -262,13 +378,13 @@ impl Objects {
     /// where they could not be.
     fn round(
         &mut self,
-        device: &Device,
+        parts: &Parts,
         batches: &[Batch],
         gate: u64,
         done: [u64; 2],
     ) -> Result<bool, Error> {
         self.settled = false;
-        let (submitted, refused) = match self.submit(device, batches, gate) {
+        let (submitted, refused) = match self.submit(parts, batches, gate) {
             Some(answer) => answer,
             None => return Ok(false),
         };
@@ -277,7 +393,7 @@ impl Objects {
             let lane = usize::from(batch.signal.0 != self.done[0]);
             reached[lane] = reached[lane].min(batch.signal.1 - 1);
         }
-        if !self.wait(device, reached)? {
+        if !self.wait(parts, reached)? {
             return Ok(false);
         }
         self.settled = true;
@@ -292,13 +408,13 @@ impl Objects {
     /// refusal; `None` where the process is exiting.
     fn submit(
         &self,
-        device: &Device,
+        parts: &Parts,
         batches: &[Batch],
         gate: u64,
     ) -> Option<(usize, Option<vk::Result>)> {
         let _busy = exit_guard::enter()?;
-        let shared = device.shared();
-        let raw = shared.vk();
+        let raw = parts.vk();
+        let uses = parts.queue_uses();
         let mut submitted = 0;
         let mut refused = None;
         for batch in batches {
@@ -321,12 +437,12 @@ impl Objects {
             // recorded, ended and in no other submission; each timeline's signals rise in the order
             // they run (each lane's batches run in its queue's order); the gate's wait is
             // signalled below.
-            let made = shared.use_queue(
+            let made = uses.use_queue(
                 batch.queue,
                 By::Runtime,
                 Uses::OneSignalling,
                 |queue| unsafe {
-                    shared.counts.queue_submitted(1, 1);
+                    parts.counts.queue_submitted(1, 1);
                     raw.queue_submit(queue, &[submit], vk::Fence::null())
                 },
             );
@@ -348,7 +464,7 @@ impl Objects {
 
     /// Wait for each `VkQueue`'s timeline to reach its value of `done`, a slice at a time, each a
     /// section: whether they did (false once the process is exiting).
-    fn wait(&self, device: &Device, done: [u64; 2]) -> Result<bool, Error> {
+    fn wait(&self, parts: &Parts, done: [u64; 2]) -> Result<bool, Error> {
         let (semaphores, values): (Vec<vk::Semaphore>, Vec<u64>) = (self.done.iter())
             .zip(done)
             .filter(|&(_, value)| value > 0)
@@ -367,8 +483,7 @@ impl Objects {
             // SAFETY: the timelines are the check's, each signalled to its value by a submission
             // made.
             let waited = unsafe {
-                device
-                    .shared()
+                parts
                     .vk()
                     .wait_semaphores(&info, WAIT_SLICE.as_nanos() as u64)
             };
@@ -383,20 +498,17 @@ impl Objects {
 
     /// The median gap between batches on the two `VkQueue`s and on one, in nanoseconds, from the
     /// timestamps (`Ok(None)` where fewer than [`FEWEST`] of either kind were written).
-    fn gaps(&self, device: &Device) -> Result<Option<(i64, i64)>, Error> {
+    fn gaps(&self, parts: &Parts) -> Result<Option<(i64, i64)>, Error> {
         let Some(_busy) = exit_guard::enter() else {
             return Ok(None);
         };
-        let shared = device.shared();
-        let Some(clock) = shared.timing.clock() else {
-            return Ok(None);
-        };
+        let (period, valid_bits) = parts.clock;
         let count = 2 * self.buffers.len();
         let mut stamps = vec![[0u64; 2]; count];
         // SAFETY: the pool's queries, each written by a batch that completed; 64-bit values each
         // with its availability.
         let read = unsafe {
-            shared.vk().get_query_pool_results(
+            parts.vk().get_query_pool_results(
                 self.queries,
                 0,
                 &mut stamps,
@@ -408,7 +520,7 @@ impl Objects {
             Ok(()) | Err(vk::Result::NOT_READY) => {}
             Err(error) => return Err(vulkan(error)),
         }
-        let mask = match clock.valid_bits {
+        let mask = match valid_bits {
             64.. => u64::MAX,
             bits => (1u64 << bits) - 1,
         };
@@ -422,7 +534,7 @@ impl Objects {
                 true => (to - from) as f64,
                 false => -((from - to) as f64),
             };
-            (ticks * clock.period) as i64
+            (ticks * period) as i64
         };
         // The batch of query pair `batch`: its start and end.
         let batch = |batch: usize| Some((at(2 * batch)?, at(2 * batch + 1)?));
@@ -450,14 +562,14 @@ impl Objects {
 
     /// Let the objects go, inside a section, where every batch submitted completed; else leave
     /// them to the device's end.
-    fn release(&self, device: &Device) {
+    fn release(&self, parts: &Parts) {
         if !self.settled {
             return;
         }
         let Some(_busy) = exit_guard::enter() else {
             return;
         };
-        let raw = device.shared().vk();
+        let raw = parts.vk();
         // SAFETY: no submission that names them is pending (each completed, or none was made),
         // inside a section; a null handle is skipped.
         unsafe {

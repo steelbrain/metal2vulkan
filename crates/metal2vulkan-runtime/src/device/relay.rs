@@ -444,9 +444,45 @@ impl super::DeviceShared {
         uses: Uses,
         f: impl FnOnce(vk::Queue) -> R,
     ) -> R {
+        self.queue_uses().use_queue(queue, by, uses, f)
+    }
+
+    /// What its uses of a queue outside a batch reach ([`QueueUses`]), borrowed from it.
+    pub(crate) fn queue_uses(&self) -> QueueUses<'_> {
+        QueueUses {
+            queues: &self.queues,
+            parking: self.parking.get().map(|parking| &**parking),
+            counts: &self.counts,
+            fences: &self.fences,
+            functions: &self.functions,
+        }
+    }
+}
+
+/// What a use of a device's `VkQueue` outside a batch reaches ([`QueueUses::use_queue`]): its
+/// queues, its parking, its counts, its fences and its functions. Borrowed from the device
+/// ([`DeviceShared::queue_uses`](super::DeviceShared::queue_uses)), or from the shares of them
+/// the queue-switch check holds, which hold no device (`queue_switch_check.rs`).
+pub(crate) struct QueueUses<'a> {
+    pub(crate) queues: &'a [super::QueueSlot],
+    pub(crate) parking: Option<&'a crate::freed_memory::Parking>,
+    pub(crate) counts: &'a crate::work_counts::Counters,
+    pub(crate) fences: &'a crate::command_buffer::fences::Fences,
+    pub(crate) functions: &'a Functions,
+}
+
+impl QueueUses<'_> {
+    /// [`DeviceShared::use_queue`](super::DeviceShared::use_queue), over what it reaches.
+    pub(crate) fn use_queue<R>(
+        &self,
+        queue: usize,
+        by: By,
+        uses: Uses,
+        f: impl FnOnce(vk::Queue) -> R,
+    ) -> R {
         let slot = &self.queues[queue];
         let flights = slot.flights.get();
-        let parking = (self.parking.get()).filter(|_| matches!(by, By::Program));
+        let parking = self.parking.filter(|_| matches!(by, By::Program));
         if flights.is_none() && parking.is_none() {
             return match uses {
                 Uses::Unknown => slot.with(f),
@@ -469,7 +505,7 @@ impl super::DeviceShared {
         }
         let fence = flights.and_then(|flights| {
             exit_guard::enter().and_then(|_busy| {
-                let raw = self.vk();
+                let raw = self.functions.get();
                 let mut done = flights.done_marks();
                 if !done.is_empty() {
                     // SAFETY: each is signaled, its submission completed, and out of the log.
@@ -492,13 +528,13 @@ impl super::DeviceShared {
             // Taken before `f` submits: a block that goes meanwhile waits for the mark.
             let mark = parking.and_then(|parking| {
                 let _busy = exit_guard::enter()?;
-                parking.program_use(queue, self.vk())
+                parking.program_use(queue, self.functions.get())
             });
             let used = f(vk_queue);
             let Some(_busy) = exit_guard::enter() else {
                 return used;
             };
-            let raw = self.vk();
+            let raw = self.functions.get();
             let logged = fence.zip(flights);
             if let Some((fence, flights)) = logged {
                 flights.push(fence, by);

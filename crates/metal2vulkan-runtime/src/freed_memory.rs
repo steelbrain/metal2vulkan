@@ -569,7 +569,7 @@ pub(crate) mod held {
         }
 
         /// Let them go once `closed` is set, or once they were let go already.
-        pub(super) fn release_once(&self, closed: &AtomicBool) {
+        pub(crate) fn release_once(&self, closed: &AtomicBool) {
             while !closed.load(Ordering::SeqCst) && lock(&self.state).0 {
                 std::thread::sleep(Duration::from_millis(1));
             }

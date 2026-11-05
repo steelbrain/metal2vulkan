@@ -321,7 +321,8 @@ impl Verdict {
 }
 
 /// A device's sharing (`DeviceShared::queue_switch`): its policy, its check's verdict and the switch
-/// cost it measured, and whether the check started and settled.
+/// cost it measured, whether the check started and settled, and whether its thread runs, which
+/// the device's teardown stops and waits for (`queue_switch_check.rs`).
 pub(crate) struct QueueSwitch {
     /// The device's policy is `Adaptive`.
     adaptive: bool,
@@ -334,6 +335,20 @@ pub(crate) struct QueueSwitch {
     wake: Condvar,
     /// The check's run in this process, in nanoseconds; 0 where none ended.
     took: AtomicU64,
+    /// The check's thread runs: from before it is spawned until it let go of its objects and of
+    /// its shares of the device's parts ([`began`](Self::began), [`ended`](Self::ended)).
+    running: Mutex<bool>,
+    /// Signalled as the check's thread ends.
+    ending: Condvar,
+    /// The device's teardown began: the check stops at its next step ([`stop`](Self::stop)).
+    stopping: AtomicBool,
+    /// How long the teardown waited for the check's thread to end, in nanoseconds: 0 where it
+    /// waited for none.
+    stop_waited: AtomicU64,
+    /// The crate's device tests' hold of the check between its rounds
+    /// (`tests/teardown_threads.rs`).
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) held: crate::freed_memory::held::Held,
 }
 
 impl QueueSwitch {
@@ -347,6 +362,12 @@ impl QueueSwitch {
             settled: Mutex::new(false),
             wake: Condvar::new(),
             took: AtomicU64::new(0),
+            running: Mutex::new(false),
+            ending: Condvar::new(),
+            stopping: AtomicBool::new(false),
+            stop_waited: AtomicU64::new(0),
+            #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+            held: Default::default(),
         }
     }
 
@@ -364,6 +385,74 @@ impl QueueSwitch {
     /// Note the check started; whether it had not been before.
     fn start(&self) -> bool {
         !self.started.swap(true, Ordering::AcqRel)
+    }
+
+    /// Settle the verdict as [`settle`](Self::settle) does, where it shares now with `slots`, the
+    /// round robin's `VkQueue`s, keeping their times from here on ([`SlotShare::watched`]).
+    pub(crate) fn settle_over(
+        &self,
+        slots: &[QueueSlot],
+        verdict: Verdict,
+        cost: i64,
+        took: Option<Duration>,
+    ) {
+        if self.adaptive && verdict == Verdict::Idles {
+            for slot in slots {
+                slot.share.watched.store(true, Ordering::Relaxed);
+            }
+        }
+        self.settle(verdict, cost, took);
+    }
+
+    /// The check's thread is about to be spawned: it runs until [`ended`](Self::ended).
+    pub(crate) fn began(&self) {
+        *lock(&self.running) = true;
+    }
+
+    /// The check's thread let go of its objects and of its shares of the device's parts (or was
+    /// never spawned).
+    pub(crate) fn ended(&self) {
+        *lock(&self.running) = false;
+        self.ending.notify_all();
+    }
+
+    /// Whether the device's teardown began, so the check stops at its next step.
+    pub(crate) fn stopping(&self) -> bool {
+        self.stopping.load(Ordering::SeqCst)
+    }
+
+    /// The device's teardown: the check stops at its next step, and this waits until its thread
+    /// ended, which holds no device handle, so never runs this teardown (`queue_switch_check.rs`).
+    pub(crate) fn stop(&self) {
+        self.stopping.store(true, Ordering::SeqCst);
+        let mut running = lock(&self.running);
+        if !*running {
+            return;
+        }
+        let waiting = Instant::now();
+        while *running {
+            running =
+                (self.ending.wait(running)).unwrap_or_else(std::sync::PoisonError::into_inner);
+        }
+        let nanos = u64::try_from(waiting.elapsed().as_nanos()).unwrap_or(u64::MAX);
+        self.stop_waited.store(nanos.max(1), Ordering::Release);
+    }
+
+    /// How long the device's teardown waited for the check's thread to end; `None` where it
+    /// waited for none.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) fn stop_waited(&self) -> Option<Duration> {
+        match self.stop_waited.load(Ordering::Acquire) {
+            0 => None,
+            nanos => Some(Duration::from_nanos(nanos)),
+        }
+    }
+
+    /// Let the tests' hold of the check go once the device's teardown began, or once it was let
+    /// go already.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) fn release_once_stopping(&self) {
+        self.held.release_once(&self.stopping);
     }
 
     /// Settle the verdict, with the cost measured (or 0) and the check's run where it ran.
@@ -622,12 +711,8 @@ impl Device {
     /// times from here on ([`SlotShare::watched`]).
     pub(crate) fn settle_queue_switch(&self, verdict: Verdict, cost: i64, took: Option<Duration>) {
         let shared = self.shared();
-        if shared.queue_switch.adaptive && verdict == Verdict::Idles {
-            for slot in &shared.queues[..shared.round_robin()] {
-                slot.share.watched.store(true, Ordering::Relaxed);
-            }
-        }
-        shared.queue_switch.settle(verdict, cost, took);
+        let slots = &shared.queues[..shared.round_robin()];
+        shared.queue_switch.settle_over(slots, verdict, cost, took);
     }
 
     /// Start the device's check where its verdict is pending and none started, and wait until the

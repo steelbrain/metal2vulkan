@@ -42,6 +42,13 @@
 //!   block waiting for that mark and the release of freed memory that a later command buffer's
 //!   completion posted, held too, as the program's wait for that command buffer returns. The
 //!   teardown frees the block and runs its deallocator, before the last drop returns.
+//! - **Not the queue-switch check's thread**: a device whose first command queue starts its check
+//!   of the GPU's idling between `VkQueue`s (`queue_switch_check.rs`), held between two of its
+//!   rounds, holds nothing of the device: the program's drops tear the device down on its own
+//!   thread before the last drop returns, the teardown stopping the check and waiting for it at
+//!   most one step and its release of its objects, within the 16 ms the owner allows a wait. A
+//!   device that runs no check (one family of one `VkQueue`, or no calibrated timestamps) skips
+//!   it, saying so.
 //!
 //! The teardown's end is seen through the device's message sink, whose last share the instance
 //! drops after `vkDestroyInstance`, the teardown's last step: the sink owns a value that, dropped,
@@ -554,4 +561,56 @@ fn a_release_of_freed_memory_leaves_the_device_to_the_program_s_thread() {
         .watched
         .layer_reported_nothing("the teardown that freed the block left no object and used none");
     drop(host);
+}
+
+/// A device whose check of its GPU's idling between `VkQueue`s runs, held between two of its rounds
+/// (`queue_switch_check.rs`): the check holds no device handle, so the program's last drop tears
+/// the device down on its own thread before it returns, and the teardown's wait for the check (it
+/// stops at its next step and lets its objects go) is within [`RELEASE`]. Without the hold the
+/// check runs some milliseconds after the first command queue, the window in which a check that
+/// held its device took the last drop's teardown to its own thread.
+#[test]
+fn a_running_queue_switch_check_leaves_the_device_to_the_program_s_thread() {
+    let scratch = Scratch::new("switch");
+    let (device, ending) = watched(&scratch.0);
+    let switch = Arc::clone(&device.shared().queue_switch);
+    if crate::queue_switch_check::pair(&device).is_none()
+        || !crate::queue_switch_check::timed(&device)
+    {
+        println!(
+            "SKIPPED {}: the device runs no queue-switch check",
+            device.name()
+        );
+        return;
+    }
+    switch.held.hold();
+    let queue = device.new_command_queue().unwrap();
+    switch.held.until_waiting(1, WAIT);
+    let releasing = std::thread::spawn({
+        let switch = Arc::clone(&switch);
+        move || switch.release_once_stopping()
+    });
+    let dropping = Instant::now();
+    drop(queue);
+    drop(device);
+    let dropped = dropping.elapsed();
+    let torn_down = ending.thread.try_recv();
+    switch.held.release();
+    releasing.join().unwrap();
+    assert_eq!(
+        torn_down,
+        Ok(program_thread()),
+        "the device was not torn down on this thread before its last drop returned"
+    );
+    let waited = switch
+        .stop_waited()
+        .expect("the teardown waited for the running check");
+    println!("the last drop took {dropped:?}, of which the wait for the check {waited:?}");
+    assert!(
+        waited < RELEASE,
+        "the teardown waited {waited:?} for the check"
+    );
+    ending
+        .watched
+        .layer_reported_nothing("the teardown that stopped the check left no object and used none");
 }

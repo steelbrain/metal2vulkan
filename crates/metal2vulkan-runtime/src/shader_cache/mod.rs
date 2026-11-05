@@ -454,6 +454,12 @@ impl ShaderCache {
         &self.store
     }
 
+    /// A share of [`content_store`](Self::content_store), for a thread that holds no device
+    /// (`queue_switch_check.rs`).
+    pub(crate) fn content_store_share(&self) -> Arc<Store> {
+        Arc::clone(&self.store)
+    }
+
     /// Destroy the `VkPipelineCache` of every record the device holds, then stop the cache
     /// thread, which writes what is queued first: the device is going.
     ///

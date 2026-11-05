@@ -208,8 +208,9 @@ pub(super) struct DeviceShared {
     /// reserved queue this modulo their number.
     presenting_made: AtomicU64,
     /// Whether its command queues share `VkQueue`s, and its check's verdict
-    /// (`queue_share.rs`).
-    pub(crate) queue_switch: crate::queue_share::QueueSwitch,
+    /// (`queue_share.rs`). Shared with the check's thread, which holds no device handle
+    /// (`queue_switch_check.rs`).
+    pub(crate) queue_switch: Arc<crate::queue_share::QueueSwitch>,
     /// The compile-and-plan device: the description restricted to what is enabled.
     compile: metal2vulkan::device::Device,
     /// What `compile`'s profile takes of viewport depth ranges past `[0, 1]`, which draws read
@@ -308,12 +309,16 @@ pub(super) struct DeviceShared {
     nudge: vk::Semaphore,
     pub(super) completion: Completion,
     /// The idle fences the batches that end command buffers signal (`command_buffer/fences.rs`).
-    pub(super) fences: Fences,
+    /// Shared with the queue-switch check's thread, whose uses of a queue take them where its
+    /// failures are relayed (`queue_switch_check.rs`).
+    pub(super) fences: Arc<Fences>,
     /// The queues' serial contexts: every command buffer's transitions and handlers run there,
     /// and the releases handed off a thread that may run none of the program's code
     /// ([`Device::let_go_elsewhere`]).
     pub(super) contexts: Contexts<Item>,
-    loader_word: LoaderWord,
+    /// Shared with the queue-switch check's thread, which allocates command buffers
+    /// (`queue_switch_check.rs`).
+    pub(super) loader_word: Arc<LoaderWord>,
     /// The runtime created the `VkDevice` and destroys it.
     owned: bool,
     /// The device was lost: no further submission. Shared with the relay (`relay.rs`), which
@@ -522,8 +527,9 @@ pub(super) struct DeviceShared {
     /// The rooms of the draws its render encoders kept for instances recorded inline after a
     /// split, which the next such instances take (`render/inline_splits.rs`).
     pub(super) kept_rooms: crate::render::SpareKept,
-    /// Counts of its commit path's work, for the lanes (`work_counts.rs`).
-    pub(super) counts: super::work_counts::Counters,
+    /// Counts of its commit path's work, for the lanes (`work_counts.rs`). Shared with the
+    /// queue-switch check's thread (`queue_switch_check.rs`).
+    pub(super) counts: Arc<super::work_counts::Counters>,
     /// Where the driver fails pending work as memory a device-address buffer lay in is freed,
     /// the record of its batches the memory's blocks that go wait by (`freed_memory.rs`).
     pub(crate) parking: OnceLock<Arc<Parking>>,
@@ -737,6 +743,9 @@ impl Drop for DeviceShared {
         let Some(_busy) = exit_guard::enter() else {
             return;
         };
+        // The queue-switch check holds nothing of the device either: it stops at its next step,
+        // and its objects go before the wait returns (`queue_switch_check.rs`).
+        self.queue_switch.stop();
         // The watch of the program's marks and the releases of freed memory, posted to the
         // handler threads, hold nothing of the device: those that begin from here on call
         // nothing, and the threads' stop below waits for those running (`freed_memory.rs`).
@@ -1898,7 +1907,9 @@ impl Device {
             queue_families,
             round_robin_made: AtomicU64::new(0),
             presenting_made: AtomicU64::new(0),
-            queue_switch: crate::queue_share::QueueSwitch::new(compile.policy().queue_sharing),
+            queue_switch: Arc::new(crate::queue_share::QueueSwitch::new(
+                compile.policy().queue_sharing,
+            )),
             compile,
             depth_ranges,
             enabled,
@@ -1943,9 +1954,9 @@ impl Device {
             scheduler,
             nudge,
             completion,
-            fences: Fences::default(),
+            fences: Arc::default(),
             contexts,
-            loader_word,
+            loader_word: Arc::new(loader_word),
             owned,
             lost,
             textures,
