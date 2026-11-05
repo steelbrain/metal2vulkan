@@ -227,6 +227,7 @@
         "gate_waits_slept": 3,
         "memory_frees.blocks": 2,
         "memory_frees.kept_stale": 2,
+        "memory_frees_posted": 2,
         "new_buffer_bytes_cleared": 49152,
         "object_churn.buffers_parked": 3,
         "object_churn.buffers_recycled": 3,
@@ -244,6 +245,7 @@
         "queue_submissions": 3,
         "queues_sharing_a_vk_queue": 1,
         "scheduled_where_submitted": 3,
+        "scheduler_passes": 1,
         "scheduler_passes_by_waiters": 3,
         "scheduler_sleeps": 3,
         "scheduler_wakes_commit": 3,
@@ -269,6 +271,7 @@
         "device_memory_allocated": 201326592,
         "memory_frees.blocks": 0,
         "memory_frees.kept_stale": 0,
+        "memory_frees_posted": 0,
         "queues_sharing_a_vk_queue": 0
       },
       "ceilings": {

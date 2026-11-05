@@ -249,8 +249,10 @@
         "addressable_buffers_made": 2,
         "device_memory_allocated": 201326592,
         "new_buffer_bytes_cleared": 24624,
+        "object_churn.buffers_evicted": 1,
         "object_churn.buffers_parked": 1,
         "object_churn.buffers_recycled": 1,
+        "object_churn.vk_buffers_destroyed": 1,
         "pooled_memory_blocks_made": 3
       },
       "composed": {

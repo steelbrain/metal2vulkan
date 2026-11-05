@@ -1872,7 +1872,6 @@
         "stage_tables_read": 60,
         "storage_placeholders_made": 1,
         "submit_infos": 1,
-        "submit_stalls_on_work": 1,
         "trail_waits": 1,
         "variant_pipelines_made": 15,
         "wakes_completion_waiters": 1,

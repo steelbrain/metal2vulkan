@@ -1067,7 +1067,6 @@
         "draw_states_recorded": 128,
         "draws_settled": 4,
         "encoder_command_buffers_begun": 96,
-        "encoder_primaries_begun_ahead": 1,
         "fence_waits": 1,
         "finales_folded": 1,
         "functions_translated": 1,

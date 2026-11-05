@@ -440,6 +440,7 @@
         "live_tables_uploaded": 1,
         "memory_frees.blocks": 1,
         "memory_frees.dedicated": 1,
+        "memory_frees_posted": 1,
         "new_buffer_bytes_cleared": 4732,
         "object_churn.buffers_evicted": 1,
         "object_churn.buffers_parked": 4,

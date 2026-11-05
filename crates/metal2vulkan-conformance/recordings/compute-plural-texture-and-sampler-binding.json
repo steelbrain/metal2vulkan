@@ -497,6 +497,7 @@
         "batches_held_past_a_look": 1,
         "batches_with_none_pending": 1,
         "bound_notices_made": 1,
+        "bound_offsets_moved": 3,
         "command_barriers": 3,
         "command_buffers_begun": 11,
         "command_buffers_begun_batch_barriers": 1,
@@ -556,9 +557,10 @@
         "scheduled_where_submitted": 1,
         "scheduler_passes": 4,
         "scheduler_passes_by_waiters": 1,
-        "scheduler_sleeps": 4,
+        "scheduler_sleeps": 3,
         "scheduler_wakes_commit": 1,
-        "scheduler_wakes_host": 3,
+        "scheduler_wakes_host": 2,
+        "set_zero_sets_reused": 2,
         "shader_modules_made": 1,
         "slot_returns": 1,
         "spare_command_pools_taken": 1,
@@ -576,7 +578,8 @@
         "command_buffers_deferred": 5,
         "command_buffers_submitted": 4,
         "commands_recorded.end_command_buffer": 4,
-        "encoder_command_buffers_begun": 3
+        "encoder_command_buffers_begun": 3,
+        "host_steps_recorded": 0
       },
       "composed": {
         "command_buffers_begun": 11,

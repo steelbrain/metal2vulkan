@@ -332,6 +332,7 @@
         "slot_returns": 5,
         "spare_command_pools_taken": 5,
         "submit_infos": 5,
+        "submit_stalls_on_work": 1,
         "trail_waits": 5,
         "wakes_completion_waiters": 5,
         "wakes_spared": 35

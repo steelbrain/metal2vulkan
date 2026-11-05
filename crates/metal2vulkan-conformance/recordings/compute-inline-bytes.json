@@ -414,6 +414,7 @@
         "batches_submitted_by_waiters": 1,
         "batches_with_none_pending": 1,
         "bound_notices_made": 1,
+        "bound_offsets_moved": 1,
         "command_barriers": 1,
         "command_buffers_begun": 7,
         "command_buffers_begun_batch_barriers": 1,

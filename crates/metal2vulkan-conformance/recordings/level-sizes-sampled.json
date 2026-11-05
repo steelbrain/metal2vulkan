@@ -1454,7 +1454,7 @@
         "queues_sharing_a_vk_queue": 1,
         "resident_textures_looked_at": 13,
         "scheduled_where_submitted": 13,
-        "scheduler_passes": 12,
+        "scheduler_passes": 15,
         "scheduler_passes_by_waiters": 13,
         "scheduler_sleeps": 15,
         "scheduler_wakes_commit": 13,
@@ -1467,7 +1467,7 @@
         "trail_waits": 13,
         "variant_pipelines_made": 1,
         "wakes_completion_waiters": 13,
-        "wakes_spared": 93
+        "wakes_spared": 92
       },
       "moving": {
         "batches_submitted_by_waiters": 2,
