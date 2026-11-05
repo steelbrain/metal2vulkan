@@ -3585,7 +3585,9 @@ bound.
   it by the reciprocal (lavapipe: some `ABGR4Unorm` codes one ulp high), and within 0.18 of a code
   where it widens a 5- or 6-bit channel by replicating its bits (ANV, NVIDIA; a 4-bit channel's
   replication is exact); a half-float or small-float texel's NaN in the device's encoding, where
-  Metal answers `0x7fc00000`; every other class Metal's value.
+  Metal answers `0x7fc00000`; a 32-bit float texel's NaN in a gather in the device's encoding,
+  where Metal hands back the texel's bits (NVIDIA's 615.71.09 on the RTX 5080 Laptop GPU gathers
+  every one as `0x7fffffff`); every other class Metal's value.
 - `metal2vulkan-degrade-device-vertex-conversion` (precision).
   `PrecisionNote::DeviceVertexConversion`: Native vertex input (a conversion): a render pipeline's
   vertex descriptor gives a normalized format (`UCharNormalized` through `Short4Normalized` of

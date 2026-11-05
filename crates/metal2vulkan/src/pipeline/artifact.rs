@@ -1694,6 +1694,9 @@ pub enum PrecisionNote {
     ///   one ulp high, and of `A1BGR5Unorm`, `B5G6R5Unorm` and `BGR5A1Unorm` one ulp apart);
     /// - a half-float or small-float texel's NaN: the device's encoding, where Metal answers
     ///   `0x7fc00000`;
+    /// - a 32-bit float texel's NaN in a gather: the device's encoding, where Metal hands back the
+    ///   texel's own bits (NVIDIA's 615.71.09 on the RTX 5080 Laptop GPU gathers every one as
+    ///   `0x7fffffff`, and reads and samples it as stored);
     /// - every other class: the device's value, which Metal's matches.
     ///
     /// A filtered sample's value is the filter's. Validation derives no tolerance from it.
