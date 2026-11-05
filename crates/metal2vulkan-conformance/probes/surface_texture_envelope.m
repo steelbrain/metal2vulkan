@@ -359,6 +359,19 @@ static const struct Shape kShapes[] = {
     S("bgra.bc1.128x64", kBGRA, 0, BC1, 128, 64),
     SS("bgra.bc1.private", kBGRA, BC1, 64, 64, MTLStorageModePrivate),
     S("bgra1x2.bc1", kBGRA1x2, 0, BC1, 64, 64),
+    // The rest of the BC family, and BC over a plane at an offset of its surface.
+    S("bgra.bc1srgb", kBGRA, 0, MTLPixelFormatBC1_RGBA_sRGB, 64, 64),
+    S("bgra.bc2", kBGRA, 0, MTLPixelFormatBC2_RGBA, 64, 64),
+    S("bgra.bc3", kBGRA, 0, MTLPixelFormatBC3_RGBA, 64, 64),
+    S("bgra.bc4", kBGRA, 0, MTLPixelFormatBC4_RUnorm, 64, 64),
+    S("bgra.bc4snorm", kBGRA, 0, MTLPixelFormatBC4_RSnorm, 64, 64),
+    S("bgra.bc5", kBGRA, 0, MTLPixelFormatBC5_RGUnorm, 64, 64),
+    S("bgra.bc6h", kBGRA, 0, MTLPixelFormatBC6H_RGBUfloat, 64, 64),
+    S("bgra.bc6hfloat", kBGRA, 0, MTLPixelFormatBC6H_RGBFloat, 64, 64),
+    S("bgra.bc7srgb", kBGRA, 0, MTLPixelFormatBC7_RGBAUnorm_sRGB, 64, 64),
+    S("bgra1x2.bc7", kBGRA1x2, 0, BC7, 64, 64),
+    S("420v.p0.bc1.16x64", k420v, 0, BC1, 16, 64),
+    S("420v.p1.bc1.16x32", k420v, 1, BC1, 16, 32),
     // Past the surface's end (`--hazard` only, by the count above).
     S("bgra1.64x65", kBGRA1, 0, BGRA8, 64, 65),
     S("bgra1.64x128", kBGRA1, 0, BGRA8, 64, 128),
@@ -372,9 +385,18 @@ static void block_of(MTLPixelFormat format, uint64_t *bytes, uint64_t *extent)
 {
 	switch (format) {
 	case BC1:
+	case MTLPixelFormatBC1_RGBA_sRGB:
+	case MTLPixelFormatBC4_RUnorm:
+	case MTLPixelFormatBC4_RSnorm:
 		*bytes = 8, *extent = 4;
 		return;
 	case BC7:
+	case MTLPixelFormatBC7_RGBAUnorm_sRGB:
+	case MTLPixelFormatBC2_RGBA:
+	case MTLPixelFormatBC3_RGBA:
+	case MTLPixelFormatBC5_RGUnorm:
+	case MTLPixelFormatBC6H_RGBUfloat:
+	case MTLPixelFormatBC6H_RGBFloat:
 		*bytes = 16, *extent = 4;
 		return;
 	case R8:
@@ -560,7 +582,11 @@ static NSString *const kSource =
     @"  if (g.x < p.w && g.y == 0) o[g.x] = q(t.read(g.x)); }\n"
     @"kernel void rms(texture2d_ms<float, access::read> t [[texture(0)]], device uchar4 *o "
     @"[[buffer(0)]], constant P &p [[buffer(1)]], uint2 g [[thread_position_in_grid]]) {\n"
-    @"  if (g.x < p.w && g.y < p.h) o[g.y * p.w + g.x] = q(t.read(g, p.slice)); }\n";
+    @"  if (g.x < p.w && g.y < p.h) o[g.y * p.w + g.x] = q(t.read(g, p.slice)); }\n"
+    @"kernel void sbc(texture2d<float> t [[texture(0)]], device float4 *o [[buffer(0)]], "
+    @"constant P &p [[buffer(1)]], uint2 g [[thread_position_in_grid]]) {\n"
+    @"  constexpr sampler s(coord::pixel, filter::nearest, address::clamp_to_edge);\n"
+    @"  if (g.x < p.w && g.y < p.h) o[g.y * p.w + g.x] = t.sample(s, float2(g) + 0.5); }\n";
 
 static const char *kernel_for(MTLTextureType type)
 {
@@ -614,7 +640,9 @@ static bool blits(const struct Shape *c)
 
 static bool compressed(const struct Shape *c)
 {
-	return c->format == BC1 || c->format == BC7;
+	uint64_t block, extent;
+	block_of(c->format, &block, &extent);
+	return extent == 4;
 }
 
 static void run_shape(id<MTLDevice> d, int n, bool hazard)
@@ -881,6 +909,69 @@ static void run_shape(id<MTLDevice> d, int n, bool hazard)
 			}
 		}
 		report_surface("replaceRegion", s);
+		fflush(stdout);
+	}
+	// 5. A BC1 texture's samples: every 8-byte block of the surface holds a solid colour, both
+	// endpoints its own offset's block index as RGB565 and every index 0, so a texel's sample
+	// names the block it decoded. Counted against the blocks rows `bytesPerRow` apart from the
+	// plane's offset, the blits' answer above.
+	if (c->format == BC1) {
+		IOSurfaceLock(s, 0, NULL);
+		uint8_t *base = IOSurfaceGetBaseAddress(s);
+		for (uint64_t o = 0; o + 8 <= alloc; o += 8) {
+			uint16_t colour = (uint16_t)(o / 8);
+			uint8_t block[8] = {(uint8_t)colour, (uint8_t)(colour >> 8), (uint8_t)colour,
+			                    (uint8_t)(colour >> 8), 0, 0, 0, 0};
+			memcpy(base + o, block, 8);
+		}
+		IOSurfaceUnlock(s, 0, NULL);
+		NSError *err = nil;
+		id<MTLLibrary> lib = [d newLibraryWithSource:kSource options:nil error:&err];
+		id<MTLFunction> f = [lib newFunctionWithName:@"sbc"];
+		id<MTLComputePipelineState> ps = f ? [d newComputePipelineStateWithFunction:f
+		                                                                      error:&err]
+		                                   : nil;
+		if (ps == nil) {
+			printf("  sample: no pipeline (%s)\n", err.localizedDescription.UTF8String);
+		} else {
+			uint64_t w = (uint64_t)c->width, h = (uint64_t)c->height;
+			id<MTLBuffer> samples = [d newBufferWithLength:w * h * 16
+			                                       options:MTLResourceStorageModeShared];
+			uint32_t p[4] = {(uint32_t)w, (uint32_t)h, 0, 0};
+			id<MTLCommandBuffer> cb = [queue commandBuffer];
+			id<MTLComputeCommandEncoder> ce = [cb computeCommandEncoder];
+			[ce setComputePipelineState:ps];
+			[ce setTexture:t atIndex:0];
+			[ce setBuffer:samples offset:0 atIndex:0];
+			[ce setBytes:p length:sizeof p atIndex:1];
+			[ce dispatchThreadgroups:MTLSizeMake((NSUInteger)(w + 7) / 8, (NSUInteger)(h + 7) / 8, 1)
+			    threadsPerThreadgroup:MTLSizeMake(8, 8, 1)];
+			[ce endEncoding];
+			[cb commit];
+			[cb waitUntilCompleted];
+			const float *v = samples.contents;
+			uint64_t matched = 0, others = 0;
+			for (uint64_t y = 0; y < h; y++) {
+				for (uint64_t x = 0; x < w; x++) {
+					const float *c4 = v + 4 * (y * w + x);
+					uint32_t r = (uint32_t)lroundf(c4[0] * 31.0f);
+					uint32_t g = (uint32_t)lroundf(c4[1] * 63.0f);
+					uint32_t b = (uint32_t)lroundf(c4[2] * 31.0f);
+					uint64_t at = 8 * (uint64_t)((r << 11) | (g << 5) | b);
+					uint64_t expected = offset + (y / 4) * bytes_per_row + (x / 4) * 8;
+					if (at == expected)
+						matched++;
+					else if (others++ < 4)
+						printf("  sample: texel (%llu, %llu) decoded the block at surface byte "
+						       "%llu, the rows' block lies at %llu\n",
+						       (unsigned long long)x, (unsigned long long)y,
+						       (unsigned long long)at, (unsigned long long)expected);
+				}
+			}
+			printf("  sample: %llu of %llu texels decoded the block at the plane's offset + (y / 4) "
+			       "x bytesPerRow + (x / 4) x 8\n",
+			       (unsigned long long)matched, (unsigned long long)(w * h));
+		}
 		fflush(stdout);
 	}
 	// A texture buffer's CPU access last: Metal may assert on it.
