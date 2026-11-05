@@ -351,7 +351,9 @@ driver's. Each is open work.
   a copied host buffer** (`copied.rs`, `copied-host-pages`): a copy and another copy or an import
   of pages that overlap without being the same first byte and length (a rebind's bytes inside a
   surface's, a guest RAM chunk's import over a copy's pages, a rebind whose texture moved in its
-  page, a buffer made after the range was reported remapped). The writer's bytes reach the pages
+  page, a buffer made after the range was reported remapped), and a copy beside a live import of
+  the same bytes for the other storage mode (a `Managed` buffer's import, then a `Shared` buffer
+  over them whose import the gate refused). The writer's bytes reach the pages
   at its completion, and the reader's copy at its commit, so a read committed before the write
   completed reads the bytes from before it: in one command buffer, in one queue's command buffers
   in flight together, and across queues an event orders (the held reader is not copied in again

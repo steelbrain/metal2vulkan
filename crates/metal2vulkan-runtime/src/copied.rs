@@ -64,7 +64,9 @@
 //! - **Between copies, GPU to GPU** (`docs/FAST-PATHS.md`, known gaps). A copy and another copy, or
 //!   an import, of pages that overlap without being the same bytes (a rebind's bytes inside a
 //!   surface's, a guest RAM chunk's import over a copy's pages, a buffer whose texture moved in
-//!   its page, the bytes again after a reported remap) are two memories, which agree only through
+//!   its page, the bytes again after a reported remap), and a copy beside a live import of the same
+//!   bytes for the other storage mode's class (a `Managed` buffer's import, then a `Shared`
+//!   buffer's copy where the gate refused its own), are two memories, which agree only through
 //!   the pages: at the writer's completion (its merge back, or its writes in place) and at the
 //!   reader's commit (its copy in). A read committed before the write completed reads the bytes
 //!   as of its commit, wherever the tracker orders it after the write: in one command buffer, in
