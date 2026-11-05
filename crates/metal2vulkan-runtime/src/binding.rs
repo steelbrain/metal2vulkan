@@ -2380,8 +2380,9 @@ pub(super) fn command_uses(
 
 /// [`command_uses`] in `into`, over the last command's storage, where the caller keeps it
 /// (`LiveBind::uses`): its uses of what the encoder made resident, and the keys they reach, kept
-/// from the last command where that command's plan was `plan` and its residency of the
-/// generation `tables`' is. They are a function of those alone: each use's resource is the
+/// from the last command where that command's plan was `plan`, or a plan that lists the same uses
+/// (as a pipeline state's plans for draws of different primitive types may), and its residency
+/// of the generation `tables`' is. They are a function of those alone: each use's resource is the
 /// residency's under its token, whose contents a generation names (`residency.rs`), its access
 /// and stages the plan's, and its key and range the resource's own, which no call changes (a
 /// resource's identity and length, a texture's levels and slices; `WorkCounts::resident_uses_made`
@@ -2423,18 +2424,41 @@ pub(crate) fn kept_resident_checks() -> u64 {
 
 /// What the uses of what an encoder made resident at the start of a [`CommandUses`] were made
 /// for (`command_uses_into`): the plan (held weakly, so its allocation names no other plan while
-/// this lives) and the residency's generation.
+/// this lives) and the residency's generation; and the other plans found to list the plan's
+/// uses, or not to, held weakly likewise.
 #[derive(Clone)]
 struct ResidentOf {
     plan: Weak<BindingPlan>,
     generation: Option<u64>,
+    compared: Vec<(Weak<BindingPlan>, bool)>,
 }
 
+/// The most plans a [`ResidentOf`] keeps compared with its own: draws of one pipeline state whose
+/// primitive types take plans of their own (Metal's five, `MTLPrimitiveType`) find each compared
+/// once.
+const COMPARED_PLANS: usize = 5;
+
 impl ResidentOf {
-    /// Whether it was made for `plan` under `generation`: the plan compared by address, which
-    /// takes no count of its references.
-    fn holds(&self, plan: &Arc<BindingPlan>, generation: Option<u64>) -> bool {
-        self.plan.as_ptr() == Arc::as_ptr(plan) && self.generation == generation
+    /// Whether its uses are those `plan` makes under `generation`: made for it, or for a plan
+    /// that lists the same uses (`BindingPlan::uses`, which with the residency decide them alone,
+    /// [`resident_uses_into`]), found once by comparing them. The plans are compared by address,
+    /// which takes no count of their references.
+    fn holds(&mut self, plan: &Arc<BindingPlan>, generation: Option<u64>) -> bool {
+        let at = Arc::as_ptr(plan);
+        if self.generation != generation {
+            return false;
+        }
+        if self.plan.as_ptr() == at {
+            return true;
+        }
+        if let Some(&(_, alike)) = self.compared.iter().find(|(of, _)| of.as_ptr() == at) {
+            return alike;
+        }
+        let alike = (self.plan.upgrade()).is_some_and(|made| made.uses == plan.uses);
+        if self.compared.len() < COMPARED_PLANS {
+            self.compared.push((Arc::downgrade(plan), alike));
+        }
+        alike
     }
 }
 
@@ -2458,9 +2482,9 @@ fn uses_into(
         return Err(internal("a command of 2^32 uses"));
     }
     let generation = tables.residency.map(Residency::generation);
-    let holds = |of: &ResidentOf| kept.is_some_and(|plan| of.holds(plan, generation));
+    let holds = |of: &mut ResidentOf| kept.is_some_and(|plan| of.holds(plan, generation));
     into.made = 0;
-    let keeps = into.of.as_ref().is_some_and(holds);
+    let keeps = into.of.as_mut().is_some_and(holds);
     match keeps {
         true => {
             into.uses.truncate(into.used);
@@ -2472,6 +2496,7 @@ fn uses_into(
             into.of = kept.map(|plan| ResidentOf {
                 plan: Arc::downgrade(plan),
                 generation,
+                compared: Vec::new(),
             });
             // Kept from one command to the next alone, so the identity of those kept alone
             // (none where there are none: `prefix` reads it only where there are some).

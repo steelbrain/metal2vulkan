@@ -319,6 +319,51 @@ fn draws_keep_their_heap_part_until_what_their_encoder_made_resident_changes() {
     }
 }
 
+/// Draws of the entry shape that alternate a point list and a triangle list, each binding other
+/// buffers than the last: a draw of each type may take a plan of its own, and plans that list the
+/// same uses share the uses of what the encoder made resident
+/// (`binding::command_uses_into`), so only the first draw works them out; each plan's heap part is
+/// worked out at its first draw alone.
+#[test]
+fn draws_of_two_primitive_types_keep_what_their_encoder_made_resident_alike() {
+    let scratch = Scratch::new("resident-primitive-types");
+    let device = device(&scratch.0, &[], &Heard::default());
+    let scene = Scene::new(&device);
+    let resources = Resources::new(&scene, -0.9);
+    let queue = device.new_command_queue().unwrap();
+    let command_buffer = queue.command_buffer().unwrap();
+    let mut encoder = command_buffer
+        .render_command_encoder(&pass(&scene.target))
+        .unwrap();
+    resources.resident(&scene, &mut encoder);
+    encoder.set_render_pipeline_state(&scene.entry).unwrap();
+    let mut each = Vec::new();
+    for at in 0..POSITIONS {
+        let table = &resources.tables[(at % 2) as usize];
+        let offset = ENTRY * (1 + at % POSITIONS);
+        (encoder.set_vertex_buffer(Some(table), offset, 0)).unwrap();
+        (encoder.set_fragment_buffer(Some(table), offset, 0)).unwrap();
+        let primitive = [PrimitiveType::Point, PrimitiveType::Triangle][(at % 2) as usize];
+        each.push(drawn(&device, || {
+            (encoder.draw_primitives(primitive, 0, 3, 1, 0)).unwrap();
+        }));
+    }
+    encoder.end_encoding().unwrap();
+    command_buffer.commit().unwrap();
+    command_buffer.wait_until_completed_for(WAIT).unwrap();
+    assert_eq!(command_buffer.status(), CommandBufferStatus::Completed);
+    for (at, drawn) in each.iter().enumerate() {
+        let what = format!("draw {at}: {drawn:?}");
+        assert_eq!(drawn.made > 0, at == 0, "{what}");
+        match at {
+            0 => assert_eq!(drawn.heap_parts, 1, "{what}"),
+            // The triangle list's plan, where it takes one of its own.
+            1 => assert!(drawn.heap_parts <= 1, "{what}"),
+            _ => assert_eq!(drawn.heap_parts, 0, "{what}"),
+        }
+    }
+}
+
 /// Draws of the entry shape after a draw whose fragments write a position the encoder made
 /// resident to read in the vertex stage: each reads in place, in its vertex stage through what the
 /// encoder made resident, bytes a fragment stage of the pass wrote (`render/pass_start_reads.rs`),

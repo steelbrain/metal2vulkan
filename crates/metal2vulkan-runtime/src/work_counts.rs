@@ -5156,8 +5156,9 @@ pub struct WorkCounts {
     pub draws_rebound: u64,
     /// The uses of resources a render encoder made resident (`useResource:usage:stages:`,
     /// `useHeap:stages:`) that its draws' binding plans list, as its draws worked them out for
-    /// hazard tracking: a draw keeps the last draw's where its plan is the last draw's and what
-    /// the encoder made resident is unchanged since (no resource made resident, usage or stage
+    /// hazard tracking: a draw keeps the last draw's where its plan is the last draw's, or lists
+    /// the same uses as the plan they were worked out for, and what the encoder made resident is
+    /// unchanged since (no resource made resident, usage or stage
     /// widened, or heap used), and works out none then, a draw rebound or drawn again included;
     /// another works out each its plan lists.
     pub resident_uses_made: u64,
