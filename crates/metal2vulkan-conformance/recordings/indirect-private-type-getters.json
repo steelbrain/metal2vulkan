@@ -1026,6 +1026,7 @@
       "bounds": {
         "addressable_buffers_made": 2,
         "device_memory_allocated": 201326592,
+        "indirect_record_bytes_copied": 134880,
         "indirect_record_runs_read": 20,
         "indirect_records_read": 60,
         "new_buffer_bytes_cleared": 86400,

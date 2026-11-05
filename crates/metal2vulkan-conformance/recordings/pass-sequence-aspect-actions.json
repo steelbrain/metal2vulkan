@@ -2870,7 +2870,7 @@
         "command_buffers_begun_segments": 18,
         "command_buffers_deferred": 144,
         "command_buffers_submitted": 119,
-        "commands_recorded.begin_command_buffer": 126,
+        "commands_recorded.begin_command_buffer": 130,
         "commands_recorded.cmd_begin_render_pass": 27,
         "commands_recorded.cmd_bind_descriptor_sets": 18,
         "commands_recorded.cmd_bind_pipeline": 18,

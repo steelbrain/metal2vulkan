@@ -454,7 +454,8 @@
         "wakes_spared": 8
       },
       "moving": {
-        "gate_waits_slept": 0
+        "gate_waits_slept": 0,
+        "host_steps_recorded": 0
       },
       "composed": {
         "addressable_buffers_made": 1,

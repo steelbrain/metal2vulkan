@@ -426,7 +426,6 @@
         "command_buffers_begun_continuations": 1,
         "command_buffers_begun_encoders": 3,
         "command_buffers_submitted": 7,
-        "command_pools_made": 1,
         "commands_recorded.begin_command_buffer": 7,
         "commands_recorded.cmd_begin_render_pass": 2,
         "commands_recorded.cmd_bind_descriptor_sets": 2,
@@ -457,7 +456,7 @@
         "commands_recorded.end_command_buffer": 7,
         "commits_handed_off": 1,
         "commits_taken_in": 1,
-        "completed_waits": 1,
+        "completed_waits": 4,
         "completed_where_seen": 1,
         "completion_arms": 1,
         "completion_arms_after_a_wake": 1,
@@ -495,6 +494,7 @@
         "pipeline_layouts_made": 2,
         "pooled_memory_blocks_made": 3,
         "queue_submissions": 1,
+        "queues_sharing_a_vk_queue": 1,
         "render_encoders_ended": 2,
         "render_passes_begun_inline": 2,
         "render_passes_made": 2,
@@ -507,6 +507,7 @@
         "shader_modules_made": 3,
         "shader_modules_shared": 1,
         "slot_returns": 1,
+        "spare_command_pools_taken": 1,
         "stage_entries_shared": 10,
         "stage_entries_specialized": 3,
         "stage_tables_read": 8,
@@ -518,6 +519,7 @@
         "wakes_spared": 7
       },
       "composed": {
+        "argument_samplers_taken": 2,
         "commands_recorded.cmd_clear_color_image": 3,
         "commands_recorded.cmd_copy_buffer": 1,
         "commands_recorded.cmd_pipeline_barrier": 8,
@@ -528,6 +530,7 @@
         "driver_diagnostics_withheld": 2,
         "functions_translated": 3,
         "linked_use_questions_asked": 4,
+        "queues_sharing_a_vk_queue": 0,
         "render_passes_made": 2,
         "stage_entries_shared": 10,
         "stage_entries_specialized": 3

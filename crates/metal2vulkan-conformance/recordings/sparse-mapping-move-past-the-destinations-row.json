@@ -626,7 +626,6 @@
         "completion_waiter_parks": 3,
         "device_memory_allocated": 201326592,
         "encoder_command_buffers_begun": 6,
-        "encoder_primaries_begun_ahead": 1,
         "fence_waits": 3,
         "finales_apart": 2,
         "finales_folded": 1,

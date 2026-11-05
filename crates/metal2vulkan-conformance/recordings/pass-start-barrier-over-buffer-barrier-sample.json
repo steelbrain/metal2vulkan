@@ -508,6 +508,7 @@
         "object_churn.images_own_memory": 1,
         "object_churn.images_parked": 1,
         "object_churn.images_recycled": 1,
+        "object_churn.making_sites_dropped": 2,
         "object_churn.textures_alias": 1,
         "object_churn.vk_image_bindings": 1,
         "object_churn.vk_image_views_made": 2,

@@ -260,6 +260,7 @@
         "slot_returns": 3,
         "spare_command_pools_taken": 3,
         "submit_infos": 3,
+        "submit_stalls_on_work": 1,
         "trail_waits": 3,
         "wakes_completion_waiters": 3,
         "wakes_spared": 21

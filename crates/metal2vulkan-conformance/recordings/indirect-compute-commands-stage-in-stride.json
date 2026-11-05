@@ -421,6 +421,7 @@
         "gate_waits": 1,
         "gate_waits_slept": 1,
         "heap_tables_worked_out": 1,
+        "indirect_record_bytes_copied": 2248,
         "indirect_record_runs_read": 1,
         "indirect_records_read": 1,
         "live_tables_uploaded": 1,

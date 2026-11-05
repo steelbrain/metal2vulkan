@@ -338,7 +338,7 @@
         "command_buffers_begun_batch_work": 1,
         "command_buffers_begun_encoders": 1,
         "command_buffers_submitted": 2,
-        "commands_recorded.begin_command_buffer": 1,
+        "commands_recorded.begin_command_buffer": 2,
         "commands_recorded.cmd_begin_render_pass": 1,
         "commands_recorded.cmd_bind_descriptor_sets": 1,
         "commands_recorded.cmd_bind_pipeline": 1,
@@ -406,6 +406,7 @@
         "pipeline_layouts_made": 1,
         "pipeline_layouts_shared": 1,
         "pooled_memory_blocks_made": 4,
+        "primaries_begun_ahead": 1,
         "queue_submissions": 1,
         "queues_sharing_a_vk_queue": 1,
         "render_encoders_ended": 1,
@@ -431,7 +432,8 @@
         "wakes_spared": 7
       },
       "moving": {
-        "batches_submitted_by_waiters": 0
+        "batches_submitted_by_waiters": 0,
+        "gate_waits_slept": 0
       },
       "composed": {
         "addressable_buffers_made": 1,

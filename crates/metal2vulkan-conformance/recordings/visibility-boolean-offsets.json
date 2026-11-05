@@ -497,7 +497,6 @@
         "stage_tables_read": 12,
         "stage_tables_read_in_part": 4,
         "submit_infos": 2,
-        "submit_stalls_on_work": 1,
         "trail_waits": 2,
         "variant_pipelines_made": 1,
         "visibility_queries_begun": 5,
