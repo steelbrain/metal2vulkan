@@ -38,18 +38,21 @@
 //! scissor's edges is a few rows of a few runs each, where its runs of texels alone would be two a
 //! row (1,042 for each of the chain's targets, 1.46 MB of recording for the three).
 //!
-//! **What the runtime announces, and the case declares.** Every row with a barrier announces
-//! `render-pass-split`: the draw that reads the target records into a Vulkan render pass instance
-//! after the one that runs the clear (`texture/attached_reads.rs`). The display row announces two
+//! **What the runtime announces, and the case declares.** The rows whose read follows a solid draw
+//! behind the barrier announce `render-pass-split`: the draw that reads the target records into a
+//! Vulkan render pass instance after the one the solid draw ran in, behind a copy of what it wrote
+//! (`texture/attached_reads.rs`). Every other row with a barrier reads the clear before any draw
+//! of its pass, through a copy cleared to it before the pass, in the pass's one instance, and
+//! announces nothing for it (`WorkCounts::attachment_read_clears`). The display row announces two
 //! more, from the parts of its shape the compositor gave it: `dont-care-load-tiles` for the earlier
 //! pass's `DontCare` load, whose draws cover the whole target before the read's pass clears it, and
-//! `shadowed-texture` for the mask over a buffer's bytes. Measured on the Apple M3 Max (MoltenVK)
-//! and on lavapipe (LLVM 23.1.1), under the exact policy and the runtime's defaults alike, with
-//! every texel and every other field of the transcripts compared. On the RTX 5080 Laptop, which
-//! renders a target over a buffer's bytes as a linear image (`VK_NV_linear_color_attachment`),
-//! the small rows over a buffer announce `linear-attachment-clear-copies` as well, for a pass that
-//! clears it, and every row announces `shared-in-system-memory`; the display row's read takes no
-//! split there.
+//! `shadowed-texture` for the mask over a buffer's bytes. Measured on the Apple M3 Max (MoltenVK),
+//! on lavapipe (LLVM 23.1.1) and on the RTX 5080 Laptop, under the exact policy and the runtime's
+//! defaults alike, with every texel and every other field of the transcripts compared. The RTX 5080
+//! Laptop, which renders a target over a buffer's bytes as a linear image
+//! (`VK_NV_linear_color_attachment`), announces `linear-attachment-clear-copies` as well on the
+//! small rows over a buffer, for a pass that clears it, and `shared-in-system-memory` on every
+//! row.
 
 use crate::allowance::{Allowance, Justification, Loosening};
 use crate::case::{
@@ -826,7 +829,13 @@ impl Case for PassStartRead {
             .collect();
         // The notices the runtime announces for the row's shape (the module docs). Each loosens
         // the notices site alone, so every texel still compares.
-        if self.row.barriered() && !matches!(self.row.shape, Shape::Composited) {
+        if matches!(
+            self.row.shape,
+            Shape::Small {
+                read: Small::DrawBarrierRead,
+                ..
+            }
+        ) {
             allowances.push(notice_allowance(Degradation::RenderPassSplit.code()));
         }
         if matches!(self.row.shape, Shape::Display) {
