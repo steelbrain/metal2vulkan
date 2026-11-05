@@ -2256,3 +2256,101 @@ fn an_instance_without_geometry_writes_answers_no_barrier_before_fragments() {
         barrier(vertex_write, fragment_read)
     );
 }
+
+/// A draw's dependency before its fragments on what earlier draws of its render pass instance
+/// wrote before theirs, by the identity of the uses of what its encoder made resident
+/// (`GeometryWrites::barrier_before_draw`): the first draw of an identity walks all of those,
+/// a later one none, but those of a resource a draw wrote since that its fragments touch (a
+/// write of one read only before the fragments walks none), and one of another identity walks
+/// its own; each answers as a walk of all its uses does (`barrier_before`), merged writes
+/// included.
+#[test]
+fn draws_check_what_their_encoder_made_resident_against_geometry_writes_once_by_identity() {
+    use vk::AccessFlags2 as A2;
+    use vk::PipelineStageFlags2 as S2;
+    let vertex_write = Access::new(S2::VERTEX_SHADER, A2::SHADER_STORAGE_WRITE);
+    let fragment_read = Access::new(FRAGMENT, A2::SHADER_STORAGE_READ);
+    let vertex_read = Access::new(S2::VERTEX_SHADER, A2::SHADER_STORAGE_READ);
+    let prefix = ResidentPrefix { id: 7, len: 3 };
+    let other = ResidentPrefix { id: 8, len: 3 };
+    let resident = [
+        reads(1, bytes(8..12), fragment_read),
+        reads(2, bytes(0..16), vertex_read),
+        reads(3, bytes(0..16), fragment_read),
+    ];
+    let draw = |own: Key| -> Vec<Use<Key>> {
+        let own = reads(own, bytes(0..16), fragment_read);
+        resident.iter().cloned().chain([own]).collect()
+    };
+    let written = barrier(vertex_write, fragment_read);
+    let mut known = GeometryWrites::new();
+    let check = |known: &mut GeometryWrites<Key>, uses: &[Use<Key>], prefix| {
+        let checked = known.barrier_before_draw((uses, prefix));
+        assert_eq!(
+            checked.0,
+            known.barrier_before(uses),
+            "the walk of all its uses"
+        );
+        checked
+    };
+    assert_eq!(
+        check(&mut known, &draw(4), prefix),
+        (None, 0),
+        "no write yet"
+    );
+    known.add(&[writes(4, bytes(0..16), vertex_write)]);
+    assert_eq!(
+        check(&mut known, &draw(4), prefix),
+        (written, 3),
+        "the first walks all"
+    );
+    assert_eq!(
+        check(&mut known, &draw(4), prefix),
+        (written, 0),
+        "a later one none"
+    );
+    assert_eq!(
+        check(&mut known, &draw(5), prefix),
+        (None, 0),
+        "its own uses meet none"
+    );
+    known.add(&[writes(3, bytes(4..8), vertex_write)]);
+    assert_eq!(
+        check(&mut known, &draw(5), prefix),
+        (written, 1),
+        "the one of key 3"
+    );
+    assert_eq!(
+        check(&mut known, &draw(5), prefix),
+        (written, 0),
+        "then none"
+    );
+    known.add(&[writes(2, bytes(0..16), vertex_write)]);
+    assert_eq!(
+        check(&mut known, &draw(5), prefix),
+        (written, 0),
+        "key 2 read before"
+    );
+    assert_eq!(
+        check(&mut known, &draw(5), other),
+        (written, 3),
+        "another identity"
+    );
+    // Writes of key 1 apart from its resident read, merged past the entries a resource keeps
+    // into one that meets it.
+    let mut merged = GeometryWrites::new();
+    merged.add(&[writes(4, bytes(0..16), vertex_write)]);
+    assert_eq!(check(&mut merged, &draw(5), prefix), (None, 3));
+    for at in 0..=ENTRIES_PER_KEY as u64 {
+        let start = [0, 16][(at % 2) as usize] + 32 * at;
+        merged.add(&[writes(1, bytes(start..start + 4), vertex_write)]);
+        let (found, _) = check(&mut merged, &draw(5), prefix);
+        let met = merged.barrier_before(&resident[..1]);
+        assert_eq!(found, met, "write {at}");
+    }
+    assert_eq!(
+        merged.barrier_before(&resident[..1]),
+        written,
+        "merged into one that meets"
+    );
+}

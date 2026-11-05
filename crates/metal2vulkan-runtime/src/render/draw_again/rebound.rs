@@ -485,14 +485,16 @@ impl RenderLowering {
         // Nor a detached buffer, a draw of which records nothing (`EncoderCore::skips`).
         let uses = &live.uses;
         let named = (uses.iter().map(|used| used.key)).filter(|key| !uses.resident().contains(key));
-        let resident = uses.prefix().map_or(0, |prefix| prefix.len as u64);
         let counts = &self.core.device().shared().counts;
         crate::shadow::shadow_uses(textures, uses).is_empty()
-            && {
-                if !self.current.geometry_writes.is_empty() {
-                    counts.resident_uses_geometry_checked(resident);
+            && match uses.prefix() {
+                None => self.current.geometry_writes.barrier_before(uses).is_none(),
+                Some(prefix) => {
+                    let (barrier, walked) =
+                        (self.current.geometry_writes).barrier_before_draw((uses, prefix));
+                    counts.resident_uses_geometry_checked(walked as u64);
+                    barrier.is_none()
                 }
-                self.current.geometry_writes.barrier_before(uses).is_none()
             }
             && !self.core.would_skip(named)
     }

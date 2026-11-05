@@ -1639,10 +1639,19 @@ impl<K: Copy + Ord + Hash> KeptUses<K> {
 
     /// The kept uses of `used`'s resource whose ranges overlap its range.
     fn meeting<'a>(&'a self, used: &'a Use<K>) -> impl Iterator<Item = &'a Use<K>> + 'a {
-        let known = self.uses.get(&used.key).map(Vec::as_slice).unwrap_or(&[]);
+        self.meeting_at(&used.key, &used.range)
+    }
+
+    /// The kept uses of `key` whose ranges overlap `range`.
+    fn meeting_at<'a>(
+        &'a self,
+        key: &K,
+        range: &'a UseRange,
+    ) -> impl Iterator<Item = &'a Use<K>> + 'a {
+        let known = self.uses.get(key).map(Vec::as_slice).unwrap_or(&[]);
         known
             .iter()
-            .filter(move |known| known.range.overlaps(&used.range))
+            .filter(move |known| known.range.overlaps(range))
     }
 }
 
@@ -1748,6 +1757,34 @@ pub(super) struct GeometryWrites<K> {
     /// [`add_draw`](Self::add_draw) began with (`binding::ResidentPrefix`): each of their writes
     /// before their fragments is held, merged or not, while the instance lasts.
     added: Option<(u64, usize)>,
+    /// What [`barrier_before_draw`](Self::barrier_before_draw) found of the uses of what the
+    /// encoder made resident the last call of it began with.
+    checked: Option<PrefixChecked<K>>,
+}
+
+/// The uses of what an encoder made resident of one identity and count (`binding::ResidentPrefix`)
+/// that a draw's fragment shader reads or writes, by key, each its range and its access there
+/// (`fragments`); the dependency they need after the writes before earlier draws' fragments, as
+/// [`GeometryWrites::barrier_before_draw`] last found it (`found`, source and destination); and
+/// the keys among those written since, which it checks again (`written`, at most `of`'s count).
+#[derive(Clone)]
+struct PrefixChecked<K> {
+    of: (u64, usize),
+    fragments: KeyMap<K, Vec<(UseRange, Access)>>,
+    found: (Access, Access),
+    written: Vec<K>,
+}
+
+impl<K: Copy + Ord + Hash> PrefixChecked<K> {
+    /// Note a write of `key` since: whether it is still checked again alone, else (more keys
+    /// written since than the uses it was found of) it is to be found whole again.
+    fn wrote(&mut self, key: K) -> bool {
+        if !self.fragments.contains_key(&key) {
+            return true;
+        }
+        self.written.push(key);
+        self.written.len() <= self.of.1
+    }
 }
 
 impl<K: Copy + Ord + Hash> GeometryWrites<K> {
@@ -1756,6 +1793,7 @@ impl<K: Copy + Ord + Hash> GeometryWrites<K> {
         GeometryWrites {
             writes: KeptUses::new(),
             added: None,
+            checked: None,
         }
     }
 
@@ -1772,6 +1810,11 @@ impl<K: Copy + Ord + Hash> GeometryWrites<K> {
             let Some(write) = Self::adds(used) else {
                 continue;
             };
+            if let Some(checked) = &mut self.checked {
+                if !checked.wrote(used.key) {
+                    self.checked = None;
+                }
+            }
             self.writes.push(Use {
                 read: Access::NONE,
                 write,
@@ -1818,31 +1861,119 @@ impl<K: Copy + Ord + Hash> GeometryWrites<K> {
     /// fragment shader and the later draw's access types there. `None` where its fragment
     /// shader touches none of it.
     pub(super) fn barrier_before(&self, uses: &[Use<K>]) -> Option<Barrier> {
-        const FRAGMENT: vk::PipelineStageFlags2 = vk::PipelineStageFlags2::FRAGMENT_SHADER;
         // Where it holds no write, no use meets one: it walks none of them.
         if self.writes.is_empty() {
             return None;
         }
-        let mut src = Access::NONE;
-        let mut dst = Access::NONE;
+        let mut found = (Access::NONE, Access::NONE);
         for used in uses {
-            let mut fragment = Access::NONE;
-            if used.read.stages.intersects(FRAGMENT) {
-                fragment = fragment.union(Access::new(FRAGMENT, used.read.access));
-            }
-            if used.write.stages.intersects(FRAGMENT) {
-                fragment = fragment.union(Access::new(FRAGMENT, used.write.access));
-            }
-            if fragment.is_empty() {
-                continue;
-            }
-            for known in self.writes.meeting(used) {
-                src = src.union(known.write);
-                dst = dst.union(fragment);
-            }
+            let fragment = Self::fragment(used);
+            meet(&self.writes, (&used.key, &used.range), fragment, &mut found);
         }
-        (!src.is_empty()).then_some(Barrier { src, dst })
+        dependency(found)
     }
+
+    /// [`barrier_before`](Self::barrier_before) a draw's `uses`, which begin with the uses of what
+    /// its encoder made resident of the identity `prefix`: those found once where the last call
+    /// of this began with others, else checked again only for the keys written since (the writes
+    /// only grow while the instance lasts: a use that met one meets it still, or the entry it
+    /// merged into, whose access types hold its own). So a draw of a large resident set walks
+    /// its own uses and those of keys written since, not the set. And how many of the uses of
+    /// what the encoder made resident it walked (`WorkCounts::resident_uses_geometry_checked`).
+    pub(super) fn barrier_before_draw(
+        &mut self,
+        (uses, prefix): (&[Use<K>], ResidentPrefix),
+    ) -> (Option<Barrier>, usize) {
+        // Where it holds no write, no use meets one: it walks none of them.
+        if self.writes.is_empty() {
+            return (None, 0);
+        }
+        let (resident, own) = uses.split_at(prefix.len);
+        let now = (prefix.id, prefix.len);
+        let mut walked = 0;
+        if self
+            .checked
+            .as_ref()
+            .is_none_or(|checked| checked.of != now)
+        {
+            let mut fragments: KeyMap<K, Vec<(UseRange, Access)>> = KeyMap::default();
+            let mut found = (Access::NONE, Access::NONE);
+            for used in resident {
+                let fragment = Self::fragment(used);
+                if fragment.is_empty() {
+                    continue;
+                }
+                meet(&self.writes, (&used.key, &used.range), fragment, &mut found);
+                let ranges = fragments.entry(used.key).or_default();
+                ranges.push((used.range.clone(), fragment));
+            }
+            walked = resident.len();
+            self.checked = Some(PrefixChecked {
+                of: now,
+                fragments,
+                found,
+                written: Vec::new(),
+            });
+        }
+        let mut found = (Access::NONE, Access::NONE);
+        if let Some(checked) = &mut self.checked {
+            for key in &checked.written {
+                for (range, fragment) in checked.fragments.get(key).into_iter().flatten() {
+                    walked += 1;
+                    meet(&self.writes, (key, range), *fragment, &mut checked.found);
+                }
+            }
+            checked.written.clear();
+            found = checked.found;
+        }
+        for used in own {
+            let fragment = Self::fragment(used);
+            meet(&self.writes, (&used.key, &used.range), fragment, &mut found);
+        }
+        let barrier = dependency(found);
+        debug_assert_eq!(
+            barrier,
+            self.barrier_before(uses),
+            "a draw's dependency before its fragments by its identity other than its uses'"
+        );
+        (barrier, walked)
+    }
+
+    /// What `used` reads and writes in the fragment stage.
+    fn fragment(used: &Use<K>) -> Access {
+        const FRAGMENT: vk::PipelineStageFlags2 = vk::PipelineStageFlags2::FRAGMENT_SHADER;
+        let mut fragment = Access::NONE;
+        if used.read.stages.intersects(FRAGMENT) {
+            fragment = fragment.union(Access::new(FRAGMENT, used.read.access));
+        }
+        if used.write.stages.intersects(FRAGMENT) {
+            fragment = fragment.union(Access::new(FRAGMENT, used.write.access));
+        }
+        fragment
+    }
+}
+
+/// Add to `found` (a dependency's source and destination) the writes of `writes` that a use of
+/// `key` and `range` touching `fragment` in the fragment stage meets, and `fragment`, where it
+/// meets one.
+fn meet<K: Copy + Ord + Hash>(
+    writes: &KeptUses<K>,
+    (key, range): (&K, &UseRange),
+    fragment: Access,
+    (src, dst): &mut (Access, Access),
+) {
+    if fragment.is_empty() {
+        return;
+    }
+    for known in writes.meeting_at(key, range) {
+        *src = src.union(known.write);
+        *dst = dst.union(fragment);
+    }
+}
+
+/// The barrier of the source and destination `found`: `None` where the source is empty.
+fn dependency((src, dst): (Access, Access)) -> Option<Barrier> {
+    (!src.is_empty()).then_some(Barrier { src, dst })
 }
 
 /// Whether `known`, a use of earlier commands, touches in one of `stages` memory `used` touches

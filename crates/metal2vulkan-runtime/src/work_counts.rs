@@ -5337,7 +5337,9 @@ pub struct WorkCounts {
     pub resident_uses_geometry_writes: u64,
     /// The uses of resources a render encoder made resident (`resident_uses_made`) that its
     /// draws' checks against what earlier draws of their render pass instance wrote before their
-    /// fragments walked, a rebound draw's check whether it may rebind included.
+    /// fragments walked, a rebound draw's check whether it may rebind included. A draw that
+    /// begins with the uses the instance's last checked draw began with, by identity, walks only
+    /// those of them whose resources a draw wrote before its fragments since.
     pub resident_uses_geometry_checked: u64,
     /// The uses of resources a render encoder made resident (`resident_uses_made`) that its
     /// draws' checks whether they may be kept for drawing again walked: whether they write
