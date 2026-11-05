@@ -426,25 +426,36 @@ impl<'a> RecordView<'a> {
 
     /// The whole record ([`CommandRecord::decode`]).
     pub fn record(&self) -> CommandRecord {
-        let mut record = CommandRecord {
-            action: self.action,
-            barrier: self.barrier,
-            bindings: Bindings {
-                pipeline: self.pipeline(),
-                ..Default::default()
-            },
-            retained_pipeline: self.retained_pipeline(),
-            stage_in_region: self.stage_in_region(),
-            imageblock_size: self.imageblock_size(),
-            ..Default::default()
-        };
-        for (index, binding) in record.bindings.buffers.iter_mut().flatten().enumerate() {
+        let mut record = CommandRecord::default();
+        self.record_into(&mut record);
+        record
+    }
+
+    /// The whole record ([`record`](Self::record)) written over `record`, each of its fields
+    /// this one's, as `*record = self.record()` leaves it: a consumer that reads many records
+    /// into storage it holds decodes each in place, with no record made and moved there.
+    pub fn record_into(&self, record: &mut CommandRecord) {
+        let CommandRecord {
+            action,
+            barrier,
+            bindings: Bindings { pipeline, buffers },
+            threadgroup_memory_lengths,
+            stage_in_region,
+            imageblock_size,
+            retained_pipeline,
+        } = record;
+        *action = self.action;
+        *barrier = self.barrier;
+        *pipeline = self.pipeline();
+        *retained_pipeline = self.retained_pipeline();
+        *stage_in_region = self.stage_in_region();
+        *imageblock_size = self.imageblock_size();
+        for (index, binding) in buffers.iter_mut().flatten().enumerate() {
             *binding = binding_at(self.bytes, index);
         }
-        for (index, length) in record.threadgroup_memory_lengths.iter_mut().enumerate() {
+        for (index, length) in threadgroup_memory_lengths.iter_mut().enumerate() {
             *length = self.threadgroup_memory_length(index).unwrap_or(0);
         }
-        record
     }
 }
 

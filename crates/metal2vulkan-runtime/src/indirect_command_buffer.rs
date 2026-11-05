@@ -2978,12 +2978,9 @@ impl IndirectCommandBuffer {
         let mut faults = ReplayFaults::default();
         let mut decoded = Vec::with_capacity(count);
         for bytes in records {
-            let bytes: &[u8; COMMAND_BYTES] = bytes.borrow();
-            let record = self.written_record(bytes);
-            if record.is_none() {
+            if !self.push_written(bytes.borrow(), &mut decoded) {
                 faults = ReplayFaults(faults.0 | ReplayFaults::RECORD.0);
             }
-            decoded.push(record.map(|record| (record, None)));
         }
         WrittenRecords {
             faults,
@@ -3017,12 +3014,30 @@ impl IndirectCommandBuffer {
         }
     }
 
-    /// One record's `bytes` as [`written_records`](Self::written_records) decodes them: `None`
-    /// where they do not decode, or set what the descriptor does not allow.
-    fn written_record(&self, bytes: &[u8]) -> Option<CommandRecord> {
-        CommandRecord::decode(bytes)
-            .ok()
-            .filter(|record| self.allows(record))
+    /// Push one record's `bytes` onto `decoded` as [`written_records`](Self::written_records)
+    /// decodes them, decoded in place (`RecordView::record_into`), with no state named: `None`,
+    /// and false, where they do not decode, or set what the descriptor does not allow.
+    fn push_written<S>(
+        &self,
+        bytes: &[u8],
+        decoded: &mut Vec<Option<(CommandRecord, Option<S>)>>,
+    ) -> bool {
+        let Ok(view) = RecordView::new(bytes) else {
+            decoded.push(None);
+            return false;
+        };
+        decoded.push(Some((CommandRecord::default(), None)));
+        let Some(slot) = decoded.last_mut() else {
+            return false;
+        };
+        let allowed = slot.as_mut().is_some_and(|(record, _)| {
+            view.record_into(record);
+            self.allows(record)
+        });
+        if !allowed {
+            *slot = None;
+        }
+        allowed
     }
 
     /// The bytes of the records of commands `range` (inside the size) as the GPU and the CPU left
@@ -3074,15 +3089,15 @@ impl IndirectCommandBuffer {
     /// `start`, decoded and checked as [`written_records`](Self::written_records) does, once its
     /// header holds no fault ([`written_header_fault`](Self::written_header_fault)).
     pub(super) fn decode_written<S>(&self, bytes: &[u8]) -> WrittenRecords<S> {
-        let (records, _) = bytes.as_chunks::<COMMAND_BYTES>();
-        let records: Vec<Option<(CommandRecord, Option<S>)>> = (records.iter())
-            .map(|record| Some((self.written_record(record)?, None)))
-            .collect();
+        let (read, _) = bytes.as_chunks::<COMMAND_BYTES>();
+        let mut records = Vec::with_capacity(read.len());
+        let mut faults = ReplayFaults::default();
+        for record in read {
+            if !self.push_written(record, &mut records) {
+                faults = ReplayFaults::RECORD;
+            }
+        }
         (self.device().shared().counts).indirect_records_read(records.len() as u64);
-        let faults = match records.iter().any(Option::is_none) {
-            true => ReplayFaults::RECORD,
-            false => ReplayFaults::default(),
-        };
         WrittenRecords { faults, records }
     }
 

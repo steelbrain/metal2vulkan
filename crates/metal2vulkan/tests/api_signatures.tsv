@@ -8889,6 +8889,7 @@ method	metal2vulkan::bind::indirect_commands::RecordView::imageblock_size	pub fn
 method	metal2vulkan::bind::indirect_commands::RecordView::new	pub fn new(bytes: &'a [u8]) -> Result<RecordView<'a>, RecordError>
 method	metal2vulkan::bind::indirect_commands::RecordView::pipeline	pub fn pipeline(&self) -> Option<NonZeroU64>
 method	metal2vulkan::bind::indirect_commands::RecordView::record	pub fn record(&self) -> CommandRecord
+method	metal2vulkan::bind::indirect_commands::RecordView::record_into	pub fn record_into(&self, record: &mut CommandRecord)
 method	metal2vulkan::bind::indirect_commands::RecordView::retained_pipeline	pub fn retained_pipeline(&self) -> Option<NonZeroU64>
 method	metal2vulkan::bind::indirect_commands::RecordView::stage_in_region	pub fn stage_in_region(&self) -> [u32; 6]
 method	metal2vulkan::bind::indirect_commands::RecordView::threadgroup_memory_length	pub fn threadgroup_memory_length(&self, index: usize) -> Option<u32>

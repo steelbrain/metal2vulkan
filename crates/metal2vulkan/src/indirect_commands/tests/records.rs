@@ -824,11 +824,12 @@ fn with_field(mut record: CommandRecord, field: RecordField) -> Option<CommandRe
 /// that decode, as what they decode to; where `encode_into` refuses the record with the field
 /// set, or the field's index is past the record's, it refuses too and leaves the bytes as they
 /// were. It writes nothing outside the bytes it answers. `RecordView` reads each field as
-/// `decode` does.
+/// `decode` does, and its `record_into` writes the record over the last round's, every field.
 #[test]
 fn a_field_written_alone_is_the_record_encoded_again() {
     let mut draws = Draws(0x9e37_79b9_7f4a_7c15);
     let (mut written, mut refused) = (0, 0);
+    let mut into = CommandRecord::default();
     for round in 0..20_000 {
         let mut bytes = vec![0u8; COMMAND_BYTES];
         if round % 2 == 0 {
@@ -846,6 +847,11 @@ fn a_field_written_alone_is_the_record_encoded_again() {
         let record = CommandRecord::decode(&bytes).unwrap();
         let view = RecordView::new(&bytes).unwrap();
         assert_eq!(view.record(), record, "round {round}: the view's record");
+        view.record_into(&mut into);
+        assert_eq!(
+            into, record,
+            "round {round}: the view's record over the last"
+        );
         assert_eq!(view.writes(), record.writes(), "round {round}");
         for stage in BufferStage::of(false)
             .into_iter()
