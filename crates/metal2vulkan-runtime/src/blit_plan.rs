@@ -888,27 +888,40 @@ impl RowsCopy {
     }
 }
 
-/// The rows of `region` (a checked region, in `unit`s of one texel) of a texture over a buffer
-/// whose texels lie at `texels` (Metal's layout): one range of the buffer's bytes per row, slice by
-/// slice.
+/// The rows of `region` (a checked region, in `unit`s of one texel or one block) of a texture
+/// over a buffer whose texels lie at `texels` (Metal's layout): one range of the buffer's bytes
+/// per row, slice by slice. A block-compressed texture's rows are rows of its blocks (a BC texture
+/// over an IOSurface plane's rows, `linear_plan.rs`), the region's texels counted in blocks.
 pub(super) fn texel_rows(
     texels: &TexelsLayout,
     unit: &CopyUnit,
     region: &ImageRegion,
 ) -> Vec<Range<u64>> {
     let bytes = u64::from(unit.bytes);
-    let width = u64::from(region.size[0]) * bytes;
-    let mut rows = Vec::with_capacity(region.layers as usize * region.size[1] as usize);
+    let ([x, y], [across, down]) = in_units(unit, region);
+    let width = across * bytes;
+    let mut rows = Vec::with_capacity(region.layers as usize * down as usize);
     for layer in region.layer..region.layer + region.layers {
-        for y in region.origin[1]..region.origin[1] + region.size[1] {
-            let start = texels.offset
-                + u64::from(layer) * texels.slice_pitch
-                + u64::from(y) * texels.row_pitch
-                + u64::from(region.origin[0]) * bytes;
-            rows.push(start..start + width);
+        for row in y..y + down {
+            let start =
+                texels.offset + u64::from(layer) * texels.slice_pitch + row * texels.row_pitch;
+            rows.push(start + x * bytes..start + x * bytes + width);
         }
     }
     rows
+}
+
+/// The origin and size of a checked `region`, across and down, in `unit`s: its texels, or its
+/// blocks for a block-compressed unit (the region starts on a block, and its last block of a
+/// row or column may cover its texels alone).
+fn in_units(unit: &CopyUnit, region: &ImageRegion) -> ([u64; 2], [u64; 2]) {
+    let [w, h] = unit.extent.map(u64::from);
+    let origin = [region.origin[0], region.origin[1]].map(u64::from);
+    let size = [region.size[0], region.size[1]].map(u64::from);
+    (
+        [origin[0] / w, origin[1] / h],
+        [size[0].div_ceil(w), size[1].div_ceil(h)],
+    )
 }
 
 /// The row copy of `copies` between two textures over buffers, each copy's source rows of
@@ -945,19 +958,20 @@ pub(super) fn plan_texels_rows_copy(
 }
 
 /// The layout of slice `layer` (of the image's) of `region` of a texture over a buffer at
-/// `texels`, as a buffer's side of a copy with a texture: its first texel's offset, and the
-/// texels' row pitch.
+/// `texels`, as a buffer's side of a copy with a texture: its first texel's (or block's) offset,
+/// and the texels' row pitch (of a row of blocks, a block-compressed texture's).
 pub(super) fn texel_layout(
     texels: &TexelsLayout,
     unit: &CopyUnit,
     region: &ImageRegion,
     layer: u32,
 ) -> BufferLayout {
+    let ([x, y], _) = in_units(unit, region);
     BufferLayout {
         offset: texels.offset
             + u64::from(layer) * texels.slice_pitch
-            + u64::from(region.origin[1]) * texels.row_pitch
-            + u64::from(region.origin[0]) * u64::from(unit.bytes),
+            + y * texels.row_pitch
+            + x * u64::from(unit.bytes),
         bytes_per_row: texels.row_pitch,
         bytes_per_image: 0,
     }

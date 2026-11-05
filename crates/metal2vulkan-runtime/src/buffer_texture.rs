@@ -85,7 +85,7 @@ pub(super) struct Texels {
     cpu: BufferLayout,
     /// Where a function reads and writes a texture buffer's texels: `layout`, but from its offset
     /// rounded down to 16 bytes, as plain Metal's functions read and write a texture buffer at an
-    /// offset off 16 ([`Texels::texture_buffer`]).
+    /// offset off 16 ([`Texels::into_texture_buffer`]).
     shader: BufferLayout,
     /// The bytes of one texel: of one block of a block-compressed texture (`blocks`).
     texel_bytes: u64,
@@ -103,7 +103,7 @@ pub(super) struct Texels {
     /// made at their first bind. A finite set per texture: the formats its plans view it as.
     views: Arc<TexelViews>,
     /// A texture buffer's staging buffer and its copies, where Vulkan views no texels at the
-    /// texels' offset in the buffer's `VkBuffer` (`Texels::texture_buffer`): its bindings view
+    /// texels' offset in the buffer's `VkBuffer` (`Texels::into_texture_buffer`): its bindings view
     /// the staging buffer, a shadow the encoders copy the texels into and back (`shadow.rs`).
     staged: Option<Arc<ShadowCopies>>,
     /// What made `buffer` for the texels, where that is not the program.

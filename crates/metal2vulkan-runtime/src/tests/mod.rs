@@ -363,6 +363,8 @@ mod submit_stalls;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod submit_stalls_idle;
 mod surface_depth;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod surface_shapes;
 mod surface_two_planes;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod teardown_threads;

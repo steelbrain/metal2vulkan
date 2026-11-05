@@ -1466,13 +1466,12 @@ fn iosurface_planes_lie_where_metal_puts_them() {
                 narrow: false,
             }),
         ),
-        // No plane below its row; a plane past the buffer; GPU rows past it.
+        // A plane below its row, which Metal makes over a surface with planes (`oracle_surftex`
+        // 17, 21) and lays out alike on no two GPUs: the runtime's gap. A plane past the buffer;
+        // GPU rows past it.
         (
             plane(r8, (4, 4), (0, 3), true, 16384),
-            refused(Pr::RowPitch {
-                bytes_per_row: 3,
-                row_bytes: 4,
-            }),
+            Err(BufferRefusal::PlaneShape),
         ),
         // A plane of a surface with planes whose rows end past the buffer: plain Metal makes such
         // a texture and reads zeros past the plane, which the runtime has no bytes for. Over a
@@ -1493,23 +1492,22 @@ fn iosurface_planes_lie_where_metal_puts_them() {
             plane(r8, (4, 4), (0, 4), true, 16),
             Err(BufferRefusal::TexelsPastLength),
         ),
-        // A 2D texture alone, of one level.
+        // Slices or levels over such a plane, which Metal makes and lays out alike on no two
+        // GPUs (`oracle_surftex` 118, 123): the runtime's gap.
         (
             Case {
                 texture_type: TextureType::Type2DArray,
                 slices: 2,
                 ..plane(r8, (4, 4), (0, 16), true, 16384)
             },
-            refused(Pr::TextureType {
-                texture_type: TextureType::Type2DArray,
-            }),
+            Err(BufferRefusal::PlaneShape),
         ),
         (
             Case {
                 levels: 2,
                 ..plane(r8, (4, 4), (0, 16), true, 16384)
             },
-            refused(Pr::MipmapLevelCount { count: 2 }),
+            Err(BufferRefusal::PlaneShape),
         ),
     ];
     for (case, want) in cases {

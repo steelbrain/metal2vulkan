@@ -4300,7 +4300,7 @@ impl Texture {
     }
 
     /// The copies of a shadowed texture, of a texture buffer viewed through a staging buffer
-    /// (`Texels::texture_buffer`), or of a heap's depth or stencil texture held as a shadow of
+    /// (`Texels::into_texture_buffer`), or of a heap's depth or stencil texture held as a shadow of
     /// the heap's bytes (`texture/heap.rs`), or `None` for another texture.
     pub(super) fn shadow(&self) -> Option<&Arc<ShadowCopies>> {
         match &self.0.storage {

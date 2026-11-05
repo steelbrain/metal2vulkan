@@ -1118,6 +1118,53 @@ fn copies_into_textures_over_buffers_move_texel_rows() {
     );
 }
 
+/// A BC texture over a surface's rows (`linear_plan.rs`) copies rows of blocks: a region's texels
+/// in blocks, each block its format's bytes, a row of blocks a row of the surface, a last block
+/// of a row partly past the texture's texels whole (`surface_texture_envelope`'s blits on the x86
+/// Macs).
+#[test]
+fn a_bc_texture_over_a_buffer_moves_rows_of_blocks() {
+    let unit = CopyUnit {
+        bytes: 8,
+        extent: [4, 4],
+        aspect: ImageAspectFlags::COLOR,
+    };
+    // A plane at 32, 64 bytes a row (a 420v surface's luma plane on the x86 Macs).
+    let texels = TexelsLayout {
+        offset: 32,
+        row_pitch: 64,
+        slice_pitch: 64 * 16,
+        row_bytes: 32,
+        rows: 16,
+        slices: 1,
+    };
+    let image = |origin: [u32; 3], size: [u32; 3]| super::super::copy_plan::ImageRegion {
+        aspect: ImageAspectFlags::COLOR,
+        level: 0,
+        layer: 0,
+        layers: 1,
+        origin,
+        size,
+    };
+    // The whole 16 x 64 texture: 16 rows of 4 blocks.
+    let whole = texel_rows(&texels, &unit, &image([0, 0, 0], [16, 64, 1]));
+    assert_eq!(whole.len(), 16);
+    assert_eq!((whole[0].clone(), whole[15].clone()), (32..64, 992..1024));
+    // Blocks (1, 2) and (2, 2), the second partly past a 10-texel-wide region's texels.
+    assert_eq!(
+        texel_rows(&texels, &unit, &image([4, 8, 0], [6, 4, 1])),
+        vec![32 + 2 * 64 + 8..32 + 2 * 64 + 24]
+    );
+    assert_eq!(
+        texel_layout(&texels, &unit, &image([4, 8, 0], [6, 4, 1]), 0),
+        BufferLayout {
+            offset: 32 + 2 * 64 + 8,
+            bytes_per_row: 64,
+            bytes_per_image: 0,
+        }
+    );
+}
+
 /// Rows that are contiguous in both buffers are one copy, and a copy whose source and destination
 /// rows share a byte meets (a Metal probe's overlapping copies, the M3 Max and an M4).
 #[test]
