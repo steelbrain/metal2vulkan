@@ -1649,7 +1649,7 @@ fn the_device_s_functions_are_reached_through_checked_accessors() {
 /// tuple field, a type argument or a by-value parameter) fails
 /// `only_the_listed_modules_keep_the_device_s_functions`; so does a listed module that keeps none
 /// any more.
-const KEEPERS: [(&str, &str); 25] = [
+const KEEPERS: [(&str, &str); 26] = [
     (
         "binding.rs",
         "the push command (vkCmdPushDescriptorSet), a call's parameter (`push_set`) and the \
@@ -1724,6 +1724,12 @@ const KEEPERS: [(&str, &str); 25] = [
     (
         "pipeline/creation_log.rs",
         "MoltenVK's statistics call, inside a call that borrows the device",
+    ),
+    (
+        "queue_switch_check.rs",
+        "the check's parts (`Parts`), which its thread holds in place of the device; the \
+         teardown stops the check and waits for it to release its objects and drop its parts \
+         before it goes on (`QueueSwitch::stop`)",
     ),
     (
         "recorder/mod.rs",
