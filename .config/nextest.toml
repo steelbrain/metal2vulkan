@@ -76,3 +76,12 @@ threads-required = 'num-test-threads'
 [[profile.default.overrides]]
 filter = 'package(metal2vulkan-runtime) & test(/^tests::queue_share_device::(a_compositor_beside_a_long_queue_keeps_its_latency_once_that_queue_went_long|an_unshared_compositor_beside_a_long_queue_never_stalls)$/)'
 threads-required = 'num-test-threads'
+
+# The runtime's teardown test of the queue-switch check runs alone. It holds the teardown's wait
+# for the check (its stop at the next step, its release of its Vulkan objects and of its shares)
+# under the 16 ms the owner allows a wait. On an RTX 5080 Laptop GPU (NVIDIA 615.71.09) that wait
+# took 1.12 to 1.23 ms in 3 runs with the GPU to itself (the objects' release 0.79 to 0.93 ms, the
+# shares' 2 us), and 26.5 and 42.4 ms in runs where other test processes used the GPU.
+[[profile.default.overrides]]
+filter = 'package(metal2vulkan-runtime) & test(/^tests::teardown_threads::a_running_queue_switch_check_leaves_the_device_to_the_program_s_thread$/)'
+threads-required = 'num-test-threads'
