@@ -98,5 +98,5 @@ objc2-metal = "0.3"
 
 # The device tests compile only under the validation crate's GPU safety cfgs (`tests/mod.rs`).
 [lints.rust]
-unexpected_cfgs = { level = "warn", check-cfg = ["cfg(m2v_gpu)", "cfg(m2v_cpu_icd)", "cfg(m2v_no_recycle)"] }
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(m2v_gpu)", "cfg(m2v_cpu_icd)", "cfg(m2v_gpu_hazards)", "cfg(m2v_no_recycle)"] }
 

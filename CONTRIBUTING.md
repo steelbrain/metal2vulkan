@@ -58,7 +58,8 @@ cargo test --workspace --all-features --doc
 ```
 
 None of these opens a device. Device tests compile only under `--cfg m2v_gpu` or
-`--cfg m2v_cpu_icd` ([docs/VALIDATION.md](docs/VALIDATION.md)).
+`--cfg m2v_cpu_icd`, and on a GPU the tests that fault it, hold it for long or allocate toward its
+limits only with `--cfg m2v_gpu_hazards` too ([docs/VALIDATION.md](docs/VALIDATION.md)).
 
 To build the command:
 

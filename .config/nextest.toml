@@ -26,9 +26,10 @@ filter = 'package(metal2vulkan-validation) & test(/^runtime_lane::exits::(pendin
 threads-required = 'num-test-threads'
 
 # The lanes that fault the GPU on purpose (a GPU write into read-only host pages; they make GPU work
-# on MoltenVK alone) run alone on macOS. Metal's recovery from a GPU fault fails command buffers of
-# other processes the GPU runs then, as `MTLCommandBufferErrorInternal` ("Discarded (victim of GPU
-# error/recovery) (00000005:kIOGPUCommandBufferCallbackErrorInnocentVictim)", the encoder
+# on MoltenVK alone) compile on a GPU only under `--cfg m2v_gpu_hazards` (docs/VALIDATION.md), and
+# run alone on macOS. Metal's recovery from a GPU fault fails command buffers of other processes
+# the GPU runs then, as `MTLCommandBufferErrorInternal` ("Discarded (victim of GPU error/recovery)
+# (00000005:kIOGPUCommandBufferCallbackErrorInnocentVictim)", the encoder
 # `Affected`), and completes some with wrong results and no error: a plain Metal probe on the M3
 # Max (macOS 27.0.1), the lane's texture round in one process beside processes that each fault
 # once, failed 19 of 52,592 rounds beside 160 faults that way and completed 4 more with wrong
@@ -55,9 +56,10 @@ platform = 'cfg(target_os = "macos")'
 filter = 'package(metal2vulkan-validation) & test(/^runtime_lane::queue_storms::four_queues_storm_as_metal_s_do$/)'
 threads-required = 'num-test-threads'
 
-# The object-grid lane runs alone. Its cases are Metal's own grids, millions of object
-# threadgroups each, and a device without Apple's watchdog runs them to the end: an RTX 5080
-# Laptop GPU (NVIDIA 615.71.09) takes 2.4 to 2.7 microseconds over each, so 4,587,520 of them is
+# The object-grid lane runs alone. Its cases are Metal's own grids, up to millions of object
+# threadgroups each; those past 2^20 run on a GPU only under `--cfg m2v_gpu_hazards`, and a device
+# without Apple's watchdog runs them to the end: an RTX 5080 Laptop GPU (NVIDIA 615.71.09) takes
+# 2.4 to 2.7 microseconds over each, so 4,587,520 of them is
 # 12.0 s with the GPU to itself. The test measures that cost and skips a case past half its wait,
 # but the measurement comes from the smaller cases before it, and a GPU shared with other lane
 # processes stretches the larger ones past the wait whatever the measurement said: that case took

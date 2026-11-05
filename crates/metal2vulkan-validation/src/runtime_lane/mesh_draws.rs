@@ -749,7 +749,9 @@ const PAST_GRID: [u32; 3] = [(1 << 29) + 1, 1, 1];
 /// before it (`TIMING` lines print each case's milliseconds, and each skipped case's reason). A
 /// device takes its own time per object threadgroup -- an RTX 5080 Laptop GPU 2.4 microseconds,
 /// where Metal's own GPU ran the largest grids here inside its 5 s watchdog -- and Metal's largest
-/// are 33.5 million threadgroups.
+/// are 33.5 million threadgroups. A grid of more than 2^20 is a GPU hazard (seconds in one command
+/// buffer: 12 s at 4.6 million on that GPU), so it runs only under `m2v_gpu_hazards`, and never on
+/// a CPU ICD; the rest runs everywhere.
 #[test]
 fn object_grids_run_as_metal_runs_them() {
     let cache = ScratchCache::new().unwrap();
@@ -864,9 +866,22 @@ fn object_grids_run_as_metal_runs_them() {
         // work. The margin spends coverage on a busy host rather than the wait.
         let mut per_group = 0.0f64;
         for c in &OBJECT_GRID_CASES {
-            // The threadgroups Metal ran.
-            if cfg!(m2v_cpu_icd) && c.words[0] > 1 << 20 {
-                continue;
+            // The threadgroups Metal ran. Past 2^20 of them, a GPU hazard (the test's docs).
+            if c.words[0] > 1 << 20 {
+                if cfg!(m2v_cpu_icd) {
+                    continue;
+                }
+                if !cfg!(m2v_gpu_hazards) {
+                    eprintln!(
+                        "TIMING {:?} of {:?}, {} on {name}: {} threadgroups, skipped: a GPU \
+                         hazard, run only under --cfg m2v_gpu_hazards",
+                        c.groups,
+                        c.threads,
+                        if c.direct { "direct" } else { "indirect" },
+                        c.words[0],
+                    );
+                    continue;
+                }
             }
             let groups = f64::from(c.words[0]);
             if per_group > 0.0 && groups * per_group > WAIT.as_secs_f64() / 4.0 {

@@ -29,16 +29,18 @@
 //!   commit (an event cannot hold it: a command buffer waiting for an event is held by the
 //!   scheduler, which holds the switch off). The spin is bounded by construction: its cap is the
 //!   loads of about a second at the rate the test measures first, well under any driver's timeout
-//!   for one submission (amdgpu resets its ring after 10 s). On the M4 a running kernel never saw a
-//!   host store made after it started, nor a release by another queue's kernel (where whether that
-//!   kernel ran beside it is not told apart), so there the cap ends the hold. Hazard tracking makes
-//!   the switch's copy wait for the held copy, the old image goes only once the switch's command
-//!   buffer completed, and every frame's copy holds its frame's value. The untracked target never
-//!   switches: its scratch stays. No encoding call waits for another queue's GPU work, as none of
-//!   Metal's does (a pass's scratch image was moved to `GENERAL` by an internal submission waited
-//!   for on the host, so on MoltenVK, whose one `VkQueue` the held copy is on, the tracked pass's
-//!   draw waited the whole hold): the held copy is still in flight as the switch's commit begins,
-//!   which the test asserts, naming each encoding call's time where it is not.
+//!   for one submission (amdgpu resets its ring after 10 s), and past what this suite holds a GPU
+//!   for by default: on a GPU the case compiles only under `m2v_gpu_hazards`. On the M4 a running
+//!   kernel never saw a host store made after it started, nor a release by another queue's kernel
+//!   (where whether that kernel ran beside it is not told apart), so there the cap ends the hold.
+//!   Hazard tracking makes the switch's copy wait for the held copy, the old image goes only once
+//!   the switch's command buffer completed, and every frame's copy holds its frame's value. The
+//!   untracked target never switches: its scratch stays. No encoding call waits for another
+//!   queue's GPU work, as none of Metal's does (a pass's scratch image was moved to `GENERAL` by an
+//!   internal submission waited for on the host, so on MoltenVK, whose one `VkQueue` the held copy
+//!   is on, the tracked pass's draw waited the whole hold): the held copy is still in flight as the
+//!   switch's commit begins, which the test asserts, naming each encoding call's time where it is
+//!   not.
 //! - **Through its resource ID** (the orchestrator's condition 2): the target's ID, in the
 //!   argument buffer of the public case `sample-an-argument-buffer-texture-through-a-bound-sampler`
 //!   (thread g samples `texture2d<float>` at (0.25g, 0.25g), nearest), read by a compute pass
@@ -72,17 +74,23 @@ use crate::runtime_lane::{
     CaseResources, WAIT,
 };
 use metal2vulkan::metal::{PixelFormat, PrimitiveType, RenderStages, TextureUsage};
+#[cfg(any(m2v_cpu_icd, m2v_gpu_hazards))]
 use metal2vulkan::pipeline::{ComputePipelineDescriptor, StageSource};
 use metal2vulkan_runtime::{
     BlitOption, Buffer, ClearColor, CommandBuffer, CommandBufferError, CommandBufferStatus,
-    CommandQueue, ComputePipelineState, CpuCacheMode, DebugMessage, Degradation, EncoderKind,
-    EventRef, Fence, HazardTrackingMode, Origin, PipelineOptions, RenderPassDescriptor,
-    RenderPipelineState, ResourceOptions, Size, StorageMode, StoreAction, Submission,
-    SubmissionCheck, Texture, TextureDescriptor,
+    CpuCacheMode, DebugMessage, Degradation, EncoderKind, EventRef, Fence, HazardTrackingMode,
+    Origin, RenderPassDescriptor, RenderPipelineState, ResourceOptions, Size, StorageMode,
+    StoreAction, Submission, SubmissionCheck, Texture, TextureDescriptor,
 };
-use std::collections::{BTreeSet, VecDeque};
+#[cfg(any(m2v_cpu_icd, m2v_gpu_hazards))]
+use metal2vulkan_runtime::{CommandQueue, ComputePipelineState, PipelineOptions};
+use std::collections::BTreeSet;
+#[cfg(any(m2v_cpu_icd, m2v_gpu_hazards))]
+use std::collections::VecDeque;
 use std::num::NonZeroU64;
-use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
+#[cfg(any(m2v_cpu_icd, m2v_gpu_hazards))]
+use std::sync::atomic::AtomicU32;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Barrier};
 use std::time::{Duration, Instant};
 
@@ -567,25 +575,31 @@ fn a_handed_out_image_keeps_its_form() {
 }
 
 /// The stream's frames.
+#[cfg(any(m2v_cpu_icd, m2v_gpu_hazards))]
 const FRAMES: usize = 12;
 
 /// The stream's first frames, during which some command buffer is always open.
+#[cfg(any(m2v_cpu_icd, m2v_gpu_hazards))]
 const OPEN: usize = 6;
 
 /// The most GPU time the held copy's kernel spins for its flag before it gives up: about a
 /// second, well under any driver's timeout for one submission (amdgpu resets its ring after 10 s),
 /// and far longer than the host takes between the held copy's commit and the
 /// switch's.
+#[cfg(any(m2v_cpu_icd, m2v_gpu_hazards))]
 const HOLD: Duration = Duration::from_secs(1);
 
 /// The least time [`spinning`] measures its spin's rate over: long enough that a commit's own
 /// cost is a small part of it.
+#[cfg(any(m2v_cpu_icd, m2v_gpu_hazards))]
 const MEASURED: Duration = Duration::from_millis(50);
 
 /// The word the held copy's kernel publishes once it saw its flag.
+#[cfg(any(m2v_cpu_icd, m2v_gpu_hazards))]
 const PUBLISHED: u32 = 5;
 
 /// The held copy's kernel and the loads it spins for its flag before it gives up.
+#[cfg(any(m2v_cpu_icd, m2v_gpu_hazards))]
 struct Spin {
     state: ComputePipelineState,
     cap: u32,
@@ -607,6 +621,7 @@ struct Spin {
 /// its GPU window 0.02 ms, and one such run at the first cap would end the growth with the rate
 /// understated as many times over. Where the window comes from the host it holds the
 /// completion's latency, which only adds, so the least of three runs is taken.
+#[cfg(any(m2v_cpu_icd, m2v_gpu_hazards))]
 fn spinning(lane: &Lane, queue: &CommandQueue) -> Spin {
     let device = lane.device.name();
     let function = library(lane, "rfs_agx_yield")
@@ -668,10 +683,12 @@ fn spinning(lane: &Lane, queue: &CommandQueue) -> Spin {
 
 /// A command buffer's hold on the GPU: [`spinning`]'s kernel, its flag (the word before its own)
 /// in a `Shared` buffer the host writes.
+#[cfg(any(m2v_cpu_icd, m2v_gpu_hazards))]
 struct Gate {
     words: Buffer,
 }
 
+#[cfg(any(m2v_cpu_icd, m2v_gpu_hazards))]
 impl Gate {
     /// Encode `state`'s spin of at most `cap` loads into `command_buffer`, its flag already up
     /// where `up`.
@@ -743,6 +760,7 @@ fn untracked(lane: &Lane) -> Texture {
 }
 
 /// The calls that encode a frame's pass, as [`frame_pass`] times them.
+#[cfg(any(m2v_cpu_icd, m2v_gpu_hazards))]
 const PASS_CALLS: [&str; 4] = [
     "render_command_encoder",
     "wait_for_fence and the bindings",
@@ -800,7 +818,10 @@ fn frame_pass(
 /// by a kernel that spins until the test raises its flag beside that commit, or for about
 /// [`HOLD`] where the device never shows the running kernel its flag; every frame's copy holds its
 /// value, and the untracked target keeps its scratch. The held copy is still in flight as the
-/// switch's commit begins: no encoding call before it waited for the GPU.
+/// switch's commit begins: no encoding call before it waited for the GPU. A GPU hazard
+/// (`m2v_gpu_hazards`): the held copy's kernel is one dispatch that spins up to [`HOLD`], 1 s,
+/// where the device never shows it its flag (Apple's GPUs).
+#[cfg(any(m2v_cpu_icd, m2v_gpu_hazards))]
 #[test]
 fn a_steady_stream_takes_the_storage_form_at_its_first_lone_commit() {
     let (messages, cache, lane) = lane();

@@ -56,7 +56,7 @@ ash = { workspace = true, features = ["loaded"] }
 # Vulkan ICD such as lavapipe). See docs/VALIDATION.md. `--cfg m2v_system_alloc` keeps the system
 # allocator in the lib test binary for the runtime lanes' cost measurements (worker/alloc.rs).
 [lints.rust]
-unexpected_cfgs = { level = "warn", check-cfg = ["cfg(m2v_gpu)", "cfg(m2v_cpu_icd)", "cfg(m2v_system_alloc)"] }
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(m2v_gpu)", "cfg(m2v_cpu_icd)", "cfg(m2v_gpu_hazards)", "cfg(m2v_system_alloc)"] }
 
 [build-dependencies]
 sha2.workspace = true

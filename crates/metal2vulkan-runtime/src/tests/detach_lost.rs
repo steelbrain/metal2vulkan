@@ -3,8 +3,10 @@
 //! thread, which blocks; the device is then marked lost (as `device/relay.rs` marks it), the word
 //! not yet raised, and the detach answers `Err(DeviceLost)` within its poll.
 //!
-//! A device test: compiled only under the validation crate's GPU safety cfgs (`m2v_gpu`,
-//! `m2v_cpu_icd`), on the kind of device the cfg selects.
+//! A device test: compiled only under the validation crate's GPU safety cfgs, on the kind of device
+//! the cfg selects, and on a GPU only with `m2v_gpu_hazards` too (docs/VALIDATION.md). It is a GPU
+//! hazard: one dispatch spins up to 2^25 loads (about 4.5 s on the M3 Max, 2 s on RADV) where the
+//! GPU does not see the host raise the word while the kernel runs, past what Metal ends as a hang.
 
 use crate::error::Error;
 use crate::{

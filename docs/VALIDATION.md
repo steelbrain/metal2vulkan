@@ -46,17 +46,36 @@ hang the host. So everything that opens a device is explicit, bounded and refusa
 | none | GPU-free tests only | none | the gate |
 | `--cfg m2v_cpu_icd` | Vulkan execution tests | a CPU ICD only (lavapipe, SwiftShader) | Linux CI, with `LP_NUM_THREADS=1` |
 | `--cfg m2v_gpu` | Vulkan and Metal execution tests | a real GPU | explicitly, on a host with a GPU |
+| `--cfg m2v_gpu --cfg m2v_gpu_hazards` | the GPU hazards too | a real GPU | only to test that feature, by name |
 
-The two are mutually exclusive. Lint the gated code without running it, in its own target
-directory:
+`m2v_cpu_icd` and `m2v_gpu` are mutually exclusive; `m2v_gpu_hazards` adds to `m2v_gpu` and means
+nothing alone. Lint the gated code without running it, in its own target directory:
 
 ```sh
 CARGO_TARGET_DIR=target/gpucfg RUSTFLAGS='-Dwarnings --cfg m2v_gpu' \
+  cargo clippy -p metal2vulkan-validation --all-targets --all-features -- -D warnings
+CARGO_TARGET_DIR=target/gpuhazards RUSTFLAGS='-Dwarnings --cfg m2v_gpu --cfg m2v_gpu_hazards' \
   cargo clippy -p metal2vulkan-validation --all-targets --all-features -- -D warnings
 ```
 
 A site that stops announcing, or any other failing assertion, still compiles: the lint sees none of
 it, and only a run does.
+
+**A GPU hazard** is a device test that, on purpose, faults a real GPU (a GPU write into read-only
+host pages), holds one for long (a command buffer past about a second, or a dispatch that spins on
+a word the GPU may never see the host raise, which only its cap ends), or allocates toward the
+device's limits (multi-GiB buffers, heaps or no-copy ranges, `max_buffer_length`). On Apple's GPUs
+the recovery from a fault fails other processes' command buffers in flight (`.config/nextest.toml`
+has the measurement). So on a GPU a hazard compiles only under `m2v_gpu_hazards`, which no sweep,
+lane, stress loop or gate may pass: `--run-ignored all` and test filters cannot reach it. Under
+`m2v_cpu_icd` it compiles and runs as any device test, since a CPU ICD cannot take a GPU down. Its
+doc comment says which hazard it is. Run one only to test that feature, by name, alone:
+
+```sh
+CARGO_TARGET_DIR=target/gpuhazards RUSTFLAGS='--cfg m2v_gpu --cfg m2v_gpu_hazards' \
+  cargo nextest run -p metal2vulkan-validation --all-features \
+  -E 'test(=runtime_lane::host_memory::a_gpu_fault_fails_its_command_buffer_and_the_queue_runs_on)'
+```
 
 - **Device selection is an argument.** Every device-opening binary takes `--device-type cpu|gpu`,
   with no default. `cpu` matches only a CPU device and never falls back to a GPU; `gpu` takes the
@@ -78,7 +97,7 @@ it, and only a run does.
 The device lane is what `--cfg m2v_gpu` adds: the delta between the workspace's test list with the
 cfg and without it. `scripts/device-lane/device-lane` derives that delta from two
 `cargo nextest list` runs, shards it by area, runs the shards one after another, and holds the run
-to the lane.
+to the lane. Its builds set `RUSTFLAGS` to `--cfg m2v_gpu` alone, so the lane holds no GPU hazard.
 
 ```sh
 scripts/device-lane/device-lane --profile debug                      # the whole lane

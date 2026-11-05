@@ -69,4 +69,4 @@ test = false
 # gate builds with `--all-features`: `--cfg m2v_gpu` (a real GPU) and `--cfg m2v_cpu_icd` (a CPU
 # Vulkan ICD such as lavapipe). See docs/VALIDATION.md.
 [lints.rust]
-unexpected_cfgs = { level = "warn", check-cfg = ["cfg(m2v_gpu)", "cfg(m2v_cpu_icd)"] }
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(m2v_gpu)", "cfg(m2v_cpu_icd)", "cfg(m2v_gpu_hazards)"] }

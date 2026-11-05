@@ -43,7 +43,9 @@
 //! the word while the kernel runs: on the M3 Max a spin waiting for the CPU to raise it ran until
 //! Metal ended the command buffer ("Caused GPU Hang Error"), natively and through MoltenVK alike.
 //! Metal ended one native dispatch of about 1.5 s the same way, and some of about 0.5 s, so the
-//! spin is many short dispatches.
+//! spin is many short dispatches. The cases that spin hold one command buffer on the GPU for
+//! [`SPIN`], 1.5 s: GPU hazards, compiled on a GPU only under `m2v_gpu_hazards`
+//! (docs/VALIDATION.md).
 
 use super::host_memory::{Mapping, GUEST_PAGE};
 use super::parallel_encodes::{
@@ -54,38 +56,51 @@ use super::{
     buffer_with, layer_reported_nothing_at_all, read_buffer, validated_device_with, Messages,
     ScratchCache,
 };
+#[cfg(any(m2v_cpu_icd, m2v_gpu_hazards))]
 use crate::air_library::AirLibrary as _;
 use crate::gpu::TEST_DEVICE;
 use metal2vulkan::device::QueueSharingPolicy;
 use metal2vulkan::metal::{PixelFormat, TextureUsage};
+#[cfg(any(m2v_cpu_icd, m2v_gpu_hazards))]
 use metal2vulkan_devtools::llvm_assemble;
 use metal2vulkan_runtime::{
-    Buffer, CommandBuffer, CommandBufferStatus, CommandQueue, ComputeCommandEncoder,
-    ComputePipelineState, Device, DeviceOptions, EventRef, HostMemory, PipelineOptions,
-    ResourceOptions, Size, Texture, TextureDescriptor,
+    Buffer, CommandBuffer, CommandQueue, Device, DeviceOptions, EventRef, HostMemory,
+    ResourceOptions, Texture, TextureDescriptor,
 };
+#[cfg(any(m2v_cpu_icd, m2v_gpu_hazards))]
+use metal2vulkan_runtime::{
+    CommandBufferStatus, ComputeCommandEncoder, ComputePipelineState, PipelineOptions, Size,
+};
+#[cfg(any(m2v_cpu_icd, m2v_gpu_hazards))]
 use std::path::Path;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+#[cfg(any(m2v_cpu_icd, m2v_gpu_hazards))]
+use std::time::Instant;
 
 /// About how long a spin runs on the GPU: far past the CPU's write, made [`SETTLE`] after the
 /// spinning command buffer's work was submitted.
+#[cfg(any(m2v_cpu_icd, m2v_gpu_hazards))]
 const SPIN: Duration = Duration::from_millis(1500);
 
 /// About how long each of a spin's dispatches runs on the GPU: far inside the half a second of one
 /// dispatch that Metal took for hung.
+#[cfg(any(m2v_cpu_icd, m2v_gpu_hazards))]
 const SLICE: Duration = Duration::from_millis(10);
 
 /// The least time a dispatch of the spin's kernel is timed over.
+#[cfg(any(m2v_cpu_icd, m2v_gpu_hazards))]
 const MEASURED: Duration = Duration::from_millis(50);
 
 /// How long the CPU waits, once the spinning command buffer's work was submitted, before it
 /// writes: its first encoder has long read the texture and its spin has started by then.
+#[cfg(any(m2v_cpu_icd, m2v_gpu_hazards))]
 const SETTLE: Duration = Duration::from_millis(250);
 
 /// The owned fixture `kernel_spin_on_an_unraised_word` (one thread loading a word nothing raises
 /// until its cap of loads runs out) at the cap that takes about [`SLICE`] of the device's GPU time,
 /// dispatched [`SPIN`] / [`SLICE`] times by a spin.
+#[cfg(any(m2v_cpu_icd, m2v_gpu_hazards))]
 struct Spin {
     state: ComputePipelineState,
     cap: u32,
@@ -94,6 +109,7 @@ struct Spin {
     loads: Buffer,
 }
 
+#[cfg(any(m2v_cpu_icd, m2v_gpu_hazards))]
 impl Spin {
     /// Time the cap: single dispatches of growing caps in command buffers of their own, from
     /// commit to completion, until one takes [`MEASURED`], scaled to [`SLICE`]. The first, not
@@ -167,6 +183,7 @@ impl Spin {
 }
 
 /// Wait until `command_buffer`'s work was submitted, then [`SETTLE`] more.
+#[cfg(any(m2v_cpu_icd, m2v_gpu_hazards))]
 fn settled(command_buffer: &CommandBuffer) {
     let deadline = Instant::now() + SPIN;
     while command_buffer.kernel_start_time() == 0.0 {
@@ -215,6 +232,7 @@ fn fill_row(command_buffer: &CommandBuffer, truth: &Buffer, row: u64, value: u8)
 
 /// A device under the validation layer, its texel kernels, each run once so that no later dispatch
 /// of them waits at a host step for its `VkPipeline`, and the spin.
+#[cfg(any(m2v_cpu_icd, m2v_gpu_hazards))]
 fn lane(messages: &Messages, cache: &ScratchCache) -> (Device, TexelKernels, Spin) {
     let (device, kernels) = lane_device(messages, cache, |_| {});
     let spin = Spin::new(&device);
@@ -429,7 +447,8 @@ fn a_waiting_writer_s_hold_is_withheld_on_one_vk_queue() {
 
 /// Another queue's encoder of the texture ends between a command buffer's two, and the CPU writes
 /// the bytes while the command buffer runs: neither of its encoders sees the write (the module
-/// docs).
+/// docs). A GPU hazard (`m2v_gpu_hazards`): its spin holds one command buffer for 1.5 s.
+#[cfg(any(m2v_cpu_icd, m2v_gpu_hazards))]
 #[test]
 fn a_cpu_write_while_a_command_buffer_runs_reaches_none_of_its_encoders() {
     let messages = Messages::default();
@@ -506,7 +525,7 @@ fn a_cpu_write_while_a_command_buffer_runs_reaches_none_of_its_encoders() {
 fn an_encoder_after_a_signal_reads_what_another_queue_wrote_after_it() {
     let messages = Messages::default();
     let cache = ScratchCache::new().unwrap();
-    let (device, kernels, spin) = lane(&messages, &cache);
+    let (device, kernels) = lane_device(&messages, &cache, |_| {});
     let (first, second) = (
         device.new_command_queue().unwrap(),
         device.new_command_queue().unwrap(),
@@ -539,13 +558,15 @@ fn an_encoder_after_a_signal_reads_what_another_queue_wrote_after_it() {
         texels_of(&filled(&initial, row, value)),
         "the encoder after the signal, which Y's fill runs before"
     );
-    drop((texture, truth, first, second, kernels, spin, event));
+    drop((texture, truth, first, second, kernels, event));
     drop(device);
     layer_reported_nothing_at_all(&messages);
 }
 
 /// A CPU write made once a command buffer's signal was seen reaches its read after the signal,
-/// whether the read is in the encoder after the signal or a later one (the module docs).
+/// whether the read is in the encoder after the signal or a later one (the module docs). A GPU
+/// hazard (`m2v_gpu_hazards`): each of its two spins holds one command buffer for 1.5 s.
+#[cfg(any(m2v_cpu_icd, m2v_gpu_hazards))]
 #[test]
 fn a_cpu_write_once_a_signal_was_seen_reaches_the_reads_after_it() {
     let messages = Messages::default();
@@ -622,7 +643,9 @@ fn a_cpu_write_once_a_signal_was_seen_reaches_the_reads_after_it() {
 
 /// A command buffer that waits for an event writes logged pages a shadowed texture lies in, and
 /// runs after a command buffer committed after it took the log's hold: a third command buffer's
-/// gated copy in still takes the write (the module docs).
+/// gated copy in still takes the write (the module docs). A GPU hazard (`m2v_gpu_hazards`): its
+/// spin holds one command buffer for 1.5 s.
+#[cfg(any(m2v_cpu_icd, m2v_gpu_hazards))]
 #[test]
 fn a_write_of_logged_pages_after_an_event_wait_reaches_a_copy_in_behind_a_later_hold() {
     let messages = Messages::default();

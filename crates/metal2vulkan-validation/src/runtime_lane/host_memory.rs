@@ -10,21 +10,25 @@
 //! are Metal's, as measured on an Apple M3 Max and an M4.
 
 use super::{
-    buffer_with, encode_case, layer_reported_nothing, pipeline_state, public_case, read_buffer,
-    validated_device, validated_device_with, CaseResources, Messages, ScratchCache,
+    buffer_with, encode_case, pipeline_state, public_case, read_buffer, validated_device,
+    CaseResources, Messages, ScratchCache,
 };
+#[cfg(any(m2v_cpu_icd, m2v_gpu_hazards))]
+use super::{layer_reported_nothing, validated_device_with};
 use crate::candidate::engine::ComputeOutput;
 use crate::gpu::TEST_DEVICE;
 use metal2vulkan::error::Feature;
 use metal2vulkan::metal::{PixelFormat, TextureUsage};
+#[cfg(any(m2v_cpu_icd, m2v_gpu_hazards))]
 use metal2vulkan::vk::DriverId;
 use metal2vulkan_runtime::{
-    BlitOption, Buffer, BufferContents, BufferDescriptor, CommandBuffer, CommandBufferError,
-    CommandBufferStatus, CommandQueue, CopyProblem, CpuCacheMode, Deallocator, DebugMessage,
-    Degradation, Device, Error, EventRef, HazardTrackingMode, HostMemory, Invalid, LayerSetting,
-    LayerSettingValue, Nil, Origin, Problem, PurgeableState, Region, ResourceOptions, Size,
-    StorageMode, TextureDescriptor,
+    BlitOption, Buffer, BufferContents, BufferDescriptor, CommandBuffer, CommandBufferStatus,
+    CommandQueue, CopyProblem, CpuCacheMode, Deallocator, DebugMessage, Degradation, Device, Error,
+    EventRef, HazardTrackingMode, HostMemory, Invalid, Nil, Origin, Problem, PurgeableState,
+    Region, ResourceOptions, Size, StorageMode, TextureDescriptor,
 };
+#[cfg(any(m2v_cpu_icd, m2v_gpu_hazards))]
+use metal2vulkan_runtime::{CommandBufferError, LayerSetting, LayerSettingValue};
 use std::collections::BTreeMap;
 use std::ptr::NonNull;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -1600,7 +1604,9 @@ fn vouched_pages_are_imported_with_no_mapping_asked() {
 /// fence returned as the first of its Metal command buffer's handlers marked the device lost,
 /// the command pools went, and a later handler aborted the process (`mutex lock failed`): in
 /// one run of `a_gpu_fault_fails_its_command_buffer_and_the_queue_runs_on` on each of two Apple
-/// M4s. On MoltenVK alone, as that test.
+/// M4s. On MoltenVK alone, as that test. A GPU hazard (`m2v_gpu_hazards`): it faults the GPU on
+/// purpose three times, and Metal's recovery fails other processes' command buffers in flight.
+#[cfg(any(m2v_cpu_icd, m2v_gpu_hazards))]
 #[test]
 fn a_lost_device_s_command_buffers_let_go_of_their_pools_after_the_driver_s_completion() {
     /// Devices lost one after another, each by one fault.
@@ -1727,7 +1733,9 @@ fn a_lost_device_s_command_buffers_let_go_of_their_pools_after_the_driver_s_comp
 /// guard on the way (a debug build once ended the process there). MoltenVK's reports of the failure
 /// are the only messages. On MoltenVK alone: a Linux driver is refused the pages
 /// (`a_read_only_page_is_refused_on_linux_and_read_elsewhere`), and lavapipe's CPU would fault
-/// the process itself.
+/// the process itself. A GPU hazard (`m2v_gpu_hazards`): it faults the GPU on purpose twice, and
+/// Metal's recovery fails other processes' command buffers in flight.
+#[cfg(any(m2v_cpu_icd, m2v_gpu_hazards))]
 #[test]
 fn a_gpu_fault_fails_its_command_buffer_and_the_queue_runs_on() {
     for resume in [None, Some(false)] {
@@ -2194,8 +2202,9 @@ fn purgeable_state_answers_as_metal_and_empty_discards() {
 /// are printed (`NOCOPY` lines: the best and the first creation, and the first use), a report, not
 /// a bound, and the first command using the first buffer writes where it should. macOS only, where
 /// the runtime once deferred the import: Linux drivers pin every
-/// imported page when the buffer is made, as they always did.
-#[cfg(target_os = "macos")]
+/// imported page when the buffer is made, as they always did. A GPU hazard (`m2v_gpu_hazards`):
+/// its buffers import up to 16 GiB of host memory, as far as `max_buffer_length`.
+#[cfg(all(target_os = "macos", any(m2v_cpu_icd, m2v_gpu_hazards)))]
 #[test]
 fn a_no_copy_buffer_s_pages_are_imported_when_it_is_made() {
     use std::time::Instant;

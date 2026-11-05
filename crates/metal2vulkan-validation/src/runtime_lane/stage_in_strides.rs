@@ -19,16 +19,20 @@ use super::{
 };
 use crate::air_library::AirLibrary;
 use crate::gpu::TEST_DEVICE;
-use metal2vulkan::metal::{AttributeFormat, IndirectCommandType, StepFunction};
+#[cfg(any(m2v_cpu_icd, m2v_gpu_hazards))]
+use metal2vulkan::metal::IndirectCommandType;
+use metal2vulkan::metal::{AttributeFormat, StepFunction};
 use metal2vulkan::pipeline::{
     ComputePipelineDescriptor, StageInputAttributeDescriptor, StageInputDescriptor,
     StageInputLayoutDescriptor, StageSource,
 };
 use metal2vulkan_devtools::llvm_assemble;
 use metal2vulkan_runtime::{
-    Buffer, CommandBufferStatus, ComputeCommandEncoder, ComputePipelineState, Device, Error,
-    IndirectCommandBufferDescriptor, PipelineOptions, Region, ResourceOptions, RuntimeGap, Size,
+    Buffer, CommandBufferStatus, ComputeCommandEncoder, ComputePipelineState, Device,
+    PipelineOptions, Region, Size,
 };
+#[cfg(any(m2v_cpu_icd, m2v_gpu_hazards))]
+use metal2vulkan_runtime::{Error, IndirectCommandBufferDescriptor, ResourceOptions, RuntimeGap};
 use std::path::Path;
 
 /// The grid: 5 by 3 threads.
@@ -327,6 +331,7 @@ fn a_fixed_layout_reads_its_own_stride_whatever_the_bind() {
 /// The owned fixture `ob3_stage_input` (each thread writes the `uint` attribute it fetched to
 /// `out[t]`, buffer 0), its attribute at offset 0 of layout 1, stepping by the thread's x at a
 /// fixed stride of 6, made with `supportIndirectCommandBuffers`.
+#[cfg(any(m2v_cpu_icd, m2v_gpu_hazards))]
 fn strided_pipeline(device: &Device) -> ComputePipelineState {
     stage_in_pipeline(device, StepFunction::ThreadPositionInGridX)
 }
@@ -368,7 +373,9 @@ pub(super) fn stage_in_pipeline(device: &Device, step: StepFunction) -> ComputeP
 /// buffer; a dispatch of one thread over a region from element 715827883 (bytes `2^32 + 2` to
 /// `2^32 + 6`) is refused, and an indirect command buffer's command of it refuses the commit.
 /// Skipped, printed, where the device's `max_buffer_length` holds no such buffer (RADV, ANV and
-/// lavapipe hold at most `2^32` bytes).
+/// lavapipe hold at most `2^32` bytes). A GPU hazard (`m2v_gpu_hazards`): the buffer is 4 GiB and
+/// 4 KiB, device memory or imported host memory.
+#[cfg(any(m2v_cpu_icd, m2v_gpu_hazards))]
 #[test]
 fn stage_in_fetches_past_4_gib_of_a_buffer_are_refused() {
     const LENGTH: u64 = (1 << 32) + 4096;

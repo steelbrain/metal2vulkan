@@ -226,7 +226,9 @@ fn heaps_answer_as_metal_s_do() {
 /// of addresses, as long as the block, is at most `maxBufferSize` (the validation layer reports
 /// nothing): the runtime's memory grows by the heap's size and no more than one allocation. RADV's
 /// largest heap is 4 GiB less 16 KiB, of an allocation of at most 4 GiB less 4 bytes. Made where
-/// it is at most 4 GiB (RADV, ANV, lavapipe), else not; out of device memory is an answer too.
+/// it is at most 4 GiB (RADV, ANV, lavapipe), else not; out of device memory is an answer too. A
+/// GPU hazard (`m2v_gpu_hazards`): the heap is the device's largest allocation, up to 4 GiB.
+#[cfg(any(m2v_cpu_icd, m2v_gpu_hazards))]
 #[test]
 fn the_largest_heap_lies_in_one_allocation() {
     on_device(|device| {

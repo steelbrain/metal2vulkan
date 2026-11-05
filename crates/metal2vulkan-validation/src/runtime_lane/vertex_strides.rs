@@ -288,13 +288,16 @@ fn an_executed_command_s_unstrided_vertex_buffer_is_refused() {
 }
 
 /// A buffer of `length` bytes, more than `2^32`, for a fetch past 4 GiB: on macOS a no-copy
-/// buffer over fresh anonymous memory, with the mapping it holds; elsewhere device memory.
+/// buffer over fresh anonymous memory, with the mapping it holds; elsewhere device memory. Only
+/// the GPU hazards make one (`m2v_gpu_hazards`).
+#[cfg(any(m2v_cpu_icd, m2v_gpu_hazards))]
 pub(super) struct Large {
     pub(super) buffer: Buffer,
     #[cfg(target_os = "macos")]
     _mapping: super::host_memory::Mapping,
 }
 
+#[cfg(any(m2v_cpu_icd, m2v_gpu_hazards))]
 impl Large {
     /// The buffer on `device`; `None`, printed, where its `max_buffer_length` holds no such
     /// buffer (RADV, ANV and lavapipe hold at most `2^32` bytes).
@@ -349,7 +352,9 @@ impl Large {
 /// vertices 0 to 7, whose furthest byte lies below `2^32`, draws from the buffer as from any
 /// other: each vertex `v` reads the word `100 + v` written at byte `6 v`. Skipped, printed, where
 /// the device's `max_buffer_length` holds no such buffer (RADV, ANV and lavapipe hold at most
-/// `2^32` bytes).
+/// `2^32` bytes). A GPU hazard (`m2v_gpu_hazards`): the buffer is 4 GiB and 4 KiB, device memory or
+/// imported host memory.
+#[cfg(any(m2v_cpu_icd, m2v_gpu_hazards))]
 #[test]
 fn vertex_fetches_past_4_gib_of_a_buffer_are_refused() {
     use metal2vulkan::metal::IndexType;
