@@ -29,6 +29,8 @@
 //!   read alone.
 //! - `Fill`: a blit fills 64 rows of the surface's bytes, a write into the pages in place (their
 //!   import's), then the read.
+//! - `NewTexture`: as `Write`, through a new texture of the plane made each frame (the last one's
+//!   dropped first), as a host that hands over a new texture over the same bytes each frame.
 //! - `Private`: `Write` into a `Private` texture of the surface's size: the passes alone.
 //!
 //! Printed per round, shape and form (`SHADOW-SYNC`): the medians and 90th percentiles of a frame's
@@ -80,6 +82,7 @@ enum Shape {
     Idle,
     CpuWrite,
     Fill,
+    NewTexture,
     Private,
 }
 
@@ -141,6 +144,7 @@ fn configurations() -> Vec<(Shape, Form)> {
         Shape::Idle,
         Shape::CpuWrite,
         Shape::Fill,
+        Shape::NewTexture,
     ] {
         all.extend([(shape, Form::PLAIN), (shape, Form::LOGGED)]);
     }
@@ -448,6 +452,8 @@ fn per_frame(before: &WorkCounts, after: &WorkCounts) -> String {
          internal submissions {:.2}; copied host buffers made {}, their copies in {:.0} bytes \
          ({:.0} skipped), merged back {:.0}, compared {:.2}; first copied in again {:.0}, \
          recopied beyond held {:.0}, after changes {:.0} (other shadows {:.0}, writes {:.0}); \
+         large surfaces' first copies in: carried {:.0}, behind an earlier command buffer's \
+         standing {:.0}, behind none {:.0}, recopied {:.0}; \
          host texture shadows: render target {}, check pending {}, failed {}, unchecked {}, \
          refused pitch {}, placement {}, image {}; device copy textures {}, in place {}",
         per(|c| c.queue_submissions),
@@ -483,6 +489,10 @@ fn per_frame(before: &WorkCounts, after: &WorkCounts) -> String {
         per(|c| c.shadow_texels_recopied_after_changes),
         per(|c| c.shadow_texels_recopied_after_other_shadows),
         per(|c| c.shadow_texels_recopied_after_writes),
+        per(|c| c.shadow_texels_first_copy_in_carried_large_surfaces),
+        per(|c| c.shadow_texels_first_copied_in_large_surfaces_stood_earlier),
+        per(|c| c.shadow_texels_first_copied_in_large_surfaces_unstood),
+        per(|c| c.shadow_texels_recopied_in_large_surfaces),
         after.host_texture_shadows_render_target,
         after.host_texture_shadows_check_pending,
         after.host_texture_shadows_check_failed,
@@ -570,6 +580,8 @@ fn frames(round: usize, shape: Shape, form: Form, len: usize) {
     );
     let mut before = device.work_counts();
     let mut reports = log.reports();
+    // The texture `NewTexture` made last.
+    let mut fresh: Option<Texture> = None;
     for k in 0..WARM + FRAMES {
         if k == WARM {
             before = device.work_counts();
@@ -613,6 +625,16 @@ fn frames(round: usize, shape: Shape, form: Form, len: usize) {
                 );
                 log.mark(bytes);
                 drawing.read(&command_buffer, &surface, &target);
+            }
+            Shape::NewTexture => {
+                drop(fresh.take());
+                let texture = plane_texture(
+                    &buffer,
+                    TextureUsage::RENDER_TARGET | TextureUsage::SHADER_READ,
+                );
+                drawing.write(&command_buffer, &texture, k % 2, true);
+                drawing.read(&command_buffer, &texture, &target);
+                fresh = Some(texture);
             }
             Shape::Fill => {
                 let first = (k as u64 * 97) % (HEIGHT - CPU_ROWS);
@@ -689,6 +711,6 @@ fn frames(round: usize, shape: Shape, form: Form, len: usize) {
         told[5] / 1e3,
         told[6] / 1e3,
     );
-    drop((surface, sampled, buffer, private, target));
+    drop((fresh, surface, sampled, buffer, private, target));
     drop(mapping);
 }
