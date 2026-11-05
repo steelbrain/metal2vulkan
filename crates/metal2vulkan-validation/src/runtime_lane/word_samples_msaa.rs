@@ -955,6 +955,12 @@ fn multisampled_word_formats_store_read_resolve_and_blend_as_metal() {
             drawn += 1;
             words += usize::from(word);
             allowed.extend(made);
+            // The reads of each sample's value (`wsm_read_f`), the device's conversion where its
+            // texture unit is not Metal's: recorded for every such read, whatever the format and
+            // however it is held (a packed format's own as much as its word's).
+            if !lane.metal_sampler() {
+                allowed.insert(Degradation::DeviceTexelConversion);
+            }
             match word {
                 true => {
                     kinds.insert(Degradation::ShaderResolve);
@@ -975,14 +981,6 @@ fn multisampled_word_formats_store_read_resolve_and_blend_as_metal() {
                     );
                     if srgb && !lane.metal_sampler() {
                         allowed.insert(Degradation::SrgbTexelDecode);
-                    }
-                    // A packed word's reads, the device's widening where it is not Metal's.
-                    let packed = matches!(
-                        WordAttachment::layout(pf),
-                        Some(WordAttachment::Packed16 { .. })
-                    );
-                    if packed && !lane.metal_sampler() {
-                        allowed.insert(Degradation::DeviceTexelConversion);
                     }
                 }
                 false => allowed.extend(resolve_kind(&lane.device, samples)),
