@@ -24,8 +24,11 @@
 //! - **Checked in builds with debug assertions.** A draw that keeps one works the tables and
 //!   elements out again and compares them, and lists its writes past the heap's entries again
 //!   and compares them (`binding::bind_into`).
-//! - **Let go as the encoder ends** (`SpareLiveBinds::give`), with what it holds: the next encoder
-//!   works out its own at its first draw.
+//! - **Let go as the encoder ends** (`SpareLiveBinds::give`): the next encoder works out its own
+//!   at its first draw, into the storage of those let go of, which hold nothing else (no texture,
+//!   sampler or plan: what a part holds is plain data, and its plan is held weakly and let go), so
+//!   a part worked out allocates no more than a draw that worked out its heap part did
+//!   (`runtime_lane::frame_costs`).
 
 use std::sync::{Arc, Weak};
 
@@ -48,9 +51,19 @@ const KEPT_PARTS: usize = 8;
 /// The heap parts a render encoder's draws worked out lately (the module docs), the latest
 /// drawn through last.
 #[derive(Default)]
-pub(crate) struct KeptHeap(Vec<HeapPart>);
+pub(crate) struct KeptHeap {
+    parts: Vec<HeapPart>,
+    /// The parts let go of as an encoder ended, emptied, the storage of those worked out later.
+    spare: Vec<HeapPart>,
+    /// The heap tables a kept part's check works out, in builds with debug assertions: kept, so
+    /// the check allocates no more than a draw that worked them out did (`runtime_lane::
+    /// frame_costs`).
+    #[cfg(debug_assertions)]
+    tables: Vec<DescriptorBytes>,
+}
 
 /// One draw's heap part, and what it is made of.
+#[derive(Default)]
 struct HeapPart {
     of: HeapOf,
     tables: Vec<DescriptorBytes>,
@@ -59,6 +72,7 @@ struct HeapPart {
 }
 
 /// What a [`HeapPart`] is made of (the module docs).
+#[derive(Default)]
 struct HeapOf {
     plan: Weak<BindingPlan>,
     capacity: Option<u32>,
@@ -89,21 +103,20 @@ fn bound_at(state: &BindState, slot: SlotRef) -> Option<BoundTexture> {
 }
 
 impl HeapOf {
-    /// What a part worked out from `inputs` is made of.
-    fn of(inputs: &HeapInputs<'_>, capacity: Option<u32>) -> HeapOf {
+    /// Make it what a part worked out from `inputs` is made of, in its own storage.
+    fn fill(&mut self, inputs: &HeapInputs<'_>, capacity: Option<u32>) {
         let state = inputs.state;
+        self.plan = Arc::downgrade(inputs.plan);
+        self.capacity = capacity;
+        self.generation = inputs.generation;
+        self.listed_at = inputs.listed_at;
+        self.samplers.clone_from(&state.argument_samplers);
+        self.function_tables.clone_from(&state.function_tables);
+        self.slots.clear();
         let slots = inputs.plan.heap_slots();
-        HeapOf {
-            plan: Arc::downgrade(inputs.plan),
-            capacity,
-            generation: inputs.generation,
-            listed_at: inputs.listed_at,
-            samplers: state.argument_samplers.clone(),
-            function_tables: state.function_tables.clone(),
-            slots: slots.map(|slot| (slot, bound_at(state, slot))).collect(),
-            placement: state.heap_placement,
-            in_token_order: state.used_in_token_order,
-        }
+        (self.slots).extend(slots.map(|slot| (slot, bound_at(state, slot))));
+        self.placement = state.heap_placement;
+        self.in_token_order = state.used_in_token_order;
     }
 
     /// Whether a part made of it is the one `inputs` work out, the layout's heap arrays holding
@@ -136,38 +149,32 @@ impl KeptHeap {
     ) -> Result<Option<Arc<HeapElements>>, Error> {
         let capacity = heap_sets::capacity(inputs.layout);
         let kept = self
-            .0
+            .parts
             .iter()
             .position(|part| part.of.holds(&inputs, capacity));
         let part = match kept {
             Some(at) => {
-                let part = self.0.remove(at);
+                let part = self.parts.remove(at);
                 #[cfg(debug_assertions)]
-                part.check(&inputs)?;
+                part.check(&inputs, &mut self.tables)?;
                 part
             }
             None => {
-                let mut tables = Vec::new();
-                let (plan, state) = (inputs.plan, inputs.state);
-                plan.heap_tables_into(state, &mut tables)
-                    .map_err(Error::Bind)?;
-                let elements = heap_sets::heap_elements(inputs.layout, plan, state)?;
-                if !tables.is_empty() || elements.is_some() {
+                // Worked out into the storage of the one drawn through longest ago, where it keeps
+                // as many as it may, else of one let go of.
+                let mut part = match self.parts.len() == KEPT_PARTS {
+                    true => self.parts.remove(0),
+                    false => self.spare.pop().unwrap_or_default(),
+                };
+                part.fill(&inputs, capacity)?;
+                if !part.tables.is_empty() || part.elements.is_some() {
                     counts.draw_heap_part_made();
                 }
-                if self.0.len() == KEPT_PARTS {
-                    self.0.remove(0);
-                }
-                HeapPart {
-                    of: HeapOf::of(&inputs, capacity),
-                    tables,
-                    elements: elements.map(Arc::new),
-                    past: PastHeap::default(),
-                }
+                part
             }
         };
         let elements = part.elements.clone();
-        self.0.push(part);
+        self.parts.push(part);
         Ok(elements)
     }
 
@@ -175,27 +182,60 @@ impl KeptHeap {
     /// entries listed of it.
     pub(crate) fn brought_in(&mut self) -> Result<(&[DescriptorBytes], &mut PastHeap), Error> {
         let part =
-            (self.0.last_mut()).ok_or_else(|| internal("a draw's heap part not brought in"))?;
+            (self.parts.last_mut()).ok_or_else(|| internal("a draw's heap part not brought in"))?;
         Ok((&part.tables, &mut part.past))
     }
 
-    /// Let go of every part, as the encoder ends.
+    /// Let go of every part, as the encoder ends, keeping its storage (the module docs).
     pub(crate) fn let_go(&mut self) {
-        self.0.clear();
+        let spare = &mut self.spare;
+        for mut part in self.parts.drain(..) {
+            part.empty();
+            spare.push(part);
+        }
     }
 }
 
 impl HeapPart {
-    /// Check that it is the part `inputs` work out (the module docs).
-    #[cfg(debug_assertions)]
-    fn check(&self, inputs: &HeapInputs<'_>) -> Result<(), Error> {
+    /// Make it the part `inputs` work out, in its own storage.
+    fn fill(&mut self, inputs: &HeapInputs<'_>, capacity: Option<u32>) -> Result<(), Error> {
         let (plan, state) = (inputs.plan, inputs.state);
-        let mut tables = Vec::new();
-        plan.heap_tables_into(state, &mut tables)
+        plan.heap_tables_into(state, &mut self.tables)
             .map_err(Error::Bind)?;
         let elements = heap_sets::heap_elements(inputs.layout, plan, state)?;
+        // Into the elements' own allocation where no draw holds them still.
+        match (elements, &mut self.elements) {
+            (Some(made), Some(held)) => match Arc::get_mut(held) {
+                Some(held) => *held = made,
+                None => *held = Arc::new(made),
+            },
+            (made, held) => *held = made.map(Arc::new),
+        }
+        self.of.fill(inputs, capacity);
+        self.past.forget();
+        Ok(())
+    }
+
+    /// Hold nothing but its storage: a part let go of (the module docs).
+    fn empty(&mut self) {
+        self.of.plan = Weak::new();
+        self.tables.clear();
+        self.past.forget();
+    }
+
+    /// Check that it is the part `inputs` work out (the module docs), its tables worked out
+    /// into `tables`.
+    #[cfg(debug_assertions)]
+    fn check(
+        &self,
+        inputs: &HeapInputs<'_>,
+        tables: &mut Vec<DescriptorBytes>,
+    ) -> Result<(), Error> {
+        let (plan, state) = (inputs.plan, inputs.state);
+        plan.heap_tables_into(state, tables).map_err(Error::Bind)?;
+        let elements = heap_sets::heap_elements(inputs.layout, plan, state)?;
         assert!(
-            tables == self.tables && elements.as_ref() == self.elements.as_deref(),
+            *tables == self.tables && elements.as_ref() == self.elements.as_deref(),
             "a draw's kept heap part that is not its own"
         );
         KEPT_HEAP_CHECKS.with(|checks| checks.set(checks.get() + 1));

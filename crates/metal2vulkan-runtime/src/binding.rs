@@ -772,12 +772,12 @@ pub(super) fn bind_into(
     writes.reserve(plan.descriptors.len());
     samplers.clear();
     match past.filter(|_| tables.heap.is_some()) {
-        Some(PastHeap(Some(listed))) => {
+        Some(past) if past.listed => {
             // Checked against the writes listed again, in place: a draw's allocations are
             // bounded in builds with debug assertions too (`runtime_lane::frame_costs`).
             #[cfg(debug_assertions)]
             {
-                let mut kept = listed.iter();
+                let mut kept = past.at.iter();
                 for (at, write) in plan.descriptors.iter().enumerate() {
                     if written_at(call, tables, write, false)?.is_some() {
                         assert_eq!(
@@ -793,7 +793,7 @@ pub(super) fn bind_into(
                     "a command's writes past its kept heap that are not its own"
                 );
             }
-            for &at in listed.iter() {
+            for &at in past.at.iter() {
                 let write = (plan.descriptors.get(at as usize))
                     .ok_or_else(|| internal("a listed write past the plan's"))?;
                 let element = written_at(call, tables, write, false)?
@@ -810,17 +810,19 @@ pub(super) fn bind_into(
                 writes.push(write);
             }
         }
-        past => {
+        mut past => {
             // A check that announced a notice its device announces at every occurrence lists
             // nothing: the next command meets it again.
             let watch = EachWatch::start();
-            let mut listing = past.is_some().then(Vec::new);
+            if let Some(past) = &mut past {
+                past.forget();
+            }
             for (at, write) in plan.descriptors.iter().enumerate() {
                 let Some(element) = written_at(call, tables, write, true)? else {
                     continue;
                 };
-                if let Some(listing) = &mut listing {
-                    listing.push(at as u32);
+                if let Some(past) = &mut past {
+                    past.at.push(at as u32);
                 }
                 let kept = (&mut *samplers, memo.as_deref_mut());
                 let write = written(
@@ -833,10 +835,8 @@ pub(super) fn bind_into(
                 )?;
                 writes.push(write);
             }
-            if let (Some(past), Some(listing)) = (past, listing) {
-                if !watch.met() {
-                    past.0 = Some(listing);
-                }
+            if let Some(past) = past {
+                past.listed = !watch.met();
             }
         }
     }
@@ -914,7 +914,20 @@ pub(super) fn bind_into(
 /// function of the plan and of where its heap writes go (`metal2vulkan::bind::HeapElements`),
 /// and an entry's check of its texture and the plan's view, which no call changes.
 #[derive(Default)]
-pub(super) struct PastHeap(Option<Vec<u32>>);
+pub(super) struct PastHeap {
+    /// Whether `at` lists them.
+    listed: bool,
+    /// Their positions among the plan's writes, ascending.
+    at: Vec<u32>,
+}
+
+impl PastHeap {
+    /// List none, keeping the list's storage: a heap part worked out again, or let go of.
+    pub(super) fn forget(&mut self) {
+        self.listed = false;
+        self.at.clear();
+    }
+}
 
 /// Where `write`, one of its plan's descriptor writes, is written for a command over `tables`:
 /// its element, or `None` where the command writes nothing there. A heap's write no handle
