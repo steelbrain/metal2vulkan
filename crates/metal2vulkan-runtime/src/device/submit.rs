@@ -35,13 +35,17 @@ const WAIT_SLICE: Duration = Duration::from_millis(100);
 
 /// A timeline the device's own submissions signal outside the batches (the internal ones here,
 /// the staging queue's copies, `staging.rs`), and the value through which the host saw them
-/// complete. Each batch with work waits for it at that value, once per value on its `VkQueue`
-/// (`command_buffer/submit.rs`), which makes what they wrote visible to the batch and to every
-/// later command there: the submission's "second synchronization scope of each semaphore wait
-/// operation defined by this command includes every command in the same batch that the wait
-/// operation is defined in, and all commands that occur later in submission order", and the
-/// wait's "second access scope includes all memory access performed by the device"
-/// (`vkQueueSubmit`, semaphore waiting).
+/// complete. What they wrote through that value is visible to every submission made after the
+/// host saw it, a batch or an internal one, with no wait or barrier of its own: the signal's
+/// "first access scope includes all memory access performed by the device" (semaphore
+/// signaling), which makes those writes available to the device domain, and each later
+/// `vkQueueSubmit` "performs a memory domain operation from host to device, and a visibility
+/// operation with source scope of the device domain and destination scope of all agents and
+/// references on the device" (the memory model's availability, visibility and domain
+/// operations). A batch with work still waits for it at that value, once per value on its
+/// `VkQueue`, where its driver does not stall on semaphore operations, and starts with
+/// `Barrier::after_completed` (`tracker.rs`) where it does (`command_buffer/submit.rs`); an
+/// internal submission takes neither.
 #[derive(Default)]
 pub(crate) struct OwnTimeline {
     semaphore: OnceLock<vk::Semaphore>,
