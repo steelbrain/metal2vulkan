@@ -4,11 +4,12 @@
 //! drift allow set aside for the completion; the pair, the
 //! reading of the least deviation; the host time domain a calibration reads; the extension's
 //! preferred form; and the device's timestamp pools, their slots held by the command buffers in
-//! flight, made as those need them up to the most.
+//! flight, made as those need them up to the most; and the kernel times, the start shown with the
+//! end alone.
 
 use crate::gpu_time::{
-    host_domain, host_time, least_deviation, Extension, GpuClock, Life, Pair, Placement, Pool,
-    Pools, Reading, DRIFT_PPM, PLAIN, PREFIXED, SLOTS,
+    host_domain, host_time, least_deviation, Extension, GpuClock, KernelTimes, Life, Pair,
+    Placement, Pool, Pools, Reading, DRIFT_PPM, PLAIN, PREFIXED, SLOTS,
 };
 use ash::vk;
 use std::collections::BTreeSet;
@@ -420,4 +421,28 @@ fn a_refused_pool_ends_the_making_and_scarce_pools_are_one() {
     assert!(!asked);
     assert_eq!(scarce.slots(), SLOTS as usize);
     drop(held);
+}
+
+/// A command buffer's kernel start shows only once its end is known (`kernelStartTime`), as no
+/// read of Metal's sees a start without an end: while the scheduler submits, between the first
+/// batch's start and the last batch's end, the start reads 0 to `kernel_start_time` and the
+/// scheduler's own read (`began`) has it; once the end is stored both show.
+#[test]
+fn a_kernel_start_shows_with_its_end_alone() {
+    let kernel = KernelTimes::default();
+    assert_eq!((kernel.start(), kernel.end(), kernel.began()), (0, 0, 0));
+    kernel.begin();
+    let began = kernel.began();
+    assert_ne!(began, 0, "the scheduler's own read of the start");
+    assert_eq!(
+        (kernel.start(), kernel.end()),
+        (0, 0),
+        "a start shown before its end"
+    );
+    kernel.end_at(began + 7);
+    // Either order of the two reads sees both.
+    let (end, start) = (kernel.end(), kernel.start());
+    assert_eq!((start, end), (began, began + 7));
+    let (start, end) = (kernel.start(), kernel.end());
+    assert_eq!((start, end), (began, began + 7));
 }
