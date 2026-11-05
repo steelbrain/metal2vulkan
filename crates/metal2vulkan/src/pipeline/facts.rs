@@ -717,8 +717,8 @@ pub enum RuntimeFact {
     /// the shape asks for (`BindShape::private_list`).
     PrivateList,
     /// The function reads the texture bound to the slot only as the in-place form of a two-plane
-    /// YCbCr texture reads it (`bind::YCbCrInPlace`): sampled through a constexpr sampler or
-    /// through the runtime sampler slots whose bits `samplers` holds (bit `n` for
+    /// YCbCr texture reads it (`bind::YCbCrInPlace`): sampled or gathered through a constexpr sampler
+    /// or through the runtime sampler slots whose bits `samplers` holds (bit `n` for
     /// `[[sampler(n)]]` of the slot's stage), read, or its size queried, as a 2D `float` texture.
     /// Recorded on a profile that reads planes in place (`ProfileFields::ycbcr_in_place`). Where
     /// the binder binds a texture whose planes are read so (`TextureShape::Texture::ycbcr_in_place`)
@@ -730,7 +730,7 @@ pub enum RuntimeFact {
     /// push field (`PushField::YCbCrInPlace`). Elsewhere the slot binds the texture's image as
     /// before. `device`: every sample of the slot is one the device's own sampler Y′CbCr
     /// conversion takes (none addresses a border through a constexpr sampler or places a texel
-    /// offset by a parent's size): where the bound texture's planes are also held as an image it
+    /// offset by a parent's size, and none is a gather): where the bound texture's planes are also held as an image it
     /// samples (`TextureShape::Texture::ycbcr_planes_sampler`) and each runtime sampler addresses
     /// no border on either axis, the slot samples that image instead
     /// (`VariantKey::ycbcr_planes_sampled`, `bind::YCbCrPlanesSampler`).

@@ -321,8 +321,8 @@ the runtime made.
   way; integrated GPUs, CPU devices and memory without a log keep the image in place.
 - **Two-plane YCbCr textures** (`YCBCR8_420_2P` and its kin over a surface's planes) hold an
   image of the texels Metal reads, converted from the planes before a command buffer's first use
-  where they changed. Where `has_unified_memory`, a function that only samples a `YCBCR8_420_2P`
-  or `YCBCR10_420_2P` texture reads the planes' codes in place instead and converts them in the
+  where they changed. Where `has_unified_memory`, a function that only samples or gathers a
+  `YCBCR8_420_2P` or `YCBCR10_420_2P` texture reads the planes' codes in place instead and converts them in the
   shader, exactly as the image holds them (`WorkCounts::ycbcr_textures_in_place`,
   `ycbcr_planes_bound`; a texture that keeps the image counts why, `ycbcr_images_kept_*`).
 

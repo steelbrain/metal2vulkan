@@ -97,14 +97,15 @@ pub struct Uses {
 /// place (`sampler::in_place`, `RuntimeFact::YCbCrInPlace`).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub struct InPlaceReads {
-    /// An access the form does not read: anything but a sample it builds (`sampler::select`'s
-    /// `in_place_sample`) and a query of the width, the height or the level count.
+    /// An access the form does not read: anything but a sample or gather it builds
+    /// (`sampler::select`'s `in_place_sample`) and a query of the width, the height or the level
+    /// count.
     pub blocked: bool,
-    /// The runtime sampler slots the slot's samples read, bit `n` `[[sampler(n)]]`.
+    /// The runtime sampler slots the slot's samples and gathers read, bit `n` `[[sampler(n)]]`.
     pub samplers: u32,
     /// A sample the device's own sampler Y′CbCr conversion does not take
     /// (`LoweringInputs::ycbcr_planes_sampled`): one through a constexpr sampler that addresses a
-    /// border, or one that places a texel offset by a parent's size.
+    /// border, one that places a texel offset by a parent's size, or a gather.
     pub device_blocked: bool,
 }
 

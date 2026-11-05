@@ -17,7 +17,10 @@
 //! (`PackedTexels::YCbCr2048`, the class the texture's image of converted texels is filtered
 //! under), through the extended-range emulation's footprint and routines (`super::extended`), its
 //! texel offset placed as there. Metal samples such a texture's one level whatever the sampler's
-//! mip filter, level, bias or gradients, so the sample reads the base level alone. A 4:2:0
+//! mip filter, level, bias or gradients, so the sample reads the base level alone. **A gather** of
+//! a component is the four taps of the linear footprint, each the texel Metal reads there (a border
+//! tap the border texel), that component of each in Vulkan's order, as the extended-range
+//! emulation gathers (`extended::gathered`); it follows no filter. A 4:2:0
 //! texture samples repeat, mirrored repeat and mirror-clamp-to-edge as clamp-to-edge: a constexpr
 //! sampler's modes arrive mapped (`LoweringInputs::address_maps`), and a runtime sampler's word is
 //! mapped here ([`mapped_word`]). A border tap reads the border color through the format's
@@ -26,7 +29,8 @@
 //! **The device's sampler** (`LoweringInputs::ycbcr_planes_sampled`): where the consumer holds
 //! the planes as an image of the multi-planar 4:2:0 format over their bytes and every sample of the
 //! slot is one the device's own sampler Y′CbCr conversion takes (no border address mode, no texel
-//! offset placed by a parent's size), the slot is a combined image sampler whose immutable sampler
+//! offset placed by a parent's size, no gather: `VUID-RuntimeSpirv-OpTypeSampledImage-12206`
+//! admits only samples through that conversion), the slot is a combined image sampler whose immutable sampler
 //! is that conversion (`ResourceKind::YCbCrPlanes`), and a sample is the device's sample of the
 //! image at level 0: a linear one at Metal's coordinate (normalized from pixels by the push field's
 //! size, its texel offset moved in texels), a nearest one at the centre of the luma texel Metal
@@ -66,6 +70,8 @@ pub struct Sample {
     pub coord: ValueId,
     /// The result is `half`, else `float`.
     pub half: bool,
+    /// A gather of this component (0 to 3, red first) instead of a sample (module docs).
+    pub gather: Option<u32>,
     /// The lowered type of the result (`{T, i8}`, its status word 0).
     pub result: DemoteTy,
 }
@@ -80,6 +86,9 @@ const WORD_WORDS: u32 = 96;
 impl Sample {
     /// The census name of the sample's form.
     pub(crate) fn name(&self) -> &'static str {
+        if self.gather.is_some() {
+            return "sampler.ycbcr_in_place.gather";
+        }
         match self.state {
             State::Constant { linear: true, .. } => "sampler.ycbcr_in_place.linear",
             State::Constant { linear: false, .. } => "sampler.ycbcr_in_place.nearest",
@@ -89,7 +98,8 @@ impl Sample {
 
     /// The estimated words of the sample: the slot's constants, a linear filter's four taps and
     /// its footprint (a runtime sampler's nearest tap and its own footprint besides, the word and
-    /// its branch), and Metal's offset rule on each lane of an offset.
+    /// its branch; a gather's four taps and footprint alone, a runtime sampler's word besides), and
+    /// Metal's offset rule on each lane of an offset.
     pub(crate) fn words(&self) -> u32 {
         let position = 2 * super::position::POSITION_WORDS;
         let linear = super::linear::PLANE_WORDS + 4 * TAP_WORDS + position;
@@ -99,10 +109,14 @@ impl Sample {
             false => super::position::OFFSET_RULE_WORDS,
         };
         let offset = self.offset.as_deref().map_or(0, |o| o.len() as u32) * rule;
-        let filters = match self.state {
-            State::Constant { linear: true, .. } => linear,
-            State::Constant { linear: false, .. } => nearest,
-            State::Slot { .. } => linear + nearest + WORD_WORDS + super::extended::BRANCH_WORDS,
+        let filters = match (&self.state, self.gather) {
+            (State::Constant { .. }, Some(_)) => linear,
+            (State::Slot { .. }, Some(_)) => linear + WORD_WORDS,
+            (State::Constant { linear: true, .. }, None) => linear,
+            (State::Constant { linear: false, .. }, None) => nearest,
+            (State::Slot { .. }, None) => {
+                linear + nearest + WORD_WORDS + super::extended::BRANCH_WORDS
+            }
         };
         PREPARE_WORDS + filters + offset + 16
     }
@@ -582,6 +596,10 @@ pub(crate) fn emit(
         return Err(cx.fail(format!("texture slot {} is not planned", s.texture)));
     };
     if decl.planes_sampler.is_some() {
+        // The device's conversion takes no gather (`device_takes` keeps such a slot off it).
+        if s.gather.is_some() {
+            return Err(cx.fail("an in-place gather under the device's sampler"));
+        }
         let x = device_sample(cx, fb, s, slot, (coord, img))?;
         return crate::lower::texture::with_word(cx, fb, &s.result, x, None);
     }
@@ -629,6 +647,27 @@ pub(crate) fn emit(
         level: None,
         half: s.half,
     };
+    if let Some(component) = s.gather {
+        let addressing = match &s.state {
+            State::Constant {
+                address,
+                border,
+                pixel,
+                ..
+            } => Addressing::Modes {
+                address,
+                border: *border,
+                pixel: *pixel,
+            },
+            State::Slot { sampler } => {
+                let word = super::emit::sampler_word(cx, fb, Pixel::Spec(*sampler))?;
+                let word = mapped_word(fb, &tt, word)?;
+                Addressing::Word { word, axes: 2 }
+            }
+        };
+        let x = super::extended::gathered(cx, fb, &t, &at, &tex, addressing, component)?;
+        return crate::lower::texture::with_word(cx, fb, &s.result, x, None);
+    }
     let x = match &s.state {
         State::Constant { .. } => super::extended::filters(cx, fb, &t, &at, &tex, &s.state)?,
         State::Slot { sampler } => {

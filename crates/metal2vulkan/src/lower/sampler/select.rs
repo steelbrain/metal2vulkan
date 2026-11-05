@@ -1098,10 +1098,13 @@ fn select_in_place(
         };
         r.linear = true;
     }
-    if !matches!(
-        sample.state,
-        super::extended::State::Constant { linear: false, .. }
-    ) {
+    // A linear filter's exact sum (a gather sums nothing).
+    if sample.gather.is_none()
+        && !matches!(
+            sample.state,
+            super::extended::State::Constant { linear: false, .. }
+        )
+    {
         cx.families
             .sampler
             .bicubic_routines
@@ -1115,7 +1118,8 @@ fn select_in_place(
 /// constexpr sampler that addresses no border on either plane axis (a 4:2:0 texture samples every
 /// other mode as clamp-to-edge, as that sampler does), or a runtime sampler, whose bound word the
 /// binder holds to the same (`bind::plan::slots::planes_word`); and no texel offset Metal places
-/// by a parent's size.
+/// by a parent's size; and no gather, which the conversion does not take
+/// (`VUID-RuntimeSpirv-OpTypeSampledImage-12206`).
 fn device_takes(s: &super::in_place::Sample) -> bool {
     use super::bicubic::TapAddress;
     let border = match &s.state {
@@ -1124,13 +1128,14 @@ fn device_takes(s: &super::in_place::Sample) -> bool {
         }
         super::extended::State::Slot { .. } => false,
     };
-    !border && !s.offset_base
+    !border && !s.offset_base && s.gather.is_none()
 }
 
 /// Sampling call `call` of texture slot `index` through `sampler` as the in-place form reads it
 /// (`in_place`), with the runtime sampler slots it reads (bit `n` `[[sampler(n)]]`); `None` where
-/// the form does not: anything but a 2D texture's sample or gradient sample without comparison,
-/// with a `float` or `half` result, a constant texel offset or none, no `min_lod_clamp`, and no
+/// the form does not: anything but a 2D texture's sample or gradient sample without comparison, or
+/// gather of a component without comparison (which follows no filter), with a `float` or `half`
+/// result, a constant texel offset or none, no `min_lod_clamp`, and no
 /// status word observed, through a constexpr sampler of one filter for minification and
 /// magnification (nearest or linear), no anisotropy and the weighted-average reduction, or a
 /// runtime sampler slot, whose bound word the binder holds to the same
@@ -1152,7 +1157,7 @@ fn in_place_sample(
     if arm.is_some() || shape.dim != ImageDim::D2 || shape.array || shape.ms || shape.depth {
         return Ok(None);
     }
-    let has_offset = match t.op {
+    let (has_offset, gather) = match t.op {
         TexOp::Sample {
             compare: false,
             offset,
@@ -1161,7 +1166,21 @@ fn in_place_sample(
         | TexOp::SampleGrad {
             compare: false,
             offset,
-        } => offset,
+        } => (offset, None),
+        TexOp::Gather {
+            component,
+            compare: false,
+            offset,
+        } => {
+            use crate::air::intrinsics::Component as C;
+            let component = match component {
+                None | Some(C::X) => 0,
+                Some(C::Y) => 1,
+                Some(C::Z) => 2,
+                Some(C::W) => 3,
+            };
+            (offset, Some(component))
+        }
         _ => return Ok(None),
     };
     if clamp_value(cx, &ops)?.is_some() || crate::lower::texture::observes_status(cx, at) {
@@ -1191,6 +1210,8 @@ fn in_place_sample(
             if s.max_anisotropy > 1 || s.reduction != crate::air::abi::Reduction::WeightedAverage {
                 return Ok(None);
             }
+            // A gather follows no filter.
+            let linear = linear && gather.is_none();
             let address = [s.address_s, s.address_t]
                 .into_iter()
                 .map(|m| match m {
@@ -1236,6 +1257,7 @@ fn in_place_sample(
         offset_base,
         coord: id(cx, coord)?,
         half,
+        gather,
         result: cx.lowered_repr(Value::Inst(at), inst.ty)?,
     };
     Ok(Some((sample, samplers)))

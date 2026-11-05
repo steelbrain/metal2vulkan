@@ -945,17 +945,17 @@ for dependency in &pipeline.dependencies {
   (`TextureFacts::ycbcr_in_place`, a `YCbCrInPlace` of its planes; the runtime states one on a
   device whose memory is the host's, `DeviceProfile::reads_ycbcr_planes_in_place`: an integrated
   GPU or a CPU device). A slot whose function only samples it (nearest or linear, no comparison,
-  anisotropy or `min_lod_clamp`) or reads its size (`RuntimeFact::YCbCrInPlace`) takes the
+  anisotropy or `min_lod_clamp`), gathers it or reads its size (`RuntimeFact::YCbCrInPlace`) takes the
   pipeline's in-place variant (`VariantKey::ycbcr_in_place`): the slot binds a uniform texel buffer
   over the planes' bytes (`WriteSource::YCbCrInPlace`, in `YCbCrInPlace::format`), its push field
   (`PushField::YCbCrInPlace`) holds `YCbCrInPlace::words`, and the function converts and filters
-  the codes as Metal does, exactly. Any other slot, and any texture without the fact, binds the
+  the codes as Metal does, exactly (a gather Metal's taps of them). Any other slot, and any texture without the fact, binds the
   texture's image of converted texels. Where the consumer also holds the planes as a linear image
   of their multi-planar 4:2:0 format over their bytes, which the device's sampler Y′CbCr
   conversion reads with Metal's reconstruction, it states so (`YCbCrInPlace::with_planes_image`,
   its conversion `YCbCrInPlace::sampler`, a `YCbCrPlanesSampler`). A slot whose every sample the
   device's sampler takes (the fact's `device`: no border address mode, no texel offset placed by a
-  parent's size; a runtime sampler's word without a border mode) then takes the planes variant
+  parent's size, no gather; a runtime sampler's word without a border mode) then takes the planes variant
   (`VariantKey::ycbcr_planes_sampled`): the slot is a combined image sampler of the image
   (`ResourceKind::YCbCrPlanes`, `BindingSource::YCbCrPlanes`, written from
   `WriteSource::YCbCrPlanesImage`) whose immutable sampler is `SamplerDesc::ycbcr` of the

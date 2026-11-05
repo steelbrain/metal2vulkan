@@ -101,6 +101,11 @@ enum Form {
     ThreeD { offset: (i32, i32, i32) },
     /// `texture2d<float>`: a `float` result.
     Float,
+    /// `texture2d<half>`: `t.gather(s, coord[tid], int2(0), component)`, `component` 0 to 3.
+    Gather { component: u32 },
+    /// `texture2d<half>`: a sample, then a gather of red, of one coordinate, written to elements
+    /// `2 tid` and `2 tid + 1`: the shape of a probe that samples or gathers as a lane asks.
+    SampleAndGather,
 }
 
 /// A kernel sampling texture slot 0 through sampler `sampler` (a constexpr sampler's words, or
@@ -124,38 +129,93 @@ fn kernel_of(sampler: Option<u64>, form: Form, float: bool) -> String {
     } else {
         "%s"
     };
-    let (tex_ty, name, args, call_args) = match form {
+    const SAMPLE_2D: &str =
+        "ptr addrspace(1), ptr addrspace(2), <2 x float>, i1, <2 x i32>, i1, float, float, i32";
+    const GATHER_2D: &str =
+        "ptr addrspace(1), ptr addrspace(2), <2 x float>, i1, <2 x i32>, i32, i32";
+    let plain = format!("texture2d<{texel}, sample>");
+    let gather = |component: u32| {
+        (
+            "gather_texture_2d",
+            GATHER_2D,
+            format!("<2 x float> %uv, i1 true, <2 x i32> zeroinitializer, i32 {component}, i32 0"),
+        )
+    };
+    let (tex_ty, calls) = match form {
         Form::Plain { offset: (ox, oy) } => (
-            format!("texture2d<{texel}, sample>"),
-            "2d",
-            "ptr addrspace(1), ptr addrspace(2), <2 x float>, i1, <2 x i32>, i1, float, float, i32",
-            format!("<2 x float> %uv, i1 true, <2 x i32> <i32 {ox}, i32 {oy}>, i1 false, float 0.0, float 0.0, i32 0"),
+            plain,
+            vec![(
+                "sample_texture_2d",
+                SAMPLE_2D,
+                format!("<2 x float> %uv, i1 true, <2 x i32> <i32 {ox}, i32 {oy}>, i1 false, float 0.0, float 0.0, i32 0"),
+            )],
         ),
         Form::Float => (
-            format!("texture2d<{texel}, sample>"),
-            "2d",
-            "ptr addrspace(1), ptr addrspace(2), <2 x float>, i1, <2 x i32>, i1, float, float, i32",
-            "<2 x float> %uv, i1 true, <2 x i32> zeroinitializer, i1 false, float 0.0, float 0.0, i32 0".to_string(),
+            plain,
+            vec![(
+                "sample_texture_2d",
+                SAMPLE_2D,
+                "<2 x float> %uv, i1 true, <2 x i32> zeroinitializer, i1 false, float 0.0, float 0.0, i32 0".to_string(),
+            )],
         ),
         Form::MinLodClamp => (
-            format!("texture2d<{texel}, sample>"),
-            "2d",
-            "ptr addrspace(1), ptr addrspace(2), <2 x float>, i1, <2 x i32>, i1, float, float, i32",
-            "<2 x float> %uv, i1 true, <2 x i32> zeroinitializer, i1 false, float 0.0, float 1.0, i32 0".to_string(),
+            plain,
+            vec![(
+                "sample_texture_2d",
+                SAMPLE_2D,
+                "<2 x float> %uv, i1 true, <2 x i32> zeroinitializer, i1 false, float 0.0, float 1.0, i32 0".to_string(),
+            )],
         ),
         Form::DynamicOffset => (
-            format!("texture2d<{texel}, sample>"),
-            "2d",
-            "ptr addrspace(1), ptr addrspace(2), <2 x float>, i1, <2 x i32>, i1, float, float, i32",
-            "<2 x float> %uv, i1 true, <2 x i32> %o, i1 false, float 0.0, float 0.0, i32 0".to_string(),
+            plain,
+            vec![(
+                "sample_texture_2d",
+                SAMPLE_2D,
+                "<2 x float> %uv, i1 true, <2 x i32> %o, i1 false, float 0.0, float 0.0, i32 0".to_string(),
+            )],
         ),
         Form::ThreeD { offset: (ox, oy, oz) } => (
             format!("texture3d<{texel}, sample>"),
-            "3d",
-            "ptr addrspace(1), ptr addrspace(2), <3 x float>, i1, <3 x i32>, i1, float, float, i32",
-            format!("<3 x float> %uvw, i1 true, <3 x i32> <i32 {ox}, i32 {oy}, i32 {oz}>, i1 false, float 0.0, float 0.0, i32 0"),
+            vec![(
+                "sample_texture_3d",
+                "ptr addrspace(1), ptr addrspace(2), <3 x float>, i1, <3 x i32>, i1, float, float, i32",
+                format!("<3 x float> %uvw, i1 true, <3 x i32> <i32 {ox}, i32 {oy}, i32 {oz}>, i1 false, float 0.0, float 0.0, i32 0"),
+            )],
+        ),
+        Form::Gather { component } => (plain, vec![gather(component)]),
+        Form::SampleAndGather => (
+            plain,
+            vec![
+                (
+                    "sample_texture_2d",
+                    SAMPLE_2D,
+                    "<2 x float> %uv, i1 true, <2 x i32> zeroinitializer, i1 false, float 0.0, float 0.0, i32 0".to_string(),
+                ),
+                gather(0),
+            ],
         ),
     };
+    // Each call's result to element `tid` of `out`, or of two calls `2 tid + k`.
+    let mut body = String::new();
+    let mut decls = String::new();
+    if calls.len() > 1 {
+        body.push_str("  %i2 = mul i64 %i, 2\n");
+    }
+    for (k, (intrinsic, args, call_args)) in calls.iter().enumerate() {
+        let at = match calls.len() {
+            1 => "%i".to_string(),
+            _ => {
+                body.push_str(&format!("  %i2_{k} = add i64 %i2, {k}\n"));
+                format!("%i2_{k}")
+            }
+        };
+        body.push_str(&format!(
+            "  %r{k} = call {{ {vec4}, i8 }} @air.{intrinsic}.{suffix}(ptr addrspace(1) %t, ptr addrspace(2) {s}, {call_args})\n  %v{k} = extractvalue {{ {vec4}, i8 }} %r{k}, 0\n  %q{k} = getelementptr inbounds {vec4}, ptr addrspace(1) %out, i64 {at}\n  store {vec4} %v{k}, ptr addrspace(1) %q{k}, align {size}\n"
+        ));
+        decls.push_str(&format!(
+            "declare {{ {vec4}, i8 }} @air.{intrinsic}.{suffix}({args})\n"
+        ));
+    }
     let dynamic = matches!(form, Form::DynamicOffset);
     let runtime = sampler.is_none();
     // Parameters after `out`: the offsets buffer, then the runtime sampler.
@@ -217,15 +277,10 @@ fn kernel_of(sampler: Option<u64>, form: Form, float: bool) -> String {
     format!(
         r#"{state}define void @k(ptr addrspace(1) %t, ptr addrspace(1) %c, ptr addrspace(1) %out{params}, i32 %tid) {{
   %i = zext i32 %tid to i64
-{load_coord}{load_offset}  %r = call {{ {vec4}, i8 }} @air.sample_texture_{name}.{suffix}(ptr addrspace(1) %t, ptr addrspace(2) {s}, {call_args})
-  %v = extractvalue {{ {vec4}, i8 }} %r, 0
-  %q = getelementptr inbounds {vec4}, ptr addrspace(1) %out, i64 %i
-  store {vec4} %v, ptr addrspace(1) %q, align {size}
-  ret void
+{load_coord}{load_offset}{body}  ret void
 }}
 
-declare {{ {vec4}, i8 }} @air.sample_texture_{name}.{suffix}({args})
-
+{decls}
 !air.kernel = !{{!0}}
 {states}!0 = !{{ptr @k, !1, !2}}
 !1 = !{{}}
@@ -720,25 +775,248 @@ fn in_place_samples_are_metals() {
     }
 }
 
+/// Metal's gather of component `c` of `planes` at footprint position `q` (`256 (x - 1/2)` per
+/// axis, the texel coordinate `x`), clamped to the edge: component `c`'s steps of the taps
+/// `(i, j + 1)`, `(i + 1, j + 1)`, `(i + 1, j)` and `(i, j)` (`i = ⌊q / 256⌋` per axis, each tap
+/// clamped), in that order; alpha's step `2048` at every tap.
+fn metal_gather(planes: &Planes, (qx, qy): (i64, i64), c: usize) -> [i64; 4] {
+    let edge = |i: i64, n: u32| i.clamp(0, i64::from(n) - 1);
+    let (i, j) = (qx >> 8, qy >> 8);
+    let (i0, i1) = (edge(i, W), edge(i + 1, W));
+    let (j0, j1) = (edge(j, H), edge(j + 1, H));
+    let step = |x: i64, y: i64| match c {
+        3 => 2048,
+        _ => planes.texel(x, y)[c],
+    };
+    [step(i0, j1), step(i1, j1), step(i1, j0), step(i0, j0)]
+}
+
+/// Every gather of each component of each format's random planes under each conversion, through
+/// constexpr and runtime samplers (either filter, which a gather does not follow; a runtime
+/// sampler's repeat gathered as clamp-to-edge, as a 4:2:0 texture's), `float` and `half` results,
+/// on lavapipe and on MoltenVK, is Metal's taps of the texels Metal reads: a quarter of the
+/// positions past an edge.
+#[test]
+fn in_place_gathers_are_metals() {
+    let conversions = [
+        (YCbCrRange::Video, YCbCrMatrix::Bt601),
+        (YCbCrRange::Full, YCbCrMatrix::Bt709),
+        (YCbCrRange::Video, YCbCrMatrix::Bt2020),
+    ];
+    let mut rng = Lcg(0x6a_7e_42);
+    let planes: Vec<Planes> = [PixelFormat::YCBCR84202P, PixelFormat::YCBCR104202P]
+        .into_iter()
+        .flat_map(|pf| conversions.map(|c| (pf, c)))
+        .map(|(pf, c)| Planes::random(pf, c, &mut rng))
+        .collect();
+    // Footprint positions `q = 256 (x - 1/2)`, each axis within one and a half texels of the
+    // texture, off the places where `⌊q / 256⌋` changes, which hold for any rounding of the
+    // coordinate.
+    let positions: Vec<(i64, i64)> = (0..64)
+        .map(|_| {
+            let mut q = |n: u32| {
+                let q = (rng.next() % (256 * u64::from(n) + 768)) as i64 - 384;
+                match q & 255 {
+                    0..16 => q + 16,
+                    240.. => q - 16,
+                    _ => q,
+                }
+            };
+            (q(W), q(H))
+        })
+        .collect();
+    let out = |q: i64, n: u32| q < 0 || q >= 256 * (i64::from(n) - 1);
+    let edges = positions
+        .iter()
+        .filter(|&&(qx, qy)| out(qx, W) || out(qy, H))
+        .count();
+    assert!(edges >= positions.len() / 4, "{edges} past an edge");
+    let coords: Vec<u8> = positions
+        .iter()
+        .flat_map(|&(qx, qy)| {
+            let n = |q: i64, n: u32| (q + 128) as f32 / (256 * i64::from(n)) as f32;
+            [n(qx, W).to_le_bytes(), n(qy, H).to_le_bytes()]
+        })
+        .flatten()
+        .collect();
+    let edge = SamplerAddressMode::ClampToEdge;
+    let cases = [
+        (
+            "constexpr linear gather",
+            Through::Constexpr(linear(1, false, 0)),
+            &[0, 1, 2, 3][..],
+        ),
+        (
+            "constexpr nearest gather",
+            Through::Constexpr(sampler_words(0, 0, 1, false, 0)),
+            &[0, 2][..],
+        ),
+        (
+            "runtime linear gather",
+            Through::Runtime(word(true, edge)),
+            &[0, 1, 2, 3][..],
+        ),
+        (
+            "runtime repeat gather",
+            Through::Runtime(word(false, SamplerAddressMode::Repeat)),
+            &[0, 2][..],
+        ),
+    ];
+    for (name, through, components) in cases {
+        for &component in components {
+            for half in [false, true] {
+                let sampler = match through {
+                    Through::Constexpr(w) => Some(w),
+                    Through::Runtime(_) => None,
+                };
+                let body = kernel_of(sampler, Form::Gather { component }, !half);
+                let Some(bc) = assemble(name, &body) else {
+                    return;
+                };
+                for (stem, p) in [("lavapipe", lavapipe()), ("moltenvk-m3", m3())] {
+                    let what = format!("{name} of {component} half={half} on {stem}");
+                    let a = compile_with(&bc, "k", &p, &inputs(true))
+                        .unwrap_or_else(|e| panic!("{what}: {e}"));
+                    link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{what}: {e}"));
+                    assert!(
+                        a.strategies
+                            .entries
+                            .contains_key("sampler.ycbcr_in_place.gather"),
+                        "{what}: {:?}",
+                        a.strategies.entries.keys().collect::<Vec<_>>()
+                    );
+                    let (plan, m) = typed_module_with(&bc, "k", &p, &inputs(true))
+                        .unwrap_or_else(|e| panic!("{what}: {e}"));
+                    let slot = texel_buffer(&m);
+                    let n = positions.len();
+                    let size = if half { 8 } else { 16 };
+                    for planes in &planes {
+                        let init = [coords.clone(), vec![0xab; size * n]];
+                        let res = resources(&plan, &init, &planes.words);
+                        let word = match through {
+                            Through::Runtime(w) => Some(w),
+                            Through::Constexpr(_) => None,
+                        };
+                        let res = with_word(res, &a, word);
+                        let got = run(&m, &res, &planes.image(slot), n as u32, half);
+                        for (q, g) in positions.iter().zip(got) {
+                            let want = metal_gather(planes, *q, component as usize);
+                            let want = want.map(|k| match half {
+                                true => u32::from(half_away(k, 2048)),
+                                false => (k as f32 / 2048.0).to_bits(),
+                            });
+                            let p = &planes.planes;
+                            assert_eq!(
+                                g,
+                                want,
+                                "{what} {:?} {}-bit q {q:?}: {g:x?}",
+                                (p.range, p.matrix),
+                                p.codes.bits,
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// A function that samples a slot and gathers it through one runtime sampler, as a probe that
+/// samples or gathers as each lane asks: its compile on MoltenVK on the M3 binds the texture's
+/// image and notes the device's filter of the format there (`PrecisionNote::HalfSampleFilter` and
+/// `FloatSampleFilter`, announced `ycbcr-filter-not-exact`), and states the in-place form with
+/// the sampler, whose compile reads the planes for both, Metal's filter and Metal's taps, noting
+/// neither that filter nor a pixel sampler's scaling.
+#[test]
+fn a_slot_that_samples_and_gathers_reads_its_planes_in_place() {
+    use crate::pipeline::artifact::PrecisionNote;
+    for half in [false, true] {
+        let what = format!("sample and gather half={half}");
+        let Some(bc) = assemble(&what, &kernel_of(None, Form::SampleAndGather, !half)) else {
+            return;
+        };
+        let filter = match half {
+            true => PrecisionNote::HalfSampleFilter,
+            false => PrecisionNote::FloatSampleFilter,
+        };
+        let p = m3();
+        let notes = |a: &crate::library::FunctionArtifact| -> Vec<PrecisionNote> {
+            let specialized = a.specialized.iter().map(|s| s.note);
+            a.precision.iter().copied().chain(specialized).collect()
+        };
+        let image =
+            compile_with(&bc, "k", &p, &inputs(false)).unwrap_or_else(|e| panic!("{what}: {e}"));
+        assert!(
+            notes(&image).contains(&filter),
+            "{what}: {:?}",
+            notes(&image)
+        );
+        assert!(
+            image.facts.contains(&RuntimeFact::YCbCrInPlace {
+                slot: TEXTURE,
+                samplers: 1,
+                device: false,
+            }),
+            "{what}: {:?}",
+            image.facts
+        );
+        let a = compile_with(&bc, "k", &p, &inputs(true))
+            .unwrap_or_else(|e| panic!("{what}, in place: {e}"));
+        link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{what}, in place: {e}"));
+        for form in [
+            "sampler.ycbcr_in_place.runtime",
+            "sampler.ycbcr_in_place.gather",
+        ] {
+            assert!(
+                a.strategies.entries.contains_key(form),
+                "{what}, in place: {:?}",
+                a.strategies.entries.keys().collect::<Vec<_>>()
+            );
+        }
+        for note in [
+            PrecisionNote::HalfSampleFilter,
+            PrecisionNote::FloatSampleFilter,
+            PrecisionNote::PixelSamplerScaling,
+        ] {
+            assert!(
+                !notes(&a).contains(&note),
+                "{what}, in place: {:?}",
+                notes(&a)
+            );
+        }
+    }
+}
+
 /// A slot whose every access the form reads states `RuntimeFact::YCbCrInPlace` with the runtime
 /// samplers it samples through, on a profile that takes the form (lavapipe, a CPU device; MoltenVK
-/// on the M3, an integrated one) and on no other (the RTX 5080, a discrete one); a gather, a
-/// dynamic offset, `min_lod_clamp` and a 3D texture keep it from the form. Its compile under the
-/// variant states the same fact, so its plan names the same variant.
+/// on the M3, an integrated one) and on no other (the RTX 5080, a discrete one); a dynamic offset,
+/// `min_lod_clamp` and a 3D texture keep it from the form, and a gather from the device's own
+/// conversion alone (`device`). Its compile under the variant states the same fact, so its plan
+/// names the same variant.
 #[test]
 fn a_slot_states_the_in_place_form_where_it_reads_only_it() {
-    let fact = |samplers| RuntimeFact::YCbCrInPlace {
+    let fact = |samplers, device| RuntimeFact::YCbCrInPlace {
         slot: TEXTURE,
         samplers,
-        device: true,
+        device,
     };
     let reads = [
         (
             "linear",
             kernel(Some(linear(1, false, 0)), Form::Float),
-            Some(0),
+            Some((0, true)),
         ),
-        ("runtime", kernel(None, Form::Float), Some(1)),
+        ("runtime", kernel(None, Form::Float), Some((1, true))),
+        (
+            "gather",
+            kernel(Some(linear(1, false, 0)), Form::Gather { component: 2 }),
+            Some((0, false)),
+        ),
+        (
+            "runtime sample and gather",
+            kernel(None, Form::SampleAndGather),
+            Some((1, false)),
+        ),
         (
             "dynamic offset",
             kernel(Some(linear(1, false, 0)), Form::DynamicOffset),
@@ -773,16 +1051,18 @@ fn a_slot_states_the_in_place_form_where_it_reads_only_it() {
             let (plan, _) = typed_module_with(&bc, "k", &p, &inputs(false))
                 .unwrap_or_else(|e| panic!("{what}: {e}"));
             let stated = plan.facts.iter().find_map(|f| match f {
-                RuntimeFact::YCbCrInPlace { slot, samplers, .. } if *slot == TEXTURE => {
-                    Some(*samplers)
-                }
+                RuntimeFact::YCbCrInPlace {
+                    slot,
+                    samplers,
+                    device,
+                } if *slot == TEXTURE => Some((*samplers, *device)),
                 _ => None,
             });
             assert_eq!(stated, samplers.filter(|_| takes), "{what}");
-            if let (Some(s), true) = (samplers, takes) {
+            if let (Some((s, device)), true) = (samplers, takes) {
                 let (variant, _) = typed_module_with(&bc, "k", &p, &inputs(true))
                     .unwrap_or_else(|e| panic!("{what}, in place: {e}"));
-                assert!(variant.facts.contains(&fact(s)), "{what}, in place");
+                assert!(variant.facts.contains(&fact(s, device)), "{what}, in place");
             }
         }
     }
