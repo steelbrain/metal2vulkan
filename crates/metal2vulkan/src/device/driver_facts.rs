@@ -966,6 +966,23 @@ pub enum DriverFact {
     /// and small floats, shared exponents and NaNs among them) into a 1x1 attachment, its 11
     /// depth and 4 stencil clears beside them: all 86 texels Metal's bytes, none a code apart.
     ColorClearIsMetals,
+    /// A colour clear's normalized channel (a render pass's `CLEAR` load operation's, and
+    /// `vkCmdClearColorImage`'s) stores either of the two codes nearest its scaled value, not
+    /// always the nearest, as Vulkan allows ("returns one of the two unsigned binary integer values
+    /// with exactly b bits which are closest to the floating-point value r. Implementations should
+    /// round to nearest", Conversion from Floating-Point to Normalized Fixed-Point). On a driver
+    /// with it the runtime announces `device-color-conversion` for a clear or a plain colour fill
+    /// of a normalized channel whose scaled value is not a whole code, not only for one near a
+    /// midpoint between two. Measured by
+    /// `runtime_lane::color_fills::plain_color_fills_are_the_device_s_clear` (`vkCmdClearColorImage`
+    /// of 762 colours into each of 70 formats) on the RTX 5080 Laptop GPU at 0b556ddfd6
+    /// (2026-11-04): 352 fills stored 382 normalized channels a code from Metal's, each one of the
+    /// two codes nearest the scaled value. The 8- and 16-bit unorm and snorm channels went toward
+    /// zero (`R16Unorm`'s 0.001, 65.535 codes, stored 65; `R8Snorm`'s -0.5, -63.5, stored -63), the
+    /// packed 16-bit and 10-bit channels and an sRGB format's alpha at times to the code above the
+    /// nearest (`B5G6R5Unorm`'s 0.7529 red, 23.34 codes, stored 24). The load operation's tie of an
+    /// 8-bit channel (127.5 codes) stores 127 there (`runtime_lane::clear_reach`, `sample_fills`).
+    ColorClearTakesEitherCode,
     /// An optimal colour image may keep its compression state apart from the memory it is bound
     /// to, so a write through a buffer or another image over its bytes can leave its texels as
     /// they were. Vulkan leaves an optimal image's texels undefined after such a write; Metal's
@@ -2069,6 +2086,10 @@ pub(crate) const MEASURED: &[Measured<DriverFact>] = &[
         device: Some(APPLE9),
         ..moltenvk_on_apple(DriverFact::ColorClearIsMetals)
     },
+    nvidia_on(
+        DriverFact::ColorClearTakesEitherCode,
+        NVIDIA_RTX_5080_LAPTOP,
+    ),
     Measured {
         fact: DriverFact::CompressedImagesHideAliasedWrites,
         driver: DriverId::INTEL_OPEN_SOURCE_MESA,

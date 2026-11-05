@@ -3321,17 +3321,21 @@ bound.
   stored up to 11 codes from Metal's).
   Also a render pass's clear of a normalized, sRGB,
   packed 16-bit, half or small-float color attachment to a color whose conversion is in question
-  (a normalized channel within 1/1024 of a midpoint between two codes, an sRGB channel inside its
-  range, a value the format does not hold exactly): the device converts the clear color, where
-  Metal's clear rounds each channel to nearest, a tie to even, and truncates a small float's and a
-  shared exponent's mantissas. Not for a clear by the load operation of an attachment the pass's
+  (a normalized channel within 1/1024 of a midpoint between two codes, or anywhere off a whole code
+  on a driver that takes either code nearest it, `DriverFact::ColorClearTakesEitherCode`: NVIDIA's
+  on the RTX 5080 Laptop GPU, whose 8- and 16-bit channels' clears went toward zero; an sRGB channel
+  inside its range, a value the format does not hold exactly): the device converts the clear color,
+  where Metal's clear rounds each channel to nearest, a tie to even, and truncates a small float's
+  and a shared exponent's mantissas. Vulkan lets the device store either of the two codes nearest a
+  normalized channel's scaled value, asking for the nearest. Not for a clear by the load operation of an attachment the pass's
   render area covers on a driver whose load operation clears as Metal's `Clear` load action does
   (`DriverFact::ColorClearIsMetals`: MoltenVK on the Apple9 GPUs under macOS 27, measured on the M3
   Max); a clear made before the pass, of an attachment its first instance leaves out, is announced
   there too. Also a plain color fill (`BlitCommandEncoder::fill_texture_color` without a pixel
   format) of a texture of such a format the device renders, which the device's clear of the color
   writes, to a color whose conversion is in question against Metal's fill packing (a normalized
-  channel within 1/1024 of a midpoint between two codes, more for a packed 16-bit channel, an sRGB
+  channel within 1/1024 of a midpoint between two codes, more for a packed 16-bit channel, or
+  anywhere off a whole code on a driver with `DriverFact::ColorClearTakesEitherCode`; an sRGB
   channel inside its range, a value a half, small float or shared exponent does not hold exactly):
   Metal's fill rounds a tie half up and takes an sRGB channel's code whose decoded value is
   nearest.

@@ -412,7 +412,8 @@ pub(super) fn device_converts(pf: PixelFormat) -> bool {
 }
 
 /// How near a midpoint between two codes a normalized channel's scaled color may lie where the
-/// device, which Vulkan asks to round to nearest, may store the other code than Metal's fill: a
+/// device, which Vulkan asks to round to nearest (it may store either nearest code), may store the
+/// other code than Metal's fill: a
 /// tie (which the fill rounds up, half away from zero signed), or a value the device's arithmetic
 /// may take across one, as for a clear (`clear_value.rs`).
 const TIE: f64 = 1.0 / 1024.0;
@@ -426,11 +427,13 @@ fn near_tie(r: f64, margin: f64) -> bool {
 /// another texel than Metal's fill packs (the module docs), announced `device-color-conversion`:
 /// a normalized channel's value scaled within [`TIE`] of a midpoint between two codes (widened by
 /// the fill's rounding of the product to `float`, and for a packed 16-bit format by a step
-/// through `half`, which a device's clear may take as Metal's own clear does), an sRGB channel's
+/// through `half`, which a device's clear may take as Metal's own clear does), or anywhere off a
+/// whole code where the device takes either of the two nearest codes (`either`,
+/// `DriverFact::ColorClearTakesEitherCode`), an sRGB channel's
 /// value inside `(0, 1)` (the fill takes the code whose decoded value is nearest, the device
 /// encodes), and a half's, small float's or shared exponent's value it does not hold exactly. A
 /// NaN is [`device_nan`]'s, or stores 0 on both.
-pub(super) fn device_apart(pf: PixelFormat, color: [f64; 4]) -> bool {
+pub(super) fn device_apart(pf: PixelFormat, color: [f64; 4], either: bool) -> bool {
     use Conversion as C;
     if pf == PixelFormat::RGB9E5Float {
         return !shared_exact(color);
@@ -456,7 +459,8 @@ pub(super) fn device_apart(pf: PixelFormat, color: [f64; 4]) -> bool {
                     true => TIE + m / 2048.0,
                     false => TIE + m / f64::from(1u32 << 24),
                 };
-                near_tie(f64::from(v.clamp(low, 1.0)) * m, margin)
+                let r = f64::from(v.clamp(low, 1.0)) * m;
+                near_tie(r, margin) || (either && r != r.round())
             }
             C::Srgb => v > 0.0 && v < 1.0,
             C::Half => {

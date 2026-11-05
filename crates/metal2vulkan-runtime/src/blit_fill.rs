@@ -553,13 +553,16 @@ fn placement(
 /// texel than Metal's fill packs ([`device_apart`], `device-color-conversion`), and where it
 /// converts a half or small-float NaN as the device likes ([`device_nan`], `device-nan-encoding`).
 fn degrade_fill_conversion(device: &Device, pf: PixelFormat, color: [f64; 4]) {
-    if device_apart(pf, color) {
+    let either = (device.properties().driver_facts)
+        .contains(&metal2vulkan::device::DriverFact::ColorClearTakesEitherCode);
+    if device_apart(pf, color, either) {
         device.degrade(Degradation::DeviceColorConversion, || {
             (
                 format!("a color fill of a {pf:?} texture to {color:?}"),
                 "the device clears the region by its own conversion of the color, which Vulkan \
-                 asks it to round to nearest, leaving a tie, an sRGB encode and a float's \
-                 rounding to it, where Metal's fill packs it by rules of its own (a tie rounded \
+                 lets store either of the two codes nearest a normalized channel's value (it asks \
+                 for the nearest) and which takes an sRGB encode and a float's rounding its own \
+                 way, where Metal's fill packs it by rules of its own (a tie rounded \
                  half up, an sRGB channel the code whose decoded value is nearest): a channel can \
                  store a code next to Metal's"
                     .to_owned(),

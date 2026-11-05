@@ -316,6 +316,30 @@ fn every_measured_fill_texel_is_metal_s() {
 
 /// Unsigned normalized: a 4- or 8-bit channel rounds the exact product half up, any other width
 /// the product's `float` (the probe's thresholds).
+/// On a driver that takes either code nearest a normalized channel's scaled value
+/// (`DriverFact::ColorClearTakesEitherCode`), a plain fill is announced wherever such a channel's
+/// scaled color is off a whole code, as the RTX 5080 Laptop GPU's clears stored; elsewhere only
+/// near a midpoint. A whole code, and a float channel, is not announced on either.
+#[test]
+fn a_driver_taking_either_code_announces_every_fill_off_a_code() {
+    for (pf, color) in [
+        (P::R16Unorm, [0.001, 0.0, 0.0, 0.0]),
+        (P::RG8Unorm, [0.0, 0.904, 0.0, 0.0]),
+        (P::R8Snorm, [0.649_799_282_935_052, 0.0, 0.0, 0.0]),
+        (P::B5G6R5Unorm, [0.0, 0.0, 0.752_941_176_470_588_2, 0.0]),
+    ] {
+        assert!(device_apart(pf, color, true), "{pf:?} {color:?}");
+        assert!(!device_apart(pf, color, false), "{pf:?} {color:?}");
+    }
+    for (pf, color) in [
+        (P::RGBA8Unorm, [0.0, 1.0, 0.0, 1.0]),
+        (P::R8Snorm, [-1.0, 0.0, 0.0, 0.0]),
+        (P::R32Float, [0.1, 0.0, 0.0, 0.0]),
+    ] {
+        assert!(!device_apart(pf, color, true), "{pf:?} {color:?}");
+    }
+}
+
 #[test]
 fn unorm_rounds_its_product_by_width() {
     // 0.5/65535's `float` times 65535 rounds to 0.5 in `float`, which rounds up; a clear stores 0.
@@ -1076,7 +1100,7 @@ fn the_device_s_clear_is_announced_where_its_conversion_is_in_question() {
         (P::RGB9E5Float, [1e6, 0.0, 0.0, 0.0], true),
     ];
     for (pf, color, want) in apart {
-        assert_eq!(device_apart(pf, color), want, "{pf:?} {color:?}");
+        assert_eq!(device_apart(pf, color, false), want, "{pf:?} {color:?}");
     }
     for (pf, want) in [
         (P::RGBA16Float, true),

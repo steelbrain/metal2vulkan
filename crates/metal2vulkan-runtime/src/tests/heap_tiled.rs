@@ -1339,7 +1339,7 @@ fn fresh_patterns_clear_colors_write_their_texels() {
                 let bytes = crate::clear_value::tests::texel_bytes(pf, color);
                 assert_eq!(bytes.as_deref(), Some(texel), "{pf:?}: {color:?}");
                 assert!(
-                    !crate::clear_value::rounds_apart(pf, color),
+                    !crate::clear_value::rounds_apart(pf, color, false),
                     "{pf:?}: {color:?}"
                 );
                 cleared += 1;

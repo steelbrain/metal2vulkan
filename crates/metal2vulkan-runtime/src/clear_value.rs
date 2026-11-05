@@ -20,11 +20,14 @@
 //! **The device converts a float clear.** A normalized, sRGB, packed 16-bit, half, float or small
 //! float channel's clear value is the clear color as a `float` ([`color`]), which the device
 //! converts to the format by its own rules, as a depth's is ([`depth`]). Vulkan clamps a
-//! normalized value and asks the device to round it to nearest, and leaves a float format's
+//! normalized value and lets the device store either of the two codes nearest it, asking it to
+//! round to nearest ("Implementations should round to nearest"), and leaves a float format's
 //! rounding and an sRGB encode's precision to the device. So the device's texel can stand a code
 //! from Metal's where the rounding is in question ([`rounds_apart`], announced
 //! `device-color-conversion`): a normalized channel's value scaled within [`TIE`] of a midpoint
 //! between two codes (a packed 16-bit channel's within the error of Metal's step through `half`),
+//! or anywhere off a whole code on a driver measured to take either code
+//! (`DriverFact::ColorClearTakesEitherCode`),
 //! an sRGB channel's value inside `(0, 1)`, a half or small float's value it does not hold
 //! exactly, and a shared exponent's texel it does not; and a `Depth16Unorm` depth scaled at or
 //! within [`TIE`] of a midpoint or above it, which Metal's clear truncates and a device rounding
@@ -282,10 +285,12 @@ fn near_tie(r: f64, margin: f64) -> bool {
 
 /// Whether the device's conversion of [`color`]'s clear value of `color` for an attachment of
 /// `pf` may store another texel than Metal's clear (the module docs): a channel whose rounding is
-/// in question. False for a clear the device converts nothing of (an integer, extended-range or
-/// YCbCr format's, or a format with no clear rule), and for a NaN, whose half or small float the
-/// device converts as it likes (`nan_clear::degrade_nan_clears`).
-pub(super) fn rounds_apart(pf: PixelFormat, color: [f64; 4]) -> bool {
+/// in question, a normalized one's anywhere off a whole code where the device takes either nearest
+/// code (`either`, `DriverFact::ColorClearTakesEitherCode`). False for a clear the device converts
+/// nothing of (an integer, extended-range or YCbCr format's, or a format with no clear rule), and
+/// for a NaN, whose half or small float the device converts as it likes
+/// (`nan_clear::degrade_nan_clears`).
+pub(super) fn rounds_apart(pf: PixelFormat, color: [f64; 4], either: bool) -> bool {
     if ExtendedRange::of(pf).is_some() || ycbcr_renders(pf) {
         return false;
     }
@@ -294,6 +299,9 @@ pub(super) fn rounds_apart(pf: PixelFormat, color: [f64; 4]) -> bool {
     };
     let values: [f32; 4] = std::array::from_fn(|i| native(channels[i], color[i]));
     let scaled = |v: f32, lo: f32, max: u64| f64::from(v.clamp(lo, 1.0)) * max as f64;
+    // In question near a midpoint, or anywhere off a whole code where the device takes either
+    // nearest code.
+    let apart = |r: f64, margin: f64| near_tie(r, margin) || (either && r != r.round());
     channels
         .iter()
         .zip(values)
@@ -303,14 +311,14 @@ pub(super) fn rounds_apart(pf: PixelFormat, color: [f64; 4]) -> bool {
             | Channel::Uint(_)
             | Channel::Sint(_)
             | Channel::Float => false,
-            Channel::Unorm(bits) => near_tie(scaled(v, 0.0, (1 << bits) - 1), TIE),
+            Channel::Unorm(bits) => apart(scaled(v, 0.0, (1 << bits) - 1), TIE),
             // Metal steps through `half`, which moves the scaled value by up to its code range
             // times 2^-11.
             Channel::HalfUnorm(bits) => {
                 let max = (1u64 << bits) - 1;
-                near_tie(scaled(v, 0.0, max), TIE + max as f64 / 2048.0)
+                apart(scaled(v, 0.0, max), TIE + max as f64 / 2048.0)
             }
-            Channel::Snorm(bits) => near_tie(scaled(v, -1.0, (1 << (bits - 1)) - 1), TIE),
+            Channel::Snorm(bits) => apart(scaled(v, -1.0, (1 << (bits - 1)) - 1), TIE),
             Channel::Srgb => v > 0.0 && v < 1.0,
             Channel::Half => !v.is_nan() && f16_to_f32(f32_to_f16(v)) != v,
             Channel::Ufloat(mantissa) => {
@@ -1129,6 +1137,37 @@ pub(crate) mod tests {
 
     /// A clear whose rounding is in question is the one announced: a normalized value at a tie, an
     /// sRGB value inside its range, a value a half, small float or shared exponent does not hold;
+    /// On a driver that takes either code nearest a normalized channel's scaled value
+    /// (`DriverFact::ColorClearTakesEitherCode`) a clear is in question wherever such a channel's
+    /// scaled value is off a whole code, as the RTX 5080 Laptop GPU's clears stored (`R16Unorm`'s
+    /// 0.001 is 65.535 codes, which it stored as 65, Metal 66), a scaled `float` a hair off a
+    /// whole code included (it may go either way); elsewhere only near a midpoint. A whole code,
+    /// and a channel of another kind, is in question as before on both.
+    #[test]
+    fn a_driver_taking_either_code_has_every_clear_off_a_code_in_question() {
+        let off = [
+            (P::R16Unorm, [0.001, 0.0, 0.0, 0.0]),
+            (P::RGBA8Unorm, [0.25, 0.0, 0.0, 1.0]),
+            (P::RG8Unorm, [0.0, 0.904, 0.0, 0.0]),
+            (P::R8Snorm, [-0.3, 0.0, 0.0, 0.0]),
+            (P::B5G6R5Unorm, [0.7529, 0.0, 0.0, 0.0]),
+        ];
+        for (pf, c) in off {
+            assert!(rounds_apart(pf, c, true), "{pf:?} {c:?}");
+            assert!(!rounds_apart(pf, c, false), "{pf:?} {c:?}");
+        }
+        let whole = [
+            (P::RGBA8Unorm, [0.0, 1.0, 0.0, 1.0]),
+            (P::R8Snorm, [-1.0, 0.0, 0.0, 0.0]),
+            (P::RGBA8Uint, [3.0, 0.0, 0.0, 1.0]),
+            (P::R32Float, [0.1, 0.0, 0.0, 0.0]),
+        ];
+        for (pf, c) in whole {
+            assert!(!rounds_apart(pf, c, true), "{pf:?} {c:?}");
+        }
+        assert!(rounds_apart(P::RGBA8Unorm, [0.5, 0.0, 0.0, 1.0], true));
+    }
+
     /// not a code, a value past the range, a value the format holds, a 32-bit float or an integer.
     #[test]
     fn a_clear_whose_rounding_is_in_question_is_the_one_announced() {
@@ -1147,7 +1186,7 @@ pub(crate) mod tests {
             (P::B5G6R5Unorm, [15.5 / 31.0, 0.0, 0.0, 0.0]),
         ];
         for (pf, c) in apart {
-            assert!(rounds_apart(pf, c), "{pf:?} {c:?}");
+            assert!(rounds_apart(pf, c, false), "{pf:?} {c:?}");
         }
         let held = [
             (P::RGBA8Unorm, [0.0, 1.0, 0.25, 0.75]),
@@ -1169,7 +1208,7 @@ pub(crate) mod tests {
             (P::BGRA10XR, [0.1, 0.2, 0.3, 0.4]),
         ];
         for (pf, c) in held {
-            assert!(!rounds_apart(pf, c), "{pf:?} {c:?}");
+            assert!(!rounds_apart(pf, c, false), "{pf:?} {c:?}");
         }
     }
 
@@ -1197,7 +1236,7 @@ pub(crate) mod tests {
                 for (i, &channel) in channels.iter().enumerate() {
                     let mut one = [0.0; 4];
                     one[i] = c[i];
-                    if rounds_apart(pf, one) {
+                    if rounds_apart(pf, one, false) {
                         continue;
                     }
                     let v = native(channel, c[i]);
@@ -1223,7 +1262,7 @@ pub(crate) mod tests {
             (P::RG11B10Float, [1.0, 0.5, 2.0, 0.0]),
             (P::RGB9E5Float, [1.0, 0.5, 2.0, 0.0]),
         ] {
-            assert!(!rounds_apart(pf, c), "{pf:?} {c:?}");
+            assert!(!rounds_apart(pf, c, false), "{pf:?} {c:?}");
             // SAFETY (union read): a float format's clear is `float32`.
             let value = unsafe { color(pf, c, ClearRoute::ThroughHalf).unwrap().float32 };
             assert_eq!(
@@ -1267,7 +1306,7 @@ pub(crate) mod tests {
             for (i, (x, b)) in f.iter().zip(bytes).enumerate() {
                 let mut one = [0.0; 4];
                 one[(i + 3) % 4] = clear[(i + 3) % 4];
-                if rounds_apart(P::ARGB8Unorm, one) {
+                if rounds_apart(P::ARGB8Unorm, one, false) {
                     continue;
                 }
                 let code = (f64::from(x.clamp(0.0, 1.0)) * 255.0).round();

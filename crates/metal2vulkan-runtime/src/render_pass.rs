@@ -1631,9 +1631,11 @@ pub(super) fn layout(
         // The device converts a float clear its own way, which can stand a code from Metal's
         // where the rounding is in question (`clear_value::rounds_apart`), announced once the
         // render area is known (below); a word attachment's clear is Metal's codes.
+        let either =
+            (device.properties().driver_facts).contains(&DriverFact::ColorClearTakesEitherCode);
         let withheld_clear = (color.load_action == LoadAction::Clear
             && word.is_none()
-            && clear_value::rounds_apart(texture.pixel_format(), channels))
+            && clear_value::rounds_apart(texture.pixel_format(), channels, either))
         .then_some(channels);
         let straight_clear = ExtendedRange::of(texture.pixel_format()).and_then(|_| {
             clear_value::color(texture.pixel_format(), channels, ClearRoute::Straight)
@@ -1970,7 +1972,9 @@ pub(super) fn degrade_clear_conversion(device: &Device, pf: PixelFormat, color: 
         (
             format!("a {pf:?} color attachment's clear to {color:?}"),
             "the device converts the clear color to the format's codes its own way, where \
-             Vulkan leaves a tie, an sRGB encode and a float's rounding to it and Metal's clear \
+             Vulkan lets it store either of the two codes nearest a normalized channel's value \
+             (it asks for the nearest) and leaves an sRGB encode and a float's rounding to it, \
+             and Metal's clear \
              rounds each channel to nearest, a tie to even (a small float's and a shared \
              exponent's mantissas truncated): a channel can store a code next to Metal's"
                 .to_owned(),
