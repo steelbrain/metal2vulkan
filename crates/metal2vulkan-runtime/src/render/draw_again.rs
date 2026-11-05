@@ -208,6 +208,19 @@ impl DrawAgain {
 
 /// Whether `used` reads an image other than as an attachment: what noting a draw's reads of
 /// fresh textures looks at (`EncoderCore::observe_fresh`).
+/// Whether `uses` write nothing and read nothing as indirect arguments, and, where they do not,
+/// whether one of them reads an image other than as an attachment ([`reads_image`]): what a
+/// draw kept for drawing again asks of its uses.
+pub(super) fn unwritten(uses: &[Use<ResourceKey>]) -> (bool, bool) {
+    let mut reads_images = false;
+    let unwritten = uses.iter().all(|used| {
+        reads_images |= reads_image(used);
+        used.write.is_empty()
+            && !(used.read.stages).intersects(vk::PipelineStageFlags2::DRAW_INDIRECT)
+    });
+    (unwritten, unwritten && reads_images)
+}
+
 pub(super) fn reads_image(used: &Use<ResourceKey>) -> bool {
     let attachment =
         vk::AccessFlags2::COLOR_ATTACHMENT_READ | vk::AccessFlags2::DEPTH_STENCIL_ATTACHMENT_READ;

@@ -526,6 +526,7 @@ struct DrawCounters {
     resident_uses_indirect_reads: AtomicU64,
     resident_uses_geometry_writes: AtomicU64,
     resident_uses_geometry_checked: AtomicU64,
+    resident_uses_again_checked: AtomicU64,
     draw_heap_parts_made: AtomicU64,
     draw_resident_textures_looked_at: AtomicU64,
 }
@@ -2316,6 +2317,14 @@ impl Counters {
     pub(crate) fn resident_uses_geometry_checked(&self, walked: u64) {
         if walked > 0 {
             (self.draws.mine()).add(|counts| &counts.resident_uses_geometry_checked, walked);
+        }
+    }
+
+    /// `walked` uses of what a render encoder made resident that a draw's check whether it may be
+    /// kept for drawing again walked (`WorkCounts::resident_uses_again_checked`).
+    pub(crate) fn resident_uses_again_checked(&self, walked: u64) {
+        if walked > 0 {
+            (self.draws.mine()).add(|counts| &counts.resident_uses_again_checked, walked);
         }
     }
 
@@ -5272,6 +5281,11 @@ pub struct WorkCounts {
     /// draws' checks against what earlier draws of their render pass instance wrote before their
     /// fragments walked, a rebound draw's check whether it may rebind included.
     pub resident_uses_geometry_checked: u64,
+    /// The uses of resources a render encoder made resident (`resident_uses_made`) that its
+    /// draws' checks whether they may be kept for drawing again walked: whether they write
+    /// nothing, read nothing as indirect arguments, and read an image. A draw walks them once for
+    /// each identity they take (as they are made again), not at each draw.
+    pub resident_uses_again_checked: u64,
     /// Render draws of a plan that reads handles that worked out its heap part: its heap tables
     /// (`BindingPlan::heap_tables_into`), where its heap writes go
     /// (`BindingPlan::heap_elements`), and the check of each texture a handle names that its
@@ -6692,6 +6706,7 @@ impl Device {
             resident_uses_indirect_reads: draws(|counts| &counts.resident_uses_indirect_reads),
             resident_uses_geometry_writes: draws(|counts| &counts.resident_uses_geometry_writes),
             resident_uses_geometry_checked: draws(|counts| &counts.resident_uses_geometry_checked),
+            resident_uses_again_checked: draws(|counts| &counts.resident_uses_again_checked),
             draw_heap_parts_made: draws(|counts| &counts.draw_heap_parts_made),
             draw_resident_textures_looked_at: draws(|counts| {
                 &counts.draw_resident_textures_looked_at

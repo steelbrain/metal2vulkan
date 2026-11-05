@@ -2569,6 +2569,7 @@ impl RenderExecution {
             shape_memo: Default::default(),
             last_retained: Default::default(),
             heaps_noted: None,
+            resident_again: None,
             unreadable: Default::default(),
             inline: super::inline_first::Inline::Never,
             held_bound: Default::default(),

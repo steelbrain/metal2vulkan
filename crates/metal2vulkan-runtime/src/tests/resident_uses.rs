@@ -167,6 +167,7 @@ struct Drawn {
     unordered: u64,
     indirect: u64,
     geometry: u64,
+    again: u64,
     heap_parts: u64,
     heap_checked: u64,
     unreadable_looks: u64,
@@ -200,6 +201,7 @@ fn drawn(device: &Device, draw: impl FnOnce()) -> Drawn {
             - before.0.resident_uses_unordered_writes,
         indirect: after.0.resident_uses_indirect_reads - before.0.resident_uses_indirect_reads,
         geometry: (after.0.resident_uses_geometry_writes) - before.0.resident_uses_geometry_writes,
+        again: after.0.resident_uses_again_checked - before.0.resident_uses_again_checked,
         heap_parts: after.0.draw_heap_parts_made - before.0.draw_heap_parts_made,
         heap_checked: after.2 - before.2,
         unreadable_looks: (after.0.draw_resident_textures_looked_at)
@@ -281,15 +283,16 @@ fn draws_keep_the_uses_of_what_their_encoder_made_resident_until_it_or_their_pla
                 drawn.unordered,
                 drawn.indirect,
                 drawn.geometry,
+                drawn.again,
             ];
             match at {
                 // The slot shape's plan lists none.
-                at if at == entry_draws => assert_eq!(walked, [0; 8], "{what}"),
+                at if at == entry_draws => assert_eq!(walked, [0; 9], "{what}"),
                 at if made_again.contains(&at) => {
                     assert!(walked.iter().all(|walked| *walked > 0), "{what}")
                 }
                 _ => {
-                    assert_eq!(walked, [0; 8], "{what}");
+                    assert_eq!(walked, [0; 9], "{what}");
                     assert!(drawn.checked > 0, "{what}");
                 }
             }

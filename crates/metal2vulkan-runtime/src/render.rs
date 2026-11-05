@@ -1650,6 +1650,10 @@ pub(crate) struct RenderLowering {
     /// The residency's generation as a command last noted the heaps of what it made resident
     /// (`command_encoded`): no command notes them again before it changes.
     heaps_noted: Option<u64>,
+    /// Of the uses of what the encoder made resident a draw last walked to check whether it may
+    /// be kept for drawing again, their identity and what they answered (`draw_resident`,
+    /// `draw_again::unwritten`).
+    resident_again: Option<(binding::ResidentPrefix, (bool, bool))>,
     /// The textures made resident whose bytes a carrier holds, found again as the residency
     /// changes (`command_encoded`).
     unreadable: crate::pvrtc::ResidentUnreadable,
@@ -2147,6 +2151,7 @@ impl RenderLowering {
             shape_memo: ShapeMemo::default(),
             last_retained: LastRetained::default(),
             heaps_noted: None,
+            resident_again: None,
             unreadable: Default::default(),
             inline: match inline {
                 Some(splits) => inline_first::Inline::Open { splits },
@@ -10332,15 +10337,32 @@ impl RenderLowering {
         // aside (`kept_again`), and where nothing it left changes what the next draw meets
         // (`render/draw_again.rs`).
         // Its uses: none written, none read as indirect arguments, and whether one reads an image
-        // other than as an attachment.
+        // other than as an attachment (`draw_again::unwritten`). Those of what the encoder made
+        // resident are a function of their identity, so they are walked once for it
+        // (`WorkCounts::resident_uses_again_checked`).
         let (unwritten, reads_images) = {
-            let mut reads_images = false;
-            let unwritten = uses.iter().all(|used| {
-                reads_images |= draw_again::reads_image(used);
-                used.write.is_empty()
-                    && !(used.read.stages).intersects(vk::PipelineStageFlags2::DRAW_INDIRECT)
-            });
-            (unwritten, reads_images)
+            let (resident, own) = match uses.prefix() {
+                Some(prefix) => {
+                    let facts = match self.resident_again {
+                        Some((of, facts)) if of == prefix => facts,
+                        _ => {
+                            counts.resident_uses_again_checked(prefix.len as u64);
+                            let facts = draw_again::unwritten(&uses[..prefix.len]);
+                            self.resident_again = Some((prefix, facts));
+                            facts
+                        }
+                    };
+                    (facts, &uses[prefix.len..])
+                }
+                None => ((true, false), &uses[..]),
+            };
+            match resident {
+                (true, resident_reads) => {
+                    let (unwritten, reads_images) = draw_again::unwritten(own);
+                    (unwritten, resident_reads || reads_images)
+                }
+                (false, _) => (false, false),
+            }
         };
         let extended = |c: &render_pass::ColorTarget| {
             ExtendedRange::of(c.target.texture.pixel_format()).is_some()
