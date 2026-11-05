@@ -13,7 +13,7 @@
 //!   through the loader with no runtime in the process. One command buffer, recorded once: a
 //!   timestamp at the top of the pipe, the fill, a barrier to the host, a timestamp at the bottom;
 //!   its queries reset on the host before each submission, which signals a timeline semaphore's
-//!   next value (and a fence where the wait is a fence's). Waited for six ways, each printed
+//!   next value (and a fence where the wait is a fence's). Waited for seven ways, each printed
 //!   apart: `vkWaitSemaphores` on the submitting thread once `vkQueueSubmit` returned
 //!   (`timeline`); `vkWaitForFences` there (`fence`); `poll` of a sync file exported from the
 //!   fence (`sync_fd`, Linux, where the driver exports one); `vkWaitSemaphores` on a thread that
@@ -21,7 +21,11 @@
 //!   the submitting thread wakes once `vkQueueSubmit` returned, as the runtime's queue waiter
 //!   wakes for a watched batch (`woken`); and `vkGetSemaphoreCounterValue` read in a loop on the
 //!   submitting thread, the first moment the host can see the value with no sleep (`spin`, a
-//!   floor, not a wait anyone ships).
+//!   floor, not a wait anyone ships); and `vkWaitForFences` for the fill and barrier alone, with
+//!   no timestamps (`fence untimed`), timed from `vkQueueSubmit` only: where the runtime's
+//!   command buffers write no timestamps (MoltenVK on Apple's GPUs answers GPU times from the
+//!   host, `gpu_time.rs`) and a timestamp costs the driver a pass of its own, its time from the
+//!   submission is the one the runtime's from the commit compares with.
 //! - **The runtime** (`runtime_completion_latency`): a device of the runtime's, one queue, each
 //!   command buffer a blit encoder's `fill_buffer` with a completion-seen handler and a completed
 //!   handler that note the host time, committed and not waited for. From the GPU end
@@ -120,6 +124,7 @@ enum RawWait {
     Armed,
     Woken,
     Spin,
+    Untimed,
 }
 
 impl RawWait {
@@ -131,6 +136,7 @@ impl RawWait {
             RawWait::Armed => "armed",
             RawWait::Woken => "woken",
             RawWait::Spin => "spin",
+            RawWait::Untimed => "fence untimed",
         }
     }
 }
@@ -143,8 +149,9 @@ struct RawSample {
     submitted: u64,
     entered: u64,
     returned: u64,
-    gpu_start: u64,
-    gpu_end: u64,
+    /// `None` for the command buffer that writes no timestamps (`fence untimed`).
+    gpu_start: Option<u64>,
+    gpu_end: Option<u64>,
 }
 
 /// A waiter thread's request: wait for the timeline's value (`armed` and `woken`), answered with
@@ -208,6 +215,8 @@ struct Raw {
     queue: vk::Queue,
     pool: vk::CommandPool,
     command: vk::CommandBuffer,
+    /// The fill alone, with no timestamps: a timestamp costs MoltenVK a pass of its own.
+    untimed: vk::CommandBuffer,
     buffer: vk::Buffer,
     memory: vk::DeviceMemory,
     queries: vk::QueryPool,
@@ -346,14 +355,15 @@ impl Raw {
                     None,
                 )
                 .unwrap();
-            let command = device
+            let commands = device
                 .allocate_command_buffers(
                     &vk::CommandBufferAllocateInfo::default()
                         .command_pool(pool)
                         .level(vk::CommandBufferLevel::PRIMARY)
-                        .command_buffer_count(1),
+                        .command_buffer_count(2),
                 )
-                .unwrap()[0];
+                .unwrap();
+            let (command, untimed) = (commands[0], commands[1]);
             let buffer = device
                 .create_buffer(
                     &vk::BufferCreateInfo::default()
@@ -423,21 +433,29 @@ impl Raw {
                 .begin_command_buffer(command, &vk::CommandBufferBeginInfo::default())
                 .unwrap();
             device.cmd_write_timestamp(command, vk::PipelineStageFlags::TOP_OF_PIPE, queries, 0);
-            device.cmd_fill_buffer(command, buffer, 0, BYTES, 0x5a5a_5a5a);
             let to_host = vk::MemoryBarrier::default()
                 .src_access_mask(vk::AccessFlags::TRANSFER_WRITE)
                 .dst_access_mask(vk::AccessFlags::HOST_READ);
-            device.cmd_pipeline_barrier(
-                command,
-                vk::PipelineStageFlags::TRANSFER,
-                vk::PipelineStageFlags::HOST,
-                vk::DependencyFlags::empty(),
-                &[to_host],
-                &[],
-                &[],
-            );
+            let fill = |command| {
+                device.cmd_fill_buffer(command, buffer, 0, BYTES, 0x5a5a_5a5a);
+                device.cmd_pipeline_barrier(
+                    command,
+                    vk::PipelineStageFlags::TRANSFER,
+                    vk::PipelineStageFlags::HOST,
+                    vk::DependencyFlags::empty(),
+                    &[to_host],
+                    &[],
+                    &[],
+                );
+            };
+            fill(command);
             device.cmd_write_timestamp(command, vk::PipelineStageFlags::BOTTOM_OF_PIPE, queries, 1);
             device.end_command_buffer(command).unwrap();
+            device
+                .begin_command_buffer(untimed, &vk::CommandBufferBeginInfo::default())
+                .unwrap();
+            fill(untimed);
+            device.end_command_buffer(untimed).unwrap();
             Raw {
                 _entry: entry,
                 instance,
@@ -446,6 +464,7 @@ impl Raw {
                 queue,
                 pool,
                 command,
+                untimed,
                 buffer,
                 memory,
                 queries,
@@ -486,11 +505,14 @@ impl Raw {
             waiter.unwrap().ask().send(value).unwrap();
         }
         let fence = match wait {
-            RawWait::Fence => self.fence,
+            RawWait::Fence | RawWait::Untimed => self.fence,
             RawWait::SyncFd => self.exported.as_ref().unwrap().0,
             _ => vk::Fence::null(),
         };
-        let commands = [self.command];
+        let commands = [match wait {
+            RawWait::Untimed => self.untimed,
+            _ => self.command,
+        }];
         let semaphores = [self.timeline];
         let values = [value];
         let mut timeline =
@@ -516,7 +538,7 @@ impl Raw {
                 wait_value(device);
                 (entered, host_nanos())
             }
-            RawWait::Fence => {
+            RawWait::Fence | RawWait::Untimed => {
                 let entered = host_nanos();
                 // SAFETY: the fence is the device's, in the submission just made.
                 unsafe { device.wait_for_fences(&[fence], true, TIMEOUT) }.unwrap();
@@ -546,6 +568,16 @@ impl Raw {
         // Every wait above but the timeline's own orders the host after the signal through a
         // wait for it: this one returns at once.
         wait_value(device);
+        if wait == RawWait::Untimed {
+            return RawSample {
+                submit,
+                submitted,
+                entered,
+                returned,
+                gpu_start: None,
+                gpu_end: None,
+            };
+        }
         let mut stamps = [0u64; 2];
         // SAFETY: both queries were written by the completed submission.
         unsafe {
@@ -563,8 +595,8 @@ impl Raw {
             submitted,
             entered,
             returned,
-            gpu_start: self.clock.place(reading.pair, stamps[0]),
-            gpu_end: self.clock.place(reading.pair, stamps[1]),
+            gpu_start: Some(self.clock.place(reading.pair, stamps[0])),
+            gpu_end: Some(self.clock.place(reading.pair, stamps[1])),
         }
     }
 
@@ -612,6 +644,7 @@ impl Raw {
             RawWait::Armed,
             RawWait::Woken,
             RawWait::Spin,
+            RawWait::Untimed,
         ]
         .into_iter()
         .filter(|&wait| wait != RawWait::SyncFd || self.exported.is_some())
@@ -669,16 +702,21 @@ fn raw_completion_latency() {
         }
         drop(waiter);
         let of = |f: fn(&RawSample) -> f64| line(samples.iter().map(f).collect());
+        let gpu = |f: fn(&RawSample) -> Option<f64>| match samples[0].gpu_end {
+            Some(_) => line(samples.iter().filter_map(f).collect()),
+            None => "-".to_owned(),
+        };
         eprintln!(
             "COMPLETION-LATENCY raw {} ({}): gpu end -> wait returned {} us; wait entered -> \
              gpu end {} us; submit returned -> gpu end {} us; submit -> gpu start {} us; \
-             vkQueueSubmit {} us",
+             submit -> wait returned {} us; vkQueueSubmit {} us",
             wait.name(),
             raw.name,
-            of(|s| us(s.gpu_end, s.returned)),
-            of(|s| us(s.entered, s.gpu_end)),
-            of(|s| us(s.submitted, s.gpu_end)),
-            of(|s| us(s.submit, s.gpu_start)),
+            gpu(|s| Some(us(s.gpu_end?, s.returned))),
+            gpu(|s| Some(us(s.entered, s.gpu_end?))),
+            gpu(|s| Some(us(s.submitted, s.gpu_end?))),
+            gpu(|s| Some(us(s.submit, s.gpu_start?))),
+            of(|s| us(s.submit, s.returned)),
             of(|s| us(s.submit, s.submitted)),
         );
     }
