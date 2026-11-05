@@ -57,6 +57,8 @@ mod copied_log;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod copied_log_device;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod copied_present_bench;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod copy_bounds;
 mod copy_plan;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
