@@ -1081,6 +1081,16 @@ pub enum RuntimeDriverDefect {
     /// runtime's compute filter there, where it computes the format, and the device's blit chain,
     /// announced as everywhere (`device-filtered-mipmaps`), elsewhere.
     VolumeBlitsUnfiltered,
+    /// A pipeline barrier between two blits does not order them where they reach the same host
+    /// pages through two imports (`VK_EXT_external_memory_host`), which Vulkan counts as aliases of
+    /// one memory ("Memory Aliasing": memory bound through external memory import mechanisms):
+    /// in one blit encoder, a copy through a buffer bound in one import of the pages read their
+    /// bytes from before a fill, recorded before the barrier, through a buffer bound in another
+    /// import of them. Nothing is refused: where the runtime would bind a no-copy object over a
+    /// guest RAM's chunk not yet imported in an import of the object's own pages
+    /// (`metal2vulkan_runtime::Device::use_host_ram`), it binds it in the chunk's import, which
+    /// the object then waits for, so that every object over a chunk's pages lies in one import.
+    AliasedImportBlitsUnordered,
 }
 
 /// One device capability a refusal can name.

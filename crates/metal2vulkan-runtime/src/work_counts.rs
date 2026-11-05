@@ -5509,7 +5509,9 @@ pub struct WorkCounts {
     pub chunk_bound_buffers_made: u64,
     /// The no-copy buffers (and no-copy heaps' own buffers) over one run inside one chunk of guest
     /// RAM that was not imported yet as they were made, while the device's own thread imports
-    /// the RAM's chunks: each bound in an import of its own run alone (its pages faulted in and
+    /// the RAM's chunks, on a driver whose barriers order blits through two imports of the same
+    /// pages (not one with `RuntimeDriverDefect::AliasedImportBlitsUnordered`): each bound in an
+    /// import of its own run alone (its pages faulted in and
     /// pinned, no more), its import gate not asked, while that thread imports the chunk, so that
     /// no making waits for a chunk's import. The objects over the chunk after that are bound in
     /// it (`chunk_bound_buffers_made`).

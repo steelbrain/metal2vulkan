@@ -497,6 +497,20 @@ pub(super) struct Affected {
 ///   `generate_mipmaps` of a 3D texture takes the runtime's compute filter there
 ///   (`mipmap_plan.rs`, `mipmap_filter.rs`) where it computes the format, and the device's blit
 ///   chain, announced as everywhere (`device-filtered-mipmaps`), elsewhere.
+///
+/// `AliasedImportBlitsUnordered`:
+/// - MoltenVK (`MOLTENVK`): a pipeline barrier between two blits records no barrier there (it
+///   ends the Metal blit encoder, `tracker.rs`) and leaves their order to Metal's hazard
+///   tracking, which is per `MTLBuffer`, and each import of host pages is an `MTLBuffer` of its
+///   own (`host_aliases.rs`). So in one blit encoder a fill through a buffer bound in an import of one
+///   run of a guest RAM's chunk, a barrier, then a copy of the same bytes through a buffer bound
+///   in the chunk's import read the bytes from before the fill
+///   (`tests::host_ram_device::a_run_bound_and_a_chunk_bound_buffer_over_the_same_pages_order_by_their_host_bytes`
+///   on the M3 Max under macOS 27.0.1, MoltenVK 1.4.2, driverVersion 10402: known broken through
+///   1.4.2). NVIDIA's 615.71.09 on the RTX 5080 Laptop GPU orders them, in one encoder, two
+///   encoders and across queues. Nothing is refused: an object over a chunk not yet imported is
+///   bound in the chunk's import, which it waits for, never in an import of its own run
+///   (`host_ram.rs`'s `RamOnDevice::for_object`).
 pub(super) const AFFECTED: &[Affected] = &[
     Affected {
         defect: RuntimeDriverDefect::HostTransferImagesCopiedAtBind,
@@ -642,6 +656,11 @@ pub(super) const AFFECTED: &[Affected] = &[
     },
     Affected {
         defect: RuntimeDriverDefect::VolumeBlitsUnfiltered,
+        driver: DriverId::MOLTENVK,
+        clean: &[],
+    },
+    Affected {
+        defect: RuntimeDriverDefect::AliasedImportBlitsUnordered,
         driver: DriverId::MOLTENVK,
         clean: &[],
     },

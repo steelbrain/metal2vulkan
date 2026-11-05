@@ -32,11 +32,19 @@
 //!   every other object over its bytes by their host addresses, whichever import each is bound
 //!   in (`host_aliases.rs`). The run's import is one more allocation, made only where the
 //!   device's allocations leave the margin the thread leaves (below), and goes with its last
-//!   holder. Counted: `WorkCounts::run_bound_buffers_made`, `run_imports_live`. Where the
-//!   device's thread does not run (never started, or ended at the use's end or the allocation
-//!   limit's margin) or failed the chunk, where the device's allocations are within that margin,
-//!   where the run is the whole chunk, or where the run's import fails, the object imports the
-//!   chunk on its own thread, or waits for the import of it under way.
+//!   holder. That is the trade for no making waiting: up to one more allocation and one more pin
+//!   of its pages for each object made while its chunk is not imported, for as long as the
+//!   object lives. A burst of heaps that outruns the thread takes one for each heap over a chunk
+//!   the thread has not imported yet: 128 of the 256 2 MiB heaps of the upward order of
+//!   `tests/host_ram_window_bench.rs` on an RTX 5080 laptop, every heap of its first burst of
+//!   four chunks. Counted: `WorkCounts::run_bound_buffers_made` (each such object),
+//!   `run_imports_live` (those live). Where the device's thread does not run (never started, or
+//!   ended at the use's end or the allocation limit's margin) or failed the chunk, where the
+//!   device's allocations are within that margin, where the device's barriers do not order blits
+//!   through two imports of the same pages (`RuntimeDriverDefect::AliasedImportBlitsUnordered`,
+//!   MoltenVK's: there every object over a chunk's pages lies in the chunk's one import, which
+//!   Metal orders), where the run is the whole chunk, or where the run's import fails, the object
+//!   imports the chunk on its own thread, or waits for the import of it under way.
 //! - **Paced.** The thread runs as the system's batch work (never at a weight the system may
 //!   starve: it holds a chunk's lock and, pinning, the process's memory map lock), yields between
 //!   chunks, and on Linux faults each chunk's pages in 2 MiB at a time before its import, so that
@@ -80,7 +88,7 @@ use super::Device;
 use crate::device::WeakDevice;
 use crate::release;
 use ash::vk;
-use metal2vulkan::error::{Feature, Unsupported};
+use metal2vulkan::error::{Feature, RuntimeDriverDefect, Unsupported};
 use std::ops::Range;
 use std::ptr::NonNull;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -472,8 +480,10 @@ impl RamOnDevice {
     /// or a command buffer that used it (`WorkCounts::run_imports_live`). Where the run is the
     /// whole chunk, the thread does not run (never started, or ended: the use's end, the
     /// allocation limit's margin) or failed the chunk, the device's allocations are within that
-    /// margin, or the run's import fails, the chunk's import, made here or waited for
-    /// ([`RamOnDevice::chunk`]).
+    /// margin, the device's barriers do not order blits through two imports of the same pages
+    /// (`RuntimeDriverDefect::AliasedImportBlitsUnordered`: there every object over a chunk's
+    /// pages lies in its one import), or the run's import fails, the chunk's import, made here or
+    /// waited for ([`RamOnDevice::chunk`]).
     fn for_object(
         &self,
         device: &Device,
@@ -482,10 +492,12 @@ impl RamOnDevice {
         run: Range<u64>,
     ) -> Result<Arc<RamChunk>, Error> {
         let span = &self.slots[slot];
+        let unordered = RuntimeDriverDefect::AliasedImportBlitsUnordered;
         let alone = run != span.span
             && self.wake.running.load(Ordering::Relaxed)
             && !span.tried.load(Ordering::Relaxed)
-            && device.shared().allocations.allocations.room_ahead();
+            && device.shared().allocations.allocations.room_ahead()
+            && !device.properties().driver_defects.contains(&unordered);
         if !alone {
             return self.chunk(device, importer, slot, By::Object);
         }
@@ -931,7 +943,10 @@ impl Device {
     /// objects over consecutive RAM finds its next chunks imported
     /// (`WorkCounts::host_ram_chunks_imported_ahead`). An object over a chunk not imported yet is
     /// bound in an import of its own run alone while the thread imports the chunk, so that no
-    /// making waits for a chunk's import (`WorkCounts::run_bound_buffers_made`). The thread
+    /// making waits for a chunk's import (`WorkCounts::run_bound_buffers_made`); on a driver whose
+    /// barriers do not order blits through two imports of the same pages
+    /// (`RuntimeDriverDefect::AliasedImportBlitsUnordered`, MoltenVK's) it imports the chunk
+    /// instead, or waits for the thread's import of it. The thread
     /// faults in and pins no more than the window past the objects, and never goes back. It is
     /// paced (the system's batch work, a yield between chunks) and stops a quarter of the
     /// device's `maxMemoryAllocationCount` short of it, the chunks it imported that no object

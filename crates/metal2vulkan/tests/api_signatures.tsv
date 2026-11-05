@@ -13570,6 +13570,7 @@ variant	metal2vulkan::error::PrivateRenderField::SampleMask	SampleMask
 variant	metal2vulkan::error::PrivateRenderField::TextureWriteRounding	TextureWriteRounding
 variant	metal2vulkan::error::Retry::Later	Later
 variant	metal2vulkan::error::Retry::Never	Never
+variant	metal2vulkan::error::RuntimeDriverDefect::AliasedImportBlitsUnordered	AliasedImportBlitsUnordered
 variant	metal2vulkan::error::RuntimeDriverDefect::CompressedImageCopiesRewriteTexels	CompressedImageCopiesRewriteTexels
 variant	metal2vulkan::error::RuntimeDriverDefect::DepthStencilResolveFirstSubresource	DepthStencilResolveFirstSubresource
 variant	metal2vulkan::error::RuntimeDriverDefect::DestroyedAddressBufferFailsSubmission	DestroyedAddressBufferFailsSubmission
