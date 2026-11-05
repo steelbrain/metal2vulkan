@@ -82,12 +82,6 @@ const ARGUMENT_ENTRY: &str = "px_sample_argument";
 const WIDTH: u32 = 5;
 const HEIGHT: u32 = 3;
 
-/// The coordinates each case of the probe's grid samples at.
-const SAMPLES: usize = 800;
-
-/// The coordinates each subnormal case samples at ([`subnormal_grid`]).
-const SUBNORMAL_SAMPLES: usize = 16;
-
 /// The threads in a threadgroup, chosen so 800 threads are ten whole groups: the group size
 /// changes nothing a sampler does, and a whole-group dispatch keeps the question to the sampler.
 const GROUP: u32 = 80;
@@ -163,13 +157,8 @@ fn subnormal_grid() -> Vec<[f32; 2]> {
     on_x.chain(on_y).collect()
 }
 
-/// The coordinate buffer a source reads: the grid as it stands for a pixel sampler, or divided by
-/// the size for the normalized control.
-fn coordinates(normalized: bool) -> Vec<u8> {
-    coordinates_of(&grid(), normalized)
-}
-
-/// The coordinate buffer of `cells`, as [`coordinates`] makes the grid's.
+/// The coordinate buffer a source reads of `cells`: the cells as they stand for a pixel sampler,
+/// or divided by the size for the normalized control.
 fn coordinates_of(cells: &[[f32; 2]], normalized: bool) -> Vec<u8> {
     cells
         .iter()
@@ -229,13 +218,8 @@ fn row_pitch(format: PixelFormat) -> u32 {
         }
 }
 
-/// The layout the results are read under: one row a sample of four lanes, so a diff names the
-/// coordinate and the lane rather than a byte offset.
-fn layout() -> ByteLayout {
-    layout_of(SAMPLES)
-}
-
-/// [`layout`] of `samples` results.
+/// The layout `samples` results are read under: one row a sample of four lanes, so a diff names
+/// the coordinate and the lane rather than a byte offset.
 fn layout_of(samples: usize) -> ByteLayout {
     ByteLayout {
         region: Region::Buffer {
@@ -726,6 +710,12 @@ mod tests {
     use crate::transcript::Observed;
     use std::collections::BTreeSet;
 
+    /// The coordinates each case of the probe's grid samples at.
+    const SAMPLES: usize = 800;
+
+    /// The coordinates each subnormal case samples at ([`subnormal_grid`]).
+    const SUBNORMAL_SAMPLES: usize = 16;
+
     /// What an Apple M4 answered for each configuration, as `runtime_lane::pixel_samplers`' own
     /// probe measured it (macOS 27.0.1, two processes, identical): the case, the source, and the
     /// SHA-256 of its 800 `float4` results. Our own measurement over our own inputs, carried here
@@ -1047,8 +1037,8 @@ mod tests {
             .collect();
         assert_eq!(crate::sha256_hex(&bytes), GRID_SHA);
         // The pixel coordinate buffer is that grid; the normalized one is it over the size.
-        assert_eq!(coordinates(false), bytes);
-        let normalized = coordinates(true);
+        assert_eq!(coordinates_of(&grid, false), bytes);
+        let normalized = coordinates_of(&grid, true);
         for (index, cell) in grid.iter().enumerate() {
             let at = index * 8;
             let axis = |offset: usize| {
@@ -1287,7 +1277,7 @@ mod tests {
     /// says which coordinate moved.
     #[test]
     fn the_layout_names_the_sample() {
-        let layout = layout();
+        let layout = layout_of(SAMPLES);
         assert_eq!(layout.extent(), SAMPLES * STRIDE as usize);
         assert_eq!(layout.at(0, 799, 3), 799 * STRIDE as usize + 3 * 4);
     }
