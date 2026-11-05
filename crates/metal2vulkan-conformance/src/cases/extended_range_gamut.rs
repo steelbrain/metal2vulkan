@@ -321,25 +321,29 @@ impl Case for GamutDraw {
         MetalSource::Run
     }
 
-    /// At four samples, beside the family's notices, what the pass's shape announces:
-    /// `shader-resolve` and `extended-range-resolve` (no device's resolve averages the codes, so
-    /// the runtime's own resolve does, `BGRA10_XR`'s alpha and an sRGB twin's color from the codes
-    /// where Metal averages finer values), `extended-range-blends-stored-codes` (the second draw
-    /// blends over the codes the first stored, where Metal's tile holds `half`s through the pass:
-    /// the `half` shadow that keeps them is single-sampled), `dont-care-store` (the multisampled
-    /// attachment of `MultisampleResolve`, and the depth and stencil stored `DontCare`, on a driver
-    /// measured to keep one of Metal's answers), and on a device without multisampled storage
-    /// images `sample-planes` and `fetch-through-scratch` (the interlocked blend reads and writes
-    /// the samples as planes, through a scratch image the target's usage needs). None loosens a
-    /// code: every texel still compares exactly.
+    /// Beside the family's notices, `extended-range-blends-stored-codes` (the second draw blends
+    /// over the codes the first stored, where Metal's tile holds `half`s through the pass: the
+    /// `half` shadow that keeps them is built for a single-sampled pass fetching in the pixel
+    /// interlock, so not at four samples, nor on lavapipe, which blends over the input
+    /// attachment), and at four samples what the pass's shape announces: `shader-resolve` and
+    /// `extended-range-resolve` (no device's resolve averages the codes, so the runtime's own
+    /// resolve does, `BGRA10_XR`'s alpha and an sRGB twin's color from the codes where Metal
+    /// averages finer values), `dont-care-store` (the multisampled attachment of
+    /// `MultisampleResolve`, and the depth and stencil stored `DontCare`, on a driver measured to
+    /// keep one of Metal's answers), and on a device without multisampled storage images
+    /// `sample-planes` and `fetch-through-scratch` (the interlocked blend reads and writes the
+    /// samples as planes, through a scratch image the target's usage needs). None loosens a code:
+    /// every texel still compares exactly.
     fn allowances(&self) -> Vec<Allowance> {
         let mut named = notices(&self.format);
+        named.push(crate::replay::notice_allowance(
+            Degradation::ExtendedRangeBlendsStoredCodes.code(),
+        ));
         if self.samples > 1 {
             named.extend(
                 [
                     Degradation::ShaderResolve,
                     Degradation::ExtendedRangeResolve,
-                    Degradation::ExtendedRangeBlendsStoredCodes,
                     Degradation::DontCareStore,
                     Degradation::SamplePlanes,
                     Degradation::FetchThroughScratch,
@@ -535,8 +539,17 @@ impl Case for UnwrittenDraw {
         MetalSource::Run
     }
 
+    /// Beside the family's notices, for the pipeline that writes depth alone, `dont-care-store`:
+    /// the pass stores its depth `DontCare`, which a driver measured to keep one of Metal's
+    /// answers (lavapipe) leaves to the device. It loosens no code.
     fn allowances(&self) -> Vec<Allowance> {
-        notices(&self.format)
+        let mut named = notices(&self.format);
+        if self.shape == Unwritten::DepthOnly {
+            named.push(crate::replay::notice_allowance(
+                Degradation::DontCareStore.code(),
+            ));
+        }
+        named
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {
@@ -705,8 +718,17 @@ impl Case for MaskedDraw {
         MetalSource::Run
     }
 
+    /// Beside the family's notices, for the blended write, `extended-range-blends-stored-codes`:
+    /// it blends over the codes the first draw stored on lavapipe, whose blend over the input
+    /// attachment holds no `half` shadow. It loosens no code.
     fn allowances(&self) -> Vec<Allowance> {
-        notices(&self.format)
+        let mut named = notices(&self.format);
+        if self.blend.is_some() {
+            named.push(crate::replay::notice_allowance(
+                Degradation::ExtendedRangeBlendsStoredCodes.code(),
+            ));
+        }
+        named
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {

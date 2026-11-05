@@ -10,8 +10,10 @@
 //! on MoltenVK's and on lavapipe's, every pipeline is made, a written blended attachment in the
 //! shader's blend (the interlocked storage form, or over the input attachment on lavapipe), an
 //! unwritten one with no blend and an empty mask, a partly masked one under the mask of its fields.
-//! Lavapipe has no multisampled color attachment of the raw format (`R16G16B16A16_UINT`), so a
-//! pipeline of four samples is refused there naming that, the device's gap. Before, a blended
+//! The committed lavapipe profile states no multisampled color attachment of the raw format
+//! (`R16G16B16A16_UINT`: its `framebufferIntegerColorSampleCounts` is one sample, and it records no
+//! count of that format's own), so a pipeline of four samples is refused there naming the
+//! properties it needs. Before, a blended
 //! attachment the function does not write and a mask of some channels were each refused
 //! `NotImplemented(Format)` at `Color(0)`, the reported refusal. No GPU is used.
 //!
@@ -57,8 +59,8 @@ fn library() -> Option<Library> {
     }
 }
 
-/// Whether `e` is lavapipe's gap at four samples: no multisampled color attachment of the raw
-/// format.
+/// Whether `e` is the lavapipe profile's gap at four samples: no multisampled color attachment of
+/// the raw format it states.
 fn lacks_samples(e: &Error) -> bool {
     matches!(e, Error::Unsupported(u)
         if u.feature == Feature::RasterSampleCount && matches!(u.needs, Needs::AnyOf(_)))

@@ -44,7 +44,7 @@ Its limits, measured rather than asserted:
 | committed recordings | 1182 |
 | distinct SDK items the Metal leg reaches, of any status | 802 |
 | of those, reached only where this cannot name the family | 3 |
-| ledger rows (a case whose gap is recorded) | 1326 |
+| ledger rows (a case whose gap is recorded) | 1352 |
 | declared crossings of the option space (pairs put to Metal at once) | 26 |
 | declared crossings that are no pair of it (a boolean or numeric field, or one type in two slots) | 30 |
 
@@ -3513,6 +3513,32 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `xr-blend-planes-srgb-add` | A `half4` fill blended into an extended-range attachment (one over the destination, added): the function blends in the shader, inside the pixel interlock, in th… |
 | `xr-blend-planes-srgb-premul` | A `half4` fill blended into an extended-range attachment (premultiplied over: one over one minus the source alpha, added): the function blends in the shader, in… |
 | `xr-blend-planes-srgb-premul` | A `half4` fill blended into an extended-range attachment (premultiplied over: one over one minus the source alpha, added): the function blends in the shader, in… |
+| `xr-gamut-bgra10xr-over-half-x1` | Two fills blended into `BGRA10_XR` at one sample, the second over the first (premultiplied source-over or straight alpha-over, a `half4` or a `float4` fill of t… |
+| `xr-gamut-bgra10xr-over-float-x1` | Two fills blended into `BGRA10_XR` at one sample, the second over the first (premultiplied source-over or straight alpha-over, a `half4` or a `float4` fill of t… |
+| `xr-gamut-bgra10xr-over-half-x4` | Two fills blended into `BGRA10_XR` at four samples and resolved at the store (premultiplied source-over or straight alpha-over, a `half4` or a `float4` fill, be… |
+| `xr-gamut-bgra10xr-over-float-x4` | Two fills blended into `BGRA10_XR` at four samples and resolved at the store (premultiplied source-over or straight alpha-over, a `half4` or a `float4` fill, be… |
+| `xr-gamut-bgra10xr-straight-half-x1` | Two fills blended into `BGRA10_XR` at one sample, the second over the first (premultiplied source-over or straight alpha-over, a `half4` or a `float4` fill of t… |
+| `xr-gamut-bgra10xr-straight-float-x1` | Two fills blended into `BGRA10_XR` at one sample, the second over the first (premultiplied source-over or straight alpha-over, a `half4` or a `float4` fill of t… |
+| `xr-gamut-bgra10xr-straight-half-x4` | Two fills blended into `BGRA10_XR` at four samples and resolved at the store (premultiplied source-over or straight alpha-over, a `half4` or a `float4` fill, be… |
+| `xr-gamut-bgra10xr-straight-float-x4` | Two fills blended into `BGRA10_XR` at four samples and resolved at the store (premultiplied source-over or straight alpha-over, a `half4` or a `float4` fill, be… |
+| `xr-gamut-bgra10xr-over-half-x4-stencil` | Two fills blended into `BGRA10_XR` at four samples and resolved at the store (premultiplied source-over or straight alpha-over, a `half4` or a `float4` fill, be… |
+| `xr-masked-bgra10xr-rgb-over` | Two fills blended into `BGRA10_XR` at one sample, the second over the first (premultiplied source-over or straight alpha-over, a `half4` or a `float4` fill of t… |
+| `xr-gamut-bgra10xr-srgb-over-half-x1` | Two fills blended into `BGRA10_XR_sRGB` at one sample, the second over the first (premultiplied source-over or straight alpha-over, a `half4` or a `float4` fill… |
+| `xr-gamut-bgra10xr-srgb-over-float-x1` | Two fills blended into `BGRA10_XR_sRGB` at one sample, the second over the first (premultiplied source-over or straight alpha-over, a `half4` or a `float4` fill… |
+| `xr-gamut-bgra10xr-srgb-over-half-x4` | Two fills blended into `BGRA10_XR_sRGB` at four samples and resolved at the store (premultiplied source-over or straight alpha-over, a `half4` or a `float4` fil… |
+| `xr-gamut-bgra10xr-srgb-over-float-x4` | Two fills blended into `BGRA10_XR_sRGB` at four samples and resolved at the store (premultiplied source-over or straight alpha-over, a `half4` or a `float4` fil… |
+| `xr-gamut-bgra10xr-srgb-straight-half-x1` | Two fills blended into `BGRA10_XR_sRGB` at one sample, the second over the first (premultiplied source-over or straight alpha-over, a `half4` or a `float4` fill… |
+| `xr-gamut-bgra10xr-srgb-straight-float-x1` | Two fills blended into `BGRA10_XR_sRGB` at one sample, the second over the first (premultiplied source-over or straight alpha-over, a `half4` or a `float4` fill… |
+| `xr-gamut-bgra10xr-srgb-straight-half-x4` | Two fills blended into `BGRA10_XR_sRGB` at four samples and resolved at the store (premultiplied source-over or straight alpha-over, a `half4` or a `float4` fil… |
+| `xr-gamut-bgra10xr-srgb-straight-float-x4` | Two fills blended into `BGRA10_XR_sRGB` at four samples and resolved at the store (premultiplied source-over or straight alpha-over, a `half4` or a `float4` fil… |
+| `xr-gamut-bgra10xr-srgb-over-half-x4-stencil` | Two fills blended into `BGRA10_XR_sRGB` at four samples and resolved at the store (premultiplied source-over or straight alpha-over, a `half4` or a `float4` fil… |
+| `xr-unwritten-bgra10xr-srgb-no-fragment` | An extended-range sRGB twin's colour read, written or blended over (`BGR10_XR_sRGB`, `BGRA10_XR_sRGB`, `RGB10A8_2P_XR10_sRGB`): the function decodes and encodes… |
+| `xr-unwritten-bgra10xr-srgb-depth-only` | An extended-range sRGB twin's colour read, written or blended over (`BGR10_XR_sRGB`, `BGRA10_XR_sRGB`, `RGB10A8_2P_XR10_sRGB`): the function decodes and encodes… |
+| `xr-masked-bgra10xr-srgb-red` | An extended-range sRGB twin's colour read, written or blended over (`BGR10_XR_sRGB`, `BGRA10_XR_sRGB`, `RGB10A8_2P_XR10_sRGB`): the function decodes and encodes… |
+| `xr-masked-bgra10xr-srgb-alpha` | An extended-range sRGB twin's colour read, written or blended over (`BGR10_XR_sRGB`, `BGRA10_XR_sRGB`, `RGB10A8_2P_XR10_sRGB`): the function decodes and encodes… |
+| `xr-masked-bgra10xr-srgb-rgb` | An extended-range sRGB twin's colour read, written or blended over (`BGR10_XR_sRGB`, `BGRA10_XR_sRGB`, `RGB10A8_2P_XR10_sRGB`): the function decodes and encodes… |
+| `xr-masked-bgra10xr-srgb-blue-green` | An extended-range sRGB twin's colour read, written or blended over (`BGR10_XR_sRGB`, `BGRA10_XR_sRGB`, `RGB10A8_2P_XR10_sRGB`): the function decodes and encodes… |
+| `xr-masked-bgra10xr-srgb-rgb-over` | Two fills blended into `BGRA10_XR_sRGB` at one sample, the second over the first (premultiplied source-over or straight alpha-over, a `half4` or a `float4` fill… |
 | `xr-gamut-bgra10xr-over-half-x1` | Two fills blended into `BGRA10_XR` at one sample, the second over the first (premultiplied source-over or straight alpha-over, a `half4` or a `float4` fill of t… |
 | `xr-gamut-bgra10xr-over-float-x1` | Two fills blended into `BGRA10_XR` at one sample, the second over the first (premultiplied source-over or straight alpha-over, a `half4` or a `float4` fill of t… |
 | `xr-gamut-bgra10xr-over-half-x4` | Two fills blended into `BGRA10_XR` at four samples and resolved at the store (premultiplied source-over or straight alpha-over, a `half4` or a `float4` fill, be… |
