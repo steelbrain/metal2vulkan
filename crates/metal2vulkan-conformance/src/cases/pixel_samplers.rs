@@ -42,7 +42,7 @@
 //! **Subnormal coordinates.** Four more cases (`pixel-samplers-subnormal-*`, [`subnormals`]) ask
 //! the same four sources of the `RGBA8Unorm` texture, through a nearest filter under each address
 //! mode, at sixteen coordinates whose one axis is a subnormal of either sign, a zero of either
-//! sign, or `-2^-126` beside them ([`subnormal_grid`]). A nearest `slot` or `arg` site hands the
+//! sign, or `-2^-126` beside them (`subnormal_grid`). A nearest `slot` or `arg` site hands the
 //! device its texel's centre `floor(x) + 0.5`, whose `floor` reads a subnormal by the device's
 //! float controls (`device-denormals`, a native note): where a negative subnormal is a texel apart
 //! from zero to Metal's sampler, an address mode that reads texel -1 as texel 0 (clamp to edge,
