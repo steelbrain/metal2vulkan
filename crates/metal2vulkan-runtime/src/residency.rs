@@ -159,6 +159,9 @@ pub(super) struct Residency {
     /// The buffers and heaps' own buffers of `used` by Metal address, made at the first
     /// [`resolve`](Self::resolve) after one was made resident.
     addresses: OnceLock<Arc<AddressIndex>>,
+    /// [`heaps`](Self::heaps), found at the generation it holds
+    /// ([`resident_heaps`](Self::resident_heaps)): shared by its copies, behind one pointer.
+    heaps_found: Option<Arc<(u64, Vec<Heap>)>>,
 }
 
 /// Where each buffer and heap's own buffer a residency made resident lies in Metal's address
@@ -374,6 +377,19 @@ impl Residency {
             .chain(textures)
             .filter_map(|used| self.join(used, ResourceUsage::READ, stages))
             .collect()
+    }
+
+    /// [`heaps`](Self::heaps), found once a generation: a render encoder's draw, and the draws of
+    /// an execution's chunks recorded apart that take it from one chunk to the next
+    /// (`render/executions/kept.rs`), each note them once a change, which costs their count, not
+    /// the resident resources'.
+    pub(super) fn resident_heaps(&mut self) -> &[Heap] {
+        let generation = self.generation;
+        if self.heaps_found.as_deref().map(|(at, _)| *at) != Some(generation) {
+            let heaps = self.heaps().collect();
+            self.heaps_found = Some(Arc::new((generation, heaps)));
+        }
+        self.heaps_found.as_deref().map_or(&[], |(_, heaps)| heaps)
     }
 
     /// The heaps of what the encoder made resident: those it used, and those its resident

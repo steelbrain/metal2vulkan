@@ -165,7 +165,7 @@ impl Execute {
             match (keeps, held) {
                 (true, Some(held)) => {
                     let effects = KeptEffects::new(
-                        part.summary.clone(),
+                        (part.summary.clone(), None),
                         (part.keys.clone(), part.taken.named().clone()),
                         (&held, &[]),
                         part.executions.clone(),

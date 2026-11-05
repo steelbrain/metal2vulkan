@@ -58,7 +58,7 @@
 //!   it did and no no-copy buffer moved (`KeptChunk::runs_again`).
 //! - **Each chunk** runs its kept recording again, or records apart: its draws into a secondary of
 //!   its own, begun against the instance's compatible pass, through an encoder of the call's
-//!   state over a core of its own (`EncoderCore::capture`), which the pass's core then takes
+//!   state over a core of its own (`EncoderCore::capture_apart`), which the pass's core then takes
 //!   (`EncoderCore::absorb`); from a context of its own where an execution ran it before, no
 //!   write reaching it since, else from its command buffer's own, kept by none. A host step's
 //!   chunks draw in the large-buffer form (`BufferForms::Large`), as its other draws do. Its draws are
@@ -69,6 +69,17 @@
 //!   reached nothing its command buffer alone holds (`CommandBuffer::own_reached`). Plain draws
 //!   write no memory, so no draw of a later chunk depends on them but through the attachments,
 //!   which the chunks' order in their subpass keeps.
+//! - **What the chunks share.** Each chunk's encoder starts from what the one before left
+//!   ([`Carried`]): the bind state with its heap parts and the shadows' copies listed
+//!   (`LiveBind::end_chunk`), the residency, the instance's gathering, the resident textures a
+//!   carrier holds as found, and the facts of the uses of what the encoder made resident. Each is
+//!   kept by what names it (the residency's generation, the identity of those uses, what a heap
+//!   part is made of), so a draw takes it as the next draw of one encoder does, and the chunks of
+//!   a step work out once what an execution recorded inline works out once. The chunks' cores
+//!   note their draws' uses past those of what the encoder made resident, which the pass's core
+//!   notes once for them (`encoder::ResidentPart`), and so does a command buffer that runs the
+//!   kept chunks again (`EncoderCore::run_kept`). Counted: `WorkCounts::resident_uses_gathered`,
+//!   `resident_uses_noted`, `draw_heap_parts_made`, `draw_resident_textures_looked_at`.
 //! - **Draws that read the heap** (set 1, `heap_sets.rs`) and the device's texture table are plain
 //!   where a run of their kept recording binds the heap set again as their binding did
 //!   (`heap_sets::Bound`): the set's one version, which a texture's placement writes in place, so
@@ -99,9 +110,9 @@ use super::{
 };
 use crate::amplification::Amplification;
 use crate::argument_table::ArgumentTable;
-use crate::binding::BindMemo;
+use crate::binding::{BindMemo, ResidentPrefix};
 use crate::command_buffer::CommandBuffer;
-use crate::encoder::EncoderCore;
+use crate::encoder::{EncoderCore, ResidentPart};
 use crate::error::{internal, vulkan, Error};
 use crate::indirect_command_buffer::{IndirectCommandBuffer, Reader, RecordSource, WrittenRecords};
 use crate::kept_commands::{
@@ -110,7 +121,8 @@ use crate::kept_commands::{
 };
 use crate::live_bind::LiveBind;
 use crate::pipeline::{BufferForms, RenderPipelineState};
-use crate::render::{memoryless, RenderLowering};
+use crate::pvrtc::ResidentUnreadable;
+use crate::render::{memoryless, InstanceShadows, RenderLowering};
 use crate::render_pass::PassLayout;
 use crate::render_state::{EncoderState, ScissorRects};
 use crate::render_target::{PassShape, RenderPassObject};
@@ -208,13 +220,50 @@ pub(super) struct Keeping {
     read_at: Option<u64>,
 }
 
-/// The bind state, bind memo and residency a chunk recorded apart starts from (`live_bind.rs`,
-/// `binding::BindMemo`): those the chunk before it left, the first chunk's the device's spares'
-/// and a copy of the command buffer's residency. An execution's chunks share one residency, so a
-/// chunk's first draw lists its used resources again only where the one before it did not list
-/// them (a render encoder's first draw lists the residency's whole: thousands of resources), and
-/// the residency is copied once an execution, as an execution recorded inline copies it once.
-type Carried = (Arc<Mutex<LiveBind>>, BindMemo, Residency);
+/// What a chunk recorded apart starts from: those the chunk before it left, the first chunk's
+/// the device's spares' and a copy of the command buffer's residency. An execution's chunks share
+/// one residency, so a chunk's first draw lists its used resources again only where the one
+/// before it did not list them (a render encoder's first draw lists the residency's whole:
+/// thousands of resources), and the residency is copied once an execution, as an execution
+/// recorded inline copies it once. So the chunks' draws take the uses of what the encoder made
+/// resident once an execution too, as the draws of an execution recorded inline do, where the
+/// identity of those uses holds from one chunk to the next: the instance's gathering of them, and
+/// the note of them its pass's core takes for the chunks (`EncoderCore::capture_apart`).
+struct Carried {
+    /// The bind state (`live_bind.rs`), its heap parts kept (`LiveBind::end_chunk`).
+    live: Arc<Mutex<LiveBind>>,
+    /// The bind memo (`binding::BindMemo`).
+    memo: BindMemo,
+    residency: Residency,
+    /// What the instance of the chunk before gathered (`render/shadows.rs`): the call's shadowed
+    /// textures and every use the chunks' draws gathered, those of what the encoder made resident
+    /// once; `None` for the first chunk, whose instance gathers from the call's shadowed textures.
+    gathered: Option<InstanceShadows>,
+    /// The uses of what the encoder made resident that the chunk before left its pass's core to
+    /// note (`ResidentPart`), where it left them.
+    resident: Option<Arc<ResidentPart>>,
+    /// The resident textures whose bytes a carrier holds, as the chunk before found them for the
+    /// residency's generation (`pvrtc::ResidentUnreadable`), and what the uses of what the
+    /// encoder made resident answered of the identity it last walked
+    /// (`RenderLowering::resident_again`): each found again only where its key moved.
+    unreadable: ResidentUnreadable,
+    resident_again: Option<(ResidentPrefix, (bool, bool))>,
+}
+
+impl Carried {
+    /// What the first chunk starts from: `live` and `memo`, a copy of `residency`.
+    fn first((live, memo): (Arc<Mutex<LiveBind>>, BindMemo), residency: &Residency) -> Carried {
+        Carried {
+            live,
+            memo,
+            residency: residency.clone(),
+            gathered: None,
+            resident: None,
+            unreadable: ResidentUnreadable::default(),
+            resident_again: None,
+        }
+    }
+}
 
 /// A chunk recorded apart: its encoder after its commands, the addresses they named and what
 /// they resolved to, the no-copy buffers' moves before it read its records, whether a command
@@ -578,7 +627,7 @@ impl RenderExecution {
         let shared = device.shared();
         let counts = &shared.counts;
         let carried = (shared.live_binds.take(), shared.bind_memos.take());
-        let mut carried = Some((carried.0, carried.1, residency.clone()));
+        let mut carried = Some(Carried::first(carried, residency));
         let mut met = ResidentMet::default();
         let mut draws = Vec::new();
         let mut rest = None;
@@ -631,7 +680,7 @@ impl RenderExecution {
             let mut chunk_found = Found::default();
             let start = match carried.take() {
                 Some(carried) => carried,
-                None => (Arc::default(), BindMemo::default(), residency.clone()),
+                None => Carried::first(Default::default(), residency),
             };
             // A host step's from the bytes of the records it last read, as they stand now
             // (`steady`), else from a copy of them.
@@ -673,7 +722,7 @@ impl RenderExecution {
             match (keeps, held, context) {
                 (true, Some(held), Some(context)) => {
                     let effects = KeptEffects::new(
-                        captured.summary.clone(),
+                        (captured.summary.clone(), captured.resident.clone()),
                         (captured.keys.clone(), captured.taken.named().clone()),
                         (&held, &heaps),
                         captured.executions.clone(),
@@ -703,7 +752,7 @@ impl RenderExecution {
         // host step compared their records with.
         let left: Vec<_> =
             (chunks.map(|((chunk, covered), (kept, read))| (chunk, covered, kept, read))).collect();
-        if let Some((live, memo, _)) = carried {
+        if let Some(Carried { live, memo, .. }) = carried {
             shared.live_binds.give(live);
             shared.bind_memos.give(memo);
         }
@@ -780,7 +829,7 @@ impl RenderExecution {
     }
 
     /// Record commands `covered` apart (the module docs): through an encoder of the call's state
-    /// over a core of its own into a secondary of its own, begun against the instance's
+    /// over a core of its own (`EncoderCore::capture_apart`) into a secondary of its own, begun against the instance's
     /// compatible pass, over the pass's `storage`, in `layout`, the call's, from the bind state
     /// and residency `carried` holds; what their draws found noted into `found`. From the CPU's
     /// records, or for a host step from `records`, the bytes of the records as the GPU and the CPU
@@ -822,14 +871,26 @@ impl RenderExecution {
         let draws = command_buffer.begin_draws(&snapshot.compatible)?;
         let raw = command_buffer.device().shared().vk();
         let visibility = Visibility::borrowing(None, None, raw, draws);
-        let (live, bind_memo, carried) = carried;
+        let Carried {
+            live,
+            memo,
+            residency: carried,
+            gathered,
+            resident,
+            unreadable,
+            resident_again,
+        } = carried;
         let mut encoder = self.replay_encoder(
-            EncoderCore::capture(command_buffer),
+            EncoderCore::capture_apart(command_buffer, resident),
             (draws, visibility),
             (storage.clone(), layout.clone(), carried),
             forms,
         );
-        (encoder.live, encoder.bind_memo) = (live, bind_memo);
+        (encoder.live, encoder.bind_memo) = (live, memo);
+        (encoder.unreadable, encoder.resident_again) = (unreadable, resident_again);
+        if let Some(gathered) = gathered {
+            encoder.current.shadows = gathered;
+        }
         self.replay(&mut encoder, commands(), residency, found)?;
         Ok(Apart {
             encoder,
@@ -861,8 +922,8 @@ impl RenderExecution {
         }
     }
 
-    /// End a plain chunk's encoder: its secondary ended. Its core back, and the bind state and
-    /// residency the next chunk starts from, its encoder ended (`LiveBind::end_encoder`).
+    /// End a plain chunk's encoder: its secondary ended. Its core back, and what the next chunk
+    /// starts from ([`Carried`]), its encoder ended (`LiveBind::end_chunk`).
     fn end_apart(
         &self,
         encoder: RenderLowering,
@@ -876,6 +937,8 @@ impl RenderExecution {
             mut live,
             bind_memo,
             residency,
+            unreadable,
+            resident_again,
             ..
         } = encoder;
         visibility.end(raw, current.draws);
@@ -883,11 +946,22 @@ impl RenderExecution {
         // SAFETY: only this recording records the secondary command buffer.
         unsafe { core.command_buffer().end_raw(current.draws) }.map_err(vulkan)?;
         // No draw holds it once its encoder ended; one that did leaves the next chunk a new one.
+        // Its heap parts stay for the next chunk's draws (`LiveBind::end_chunk`).
         match Arc::get_mut(&mut live).map(Mutex::get_mut) {
-            Some(Ok(state)) => state.end_encoder(),
+            Some(Ok(state)) => state.end_chunk(),
             Some(Err(_)) | None => live = Arc::default(),
         }
-        Ok((core, (live, bind_memo, residency)))
+        let resident = core.resident_part();
+        let carried = Carried {
+            live,
+            memo: bind_memo,
+            residency,
+            gathered: Some(current.shadows),
+            resident,
+            unreadable,
+            resident_again,
+        };
+        Ok((core, carried))
     }
 
     /// The addresses `commands` name (their buffers', where the buffer does not inherit them,

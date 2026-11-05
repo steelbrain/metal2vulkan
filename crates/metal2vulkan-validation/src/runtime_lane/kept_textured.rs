@@ -135,6 +135,20 @@ fn unkept(before: &WorkCounts, after: &WorkCounts) -> [u64; 5] {
     ]
 }
 
+/// What the draws between `before` and `after` walked once for each instance or core of the uses
+/// of what the encoder made resident, gathered and noted, the heap parts they worked out, and
+/// their looks at the textures made resident for those a carrier holds
+/// (`WorkCounts::resident_uses_gathered`, `resident_uses_noted`, `draw_heap_parts_made`,
+/// `draw_resident_textures_looked_at`).
+fn walked(before: &WorkCounts, after: &WorkCounts) -> [u64; 4] {
+    [
+        after.resident_uses_gathered - before.resident_uses_gathered,
+        after.resident_uses_noted - before.resident_uses_noted,
+        after.draw_heap_parts_made - before.draw_heap_parts_made,
+        after.draw_resident_textures_looked_at - before.draw_resident_textures_looked_at,
+    ]
+}
+
 /// Wait for `command_buffer`, which must complete.
 fn completed(command_buffer: &CommandBuffer) {
     command_buffer.wait_until_completed_for(WAIT).unwrap();
@@ -161,12 +175,18 @@ fn frame(
 
 /// Frames 0 to 2 of `page`: the first records inline, the second records apart and keeps every
 /// chunk, the third runs them kept, each drawing what the first drew. Where the device keeps no
-/// heap draw, each records inline, counting every replayed draw's unshared set. Its pixels.
+/// heap draw, each records inline, counting every replayed draw's unshared set. The second walks
+/// the uses of what the encoder made resident, works the heap parts out and looks at the textures
+/// made resident no more often than the first ([`walked`]): its chunks take them from one to the next, as the draws of one
+/// encoder do (the runtime's `render/executions/kept.rs`). Its pixels.
 fn steady(device: &Device, queue: &CommandQueue, case: &str, page: &Page) -> Vec<u8> {
     let shared = shared_heap(device);
     let mut first = None;
+    let mut walks = Vec::new();
     for (at, expected) in [INLINE, KEEPS, KEPT].into_iter().enumerate() {
+        let before = device.work_counts();
         let (counts, unkept, pixels) = frame(device, queue, page, None);
+        walks.push(walked(&before, &device.work_counts()));
         assert_eq!(counts, on(shared, expected), "{case}: frame {at}");
         assert_eq!(
             unkept[1..],
@@ -183,6 +203,15 @@ fn steady(device: &Device, queue: &CommandQueue, case: &str, page: &Page) -> Vec
             Some(first) => assert!(pixels == *first, "{case}: frame {at} draws other pixels"),
         }
     }
+    assert!(
+        walks[1]
+            .iter()
+            .zip(&walks[0])
+            .all(|(apart, inline)| apart <= inline),
+        "{case}: frame 1 gathered, noted, worked out and looked at {:?}, frame 0 {:?}",
+        walks[1],
+        walks[0]
+    );
     first.unwrap()
 }
 

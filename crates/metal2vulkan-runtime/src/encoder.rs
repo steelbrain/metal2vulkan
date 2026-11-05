@@ -376,7 +376,36 @@ pub(super) struct EncoderCore {
     /// write an indirect command buffer's records, which its command buffer's commit reads
     /// (`write_routes.rs`).
     pub(super) routes: Routes,
+    /// Where its draws note the uses of what their encoder made resident
+    /// ([`note_draw`](Self::note_draw)).
+    resident_notes: ResidentNotes,
+    /// The last [`ResidentPart`] it noted, by identity, and the state it noted it into
+    /// ([`note_resident_part`](Self::note_resident_part)).
+    resident_noted: Option<(ReachingPrefix, NotedInto)>,
     _not_sync: PhantomData<std::cell::Cell<()>>,
+}
+
+/// The uses of what a render encoder made resident that begin the uses of the draws of an
+/// execution's chunks recorded apart (`render/executions/kept.rs`), by identity
+/// (`binding::ReachingPrefix`: two draws of the same begin with the same uses and reach the same
+/// keys through the resident set alone), with those keys. The core of each chunk notes its
+/// draws' uses past them (a core of [`EncoderCore::capture_apart`]), and the core of the chunks'
+/// pass notes them once ([`EncoderCore::absorb`], [`EncoderCore::run_kept`]), as the core of an
+/// execution recorded inline notes them at its first draw alone (`noted_apart.rs`).
+pub(super) struct ResidentPart {
+    reaching: ReachingPrefix,
+    uses: Vec<Use<ResourceKey>>,
+    resident: BTreeSet<ResourceKey>,
+}
+
+/// Where a core's draws note the uses of what their encoder made resident.
+enum ResidentNotes {
+    /// In the core.
+    Here,
+    /// In the core of the pass whose execution's chunk it records
+    /// ([`EncoderCore::capture_apart`]): those of the part, or of the first draw's that begin
+    /// with some, which becomes the part; a draw that begins with others notes them here.
+    Apart(Option<Arc<ResidentPart>>),
 }
 
 /// An encoder encoded again (`EncoderCore::replaying`), ended: what its place among its command
@@ -544,6 +573,8 @@ impl EncoderCore {
             replaying: false,
             last_set_zero: LastSetZero::default(),
             routes,
+            resident_notes: ResidentNotes::Here,
+            resident_noted: None,
             _not_sync: PhantomData,
         })
     }
@@ -610,6 +641,44 @@ impl EncoderCore {
         EncoderCore::over(command_buffer, vk::CommandBuffer::null(), false)
     }
 
+    /// A [`capture`](Self::capture) core for a chunk of a render execution's commands recorded
+    /// apart, whose draws leave the uses of what their encoder made resident to the core that
+    /// takes what it did ([`ResidentPart`]): `resident`'s, the chunk before's, or where it is
+    /// `None` those its first draw that begins with some begins with.
+    pub(super) fn capture_apart(
+        command_buffer: &CommandBuffer,
+        resident: Option<Arc<ResidentPart>>,
+    ) -> EncoderCore {
+        let mut core = EncoderCore::capture(command_buffer);
+        core.resident_notes = ResidentNotes::Apart(resident);
+        core
+    }
+
+    /// The uses of what its encoder made resident its draws left to the core that takes what it
+    /// did, where they left some ([`capture_apart`](Self::capture_apart)).
+    pub(super) fn resident_part(&self) -> Option<Arc<ResidentPart>> {
+        match &self.resident_notes {
+            ResidentNotes::Apart(part) => part.clone(),
+            ResidentNotes::Here => None,
+        }
+    }
+
+    /// Note `part`'s uses, those of what an encoder made resident that the cores of an
+    /// execution's chunks left to this one ([`ResidentPart`]): once while it notes into the same
+    /// state (`NotedInto`), as a draw noted after one that began with the same notes them no
+    /// more (`noted_apart.rs`; `WorkCounts::resident_uses_noted` counts the ones walked).
+    fn note_resident_part(&mut self, part: &ResidentPart) -> Result<(), Error> {
+        let into = self.noted_into();
+        if self.resident_noted == Some((part.reaching, into)) {
+            return Ok(());
+        }
+        let stages = part.reaching.stages;
+        self.note_reaching(stages, (&part.uses, &part.resident), None)?;
+        (self.device().shared().counts).resident_uses_noted(part.uses.len() as u64);
+        self.resident_noted = Some((part.reaching, into));
+        Ok(())
+    }
+
     /// A core of `command_buffer` over `raw`, begun, or none (null), recording nothing yet, that
     /// abandons nothing when dropped.
     fn over(command_buffer: &CommandBuffer, raw: vk::CommandBuffer, ordered: bool) -> EncoderCore {
@@ -648,6 +717,8 @@ impl EncoderCore {
             replaying: crate::replay::is_replaying(),
             last_set_zero: LastSetZero::default(),
             routes: Routes::default(),
+            resident_notes: ResidentNotes::Here,
+            resident_noted: None,
             _not_sync: PhantomData,
         }
     }
@@ -1460,10 +1531,30 @@ impl EncoderCore {
                 "a command recorded apart in an ordered encoder",
             ));
         }
+        let len = prefix.prefix.len;
+        // A chunk's core notes the uses past those its pass's core notes ([`ResidentPart`]).
+        let apart = match &mut self.resident_notes {
+            ResidentNotes::Here => false,
+            ResidentNotes::Apart(Some(part)) => part.reaching == prefix,
+            ResidentNotes::Apart(part) => {
+                *part = Some(Arc::new(ResidentPart {
+                    reaching: prefix,
+                    uses: uses[..len].to_vec(),
+                    resident: resident.clone(),
+                }));
+                true
+            }
+        };
+        if apart {
+            let past = &uses[len..];
+            let stages = (past.iter()).fold(vk::PipelineStageFlags2::empty(), |all, used| {
+                all | used.read.stages | used.write.stages
+            });
+            return self.note_reaching(stages, (past, resident), Some(noted));
+        }
         self.observe_fresh(uses, &[]);
         self.hold_resident();
         // Its stages: those of the uses of what the encoder made resident, and the rest's.
-        let len = prefix.prefix.len;
         let stages = (uses[len..].iter()).fold(prefix.stages, |all, used| {
             all | used.read.stages | used.write.stages
         });
@@ -2691,8 +2782,13 @@ impl EncoderCore {
             fails_command_buffer,
             faults,
             resident_unheld,
+            resident_notes,
             ..
         } = self;
+        let resident = match resident_notes {
+            ResidentNotes::Apart(part) => part,
+            ResidentNotes::Here => None,
+        };
         Ok(Captured {
             raws: ended,
             summary: uses.finish(),
@@ -2709,6 +2805,7 @@ impl EncoderCore {
             fails_command_buffer,
             faults,
             resident_unheld,
+            resident,
         })
     }
 
@@ -2735,6 +2832,7 @@ impl EncoderCore {
             fails_command_buffer,
             faults,
             resident_unheld,
+            resident,
         } = captured;
         if !raws.is_empty() {
             self.flush_gathers();
@@ -2750,6 +2848,9 @@ impl EncoderCore {
             self.barrier(Barrier::everything());
         }
         self.uses.record(summary.stages(), summary.uses(), None);
+        if let Some(part) = resident {
+            self.note_resident_part(&part)?;
+        }
         self.retained.join(retained);
         self.executions.extend(executions);
         self.keys.extend(keys);
@@ -2791,6 +2892,9 @@ impl EncoderCore {
             .filter(|key| !effects.named.contains(key))
             .collect();
         self.note_reaching(summary.stages(), (summary.uses(), &resident), None)?;
+        if let Some(part) = &effects.resident {
+            self.note_resident_part(part)?;
+        }
         self.touch_keys(effects.keys.iter().copied());
         for object in held {
             self.retain_shared(object);
@@ -2826,6 +2930,9 @@ pub(super) struct Captured {
     fails_command_buffer: Option<CommandBufferError>,
     faults: Option<CommandBufferError>,
     resident_unheld: Vec<ResourceKey>,
+    /// The uses of what its encoder made resident its draws left to the core that takes what it
+    /// did ([`ResidentPart`]), where they left some.
+    pub(super) resident: Option<Arc<ResidentPart>>,
 }
 
 impl Captured {
@@ -2863,7 +2970,8 @@ impl Captured {
             || !self.twin_writes.is_empty()
             || self.fails_command_buffer.is_some()
             || self.faults.is_some()
-            || self.taken.rate_map_id().is_some();
+            || self.taken.rate_map_id().is_some()
+            || self.resident.is_some();
         if more {
             return Err(internal(
                 "a kept chunk's run that did more than its recording",

@@ -35,7 +35,10 @@
 //!   at its first draw, into the storage of those let go of, which hold nothing else (no texture,
 //!   sampler or plan: what a part holds is plain data, and its plan is held weakly and let go), so
 //!   a part worked out allocates no more than a draw that worked out its heap part did
-//!   (`runtime_lane::frame_costs`).
+//!   (`runtime_lane::frame_costs`). The encoders of the chunks of one execution recorded apart
+//!   keep them from one chunk to the next (`LiveBind::end_chunk`), as one encoder keeps them
+//!   from one draw to the next: a host step that records an execution's chunks apart works out
+//!   each part once, as one that records them inline does.
 
 use std::sync::{Arc, Weak};
 

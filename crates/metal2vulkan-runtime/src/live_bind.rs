@@ -438,9 +438,20 @@ impl LiveBind {
     /// Its encoder ended: what its draws settled, the shadows' copies listed and the heap parts
     /// kept go with the encoder (the module docs), so the next encoder may start from it.
     pub(super) fn end_encoder(&mut self) {
-        self.forget_settles();
+        self.end_chunk();
         self.shadows.let_go();
         self.heap.let_go();
+    }
+
+    /// Its encoder, a chunk's of an execution's commands recorded apart, ended, and the next
+    /// chunk's starts from it in the same recording (`render/executions/kept.rs`): as
+    /// [`end_encoder`](Self::end_encoder), but the shadows' copies listed and the heap parts
+    /// stay, so the chunks' draws take them as the draws of one encoder do. Each is a function of
+    /// what a draw compares before it takes it: the residency's generation and the device's count
+    /// of usage shadows made (`shadow::ResidentShadows`), and what a part is made of
+    /// (`render/heap_part.rs`).
+    pub(super) fn end_chunk(&mut self) {
+        self.forget_settles();
     }
 
     /// Start a draw through `interface` from the state that pipeline state's last draw left, where

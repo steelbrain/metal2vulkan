@@ -137,7 +137,8 @@ impl RenderLowering {
         // change of it, as an earlier command noted those it held then.
         let generation = self.residency.generation();
         if self.heaps_noted != Some(generation) {
-            self.core.touch_heaps(self.residency.heaps());
+            let heaps = self.residency.resident_heaps();
+            self.core.touch_heaps(heaps.iter().cloned());
             self.heaps_noted = Some(generation);
         }
         if reads.is_empty() {

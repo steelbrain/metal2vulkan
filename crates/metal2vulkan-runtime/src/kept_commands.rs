@@ -42,6 +42,7 @@
 use crate::command_buffer::{command_pool, hand_out, CommandBuffer};
 use crate::descriptor_arena::DescriptorArena;
 use crate::device::{lock, Device};
+use crate::encoder::ResidentPart;
 use crate::error::Error;
 use crate::execution::Execution;
 use crate::heap_sets::{self, SetVersion};
@@ -185,6 +186,10 @@ pub(super) struct KeptEffects {
     heaps: Vec<Weak<SetVersion>>,
     /// Its execution records, where the device keeps them.
     pub(super) executions: Vec<Execution>,
+    /// The uses of what its encoder made resident its draws left to the core of their pass, which
+    /// a command buffer that runs it again notes once for the chunks that share them
+    /// (`EncoderCore::run_kept`).
+    pub(super) resident: Option<Arc<ResidentPart>>,
 }
 
 /// What a command buffer that runs a kept chunk again holds of it ([`KeptChunk::runs_again`]):
@@ -193,9 +198,10 @@ pub(super) type Held = (Vec<Arc<dyn Any + Send + Sync>>, Vec<Arc<SetVersion>>);
 
 impl KeptEffects {
     /// The effects of a recording that noted `summary`, kept `keys`, named `named`, held `held`,
-    /// bound the heap set versions `heaps` and recorded `executions`.
+    /// bound the heap set versions `heaps`, recorded `executions` and left `resident` to its
+    /// pass's core.
     pub(super) fn new(
-        summary: Summary<ResourceKey>,
+        (summary, resident): (Summary<ResourceKey>, Option<Arc<ResidentPart>>),
         (keys, named): (BTreeSet<ResourceKey>, BTreeSet<ResourceKey>),
         (held, heaps): (&[Arc<dyn Any + Send + Sync>], &[Weak<SetVersion>]),
         executions: Vec<Execution>,
@@ -207,6 +213,7 @@ impl KeptEffects {
             held: held.iter().map(Arc::downgrade).collect(),
             heaps: heaps.to_vec(),
             executions,
+            resident,
         }
     }
 

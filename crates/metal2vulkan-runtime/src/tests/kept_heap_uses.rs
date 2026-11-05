@@ -1,9 +1,11 @@
 //! A host step's run of kept chunks of draws that read textures through the heap reports the uses
-//! their recording noted (`EncoderCore::run_kept`, `render/executions/kept.rs`): the batches the
-//! scheduler plans for a step that runs every chunk kept hold the same tracked uses, by resource,
-//! range, reads and writes (their stages and accesses), as those of the step that recorded the
-//! commands inline, so the tracker orders a kept run after earlier writers as it orders a fresh
-//! recording (`CommandBuffer::watch_planned`, a device test's).
+//! their recording noted (`EncoderCore::run_kept`, `render/executions/kept.rs`), and a step that
+//! records the chunks apart those its draws noted, the uses of what the encoder made resident
+//! among them, which the pass's core notes once for the chunks (`encoder::ResidentPart`): the
+//! batches the scheduler plans for either step hold the same tracked uses, by resource, range,
+//! reads and writes (their stages and accesses), as those of the step that recorded the commands
+//! inline, so the tracker orders a kept run after earlier writers as it orders a fresh recording
+//! (`CommandBuffer::watch_planned`, a device test's).
 //!
 //! The page is the validation lane `kept_textured`'s at two chunks' commands (the owned fixture
 //! `icb_vertex_encode_textured`): a pass with rasterization off encodes one indexed draw a
@@ -232,10 +234,12 @@ fn a_kept_heap_chunk_s_run_reports_the_uses_an_inline_recording_reports() {
         textures, COMMANDS,
         "the inline frame's uses name every texture"
     );
-    assert!(
-        frames[2] == frames[0],
-        "the kept frame's planned uses differ from the inline frame's: {} only kept, {} only inline",
-        frames[2].difference(&frames[0]).count(),
-        frames[0].difference(&frames[2]).count()
-    );
+    for (at, frame) in frames.iter().enumerate().skip(1) {
+        assert!(
+            *frame == frames[0],
+            "frame {at}'s planned uses differ from the inline frame's: {} only in it, {} only inline",
+            frame.difference(&frames[0]).count(),
+            frames[0].difference(frame).count()
+        );
+    }
 }
