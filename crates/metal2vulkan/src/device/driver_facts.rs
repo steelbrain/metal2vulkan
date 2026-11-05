@@ -458,11 +458,14 @@ pub(crate) fn among<F: Copy + Ord>(
 /// `runtime_lane::heap_extended_reads::heap_half_reads_of_every_code_round_their_float` reads every
 /// code of the five forms a heap holds by its raw texels that the runtime makes, as `half` through
 /// an argument buffer, against the nearest even `half` of the same read as `float` and the slot's
-/// `half` read. An argument buffer's `half` read of a member of another numeric class rounds
+/// `half` read: on the M3 Max under macOS 27.0.1 (2026-11-05), none of the 262,144 channels of
+/// `BGRA10_XR`, `BGR10_XR`, `R16Bfloat`, `RG16Bfloat` and `RGBA16Bfloat` each differs. An argument
+/// buffer's `half` read of a member of another numeric class rounds
 /// nothing: its arms merge the texel's `half` bits as integers (`lower::texture::emit`'s
 /// `read_crossed`), widened once after the merge as a slot's read widens them, which the gate lane
 /// `runtime_lane::cross_class_reads::argument_buffer_cross_class_reads_are_the_native_words` reads
-/// against the slot's words. One row per GPU, as measured.
+/// against the slot's words: there, the same day, each of its 2,170 lanes is the slot's words, a
+/// NaN's bits included. One row per GPU, as measured.
 ///
 /// `MetalSmallFloatNans`: MoltenVK 1.4.2 hands a storage image write to Metal's own texture
 /// write. On the M3 Max under macOS 27.0.1 (2026-11-03), byte for byte against plain Metal, a
