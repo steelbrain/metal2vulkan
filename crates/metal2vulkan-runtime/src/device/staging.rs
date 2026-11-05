@@ -22,8 +22,10 @@
 //!   that needs what it did on the CPU (`get_bytes`, a texture's `VkImage` handed out, the
 //!   program's own use of a `VkQueue`) waits for it on the host. Every other submission of the
 //!   device's, a batch or an internal one on any `VkQueue`, waits for it on the GPU until the host
-//!   saw it complete ([`Device::staging_wait`]): the copies it made are visible to the commands
-//!   after that wait, which never waits for work of the program's. A submission is not waited for
+//!   saw it complete ([`Device::staging_wait`]), but a batch of a `VkQueue` where an earlier
+//!   batch waited for it (`command_buffer/submit.rs`): the copies it made are visible to the
+//!   commands after that wait, in submission order there, which never waits for work of the
+//!   program's. A submission is not waited for
 //!   before the next one is recorded: its command buffer is one of up to [`BUFFERS`], each reused
 //!   once the host saw the value it signalled reached.
 //! - **Who uses it.** A texture made to copy through it (`texture/staging_copy.rs`) has its first
@@ -353,8 +355,8 @@ impl Device {
     }
 
     /// The staging queue's last submission while the host has not seen it complete: what every
-    /// other submission of the device's waits for on the GPU (the module docs), as what it copied
-    /// may be among what it uses. The host sees it complete once a wait of no time returned for
+    /// other submission of the device's waits for on the GPU, or follows on its `VkQueue` a wait
+    /// for (the module docs), as what it copied may be among what it uses. The host sees it complete once a wait of no time returned for
     /// it.
     pub(crate) fn staging_wait(&self) -> Option<(vk::Semaphore, u64)> {
         let shared = self.shared();

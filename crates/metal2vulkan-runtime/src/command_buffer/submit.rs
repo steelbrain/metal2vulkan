@@ -51,12 +51,19 @@
 //! and the RTX 3090, about 2 ms of CPU in one `vkQueueSubmit` in about every thousand waits and
 //! signals) takes no such wait: each batch with work starts instead with a command buffer of
 //! barriers whose first is [`Barrier::after_completed`], which makes what completed batches
-//! wrote visible to every later command. Every batch, on every driver, waits for the staging
-//! queue's last submission while the host has not seen it complete (`Device::staging_wait`):
-//! one that carries the copies a burst of host calls queued is made just before the batch and
-//! waited for on the GPU, not the host (`texture/staging_copy.rs`).
-//! Where every batch waited, about twice as many of its submissions took that long as where
-//! batches only signal.
+//! wrote visible to every later command. Where every batch waited, about twice as many of its
+//! submissions took that long as where batches only signal.
+//!
+//! **The staging queue's copies.** On every driver, a batch waits on the GPU for the staging
+//! queue's last submission while the host has not seen it complete (`Device::staging_wait`),
+//! unless a batch of its `VkQueue` already waited for that submission: the wait's second
+//! synchronization scope holds every command later in submission order there, so one wait per
+//! `VkQueue` makes the copies visible to every later batch of it, as one wait per value does for
+//! completed work above. A submission that carries the copies a burst of host calls queued is
+//! made just before the batch and waited for on the GPU, not the host
+//! (`texture/staging_copy.rs`). The batches after the one that waits may then join a group
+//! (**Grouped**, above), which a batch with a wait for work the host has not seen complete only
+//! leads. Counted: `WorkCounts::staging_gpu_waits`.
 //!
 //! Each barrier goes in a command buffer of barriers alone, which the scheduler records once per
 //! list of barriers and submits again once the batch that last carried it completed
@@ -830,9 +837,16 @@ impl CommandBufferShared {
             wait_values.push(value);
             wait_stages.push(vk::PipelineStageFlags::ALL_COMMANDS);
         }
-        // And the staging queue's last submission, on every `VkQueue`, until the host saw it
-        // complete: what it copied may be among what the work reads (`device/staging.rs`).
-        if let Some((timeline, value)) = device.staging_wait() {
+        // And the staging queue's last submission, until the host saw it complete: what it
+        // copied may be among what the work reads (`device/staging.rs`). Where a batch of this
+        // `VkQueue` already waited for it, every later command there follows that wait in
+        // submission order, this batch's too (the module docs): one wait serves them all. The
+        // staging queue's place among the timelines follows the `VkQueue`s' and the internal
+        // submissions' (`Device::own_completed`).
+        let staging_place = shared.queues.len() + 1;
+        let staging_wait = (device.staging_wait())
+            .filter(|&(_, value)| value > scheduler.waited[queue][staging_place]);
+        if let Some((timeline, value)) = staging_wait {
             wait_semaphores.push(timeline);
             wait_values.push(value);
             wait_stages.push(vk::PipelineStageFlags::ALL_COMMANDS);
@@ -1079,6 +1093,11 @@ impl CommandBufferShared {
         }
         for &(source, value) in waited.iter() {
             scheduler.waited[queue][source] = value;
+        }
+        // Its staging wait, made or held: a held group goes to its `VkQueue` before any later
+        // batch there, and one whose submission fails puts the values back.
+        if let Some((_, value)) = staging_wait {
+            scheduler.waited[queue][staging_place] = value;
         }
         shared.counts.completed_waited(waited.len());
         if !single && !started {

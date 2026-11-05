@@ -4898,7 +4898,8 @@ pub struct WorkCounts {
     pub staging_flushes: u64,
     /// Batches and internal submissions that waited on the GPU for a staging submission the host
     /// had not seen complete (`Device::staging_wait`, `device/staging.rs`), in place of a wait on
-    /// the host.
+    /// the host: of the batches, at most one per `VkQueue` per staging submission, as every later
+    /// batch there follows its wait (`command_buffer/submit.rs`).
     pub staging_gpu_waits: u64,
     /// New `Shared` and `Managed` textures' images with host-transfer usage placed in memory the
     /// host does not cache, where the device has none the image may take

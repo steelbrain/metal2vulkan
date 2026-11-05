@@ -211,6 +211,97 @@ fn a_burst_of_replace_regions_shares_one_staging_submission() {
     });
 }
 
+/// One `replace_region` of a 64 MiB `Managed` texture, then `BATCHES` command buffers committed
+/// back to back on one queue, each a blit of a 64-texel square of it of its own into a buffer:
+/// every blit reads the call's bytes. Where the device copies on its staging queue, the first
+/// batch carried the copy and waited for it on the GPU, and the batches after it on the queue,
+/// committed while the copy may still run, took no wait of their own: they follow that wait in
+/// the `VkQueue`'s submission order, which orders them after the copy (`command_buffer/submit.rs`).
+/// So the staging waits are one per staging submission, not one per batch the host submitted
+/// before it saw the copy complete.
+#[test]
+fn batches_after_one_that_waited_for_a_staging_copy_follow_its_wait() {
+    const SIDE: u64 = 4096;
+    const SQUARE: u64 = 64;
+    const BATCHES: u64 = 32;
+    on_device(|device| {
+        let name = device.name();
+        let queue = device.new_command_queue().unwrap();
+        let texture = texture(device, PixelFormat::RGBA8Unorm, SIDE, managed());
+        let written = texels(SIDE, 3);
+        let before = device.work_counts();
+        let region = Region::new_2d(0, 0, SIDE, SIDE);
+        (texture.replace_region(region, 0, 0, &written, 4 * SIDE, 0)).unwrap();
+        let burst = Path::between(&before, &device.work_counts());
+        let squares: Vec<(u64, u64)> = (0..BATCHES)
+            .map(|at| (SQUARE * (at % 8), SQUARE * (at / 8)))
+            .collect();
+        let mut last = None;
+        let outs: Vec<Buffer> = (squares.iter())
+            .map(|&(x, y)| {
+                let command_buffer = queue.command_buffer().unwrap();
+                let out = device
+                    .new_buffer(4 * SQUARE * SQUARE, ResourceOptions::shared())
+                    .unwrap();
+                let mut blit = command_buffer.blit_command_encoder().unwrap();
+                blit.copy_from_texture_to_buffer(
+                    &texture,
+                    0,
+                    0,
+                    Origin::new(x, y, 0),
+                    Size::new(SQUARE, SQUARE, 1),
+                    &out,
+                    0,
+                    4 * SQUARE,
+                    0,
+                    BlitOption::None,
+                )
+                .unwrap();
+                blit.end_encoding().unwrap();
+                command_buffer.commit().unwrap();
+                last = Some(command_buffer);
+                out
+            })
+            .collect();
+        let last = last.unwrap();
+        last.wait_until_completed_for(WAIT).unwrap();
+        assert_eq!(last.error(), None, "{name}: the blits");
+        let read = Path::between(&before, &device.work_counts());
+        for (at, (out, &(x, y))) in outs.iter().zip(&squares).enumerate() {
+            let want: Vec<u8> = (0..SQUARE)
+                .flat_map(|row| {
+                    let from = (4 * ((y + row) * SIDE + x)) as usize;
+                    written[from..from + (4 * SQUARE) as usize].iter().copied()
+                })
+                .collect();
+            assert!(
+                read_buffer(out, 0, want.len() as u64).unwrap() == want,
+                "{name}: batch {at}'s blit reads the replace_region's bytes"
+            );
+        }
+        println!(
+            "STAGING-BATCH {name}: one replace_region of {} MiB {}, then {BATCHES} batches on one \
+             queue that read it: the call {burst:?}, with the batches {read:?}",
+            (4 * SIDE * SIDE) >> 20,
+            burst.said(1)
+        );
+        if burst.queued > 0 {
+            assert_eq!(
+                (read.staging, read.flushes),
+                (1, 1),
+                "{name}: the first batch carried the copy in one staging submission"
+            );
+            assert!(
+                (1..=1 + read.internal).contains(&read.gpu_waits),
+                "{name}: one batch on the queue waited for the staging submission on the GPU, \
+                 and the batches after it none (internal submissions wait for it themselves): \
+                 {} waits",
+                read.gpu_waits
+            );
+        }
+    });
+}
+
 /// Overlapping writes into one texture keep their order, whether read by `get_bytes` or by a later
 /// command buffer, through the texture or a view of it: the whole level written twice, then a
 /// part of it, then a part through a view; the reads see the last whole write with the two parts
