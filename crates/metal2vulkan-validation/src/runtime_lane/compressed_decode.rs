@@ -352,9 +352,9 @@ fn read_whole(device: &Device, state: &ComputePipelineState, texture: &Texture) 
 fn noted_bound(kind: Kind, c: usize) -> f32 {
     match kind {
         Kind::Bc3 if c == 3 => 6.0 / 255.0,
-        Kind::Bc1 | Kind::Bc2 | Kind::Bc3 => 3.0 / 255.0,
-        Kind::Channels { signed: true, .. } => 0.064,
-        Kind::Channels { signed: false, .. } => 7.3 / 255.0,
+        Kind::Bc1 | Kind::Bc2 | Kind::Bc3 => 4.0 / 255.0,
+        Kind::Channels { signed: true, .. } => 0.065,
+        Kind::Channels { signed: false, .. } => 7.4 / 255.0,
     }
 }
 

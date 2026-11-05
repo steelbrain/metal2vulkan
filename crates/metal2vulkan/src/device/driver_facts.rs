@@ -1115,8 +1115,8 @@ pub enum DriverFact {
     /// weight of 64 (BC7's: 21 and 43 for the thirds, 9 to 55 for BC3's alpha's sevenths, 13 to
     /// 51 for its fifths, 32 for BC1's half) summed as `(64 - w) a + w b` and rounded half up to
     /// 8 bits; BC2's alpha its 4-bit code times 17. NVIDIA's 615.71.09 (the RTX 3090 and the RTX
-    /// 5080 Laptop GPU) answers channels up to 3/255 off (BC3's alpha 6/255), ANV up to 1/255,
-    /// lavapipe 3/255. On a driver without it a texture of such a format announces
+    /// 5080 Laptop GPU) answers channels up to 4/255 off (BC3's alpha 6/255; the 5080's 6-bit
+    /// green 4/255 at 961b1ff319, its other channels 3/255), ANV up to 1/255, lavapipe 3/255. On a driver without it a texture of such a format announces
     /// `compressed-texel-decode` where the runtime makes it, and its reads, samples and gathers
     /// are the device's decode of its own BC image: the runtime keeps no decoded twin of a BC
     /// texture.
@@ -1126,7 +1126,7 @@ pub enum DriverFact {
     /// BC3's alpha, the sum `(64 - w) a + w b` unrounded, `sum / 16320` (signed `sum / 8128`,
     /// an endpoint of -128 summed as it is and the value clamped to -1 after), the six-value
     /// constants 0 and 1 (signed -1 and 1), each correctly rounded to `float`. NVIDIA's 615.71.09
-    /// answers up to 7.3/255 off (signed 0.064), ANV 1.3/255 (signed 0.013), lavapipe 2.4/255
+    /// answers up to 7.4/255 off (signed 0.065), ANV 1.3/255 (signed 0.013), lavapipe 2.4/255
     /// (signed 0.022), and RADV (Mesa 26.2.4, the Radeon 780M) clamps an endpoint of -128 to -127
     /// before the sum (signed up to 1.7/255 off) and rounds some unsigned values a `float` ulp
     /// off. On a driver without it a texture of such a format announces

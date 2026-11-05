@@ -1739,9 +1739,9 @@ degradations! {
         CompressedTexelDecode = "compressed-texel-decode", Precision,
             "a read, sample or gather of its texels answers the device's decode of its blocks \
              (an sRGB form's code through the device's sRGB decode), where Metal interpolates \
-             with 6-bit weights: a BC1 to BC3 channel up to 3/255 off Metal's on NVIDIA (615.71.09, the RTX \
-             3090 and RTX 5080 Laptop GPU; BC3's alpha 6/255) and lavapipe, 1/255 on ANV; a BC4 \
-             or BC5 channel up to 7.3/255 (signed 0.064) on NVIDIA, 1.3/255 (signed 0.013) on \
+             with 6-bit weights: a BC1 to BC3 channel up to 4/255 off Metal's on NVIDIA (615.71.09, the RTX \
+             3090 and RTX 5080 Laptop GPU; BC3's alpha 6/255), 3/255 on lavapipe, 1/255 on ANV; a \
+             BC4 or BC5 channel up to 7.4/255 (signed 0.065) on NVIDIA, 1.3/255 (signed 0.013) on \
              ANV, 2.4/255 (signed 0.022) on lavapipe, and on RADV (Mesa 26.2.4, the Radeon \
              780M) a signed texel with an endpoint of -128 up to 1.7/255; a BC7 channel a \
              `float` ulp on lavapipe; its blocks' bytes, copies and sizes are Metal's";
