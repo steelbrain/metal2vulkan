@@ -243,6 +243,18 @@ fn each_device_routes_each_width_as_its_lines_allow() {
         (lines, edges, mesh_lines, patch_edges),
         (Drawn::Lines, Drawn::Edges, Drawn::Other, Drawn::Other)
     );
+    // A mesh of triangles or points draws no line filled, whether the device draws the mesh or
+    // it is emulated (`GraphicsState::mesh_corners`); a mesh of triangles draws its edges in fill
+    // mode `Lines`.
+    let mesh = |fill, corners| drawn(Assembly::Meshes, fill, false, corners, true);
+    assert_eq!(
+        [
+            mesh(TriangleFillMode::Fill, Some(3)),
+            mesh(TriangleFillMode::Fill, Some(1)),
+            mesh(TriangleFillMode::Lines, Some(3)),
+        ],
+        [Drawn::Nothing, Drawn::Nothing, Drawn::Other]
+    );
     for (stem, widths, rows) in table {
         let device = device(stem);
         let profile = device.profile();

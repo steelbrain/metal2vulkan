@@ -312,6 +312,11 @@ pub struct StageInterface {
     /// which the pipeline's synthesized vertex stage draws.
     #[cfg_attr(feature = "serde", serde(default))]
     pub mesh_records: Option<MeshRecords>,
+    /// A mesh function's primitive: its indices, 1 (points), 2 (lines) or 3 (triangles), on
+    /// every device, whether the device draws the mesh or the function writes records. `None`
+    /// for any other function.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub mesh_corners: Option<u32>,
     /// An object or mesh function compiled for a device without `VK_EXT_mesh_shader` (a
     /// `GLCompute` entry): its payload's words (0 without a payload), which its object
     /// threadgroup's slot of the draw's work buffer holds (`MeshRecords::slot_words`). `None`

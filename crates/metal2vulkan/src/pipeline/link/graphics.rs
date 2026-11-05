@@ -678,6 +678,7 @@ pub fn graphics_state(
         early_fragment_tests: fs.is_some_and(|fs| fs.io.early_fragment_tests),
         // An emulated mesh function's pipeline states its records (`link`).
         mesh_records: None,
+        mesh_corners: None,
         emulated_tessellation: None,
         // A band variant's pipeline states its band (`link`).
         line_band: None,

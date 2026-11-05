@@ -511,6 +511,7 @@ pub fn link(
             let vi = VertexInputState::default();
             let fragment = stages.get(at + 1).copied();
             let mut gs = render_state(r, ifaces[at], fragment, &vi, None, p)?;
+            gs.mesh_corners = ifaces[at].mesh_corners;
             // An emulated mesh function's primitives are drawn as a list of their kind.
             if let Some(records) = records {
                 gs.topology = records.topology();

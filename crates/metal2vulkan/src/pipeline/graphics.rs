@@ -146,6 +146,11 @@ pub struct GraphicsState {
     /// every other pipeline.
     #[cfg_attr(feature = "serde", serde(default))]
     pub mesh_records: Option<MeshRecords>,
+    /// A mesh render pipeline's primitive, its mesh function's: its indices, 1 (points), 2
+    /// (lines) or 3 (triangles), whether the device draws the mesh or
+    /// [`mesh_records`](Self::mesh_records) does. `None` for every other pipeline.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub mesh_corners: Option<u32>,
     /// A render pipeline whose vertex function is a post-tessellation vertex function, on a
     /// device without `tessellationShader`: the function is the pipeline's `VERTEX` module, which
     /// draws the tessellator's triangles itself as a `TRIANGLE_LIST` from an emulated draw's
@@ -492,6 +497,7 @@ impl GraphicsState {
             shadow_stencil: None,
             early_fragment_tests: false,
             mesh_records: None,
+            mesh_corners: None,
             emulated_tessellation: None,
             line_band: None,
             writes_point_size: false,

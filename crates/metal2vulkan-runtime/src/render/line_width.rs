@@ -257,8 +257,8 @@ enum Drawn {
     /// Triangles' edges in fill mode `Lines`, of a list, a strip or one of Metal's private
     /// triangle types, which the band draws.
     Edges,
-    /// Lines the band does not draw: a mesh draw's lines and edges (whose lines the runtime does
-    /// not tell from its triangles), and a tessellated patch draw's edges.
+    /// Lines the band does not draw: a mesh draw's lines and edges, and a tessellated patch draw's
+    /// edges.
     Other,
 }
 
@@ -288,8 +288,9 @@ pub(super) fn draws_primitives(assembly: Assembly, draw: &DrawCall) -> bool {
 }
 
 /// What `assembly` draws that the width changes, in fill mode `fill`, under a pipeline that
-/// rasterizes nothing where `discards`, whose emulated meshes' primitives have `mesh_corners`
-/// corners (`None` for a mesh draw the device draws), of a draw that may draw a primitive where
+/// rasterizes nothing where `discards`, whose mesh function's primitives have `mesh_corners`
+/// corners (`GraphicsState::mesh_corners`, whether the device draws the mesh or it is emulated;
+/// `None` where it is not known, drawn as lines may be), of a draw that may draw a primitive where
 /// `primitives` ([`draws_primitives`]).
 fn drawn(
     assembly: Assembly,
@@ -411,7 +412,7 @@ impl ShapeInputs<'_> {
             assembly,
             self.state.fill_mode(),
             graphics.rasterizer_discard,
-            graphics.mesh_records.as_ref().map(|r| r.corners),
+            graphics.mesh_corners,
             primitives,
         );
         let compile = self.device.compile_device();

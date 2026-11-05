@@ -4278,6 +4278,7 @@ field	metal2vulkan::pipeline::GraphicsState.interpolates_at_sample	pub interpola
 field	metal2vulkan::pipeline::GraphicsState.line_band	pub line_band: Option<LineBandState>
 field	metal2vulkan::pipeline::GraphicsState.logic_op	pub logic_op: Option<vk::LogicOp>
 field	metal2vulkan::pipeline::GraphicsState.max_vertex_amplification_count	pub max_vertex_amplification_count: u32
+field	metal2vulkan::pipeline::GraphicsState.mesh_corners	pub mesh_corners: Option<u32>
 field	metal2vulkan::pipeline::GraphicsState.mesh_records	pub mesh_records: Option<MeshRecords>
 field	metal2vulkan::pipeline::GraphicsState.rasterization_order_attachment_access	pub rasterization_order_attachment_access: bool
 field	metal2vulkan::pipeline::GraphicsState.rasterization_samples	pub rasterization_samples: vk::SampleCountFlags

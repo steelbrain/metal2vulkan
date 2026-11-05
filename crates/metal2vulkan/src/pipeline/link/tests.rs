@@ -116,6 +116,7 @@ pub(super) fn iface(
         tessellation: None,
         writes_memory: false,
         mesh_records: None,
+        mesh_corners: None,
         emulated_payload: None,
         payload: None,
         reaches_command_buffers: false,

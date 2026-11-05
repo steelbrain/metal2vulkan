@@ -3125,6 +3125,7 @@ fn stage_interface(
         tessellation: crate::lower::tessellation::interface(plan),
         writes_memory,
         mesh_records: crate::lower::mesh::records(&plan.families.mesh),
+        mesh_corners: (plan.families.mesh.mesh).map(crate::lower::mesh::MeshShape::per_primitive),
         emulated_payload: crate::lower::mesh::emulated_payload(&plan.families.mesh),
         payload: plan.families.mesh.payload,
         reaches_command_buffers,

@@ -645,6 +645,7 @@ mod serde_round_trips {
                 ],
                 slot_words: 12,
             }),
+            mesh_corners: Some(3),
             // An emulated tessellation pipeline's state.
             emulated_tessellation: Some(crate::pipeline::EmulatedTessellation {
                 domain: crate::pipeline::interface::PatchDomain::Quad,
