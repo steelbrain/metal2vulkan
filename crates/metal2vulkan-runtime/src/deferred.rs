@@ -54,6 +54,33 @@ pub(super) enum Deferred {
     Loop(Arc<LoopCheck>),
 }
 
+// SAFETY: a `Deferred` holds one `Arc` of its variant's work, which is `Send` and `Sync` for every
+// work that is both; the constant below makes the compiler prove that of each variant's work, its
+// match naming every variant (one added fails it until its work is proved too), so these impls
+// claim nothing it does not check. Written out, they end the compiler's walk of a segment's work
+// where a program's crate proves its own objects' `Send` and `Sync`: the walk from an encoder's
+// segments down the work's types runs past rustc's default recursion limit
+// (`recursion_depth_exceeding_limit`), which a program's crate keeps
+// (`tests/consumer_auto_traits.rs`).
+unsafe impl Send for Deferred {}
+// SAFETY: as for `Send` above.
+unsafe impl Sync for Deferred {}
+
+// The compiler's proof of what `Deferred`'s `Send` and `Sync` impls rest on: each variant's work.
+const _: fn(&Deferred) = |work| {
+    fn shared<T: Send + Sync>(_: &T) {}
+    match work {
+        Deferred::Execute(work) => shared(work),
+        Deferred::Dispatch(work) => shared(work),
+        Deferred::SparseScrub(work) => shared(work),
+        Deferred::GatedCopyIn(work) => shared(work),
+        Deferred::RunMerge(work) => shared(work),
+        Deferred::RenderPass(work) => shared(work),
+        Deferred::Pending(work) => shared(work),
+        Deferred::Loop(work) => shared(work),
+    }
+};
+
 /// What `commit` left a segment for its host step.
 #[derive(Clone)]
 pub(super) enum StepInputs {
