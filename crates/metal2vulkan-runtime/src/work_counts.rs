@@ -504,6 +504,7 @@ struct DrawCounters {
     resident_uses_gathered: AtomicU64,
     resident_uses_against_fragments: AtomicU64,
     resident_uses_against_attachments: AtomicU64,
+    resident_uses_noted: AtomicU64,
 }
 
 /// How a render pass took a shadowed texture as a color attachment
@@ -2200,6 +2201,12 @@ impl Counters {
     /// render pass's attachments walked (`WorkCounts::resident_uses_against_attachments`).
     pub(crate) fn resident_uses_against_attachments(&self, walked: u64) {
         (self.draws.mine()).add(|counts| &counts.resident_uses_against_attachments, walked);
+    }
+
+    /// `walked` uses of what a render encoder made resident that a draw's noting walked
+    /// (`WorkCounts::resident_uses_noted`).
+    pub(crate) fn resident_uses_noted(&self, walked: u64) {
+        (self.draws.mine()).add(|counts| &counts.resident_uses_noted, walked);
     }
 
     /// A render draw rebound (`WorkCounts::draws_rebound`), which recorded `states` state
@@ -5007,6 +5014,13 @@ pub struct WorkCounts {
     /// `Degradation::AttachmentReadInPlace` would be announced. A draw that begins with the uses
     /// found to share none with the pass's attachments, by identity, walks none of them.
     pub resident_uses_against_attachments: u64,
+    /// The uses of resources a render encoder made resident (`resident_uses_made`) that its
+    /// draws' noting walked: recorded into the encoder's part and touched (each key kept, each
+    /// buffer over host pages held) for the hazard tracking of its commands. A draw that begins
+    /// with the uses the last draw noted began with, by identity, reaching the same keys through
+    /// the resident set alone, in the same part of the encoder while the device's buffers over
+    /// host pages stand as they did, walks none of them.
+    pub resident_uses_noted: u64,
     /// Keys an encoder's commands named first, while the device has a buffer over host pages
     /// (`new_buffer_with_bytes_no_copy`), that were looked up among those buffers under the lock
     /// their command buffers' submissions take: the keys of such buffers, and the rare other key
@@ -6359,6 +6373,7 @@ impl Device {
             resident_uses_against_attachments: draws(|counts| {
                 &counts.resident_uses_against_attachments
             }),
+            resident_uses_noted: draws(|counts| &counts.resident_uses_noted),
             host_holds_looked_up: counters.host_holds_looked_up.load(Ordering::Relaxed),
             dispatches_settled_as_before: (counters.dispatches_settled_as_before)
                 .load(Ordering::Relaxed),

@@ -27,7 +27,7 @@
 //! - Encoders are `Send` but not `Sync`: every method takes `&mut self`, and the core holds a
 //!   `!Sync` marker so no encoder is shared between threads by reference.
 
-use super::binding::{self, LastSetZero, Write, WrittenSet};
+use super::binding::{self, LastSetZero, ReachingPrefix, Write, WrittenSet};
 use super::buffer::Buffer;
 use super::churn_counts::KeepBy;
 use super::command_buffer::rebound_use::Unlogged;
@@ -1245,6 +1245,42 @@ impl EncoderCore {
         self.touched.truncate(uses.len());
     }
 
+    /// [`touch_reaching`](Self::touch_reaching) of a draw's `uses` past the first `past`, those
+    /// of what the encoder made resident it touched already (`NotedApart::touched`), while the
+    /// device's buffers over host pages stand as `rebinds` says.
+    fn touch_draw(
+        &mut self,
+        (uses, resident): (&[Use<ResourceKey>], &BTreeSet<ResourceKey>),
+        past: usize,
+        rebinds: bool,
+    ) {
+        for (at, used) in uses.iter().enumerate().skip(past) {
+            let key = used.key;
+            let named = rebinds && !resident.contains(&key);
+            let before = self.touched.get(at).copied();
+            if before.map(|(touched, _)| touched) != Some(key) && self.keys.insert(key) && rebinds {
+                self.hold(key);
+            }
+            if named && before != Some((key, true)) {
+                self.taken.name(key);
+            }
+            match self.touched.get_mut(at) {
+                Some(touched) => *touched = (key, named),
+                None => self.touched.push((key, named)),
+            }
+        }
+        self.touched.truncate(uses.len());
+        // Each key the uses take is kept, and named where touching them whole names it.
+        #[cfg(debug_assertions)]
+        for used in uses {
+            let named = rebinds && !resident.contains(&used.key);
+            assert!(
+                self.keys.contains(&used.key) && (!named || self.taken.named().contains(&used.key)),
+                "a draw touched by its uses' identity less than by its uses"
+            );
+        }
+    }
+
     /// Keep `keys`, those of resources a command uses (its own uses', or its bindings', which
     /// it may not read), holding each buffer over host pages among them as `touch` does.
     pub(super) fn touch_keys(&mut self, keys: impl IntoIterator<Item = ResourceKey>) {
@@ -1407,6 +1443,48 @@ impl EncoderCore {
         self.record_aliased(stages, fresh);
         self.touch_reaching(uses, resident);
         noted.note(stages, (uses, resident), into);
+        Ok(())
+    }
+
+    /// [`note_reaching`](Self::note_reaching) a draw whose uses begin with those of what the
+    /// encoder made resident of the identities `prefix` (`binding::ReachingPrefix`), with
+    /// `noted`: those are compared, recorded and touched once while the identities hold
+    /// (`noted_apart.rs`; `WorkCounts::resident_uses_noted` counts the ones walked).
+    pub(super) fn note_draw(
+        &mut self,
+        (uses, resident, prefix): (&[Use<ResourceKey>], &BTreeSet<ResourceKey>, ReachingPrefix),
+        noted: &mut NotedApart,
+    ) -> Result<(), Error> {
+        if self.uses.ordered() {
+            return Err(super::error::internal(
+                "a command recorded apart in an ordered encoder",
+            ));
+        }
+        self.observe_fresh(uses, &[]);
+        self.hold_resident();
+        // Its stages: those of the uses of what the encoder made resident, and the rest's.
+        let len = prefix.prefix.len;
+        let stages = (uses[len..].iter()).fold(prefix.stages, |all, used| {
+            all | used.read.stages | used.write.stages
+        });
+        // Read before the host aliases' uses are worked out, so a change made since counts.
+        let into = self.noted_into();
+        if noted.holds_draw(stages, (uses, resident, prefix), into) {
+            self.device().shared().counts.command_noted_as_before();
+            return Ok(());
+        }
+        let fresh = noted.fresh_draw((uses, prefix.prefix), into);
+        let recorded = fresh.len();
+        self.record_aliased(stages, fresh);
+        let rebinds = self.device().shared().rebinds.any();
+        let touched = noted.touched(prefix.prefix, (into.core, rebinds));
+        self.touch_draw((uses, resident), touched, rebinds);
+        noted.note_draw(stages, (uses, resident, prefix), into);
+        // The uses of what the encoder made resident it walked: recorded whole (`fresh_draw`
+        // gave them all), or touched.
+        if touched == 0 || recorded == uses.len() {
+            (self.device().shared().counts).resident_uses_noted(len as u64);
+        }
         Ok(())
     }
 

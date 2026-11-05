@@ -2867,6 +2867,7 @@ field	metal2vulkan-runtime::WorkCounts.resident_uses_against_attachments	pub res
 field	metal2vulkan-runtime::WorkCounts.resident_uses_against_fragments	pub resident_uses_against_fragments: u64
 field	metal2vulkan-runtime::WorkCounts.resident_uses_gathered	pub resident_uses_gathered: u64
 field	metal2vulkan-runtime::WorkCounts.resident_uses_made	pub resident_uses_made: u64
+field	metal2vulkan-runtime::WorkCounts.resident_uses_noted	pub resident_uses_noted: u64
 field	metal2vulkan-runtime::WorkCounts.residual_form_draws	pub residual_form_draws: u64
 field	metal2vulkan-runtime::WorkCounts.residual_form_makings	pub residual_form_makings: u64
 field	metal2vulkan-runtime::WorkCounts.root_table_ranges_noted	pub root_table_ranges_noted: u64

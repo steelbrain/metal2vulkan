@@ -506,10 +506,22 @@ impl RenderLowering {
             false => &[],
         };
         let uses = &live.uses;
-        let stages = (uses.iter()).fold(vk::PipelineStageFlags2::empty(), |all, used| {
-            all | used.read.stages | used.write.stages
-        });
-        (self.core).note_reaching(stages, (uses, uses.resident()), Some(&mut live.noted))?;
+        match uses.reaching_prefix() {
+            None => {
+                let stages = (uses.iter()).fold(vk::PipelineStageFlags2::empty(), |all, used| {
+                    all | used.read.stages | used.write.stages
+                });
+                (self.core).note_reaching(
+                    stages,
+                    (uses, uses.resident()),
+                    Some(&mut live.noted),
+                )?;
+            }
+            Some(prefix) => {
+                let reaching = (&**uses, uses.resident(), prefix);
+                (self.core).note_draw(reaching, &mut live.noted)?;
+            }
+        }
         self.unordered.add(uses);
         let prefix = uses.prefix();
         match prefix {

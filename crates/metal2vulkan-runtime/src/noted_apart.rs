@@ -21,6 +21,16 @@
 //! use equal to the last command's at its place, and so the host aliases' uses beside it, is in
 //! the part already, and recording it again changes nothing. Its stages widen the part as before.
 //!
+//! A draw's uses may begin with those of what its encoder made resident, which draws keep from
+//! one to the next and name by identity (`binding::ReachingPrefix`, with the identity of the keys
+//! they reach through the resident set alone): such a draw is noted through
+//! `EncoderCore::note_draw`, which keeps their identity in place of them and of those keys, and a
+//! draw noted after it with the same identities compares, records and touches only its uses past
+//! them (`WorkCounts::resident_uses_noted` counts the ones a draw walked). Those uses are equal
+//! at each place, and the keys equal, wherever the identities are; the keys a draw touched stay
+//! kept, and named, while the encoder is open. A command without them is noted as above. Builds
+//! with debug assertions keep the whole uses too, and check each answer against theirs.
+//!
 //! A render encoder keeps it with its bind state (`live_bind.rs`), which the next render encoder
 //! starts from, so its storage is kept from one encoder to the next and a draw allocates none:
 //! it names the encoder core that noted it (`EncoderCore::id`, no other core's), and another
@@ -29,6 +39,7 @@
 use ash::vk;
 use std::collections::BTreeSet;
 
+use super::binding::{ReachingPrefix, ResidentPrefix};
 use super::resource::ResourceKey;
 use super::tracker::Use;
 
@@ -38,6 +49,11 @@ pub(super) struct NotedApart {
     /// The core of the encoder that noted it and kept it, if any.
     core: Option<u64>,
     stages: vk::PipelineStageFlags2,
+    /// The identities of the uses of what its encoder made resident at their start and of the
+    /// keys it reached through the resident set alone, where it had them
+    /// ([`note_draw`](NotedApart::note_draw)): then `uses` holds its uses past them, and
+    /// `resident` nothing.
+    prefix: Option<ReachingPrefix>,
     /// Its uses as given, and the keys of them it reached through the resident set alone, in
     /// order.
     uses: Vec<Use<ResourceKey>>,
@@ -52,6 +68,14 @@ pub(super) struct NotedApart {
     /// The uses of the command being noted that differ from the last one's
     /// ([`fresh`](NotedApart::fresh)), kept so their storage is too.
     fresh: Vec<Use<ResourceKey>>,
+    /// The uses of what the encoder made resident the last draw that began with some touched
+    /// (`EncoderCore::note_draw`), by identity, with its encoder's core and whether the device
+    /// had a buffer over host pages then: while those stand, a draw that begins with the same
+    /// touched them already.
+    touched: Option<(u64, ResidentPrefix, bool)>,
+    /// Its whole uses and resident keys, which builds with debug assertions answer by too.
+    #[cfg(debug_assertions)]
+    whole: (Vec<Use<ResourceKey>>, Vec<ResourceKey>),
 }
 
 /// The encoder's state a command is noted into: its core, its parts and held images (counts),
@@ -72,6 +96,7 @@ impl std::fmt::Debug for NotedApart {
         let NotedApart {
             core,
             stages,
+            prefix,
             uses,
             resident,
             parts,
@@ -79,10 +104,17 @@ impl std::fmt::Debug for NotedApart {
             rebinds,
             aliases,
             fresh,
+            touched,
+            #[cfg(debug_assertions)]
+                whole: _,
         } = self;
         (f.debug_struct("NotedApart"))
             .field("core", core)
             .field("stages", &stages.as_raw())
+            .field(
+                "prefix",
+                &prefix.map(|p| (p.prefix, p.resident, p.stages.as_raw())),
+            )
             .field("uses", uses)
             .field("resident", resident)
             .field("parts", parts)
@@ -90,6 +122,7 @@ impl std::fmt::Debug for NotedApart {
             .field("rebinds", rebinds)
             .field("aliases", aliases)
             .field("fresh", fresh)
+            .field("touched", touched)
             .finish()
     }
 }
@@ -107,8 +140,41 @@ impl NotedApart {
         self.core == Some(into.core)
             && self.stages == stages
             && self.into() == into
+            && self.prefix.is_none()
             && *self.uses == *uses
             && self.resident.iter().eq(resident)
+    }
+
+    /// [`holds`](Self::holds) of a draw whose `uses` begin with those of what its encoder made
+    /// resident of the identities `prefix`: by those, and its uses past them.
+    pub(super) fn holds_draw(
+        &self,
+        stages: vk::PipelineStageFlags2,
+        (uses, resident, prefix): (&[Use<ResourceKey>], &BTreeSet<ResourceKey>, ReachingPrefix),
+        into: NotedInto,
+    ) -> bool {
+        let holds = self.core == Some(into.core)
+            && self.stages == stages
+            && self.into() == into
+            && self.prefix == Some(prefix)
+            && *self.uses == uses[prefix.prefix.len..];
+        // What the whole uses answer, but where the identities changed with the uses the same.
+        #[cfg(debug_assertions)]
+        {
+            let (whole, keys) = &self.whole;
+            let as_whole = self.core == Some(into.core)
+                && self.stages == stages
+                && self.into() == into
+                && **whole == *uses
+                && keys.iter().eq(resident);
+            assert!(
+                holds == as_whole || (as_whole && self.prefix != Some(prefix)),
+                "a draw noted apart held by its uses' identity other than by its uses"
+            );
+        }
+        #[cfg(not(debug_assertions))]
+        let _ = resident;
+        holds
     }
 
     /// Whether the last command was noted into `into`: then a command noted with its stages and
@@ -118,8 +184,14 @@ impl NotedApart {
         self.core == Some(into.core) && self.into() == into
     }
 
-    /// The last command's uses, as given.
+    /// The last command's uses, as given, where it began with no use of what its encoder made
+    /// resident: a draw kept to draw again, which reads through no root or handle table
+    /// (`render.rs`'s plain draw), so whose plan lists none.
     pub(super) fn uses(&self) -> &[Use<ResourceKey>] {
+        debug_assert!(
+            self.prefix.is_none(),
+            "a draw kept to draw again began with uses of what its encoder made resident"
+        );
         &self.uses
     }
 
@@ -133,15 +205,74 @@ impl NotedApart {
     ) {
         self.core = Some(into.core);
         self.stages = stages;
+        self.prefix = None;
         // Its storage is kept from one command to the next.
         self.uses.clear();
         self.uses.extend_from_slice(uses);
         self.resident.clear();
         self.resident.extend(resident);
+        self.keep_into(into);
+        #[cfg(debug_assertions)]
+        self.note_whole((uses, resident));
+    }
+
+    /// [`note`](Self::note) a draw whose `uses` begin with those of what its encoder made
+    /// resident of the identities `prefix`: those, and its uses past them alone (the module
+    /// docs).
+    pub(super) fn note_draw(
+        &mut self,
+        stages: vk::PipelineStageFlags2,
+        (uses, resident, prefix): (&[Use<ResourceKey>], &BTreeSet<ResourceKey>, ReachingPrefix),
+        into: NotedInto,
+    ) {
+        self.core = Some(into.core);
+        self.stages = stages;
+        self.prefix = Some(prefix);
+        self.uses.clear();
+        self.uses.extend_from_slice(&uses[prefix.prefix.len..]);
+        self.resident.clear();
+        self.keep_into(into);
+        #[cfg(debug_assertions)]
+        self.note_whole((uses, resident));
+        #[cfg(not(debug_assertions))]
+        let _ = resident;
+    }
+
+    /// Keep the encoder's state `into` as the last command's.
+    fn keep_into(&mut self, into: NotedInto) {
         self.parts = into.parts;
         self.held = into.held;
         self.rebinds = into.rebinds;
         self.aliases = into.aliases;
+    }
+
+    /// Keep a command's whole `uses` and `resident` keys (builds with debug assertions).
+    #[cfg(debug_assertions)]
+    fn note_whole(&mut self, (uses, resident): (&[Use<ResourceKey>], &BTreeSet<ResourceKey>)) {
+        let (whole, keys) = &mut self.whole;
+        whole.clear();
+        whole.extend_from_slice(uses);
+        keys.clear();
+        keys.extend(resident);
+    }
+
+    /// How many of a draw's uses, which begin with those of what its encoder made resident of
+    /// the identity `prefix`, its encoder (`core`) touched already while the device's buffers
+    /// over host pages stand as they did (`rebinds`): those, where the last draw that began with
+    /// some, in that encoder, began with the same (the module docs); then none. They are kept
+    /// as touched.
+    pub(super) fn touched(
+        &mut self,
+        prefix: ResidentPrefix,
+        (core, rebinds): (u64, bool),
+    ) -> usize {
+        let now = Some((core, prefix, rebinds));
+        let touched = match self.touched == now {
+            true => prefix.len,
+            false => 0,
+        };
+        self.touched = now;
+        touched
     }
 
     /// The uses of `uses`, a command noted into `into`, that the encoder's current part may
@@ -164,6 +295,43 @@ impl NotedApart {
                 .filter(differ)
                 .map(|(_, used)| used.clone()),
         );
+        &self.fresh
+    }
+
+    /// [`fresh`](Self::fresh) of a draw whose `uses` begin with those of what its encoder made
+    /// resident of the identity `prefix`: all of them unless the last command began with the
+    /// same, then those of its uses past them that differ from the last one's at the same
+    /// position.
+    pub(super) fn fresh_draw<'s>(
+        &'s mut self,
+        (uses, prefix): (&'s [Use<ResourceKey>], ResidentPrefix),
+        into: NotedInto,
+    ) -> &'s [Use<ResourceKey>] {
+        let same = self.prefix.is_some_and(|then| then.prefix == prefix);
+        if self.core != Some(into.core) || NotedApart::into(self) != into || !same {
+            return uses;
+        }
+        self.fresh.clear();
+        let last = &self.uses;
+        let differ = |(at, used): &(usize, &Use<ResourceKey>)| last.get(*at) != Some(*used);
+        self.fresh.extend(
+            (uses[prefix.len..].iter().enumerate())
+                .filter(differ)
+                .map(|(_, used)| used.clone()),
+        );
+        #[cfg(debug_assertions)]
+        {
+            let whole = &self.whole.0;
+            let differ = |(at, used): &(usize, &Use<ResourceKey>)| whole.get(*at) != Some(*used);
+            assert!(
+                uses.iter()
+                    .enumerate()
+                    .filter(differ)
+                    .map(|(_, used)| used)
+                    .eq(&self.fresh),
+                "a draw noted apart found fresh by its uses' identity other uses than by its uses"
+            );
+        }
         &self.fresh
     }
 

@@ -2404,8 +2404,8 @@ fn uses_into(
 
 /// Make the uses of what the encoder made resident `plan` lists, as `tables` hold it, first in
 /// `into`'s, emptied: their count, `made`, and of the buffers among them (reached by address)
-/// the keys no texture use of them names, `reaching`; and the positions of the plan's other
-/// uses, `others`.
+/// the keys no texture use of them names, `reaching`; their stages, `prefix_stages`; and the
+/// positions of the plan's other uses, `others`.
 fn resident_uses_into(
     plan: &BindingPlan,
     tables: &Tables<'_>,
@@ -2418,6 +2418,7 @@ fn resident_uses_into(
         made,
         others,
         reaching,
+        prefix_stages,
         ..
     } = into;
     uses.clear();
@@ -2472,6 +2473,9 @@ fn resident_uses_into(
     reaching.retain(|key| !named.contains(key));
     *used = uses.len();
     *made += uses.len();
+    *prefix_stages = (uses.iter()).fold(vk::PipelineStageFlags2::empty(), |all, used| {
+        all | used.read.stages | used.write.stages
+    });
     Ok(())
 }
 
@@ -2679,6 +2683,11 @@ pub(super) struct CommandUses {
     /// memory with an attachment of a render pass of the layout of the version beside them
     /// ([`apart_from`](Self::apart_from)).
     apart: Option<(u64, usize, u64)>,
+    /// The identity of `resident` while the uses of what the encoder made resident have one
+    /// ([`ReachingPrefix`]): given where it was worked out again, from [`IDENTITIES`].
+    resident_at: u64,
+    /// The pipeline stages of the uses of what the encoder made resident.
+    prefix_stages: vk::PipelineStageFlags2,
 }
 
 /// The identities given to [`CommandUses`]' uses of what an encoder made resident, from 1: one of
@@ -2699,6 +2708,16 @@ pub(super) struct ResidentPrefix {
     pub(super) len: usize,
 }
 
+/// A draw's [`ResidentPrefix`], with the identity of the keys it reaches through the resident set
+/// alone (`resident`) and the stages of those uses ([`CommandUses::reaching_prefix`]): two draws'
+/// of the same identities begin with the same uses and reach the same keys so.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) struct ReachingPrefix {
+    pub(super) prefix: ResidentPrefix,
+    pub(super) resident: u64,
+    pub(super) stages: vk::PipelineStageFlags2,
+}
+
 impl CommandUses {
     /// Add `used`, which names its key.
     pub(super) fn push(&mut self, used: Use<ResourceKey>) {
@@ -2714,6 +2733,20 @@ impl CommandUses {
             len: self.used,
         };
         (prefix.len > 0 && prefix.id != 0).then_some(prefix)
+    }
+
+    /// [`prefix`](Self::prefix), with the identity of the keys the uses reach through the resident
+    /// set alone and the prefix's stages (`ReachingPrefix`); `None` also where a use added since
+    /// those keys were worked out took one of them ([`push`](Self::push)).
+    pub(super) fn reaching_prefix(&self) -> Option<ReachingPrefix> {
+        let prefix = self.prefix()?;
+        let resident = self.resident_at;
+        let stages = self.prefix_stages;
+        (resident != 0 && !self.taken).then_some(ReachingPrefix {
+            prefix,
+            resident,
+            stages,
+        })
     }
 
     /// How many uses at its start, of what the encoder made resident, were found to share no
@@ -2752,6 +2785,13 @@ impl CommandUses {
         }
         self.named.clone_from(&self.named_now);
         self.taken = false;
+        // Their identity, where the uses of what the encoder made resident have one.
+        if self.used > 0 {
+            self.resident_at = match self.prefix {
+                0 => 0,
+                _ => identity(),
+            };
+        }
     }
 
     /// Add each of `uses`, which name their keys.
