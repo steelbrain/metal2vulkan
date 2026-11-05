@@ -4,7 +4,10 @@
 //! 0, kept through the pass (Metal probes on an M4 with macOS 27.0.1), which the runtime gives the
 //! pass as an attachment of its own. The probe's functions (the owned fixture `rt6_render_state`)
 //! draw fullscreen triangles into its 4x4 `RGBA8Unorm` target cleared to zero, white unless a case
-//! names `rt6_half`.
+//! names `rt6_half`, whose 0.5 is a half step between two codes (127.5): Metal stores 0x80, held so
+//! where the device's color writes are Metal's (`VkProperty::MetalColorWrites`) and to either
+//! nearest code elsewhere, where the pipeline records `PrecisionNote::DeviceColorConversion` (the
+//! RTX 5080 Laptop GPU stores 0x7f: `command_render_states::metals_texels`).
 //!
 //! Every answer below is plain Metal's, and each pass stores what the same pass stores with a
 //! `Depth32Float` attachment cleared to 1.0 and a `Stencil8` one cleared to 0 (checked):
@@ -48,6 +51,7 @@
 //!   attachment is written by `Replace` of 7 though the pipeline names no stencil; Metal drew
 //!   every texel and stored 7 (`pass_stencil_extra_write`).
 
+use super::command_render_states::metals_texels;
 use super::render_state::{rows, stencil, validated, Pipe, Probe, EMPTY, FULL, PASS, WHITE};
 use metal2vulkan::metal::{CompareFunction, PixelFormat, PrimitiveType, StencilOperation};
 use metal2vulkan_runtime::{Buffer, Error, RenderCommandEncoder, RuntimeGap, Viewport};
@@ -112,10 +116,9 @@ fn a_draw_without_its_depth_or_stencil_attachment_tests_metal_s_hidden_ones() {
             .unwrap();
         p.draw(e, h, half(fit), 0.25, 0.0);
     });
-    assert_eq!(
-        texels,
-        [0x80; 4].repeat(16),
-        "a write, then Equal on {name}"
+    assert!(
+        metals_texels(&probe.device, &texels, &[0x80; 4].repeat(16)),
+        "a write, then Equal on {name}: {texels:02x?}"
     );
     let above = f32::from_bits(0.5f32.to_bits() + 1);
     let texels = hidden(&probe, "a write, then Equal above", &|p, e, h, fit| {
@@ -190,7 +193,9 @@ fn a_draw_without_its_depth_or_stencil_attachment_tests_metal_s_hidden_ones() {
         p.draw(e, h, fit(WHITE.fragment("rt6_half")), 0.5, 0.0);
     });
     let whites = texels.chunks(4).filter(|t| *t == [0xff; 4]).count();
-    let halves = texels.chunks(4).filter(|t| *t == [0x80; 4]).count();
+    let halves = (texels.chunks(4))
+        .filter(|t| metals_texels(&probe.device, t, &[0x80; 4]))
+        .count();
     assert!(
         whites > 0 && whites + halves == 16,
         "after a draw without them on {name}: {texels:02x?}"
@@ -626,7 +631,10 @@ fn executed_commands_test_metal_s_hidden_depth_and_stencil() {
     for (case, steps, expected) in cases {
         let texels = executed(&probe, case, steps);
         match expected {
-            Some(expected) => assert_eq!(texels, expected, "{case} on {name}"),
+            Some(expected) => assert!(
+                metals_texels(&probe.device, &texels, expected),
+                "{case} on {name}: {texels:02x?}, Metal's {expected:02x?}"
+            ),
             // The small triangle's texels, white; the rest, the clear.
             None => {
                 let drawn = texels.chunks(4).filter(|t| *t == [0xff; 4]).count();

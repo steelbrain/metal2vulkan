@@ -110,7 +110,7 @@ type Setup = fn(&Probe, &mut RenderCommandEncoder, &mut Vec<Buffer>) -> Result<(
 /// for `rt6_half`'s 0.5, a half step between two codes (127.5), may hold either nearest code on a
 /// device whose color writes are not Metal's (no `VkProperty::MetalColorWrites`: the pipeline
 /// records `PrecisionNote::DeviceColorConversion`). Every other channel compares exactly.
-fn metals_texels(device: &Device, seen: &[u8], metal: &[u8]) -> bool {
+pub(super) fn metals_texels(device: &Device, seen: &[u8], metal: &[u8]) -> bool {
     let metals = device
         .compile_device()
         .profile()
