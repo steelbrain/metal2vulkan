@@ -1,0 +1,50 @@
+; Owned synthetic fixture, written for this repository: the vertex stage of the bare Vulkan loop
+; of `runtime_lane::composite_costs`. Vertex `gl_VertexIndex` of a 4-vertex triangle strip takes
+; corner `corners[gl_VertexIndex]` of the uniform block at set 0, binding 0: its clip-space
+; position in `xy`, its texture coordinates in `zw`, handed to location 0.
+               OpCapability Shader
+               OpMemoryModel Logical GLSL450
+               OpEntryPoint Vertex %main "main" %vertex_index %position %uv %corners
+               OpDecorate %vertex_index BuiltIn VertexIndex
+               OpDecorate %position BuiltIn Position
+               OpDecorate %uv Location 0
+               OpDecorate %corner_array ArrayStride 16
+               OpDecorate %Corners Block
+               OpMemberDecorate %Corners 0 Offset 0
+               OpDecorate %corners DescriptorSet 0
+               OpDecorate %corners Binding 0
+       %void = OpTypeVoid
+    %void_fn = OpTypeFunction %void
+      %float = OpTypeFloat 32
+     %float2 = OpTypeVector %float 2
+     %float4 = OpTypeVector %float 4
+        %int = OpTypeInt 32 1
+       %uint = OpTypeInt 32 0
+     %uint_4 = OpConstant %uint 4
+      %int_0 = OpConstant %int 0
+    %float_0 = OpConstant %float 0
+    %float_1 = OpConstant %float 1
+%corner_array = OpTypeArray %float4 %uint_4
+    %Corners = OpTypeStruct %corner_array
+%corners_ptr = OpTypePointer Uniform %Corners
+ %float4_ptr = OpTypePointer Uniform %float4
+     %in_int = OpTypePointer Input %int
+ %out_float4 = OpTypePointer Output %float4
+ %out_float2 = OpTypePointer Output %float2
+    %corners = OpVariable %corners_ptr Uniform
+%vertex_index = OpVariable %in_int Input
+   %position = OpVariable %out_float4 Output
+         %uv = OpVariable %out_float2 Output
+       %main = OpFunction %void None %void_fn
+      %entry = OpLabel
+      %index = OpLoad %int %vertex_index
+         %at = OpAccessChain %float4_ptr %corners %int_0 %index
+     %corner = OpLoad %float4 %at
+          %x = OpCompositeExtract %float %corner 0
+          %y = OpCompositeExtract %float %corner 1
+        %out = OpCompositeConstruct %float4 %x %y %float_0 %float_1
+         %st = OpVectorShuffle %float2 %corner %corner 2 3
+               OpStore %position %out
+               OpStore %uv %st
+               OpReturn
+               OpFunctionEnd

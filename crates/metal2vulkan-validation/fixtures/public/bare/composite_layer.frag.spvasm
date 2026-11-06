@@ -1,0 +1,45 @@
+; Owned synthetic fixture, written for this repository: the fragment stage of the bare Vulkan loop
+; of `runtime_lane::composite_costs`. It samples the combined image sampler at set 0, binding 2 at
+; the coordinates of location 0, times the tint of the uniform block at set 0, binding 1.
+               OpCapability Shader
+               OpMemoryModel Logical GLSL450
+               OpEntryPoint Fragment %main "main" %uv %color %tint %layer
+               OpExecutionMode %main OriginUpperLeft
+               OpDecorate %uv Location 0
+               OpDecorate %color Location 0
+               OpDecorate %Tint Block
+               OpMemberDecorate %Tint 0 Offset 0
+               OpDecorate %tint DescriptorSet 0
+               OpDecorate %tint Binding 1
+               OpDecorate %layer DescriptorSet 0
+               OpDecorate %layer Binding 2
+       %void = OpTypeVoid
+    %void_fn = OpTypeFunction %void
+      %float = OpTypeFloat 32
+     %float2 = OpTypeVector %float 2
+     %float4 = OpTypeVector %float 4
+        %int = OpTypeInt 32 1
+      %int_0 = OpConstant %int 0
+      %image = OpTypeImage %float 2D 0 0 0 1 Unknown
+    %sampled = OpTypeSampledImage %image
+       %Tint = OpTypeStruct %float4
+   %tint_ptr = OpTypePointer Uniform %Tint
+ %float4_ptr = OpTypePointer Uniform %float4
+%sampled_ptr = OpTypePointer UniformConstant %sampled
+  %in_float2 = OpTypePointer Input %float2
+ %out_float4 = OpTypePointer Output %float4
+       %tint = OpVariable %tint_ptr Uniform
+      %layer = OpVariable %sampled_ptr UniformConstant
+         %uv = OpVariable %in_float2 Input
+      %color = OpVariable %out_float4 Output
+       %main = OpFunction %void None %void_fn
+      %entry = OpLabel
+    %texture = OpLoad %sampled %layer
+         %st = OpLoad %float2 %uv
+     %texel = OpImageSampleImplicitLod %float4 %texture %st
+         %at = OpAccessChain %float4_ptr %tint %int_0
+     %factor = OpLoad %float4 %at
+     %result = OpFMul %float4 %texel %factor
+               OpStore %color %result
+               OpReturn
+               OpFunctionEnd

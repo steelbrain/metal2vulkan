@@ -215,7 +215,7 @@ const TARGET_SIDE: u64 = 512;
 /// reaches 512x320.
 const PART: [u64; 2] = [500, 300];
 /// The sampled textures the rectangles take in turn, and their side.
-const TEXTURES: usize = 16;
+pub(super) const TEXTURES: usize = 16;
 const TEXTURE_SIDE: u64 = 64;
 /// The bytes of `zwd_shapes`' `ZwdShape`: rectangle, fill, outline and shape.
 const SHAPE_BYTES: usize = 64;
@@ -769,7 +769,7 @@ fn pipeline(
 }
 
 /// A `TEXTURE_SIDE` square `BGRA8Unorm` texture, every texel `texel`.
-fn sampled(device: &Device, texel: [u8; 4]) -> Texture {
+pub(super) fn sampled(device: &Device, texel: [u8; 4]) -> Texture {
     let mut descriptor =
         TextureDescriptor::texture_2d(PixelFormat::BGRA8Unorm, TEXTURE_SIDE, TEXTURE_SIDE, false);
     descriptor.usage = TextureUsage::SHADER_READ;
@@ -813,7 +813,7 @@ fn target_over_buffer(device: &Device) -> (Texture, Buffer) {
 }
 
 /// `ZwdShape`'s bytes: draw `n`'s box in a pass of the target's size, a fill and an outline.
-fn shape(n: usize) -> [u8; SHAPE_BYTES] {
+pub(super) fn shape(n: usize) -> [u8; SHAPE_BYTES] {
     let x = (n % 8) as f32 * 60.0;
     let y = (n / 8 % 8) as f32 * 60.0;
     let words: [f32; 16] = [
@@ -1271,14 +1271,14 @@ impl Workload {
 /// One step's wall time, and the encoding thread's allocations and user-space instructions in it
 /// where they are counted.
 #[derive(Clone, Copy)]
-struct Step {
-    wall: Duration,
-    allocations: Option<u64>,
-    instructions: Option<u64>,
+pub(super) struct Step {
+    pub(super) wall: Duration,
+    pub(super) allocations: Option<u64>,
+    pub(super) instructions: Option<u64>,
 }
 
 /// Run `body` as one step, counting its instructions where `counted`.
-fn step<R>(counted: bool, body: impl FnOnce() -> R) -> (R, Step) {
+pub(super) fn step<R>(counted: bool, body: impl FnOnce() -> R) -> (R, Step) {
     let allocations = alloc::thread_allocations();
     let instructions = counted.then(instructions::read).flatten();
     let start = Instant::now();
@@ -1302,7 +1302,7 @@ fn step<R>(counted: bool, body: impl FnOnce() -> R) -> (R, Step) {
 /// hybrid CPU (Intel's P and E cores) it counts on the P cores alone (`cpu_core`), where a run is
 /// pinned (`taskset`).
 #[cfg(target_os = "linux")]
-mod instructions {
+pub(super) mod instructions {
     use std::cell::Cell;
 
     /// `struct perf_event_attr` as its first published size (`PERF_ATTR_SIZE_VER0`).
@@ -1373,7 +1373,7 @@ mod instructions {
     }
 
     /// The instructions the calling thread retired in user space since its counter opened.
-    pub(super) fn read() -> Option<u64> {
+    pub(in crate::runtime_lane) fn read() -> Option<u64> {
         let fd = counter();
         if fd < 0 {
             return None;
@@ -1387,8 +1387,8 @@ mod instructions {
 
 /// Elsewhere none is counted.
 #[cfg(not(target_os = "linux"))]
-mod instructions {
-    pub(super) fn read() -> Option<u64> {
+pub(super) mod instructions {
+    pub(in crate::runtime_lane) fn read() -> Option<u64> {
         None
     }
 }
@@ -1520,7 +1520,7 @@ fn thread_switches() -> Option<Switches> {
 }
 
 /// The calling thread's CPU time so far.
-fn thread_cpu() -> Duration {
+pub(super) fn thread_cpu() -> Duration {
     let mut now = libc::timespec {
         tv_sec: 0,
         tv_nsec: 0,
