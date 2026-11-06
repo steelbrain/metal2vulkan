@@ -4271,6 +4271,14 @@ each item named states the rule in full.
   rest), and its creation refuses what Metal refuses of them (`MeshPipelineProblem`); a draw of
   other threadgroup sizes within the device's limits runs, and so does an object function's mesh
   grid past the state's maximum (within Metal's 2^20 above).
+- **A mesh state under a required threadgroup size or a function's own maximum follows one rule
+  every time.** Its thread maxima are the descriptor's, else the function's, else 1024; a
+  required mesh size of other threads than the mesh maximum is refused, and a required object
+  size of fewer threads than the object maximum is made. An M3 Max under macOS 27.0.1 answers
+  these from what its compiler compiled before: a first compile refused a required size of 32
+  under a maximum of 64 in either stage and made it after a compile under 64, and a first compile
+  of a function of `[[max_total_threads_per_threadgroup(64)]]` answered 32
+  (`mesh_pipeline_limits.m`).
 
 **Process exit**
 

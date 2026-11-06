@@ -45,6 +45,17 @@
 //   "must be <= maxTotalThreadsPerThreadgroup (32)"); a required object size without an object
 //   function (`required-object-no-object`: "If objectFunction is nil,
 //   requiredThreadsPerObjectThreadgroup must be [0, 0, 0] but is [32, 1, 1]").
+// - The answers of a required size, and of a function's `[[max_total_threads_per_threadgroup]]`,
+//   change with what the compiler compiled before, the answers above among them. Each creation of
+//   a source compiled once and never before (a comment unique to it), on the same M3 Max: a
+//   required mesh size of 32 under a mesh maximum of 64 is refused as above, plain and under API
+//   validation, and made, answering 64, after the same source's compile under a required 64; a
+//   required object size of 32 under an object maximum of 64 is refused with the same words; a
+//   required mesh size of 16x2 with no maximum answered a mesh maximum of 1024 plain and 32 under
+//   API validation, and a required 32 answered 1024 in one source and 32 in another; `obj64`
+//   answered an object maximum of 32, and `msh64` a mesh maximum of 32, where this probe's
+//   `attribute-64` and `mesh-attribute-64` answered 64. The conformance suite's `mesh-limits`
+//   cases leave both out.
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
 #include <stdio.h>

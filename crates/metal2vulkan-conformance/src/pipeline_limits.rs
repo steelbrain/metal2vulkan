@@ -1,9 +1,8 @@
 //! What a pipeline's **creation** answers for a descriptor's thread and grid limits: refused, or
 //! made, and then what the made state's limit getters answer.
 //!
-//! Two descriptors: a mesh render pipeline's thread maxima, mesh-grid maximum, required
-//! threadgroup sizes, payload length and vertex amplification count, beside its object and mesh
-//! functions' own `[[max_total_threads_per_threadgroup]]` and
+//! Two descriptors: a mesh render pipeline's thread maxima, mesh-grid maximum, payload length and
+//! vertex amplification count, beside its object function's own
 //! `[[max_total_threadgroups_per_mesh_grid]]`; and a compute pipeline's
 //! `maxTotalThreadsPerThreadgroup` beside its kernel's. The probes
 //! `mesh_pipeline_limits.m` and `compute_pipeline_limits.m` measured both on an M3 Max; the cases
@@ -47,7 +46,9 @@ use crate::transcript::{Node, NodeName, Observed, Value};
 pub const THREAD_FLOOR: u64 = 128;
 
 /// A mesh render pipeline a case makes: its functions, rasterization disabled and no fragment
-/// function, and the descriptor's limit fields, each 0 (a zero size) for Metal's default.
+/// function, and the descriptor's limit fields, each 0 for Metal's default. No case states a
+/// required threadgroup size ([`crate::cases::pipeline_limits`] says why), so both are Metal's
+/// zero size.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct MeshLimitsSpec<'a> {
     /// `objectFunction`'s entry, where one is set.
@@ -64,10 +65,6 @@ pub struct MeshLimitsSpec<'a> {
     pub payload: u32,
     /// `maxVertexAmplificationCount`; Metal's default is 1.
     pub amplification: u32,
-    /// `requiredThreadsPerObjectThreadgroup`.
-    pub required_object: [u32; 3],
-    /// `requiredThreadsPerMeshThreadgroup`.
-    pub required_mesh: [u32; 3],
 }
 
 impl<'a> MeshLimitsSpec<'a> {
@@ -81,8 +78,6 @@ impl<'a> MeshLimitsSpec<'a> {
             max_grid: 0,
             payload: 0,
             amplification: 1,
-            required_object: [0; 3],
-            required_mesh: [0; 3],
         }
     }
 
@@ -98,11 +93,7 @@ impl<'a> MeshLimitsSpec<'a> {
             self.max_grid,
             self.payload,
             self.amplification,
-        ]
-        .into_iter()
-        .chain(self.required_object)
-        .chain(self.required_mesh)
-        {
+        ] {
             out.extend(word.to_le_bytes());
         }
         out

@@ -3806,8 +3806,6 @@ impl Side for MetalSide {
         descriptor.setMaxTotalThreadsPerMeshThreadgroup(spec.max_mesh as usize);
         descriptor.setMaxTotalThreadgroupsPerMeshGrid(spec.max_grid as usize);
         descriptor.setPayloadMemoryLength(spec.payload as usize);
-        descriptor.setRequiredThreadsPerObjectThreadgroup(size(spec.required_object));
-        descriptor.setRequiredThreadsPerMeshThreadgroup(size(spec.required_mesh));
         let made = self
             .device
             .newRenderPipelineStateWithMeshDescriptor_options_reflection_error(

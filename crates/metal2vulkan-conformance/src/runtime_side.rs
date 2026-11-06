@@ -3104,9 +3104,8 @@ impl Side for RuntimeSide<'_> {
                     .function_descriptor(),
             ))
         };
-        // Metal's 0 and zero size are the runtime's `None`: the descriptor's default.
+        // Metal's 0 is the runtime's `None`: the descriptor's default.
         let given = |value: u32| (value != 0).then_some(value);
-        let required = |axes: [u32; 3]| (axes != [0; 3]).then_some(axes);
         let mut descriptor = MeshPipelineDescriptor::new(stage(spec.mesh)?);
         descriptor.object = spec.object.map(stage).transpose()?;
         descriptor.rasterization_enabled = false;
@@ -3115,8 +3114,6 @@ impl Side for RuntimeSide<'_> {
         descriptor.max_total_threadgroups_per_mesh_grid = given(spec.max_grid);
         descriptor.payload_memory_length = given(spec.payload);
         descriptor.max_vertex_amplification_count = spec.amplification;
-        descriptor.required_threads_per_object_threadgroup = required(spec.required_object);
-        descriptor.required_threads_per_mesh_threadgroup = required(spec.required_mesh);
         let state = match crate::states::making_a_state(self.device)
             .new_mesh_render_pipeline_state(&descriptor, &PipelineOptions::default())
         {

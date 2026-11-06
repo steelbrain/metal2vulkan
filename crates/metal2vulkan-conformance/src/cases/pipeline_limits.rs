@@ -1,16 +1,20 @@
 //! What a mesh or compute pipeline's creation answers for a descriptor's limits: refused, or made
 //! and then what the state's limit getters answer ([`crate::pipeline_limits`]).
 //!
-//! The mesh cases are the rows of `probes/mesh_pipeline_limits.m` that Metal answers, over the
-//! owned fixture `mesh_pipeline_limits` (the probe's functions): the descriptor's thread maxima,
-//! mesh-grid maximum, required sizes, payload length and amplification count, alone and beside
-//! the functions' own maxima. The compute cases are the rows of `probes/compute_pipeline_limits.m`
+//! The mesh cases are rows of `probes/mesh_pipeline_limits.m`, over the owned fixture
+//! `mesh_pipeline_limits` (the probe's functions): the descriptor's thread maxima, mesh-grid
+//! maximum, payload length and amplification count, and an object function's mesh-grid maximum
+//! beside the descriptor's. The compute cases are the rows of `probes/compute_pipeline_limits.m`
 //! over the owned fixture `compute_thread_limit`: a descriptor's `maxTotalThreadsPerThreadgroup`
-//! for a kernel without a maximum and for one of `[[max_total_threads_per_threadgroup(64)]]`. The
-//! probes' rows whose descriptor validation ends the process (a required size with an axis of 0,
-//! of more than 1024 threads or more than its stage's maximum, an object size without an object
-//! function, an amplification count of 0) are not cases: the translator's tests hold the runtime's
-//! typed refusals of them.
+//! for a kernel without a maximum and for one of `[[max_total_threads_per_threadgroup(64)]]`.
+//!
+//! Two kinds of the probe's rows are not cases. Those whose descriptor validation ends the process
+//! (a required size with an axis of 0, of more than 1024 threads or more than its stage's maximum,
+//! an object size without an object function, an amplification count of 0): the translator's
+//! tests hold the runtime's typed refusals of them. And those of a required threadgroup size or an
+//! object or mesh function's own `[[max_total_threads_per_threadgroup]]`, whose answers on an M3
+//! Max change with what its compiler compiled before (`mesh_pipeline_limits.m` says how), so a
+//! recording of one would hold that history rather than an answer.
 //!
 //! # Why this family is safe
 //!
@@ -32,10 +36,8 @@ const CREATED: &str = "created";
 /// The mesh cases' fixture and functions.
 const MESH_FIXTURE: &str = "mesh_pipeline_limits";
 const OBJECT: &str = "mesh_pipeline_limits_object";
-const OBJECT_64: &str = "mesh_pipeline_limits_object_64";
 const OBJECT_GRID_4: &str = "mesh_pipeline_limits_object_grid_4";
 const MESH: &str = "mesh_pipeline_limits_mesh";
-const MESH_64: &str = "mesh_pipeline_limits_mesh_64";
 const ALONE: &str = "mesh_pipeline_limits_mesh_alone";
 
 /// The compute cases' fixture and kernels.
@@ -56,14 +58,14 @@ pub struct PipelineLimitsCase {
     made: Made,
 }
 
-/// The descriptor of `object` and `mesh`, changed by `with`.
+/// The descriptor of `object` and `mesh` under the maxima `max` (object threads, mesh threads,
+/// mesh grid), `payload` and `amplification`.
 const fn mesh(
     object: Option<&'static str>,
     mesh: &'static str,
     max: [u32; 3],
     payload: u32,
     amplification: u32,
-    required: [[u32; 3]; 2],
 ) -> Made {
     let mut spec = MeshLimitsSpec::new(object, mesh);
     spec.max_object = max[0];
@@ -71,149 +73,68 @@ const fn mesh(
     spec.max_grid = max[2];
     spec.payload = payload;
     spec.amplification = amplification;
-    spec.required_object = required[0];
-    spec.required_mesh = required[1];
     Made::Mesh(spec)
 }
-
-const Z: [u32; 3] = [0; 3];
-const NONE: [[u32; 3]; 2] = [Z, Z];
 
 /// Every case of the family: the probe's name for its row, after the family's prefix.
 pub fn all() -> Vec<PipelineLimitsCase> {
     let o = Some(OBJECT);
-    let o64 = Some(OBJECT_64);
     let grid4 = Some(OBJECT_GRID_4);
-    let rows: [(&'static str, Made); 33] = [
+    let rows: [(&'static str, Made); 17] = [
         // Made: Metal's defaults, and each limit alone.
-        ("mesh-limits-plain", mesh(o, MESH, [0, 0, 0], 0, 1, NONE)),
-        (
-            "mesh-limits-no-object",
-            mesh(None, ALONE, [0, 0, 0], 0, 1, NONE),
-        ),
-        (
-            "mesh-limits-max-64-32",
-            mesh(o, MESH, [64, 32, 0], 0, 1, NONE),
-        ),
-        (
-            "mesh-limits-attribute-64",
-            mesh(o64, MESH, [0, 0, 0], 0, 1, NONE),
-        ),
-        (
-            "mesh-limits-attribute-64-max-64",
-            mesh(o64, MESH, [64, 0, 0], 0, 1, NONE),
-        ),
-        (
-            "mesh-limits-required-object-32-attribute-64",
-            mesh(o64, MESH, [0, 0, 0], 0, 1, [[32, 1, 1], Z]),
-        ),
-        (
-            "mesh-limits-mesh-attribute-64",
-            mesh(o, MESH_64, [0, 0, 0], 0, 1, NONE),
-        ),
-        (
-            "mesh-limits-mesh-attribute-64-max-64",
-            mesh(o, MESH_64, [0, 64, 0], 0, 1, NONE),
-        ),
-        (
-            "mesh-limits-required-mesh-32-attribute-64",
-            mesh(o, MESH_64, [0, 0, 0], 0, 1, [Z, [32, 1, 1]]),
-        ),
-        ("mesh-limits-grid-8", mesh(o, MESH, [0, 0, 8], 0, 1, NONE)),
+        ("mesh-limits-plain", mesh(o, MESH, [0, 0, 0], 0, 1)),
+        ("mesh-limits-no-object", mesh(None, ALONE, [0, 0, 0], 0, 1)),
+        ("mesh-limits-max-64-32", mesh(o, MESH, [64, 32, 0], 0, 1)),
+        ("mesh-limits-grid-8", mesh(o, MESH, [0, 0, 8], 0, 1)),
         (
             "mesh-limits-grid-2097152",
-            mesh(o, MESH, [0, 0, 2_097_152], 0, 1, NONE),
+            mesh(o, MESH, [0, 0, 2_097_152], 0, 1),
         ),
         (
             "mesh-limits-grid-8-no-object",
-            mesh(None, ALONE, [0, 0, 8], 0, 1, NONE),
+            mesh(None, ALONE, [0, 0, 8], 0, 1),
         ),
         (
             "mesh-limits-grid-attribute-4",
-            mesh(grid4, MESH, [0, 0, 0], 0, 1, NONE),
+            mesh(grid4, MESH, [0, 0, 0], 0, 1),
         ),
         (
             "mesh-limits-grid-attribute-4-grid-8",
-            mesh(grid4, MESH, [0, 0, 8], 0, 1, NONE),
+            mesh(grid4, MESH, [0, 0, 8], 0, 1),
         ),
         (
             "mesh-limits-grid-attribute-4-grid-2",
-            mesh(grid4, MESH, [0, 0, 2], 0, 1, NONE),
+            mesh(grid4, MESH, [0, 0, 2], 0, 1),
         ),
-        (
-            "mesh-limits-payload-64",
-            mesh(o, MESH, [0, 0, 0], 64, 1, NONE),
-        ),
+        ("mesh-limits-payload-64", mesh(o, MESH, [0, 0, 0], 64, 1)),
         (
             "mesh-limits-payload-16384",
-            mesh(o, MESH, [0, 0, 0], 16384, 1, NONE),
+            mesh(o, MESH, [0, 0, 0], 16384, 1),
         ),
         (
             "mesh-limits-amplification-2",
-            mesh(o, MESH, [0, 0, 0], 0, 2, NONE),
+            mesh(o, MESH, [0, 0, 0], 0, 2),
         ),
-        (
-            "mesh-limits-required-object-32x2",
-            mesh(o, MESH, [0, 0, 0], 0, 1, [[32, 2, 1], Z]),
-        ),
-        (
-            "mesh-limits-required-mesh-16x2",
-            mesh(o, MESH, [0, 0, 0], 0, 1, [Z, [16, 2, 1]]),
-        ),
-        (
-            "mesh-limits-required-object-32-max-64",
-            mesh(o, MESH, [64, 0, 0], 0, 1, [[32, 1, 1], Z]),
-        ),
-        (
-            "mesh-limits-required-object-64-max-64",
-            mesh(o, MESH, [64, 0, 0], 0, 1, [[64, 1, 1], Z]),
-        ),
-        (
-            "mesh-limits-required-mesh-64-max-64",
-            mesh(o, MESH, [0, 64, 0], 0, 1, [Z, [64, 1, 1]]),
-        ),
-        // Refused: a maximum past 1024, a function's maximum beside another of the
-        // descriptor's, a mesh stage's required size of fewer threads than its maximum, and a
-        // payload past 16384 bytes.
+        // Refused: a maximum past 1024 and a payload past 16384 bytes.
         (
             "mesh-limits-max-object-2048",
-            mesh(o, MESH, [2048, 0, 0], 0, 1, NONE),
+            mesh(o, MESH, [2048, 0, 0], 0, 1),
         ),
         (
             "mesh-limits-max-mesh-2048",
-            mesh(o, MESH, [0, 2048, 0], 0, 1, NONE),
+            mesh(o, MESH, [0, 2048, 0], 0, 1),
         ),
         (
             "mesh-limits-max-mesh-2048-no-object",
-            mesh(None, ALONE, [0, 2048, 0], 0, 1, NONE),
-        ),
-        (
-            "mesh-limits-attribute-64-max-32",
-            mesh(o64, MESH, [32, 0, 0], 0, 1, NONE),
-        ),
-        (
-            "mesh-limits-attribute-64-max-128",
-            mesh(o64, MESH, [128, 0, 0], 0, 1, NONE),
-        ),
-        (
-            "mesh-limits-mesh-attribute-64-max-32",
-            mesh(o, MESH_64, [0, 32, 0], 0, 1, NONE),
-        ),
-        (
-            "mesh-limits-mesh-attribute-64-max-128",
-            mesh(o, MESH_64, [0, 128, 0], 0, 1, NONE),
-        ),
-        (
-            "mesh-limits-required-mesh-32-max-64",
-            mesh(o, MESH, [0, 64, 0], 0, 1, [Z, [32, 1, 1]]),
+            mesh(None, ALONE, [0, 2048, 0], 0, 1),
         ),
         (
             "mesh-limits-payload-16385",
-            mesh(o, MESH, [0, 0, 0], 16385, 1, NONE),
+            mesh(o, MESH, [0, 0, 0], 16385, 1),
         ),
         (
             "mesh-limits-payload-16385-no-object",
-            mesh(None, ALONE, [0, 0, 0], 16385, 1, NONE),
+            mesh(None, ALONE, [0, 0, 0], 16385, 1),
         ),
     ];
     let compute = |entry, max_total_threads| {
