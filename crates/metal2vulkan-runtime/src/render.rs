@@ -446,7 +446,7 @@ pub(crate) use draw_room::SpareDrawRooms;
 pub(crate) use heap_part::kept_heap_checks;
 pub(crate) use heap_part::KeptHeap;
 pub(crate) use inline_splits::SpareKept;
-#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+#[cfg(all(test, debug_assertions, any(m2v_gpu, m2v_cpu_icd)))]
 pub(crate) use plan_facts::plan_facts_made;
 pub(crate) use plan_facts::PlanFacts;
 use replay::{

@@ -30,7 +30,7 @@ pub(crate) struct PlanFacts {
 impl PlanFacts {
     /// Those of `plan`, from one walk of its writes.
     pub(crate) fn of(plan: &BindingPlan) -> PlanFacts {
-        #[cfg(test)]
+        #[cfg(all(test, debug_assertions, any(m2v_gpu, m2v_cpu_icd)))]
         PLAN_FACTS_MADE.with(|made| made.set(made.get() + 1));
         let mut facts = PlanFacts {
             sampled: Vec::new(),
@@ -96,14 +96,15 @@ impl PlanFacts {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, debug_assertions, any(m2v_gpu, m2v_cpu_icd)))]
 thread_local! {
-    /// The plans whose facts this thread worked out ([`PlanFacts::of`]), in tests.
+    /// The plans whose facts this thread worked out ([`PlanFacts::of`]), in the device tests that
+    /// read it (`tests::resident_uses`, built with debug assertions).
     static PLAN_FACTS_MADE: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
 /// How many plans' facts this thread worked out so far ([`PlanFacts::of`]).
-#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+#[cfg(all(test, debug_assertions, any(m2v_gpu, m2v_cpu_icd)))]
 pub(crate) fn plan_facts_made() -> u64 {
     PLAN_FACTS_MADE.with(std::cell::Cell::get)
 }
