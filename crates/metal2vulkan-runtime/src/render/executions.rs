@@ -2560,7 +2560,7 @@ impl RenderExecution {
             restart: None,
             live: Arc::default(),
             log: None,
-            quiet_bound_values: Vec::new(),
+            quiet_bound_values: Default::default(),
             bind_memo: crate::binding::BindMemo::default(),
             shape_memo: Default::default(),
             last_retained: Default::default(),

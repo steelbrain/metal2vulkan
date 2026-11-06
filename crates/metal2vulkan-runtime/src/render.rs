@@ -1641,9 +1641,8 @@ pub(crate) struct RenderLowering {
     /// again.
     log: Option<RenderLog>,
     /// The variants, plans and specializations of its draws under which the bound values'
-    /// notices were quiet (`Device::degrade_bound_values`), the latest last: at most
-    /// [`QUIET_KEPT`], so draws that switch between a few pipeline states test each once.
-    quiet_bound_values: Vec<QuietBoundValues>,
+    /// notices were quiet (`Device::degrade_bound_values`).
+    quiet_bound_values: QuietKept,
     /// The views and sampler descriptions its draws' binds made or found, taken from the
     /// device's ended render encoders' and given back as it ends (`binding::BindMemo`).
     bind_memo: binding::BindMemo,
@@ -1769,6 +1768,34 @@ impl LastRetained {
 /// The most [`QuietBoundValues`] a render encoder keeps: one for each of a few pipeline states its
 /// draws switch between, as a compositor's do every few draws.
 const QUIET_KEPT: usize = 8;
+
+/// The [`QuietBoundValues`] of a render encoder's draws: at most [`QUIET_KEPT`], held in place
+/// (an encoder allocates none for them), the one kept longest ago given up first. So draws that
+/// switch between a few pipeline states test each once.
+#[derive(Default)]
+struct QuietKept {
+    kept: [Option<QuietBoundValues>; QUIET_KEPT],
+    /// Where the next is kept.
+    next: usize,
+}
+
+impl QuietKept {
+    /// Whether one kept is of `variant`, `plan` and `specialization` ([`QuietBoundValues::holds`]).
+    fn holds(
+        &self,
+        variant: &Arc<RenderVariant>,
+        plan: &Arc<BindingPlan>,
+        specialization: &SpecializationKey,
+    ) -> bool {
+        (self.kept.iter().flatten()).any(|quiet| quiet.holds(variant, plan, specialization))
+    }
+
+    /// Keep `quiet`, in place of the one kept longest ago where it keeps as many as it may.
+    fn keep(&mut self, quiet: QuietBoundValues) {
+        self.kept[self.next] = Some(quiet);
+        self.next = (self.next + 1) % QUIET_KEPT;
+    }
+}
 
 /// A variant, plan and specialization under which `Device::degrade_bound_values` was quiet: no
 /// clause of a note it tested held. Which hold is a function of the three alone, so a draw of
@@ -2175,7 +2202,7 @@ impl RenderLowering {
             restart: None,
             live,
             log,
-            quiet_bound_values: Vec::new(),
+            quiet_bound_values: QuietKept::default(),
             bind_memo,
             shape_memo: ShapeMemo::default(),
             last_retained: LastRetained::default(),
@@ -9177,7 +9204,7 @@ impl RenderLowering {
         // A variant whose notes test no bound value is quiet at every draw, and kept as none
         // (`Device::tests_bound_values`).
         let quiet = !super::Device::tests_bound_values(&variant.pipeline().stages)
-            || (self.quiet_bound_values.iter()).any(|q| q.holds(&variant, &plan, specialization));
+            || (self.quiet_bound_values).holds(&variant, &plan, specialization);
         if !quiet
             && device.degrade_bound_values(
                 &variant.pipeline().stages,
@@ -9186,11 +9213,7 @@ impl RenderLowering {
                 Some(&formats),
             )
         {
-            if self.quiet_bound_values.len() == QUIET_KEPT {
-                self.quiet_bound_values.remove(0);
-            }
-            self.quiet_bound_values
-                .push(QuietBoundValues::new(&variant, &plan, specialization));
+            (self.quiet_bound_values).keep(QuietBoundValues::new(&variant, &plan, specialization));
         }
         device.degrade_cross_class(&plan.diagnostics, &formats);
         device.degrade_astc_storage(&plan.diagnostics, &formats);
