@@ -132,6 +132,7 @@ pub mod pipeline_descriptors;
 pub mod pipeline_facts;
 pub mod pipeline_functions;
 pub mod pipeline_handlers;
+pub mod pipeline_limits;
 pub mod pipeline_option_reflection;
 pub mod pipeline_options;
 pub mod pixel_downscales;
@@ -410,6 +411,9 @@ pub fn all() -> Vec<Box<dyn Case>> {
         cases.push(Box::new(case));
     }
     for case in mesh_partial_barriers::all() {
+        cases.push(Box::new(case));
+    }
+    for case in pipeline_limits::all() {
         cases.push(Box::new(case));
     }
     cases.push(Box::new(mesh_commands::own_state_commands()));

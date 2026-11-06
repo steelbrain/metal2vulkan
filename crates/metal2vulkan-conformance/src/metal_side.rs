@@ -57,6 +57,9 @@ use crate::pipeline_handlers::{
     BothPaths, Delivered, Form as PipelineForm, Handled, StateFacts,
     IMAGEBLOCK as HANDLER_IMAGEBLOCK, WAIT as HANDLER_WAIT,
 };
+use crate::pipeline_limits::{
+    floored, ComputeLimitsSpec, ComputeStateLimits, Created, MeshLimitsSpec, MeshStateLimits,
+};
 use crate::pipeline_option_reflection::UnderOptions;
 use crate::pipeline_options::{OptionOutcome, FRAGMENT_STAGE, KERNEL_STAGE, VERTEX_STAGE};
 use crate::queue_slots::QueueSlots;
@@ -3721,6 +3724,101 @@ impl Side for MetalSide {
             stages(&descriptor)?;
         }
         Ok(read_mesh_descriptor(&descriptor, !spec.shape.resets()))
+    }
+
+    fn mesh_pipeline_limits(
+        &mut self,
+        library: Handle,
+        spec: &MeshLimitsSpec<'_>,
+    ) -> Answer<Created<MeshStateLimits>> {
+        let held: &Retained<ProtocolObject<dyn MTLLibrary>> = self
+            .libraries
+            .get(library.0 as usize)
+            .ok_or_else(|| Failure::named("NoSuchHandle", format!("library {}", library.0)))?;
+        let function = |entry: &str| {
+            held.newFunctionWithName(&NSString::from_str(entry))
+                .ok_or_else(|| Failure::named("NoSuchFunction", entry.to_owned()))
+        };
+        let descriptor = MTLMeshRenderPipelineDescriptor::new();
+        // SAFETY: each function is of this library, the descriptor is this call's own, and the
+        // amplification count is a case's own, one `mesh_pipeline_limits.m` measured Metal
+        // answering for rather than ending the process.
+        unsafe {
+            descriptor.setMeshFunction(Some(&*function(spec.mesh)?));
+            if let Some(object) = spec.object {
+                descriptor.setObjectFunction(Some(&*function(object)?));
+            }
+            descriptor.setMaxVertexAmplificationCount(spec.amplification as usize);
+        }
+        descriptor.setRasterizationEnabled(false);
+        descriptor.setMaxTotalThreadsPerObjectThreadgroup(spec.max_object as usize);
+        descriptor.setMaxTotalThreadsPerMeshThreadgroup(spec.max_mesh as usize);
+        descriptor.setMaxTotalThreadgroupsPerMeshGrid(spec.max_grid as usize);
+        descriptor.setPayloadMemoryLength(spec.payload as usize);
+        descriptor.setRequiredThreadsPerObjectThreadgroup(size(spec.required_object));
+        descriptor.setRequiredThreadsPerMeshThreadgroup(size(spec.required_mesh));
+        let made = self
+            .device
+            .newRenderPipelineStateWithMeshDescriptor_options_reflection_error(
+                &descriptor,
+                MTLPipelineOption::None,
+                None,
+            );
+        let Ok(state) = made else {
+            return Ok(Created::refused());
+        };
+        // Declared, so the coverage derivation types the receiver.
+        let state: Retained<ProtocolObject<dyn MTLRenderPipelineState>> = state;
+        let axes = |held: MTLSize| [held.width as u64, held.height as u64, held.depth as u64];
+        let object = spec.object.is_some();
+        Ok(Created::made(MeshStateLimits {
+            max_total_threads_per_object_threadgroup: object
+                .then(|| floored(state.maxTotalThreadsPerObjectThreadgroup() as u64)),
+            max_total_threads_per_mesh_threadgroup: floored(
+                state.maxTotalThreadsPerMeshThreadgroup() as u64,
+            ),
+            object_thread_execution_width: object
+                .then(|| state.objectThreadExecutionWidth() as u64),
+            mesh_thread_execution_width: state.meshThreadExecutionWidth() as u64,
+            max_total_threadgroups_per_mesh_grid: state.maxTotalThreadgroupsPerMeshGrid() as u64,
+            required_threads_per_object_threadgroup: axes(
+                state.requiredThreadsPerObjectThreadgroup(),
+            ),
+            required_threads_per_mesh_threadgroup: axes(state.requiredThreadsPerMeshThreadgroup()),
+            max_total_threads_per_threadgroup: state.maxTotalThreadsPerThreadgroup() as u64,
+        }))
+    }
+
+    fn compute_pipeline_limits(
+        &mut self,
+        library: Handle,
+        spec: &ComputeLimitsSpec<'_>,
+    ) -> Answer<Created<ComputeStateLimits>> {
+        let held: &Retained<ProtocolObject<dyn MTLLibrary>> = self
+            .libraries
+            .get(library.0 as usize)
+            .ok_or_else(|| Failure::named("NoSuchHandle", format!("library {}", library.0)))?;
+        let function = held
+            .newFunctionWithName(&NSString::from_str(spec.entry))
+            .ok_or_else(|| Failure::named("NoSuchFunction", spec.entry.to_owned()))?;
+        let descriptor = MTLComputePipelineDescriptor::new();
+        descriptor.setComputeFunction(Some(&function));
+        descriptor.setMaxTotalThreadsPerThreadgroup(spec.max_total_threads as usize);
+        let made = self
+            .device
+            .newComputePipelineStateWithDescriptor_options_reflection_error(
+                &descriptor,
+                MTLPipelineOption::None,
+                None,
+            );
+        let Ok(state) = made else {
+            return Ok(Created::refused());
+        };
+        // Declared, so the coverage derivation types the receiver.
+        let state: Retained<ProtocolObject<dyn MTLComputePipelineState>> = state;
+        Ok(Created::made(ComputeStateLimits {
+            max_total_threads_per_threadgroup: floored(state.maxTotalThreadsPerThreadgroup() as u64),
+        }))
     }
 
     fn pass_descriptor_facts(&mut self, spec: &PassSpec) -> Answer<PassDescriptorFacts> {

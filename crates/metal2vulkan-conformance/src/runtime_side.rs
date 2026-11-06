@@ -53,6 +53,9 @@ use crate::pipeline_handlers::{
     BothPaths, Delivered, Form as PipelineForm, Handled, StateFacts,
     IMAGEBLOCK as HANDLER_IMAGEBLOCK,
 };
+use crate::pipeline_limits::{
+    floored, ComputeLimitsSpec, ComputeStateLimits, Created, MeshLimitsSpec, MeshStateLimits,
+};
 use crate::pipeline_option_reflection::UnderOptions;
 use crate::pipeline_options::{OptionOutcome, FRAGMENT_STAGE, KERNEL_STAGE, VERTEX_STAGE};
 use crate::queue_slots::QueueSlots;
@@ -3040,6 +3043,98 @@ impl Side for RuntimeSide<'_> {
             &options,
             !spec.shape.resets(),
         ))
+    }
+
+    fn mesh_pipeline_limits(
+        &mut self,
+        library: Handle,
+        spec: &MeshLimitsSpec<'_>,
+    ) -> Answer<Created<MeshStateLimits>> {
+        let library = self
+            .libraries
+            .get(library.0 as usize)
+            .ok_or_else(|| Failure::named("NoSuchHandle", format!("library {}", library.0)))?;
+        let stage = |name: &str| -> Answer<StageSource> {
+            Ok(StageSource::Function(
+                library
+                    .new_function_with_name(name)
+                    .map_err(Failure::from_error)?
+                    .function_descriptor(),
+            ))
+        };
+        // Metal's 0 and zero size are the runtime's `None`: the descriptor's default.
+        let given = |value: u32| (value != 0).then_some(value);
+        let required = |axes: [u32; 3]| (axes != [0; 3]).then_some(axes);
+        let mut descriptor = MeshPipelineDescriptor::new(stage(spec.mesh)?);
+        descriptor.object = spec.object.map(stage).transpose()?;
+        descriptor.rasterization_enabled = false;
+        descriptor.max_total_threads_per_object_threadgroup = given(spec.max_object);
+        descriptor.max_total_threads_per_mesh_threadgroup = given(spec.max_mesh);
+        descriptor.max_total_threadgroups_per_mesh_grid = given(spec.max_grid);
+        descriptor.payload_memory_length = given(spec.payload);
+        descriptor.max_vertex_amplification_count = spec.amplification;
+        descriptor.required_threads_per_object_threadgroup = required(spec.required_object);
+        descriptor.required_threads_per_mesh_threadgroup = required(spec.required_mesh);
+        let state = match crate::states::making_a_state(self.device)
+            .new_mesh_render_pipeline_state(&descriptor, &PipelineOptions::default())
+        {
+            Ok(state) => state,
+            Err(error) if refuses_as_metal(&error) => return Ok(Created::refused()),
+            Err(error) => return Err(Failure::of(&error)),
+        };
+        let axes = |held: metal2vulkan_runtime::Size| [held.width, held.height, held.depth];
+        let object = spec.object.is_some();
+        Ok(Created::made(MeshStateLimits {
+            max_total_threads_per_object_threadgroup: object
+                .then(|| floored(u64::from(state.max_total_threads_per_object_threadgroup()))),
+            max_total_threads_per_mesh_threadgroup: floored(u64::from(
+                state.max_total_threads_per_mesh_threadgroup(),
+            )),
+            object_thread_execution_width: object
+                .then(|| u64::from(state.object_thread_execution_width())),
+            mesh_thread_execution_width: u64::from(state.mesh_thread_execution_width()),
+            max_total_threadgroups_per_mesh_grid: u64::from(
+                state.max_total_threadgroups_per_mesh_grid(),
+            ),
+            required_threads_per_object_threadgroup: axes(
+                state.required_threads_per_object_threadgroup(),
+            ),
+            required_threads_per_mesh_threadgroup: axes(
+                state.required_threads_per_mesh_threadgroup(),
+            ),
+            max_total_threads_per_threadgroup: u64::from(state.max_total_threads_per_threadgroup()),
+        }))
+    }
+
+    fn compute_pipeline_limits(
+        &mut self,
+        library: Handle,
+        spec: &ComputeLimitsSpec<'_>,
+    ) -> Answer<Created<ComputeStateLimits>> {
+        let library = self
+            .libraries
+            .get(library.0 as usize)
+            .ok_or_else(|| Failure::named("NoSuchHandle", format!("library {}", library.0)))?;
+        let function = library
+            .new_function_with_name(spec.entry)
+            .map_err(|error| Failure::of(&error))?;
+        let mut descriptor = metal2vulkan::pipeline::ComputePipelineDescriptor::new(
+            StageSource::Function(function.function_descriptor()),
+        );
+        descriptor.max_total_threads_per_threadgroup =
+            (spec.max_total_threads != 0).then_some(spec.max_total_threads);
+        let state = match crate::states::making_a_state(self.device)
+            .new_compute_pipeline_state(&descriptor, &PipelineOptions::default())
+        {
+            Ok(state) => state,
+            Err(error) if refuses_as_metal(&error) => return Ok(Created::refused()),
+            Err(error) => return Err(Failure::of(&error)),
+        };
+        Ok(Created::made(ComputeStateLimits {
+            max_total_threads_per_threadgroup: floored(u64::from(
+                state.max_total_threads_per_threadgroup(),
+            )),
+        }))
     }
 
     fn pass_descriptor_facts(&mut self, spec: &PassSpec) -> Answer<PassDescriptorFacts> {
@@ -8377,4 +8472,17 @@ impl RuntimeMaker {
             }
         }
     }
+}
+
+/// Whether the runtime refused a creation by one of Metal's own rules (a descriptor Metal's
+/// creation refuses, or misuse Metal refuses), which a limits case records as the refusal Metal
+/// answers ([`crate::pipeline_limits`]), rather than by a gap of its own.
+fn refuses_as_metal(error: &metal2vulkan_runtime::Error) -> bool {
+    matches!(
+        error,
+        metal2vulkan_runtime::Error::Invalid(_)
+            | metal2vulkan_runtime::Error::Compile(metal2vulkan::error::Error::InvalidDescriptor(
+                _
+            ))
+    )
 }
