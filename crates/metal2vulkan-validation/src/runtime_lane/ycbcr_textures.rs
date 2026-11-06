@@ -2126,6 +2126,183 @@ fn a_runtime_sampler_announces_the_ycbcr_filter_only_where_it_filters() {
     }
 }
 
+/// A sample of a two-plane YCbCr texture an argument buffer holds announces
+/// `ycbcr-filter-not-exact` only where its sampler can filter, on a device that samples through
+/// Metal's own sampler (`VkProperty::MetalSampler`): a 4:4:4 texture (`YCBCR8_444_2P` over `444v`,
+/// `YCBCR10_444_2P_sRGB` over `x444`, whose address-mode map is the identity, so a function that
+/// samples handles reaches it), made resident by the encoder, its `float` and `half` samples
+/// through a linear constexpr sampler, a runtime sampler slot, or the sampler state the argument
+/// buffer holds. Through a runtime slot the bound sampler's word decides; through the argument
+/// buffer's sampler, whether a live sampler state filters, as the runtime cannot read which state
+/// the buffer's memory names (`SpecKey::FilteringArgumentSampler`): a program whose live states
+/// are all nearest announces nothing, and one with a linear state alive announces, whichever
+/// state the buffer holds. An `RGBA16Float` texture in the same place announces no YCbCr notice.
+/// A device that samples natively announces it only where it converted the texture itself.
+#[test]
+fn a_ycbcr_texture_through_an_argument_buffer_announces_its_filter_only_where_it_can_filter() {
+    #[derive(Clone, Copy, Debug)]
+    enum Held {
+        None,
+        Nearest,
+        Linear,
+    }
+    // Each case: its name, how the kernel samples, the state the buffer holds or the slot binds,
+    // whether a linear state lives beside it, and whether the sample can filter.
+    let cases = [
+        (
+            "constexpr linear",
+            Through::Constexpr(LINEAR_EDGE),
+            Held::None,
+            false,
+            true,
+        ),
+        (
+            "runtime nearest",
+            Through::Runtime,
+            Held::Nearest,
+            false,
+            false,
+        ),
+        (
+            "runtime linear",
+            Through::Runtime,
+            Held::Linear,
+            false,
+            true,
+        ),
+        (
+            "argument nearest",
+            Through::Argument,
+            Held::Nearest,
+            false,
+            false,
+        ),
+        (
+            "argument linear",
+            Through::Argument,
+            Held::Linear,
+            false,
+            true,
+        ),
+        (
+            "argument nearest, a linear state alive",
+            Through::Argument,
+            Held::Nearest,
+            true,
+            true,
+        ),
+    ];
+    let formats = [
+        (PixelFormat::YCBCR84442P, "444v", true),
+        (PixelFormat::YCBCR104442PSRGB, "x444", true),
+        (PixelFormat::RGBA16Float, "", false),
+    ];
+    for (seed, (pf, ostype, ycbcr)) in (960..).zip(formats) {
+        for (name, through, held, alive, filters) in cases {
+            on_device(|device, messages| {
+                let case = format!("{pf:?} {name}");
+                let sampler_of = |held| match held {
+                    Held::None => None,
+                    Held::Nearest => Some(sampler(device, SamplerMinMagFilter::Nearest)),
+                    Held::Linear => Some(sampler(device, SamplerMinMagFilter::Linear)),
+                };
+                let state = sampler_of(held);
+                let _beside = alive.then(|| sampler(device, SamplerMinMagFilter::Linear));
+                let pipelines: Vec<ComputePipelineState> = [false, true]
+                    .map(|half| {
+                        let source = argument_linear_samples::kernel(true, through, false, half);
+                        pipeline_of(device, &llvm_assemble_text(&source).unwrap(), "k")
+                    })
+                    .into();
+                // From here: a texture the device converts itself is announced as it is made.
+                messages.take_notices();
+                let (texture, by_device) = match ycbcr {
+                    true => {
+                        let codes = ycbcr_format(pf).and_then(YCbCrCodes::of).unwrap();
+                        let surface = buffer_with(device, &family_bytes(seed, codes)).unwrap();
+                        let made = made_by_device(device, || {
+                            family_texture(&surface, pf, ostype, None).unwrap()
+                        });
+                        assert!(made.0.address_mode_map().is_identity(), "{case}");
+                        made
+                    }
+                    false => {
+                        let mut d = TextureDescriptor::texture_2d(pf, W, H, false);
+                        d.usage = TextureUsage::SHADER_READ;
+                        (device.new_texture(&d).unwrap(), false)
+                    }
+                };
+                let coords: Vec<u8> = (0..8u32)
+                    .flat_map(|i| {
+                        let x = (i as f32 * 4.3 + 0.37) / W as f32;
+                        [x, 0.41, 0.0, 0.0].into_iter().flat_map(f32::to_le_bytes)
+                    })
+                    .collect();
+                let input = buffer_with(device, &coords).unwrap();
+                let out = device
+                    .new_buffer(16 * 8, ResourceOptions::shared())
+                    .unwrap();
+                let held_id = match (through, &state) {
+                    (Through::Argument, Some(state)) => state.gpu_resource_id().0,
+                    _ => 0,
+                };
+                let ids = [texture.gpu_resource_id().0, held_id];
+                let words: Vec<u8> = ids.iter().flat_map(|id| id.to_le_bytes()).collect();
+                let argument = buffer_with(device, &words).unwrap();
+                let queue = device.new_command_queue().unwrap();
+                let command_buffer = queue.command_buffer().unwrap();
+                let mut encoder = command_buffer.compute_command_encoder().unwrap();
+                for pipeline in &pipelines {
+                    encoder.set_compute_pipeline_state(pipeline).unwrap();
+                    encoder
+                        .use_resource(texture.as_resource(), ResourceUsage::READ)
+                        .unwrap();
+                    encoder.set_buffer(Some(&input), 0, 0).unwrap();
+                    encoder.set_buffer(Some(&out), 0, 1).unwrap();
+                    encoder.set_buffer(Some(&argument), 0, 2).unwrap();
+                    if let (Through::Runtime, Some(state)) = (through, &state) {
+                        encoder.set_sampler_state(Some(state), 0).unwrap();
+                    }
+                    encoder
+                        .dispatch_threads(Size::new(8, 1, 1), Size::new(8, 1, 1))
+                        .unwrap_or_else(|e| panic!("{case}: {e:?}"));
+                }
+                encoder.end_encoding().unwrap();
+                command_buffer.commit().unwrap();
+                command_buffer.wait_until_completed_for(WAIT).unwrap();
+                let metal = metal_sampler(device);
+                let notices = messages.take_notices();
+                let counts = counts(&notices);
+                println!(
+                    "YCBCR-ARGUMENT-FILTER {} {case}: metal sampler {metal}, device conversion \
+                     {by_device}, notices {counts:?}",
+                    device.name()
+                );
+                for kind in [
+                    Degradation::FloatSampleFilter,
+                    Degradation::HalfSampleFilter,
+                ] {
+                    assert_eq!(counts.get(&kind), None, "{case}: {counts:?}");
+                }
+                let announced = counts.get(&YCBCR_FILTERS[0]);
+                let want = (ycbcr && metal && filters) || by_device;
+                assert_eq!(announced, want.then_some(&1), "{case}: {counts:?}");
+                if ycbcr && metal && filters && !by_device {
+                    let notice = notices
+                        .iter()
+                        .filter_map(|m| m.degradation.as_ref())
+                        .find(|n| n.degradation == YCBCR_FILTERS[0])
+                        .unwrap();
+                    assert!(
+                        notice.reason.contains("argument buffers name"),
+                        "{case}: {notice:?}"
+                    );
+                }
+            });
+        }
+    }
+}
+
 /// A function that samples textures through handles (an argument buffer's) reads its sampler
 /// from memory, where no slot's specialization can give it Metal's exact filter of a YCbCr
 /// texture it reaches, nor the texture's address-mode map: a command whose function samples

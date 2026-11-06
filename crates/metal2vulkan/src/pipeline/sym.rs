@@ -833,6 +833,23 @@ pub enum SpecKey {
     /// known (a reading of the module alone, `StageModule::precision_notes_under`), such a test
     /// holds. A slot bound to no sampler takes 0.
     BoundSamplerWord(SlotRef),
+    /// Boolean: a texture the stage's handles can name is of a two-plane YCbCr class (its
+    /// `metal::texel_format::TexelFormat::PACKED` field `YCbCr2048`, `YCbCr8192` or
+    /// `YCbCrExtended8192`): a heap member of the command reaching the stage, one it makes
+    /// resident (`BindShape::used`) or binds at a texture slot of the stage
+    /// (`bind::heap`'s members). Read by a specialized note's test alone
+    /// ([`SpecTest`](crate::pipeline::SpecTest)), as [`BoundSamplerWord`](Self::BoundSamplerWord)
+    /// is: a plan gives it (`BindingPlan::specialized_value`), and where it is not known such a
+    /// test holds. A texture the command neither names nor makes resident, which a handle loaded
+    /// from memory may still reach and whose read Metal leaves undefined, is not counted.
+    HeapYCbCrTextures(Stage),
+    /// Boolean: a sampler state an argument buffer's sampler handle can name filters: one of the
+    /// bind state's argument samplers (`BindState::argument_samplers`, every live state, its
+    /// shape in `BindShape`) has a linear minification, magnification or mip filter, anisotropy,
+    /// or a cubic filter. Which state an argument buffer holds is in its memory, which no plan
+    /// reads. Read by a specialized note's test alone, given by a plan, as
+    /// [`HeapYCbCrTextures`](Self::HeapYCbCrTextures) is.
+    FilteringArgumentSampler,
 }
 
 impl SpecKey {

@@ -14120,7 +14120,9 @@ variant	metal2vulkan::pipeline::SpecKey::BicubicTexels	BicubicTexels(SlotRef)
 variant	metal2vulkan::pipeline::SpecKey::BoundSamplerWord	BoundSamplerWord(SlotRef)
 variant	metal2vulkan::pipeline::SpecKey::BoundTexelFormat	BoundTexelFormat(SlotRef)
 variant	metal2vulkan::pipeline::SpecKey::ConstantLanes	ConstantLanes(SlotRef)
+variant	metal2vulkan::pipeline::SpecKey::FilteringArgumentSampler	FilteringArgumentSampler
 variant	metal2vulkan::pipeline::SpecKey::FlatLocalSize	FlatLocalSize
+variant	metal2vulkan::pipeline::SpecKey::HeapYCbCrTextures	HeapYCbCrTextures(Stage)
 variant	metal2vulkan::pipeline::SpecKey::ImageblockHeight	ImageblockHeight
 variant	metal2vulkan::pipeline::SpecKey::ImageblockWidth	ImageblockWidth
 variant	metal2vulkan::pipeline::SpecKey::LocalSize	LocalSize(Axis)

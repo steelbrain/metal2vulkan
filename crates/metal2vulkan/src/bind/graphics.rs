@@ -2325,7 +2325,7 @@ fn plan(p: &RenderPipeline, device: &Device, shape: &BindShape) -> Result<Bindin
         })?;
     }
     record_specialized(&push, shape, &mut resources)?;
-    record_noted(&p.stages, shape, &mut resources)?;
+    record_noted(&p.stages, shape, &mut resources, &heap_reach)?;
     let specialization = spec_key(&layout, |k| {
         fixed.iter().find(|(key, _)| *key == k).map(|(_, v)| *v)
     });

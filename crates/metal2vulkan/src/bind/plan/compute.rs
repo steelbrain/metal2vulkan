@@ -711,7 +711,7 @@ fn plan(p: &ComputePipeline, device: &Device, shape: &BindShape) -> Result<Bindi
         fixed.push((c.key, v));
     }
     record_specialized(&push, shape, &mut resources)?;
-    record_noted([&p.stage], shape, &mut resources)?;
+    record_noted([&p.stage], shape, &mut resources, &|_| vec![Stage::Kernel])?;
     // Emulated simdgroups: the reported static length also counts the scratch of the most threads,
     // so the arena's own static part comes from the fact.
     let emulation = p.dependencies.iter().find_map(|d| match d.fact {

@@ -18,8 +18,11 @@
 //! `RGBA32Float` texture's, within one step of the grid, so a filtered sample of such a slot there
 //! records `PrecisionNote::HalfSampleFilter` or `PrecisionNote::FloatSampleFilter` where the bound
 //! format is two-plane YCbCr ([`metal_filtered_ycbcr`]), through a runtime sampler slot only where
-//! the bound sampler filters ([`filtering_word`]). A device whose memory is the host's reads the
-//! planes in place, Metal's filter exactly (`in_place`).
+//! the bound sampler filters ([`filtering_word`]). A heap's texture (an argument buffer's) is held
+//! by the same view and sampled by the same sampler, so its filtered sample records the note where
+//! a texture its handles can name is two-plane YCbCr, and through an argument buffer's sampler
+//! where a sampler state an argument buffer can name filters. A device whose memory is the host's
+//! reads a slot's planes in place, Metal's filter exactly (`in_place`).
 
 use crate::air::abi::{Filter, MipFilter, SamplerState};
 use crate::error::Error;
@@ -62,8 +65,10 @@ pub(super) const PLANE_WORDS: u32 = 576;
 /// Through a runtime sampler slot each clause also tests the word of the sampler bound there
 /// ([`filtering_word`]), which the runtime reads at each draw or dispatch: a bound sampler that
 /// reads one texel of one level takes the texel the view holds, Metal's read, and holds none.
-/// An argument buffer's sampler states its word in a table no slot's test reads, so its clauses
-/// test the bound format alone.
+/// An argument buffer's sampler is the state whose ID its memory holds, which no plan reads: its
+/// clauses test that a sampler state an argument buffer can name filters
+/// (`NoteOn::ArgumentSamplers`, every live state), so a program whose live states all read one
+/// texel of one level holds none.
 pub(super) fn filter_note(
     cx: &SelectCx<'_>,
     op: &SampleOp,
@@ -83,8 +88,8 @@ pub(super) fn filter_note(
             true => return Ok(None),
             false => None,
         },
-        Some(SamplerRef::Slot(n)) => Some(filtering_word(n)),
-        None => None,
+        Some(SamplerRef::Slot(n)) => Some(filtering_word(n).to_vec()),
+        None => Some(vec![NoteTest::equal(NoteOn::ArgumentSamplers, 1, 1)]),
     };
     let Some(formats) = metal_filtered_ycbcr(cx, image) else {
         return Ok(None);
@@ -130,27 +135,30 @@ fn filtering_word(n: u32) -> [NoteTest; 2] {
 /// [`PackedTexels::YCbCrExtended8192`]), whose view holds Metal's reads exactly but which Metal's
 /// sampler then filters as an `RGBA16Float` or `RGBA32Float` texture's texels, not on the format's
 /// own grid. The runtime reads the bound format (`SpecKey::BoundTexelFormat`) and announces it as
-/// `ycbcr-filter-not-exact` ([`filter_note`] adds a runtime sampler slot's word). `None` on any
-/// other device, and for a heap's texture.
+/// `ycbcr-filter-not-exact` ([`filter_note`] adds a runtime sampler slot's word). A heap's
+/// texture, which a handle names at run time, holds one clause: a texture the stage's handles can
+/// name is two-plane YCbCr (`SpecKey::HeapYCbCrTextures`, which the plan gives from the command's
+/// heap members). `None` on any other device.
 pub(super) fn metal_filtered_ycbcr(cx: &SelectCx<'_>, image: ImageRef) -> Option<Vec<NoteClause>> {
-    let ImageRef::Slot(index) = image else {
-        return None;
-    };
     let metal = cx
         .profile
         .fields()
         .enabled
         .properties
         .contains(&crate::device::requirements::VkProperty::MetalSampler);
-    metal.then(|| {
-        any_of(
+    if !metal {
+        return None;
+    }
+    Some(match image {
+        ImageRef::Slot(index) => any_of(
             [
                 PackedTexels::YCbCr2048,
                 PackedTexels::YCbCr8192,
                 PackedTexels::YCbCrExtended8192,
             ]
             .map(|p| NoteTest::equal(NoteOn::Bound(index), TexelFormat::PACKED_MASK, p.class().0)),
-        )
+        ),
+        ImageRef::Heap { .. } => any_of([NoteTest::equal(NoteOn::HeapTextures(cx.stage), 1, 1)]),
     })
 }
 

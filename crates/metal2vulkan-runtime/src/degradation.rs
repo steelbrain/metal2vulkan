@@ -1456,7 +1456,10 @@ degradations! {
         /// runtime sampler slot, only where the sampler bound there filters: a linear
         /// minification, magnification or mip filter, anisotropy, or a cubic filter; one that
         /// reads one texel of one level takes the texel the view holds, Metal's read), naming the
-        /// slot and the format.
+        /// slot and the format; and at a draw or dispatch whose function filters a texture an
+        /// argument buffer holds where a texture the command makes resident or binds that its
+        /// handles can name is two-plane YCbCr, through an argument buffer's sampler only where a
+        /// live sampler state filters (which state the buffer's memory names is not read).
         YCbCrFilterNotExact = "ycbcr-filter-not-exact", Precision,
             "where the device converts the planes' format, the texels are its own Y′CbCr \
              conversion's, at its precision and unclamped where it does not clamp, not Metal's \
@@ -3693,7 +3696,9 @@ impl Device {
     /// reads as data or a bound sampler's word (`SpecClause::tests_bound_values`: a bound
     /// texture's format class, `SpecKey::BoundSamplerWord`) and holds where the draw's plan gives
     /// the values `bound` gives (`BindingPlan::specialized_value`;
-    /// `StageModule::note_clauses_bound`), the class of the format `formats` binds at each
+    /// `StageModule::note_clauses_bound`; and what the command's handles can name,
+    /// `SpecKey::HeapYCbCrTextures` and `SpecKey::FilteringArgumentSampler`, which the plan gives
+    /// too: a filter note's heap texture), the class of the format `formats` binds at each
     /// texture slot such a clause also tests (`SpecKey::BoundTexelFormat`: a filter note's
     /// two-plane YCbCr format under a runtime sampler's filtering word). A clause testing a slot
     /// bound to nothing does not hold, as [`degrade_bound_formats`](Self::degrade_bound_formats)
@@ -3765,8 +3770,9 @@ impl Device {
     /// Announce `note` of `stage`, `at` ([`Occurrence`]), where `clauses`, the clauses of its
     /// specialized note that hold, are not empty: a filter note's slot bound to a two-plane YCbCr
     /// texture (or, where the command's formats are not known, `formats` `None`, to the format its
-    /// clause tests, a two-plane YCbCr one) as its own kind, and the note's kind where a clause
-    /// that holds tests another slot, or none, the reason naming each such slot (with its bound
+    /// clause tests, a two-plane YCbCr one), and its clause of a heap's texture
+    /// (`SpecKey::HeapYCbCrTextures`), as its own kind, and the note's kind where a clause that
+    /// holds tests another slot, or none, the reason naming each such slot (with its bound
     /// format, where `formats` knows it) after `under`.
     fn degrade_clauses(
         &self,
@@ -3812,9 +3818,26 @@ impl Device {
                 )
             });
         }
+        // A filter note's clause of a heap's texture: a two-plane YCbCr texture the stage's
+        // handles can name (`SpecKey::HeapYCbCrTextures`), its own kind too.
+        let heap = |c: &&metal2vulkan::pipeline::SpecClause| {
+            filter_note(note)
+                && (c.all.iter()).any(|t| matches!(t.key, SpecKey::HeapYCbCrTextures(_)))
+        };
+        if clauses.iter().any(heap) {
+            self.degrade_at(at, Degradation::YCbCrFilterNotExact, || {
+                (
+                    stage_object(stage.stage).to_owned(),
+                    format!(
+                        "a filtered sample of a texture its argument buffers name takes the                          device's filter, not Metal's exact filter of the format, and a texture                          the command makes resident or binds that they can name is two-plane                          YCbCr: {}",
+                        self.note_reason(note)
+                    ),
+                )
+            });
+        }
         let covered = |c: &&metal2vulkan::pipeline::SpecClause| {
             let tested = tested_slots([*c]);
-            !tested.is_empty() && tested.iter().all(held)
+            heap(c) || (!tested.is_empty() && tested.iter().all(held))
         };
         if clauses.iter().all(covered) {
             return;

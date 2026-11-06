@@ -269,13 +269,16 @@ pub(crate) fn record_specialized(
 
 /// Record in `resources`' template the value of each key a specialized note of `stages` tests that
 /// no constant and no push carries but the bound resources decide (`SpecKey::BoundSamplerWord`),
-/// which `BindingPlan::specialized_value` gives the runtime at each draw or dispatch, where it
-/// reads such a note (`StageModule::note_clauses_bound`). Nothing pushes it: instantiation writes
-/// only the keys its push fields name.
+/// or what the command's handles can name (`SpecKey::HeapYCbCrTextures`, through `reach`, the
+/// stages a used resource's render stages reach, as for the heap's members;
+/// `SpecKey::FilteringArgumentSampler`), which `BindingPlan::specialized_value` gives the runtime at
+/// each draw or dispatch, where it reads such a note (`StageModule::note_clauses_bound`). Nothing
+/// pushes it: instantiation writes only the keys its push fields name.
 pub(crate) fn record_noted<'a>(
     stages: impl IntoIterator<Item = &'a crate::pipeline::StageModule>,
     shape: &BindShape,
     resources: &mut ResourcePlanner<'_>,
+    reach: &dyn Fn(metal::RenderStages) -> Vec<Stage>,
 ) -> Result<(), BindError> {
     let tested: Vec<SpecKey> = stages
         .into_iter()
@@ -283,7 +286,14 @@ pub(crate) fn record_noted<'a>(
         .flat_map(|note| &note.when)
         .flat_map(|clause| &clause.all)
         .map(|test| test.key)
-        .filter(|key| matches!(key, SpecKey::BoundSamplerWord(_)))
+        .filter(|key| {
+            matches!(
+                key,
+                SpecKey::BoundSamplerWord(_)
+                    | SpecKey::HeapYCbCrTextures(_)
+                    | SpecKey::FilteringArgumentSampler
+            )
+        })
         .collect();
     for key in tested {
         if resources
@@ -294,13 +304,40 @@ pub(crate) fn record_noted<'a>(
         {
             continue;
         }
-        let value = bound_value(key, shape, resources)?
-            .ok_or_else(|| internal(format!("a noted {key:?}, which no bound resource decides")))?;
+        let value = match key {
+            SpecKey::HeapYCbCrTextures(stage) => u64::from(heap_ycbcr(shape, stage, reach)),
+            // A sampler state of any listed shape may be the one an argument buffer names.
+            SpecKey::FilteringArgumentSampler => u64::from(
+                (shape.argument_samplers.shapes.iter())
+                    .any(|s| s.linear || s.anisotropic || s.cubic),
+            ),
+            key => bound_value(key, shape, resources)?.ok_or_else(|| {
+                internal(format!("a noted {key:?}, which no bound resource decides"))
+            })?,
+        };
         let value = u32::try_from(value)
             .map_err(|_| internal(format!("a noted {key:?} of {value}, past a word")))?;
         resources.template.specialized.push((key, value));
     }
     Ok(())
+}
+
+/// Whether a heap member of `shape` that reaches `stage` (`bind::heap`'s members: a texture the
+/// command makes resident, its render stages through `reach`, or binds at a texture slot of the
+/// stage) is of a two-plane YCbCr class (`TexelFormat::two_plane_ycbcr`).
+fn heap_ycbcr(
+    shape: &BindShape,
+    stage: Stage,
+    reach: &dyn Fn(metal::RenderStages) -> Vec<Stage>,
+) -> bool {
+    crate::bind::heap::members(shape, &[stage], reach)
+        .iter()
+        .any(|m| match m.shape {
+            TextureShape::Texture { pixel_format, .. } => {
+                crate::metal::texel_format::texel_format(pixel_format).two_plane_ycbcr()
+            }
+            _ => false,
+        })
 }
 
 /// Whether `shape` binds anything at `slot`.

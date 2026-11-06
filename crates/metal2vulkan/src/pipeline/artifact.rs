@@ -443,13 +443,21 @@ impl SpecClause {
 
     /// Whether a test reads a value no pipeline's key carries that a plan gives
     /// (`BindingPlan::specialized_value`): one the function reads as data
-    /// (`SpecKey::read_as_data`), or the word of the sampler bound at a slot
-    /// (`SpecKey::BoundSamplerWord`). A runtime reads such a clause at each draw or dispatch, from
-    /// the values its plan gives ([`StageModule::note_clauses_bound`]).
+    /// (`SpecKey::read_as_data`), the word of the sampler bound at a slot
+    /// (`SpecKey::BoundSamplerWord`), or what the stage's handles can name
+    /// (`SpecKey::HeapYCbCrTextures`, `SpecKey::FilteringArgumentSampler`). A runtime reads such
+    /// a clause at each draw or dispatch, from the values its plan gives
+    /// ([`StageModule::note_clauses_bound`]).
     pub fn tests_bound_values(&self) -> bool {
-        self.all
-            .iter()
-            .any(|t| t.key.read_as_data() || matches!(t.key, SpecKey::BoundSamplerWord(_)))
+        self.all.iter().any(|t| {
+            t.key.read_as_data()
+                || matches!(
+                    t.key,
+                    SpecKey::BoundSamplerWord(_)
+                        | SpecKey::HeapYCbCrTextures(_)
+                        | SpecKey::FilteringArgumentSampler
+                )
+        })
     }
 
     /// Whether every test of the bound formats holds where `bound` gives the class of the format
@@ -1033,12 +1041,14 @@ pub enum PrecisionNote {
     /// bound format, which the runtime reads at each draw or dispatch and announces as
     /// `ycbcr-filter-not-exact`, and through a runtime sampler slot under the bound sampler's word
     /// (`SpecKey::BoundSamplerWord`, which the plan gives) where it filters: a linear minification
-    /// or magnification filter, a linear mip filter, anisotropy, or a cubic filter. A sample
-    /// through a sampler that reads one texel of one level (nearest minification and
-    /// magnification, no mip filter or a nearest one, no anisotropy: a constexpr one, or a runtime
-    /// slot's bound one) and a gather are not filtered and do not carry it; an argument buffer's
-    /// sampler, whose word no slot's test reads, carries it whatever it states. A device that
-    /// samples natively records
+    /// or magnification filter, a linear mip filter, anisotropy, or a cubic filter. A sample of a
+    /// texture an argument buffer holds (a heap's) is recorded where a texture its handles can name
+    /// is two-plane YCbCr (`SpecKey::HeapYCbCrTextures`), and through an argument buffer's sampler
+    /// where a sampler state an argument buffer can name filters
+    /// (`SpecKey::FilteringArgumentSampler`): the plan gives both. A sample through a sampler that
+    /// reads one texel of one level (nearest minification and magnification, no mip filter or a
+    /// nearest one, no anisotropy: a constexpr one, or a runtime slot's bound one) and a gather
+    /// are not filtered and do not carry it. A device that samples natively records
     /// [`PrecisionNote::DeviceSampling`] instead. The `float` result's counterpart is
     /// [`PrecisionNote::FloatSampleFilter`]. Validation derives no tolerance from it: the class is
     /// unbounded.
@@ -1085,11 +1095,12 @@ pub enum PrecisionNote {
     /// format bound there: a two-plane YCbCr texture's, as for [`PrecisionNote::HalfSampleFilter`]
     /// (a depth texture's sample and a comparison's included). A sample is filtered unless its
     /// sampler has nearest minification and magnification, no mip filter or a nearest one, and no
-    /// anisotropy: linear minification or magnification, a linear mip filter, anisotropy, and an
-    /// argument buffer's sampler (whose word no slot's test reads) all filter. Recorded under the
-    /// slot's bound format, and through a runtime sampler slot under the bound sampler's word
-    /// (`SpecKey::BoundSamplerWord`), whose filter is not known when the function compiles: the
-    /// runtime reads both at each draw or dispatch and announces it as `ycbcr-filter-not-exact`. A
+    /// anisotropy: linear minification or magnification, a linear mip filter, anisotropy, and a
+    /// cubic filter filter. Recorded under the slot's bound format, and through a runtime sampler
+    /// slot under the bound sampler's word (`SpecKey::BoundSamplerWord`), whose filter is not
+    /// known when the function compiles, and for a heap's texture under what its handles and an
+    /// argument buffer's sampler can name, as [`PrecisionNote::HalfSampleFilter`] is: the runtime
+    /// reads them at each draw or dispatch and announces it as `ycbcr-filter-not-exact`. A
     /// device that samples natively records [`PrecisionNote::DeviceSampling`] instead. Validation
     /// derives no tolerance from it: the class is unbounded.
     FloatSampleFilter,

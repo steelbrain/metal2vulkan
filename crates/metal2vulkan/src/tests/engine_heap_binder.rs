@@ -2606,3 +2606,172 @@ fn late_argument_samplers_fit_twice_the_class_and_the_plan_s_checks() {
     assert!(relisted(&plan, &with(linear)).is_some());
     assert_eq!(relisted(&plan, &with(cubic)), None, "beside no test");
 }
+
+/// A filtered `float` sample of a texture an argument buffer holds records its filter note on a
+/// device that samples through Metal's own sampler (`moltenvk-m3`), under what the command's
+/// handles and an argument buffer's sampler can name (`lower::sampler::linear::filter_note`): the
+/// plan gives `SpecKey::HeapYCbCrTextures` 1 exactly where a texture the command makes resident is
+/// two-plane YCbCr, and `SpecKey::FilteringArgumentSampler` 1 exactly where a listed argument
+/// sampler filters (a linear minification, magnification or mip filter, or anisotropy), and the
+/// note holds (`StageModule::precision_notes_bound`) exactly where both do. Through a runtime
+/// sampler slot the bound sampler's word decides in the second's place. A comparison of a depth
+/// texture, whose class holds no two-plane texture, and an integer texture's sample record no
+/// such note; lavapipe, which samples natively, records none.
+#[test]
+fn a_heap_texture_s_ycbcr_filter_note_holds_where_its_sampler_can_filter() {
+    use crate::metal::SamplerMipFilter;
+    use crate::pipeline::artifact::PrecisionNote;
+    use crate::pipeline::sym::SpecKey;
+    let note = PrecisionNote::FloatSampleFilter;
+    let dev = m3();
+    let (Some(argument), Some(compare), Some(integer)) = (
+        argument_sampler_pipeline(&dev, "argument_sampler_sample"),
+        argument_sampler_pipeline(&dev, "argument_sampler_compare"),
+        argument_sampler_pipeline(&dev, "argument_sampler_integer"),
+    ) else {
+        return;
+    };
+    let Some(bc) = assembled("handles", llvm_assemble(&engine_dir().join("handles.ll"))) else {
+        return;
+    };
+    let runtime = compute(&dev, &bc, "argument_buffer_runtime_sampler");
+    let keys = |p: &ComputePipeline| -> Vec<Vec<SpecKey>> {
+        (p.stage.specialized_notes.iter())
+            .filter(|s| s.note == note)
+            .flat_map(|s| &s.when)
+            .map(|c| c.all.iter().map(|t| t.key).collect())
+            .collect()
+    };
+    let heap = SpecKey::HeapYCbCrTextures(Stage::Kernel);
+    assert_eq!(
+        keys(&argument),
+        vec![vec![heap, SpecKey::FilteringArgumentSampler]]
+    );
+    let sampler = SlotRef {
+        stage: Stage::Kernel,
+        class: SlotClass::Sampler,
+        index: 0,
+    };
+    let runtime_keys = keys(&runtime);
+    assert!(!runtime_keys.is_empty());
+    for k in &runtime_keys {
+        assert!(
+            k.contains(&heap) && k.contains(&SpecKey::BoundSamplerWord(sampler)),
+            "{k:?}"
+        );
+    }
+    for p in [&compare, &integer] {
+        assert!(keys(p).is_empty(), "{:?}", p.stage.specialized_notes);
+        assert!(!p.stage.precision_notes.contains(&note));
+    }
+    let lavapipe = {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../metal2vulkan-validation/profiles/lavapipe.json");
+        let text = std::fs::read_to_string(path).expect("profile");
+        let desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
+        Device::new(desc, DevicePolicy::default()).expect("device")
+    };
+    for entry in ["argument_sampler_sample", "argument_sampler_compare"] {
+        let native = argument_sampler_pipeline(&lavapipe, entry).expect("lavapipe");
+        assert!(keys(&native).is_empty(), "{entry} on lavapipe");
+        assert!(!native.stage.precision_notes.contains(&note), "{entry}");
+    }
+    let desc = |linear: bool, mip: SamplerMipFilter, anisotropy: u32| {
+        let mut d = SamplerDescriptor::new();
+        if linear {
+            d.min_filter = SamplerMinMagFilter::Linear;
+            d.mag_filter = SamplerMinMagFilter::Linear;
+        }
+        d.mip_filter = mip;
+        d.max_anisotropy = anisotropy;
+        d
+    };
+    let nearest = desc(false, SamplerMipFilter::NotMipmapped, 1);
+    // Each list of live argument samplers, and whether one of them filters.
+    let lists = [
+        ("none", vec![], false),
+        ("nearest", vec![nearest], false),
+        (
+            "nearest mip filter",
+            vec![desc(false, SamplerMipFilter::Nearest, 1)],
+            false,
+        ),
+        (
+            "nearest and linear",
+            vec![nearest, desc(true, SamplerMipFilter::NotMipmapped, 1)],
+            true,
+        ),
+        (
+            "linear mip filter",
+            vec![desc(false, SamplerMipFilter::Linear, 1)],
+            true,
+        ),
+        (
+            "anisotropic",
+            vec![desc(false, SamplerMipFilter::NotMipmapped, 16)],
+            true,
+        ),
+    ];
+    let formats = [
+        (PixelFormat::YCBCR84442P, true),
+        (PixelFormat::YCBCR104442PSRGB, true),
+        (PixelFormat::RGBA16Float, false),
+        (PixelFormat::RGBA8Unorm, false),
+    ];
+    for (pf, ycbcr) in formats {
+        for (name, list, filters) in &lists {
+            let what = format!("{pf:?} beside {name}");
+            let state = BindState {
+                used_resources: vec![used(1, TextureType::Type2D, pf, read(), Some(A))],
+                argument_samplers: (list.iter().zip(1u64..))
+                    .map(|(d, id)| argument_sampler(*d, id))
+                    .collect(),
+                ..Default::default()
+            };
+            let plan = argument
+                .plan(&dev, &state.shape())
+                .unwrap_or_else(|e| panic!("{what}: {e}"));
+            assert_eq!(
+                plan.specialized_value(heap),
+                Some(u64::from(ycbcr)),
+                "{what}"
+            );
+            let filtering = plan.specialized_value(SpecKey::FilteringArgumentSampler);
+            assert_eq!(filtering, Some(u64::from(*filters)), "{what}");
+            let held = (argument.stage)
+                .precision_notes_bound(&plan.specialization, &|k| plan.specialized_value(k))
+                .contains(&note);
+            assert_eq!(held, ycbcr && *filters, "{what}");
+        }
+        // Through a runtime sampler slot: the bound sampler's word.
+        for (name, d, filters) in [
+            ("nearest", nearest, false),
+            (
+                "linear",
+                desc(true, SamplerMipFilter::NotMipmapped, 1),
+                true,
+            ),
+        ] {
+            let what = format!("{pf:?} through a runtime {name} sampler");
+            let mut state = BindState {
+                used_resources: vec![used(1, TextureType::Type2D, pf, read(), Some(A))],
+                ..Default::default()
+            };
+            let mut t = StageTable::default();
+            t.samplers.insert(0, BoundSampler::new(d));
+            state.stages.insert(Stage::Kernel, t);
+            let plan = runtime
+                .plan(&dev, &state.shape())
+                .unwrap_or_else(|e| panic!("{what}: {e}"));
+            assert_eq!(
+                plan.specialized_value(heap),
+                Some(u64::from(ycbcr)),
+                "{what}"
+            );
+            let held = (runtime.stage)
+                .precision_notes_bound(&plan.specialization, &|k| plan.specialized_value(k))
+                .contains(&note);
+            assert_eq!(held, ycbcr && filters, "{what}");
+        }
+    }
+}

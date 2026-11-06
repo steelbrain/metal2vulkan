@@ -2186,10 +2186,20 @@ fn select_one(
     // A filtered sample's note, where Metal's own sampler filters the slot and a two-plane YCbCr
     // format bound there takes another filter than Metal's: the clauses test the bound format,
     // which the runtime reads at each draw, and through a runtime sampler slot the bound word's
-    // filter (`SpecKey::BoundSamplerWord`, which the plan gives: no key carries either).
+    // filter (`SpecKey::BoundSamplerWord`, which the plan gives: no key carries either); a heap
+    // texture's test what its handles and an argument buffer's sampler can name. A handle names a
+    // two-plane YCbCr texture (2D, one layer) only through a 2D color class.
     let by = stat.map(|(r, _)| r);
-    if let Some((note, when)) = super::linear::filter_note(cx, &op, form, (by, image))? {
-        cx.note_when(note, when, m)?;
+    let two_plane_reach = match image {
+        ImageRef::Slot(_) => true,
+        ImageRef::Heap { .. } => {
+            shape.dim == ImageDim::D2 && !shape.array && !shape.depth && !shape.ms
+        }
+    };
+    if two_plane_reach {
+        if let Some((note, when)) = super::linear::filter_note(cx, &op, form, (by, image))? {
+            cx.note_when(note, when, m)?;
+        }
     }
     // A pixel sampler's coordinate reaches the device's sampler over the level-0 size, whose
     // texels at a texel edge or a filter step's edge are the device's arithmetic's on that

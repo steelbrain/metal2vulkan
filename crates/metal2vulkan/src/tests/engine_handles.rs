@@ -2796,9 +2796,12 @@ define void @k(ptr addrspace(2) %m, ptr addrspace(1) %out{param}, i32 %gid) {{
 }
 
 /// A heap texture's linear sample, through a constexpr sampler of linear filters (2D and 3D), a
-/// runtime sampler slot, or the sampler its argument buffer holds, is the device's sample, with no
-/// filter note; the census names the sample by its source, and the module states no `TexelFormat`
-/// specialization. A 2D sample through a constexpr or runtime sampler also emulates a raw-held
+/// runtime sampler slot, or the sampler its argument buffer holds, is the device's sample; the
+/// census names the sample by its source, and the module states no `TexelFormat`
+/// specialization. On a profile that samples through Metal's own sampler a 2D sample records the
+/// filter note only under what the command's handles can name (a two-plane YCbCr texture,
+/// `SpecKey::HeapYCbCrTextures`), never outright; a 3D one, whose class holds no two-plane
+/// texture, records none. A 2D sample through a constexpr or runtime sampler also emulates a raw-held
 /// texture's, in a branch on the class the handle carries (the search's flagged form, whose masks
 /// and table the census counts under `HEAP_CLASS_CENSUS`). Each validates; a profile without the
 /// sampled heap refuses each. (The interpreter models no sample; the runtime lane
@@ -2856,10 +2859,21 @@ fn heap_linear_samples_are_the_device_s() {
                 raw,
                 "{what}"
             );
-            assert!(
-                !a.precision.contains(&PrecisionNote::FloatSampleFilter),
+            let filter = PrecisionNote::FloatSampleFilter;
+            assert_eq!(
+                a.precision.contains(&filter),
+                !three && metal_sampler(&p),
                 "{what}"
             );
+            let clauses: Vec<_> = (a.specialized.iter())
+                .filter(|s| s.note == filter)
+                .flat_map(|s| &s.when)
+                .collect();
+            assert_eq!(clauses.is_empty(), three || !metal_sampler(&p), "{what}");
+            for c in clauses {
+                let heap = SpecKey::HeapYCbCrTextures(crate::pipeline::sym::Stage::Kernel);
+                assert!(c.all.iter().any(|t| t.key == heap), "{what}: {c:?}");
+            }
             assert!(
                 !a.interface
                     .read_keys()

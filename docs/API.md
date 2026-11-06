@@ -2395,7 +2395,14 @@ bound.
   format of their codes, which Metal's sampler filters as that format's: neither is announced),
   and through a runtime sampler slot only where the sampler bound there filters (a linear
   minification, magnification or mip filter, anisotropy, or a cubic filter), read at each draw or
-  dispatch; an argument buffer's sampler announces it whatever it states.
+  dispatch. A filtered sample of a texture an argument buffer holds (a 4:4:4 one: a 4:2:0 or 4:2:2
+  texture a function that samples through handles can reach is refused) is announced at a draw or
+  dispatch where a texture the command makes resident or binds that its handles can name is
+  two-plane YCbCr, through a runtime sampler slot only where the bound sampler filters, and
+  through an argument buffer's sampler only where a live sampler state filters: the runtime does
+  not read which state the buffer's memory names, so one linear state alive announces it for a
+  buffer that holds a nearest one. A texture the command neither names nor makes resident, which
+  its function may still reach through its ID (Metal's read of it is undefined), is not counted.
   Cost: where the device converts the planes'
   format, the texels are its own Y′CbCr conversion's, at its precision and unclamped where it does
   not clamp, not Metal's fixed-point read; elsewhere the texels hold Metal's reads exactly, but the
@@ -3312,7 +3319,8 @@ bound.
   module samples a texture with a `half` result through a filter (linear minification or
   magnification, a linear mip filter, anisotropy, or a runtime sampler slot whose bound sampler
   filters so) that Metal's own sampler (MoltenVK) answers otherwise than Metal filters the format
-  bound there: a two-plane YCbCr texture's.
+  bound there: a two-plane YCbCr texture's, at a slot or held by an argument buffer (announced as
+  `ycbcr-filter-not-exact`).
 - `metal2vulkan-degrade-srgb-texel-decode` (precision). `PrecisionNote::SrgbTexelDecode`: The module
   reads, samples, or gathers a texture with a `half` or `float` result through the device's sRGB
   decode, or decodes the device's filter of its codes, where the texture may be bound in an 8-bit
@@ -3327,7 +3335,7 @@ bound.
 - `metal2vulkan-degrade-float-sample-filter` (precision). `PrecisionNote::FloatSampleFilter`: The
   module samples a texture with a `float` result through a filter that Metal's own sampler
   (MoltenVK) answers otherwise than Metal filters the format bound there: a two-plane YCbCr
-  texture's.
+  texture's, at a slot or held by an argument buffer (announced as `ycbcr-filter-not-exact`).
 - `metal2vulkan-degrade-function-storage-assumed` (precision).
   `PrecisionNote::FunctionStorageAssumed`: A vertex or fragment function keeps more private memory
   (its `alloca`s, a call stack among them, or constants held as `Private` variables) than the floor,

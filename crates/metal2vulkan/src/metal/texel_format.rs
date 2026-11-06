@@ -232,6 +232,15 @@ impl TexelFormat {
     pub const NAN_FREE: u32 =
         BicubicTexels::UNORM | BicubicTexels::SNORM | BicubicTexels::SRGB | BicubicTexels::EXTENDED;
 
+    /// Whether the class's [`PACKED`](Self::PACKED) field is a two-plane YCbCr format's
+    /// ([`PackedTexels::ycbcr`]): a texture Metal's own sampler filters as a float texture's
+    /// texels, not on the field's grid (`lower::sampler::linear`).
+    pub(crate) fn two_plane_ycbcr(self) -> bool {
+        PackedTexels::ALL
+            .iter()
+            .any(|p| p.ycbcr() && self.0 & TexelFormat::PACKED_MASK == p.class().0)
+    }
+
     /// Whether the class states channels ([`BicubicTexels::PRESENT`]): a measured family's does,
     /// a [`CubeCorner`] alone does not, so the binder states no border texel for it.
     pub fn has_channels(self) -> bool {
