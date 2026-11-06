@@ -182,6 +182,7 @@
         "object_churn.vk_buffers_made": 2,
         "object_churn.vk_memory_allocations": 1,
         "pooled_memory_blocks_made": 3,
+        "primaries_begun_ahead": 1,
         "queue_submissions": 1,
         "queues_sharing_a_vk_queue": 1,
         "replay_log_bytes": 48,

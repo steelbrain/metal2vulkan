@@ -1236,7 +1236,6 @@
         "linked_use_questions_asked": 4,
         "live_tables_uploaded": 1,
         "new_buffer_bytes_cleared": 7984,
-        "object_churn.buffers_evicted": 1,
         "object_churn.buffers_parked": 10,
         "object_churn.buffers_recycled": 10,
         "object_churn.images_evicted": 8,
@@ -1245,9 +1244,6 @@
         "object_churn.images_recycled": 6,
         "object_churn.making_sites_dropped": 1,
         "object_churn.textures_image": 14,
-        "object_churn.vk_buffer_bindings": 1,
-        "object_churn.vk_buffers_destroyed": 1,
-        "object_churn.vk_buffers_made": 1,
         "object_churn.vk_image_bindings": 9,
         "object_churn.vk_image_views_made": 14,
         "object_churn.vk_images_destroyed": 12,
@@ -1278,11 +1274,12 @@
         "stage_entries_specialized": 2,
         "stage_tables_read": 16,
         "submit_infos": 2,
+        "submit_stalls_on_work": 1,
         "trail_waits": 1,
         "variant_pipelines_made": 6,
         "wakes_completion_waiters": 1,
         "wakes_handler_threads": 1,
-        "wakes_spared": 8
+        "wakes_spared": 9
       },
       "moving": {
         "flights_followed": 0,

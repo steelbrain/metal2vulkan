@@ -759,11 +759,11 @@
         "linked_use_questions_asked": 24,
         "live_tables_uploaded": 1,
         "new_buffer_bytes_cleared": 1065328,
-        "object_churn.buffers_evicted": 15,
+        "object_churn.buffers_evicted": 3,
         "object_churn.buffers_parked": 12,
         "object_churn.buffers_recycled": 11,
         "object_churn.vk_buffer_bindings": 1,
-        "object_churn.vk_buffers_destroyed": 15,
+        "object_churn.vk_buffers_destroyed": 3,
         "object_churn.vk_buffers_made": 1,
         "passes_not_inline_layouts": 8,
         "pipeline_layouts_made": 1,
@@ -779,9 +779,9 @@
         "scheduled_where_submitted": 1,
         "scheduler_passes": 11,
         "scheduler_passes_by_waiters": 1,
-        "scheduler_sleeps": 11,
+        "scheduler_sleeps": 10,
         "scheduler_wakes_commit": 1,
-        "scheduler_wakes_host": 10,
+        "scheduler_wakes_host": 9,
         "shader_cache_writes_on_thread": 6,
         "shader_modules_made": 10,
         "shader_modules_shared": 16,
@@ -795,7 +795,7 @@
         "variant_pipelines_made": 8,
         "wakes_completion_waiters": 1,
         "wakes_handler_threads": 1,
-        "wakes_spared": 8
+        "wakes_spared": 10
       },
       "moving": {
         "shader_cache_writes_on_thread": 0
