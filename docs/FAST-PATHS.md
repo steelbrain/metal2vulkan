@@ -120,13 +120,17 @@ recorded here.
   (`scheduler/inbox.rs`), so no driver call holds `commit`. Where that thread sleeps, a commit's
   batches wait for its wake: three command buffers committed back to back and waited for take a
   median 90 to 160 µs longer on ANV (Iris Xe), 5 µs on the RTX 5080 Laptop GPU and none on the M3
-  Max. On the Iris Xe, frames of 24 command buffers committed back to back
-  (`runtime_lane::commit_costs`, `frames`) take a median 5.7 to 6.0 ms against 3.2 to 4.5 ms with
-  the submissions on the committing thread, the GT held at its efficient 300 MHz by its governor
-  (GuC SLPC). A submission check or submission handler, which run on that thread, holds back every
-  other command buffer's submission while it runs. `CommandBuffer::commit_and_submit`, a runtime
-  extension, submits on the committing thread instead where no other pass is under way, and runs
-  the submission checks and submission handlers of what it submits there.
+  Max. From idle it is longer: on the RTX 5080 Laptop GPU (NVIDIA 615.71.09), with one fill
+  committed every 2 ms, a commit's batch was watched 140 to 165 µs after the call at the median
+  against 5 µs for `vkQueueSubmit` itself, and a parked thread's wake took 80 to 105 µs at the
+  median on that host (the queue waiters', `tests::completion_latency`). On the Iris Xe, frames of
+  24 command buffers committed back to back (`runtime_lane::commit_costs`, `frames`) take a median
+  5.7 to 6.0 ms against 3.2 to 4.5 ms with the submissions on the committing thread, the GT held at
+  its efficient 300 MHz by its governor (GuC SLPC). A submission check or submission handler,
+  which run on that thread, holds back every other command buffer's submission while it runs.
+  `CommandBuffer::commit_and_submit`, a runtime extension, is the inline form: it submits on the
+  committing thread where no other pass is under way, and runs the submission checks and
+  submission handlers of what it submits there.
 - **A present that samples a guest plane copies the whole plane in, and Metal requires it.** Where
   a window's sink draws a guest's 3840x2160 plane into its swapchain texture, it does so in its own
   command buffer, and Metal shows a command buffer any CPU write made since its commit -- probed on
