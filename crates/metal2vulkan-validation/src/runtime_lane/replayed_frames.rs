@@ -35,8 +35,9 @@
 //! ignored by default: run it by name with `--run-ignored all`.
 //!
 //! [`a_replayed_execution_holds_only_what_shares_its_resources`] checks what the frame holds of
-//! other queues' work while its host step is not recorded: a later commit on another queue waits
-//! behind it only where Metal orders the two, as one writes what the other uses.
+//! other queues' work while its execution is not recorded (the frame held at a gate the test
+//! opens, then for its host step): a later commit on another queue waits behind it only where
+//! Metal orders the two, as one writes what the other uses.
 
 use super::{
     buffer_with, layer_reported_nothing_at_all, read_buffer, validated_device,
@@ -51,10 +52,10 @@ use metal2vulkan::metal::{
 use metal2vulkan::pipeline::{ColorAttachmentDescriptor, RenderPipelineDescriptor, StageSource};
 use metal2vulkan_devtools::{engine_dir, llvm_assemble};
 use metal2vulkan_runtime::{
-    BlitOption, Buffer, CommandBuffer, CommandBufferStatus, CommandQueue, Device,
+    BlitOption, Buffer, CommandBuffer, CommandBufferStatus, CommandQueue, Device, EventRef,
     IndirectCommandBuffer, IndirectCommandBufferDescriptor, Library, LoadAction, Origin,
-    PipelineOptions, RenderPassDescriptor, RenderPipelineState, ResourceOptions, ScissorRect, Size,
-    StoreAction, Texture, TextureDescriptor, WorkCounts,
+    PipelineOptions, RenderPassDescriptor, RenderPipelineState, ResourceOptions, ScissorRect,
+    SharedEvent, Size, StoreAction, Texture, TextureDescriptor, WorkCounts,
 };
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
@@ -78,8 +79,8 @@ const EACH_VAR: &str = "REPLAYED_FRAMES_CHANGE_EACH";
 /// The commands the pass encodes, one a draw, in [`replayed_frames`].
 const DRAWS: u32 = 5000;
 
-/// The commands the pass encodes in [`a_replayed_execution_holds_only_what_shares_its_resources`]:
-/// enough that the host step takes longer than another queue's commit.
+/// The commands the pass encodes in [`a_replayed_execution_holds_only_what_shares_its_resources`]
+/// and [`a_batch_s_footprint_is_built_once_however_many_passes_look`].
 const CHECKED_DRAWS: u32 = 256;
 
 /// The target's width and height.
@@ -129,6 +130,8 @@ pub(super) struct Inputs<'a> {
     pub(super) scissor: Option<ScissorRect>,
     /// A buffer the execution's pass makes resident besides.
     pub(super) resident: Option<&'a Buffer>,
+    /// An event and a value the command buffer waits for before its first pass.
+    pub(super) wait: Option<(&'a SharedEvent, u64)>,
 }
 
 /// The fixture's library on `device`.
@@ -265,6 +268,9 @@ impl Page {
     /// [`frame`](Self::frame) with `inputs` in place of the page's own.
     pub(super) fn frame_with(&self, queue: &CommandQueue, inputs: &Inputs) -> CommandBuffer {
         let command_buffer = queue.command_buffer().unwrap();
+        if let Some((event, value)) = inputs.wait {
+            (command_buffer.encode_wait_for_event(EventRef::from(event), value)).unwrap();
+        }
         let mut encoder = command_buffer.render_command_encoder(&self.pass()).unwrap();
         let vertex = RenderStages::VERTEX;
         let (indices, at) = inputs.indices.unwrap_or((&self.indices, 0));
@@ -638,12 +644,15 @@ fn a_batch_s_footprint_is_built_once_however_many_passes_look() {
 /// [`a_replayed_execution_holds_only_what_shares_its_resources`].
 type Encode<'a> = dyn Fn(&CommandBuffer) + 'a;
 
-/// While the page's frame is held for its host step (`WorkCounts::heads_held_for_host_steps`
-/// moves), another queue's command buffer committed after it is held behind it
-/// (`WorkCounts::heads_held_for_earlier_commits`) only where Metal orders the two: a bystander
-/// that fills a buffer of its own, and a presenter that copies out the texture the frame only
-/// reads, go at once; a presenter that fills the buffer the execution's commands inherit waits.
-/// The validation layer stays silent.
+/// While the page's frame is held, its execution not recorded, another queue's command buffer
+/// committed after it is held behind it (`WorkCounts::heads_held_for_earlier_commits`) only where
+/// Metal orders the two: a bystander that fills a buffer of its own, and a presenter that copies
+/// out the texture the frame only reads, go at once; a presenter that fills the buffer the
+/// execution's commands inherit waits. The frame waits for a shared event first, which the test
+/// signals once the scheduler answered the other command buffer (it went: submitted; or it waits:
+/// a look held it behind the frame), so the frame is held whatever the host's timing; then it is
+/// held for its host step (`WorkCounts::heads_held_for_host_steps` moves). The validation layer
+/// stays silent.
 #[test]
 fn a_replayed_execution_holds_only_what_shares_its_resources() {
     let cache = ScratchCache::new().unwrap();
@@ -703,12 +712,41 @@ fn a_replayed_execution_holds_only_what_shares_its_resources() {
                 &|command_buffer| fill(&page.inherited, command_buffer),
             ),
         ];
-        for (case, shares, encode) in cases {
+        let gate = device.new_shared_event().unwrap();
+        for (value, (case, shares, encode)) in (1..).zip(cases) {
             let before = device.work_counts();
-            let frame = page.frame(&page_queue);
+            let inputs = Inputs {
+                wait: Some((&gate, value)),
+                ..Inputs::default()
+            };
+            let frame = page.frame_with(&page_queue, &inputs);
             let command_buffer = other.command_buffer().unwrap();
             encode(&command_buffer);
             command_buffer.commit().unwrap();
+            // The scheduler's answer for the other command buffer while the frame waits at its
+            // gate: submitted, or held behind the frame.
+            let deadline = Instant::now() + WAIT;
+            let answered = || match shares {
+                true => {
+                    let counts = device.work_counts();
+                    counts.heads_held_for_earlier_commits > before.heads_held_for_earlier_commits
+                }
+                false => command_buffer.status() != CommandBufferStatus::Committed,
+            };
+            while !answered() && Instant::now() < deadline {
+                thread::sleep(Duration::from_millis(1));
+            }
+            let went = command_buffer.status() != CommandBufferStatus::Committed;
+            assert_eq!(
+                frame.status(),
+                CommandBufferStatus::Committed,
+                "{case} on {name}: the frame went before its gate opened"
+            );
+            gate.set_signaled_value(value);
+            assert_eq!(
+                went, !shares,
+                "{case} on {name}: whether it went while the frame was held"
+            );
             for command_buffer in [&frame, &command_buffer] {
                 command_buffer.wait_until_completed_for(WAIT).unwrap();
                 assert_eq!(
