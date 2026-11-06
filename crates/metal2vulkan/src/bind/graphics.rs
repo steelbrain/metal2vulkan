@@ -107,7 +107,8 @@
 //!   variant of a draw that holds the `half` shadow of an extended-range color the function writes
 //!   (`BindShape::extended_shadows`): the plan of the pipeline as compiled selects such a moved
 //!   writer's tests from `RuntimeFact::MovableStorageWrites`. A mesh pipeline's is not
-//!   implemented, nor a multisampled, layered or amplified draw's.
+//!   implemented, nor a multisampled, layered or amplified draw's; a multisampled draw holds the
+//!   shadow of a color its pipeline already reads in the storage form (a blended or fetched one).
 //! - **Snapshot reads**. A draw the consumer reads a texture of its own subpass for through a
 //!   snapshot (`BindShape::snapshot_textures`) runs the variant whose fragment function reads it so
 //!   (`VariantKey::snapshot_textures`, `lower::fragment`'s `snapshot`), for each slot of the
@@ -1308,9 +1309,12 @@ fn plan(p: &RenderPipeline, device: &Device, shape: &BindShape) -> Result<Bindin
         .collect();
     // The extended-range colors whose `half` shadow the draw's instance holds that the fragment
     // function writes or reads in the storage form: the variant that reads and writes the
-    // shadows beside the codes. Every such color is single-sampled in a pass of one layer (the
-    // encoder holds no other shadow), as the interlocked colors above are; a pipeline compiled
-    // with shadows binds them.
+    // shadows beside the codes. Every such color is in a pass of one layer (the encoder holds no
+    // other shadow); a pipeline compiled with shadows binds them. In a multisampled pipeline only
+    // a color the pipeline already reads in the storage form (a blended or fetched one, whose
+    // function runs per sample): a plain writer's would be moved into the per-sample form, which
+    // runs the function per sample where Metal runs it per pixel, as for the interlocked colors
+    // above.
     let extended_shadows: std::collections::BTreeSet<u32> = shape
         .extended_shadows
         .iter()
@@ -1324,9 +1328,15 @@ fn plan(p: &RenderPipeline, device: &Device, shape: &BindShape) -> Result<Bindin
                     .any(|a| a.color_index == c)
         })
         .collect();
+    let moved_shadow = extended_shadows.iter().any(|&c| {
+        !p.graphics
+            .storage_attachments
+            .iter()
+            .any(|a| a.color_index == c)
+    });
     if !extended_shadows.is_empty()
         && (mesh
-            || p.graphics.rasterization_samples.as_raw() > 1
+            || (p.graphics.rasterization_samples.as_raw() > 1 && moved_shadow)
             || shape.render_target_array_length > 1
             || shape.vertex_amplification.count > 1)
     {

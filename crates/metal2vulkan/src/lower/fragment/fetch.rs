@@ -170,9 +170,11 @@
 //! **The `half` shadow**: Metal's tile memory holds such an attachment as `half` through a render
 //! pass and rounds it to the codes only at the store, so a blend or a fetch onto what an earlier
 //! draw of the pass wrote sees that draw's `half`, not its codes. A function compiled for an
-//! instance that holds the attachment's shadow (`LoweringInputs::extended_shadows`, one sample)
-//! declares a second storage image of the attachment's extent in `Rgba16f`
-//! (`ResourceKind::ExtendedShadow`), each texel what the tile holds. A read takes Metal's read of
+//! instance that holds the attachment's shadow (`LoweringInputs::extended_shadows`) declares a
+//! second storage image of the attachment's extent in `Rgba16f` (`ResourceKind::ExtendedShadow`),
+//! each texel what the tile holds, holding the samples as the attachment's storage image holds
+//! them (one; multisampled, read and written at the invocation's `SampleId`; or planes, one layer
+//! per sample), so a per-sample function reads and writes its own sample's. A read takes Metal's read of
 //! the shadow's texel (`extended_range::tile_read`: the color lanes clamped to the blend's source
 //! range, alpha to `[0, 1]`, a NaN to the low end, `BGR10_XR`'s alpha 1), a blend reads its
 //! destination so, and every write stores the value it computed, unclamped, the blend's result or
@@ -181,8 +183,8 @@
 //! read clamps); channels a write mask keeps stay as the shadow and the codes held them. Every
 //! value the shadow holds is a `half`, so the device's conversions both ways are exact, and the
 //! codes always hold the encode of the last `half` written to each channel. A shadowed attachment
-//! the storage form does not take, or of a padded or bfloat form, or of more than one sample, is
-//! refused whatever the policy (the runtime keeps such a draw off the shadow).
+//! the storage form does not take, or of a padded or bfloat form, is refused whatever the policy
+//! (the runtime keeps such a draw off the shadow).
 //!
 //! **A 16-bit float attachment's blend** (`R16Float`, `RG16Float`, `RGBA16Float`): no Vulkan blend
 //! applies to a storage write, so the shader computes Metal's: the write reads the texel at the pixel inside the interlock, blends the function's `half`
@@ -1466,10 +1468,11 @@ pub(super) fn plan(cx: &mut SelectCx<'_>) -> Result<(), Error> {
     );
     // A draw may move a color the function writes through its first output into the storage
     // form: a color its render pass instance keeps out of its subpass for other draws'
-    // interlocked form (`VariantKey::interlocked_colors`), or an extended-range color whose `half`
-    // shadow the instance holds (`VariantKey::extended_shadows`), both single-sampled, so no
-    // driver drops their writes under early tests. The plan of the pipeline as compiled, which
-    // stores no color so, selects the tests such a draw's variant needs from this.
+    // interlocked form (`VariantKey::interlocked_colors`, single-sampled), or an extended-range
+    // color whose `half` shadow the instance holds (`VariantKey::extended_shadows`), whose
+    // variant at more than one sample [`storage_form`] refuses where the driver drops its writes
+    // under early tests. The plan of the pipeline as compiled, which stores no color so, selects
+    // the tests such a draw's variant needs from this.
     let movable = stored_before_tests(&body, (declared_early, exports), (true, false));
     if (movable.tested || movable.untested)
         && returns(|r| matches!(r, OutputRole::RenderTarget { index: 0, .. }))
@@ -1748,18 +1751,15 @@ pub(super) fn plan(cx: &mut SelectCx<'_>) -> Result<(), Error> {
             },
             Err(blocked) => Err(blocked),
         };
-        // The instance's `half` shadow of an extended-range attachment, which holds one sample
-        // per pixel, of a form whose tile memory is measured (not a padded or bfloat one). The
-        // shadow is the attachment's tile value only where every write of it keeps it, so a
-        // shadowed attachment the storage form does not take is refused whatever the policy: an
-        // unordered input attachment would neither read nor write it.
+        // The instance's `half` shadow of an extended-range attachment, held as the
+        // attachment's storage image holds its samples (one, multisampled or planes), of a form
+        // whose tile memory is measured (not a padded or bfloat one). The shadow is the
+        // attachment's tile value only where every write of it keeps it, so a shadowed attachment
+        // the storage form does not take is refused whatever the policy: an unordered input
+        // attachment would neither read nor write it.
         let shadowed = cx.inputs.extended_shadows.contains(&color);
         let form = match form {
-            Ok((view, _))
-                if shadowed
-                    && (view.extended.is_none_or(|e| e.padded() || e.bfloat())
-                        || view.samples != StorageSamples::One) =>
-            {
+            Ok((view, _)) if shadowed && view.extended.is_none_or(|e| e.padded() || e.bfloat()) => {
                 return Err(tied(not_implemented().into()));
             }
             Err(blocked) if shadowed => return Err(tied(blocked.into())),
@@ -2328,17 +2328,23 @@ pub(super) fn declare(mb: &mut ModuleBuilder, color: u32, sc: &StorageColor) -> 
 }
 
 /// Declare the `half` shadow of extended-range attachment `color` that the draw's render pass
-/// instance holds (`StorageColor::shadowed`): a single-sample 2D `Rgba16f` storage image of
-/// `float` texels (`ResourceKind::ExtendedShadow`), each Metal's tile value of the texel. Every
-/// value it holds is a `half`, so the device's conversions both ways are exact.
-pub(super) fn declare_shadow(mb: &mut ModuleBuilder, color: u32) -> BResult<GlobalId> {
+/// instance holds (`StorageColor::shadowed`): a 2D `Rgba16f` storage image of `float` texels
+/// (`ResourceKind::ExtendedShadow`), each Metal's tile value of the texel, holding the samples as
+/// the attachment's storage image holds them (`samples`: one, a multisampled image of the
+/// pipeline's samples, or planes, one layer per sample). Every value it holds is a `half`, so the
+/// device's conversions both ways are exact.
+pub(super) fn declare_shadow(
+    mb: &mut ModuleBuilder,
+    color: u32,
+    samples: StorageSamples,
+) -> BResult<GlobalId> {
     let sampled_type = mb.ty(SType::Float { width: 32 })?;
     let ty = mb.ty(SType::Image(ImageType {
         sampled_type,
         dim: Dim::D2,
         depth: false,
-        arrayed: false,
-        multisampled: false,
+        arrayed: samples == StorageSamples::Planes,
+        multisampled: samples == StorageSamples::Multisampled,
         usage: ImageUsage::Storage,
         format: crate::spv::ImageFormat::Rgba16f,
     }))?;
@@ -2350,13 +2356,15 @@ pub(super) fn declare_shadow(mb: &mut ModuleBuilder, color: u32) -> BResult<Glob
     mb.resource(slot, StorageClass::UniformConstant, ty)
 }
 
-/// The shadow of attachment `color` and the invocation's pixel, its texel there
-/// ([`declare_shadow`]).
+/// The shadow of attachment `color`, held as `samples` ([`declare_shadow`]), the texel of the
+/// invocation's sample, and the access's image operands, as [`image_and_texel`] gives the
+/// attachment's own.
 fn shadow_and_texel(
     cx: &mut EmitCx<'_>,
     fb: &mut FunctionBuilder<'_>,
     color: u32,
-) -> BResult<(SValue, SValue)> {
+    samples: StorageSamples,
+) -> BResult<(SValue, SValue, ImageOperands)> {
     let Some(g) = cx
         .decl
         .families
@@ -2369,8 +2377,8 @@ fn shadow_and_texel(
     };
     let p = fb.module().global_value(g)?;
     let image = fb.load(p, MemAccess::default())?;
-    let pixel = pixel(cx, fb)?;
-    Ok((image, pixel))
+    let (at, ops) = sample_texel(cx, fb, samples)?;
+    Ok((image, at, ops))
 }
 
 /// The tile value the shadow of attachment `color`, held in `range`, holds at the invocation's
@@ -2383,9 +2391,13 @@ fn shadow_read(
     color: u32,
     range: ExtendedRange,
 ) -> BResult<SValue> {
-    let (image, at) = shadow_and_texel(cx, fb, color)?;
+    let samples = match cx.plan.families.fragment.fetch.get(&color) {
+        Some(sc) => sc.view.samples,
+        None => return Err(cx.fail(format!("attachment {color} is not in the storage form"))),
+    };
+    let (image, at, ops) = shadow_and_texel(cx, fb, color, samples)?;
     let mem = memory_model::coherence(cx.plan).texel(fb)?;
-    let texel = fb.read(image, at, &ImageOperands::default(), mem)?;
+    let texel = fb.read(image, at, &ops, mem)?;
     extended_range::tile_read(fb, range, texel)
 }
 
@@ -2419,10 +2431,22 @@ fn image_and_texel(
     };
     let p = fb.module().global_value(g)?;
     let image = fb.load(p, MemAccess::default())?;
+    let (at, ops) = sample_texel(cx, fb, samples)?;
+    Ok((image, at, ops))
+}
+
+/// The texel of the invocation's sample in a storage image holding the samples as `samples`, and
+/// the access's image operands: the invocation's [`pixel`] with its [`operands`], or, for planes,
+/// the pixel and the invocation's `SampleId` as the layer.
+fn sample_texel(
+    cx: &mut EmitCx<'_>,
+    fb: &mut FunctionBuilder<'_>,
+    samples: StorageSamples,
+) -> BResult<(SValue, ImageOperands)> {
     let pixel = pixel(cx, fb)?;
     if samples != StorageSamples::Planes {
         let ops = operands(cx, fb)?;
-        return Ok((image, pixel, ops));
+        return Ok((pixel, ops));
     }
     let Some(layer) = sample(cx, fb)? else {
         return Err(cx.fail("a planes access without its SampleId"));
@@ -2435,7 +2459,7 @@ fn image_and_texel(
     let x = fb.composite_extract(pixel, &[0])?;
     let y = fb.composite_extract(pixel, &[1])?;
     let texel = fb.composite_construct(uvec3, &[x, y, layer])?;
-    Ok((image, texel, ImageOperands::default()))
+    Ok((texel, ImageOperands::default()))
 }
 
 /// The texel of storage-form attachment `sc`'s image at the invocation's pixel (and sample) of
@@ -2677,8 +2701,8 @@ pub(super) fn emit_return(
         let (image, at, ops) = image_and_texel(cx, fb, color, sc.view.samples)?;
         texels.push((image, at, texel, ops));
         if let Some(held) = held {
-            let (image, at) = shadow_and_texel(cx, fb, color)?;
-            texels.push((image, at, held, ImageOperands::default()));
+            let (image, at, ops) = shadow_and_texel(cx, fb, color, sc.view.samples)?;
+            texels.push((image, at, held, ops));
         }
     }
     let mem = memory_model::coherence(cx.plan).texel(fb)?;

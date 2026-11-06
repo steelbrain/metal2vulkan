@@ -682,9 +682,10 @@ pub struct LoweringInputs {
     /// such an attachment as `half` through the pass and rounds it to the codes once at the
     /// store, so a function that reads one in the interlocked storage form reads the shadow's texel
     /// (`ResourceKind::ExtendedShadow`) as the tile value, and a write stores the value it computes
-    /// there as well as the codes. Each is a single-sample attachment the function writes or reads
-    /// in the storage form under `framebuffer_fetch`; any other is
-    /// `NotImplemented(FramebufferFetch)`. Empty for any other function.
+    /// there as well as the codes, at the invocation's own sample in a multisampled pipeline. Each
+    /// is an attachment the function writes or reads in the storage form under
+    /// `framebuffer_fetch`; any other is `NotImplemented(FramebufferFetch)`. Empty for any other
+    /// function.
     #[cfg_attr(feature = "serde", serde(default))]
     pub extended_shadows: BTreeSet<u32>,
     /// Sampled texture slots bound to a texture whose format's numeric class (`Float`, `Sint` or

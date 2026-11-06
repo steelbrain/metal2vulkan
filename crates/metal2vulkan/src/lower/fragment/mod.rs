@@ -509,7 +509,7 @@ pub fn declare(
     for (&color, sc) in &fp.fetch {
         if sc.shadowed {
             d.extended_shadows
-                .insert(color, fetch::declare_shadow(mb, color)?);
+                .insert(color, fetch::declare_shadow(mb, color, sc.view.samples)?);
         }
     }
     d.imageblock = imageblock::declare(mb, fp.imageblock.as_ref())?;

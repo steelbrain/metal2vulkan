@@ -928,8 +928,9 @@ fn image_accesses(words: &[u32]) -> (usize, usize) {
 /// unshadowed) and writes both (one write more), passes L3, and plans the same variant against
 /// itself, writing `WriteSource::ExtendedShadow`. `rt6_resolve_white`, writing a `BGRA10_XR` color
 /// 0 unblended through an ordinary output, takes the storage form under the shadow and writes the
-/// codes and the shadow, reading neither. A layered pass's and a multisampled pipeline's shadow are
-/// refused, as the interlocked colors' are.
+/// codes and the shadow, reading neither. A layered pass's shadow is refused, and so is a
+/// multisampled plain writer's, as the interlocked colors' are (the storage form would run it per
+/// sample).
 #[test]
 fn a_shadowed_extended_range_attachment_reads_and_writes_its_half() {
     use crate::metal::{BlendFactor, ColorWriteMask};
@@ -1120,6 +1121,145 @@ fn a_shadowed_extended_range_attachment_reads_and_writes_its_half() {
         );
     }
     assert!(checked > 0, "no profile compiled the shadow");
+}
+
+/// The shadow's `Rgba16f` storage image types in `words`: each declaration's (arrayed,
+/// multisampled).
+fn shadow_image_types(words: &[u32]) -> Vec<(bool, bool)> {
+    // `OpTypeImage` (25): result, sampled type, dim, depth, arrayed, MS, sampled, format
+    // (`Rgba16f` is 2).
+    let mut out = Vec::new();
+    let mut at = 5;
+    while let Some(&word) = words.get(at) {
+        let count = ((word >> 16) as usize).max(1);
+        if word & 0xffff == 25 && words.get(at + 8) == Some(&2) {
+            out.push((words[at + 5] == 1, words[at + 6] == 1));
+        }
+        at += count;
+    }
+    out
+}
+
+/// In a multisampled pipeline that blends a `BGRA10_XR` color 0 (`rt6_samples`'s `half4` fill,
+/// premultiplied over, four samples), a draw whose instance holds the color's shadow runs the
+/// variant that reads and writes it per sample, as the storage form holds the samples: a
+/// multisampled `Rgba16f` image where the device has multisampled storage images (the RTX 5080's
+/// and RADV's profiles), a 2D array of one layer per sample elsewhere (MoltenVK's and ANV's). The
+/// blend's destination is read from the shadow in place of the codes and both are written, the
+/// variant passes L3 and plans the same variant against itself. Before, every multisampled
+/// pipeline's shadow was refused, so a four-sample pass's blends saw the stored codes.
+#[test]
+fn a_multisampled_blend_holds_its_half_shadow_per_sample() {
+    use crate::metal::BlendFactor;
+    let Some(samples) = fixture("rt6_samples") else {
+        return;
+    };
+    let function = |name: &str| {
+        StageSource::Function(FunctionDescriptor::new(
+            Library::from_air(&samples)
+                .expect("library")
+                .function(name)
+                .expect("function"),
+        ))
+    };
+    let blended = || {
+        let mut d = RenderPipelineDescriptor::new(function("rt6_fill_vertex"));
+        d.fragment = Some(function("rt6_fill_rgba16float"));
+        let mut over = ColorAttachmentDescriptor::new(PixelFormat::BGRA10XR);
+        over.blending_enabled = true;
+        over.source_rgb_blend_factor = BlendFactor::One;
+        over.destination_rgb_blend_factor = BlendFactor::OneMinusSourceAlpha;
+        over.destination_alpha_blend_factor = BlendFactor::OneMinusSourceAlpha;
+        d.color_attachments[0] = Some(over);
+        d.raster_sample_count = 4;
+        d
+    };
+    let fragment_words = |p: &crate::pipeline::RenderPipeline| {
+        p.stages
+            .iter()
+            .find(|m| m.stage == vk::ShaderStage::FRAGMENT)
+            .map(|m| m.spirv.to_vec())
+            .expect("a fragment stage")
+    };
+    let mut seen = std::collections::BTreeSet::new();
+    for (stem, planes) in [
+        ("moltenvk-m3", true),
+        ("intel-uhd770-rpls-anv", true),
+        ("amd-780m-radv", false),
+        ("nvidia-rtx5080-laptop", false),
+    ] {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join(format!("../metal2vulkan-validation/profiles/{stem}.json"));
+        let text = std::fs::read_to_string(path).expect("profile");
+        let desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
+        let dev = Device::new(desc, DevicePolicy::default()).expect("device");
+        assert!(
+            crate::lower::fragment::interlock_orders(dev.profile()),
+            "{stem}"
+        );
+        assert_eq!(
+            !dev.profile().images().storage_multisample,
+            planes,
+            "{stem}"
+        );
+        let d = blended();
+        let base = match dev.compile_render_pipeline(&d, &Budget::standard()) {
+            Ok(base) => base,
+            // A device without the raw format's storage at the count refuses the form whatever
+            // the shadow.
+            Err(Error::Unsupported(u)) if u.needs != Needs::NotImplemented => continue,
+            Err(e) => panic!("{stem}: {e}"),
+        };
+        assert!(
+            base.graphics
+                .storage_attachments
+                .iter()
+                .any(|a| a.color_index == 0),
+            "{stem}"
+        );
+        assert!(
+            shadow_image_types(&fragment_words(&base)).is_empty(),
+            "{stem}"
+        );
+        let (reads, writes) = image_accesses(&fragment_words(&base));
+        let state = BindState {
+            extended_shadows: [0].into(),
+            ..Default::default()
+        };
+        let plan = base
+            .plan(&dev, &state.shape())
+            .unwrap_or_else(|e| panic!("{stem}: plan: {e:?}"));
+        assert_eq!(plan.variant.extended_shadows, [0].into(), "{stem}");
+        let variant = dev
+            .compile_render_variant(&d, &plan.variant, &Budget::standard())
+            .unwrap_or_else(|e| panic!("{stem}: variant: {e}"));
+        let words = fragment_words(&variant);
+        assert_eq!(
+            shadow_image_types(&words),
+            [(planes, !planes)],
+            "{stem}: the shadow holds the samples as the codes' storage image does"
+        );
+        assert_eq!(
+            image_accesses(&words),
+            (reads, writes + 1),
+            "{stem}: the shadow's read replaces the codes' and both are written"
+        );
+        for m in &variant.stages {
+            check_words_valid(&m.spirv, &variant.requirements, dev.profile())
+                .unwrap_or_else(|e| panic!("{stem}: L3: {e}"));
+        }
+        let again = variant.plan(&dev, &state.shape()).expect("variant plan");
+        assert_eq!(again.variant, plan.variant, "{stem}: a fixed point");
+        assert!(
+            again
+                .descriptors
+                .iter()
+                .any(|w| w.source == WriteSource::ExtendedShadow { color_index: 0 }),
+            "{stem}"
+        );
+        seen.insert(planes);
+    }
+    assert_eq!(seen.len(), 2, "both shapes compiled");
 }
 
 /// `fragment_fetch` with `fetch_scalar` discarding a fragment whose color input is negative.
