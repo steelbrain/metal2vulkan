@@ -736,11 +736,11 @@ pub struct MeshPipelineDescriptor {
     ///
     /// [`MeshPipelineMetalInfo::max_total_threads_per_mesh_threadgroup`]: crate::pipeline::MeshPipelineMetalInfo::max_total_threads_per_mesh_threadgroup
     pub max_total_threads_per_mesh_threadgroup: Option<u32>,
-    /// `maxTotalThreadgroupsPerMeshGrid`: `None` for Metal's 0, the object function's
-    /// `[[max_total_threadgroups_per_mesh_grid(n)]]` or else Metal's 2^20. The compiled
-    /// pipeline's [`MeshPipelineMetalInfo::max_total_threadgroups_per_mesh_grid`] answers it,
-    /// within the device's limit where it runs mesh functions natively; Metal takes any count. An
-    /// object function's grid is not held to it.
+    /// `maxTotalThreadgroupsPerMeshGrid`: `None` for Metal's 0, which answers 2^20 whatever the
+    /// object function's `[[max_total_threadgroups_per_mesh_grid(n)]]`. The compiled pipeline's
+    /// [`MeshPipelineMetalInfo::max_total_threadgroups_per_mesh_grid`] answers it, within the
+    /// device's limit where it runs mesh functions natively; Metal takes any count, above the
+    /// object function's attribute too. An object function's grid is not held to it.
     ///
     /// [`MeshPipelineMetalInfo::max_total_threadgroups_per_mesh_grid`]: crate::pipeline::MeshPipelineMetalInfo::max_total_threadgroups_per_mesh_grid
     pub max_total_threadgroups_per_mesh_grid: Option<u32>,

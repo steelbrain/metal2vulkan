@@ -430,7 +430,4 @@ pub struct KernelFacts {
     /// threadgroup memory, no barrier, no fence or atomic of threadgroup or simdgroup scope, no
     /// simdgroup or quad function, and no builtin of the partition.
     pub partition_oblivious: bool,
-    /// An object function's `[[max_total_threadgroups_per_mesh_grid(n)]]`
-    /// (`air.max_mesh_work_groups`); `None` for every other function.
-    pub max_mesh_threadgroups: Option<u32>,
 }

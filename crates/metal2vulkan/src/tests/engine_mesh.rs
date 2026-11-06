@@ -1946,9 +1946,10 @@ fn a_partial_object_threadgroup_of_a_body_with_a_barrier_is_not_implemented() {
 /// else the function's `[[max_total_threads_per_threadgroup(n)]]`, else 1024, within the device's
 /// limit for the stage (the task and mesh stages' invocations, or the compute stage's where it
 /// runs them as compute work); the widths are 32; the mesh grid is the descriptor's maximum, else
-/// the object function's `[[max_total_threadgroups_per_mesh_grid(n)]]`, else 2^20, within the
+/// 2^20 whatever the object function's `[[max_total_threadgroups_per_mesh_grid(n)]]`, within the
 /// device's `maxMeshWorkGroupTotalCount` where it runs mesh functions natively. Without an object
-/// function the object stage answers 0 and 0. A required size leaves the limits.
+/// function the object stage answers 0 and 0. A required size leaves the limits. Each as an M3
+/// Max answers (`mesh_pipeline_limits.m`).
 #[test]
 fn a_mesh_pipeline_answers_metals_mesh_queries_within_the_device() {
     use crate::budget::Budget;
@@ -2024,20 +2025,21 @@ fn a_mesh_pipeline_answers_metals_mesh_queries_within_the_device() {
             answers(object.min(64), mesh.min(32), 32, total.min(1 << 21)),
             "{stem}"
         );
-        // The functions' own maxima (`mesh_outputs_object`'s 64 threads and 16 threadgroups,
-        // `mesh_outputs_triangles`' 32 threads), and the descriptor's equal ones.
+        // The functions' own maxima (`mesh_outputs_object`'s 64 threads, `mesh_outputs_triangles`'
+        // 32 threads), and the descriptor's equal ones; the object function's 16 threadgroups
+        // change no grid.
         let mut own = MeshPipelineDescriptor::new(stage(&outputs, "mesh_outputs_triangles"));
         own.object = Some(stage(&outputs, "mesh_outputs_object"));
         own.rasterization_enabled = false;
-        let theirs = answers(object.min(64), mesh.min(32), 32, total.min(16));
+        let theirs = answers(object.min(64), mesh.min(32), 32, total.min(1 << 20));
         assert_eq!(info(&own), theirs, "{stem}");
         own.max_total_threads_per_object_threadgroup = Some(64);
         own.max_total_threads_per_mesh_threadgroup = Some(32);
         assert_eq!(info(&own), theirs, "{stem}");
-        own.max_total_threadgroups_per_mesh_grid = Some(4);
+        own.max_total_threadgroups_per_mesh_grid = Some(32);
         assert_eq!(
             info(&own).max_total_threadgroups_per_mesh_grid,
-            total.min(4),
+            total.min(32),
             "{stem}"
         );
         // Without an object function.
@@ -2266,6 +2268,11 @@ fn a_mesh_descriptor_metal_refuses_is_refused_as_its_rule() {
             own.max_total_threads_per_mesh_threadgroup = mesh;
             assert_eq!(answer(&own), want, "{stem}: {object:?} {mesh:?}");
         }
+        // A required mesh size beside the mesh function's own maximum alone is made.
+        own.max_total_threads_per_object_threadgroup = None;
+        own.max_total_threads_per_mesh_threadgroup = None;
+        own.required_threads_per_mesh_threadgroup = Some([16, 1, 1]);
+        assert_eq!(answer(&own), None, "{stem}");
     }
 }
 

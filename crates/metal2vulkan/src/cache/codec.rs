@@ -1310,7 +1310,6 @@ codec_struct! {
     TextureReferenceType { data_type, texture_type, access, depth }
     KernelFacts {
         max_total_threads, flat_local_size, static_threadgroup_bytes, partition_oblivious,
-        max_mesh_threadgroups,
     }
     StrategyCensus { entries }
     StrategyUse { uses, words }

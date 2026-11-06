@@ -1252,9 +1252,9 @@ impl RenderPipelineState {
 
     /// `maxTotalThreadgroupsPerMeshGrid`: a mesh state's
     /// ([`MeshPipelineMetalInfo::max_total_threadgroups_per_mesh_grid`]): the descriptor's
-    /// maximum, else the object function's `[[max_total_threadgroups_per_mesh_grid(n)]]`, else
-    /// 2^20, as an M3 Max answers, held to the device's `maxMeshWorkGroupTotalCount` where it runs
-    /// mesh functions natively and that is lower. An object function's grid is not held to it. 0
+    /// maximum, else 2^20, as an M3 Max answers whatever the object function's
+    /// `[[max_total_threadgroups_per_mesh_grid(n)]]`, held to the device's
+    /// `maxMeshWorkGroupTotalCount` where it runs mesh functions natively and that is lower. An object function's grid is not held to it. 0
     /// for any other state.
     pub fn max_total_threadgroups_per_mesh_grid(&self) -> u32 {
         self.mesh_info()

@@ -570,9 +570,10 @@ pub struct MeshPipelineMetalInfo {
     pub object_thread_execution_width: u32,
     /// `meshThreadExecutionWidth`: 32, as [`object_thread_execution_width`](Self::object_thread_execution_width).
     pub mesh_thread_execution_width: u32,
-    /// `maxTotalThreadgroupsPerMeshGrid`: the descriptor's maximum, else the object function's
-    /// `[[max_total_threadgroups_per_mesh_grid(n)]]`, else Metal's 2^20, held to the device's
-    /// `maxMeshWorkGroupTotalCount` where it runs mesh functions natively and that is lower.
+    /// `maxTotalThreadgroupsPerMeshGrid`: the descriptor's maximum, else Metal's 2^20 (an object
+    /// function's `[[max_total_threadgroups_per_mesh_grid(n)]]` changes neither), held to the
+    /// device's `maxMeshWorkGroupTotalCount` where it runs mesh functions natively and that is
+    /// lower.
     pub max_total_threadgroups_per_mesh_grid: u32,
 }
 

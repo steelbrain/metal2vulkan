@@ -708,10 +708,11 @@ impl Device {
                 .fold(METAL_MAX_THREADS.min(device), u32::min)
         };
         let width = self.metal_properties().thread_execution_width;
+        // The descriptor's, else Metal's: an object function's
+        // `[[max_total_threadgroups_per_mesh_grid(n)]]` changes nothing Metal answers.
         let grid = d
             .max_total_threadgroups_per_mesh_grid
             .filter(|&n| n > 0)
-            .or_else(|| object.and_then(|o| o.artifact().kernel.max_mesh_threadgroups))
             .unwrap_or(METAL_MESH_GRID_THREADGROUPS);
         let grid = match crate::lower::mesh::emulates(p) {
             true => grid,
@@ -1424,8 +1425,9 @@ const TILE_MAX_THREADS: u32 = TILE_MAX_SIDE * TILE_MAX_SIDE;
 /// Apple's GPUs' threads a threadgroup (a threadgroup of 2048 ran nothing on an M4).
 const METAL_MAX_THREADS: u32 = 1024;
 
-/// `maxTotalThreadgroupsPerMeshGrid` of a mesh render pipeline whose descriptor and object
-/// function set none, as an M3 Max under macOS 27.0.1 answers it.
+/// `maxTotalThreadgroupsPerMeshGrid` of a mesh render pipeline whose descriptor sets none, as an
+/// M3 Max under macOS 27.0.1 answers it, whatever its object function's
+/// `[[max_total_threadgroups_per_mesh_grid(n)]]`.
 const METAL_MESH_GRID_THREADGROUPS: u32 = 1 << 20;
 
 /// The most bytes of a mesh render pipeline's `payloadMemoryLength` Metal makes a pipeline of (an

@@ -2569,13 +2569,6 @@ fn plan_one(r: &Request<'_>, p: &DeviceProfile, m: &mut Meter) -> Result<Planned
             memory.tg_metal_static
         },
         partition_oblivious,
-        max_mesh_threadgroups: match spec.ep.stage {
-            AbiStage::Object {
-                max_mesh_threadgroups,
-                ..
-            } => max_mesh_threadgroups,
-            _ => None,
-        },
     };
     Ok(Planned {
         key,

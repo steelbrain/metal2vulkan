@@ -13,6 +13,38 @@
 // compiled from source, and prints `made` and the state's answers, or `refused` and the error's
 // domain, code and description. `mesh_pipeline_limits --cases` lists the cases. Run one case a
 // process: a stop of Metal's ends only its own.
+//
+// Measured on an M3 Max under macOS 27.0.1, plain and with `MTL_DEBUG_LAYER=1`, which agree:
+// - Made, answering (object threads, mesh threads, object width, mesh width, mesh grid):
+//   `plain` 1024, 1024, 32, 32, 1048576, and `maxTotalThreadsPerThreadgroup` 0 in every case;
+//   `no-object` 3, 1024, 32, 32, 1048576; `max-64-32` 64 and 32; `attribute-64`,
+//   `attribute-64-max-64` and `required-object-32-attribute-64` 64 for the object stage,
+//   `mesh-attribute-64`, `mesh-attribute-64-max-64` and `required-mesh-32-attribute-64` 64 for
+//   the mesh stage; `grid-8` 8, `grid-2097152` 2097152, `grid-8-no-object` 8; `grid-attribute-4`
+//   1048576 (an object function's `max_total_threadgroups_per_mesh_grid` changes nothing), with
+//   `grid-attribute-4-grid-8` 8 and `-grid-2` 2; `payload-64`, `payload-16384` and
+//   `amplification-2` as `plain`. A required size is answered as given and changes no thread
+//   limit: `required-object-32x2` (32,2,1), `required-mesh-16x2` (16,2,1),
+//   `required-object-32-max-64` and `required-object-64-max-64` (64 for the object stage),
+//   `required-mesh-64-max-64` (64 for the mesh stage).
+// - Refused, domain `AGXMetalG15X_M1`, code 3: a maximum of 2048 for either stage, with or
+//   without an object function (`max-object-2048`, `max-mesh-2048`, `max-mesh-2048-no-object`:
+//   "Specified total max threads per threadgroup (2048) exceeds the maximum total threads per
+//   threadgroup supported (1024)"); a function's maximum beside another of the descriptor's
+//   (`attribute-64-max-32`, `-max-128`, `mesh-attribute-64-max-32`, `-max-128`: "Kernel specified
+//   max total threads per threadgroup (64) must match compute pipeline specified max total threads
+//   per threadgroup (32)"); a required mesh size of fewer threads than the mesh maximum
+//   (`required-mesh-32-max-64`, the same words, 32 and 64); `payload-16385` ("Object shader payload
+//   size (16385) exceeds the maximum payload size allowed (16384)"). Code 2:
+//   `payload-16385-no-object` ("Payload size > 16384").
+// - The process ends at the descriptor's validation (exit 134), with or without API validation:
+//   `amplification-0` ("maxVertexAmplificationCount (0) cannot be set to zero."); a required size
+//   with an axis of 0 (`required-object-4x0`, `required-mesh-4x0`: "... must not be 0."), of 2048
+//   threads (`required-object-2048`, `required-mesh-2048`: "must be <= 1024 (device limit)"), of
+//   more threads than its stage's maximum (`required-object-64-max-32`, `required-mesh-64-max-32`:
+//   "must be <= maxTotalThreadsPerThreadgroup (32)"); a required object size without an object
+//   function (`required-object-no-object`: "If objectFunction is nil,
+//   requiredThreadsPerObjectThreadgroup must be [0, 0, 0] but is [32, 1, 1]").
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
 #include <stdio.h>
