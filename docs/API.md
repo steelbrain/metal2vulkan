@@ -2389,7 +2389,10 @@ bound.
   too, announced where the image is made; and a pipeline stage's filtered sample of a
   texture slot bound to a two-plane YCbCr texture, through Metal's own sampler (MoltenVK), does not
   take Metal's exact filter of the format: the stage records `PrecisionNote::HalfSampleFilter` or
-  `FloatSampleFilter` under the slot's bound format. Cost: where the device converts the planes'
+  `FloatSampleFilter` under the slot's bound format, the one its binding presents (a view in its
+  texture's own format as another type, and a texture over a P3 surface, present the code-reading
+  format of their codes, which Metal's sampler filters as that format's: neither is announced).
+  Cost: where the device converts the planes'
   format, the texels are its own Y′CbCr conversion's, at its precision and unclamped where it does
   not clamp, not Metal's fixed-point read; elsewhere the texels hold Metal's reads exactly, but the
   sample filters them as the device does, off the grid Metal sums the format's steps on, so a

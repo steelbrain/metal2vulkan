@@ -130,8 +130,9 @@
 //!   luma codes alone, `(Y, 0, 0, 1)`, or `(0, Y, 0, 1)` of a format read as codes, its linear
 //!   sample the luma of the code-reading format's (the M3 Max under macOS 27.0.1, bit for bit):
 //!   an image of the codes over the same planes read through a swizzle
-//!   (`Texture::luma_view`); an `_sRGB` twin's reads no defined value on Metal and reads as its
-//!   converted format's here.
+//!   (`Texture::luma_view`), whose bindings present the code-reading format, so a filtered
+//!   sample of it announces no filter notice (**Linear filtering** below); an `_sRGB` twin's
+//!   reads no defined value on Metal and reads as its converted format's here.
 //! - **Surfaces** (an Apple M3 Max under macOS 27.0.1; our probe `ycr`: each of the 24 formats
 //!   above over each plane of CoreVideo surfaces of 35 OSTypes, 16 x 8, random bytes, every texel
 //!   of `read()`, 1320 textures; and textures of other sizes and matrices). Metal makes such a
@@ -220,7 +221,13 @@
 //!   1/2048 or 1/8192 (`metal2vulkan::metal::texel_format::PackedTexels::YCbCr2048`, `YCbCr8192`),
 //!   announced naming the slot and the format (`ycbcr-filter-not-exact`). A texture whose planes
 //!   are read in place (`TextureFacts::ycbcr_in_place`) is filtered as Metal filters it on that
-//!   grid, each tap computed from the codes, exact. A function that samples
+//!   grid, each tap computed from the codes, exact; the in-place form reads 4:2:0 planes alone, so
+//!   a 4:2:2 or 4:4:4 texture keeps its image (`WorkCounts::ycbcr_images_kept_layout`). A
+//!   texture whose bindings present the code-reading format of its codes (a luma view, a texture
+//!   over a P3 surface: an `RGBA8Unorm` or `RGB10A2Unorm` image of the codes) is filtered as that
+//!   format's texels, which Metal's sampler filters as Metal filters the format, and announces no
+//!   filter notice (Metal's filter of a texture over a P3 surface is not measured:
+//!   docs/FAST-PATHS.md's known gaps). A function that samples
 //!   textures through handles reads its sampler from memory and is refused where it can reach the
 //!   texture (`MappedTextureSampling`, as the texture's address-mode map is).
 

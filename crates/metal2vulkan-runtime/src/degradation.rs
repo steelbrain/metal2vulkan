@@ -1432,7 +1432,10 @@ degradations! {
         /// texture, on a device that samples through Metal's own sampler (MoltenVK,
         /// `VkProperty::MetalSampler`), does not take Metal's exact filter of the format: the stage
         /// records `PrecisionNote::HalfSampleFilter` or `FloatSampleFilter` under any two-plane
-        /// YCbCr format bound there (`lower::sampler::linear`), whose converted texels Metal's
+        /// YCbCr format bound there (`lower::sampler::linear`), the format the slot's binding
+        /// presents (a view in its texture's own format as another type, and a texture over a P3
+        /// surface, present the code-reading format of their codes, whose image Metal's sampler
+        /// filters as that format's, so neither is announced), whose converted texels Metal's
         /// sampler filters as an `RGBA16Float` or `RGBA32Float` texture's: within one step of the
         /// format's grid of Metal's filter of the format, a `half` result within one `half` unit in
         /// the last place (plain Metal on an Apple M3 Max under macOS 27.0.1, `YCBCR8_420_2P` and

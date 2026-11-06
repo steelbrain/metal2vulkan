@@ -180,6 +180,14 @@ impl Texture {
         Some((Arc::clone(base), read_as))
     }
 
+    /// The pixel format the texture's bindings present (`ViewRecord::bound`): its own, or, for a
+    /// texture that reads its image in another format (`ViewRecord::read_as`: a view in other
+    /// channels of its image's bits, a two-plane YCbCr texture's luma view, a texture over a P3
+    /// surface), that format, whose texels a slot bound to it reads.
+    pub(crate) fn bound_pixel_format(&self) -> PixelFormat {
+        self.0.record.bound().pixel_format
+    }
+
     /// A texture presenting what this one's bindings present (`ViewRecord::bound`) over the same
     /// storage, where they differ: a view that reads its image in the image's own format, as a
     /// texture of that format. `None` for every other texture.

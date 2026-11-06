@@ -384,10 +384,11 @@ impl<'a> Tables<'a> {
         self.residency?.get(token)
     }
 
-    /// The pixel format of the texture bound at texture slot `slot`, if one is: what a specialized
-    /// notice names (`Device::degrade_specialized`).
+    /// The pixel format the texture bound at texture slot `slot` presents to the slot's binding,
+    /// if one is bound (`Texture::bound_pixel_format`): the format whose texels the slot reads,
+    /// which a specialized notice tests and names (`Device::degrade_specialized`).
     pub(super) fn bound_format(&self, slot: SlotRef) -> Option<metal2vulkan::metal::PixelFormat> {
-        slot_texture(self, slot).map(Texture::pixel_format)
+        slot_texture(self, slot).map(Texture::bound_pixel_format)
     }
 
     /// The table of `stage`, if the encoder has one.

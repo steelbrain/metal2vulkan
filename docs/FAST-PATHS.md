@@ -476,6 +476,10 @@ driver's. Each is open work.
   `sparse-mapping-a-slice-past-the-textures` holds every side of the difference visible, with its
   four rows of `crates/metal2vulkan-conformance/known-gaps.tsv`.
 
+- **A linear sample of a converted two-plane YCbCr texture over a P3 surface** (`DCI_P3`,
+  `P3_D65`, each code read alone): the runtime filters the codes as the code-reading format's
+  (`RGB8_420_2P` and its kin), unannounced; Metal's filter of such a texture is not measured.
+
 - **A two-plane YCbCr texture over plane 1 of a three-plane surface** (`y420`, `v0a8`): Metal
   reads plane 2's pairs as its chroma; the surface's facts (`IoSurfaceYCbCr`) name plane 1 alone,
   so the runtime reads chroma codes 0 there, as over plane 1 of a two-plane surface.
