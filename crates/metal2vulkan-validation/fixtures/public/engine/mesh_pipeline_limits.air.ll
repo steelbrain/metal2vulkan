@@ -15,23 +15,8 @@ define void @mesh_pipeline_limits_object(%struct.LimitsPayload addrspace(6)* noc
 
 5:                                                ; preds = %3
   %6 = getelementptr inbounds %struct.LimitsPayload, %struct.LimitsPayload addrspace(6)* %0, i64 0, i32 0, i64 0
-  store i32 1, i32 addrspace(6)* %6, align 4, !tbaa !37
-  tail call void @air.set_threadgroups_per_grid_mesh_properties(%struct._mesh_grid_properties_t addrspace(3)* nocapture %1, <3 x i32> <i32 1, i32 1, i32 1>) #5
-  br label %7
-
-7:                                                ; preds = %5, %3
-  ret void
-}
-
-; Function Attrs: mustprogress nounwind willreturn
-define void @mesh_pipeline_limits_object_64(%struct.LimitsPayload addrspace(6)* nocapture noundef writeonly align 4 dereferenceable(16) %0, %struct._mesh_grid_properties_t addrspace(3)* %1, i32 noundef %2) local_unnamed_addr #1 {
-  %4 = icmp eq i32 %2, 0
-  br i1 %4, label %5, label %7
-
-5:                                                ; preds = %3
-  %6 = getelementptr inbounds %struct.LimitsPayload, %struct.LimitsPayload addrspace(6)* %0, i64 0, i32 0, i64 0
-  store i32 1, i32 addrspace(6)* %6, align 4, !tbaa !37
-  tail call void @air.set_threadgroups_per_grid_mesh_properties(%struct._mesh_grid_properties_t addrspace(3)* nocapture %1, <3 x i32> <i32 1, i32 1, i32 1>) #5
+  store i32 1, i32 addrspace(6)* %6, align 4, !tbaa !34
+  tail call void @air.set_threadgroups_per_grid_mesh_properties(%struct._mesh_grid_properties_t addrspace(3)* nocapture %1, <3 x i32> <i32 1, i32 1, i32 1>) #3
   br label %7
 
 7:                                                ; preds = %5, %3
@@ -45,8 +30,8 @@ define void @mesh_pipeline_limits_object_grid_4(%struct.LimitsPayload addrspace(
 
 5:                                                ; preds = %3
   %6 = getelementptr inbounds %struct.LimitsPayload, %struct.LimitsPayload addrspace(6)* %0, i64 0, i32 0, i64 0
-  store i32 1, i32 addrspace(6)* %6, align 4, !tbaa !37
-  tail call void @air.set_threadgroups_per_grid_mesh_properties(%struct._mesh_grid_properties_t addrspace(3)* nocapture %1, <3 x i32> <i32 1, i32 1, i32 1>) #5
+  store i32 1, i32 addrspace(6)* %6, align 4, !tbaa !34
+  tail call void @air.set_threadgroups_per_grid_mesh_properties(%struct._mesh_grid_properties_t addrspace(3)* nocapture %1, <3 x i32> <i32 1, i32 1, i32 1>) #3
   br label %7
 
 7:                                                ; preds = %5, %3
@@ -54,15 +39,15 @@ define void @mesh_pipeline_limits_object_grid_4(%struct.LimitsPayload addrspace(
 }
 
 ; Function Attrs: mustprogress nounwind willreturn
-define void @mesh_pipeline_limits_mesh(%struct._mesh_t addrspace(7)* %0, %struct.LimitsPayload addrspace(6)* nocapture noundef readonly align 4 dereferenceable(16) %1, i32 noundef %2) local_unnamed_addr #2 {
+define void @mesh_pipeline_limits_mesh(%struct._mesh_t addrspace(7)* %0, %struct.LimitsPayload addrspace(6)* nocapture noundef readonly align 4 dereferenceable(16) %1, i32 noundef %2) local_unnamed_addr #1 {
   %4 = icmp eq i32 %2, 0
   br i1 %4, label %5, label %9
 
 5:                                                ; preds = %3
   %6 = getelementptr inbounds %struct.LimitsPayload, %struct.LimitsPayload addrspace(6)* %1, i64 0, i32 0, i64 0
-  %7 = load i32, i32 addrspace(6)* %6, align 4, !tbaa !37
+  %7 = load i32, i32 addrspace(6)* %6, align 4, !tbaa !34
   %8 = add i32 %7, -1
-  tail call void @air.set_primitive_count_mesh(%struct._mesh_t addrspace(7)* nocapture %0, i32 %8) #5
+  tail call void @air.set_primitive_count_mesh(%struct._mesh_t addrspace(7)* nocapture %0, i32 %8) #3
   br label %9
 
 9:                                                ; preds = %5, %3
@@ -70,28 +55,12 @@ define void @mesh_pipeline_limits_mesh(%struct._mesh_t addrspace(7)* %0, %struct
 }
 
 ; Function Attrs: mustprogress nounwind willreturn
-define void @mesh_pipeline_limits_mesh_64(%struct._mesh_t addrspace(7)* %0, %struct.LimitsPayload addrspace(6)* nocapture noundef readonly align 4 dereferenceable(16) %1, i32 noundef %2) local_unnamed_addr #3 {
-  %4 = icmp eq i32 %2, 0
-  br i1 %4, label %5, label %9
-
-5:                                                ; preds = %3
-  %6 = getelementptr inbounds %struct.LimitsPayload, %struct.LimitsPayload addrspace(6)* %1, i64 0, i32 0, i64 0
-  %7 = load i32, i32 addrspace(6)* %6, align 4, !tbaa !37
-  %8 = add i32 %7, -1
-  tail call void @air.set_primitive_count_mesh(%struct._mesh_t addrspace(7)* nocapture %0, i32 %8) #5
-  br label %9
-
-9:                                                ; preds = %5, %3
-  ret void
-}
-
-; Function Attrs: mustprogress nounwind willreturn
-define void @mesh_pipeline_limits_mesh_alone(%struct._mesh_t addrspace(7)* %0, i32 noundef %1) local_unnamed_addr #2 {
+define void @mesh_pipeline_limits_mesh_alone(%struct._mesh_t addrspace(7)* %0, i32 noundef %1) local_unnamed_addr #1 {
   %3 = icmp eq i32 %1, 0
   br i1 %3, label %4, label %5
 
 4:                                                ; preds = %2
-  tail call void @air.set_primitive_count_mesh(%struct._mesh_t addrspace(7)* nocapture %0, i32 0) #5
+  tail call void @air.set_primitive_count_mesh(%struct._mesh_t addrspace(7)* nocapture %0, i32 0) #3
   br label %5
 
 5:                                                ; preds = %4, %2
@@ -99,25 +68,23 @@ define void @mesh_pipeline_limits_mesh_alone(%struct._mesh_t addrspace(7)* %0, i
 }
 
 ; Function Attrs: argmemonly mustprogress nounwind willreturn
-declare void @air.set_threadgroups_per_grid_mesh_properties(%struct._mesh_grid_properties_t addrspace(3)* nocapture, <3 x i32>) local_unnamed_addr #4
+declare void @air.set_threadgroups_per_grid_mesh_properties(%struct._mesh_grid_properties_t addrspace(3)* nocapture, <3 x i32>) local_unnamed_addr #2
 
 ; Function Attrs: argmemonly mustprogress nounwind willreturn
-declare void @air.set_primitive_count_mesh(%struct._mesh_t addrspace(7)* nocapture, i32) local_unnamed_addr #4
+declare void @air.set_primitive_count_mesh(%struct._mesh_t addrspace(7)* nocapture, i32) local_unnamed_addr #2
 
 attributes #0 = { mustprogress nounwind willreturn "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="96" "no-builtins" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" }
-attributes #1 = { mustprogress nounwind willreturn "approx-func-fp-math"="true" "frame-pointer"="all" "max-work-group-size"="64" "min-legal-vector-width"="96" "no-builtins" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" }
-attributes #2 = { mustprogress nounwind willreturn "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="0" "no-builtins" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" }
-attributes #3 = { mustprogress nounwind willreturn "approx-func-fp-math"="true" "frame-pointer"="all" "max-work-group-size"="64" "min-legal-vector-width"="0" "no-builtins" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" }
-attributes #4 = { argmemonly mustprogress nounwind willreturn }
-attributes #5 = { argmemonly nounwind willreturn }
+attributes #1 = { mustprogress nounwind willreturn "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="0" "no-builtins" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" }
+attributes #2 = { argmemonly mustprogress nounwind willreturn }
+attributes #3 = { argmemonly nounwind willreturn }
 
 !llvm.module.flags = !{!0, !1, !2, !3, !4, !5, !6, !7, !8}
-!air.object = !{!9, !16, !18}
-!air.mesh = !{!20, !27, !28}
-!air.compile_options = !{!31, !32, !33}
-!llvm.ident = !{!34}
-!air.version = !{!35}
-!air.language_version = !{!36}
+!air.object = !{!9, !16}
+!air.mesh = !{!18, !25}
+!air.compile_options = !{!28, !29, !30}
+!llvm.ident = !{!31}
+!air.version = !{!32}
+!air.language_version = !{!33}
 
 !0 = !{i32 2, !"SDK Version", [2 x i32] [i32 27, i32 2]}
 !1 = !{i32 1, !"wchar_size", i32 4}
@@ -135,28 +102,25 @@ attributes #5 = { argmemonly nounwind willreturn }
 !13 = !{i32 0, i32 4, i32 4, !"uint", !"v"}
 !14 = !{i32 1, !"air.mesh_grid_properties", !"air.arg_type_name", !"mesh_grid_properties", !"air.arg_name", !"g"}
 !15 = !{i32 2, !"air.thread_index_in_threadgroup", !"air.arg_type_name", !"uint", !"air.arg_name", !"t"}
-!16 = !{void (%struct.LimitsPayload addrspace(6)*, %struct._mesh_grid_properties_t addrspace(3)*, i32)* @mesh_pipeline_limits_object_64, !10, !11, !17}
-!17 = !{!"air.max_work_group_size", i32 64}
-!18 = !{void (%struct.LimitsPayload addrspace(6)*, %struct._mesh_grid_properties_t addrspace(3)*, i32)* @mesh_pipeline_limits_object_grid_4, !10, !11, !19}
-!19 = !{!"air.max_mesh_work_groups", i32 4}
-!20 = !{void (%struct._mesh_t addrspace(7)*, %struct.LimitsPayload addrspace(6)*, i32)* @mesh_pipeline_limits_mesh, !10, !21}
-!21 = !{!22, !26, !15}
-!22 = !{i32 0, !"air.mesh", !23, !"air.arg_type_name", !"mesh<LimitsVertex, void, 3, 1, triangle>", !"air.arg_name", !"out"}
-!23 = !{!"air.mesh_type_info", !24, !10, i32 3, i32 1, !"air.triangle"}
-!24 = !{!25}
-!25 = !{!"air.position", !"air.arg_type_name", !"float4", !"air.arg_name", !"position"}
-!26 = !{i32 1, !"air.payload", !"air.struct_type_info", !13, !"air.arg_type_size", i32 16, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"LimitsPayload", !"air.arg_name", !"p"}
-!27 = !{void (%struct._mesh_t addrspace(7)*, %struct.LimitsPayload addrspace(6)*, i32)* @mesh_pipeline_limits_mesh_64, !10, !21, !17}
-!28 = !{void (%struct._mesh_t addrspace(7)*, i32)* @mesh_pipeline_limits_mesh_alone, !10, !29}
-!29 = !{!22, !30}
-!30 = !{i32 1, !"air.thread_index_in_threadgroup", !"air.arg_type_name", !"uint", !"air.arg_name", !"t"}
-!31 = !{!"air.compile.denorms_disable"}
-!32 = !{!"air.compile.fast_math_enable"}
-!33 = !{!"air.compile.framebuffer_fetch_enable"}
-!34 = !{!"Apple metal version 32023.922 (metalfe-32023.922.4)"}
-!35 = !{i32 2, i32 8, i32 0}
-!36 = !{!"Metal", i32 4, i32 0, i32 0}
-!37 = !{!38, !38, i64 0}
-!38 = !{!"int", !39, i64 0}
-!39 = !{!"omnipotent char", !40, i64 0}
-!40 = !{!"Simple C++ TBAA"}
+!16 = !{void (%struct.LimitsPayload addrspace(6)*, %struct._mesh_grid_properties_t addrspace(3)*, i32)* @mesh_pipeline_limits_object_grid_4, !10, !11, !17}
+!17 = !{!"air.max_mesh_work_groups", i32 4}
+!18 = !{void (%struct._mesh_t addrspace(7)*, %struct.LimitsPayload addrspace(6)*, i32)* @mesh_pipeline_limits_mesh, !10, !19}
+!19 = !{!20, !24, !15}
+!20 = !{i32 0, !"air.mesh", !21, !"air.arg_type_name", !"mesh<LimitsVertex, void, 3, 1, triangle>", !"air.arg_name", !"out"}
+!21 = !{!"air.mesh_type_info", !22, !10, i32 3, i32 1, !"air.triangle"}
+!22 = !{!23}
+!23 = !{!"air.position", !"air.arg_type_name", !"float4", !"air.arg_name", !"position"}
+!24 = !{i32 1, !"air.payload", !"air.struct_type_info", !13, !"air.arg_type_size", i32 16, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"LimitsPayload", !"air.arg_name", !"p"}
+!25 = !{void (%struct._mesh_t addrspace(7)*, i32)* @mesh_pipeline_limits_mesh_alone, !10, !26}
+!26 = !{!20, !27}
+!27 = !{i32 1, !"air.thread_index_in_threadgroup", !"air.arg_type_name", !"uint", !"air.arg_name", !"t"}
+!28 = !{!"air.compile.denorms_disable"}
+!29 = !{!"air.compile.fast_math_enable"}
+!30 = !{!"air.compile.framebuffer_fetch_enable"}
+!31 = !{!"Apple metal version 32023.922 (metalfe-32023.922.4)"}
+!32 = !{i32 2, i32 8, i32 0}
+!33 = !{!"Metal", i32 4, i32 0, i32 0}
+!34 = !{!35, !35, i64 0}
+!35 = !{!"int", !36, i64 0}
+!36 = !{!"omnipotent char", !37, i64 0}
+!37 = !{!"Simple C++ TBAA"}
