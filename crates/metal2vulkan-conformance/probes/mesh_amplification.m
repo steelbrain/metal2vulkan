@@ -85,7 +85,6 @@ int main(int argc, const char **argv) {
         d.meshFunction = [library newFunctionWithName:@"msh"];
         d.fragmentFunction = [library newFunctionWithName:@"frag"];
         d.colorAttachments[0].pixelFormat = MTLPixelFormatRGBA32Uint;
-        d.inputPrimitiveTopology = MTLPrimitiveTopologyClassTriangle;
         d.maxVertexAmplificationCount = amplified ? 2 : 1;
         id<MTLRenderPipelineState> state =
             [device newRenderPipelineStateWithMeshDescriptor:d
