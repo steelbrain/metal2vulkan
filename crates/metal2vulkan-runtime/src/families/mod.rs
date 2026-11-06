@@ -332,6 +332,21 @@ pub enum Refusal {
         /// The runtime's answer.
         available: u64,
     },
+    /// The textures a function can read through argument buffers on the device lie below the
+    /// count the family's cell lists: a function reading a texture whose resource ID is past them
+    /// reads the neutral texture there, and a command naming it is refused
+    /// (`unnamed-textures-past-capacity`). They
+    /// are the textures at IDs 1 and up that a set-1 sampled-image array holds, one fewer than
+    /// its elements (element 0 is the neutral): the least of the handle table's 65536 entries
+    /// (on MoltenVK, RADV, ANV, NVIDIA and lavapipe) and the device's update-after-bind
+    /// sampled-image limits, the count texture placements are checked against too. Apple6 to
+    /// Apple10 and Mac2 list 1,000,000.
+    ArgumentBufferTextureCount {
+        /// The textures the family's cell lists.
+        required: u64,
+        /// The textures the device's sampled-image array holds.
+        available: u64,
+    },
 }
 
 /// A framework layered on Metal that a feature row names.

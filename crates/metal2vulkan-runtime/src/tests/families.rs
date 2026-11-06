@@ -12,6 +12,7 @@ use super::capabilities::{committed_descriptions, created};
 use crate::families::formats::{answers, FormatAnswers, Missing};
 use crate::families::{audit, Facts};
 use crate::image_plan::{ImageFacts, ImagePlan};
+use crate::resource_ids::texture_arrays;
 use crate::{
     FamilyRow, FeatureRow, FormatCapabilities, FormatCapability, FormatRow, Framework, GpuFamily,
     LimitRow, Refusal, RowAudit, RowState, RuntimeGap,
@@ -525,6 +526,77 @@ fn the_argument_buffer_sampler_row_is_the_runtime_s_answer() {
         ("vk12-floor", &every),
     ] {
         assert_eq!(refusing.get(stem), Some(want), "{stem}");
+    }
+}
+
+/// The argument-buffer texture row answers by what the runtime honours: the textures a set-1
+/// sampled-image array holds at IDs 1 and up (`resource_ids::texture_arrays`, which texture
+/// placements are checked against: the least of the handle table's 65536 entries and the
+/// update-after-bind sampled-image limits, less the neutral's element) against each family's
+/// cell, on every committed profile. It read `maxDescriptorSetUpdateAfterBindSampledImages` alone
+/// before, so MoltenVK's 1,000,000 and the other venues' larger limits held Apple6's 1,000,000
+/// where the array holds 65535 textures. Pinned: the families whose row each venue refuses
+/// (Apple6 to Apple10, Mac1, Mac2 and Metal3, whose cell is 1,000,000, past 65535 and past the
+/// desktop baseline's 127; every family past the floor's 0).
+#[test]
+fn the_argument_buffer_texture_row_is_the_runtime_s_array() {
+    use GpuFamily as G;
+    let cell = |family: GpuFamily| match family {
+        G::Apple1 | G::Apple2 | G::Apple3 => Some(31),
+        G::Apple4 | G::Apple5 => Some(96),
+        G::Apple6 | G::Apple7 | G::Apple8 | G::Apple9 | G::Apple10 | G::Metal3 => Some(1_000_000),
+        G::Mac1 | G::Mac2 => Some(1_000_000),
+        _ => None,
+    };
+    let row = FamilyRow::Limit(LimitRow::ArgumentBufferTextures);
+    let mut answers: BTreeMap<String, (u64, BTreeSet<GpuFamily>)> = BTreeMap::new();
+    for (stem, desc) in committed_descriptions() {
+        let (enabled, _) = created(&stem, &desc);
+        let compile = Device::new(enabled, DevicePolicy::UNTRUSTED).unwrap();
+        let [(elements, _), _] = texture_arrays(compile.profile());
+        let available = elements.saturating_sub(1);
+        let mut refused = BTreeSet::new();
+        for (family, rows) in all_audits(&stem, &desc) {
+            let want = cell(family).map(|required| match available >= required {
+                true => RowState::Exact,
+                false => RowState::Refused(Refusal::ArgumentBufferTextureCount {
+                    required,
+                    available,
+                }),
+            });
+            let got = state(&rows, row);
+            assert_eq!(got, want, "{stem} {family:?}");
+            if got.is_some_and(|s| s.blocks()) {
+                refused.insert(family);
+            }
+        }
+        answers.insert(stem, (available, refused));
+    }
+    let past_apple5 = BTreeSet::from([
+        G::Apple6,
+        G::Apple7,
+        G::Apple8,
+        G::Apple9,
+        G::Apple10,
+        G::Mac1,
+        G::Mac2,
+        G::Metal3,
+    ]);
+    let every: BTreeSet<GpuFamily> = (GpuFamily::ALL.into_iter())
+        .filter(|&f| cell(f).is_some())
+        .collect();
+    for (stem, want) in [
+        ("moltenvk-m3", (65535, &past_apple5)),
+        ("amd-780m-radv", (65535, &past_apple5)),
+        ("intel-irisxe-rplp-anv", (65535, &past_apple5)),
+        ("lavapipe", (65535, &past_apple5)),
+        ("gate-lavapipe", (65535, &past_apple5)),
+        ("nvidia-rtx5080-laptop", (65535, &past_apple5)),
+        ("lunarg-desktop-baseline-2023", (127, &past_apple5)),
+        ("vk12-floor", (0, &every)),
+    ] {
+        let got = answers.get(stem).map(|(n, refused)| (*n, refused));
+        assert_eq!(got, Some(want), "{stem}");
     }
 }
 

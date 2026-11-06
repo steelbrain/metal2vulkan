@@ -1410,7 +1410,9 @@ pub(super) enum ArrayBound {
 }
 
 /// The most elements a set-1 sampled-image array and a set-1 storage-image array can have on a
-/// device of `p` (an ID is its element), each with what bounds it ([`least`]).
+/// device of `p` (an ID is its element), each with what bounds it ([`least`]): what texture
+/// placements and reservations are checked against, and the argument-buffer texture family row
+/// is judged by (`families::limits`).
 pub(super) fn texture_arrays(p: &DeviceProfile) -> [(u64, ArrayBound); 2] {
     let l = p.limits();
     let resources = (

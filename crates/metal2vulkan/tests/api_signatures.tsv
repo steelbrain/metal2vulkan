@@ -12057,6 +12057,7 @@ variant	metal2vulkan-runtime::RecordsRead::Commit	Commit
 variant	metal2vulkan-runtime::RecordsRead::Gpu	Gpu
 variant	metal2vulkan-runtime::RecordsRead::HostStep	HostStep
 variant	metal2vulkan-runtime::Refusal::ArgumentBufferSamplerCount	ArgumentBufferSamplerCount { required: u64, available: u64 }
+variant	metal2vulkan-runtime::Refusal::ArgumentBufferTextureCount	ArgumentBufferTextureCount { required: u64, available: u64 }
 variant	metal2vulkan-runtime::Refusal::NoPublishedColumn	NoPublishedColumn
 variant	metal2vulkan-runtime::Refusal::NotACatalystProcess	NotACatalystProcess
 variant	metal2vulkan-runtime::Refusal::PointSizeRange	PointSizeRange

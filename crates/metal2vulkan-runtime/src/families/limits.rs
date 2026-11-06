@@ -838,12 +838,22 @@ impl LimitRow {
             // Argument buffers' buffers, reached by device address (set 1 for dispatches, draws
             // and tile dispatches alike).
             L::ArgumentBufferBuffers => first([addressed(f, Feature::ArgumentBufferPointers)]),
-            // Argument buffers' textures: the handle table's descriptors.
-            L::ArgumentBufferTextures => first([at_least(
-                Feature::ArgumentBufferTextures,
-                VkLimit::MaxDescriptorSetUpdateAfterBindSampledImages,
-                l.max_descriptor_set_update_after_bind_sampled_images,
-            )]),
+            // Argument buffers' textures: those a set-1 sampled-image array holds, at IDs 1 and up
+            // (`resource_ids::texture_arrays`, which texture placements are checked against: the
+            // least of the handle table's reach and the update-after-bind sampled-image limits).
+            L::ArgumentBufferTextures => {
+                let [(elements, _), _] = crate::resource_ids::texture_arrays(f.profile);
+                let available = elements.saturating_sub(1);
+                match need {
+                    Need::AtLeast(required) if available < required => {
+                        RowState::Refused(Refusal::ArgumentBufferTextureCount {
+                            required,
+                            available,
+                        })
+                    }
+                    _ => RowState::Exact,
+                }
+            }
             // Argument buffers' samplers: the live states the runtime holds for them,
             // `maxArgumentBufferSamplerCount` as it answers it
             // (`DeviceProperties::max_argument_buffer_sampler_count`), from the set-1 sampler

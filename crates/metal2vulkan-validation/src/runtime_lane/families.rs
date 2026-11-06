@@ -3,6 +3,7 @@
 
 use super::{layer_reported_nothing_at_all, validated_device, Messages, ScratchCache};
 use crate::gpu::TEST_DEVICE;
+use metal2vulkan::bind::HANDLE_TABLE_CAPACITY;
 use metal2vulkan::metal::TextureUsage;
 use metal2vulkan_runtime::{
     FamilyRow, FormatCapability, FormatRow, GpuFamily, HeapDescriptor, HeapType, LimitRow, Refusal,
@@ -16,7 +17,11 @@ use metal2vulkan_runtime::{
 /// false. Each format row's state agrees with the runtime's per-format capability query, and
 /// Apple9's argument-buffer sampler row with the device's `maxArgumentBufferSamplerCount`
 /// (`DeviceProperties::max_argument_buffer_sampler_count`) against the cell's 500000 states,
-/// printed (`ARGUMENT_SAMPLERS`, beside the driver's `maxDescriptorSetUpdateAfterBindSamplers`).
+/// printed (`ARGUMENT_SAMPLERS`, beside the driver's `maxDescriptorSetUpdateAfterBindSamplers`),
+/// and Apple6's argument-buffer texture row with the textures a set-1 sampled-image array holds
+/// (the least of the handle table's 65536 entries and the update-after-bind sampled-image
+/// limits, less the neutral's element) against the cell's 1,000,000, printed
+/// (`ARGUMENT_TEXTURES`, beside the driver's `maxDescriptorSetUpdateAfterBindSampledImages`).
 /// Once everything is dropped, the validation layer reported nothing.
 #[test]
 fn every_family_answers_with_its_blocking_rows() {
@@ -77,6 +82,36 @@ fn every_family_answers_with_its_blocking_rows() {
             }),
         };
         assert_eq!(apple9, Some(want));
+        // The argument-buffer texture row: the textures a set-1 sampled-image array holds at IDs 1
+        // and up, against Apple6's 1,000,000.
+        let l = &device.properties().description.limits;
+        let elements = [
+            l.max_descriptor_set_update_after_bind_sampled_images,
+            l.max_per_stage_descriptor_update_after_bind_sampled_images,
+            l.max_per_stage_update_after_bind_resources,
+            HANDLE_TABLE_CAPACITY,
+        ]
+        .into_iter()
+        .min()
+        .unwrap();
+        let textures = u64::from(elements).saturating_sub(1);
+        let row = FamilyRow::Limit(LimitRow::ArgumentBufferTextures);
+        let apple6 = (device.family_rows(GpuFamily::Apple6).into_iter())
+            .find(|r| r.row == row)
+            .map(|r| r.state);
+        eprintln!(
+            "ARGUMENT_TEXTURES textures={textures} maxDescriptorSetUpdateAfterBindSampledImages={} \
+             apple6={apple6:?}",
+            l.max_descriptor_set_update_after_bind_sampled_images
+        );
+        let want = match textures >= 1_000_000 {
+            true => RowState::Exact,
+            false => RowState::Refused(Refusal::ArgumentBufferTextureCount {
+                required: 1_000_000,
+                available: textures,
+            }),
+        };
+        assert_eq!(apple6, Some(want));
         assert_eq!(
             device.family_rows(GpuFamily::Metal4),
             vec![RowAudit {
