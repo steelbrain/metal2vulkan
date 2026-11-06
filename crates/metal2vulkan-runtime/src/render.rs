@@ -2081,10 +2081,43 @@ impl Opening {
     }
 }
 
+/// What a render encoder's open takes from the device's ended render encoders
+/// ([`RenderLowering::assemble`]): the bind state the last one left (`live_bind.rs`), the views and
+/// sampler descriptions its binds made or found (`binding::BindMemo`), and the room its draws
+/// gathered into (`render/draw_room.rs`).
+struct Spares {
+    live: Arc<Mutex<LiveBind>>,
+    bind_memo: binding::BindMemo,
+    room: draw_room::DrawRoom,
+}
+
 impl RenderLowering {
     /// An encoder over `core` of the pass `opening` describes, its first instance's draws
-    /// recording into `draws` (null where it records inline), made in its box.
+    /// recording into `draws` (null where it records inline), made in its box: the box is
+    /// allocated first and the lowering made into it ([`opened`](Self::opened)), where a box
+    /// made of a made lowering copies its thousands of bytes in from the stack.
     fn assemble(core: Box<EncoderCore>, draws: vk::CommandBuffer, opening: Opening) -> Box<Self> {
+        let shared = core.device().shared();
+        let spares = Spares {
+            live: shared.live_binds.take(),
+            bind_memo: shared.bind_memos.take(),
+            room: shared.draw_rooms.take(),
+        };
+        Box::write(
+            Box::new_uninit(),
+            RenderLowering::opened(core, draws, opening, spares),
+        )
+    }
+
+    /// [`assemble`](Self::assemble)'s lowering, with the device's `spares`. Never inlined: a call
+    /// whose result goes straight into the box is compiled to make the result there.
+    #[inline(never)]
+    fn opened(
+        core: Box<EncoderCore>,
+        draws: vk::CommandBuffer,
+        opening: Opening,
+        spares: Spares,
+    ) -> RenderLowering {
         let Opening {
             layout,
             render_target_array_length,
@@ -2098,19 +2131,17 @@ impl RenderLowering {
             log,
             grouped,
         } = opening;
+        let Spares {
+            live,
+            bind_memo,
+            room,
+        } = spares;
         let rerecord = extended.keeps_draws();
-        // The bind state the device's last ended render encoder left (`live_bind.rs`).
-        let live = core.device().shared().live_binds.take();
-        // The views and sampler descriptions its binds made or found (`binding::BindMemo`).
-        let bind_memo = core.device().shared().bind_memos.take();
-        // What its draws gather into, with the room an ended encoder's left
-        // (`render/draw_room.rs`).
-        let room = core.device().shared().draw_rooms.take();
         // Metal's default viewport and scissor rectangle cover the render area: a rate map's.
         let area = rate_map
             .as_ref()
             .map_or(layout.extent, RateMappedPass::area);
-        Box::new(RenderLowering {
+        RenderLowering {
             core,
             earlier: Vec::new(),
             current: Instance {
@@ -2225,7 +2256,7 @@ impl RenderLowering {
             held_bound: Bound::default(),
             again: draw_again::DrawAgain::default(),
             grouped,
-        })
+        }
     }
 }
 
