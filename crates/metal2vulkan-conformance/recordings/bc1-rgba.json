@@ -632,7 +632,7 @@
         "functions_translated": 1,
         "gate_waits": 4,
         "gate_waits_slept": 4,
-        "heads_held_for_host_steps": 4,
+        "heads_held_for_host_steps": 3,
         "heap_tables_worked_out": 1,
         "host_steps_recorded": 1,
         "new_buffer_bytes_cleared": 16896,

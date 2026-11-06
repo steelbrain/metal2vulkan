@@ -1723,7 +1723,6 @@
         "row_copies": 16,
         "row_copy_regions": 47,
         "scheduled_where_submitted": 19,
-        "scheduler_passes": 1,
         "scheduler_passes_by_waiters": 19,
         "scheduler_sleeps": 19,
         "scheduler_wakes_commit": 19,

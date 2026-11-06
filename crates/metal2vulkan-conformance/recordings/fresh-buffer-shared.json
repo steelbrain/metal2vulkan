@@ -692,7 +692,6 @@
         "queue_submissions": 15,
         "queues_sharing_a_vk_queue": 1,
         "scheduled_where_submitted": 15,
-        "scheduler_passes": 1,
         "scheduler_passes_by_waiters": 15,
         "scheduler_sleeps": 15,
         "scheduler_wakes_commit": 15,

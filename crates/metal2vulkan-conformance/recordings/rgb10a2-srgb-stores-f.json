@@ -357,7 +357,6 @@
         "stage_entries_specialized": 2,
         "stage_tables_read": 4,
         "submit_infos": 2,
-        "submit_stalls_on_work": 1,
         "trail_waits": 2,
         "variant_pipelines_made": 1,
         "wakes_completion_waiters": 2,
