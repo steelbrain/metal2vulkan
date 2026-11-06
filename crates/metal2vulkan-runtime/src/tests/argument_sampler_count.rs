@@ -118,11 +118,9 @@ fn the_argument_buffer_sampler_count_is_the_set_1_sampler_array_and_the_sampler_
         u64::from(elements.min(limit)) - 1
     );
     assert_eq!(unlisted(&heard), []);
-    let options = {
-        let mut options = SamplerStateOptions::default();
-        options.support_argument_buffers = true;
-        options.placement = IdPlacement::At(ResourceId(5));
-        options
+    let options = SamplerStateOptions {
+        support_argument_buffers: true,
+        placement: IdPlacement::At(ResourceId(5)),
     };
     let state = |n: u32| -> SamplerState {
         let mut descriptor = SamplerDescriptor::new();
