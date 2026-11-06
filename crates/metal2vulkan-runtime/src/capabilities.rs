@@ -140,11 +140,12 @@ pub struct DeviceProperties {
     ///   them refused (`Error::SamplerLimit`): the array's neutral sampler and a sampler of each
     ///   state it holds are among them.
     ///
-    /// It is the most any pipeline reads: fewer are read where a pipeline's heap has more arrays
-    /// or its set 0 counts samplers (a smaller array), where other Vulkan samplers live (another
-    /// use's array, a slot's bind, a pipeline's constexpr samplers), or where other holders of
-    /// sampler IDs (the device's own sampler, a pipeline state's numbered samplers) hold IDs the
-    /// device's sampler tables reach, which are IDs 1 to 65535 under plain allocation. A state
+    /// It is the most any pipeline reads. Fewer can be: in a pipeline whose set-1 arrays are
+    /// smaller (its heap has more arrays of a kind, or its set 0 counts descriptors of them), where
+    /// other Vulkan samplers live (another use's array, a slot's bind, a pipeline's constexpr
+    /// samplers), and where other holders of sampler IDs (the device's own sampler, a pipeline
+    /// state's numbered samplers) hold IDs the device's sampler tables reach, IDs 1 to 65535 under
+    /// plain allocation. A state
     /// left out reads the neutral sampler through an argument buffer, announced
     /// (`Degradation::UnlistedArgumentSampler`). Every live state counts, with or without
     /// `supportArgumentBuffers`, since Metal reads one without it through an argument buffer too;
