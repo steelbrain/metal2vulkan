@@ -626,7 +626,7 @@ struct Scratch {
 fn with_scratch(mut report: impl FnMut(&mut Scratch)) {
     let kept = SCRATCH.try_with(|scratch| match scratch.try_borrow_mut() {
         Ok(mut scratch) => {
-            report(&mut *scratch);
+            report(&mut scratch);
             true
         }
         Err(_) => false,
