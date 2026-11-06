@@ -36,6 +36,8 @@ mod capabilities;
 mod color_reformat;
 mod command_buffer;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod command_counts;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod commit_and_submit;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod completion;
