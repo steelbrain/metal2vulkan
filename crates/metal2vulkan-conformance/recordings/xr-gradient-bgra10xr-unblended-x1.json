@@ -1,0 +1,416 @@
+{
+  "format": 1,
+  "case": "xr-gradient-bgra10xr-unblended-x1",
+  "suite_version": 1,
+  "shaders": [
+    {
+      "fixture": "xr_gradients.ll",
+      "entry": "xrg_vertex",
+      "source_sha256": "fc12f72c062a0d9180a63f23806032a8abf23abe763c4d8d5533483b52cfaa88"
+    },
+    {
+      "fixture": "xr_gradients.air.ll",
+      "entry": "xrg_vertex",
+      "source_sha256": "14c2f44192dbf6d35de26d85942bc2f379c5134bc2d1ac356702b056124ef52a"
+    },
+    {
+      "fixture": "xr_gradients.ll",
+      "entry": "xrg_radial_float",
+      "source_sha256": "fc12f72c062a0d9180a63f23806032a8abf23abe763c4d8d5533483b52cfaa88"
+    },
+    {
+      "fixture": "xr_gradients.air.ll",
+      "entry": "xrg_radial_float",
+      "source_sha256": "14c2f44192dbf6d35de26d85942bc2f379c5134bc2d1ac356702b056124ef52a"
+    },
+    {
+      "fixture": "xr_gradients.ll",
+      "entry": "xrg_linear_half",
+      "source_sha256": "fc12f72c062a0d9180a63f23806032a8abf23abe763c4d8d5533483b52cfaa88"
+    },
+    {
+      "fixture": "xr_gradients.air.ll",
+      "entry": "xrg_linear_half",
+      "source_sha256": "14c2f44192dbf6d35de26d85942bc2f379c5134bc2d1ac356702b056124ef52a"
+    }
+  ],
+  "answers": [
+    {
+      "key": {
+        "chip": "apple-m3-max",
+        "os_version": "27.0.1",
+        "os_build": "26A434",
+        "metal_level": "27.0.1"
+      },
+      "provenance": "metal_run",
+      "device": "Apple M3 Max",
+      "runs": 3,
+      "outcomes": [
+        {
+          "runs": 3,
+          "transcript": {
+            "root": {
+              "name": "case",
+              "observed": {
+                "value": "absent"
+              },
+              "children": [
+                {
+                  "name": "inputs",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "gradients:air",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "fc12f72c062a0d9180a63f23806032a8abf23abe763c4d8d5533483b52cfaa88"
+                        }
+                      }
+                    },
+                    {
+                      "name": "gradients:air-typed",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "14c2f44192dbf6d35de26d85942bc2f379c5134bc2d1ac356702b056124ef52a"
+                        }
+                      }
+                    },
+                    {
+                      "name": "format",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "53b6aa9c2a74dcdabd8a780295d95aab78fb23e1766e98f712aeabc7292f6c24"
+                        }
+                      }
+                    },
+                    {
+                      "name": "blend",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "4e4c7eacf3c90cb6bcbb1b319f4974ca3753209e44cdb2e941e37a4722aaae40"
+                        }
+                      }
+                    },
+                    {
+                      "name": "pipeline-radial",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "487446235e3b201ec427654cb6d351388bca8e335d63a1507bd99d2c77fd5498"
+                        }
+                      }
+                    },
+                    {
+                      "name": "pipeline-linear",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "5e4f73c5649411b238cd938d8c6669829fdc24d3a692976a2197242c697e60f4"
+                        }
+                      }
+                    },
+                    {
+                      "name": "target",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "c0fa5e9f17edb21606ae7e04bdf352dd65c7a0cbd36baa7b5219badc854f3cec"
+                        }
+                      }
+                    },
+                    {
+                      "name": "clear",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "e8c62dfa10f9caf3eb4a2a7362b54b7afcbd06c65701596331176b0e9fc3b9a1"
+                        }
+                      }
+                    },
+                    {
+                      "name": "corners-full",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "63ed26623314c98ed00a41a010fa0402e0a5297d0fc12dab33dea25ca199c515"
+                        }
+                      }
+                    },
+                    {
+                      "name": "corners-part",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "b275383c2ea74e21f3fdfd73ba966de2d36bc7e0cb2fddd6d988eff5153e6844"
+                        }
+                      }
+                    },
+                    {
+                      "name": "buffer:radial-stops",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "328aa4bc13f91d21d1362b4e8cbfdc00c03ab1fc5991a1ad2cfc6c39f493013b"
+                        }
+                      }
+                    },
+                    {
+                      "name": "buffer:radial-info",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "5075e84a732bb7d4ffa9ab46908c73ec79c2230db06ac8a1f4c3f38e3f749c6a"
+                        }
+                      }
+                    },
+                    {
+                      "name": "buffer:linear-stops",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "9a37b3e0ca21b8823c54ed2d07ea8ef11208648d3f61ea0faef0b286b4c465d0"
+                        }
+                      }
+                    },
+                    {
+                      "name": "buffer:linear-info",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "f22f134ecf90de25c6d6a9052521b6b41f29065ccc51e5f96cff3ffbbcd6c87c"
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "library/gradients",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "pipeline/radial",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "pipeline/linear",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer/radial-stops",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer/radial-info",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer/linear-stops",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer/linear-info",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "target",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer/texels",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "render",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "program",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "status",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Completed",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "read-back",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "texels",
+                  "observed": {
+                    "value": {
+                      "bytes": "wHnAcYBsANLAe4BzAG9A04B+AHZAcQDUQIGAeEBzANXAg8B6gHXA1QCGwHyAd4DWQIjAfkB5ANdAioCAwHrA1wCMQIJAfEDYwI2Ag4B9wNjAjoCEgH4A2cCPQIVAf0DZQJDAhcB/gNlAkACGwH+A2UCQwIXAf4DZwI9AhUB/QNnAjoCEgH4A2YCNQIOAfYDYAIwAgkB8QNgAikCAwHqA1wCIgH4AeQDXwIWAfEB3QNaAg4B6QHWA1cCAAHgAc8DUQH7AdQBxANSAe0BzgG4A04B5gHEAbMDRAHhAcEBpANDAdgBvgGZAzkB1gG0AZIDMwHNAbEBhwMpAcgBrgF7AyIB7QHPAbgDTgH4AdgBxANRAgYB4gHMA1UCEAHvAdcDVAIeAfQB4wNaAicB/QHqA1wCMAIIAfEDYAI4AhAB+wNgAkMCFgH9A2cCRAIfAgMDZAJNAiACCQNoAlECJwIKA2oCUwIlAg8DawJTAiYCDwNqAlICJQIPA2sCTAInAgoDawJJAiMCBQNqAkQCHwIDA2cCPgIVAf0DZwI3Ag8B9wNiAi8CBAHwA2ECJgH8AekDXgIZAfcB3gNbAg8B6gHXA1QCBQHhAc8DUAH7AdcBwANQAewBzQG4A00B5QHGAa0DRwHcAcMBogM9AdoBuwGXAzcB0QG0AY8DLQHPAa0BgAMoAfoB1wHDA0wCBQHhAc8DUAIQAe8B1wNVAh8B9QHjA1gCKQICAeoDXwIzAgsB8gNiAjwCFAH9A2cCRQIcAgcDZAJQAicCCgNrAlcCKQIQA20CXAIyAhYDbQJgAjUCGwNsAmYCNAIcA3EBiAJDAh0CiwJiAjcCGANxAmACNQIbA2wCXAIxAhYDbgJWAigCEANvAk8CIgIKA2oCRAIfAgMDZAI/AhMB+ANmAjICCgHxA2MCJAIBAeoDXwIaAfQB4gNbAg8B6gHXA1cCAAHgAc8DUgH1AdUBwwNNAekBywG3A0sB4wHDAasDQQHeAb8BnAM+AdQBuwGQAzQB0gGzAYQDLQICAd4BygNSAg4B6QHWA1cCGQH0AeIDWAIpAgIB6gNcAjQCDAH2A2ACQwIWAf0DZwJIAiMCBQNqAlYCKAIQA28CXgIwAhoDbwJlAjoCHQNyAm8CPAImA3MCcAJEAigDdgJ2AkYCKQN3AYoCOQImAocBjQIzAi0CggJzAkMCJAN1Am8CPwIiA3ICZQI6AhwDcgJdAjMCFgNtAlUCKwIPA2oCSwIeAgQDawI9AhUB/QNnAjMCCwHxA2ICJAIBAeoDXQIYAfYB3gNYAgwB6AHWA1cB/QHdAcoDUgHxAdIBvgNPAecBxgGwA0gB4QHCAaQDQgHbAbkBmAM7AdEBtQGMAzECCgHlAdEDVwIWAfAB3QNZAiYB/AHpA14CMgILAfEDYAJCAhYB/QNkAk0CIAIJA2kCWAIuAhADbAJnAjQCHANyAmwCQAInA3MCdAJIAi0DdwJ/Ak4CMwN0AoQCVgI1A3oBigI9AiACigGMAjcCKwKCAZMCKQI2An4BlgIiAj0CegJ+Ak0CMwN2AncCRwIpA3UCbwI/AiIDcwJhAjcCGwNvAlcCKQIQA28CSAIjAgUDagI9AhQB/QNlAjECCgHxA2MCIQH+AeUDXQIVAfMB2QNYAggB5AHQA1YB+AHYAcQDUAHvAckBuANMAeQBxAGsA0UB3gG/AZwDPgHUAbsBkAM1AhEB7AHbA1QCIgH7AeADXgIuAgcB7ANgAj8CEwH4A2YCSAIjAgQDaAJYAi4CEANtAmQCOQIcA3ICcwJDAiQDdQJ9AkwCMwN3AoYCVQI6A3gCkgJcAkADfgKXAmECRgN8AYwCOwIlAoQBkgItAjACgAGVAiYCOwJ4AZgCHwJBAnQBnAIXAkgCcgKFAlQCOQN4AnwCTwIuA3QCcgJCAicDcAJmAjQCHANzAlcCKQIQA20CSgIdAgQDawI6AhIB+ANkAi0CBgHsA2ICHAH6AeMDWwIPAeoB1wNVAgIB3gHKA1IB8QHSAb4DTwHnAcYBsANIAeEBwQGnAz0B2gG4AZsDNAIbAfEB3gNbAiQCAgHqA14CNgIOAfcDYQJHAhoCAwNkAlUCKwIPA2sCYgI3AhsDbQJyAkICJwNzAn8CTgIzA3cCigJYAj8DewKUAmYCRgN8AqQCewJiA34CrAKJAn4DfwGOAjICLgKDAZACKwI1An8BlwIcAkMCdgGbAhQCSgJyAZ4CDAJRAm0BogIHAlQCagKJAlsCOgN5An0CTAIzA3QCcQJBAicDcQJgAjUCGwNvAlMCJQIPA2gCRgIZAgIDZQI0Ag0B9gNhAicB/AHqA14CFQHwAd0DWwIEAeQB0ANUAfsB1wHAA1IB6gHLAbcDSgHjAcEBqwNDAdgBvAGeAzoCHAH6AeMDWgIuAgcB7ANiAjwCFAH9A2UCTgIhAgkDaQJcAjICFgNtAm4CPwIiA3ACfAJPAi4DdwKJAlgCPgN5ApoCZAJKA38CqwKBAnYDfwK7ApsCmgN9AY0CNgIoAoUBkAIvAjMCfQGXAiACPQJ5AZoCGQJEAnQBnQIRAk8CbAGhAggCVgJrAaECAwJZAmYBpQH5AmMCXQKIAloCOgN6AnoCSgIuA3cCaQI9AiIDcwJbAiwCFQNvAkkCIwIFA2gCPwITAfgDZAItAgYB7ANgAh8B9QHjA1kCDQHoAdYDVgH/AdgByQNTAe4BzwG5A00B5QHGAa0DRQHeAbwBoQM/AiEB/gHlA18CMwIIAfYDYAJGAhkCAgNkAlQCKwIPA2kCZwI0AhwDcQJ2AkYCKAN1AoQCVwI1A3kClwJgAkUDfgKpAoICcgN+Ar0CowKiA3wC0QK/As4DfAGTAiwCMAKAAZYCJQI7AngBmQIeAkICdwGZAhYCSQJzAZwCDQJQAm4BoAIFAlsCZQGkAf8CXQJgAagB9QJkAl4BqQHvAmsCVwKDAlICNAN7AnACRAIoA3cCYQI3AhsDbgJTAiUCDwNqAkACGAICA2UCMgIKAfEDYQIjAfkB5ANeAhEB7AHYA1oCAwHfAcsDUgHxAdIBvgNOAecBxQGzA0cB3AHDAaIDPwIkAgIB6gNcAjsCDwH3A2ACSgIdAgQDaQJZAi8CEQNuAmgCPQIiA3ACfAJPAi4DdQKPAloCPwN5AqICcwJaA3wCuwKUApYDfgLOArgCzgN/AuMC2gL+A34BkgIqAjUCfgGVAiMCPAJ6AZgCGwJHAnEBnwIPAk4CbQGjAgYCVQJoAacB/QJfAmMBpwH3AmICXQGrAe0CaQJYAbEB6AJlAlcBuQHkAlUCUgJ6AkkCLgN0AmsCOwIdA3MCVwIpAhADbgJEAh8CAwNmAjUCDgH2A2ECJwH8AeoDXQIUAfMB2QNZAgYB4gHMA1UB9AHVAcMDTAHoAcgBtQNIAeEBwQGkA0ICKwIAAe8DXwI6AhIB+ANkAk0CIAIJA2kCXQIyAhYDbwJsAkACJwNwAoACUwIwA3oCkAJiAkEDfgKoAoECcgN+AsACqgKuA38C2gLOAuoDfQGRAi4CMwJ9AZQCJwI6AngBmwIYAkUCdAGeAhACTAJzAZ4CCwJSAmsBogICAlkCZgGmAfkCYAJgAaoB8wJnAlgBrwHrAmoCVwG3AeYCWwJRAcMB4QJLAk4CfgJNAjMDdQJuAj8CIgNzAlsCLAIVA24CSwIeAgQDaQI4AhAB+wNgAikCAgHqA1wCGgHxAd0DWwIEAeQB0ANUAfoB1wHDA00B6QHKAbYDSQHiAcMBpQNAAiwCBQHvA1wCPwITAfgDZgJPAiECCQNrAl4CMAIaA20CcgJCAicDcwKCAlECNAN6ApcCYAJFA38CrAKJAn4DfALJArECvgN+AuIC2QL+A38BkwIkAjgCfwGWAh0CQwJ3AZoCFQJKAnIBnQINAlACbQGhAgQCWwJkAaUB/gJeAmMBpQH0AmUCXgGpAe4CaAJbAbAB6AJgAlUBvAHkAlACUAHIAeMCPQJOAdAB3AIxAksCbAJBAicDcQJcAjICFgNsAk0CIAIJA2oCOQIRAfgDZQIqAgAB7wNdAhgB9gHeA1kCCQHlAdEDVQH7AdcBwANRAekBywG3A0oB4gHAAaoDQAIsAgUB7wNdAjwCFwH4A2YCTwIhAgkDawJfAjACGgNtAnICQwInA3MCgwJSAjQDegKXAmECRQN/Aq0CiwJ+A30CygKzAr4DfwLjAtsC/gN+AZYCIgI9AnkBmQIaAkQCdQGcAhICTgJsAaACCQJVAmsBoAIAAlwCZgGkAfoCYwJdAagB8AJqAloBrgHqAmUCVQG6AeYCVgJQAcYB4QJGAk4BzgHeAjcCSAHaAdoCJwJGAeIB1wIUAkUCXQIyAhYDbAJNAiACCQNrAjoCEgH4A2YCKwIAAe8DXQIYAfYB3gNZAgkB5QHRA1UB+wHUAcQDUQHpAcsBtwNKAeIBwAGqA0MCKwIBAe8DXAI+AhIB+ANlAk4CIAIJA2oCXQIzAhYDbAJxAkECJwNxAoECUAI0A3gClQJjAkEDfAKvAoICdgN9AscCqAK2A3wBlQImAjsCeAGYAh8CQQJ0AZwCFwJIAnMBnwIKAlMCagGjAgECWgJlAacB+AJhAmABqwHyAmQCXwGoAe8CawJVAbcB5AJfAlABwwHjAkgCUwHLAdwCPAJNAdcB2AItAkoB3AHZAh0CRwHkAdYCDgJAAfAB0AICAj8CSAIjAgQDaQI5AhEB+wNhAioCAwHrA1wCGwHxAd4DWAIIAeQB0QNUAfoB1wHAA1EB6QHKAbYDSQHiAcABqQNAAikCAwHqA10COAIQAfsDYgJLAh4CBANrAloCLAIVA2wCbgI+AiIDcgJ9Ak0CMwN3Ao0CXwI8A3wCpwJ3AmIDfAK9Ap4CngN/AZcCHAJDAnYBmwIUAkoCcgGeAgwCUQJtAaICBwJUAmgBpgH+Al8CYwGmAfQCZgJeAaoB7QJoAlkBsQHqAmACVAG9AeYCUQJTAcUB4QJBAk0B0QHeAjICSwHZAdoCIgJEAeUB1AIXAkEB7gHRAgQCQgH2Ac8B9AI+Af8ByQHpAjsCNgIPAfcDYgIkAgEB6gNeAhUB8AHdA1oCBwHiAcwDVgH1AdUBwwNMAegByAG1A0kB4QHCAaQDQQImAfwB6QNdAjUCDQH2A2ECRwIaAgMDZgJWAigCEANvAmUCOgIcA3MCdAJIAi0DdAKLAlUCOgN5ApoCZwJGA38CrQKKAn4DfQGaAhkCRAJ0AZ0CEQJPAmwBoQIIAlYCawGhAgMCWQJmAaUB+QJjAl0BqQHzAmYCWQGuAegCagJUAboB5AJaAlMBwgHjAkcCTQHOAdwCOwJLAdcB2AIoAkgB4wHVAhgCRgHrAdICCQJCAfMBzAH+Aj8B+AHPAe4COwIAAckB4wI2AgkBxAHXAjMCIAH+AeUDXwISAe0B2ANbAgAB4AHPA1MB8gHTAb4DTwHnAcYBsANIAeABwAGnAzwCIgH4AeQDXAIwAgkB8QNgAkICFgH9A2QCUAInAgoDaAJjAjACGgNsAnECQQInA3MCfwJOAjMDdgKNAl8CPwN4AZkCHgJCAncBmQIWAkkCcwGcAg0CUAJuAaACBQJbAmUBpAH/Al0CYAGoAfUCZAJeAakB7wJrAlQBtAHqAl8CUwG8AeUCTAJRAcgB4QI9Ak8B0AHeAi0CSQHcAdsCHgJGAeQB1AISAkMB7QHRAgMCPAH5AcwB9wI4AgIBygHkAjgCCgHFAdgCNwIPAcABzQIyAhQBwAHCAi4CDgHpAdcDVwH9Ad0BygNQAfMBzAG9A00B5QHHAa4DRgHfAb0BoQM+AhkB9wHeA1kCKgIAAe8DXQI4AhAB+wNgAkoCHQIEA2sCVwIpAhADbgJlAjoCHANxAnYCRQIoA3cCggJRAjQDegGYAhsCRwJxAZ8CDwJOAm0BowIGAlUCaAGnAf0CXwJjAacB9wJiAl0BqwHtAmkCWAGxAegCZQJXAbkB5AJVAlEBxQHjAkICTAHRAdwCNgJJAdoB2AInAkcB4gHVAhcCQAHuAdMCBAJBAfcBzQH5Aj0B/wHLAekCOQIEAcoB3gI0AgwBxQHSAjMCEQHBAccCLgIaAb0BuwIoAiMBuQGsAioB+AHZAcQDUwHrAckBuANPAeABxwGrA0AB3QG9AZ8DOwITAe0B2ANaAiAB/QHlA10CMQIKAfEDYwI+AhYB/QNmAk8CIQIJA2gCXwItAhUDbQJrAjgCIQNwAZsCGAJFAnQBngIQAkwCcwGeAgsCUgJrAaICAgJZAmYBpgH5AmACYAGqAfMCZwJYAa8B6wJqAlcBtwHmAlsCUQHDAeECSwJMAc8B3gI4Ak4B1wHaAigCSwHfAdcCGQJFAesB0AINAkEB8AHSAf4CPgH4AcwB8wI6AgEBywHjAjUCCQHGAdQCNQISAcEByAIwAhsBvQG9Ai4CHAG+AbECKAIlAboBpgImAioBtwGaAiAB6AHIAbUDSQHhAcIBpANCAdsBuQGYAzgCDAHrAdIDVgIZAfcB3gNYAikCAgHqA14CNQIOAfYDYwJBAhkCAgNkAlECJwIKA2kCXAIyAhYDbwGaAhUCSgJyAZ0CDQJQAm0BoQIEAlsCZAGlAf4CXgJjAaUB9AJlAl4BqQHuAmgCWwGwAegCYAJVAbwB5AJQAlAByAHjAj0CTgHQAdwCMQJIAd0B2AIiAkUB5QHWAhMCQgHtAdMCAwI/AfYBzQH0Aj8B/gHIAegCOwIHAccB2QI2Ag8BwgHNAjECFAHCAcICLAIdAb4BtwIqAiIBugGrAiQCKwG3AZwCJQIsAbUBlAIiAjEBswGJAh4B3wG9AaEDPwHVAbgBlQM3AgEB4AHPA1ECEQHvAdcDVgIcAfoB4wNbAigCBQHvA1wCOwIPAfcDYAJGAhkCAwNkAlACJwIKA2kBnAISAk4CbAGgAgkCVQJrAaACAAJcAmYBpAH6AmMCXQGoAfACagJaAa4B6gJlAlUBugHmAlYCUAHGAeECRgJOAc4B3gI3AkgB2gHaAicCRgHiAdcCFAJHAesB0QIIAkMB8wHPAfkCPAH/AckB7gI4AgQByAHiAjcCCQHHAdMCMgIRAcIBxwItAhoBvgG4AiwCIwG7AawCKgIkAbgBpQInAikBtQGZAiECMgGzAY4CHQI3Aa0BhwIYAjoBrAGBAhgB1gG3AY0DMwH5AdkBxANTAgQB5AHQA1QCFwHuAdgDWAIiAfgB5ANcAi0CBgHsA2MCNwIPAfcDYAGcAhcCSAJzAZ8CCgJTAmoBowIBAloCZQGnAfgCYQJgAasB8gJkAl8BqAHvAmsCVQG3AeQCXwJQAcMB4wJIAlMBywHcAjwCTQHXAdgCLQJKAdwB2QIdAkcB5AHWAg4CQAHwAdACAgI9AfkBzgHzAjkCAQHIAeQCOAIKAccB1AI0AhMBwwHJAjMCFwG/Ab0CLQIcAb8BsgIrAiEBuAGqAiUCKgG1AZ8CIwIvAbIBkwIcAjQBsAGIAh4B3wG9AaEDPAHZAbkBlQM1AdMBsQGJAy0B8AHRAb0DTQH/AdsBxQNRAgkB5QHRA1UCFAHyAdgDWAIiAfsB4ANeAisCAAHvA14BngIMAlECbQGiAgcCVAJoAaYB/gJfAmMBpgH0AmYCXgGqAe0CaAJZAbEB6gJgAlQBvQHmAlECUwHFAeECQQJNAdEB3gIyAksB2QHaAiICRAHlAdQCFwJBAe4B0QIEAkIB9gHPAfQCPgH/AckB6QI6AgcBxAHdAjUCDAHEAdICMAIVAcMBwgIvAhkBvwG3AikCIgG4AawCKwInAbUBoAIkAfMBzAG9A04B5wHFAbMDRAHhAcEBpANCAdsBugGZAzgB1gG2AY0DMgHMAbMBgQMoAegByQG1A0oB8QHSAb4DTgH/AdgByQNRAgkB5AHRA1cCEgHtAdgDWQIfAfUB4wNYAaECCAJWAmsBoQIDAlkCZgGlAfkCYwJdAakB8wJmAlkBrgHoAmoCVAG6AeQCWgJTAcIB4wJHAk0BzgHcAjsCSwHXAdgCKAJIAeMB1QIYAkYB6wHSAgkCQgHzAcwB/gI/AfgBzwHuAjsCAAHJAeMCNgIJAcQB1wIyAhIBwAHIAjACGwG8AbwCLwIEAeQB0ANUAf4B2wHFA1EB8AHRAb0DTAHoAcsBsQNKAeIBwAGqA0AB3QG9AZ8DOgHUAboBkAM0AdIBswGEAy8ByQGtAX0DJwHgAccBqwNBAekByQG2A0oB8QHSAb4DTAH+AdoBxQNSAgcB4gHMA1cBnAINAlACbgGgAgUCWwJlAaQB/wJdAmABqAH1AmQCXgGpAe8CawJUAbQB6gJfAlMBvAHlAkwCUQHIAeECPQJPAdAB3gItAkkB3AHbAh4CRgHkAdQCEgJDAe0B0QIDAjwB+QHMAfcCOAICAcoB5AI4AgoBxQHYAjcCDwHAAc0CMgIOAekB1gNVAgYB4gHMA1cB+QHZAcUDUQHwAdEBvQNMAegByAG1A0oB4wHCAasDQQHeAb8BnAM/AdUBuQGVAzYB0AG2AYoDLAHPAawBgwMnAcYBqgF0AyIB3wG9AaEDPwHjAcIBqwNAAegByAG1A0gB8wHMAb0DTQH7AdQBxANRAaMCBgJVAmgBpwH9Al8CYwGnAfcCYgJdAasB7QJpAlgBsQHoAmUCVwG5AeQCVQJRAcUB4wJCAkwB0QHcAjYCSQHaAdgCJwJHAeIB1QIXAkAB7gHTAgQCQQH3Ac0B+QI9Af8BywHpAjoCFQHzAdkDWAITAeoB1wNUAgkB5AHRA1QCAgHeAcoDUAH6AdcBwANTAe4BzwG5A08B5wHHAbADSgHjAcEBqgNBAd4BvAGgAzwB2QG6AZYDNwHRAbQBjwMuAcwBsgGBAygBywGoAXoDIwHCAacBbgMZAdoBuwGXAzUB3gG8AaEDPgHiAcEBqgNCAecBxQGzA0QB7wHJAbgDTwGiAgICWQJmAaYB+QJgAmABqgHzAmcCWAGvAesCagJXAbcB5gJbAlEBwwHhAksCTAHPAd4COAJOAdcB2gIoAksB3wHXAhkCRQHrAdACDQJCAhIB7AHYA1sCDwHqAdcDVwIIAesB0gNXAgcB4wHMA1UCAgHeAcoDUgH4AdkBxANTAfIB0wG+A08B6wHIAbsDSgHmAcQBswNFAeIBwAGpA0EB3gG/AZwDPAHZAboBlgM3AdEBtAGMAzIBzAGzAYEDKQHIAa4BewMgAccBpQFwAx0BwQGkAWwDGwHRAbUBjAMwAdkBuQGWAzQB3QG9AZ8DOAHhAcEBpANBAaECBAJbAmQBpQH+Al4CYwGlAfQCZQJeAakB7gJoAlsBsAHoAmACVQG8AeQCUAJQAcgB4wI9Ak4B0AHcAjECSAIFAeEBzwNQAgUB4QHPA1ACBQHhAc8DUgIDAd8BywNQAgEB3QHKA1AB/gHaAcUDUwH2AdYBwwNOAfEB0gG+A0wB7AHNAbgDTwHnAccBsANIAeQBxAGsA0QB4AHAAacDPAHdAbwBngM7AdUBuAGVAzcB0AG0AY8DLgHMAbMBgQMpAcgBrgF7AyEBxAGqAXEDHQHBAaQBbAMZAcEBpAFsAxoBzAGzAYEDKgHQAbYBigMuAdQBugGQAzYB2wG5AZgDOwGgAgACXAJmAaQB+gJjAl0BqAHwAmoCWgGuAeoCZQJVAboB5gJWAlABxgHhAkYCTAHwAdEBvQNPAfIB0wG+A0wB9wHQAcIDTAH3AdABwgNMAfcB0AHCA04B8QHSAb4DTAHzAcwBvQNNAewBzgG4A00B6QHKAbYDSwHnAcUBswNEAeQBxAGsA0UB4QHCAaQDQQHeAb8BnAM9AdsBuAGYAzoB1wG1AZMDMQHTAbIBigMtAcwBsgGAAykByAGuAXoDIQHEAaoBcAMdAcEBpAFsAxkBwQGkAWwDGQHBAaQBbAMYAcsBqQF6AyABzwGsAYMDJAHSAbMBhAMsAdYBtgGNAzEBpwH4AmECYAGrAfICZAJfAagB7wJrAlQB4AHAAacDPgHjAcEBqgNAAeQBxAGsA0UB5gHHAa4DRgHnAcUBswNHAecBxgGwA0sB5wHHAbADSwHnAcYBsANKAeYBxQGzA0UB5QHHAa4DRAHkAcQBrANGAeIBwAGqA0AB4AHAAacDPQHeAb8BnAM+AdsBuQGYAzsB1AG7AZADNwHRAbUBjAMwAdIBsgGHAygBzgGvAX4DJAHLAagBeQMgAccBpAFwAx0BwQGkAWwDGQHBAaQBbAMZAcEBpAFsAxkBwQGkAWwDGwHCAacBbgMbAcYBqgF0AyIByQGsAXwDJAGmAf4CXwJhAdMBsAGJAywB1gG2AY0DMgHUAbsBkAM1AdoBuwGXAzcB2AG/AZoDOQHeAb4BnAM+Ad8BvQGhAz8B3AHDAaIDPAHgAcABpwM8AeABwAGnAzwB4AHAAacDPwHcAcMBogM+Ad8BvQGhAzwB3QG+AZ8DOwHYAb8BmQM5AdoBuwGXAzYB1AG6AZADNwHRAbUBjAMwAdIBsAGIAy0BzAGyAYADKgHJAa8BeAMmAcUBqQF3Ax8BwgGmAW4DGQHBAaQBbAMZAcEBpAFsAxkBwQGkAWwDGQHBAaQBbAMZAcEBpAFsAxkBwQGkAWwDGQHBAaQBbAMZAcQBqgFwAxwBywGrAXUDIwHJAa0BfQMlAcwBsgGAAygB0gGyAYQDLgHQAbcBigMsAdYBtgGNAzIB1wG1AZMDMwHUAbsBkAM0AdkBuQGWAzQB2gG6AZYDNAHaAboBlgM0AdoBugGWAzQB2QG5AZUDNwHUAbsBkAM1AdcBtQGTAzAB1QG2AY0DMgHQAbYBigMsAdIBsgGHAykBzwGtAYADKgHJAawBfAMnAcYBqwF0AyABxwGlAXADHQHBAaQBbAMZAcEBpAFsAxkBwQGkAWwDGQHBAaQBbAMZAcEBpAFsAxkBwQGkAWwDGQHBAaQBbAMY="
+                    },
+                    "shape": {
+                      "bytes": {
+                        "region": {
+                          "texture": {
+                            "level": 0,
+                            "slice": 0,
+                            "aspect": "color",
+                            "sample": 0,
+                            "origin": [
+                              0,
+                              0,
+                              0
+                            ],
+                            "size": [
+                              32,
+                              32,
+                              1
+                            ]
+                          }
+                        },
+                        "element": "u16",
+                        "row_offset": 0,
+                        "row_elements": 128,
+                        "row_pitch": 256,
+                        "rows": 32,
+                        "image_pitch": 8192,
+                        "images": 1,
+                        "gaps": "ignored"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "notices",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "set",
+                      "observed": {
+                        "value": {
+                          "nothing": "announced_nothing"
+                        }
+                      }
+                    },
+                    {
+                      "name": "counts",
+                      "observed": {
+                        "value": {
+                          "fields": {}
+                        }
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "validated": "ran"
+    }
+  ]
+}

@@ -19,8 +19,8 @@
 //!   unblended and whose second is a pipeline that blends the attachment but writes no color: one
 //!   without a fragment function, and one whose function writes depth alone. Metal leaves the
 //!   attachment as the first draw left it. The padded 10-bit formats (`R10Unorm_X6`,
-//!   `RG10Unorm_X12`, `RGB10A2Unorm_sRGB`) and the bfloat ones (`R16Bfloat`, `RG16Bfloat`,
-//!   `RGBA16Bfloat`) take the pipeline without a fragment function too.
+//!   `RG10Unorm_X12`, `RGB10A2Unorm_sRGB`) take the pipeline without a fragment function too; the
+//!   bfloat ones do not, whose blend Metal's validation layer refuses.
 //! - **The masked write** (`xr-masked-*`): a first draw fills the target, and a second writes the
 //!   other values under a mask of some of the channels (red; alpha; red, green and blue; blue and
 //!   green), unblended, and under the mask of red, green and blue with source-over blending.
@@ -458,10 +458,12 @@ pub struct UnwrittenDraw {
     shape: Unwritten,
 }
 
-/// The padded 10-bit and bfloat formats an unwritten case also takes: Metal leaves an unwritten
-/// attachment as it is whatever its format, these among them, where the runtime refused their
-/// blended attachment written or not.
-const OTHER_FORMATS: [Format; 6] = [
+/// The padded 10-bit formats an unwritten case also takes: Metal leaves an unwritten attachment as
+/// it is whatever its format, these among them, where the runtime refused their blended attachment
+/// written or not. Not the bfloat formats: Metal's validation layer refuses a pipeline that blends
+/// one ("the pixelformat MTLPixelFormatR16Bfloat for this render target is not blendable", an M3
+/// Max under macOS 27.0.1), which ends the recording's process.
+const OTHER_FORMATS: [Format; 3] = [
     Format {
         slug: "r10unorm-x6",
         format: PixelFormat::R10UnormX6,
@@ -486,33 +488,9 @@ const OTHER_FORMATS: [Format; 6] = [
         words: 1,
         copies: true,
     },
-    Format {
-        slug: "r16bfloat",
-        format: PixelFormat::R16Bfloat,
-        texel: 2,
-        word: Element::U16,
-        words: 1,
-        copies: true,
-    },
-    Format {
-        slug: "rg16bfloat",
-        format: PixelFormat::RG16Bfloat,
-        texel: 4,
-        word: Element::U16,
-        words: 2,
-        copies: true,
-    },
-    Format {
-        slug: "rgba16bfloat",
-        format: PixelFormat::RGBA16Bfloat,
-        texel: 8,
-        word: Element::U16,
-        words: 4,
-        copies: true,
-    },
 ];
 
-/// Each format under each shape, and each padded and bfloat format without a fragment function.
+/// Each format under each shape, and each padded format without a fragment function.
 pub fn unwritten() -> Vec<UnwrittenDraw> {
     let names = [
         (
@@ -536,9 +514,6 @@ pub fn unwritten() -> Vec<UnwrittenDraw> {
         "xr-unwritten-r10unorm-x6-no-fragment",
         "xr-unwritten-rg10unorm-x12-no-fragment",
         "xr-unwritten-rgb10a2unorm-srgb-no-fragment",
-        "xr-unwritten-r16bfloat-no-fragment",
-        "xr-unwritten-rg16bfloat-no-fragment",
-        "xr-unwritten-rgba16bfloat-no-fragment",
     ];
     let mut cases: Vec<UnwrittenDraw> = names
         .into_iter()
