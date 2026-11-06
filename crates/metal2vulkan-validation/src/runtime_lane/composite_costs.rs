@@ -54,6 +54,7 @@ mod bare;
 use super::frame_costs::{instructions, sampled, shape, step, thread_cpu, Step, TEXTURES};
 use super::host_memory::{host_page, no_copy, Mapping};
 use super::{loader, open_device, ScratchCache, WAIT};
+use crate::air_library::AirLibrary;
 use crate::gpu::TEST_DEVICE;
 use metal2vulkan::bind::SamplerDescriptor;
 use metal2vulkan::library::{FunctionConstantValue, FunctionConstantValues};
