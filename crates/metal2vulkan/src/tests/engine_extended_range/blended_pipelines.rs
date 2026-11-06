@@ -279,3 +279,61 @@ fn unwritten_and_masked_extended_range_attachments_are_made() {
     let shapes = FORMATS.len() * 2 * masks.len() * fragments.len();
     assert_eq!(made_count, 3 * shapes * 2 + shapes);
 }
+
+/// On a device that orders framebuffer fetch in neither form (no `fragmentShaderPixelInterlock`,
+/// no `rasterizationOrderColorAttachmentAccess`: the `vk12-floor` and `roadmap-2022` profiles), a
+/// written blended attachment of either format, which the function blends over its own read of
+/// the codes, is refused as framebuffer fetch needing either feature, the refusal the public door
+/// (`metal::format::extended_range_blend`) gives, where it was `NotImplemented(Format)`. The
+/// unwritten attachment, which takes no blend, is still made there.
+#[test]
+fn an_unordered_device_names_what_an_extended_range_blend_needs() {
+    let Some(library) = library() else {
+        return;
+    };
+    let function = |name: &str| {
+        StageSource::Function(FunctionDescriptor::new(
+            library.function(name).expect("function"),
+        ))
+    };
+    use BlendFactor as F;
+    let over = [
+        F::One,
+        F::OneMinusSourceAlpha,
+        F::One,
+        F::OneMinusSourceAlpha,
+    ];
+    let wanted = crate::lower::fragment::fetch::unordered_extended_blend();
+    for stem in ["vk12-floor", "roadmap-2022"] {
+        let dev = device(stem);
+        assert!(
+            crate::lower::fragment::fetch::fetch_unordered(dev.profile()),
+            "{stem}"
+        );
+        for pf in FORMATS {
+            for fill in ["rt6_fill_rgba16float", "rt6_fill_rgba32float"] {
+                let mut d = RenderPipelineDescriptor::new(function("rt6_fill_vertex"));
+                d.fragment = Some(function(fill));
+                d.color_attachments[0] = Some(attachment(pf, Some(over), ColorWriteMask::ALL));
+                let what = format!("{stem} {pf:?} {fill}");
+                match dev.compile_render_pipeline(&d, &Budget::standard()) {
+                    Err(Error::Unsupported(u)) => {
+                        assert_eq!(u.feature, wanted.feature, "{what}: {u:?}");
+                        assert_eq!(u.needs, wanted.needs, "{what}: {u:?}");
+                    }
+                    other => panic!("{what}: {other:?}"),
+                }
+            }
+            let mut d = RenderPipelineDescriptor::new(function("rt6_fill_vertex"));
+            d.color_attachments[0] = Some(attachment(pf, Some(over), ColorWriteMask::ALL));
+            let pipe = dev
+                .compile_render_pipeline(&d, &Budget::standard())
+                .unwrap_or_else(|e| panic!("{stem} {pf:?} unwritten: {e:?}"));
+            let a = pipe.graphics.color_attachments[0].expect("attachment");
+            assert!(
+                a.blend.is_none() && a.write_mask.is_empty(),
+                "{stem} {pf:?}"
+            );
+        }
+    }
+}

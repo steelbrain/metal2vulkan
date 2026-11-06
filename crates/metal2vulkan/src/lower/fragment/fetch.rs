@@ -341,6 +341,29 @@ pub(crate) fn inputs_order(p: &DeviceProfile) -> bool {
     p.fields().fragment.rasterization_order_color_access
 }
 
+/// Whether `p` orders framebuffer fetch in neither form: no rasterization-order color attachment
+/// access and no `fragmentShaderPixelInterlock`.
+pub(crate) fn fetch_unordered(p: &DeviceProfile) -> bool {
+    !interlock_orders(p) && !inputs_order(p)
+}
+
+/// The refusal of a blend into an extended-range attachment on a device that orders framebuffer
+/// fetch in neither form ([`fetch_unordered`]): the function computes the blend over its own read
+/// of the attachment's codes, which no device's blend unit reads, and that read must be ordered
+/// after every earlier fragment's write of the pixel, through the pixel interlock (the storage
+/// form) or rasterization-order color attachment access (over the input attachment).
+pub(crate) fn unordered_extended_blend() -> Unsupported {
+    Unsupported::needs_any_of(
+        Feature::FramebufferFetch,
+        vec![
+            vec![Capability::Feature(VkFeature::FragmentShaderPixelInterlock)],
+            vec![Capability::Feature(
+                VkFeature::RasterizationOrderColorAttachmentAccess,
+            )],
+        ],
+    )
+}
+
 /// Whether `pf` is a 16-bit float color format, whose blend of a `half` output of a module
 /// without fast math Metal computes in `half` arithmetic, and of one with fast math in the fast
 /// forms it folds into the function ([`extended_range::blend::BlendMath`]).
@@ -1228,7 +1251,8 @@ pub(crate) fn storage_form(
 /// where it orders fetch through rasterization-order input attachments and the function's blend
 /// over the attachment's input attachment holds (`input_blend`: a form Metal's model blends, not a
 /// padded or bfloat one, which stays `NotImplemented(Format)` as `stage_io::extended_color` refuses
-/// it); else what blocks it, without either ordering the interlock it needs.
+/// it); else what blocks it, without either ordering the two it needs one of
+/// ([`unordered_extended_blend`]).
 pub(crate) fn extended_range_blend(
     pf: crate::metal::PixelFormat,
     p: &DeviceProfile,
@@ -1246,12 +1270,8 @@ pub(crate) fn extended_range_blend(
         alpha_operation: O::Add,
     };
     if !interlock_orders(p) {
-        let f = p.fields().fragment;
-        if !f.rasterization_order_color_access {
-            return Err(Unsupported::needs(
-                Feature::FramebufferFetch,
-                Capability::Feature(VkFeature::FragmentShaderPixelInterlock),
-            ));
+        if fetch_unordered(p) {
+            return Err(unordered_extended_blend());
         }
         // The blend over the input attachment: the attachment's raw format a color attachment,
         // and the blend Metal's model's.

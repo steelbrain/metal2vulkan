@@ -23,9 +23,13 @@
 //!
 //! An integer output to such an attachment is Metal's pipeline error: it is not encoded, and link
 //! refuses it (`ColorAttachment`). Refused `NotImplemented(Format)` until measured and modelled:
-//! an attachment the pipeline blends (`ExtendedRangeColor::blended`; Metal's validation refuses a
-//! bfloat one's blend) and a dual-source second output to one. A `bfloat` output is refused
-//! before, as Metal's compiler rejects it.
+//! an attachment of a padded or bfloat form the pipeline blends (`ExtendedRangeColor::blended`;
+//! Metal's validation refuses a bfloat one's blend) and a dual-source second output to one. A
+//! `bfloat` output is refused before, as Metal's compiler rejects it. A blend of another form is
+//! the function's own, over an ordered read of the attachment (below, and `lower::fragment::fetch`'s
+//! storage form): on a device that orders fetch in neither form it is refused naming what it needs
+//! (`fetch::unordered_extended_blend`: `fragmentShaderPixelInterlock` or
+//! `rasterizationOrderColorAttachmentAccess`).
 //!
 //! On a device that orders framebuffer fetch through rasterization-order input attachments, a blend
 //! the function computes over the attachment's input attachment (`lower::fragment`'s `input_blend`)
@@ -72,6 +76,17 @@ pub(super) fn plan(
         return Ok(None);
     };
     let blended = e.blended && !cx.families.fragment.input_blends.contains_key(&color);
+    // A blend of a form Metal's model blends, which the function computes over an ordered read of
+    // the attachment (the storage form, or over the input attachment, `lower::fragment`), on a
+    // device that orders fetch in neither form: refused naming the two orderings.
+    let unordered = blended
+        && index == 0
+        && !e.form.padded()
+        && !e.form.bfloat()
+        && crate::lower::fragment::fetch::fetch_unordered(cx.profile);
+    if unordered {
+        return Err(crate::lower::fragment::fetch::unordered_extended_blend().into());
+    }
     if index != 0 || blended || !matches!(fmt, FloatFmt::F32 | FloatFmt::Half) {
         return Err(Unsupported::not_implemented(Feature::Format).into());
     }

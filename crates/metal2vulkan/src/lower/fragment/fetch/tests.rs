@@ -1059,7 +1059,7 @@ fn a_missing_attachment_is_a_descriptor_error() {
 /// An extended-range format's blend (`extended_range_blend`): taken where the device orders fetch
 /// through the pixel interlock alone and the storage form holds, for every form Metal's model
 /// blends and its `_sRGB` twin, and where it orders fetch through rasterization-order input
-/// attachments, over which the function blends; the interlock named where it has neither; refused
+/// attachments, over which the function blends; the two orderings named where it has neither; refused
 /// for a padded form, whose blends are not measured, and for any other format.
 #[test]
 fn an_extended_range_blend_follows_the_ordered_storage_form() {
@@ -1108,15 +1108,21 @@ fn an_extended_range_blend_follows_the_ordered_storage_form() {
             );
         }
     }
-    let interlock = Unsupported::needs(
+    // Without either ordering, the two features it needs one of.
+    let unordered = Unsupported::needs_any_of(
         Feature::FramebufferFetch,
-        Capability::Feature(VkFeature::FragmentShaderPixelInterlock),
+        vec![
+            vec![Capability::Feature(VkFeature::FragmentShaderPixelInterlock)],
+            vec![Capability::Feature(
+                VkFeature::RasterizationOrderColorAttachmentAccess,
+            )],
+        ],
     );
     for stem in ["vk12-floor", "roadmap-2022"] {
         let p = profile(stem, &[]);
         assert_eq!(
             extended_range_blend(PixelFormat::BGRA10XR, &p),
-            Err(interlock.clone()),
+            Err(unordered.clone()),
             "{stem}"
         );
     }
