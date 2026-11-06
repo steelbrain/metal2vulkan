@@ -1087,8 +1087,9 @@ fn listed_formats_answer_at_most_their_apple9_cell() {
 /// threadgroup of an object function that waits at a barrier (`NotImplemented(MeshShading)`),
 /// whether the device runs the stages natively or as compute work; and a device that runs them as
 /// compute work answers the mesh grid, object grid and payload limits of Metal3 by its compute
-/// limits, where they were refused for `meshShader` before. Each profile's Metal3 blockers are
-/// printed (`METAL3` lines).
+/// limits (the payload refused where its workgroup memory cannot hold Metal3's 16384 bytes beside
+/// the object wrapper's 12), where they were refused for `meshShader` before. Each profile's
+/// Metal3 blockers are printed (`METAL3` lines).
 #[test]
 fn mesh_rows_follow_how_the_device_runs_mesh_stages() {
     let mut emulating = 0;
@@ -1115,7 +1116,6 @@ fn mesh_rows_follow_how_the_device_runs_mesh_stages() {
             for row in [
                 LimitRow::MeshThreadgroupsPerGrid,
                 LimitRow::ObjectThreadgroupsPerGrid,
-                LimitRow::MeshPayload,
             ] {
                 assert_eq!(
                     state(metal3, FamilyRow::Limit(row)),
@@ -1123,6 +1123,31 @@ fn mesh_rows_follow_how_the_device_runs_mesh_stages() {
                     "{stem} {row:?}"
                 );
             }
+            // Metal3's 16384 payload bytes in the compute stage's workgroup memory, beside the
+            // object wrapper's 12.
+            let available = u64::from(
+                compile
+                    .profile()
+                    .limits()
+                    .max_compute_shared_memory_size
+                    .saturating_sub(12),
+            );
+            let payload = match available >= 16384 {
+                true => RowState::Exact,
+                false => refused(
+                    Feature::MeshShading,
+                    Capability::Limit {
+                        limit: VkLimit::MaxComputeSharedMemorySize,
+                        required: 16384,
+                        available,
+                    },
+                ),
+            };
+            assert_eq!(
+                state(metal3, FamilyRow::Limit(LimitRow::MeshPayload)),
+                Some(payload),
+                "{stem}"
+            );
         }
         for r in metal3.iter().filter(|r| r.state.blocks()) {
             eprintln!("METAL3 {stem} | {:?} | {:?}", r.row, r.state);
