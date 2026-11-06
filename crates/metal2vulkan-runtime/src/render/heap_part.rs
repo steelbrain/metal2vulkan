@@ -58,11 +58,15 @@ use crate::work_counts::Counting;
 /// `MTLPrimitiveType`).
 const KEPT_PARTS: usize = 8;
 
-/// The heap parts a render encoder's draws worked out lately (the module docs), the latest
-/// drawn through last.
+/// The heap parts a render encoder's draws worked out lately (the module docs), each where it was
+/// worked out.
 #[derive(Default)]
 pub(crate) struct KeptHeap {
     parts: Vec<HeapPart>,
+    /// The part the last draw brought in, among `parts`.
+    latest: usize,
+    /// The draws that brought a part in, the count each part's `drawn` reads.
+    draws: u64,
     /// The parts let go of as an encoder ended, emptied, the storage of those worked out later.
     spare: Vec<HeapPart>,
     /// The heap tables a kept part's check works out, in builds with debug assertions: kept, so
@@ -76,6 +80,9 @@ pub(crate) struct KeptHeap {
 #[derive(Default)]
 struct HeapPart {
     of: HeapOf,
+    /// The count of the draws that brought a part in ([`KeptHeap::draws`]) at the last that
+    /// brought this one in: the least is the one drawn through longest ago.
+    drawn: u64,
     tables: Vec<DescriptorBytes>,
     /// Where its heap writes go, where `heap`: kept allocated whatever plan the part is worked
     /// out for next, so a part worked out again allocates none of its own.
@@ -163,48 +170,63 @@ impl KeptHeap {
         inputs: HeapInputs<'_>,
     ) -> Result<Option<Arc<HeapElements>>, Error> {
         let capacity = heap_sets::capacity(inputs.layout);
-        // Looked for from the one drawn through last, which a draw most often draws through
-        // again, and made the last in place: the others keep their order.
-        let kept = self
-            .parts
-            .iter()
-            .rposition(|part| part.of.holds(&inputs, capacity));
-        match kept {
+        // The last draw's first, which a draw most often draws through again, then the others in
+        // place: no part moves.
+        let latest = self.latest;
+        let holds = |part: &HeapPart| part.of.holds(&inputs, capacity);
+        let kept = match self.parts.get(latest) {
+            Some(part) if holds(part) => Some(latest),
+            _ => (self.parts.iter().enumerate()).position(|(at, part)| at != latest && holds(part)),
+        };
+        let at = match kept {
             Some(at) => {
                 #[cfg(debug_assertions)]
                 self.parts[at].check(&inputs, &mut self.tables)?;
-                self.parts[at..].rotate_left(1);
+                at
             }
             None => {
-                // Worked out into the storage of the one drawn through longest ago, where it keeps
-                // as many as it may, else of one let go of.
-                let mut part = match self.parts.len() == KEPT_PARTS {
-                    true => self.parts.remove(0),
-                    false => self.spare.pop().unwrap_or_default(),
+                // Worked out in place of the one drawn through longest ago, where it keeps as many
+                // as it may, else into the storage of one let go of.
+                let at = match self.parts.len() == KEPT_PARTS {
+                    true => (self.parts.iter().enumerate())
+                        .min_by_key(|(_, part)| part.drawn)
+                        .map_or(0, |(at, _)| at),
+                    false => {
+                        self.parts.push(self.spare.pop().unwrap_or_default());
+                        self.parts.len() - 1
+                    }
                 };
-                part.fill(&inputs, capacity)?;
+                let part = &mut self.parts[at];
+                if let Err(error) = part.fill(&inputs, capacity) {
+                    // Half worked out: one no draw keeps, given up first.
+                    part.empty();
+                    return Err(error);
+                }
                 if !part.tables.is_empty() || part.heap {
                     counts.draw_heap_part_made();
                 }
-                self.parts.push(part);
+                at
             }
-        }
-        let part = (self.parts.last()).ok_or_else(|| internal("a draw's heap part not kept"))?;
+        };
+        self.draws += 1;
+        self.latest = at;
+        let part = &mut self.parts[at];
+        part.drawn = self.draws;
         Ok(part.heap.then(|| Arc::clone(&part.elements)))
     }
 
     /// Whether the part the last draw brought in reads a texture its tables bind at a heap slot
     /// (`BindingPlan::heap_slots`).
     pub(crate) fn binds_slot_textures(&self) -> bool {
-        (self.parts.last())
+        (self.parts.get(self.latest))
             .is_some_and(|part| part.of.slots.iter().any(|(_, bound)| bound.is_some()))
     }
 
     /// The heap tables of the part the last draw brought in, and the writes past its heap's
     /// entries listed of it.
     pub(crate) fn brought_in(&mut self) -> Result<(&[DescriptorBytes], &mut PastHeap), Error> {
-        let part =
-            (self.parts.last_mut()).ok_or_else(|| internal("a draw's heap part not brought in"))?;
+        let part = (self.parts.get_mut(self.latest))
+            .ok_or_else(|| internal("a draw's heap part not brought in"))?;
         Ok((&part.tables, &mut part.past))
     }
 
@@ -215,6 +237,7 @@ impl KeptHeap {
             part.empty();
             spare.push(part);
         }
+        self.latest = 0;
     }
 }
 
@@ -241,6 +264,7 @@ impl HeapPart {
     /// Hold nothing but its storage: a part let go of (the module docs).
     fn empty(&mut self) {
         self.of.plan = Weak::new();
+        self.drawn = 0;
         self.tables.clear();
         self.past.forget();
     }
