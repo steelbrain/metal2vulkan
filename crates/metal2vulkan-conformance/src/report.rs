@@ -405,6 +405,13 @@ impl Report {
                 "\n{} on {}: {}\n",
                 row.case, row.venue, row.verdict
             ));
+            let native = native_notes_announced(row);
+            if !native.is_empty() {
+                out.push_str(&format!(
+                    "  the device's native notes this case announced: {}\n",
+                    native.join(", ")
+                ));
+            }
         }
         out.push_str(&self.render_cost());
         out
@@ -620,4 +627,25 @@ pub fn must_hold(verdict: &Verdict) -> Result<(), String> {
         return Ok(());
     }
     Err(verdict.to_string())
+}
+
+/// The device's native notes ([`crate::replay::NATIVE_NOTES`]) `row`'s own run announced, by code.
+///
+/// The suite declares them for every case and they loosen no value, so a value the device's
+/// native answer moves is a `known-gaps.tsv` row whose words name the note that records it. That
+/// row's claim is only as good as the note having fired, and nothing else in the report says so:
+/// a declared note never reads as a difference. Printed under each failing row, it is the
+/// evidence a row needs that the note fired in the case it describes, on the venue it is scoped
+/// to; a note fires at each occurrence under the suite's device options, so the case's own run
+/// is the one that announced it.
+fn native_notes_announced(row: &Replayed) -> Vec<String> {
+    row.ours
+        .announced_notices()
+        .into_keys()
+        .filter(|code| {
+            crate::replay::NATIVE_NOTES
+                .iter()
+                .any(|kind| kind.code() == code)
+        })
+        .collect()
 }

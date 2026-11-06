@@ -1241,6 +1241,37 @@ fn no_case_names_a_native_note() {
     assert!(named.is_empty(), "{}:\n{}", named.len(), named.join("\n"));
 }
 
+/// A failing row says which of the device's native notes its own run announced, and names no
+/// other notice there: a value the device's native answer moves is a ledger row that names the
+/// note recording it, and that note never reads as a difference, so this line is the report's one
+/// evidence that it fired in the case the row describes.
+#[test]
+fn a_failing_row_names_the_native_notes_its_run_announced() {
+    let native = Degradation::DeviceTexelConversion;
+    assert!(crate::replay::NATIVE_NOTES.contains(&native));
+    let case = WordsCase::new("words", 2);
+    let recording = recording_of(&case, case.transcript(words(&[1, 2]), "Completed", &[]), 3);
+    let render = |side: &mut StubSide| {
+        let replayed = replay_against(&case, side, &recording).unwrap();
+        assert!(
+            matches!(replayed.verdict, Verdict::Divergent { .. }),
+            "{}",
+            replayed.verdict
+        );
+        let mut report = Report::new();
+        report.add(replayed);
+        report.render()
+    };
+    let line = "the device's native notes this case announced:";
+    let noted = render(&mut StubSide::new(words(&[1, 7])).announcing(&[native]));
+    assert!(
+        noted.contains(&format!("{line} {}", native.code())),
+        "{noted}"
+    );
+    let silent = render(&mut StubSide::new(words(&[1, 7])));
+    assert!(!silent.contains(line), "{silent}");
+}
+
 /// Every accepted difference a case names is an entry of `docs/API.md` section 10, a venue's
 /// answer (`Justification::WithoutCompression`) included. A slug that names no entry justifies
 /// nothing on any venue, and a replay says so only where the site it loosens differs: the
