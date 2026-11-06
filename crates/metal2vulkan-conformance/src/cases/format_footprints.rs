@@ -317,6 +317,12 @@ pub struct FootprintCase {
     /// The formats a round trip runs for, in order. Empty where Metal makes no texture of any
     /// format of the case.
     round_trips: Vec<PixelFormat>,
+    /// Whether the runtime makes a `Shared` texture buffer of one of the case's formats: the
+    /// buffer under it is `Shared` memory, which a device without unified memory places in system
+    /// memory and announces (`shared-in-system-memory`). Measured on the RTX 5080 Laptop
+    /// (615.71.09): the plain stragglers' case announced it in the whole-set replay, and no other
+    /// case of the family did, their formats' texture buffers being refused or nil.
+    shared_texture_buffers: bool,
 }
 
 /// Every case of the family.
@@ -378,6 +384,7 @@ fn case_over(
         } else {
             Vec::new()
         },
+        shared_texture_buffers: false,
     }
 }
 
@@ -391,7 +398,10 @@ fn astc_footprints() -> FootprintCase {
 /// `BGRA4Unorm` and `ARGB8Unorm_sRGB`: an ordinary 2-byte texel and an ordinary 4-byte one, whose
 /// answers are what a reader compares the rest of the family against.
 fn plain_stragglers() -> FootprintCase {
-    case_over(PLAIN_STRAGGLERS, &PLAIN, &all_types(), true)
+    FootprintCase {
+        shared_texture_buffers: true,
+        ..case_over(PLAIN_STRAGGLERS, &PLAIN, &all_types(), true)
+    }
 }
 
 /// Apple's nine one-plane YCbCr formats, whose cube and cube-array descriptors answer a size and
@@ -564,13 +574,21 @@ impl Case for FootprintCase {
             .round_trips
             .iter()
             .any(|&pf| AstcDecode::of(pf).is_some());
-        if !astc {
-            return Vec::new();
+        let mut named = Vec::new();
+        if astc {
+            named.extend(
+                [Degradation::CarriedDecodedTwin, Degradation::CpuBlockDecode]
+                    .into_iter()
+                    .map(|kind| crate::replay::notice_allowance(kind.code())),
+            );
         }
-        [Degradation::CarriedDecodedTwin, Degradation::CpuBlockDecode]
-            .into_iter()
-            .map(|kind| crate::replay::notice_allowance(kind.code()))
-            .collect()
+        // A `Shared` texture buffer's own buffer, on a device without unified memory
+        // (`crate::replay::shared_memory_notice` holds the whole reason). It loosens the notices
+        // site alone, like the two above.
+        if self.shared_texture_buffers {
+            named.push(crate::replay::shared_memory_notice());
+        }
+        named
     }
 
     fn inputs(&self) -> Result<Vec<Input>, String> {

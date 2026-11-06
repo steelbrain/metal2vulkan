@@ -320,6 +320,16 @@ impl Case for StrideBelowTheRow {
         MetalSource::did_not_return(ASSERTED_IN, BELOW_SITE, ASSERTED_SAYS)
     }
 
+    fn allowances(&self) -> Vec<crate::allowance::Allowance> {
+        // The row makes its `Shared` buffer before the texture over it is refused, so on a device
+        // without unified memory the runtime announces `shared-in-system-memory`
+        // (`crate::replay::shared_memory_notice` holds the whole reason). It declares the notices
+        // site alone: the refusal at the one value site is still what the row pins. Measured on
+        // the RTX 5080 Laptop (615.71.09): the whole-set replay announced it here and the row
+        // was divergent at the notices site and nowhere else.
+        vec![crate::replay::shared_memory_notice()]
+    }
+
     fn inputs(&self) -> Result<Vec<Input>, String> {
         Ok(vec![Input::bytes("request", &BELOW.words())])
     }
