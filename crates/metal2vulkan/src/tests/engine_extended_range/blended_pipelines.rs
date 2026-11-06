@@ -378,7 +378,7 @@ fn a_mask_of_some_codes_of_a_word_merges_them_in_the_storage_form() {
         "moltenvk-m3",
         "intel-uhd770-rpls-anv",
         "lavapipe",
-        "vk12-floor",
+        "roadmap-2022",
     ] {
         let dev = device(stem);
         let interlock = crate::lower::fragment::interlock_orders(dev.profile());

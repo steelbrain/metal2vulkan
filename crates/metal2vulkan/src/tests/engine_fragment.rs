@@ -3096,7 +3096,8 @@ fn an_extended_range_blend_through_input_attachments_is_computed_in_the_shader()
 /// takes color 0: the write stores Metal's unblended write of the output (`exf_fetch_blend`'s
 /// `float4`, and `exf_fetch_three`'s `float4` and `half4` to two such attachments, the `_sRGB` twin
 /// among them), the fact names no blend, and the module passes L3. A mask of some of the channels
-/// is refused `NotImplemented`; a blend of the `float4` output is the device's arithmetic. The whole
+/// keeps the masked codes from the texel the function read (`extended_range::encode_keeping`;
+/// refused `NotImplemented` before); a blend of the `float4` output is the device's arithmetic. The whole
 /// pipeline is made on `moltenvk-m3` (no vertex descriptor), color 0 a written
 /// storage attachment of the raw format, and a stage compiled under it links into no pipeline that
 /// blends color 0.
@@ -3139,11 +3140,6 @@ fn a_fetched_extended_range_attachment_is_written_unblended_in_the_shader() {
         ));
         inputs
     };
-    let ni =
-        |r: Result<std::sync::Arc<crate::library::FunctionArtifact>, Error>, f: Feature| match r {
-            Err(Error::Unsupported(u)) => (u.feature, u.needs) == (f, Needs::NotImplemented),
-            _ => false,
-        };
     let fetched = |a: &crate::library::FunctionArtifact, color: u32| {
         a.facts.iter().find_map(|f| match f {
             RuntimeFact::InterlockedFramebufferFetch {
@@ -3179,15 +3175,20 @@ fn a_fetched_extended_range_attachment_is_written_unblended_in_the_shader() {
         link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{stem}: three: L3: {e}"));
         assert_eq!(fetched(&a, 0), Some((true, None)), "{stem}: {:?}", a.facts);
         assert_eq!(fetched(&a, 2), Some((true, None)), "{stem}: {:?}", a.facts);
-        // A mask of some of the channels; a `float4` output's blend, its own model.
-        let some = colors(PixelFormat::RGB10A82PXR10, ColorWriteMask::RED);
-        assert!(
-            ni(
-                compile_with(&blend, "exf_fetch_blend", &p, &state(&[0], &some, &p)),
-                Feature::FramebufferFetch
-            ),
-            "{stem}: a mask of red"
-        );
+        // A mask of some of the channels, whose kept codes the write takes from the texel it
+        // read; a `float4` output's blend, its own model.
+        for mask in [
+            ColorWriteMask::RED,
+            ColorWriteMask::ALPHA,
+            ColorWriteMask::RED.union(ColorWriteMask::ALPHA),
+        ] {
+            let some = colors(PixelFormat::RGB10A82PXR10, mask);
+            let a = compile_with(&blend, "exf_fetch_blend", &p, &state(&[0], &some, &p))
+                .unwrap_or_else(|e| panic!("{stem}: mask {}: {e}", mask.as_raw()));
+            link_and_validate(&a, &p)
+                .unwrap_or_else(|e| panic!("{stem}: mask {}: L3: {e}", mask.as_raw()));
+            assert_eq!(fetched(&a, 0), Some((true, None)), "{stem}: {:?}", a.facts);
+        }
         let mut over = guest();
         if let Some(c) = over[0].as_mut() {
             c.blending_enabled = true;
