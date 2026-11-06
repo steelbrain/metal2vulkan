@@ -4452,6 +4452,7 @@ fn four_two_two_and_four_four_four_textures_read_what_metal_reads() {
                 _ => 2048,
             };
             let (differ, checked) = (steps.differ, steps.checked);
+            let kept = device.work_counts().ycbcr_images_kept_layout;
             for (ostype, range) in ostypes
                 .into_iter()
                 .zip([YCbCrRange::Video, YCbCrRange::Full])
@@ -4496,10 +4497,13 @@ fn four_two_two_and_four_four_four_textures_read_what_metal_reads() {
                     steps.texels(&between, &texels, in_place, &case);
                 }
             }
+            // Each texture keeps its image for its layout (`ycbcr_images_kept_layout`) where the
+            // device would read 4:2:0 planes in place.
             off_step.push(format!(
-                "{pf:?} {} of {}",
+                "{pf:?} {} of {} (images kept for their layout: {})",
                 steps.differ - differ,
-                steps.checked - checked
+                steps.checked - checked,
+                device.work_counts().ycbcr_images_kept_layout - kept
             ));
         }
         println!("YCBCR-DEVICE 4:2:2 and 4:4:4: {by_devices} textures the device's conversion");
