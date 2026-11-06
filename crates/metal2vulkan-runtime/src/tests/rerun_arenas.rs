@@ -22,7 +22,10 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-/// The longest the test waits for the loop's runs again, and for its command buffer.
+/// The longest the test waits for the loop's next run again, and for its command buffer: the
+/// runs again take as long as the GPU's other work lets them (the forty took 4 s on an RTX 5080
+/// Laptop GPU alone and up to 59 s in a suite sharing it), so the wait bounds a stall, not the
+/// forty.
 const WAIT: Duration = Duration::from_secs(60);
 
 /// The threads each dispatch runs.
@@ -120,18 +123,35 @@ fn a_loop_run_again_holds_no_more_uploads_each_run() {
     assert_eq!(end, Ok(true));
     encoder.end_encoding().unwrap();
     let before = device.work_counts().predicated_loop_runs_again;
+    let started = Instant::now();
     command_buffer.commit().unwrap();
-    let ran_again = |runs: u64| {
-        let deadline = Instant::now() + WAIT;
-        while device.work_counts().predicated_loop_runs_again < before + runs {
-            assert!(Instant::now() < deadline, "fewer than {runs} runs again");
+    // The longest wait for one run again.
+    let mut longest = Duration::ZERO;
+    let mut ran_again = |runs: u64| {
+        let mut seen = device.work_counts().predicated_loop_runs_again;
+        let mut since = Instant::now();
+        while seen < before + runs {
             std::thread::sleep(Duration::from_millis(1));
+            let now = device.work_counts().predicated_loop_runs_again;
+            if now > seen {
+                longest = longest.max(since.elapsed());
+                (seen, since) = (now, Instant::now());
+            }
+            assert!(
+                since.elapsed() < WAIT,
+                "no run again in {WAIT:?} after {} of {runs}",
+                seen - before
+            );
         }
     };
     ran_again(3);
     let early = command_buffer.upload_bytes();
     ran_again(40);
     let late = command_buffer.upload_bytes();
+    eprintln!(
+        "RERUN-ARENAS: 40 runs again in {:?}, the longest wait for one {longest:?}",
+        started.elapsed()
+    );
     let contents = word.contents().unwrap();
     // SAFETY: the word's first 4 bytes; the GPU only reads them.
     unsafe { contents.as_ptr().cast::<u32>().write_volatile(1) };
