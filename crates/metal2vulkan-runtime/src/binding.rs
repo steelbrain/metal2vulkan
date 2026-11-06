@@ -2465,17 +2465,23 @@ struct ResidentOf {
 const COMPARED_PLANS: usize = 5;
 
 impl ResidentOf {
-    /// Whether its uses are those `plan` makes under `generation`: made for it, or for a plan
-    /// that lists the same uses (`BindingPlan::uses`, which with the residency decide them alone,
-    /// [`resident_uses_into`]), found once by comparing them. The plans are compared by address,
-    /// which takes no count of their references.
-    fn holds(&mut self, plan: &Arc<BindingPlan>, generation: Option<u64>) -> bool {
+    /// Whether its uses are those `plan` makes under `generation`: made for it, or, where they
+    /// hold some uses of what the encoder made resident (`resident`), for a plan that lists the
+    /// same uses (`BindingPlan::uses`, which with the residency decide them alone,
+    /// [`resident_uses_into`]), found once by comparing them. Where they hold none, making them
+    /// again for another plan walks its uses once, which costs less than that comparison: draws
+    /// that switch between pipeline states of no resident uses at every few draws compare none.
+    /// The plans are compared by address, which takes no count of their references.
+    fn holds(&mut self, plan: &Arc<BindingPlan>, generation: Option<u64>, resident: bool) -> bool {
         let at = Arc::as_ptr(plan);
         if self.generation != generation {
             return false;
         }
         if self.plan.as_ptr() == at {
             return true;
+        }
+        if !resident {
+            return false;
         }
         let found = (self.compared.iter().flatten()).find(|(of, _)| of.as_ptr() == at);
         if let Some(&(_, alike)) = found {
@@ -2509,7 +2515,8 @@ fn uses_into(
         return Err(internal("a command of 2^32 uses"));
     }
     let generation = tables.residency.map(Residency::generation);
-    let holds = |of: &mut ResidentOf| kept.is_some_and(|plan| of.holds(plan, generation));
+    let resident = into.used > 0;
+    let holds = |of: &mut ResidentOf| kept.is_some_and(|plan| of.holds(plan, generation, resident));
     into.made = 0;
     let keeps = into.of.as_mut().is_some_and(holds);
     match keeps {
