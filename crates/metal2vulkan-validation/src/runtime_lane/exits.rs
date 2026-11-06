@@ -217,10 +217,25 @@ static HELD: Mutex<Option<Device>> = Mutex::new(None);
 /// closed the guard, makes no Vulkan call.
 extern "C" fn drop_the_held_device() {
     let hook_ran = metal2vulkan_runtime::process_exiting();
-    let line = format!("{REPORT}-HELD hook_ran={}\n", u8::from(hook_ran));
+    let at_ms = now_ms();
+    drop(HELD.lock().unwrap_or_else(PoisonError::into_inner).take());
+    let line = format!(
+        "{REPORT}-HELD hook_ran={} at_ms={at_ms} dropped_ms={}\n",
+        u8::from(hook_ran),
+        now_ms()
+    );
     // SAFETY: a write of the line's bytes to standard output.
     unsafe { libc::write(1, line.as_ptr().cast(), line.len()) };
-    drop(HELD.lock().unwrap_or_else(PoisonError::into_inner).take());
+}
+
+/// An exit handler the case `instance_after_handler_exit` registers right after the child's first
+/// device, so that it runs after every handler registered since (the later instances' and
+/// devices', the hook's later registrations, [`drop_the_held_device`]) and before those
+/// registered as the first device was made (its driver's and layer's): print when it ran.
+extern "C" fn after_the_later_devices() {
+    let line = format!("{REPORT}-MARK at_ms={}\n", now_ms());
+    // SAFETY: a write of the line's bytes to standard output.
+    unsafe { libc::write(1, line.as_ptr().cast(), line.len()) };
 }
 
 /// The longest [`release_the_gate`] waits for the gate's work to be submitted once it opened the
@@ -494,6 +509,8 @@ fn child() {
             // device made and dropped first: its making's sections register the hook again after
             // each entry point's first call since the first device's, which the last one's then
             // do not.
+            // SAFETY: a handler with no arguments that never unwinds.
+            unsafe { libc::atexit(after_the_later_devices) };
             drop(validated_device(TEST_DEVICE, &messages, &cache).unwrap());
             // SAFETY: a handler with no arguments that never unwinds.
             unsafe { libc::atexit(drop_the_held_device) };
@@ -1115,6 +1132,31 @@ fn an_exit_handler_registered_before_an_instance_runs_after_the_hook() {
         line.contains("hook_ran=1"),
         "the handler ran before the hook: {line}"
     );
+    let at = |start: &str, name: &str| -> Option<u128> {
+        stdout_line(&exited[0], start)?
+            .split_whitespace()
+            .find_map(|pair| pair.strip_prefix(name)?.strip_prefix('='))?
+            .parse()
+            .ok()
+    };
+    let last = at(&format!("{REPORT} instance_after_handler_exit "), "at_ms");
+    let held = at(&format!("{REPORT}-HELD "), "at_ms");
+    let dropped = at(&format!("{REPORT}-HELD "), "dropped_ms");
+    let mark = at(&format!("{REPORT}-MARK "), "at_ms");
+    let end = at(&format!("{REPORT}-END "), "at_ms");
+    if let (Some(last), Some(held), Some(dropped), Some(mark), Some(end)) =
+        (last, held, dropped, mark, end)
+    {
+        println!(
+            "runtime exit, instance_after_handler_exit's parts: {} ms to the program's handler \
+             (the hook, the last instance's handlers), {} ms its drop of the last device, {} ms \
+             the second device's handlers, {} ms the first device's",
+            held.saturating_sub(last),
+            dropped.saturating_sub(held),
+            mark.saturating_sub(dropped),
+            end.saturating_sub(mark)
+        );
+    }
 }
 
 /// A command buffer whose program dropped every handle but the shared event it waits for stays
