@@ -18,10 +18,14 @@
 //! - **The unwritten attachment** (`xr-unwritten-*`): a pass whose first draw fills the target
 //!   unblended and whose second is a pipeline that blends the attachment but writes no color: one
 //!   without a fragment function, and one whose function writes depth alone. Metal leaves the
-//!   attachment as the first draw left it.
+//!   attachment as the first draw left it. The padded 10-bit formats (`R10Unorm_X6`,
+//!   `RG10Unorm_X12`, `RGB10A2Unorm_sRGB`) and the bfloat ones (`R16Bfloat`, `RG16Bfloat`,
+//!   `RGBA16Bfloat`) take the pipeline without a fragment function too.
 //! - **The masked write** (`xr-masked-*`): a first draw fills the target, and a second writes the
 //!   other values under a mask of some of the channels (red; alpha; red, green and blue; blue and
 //!   green), unblended, and under the mask of red, green and blue with source-over blending.
+//!   `BGR10_XR` and its twin, whose three codes share one word, take red and blue-and-green
+//!   unblended and red under source-over.
 //!
 //! The values are the family's own: each a `half` (so the `half4` and `float4` fills carry the
 //! same value), an alpha on a grid of thirty-seconds in `[0, 1]` and each color its alpha times a
@@ -39,7 +43,7 @@ use crate::render::{
     Blend, ColorState, PassColor, PassDepth, PassStencil, Plane, ReadAt, RenderPass,
     RenderPipelineSpec, RenderStep, RenderWork, StageFunction, TargetSpec,
 };
-use crate::transcript::{Node, Observed, Sites, Value};
+use crate::transcript::{Element, Node, Observed, Sites, Value};
 use metal2vulkan::metal::{BlendFactor as F, BlendOperation as O, ColorWriteMask, PixelFormat};
 use metal2vulkan_runtime::{Degradation, StoreAction};
 
@@ -454,7 +458,61 @@ pub struct UnwrittenDraw {
     shape: Unwritten,
 }
 
-/// Each format under each shape.
+/// The padded 10-bit and bfloat formats an unwritten case also takes: Metal leaves an unwritten
+/// attachment as it is whatever its format, these among them, where the runtime refused their
+/// blended attachment written or not.
+const OTHER_FORMATS: [Format; 6] = [
+    Format {
+        slug: "r10unorm-x6",
+        format: PixelFormat::R10UnormX6,
+        texel: 2,
+        word: Element::U16,
+        words: 1,
+        copies: true,
+    },
+    Format {
+        slug: "rg10unorm-x12",
+        format: PixelFormat::RG10UnormX12,
+        texel: 4,
+        word: Element::U16,
+        words: 2,
+        copies: true,
+    },
+    Format {
+        slug: "rgb10a2unorm-srgb",
+        format: PixelFormat::RGB10A2UnormSRGB,
+        texel: 4,
+        word: Element::U32,
+        words: 1,
+        copies: true,
+    },
+    Format {
+        slug: "r16bfloat",
+        format: PixelFormat::R16Bfloat,
+        texel: 2,
+        word: Element::U16,
+        words: 1,
+        copies: true,
+    },
+    Format {
+        slug: "rg16bfloat",
+        format: PixelFormat::RG16Bfloat,
+        texel: 4,
+        word: Element::U16,
+        words: 2,
+        copies: true,
+    },
+    Format {
+        slug: "rgba16bfloat",
+        format: PixelFormat::RGBA16Bfloat,
+        texel: 8,
+        word: Element::U16,
+        words: 4,
+        copies: true,
+    },
+];
+
+/// Each format under each shape, and each padded and bfloat format without a fragment function.
 pub fn unwritten() -> Vec<UnwrittenDraw> {
     let names = [
         (
@@ -474,14 +532,33 @@ pub fn unwritten() -> Vec<UnwrittenDraw> {
             1,
         ),
     ];
-    names
+    let others = [
+        "xr-unwritten-r10unorm-x6-no-fragment",
+        "xr-unwritten-rg10unorm-x12-no-fragment",
+        "xr-unwritten-rgb10a2unorm-srgb-no-fragment",
+        "xr-unwritten-r16bfloat-no-fragment",
+        "xr-unwritten-rg16bfloat-no-fragment",
+        "xr-unwritten-rgba16bfloat-no-fragment",
+    ];
+    let mut cases: Vec<UnwrittenDraw> = names
         .into_iter()
         .map(|(name, shape, format)| UnwrittenDraw {
             name,
             format: formats()[format],
             shape,
         })
-        .collect()
+        .collect();
+    cases.extend(
+        others
+            .into_iter()
+            .zip(OTHER_FORMATS)
+            .map(|(name, format)| UnwrittenDraw {
+                name,
+                format,
+                shape: Unwritten::NoFragment,
+            }),
+    );
+    cases
 }
 
 impl UnwrittenDraw {
@@ -676,6 +753,38 @@ pub fn masked() -> Vec<MaskedDraw> {
     let mut cases = Vec::new();
     for (format, names) in formats().into_iter().zip(NAMES) {
         for ((_, mask, blend), name) in shapes.into_iter().zip(names) {
+            cases.push(MaskedDraw {
+                name,
+                format,
+                mask,
+                blend,
+            });
+        }
+    }
+    // `BGR10_XR` and its twin hold the three color codes in one word: a mask of some of them.
+    let word_shapes = [
+        ("red", ColorWriteMask::RED, None),
+        (
+            "blue-green",
+            ColorWriteMask::BLUE.union(ColorWriteMask::GREEN),
+            None,
+        ),
+        ("red-over", ColorWriteMask::RED, Some(OVER)),
+    ];
+    const WORD_NAMES: [[&str; 3]; 2] = [
+        [
+            "xr-masked-bgr10xr-red",
+            "xr-masked-bgr10xr-blue-green",
+            "xr-masked-bgr10xr-red-over",
+        ],
+        [
+            "xr-masked-bgr10xr-srgb-red",
+            "xr-masked-bgr10xr-srgb-blue-green",
+            "xr-masked-bgr10xr-srgb-red-over",
+        ],
+    ];
+    for (format, names) in [FORMATS[2], FORMATS[3]].into_iter().zip(WORD_NAMES) {
+        for ((_, mask, blend), name) in word_shapes.into_iter().zip(names) {
             cases.push(MaskedDraw {
                 name,
                 format,
