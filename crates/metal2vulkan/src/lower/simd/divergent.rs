@@ -282,7 +282,7 @@ pub fn barriers(
             &computed
         }
     };
-    let r = (|| -> Result<Option<Predication>, Error> {
+    let r = (|| -> Result<Option<(Predication, bool)>, Error> {
         let divergent = cx.body.blocks.iter().any(|(b, block)| {
             !u.is_uniform(b)
                 && block.inst_ids().any(|id| {
