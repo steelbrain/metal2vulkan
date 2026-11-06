@@ -1768,14 +1768,33 @@ impl LastRetained {
 /// A variant, plan and specialization under which `Device::degrade_bound_values` was quiet: no
 /// clause of a note it tested held. Which hold is a function of the three alone, so a draw of
 /// the same three announces nothing there. The variant and the plan are held, so a pointer seen
-/// again is the same object.
+/// again is the same object. A draw that takes its plan's specialization
+/// (`BindingPlan::specialization`) keeps it through the plan, so keeping one allocates nothing:
+/// only a draw's own key (a mesh draw's) is copied.
 struct QuietBoundValues {
     variant: Arc<RenderVariant>,
     plan: Arc<BindingPlan>,
-    specialization: SpecializationKey,
+    /// The draw's own specialization, where it was not its plan's.
+    own: Option<SpecializationKey>,
 }
 
 impl QuietBoundValues {
+    /// The three of a draw of `variant` and `plan` under `specialization`, its plan's own or the
+    /// draw's.
+    fn new(
+        variant: &Arc<RenderVariant>,
+        plan: &Arc<BindingPlan>,
+        specialization: &SpecializationKey,
+    ) -> QuietBoundValues {
+        let own =
+            (!std::ptr::eq(specialization, &plan.specialization)).then(|| specialization.clone());
+        QuietBoundValues {
+            variant: Arc::clone(variant),
+            plan: Arc::clone(plan),
+            own,
+        }
+    }
+
     /// Whether a draw of `variant`, `plan` and `specialization` is of the three.
     fn holds(
         &self,
@@ -1783,9 +1802,10 @@ impl QuietBoundValues {
         plan: &Arc<BindingPlan>,
         specialization: &SpecializationKey,
     ) -> bool {
+        let kept = self.own.as_ref().unwrap_or(&self.plan.specialization);
         Arc::ptr_eq(&self.variant, variant)
             && Arc::ptr_eq(&self.plan, plan)
-            && self.specialization == *specialization
+            && (std::ptr::eq(kept, specialization) || *kept == *specialization)
     }
 }
 
@@ -9164,11 +9184,7 @@ impl RenderLowering {
                 Some(&formats),
             )
         {
-            self.quiet_bound_values = Some(QuietBoundValues {
-                variant: Arc::clone(&variant),
-                plan: Arc::clone(&plan),
-                specialization: specialization.clone(),
-            });
+            self.quiet_bound_values = Some(QuietBoundValues::new(&variant, &plan, specialization));
         }
         device.degrade_cross_class(&plan.diagnostics, &formats);
         device.degrade_astc_storage(&plan.diagnostics, &formats);
