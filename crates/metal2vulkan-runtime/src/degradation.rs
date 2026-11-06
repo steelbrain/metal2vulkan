@@ -1650,7 +1650,13 @@ degradations! {
         /// such an attachment as `half` through the pass (a clear's, a load's, a write's or a
         /// blend's value rounded to `half`) and rounds it to its codes once, at the store (on an
         /// Apple M4; the M3 Max's run of the same probes), where the runtime stores the codes at
-        /// each draw, so a later blend or read sees the stored codes.
+        /// each draw, so a later blend or read sees the stored codes. Not a color whose `half`
+        /// shadow the runtime holds (`render/extended_shadow.rs`): in a pass of one layer on a
+        /// device that orders framebuffer fetch through the pixel interlock alone, at one sample
+        /// or more, from the pass's clear or (at one sample) its load, a draw's blend or read
+        /// sees the `half` Metal's tile holds. Over input attachments (lavapipe), in a
+        /// multisampled pass that loads the color, and once a draw ends the shadow, the codes
+        /// stay.
         ExtendedRangeBlendsStoredCodes = "extended-range-blends-stored-codes", Precision,
             "a blend into, or a read of, an extended-range color an earlier draw of the pass \
              wrote sees the codes the runtime stored at that draw (each channel rounded to its \

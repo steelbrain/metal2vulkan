@@ -2538,7 +2538,13 @@ bound.
   of the pass wrote sees the codes the runtime stored at that draw (each channel rounded to its
   10-bit code, the two-plane format's alpha to its byte), where Metal's tile memory holds the color
   as half through the pass and rounds it once at the store: a blended or read value can differ from
-  Metal's by a code, and the difference can grow over many draws that blend onto each other.
+  Metal's by a code, and the difference can grow over many draws that blend onto each other. Not
+  announced for a color whose half shadow the runtime holds: in a pass of one layer on a device that
+  orders framebuffer fetch through the pixel interlock alone (MoltenVK, NVIDIA, ANV, RADV), at one
+  sample or more, from the pass's clear or, at one sample, its load, each blend and read sees the half
+  Metal's tile holds. Over input attachments (lavapipe), in a multisampled pass that loads the color,
+  and after a draw the shadow cannot follow (one that writes the color without reading it at more
+  than one sample), the codes stay and the notice fires.
 - `metal2vulkan-degrade-unmeasured-heap-texture-size` (precision). `UnmeasuredHeapTextureSize`: A
   heap texture sized or made (`heap_texture_size_and_align`, `Heap::new_texture`) whose size Metal's
   layout the runtime does not model: a format or a sample count whose layout in Metal's heaps is not
