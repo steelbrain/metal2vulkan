@@ -36,7 +36,7 @@ use std::cell::Cell;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 /// How many shards threads own; the threads past them share one more ([`SHARED`]).
-pub(crate) const SHARDS: usize = 16;
+pub(crate) const SHARDS: usize = 64;
 
 /// The index of the shard no thread owns, which the threads past the owned ones add into.
 pub(crate) const SHARED: usize = SHARDS;
