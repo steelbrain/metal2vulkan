@@ -16,8 +16,8 @@ use metal2vulkan_runtime::{
 /// false. Each format row's state agrees with the runtime's per-format capability query, and
 /// Apple9's argument-buffer sampler row with the device's `maxArgumentBufferSamplerCount`
 /// (`DeviceProperties::max_argument_buffer_sampler_count`) against the cell's 500000 states,
-/// printed (`ARGUMENT_SAMPLERS`). Once everything is dropped, the validation layer reported
-/// nothing.
+/// printed (`ARGUMENT_SAMPLERS`, beside the driver's `maxDescriptorSetUpdateAfterBindSamplers`).
+/// Once everything is dropped, the validation layer reported nothing.
 #[test]
 fn every_family_answers_with_its_blocking_rows() {
     let cache = ScratchCache::new().unwrap();
@@ -63,7 +63,12 @@ fn every_family_answers_with_its_blocking_rows() {
         let apple9 = (device.family_rows(GpuFamily::Apple9).into_iter())
             .find(|r| r.row == samplers)
             .map(|r| r.state);
-        eprintln!("ARGUMENT_SAMPLERS answer={answer} apple9={apple9:?}");
+        let driver =
+            (device.properties().description.limits).max_descriptor_set_update_after_bind_samplers;
+        eprintln!(
+            "ARGUMENT_SAMPLERS answer={answer} maxDescriptorSetUpdateAfterBindSamplers={driver} \
+             apple9={apple9:?}"
+        );
         let want = match answer >= 500_000 {
             true => RowState::Exact,
             false => RowState::Refused(Refusal::ArgumentBufferSamplerCount {
