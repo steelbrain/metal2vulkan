@@ -40,6 +40,16 @@
 //!   watched, the driver's wait entered and returned, the completion turn's `seen` (the command
 //!   buffer's completion time) and the handlers.
 //!
+//! - **From commit to submission** (`runtime_commit_to_submission`): a device of the runtime's
+//!   under `RenderLoweringPolicy::Worker`, each command buffer carrying a submission check that
+//!   passes and a submission handler that notes the host time and its thread, committed with
+//!   `commit_and_submit` [`GAP`] apart, [`SUBMISSION_RUNS`] of each shape in a row: a fill alone
+//!   on its queue; a fill on one queue right after another queue's head was committed whose check
+//!   waits for a shared event's value that a third queue's long fill signals, so that head waits
+//!   for the signal to land; and a render pass whose end the device's lowering thread has not
+//!   lowered at the commit. From the commit call to the submission handler, with the threads the
+//!   handlers ran on and the scheduler's work counts over each shape.
+//!
 //! Each line also counts the waits entered after the GPU end: there, the time to the wait's return
 //! holds the wake of the thread that waits, not the driver's wake alone.
 //!
@@ -47,13 +57,17 @@
 //!
 //! Device tests: compiled only under the GPU safety cfgs (`m2v_gpu`, `m2v_cpu_icd`).
 
+use super::encoder_holds::pass;
 use crate::command_buffer::completion::trace::{self, Traced};
 use crate::gpu_time::{self, host_nanos, GpuClock, Reading, REFRESH};
 use crate::{
-    CommandBuffer, Device, DeviceKind, DeviceOptions, ResourceOptions, ShaderCacheOptions,
+    Buffer, CommandBuffer, CommandQueue, Device, DeviceKind, DeviceOptions, EventRef,
+    ResourceOptions, ShaderCacheOptions, Submission, TextureDescriptor, WorkCounts,
 };
 use ash::vk;
-use std::collections::BTreeSet;
+use metal2vulkan::device::RenderLoweringPolicy;
+use metal2vulkan::metal::{PixelFormat, TextureUsage};
+use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::{CStr, CString};
 use std::path::PathBuf;
 use std::sync::mpsc;
@@ -1110,4 +1124,265 @@ fn print_runtime(name: &str, shape: &str, calibrated: bool, times: &[&Times]) {
         }
     }
     eprintln!("COMPLETION-LATENCY runtime commit, {shape} ({name}){way}");
+}
+
+/// The timed command buffers of each of [`runtime_commit_to_submission`]'s shapes, after
+/// [`WARM`] untimed.
+const SUBMISSION_RUNS: usize = 500;
+
+/// The bytes of the long fill whose signal the held head's check waits for to land: long enough
+/// that the head still waits as the next commit is made.
+const LONG_BYTES: u64 = 64 << 20;
+
+/// The shapes of [`runtime_commit_to_submission`] (the module docs).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Way {
+    /// A fill alone on its queue.
+    Alone,
+    /// A fill committed right after another queue's head whose check waits for a signal to land.
+    BehindALandingCheck,
+    /// A render pass whose end the lowering thread has not lowered at the commit.
+    RenderPass,
+}
+
+/// The shapes, each with its line's name.
+const WAYS: [(Way, &str); 3] = [
+    (Way::Alone, "a checked fill alone"),
+    (
+        Way::BehindALandingCheck,
+        "a checked fill, another queue's head waiting for its check's signal to land",
+    ),
+    (
+        Way::RenderPass,
+        "a checked render pass, its end with the lowering thread",
+    ),
+];
+
+/// One timed command buffer: host nanoseconds of its commit call and the call's return, and its
+/// submission handler's run, with that handler's thread.
+type Submitted = (u64, u64, Arc<Mutex<Option<(u64, Option<String>)>>>);
+
+/// The runtime's time from `commit_and_submit` to a command buffer's submission, seen by its
+/// submission handler, over the shapes of [`WAYS`] (the module docs).
+#[test]
+#[ignore = "a measurement, not a check: run by name with --run-ignored all"]
+fn runtime_commit_to_submission() {
+    let scratch = Scratch(
+        std::env::temp_dir().join(format!("m2v-commit-to-submission-{}", std::process::id())),
+    );
+    std::fs::create_dir_all(&scratch.0).unwrap();
+    let mut options = DeviceOptions {
+        kinds: kinds(),
+        shader_cache: ShaderCacheOptions {
+            directory: Some(scratch.0.clone()),
+            ..ShaderCacheOptions::default()
+        },
+        ..DeviceOptions::default()
+    };
+    options.policy.render_lowering = RenderLoweringPolicy::Worker;
+    let device = Device::system_default_with(&options).unwrap();
+    let name = device.name().to_owned();
+    let queues: Vec<CommandQueue> = (0..3)
+        .map(|_| device.new_command_queue().unwrap())
+        .collect();
+    let private = |bytes| {
+        device
+            .new_buffer(bytes, ResourceOptions::private())
+            .unwrap()
+    };
+    let (small, other, long) = (private(BYTES), private(BYTES), private(LONG_BYTES));
+    let landing = device.new_shared_event().unwrap();
+    let mut descriptor = TextureDescriptor::texture_2d(PixelFormat::RGBA8Unorm, 256, 256, false);
+    descriptor.usage = TextureUsage::RENDER_TARGET;
+    descriptor.resource_options = ResourceOptions::private();
+    let target = device.new_texture(&descriptor).unwrap();
+    let committing = std::thread::current().name().map(str::to_owned);
+    let mut signal = 0;
+    for (way, shape) in WAYS {
+        let before = device.work_counts();
+        let mut timed: Vec<Submitted> = Vec::with_capacity(SUBMISSION_RUNS);
+        let mut held = Vec::new();
+        let mut next = Instant::now();
+        for run in 0..WARM + SUBMISSION_RUNS {
+            next += GAP;
+            if way == Way::BehindALandingCheck {
+                signal += 1;
+                let signaller = filled(&queues[2], &long, run as u8);
+                signaller
+                    .encode_signal_event(EventRef::from(&landing), signal)
+                    .unwrap();
+                signaller.commit_and_submit().unwrap();
+                let waiter = queues[1].command_buffer().unwrap();
+                checked(&waiter);
+                waiter
+                    .encode_wait_for_event(EventRef::from(&landing), signal)
+                    .unwrap();
+                fill_into(&waiter, &other, run as u8);
+                waiter.commit_and_submit().unwrap();
+                held.extend([signaller, waiter]);
+            }
+            let command_buffer = queues[0].command_buffer().unwrap();
+            checked(&command_buffer);
+            let handled = Arc::new(Mutex::new(None));
+            let noted = Arc::clone(&handled);
+            command_buffer
+                .add_submission_handler(Box::new(move |_: &CommandBuffer| {
+                    let thread = std::thread::current().name().map(str::to_owned);
+                    *noted.lock().unwrap() = Some((host_nanos(), thread));
+                }))
+                .unwrap();
+            match way {
+                Way::RenderPass => {
+                    let encoder = command_buffer
+                        .render_command_encoder(&pass(&target))
+                        .unwrap();
+                    encoder.end_encoding().unwrap();
+                }
+                Way::Alone | Way::BehindALandingCheck => {
+                    fill_into(&command_buffer, &small, run as u8);
+                }
+            }
+            let commit = host_nanos();
+            command_buffer.commit_and_submit().unwrap();
+            let returned = host_nanos();
+            if run >= WARM {
+                timed.push((commit, returned, handled));
+            }
+            held.push(command_buffer);
+            sleep_until(next);
+        }
+        for command_buffer in &held {
+            command_buffer
+                .wait_until_completed_for(Duration::from_secs(5))
+                .unwrap();
+        }
+        let after = device.work_counts();
+        print_submissions(
+            &name,
+            shape,
+            committing.as_deref(),
+            &timed,
+            (&before, &after),
+        );
+    }
+}
+
+/// A command buffer of `queue` that fills `target` whole with `value`.
+fn filled(queue: &CommandQueue, target: &Buffer, value: u8) -> CommandBuffer {
+    let command_buffer = queue.command_buffer().unwrap();
+    fill_into(&command_buffer, target, value);
+    command_buffer
+}
+
+/// Encode into `command_buffer` a fill of `target` whole with `value`.
+fn fill_into(command_buffer: &CommandBuffer, target: &Buffer, value: u8) {
+    let mut blit = command_buffer.blit_command_encoder().unwrap();
+    blit.fill_buffer(target, 0..target.length(), value).unwrap();
+    blit.end_encoding().unwrap();
+}
+
+/// Give `command_buffer` a submission check that passes it.
+fn checked(command_buffer: &CommandBuffer) {
+    command_buffer
+        .set_submission_check(Arc::new(|_: &Submission<'_>| None))
+        .unwrap();
+}
+
+/// Print one shape's line of [`runtime_commit_to_submission`]: from the commit call to its return
+/// and to the submission handler, the threads the handlers ran on (`committing` the thread that
+/// committed), and what the scheduler's work counts moved by over the shape.
+fn print_submissions(
+    name: &str,
+    shape: &str,
+    committing: Option<&str>,
+    timed: &[Submitted],
+    (before, after): (&WorkCounts, &WorkCounts),
+) {
+    let handled: Vec<(u64, u64, u64, Option<String>)> = (timed.iter())
+        .map(|(commit, returned, handled)| {
+            let (at, thread) =
+                (handled.lock().unwrap().clone()).expect("its submission handler ran");
+            (*commit, *returned, at, thread)
+        })
+        .collect();
+    let mut threads: BTreeMap<String, usize> = BTreeMap::new();
+    for (.., thread) in &handled {
+        let thread = match thread.as_deref() {
+            Some(thread) if Some(thread) == committing => "the committing thread",
+            Some(thread) => thread,
+            None => "an unnamed thread",
+        };
+        *threads.entry(thread.to_owned()).or_default() += 1;
+    }
+    let threads: Vec<String> = (threads.iter())
+        .map(|(thread, count)| format!("{thread} {count}"))
+        .collect();
+    let moved = |field: fn(&WorkCounts) -> u64| field(after) - field(before);
+    let counts = [
+        ("commits_handed_off", moved(|c| c.commits_handed_off)),
+        (
+            "scheduler_passes_at_commit",
+            moved(|c| c.scheduler_passes_at_commit),
+        ),
+        (
+            "batches_submitted_at_commit",
+            moved(|c| c.batches_submitted_at_commit),
+        ),
+        (
+            "batches_checked_at_commit",
+            moved(|c| c.batches_checked_at_commit),
+        ),
+        (
+            "scheduler_wakes_commit",
+            moved(|c| c.scheduler_wakes_commit),
+        ),
+        ("scheduler_wakes_host", moved(|c| c.scheduler_wakes_host)),
+        (
+            "scheduler_wakes_completion",
+            moved(|c| c.scheduler_wakes_completion),
+        ),
+        ("scheduler_passes", moved(|c| c.scheduler_passes)),
+        ("heads_held_for_checks", moved(|c| c.heads_held_for_checks)),
+        (
+            "heads_awaiting_check_signals",
+            moved(|c| c.heads_awaiting_check_signals),
+        ),
+        (
+            "heads_held_for_earlier_commits",
+            moved(|c| c.heads_held_for_earlier_commits),
+        ),
+        (
+            "batches_held_past_a_look",
+            moved(|c| c.batches_held_past_a_look),
+        ),
+        ("batch_hold_nanos", moved(|c| c.batch_hold_nanos)),
+        (
+            "render_log_commits_by_thread",
+            moved(|c| c.render_log_commits_by_thread),
+        ),
+        (
+            "render_log_commits_by_program",
+            moved(|c| c.render_log_commits_by_program),
+        ),
+    ];
+    let counts: Vec<String> = (counts.iter())
+        .map(|(field, moved)| format!("{field} {moved}"))
+        .collect();
+    eprintln!(
+        "COMPLETION-LATENCY submission, {shape} ({name}): {} commit_and_submit {GAP:?} apart: \
+         commit -> commit returned {} us; commit -> submission handler {} us; handlers on {}; {}",
+        handled.len(),
+        line(
+            (handled.iter())
+                .map(|(commit, returned, ..)| us(*commit, *returned))
+                .collect()
+        ),
+        line(
+            (handled.iter())
+                .map(|(commit, _, at, _)| us(*commit, *at))
+                .collect()
+        ),
+        threads.join(", "),
+        counts.join(", "),
+    );
 }
