@@ -243,7 +243,7 @@ impl Composite {
             .unwrap();
         let mut calls = 4;
         for draw in 0..DRAWS {
-            if draw > 0 && *n % RESET == 0 {
+            if draw > 0 && (*n).is_multiple_of(RESET) {
                 encoder.set_render_pipeline_state(&self.pipeline).unwrap();
                 encoder
                     .set_fragment_sampler_state(Some(&self.sampler), 0)

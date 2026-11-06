@@ -371,7 +371,12 @@ impl<'a> Bare<'a> {
                         .command_pool(command_pool)
                         .level(vk::CommandBufferLevel::PRIMARY)
                         .command_buffer_count(1);
-                    let command_buffer = device.allocate_command_buffers(&info).unwrap()[0];
+                    // Through the loaded table: no `VulkanContext` holds this device (the runtime's).
+                    let mut command_buffer = vk::CommandBuffer::null();
+                    let allocate = device.fp_v1_0().allocate_command_buffers;
+                    allocate(device.handle(), &info, &mut command_buffer)
+                        .result()
+                        .unwrap();
                     let fence = device
                         .create_fence(&vk::FenceCreateInfo::default(), None)
                         .unwrap();
@@ -539,7 +544,7 @@ impl<'a> Bare<'a> {
             device.cmd_set_viewport(command_buffer, 0, &viewport);
             device.cmd_set_scissor(command_buffer, 0, &scissor);
             for draw in 0..DRAWS {
-                if draw > 0 && *n % RESET == 0 {
+                if draw > 0 && (*n).is_multiple_of(RESET) {
                     device.cmd_bind_pipeline(
                         command_buffer,
                         vk::PipelineBindPoint::GRAPHICS,
