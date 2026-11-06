@@ -1,12 +1,13 @@
 //! `CommandBuffer::commit_and_submit` (`scheduler/mod.rs`, "A committing thread may submit for
 //! itself"): where no other pass is under way, the committing thread submits the ready heads
-//! committed first itself and runs their submission handlers inside the call, before the command
+//! itself, in commit order, and runs their submission handlers inside the call, before the command
 //! buffer reads `Scheduled` (`WorkCounts::scheduler_passes_at_commit`,
 //! `WorkCounts::batches_submitted_at_commit`); submission handlers keep their submission order
 //! whichever thread runs them; and a head with a submission check is checked by the committing
 //! thread too, just before it submits it (`WorkCounts::batches_checked_at_commit`): a check that
 //! answers a code fails its submission as on the scheduler's thread, and checks keep commit order
-//! whichever thread runs them.
+//! whichever thread runs them. A head another queue holds for its check holds back only the
+//! commits that wait behind it: one of a third queue is checked and submitted at its commit.
 //!
 //! Device tests: compiled only under the validation crate's GPU safety cfgs (`m2v_gpu`,
 //! `m2v_cpu_icd`), on the kind of device the cfg selects.
@@ -18,7 +19,7 @@ use crate::{
 use std::num::NonZeroU64;
 use std::ops::Range;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{mpsc, Arc, Mutex};
 use std::thread::ThreadId;
 use std::time::{Duration, Instant};
 
@@ -536,4 +537,112 @@ fn checked_command_buffers_keep_commit_order_across_commit_and_commit_and_submit
         "{on_committer} of {total} checks ran on a committing thread"
     );
     assert!(checked >= on_committer && batches >= checked);
+}
+
+/// How long the held-check test waits for a check to start, and for its command buffers.
+const BOUND: Duration = Duration::from_secs(20);
+
+/// Give `command_buffer` a submission check and a submission handler that note `check` and
+/// `submitted` into `events`.
+fn noting(
+    command_buffer: &CommandBuffer,
+    events: &Events,
+    (check, submitted): (&'static str, &'static str),
+) {
+    let (checks, handled) = (Arc::clone(events), Arc::clone(events));
+    command_buffer
+        .set_submission_check(Arc::new(move |_: &Submission<'_>| {
+            note(&checks, check);
+            None
+        }))
+        .unwrap();
+    command_buffer
+        .add_submission_handler(Box::new(move |_: &CommandBuffer| note(&handled, submitted)))
+        .unwrap();
+}
+
+/// While the scheduler's thread runs the submission check of queue A's head, committed with
+/// `commit` (the check held until the test lets it go), the heads of two other queues are
+/// committed with `commit_and_submit`: B's fills A's buffer, so it waits behind A (its footprint
+/// runs in commit order with A's, which keeps its place, `scheduler/order.rs`) and its check and
+/// submission handler run on the scheduler's thread once A was submitted; C's fills another, so
+/// the committing thread checks and submits it inside the call while A's check still runs
+/// (`WorkCounts::batches_checked_at_commit`, `batches_submitted_at_commit`), as the scheduler's
+/// own pass would. Submission handlers keep submission order: C's, A's, then B's. All complete.
+#[test]
+fn a_head_held_for_its_check_holds_back_only_the_commits_behind_it() {
+    let device = device();
+    let queues: Vec<CommandQueue> = (0..3)
+        .map(|_| device.new_command_queue().unwrap())
+        .collect();
+    let [shared, other] = [(); 2].map(|()| {
+        device
+            .new_buffer(1 << 16, ResourceOptions::private())
+            .unwrap()
+    });
+    let caller = std::thread::current().id();
+    let events: Events = Arc::default();
+    let (entered, enters) = mpsc::channel();
+    let (release, released) = mpsc::channel::<()>();
+    let held = fill(&queues[0], &shared, 1);
+    let (checks, handled) = (Arc::clone(&events), Arc::clone(&events));
+    let released = Mutex::new(released);
+    held.set_submission_check(Arc::new(move |_: &Submission<'_>| {
+        note(&checks, "a check");
+        let _ = entered.send(());
+        let _ = released.lock().unwrap().recv_timeout(BOUND);
+        None
+    }))
+    .unwrap();
+    held.add_submission_handler(Box::new(move |_: &CommandBuffer| {
+        note(&handled, "a submitted")
+    }))
+    .unwrap();
+    held.commit().unwrap();
+    enters
+        .recv_timeout(BOUND)
+        .expect("the scheduler's thread runs A's check");
+    let before = device.work_counts();
+    let behind = fill(&queues[1], &shared, 2);
+    noting(&behind, &events, ("b check", "b submitted"));
+    behind.commit_and_submit().unwrap();
+    let apart = fill(&queues[2], &other, 3);
+    noting(&apart, &events, ("c check", "c submitted"));
+    apart.commit_and_submit().unwrap();
+    let while_held = events.lock().unwrap().clone();
+    let after = device.work_counts();
+    release.send(()).unwrap();
+    for command_buffer in [&held, &behind, &apart] {
+        command_buffer.wait_until_completed_for(BOUND).unwrap();
+        assert_eq!(command_buffer.status(), CommandBufferStatus::Completed);
+    }
+    let on_caller = |events: &[(&'static str, ThreadId)]| -> Vec<(&'static str, bool)> {
+        (events.iter())
+            .map(|&(name, thread)| (name, thread == caller))
+            .collect()
+    };
+    assert_eq!(
+        on_caller(&while_held[..]),
+        [("a check", false), ("c check", true), ("c submitted", true)],
+        "while A's check ran: C checked and submitted inside its call, B left"
+    );
+    let events = events.lock().unwrap().clone();
+    assert_eq!(
+        on_caller(&events[while_held.len()..]),
+        [
+            ("a submitted", false),
+            ("b check", false),
+            ("b submitted", false)
+        ],
+        "once A's check returned: A submitted, then B checked and submitted by the scheduler"
+    );
+    let moved = |field: fn(&crate::WorkCounts) -> u64| field(&after) - field(&before);
+    assert_eq!(
+        (
+            moved(|c| c.batches_checked_at_commit),
+            moved(|c| c.batches_submitted_at_commit),
+        ),
+        (1, 1),
+        "C alone checked and submitted at commit"
+    );
 }

@@ -2851,10 +2851,13 @@ impl CommandBuffer {
     /// extensions"). Metal's `commit` returns before its command buffer is scheduled and submits
     /// on a thread of its own; the runtime's hands it to its scheduler thread, a wake and a pass
     /// away. Here, where no other submission pass is under way, this thread makes it: it submits
-    /// the device's ready batches committed first, this one's among them, while each needs no
-    /// host step, no group and no switch of a storage form, up to the pass's bound, in commit
-    /// order. What it leaves goes to the scheduler's thread, which it wakes; where a pass is under
-    /// way, that pass takes this commit in, as for `commit`.
+    /// the device's ready batches in commit order, this one's among them, each needing no host
+    /// step, no group and no switch of a storage form, up to the pass's bound. A batch held back
+    /// (another queue's, for its checks, an event value or a host step) holds back only the later
+    /// commits that wait behind it, as on the scheduler's thread: those of its own queue, and
+    /// another queue's whose resources it uses. What it leaves goes to the scheduler's thread,
+    /// which it wakes; where a pass is under way, that pass takes this commit in, as for
+    /// `commit`.
     ///
     /// - **Its submission checks run here**, inside this call, for the batches it submits
     ///   ([`set_submission_check`](Self::set_submission_check)): each just before its batch's

@@ -15,30 +15,31 @@
 //!   recorded. Then the event's kind decides, as Metal's submission does (an M3 Max under macOS
 //!   27.0.1, the conformance case `event-wait-behind-a-running-signal`: a command buffer waiting
 //!   for a value only a signal still running on the GPU reaches, its status and scheduled handler
-//!   read while that signal ran; its `Scheduled` is the proxy for "submitted, and so checked").
-//!   An `Event`'s value no host call sets, and Metal submits a command buffer whose `MTLEvent`
-//!   wait such a signal meets at once: so a wait the batch hands to its `VkQueue` (a signal
-//!   submitted before it, on its `VkQueue` or one the GPU wait reaches, or reserved by the
-//!   caller) holds no check, which runs at once and the batch goes with the wait on the `VkQueue`,
-//!   as a batch without a check does. Metal holds one whose `MTLSharedEvent` wait such a signal
-//!   meets until the signal lands, as the runtime holds every wait for a value the host may set
+//!   read while that signal ran; its `Scheduled` is the proxy for "submitted, and so checked"). An
+//!   `Event`'s value no host call sets, and Metal submits a command buffer whose `MTLEvent` wait
+//!   such a signal meets at once: so a wait the batch hands to its `VkQueue` (a signal submitted
+//!   before it, on its `VkQueue` or one the GPU wait reaches, or reserved by the caller) holds no
+//!   check, which runs at once and the batch goes with the wait on the `VkQueue`, as a batch
+//!   without a check does. Metal holds one whose `MTLSharedEvent` wait such a signal meets until
+//!   the signal lands, as the runtime holds every wait for a value the host may set
 //!   (`event_timeline.rs`): so a `SharedEvent`'s value reached only by a GPU signal submitted but
 //!   not yet landed holds the check until it lands, and a resource detached meanwhile fails the
-//!   submission. A value the host set (or the device reached) needs no wait. On its
-//!   thread, without its own lock or the command buffer's, it then runs the check of each
-//!   submission that begins in the batch, and again of each that a host step of the batch
-//!   recorded commands for (what they reach is known only then), then submits the batch in its
-//!   order. A thread in `CommandBuffer::commit_and_submit` that makes the submission pass itself
-//!   runs those checks instead, the same way, just before it submits the batch, where the batch
-//!   is the one committed first of all, ready but for them, with no host step and no group, and
-//!   every value it waits for reached on the device or by the host or one its `VkQueue` waits for
-//!   (`scheduler::claim_check`); the rest are the scheduler thread's. Where the scheduler groups batches (`CompletionPolicy::Grouped` on a driver that
-//!   merges submissions, `group.rs`), it runs the checks of up to three batches right behind a
-//!   head that goes with the head's, in commit order, each once its batch is otherwise ready and
-//!   its events' values reached on the device or by the host, none committed after another
-//!   queue's batch: so they go to the driver together. Such a check runs before the previous
-//!   batch's `vkQueueSubmit`, in the pass that submits its own batch, where alone it runs after
-//!   it. `CompletionPolicy::Exact` checks each head alone.
+//!   submission. A value the host set (or the device reached) needs no wait. On its thread, without
+//!   its own lock or the command buffer's, it then runs the check of each submission that begins in
+//!   the batch, and again of each that a host step of the batch recorded commands for (what they
+//!   reach is known only then), then submits the batch in its order. A thread in
+//!   `CommandBuffer::commit_and_submit` that makes the submission pass itself runs those checks
+//!   instead, the same way, just before it submits the batch, where the batch is the first queue's
+//!   head in commit order ready but for them and behind no earlier commit, with no host step and no
+//!   group, and every value it waits for reached on the device or by the host or one its `VkQueue`
+//!   waits for (`scheduler::claim_check`); the rest are the scheduler thread's. Where the scheduler
+//!   groups batches (`CompletionPolicy::Grouped` on a driver that merges submissions, `group.rs`),
+//!   it runs the checks of up to three batches right behind a head that goes with the head's, in
+//!   commit order, each once its batch is otherwise ready and its events' values reached on the
+//!   device or by the host, none committed after another queue's batch: so they go to the driver
+//!   together. Such a check runs before the previous batch's `vkQueueSubmit`, in the pass that
+//!   submits its own batch, where alone it runs after it. `CompletionPolicy::Exact` checks each
+//!   head alone.
 //! - **Stricter than Metal: the re-check after a host step.** Metal checks a submission once,
 //!   with what it knows as it submits it, and cannot know what the commands the GPU writes into
 //!   an indirect command buffer reach before they run (an earlier encoder of the same submission

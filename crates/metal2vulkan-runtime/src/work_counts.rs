@@ -4614,9 +4614,10 @@ pub struct WorkCounts {
     pub scheduler_passes_by_waiters: u64,
     /// The batches those passes submitted: those ready with nothing for the scheduler's thread to
     /// do for them (no host step, no submission check, no group) and nothing of the program's to
-    /// run (no submission or scheduled handler, no switch of a storage form). A pass stops at the
-    /// first batch in commit order that is none of these and leaves the rest to the thread, so
-    /// this is below `scheduler_passes_by_waiters` where a command buffer needs it.
+    /// run (no submission or scheduled handler, no switch of a storage form), taken in commit
+    /// order, a held head passed over only by another queue's that waits behind no earlier commit,
+    /// as the thread's own pass picks them; the rest it leaves to the thread, so this is below
+    /// `scheduler_passes_by_waiters` where a command buffer needs it.
     pub batches_submitted_by_waiters: u64,
     /// Passes a thread made over the scheduler's order itself right after its commit
     /// (`CommandBuffer::commit_and_submit`, `scheduler/mod.rs`): one where no pass was under
@@ -4624,15 +4625,16 @@ pub struct WorkCounts {
     pub scheduler_passes_at_commit: u64,
     /// The batches those passes submitted: those ready with nothing for the scheduler's thread to
     /// do for them (no host step, no group, no switch of a storage form, no submission check the
-    /// committing thread may not run), their submission handlers run by the committing thread. A
-    /// pass stops at the first batch in commit order that is none of these and leaves the rest to
-    /// the thread.
+    /// committing thread may not run), their submission handlers run by the committing thread,
+    /// taken in commit order, a held head passed over only by another queue's that waits behind no
+    /// earlier commit, as the thread's own pass picks them; the rest it leaves to the thread.
     pub batches_submitted_at_commit: u64,
     /// The batches whose submission checks those passes ran on the committing thread, each just
-    /// before it submitted the batch (`CommandBuffer::set_submission_check`): a head committed
-    /// first of all, ready but for its checks, every event value it waits for reached on the
-    /// device or by the host. A head whose checks wait for a GPU signal to land, or whose checks
-    /// the scheduler's thread took first, is left to that thread, uncounted here.
+    /// before it submitted the batch (`CommandBuffer::set_submission_check`): the first queue's
+    /// head in commit order ready but for its checks and behind no earlier commit, every event
+    /// value it waits for reached on the device or by the host. A head whose checks wait for a GPU
+    /// signal to land, or whose checks the scheduler's thread took first, is left to that thread,
+    /// uncounted here, and holds back no later commit of another queue but those behind it.
     pub batches_checked_at_commit: u64,
     /// Footprints of batches the scheduler built to order them across queues
     /// (`scheduler/order.rs`), one each time: each batch's is built where a pass first compares

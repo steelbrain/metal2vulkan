@@ -20,15 +20,18 @@
 //! - **A committing thread may submit for itself** ([`Scheduler::submit_at_commit`],
 //!   `CommandBuffer::commit_and_submit`, a runtime extension). Its commit is posted with no wake,
 //!   and where no passer is counted it makes one pass as a thread about to block does: it takes
-//!   in what the inbox holds and submits the heads committed first while each is ready and needs
+//!   in what the inbox holds and submits, in commit order, the line heads that are ready and need
 //!   nothing of this thread (no host step, no group, no switch of a storage form, no rebind's
-//!   encoding), up to [`PASS_SUBMISSIONS`]; their submission handlers then run on it, in their
-//!   turn ([`Turns`]), and their transitions to `Scheduled` run on it where plain, else go to
-//!   their queues' contexts. A head ready but for its submission checks, every value it waits for
-//!   reached on the device or by the host, has its checks run there too, without the lock, the
-//!   head marked so this thread leaves them ([`claim_check`]), and is submitted by a pass of the
-//!   committing thread's right after. What it leaves goes to this thread, which it wakes, and a
-//!   pass under way takes the commit in instead. One wake and one thread hop fewer per command
+//!   encoding) and wait behind no earlier commit, as this thread's own pass picks them
+//!   ([`Order::next`], [`is_behind`]), up to [`PASS_SUBMISSIONS`]; their submission handlers then
+//!   run on it, in their turn ([`Turns`]), and their transitions to `Scheduled` run on it where
+//!   plain, else go to their queues' contexts. The first head in commit order ready but for its
+//!   submission checks, every value it waits for reached on the device or by the host, and behind
+//!   no earlier commit, has its checks run there too, without the lock, the head marked so this
+//!   thread leaves them ([`claim_check`]), and is submitted by a pass of the committing thread's
+//!   right after. A head another queue holds back (its checks waiting for a signal to land, or run
+//!   by this thread) so holds back no later commit that does not wait behind it. What it leaves
+//!   goes to this thread, which it wakes, and a pass under way takes the commit in instead. One wake and one thread hop fewer per command
 //!   buffer, its submission's cost on the committing thread.
 //! - **Submission handlers run in submission order, whichever thread runs them** ([`Turns`]).
 //!   Each pass that took batches with submission handlers takes a ticket under the lock, in the
@@ -41,9 +44,10 @@
 //!   thread becomes the passer ([`Inbox::pass_once`]), takes them into the order and submits what
 //!   needs nothing of this thread and runs none of the program's code ([`submit_plain_ready`]):
 //!   batches with no host step, no submission check, no handler of any kind, no switch of storage
-//!   forms, and never one of a `VkQueue` whose batches group. It takes the head committed first of
-//!   all and stops there, so its submissions are in commit order; it leaves [`Awaits`], [`Left`]
-//!   and the group to this thread, which it wakes for what it left; and it never looks at the
+//!   forms, and never one of a `VkQueue` whose batches group. It takes the ready heads in commit
+//!   order, passing over a held one only for a head that waits behind no earlier commit, as this
+//!   thread's own pass does; it leaves [`Awaits`], [`Left`] and the group to this thread, which
+//!   it wakes for what it left; and it never looks at the
 //!   inbox again, so what was left to it goes to this thread by the same fences
 //!   ([`Inbox::passed_over`]). Counted: `WorkCounts::scheduler_passes_by_waiters` and
 //!   `WorkCounts::batches_submitted_by_waiters`.
@@ -927,13 +931,13 @@ impl Scheduler {
     /// The committing thread's own pass, right after its commit was posted with no wake
     /// ([`Hand::Pass`], `CommandBuffer::commit_and_submit`; the module docs): where no passer is
     /// counted it becomes the passer ([`Inbox::pass_once_then`]), takes in what the inbox holds,
-    /// and submits the heads committed first while [`plain_ready`] holds for each
-    /// ([`Passer::Committing`]); then, still counted and without the lock, it runs their
-    /// submission handlers in their turn ([`Turns`]) and lets go of what the pass held, a command
-    /// buffer's last reference on a handler thread. Where the head it stopped at waits only for
-    /// its submission checks and this thread may run them ([`claim_check`]), it runs them then, as
-    /// the scheduler's thread does (`CommandBufferShared::run_checks`), and passes again under the
-    /// lock ([`Inbox::pass_again`]), which submits that head first; and so on, up to
+    /// and submits the heads [`plain_ready`] holds for, in commit order, each behind no earlier
+    /// commit ([`submit_plain_ready`], [`Passer::Committing`]); then, still counted and without the
+    /// lock, it runs their submission handlers in their turn ([`Turns`]) and lets go of what the
+    /// pass held, a command buffer's last reference on a handler thread. Where a head left waits
+    /// only for its submission checks and this thread may run them ([`claim_check`]), it runs them
+    /// then, as the scheduler's thread does (`CommandBufferShared::run_checks`), and passes again
+    /// under the lock ([`Inbox::pass_again`]), which submits that head; and so on, up to
     /// [`PASS_SUBMISSIONS`] batches in all. What it leaves, and anything committed or nudged
     /// meanwhile, goes to the thread, which it wakes. Where a passer is counted, that pass takes
     /// the commit in. Then it makes the completion turn a command buffer that needs no GPU work
@@ -1728,16 +1732,16 @@ struct AtCommit {
     segments: Vec<(usize, u64)>,
     /// The batches it submitted.
     submitted: usize,
-    /// The checks of the head it stopped at, taken for the thread to run ([`claim_check`]).
+    /// The checks of a head it left, taken for the thread to run ([`claim_check`]).
     check: Option<Work>,
     /// It left batches in the order or the group.
     left_over: bool,
 }
 
 impl AtCommit {
-    /// Submit the heads committed first while [`plain_ready`] holds for each, at most `room`; then,
-    /// with room for one more, take the checks of the head it stopped at where the committing
-    /// thread may run them ([`claim_check`]). Its holds go to `spent`.
+    /// Submit the heads [`plain_ready`] holds for, in commit order, at most `room`
+    /// ([`submit_plain_ready`]); then, with room for one more, take the checks of the first head
+    /// left whose checks the committing thread may run ([`claim_check`]). Its holds go to `spent`.
     fn pass(state: &mut State, mut spent: Spent, room: usize) -> AtCommit {
         let mut handlers = Handlers::new();
         let committing = (Passer::Committing, &mut handlers);
@@ -1784,13 +1788,11 @@ impl AtCommit {
 
 /// Submit, into `spent`, the batches a thread other than the scheduler's may submit itself
 /// ([`Scheduler::submit_before_waiting`], [`Scheduler::submit_at_commit`]), at most `room` of
-/// them: the head committed first of all while [`plain_ready`] holds for it. How many it
-/// submitted.
-///
-/// It takes the first head rather than the first *ready* one ([`Order::take_first`]), so it stops
-/// at the first head it may not submit: submission order stays commit order, and no batch that
-/// keeps its place is passed over by one committed after it ([`is_behind`] has nothing to answer).
-/// That is why it is a path of its own and not a condition in [`submit_ready`]'s head selection.
+/// them: each the line head committed first of those [`plain_ready`] holds for that wait behind
+/// no earlier commit, as the thread's own pass picks its next ([`Order::next`], [`is_behind`]). A
+/// head held (for its checks, a host step, an event value) holds back no later commit of another
+/// queue but one whose footprint runs in commit order with it while it keeps its place, as in the
+/// thread's own pass. How many it submitted.
 ///
 /// **It touches none of the thread's own state.** [`Awaits`] is what the thread's last pass left
 /// it asleep on, its `vkWaitSemaphores` among them, and [`Left`] is the work that pass handed it:
@@ -1819,7 +1821,11 @@ fn submit_plain_ready(
                 ..
             } = &mut *state;
             let (binary, decodes, untracked) = (&*binary, &*decodes, *untracked_decodes);
-            order.take_first(|held| plain_ready(held, binary, decodes, untracked, passer))
+            let mut memo = Behind::default();
+            order.next(
+                |order, sequence| is_behind(order, binary, &mut memo, sequence),
+                |held| plain_ready(held, binary, decodes, untracked, passer),
+            )
         };
         let Some((queue, sequence, mut held, waits)) = taken else {
             drop(busy);
@@ -1952,7 +1958,7 @@ pub(crate) enum Hand {
 ///
 /// - no segments, so no host step the thread records, and none in its [`Left`] work;
 /// - no submission check left to run, which runs the program's code on the thread that runs it
-///   (a committing thread runs the checks of the head committed first of all itself first, where
+///   (a committing thread runs the checks of a head left itself first, where
 ///   [`claim_check`] takes them);
 /// - for a waiting thread, no submission handler and no scheduled handler, so its transition to
 ///   `Scheduled` is plain and runs none of the program's code where it is published
@@ -2001,14 +2007,17 @@ fn plain(
     quiet && !held.buffer.groups()
 }
 
-/// The checks of the head committed first of all, taken for a committing thread to run itself
-/// without the lock and right before it submits that head ([`Scheduler::submit_at_commit`]), as
-/// Metal checks a submission as it submits it: where they are still to run and no other thread
-/// took them, nothing else holds the head back from that thread ([`plain`]), and every event value
-/// it waits for was reached on the device or by the host, or is one its `VkQueue` waits for
-/// ([`landing_waits`]). A head whose checks wait for a submitted GPU signal to land (a shared
-/// event's) is left to the scheduler's thread, which waits for it ([`check_heads`]). Marked
-/// taken, so that thread leaves them.
+/// The checks of the first line head in commit order whose checks a committing thread may run
+/// itself, without the lock and right before it submits that head
+/// ([`Scheduler::submit_at_commit`]), as Metal checks a submission as it submits it: where they are still to run and no other thread
+/// took them, nothing else holds the head back from that thread ([`plain`]), every event value it
+/// waits for was reached on the device or by the host, or is one its `VkQueue` waits for
+/// ([`landing_waits`]), and it waits behind no earlier commit ([`is_behind`]: no check of a head
+/// before the batch it waits behind is submitted, as in the thread's own pass, [`check_heads`]). A
+/// head whose checks wait for a submitted GPU signal to land (a shared event's) is left to the
+/// scheduler's thread, which waits for it, and so is one whose checks that thread took; a later
+/// commit's head of another queue may be taken past either. Marked taken, so that thread leaves
+/// them.
 fn claim_check(state: &mut State) -> Option<Work> {
     let State {
         order,
@@ -2017,17 +2026,19 @@ fn claim_check(state: &mut State) -> Option<Work> {
         untracked_decodes,
         ..
     } = state;
-    let held = order.first_mut()?;
-    if !held.checked || held.checks_taken || !held.buffer.needs_check(held.index) {
-        return None;
-    }
     let passer = Passer::Committing;
-    if !plain(held, binary, decodes, *untracked_decodes, passer) {
-        return None;
-    }
-    if !landing_waits(held).is_some_and(|waits| waits.is_empty()) {
-        return None;
-    }
+    let mut claimable = order.heads_where(|held| {
+        held.checked
+            && !held.checks_taken
+            && held.buffer.needs_check(held.index)
+            && plain(held, binary, decodes, *untracked_decodes, passer)
+            && landing_waits(held).is_some_and(|waits| waits.is_empty())
+    });
+    claimable.sort_unstable();
+    let mut memo = Behind::default();
+    let sequence =
+        (claimable.into_iter()).find(|&sequence| !is_behind(order, binary, &mut memo, sequence))?;
+    let held = order.head_mut_at(sequence)?;
     held.checks_taken = true;
     Some((held.buffer.hold(), held.index))
 }

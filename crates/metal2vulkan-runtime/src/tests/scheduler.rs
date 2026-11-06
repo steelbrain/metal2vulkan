@@ -10,10 +10,10 @@
 //! and [`EventShared::reached`], `event.rs`) and here makes a pass again ([`Model::host_set`],
 //! [`Model::step`]).
 //!
-//! [`Order::take_first`], which a thread about to block submits with
-//! (`scheduler::submit_plain_ready`), is tested here too: it takes the head committed first of
-//! all and stops at it, so it passes no head over and needs no answer of
-//! [`Order::is_behind`](crate::scheduler::order::Order::is_behind).
+//! The passes a committing thread and a thread about to block make themselves
+//! (`scheduler::submit_plain_ready`) take their heads with the same [`Order::next`] and
+//! [`Order::is_behind`](crate::scheduler::order::Order::is_behind) as the scheduler's own, which
+//! [`take`] stands for here.
 //!
 //! The model is the worst case Vulkan allows: each `VkQueue` runs its batches strictly in
 //! submission order, and a batch at its head whose waits are not met stalls every batch behind
@@ -789,55 +789,4 @@ fn heads_that_go_in_commit_order_take_no_footprint() {
     assert_eq!(taken, 2049);
     assert_eq!((footprints.get(), keeps.get()), (0, 0));
     assert!(ready_order.is_empty());
-}
-
-/// The batch a thread about to block takes next ([`Order::take_first`]): the head committed first
-/// of all, and only where it is ready with nothing held for the runtime.
-fn take_first(order: &mut Order<Work>) -> Option<char> {
-    order
-        .take_first(|work| (!work.step && !work.event).then_some(()))
-        .map(|(_, _, work, ())| work.name)
-}
-
-/// A thread about to block stops at the first head in commit order it may not submit, whatever
-/// else is ready: a batch held for its host step, and one waiting for an event, hold back every
-/// later commit, so its submissions are in commit order and no batch that keeps its place is
-/// passed over. The scheduler's own pass, which has the step and the check to run, goes on past
-/// them ([`take`]).
-#[test]
-fn a_thread_about_to_block_stops_at_the_first_head_it_may_not_submit() {
-    for held in [stepping as fn(Work) -> Work, waiting] {
-        let mut order = Order::default();
-        order.push(1, [work('a', &[], &[1]), work('b', &[], &[1])]);
-        order.push(2, [held(work('h', &[], &[2])), work('i', &[], &[2])]);
-        order.push(3, [work('c', &[], &[3])]);
-        // Commit order: a, b, h, i, c.
-        assert_eq!(take_first(&mut order), Some('a'));
-        assert_eq!(take_first(&mut order), Some('b'));
-        assert_eq!(take_first(&mut order), None, "it went past the head held");
-        // The scheduler's pass takes what it can, the held line's batches keeping their place.
-        assert_eq!(take(&mut order), Some('c'));
-        stepped(&mut order, 'h');
-        let taken: Vec<_> = std::iter::from_fn(|| take_first(&mut order)).collect();
-        match held(work('h', &[], &[])).event {
-            // A step recorded lets it go; the line then drains in commit order.
-            false => assert_eq!(taken, ['h', 'i']),
-            // The event is still not reached: nothing goes, and the scheduler's pass holds it too.
-            true => assert_eq!(taken, [] as [char; 0]),
-        }
-    }
-}
-
-/// With nothing held, it drains every line in commit order, one batch at a time.
-#[test]
-fn a_thread_about_to_block_drains_the_lines_in_commit_order() {
-    let mut order = Order::default();
-    order.push(1, [work('a', &[], &[]), work('d', &[], &[])]);
-    order.push(2, [work('b', &[], &[])]);
-    order.push(1, [work('e', &[], &[])]);
-    order.push(3, [work('c', &[], &[])]);
-    let taken: Vec<_> = std::iter::from_fn(|| take_first(&mut order)).collect();
-    assert_eq!(taken, ['a', 'd', 'b', 'e', 'c']);
-    assert!(order.is_empty());
-    assert_eq!(take_first(&mut order), None);
 }
