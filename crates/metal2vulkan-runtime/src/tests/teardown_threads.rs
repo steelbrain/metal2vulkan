@@ -54,7 +54,8 @@
 //!   (`warm/pass.rs`), held before a record while it holds it. The program's last drop stops the
 //!   holds and waits for them (`device/holds.rs`), so the device is torn down on the program's
 //!   thread before that drop returns. A device whose check makes no round (its policy takes no
-//!   texture in place, or it makes no class's pages) skips the check's case, saying so.
+//!   texture in place, or it makes no class's pages) skips the check's case, saying so. A program
+//!   handle's drop short of the last returns while another thread holds the registry's lock.
 //!
 //! The teardown's end is seen through the device's message sink, whose last share the instance
 //! drops after `vkDestroyInstance`, the teardown's last step: the sink owns a value that, dropped,
@@ -731,4 +732,33 @@ fn a_running_warm_pass_leaves_the_device_to_the_program_s_thread() {
     let holds = held_at_a_step(&device, Holder::WarmPass, start, || false)
         .expect("the warm pass reaches its hold");
     dropped_while_held(device, &ending, &holds, Holder::WarmPass);
+}
+
+/// A program handle's drop that leaves the program other handles counts it gone without the holds
+/// registry's lock (`device/holds.rs`): the drops of the handles the program's objects, command
+/// buffers and encoders make, a draw's among them, share no lock. One dropped on another thread
+/// while this thread holds the lock returns; the program's last drop then tears the device down
+/// here. A drop that waited for the lock would not return until the lock went.
+#[test]
+fn a_program_handle_s_drop_short_of_the_last_takes_no_lock() {
+    let scratch = Scratch::new("program-drop");
+    let (device, ending) = watched(&scratch.0);
+    let other = device.clone();
+    let holds = Arc::clone(&device.shared().holds);
+    let (returned, dropping) = holds.locked(|| {
+        let (sender, dropped) = mpsc::channel();
+        let dropping = std::thread::spawn(move || {
+            drop(other);
+            let _ = sender.send(());
+        });
+        (dropped.recv_timeout(WAIT).is_ok(), dropping)
+    });
+    dropping.join().unwrap();
+    assert!(
+        returned,
+        "a program handle's drop short of the last waited for the registry's lock"
+    );
+    drop(holds);
+    drop(device);
+    ending.ended_here();
 }

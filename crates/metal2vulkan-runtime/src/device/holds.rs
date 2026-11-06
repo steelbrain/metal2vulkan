@@ -17,13 +17,17 @@
 //!   ([`Device::holds_go_on`]): the check between its rounds, the warm pass between its records.
 //!   So the wait is at most the check's round in progress (and its release of its buffer), or the
 //!   record the pass is making. It happens only at teardown.
-//! - **Exact.** A program handle's drop, a holder's take and a holder's handle's clone and drop
-//!   count under the registry's lock; a holder's handle is counted gone only once its share of the
-//!   device went ([`Share`]), so the program's last drop, waiting for that, holds the device's last
-//!   share. A program handle is counted gone before its share goes: a program handle another
-//!   thread drops at once may go last, inside that drop. A program handle's clone counts without
-//!   the lock (it clones a handle that is counted), and so does a runtime thread's upgrade, which
-//!   keeps the device as before: one made while the last drop waits goes on that thread.
+//! - **Exact.** A holder's take and a holder's handle's clone and drop count under the registry's
+//!   lock; a holder's handle is counted gone only once its share of the device went ([`Share`]),
+//!   so the program's last drop, waiting for that, holds the device's last share. A program
+//!   handle's drop counts without the lock, and only the last takes it, to stop the holds and wait:
+//!   a holder that took its hold before that drop's lock is waited for, as one that took it before
+//!   the drop. So the drops of the program's handles, which its objects, command buffers and
+//!   encoders make at every turn on every thread, share no lock. A program handle is counted gone
+//!   before its share goes: a program handle another thread drops at once may go last, inside that
+//!   drop. A program handle's clone counts without the lock (it clones a handle that is counted),
+//!   and so does a runtime thread's upgrade, which keeps the device as before: one made while the
+//!   last drop waits goes on that thread.
 //! - **A stopped device is gone.** Once stopped, no holder takes the device, and a device made on
 //!   the same physical device makes a new one (`create.rs`) rather than revive it.
 
@@ -95,6 +99,13 @@ impl Holds {
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     pub(crate) fn held(&self, holder: Holder) -> &crate::freed_memory::held::Held {
         &self.held[holder as usize]
+    }
+
+    /// Run `run` with the registry's lock held, for the crate's device tests.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) fn locked<R>(&self, run: impl FnOnce() -> R) -> R {
+        let _state = lock(&self.state);
+        run()
     }
 
     /// Let `holder`'s test hold go once the holds were stopped, or once it was let go already.
@@ -185,10 +196,10 @@ impl Drop for Device {
             return;
         }
         let holds = &self.0.holds;
-        let mut state = lock(&holds.state);
         if holds.program.fetch_sub(1, Ordering::SeqCst) > 1 {
             return;
         }
+        let mut state = lock(&holds.state);
         state.stopped = true;
         holds.stopping.store(true, Ordering::SeqCst);
         if state.holders == 0 || exit_guard::on_runtime_thread() {
