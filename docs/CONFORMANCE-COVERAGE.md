@@ -44,7 +44,7 @@ Its limits, measured rather than asserted:
 | committed recordings | 1182 |
 | distinct SDK items the Metal leg reaches, of any status | 802 |
 | of those, reached only where this cannot name the family | 3 |
-| ledger rows (a case whose gap is recorded) | 1378 |
+| ledger rows (a case whose gap is recorded) | 1376 |
 | declared crossings of the option space (pairs put to Metal at once) | 26 |
 | declared crossings that are no pair of it (a boolean or numeric field, or one type in two slots) | 30 |
 
@@ -2229,8 +2229,6 @@ A case whose difference from Metal is recorded rather than compared away. The le
 
 | case | waiting on |
 |---|---|
-| `mesh-object-draws-partial-threadgroup-6-by-4` | The runtime refuses `drawMeshThreads` where the threads leave a partial object threadgroup, `Unsupported(MeshShading, NotImplemented)` out of the bind state (cr… |
-| `mesh-object-draws-partial-threadgroup-5x3-by-4x2` | The runtime refuses `drawMeshThreads` where the threads leave a partial object threadgroup, `Unsupported(MeshShading, NotImplemented)` out of the bind state (cr… |
 | `discard-quad-sum-placement` | Metal counts the quads the discard drops whole in a simdgroup sum that sits ahead of the discard for a measured reason -- the discard's condition reads the sum … |
 | `discard-quad-sum-placement` | Metal counts the quads the discard drops whole in a simdgroup sum that sits ahead of the discard for a measured reason -- the discard's condition reads the sum … |
 | `discard-quad-sum-placement` | Metal counts the quads the discard drops whole in a simdgroup sum that sits ahead of the discard for a measured reason -- the discard's condition reads the sum … |
