@@ -464,19 +464,22 @@ pub fn graphics_state(
                             };
                             extended_write_mask(form, stored)?
                         }
-                        // A mask of some of the codes one word holds, which the stage merges in
-                        // the storage form where the device orders fetch so: on a device that
-                        // orders it in neither form, the orderings the merge needs.
+                        // A mask of some of the codes one word holds, which a stage compiled for
+                        // this pipeline merges where the device orders fetch (one that reaches here
+                        // was compiled for another): on a device that orders it in neither form,
+                        // the orderings the merge needs.
                         (Some(form), None) => {
                             extended_write_mask(form, descriptor_mask).map_err(|e| {
-                                match color_writes::merged_extended(a)
-                                    && crate::lower::fragment::fetch::fetch_unordered(p)
-                                {
-                                    true => {
+                                let unordered = crate::lower::fragment::fetch::fetch_unordered(p);
+                                match (color_writes::merged_extended(a), unordered) {
+                                    (true, true) => {
                                         crate::lower::fragment::fetch::unordered_extended_fetch()
                                             .into()
                                     }
-                                    false => e,
+                                    (true, false) => {
+                                        Error::NeedsInput(RuntimeInput::FramebufferFetch)
+                                    }
+                                    (false, _) => e,
                                 }
                             })?
                         }
@@ -1153,8 +1156,9 @@ fn uniform_blend(
 /// (`color_writes::merged_extended`): in the interlocked storage form, which leaves the attachment
 /// out of the subpass, where the device orders fetch through the pixel interlock, and over the
 /// input attachment, whose write the caller makes of every raw component, where it orders fetch
-/// through rasterization-order input attachments; on a device that orders it in neither form, the
-/// caller names the orderings the merge needs. A bfloat form's channels
+/// through rasterization-order input attachments, so a stage that reaches here so was compiled
+/// for another pipeline (the caller answers `NeedsInput(FramebufferFetch)`); on a device that
+/// orders it in neither form, the caller names the orderings the merge needs. A bfloat form's channels
 /// are its own (red; red and green; all four), each a raw component; a mask of some of them is
 /// unmeasured and refused as above.
 fn extended_write_mask(

@@ -24,8 +24,9 @@
 //!   or bfloat one's too.
 //! - Refused, typed: a blended attachment the function writes on a device with neither ordering
 //!   (framebuffer fetch needing either, by the lowering), a mask of some of the codes one word
-//!   holds from a stage compiled without the pipeline's fetch state (`NotImplemented(Format)`; a
-//!   stage compiled for the pipeline merges them in the storage form, `blended_pipelines`), an
+//!   holds from a stage compiled without the pipeline's fetch state
+//!   (`NeedsInput(FramebufferFetch)`; a stage compiled for the pipeline merges them in the storage
+//!   form or over the input attachment, `blended_pipelines`), an
 //!   integer or a `float` output (Metal's pipeline errors, `ColorAttachment`), a fragment compiled
 //!   without the pipeline's attachments (`NeedsInput(ColorWrites)`).
 //! - A framebuffer fetch of such an attachment through an input attachment (lavapipe) reads the
@@ -610,8 +611,13 @@ fn unmodelled_extended_range_targets_are_refused() {
                     );
                 }
                 form => {
+                    // Merged by a stage compiled with the pipeline's fetch state, which this one
+                    // was not (`blended_pipelines`).
                     let e = linked.expect_err(&what);
-                    assert!(is_format_refusal(&e), "{what} red mask: {e}");
+                    assert!(
+                        matches!(e, Error::NeedsInput(RuntimeInput::FramebufferFetch)),
+                        "{what} red mask: {e}"
+                    );
                     // The two-plane forms' three color codes alone are the color word, the
                     // first raw component.
                     if let ExtendedRange::Planes { .. } = form {
