@@ -6,12 +6,12 @@
     {
       "fixture": "mesh_pipeline_limits.ll",
       "entry": "mesh_pipeline_limits_object",
-      "source_sha256": "40497b8514fabad6ea18276085fb499997b907a455b2dfa0d89b45031c88f6d9"
+      "source_sha256": "baf458800da7dd5691b9b47d29a3273e64fa0da2babb824520e6f2ac40e893c4"
     },
     {
       "fixture": "mesh_pipeline_limits.air.ll",
       "entry": "mesh_pipeline_limits_object",
-      "source_sha256": "f71e0a99066292c3b28f0ca2d3c83de542b54c1f21ec6e5c836630a1626d0a9b"
+      "source_sha256": "a2ef527bd774614156dc4ac4280c06e74c46bca80038b7600e39dabd759c229c"
     }
   ],
   "answers": [
@@ -47,7 +47,7 @@
                         "value": "absent",
                         "digest": {
                           "kind": "sha256",
-                          "hex": "40497b8514fabad6ea18276085fb499997b907a455b2dfa0d89b45031c88f6d9"
+                          "hex": "baf458800da7dd5691b9b47d29a3273e64fa0da2babb824520e6f2ac40e893c4"
                         }
                       }
                     },
@@ -57,7 +57,7 @@
                         "value": "absent",
                         "digest": {
                           "kind": "sha256",
-                          "hex": "f71e0a99066292c3b28f0ca2d3c83de542b54c1f21ec6e5c836630a1626d0a9b"
+                          "hex": "a2ef527bd774614156dc4ac4280c06e74c46bca80038b7600e39dabd759c229c"
                         }
                       }
                     },
@@ -67,7 +67,7 @@
                         "value": "absent",
                         "digest": {
                           "kind": "sha256",
-                          "hex": "edaf5cc785a5b9aef486beb3d4323f9d4119cd4389f7cb8bf59613e2b1049482"
+                          "hex": "a9d8adc996802745e7f3912c3f0cf102210bf11d1d1330eac6bd60b5f178b0cc"
                         }
                       }
                     }
@@ -254,6 +254,104 @@
       "per_state": {
         "pipelines": 0,
         "states": 1
+      }
+    }
+  ],
+  "times": [
+    {
+      "leg": "metal",
+      "venue": "native Metal",
+      "chip": "apple-m3-max",
+      "os_build": "26A434",
+      "rounds": 8,
+      "measured": "8 round(s) of the whole selection, in the case set's own order, each round on a fresh device, our shader cache carried over between the cases of a round; a figure is the median of the rounds' own medians; Metal's leg ran at a one-minute load average of 30.12 and ours at 38.41; the legs run one after the other, so the per-call margin is judged only when both are 26.0 or under and within 2.0x of each other",
+      "instrument": 413,
+      "times": {
+        "case": "mesh-limits-max-64-32",
+        "calls": 2,
+        "in_calls": 56139417,
+        "on_cpu": 1226500,
+        "blocked": 54766083,
+        "elsewhere": 2917,
+        "spend": 56142334,
+        "spend_least": 46343251,
+        "spend_most": 83293584,
+        "per_call": [
+          {
+            "call": "library",
+            "least_calls": 1,
+            "most_calls": 1,
+            "wall": 55780750,
+            "on_cpu": 888917,
+            "blocked": 54766083,
+            "wall_least": 46107459,
+            "wall_most": 82927792,
+            "wall_total": 55780750,
+            "on_cpu_total": 888917,
+            "blocked_total": 54766083
+          },
+          {
+            "call": "mesh_pipeline_limits",
+            "least_calls": 1,
+            "most_calls": 1,
+            "wall": 234375,
+            "on_cpu": 234750,
+            "blocked": 0,
+            "wall_least": 226417,
+            "wall_most": 367083,
+            "wall_total": 234375,
+            "on_cpu_total": 234750,
+            "blocked_total": 0
+          }
+        ]
+      }
+    },
+    {
+      "leg": "ours",
+      "venue": "Apple M3 Max",
+      "chip": "apple-m3-max",
+      "os_build": "26A434",
+      "rounds": 8,
+      "measured": "8 round(s) of the whole selection, in the case set's own order, each round on a fresh device, our shader cache carried over between the cases of a round; a figure is the median of the rounds' own medians; Metal's leg ran at a one-minute load average of 30.12 and ours at 38.41; the legs run one after the other, so the per-call margin is judged only when both are 26.0 or under and within 2.0x of each other",
+      "instrument": 286,
+      "times": {
+        "case": "mesh-limits-max-64-32",
+        "calls": 2,
+        "in_calls": 5862500,
+        "on_cpu": 5775291,
+        "blocked": 89500,
+        "elsewhere": 1292,
+        "spend": 5863792,
+        "spend_least": 5425292,
+        "spend_most": 17811249,
+        "per_call": [
+          {
+            "call": "library",
+            "least_calls": 1,
+            "most_calls": 1,
+            "wall": 1105958,
+            "on_cpu": 1016458,
+            "blocked": 41541,
+            "wall_least": 836084,
+            "wall_most": 4676500,
+            "wall_total": 1105958,
+            "on_cpu_total": 1016458,
+            "blocked_total": 41541
+          },
+          {
+            "call": "mesh_pipeline_limits",
+            "least_calls": 1,
+            "most_calls": 1,
+            "wall": 4756542,
+            "on_cpu": 4758833,
+            "blocked": 4000,
+            "wall_least": 4550208,
+            "wall_most": 13132916,
+            "wall_total": 4756542,
+            "on_cpu_total": 4758833,
+            "blocked_total": 4000
+          }
+        ]
       }
     }
   ]

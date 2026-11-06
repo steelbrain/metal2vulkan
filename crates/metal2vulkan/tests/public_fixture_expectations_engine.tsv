@@ -1564,16 +1564,12 @@ engine/mesh_partial_barrier.ll	mesh_partial_barrier_if	ok	ok	ok	ok	ok	ok	ok	ok	o
 engine/mesh_partial_barrier.ll	mesh_partial_barrier_mesh	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/mesh_partial_barrier.ll	mesh_partial_barrier_mesh_early_return	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/mesh_pipeline_limits.air.ll	mesh_pipeline_limits_object	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
-engine/mesh_pipeline_limits.air.ll	mesh_pipeline_limits_object_64	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/mesh_pipeline_limits.air.ll	mesh_pipeline_limits_object_grid_4	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/mesh_pipeline_limits.air.ll	mesh_pipeline_limits_mesh	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
-engine/mesh_pipeline_limits.air.ll	mesh_pipeline_limits_mesh_64	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/mesh_pipeline_limits.air.ll	mesh_pipeline_limits_mesh_alone	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/mesh_pipeline_limits.ll	mesh_pipeline_limits_object	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
-engine/mesh_pipeline_limits.ll	mesh_pipeline_limits_object_64	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/mesh_pipeline_limits.ll	mesh_pipeline_limits_object_grid_4	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/mesh_pipeline_limits.ll	mesh_pipeline_limits_mesh	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
-engine/mesh_pipeline_limits.ll	mesh_pipeline_limits_mesh_64	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/mesh_pipeline_limits.ll	mesh_pipeline_limits_mesh_alone	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/mip_level_sampling.air.ll	mip_bias_kernel	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/mip_level_sampling.air.ll	mip_implicit_fragment	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
