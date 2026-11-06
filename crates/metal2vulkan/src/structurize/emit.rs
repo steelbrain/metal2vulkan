@@ -74,6 +74,13 @@ pub trait CodeEmitter {
         false
     }
 
+    /// The per-invocation `bool` the predicated walk starts `live` from, computed in the
+    /// function's entry block: whether the invocation runs the body at all (an object function's
+    /// partial threadgroup runs only its first invocations). `None`: every invocation does.
+    fn entry_live(&self) -> Option<Value> {
+        None
+    }
+
     /// Whether block `b` holds a workgroup synchronization, which every invocation of the
     /// workgroup must execute together.
     fn syncs(&self, _b: BlockId) -> bool {

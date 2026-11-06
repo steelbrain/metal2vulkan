@@ -188,6 +188,10 @@ pub struct EmitCx<'a> {
     /// where `live` holds. In a workgroup-uniform block every invocation is live or none is, so
     /// every lane takes part as active (a result nobody is live for is never stored).
     pub active: Option<SValue>,
+    /// The flag a predicated walk starts `live` from, computed in the function's entry: whether
+    /// the invocation is one of its partial object threadgroup's threads (`dispatch::emit_entry`).
+    /// `None`: every invocation runs the body.
+    pub(crate) entry_live: Option<SValue>,
     /// The memory-plan slots a buffer store emitted so far merges a partial word into, through
     /// the sub-word store's two atomics, which read the word they modify. Whether a store merges
     /// depends on the leaf the lowering chose and on the units the slot's views hold on the
@@ -251,6 +255,7 @@ impl<'a> EmitCx<'a> {
             entry_block: None,
             live: None,
             active: None,
+            entry_live: None,
             merged: BTreeSet::new(),
             localized: None,
             fault: None,
@@ -669,6 +674,7 @@ impl<'a> Emitter<'a> {
                 entry_block: None,
                 live: None,
                 active: None,
+                entry_live: None,
                 merged: BTreeSet::new(),
                 localized: None,
                 fault: None,
@@ -1106,6 +1112,10 @@ impl CodeEmitter for Emitter<'_> {
 
     fn predicated(&self) -> bool {
         self.cx.plan.families.simd.predication.is_some()
+    }
+
+    fn entry_live(&self) -> Option<SValue> {
+        self.cx.entry_live
     }
 
     fn syncs(&self, b: crate::air::ir::BlockId) -> bool {

@@ -3194,9 +3194,8 @@ fn size_value(keys: &DispatchKeys, key: SpecKey, l: [u32; 3]) -> Option<u64> {
 /// leaves a partial object threadgroup runs that threadgroup with the threads left, as Metal does
 /// (probe 4): one draw of whole threadgroups, `MultiRegion` 1, Metal's threads per grid and its
 /// region flagged `lower::dispatch::NONUNIFORM`, whose object function answers the smaller
-/// threadgroup and returns its invocations past it before its body
-/// (`RuntimeFact::PartialObjectThreadgroups`); for an object function whose body holds a
-/// workgroup barrier, which those invocations would not reach, such a draw is not implemented. A
+/// threadgroup and runs its invocations past it none of its body
+/// (`RuntimeFact::PartialObjectThreadgroups`). A
 /// draw whose object threadgroup Metal draws nothing for (no thread, or past 1024) launches
 /// nothing. A direct draw's object grid is Metal's ([`metal_object_grid`], measured): each
 /// axis's threads per grid wrap at 2^32, the draw runs the threadgroups the wrapped threads fill,

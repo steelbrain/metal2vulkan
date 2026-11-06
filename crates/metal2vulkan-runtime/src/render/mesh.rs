@@ -38,14 +38,13 @@
 //!   launches the whole object threadgroups the threads fill, rounded up, and the last along an
 //!   axis answers the threads left as its `threads_per_threadgroup` (and its simdgroup and
 //!   quadgroup counts and thread positions), its invocations past them returning before the
-//!   object function's body (the binder's region flag, `RuntimeFact::PartialObjectThreadgroups`),
-//!   on a device with `VK_EXT_mesh_shader` and emulated alike.
+//!   object function's body, or, where the body holds a `threadgroup_barrier`, walking it to each
+//!   barrier without running anything else of it (the binder's region flag,
+//!   `RuntimeFact::PartialObjectThreadgroups`), on a device with `VK_EXT_mesh_shader` and emulated
+//!   alike.
 //! - **Refused**, as the binder refuses them: a threadgroup or a grid past the device's limits
 //!   for its stage (`Unsupported{MeshShading}` naming the limit; an object grid only on a device
-//!   that does not fold object grids), a `drawMeshThreads` that leaves a partial object
-//!   threadgroup of an object function whose body holds a `threadgroup_barrier`
-//!   (`NotImplemented(MeshShading)`: the invocations past its threads would not reach the
-//!   barrier, which Vulkan leaves undefined), and an object
+//!   that does not fold object grids), and an object
 //!   function's arena with the lengths `setObjectThreadgroupMemoryLength:atIndex:` set
 //!   ([`RenderCommandEncoder::set_object_threadgroup_memory_length`]) past the device's workgroup
 //!   memory for the object stage (`Unsupported{ThreadgroupMemorySize}` naming the limit).

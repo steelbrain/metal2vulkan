@@ -83,6 +83,7 @@ mod engine_link;
 mod engine_linking;
 mod engine_matmul2d;
 mod engine_mesh;
+mod engine_mesh_barriers;
 mod engine_metal_denormals;
 mod engine_metal_math;
 mod engine_metal_readings;

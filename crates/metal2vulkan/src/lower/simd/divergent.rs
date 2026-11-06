@@ -35,11 +35,20 @@
 //! **Workgroup barriers in every tier**. A threadgroup barrier that part of the workgroup skips
 //! (after a divergent early return, under a thread-dependent condition, or in a loop with a
 //! per-thread trip count) is a workgroup barrier in non-uniform control flow, which Vulkan leaves
-//! undefined (an Intel GPU hangs on it). Every kernel with a workgroup barrier in a block
-//! `Uniformity` does not prove uniform is walked predicated, whatever its tier ([`barriers`]
-//! outside the emulated tier, `workgroup::check` in it), so every invocation reaches each such
-//! barrier, the returned ones inactive: the remaining invocations synchronize among themselves,
-//! Apple's reading. Outside the emulated tier only the workgroup barriers are synchronizations
+//! undefined (an Intel GPU hangs on it). Every kernel, object function and mesh function with a
+//! workgroup barrier in a block `Uniformity` does not prove uniform is walked predicated, whatever
+//! its tier ([`barriers`] outside the emulated tier, `workgroup::check` in it, which only a kernel
+//! takes), so every invocation reaches each such barrier, the returned ones inactive: the remaining
+//! invocations synchronize among themselves, Apple's reading.
+//!
+//! **Partial object threadgroups**. An object function's partial threadgroup
+//! (`lower::mesh::plan_partial_groups`) runs at the whole local size, and only its first threads
+//! are Metal's. One whose body holds a workgroup barrier anywhere is walked predicated
+//! ([`Predication::partial_groups`]) from `live` set to whether the invocation is one of its
+//! threadgroup's threads (`dispatch::KernelDecl::live`, which answers every invocation of a
+//! threadgroup that is not partial), so the invocations past them walk to each barrier as
+//! invocations that returned at entry, executing nothing else of the body: no store, load or
+//! atomic of theirs is made. Outside the emulated tier only the workgroup barriers are synchronizations
 //! ([`SyncSet::WorkgroupBarriers`]): a subgroup operation runs where `live` holds, so it sees the
 //! live invocations that execute it, its tangle in the source under maximal reconvergence. A loop
 //! vote there uses a workgroup word of its own (`RuntimeFact::PredicationVote`), declared when a
@@ -106,6 +115,10 @@ pub struct Predication {
     /// (`RuntimeFact::PredicationVote`), because a synchronization lies in a loop. The emulated
     /// tier votes in its scratch's first word.
     pub vote_word: bool,
+    /// An object function's partial threadgroups (`MeshPlan::partial_groups`): the walk starts
+    /// with `live` set only where the invocation is one of its threadgroup's threads
+    /// (`dispatch::emit_entry`), rather than everywhere.
+    pub partial_groups: bool,
 }
 
 impl Predication {
@@ -175,6 +188,7 @@ pub fn plan(
             uniform_conds: Vec::new(),
             set,
             vote_word: false,
+            partial_groups: false,
         };
         let mut home: Vec<(u32, u32)> = vec![(u32::MAX, 0); n];
         for (b, block) in body.blocks.iter() {
@@ -223,17 +237,23 @@ pub fn plan(
 /// (`RuntimeFact::PredicationVote`).
 pub const VOTE_BYTES: u32 = 4;
 
-/// Plan the predicated walk of a kernel outside the emulated tier: when some control barrier
-/// emitted at `Workgroup` scope stands in a block `Uniformity` does not prove workgroup uniform,
-/// every invocation must walk to it. `given` is the body's uniformity when the caller already holds
-/// it (`simd::partly_live`, which keeps its ledger bytes); otherwise it is computed here, only for
-/// a kernel with such a barrier, and released. A kernel whose workgroup barriers are all in uniform
-/// blocks keeps `predication: None` and is emitted as before.
+/// Plan the predicated walk of a kernel, object or mesh function outside the emulated tier: when
+/// some control barrier emitted at `Workgroup` scope stands in a block `Uniformity` does not prove
+/// workgroup uniform, every invocation must walk to it. `given` is the body's uniformity when the
+/// caller already holds it (`simd::partly_live`, which keeps its ledger bytes); otherwise it is
+/// computed here, only for a function with such a barrier, and released. A function whose
+/// workgroup barriers are all in uniform blocks keeps `predication: None` and is emitted as before,
+/// but for an object function of partial threadgroups (`MeshPlan::partial_groups`): one with any
+/// workgroup barrier is walked predicated from its threadgroup's threads
+/// ([`Predication::partial_groups`]).
 ///
 /// A synchronization in a loop makes the walk vote (`structurize::emit::CodeEmitter::vote`),
-/// which needs one workgroup word beside the kernel's threadgroup arena: the kernel depends on
-/// `RuntimeFact::PredicationVote`, and its static arena with that word must fit
-/// `maxComputeSharedMemorySize` (else `ThreadgroupMemorySize`).
+/// which needs one workgroup word beside the function's threadgroup arena: the function depends on
+/// `RuntimeFact::PredicationVote`, and its static arena with that word must fit its stage's
+/// workgroup memory (`mesh::workgroup_limit`, else `ThreadgroupMemorySize`); an object function's
+/// arena fact counts the word (`RuntimeFact::ObjectThreadgroupArena`). An object function whose
+/// barriers are uniform and whose word does not fit runs no partial threadgroup instead
+/// (`MeshPlan::partial_groups` cleared, so the binder refuses such a draw).
 pub fn barriers(
     cx: &mut SelectCx<'_>,
     strategy: &[Option<Strategy>],
@@ -242,7 +262,7 @@ pub fn barriers(
     given: Option<&Uniformity>,
     m: &mut Meter,
 ) -> Result<(), Error> {
-    if cx.stage != Stage::Kernel || tier == Tier::Emulated {
+    if !matches!(cx.stage, Stage::Kernel | Stage::Object | Stage::Mesh) || tier == Tier::Emulated {
         return Ok(());
     }
     let set = SyncSet::WorkgroupBarriers {
@@ -252,6 +272,8 @@ pub fn barriers(
     if !strategy.iter().flatten().any(|s| set.holds(s)) {
         return Ok(());
     }
+    // A partial object threadgroup's invocations past its threads walk to every barrier.
+    let partial = cx.stage == Stage::Object && cx.families.mesh.partial_groups;
     let computed;
     let u = match given {
         Some(u) => u,
@@ -271,17 +293,18 @@ pub fn barriers(
                         .is_some_and(|s| set.holds(s))
                 })
         });
-        if !divergent {
+        if !divergent && !partial {
             return Ok(None);
         }
         let mut p = plan(cx, strategy, u, set, cross, m)?;
         p.vote_word = sync_in_loop(cx, &p, m)?;
-        Ok(Some(p))
+        p.partial_groups = partial;
+        Ok(Some((p, divergent)))
     })();
     if given.is_none() {
         m.release(u.ledger_bytes());
     }
-    let Some(p) = r? else {
+    let Some((p, divergent)) = r? else {
         return Ok(());
     };
     if p.vote_word {
@@ -290,11 +313,44 @@ pub fn barriers(
         let arena = crate::lower::access::local::static_workgroup_bytes(cx);
         let required =
             super::workgroup::arena_bytes(arena, 0).saturating_add(u64::from(VOTE_BYTES));
-        crate::lower::mesh::workgroup_limit(cx).check(required)?;
+        match crate::lower::mesh::workgroup_limit(cx).check(required) {
+            Ok(()) => {}
+            // Uniform barriers need the walk only for partial threadgroups, which then stay
+            // refused.
+            Err(Error::Unsupported(_)) if !divergent => {
+                cx.families.mesh.partial_groups = false;
+                return Ok(());
+            }
+            Err(e) => return Err(e),
+        }
         cx.facts.insert(RuntimeFact::PredicationVote);
+        vote_in_object_arena(cx);
     }
     cx.families.simd.predication = Some(p);
     Ok(())
+}
+
+/// An object function's arena fact with the vote word in its static part, which the binder checks
+/// beside the encoder's lengths (`RuntimeFact::ObjectThreadgroupArena`).
+fn vote_in_object_arena(cx: &mut SelectCx<'_>) {
+    let arena = cx.facts.iter().find_map(|f| match *f {
+        RuntimeFact::ObjectThreadgroupArena {
+            static_bytes,
+            payload,
+        } => Some((static_bytes, payload)),
+        _ => None,
+    });
+    let Some((static_bytes, payload)) = arena else {
+        return;
+    };
+    cx.facts.remove(&RuntimeFact::ObjectThreadgroupArena {
+        static_bytes,
+        payload,
+    });
+    cx.facts.insert(RuntimeFact::ObjectThreadgroupArena {
+        static_bytes: static_bytes.saturating_add(VOTE_BYTES),
+        payload,
+    });
 }
 
 /// Whether a sync block of `p` lies in a loop of the kernel's CFG, so the walk may vote: it votes

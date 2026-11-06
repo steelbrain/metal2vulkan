@@ -28,7 +28,7 @@ use crate::pipeline::testing::{engine_dir, llvm_assemble, meter, AssembleError};
 use crate::spirv::testing::{check_words_valid, committed_profiles};
 use std::sync::Arc;
 
-fn fixture(stem: &str) -> Option<Vec<u8>> {
+pub(super) fn fixture(stem: &str) -> Option<Vec<u8>> {
     match llvm_assemble(&engine_dir().join(format!("{stem}.ll"))) {
         Ok(b) => Some(b),
         Err(AssembleError::Missing(why)) => {
@@ -39,7 +39,11 @@ fn fixture(stem: &str) -> Option<Vec<u8>> {
     }
 }
 
-fn compile(bc: &[u8], entry: &str, p: &DeviceProfile) -> Result<Arc<FunctionArtifact>, Error> {
+pub(super) fn compile(
+    bc: &[u8],
+    entry: &str,
+    p: &DeviceProfile,
+) -> Result<Arc<FunctionArtifact>, Error> {
     compile_with(bc, entry, &FunctionConstantValues::defaults(), p)
 }
 
@@ -70,7 +74,7 @@ fn lists_mesh_shader(stem: &str) -> bool {
 
 /// The committed profiles that enable `taskShader` and `meshShader`: exactly those whose device
 /// lists `VK_EXT_mesh_shader`, which each enables with its mesh limits.
-fn mesh_profiles() -> Vec<(String, DeviceProfile)> {
+pub(super) fn mesh_profiles() -> Vec<(String, DeviceProfile)> {
     let all = committed_profiles().expect("committed profiles");
     let mut out = Vec::new();
     for (stem, p) in all {
@@ -174,7 +178,7 @@ fn a_mesh_function_is_a_mesh_entry() {
 
 /// The committed profiles whose device does not list `VK_EXT_mesh_shader`: those that emulate a
 /// mesh function.
-fn emulating_profiles() -> Vec<(String, DeviceProfile)> {
+pub(super) fn emulating_profiles() -> Vec<(String, DeviceProfile)> {
     let out: Vec<(String, DeviceProfile)> = committed_profiles()
         .expect("committed profiles")
         .into_iter()
@@ -594,7 +598,7 @@ fn a_mesh_point_size_past_metals_largest_point_is_stored_as_it() {
 }
 
 /// A device of committed profile `stem`.
-fn device(stem: &str) -> crate::device::Device {
+pub(super) fn device(stem: &str) -> crate::device::Device {
     use crate::device::{Device, DeviceDescription, DevicePolicy};
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join(format!("../metal2vulkan-validation/profiles/{stem}.json"));
@@ -1882,62 +1886,6 @@ fn a_mesh_functions_buffer_writes_need_no_stage_store_feature() {
             assert!(!r.features.contains(&f), "{stem}: {f:?}");
         }
         check_words_valid(&a.module.words, r, p).unwrap_or_else(|e| panic!("{stem}: L3: {e}"));
-    }
-}
-
-/// An object function whose body holds a threadgroup barrier (`icb_object_threadgroup_object`)
-/// runs no partial threadgroup: its pipeline records no `PartialObjectThreadgroups`, a
-/// `drawMeshThreads` of whole object threadgroups draws, and one that leaves a partial one is
-/// `NotImplemented(MeshShading)`, emulated or not.
-#[test]
-fn a_partial_object_threadgroup_of_a_body_with_a_barrier_is_not_implemented() {
-    use crate::bind::{BindState, DrawCall};
-    use crate::budget::Budget;
-    use crate::error::{BindError, Unsupported};
-    use crate::library::Library;
-    use crate::pipeline::descriptor::{FunctionDescriptor, MeshPipelineDescriptor, StageSource};
-    let Some(bc) = fixture("icb_object_threadgroup") else {
-        return;
-    };
-    let lib = Library::from_air(&bc).expect("library");
-    let function = |name: &str| {
-        StageSource::Function(FunctionDescriptor::new(
-            lib.function(name).expect("function"),
-        ))
-    };
-    let draw = |threads| DrawCall::MeshThreads {
-        threads,
-        threads_per_object_group: [4, 1, 1],
-        threads_per_mesh_group: [8, 1, 1],
-    };
-    for (stem, _) in mesh_profiles().into_iter().chain(emulating_profiles()) {
-        let dev = device(&stem);
-        let mut d = MeshPipelineDescriptor::new(function("icb_object_threadgroup_mesh"));
-        d.object = Some(function("icb_object_threadgroup_object"));
-        d.rasterization_enabled = false;
-        let made = dev
-            .compile_mesh_pipeline(&d, &Budget::standard())
-            .unwrap_or_else(|e| panic!("{stem}: {e}"));
-        assert!(
-            !made
-                .dependencies
-                .iter()
-                .any(|d| d.fact == RuntimeFact::PartialObjectThreadgroups),
-            "{stem}"
-        );
-        let state = BindState::default();
-        let plan = made
-            .plan(&dev, &state.shape())
-            .unwrap_or_else(|e| panic!("{stem}: plan: {e}"));
-        plan.instantiate_draw(&state, &draw([8, 1, 1]))
-            .unwrap_or_else(|e| panic!("{stem}: whole object threadgroups: {e}"));
-        assert_eq!(
-            plan.instantiate_draw(&state, &draw([6, 1, 1])).err(),
-            Some(BindError::Unsupported(Unsupported::not_implemented(
-                Feature::MeshShading
-            ))),
-            "{stem}"
-        );
     }
 }
 

@@ -213,10 +213,7 @@ pub enum FeatureRow {
     RenderDynamicLibraries,
     /// "Compute dynamic libraries".
     ComputeDynamicLibraries,
-    /// "Mesh shading". Refused on every device for now, which keeps Metal3, and every family
-    /// that lists the row, false: a `drawMeshThreads` partial object threadgroup of an object
-    /// function that waits at a threadgroup barrier is not built (`NotImplemented(MeshShading)`).
-    /// Before that, a device that runs mesh functions natively (`VK_EXT_mesh_shader` and
+    /// "Mesh shading". A device that runs mesh functions natively (`VK_EXT_mesh_shader` and
     /// `meshShader`) needs `taskShader`; one that runs them as compute work
     /// (`DeviceProfile::emulates_mesh_shading`) needs nothing more.
     MeshShading,
@@ -1391,19 +1388,11 @@ impl FeatureRow {
                 first([not_implemented(Feature::TileShading)])
             }
             // Mesh pipelines (`new_mesh_render_pipeline_state`, the encoder's mesh draws): the
-            // stages ([`mesh_stages`]), then what the binder does not implement yet: a
-            // `drawMeshThreads` that leaves a partial object threadgroup of an object function
-            // that waits at a threadgroup barrier. Indirect mesh draws read the counts an
-            // arguments pass writes (`render/mesh_arguments.rs`); an indirect command buffer's
-            // mesh draws are render commands first.
-            F::MeshShading | F::IndirectMeshDrawArguments => {
-                first([mesh_stages(f), not_implemented(Feature::MeshShading)])
-            }
-            F::IcbMeshDraws => first([
-                mesh_stages(f),
-                gap(G::IndirectRenderCommands),
-                not_implemented(Feature::MeshShading),
-            ]),
+            // stages ([`mesh_stages`]). Indirect mesh draws read the counts an arguments pass
+            // writes (`render/mesh_arguments.rs`); an indirect command buffer's mesh draws are
+            // render commands first.
+            F::MeshShading | F::IndirectMeshDrawArguments => first([mesh_stages(f)]),
+            F::IcbMeshDraws => first([mesh_stages(f), gap(G::IndirectRenderCommands)]),
             // Ray tracing: ray queries and acceleration structures on device addresses, then the
             // runtime's acceleration structures.
             F::RayTracingCompute

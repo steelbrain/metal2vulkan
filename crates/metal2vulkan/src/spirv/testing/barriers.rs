@@ -522,7 +522,14 @@ fn impure_functions(m: &TypedModule, entry: FuncId) -> (Vec<bool>, u32) {
 /// Check every workgroup barrier of `m`'s entry function against the module's own uniformity
 /// (see the module documentation).
 pub fn workgroup_barriers(m: &TypedModule) -> Result<BarrierReport, Error> {
-    let entry = m.entry().func;
+    workgroup_barriers_of(m, m.entry().func)
+}
+
+/// [`workgroup_barriers`] of function `entry` of `m`, taken as called by every invocation of the
+/// workgroup together with no argument: an object or mesh function's body, which its entry wrapper
+/// calls between its own barriers (`lower::mesh::wrap_entry`). Its `in_callees` counts the
+/// workgroup barriers of every other function, the wrapper's among them.
+pub fn workgroup_barriers_of(m: &TypedModule, entry: FuncId) -> Result<BarrierReport, Error> {
     let f = m
         .functions()
         .get(entry.index())

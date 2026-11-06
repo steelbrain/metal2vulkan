@@ -1594,7 +1594,7 @@ fn finish(
 
     // An object function's partial threadgroups read its region, which a folded variant's slot
     // plan then reads from its record.
-    mesh::plan_partial_groups(&mut cx, &sel.strategy);
+    mesh::plan_partial_groups(&mut cx);
     let slots = access::finish_slots(&mut cx, m)?;
     access::absent::finish(&mut cx);
     sync::memory_model::finish_interlock(&mut cx, &slots)?;

@@ -1212,10 +1212,11 @@ fn listed_formats_answer_at_most_their_apple9_cell() {
 }
 
 /// The mesh rows follow how the device runs mesh pipelines (`DeviceProfile::emulates_mesh_shading`):
-/// on every committed profile the mesh shading row is the binder's one refusal, a partial object
-/// threadgroup of an object function that waits at a barrier (`NotImplemented(MeshShading)`),
-/// whether the device runs the stages natively or as compute work; and a device that runs them as
-/// compute work answers the mesh grid, object grid and payload limits of Metal3 by its compute
+/// on every committed profile that runs the stages natively or as compute work the mesh shading
+/// row is exact (a partial object threadgroup of an object function that waits at a barrier runs,
+/// `lower::simd::divergent`), and one that runs them neither way lacks `taskShader`; and a device
+/// that runs them as compute work answers the mesh grid, object grid and payload limits of Metal3
+/// by its compute
 /// limits (the payload refused where its workgroup memory cannot hold Metal3's 16384 bytes beside
 /// the object wrapper's 12), where they were refused for `meshShader` before. Each profile's
 /// Metal3 blockers are printed (`METAL3` lines).
@@ -1236,7 +1237,7 @@ fn mesh_rows_follow_how_the_device_runs_mesh_stages() {
         if emulates || native {
             assert_eq!(
                 state(metal3, feature(FeatureRow::MeshShading)),
-                Some(not_implemented(Feature::MeshShading)),
+                Some(RowState::Exact),
                 "{stem}"
             );
         }

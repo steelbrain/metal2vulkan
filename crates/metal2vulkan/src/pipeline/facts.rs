@@ -743,9 +743,11 @@ pub enum RuntimeFact {
     /// (`lower::dispatch`'s partial object threadgroups): where its `DispatchRegion` (or a folded
     /// variant's region record) carries `lower::dispatch::NONUNIFORM`, it answers its
     /// threadgroup's threads, `min(L, threads_per_grid − position · L)` per axis, and its
-    /// invocations past them return before the body. Recorded for an object function whose body
-    /// holds no workgroup barrier; the binder refuses a draw that leaves a partial object
-    /// threadgroup of any other (`NotImplemented(MeshShading)`).
+    /// invocations past them run none of the body: they return before it, or, in a body that
+    /// holds a workgroup barrier, walk it predicated, never live, to each barrier. Recorded for
+    /// every object function but one whose barriers are uniform and whose predicated walk's vote
+    /// word does not fit its workgroup memory; the binder refuses a draw that leaves a partial
+    /// object threadgroup of that one (`NotImplemented(MeshShading)`).
     PartialObjectThreadgroups,
 }
 

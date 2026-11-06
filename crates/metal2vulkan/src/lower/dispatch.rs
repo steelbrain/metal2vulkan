@@ -77,8 +77,10 @@
 //! them (Metal's numbering of the smaller threadgroup); an invocation whose `lin` is at or past
 //! their product returns before the body ([`emit_entry`]), so the body runs Metal's threads
 //! alone. Without the flag every answer is the uniform one. A body that holds a workgroup barrier
-//! keeps the uniform form: its returned invocations would not reach the barrier, which Vulkan
-//! leaves undefined (`lower::mesh::plan_partial_groups`).
+//! is walked predicated instead (`simd::divergent`'s partial object threadgroups): such an
+//! invocation is not live from entry ([`KernelDecl::live`] is the walk's first `live`), so it
+//! reaches each barrier and runs nothing else of the body, where a returned one would leave the
+//! others at a barrier it never reaches, which Vulkan leaves undefined.
 //!
 //! **Flat grids**. A flat variant (`LoweringInputs::flat_grid`, of a device replay or not) of a
 //! kernel that does not observe its threadgroup partition runs any grid in threadgroups of its own
@@ -425,10 +427,9 @@ pub struct DispatchPlan {
     /// `NumWorkgroups` unless an axis's threads wrap, as an indirect draw's may (Metal runs every
     /// threadgroup of it and reports the wrapped grid).
     pub object_grid: bool,
-    /// An object function whose body holds no workgroup barrier
-    /// (`lower::mesh::plan_partial_groups`): where its region says so ([`NONUNIFORM`]), its
-    /// threadgroup runs only the threads Metal's partial threadgroup has (the module docs). It
-    /// declares `MultiRegion` and reads the region whatever builtins it reads.
+    /// An object function (`lower::mesh::plan_partial_groups`): where its region says so
+    /// ([`NONUNIFORM`]), its threadgroup runs only the threads Metal's partial threadgroup has (the
+    /// module docs). It declares `MultiRegion` and reads the region whatever builtins it reads.
     pub partial_groups: bool,
 }
 
@@ -657,19 +658,31 @@ pub fn emit_entry(cx: &mut EmitCx<'_>, fb: &mut FunctionBuilder<'_>) -> BResult<
         });
         fb.if_(&mut (), past, leave, None)?;
     }
-    // An invocation past a partial object threadgroup's threads returns before the body.
+    // An invocation past a partial object threadgroup's threads returns before the body, or, where
+    // the body is walked predicated for its barriers, walks it never live.
     if plan.partial_groups {
         let decl: &crate::lower::emit::Declared = cx.decl;
         let Some(decl) = decl.families.dispatch.kernel.as_ref() else {
             return Err(cx.fail("partial object threadgroups without the kernel's declarations"));
         };
         if let Some(live) = decl.live(fb, &mut |fb| cx.push_field(fb, PushField::DispatchRegion))? {
-            let past = fb.unary(UnOp::LogicalNot, live)?;
-            let leave: ArmFn<'_, ()> = Box::new(|fb, _| {
-                fb.ret(None)?;
-                Ok(ArmEnd::Exits)
-            });
-            fb.if_(&mut (), past, leave, None)?;
+            let walked = cx
+                .plan
+                .families
+                .simd
+                .predication
+                .as_ref()
+                .is_some_and(|p| p.partial_groups);
+            if walked {
+                cx.entry_live = Some(live);
+            } else {
+                let past = fb.unary(UnOp::LogicalNot, live)?;
+                let leave: ArmFn<'_, ()> = Box::new(|fb, _| {
+                    fb.ret(None)?;
+                    Ok(ArmEnd::Exits)
+                });
+                fb.if_(&mut (), past, leave, None)?;
+            }
         }
     }
     let entry = cx.entry;

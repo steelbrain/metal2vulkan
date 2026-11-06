@@ -2,8 +2,10 @@
 //! synchronization runs in workgroup-uniform control flow, whatever the divergence of the source.
 //!
 //! A `bool` `Function` variable `live` holds, for each invocation, whether it executes the
-//! current point of the source program. It is `true` at entry. Every construct that holds a
-//! synchronization (**hot**) is walked by every invocation of the workgroup, in order:
+//! current point of the source program. It is `true` at entry, or the emitter's entry flag where
+//! it has one (`CodeEmitter::entry_live`: the invocations that run the body at all, the others
+//! walking it as if they had returned at entry). Every construct that holds a synchronization
+//! (**hot**) is walked by every invocation of the workgroup, in order:
 //!
 //! - an `If`, `Switch`, `Dispatch`, or `GuardPending` runs its arms one after another, each with
 //!   `live` set to the invocations that take it, and merges `live` as the union of the arms' ends;
@@ -26,7 +28,8 @@
 //!
 //! **Uniform positions.** The walk tracks statically whether every invocation of the workgroup
 //! executes the current point (`all`) and whether every invocation executing it is live
-//! (`live`). A position is uniform (both hold) at entry, in the arms of a real branch taken from
+//! (`live`). A position is uniform (both hold) at entry without an entry flag (with one, the
+//! entry is not: some invocation may not be live), in the arms of a real branch taken from
 //! one, in the body of a loop that iterates together, and after a construct entered from one
 //! that no invocation leaves early (every invocation live before it is live after it). It never
 //! becomes uniform at a block because `uniform::Uniformity` proves the block uniform: that means
@@ -254,9 +257,19 @@ pub(super) fn walk_root<E: CodeEmitter>(
             live,
             bool_ty,
         };
-        let t = w.konst(fb, true)?;
-        w.store(fb, live, t)?;
-        let end = walk(cx, fb, &w, cx.tree.root(), UNIFORM, None)?;
+        // Every invocation is live at entry, or those the emitter's entry flag says run the body.
+        let (first, st) = match cx.c.entry_live() {
+            Some(l) => (
+                l,
+                St {
+                    all: true,
+                    live: false,
+                },
+            ),
+            None => (w.konst(fb, true)?, UNIFORM),
+        };
+        w.store(fb, live, first)?;
+        let end = walk(cx, fb, &w, cx.tree.root(), st, None)?;
         if end.is_some() && fb.current_block().is_some() {
             // Every invocation that returned in a divergent position ends here.
             cx.c.on_return(None, fb)?;

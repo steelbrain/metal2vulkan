@@ -127,7 +127,7 @@ use crate::error::{Capability, Error, Feature, LowerFamily, Unsupported};
 use crate::lower::dispatch::KernelBuiltin;
 use crate::lower::emit::EmitCx;
 use crate::lower::select::{Plan, SelectCx};
-use crate::lower::strategy::{FamilyStrategy, Strategy};
+use crate::lower::strategy::FamilyStrategy;
 use crate::lower::sync::barrier::{memory_model, semantics};
 use crate::lower::sync::memory_model::coherence;
 use crate::memory::arena::{self, WorkgroupLimit};
@@ -266,8 +266,8 @@ pub struct MeshPlan {
     /// An object or mesh function's payload arena's bytes (`arena::payload_bytes` of
     /// [`payload_extent`]), `None` without a payload (`StageInterface::payload`).
     pub payload: Option<u32>,
-    /// An object function whose body holds no workgroup barrier: it runs a partial object
-    /// threadgroup's threads alone where its region says so ([`plan_partial_groups`]).
+    /// An object function: it runs a partial object threadgroup's threads alone where its region
+    /// says so ([`plan_partial_groups`]).
     pub partial_groups: bool,
 }
 
@@ -534,27 +534,15 @@ pub fn check_payload(cx: &SelectCx<'_>, size: u64) -> Result<(), Error> {
     workgroup_limit(cx).check(0)
 }
 
-/// Plan an object function's partial threadgroups: where its body holds no workgroup barrier
-/// (`sync::barrier::is_workgroup_barrier`; an object function's barriers keep their scope in
-/// every tier, and it has no emulated simdgroups), it reads its region (`PushField::DispatchRegion`)
-/// and answers a partial threadgroup of a `drawMeshThreads` as Metal runs it, its invocations past
-/// the threadgroup's threads returning before the body (`lower::dispatch`'s partial object
-/// threadgroups; `RuntimeFact::PartialObjectThreadgroups`). A body that holds one is left
-/// uniform: the returned invocations would not reach its barrier, and the binder refuses such a
-/// draw (`NotImplemented(MeshShading)`). Called before the push fields are placed, with the
-/// body's strategies.
-pub fn plan_partial_groups(cx: &mut SelectCx<'_>, strategy: &[Option<Strategy>]) {
+/// Plan an object function's partial threadgroups: it reads its region (`PushField::DispatchRegion`)
+/// and answers a partial threadgroup of a `drawMeshThreads` as Metal runs it, with the threads
+/// left (`lower::dispatch`'s partial object threadgroups; `RuntimeFact::PartialObjectThreadgroups`).
+/// Its invocations past them return before the body where the body holds no workgroup barrier;
+/// where it holds one, the body is walked predicated from its threadgroup's threads
+/// (`simd::divergent::barriers`, `Predication::partial_groups`), so they walk to each barrier
+/// without running anything else of it. Called before the push fields are placed.
+pub fn plan_partial_groups(cx: &mut SelectCx<'_>) {
     if cx.stage != Stage::Object {
-        return;
-    }
-    let synchronizes = strategy.iter().flatten().any(|s| {
-        crate::lower::sync::barrier::is_workgroup_barrier(
-            s,
-            Stage::Object,
-            crate::device::subgroup::Tier::NoSubgroup,
-        )
-    });
-    if synchronizes {
         return;
     }
     cx.families.mesh.partial_groups = true;

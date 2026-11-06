@@ -680,12 +680,6 @@ driver's. Each is open work.
   the command buffer of an indirect one past the compute limits with
   `CommandBufferError::MeshGridPastLimits` (ANV's y and z axes stop at 65,535; MoltenVK's limits
   pass every grid Metal runs).
-- **A partial object threadgroup of an object function that waits at a threadgroup barrier.** A
-  `drawMeshThreads` whose threads leave a partial object threadgroup runs it as Metal does, with the
-  threads left, for an object function whose body holds no `threadgroup_barrier`; for one whose body
-  holds one, the draw is refused (`NotImplemented(MeshShading)`), since the invocations past the
-  smaller threadgroup would not reach the barrier. A form that runs such a body predicated, every
-  invocation reaching each barrier, is not built for object functions.
 - **A mesh render pipeline's vertex amplification.** A mesh descriptor's
   `maxVertexAmplificationCount` above 1, which Metal makes, is refused
   (`Unsupported{VertexAmplification, NotImplemented}`): no form runs an object or mesh function's
