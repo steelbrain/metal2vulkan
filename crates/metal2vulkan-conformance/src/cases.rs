@@ -85,6 +85,7 @@ pub mod etc_textures;
 pub mod event_orders;
 pub mod extended_range_blends;
 pub mod extended_range_gamut;
+pub mod extended_range_gradients;
 pub mod extended_range_planes;
 pub mod extended_range_targets;
 pub mod extended_range_two_planes;
@@ -386,6 +387,9 @@ pub fn all() -> Vec<Box<dyn Case>> {
         cases.push(Box::new(case));
     }
     for case in extended_range_gamut::masked() {
+        cases.push(Box::new(case));
+    }
+    for case in extended_range_gradients::draws() {
         cases.push(Box::new(case));
     }
     cases.push(Box::new(texture_buffer_fills::streams()));

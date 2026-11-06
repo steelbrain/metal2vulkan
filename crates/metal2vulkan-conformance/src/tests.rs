@@ -6907,11 +6907,18 @@ fn every_case_carries_a_cost_recording() {
     /// produces a record, so a case is covered only where a later whole-set run includes it, and
     /// the next one empties the list again.
     ///
-    /// Empty: the last whole-set run covered every case.
-    ///
     /// A whole-set run is the only shape that pays a record: a case's counts depend on what ran
     /// before it in the same process, so a selection cannot pay one however many cases it names.
-    const AFTER_THE_LAST_RUN: [&str; 0] = [];
+    const AFTER_THE_LAST_RUN: [&str; 8] = [
+        "xr-gradient-bgra10xr-blended-x1",
+        "xr-gradient-bgra10xr-blended-x4",
+        "xr-gradient-bgra10xr-srgb-blended-x1",
+        "xr-gradient-bgra10xr-srgb-blended-x4",
+        "xr-gradient-bgra10xr-srgb-unblended-x1",
+        "xr-gradient-bgra10xr-srgb-unblended-x4",
+        "xr-gradient-bgra10xr-unblended-x1",
+        "xr-gradient-bgra10xr-unblended-x4",
+    ];
 
     /// Cases a whole-set run did not cover although they were committed before it ran.
     ///
