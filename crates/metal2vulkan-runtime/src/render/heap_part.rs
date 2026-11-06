@@ -137,7 +137,8 @@ impl HeapOf {
     /// `capacity` elements.
     fn holds(&self, inputs: &HeapInputs<'_>, capacity: Option<u32>) -> bool {
         let state = inputs.state;
-        let samplers = match (self.listed_at, inputs.listed_at) {
+        // The plan first: the parts of the other plans a draw passes over differ there.
+        let samplers = || match (self.listed_at, inputs.listed_at) {
             (Some(was), Some(now)) if was == now => true,
             _ => heap_sets::same_listing(&self.samplers, &state.argument_samplers),
         };
@@ -146,7 +147,7 @@ impl HeapOf {
             && self.generation == inputs.generation
             && self.placement == state.heap_placement
             && self.in_token_order == state.used_in_token_order
-            && samplers
+            && samplers()
             && self.function_tables == state.function_tables
             && (self.slots.iter()).all(|&(slot, bound)| bound_at(state, slot) == bound)
     }
@@ -162,16 +163,17 @@ impl KeptHeap {
         inputs: HeapInputs<'_>,
     ) -> Result<Option<Arc<HeapElements>>, Error> {
         let capacity = heap_sets::capacity(inputs.layout);
+        // Looked for from the one drawn through last, which a draw most often draws through
+        // again, and made the last in place: the others keep their order.
         let kept = self
             .parts
             .iter()
-            .position(|part| part.of.holds(&inputs, capacity));
-        let part = match kept {
+            .rposition(|part| part.of.holds(&inputs, capacity));
+        match kept {
             Some(at) => {
-                let part = self.parts.remove(at);
                 #[cfg(debug_assertions)]
-                part.check(&inputs, &mut self.tables)?;
-                part
+                self.parts[at].check(&inputs, &mut self.tables)?;
+                self.parts[at..].rotate_left(1);
             }
             None => {
                 // Worked out into the storage of the one drawn through longest ago, where it keeps
@@ -184,12 +186,11 @@ impl KeptHeap {
                 if !part.tables.is_empty() || part.heap {
                     counts.draw_heap_part_made();
                 }
-                part
+                self.parts.push(part);
             }
-        };
-        let elements = part.heap.then(|| Arc::clone(&part.elements));
-        self.parts.push(part);
-        Ok(elements)
+        }
+        let part = (self.parts.last()).ok_or_else(|| internal("a draw's heap part not kept"))?;
+        Ok(part.heap.then(|| Arc::clone(&part.elements)))
     }
 
     /// Whether the part the last draw brought in reads a texture its tables bind at a heap slot
