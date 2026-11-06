@@ -1,6 +1,6 @@
 // Owned fixture: object functions that wait at threadgroup barriers, for drawMeshThreads draws that
-// leave a partial object threadgroup (the runtime lane, the conformance suite's
-// `mesh-partial-barrier` cases, and the translator's interpreter test). Every thread of an object
+// leave a partial object threadgroup, and a mesh function that returns before one (the
+// conformance suite's `mesh-partial-barrier` cases and the translator's tests). Every thread of an object
 // threadgroup adds 1 to out[0]; the thread at position (x, y) of the grid writes its two words at
 // out[4 + 2 * (x + threads_per_grid.x * y)] once, on the path it takes: the word it read from
 // threadgroup memory across the barriers, and its threadgroup's threads (x | y << 8) with its own
@@ -120,6 +120,30 @@ static uint slot(uint3 pos, uint3 tpg) {
 }
 
 [[mesh]] void mesh_partial_barrier_mesh(PartialMesh output) {
+}
+
+// A mesh function's divergent early return, drawn without an object function: threads at or past
+// ctl.y write a marker at out[4 + tid] and return before the barrier; the rest exchange words
+// across it. Thread 0 draws nothing.
+[[mesh]] void mesh_partial_barrier_mesh_early_return(PartialMesh output,
+                                                     device uint *out [[buffer(0)]],
+                                                     constant uint4 &ctl [[buffer(1)]],
+                                                     uint tid [[thread_index_in_threadgroup]],
+                                                     uint3 tptg [[threads_per_threadgroup]]) {
+    threadgroup uint words[64];
+    uint n = tptg.x * tptg.y * tptg.z;
+    uint stay = min(ctl.y, n);
+    atomic_fetch_add_explicit((device atomic_uint *)out, 1u, memory_order_relaxed);
+    if (tid == 0u) {
+        output.set_primitive_count(0);
+    }
+    if (tid >= stay) {
+        out[4u + tid] = 0xE0000000u | tid;
+        return;
+    }
+    words[tid] = tid * 7u + 3u;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    out[4u + tid] = words[(tid + 1u) % stay];
 }
 
 fragment uint4 mesh_partial_barrier_fragment() {
