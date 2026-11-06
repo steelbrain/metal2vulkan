@@ -576,6 +576,12 @@ narrow refusal that the call's rustdoc describes.
 | `heap_buffer_page_private` | `heapBufferSizeAndAlignWithLength:options:` | `Device::heap_buffer_size_and_align` |
 | `min_linear_alignment_bgra8` | `minimumLinearTextureAlignmentForPixelFormat:` | `DeviceProperties::minimum_linear_texture_alignment_for_pixel_format` |
 
+### `IdentityCaps`: `MTLDevice` identity and size answers
+
+| Item | Metal | Runtime |
+|---|---|---|
+| `sizes.max_argument_buffer_sampler_count` | `maxArgumentBufferSamplerCount` | `DeviceProperties::max_argument_buffer_sampler_count`: one fewer than the smaller of a set-1 sampler array's elements (`metal2vulkan::pipeline::heap_sampler_capacity`) and `maxSamplerAllocationCount`; 65535 on MoltenVK on an M3 Max, where Metal answers 500000 *(partial)* |
+
 ## Composed from runtime calls
 
 These items have no single runtime call. The consumer builds them from the calls named.
