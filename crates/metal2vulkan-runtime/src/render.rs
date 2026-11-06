@@ -1640,9 +1640,10 @@ pub(crate) struct RenderLowering {
     /// as it opened (`render/replay.rs`): `None` where it logs nothing, as when it is encoded
     /// again.
     log: Option<RenderLog>,
-    /// The last draw's variant, plan and specialization under which the bound values' notices
-    /// were quiet (`Device::degrade_bound_values`), where it was.
-    quiet_bound_values: Option<QuietBoundValues>,
+    /// The variants, plans and specializations of its draws under which the bound values'
+    /// notices were quiet (`Device::degrade_bound_values`), the latest last: at most
+    /// [`QUIET_KEPT`], so draws that switch between a few pipeline states test each once.
+    quiet_bound_values: Vec<QuietBoundValues>,
     /// The views and sampler descriptions its draws' binds made or found, taken from the
     /// device's ended render encoders' and given back as it ends (`binding::BindMemo`).
     bind_memo: binding::BindMemo,
@@ -1764,6 +1765,10 @@ impl LastRetained {
         }
     }
 }
+
+/// The most [`QuietBoundValues`] a render encoder keeps: one for each of a few pipeline states its
+/// draws switch between, as a compositor's do every few draws.
+const QUIET_KEPT: usize = 8;
 
 /// A variant, plan and specialization under which `Device::degrade_bound_values` was quiet: no
 /// clause of a note it tested held. Which hold is a function of the three alone, so a draw of
@@ -2170,7 +2175,7 @@ impl RenderLowering {
             restart: None,
             live,
             log,
-            quiet_bound_values: None,
+            quiet_bound_values: Vec::new(),
             bind_memo,
             shape_memo: ShapeMemo::default(),
             last_retained: LastRetained::default(),
@@ -9172,10 +9177,7 @@ impl RenderLowering {
         // A variant whose notes test no bound value is quiet at every draw, and kept as none
         // (`Device::tests_bound_values`).
         let quiet = !super::Device::tests_bound_values(&variant.pipeline().stages)
-            || self
-                .quiet_bound_values
-                .as_ref()
-                .is_some_and(|q| q.holds(&variant, &plan, specialization));
+            || (self.quiet_bound_values.iter()).any(|q| q.holds(&variant, &plan, specialization));
         if !quiet
             && device.degrade_bound_values(
                 &variant.pipeline().stages,
@@ -9184,7 +9186,11 @@ impl RenderLowering {
                 Some(&formats),
             )
         {
-            self.quiet_bound_values = Some(QuietBoundValues::new(&variant, &plan, specialization));
+            if self.quiet_bound_values.len() == QUIET_KEPT {
+                self.quiet_bound_values.remove(0);
+            }
+            self.quiet_bound_values
+                .push(QuietBoundValues::new(&variant, &plan, specialization));
         }
         device.degrade_cross_class(&plan.diagnostics, &formats);
         device.degrade_astc_storage(&plan.diagnostics, &formats);
