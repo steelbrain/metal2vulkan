@@ -58,7 +58,7 @@ use crate::pipeline_handlers::{
     IMAGEBLOCK as HANDLER_IMAGEBLOCK, WAIT as HANDLER_WAIT,
 };
 use crate::pipeline_limits::{
-    floored, ComputeLimitsSpec, ComputeStateLimits, Created, MeshLimitsSpec, MeshStateLimits,
+    floored, ComputeLimitsSpec, ComputeStateLimits, Creation, MeshLimitsSpec, MeshStateLimits,
 };
 use crate::pipeline_option_reflection::UnderOptions;
 use crate::pipeline_options::{OptionOutcome, FRAGMENT_STAGE, KERNEL_STAGE, VERTEX_STAGE};
@@ -3781,7 +3781,7 @@ impl Side for MetalSide {
         &mut self,
         library: Handle,
         spec: &MeshLimitsSpec<'_>,
-    ) -> Answer<Created<MeshStateLimits>> {
+    ) -> Answer<Creation<MeshStateLimits>> {
         let held: &Retained<ProtocolObject<dyn MTLLibrary>> = self
             .libraries
             .get(library.0 as usize)
@@ -3816,13 +3816,13 @@ impl Side for MetalSide {
                 None,
             );
         let Ok(state) = made else {
-            return Ok(Created::refused());
+            return Ok(Creation::refused());
         };
         // Declared, so the coverage derivation types the receiver.
         let state: Retained<ProtocolObject<dyn MTLRenderPipelineState>> = state;
         let axes = |held: MTLSize| [held.width as u64, held.height as u64, held.depth as u64];
         let object = spec.object.is_some();
-        Ok(Created::made(MeshStateLimits {
+        Ok(Creation::made(MeshStateLimits {
             max_total_threads_per_object_threadgroup: object
                 .then(|| floored(state.maxTotalThreadsPerObjectThreadgroup() as u64)),
             max_total_threads_per_mesh_threadgroup: floored(
@@ -3844,7 +3844,7 @@ impl Side for MetalSide {
         &mut self,
         library: Handle,
         spec: &ComputeLimitsSpec<'_>,
-    ) -> Answer<Created<ComputeStateLimits>> {
+    ) -> Answer<Creation<ComputeStateLimits>> {
         let held: &Retained<ProtocolObject<dyn MTLLibrary>> = self
             .libraries
             .get(library.0 as usize)
@@ -3863,11 +3863,11 @@ impl Side for MetalSide {
                 None,
             );
         let Ok(state) = made else {
-            return Ok(Created::refused());
+            return Ok(Creation::refused());
         };
         // Declared, so the coverage derivation types the receiver.
         let state: Retained<ProtocolObject<dyn MTLComputePipelineState>> = state;
-        Ok(Created::made(ComputeStateLimits {
+        Ok(Creation::made(ComputeStateLimits {
             max_total_threads_per_threadgroup: floored(state.maxTotalThreadsPerThreadgroup() as u64),
         }))
     }

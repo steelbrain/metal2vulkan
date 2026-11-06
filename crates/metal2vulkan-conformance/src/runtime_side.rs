@@ -54,7 +54,7 @@ use crate::pipeline_handlers::{
     IMAGEBLOCK as HANDLER_IMAGEBLOCK,
 };
 use crate::pipeline_limits::{
-    floored, ComputeLimitsSpec, ComputeStateLimits, Created, MeshLimitsSpec, MeshStateLimits,
+    floored, ComputeLimitsSpec, ComputeStateLimits, Creation, MeshLimitsSpec, MeshStateLimits,
 };
 use crate::pipeline_option_reflection::UnderOptions;
 use crate::pipeline_options::{OptionOutcome, FRAGMENT_STAGE, KERNEL_STAGE, VERTEX_STAGE};
@@ -3091,7 +3091,7 @@ impl Side for RuntimeSide<'_> {
         &mut self,
         library: Handle,
         spec: &MeshLimitsSpec<'_>,
-    ) -> Answer<Created<MeshStateLimits>> {
+    ) -> Answer<Creation<MeshStateLimits>> {
         let library = self
             .libraries
             .get(library.0 as usize)
@@ -3121,12 +3121,12 @@ impl Side for RuntimeSide<'_> {
             .new_mesh_render_pipeline_state(&descriptor, &PipelineOptions::default())
         {
             Ok(state) => state,
-            Err(error) if refuses_as_metal(&error) => return Ok(Created::refused()),
+            Err(error) if refuses_as_metal(&error) => return Ok(Creation::refused()),
             Err(error) => return Err(Failure::of(&error)),
         };
         let axes = |held: metal2vulkan_runtime::Size| [held.width, held.height, held.depth];
         let object = spec.object.is_some();
-        Ok(Created::made(MeshStateLimits {
+        Ok(Creation::made(MeshStateLimits {
             max_total_threads_per_object_threadgroup: object
                 .then(|| floored(u64::from(state.max_total_threads_per_object_threadgroup()))),
             max_total_threads_per_mesh_threadgroup: floored(u64::from(
@@ -3152,7 +3152,7 @@ impl Side for RuntimeSide<'_> {
         &mut self,
         library: Handle,
         spec: &ComputeLimitsSpec<'_>,
-    ) -> Answer<Created<ComputeStateLimits>> {
+    ) -> Answer<Creation<ComputeStateLimits>> {
         let library = self
             .libraries
             .get(library.0 as usize)
@@ -3169,10 +3169,10 @@ impl Side for RuntimeSide<'_> {
             .new_compute_pipeline_state(&descriptor, &PipelineOptions::default())
         {
             Ok(state) => state,
-            Err(error) if refuses_as_metal(&error) => return Ok(Created::refused()),
+            Err(error) if refuses_as_metal(&error) => return Ok(Creation::refused()),
             Err(error) => return Err(Failure::of(&error)),
         };
-        Ok(Created::made(ComputeStateLimits {
+        Ok(Creation::made(ComputeStateLimits {
             max_total_threads_per_threadgroup: floored(u64::from(
                 state.max_total_threads_per_threadgroup(),
             )),

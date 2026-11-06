@@ -12,7 +12,7 @@
 //! # A refusal is an answer
 //!
 //! Each case asks what one descriptor does, and "Metal refuses it" is one of the answers, so a
-//! refusal of Metal's own rule is an `Ok` of [`Created::refused`] on both sides, for the reason
+//! refusal of Metal's own rule is an `Ok` of [`Creation::refused`] on both sides, for the reason
 //! [`Side::tile_pipeline_bindings`](crate::case::Side::tile_pipeline_bindings) states. The
 //! runtime's answer is refused where its typed error is Metal's rule
 //! (`Compile(InvalidDescriptor(..))`, `Invalid(..)`); any other typed error is the runtime's own
@@ -131,14 +131,14 @@ impl ComputeLimitsSpec<'_> {
 
 /// What a creation answered: refused by Metal's rule, or made, with what the state then answers.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Created<T> {
+pub struct Creation<T> {
     /// Whether the creation was refused.
     pub refused: bool,
     /// The made state's answers; `None` where it was refused.
     pub state: Option<T>,
 }
 
-impl<T> Created<T> {
+impl<T> Creation<T> {
     /// The answer of a creation refused by Metal's rule.
     pub fn refused() -> Self {
         Self {
@@ -201,7 +201,7 @@ fn optional(held: Option<u64>) -> Value {
     }
 }
 
-impl Created<MeshStateLimits> {
+impl Creation<MeshStateLimits> {
     /// The answer as the sites a case emits under one node, so both sides emit one shape.
     pub fn node(&self, name: impl Into<NodeName>) -> Node {
         let value = Observed::value;
@@ -246,7 +246,7 @@ impl Created<MeshStateLimits> {
     }
 }
 
-impl Created<ComputeStateLimits> {
+impl Creation<ComputeStateLimits> {
     /// The answer as the sites a case emits under one node, so both sides emit one shape.
     pub fn node(&self, name: impl Into<NodeName>) -> Node {
         let mut node = Node::branch(name, Vec::new()).with(Node::leaf(

@@ -1146,13 +1146,13 @@ pub trait Side {
 
     /// `newRenderPipelineStateWithMeshDescriptor:options:reflection:error:` of the descriptor
     /// `spec` states, and what the made state answers of its limits
-    /// ([`Created`](crate::pipeline_limits::Created)). A refusal of Metal's rule is an `Ok`, for
+    /// ([`Creation`](crate::pipeline_limits::Creation)). A refusal of Metal's rule is an `Ok`, for
     /// the reasons [`crate::pipeline_limits`] states; the state is kept by neither side.
     fn mesh_pipeline_limits(
         &mut self,
         library: Handle,
         spec: &crate::pipeline_limits::MeshLimitsSpec<'_>,
-    ) -> Answer<crate::pipeline_limits::Created<crate::pipeline_limits::MeshStateLimits>> {
+    ) -> Answer<crate::pipeline_limits::Creation<crate::pipeline_limits::MeshStateLimits>> {
         let _ = (library, spec);
         Err(Failure::unavailable("mesh_pipeline_limits"))
     }
@@ -1164,7 +1164,7 @@ pub trait Side {
         &mut self,
         library: Handle,
         spec: &crate::pipeline_limits::ComputeLimitsSpec<'_>,
-    ) -> Answer<crate::pipeline_limits::Created<crate::pipeline_limits::ComputeStateLimits>> {
+    ) -> Answer<crate::pipeline_limits::Creation<crate::pipeline_limits::ComputeStateLimits>> {
         let _ = (library, spec);
         Err(Failure::unavailable("compute_pipeline_limits"))
     }
