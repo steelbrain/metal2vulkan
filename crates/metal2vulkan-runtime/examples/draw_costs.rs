@@ -3,7 +3,7 @@
 //! through the runtime's public calls alone, on one thread.
 //!
 //! ```sh
-//! cargo run --release -p metal2vulkan-runtime --example draw_costs [-- [ws|many|10k]... [--runs N] [--calls] [--metallib PATH]]
+//! cargo run --release -p metal2vulkan-runtime --example draw_costs [-- [ws|many|10k]... [--runs N] [--calls] [--counts] [--metallib PATH]]
 //! ```
 //!
 //! Each shape is command buffers committed back to back, each of one render pass over a 512x512
@@ -41,6 +41,10 @@
 //! (`DRAW-CALL` lines), its calls a draw, its instructions a call and its share of a draw, the
 //! median over the runs, with the lowest and highest a call. The reads cost the totals their own
 //! instructions, so a run's totals are read without `--calls`.
+//!
+//! With `--counts`, each shape's runs are bracketed by the device's work counts
+//! (`Device::work_counts`), printed whole before and after (`WORK-COUNTS` lines) with the draws
+//! between, warm repetitions included.
 //!
 //! The library is the metallib `--metallib` names, or else `draw_costs.metal` compiled by
 //! `xcrun metal` in a scratch directory, removed once read.
@@ -500,8 +504,9 @@ fn spread(mut values: Vec<f64>) -> (f64, f64, f64) {
 }
 
 /// Run `shape` `runs` times and print its figures a draw, and with `calls` each call's.
-fn measure(bench: &Bench, shape: Shape, runs: usize, calls: bool) -> Result<()> {
+fn measure(bench: &Bench, shape: Shape, runs: usize, (calls, counts): (bool, bool)) -> Result<()> {
     let chunks = bench.chunks(shape)?;
+    let before = counts.then(|| bench.device.work_counts());
     let buffers: Vec<Vec<Step<'_>>> = (0..shape.buffers)
         .map(|buffer| bench.steps(&chunks, shape, buffer))
         .collect();
@@ -520,6 +525,16 @@ fn measure(bench: &Bench, shape: Shape, runs: usize, calls: bool) -> Result<()> 
         }
         seen.push(total.unwrap_or_default());
         tallies.push(tally);
+    }
+    if let Some(before) = before {
+        let drawn = (WARM + COUNTED) * runs * shape.buffers * shape.draws;
+        println!("WORK-COUNTS {} draws {drawn}", shape.name);
+        println!("WORK-COUNTS {} before {before:?}", shape.name);
+        println!(
+            "WORK-COUNTS {} after {:?}",
+            shape.name,
+            bench.device.work_counts()
+        );
     }
     println!(
         "{}: {} command buffers of {} draws, {runs} runs of {COUNTED} counted repetitions; a draw:",
@@ -611,12 +626,13 @@ fn compile(scratch: &Path) -> Result<PathBuf> {
 
 fn main() -> Result<()> {
     let mut shapes = Vec::new();
-    let (mut runs, mut metallib, mut calls) = (RUNS, None, false);
+    let (mut runs, mut metallib, mut calls, mut counts) = (RUNS, None, false, false);
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--runs" => runs = args.next().ok_or("--runs N")?.parse()?,
             "--calls" => calls = true,
+            "--counts" => counts = true,
             "--metallib" => metallib = Some(PathBuf::from(args.next().ok_or("--metallib PATH")?)),
             name => shapes.push(
                 *SHAPES
@@ -648,7 +664,7 @@ fn main() -> Result<()> {
     let library = library(&device, metallib.as_deref())?;
     let bench = Bench::new(device, &library)?;
     for shape in shapes {
-        measure(&bench, shape, runs, calls)?;
+        measure(&bench, shape, runs, (calls, counts))?;
     }
     println!("notices heard: {}", NOTICES.load(Ordering::Relaxed));
     Ok(())
