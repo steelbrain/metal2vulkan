@@ -36,7 +36,8 @@
 //!   after the chunk taken. It imports nothing past the window or the RAM's end, and never goes
 //!   back for a chunk a jump skipped. A run of heaps that stays inside the window imports nothing
 //!   on the thread making them; a heap outside it is bound in an import of its own run, and
-//!   imports no chunk.
+//!   imports no chunk. An object over a chunk the thread imported, made while the chunk's state
+//!   is looked at (as the thread looks at each chunk of its window), is bound in the chunk.
 //! - **Down the RAM.** A heap over a chunk not imported, at the RAM's top, is bound in an import
 //!   of its own run, whose bytes go from the CPU to the GPU and back, while the thread imports
 //!   the chunk, in which the heaps over it after that are bound; a heap next to it below opens
@@ -685,6 +686,62 @@ fn the_window_ahead_moves_with_the_objects_and_imports_no_more() {
         heaps.len()
     );
     drop((heaps, used, ram));
+    assert!(
+        settles(&dropped),
+        "the keep-alive goes after the last chunk"
+    );
+}
+
+/// An object over a chunk the device's thread imported, made while the chunk's state is looked at
+/// as the thread looks at each chunk of its window as it passes them
+/// (`Device::looking_at_host_ram_chunk`), waits for the look and is bound in the chunk: the look
+/// is not an import under way, so the object imports nothing of its own. The look lasts past the
+/// object's making's start; where the making reached the chunk after it ended, it binds there
+/// too.
+#[test]
+fn an_object_made_while_its_imported_chunk_is_looked_at_is_bound_in_the_chunk() {
+    let Some(device) = ahead_device() else {
+        return;
+    };
+    let (ram, start, dropped) = fresh_ram(2 * 64 * MIB);
+    let before = device.work_counts();
+    let used = device.use_host_ram(&ram).unwrap();
+    let ahead = |counts: &crate::WorkCounts| {
+        counts.host_ram_chunks_imported_ahead - before.host_ram_chunks_imported_ahead
+    };
+    let first = counts_until(&device, |counts| ahead(counts) == 1);
+    assert_eq!(ahead(&first), 1, "the RAM's first chunk, imported ahead");
+    let page = device.shared().host_import.as_ref().unwrap().page;
+    let (runs, gates): (Arc<Mutex<_>>, Arc<Mutex<_>>) = Default::default();
+    let made = std::thread::scope(|scope| {
+        let making = device.looking_at_host_ram_chunk(start, || {
+            let making = scope.spawn(|| {
+                buffer(
+                    &device,
+                    start,
+                    4 * page,
+                    resolver(&runs, itself),
+                    gate(&gates, true),
+                )
+            });
+            // Long past the making's start, so that it reaches the chunk while it is looked at.
+            std::thread::sleep(Duration::from_millis(200));
+            making
+        });
+        making.join().unwrap()
+    });
+    let object = made.expect("the buffer over the chunk is made");
+    let after = device.work_counts();
+    assert_eq!(
+        (
+            after.chunk_bound_buffers_made - before.chunk_bound_buffers_made,
+            after.run_bound_buffers_made - before.run_bound_buffers_made,
+        ),
+        (1, 0),
+        "the object made while its chunk was looked at is bound in the chunk, in no run's import"
+    );
+    assert!(gates.lock().unwrap().is_empty(), "the gate was not asked");
+    drop((object, used, ram));
     assert!(
         settles(&dropped),
         "the keep-alive goes after the last chunk"
