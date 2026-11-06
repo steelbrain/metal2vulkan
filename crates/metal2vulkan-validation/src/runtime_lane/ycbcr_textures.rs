@@ -4419,8 +4419,10 @@ fn family_texture(
 /// twins over `422v`, `422f`, `444v`, `444f`, `x422`, `xf22`, `x444` and `xf44`, without a matrix,
 /// with BT.709, with BT.2020 and with SMPTE 240M (read as BT.709): `read()`, a nearest and a linear
 /// sample at each texel's centre, and a `half` read (the twins' steps rounded with ties away from
-/// zero). The filter notices are [`assert_filter_notices`]'s: no function reads these planes in
-/// place. A format over a surface whose chroma plane holds its own reads its pairs at the
+/// zero). No function reads these planes in place, so a linear sample between the texels is the
+/// filter of the kept image ([`Between`]), its values off Metal's step counted for each format,
+/// and the filter notices are [`assert_filter_notices`]'s. A format over a surface whose chroma
+/// plane holds its own reads its pairs at the
 /// surface's rows, and over one whose plane is smaller the same, past the plane. A texture the
 /// device converts itself reads Vulkan's conversion of the same codes instead, within the device's
 /// bound (`ycbcr_device_reads`; lavapipe's 8-bit 4:4:4 ones).
@@ -4433,6 +4435,7 @@ fn four_two_two_and_four_four_four_textures_read_what_metal_reads() {
         let mut steps = Between::new(device);
         let mut seed = 120;
         let mut by_devices = 0;
+        let mut off_step = Vec::new();
         for (pf, ostypes) in [
             (PixelFormat::YCBCR84222P, ["422v", "422f"]),
             (PixelFormat::YCBCR84442P, ["444v", "444f"]),
@@ -4448,6 +4451,7 @@ fn four_two_two_and_four_four_four_textures_read_what_metal_reads() {
                 YCbCrOutput::Srgb => 8192,
                 _ => 2048,
             };
+            let (differ, checked) = (steps.differ, steps.checked);
             for (ostype, range) in ostypes
                 .into_iter()
                 .zip([YCbCrRange::Video, YCbCrRange::Full])
@@ -4464,7 +4468,7 @@ fn four_two_two_and_four_four_four_textures_read_what_metal_reads() {
                     let before = made_in_place(device);
                     let converted = device_conversions(device);
                     let texture = family_texture(&surface, pf, ostype, matrix).unwrap();
-                    steps.sampled(made_in_place(device) > before);
+                    let in_place = made_in_place(device) > before;
                     let by_device = device_conversions(device) > converted;
                     by_devices += usize::from(by_device);
                     let case = format!("{pf:?} over {ostype}, {matrix:?}");
@@ -4487,10 +4491,23 @@ fn four_two_two_and_four_four_four_textures_read_what_metal_reads() {
                     }
                     let half = texels_of(device, &kernels.read_half, &texture, None);
                     check(&half, true, "a half read()");
+                    let between = texels_of(device, &kernels.between, &texture, Some(&linear));
+                    let texels = Texels::of(&read, grid, by_device);
+                    steps.texels(&between, &texels, in_place, &case);
                 }
             }
+            off_step.push(format!(
+                "{pf:?} {} of {}",
+                steps.differ - differ,
+                steps.checked - checked
+            ));
         }
         println!("YCBCR-DEVICE 4:2:2 and 4:4:4: {by_devices} textures the device's conversion");
+        println!(
+            "YCBCR-BETWEEN 4:2:2 and 4:4:4 {}: values off Metal's step: {}",
+            device.name(),
+            off_step.join(", ")
+        );
         steps.finish(device, &counts(&messages.take_notices()), "4:2:2 and 4:4:4");
         // Over a surface whose chroma plane holds the format's (for 4:2:2 over
         // 4:4:4): the format's pairs, at the surface's rows.
@@ -5242,11 +5259,16 @@ fn packed_views_read_their_twins_texels() {
 /// reads no defined value on Metal: its texels change from run to run), `(0, Y, 0, 1)` of one
 /// read as codes, `Y` the code over `2^b - 1`; a swizzle applies to that read; and a linear
 /// sample is the luma channel of the code-reading format's sample over the same planes. The
-/// texture itself still reads its own conversion; a texture over plane 1 refuses the view.
+/// texture itself still reads its own conversion; a texture over plane 1 refuses the view. The
+/// view's bindings present the code-reading format, whose texels the device's sampler filters as
+/// it filters that format's (`Texture::luma_view`), so the view's samples announce no filter
+/// notice, through Metal's own sampler too: only a texture the device converted itself announces
+/// `ycbcr-filter-not-exact`, where it is made (`ycbcr_device_reads`).
 #[test]
 fn retyped_views_read_their_luma_codes() {
     use metal2vulkan::metal::TextureSwizzle as S;
-    on_device(|device, _| {
+    on_device(|device, messages| {
+        let converted = device_conversions(device);
         let kernels = Kernels::new(device);
         let linear = sampler(device, SamplerMinMagFilter::Linear);
         let array = |t: &Texture, swizzle: Option<TextureSwizzleChannels>| {
@@ -5343,6 +5365,12 @@ fn retyped_views_read_their_luma_codes() {
                 .collect();
             assert_eq!(floats(&sampled), want, "{pf:?}'s view sampled");
         }
+        let announced = counts(&messages.take_notices());
+        assert_eq!(
+            announced.get(&Degradation::YCbCrFilterNotExact),
+            (device_conversions(device) > converted).then_some(&1),
+            "{announced:?}"
+        );
         // Over plane 1, not measured: refused.
         let pf = PixelFormat::YCBCR84442P;
         let codes = ycbcr_format(pf).and_then(YCbCrCodes::of).unwrap();
