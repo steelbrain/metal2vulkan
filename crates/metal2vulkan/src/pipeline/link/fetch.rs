@@ -33,7 +33,10 @@
 //! There too the function merges its word of a word attachment written under a mask of some of
 //! the word's channels into the word its input attachment holds (`RuntimeFact::WordInputMerge`,
 //! [`word_merges`]); `graphics_state` writes the whole word, and a stage compiled under another
-//! mask there, or without the merge, was compiled for another pipeline.
+//! mask there, or without the merge, was compiled for another pipeline. So does it merge the codes
+//! of an extended-range attachment written unblended under a mask of some of the codes one word
+//! holds (`color_writes::merged_extended`, the same fact): [`input_blends`] names it beside the
+//! blended ones, so that `graphics_state` gives it no blend and a write of every raw component.
 
 use std::collections::BTreeMap;
 
@@ -46,6 +49,7 @@ use crate::library::FunctionArtifact;
 use crate::lower::fragment::{
     inputs_order, interlock_orders, kept_channels, storage_form, ColorUse, StorageSamples,
 };
+use crate::metal::format::ExtendedRange;
 use crate::metal::state::color_write_mask;
 use crate::pipeline::facts::RuntimeFact;
 use crate::pipeline::graphics::{StorageAttachmentUse, StorageAttachmentView};
@@ -172,11 +176,12 @@ pub fn storage_attachments(
 }
 
 /// The extended-range attachments whose blend fragment stage `fragment` computes over their
-/// input attachments (`RuntimeFact::ExtendedRangeInputBlend`), on a device that orders fetch
-/// through rasterization-order input attachments, against the attachments of render inputs `r`:
-/// by color index, the channels each write keeps from its texel, where the pipeline's blend and
-/// write mask there are those the function compiled under; `NeedsInput(FramebufferFetch)` where
-/// they are another pipeline's.
+/// input attachments (`RuntimeFact::ExtendedRangeInputBlend`), or whose codes it merges there
+/// (`RuntimeFact::WordInputMerge` of such an attachment), on a device that orders fetch through
+/// rasterization-order input attachments, against the attachments of render inputs `r`: by color
+/// index, the channels each write keeps from its texel, where the pipeline's blend and write mask
+/// there are those the function compiled under; `NeedsInput(FramebufferFetch)` where they are
+/// another pipeline's (a merge's mask, [`word_merges`]).
 pub fn input_blends(
     r: &RenderLinkInputs,
     fragment: Option<&FunctionArtifact>,
@@ -184,6 +189,20 @@ pub fn input_blends(
 ) -> Result<BTreeMap<u32, crate::vk::ColorComponentFlags>, Error> {
     let mut out = BTreeMap::new();
     for fact in fragment.into_iter().flat_map(|f| &f.facts) {
+        // An extended-range attachment's merge, which [`word_merges`] holds to the pipeline's
+        // state, writes every raw component as a blend over the input attachment does.
+        if let RuntimeFact::WordInputMerge { color, kept } = *fact {
+            let extended = r
+                .color_attachments
+                .get(color as usize)
+                .copied()
+                .flatten()
+                .is_some_and(|a| ExtendedRange::of(a.pixel_format).is_some());
+            if extended {
+                out.insert(color, kept);
+            }
+            continue;
+        }
         let RuntimeFact::ExtendedRangeInputBlend { color, blend, kept } = *fact else {
             continue;
         };
@@ -209,7 +228,8 @@ pub fn input_blends(
 /// The word merges the fragment stage `fragment` computes over input attachments
 /// (`RuntimeFact::WordInputMerge`), against the attachments of render inputs `r` on `p`: each
 /// attachment the stage writes through a first output whose word the pipeline's state merges
-/// (`color_writes::merged_word`) needs the stage's merge keeping the channels the mask leaves out,
+/// (`color_writes::merged_word`, and an extended-range one's codes, `color_writes::merged_extended`)
+/// needs the stage's merge keeping the channels the mask leaves out,
 /// and each merge the stage states needs that state. A stage compiled under another mask there,
 /// or without the merge, is `NeedsInput(FramebufferFetch)`.
 pub fn word_merges(
@@ -249,6 +269,9 @@ pub fn word_merges(
         if let Some(kept) =
             crate::pipeline::color_writes::merged_word(color, &a, r.alpha_to_coverage, p)
         {
+            wanted.insert(color, color_write_mask(kept)?);
+        } else if crate::pipeline::color_writes::merged_extended(&a) && inputs_order(p) {
+            let kept = kept_channels(a.pixel_format, a.write_mask, true);
             wanted.insert(color, color_write_mask(kept)?);
         }
     }

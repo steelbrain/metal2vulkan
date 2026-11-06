@@ -619,7 +619,11 @@ pub enum RuntimeFact {
     /// word's channels: it reads the texel's word through the attachment's input attachment
     /// (`RuntimeFact::FramebufferFetch`) and writes Metal's word of its output with the fields of
     /// the channels `kept` (those of the word the descriptor's write mask leaves out) taken from
-    /// the word read. Link writes the whole word, and a pipeline of another write mask there is
+    /// the word read. Likewise an extended-range attachment whose one raw component holds three
+    /// codes (`BGR10_XR`, the two-plane forms' color word, their `_sRGB` twins) written unblended
+    /// under a mask of some of them: the function writes the kernel write's encode of its output
+    /// with the codes of the channels `kept` taken from the texel read. Link writes the whole word
+    /// (every raw component), and a pipeline of another write mask there is
     /// `NeedsInput(FramebufferFetch)`.
     WordInputMerge {
         color: u32,

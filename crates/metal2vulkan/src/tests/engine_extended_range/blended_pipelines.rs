@@ -346,8 +346,11 @@ fn an_unordered_device_names_what_an_extended_range_blend_needs() {
 /// components gives: where the device orders fetch only through the pixel interlock, the function
 /// merges its codes into the word it reads first, in the interlocked storage form (color 0 leaves
 /// the subpass), at one sample and four, from a `half4` output and a `float4` one, and every stage
-/// passes L3. Over lavapipe's input attachments the merge is not built (`NotImplemented(Format)`,
-/// or its gap at four samples); on a device that orders fetch in neither form the refusal names the
+/// passes L3. On lavapipe, which orders fetch through rasterization-order input attachments, the
+/// function merges them over the input attachment: color 0 stays a color attachment of the raw
+/// format with no blend and a write of every raw component, the stage states
+/// `RuntimeFact::WordInputMerge` with the channels the mask keeps, and it passes L3 (four samples
+/// are its profile's gap). On a device that orders fetch in neither form the refusal names the
 /// orderings the merge needs. Before, every venue refused the mask `NotImplemented(Format)` at link.
 #[test]
 fn a_mask_of_some_codes_of_a_word_merges_them_in_the_storage_form() {
@@ -395,8 +398,34 @@ fn a_mask_of_some_codes_of_a_word_merges_them_in_the_storage_form() {
                             format!("{stem} {pf:?} mask {} {fill} x{samples}", mask.as_raw());
                         match dev.compile_render_pipeline(&d, &Budget::standard()) {
                             Ok(pipe) => {
-                                assert!(interlock, "{what}");
-                                assert!(stored(&pipe), "{what}");
+                                assert!(interlock || inputs, "{what}");
+                                assert_eq!(stored(&pipe), interlock, "{what}");
+                                if inputs {
+                                    let a = pipe.graphics.color_attachments[0].expect("attachment");
+                                    let form = ExtendedRange::of(pf).expect("a form");
+                                    assert_eq!(a.format, form.raw_format(), "{what}");
+                                    let whole = match form.raw_components() {
+                                        1 => vk::ColorComponentFlags::R,
+                                        _ => {
+                                            vk::ColorComponentFlags::R | vk::ColorComponentFlags::G
+                                        }
+                                    };
+                                    assert_eq!(a.write_mask, whole, "{what}");
+                                    assert!(a.blend.is_none(), "{what}");
+                                    let kept = crate::metal::state::color_write_mask(
+                                        crate::lower::fragment::kept_channels(pf, mask, true),
+                                    )
+                                    .expect("mask");
+                                    let fact = crate::pipeline::RuntimeFact::WordInputMerge {
+                                        color: 0,
+                                        kept,
+                                    };
+                                    assert!(
+                                        pipe.dependencies.iter().any(|d| d.fact == fact),
+                                        "{what}: {:?}",
+                                        pipe.dependencies
+                                    );
+                                }
                                 for m in &pipe.stages {
                                     check_words_valid(&m.spirv, &pipe.requirements, dev.profile())
                                         .unwrap_or_else(|e| panic!("{what}: L3: {e}"));
@@ -408,10 +437,6 @@ fn a_mask_of_some_codes_of_a_word_merges_them_in_the_storage_form() {
                                 assert_eq!(u.needs, unordered.needs, "{what}: {u:?}");
                             }
                             Err(e) if inputs && samples > 1 && lacks_samples(&e) => {}
-                            Err(Error::Unsupported(u)) if inputs => {
-                                assert_eq!(u.feature, Feature::Format, "{what}: {u:?}");
-                                assert_eq!(u.needs, Needs::NotImplemented, "{what}: {u:?}");
-                            }
                             Err(e) => panic!("{what}: {e:?}"),
                         }
                     }
@@ -419,5 +444,6 @@ fn a_mask_of_some_codes_of_a_word_merges_them_in_the_storage_form() {
             }
         }
     }
-    assert_eq!(merged, 4 * formats.len() * masks.len() * 2 * 2);
+    // Four interlock venues at both counts, lavapipe at one sample.
+    assert_eq!(merged, (4 * 2 + 1) * formats.len() * masks.len() * 2);
 }

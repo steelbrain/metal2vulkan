@@ -193,7 +193,7 @@ pub(super) fn select_param(cx: &mut SelectCx<'_>, b: &ParamBinding) -> Result<Co
         .fragment
         .input_blends
         .get(&color)
-        .is_some_and(|ib| ib.blend.is_some());
+        .is_some_and(super::InputBlend::reads);
     if !known.iter().any(|c| c.color == color) && !blended {
         cx.descriptors.input_attachments = cx.descriptors.input_attachments.saturating_add(1);
         cx.facts.insert(RuntimeFact::FramebufferFetch { color });
@@ -369,10 +369,7 @@ pub(super) fn declare(
             e.insert(super::fetch::declare(mb, color, sc)?);
         }
     }
-    let blended = blends
-        .iter()
-        .filter(|(_, ib)| ib.blend.is_some())
-        .map(|(&c, _)| c);
+    let blended = blends.iter().filter(|(_, ib)| ib.reads()).map(|(&c, _)| c);
     for color in blended.chain(merges.keys().copied()) {
         if let std::collections::btree_map::Entry::Vacant(e) = out.entry(color) {
             e.insert(input_attachment(mb, color, false, multisampled)?);

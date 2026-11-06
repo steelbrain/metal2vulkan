@@ -696,8 +696,12 @@ pub(crate) fn shader_blend(
             .map(|form| (sc.view.blend, form, sc.view.stores_nothing()));
     }
     fp.input_blends.get(&color).map(|ib| {
-        let stores = ib.blend.is_some();
-        (stores.then_some(ib.equation), ib.form, !stores)
+        let blends = ib.blend.is_some();
+        (
+            blends.then_some(ib.equation).flatten(),
+            ib.form,
+            !blends && !ib.merges(),
+        )
     })
 }
 

@@ -2102,9 +2102,11 @@ pub(crate) fn unattached_colors_written(
 /// (`VariantKey::interlocked_colors`); `None` on another device or for an entry that declares none
 /// of them. On a device that orders fetch through rasterization-order input attachments, the state
 /// of every extended-range attachment the entry writes that the pass blends (whose blend the
-/// function computes over its input attachment, `lower::fragment`'s `input_blend`), and of every
+/// function computes over its input attachment, `lower::fragment`'s `input_blend`), of every
 /// word attachment it writes under a mask of some of the word's channels (whose word the function
-/// merges into its input attachment's, `color_writes::merged_word`).
+/// merges into its input attachment's, `color_writes::merged_word`), and of every extended-range
+/// attachment it writes unblended under a mask of some of the codes one word holds (merged so,
+/// `color_writes::merged_extended`).
 pub(crate) fn fetch_inputs(
     spec: &air::Entry,
     d: FragmentPass<'_>,
@@ -2174,7 +2176,7 @@ pub(crate) fn fetch_inputs(
                 ..
             } if blended(color)
                 || (interlock && (stored_word(color) || merged_extended(color)))
-                || (inputs && merged_word(color)) =>
+                || (inputs && (merged_word(color) || merged_extended(color))) =>
             {
                 Some(color)
             }

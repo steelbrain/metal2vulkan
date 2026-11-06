@@ -1149,10 +1149,12 @@ fn uniform_blend(
 /// Max and an M4, byte-identical). A mask of some of the channels one component holds
 /// (`BGR10_XR`'s word, `RGB10A2Unorm_sRGB`'s, the two-plane forms' color word) is
 /// `NotImplemented(Format)` here: no mask of the raw components keeps one code of a word and
-/// writes another. A stage that writes `BGR10_XR` or a two-plane form so merges the codes in the
-/// interlocked storage form (`color_writes::merged_extended`), which leaves the attachment out of
-/// the subpass, where the device orders fetch through the pixel interlock; on a device that orders
-/// it in neither form, the caller names the orderings the merge needs. A bfloat form's channels
+/// writes another. A stage that writes `BGR10_XR` or a two-plane form so merges the codes
+/// (`color_writes::merged_extended`): in the interlocked storage form, which leaves the attachment
+/// out of the subpass, where the device orders fetch through the pixel interlock, and over the
+/// input attachment, whose write the caller makes of every raw component, where it orders fetch
+/// through rasterization-order input attachments; on a device that orders it in neither form, the
+/// caller names the orderings the merge needs. A bfloat form's channels
 /// are its own (red; red and green; all four), each a raw component; a mask of some of them is
 /// unmeasured and refused as above.
 fn extended_write_mask(

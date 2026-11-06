@@ -19,6 +19,13 @@
 //! `half` shadow does (the announcement, `extended-range-blends-stored-codes`, stays the runtime's
 //! there).
 //!
+//! There too an unblended write of some of the codes one word holds (`BGR10_XR`'s word, the
+//! two-plane forms' color word, `color_writes::merged_extended`), which no mask of the raw
+//! components gives, reads the texel's raw codes through the input attachment and writes the
+//! kernel write's encode of its output with the codes the mask keeps taken from them
+//! (`extended_range::encode_keeping`), as Metal's tile keeps a masked channel's code; it states
+//! `RuntimeFact::WordInputMerge`, and link writes every raw component.
+//!
 //! The blend takes a `half4` or `float4` output under every factor, operation and write mask, as
 //! the storage form does (another output is refused, `Feature::ExtendedRangeBlend` `Output`); its
 //! second source is the function's index-1 output, read from the returned value and stored nowhere
@@ -28,6 +35,7 @@
 
 use std::collections::BTreeMap;
 
+use crate::air::abi::{AbiInt, OutputRole};
 use crate::air::ir::TypeId as AirTypeId;
 use crate::error::{
     Attachment, DescriptorError, Error, ExtendedRangeBlend, Feature, RuntimeInput, Unsupported,
@@ -52,8 +60,9 @@ use super::fetch;
 pub struct InputBlend {
     /// The attachment's form.
     pub form: ExtendedRange,
-    /// The pipeline's blend at the attachment.
-    pub equation: BlendEquation,
+    /// The pipeline's blend at the attachment; `None` for an unblended write of some of the codes
+    /// one word holds, which the function merges into the texel (see the module docs).
+    pub equation: Option<BlendEquation>,
     /// The blend of the write, as the shader computes it; `None` where the write stores none of
     /// the format's channels, and blends nothing.
     pub blend: Option<extended_range::blend::NativeBlend>,
@@ -64,6 +73,19 @@ pub struct InputBlend {
     /// attachment and its form, once the stage interface planned it, where the blend reads the
     /// second source ([`select_second_output`]).
     pub second: Option<(u32, Form)>,
+}
+
+impl InputBlend {
+    /// Whether the write is unblended and keeps some of the format's codes from the texel it reads
+    /// (`color_writes::merged_extended`).
+    pub fn merges(&self) -> bool {
+        self.equation.is_none()
+    }
+
+    /// Whether the write reads the attachment's input attachment: a blend, or a merge.
+    pub fn reads(&self) -> bool {
+        self.blend.is_some() || self.merges()
+    }
 }
 
 /// An upper estimate of the words one blended write adds beside its blend's arithmetic: the
@@ -87,11 +109,11 @@ pub(super) fn plan(cx: &mut SelectCx<'_>) -> Result<(), Error> {
         return Ok(());
     }
     let blended = fetch::blended_extended_range(cx)?;
-    if blended.is_empty() {
-        return Ok(());
-    }
     let Some(inputs) = cx.inputs.framebuffer_fetch.clone() else {
-        return Err(Error::NeedsInput(RuntimeInput::FramebufferFetch));
+        return match blended.is_empty() {
+            true => Ok(()),
+            false => Err(Error::NeedsInput(RuntimeInput::FramebufferFetch)),
+        };
     };
     let mut planned = BTreeMap::new();
     for (color, ty) in blended {
@@ -129,7 +151,7 @@ pub(super) fn plan(cx: &mut SelectCx<'_>) -> Result<(), Error> {
         if !stores {
             let ib = InputBlend {
                 form,
-                equation: eq,
+                equation: Some(eq),
                 blend: None,
                 kept,
                 second: None,
@@ -168,19 +190,82 @@ pub(super) fn plan(cx: &mut SelectCx<'_>) -> Result<(), Error> {
             color,
             InputBlend {
                 form,
-                equation: eq,
+                equation: Some(eq),
                 blend: Some(blend),
                 kept,
                 second: None,
             },
         );
     }
-    let reads = planned.values().any(|ib| ib.blend.is_some());
+    merged(cx, &inputs, &mut planned)?;
+    let reads = planned.values().any(InputBlend::reads);
     cx.families.fragment.input_blends = planned;
     match reads {
         true => fetch::plan_sample(cx),
         false => Ok(()),
     }
+}
+
+/// Plan, into `planned`, the extended-range attachments the function writes through a first output
+/// unblended under a mask of some of the codes one word holds, as the pipeline's state `inputs`
+/// names them (`color_writes::merged_extended`): each reads its input attachment, merges the
+/// written codes into the texel it reads, and states `RuntimeFact::WordInputMerge` with the
+/// channels it keeps (see the module docs).
+fn merged(
+    cx: &mut SelectCx<'_>,
+    inputs: &crate::pipeline::lower_inputs::FramebufferFetchInputs,
+    planned: &mut BTreeMap<u32, InputBlend>,
+) -> Result<(), Error> {
+    let written: Vec<u32> = cx
+        .entry
+        .ep
+        .outputs
+        .iter()
+        .filter_map(|o| match o.role {
+            OutputRole::RenderTarget {
+                attachment: AbiInt::Const(color),
+                index: 0,
+                ..
+            } => Some(color),
+            _ => None,
+        })
+        .collect();
+    for color in written {
+        let Some(a) = inputs.attachments.get(&color).copied().flatten() else {
+            continue;
+        };
+        let Some(form) = cx
+            .inputs
+            .extended_range_colors
+            .get(&color)
+            .filter(|e| !e.blended)
+            .map(|e| e.form)
+        else {
+            continue;
+        };
+        let merges = crate::pipeline::color_writes::merges_extended;
+        if !merges(a.pixel_format, a.write_mask, a.blending_enabled) {
+            continue;
+        }
+        let tied = |e: Error| e.at_attachment(Attachment::Color(color));
+        let kept = fetch::kept_channels(a.pixel_format, a.write_mask, true);
+        let kept = crate::metal::state::color_write_mask(kept).map_err(tied)?;
+        cx.facts.insert(RuntimeFact::WordInputMerge { color, kept });
+        cx.facts.insert(RuntimeFact::FramebufferFetch { color });
+        cx.families.arith.converts(form);
+        cx.descriptors.input_attachments = cx.descriptors.input_attachments.saturating_add(1);
+        planned.insert(
+            color,
+            InputBlend {
+                form,
+                equation: None,
+                blend: None,
+                kept,
+                second: None,
+            },
+        );
+    }
+    Ok(())
 }
 
 /// Whether the function's second (index-1) output to `color` is the second source of the blend
@@ -223,8 +308,21 @@ pub(crate) fn texel(
     (form, part): (Form, SValue),
     second: Option<(Form, SValue)>,
 ) -> BResult<SValue> {
+    let kept = [
+        vk::ColorComponentFlags::R,
+        vk::ColorComponentFlags::G,
+        vk::ColorComponentFlags::B,
+        vk::ColorComponentFlags::A,
+    ]
+    .map(|c| ib.kept.contains(c));
     let Some(b) = &ib.blend else {
-        return crate::lower::stage_io::extended_color::texel(fb, ib.form, form, part);
+        if !ib.merges() {
+            return crate::lower::stage_io::extended_color::texel(fb, ib.form, form, part);
+        }
+        // The unblended write's `half`, encoded, the codes the mask keeps taken from the texel.
+        let codes = super::color::input_texel(cx, fb, color)?;
+        let v = crate::lower::stage_io::extended_color::held(fb, ib.form, form, part)?;
+        return extended_range::encode_keeping(fb, ib.form, v, (codes, kept));
     };
     let s1 = fetch::blend_second(cx, b, second)?;
     let codes = super::color::input_texel(cx, fb, color)?;
@@ -235,13 +333,6 @@ pub(crate) fn texel(
     if ib.kept.is_empty() {
         return extended_range::encode(fb, ib.form, v);
     }
-    let kept = [
-        vk::ColorComponentFlags::R,
-        vk::ColorComponentFlags::G,
-        vk::ColorComponentFlags::B,
-        vk::ColorComponentFlags::A,
-    ]
-    .map(|c| ib.kept.contains(c));
     extended_range::encode_keeping(fb, ib.form, v, (codes, kept))
 }
 
@@ -252,10 +343,11 @@ pub(super) fn words(cx: &SelectCx<'_>, rets: u64) -> u64 {
         .fragment
         .input_blends
         .values()
-        .filter_map(|ib| ib.blend.as_ref())
-        .map(|b| {
+        .filter(|ib| ib.reads())
+        .map(|ib| {
+            let blend = ib.blend.as_ref().map_or(0, |b| b.words());
             let each = WRITE_WORDS
-                .saturating_add(u64::from(b.words()))
+                .saturating_add(u64::from(blend))
                 .saturating_add(u64::from(
                     extended_range::DECODE_WORDS + extended_range::ENCODE_WORDS,
                 ));
