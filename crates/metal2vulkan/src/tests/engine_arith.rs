@@ -3842,7 +3842,7 @@ fn half_moves_are_metals_only_where_the_device_folds_them() {
         half_nan_kernel(
             "member_merged_selection_constant",
             format!(
-                "{hx}{nan}{one}  br i1 %c, label %l, label %u\nl:\n  %t = select i1 %e, half %hx, half 0xH0000\n  %tm = insertvalue {{ half, i8 }} undef, half %t, 0\n  %tw = insertvalue {{ half, i8 }} %tm, i8 0, 1\n  br label %j\nu:\n  br label %j\nj:\n  %p = phi {{ half, i8 }} [ %tw, %l ], [ {{ half, i8 }} {{ half 0xH3C00, i8 0 }}, %u ]\n  %s = extractvalue {{ half, i8 }} %p, 0\n"
+                "{hx}{nan}{one}  br i1 %c, label %l, label %u\nl:\n  %t = select i1 %e, half %hx, half 0xH0000\n  %tm = insertvalue {{ half, i8 }} undef, half %t, 0\n  %tw = insertvalue {{ half, i8 }} %tm, i8 0, 1\n  br label %j\nu:\n  br label %j\nj:\n  %p = phi {{ half, i8 }} [ %tw, %l ], [ {{ half 0xH3C00, i8 0 }}, %u ]\n  %s = extractvalue {{ half, i8 }} %p, 0\n"
             ),
             None,
         ),
