@@ -67,7 +67,7 @@
                         "value": "absent",
                         "digest": {
                           "kind": "sha256",
-                          "hex": "7ab0da58d20d16028e75a2dc6ea1366856ab83f5e4b6eda20d6b7aa2eba028e5"
+                          "hex": "a78ad647623b3f4faf904b2b2d71783b5335a0e9c055a39c53aabb5cc67e54fe"
                         }
                       }
                     },
@@ -528,6 +528,106 @@
                           "uint": 0
                         }
                       }
+                    },
+                    {
+                      "name": "limits",
+                      "observed": {
+                        "value": "absent"
+                      },
+                      "children": [
+                        {
+                          "name": "max_total_threads_per_object_threadgroup",
+                          "observed": {
+                            "value": {
+                              "uint": 0
+                            }
+                          }
+                        },
+                        {
+                          "name": "max_total_threads_per_mesh_threadgroup",
+                          "observed": {
+                            "value": {
+                              "uint": 0
+                            }
+                          }
+                        },
+                        {
+                          "name": "object_threadgroup_size_is_multiple_of_thread_execution_width",
+                          "observed": {
+                            "value": {
+                              "bool": false
+                            }
+                          }
+                        },
+                        {
+                          "name": "mesh_threadgroup_size_is_multiple_of_thread_execution_width",
+                          "observed": {
+                            "value": {
+                              "bool": false
+                            }
+                          }
+                        },
+                        {
+                          "name": "payload_memory_length",
+                          "observed": {
+                            "value": {
+                              "uint": 0
+                            }
+                          }
+                        },
+                        {
+                          "name": "max_total_threadgroups_per_mesh_grid",
+                          "observed": {
+                            "value": {
+                              "uint": 0
+                            }
+                          }
+                        },
+                        {
+                          "name": "max_vertex_amplification_count",
+                          "observed": {
+                            "value": {
+                              "uint": 1
+                            }
+                          }
+                        },
+                        {
+                          "name": "required_threads_per_object_threadgroup",
+                          "observed": {
+                            "value": {
+                              "fields": {
+                                "depth": {
+                                  "uint": 0
+                                },
+                                "height": {
+                                  "uint": 0
+                                },
+                                "width": {
+                                  "uint": 0
+                                }
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "required_threads_per_mesh_threadgroup",
+                          "observed": {
+                            "value": {
+                              "fields": {
+                                "depth": {
+                                  "uint": 0
+                                },
+                                "height": {
+                                  "uint": 0
+                                },
+                                "width": {
+                                  "uint": 0
+                                }
+                              }
+                            }
+                          }
+                        }
+                      ]
                     }
                   ]
                 },

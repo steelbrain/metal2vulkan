@@ -1,0 +1,978 @@
+{
+  "format": 1,
+  "case": "mesh-partial-barrier-uniform",
+  "suite_version": 1,
+  "shaders": [
+    {
+      "fixture": "mesh_partial_barrier.ll",
+      "entry": "mesh_partial_barrier_uniform",
+      "source_sha256": "c637d334d0f8d73548b5f8d9cb12c9cab34c40e734ad1847bbda0c221680b924"
+    },
+    {
+      "fixture": "mesh_partial_barrier.air.ll",
+      "entry": "mesh_partial_barrier_uniform",
+      "source_sha256": "bf712dd8e3a5ae6186b66242672b4d7a6ec7b27a648a228d8fdf763166c921f7"
+    }
+  ],
+  "answers": [
+    {
+      "key": {
+        "chip": "apple-m3-max",
+        "os_version": "27.0.1",
+        "os_build": "26A434",
+        "metal_level": "27.0.1"
+      },
+      "provenance": "metal_run",
+      "device": "Apple M3 Max",
+      "runs": 3,
+      "outcomes": [
+        {
+          "runs": 3,
+          "transcript": {
+            "root": {
+              "name": "case",
+              "observed": {
+                "value": "absent"
+              },
+              "children": [
+                {
+                  "name": "inputs",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "air",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "c637d334d0f8d73548b5f8d9cb12c9cab34c40e734ad1847bbda0c221680b924"
+                        }
+                      }
+                    },
+                    {
+                      "name": "air-typed",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "bf712dd8e3a5ae6186b66242672b4d7a6ec7b27a648a228d8fdf763166c921f7"
+                        }
+                      }
+                    },
+                    {
+                      "name": "functions",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "86cb3483e032364f73be82a0101f475b59cc940dd2d6c88562a95edcb14864d1"
+                        }
+                      }
+                    },
+                    {
+                      "name": "control",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "b7c3a439276a44318a3ebfd2f8d5fe379211eebd535d9035e2d0d060566149eb"
+                        }
+                      }
+                    },
+                    {
+                      "name": "buffer",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "12dae5be05ce4c9fb3121e322f5e01dd61b26c4422a8b4aa9766e08890c77932"
+                        }
+                      }
+                    },
+                    {
+                      "name": "rows",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "eaac18f1805a8eb9b0e922d1f53d4f67dd91fd9515074bf69c63623190a6ff21"
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "library",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "pipeline",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "threads-6-by-4",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "calls",
+                      "observed": {
+                        "value": "absent"
+                      },
+                      "children": [
+                        {
+                          "name": "0-setRenderPipelineState",
+                          "observed": {
+                            "value": {
+                              "variant": {
+                                "name": "Ok",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "1-setObjectBuffer",
+                          "observed": {
+                            "value": {
+                              "variant": {
+                                "name": "Ok",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "2-setObjectBytes",
+                          "observed": {
+                            "value": {
+                              "variant": {
+                                "name": "Ok",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "3-drawMeshThreads",
+                          "observed": {
+                            "value": {
+                              "variant": {
+                                "name": "Ok",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "name": "status",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "variant": {
+                                "name": "Completed",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "command-buffer-error",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "None",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "words",
+                      "observed": {
+                        "value": {
+                          "bytes": "BgAAAKurq6urq6urq6urq3ECAAAEAQAAcQIAAAQBAQBxAgAABAECAGUCAAAEAQMAZQIAAAIBAABfAgAAAgEBAA=="
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "buffer": {
+                                "offset": 0,
+                                "length": 64
+                              }
+                            },
+                            "element": "u32",
+                            "row_offset": 0,
+                            "row_elements": 16,
+                            "row_pitch": 64,
+                            "rows": 1,
+                            "image_pitch": 64,
+                            "images": 1,
+                            "gaps": "compared"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "threads-5x3-by-4x2",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "calls",
+                      "observed": {
+                        "value": "absent"
+                      },
+                      "children": [
+                        {
+                          "name": "0-setRenderPipelineState",
+                          "observed": {
+                            "value": {
+                              "variant": {
+                                "name": "Ok",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "1-setObjectBuffer",
+                          "observed": {
+                            "value": {
+                              "variant": {
+                                "name": "Ok",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "2-setObjectBytes",
+                          "observed": {
+                            "value": {
+                              "variant": {
+                                "name": "Ok",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "3-drawMeshThreads",
+                          "observed": {
+                            "value": {
+                              "variant": {
+                                "name": "Ok",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "name": "status",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "variant": {
+                                "name": "Completed",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "command-buffer-error",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "None",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "words",
+                      "observed": {
+                        "value": {
+                          "bytes": "DwAAAKurq6urq6urq6urq30CAAAEAgAAiQIAAAQCAQCVAgAABAICAIkCAAAEAgMAZQIAAAECAACVAgAABAIEAIkCAAAEAgUAfQIAAAQCBgBxAgAABAIHAF8CAAABAgEAcQIAAAQBAABxAgAABAEBAHECAAAEAQIAZQIAAAQBAwBcAgAAAQEAAA=="
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "buffer": {
+                                "offset": 0,
+                                "length": 136
+                              }
+                            },
+                            "element": "u32",
+                            "row_offset": 0,
+                            "row_elements": 34,
+                            "row_pitch": 136,
+                            "rows": 1,
+                            "image_pitch": 136,
+                            "images": 1,
+                            "gaps": "compared"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "threads-37-by-32",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "calls",
+                      "observed": {
+                        "value": "absent"
+                      },
+                      "children": [
+                        {
+                          "name": "0-setRenderPipelineState",
+                          "observed": {
+                            "value": {
+                              "variant": {
+                                "name": "Ok",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "1-setObjectBuffer",
+                          "observed": {
+                            "value": {
+                              "variant": {
+                                "name": "Ok",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "2-setObjectBytes",
+                          "observed": {
+                            "value": {
+                              "variant": {
+                                "name": "Ok",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "3-drawMeshThreads",
+                          "observed": {
+                            "value": {
+                              "variant": {
+                                "name": "Ok",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "name": "status",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "variant": {
+                                "name": "Completed",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "command-buffer-error",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "None",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "words",
+                      "observed": {
+                        "value": {
+                          "bytes": "JQAAAKurq6urq6urq6urq30CAAAgAQAAiQIAACABAQCVAgAAIAECAKECAAAgAQMArQIAACABBAC5AgAAIAEFAMUCAAAgAQYA0QIAACABBwDdAgAAIAEIAOkCAAAgAQkA9QIAACABCgABAwAAIAELAA0DAAAgAQwAGQMAACABDQAlAwAAIAEOADEDAAAgAQ8APQMAACABEABJAwAAIAERAFUDAAAgARIAYQMAACABEwBtAwAAIAEUAHkDAAAgARUAhQMAACABFgCRAwAAIAEXAJ0DAAAgARgAqQMAACABGQC1AwAAIAEaAGEDAAAgARsAbQMAACABHAAZAwAAIAEdAMUCAAAgAR4AcQIAACABHwBuAgAABQEAAHoCAAAFAQEAdwIAAAUBAgB0AgAABQEDAHECAAAFAQQA"
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "buffer": {
+                                "offset": 0,
+                                "length": 312
+                              }
+                            },
+                            "element": "u32",
+                            "row_offset": 0,
+                            "row_elements": 78,
+                            "row_pitch": 312,
+                            "rows": 1,
+                            "image_pitch": 312,
+                            "images": 1,
+                            "gaps": "compared"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "threads-2-by-4",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "calls",
+                      "observed": {
+                        "value": "absent"
+                      },
+                      "children": [
+                        {
+                          "name": "0-setRenderPipelineState",
+                          "observed": {
+                            "value": {
+                              "variant": {
+                                "name": "Ok",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "1-setObjectBuffer",
+                          "observed": {
+                            "value": {
+                              "variant": {
+                                "name": "Ok",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "2-setObjectBytes",
+                          "observed": {
+                            "value": {
+                              "variant": {
+                                "name": "Ok",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "3-drawMeshThreads",
+                          "observed": {
+                            "value": {
+                              "variant": {
+                                "name": "Ok",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "name": "status",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "variant": {
+                                "name": "Completed",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "command-buffer-error",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "None",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "words",
+                      "observed": {
+                        "value": {
+                          "bytes": "AgAAAKurq6urq6urq6urq2UCAAACAQAAXwIAAAIBAQA="
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "buffer": {
+                                "offset": 0,
+                                "length": 32
+                              }
+                            },
+                            "element": "u32",
+                            "row_offset": 0,
+                            "row_elements": 8,
+                            "row_pitch": 32,
+                            "rows": 1,
+                            "image_pitch": 32,
+                            "images": 1,
+                            "gaps": "compared"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "threads-8x2-by-4x2",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "calls",
+                      "observed": {
+                        "value": "absent"
+                      },
+                      "children": [
+                        {
+                          "name": "0-setRenderPipelineState",
+                          "observed": {
+                            "value": {
+                              "variant": {
+                                "name": "Ok",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "1-setObjectBuffer",
+                          "observed": {
+                            "value": {
+                              "variant": {
+                                "name": "Ok",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "2-setObjectBytes",
+                          "observed": {
+                            "value": {
+                              "variant": {
+                                "name": "Ok",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "3-drawMeshThreads",
+                          "observed": {
+                            "value": {
+                              "variant": {
+                                "name": "Ok",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "name": "status",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "variant": {
+                                "name": "Completed",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "command-buffer-error",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "None",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "words",
+                      "observed": {
+                        "value": {
+                          "bytes": "EAAAAKurq6urq6urq6urq30CAAAEAgAAiQIAAAQCAQCVAgAABAICAIkCAAAEAgMAfQIAAAQCAACJAgAABAIBAJUCAAAEAgIAiQIAAAQCAwCVAgAABAIEAIkCAAAEAgUAfQIAAAQCBgBxAgAABAIHAJUCAAAEAgQAiQIAAAQCBQB9AgAABAIGAHECAAAEAgcA"
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "buffer": {
+                                "offset": 0,
+                                "length": 144
+                              }
+                            },
+                            "element": "u32",
+                            "row_offset": 0,
+                            "row_elements": 36,
+                            "row_pitch": 144,
+                            "rows": 1,
+                            "image_pitch": 144,
+                            "images": 1,
+                            "gaps": "compared"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "groups-2-by-4",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "calls",
+                      "observed": {
+                        "value": "absent"
+                      },
+                      "children": [
+                        {
+                          "name": "0-setRenderPipelineState",
+                          "observed": {
+                            "value": {
+                              "variant": {
+                                "name": "Ok",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "1-setObjectBuffer",
+                          "observed": {
+                            "value": {
+                              "variant": {
+                                "name": "Ok",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "2-setObjectBytes",
+                          "observed": {
+                            "value": {
+                              "variant": {
+                                "name": "Ok",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "3-drawMeshThreadgroups",
+                          "observed": {
+                            "value": {
+                              "variant": {
+                                "name": "Ok",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "name": "status",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "variant": {
+                                "name": "Completed",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "command-buffer-error",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "None",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "words",
+                      "observed": {
+                        "value": {
+                          "bytes": "CAAAAKurq6urq6urq6urq3ECAAAEAQAAcQIAAAQBAQBxAgAABAECAGUCAAAEAQMAcQIAAAQBAABxAgAABAEBAHECAAAEAQIAZQIAAAQBAwA="
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "buffer": {
+                                "offset": 0,
+                                "length": 80
+                              }
+                            },
+                            "element": "u32",
+                            "row_offset": 0,
+                            "row_elements": 20,
+                            "row_pitch": 80,
+                            "rows": 1,
+                            "image_pitch": 80,
+                            "images": 1,
+                            "gaps": "compared"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "notices",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "set",
+                      "observed": {
+                        "value": {
+                          "nothing": "announced_nothing"
+                        }
+                      }
+                    },
+                    {
+                      "name": "counts",
+                      "observed": {
+                        "value": {
+                          "fields": {}
+                        }
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "validated": "ran"
+    }
+  ],
+  "costs": [
+    {
+      "venue": "Apple M3 Max",
+      "runs": 8,
+      "measured": "8 run(s) of the whole selection on Apple M3 Max, in the case set's own order, the largest each count reached",
+      "contrasted": "8 run(s) of each case on its own on Apple M3 Max, nothing before it on the device, the largest each count reached",
+      "degraded": [
+        "metal2vulkan-degrade-emulated-mesh-draws"
+      ],
+      "bounds": {
+        "addressable_buffers_made": 1,
+        "arena_pools_made": 2,
+        "argument_objects_retained": 6,
+        "argument_samplers_taken": 1,
+        "argument_tables_retained": 6,
+        "bare_starts": 6,
+        "batches_submitted_by_waiters": 1,
+        "batches_with_none_pending": 6,
+        "command_buffers_begun": 38,
+        "command_buffers_begun_batch_barriers": 5,
+        "command_buffers_begun_batch_work": 1,
+        "command_buffers_begun_continuations": 6,
+        "command_buffers_begun_encoders": 6,
+        "command_buffers_begun_secondaries": 15,
+        "command_buffers_begun_segments": 5,
+        "command_buffers_submitted": 23,
+        "command_pools_made": 1,
+        "commands_recorded.begin_command_buffer": 38,
+        "commands_recorded.cmd_begin_render_pass": 6,
+        "commands_recorded.cmd_bind_descriptor_sets": 24,
+        "commands_recorded.cmd_bind_pipeline": 24,
+        "commands_recorded.cmd_copy_buffer": 1,
+        "commands_recorded.cmd_dispatch": 12,
+        "commands_recorded.cmd_dispatch_indirect": 6,
+        "commands_recorded.cmd_draw_indirect": 6,
+        "commands_recorded.cmd_end_render_pass": 6,
+        "commands_recorded.cmd_execute_commands": 5,
+        "commands_recorded.cmd_pipeline_barrier": 42,
+        "commands_recorded.cmd_push_constants": 18,
+        "commands_recorded.cmd_set_blend_constants": 6,
+        "commands_recorded.cmd_set_cull_mode": 6,
+        "commands_recorded.cmd_set_depth_bias": 6,
+        "commands_recorded.cmd_set_depth_compare_op": 6,
+        "commands_recorded.cmd_set_depth_test_enable": 6,
+        "commands_recorded.cmd_set_depth_write_enable": 6,
+        "commands_recorded.cmd_set_front_face": 6,
+        "commands_recorded.cmd_set_scissor": 6,
+        "commands_recorded.cmd_set_stencil_compare_mask": 6,
+        "commands_recorded.cmd_set_stencil_op": 6,
+        "commands_recorded.cmd_set_stencil_reference": 6,
+        "commands_recorded.cmd_set_stencil_test_enable": 6,
+        "commands_recorded.cmd_set_stencil_write_mask": 6,
+        "commands_recorded.cmd_set_viewport": 6,
+        "commands_recorded.end_command_buffer": 38,
+        "commits_handed_off": 6,
+        "commits_taken_in": 6,
+        "completed_waits": 5,
+        "completed_where_seen": 6,
+        "completion_arms": 6,
+        "completion_arms_after_a_wake": 6,
+        "completion_waiter_parks": 6,
+        "device_memory_allocated": 1342177280,
+        "draw_shapes_carried": 5,
+        "draw_shapes_made": 4,
+        "draw_states_recorded": 102,
+        "draws_settled": 4,
+        "driver_diagnostics_withheld": 5,
+        "empty_memory_blocks_live": 2,
+        "encoder_command_buffers_begun": 32,
+        "fence_waits": 6,
+        "fences_made": 1,
+        "finales_apart": 5,
+        "finales_folded": 1,
+        "gate_waits": 6,
+        "gate_waits_slept": 6,
+        "gpu_pool_blocks_made": 1,
+        "gpu_pool_blocks_released": 1,
+        "graphics_pipelines_looked_up": 6,
+        "heap_tables_worked_out": 12,
+        "images_started_on_the_host": 6,
+        "indirect_draws_recorded": 6,
+        "inline_passes": 1,
+        "linked_use_questions_asked": 2,
+        "live_tables_uploaded": 4,
+        "memory_blocks_live": 2,
+        "memory_frees.blocks": 1,
+        "memory_frees.dedicated": 1,
+        "memory_frees_posted": 1,
+        "new_buffer_bytes_cleared": 2092,
+        "object_churn.buffers_parked": 16,
+        "object_churn.buffers_recycled": 5,
+        "object_churn.images_own_memory": 6,
+        "object_churn.textures_image": 6,
+        "object_churn.vk_buffer_bindings": 15,
+        "object_churn.vk_buffers_destroyed": 3,
+        "object_churn.vk_buffers_made": 17,
+        "object_churn.vk_image_bindings": 6,
+        "object_churn.vk_image_views_made": 6,
+        "object_churn.vk_images_destroyed": 9,
+        "object_churn.vk_images_made": 9,
+        "object_churn.vk_memory_allocations": 5,
+        "object_churn.vk_memory_freed": 1,
+        "owned_descriptor_pools": 6,
+        "owned_kernel_spirv_bytes": 7928,
+        "owned_kernels_made": 1,
+        "passes_not_inline_draws": 5,
+        "pipeline_layouts_made": 1,
+        "pipelines_pooled": 5,
+        "pooled_memory_blocks_made": 4,
+        "queue_submissions": 6,
+        "render_encoders_ended": 6,
+        "render_passes_begun_inline": 1,
+        "render_passes_begun_instances": 5,
+        "render_passes_made": 2,
+        "resident_textures_looked_at": 6,
+        "scheduled_where_submitted": 6,
+        "scheduler_passes": 6,
+        "scheduler_passes_by_waiters": 6,
+        "scheduler_sleeps": 8,
+        "scheduler_wakes_commit": 6,
+        "scheduler_wakes_host": 2,
+        "shader_modules_made": 4,
+        "slot_returns": 6,
+        "spare_command_pools_taken": 5,
+        "stage_entries_shared": 1,
+        "stage_entries_specialized": 2,
+        "stage_tables_read": 24,
+        "submit_infos": 11,
+        "submit_stalls_on_work": 1,
+        "trail_waits": 6,
+        "variant_pipelines_made": 15,
+        "wakes_completion_waiters": 6,
+        "wakes_spared": 47
+      },
+      "per_state": {
+        "pipelines": 15,
+        "states": 1
+      }
+    }
+  ]
+}

@@ -67,7 +67,7 @@
                         "value": "absent",
                         "digest": {
                           "kind": "sha256",
-                          "hex": "a53fa51600f318f17b48418e1eeada4238fbcb634b8eed2fd4c6d4713b1392ca"
+                          "hex": "ab3eae9969e7222e0e85fc4a51e58507dd13ede8e594a1e207b31956066babcb"
                         }
                       }
                     },
@@ -532,6 +532,106 @@
                           "uint": 0
                         }
                       }
+                    },
+                    {
+                      "name": "limits",
+                      "observed": {
+                        "value": "absent"
+                      },
+                      "children": [
+                        {
+                          "name": "max_total_threads_per_object_threadgroup",
+                          "observed": {
+                            "value": {
+                              "uint": 96
+                            }
+                          }
+                        },
+                        {
+                          "name": "max_total_threads_per_mesh_threadgroup",
+                          "observed": {
+                            "value": {
+                              "uint": 48
+                            }
+                          }
+                        },
+                        {
+                          "name": "object_threadgroup_size_is_multiple_of_thread_execution_width",
+                          "observed": {
+                            "value": {
+                              "bool": true
+                            }
+                          }
+                        },
+                        {
+                          "name": "mesh_threadgroup_size_is_multiple_of_thread_execution_width",
+                          "observed": {
+                            "value": {
+                              "bool": true
+                            }
+                          }
+                        },
+                        {
+                          "name": "payload_memory_length",
+                          "observed": {
+                            "value": {
+                              "uint": 80
+                            }
+                          }
+                        },
+                        {
+                          "name": "max_total_threadgroups_per_mesh_grid",
+                          "observed": {
+                            "value": {
+                              "uint": 12
+                            }
+                          }
+                        },
+                        {
+                          "name": "max_vertex_amplification_count",
+                          "observed": {
+                            "value": {
+                              "uint": 2
+                            }
+                          }
+                        },
+                        {
+                          "name": "required_threads_per_object_threadgroup",
+                          "observed": {
+                            "value": {
+                              "fields": {
+                                "depth": {
+                                  "uint": 1
+                                },
+                                "height": {
+                                  "uint": 2
+                                },
+                                "width": {
+                                  "uint": 8
+                                }
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": "required_threads_per_mesh_threadgroup",
+                          "observed": {
+                            "value": {
+                              "fields": {
+                                "depth": {
+                                  "uint": 1
+                                },
+                                "height": {
+                                  "uint": 3
+                                },
+                                "width": {
+                                  "uint": 4
+                                }
+                              }
+                            }
+                          }
+                        }
+                      ]
                     },
                     {
                       "name": "object_linked_functions",

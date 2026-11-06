@@ -1,0 +1,259 @@
+{
+  "format": 1,
+  "case": "mesh-limits-required-object-32-attribute-64",
+  "suite_version": 1,
+  "shaders": [
+    {
+      "fixture": "mesh_pipeline_limits.ll",
+      "entry": "mesh_pipeline_limits_object_64",
+      "source_sha256": "40497b8514fabad6ea18276085fb499997b907a455b2dfa0d89b45031c88f6d9"
+    },
+    {
+      "fixture": "mesh_pipeline_limits.air.ll",
+      "entry": "mesh_pipeline_limits_object_64",
+      "source_sha256": "f71e0a99066292c3b28f0ca2d3c83de542b54c1f21ec6e5c836630a1626d0a9b"
+    }
+  ],
+  "answers": [
+    {
+      "key": {
+        "chip": "apple-m3-max",
+        "os_version": "27.0.1",
+        "os_build": "26A434",
+        "metal_level": "27.0.1"
+      },
+      "provenance": "metal_run",
+      "device": "Apple M3 Max",
+      "runs": 3,
+      "outcomes": [
+        {
+          "runs": 3,
+          "transcript": {
+            "root": {
+              "name": "case",
+              "observed": {
+                "value": "absent"
+              },
+              "children": [
+                {
+                  "name": "inputs",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "air",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "40497b8514fabad6ea18276085fb499997b907a455b2dfa0d89b45031c88f6d9"
+                        }
+                      }
+                    },
+                    {
+                      "name": "air-typed",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "f71e0a99066292c3b28f0ca2d3c83de542b54c1f21ec6e5c836630a1626d0a9b"
+                        }
+                      }
+                    },
+                    {
+                      "name": "descriptor",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "42a907444299bb20e867a3dfddcc8670b4d1f3161b87075a7c83997085612319"
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "library",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "created",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "refused",
+                      "observed": {
+                        "value": {
+                          "bool": false
+                        }
+                      }
+                    },
+                    {
+                      "name": "max_total_threads_per_object_threadgroup",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Some",
+                            "payload": {
+                              "uint": 64
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "max_total_threads_per_mesh_threadgroup",
+                      "observed": {
+                        "value": {
+                          "uint": 128
+                        }
+                      }
+                    },
+                    {
+                      "name": "object_thread_execution_width",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Some",
+                            "payload": {
+                              "uint": 32
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "mesh_thread_execution_width",
+                      "observed": {
+                        "value": {
+                          "uint": 32
+                        }
+                      }
+                    },
+                    {
+                      "name": "max_total_threadgroups_per_mesh_grid",
+                      "observed": {
+                        "value": {
+                          "uint": 1048576
+                        }
+                      }
+                    },
+                    {
+                      "name": "required_threads_per_object_threadgroup",
+                      "observed": {
+                        "value": {
+                          "fields": {
+                            "depth": {
+                              "uint": 1
+                            },
+                            "height": {
+                              "uint": 1
+                            },
+                            "width": {
+                              "uint": 32
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "required_threads_per_mesh_threadgroup",
+                      "observed": {
+                        "value": {
+                          "fields": {
+                            "depth": {
+                              "uint": 0
+                            },
+                            "height": {
+                              "uint": 0
+                            },
+                            "width": {
+                              "uint": 0
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "max_total_threads_per_threadgroup",
+                      "observed": {
+                        "value": {
+                          "uint": 0
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "notices",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "set",
+                      "observed": {
+                        "value": {
+                          "nothing": "announced_nothing"
+                        }
+                      }
+                    },
+                    {
+                      "name": "counts",
+                      "observed": {
+                        "value": {
+                          "fields": {}
+                        }
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "validated": "ran"
+    }
+  ],
+  "costs": [
+    {
+      "venue": "Apple M3 Max",
+      "runs": 8,
+      "measured": "8 run(s) of the whole selection on Apple M3 Max, in the case set's own order, the largest each count reached",
+      "contrasted": "8 run(s) of each case on its own on Apple M3 Max, nothing before it on the device, the largest each count reached",
+      "bounds": {
+        "addressable_buffers_made": 2,
+        "device_memory_allocated": 201326592,
+        "linked_use_questions_asked": 2,
+        "pipeline_layouts_made": 1,
+        "pooled_memory_blocks_made": 3,
+        "shader_modules_made": 3,
+        "variants_taken_back": 1
+      },
+      "composed": {
+        "device_memory_allocated": 201326592
+      },
+      "ceilings": {
+        "addressable_buffers_made": 2,
+        "pipeline_layouts_made": 1,
+        "pooled_memory_blocks_made": 3,
+        "shader_modules_made": 3
+      },
+      "per_state": {
+        "pipelines": 0,
+        "states": 1
+      }
+    }
+  ]
+}

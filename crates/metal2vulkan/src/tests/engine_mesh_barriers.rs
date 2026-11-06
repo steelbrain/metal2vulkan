@@ -28,7 +28,9 @@ use crate::lower::select::Plan;
 use crate::pipeline::descriptor::{FunctionDescriptor, MeshPipelineDescriptor, StageSource};
 use crate::pipeline::facts::RuntimeFact;
 use crate::pipeline::interface::PushLoc;
-use crate::pipeline::sym::{Axis, PushField, ResourceKind, ResourceSlot, SpecKey, Stage};
+use crate::pipeline::sym::{
+    Axis, PushField, ResourceKind, ResourceSlot, SpecKey, Stage, SyntheticBinding,
+};
 use crate::pipeline::testing::typed_module;
 use crate::spirv::interp::{run, BarrierRule, Buffer, Config, Order, Resources, SubgroupSize};
 use crate::spirv::ir::{Inst, TypedModule};
@@ -304,17 +306,15 @@ fn run_draw(plan: &Plan, m: &TypedModule, draw: Draw, lanes: SubgroupSize) -> Ve
     spec.insert(SpecKey::ObjectMultiRegion, 1);
     let mut push = vec![0u8; plan.push.push_range.map_or(0, |(_, end)| end as usize)];
     for f in &plan.push.fields {
-        let PushLoc::Push { offset } = f.loc else {
-            panic!("a field outside the push block {f:?}");
-        };
-        match f.field {
-            PushField::DispatchRegion => {
+        match (f.field, f.loc) {
+            (PushField::DispatchRegion, PushLoc::Push { offset }) => {
                 let region = crate::lower::dispatch::partial_region_bytes([tx, ty, 1], [lx, ly, 1])
                     .expect("a region");
                 let at = offset as usize;
                 push[at..at + region.len()].copy_from_slice(&region);
             }
-            PushField::SlotBindOffset(_) => {}
+            // Every buffer is bound at offset 0, wherever its offset word is placed.
+            (PushField::SlotBindOffset(_), _) => {}
             other => panic!("unexpected push field {other:?}"),
         }
     }
@@ -353,6 +353,16 @@ fn run_draw(plan: &Plan, m: &TypedModule, draw: Draw, lanes: SubgroupSize) -> Ve
                 slot: Some(OBJECT_RECORDS_SLOT),
                 address: None,
                 bytes: bytes(&[0; 4]),
+            },
+            // The offset words a profile's push window has no room for: every one 0.
+            Buffer {
+                slot: Some(ResourceSlot {
+                    stage: Stage::Object,
+                    kind: ResourceKind::Synthetic(SyntheticBinding::ArgumentTable),
+                    index: 0,
+                }),
+                address: None,
+                bytes: vec![0; plan.push.argument_table_size.max(4) as usize],
             },
         ],
         push,

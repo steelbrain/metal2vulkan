@@ -314,6 +314,24 @@ impl<S: Side, W: Watcher> Side for Watching<S, W> {
         self.inner.mesh_descriptor_facts(library, spec)
     }
 
+    fn mesh_pipeline_limits(
+        &mut self,
+        library: Handle,
+        spec: &crate::pipeline_limits::MeshLimitsSpec<'_>,
+    ) -> Answer<crate::pipeline_limits::Creation<crate::pipeline_limits::MeshStateLimits>> {
+        let _span = self.watch("mesh_pipeline_limits");
+        self.inner.mesh_pipeline_limits(library, spec)
+    }
+
+    fn compute_pipeline_limits(
+        &mut self,
+        library: Handle,
+        spec: &crate::pipeline_limits::ComputeLimitsSpec<'_>,
+    ) -> Answer<crate::pipeline_limits::Creation<crate::pipeline_limits::ComputeStateLimits>> {
+        let _span = self.watch("compute_pipeline_limits");
+        self.inner.compute_pipeline_limits(library, spec)
+    }
+
     fn heap_buffer_size_and_align(
         &mut self,
         query: &crate::device_queries::HeapBufferQuery,

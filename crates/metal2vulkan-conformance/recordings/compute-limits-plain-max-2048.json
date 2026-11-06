@@ -1,0 +1,156 @@
+{
+  "format": 1,
+  "case": "compute-limits-plain-max-2048",
+  "suite_version": 1,
+  "shaders": [
+    {
+      "fixture": "compute_thread_limit.ll",
+      "entry": "compute_thread_limit_plain",
+      "source_sha256": "038d53ea10e88bf3ef0afb0a8d044ddbc77f07a8edd6af3df3e6bc409cbd92bd"
+    },
+    {
+      "fixture": "compute_thread_limit.air.ll",
+      "entry": "compute_thread_limit_plain",
+      "source_sha256": "38d1a31c40b4ce47a0b2e4dc3c2963d118bf614b97e3da6820360cc53c47a4ef"
+    }
+  ],
+  "answers": [
+    {
+      "key": {
+        "chip": "apple-m3-max",
+        "os_version": "27.0.1",
+        "os_build": "26A434",
+        "metal_level": "27.0.1"
+      },
+      "provenance": "metal_run",
+      "device": "Apple M3 Max",
+      "runs": 3,
+      "outcomes": [
+        {
+          "runs": 3,
+          "transcript": {
+            "root": {
+              "name": "case",
+              "observed": {
+                "value": "absent"
+              },
+              "children": [
+                {
+                  "name": "inputs",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "air",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "038d53ea10e88bf3ef0afb0a8d044ddbc77f07a8edd6af3df3e6bc409cbd92bd"
+                        }
+                      }
+                    },
+                    {
+                      "name": "air-typed",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "38d1a31c40b4ce47a0b2e4dc3c2963d118bf614b97e3da6820360cc53c47a4ef"
+                        }
+                      }
+                    },
+                    {
+                      "name": "descriptor",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "2eb6a8bee00689f8060d5a647f28d90227ea3121a9673e170bf032815a615cea"
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "library",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "created",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "refused",
+                      "observed": {
+                        "value": {
+                          "bool": true
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "notices",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "set",
+                      "observed": {
+                        "value": {
+                          "nothing": "announced_nothing"
+                        }
+                      }
+                    },
+                    {
+                      "name": "counts",
+                      "observed": {
+                        "value": {
+                          "fields": {}
+                        }
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "validated": "ran"
+    }
+  ],
+  "costs": [
+    {
+      "venue": "Apple M3 Max",
+      "runs": 8,
+      "measured": "8 run(s) of the whole selection on Apple M3 Max, in the case set's own order, the largest each count reached",
+      "contrasted": "8 run(s) of each case on its own on Apple M3 Max, nothing before it on the device, the largest each count reached",
+      "bounds": {
+        "functions_shared": 1,
+        "functions_translated": 1,
+        "stage_entries_specialized": 1
+      },
+      "composed": {
+        "functions_translated": 1,
+        "stage_entries_specialized": 1
+      },
+      "per_state": {
+        "pipelines": 0,
+        "states": 1
+      }
+    }
+  ]
+}
