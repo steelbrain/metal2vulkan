@@ -439,7 +439,7 @@ impl Counts {
         }
     }
 
-    fn add(self, more: Counts) -> Counts {
+    fn plus(self, more: Counts) -> Counts {
         Counts {
             nanos: self.nanos + more.nanos,
             instructions: self
@@ -496,7 +496,7 @@ fn measure(bench: &Bench, shape: Shape, runs: usize, calls: bool) -> Result<()> 
             let counted = repetition >= WARM;
             let spent = bench.repetition(&buffers, (calls && counted).then_some(&mut tally))?;
             if counted {
-                total = Some(total.map_or(spent, |total| total.add(spent)));
+                total = Some(total.map_or(spent, |total| total.plus(spent)));
             }
         }
         seen.push(total.unwrap_or_default());
