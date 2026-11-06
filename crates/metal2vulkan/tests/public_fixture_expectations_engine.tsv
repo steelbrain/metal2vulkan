@@ -2843,6 +2843,12 @@ engine/xr_bicubic.ll	xrb_black	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	o
 engine/xr_bicubic.ll	xrb_pixel	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/xr_bicubic.ll	xrb_edge_offset	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/xr_bicubic.ll	xrb_repeat_offset	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/xr_gradients.air.ll	xrg_vertex	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/xr_gradients.air.ll	xrg_linear_half	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/xr_gradients.air.ll	xrg_radial_float	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/xr_gradients.ll	xrg_vertex	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/xr_gradients.ll	xrg_linear_half	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/xr_gradients.ll	xrg_radial_float	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/xr_planes.air.ll	xr_planes_join	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	NeedsInput{StorageTextureFormat { slot: SlotRef { stage: Kernel, class: Texture, index: 2 } }}	ok	NeedsInput{StorageTextureFormat { slot: SlotRef { stage: Kernel, class: Texture, index: 2 } }}
 engine/xr_planes.air.ll	xr_planes_split	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	NeedsInput{StorageTextureFormat { slot: SlotRef { stage: Kernel, class: Texture, index: 1 } }}	ok	NeedsInput{StorageTextureFormat { slot: SlotRef { stage: Kernel, class: Texture, index: 1 } }}
 engine/xr_planes.ll	xr_planes_join	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	NeedsInput{StorageTextureFormat { slot: SlotRef { stage: Kernel, class: Texture, index: 2 } }}	ok	NeedsInput{StorageTextureFormat { slot: SlotRef { stage: Kernel, class: Texture, index: 2 } }}

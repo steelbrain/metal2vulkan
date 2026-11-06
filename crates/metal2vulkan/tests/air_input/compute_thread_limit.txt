@@ -1,0 +1,147 @@
+target triple = "air64_v28-apple-macosx26.0.0"
+source_filename = "-"
+; datalayout DataLayout { endian: Little, pointers: {0: PointerSpec { size_bits: 64, abi_bits: 64, pref_bits: 64, index_bits: 64 }}, ints: {1: AlignSpec { abi_bits: 8, pref_bits: 8 }, 8: AlignSpec { abi_bits: 8, pref_bits: 8 }, 16: AlignSpec { abi_bits: 16, pref_bits: 16 }, 32: AlignSpec { abi_bits: 32, pref_bits: 32 }, 64: AlignSpec { abi_bits: 64, pref_bits: 64 }}, floats: {16: AlignSpec { abi_bits: 16, pref_bits: 16 }, 32: AlignSpec { abi_bits: 32, pref_bits: 32 }, 64: AlignSpec { abi_bits: 64, pref_bits: 64 }, 128: AlignSpec { abi_bits: 128, pref_bits: 128 }}, vectors: {16: AlignSpec { abi_bits: 16, pref_bits: 16 }, 24: AlignSpec { abi_bits: 32, pref_bits: 32 }, 32: AlignSpec { abi_bits: 32, pref_bits: 32 }, 48: AlignSpec { abi_bits: 64, pref_bits: 64 }, 64: AlignSpec { abi_bits: 64, pref_bits: 64 }, 96: AlignSpec { abi_bits: 128, pref_bits: 128 }, 128: AlignSpec { abi_bits: 128, pref_bits: 128 }, 192: AlignSpec { abi_bits: 256, pref_bits: 256 }, 256: AlignSpec { abi_bits: 256, pref_bits: 256 }, 512: AlignSpec { abi_bits: 512, pref_bits: 512 }, 1024: AlignSpec { abi_bits: 1024, pref_bits: 1024 }}, aggregate: AlignSpec { abi_bits: 0, pref_bits: 64 }, native_ints: [8, 16, 32], stack_align_bits: None, alloca_space: 0, program_space: 0, globals_space: 0, mangling: None, fn_ptr_align: None, non_integral: [] }
+%t5 = type void (ptr addrspace(1), <3 x i32>, <3 x i32>, i32)
+%t7 = type i32 (ptr addrspace(1), i32, i32, i32, i1)
+%t8 = type void (ptr addrspace(1), i32, i32, i32, i1)
+%t10 = type [2 x i32]
+%t12 = type { i32 } ; "struct.metal::_atomic"
+c6 = %t10 [27, 2]
+
+define %t5 @f0 "compute_thread_limit_plain" "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="96" "no-builtins"="" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" %a0( nocapture "air-buffer-no-alias"="" ) {
+bb0:
+  %i0 = getelementptr inbounds %t12, %a0, i64 0, i32 0
+  %i1 = tail call i32 @f2 [air Atomic(Atomic { space: Global, op: Add, sign: Some(Unsigned), ty: NumTy { elem: I32, lanes: 1 }, order: Relaxed, failure: None, scope: Device, volatile: true, fetch: true, flags: None, stated_volatile: true })](%i0, i32 1, i32 0, i32 2, i1 1) arg0( nocapture )
+  %i2 = extractelement %a2, i64 0
+  %i3 = or i32 %i2, %a3
+  %i4 = extractelement %a2, i64 1
+  %i5 = or i32 %i3, %i4
+  %i6 = extractelement %a2, i64 2
+  %i7 = or i32 %i5, %i6
+  %i8 = icmp eq %i7, i32 0
+  br %i8, bb1, bb2
+bb1:
+  %i10 = extractelement %a1, i64 0
+  %i11 = getelementptr inbounds %t12, %a0, i64 1, i32 0
+  %i12 = extractelement %a1, i64 1
+  %i13 = getelementptr inbounds %t12, %a0, i64 2, i32 0
+  %i14 = extractelement %a1, i64 2
+  %i15 = getelementptr inbounds %t12, %a0, i64 3, i32 0
+  tail call void @f3 [air Atomic(Atomic { space: Global, op: Store, sign: None, ty: NumTy { elem: I32, lanes: 1 }, order: Relaxed, failure: None, scope: Device, volatile: true, fetch: false, flags: None, stated_volatile: true })](%i11, %i10, i32 0, i32 2, i1 1) arg0( nocapture )
+  tail call void @f3 [air Atomic(Atomic { space: Global, op: Store, sign: None, ty: NumTy { elem: I32, lanes: 1 }, order: Relaxed, failure: None, scope: Device, volatile: true, fetch: false, flags: None, stated_volatile: true })](%i13, %i12, i32 0, i32 2, i1 1) arg0( nocapture )
+  tail call void @f3 [air Atomic(Atomic { space: Global, op: Store, sign: None, ty: NumTy { elem: I32, lanes: 1 }, order: Relaxed, failure: None, scope: Device, volatile: true, fetch: false, flags: None, stated_volatile: true })](%i15, %i14, i32 0, i32 2, i1 1) arg0( nocapture )
+  br bb2
+bb2:
+  ret void
+}
+
+define %t5 @f1 "compute_thread_limit_64" "approx-func-fp-math"="true" "frame-pointer"="all" "max-work-group-size"="64" "min-legal-vector-width"="96" "no-builtins"="" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" %a0( nocapture "air-buffer-no-alias"="" ) {
+bb0:
+  %i0 = getelementptr inbounds %t12, %a0, i64 0, i32 0
+  %i1 = tail call i32 @f2 [air Atomic(Atomic { space: Global, op: Add, sign: Some(Unsigned), ty: NumTy { elem: I32, lanes: 1 }, order: Relaxed, failure: None, scope: Device, volatile: true, fetch: true, flags: None, stated_volatile: true })](%i0, i32 1, i32 0, i32 2, i1 1) arg0( nocapture )
+  %i2 = extractelement %a2, i64 0
+  %i3 = or i32 %i2, %a3
+  %i4 = extractelement %a2, i64 1
+  %i5 = or i32 %i3, %i4
+  %i6 = extractelement %a2, i64 2
+  %i7 = or i32 %i5, %i6
+  %i8 = icmp eq %i7, i32 0
+  br %i8, bb1, bb2
+bb1:
+  %i10 = extractelement %a1, i64 0
+  %i11 = getelementptr inbounds %t12, %a0, i64 1, i32 0
+  %i12 = extractelement %a1, i64 1
+  %i13 = getelementptr inbounds %t12, %a0, i64 2, i32 0
+  %i14 = extractelement %a1, i64 2
+  %i15 = getelementptr inbounds %t12, %a0, i64 3, i32 0
+  tail call void @f3 [air Atomic(Atomic { space: Global, op: Store, sign: None, ty: NumTy { elem: I32, lanes: 1 }, order: Relaxed, failure: None, scope: Device, volatile: true, fetch: false, flags: None, stated_volatile: true })](%i11, %i10, i32 0, i32 2, i1 1) arg0( nocapture )
+  tail call void @f3 [air Atomic(Atomic { space: Global, op: Store, sign: None, ty: NumTy { elem: I32, lanes: 1 }, order: Relaxed, failure: None, scope: Device, volatile: true, fetch: false, flags: None, stated_volatile: true })](%i13, %i12, i32 0, i32 2, i1 1) arg0( nocapture )
+  tail call void @f3 [air Atomic(Atomic { space: Global, op: Store, sign: None, ty: NumTy { elem: I32, lanes: 1 }, order: Relaxed, failure: None, scope: Device, volatile: true, fetch: false, flags: None, stated_volatile: true })](%i15, %i14, i32 0, i32 2, i1 1) arg0( nocapture )
+  br bb2
+bb2:
+  ret void
+}
+
+declare %t7 @f2 "air.atomic.global.add.u.i32" %a0( nocapture )
+
+declare %t8 @f3 "air.atomic.global.store.i32" %a0( nocapture )
+!md0 = !"SDK Version"
+!md1 = !"wchar_size"
+!md2 = !"frame-pointer"
+!md3 = !"air.max_device_buffers"
+!md4 = !"air.max_constant_buffers"
+!md5 = !"air.max_threadgroup_buffers"
+!md6 = !"air.max_textures"
+!md7 = !"air.max_read_write_textures"
+!md8 = !"air.max_samplers"
+!md9 = !"air.buffer"
+!md10 = !"air.location_index"
+!md11 = !"air.read_write"
+!md12 = !"air.address_space"
+!md13 = !"air.struct_type_info"
+!md14 = !"uint"
+!md15 = !"__s"
+!md16 = !"air.arg_type_size"
+!md17 = !"air.arg_type_align_size"
+!md18 = !"air.arg_type_name"
+!md19 = !"metal::_atomic"
+!md20 = !"air.arg_name"
+!md21 = !"out"
+!md22 = !"air.threads_per_threadgroup"
+!md23 = !"uint3"
+!md24 = !"tptg"
+!md25 = !"air.threadgroup_position_in_grid"
+!md26 = !"group"
+!md27 = !"air.thread_index_in_threadgroup"
+!md28 = !"tid"
+!md29 = !"air.max_work_group_size"
+!md30 = !"air.compile.denorms_disable"
+!md31 = !"air.compile.fast_math_enable"
+!md32 = !"air.compile.framebuffer_fetch_enable"
+!md33 = !"Apple metal version 32023.922 (metalfe-32023.922.4)"
+!md34 = !"Metal"
+!md35 = i32 2
+!md36 = %t10 c6
+!md37 = i32 1
+!md38 = i32 4
+!md39 = i32 7
+!md40 = i32 31
+!md41 = i32 128
+!md42 = i32 8
+!md43 = i32 16
+!md44 = ptr addrspace(0) @f0
+!md45 = i32 0
+!md46 = i32 3
+!md47 = ptr addrspace(0) @f1
+!md48 = i32 64
+!md49 = !{!md35, !md0, !md36}
+!md50 = !{!md37, !md1, !md38}
+!md51 = !{!md39, !md2, !md35}
+!md52 = !{!md39, !md3, !md40}
+!md53 = !{!md39, !md4, !md40}
+!md54 = !{!md39, !md5, !md40}
+!md55 = !{!md39, !md6, !md41}
+!md56 = !{!md39, !md7, !md42}
+!md57 = !{!md39, !md8, !md43}
+!md58 = !{}
+!md59 = !{!md45, !md38, !md45, !md14, !md15}
+!md60 = !{!md45, !md9, !md10, !md45, !md37, !md11, !md12, !md37, !md13, !md59, !md16, !md38, !md17, !md38, !md18, !md19, !md20, !md21}
+!md61 = !{!md37, !md22, !md18, !md23, !md20, !md24}
+!md62 = !{!md35, !md25, !md18, !md23, !md20, !md26}
+!md63 = !{!md46, !md27, !md18, !md14, !md20, !md28}
+!md64 = !{!md60, !md61, !md62, !md63}
+!md65 = !{!md44, !md58, !md64}
+!md66 = !{!md29, !md48}
+!md67 = !{!md47, !md58, !md64, !md66}
+!md68 = !{!md30}
+!md69 = !{!md31}
+!md70 = !{!md32}
+!md71 = !{!md33}
+!md72 = !{!md35, !md42, !md45}
+!md73 = !{!md34, !md38, !md45, !md45}
+!"llvm.module.flags" = !{!md49, !md50, !md51, !md52, !md53, !md54, !md55, !md56, !md57}
+!"air.kernel" = !{!md65, !md67}
+!"air.compile_options" = !{!md68, !md69, !md70}
+!"llvm.ident" = !{!md71}
+!"air.version" = !{!md72}
+!"air.language_version" = !{!md73}

@@ -1,0 +1,169 @@
+target triple = "air64_v28-apple-macosx26.0.0"
+source_filename = "-"
+; datalayout DataLayout { endian: Little, pointers: {0: PointerSpec { size_bits: 64, abi_bits: 64, pref_bits: 64, index_bits: 64 }}, ints: {1: AlignSpec { abi_bits: 8, pref_bits: 8 }, 8: AlignSpec { abi_bits: 8, pref_bits: 8 }, 16: AlignSpec { abi_bits: 16, pref_bits: 16 }, 32: AlignSpec { abi_bits: 32, pref_bits: 32 }, 64: AlignSpec { abi_bits: 64, pref_bits: 64 }}, floats: {16: AlignSpec { abi_bits: 16, pref_bits: 16 }, 32: AlignSpec { abi_bits: 32, pref_bits: 32 }, 64: AlignSpec { abi_bits: 64, pref_bits: 64 }, 128: AlignSpec { abi_bits: 128, pref_bits: 128 }}, vectors: {16: AlignSpec { abi_bits: 16, pref_bits: 16 }, 24: AlignSpec { abi_bits: 32, pref_bits: 32 }, 32: AlignSpec { abi_bits: 32, pref_bits: 32 }, 48: AlignSpec { abi_bits: 64, pref_bits: 64 }, 64: AlignSpec { abi_bits: 64, pref_bits: 64 }, 96: AlignSpec { abi_bits: 128, pref_bits: 128 }, 128: AlignSpec { abi_bits: 128, pref_bits: 128 }, 192: AlignSpec { abi_bits: 256, pref_bits: 256 }, 256: AlignSpec { abi_bits: 256, pref_bits: 256 }, 512: AlignSpec { abi_bits: 512, pref_bits: 512 }, 1024: AlignSpec { abi_bits: 1024, pref_bits: 1024 }}, aggregate: AlignSpec { abi_bits: 0, pref_bits: 64 }, native_ints: [8, 16, 32], stack_align_bits: None, alloca_space: 0, program_space: 0, globals_space: 0, mangling: None, fn_ptr_align: None, non_integral: [] }
+%t5 = type void (ptr addrspace(6), ptr addrspace(3), i32)
+%t7 = type void (ptr addrspace(7), ptr addrspace(6), i32)
+%t8 = type void (ptr addrspace(7), i32)
+%t10 = type void (ptr addrspace(3), <3 x i32>)
+%t12 = type [2 x i32]
+%t16 = type [4 x i32]
+%t17 = type { %t16 } ; "struct.LimitsPayload"
+c8 = %t12 [27, 2]
+c19 = <3 x i32> [1, 1, 1]
+
+define %t5 @f0 "mesh_pipeline_limits_object" "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="96" "no-builtins"="" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" %a0( align 4 dereferenceable(16) Mod nocapture ) {
+bb0:
+  %i0 = icmp eq %a2, i32 0
+  br %i0, bb1, bb2
+bb1:
+  %i2 = getelementptr inbounds %t17, %a0, i64 0, i32 0, i64 0
+  store i32 1, %i2, align 4
+  tail call void @f4 [air Mesh(ThreadgroupsPerGrid)](%a1, <3 x i32> c19) arg0( nocapture )
+  br bb2
+bb2:
+  ret void
+}
+
+define %t5 @f1 "mesh_pipeline_limits_object_grid_4" "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="96" "no-builtins"="" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" %a0( align 4 dereferenceable(16) Mod nocapture ) {
+bb0:
+  %i0 = icmp eq %a2, i32 0
+  br %i0, bb1, bb2
+bb1:
+  %i2 = getelementptr inbounds %t17, %a0, i64 0, i32 0, i64 0
+  store i32 1, %i2, align 4
+  tail call void @f4 [air Mesh(ThreadgroupsPerGrid)](%a1, <3 x i32> c19) arg0( nocapture )
+  br bb2
+bb2:
+  ret void
+}
+
+define %t7 @f2 "mesh_pipeline_limits_mesh" "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="0" "no-builtins"="" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" %a1( align 4 dereferenceable(16) Ref nocapture ) {
+bb0:
+  %i0 = icmp eq %a2, i32 0
+  br %i0, bb1, bb2
+bb1:
+  %i2 = getelementptr inbounds %t17, %a1, i64 0, i32 0, i64 0
+  %i3 = load i32, %i2, align 4
+  %i4 = add i32 %i3, i32 4294967295
+  tail call void @f5 [air Mesh(PrimitiveCount)](%a0, %i4) arg0( nocapture )
+  br bb2
+bb2:
+  ret void
+}
+
+define %t8 @f3 "mesh_pipeline_limits_mesh_alone" "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="0" "no-builtins"="" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" {
+bb0:
+  %i0 = icmp eq %a1, i32 0
+  br %i0, bb1, bb2
+bb1:
+  tail call void @f5 [air Mesh(PrimitiveCount)](%a0, i32 0) arg0( nocapture )
+  br bb2
+bb2:
+  ret void
+}
+
+declare %t10 @f4 "air.set_threadgroups_per_grid_mesh_properties" memory(ModRef, NoModRef, NoModRef) %a0( nocapture )
+
+declare %t8 @f5 "air.set_primitive_count_mesh" memory(ModRef, NoModRef, NoModRef) %a0( nocapture )
+!md0 = !"SDK Version"
+!md1 = !"wchar_size"
+!md2 = !"frame-pointer"
+!md3 = !"air.max_device_buffers"
+!md4 = !"air.max_constant_buffers"
+!md5 = !"air.max_threadgroup_buffers"
+!md6 = !"air.max_textures"
+!md7 = !"air.max_read_write_textures"
+!md8 = !"air.max_samplers"
+!md9 = !"air.payload"
+!md10 = !"air.struct_type_info"
+!md11 = !"uint"
+!md12 = !"v"
+!md13 = !"air.arg_type_size"
+!md14 = !"air.arg_type_align_size"
+!md15 = !"air.arg_type_name"
+!md16 = !"LimitsPayload"
+!md17 = !"air.arg_name"
+!md18 = !"p"
+!md19 = !"air.mesh_grid_properties"
+!md20 = !"mesh_grid_properties"
+!md21 = !"g"
+!md22 = !"air.thread_index_in_threadgroup"
+!md23 = !"t"
+!md24 = !"air.max_mesh_work_groups"
+!md25 = !"air.mesh"
+!md26 = !"air.mesh_type_info"
+!md27 = !"air.position"
+!md28 = !"float4"
+!md29 = !"position"
+!md30 = !"air.triangle"
+!md31 = !"mesh<LimitsVertex, void, 3, 1, triangle>"
+!md32 = !"out"
+!md33 = !"air.compile.denorms_disable"
+!md34 = !"air.compile.fast_math_enable"
+!md35 = !"air.compile.framebuffer_fetch_enable"
+!md36 = !"Apple metal version 32023.922 (metalfe-32023.922.4)"
+!md37 = !"Metal"
+!md38 = !"int"
+!md39 = !"omnipotent char"
+!md40 = !"Simple C++ TBAA"
+!md41 = i32 2
+!md42 = %t12 c8
+!md43 = i32 1
+!md44 = i32 4
+!md45 = i32 7
+!md46 = i32 31
+!md47 = i32 128
+!md48 = i32 8
+!md49 = i32 16
+!md50 = ptr addrspace(0) @f0
+!md51 = i32 0
+!md52 = ptr addrspace(0) @f1
+!md53 = ptr addrspace(0) @f2
+!md54 = i32 3
+!md55 = ptr addrspace(0) @f3
+!md56 = i64 0
+!md57 = !{!md41, !md0, !md42}
+!md58 = !{!md43, !md1, !md44}
+!md59 = !{!md45, !md2, !md41}
+!md60 = !{!md45, !md3, !md46}
+!md61 = !{!md45, !md4, !md46}
+!md62 = !{!md45, !md5, !md46}
+!md63 = !{!md45, !md6, !md47}
+!md64 = !{!md45, !md7, !md48}
+!md65 = !{!md45, !md8, !md49}
+!md66 = !{}
+!md67 = !{!md51, !md44, !md44, !md11, !md12}
+!md68 = !{!md51, !md9, !md10, !md67, !md13, !md49, !md14, !md44, !md15, !md16, !md17, !md18}
+!md69 = !{!md43, !md19, !md15, !md20, !md17, !md21}
+!md70 = !{!md41, !md22, !md15, !md11, !md17, !md23}
+!md71 = !{!md68, !md69, !md70}
+!md72 = !{!md50, !md66, !md71}
+!md73 = !{!md24, !md44}
+!md74 = !{!md52, !md66, !md71, !md73}
+!md75 = !{!md27, !md15, !md28, !md17, !md29}
+!md76 = !{!md75}
+!md77 = !{!md26, !md76, !md66, !md54, !md43, !md30}
+!md78 = !{!md51, !md25, !md77, !md15, !md31, !md17, !md32}
+!md79 = !{!md43, !md9, !md10, !md67, !md13, !md49, !md14, !md44, !md15, !md16, !md17, !md18}
+!md80 = !{!md78, !md79, !md70}
+!md81 = !{!md53, !md66, !md80}
+!md82 = !{!md43, !md22, !md15, !md11, !md17, !md23}
+!md83 = !{!md78, !md82}
+!md84 = !{!md55, !md66, !md83}
+!md85 = !{!md33}
+!md86 = !{!md34}
+!md87 = !{!md35}
+!md88 = !{!md36}
+!md89 = !{!md41, !md48, !md51}
+!md90 = !{!md37, !md44, !md51, !md51}
+!md91 = !{!md40}
+!md92 = !{!md39, !md91, !md56}
+!md93 = !{!md38, !md92, !md56}
+!md94 = !{!md93, !md93, !md56}
+!"llvm.module.flags" = !{!md57, !md58, !md59, !md60, !md61, !md62, !md63, !md64, !md65}
+!"air.object" = !{!md72, !md74}
+!"air.mesh" = !{!md81, !md84}
+!"air.compile_options" = !{!md85, !md86, !md87}
+!"llvm.ident" = !{!md88}
+!"air.version" = !{!md89}
+!"air.language_version" = !{!md90}
