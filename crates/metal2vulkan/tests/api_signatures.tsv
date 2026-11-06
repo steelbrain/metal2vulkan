@@ -10247,6 +10247,8 @@ trait-item	metal2vulkan-runtime::DirtyPages::wait	fn wait(&self, stamp: DirtySta
 trait-item	metal2vulkan-runtime::DirtyPages::watch	fn watch(&self, range: Range<u64>) -> Self::Watch
 trait-item	metal2vulkan-runtime::DirtyPages::wrote	fn wrote(&self, range: Range<u64>)
 trait-item	metal2vulkan-runtime::DirtyPages::wrote_as	fn wrote_as(&self, range: Range<u64>, writer: NonZeroU64)
+trait-item	metal2vulkan-runtime::DirtyPages::wrote_runs	fn wrote_runs(&self, runs: &[Range<u64>])
+trait-item	metal2vulkan-runtime::DirtyPages::wrote_runs_as	fn wrote_runs_as(&self, runs: &[Range<u64>], writer: NonZeroU64)
 trait-item	metal2vulkan::cache::PipelineArtifact::from_bytes	fn from_bytes(bytes: &[u8], device: &Device) -> Result<Self, ArtifactError>
 trait-item	metal2vulkan::cache::PipelineArtifact::from_bytes_for_key	fn from_bytes_for_key(bytes: &[u8], key: &PipelineKey, device: &Device) -> Result<Self, ArtifactError>
 trait-item	metal2vulkan::cache::PipelineArtifact::key	fn key(&self) -> &PipelineKey

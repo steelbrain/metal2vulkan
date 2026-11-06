@@ -519,7 +519,10 @@ pages then takes a kernel mapping per page) can give the device the guest's RAM 
   holds it (no buffer bound in it, no command buffer that used one), and the RAM's keep-alive is
   dropped after the last.
 - `HostRam::with_dirty_pages` takes one `DirtyPages` log for the whole RAM, its offsets host
-  addresses.
+  addresses. A write the runtime reports over an object whose pages are many runs of the RAM
+  comes to the log as one call (`DirtyPages::wrote_runs`, or `wrote_runs_as` for a copy's own
+  write) carrying the host addresses of every run it reaches, in the object's order; by default
+  those call `wrote` or `wrote_as` once a run.
 - `BlitCommandEncoder::copy_from_host_ram(ram, runs, destination, offset)` gathers `runs` of a RAM
   the device uses into consecutive bytes of `destination` from `offset`, in the order given, and
   `copy_to_host_ram(source, offset, ram, runs)` scatters them back: for a surface whose pages are

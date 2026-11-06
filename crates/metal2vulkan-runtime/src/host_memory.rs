@@ -354,18 +354,19 @@ impl HostMemory {
     /// latest stamp asked of the log so far, so one wait serves every command buffer committed
     /// before it; none where the copy has no earlier copy to count on). A command buffer that
     /// waits for an event or a semaphore, or wrote the bytes before the copy, copies every row.
-    /// The runtime reports its own writes into the pages back to the log: a shadow's copy back
-    /// or merge ([`DirtyPages::wrote_as`], the shadow its writer, to every log of the pages, at
-    /// the commit and again once it ran), which that shadow's own copies in leave out
+    /// The runtime reports its own writes into the pages back to the log, each write in one call
+    /// to each log carrying all its runs there: a shadow's copy back or merge
+    /// ([`DirtyPages::wrote_runs_as`], the shadow its writer, to every log of the pages, at the
+    /// commit and again once it ran), which that shadow's own copies in leave out
     /// ([`DirtyPages::changed_except`]), a copied host buffer's merge back of the GPU's writes
-    /// (`copied.rs`; [`DirtyPages::wrote_as`], the copy its writer, before the batch is seen
-    /// complete), the GPU's writes into them where they are imported in place
-    /// ([`DirtyPages::wrote`]: the bytes a command buffer's commands wrote through the buffers,
-    /// heaps and textures over them, at the commit and again once they ran, before the command
-    /// buffer's last batch, or a batch that signals an event, is seen complete), and its CPU
-    /// writes into them ([`DirtyPages::wrote`]): a
-    /// `replaceRegion` of a texture over them or of a heap's texture held in them, an argument
-    /// encoder's writes, and `copyParameterDataToBuffer`. A wait the log answers `false` makes
+    /// (`copied.rs`; [`DirtyPages::wrote_runs_as`], the copy its writer, before the batch is
+    /// seen complete), the GPU's writes into them where they are imported in place
+    /// ([`DirtyPages::wrote_runs`]: the bytes a command buffer's commands wrote through the
+    /// buffers, heaps and textures over them, at the commit and again once they ran, before the
+    /// command buffer's last batch, or a batch that signals an event, is seen complete), and its
+    /// CPU writes into them ([`DirtyPages::wrote_runs`]): a `replaceRegion` of a texture over
+    /// them or of a heap's texture held in them, an argument encoder's writes, and
+    /// `copyParameterDataToBuffer`. A wait the log answers `false` makes
     /// the copy take every row, and is not made again for a stamp at or below it. Such a shadow's
     /// copy in is never cut to the rectangle a pass's scissors bound, so its image holds every
     /// texel for the next command buffer. A copied host buffer or heap over the pages

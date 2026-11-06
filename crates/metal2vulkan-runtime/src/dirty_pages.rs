@@ -19,11 +19,14 @@
 //!   ([`DirtyPages::changed`]), but one whose merges back wrote a MiB or more since, which asks
 //!   apart for every writer's but its own.
 //! - **The runtime's own writes** into the pages (a shadow's copy back or merge, a copied host
-//!   buffer's merge back, `copied.rs`) are reported ([`DirtyPages::wrote_as`]), naming the copy
-//!   as their writer, so other copies of the same
+//!   buffer's merge back, `copied.rs`) are reported ([`DirtyPages::wrote_runs_as`]), naming the
+//!   copy as their writer, so other copies of the same
 //!   pages see them as changed and the copy's own copies in, under a log that keeps writers
 //!   apart, do not. So are the GPU's writes into pages imported in place, which no log of the
-//!   host's sees, and the runtime's CPU writes into the pages ([`DirtyPages::wrote`]).
+//!   host's sees, and the runtime's CPU writes into the pages ([`DirtyPages::wrote_runs`]).
+//!   Each report is one call to each log, carrying every run of the source's offsets the write
+//!   reaches in it (an object over a guest RAM's scattered pages is many runs of the RAM's log):
+//!   gathered in a buffer of the reporting thread's, kept for its next report.
 //! - **The GPU's writes in place** are those a command buffer's commands name (their uses, of a
 //!   buffer over the pages, a heap's buffers or textures, a texture over a buffer's bytes: a
 //!   texture's use names its whole buffer or heap, and so does a command buffer that wrote more
@@ -72,6 +75,7 @@ use super::resource::ResourceKey;
 use super::shadow::ShadowCopies;
 use super::tracker::{Use, UseRange};
 use ash::vk;
+use std::cell::RefCell;
 use std::fmt;
 use std::num::NonZeroU64;
 use std::ops::Range;
@@ -98,34 +102,41 @@ pub struct DirtyStamp(pub u64);
 /// changed for any stamp earlier than the start of the log's continuous watch over it
 /// ([`watch`](Self::watch)), which the first watch over the page begins, whatever source asks;
 /// a page no one watches any more counts as changed for every stamp until one watches it again.
-/// A write the host makes (the consumer's own, and those [`wrote`](Self::wrote) reports) is
-/// stamped at once. The sources over the same host bytes share one order of stamps: each answers
+/// A write the host makes (the consumer's own, and those the runtime reports,
+/// [`wrote_runs`](Self::wrote_runs) and kin, every run of a call) is stamped at once. The sources over the same host bytes share one order of stamps: each answers
 /// [`changed`](Self::changed) for a stamp another of them gave as for its own. A closed source
 /// (the consumer's reset, pause or stop) answers [`wait`](Self::wait) with `false`, so the
 /// runtime takes every page as changed.
 ///
 /// **Writers** (optional: both methods default to the plain ones). The runtime reports a copy's
 /// own copy back or merge (a shadow's, or a copied host buffer's merge back of the GPU's writes,
-/// `copied.rs`) naming the copy as its writer ([`wrote_as`](Self::wrote_as)), and asks
-/// for that copy's copy in which pages changed by any writer but it
-/// ([`changed_except`](Self::changed_except)): it already holds what it wrote, so a page only it
-/// wrote since is no change to it. A writer is a [`NonZeroU64`] no other writer in the process
-/// is ever given; 0 is the consumer's own writes and every write reported through
-/// [`wrote`](Self::wrote), which no copy's question leaves out. The sources over the same host
-/// bytes share their writers as their stamps. One way to keep it: per page, its latest stamp and
-/// that write's writer, and the latest stamp of any other writer; `changed_except(since, w)`
-/// counts the page where its latest writer is not `w` and its latest stamp is later than
-/// `since`, or where it is and the other writers' latest stamp is.
+/// `copied.rs`) naming the copy as its writer ([`wrote_runs_as`](Self::wrote_runs_as), by
+/// default [`wrote_as`](Self::wrote_as) for each run), and asks for that copy's copy in which
+/// pages changed by any writer but it ([`changed_except`](Self::changed_except)): it already
+/// holds what it wrote, so a page only it wrote since is no change to it. A writer is a
+/// [`NonZeroU64`] no other writer in the process is ever given; 0 is the consumer's own writes
+/// and every write reported through [`wrote_runs`](Self::wrote_runs) (or [`wrote`](Self::wrote)),
+/// which no copy's question leaves out. The sources over the same host bytes share their writers
+/// as their stamps. One way to keep it: per page, its latest stamp and that write's writer, and
+/// the latest stamp of any other writer; `changed_except(since, w)` counts the page where its
+/// latest writer is not `w` and its latest stamp is later than `since`, or where it is and the
+/// other writers' latest stamp is.
+///
+/// **Batches.** Each write the runtime reports comes to each log of the pages as one call of
+/// [`wrote_runs`](Self::wrote_runs) or [`wrote_runs_as`](Self::wrote_runs_as) carrying every run
+/// of it in that log: an object over a guest RAM's scattered pages is many runs of the RAM's log,
+/// one call. By default they call [`wrote`](Self::wrote) or [`wrote_as`](Self::wrote_as) once a
+/// run, in order, so a source that implements only those hears every run.
 ///
 /// **Threads.** Called on the runtime's threads, never under a lock the source's own calls
 /// take: [`watch`](Self::watch) where a copy of the pages is made, [`request`](Self::request) on
 /// the thread that commits a command buffer, [`wait`](Self::wait), [`changed`](Self::changed)
 /// and [`changed_except`](Self::changed_except) on the thread that records its commands for the
-/// GPU, and for copied host buffers on the thread that commits it, [`wrote`](Self::wrote) and
-/// [`wrote_as`](Self::wrote_as) at the commit and once its work ran (on the thread that
-/// finishes its batches, before its waiters and completed handlers see its last batch
-/// complete). A [`Watch`](Self::Watch) may be dropped on a completion thread, so its drop takes
-/// no lock the consumer holds while it calls the runtime.
+/// GPU, and for copied host buffers on the thread that commits it,
+/// [`wrote_runs`](Self::wrote_runs) and [`wrote_runs_as`](Self::wrote_runs_as) at the commit and
+/// once its work ran (on the thread that finishes its batches, before its waiters and completed
+/// handlers see its last batch complete). A [`Watch`](Self::Watch) may be dropped on a
+/// completion thread, so its drop takes no lock the consumer holds while it calls the runtime.
 ///
 /// [`HostMemory::with_dirty_pages`]: crate::HostMemory::with_dirty_pages
 /// [`HostMemory::pointer`]: crate::HostMemory::pointer
@@ -169,6 +180,44 @@ pub trait DirtyPages: Send + Sync {
         self.wrote(range);
     }
 
+    /// [`wrote`](Self::wrote) of each of `runs`, in one call: how the runtime reports every write
+    /// of its own as the consumer's (writer 0). No Metal counterpart: a metal2vulkan host-memory
+    /// extension. By default, `wrote` for each run, in order.
+    ///
+    /// One call carries one write the runtime made into the bytes of one object over the memory
+    /// (a no-copy buffer's or heap's, or a guest RAM's chunk a
+    /// `BlitCommandEncoder::copy_to_host_ram` writes): a range a command buffer's commands wrote
+    /// in place (but for the bytes a shadow's copy back or merge wrote, which
+    /// [`wrote_runs_as`](Self::wrote_runs_as) reports apart), or a CPU write. `runs` is never
+    /// empty, and each run is non-empty and holds bytes of the object. The runs are in the order
+    /// of the object's bytes they hold, and no two hold the same byte of the object; they are not
+    /// sorted by offset where the object's pages are not in the memory's order (a guest RAM's
+    /// log, whose offsets are host addresses, over an object's scattered pages), two may meet one
+    /// page of the log, and two may name the same bytes where the object's pages map one page of
+    /// the memory twice.
+    fn wrote_runs(&self, runs: &[Range<u64>]) {
+        for run in runs {
+            self.wrote(run.clone());
+        }
+    }
+
+    /// [`wrote_as`](Self::wrote_as) of each of `runs`, in one call, every one of them `writer`'s:
+    /// how the runtime reports a copy's own copy back or merge (the trait's **Writers**). No Metal
+    /// counterpart: a metal2vulkan host-memory extension. By default, `wrote_as` for each run, in
+    /// order.
+    ///
+    /// One call carries one write of the copy's into the bytes of one object over the memory (a
+    /// shadow's truth, or the no-copy buffer's or heap's pages it lies in): a shadow's copy back or
+    /// merge, or a copied host buffer's merge back (the blocks of 4 KiB it wrote a byte of,
+    /// adjacent ones joined). `runs` is as [`wrote_runs`](Self::wrote_runs)' is: never empty,
+    /// each run non-empty, in the order of the object's bytes they hold, no two holding the same
+    /// byte of the object, not sorted by offset where its pages are scattered.
+    fn wrote_runs_as(&self, runs: &[Range<u64>], writer: NonZeroU64) {
+        for run in runs {
+            self.wrote_as(run.clone(), writer);
+        }
+    }
+
     /// [`changed`](Self::changed), leaving out a page whose every write stamped later than
     /// `since` was `writer`'s ([`wrote_as`](Self::wrote_as)); a page another writer wrote since
     /// (the consumer among them), or one whose watch began after `since`, still counts (the
@@ -187,10 +236,10 @@ pub(crate) trait DirtyHook: Send + Sync {
     fn request(&self) -> DirtyStamp;
     /// [`DirtyPages::wait`].
     fn wait(&self, stamp: DirtyStamp) -> bool;
-    /// [`DirtyPages::wrote`].
-    fn wrote_as_consumer(&self, range: Range<u64>);
-    /// [`DirtyPages::wrote_as`].
-    fn wrote_as(&self, range: Range<u64>, writer: NonZeroU64);
+    /// [`DirtyPages::wrote_runs`].
+    fn wrote_runs(&self, runs: &[Range<u64>]);
+    /// [`DirtyPages::wrote_runs_as`].
+    fn wrote_runs_as(&self, runs: &[Range<u64>], writer: NonZeroU64);
     /// [`DirtyPages::changed`].
     fn changed(&self, since: DirtyStamp, out: &mut Vec<Range<u64>>);
     /// [`DirtyPages::changed_except`].
@@ -214,11 +263,11 @@ where
     fn wait(&self, stamp: DirtyStamp) -> bool {
         self.0.wait(stamp)
     }
-    fn wrote_as_consumer(&self, range: Range<u64>) {
-        self.0.wrote(range);
+    fn wrote_runs(&self, runs: &[Range<u64>]) {
+        self.0.wrote_runs(runs);
     }
-    fn wrote_as(&self, range: Range<u64>, writer: NonZeroU64) {
-        self.0.wrote_as(range, writer);
+    fn wrote_runs_as(&self, runs: &[Range<u64>], writer: NonZeroU64) {
+        self.0.wrote_runs_as(runs, writer);
     }
     fn changed(&self, since: DirtyStamp, out: &mut Vec<Range<u64>>) {
         self.0.changed(since, out);
@@ -314,11 +363,16 @@ impl DirtySource {
         published
     }
 
-    /// [`DirtyPages::wrote`] of the source's offsets `range` by the runtime's own CPU (a
-    /// `replaceRegion` of a texture over the pages, writer 0), where non-empty.
-    pub(crate) fn wrote(&self, range: Range<u64>) {
-        if range.start < range.end {
-            self.hook.wrote_as_consumer(range);
+    /// The runtime wrote the source's offsets `runs` (each non-empty) itself, as `writer`
+    /// ([`DirtyPages::wrote_runs_as`]), or as the consumer where `None`
+    /// ([`DirtyPages::wrote_runs`]): one call, where there are any.
+    pub(crate) fn wrote(&self, runs: &[Range<u64>], writer: Option<NonZeroU64>) {
+        if runs.is_empty() {
+            return;
+        }
+        match writer {
+            Some(writer) => self.hook.wrote_runs_as(runs, writer),
+            None => self.hook.wrote_runs(runs),
         }
     }
 
@@ -379,10 +433,10 @@ impl ShadowLog {
     }
 
     /// Report a copy back or merge of the shadow into the `VkBuffer` bytes `range`
-    /// ([`DirtyPages::wrote_as`], the shadow its writer).
+    /// ([`DirtyPages::wrote_runs_as`], one run, the shadow its writer).
     pub(crate) fn wrote_back(&self, range: Range<u64>) {
         if let Some(offsets) = self.written(range) {
-            self.source.hook.wrote_as(offsets, self.writer);
+            (self.source).wrote(std::slice::from_ref(&offsets), Some(self.writer));
         }
     }
 
@@ -533,15 +587,55 @@ impl LogOf {
         }
     }
 
-    /// Each run of the source's offsets of the object's bytes `bytes`, to `each`.
-    fn each(&self, bytes: &Range<u64>, mut each: impl FnMut(Range<u64>)) {
+    /// Each run of the source's offsets of the object's bytes `bytes`, appended to `out` in the
+    /// object's order.
+    fn runs_of(&self, bytes: &Range<u64>, out: &mut Vec<Range<u64>>) {
         for (first, offsets) in self.runs.iter() {
             let end = first + (offsets.end - offsets.start);
             let (start, stop) = (bytes.start.max(*first), bytes.end.min(end));
             if start < stop {
-                each(offsets.start + (start - first)..offsets.start + (stop - first));
+                out.push(offsets.start + (start - first)..offsets.start + (stop - first));
             }
         }
+    }
+}
+
+thread_local! {
+    /// What a report of the runtime's writes to an object's logs gathers before each call
+    /// ([`DirtyPages::wrote_runs`]), kept for the thread's next report: a warm one allocates
+    /// nothing.
+    static SCRATCH: RefCell<Scratch> = const {
+        RefCell::new(Scratch {
+            runs: Vec::new(),
+            apart: Vec::new(),
+        })
+    };
+}
+
+/// A report's buffers ([`SCRATCH`]).
+struct Scratch {
+    /// The runs of one call to a source.
+    runs: Vec<Range<u64>>,
+    /// The object's bytes its shadows' copies back and merges wrote, sorted by start
+    /// ([`PagesLog::wrote_but`]).
+    apart: Vec<Range<u64>>,
+}
+
+/// `report` with the thread's [`Scratch`]; with a new one where the thread's is in use (a source's
+/// call that reported a write through the runtime again) or gone (the thread's end).
+fn with_scratch(mut report: impl FnMut(&mut Scratch)) {
+    let kept = SCRATCH.try_with(|scratch| match scratch.try_borrow_mut() {
+        Ok(mut scratch) => {
+            report(&mut *scratch);
+            true
+        }
+        Err(_) => false,
+    });
+    if !matches!(kept, Ok(true)) {
+        report(&mut Scratch {
+            runs: Vec::new(),
+            apart: Vec::new(),
+        });
     }
 }
 
@@ -674,11 +768,33 @@ impl PagesLog {
         }
     }
 
-    /// The runtime wrote the object's bytes `bytes` itself (writer 0, [`DirtyPages::wrote`]):
+    /// The runtime wrote the object's bytes `bytes` itself (writer 0, [`DirtyPages::wrote_runs`]):
     /// reported to every log, so every copy of the pages takes them.
     pub(crate) fn wrote(&self, bytes: Range<u64>) {
+        let bytes = std::slice::from_ref(&bytes);
+        with_scratch(|scratch| self.report(bytes, None, None, &mut scratch.runs));
+    }
+
+    /// Report the object's bytes `bytes` (in its order, apart) as `writer`'s, or the consumer's
+    /// where `None` ([`DirtySource::wrote`]), to each log but the one of source `but` where
+    /// given: one call to each, carrying the runs of the log's offsets of all of them, in order,
+    /// gathered in `runs`.
+    fn report(
+        &self,
+        bytes: &[Range<u64>],
+        writer: Option<NonZeroU64>,
+        but: Option<&Arc<DirtySource>>,
+        runs: &mut Vec<Range<u64>>,
+    ) {
         for log in &self.logs {
-            log.each(&bytes, |run| log.source.wrote(run));
+            if but.is_some_and(|source| Arc::ptr_eq(&log.source, source)) {
+                continue;
+            }
+            runs.clear();
+            for bytes in bytes {
+                log.runs_of(bytes, runs);
+            }
+            log.source.wrote(runs, writer);
         }
     }
 
@@ -705,36 +821,43 @@ impl PagesLog {
     /// Another copy of the pages, through any of their logs, counts it as changed; the shadow's
     /// own copies in do not, whose source answers for the writers of every source over the same
     /// host bytes (the trait's **Writers**).
+    ///
+    /// Each log hears of each of `written` in one call ([`DirtyPages::wrote_runs`]), carrying the
+    /// runs of every byte of it no shadow wrote, in order, and of each shadow's write in one more
+    /// ([`DirtyPages::wrote_runs_as`]).
     pub(crate) fn wrote_but(&self, written: &[Range<u64>], shadows: &[ShadowWrite<'_>]) {
-        let own: Vec<(NonZeroU64, &Arc<DirtySource>, Range<u64>)> = (shadows.iter())
-            .filter_map(|(writer, source, at)| Some((*writer, *source, self.bytes_at(at)?)))
-            .collect();
-        for bytes in written {
-            let bytes = bytes.start.min(self.length)..bytes.end.min(self.length);
-            let mut left = vec![bytes];
-            for (.., apart) in &own {
-                left = (left.into_iter())
-                    .flat_map(|run| {
-                        let before = run.start..run.end.min(apart.start);
-                        let after = run.start.max(apart.end)..run.end;
-                        [before, after].into_iter().filter(|r| r.start < r.end)
-                    })
-                    .collect();
-            }
-            for run in left {
-                self.wrote(run);
-            }
-        }
-        for (writer, source, bytes) in &own {
-            let others = (self.logs.iter()).filter(|log| !Arc::ptr_eq(&log.source, source));
-            for log in others {
-                log.each(bytes, |run| {
-                    if run.start < run.end {
-                        log.source.hook.wrote_as(run, *writer);
+        with_scratch(|Scratch { runs, apart }| {
+            apart.clear();
+            apart.extend((shadows.iter()).filter_map(|(_, _, at)| self.bytes_at(at)));
+            apart.sort_unstable_by_key(|bytes| bytes.start);
+            for bytes in written {
+                let bytes = bytes.start.min(self.length)..bytes.end.min(self.length);
+                for log in &self.logs {
+                    runs.clear();
+                    // The bytes no shadow wrote, in order: the gaps between the shadows' writes.
+                    let mut at = bytes.start;
+                    for shadow in apart.iter() {
+                        if at >= bytes.end {
+                            break;
+                        }
+                        if at < shadow.start {
+                            log.runs_of(&(at..shadow.start.min(bytes.end)), runs);
+                        }
+                        at = at.max(shadow.end);
                     }
-                });
+                    if at < bytes.end {
+                        log.runs_of(&(at..bytes.end), runs);
+                    }
+                    log.source.wrote(runs, None);
+                }
             }
-        }
+            for (writer, source, at) in shadows {
+                if let Some(bytes) = self.bytes_at(at) {
+                    let bytes = std::slice::from_ref(&bytes);
+                    self.report(bytes, Some(*writer), Some(*source), runs);
+                }
+            }
+        });
     }
 
     /// [`wrote`](Self::wrote) of the host addresses `addresses`, cut to the object's: a CPU write
@@ -747,16 +870,10 @@ impl PagesLog {
         }
     }
 
-    /// The runtime wrote the object's bytes `bytes` as `writer`, a copy's merge back
-    /// ([`DirtyPages::wrote_as`]): reported to every log.
-    pub(crate) fn wrote_as(&self, bytes: Range<u64>, writer: NonZeroU64) {
-        for log in &self.logs {
-            log.each(&bytes, |run| {
-                if run.start < run.end {
-                    log.source.hook.wrote_as(run, writer);
-                }
-            });
-        }
+    /// The runtime wrote the object's bytes `bytes` (in its order, apart) as `writer`, a copy's
+    /// merge back ([`DirtyPages::wrote_runs_as`]): reported to every log, in one call to each.
+    pub(crate) fn wrote_as(&self, bytes: &[Range<u64>], writer: NonZeroU64) {
+        with_scratch(|scratch| self.report(bytes, Some(writer), None, &mut scratch.runs));
     }
 }
 

@@ -4,8 +4,10 @@
 //! runs of the RAM, each one page, none next to the one before (page `i` at RAM page
 //! `i * 7919 mod 2^18` of a 1 GiB RAM), written whole by one command (as a render target's use
 //! names its whole buffer). The RAM's log is the bench's own and trivial: each call it takes is
-//! one fence and one load, and it adds up the bytes it was told of ([`PerRun`]). Prints the
-//! median and 90th percentile of `REPORTS` reports and the log's calls a report
+//! one fence and one load, and it adds up the bytes it was told of; one keeps only the per-run
+//! hooks ([`PerRun`], `DirtyPages::wrote`, which the batched hooks' defaults call once a run),
+//! the other the batched ones ([`Batched`], `DirtyPages::wrote_runs`, a fence a call). Prints,
+//! for each, the median and 90th percentile of `REPORTS` reports and the log's calls a report
 //! (`DIRTY-RUNS-BENCH`). Ignored: run it in release,
 //! `cargo test --release -p metal2vulkan-runtime --lib dirty_runs_bench -- --ignored --nocapture`.
 
@@ -68,6 +70,40 @@ impl DirtyPages for PerRun {
     }
 }
 
+/// A trivial log that keeps the batched hooks: one fence and one load a call, however many runs
+/// it carries.
+#[derive(Default)]
+struct Batched(PerRun);
+
+impl DirtyPages for Batched {
+    type Watch = ();
+
+    fn watch(&self, _range: Range<u64>) {}
+
+    fn request(&self) -> DirtyStamp {
+        self.0.request()
+    }
+
+    fn wait(&self, _stamp: DirtyStamp) -> bool {
+        true
+    }
+
+    fn changed(&self, _since: DirtyStamp, _out: &mut Vec<Range<u64>>) {}
+
+    fn wrote(&self, range: Range<u64>) {
+        self.0.wrote(range);
+    }
+
+    fn wrote_runs(&self, runs: &[Range<u64>]) {
+        self.0
+            .took(runs.iter().map(|run| run.end - run.start).sum());
+    }
+
+    fn wrote_runs_as(&self, runs: &[Range<u64>], _writer: NonZeroU64) {
+        self.wrote_runs(runs);
+    }
+}
+
 /// The surface's window: 9,000 runs of one page each, scattered over the RAM.
 fn window() -> Vec<Range<u64>> {
     (0..SURFACE / PAGE)
@@ -112,18 +148,26 @@ fn reports<D: DirtyPages<Watch = ()> + 'static>(source: &Arc<D>) -> (Duration, D
     spread(times)
 }
 
-#[test]
-#[ignore = "a release bench: cargo test --release -p metal2vulkan-runtime --lib dirty_runs_bench -- --ignored --nocapture"]
-fn dirty_runs_bench() {
-    let per_run = Arc::new(PerRun::default());
-    let (median, p90) = reports(&per_run);
+/// Print the reports' `median` and `p90` to the log `name`, whose counts `took` are.
+fn print(name: &str, took: &PerRun, (median, p90): (Duration, Duration)) {
     let made = (REPORTS + 10) as u64;
-    let calls = per_run.calls.load(Ordering::Relaxed) / made;
-    assert_eq!(per_run.bytes.load(Ordering::Relaxed), made * SURFACE);
+    let calls = took.calls.load(Ordering::Relaxed) / made;
+    assert_eq!(took.bytes.load(Ordering::Relaxed), made * SURFACE);
     println!(
-        "DIRTY-RUNS-BENCH log=per-run runs={} calls/report={calls} median={:.1}us p90={:.1}us",
+        "DIRTY-RUNS-BENCH log={name} runs={} calls/report={calls} median={:.1}us p90={:.1}us",
         SURFACE / PAGE,
         median.as_secs_f64() * 1e6,
         p90.as_secs_f64() * 1e6,
     );
+}
+
+#[test]
+#[ignore = "a release bench: cargo test --release -p metal2vulkan-runtime --lib dirty_runs_bench -- --ignored --nocapture"]
+fn dirty_runs_bench() {
+    let per_run = Arc::new(PerRun::default());
+    let spread = reports(&per_run);
+    print("per-run", &per_run, spread);
+    let batched = Arc::new(Batched::default());
+    let spread = reports(&batched);
+    print("batched", &batched.0, spread);
 }

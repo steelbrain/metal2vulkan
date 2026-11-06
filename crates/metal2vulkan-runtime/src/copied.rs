@@ -39,8 +39,8 @@
 //!   ([`sync`]). Each batch ends with a barrier that makes its writes visible to the host
 //!   (`tracker::Barrier::to_host`). Where the pages' memory came with a log of the writes to them
 //!   (`HostMemory::with_dirty_pages`, or its guest RAM's, `HostRam::with_dirty_pages`), each merge
-//!   back reports the blocks it wrote to the log as the copy's own writes
-//!   (`DirtyPages::wrote_as`, a writer of the copy's own) before it returns: the log sees no
+//!   back reports the blocks it wrote to the log as the copy's own writes, in one call
+//!   (`DirtyPages::wrote_runs_as`, a writer of the copy's own) before it returns: the log sees no
 //!   write the runtime makes, and every other copy and shadow of the pages takes them.
 //! - **Copies in the log gates.** Where the pages' memory came with such a log, a commit's copy
 //!   in compares only the pages the log reports written since the copy's last copy in, and the
@@ -508,10 +508,11 @@ impl CopiedBuffers {
     /// Counted: `WorkCounts::copied_merges_compared`, `copied_merges_skipped`.
     ///
     /// The bytes written into pages whose memory came with a log are reported to it, as the
-    /// copy's own writes ([`DirtyPages::wrote_as`](crate::DirtyPages::wrote_as)), a block of
-    /// [`SYNC_BLOCK`] bytes at a time, before this returns: the log sees no write the runtime
-    /// makes, and every other copy and shadow of those pages must take them, while the copy's
-    /// own copies in need not.
+    /// copy's own writes: the blocks of [`SYNC_BLOCK`] bytes it wrote a byte of, adjacent ones
+    /// joined, in one call to each log for each copy
+    /// ([`DirtyPages::wrote_runs_as`](crate::DirtyPages::wrote_runs_as)), before this returns:
+    /// the log sees no write the runtime makes, and every other copy and shadow of those pages
+    /// must take them, while the copy's own copies in need not.
     pub(crate) fn merge_back(&self, counts: &Counters, written: &Written) {
         if self.live.load(Ordering::Relaxed) == 0 {
             return;
@@ -547,9 +548,7 @@ impl CopiedBuffers {
         }
         // Reported with no lock of the copies' held.
         for (log, writer, blocks) in reports {
-            for bytes in blocks {
-                log.wrote_as(bytes, writer);
-            }
+            log.wrote_as(&blocks, writer);
         }
         counts.copied_merged_back(moved);
         counts.copied_dropped(dropped);
