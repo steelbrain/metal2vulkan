@@ -2544,7 +2544,10 @@ bound.
   sample or more, from the pass's clear or, at one sample, its load, each blend and read sees the half
   Metal's tile holds. Over input attachments (lavapipe), in a multisampled pass that loads the color,
   and after a draw the shadow cannot follow (one that writes the color without reading it at more
-  than one sample), the codes stay and the notice fires.
+  than one sample), the codes stay and the notice fires. Over input attachments it also fires for a
+  draw that writes some of an extended-range word's codes under a mask (`BGR10_XR`'s, or a two-plane
+  format's color word), whose function reads the word only to keep the other codes, which it keeps
+  exactly: the pipeline's state does not tell that read from the function's own fetch.
 - `metal2vulkan-degrade-unmeasured-heap-texture-size` (precision). `UnmeasuredHeapTextureSize`: A
   heap texture sized or made (`heap_texture_size_and_align`, `Heap::new_texture`) whose size Metal's
   layout the runtime does not model: a format or a sample count whose layout in Metal's heaps is not
