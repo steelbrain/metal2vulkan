@@ -1241,6 +1241,41 @@ fn no_case_names_a_native_note() {
     assert!(named.is_empty(), "{}:\n{}", named.len(), named.join("\n"));
 }
 
+/// Every accepted difference a case names is an entry of `docs/API.md` section 10, a venue's
+/// answer (`Justification::WithoutCompression`) included. A slug that names no entry justifies
+/// nothing on any venue, and a replay says so only where the site it loosens differs: the
+/// presented-Mac entry's lead-in was reworded while the compression slug kept the old words, so
+/// every site that slug loosens read divergent on the RTX 5080 and on lavapipe, and the M3 Max,
+/// whose sites match Metal's, saw nothing.
+#[test]
+fn every_accepted_difference_a_case_names_is_an_entry() {
+    let entries = accepted_differences();
+    let mut missing = Vec::new();
+    for case in crate::cases::all() {
+        for allowance in case.allowances() {
+            let (Justification::AcceptedDifference(slug) | Justification::WithoutCompression(slug)) =
+                &allowance.justified_by
+            else {
+                continue;
+            };
+            if !entries.contains(slug) {
+                missing.push(format!(
+                    "{} names {slug} at {}",
+                    case.name(),
+                    allowance.path
+                ));
+            }
+        }
+    }
+    missing.dedup();
+    assert!(
+        missing.is_empty(),
+        "{} allowance(s) name no entry of docs/API.md section 10:\n{}",
+        missing.len(),
+        missing.join("\n")
+    );
+}
+
 /// A case that names two notices separately must see **both** fire. Before the subset check the
 /// walk stopped at the first covering allowance that held, so a case declaring two announced
 /// notices read "3 named, 2 fired, 1 never fired" and its second declaration was permanently dead

@@ -366,9 +366,8 @@ pub fn shared_memory_notice() -> crate::allowance::Allowance {
 
 /// The slug of `docs/API.md`'s accepted difference that says what a device presenting a Mac that
 /// keeps no texture compressed answers, as a Mac with an Intel or AMD GPU does
-/// ([`without_compression`]).
-pub const WITHOUT_COMPRESSION: &str =
-    "a-device-that-presents-a-mac-without-texture-compression-answers-as-that-mac";
+/// ([`without_compression`]): "A device answers as the class of Mac it presents".
+pub const WITHOUT_COMPRESSION: &str = "a-device-answers-as-the-class-of-mac-it-presents";
 
 /// The declaration a case needs at `site`, a value Metal's lossless texture compression decides,
 /// for the one answer a **venue's Mac** changes there. The Apple silicon Mac every recording was
@@ -385,8 +384,8 @@ pub const WITHOUT_COMPRESSION: &str =
 ///
 /// **It loosens the value, and only on such a venue.** The site is unchecked, justified by
 /// [`Justification::WithoutCompression`], which holds only on a run whose venue presents no
-/// compression: on the M3 Max and on lavapipe it justifies nothing, so every byte of the site
-/// still compares exactly there, the pattern included. A run without such a venue counts the
+/// compression: on the M3 Max it justifies nothing, so every byte of the site still compares
+/// exactly there, the pattern included. A run without such a venue counts the
 /// claim as one nothing checked ([`crate::report::Report::unchecked_everywhere`]); a case names it
 /// at the sites the compression decides, never at another, and says in a comment which run it
 /// rests on.

@@ -57,9 +57,10 @@ pub enum Justification {
     ///
     /// **It is scoped to the venue, and held both ways.** It holds only on a run whose device
     /// presents no such compression (`DeviceProperties::lossless_compression` false, the venue's
-    /// [`crate::case::Venue::lossless_compression`]): on one that presents it, as the M3 Max and
-    /// lavapipe do, it justifies nothing, so the sites it covers compare exactly there and any
-    /// difference at them is a divergence. Where it is named and no venue without the compression
+    /// [`crate::case::Venue::lossless_compression`]): on one that presents it, as the M3 Max
+    /// does, it justifies nothing, so the sites it covers compare exactly there and any difference
+    /// at them is a divergence. lavapipe and the RTX 5080 present a Mac with an Intel or AMD GPU,
+    /// so it holds there. Where it is named and no venue without the compression
     /// ran, the report counts it as a claim nothing checked
     /// ([`crate::report::Report::unchecked_everywhere`]), as it does a notice no run announced.
     WithoutCompression(String),
