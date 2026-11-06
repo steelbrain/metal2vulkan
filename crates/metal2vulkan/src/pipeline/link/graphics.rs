@@ -15,8 +15,9 @@
 //!   `R16Float` attachment, Metal keeps `-0`). An
 //!   attachment that no first (index 0) output of the fragment function names (every attachment of
 //!   a pipeline without a fragment function) gets an empty write mask, so the draw leaves it
-//!   unmodified, and an extended-range one (but a padded or bfloat one, whose blend is not built)
-//!   no blend: its raw unsigned format blends nothing, and nothing is written to blend. That is what Metal does where measured: an unblended attachment the function reads
+//!   unmodified, and an extended-range one (a padded 10-bit or bfloat one among them) no blend:
+//!   its raw unsigned format blends nothing, and nothing is written to blend. That is what Metal
+//!   does where measured: an unblended attachment the function reads
 //!   through framebuffer fetch but has no output for, which a draw's later fragments read as
 //!   loaded; an attachment without an output whose blend would change it (`Zero`/`Zero`,
 //!   `One`/`One`, a blend-color factor), and one named only by a dual-source second output
@@ -425,13 +426,11 @@ pub fn graphics_state(
                     // An extended-range attachment no first output writes (every attachment of a
                     // pipeline without a fragment function) is left as it is, as Metal leaves an
                     // unwritten attachment (the module docs), so its blend changes nothing: it
-                    // takes none, nor the blend usage its raw unsigned format lacks. Not a padded
-                    // or bfloat one's, whose blend is not built written or not (Metal's validation
-                    // refuses a bfloat blend).
+                    // takes none, nor the blend usage its raw unsigned format lacks: a padded or
+                    // bfloat one's too, whose blend of a written color is not built.
                     let extended = ExtendedRange::of(a.pixel_format);
                     let written_here = written.contains(&(index as u32));
-                    let unwritten_extended = !written_here
-                        && extended.is_some_and(|form| !form.padded() && !form.bfloat());
+                    let unwritten_extended = !written_here && extended.is_some();
                     // An attachment held with its channels rotated takes the function's rotated
                     // output, the descriptor's mask rotated, and the blend `rotated_blend`
                     // finds Metal's in Vulkan's factors; one holding Metal's alpha in red
@@ -465,7 +464,22 @@ pub fn graphics_state(
                             };
                             extended_write_mask(form, stored)?
                         }
-                        (Some(form), None) => extended_write_mask(form, descriptor_mask)?,
+                        // A mask of some of the codes one word holds, which the stage merges in
+                        // the storage form where the device orders fetch so: on a device that
+                        // orders it in neither form, the orderings the merge needs.
+                        (Some(form), None) => {
+                            extended_write_mask(form, descriptor_mask).map_err(|e| {
+                                match color_writes::merged_extended(a)
+                                    && crate::lower::fragment::fetch::fetch_unordered(p)
+                                {
+                                    true => {
+                                        crate::lower::fragment::fetch::unordered_extended_fetch()
+                                            .into()
+                                    }
+                                    false => e,
+                                }
+                            })?
+                        }
                         (None, _) => descriptor_mask,
                     };
                     let blend = match (
@@ -1127,14 +1141,20 @@ fn uniform_blend(
 /// holds each channel in a raw component of its own takes the mask of those components: a channel
 /// the mask leaves out keeps its component's bytes as the device's pass stores it, the same bytes
 /// where a Metal write left them. `BGRA10_XR` and its twin hold blue, green, red and alpha in the
-/// fields from the lowest, so the mask's red and blue trade places; a padded form's channels are
+/// fields from the lowest, so the mask's red and blue trade places; the two-plane forms the color
+/// word in the first component and the alpha byte in the second, so a mask of the three color
+/// channels alone writes the first and one of alpha alone the second; a padded form's channels are
 /// its raw words, one each, in Metal's order (Metal's loading pass that draws keeps the channel's
 /// code and zeroes its word's low six bits, every word of each tile it stores alike: an Apple M3
 /// Max and an M4, byte-identical). A mask of some of the channels one component holds
 /// (`BGR10_XR`'s word, `RGB10A2Unorm_sRGB`'s, the two-plane forms' color word) is
-/// `NotImplemented(Format)`: no mask of the raw components keeps one code of a word and writes
-/// another. A bfloat form's channels are its own (red; red and green; all four), each a raw
-/// component; a mask of some of them is unmeasured and refused as above.
+/// `NotImplemented(Format)` here: no mask of the raw components keeps one code of a word and
+/// writes another. A stage that writes `BGR10_XR` or a two-plane form so merges the codes in the
+/// interlocked storage form (`color_writes::merged_extended`), which leaves the attachment out of
+/// the subpass, where the device orders fetch through the pixel interlock; on a device that orders
+/// it in neither form, the caller names the orderings the merge needs. A bfloat form's channels
+/// are its own (red; red and green; all four), each a raw component; a mask of some of them is
+/// unmeasured and refused as above.
 fn extended_write_mask(
     form: ExtendedRange,
     mask: vk::ColorComponentFlags,
@@ -1155,6 +1175,23 @@ fn extended_write_mask(
     // `RGB10A2Unorm_sRGB`'s channels share one word: a mask of some of them is refused as above.
     if form.padded() && form.raw_components() == channels.as_raw().count_ones() {
         return Ok(kept);
+    }
+    // The two-plane forms hold the color word in the first component and the alpha byte in the
+    // second: a mask of the three color codes alone, or of alpha alone, keeps the other
+    // component's bytes as the device's pass stores it (the same bytes where a Metal write left
+    // them), as `BGRA10_XR`'s fields below.
+    if let ExtendedRange::Planes { .. } = form {
+        let color = kept & (C::R | C::G | C::B);
+        if !color.is_empty() && color != C::R | C::G | C::B {
+            return Err(Unsupported::not_implemented(Feature::Format).into());
+        }
+        let word = if color.is_empty() { C::empty() } else { C::R };
+        let alpha = if kept.contains(C::A) {
+            C::G
+        } else {
+            C::empty()
+        };
+        return Ok(word | alpha);
     }
     // Blue, green, red and alpha in the fields from the lowest: red and blue trade places.
     if let ExtendedRange::Bgra10 { .. } = form {

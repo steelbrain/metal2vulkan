@@ -28,7 +28,7 @@
 //! `bfloat` output is refused before, as Metal's compiler rejects it. A blend of another form is
 //! the function's own, over an ordered read of the attachment (below, and `lower::fragment::fetch`'s
 //! storage form): on a device that orders fetch in neither form it is refused naming what it needs
-//! (`fetch::unordered_extended_blend`: `fragmentShaderPixelInterlock` or
+//! (`fetch::unordered_extended_fetch`: `fragmentShaderPixelInterlock` or
 //! `rasterizationOrderColorAttachmentAccess`).
 //!
 //! On a device that orders framebuffer fetch through rasterization-order input attachments, a blend
@@ -85,7 +85,7 @@ pub(super) fn plan(
         && !e.form.bfloat()
         && crate::lower::fragment::fetch::fetch_unordered(cx.profile);
     if unordered {
-        return Err(crate::lower::fragment::fetch::unordered_extended_blend().into());
+        return Err(crate::lower::fragment::fetch::unordered_extended_fetch().into());
     }
     if index != 0 || blended || !matches!(fmt, FloatFmt::F32 | FloatFmt::Half) {
         return Err(Unsupported::not_implemented(Feature::Format).into());

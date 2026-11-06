@@ -2096,7 +2096,8 @@ pub(crate) fn unattached_colors_written(
 /// (`LoweringInputs::framebuffer_fetch`): on a device that orders fetch only through the pixel
 /// interlock, the state of every attachment the entry declares a `[[color(n)]]` input of a constant
 /// index for, of every extended-range attachment it writes that the pass blends (whose blend the
-/// function computes from the texel it reads), and of every attachment variant `v`'s instance keeps
+/// function computes from the texel it reads) or writes unblended under a mask of some of the codes
+/// one word holds (`color_writes::merged_extended`), and of every attachment variant `v`'s instance keeps
 /// out of its subpass that the entry writes through its first output
 /// (`VariantKey::interlocked_colors`); `None` on another device or for an entry that declares none
 /// of them. On a device that orders fetch through rasterization-order input attachments, the state
@@ -2124,6 +2125,15 @@ pub(crate) fn fetch_inputs(
                 c.blending_enabled
                     && crate::metal::format::ExtendedRange::of(c.pixel_format).is_some()
             })
+    };
+    // An extended-range attachment whose word's codes an unblended write of some of them merges
+    // into the word it reads.
+    let merged_extended = |color: u32| {
+        d.color_attachments
+            .get(color as usize)
+            .copied()
+            .flatten()
+            .is_some_and(|c| crate::pipeline::color_writes::merged_extended(&c))
     };
     // A word attachment whose writes the function blends over, or merges into, the word it reads.
     let stored_word = |color: u32| {
@@ -2163,7 +2173,7 @@ pub(crate) fn fetch_inputs(
                 index: 0,
                 ..
             } if blended(color)
-                || (interlock && stored_word(color))
+                || (interlock && (stored_word(color) || merged_extended(color)))
                 || (inputs && merged_word(color)) =>
             {
                 Some(color)

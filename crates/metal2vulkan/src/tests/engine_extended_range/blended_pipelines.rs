@@ -15,7 +15,9 @@
 //! one sample, and it records no count of that format's own), so a pipeline of four samples is
 //! refused there naming the properties it needs. Before, a blended attachment the function does
 //! not write and a mask of some channels were each refused `NotImplemented(Format)` at `Color(0)`,
-//! the reported refusal. No GPU is used.
+//! the reported refusal. An unblended mask of some of the codes one word holds (`BGR10_XR`'s, the
+//! two-plane forms') merges them in the storage form where the device orders fetch through the
+//! interlock. No GPU is used.
 //!
 //! `llvm-as` assembles the fixture `rt6_samples`; without it the tests skip visibly.
 
@@ -24,6 +26,7 @@ use crate::error::{Error, Needs};
 use crate::metal::{BlendFactor, ColorWriteMask};
 use crate::pipeline::descriptor::{ColorAttachmentDescriptor, RenderPipelineDescriptor};
 use crate::pipeline::RenderPipeline;
+use crate::spirv::testing::check_words_valid;
 use crate::vk;
 
 /// The profiles: the reported device's family, MoltenVK's and lavapipe's.
@@ -303,7 +306,7 @@ fn an_unordered_device_names_what_an_extended_range_blend_needs() {
         F::One,
         F::OneMinusSourceAlpha,
     ];
-    let wanted = crate::lower::fragment::fetch::unordered_extended_blend();
+    let wanted = crate::lower::fragment::fetch::unordered_extended_fetch();
     for stem in ["vk12-floor", "roadmap-2022"] {
         let dev = device(stem);
         assert!(
@@ -336,4 +339,85 @@ fn an_unordered_device_names_what_an_extended_range_blend_needs() {
             );
         }
     }
+}
+
+/// An unblended write of some of the codes one word holds (`BGR10_XR`'s and its twin's word, the
+/// two-plane forms' color word: `color_writes::merged_extended`), which no mask of the raw
+/// components gives: where the device orders fetch only through the pixel interlock, the function
+/// merges its codes into the word it reads first, in the interlocked storage form (color 0 leaves
+/// the subpass), at one sample and four, from a `half4` output and a `float4` one, and every stage
+/// passes L3. Over lavapipe's input attachments the merge is not built (`NotImplemented(Format)`,
+/// or its gap at four samples); on a device that orders fetch in neither form the refusal names the
+/// orderings the merge needs. Before, every venue refused the mask `NotImplemented(Format)` at link.
+#[test]
+fn a_mask_of_some_codes_of_a_word_merges_them_in_the_storage_form() {
+    let Some(library) = library() else {
+        return;
+    };
+    let function = |name: &str| {
+        StageSource::Function(FunctionDescriptor::new(
+            library.function(name).expect("function"),
+        ))
+    };
+    let formats = [
+        PixelFormat::BGR10XR,
+        PixelFormat::BGR10XRSRGB,
+        PixelFormat::RGB10A82PXR10,
+        PixelFormat::RGB10A82PXR10SRGB,
+    ];
+    let masks = [
+        ColorWriteMask::RED,
+        ColorWriteMask::BLUE.union(ColorWriteMask::GREEN),
+        ColorWriteMask::RED.union(ColorWriteMask::ALPHA),
+    ];
+    let unordered = crate::lower::fragment::fetch::unordered_extended_fetch();
+    let mut merged = 0;
+    for stem in [
+        "nvidia-rtx50-linux",
+        "nvidia-rtx5080-laptop",
+        "moltenvk-m3",
+        "intel-uhd770-rpls-anv",
+        "lavapipe",
+        "vk12-floor",
+    ] {
+        let dev = device(stem);
+        let interlock = crate::lower::fragment::interlock_orders(dev.profile());
+        let inputs = crate::lower::fragment::inputs_order(dev.profile());
+        for pf in formats {
+            for mask in masks {
+                for fill in ["rt6_fill_rgba16float", "rt6_fill_rgba32float"] {
+                    for samples in [1, 4] {
+                        let mut d = RenderPipelineDescriptor::new(function("rt6_fill_vertex"));
+                        d.fragment = Some(function(fill));
+                        d.color_attachments[0] = Some(attachment(pf, None, mask));
+                        d.raster_sample_count = samples;
+                        let what =
+                            format!("{stem} {pf:?} mask {} {fill} x{samples}", mask.as_raw());
+                        match dev.compile_render_pipeline(&d, &Budget::standard()) {
+                            Ok(pipe) => {
+                                assert!(interlock, "{what}");
+                                assert!(stored(&pipe), "{what}");
+                                for m in &pipe.stages {
+                                    check_words_valid(&m.spirv, &pipe.requirements, dev.profile())
+                                        .unwrap_or_else(|e| panic!("{what}: L3: {e}"));
+                                }
+                                merged += 1;
+                            }
+                            Err(Error::Unsupported(u)) if !interlock && !inputs => {
+                                assert_eq!(u.feature, unordered.feature, "{what}: {u:?}");
+                                assert_eq!(u.needs, unordered.needs, "{what}: {u:?}");
+                            }
+                            Err(e) if inputs && samples > 1 && lacks_samples(&e) => {}
+                            Err(Error::Unsupported(u)) if inputs => {
+                                assert_eq!(u.feature, Feature::Format, "{what}: {u:?}");
+                                assert_eq!(u.needs, Needs::NotImplemented, "{what}: {u:?}");
+                            }
+                            Err(e) => panic!("{what}: {e:?}"),
+                        }
+                    }
+                }
+            }
+        }
+    }
+    assert_eq!(merged, 4 * formats.len() * masks.len() * 2 * 2);
 }

@@ -379,6 +379,26 @@ pub(crate) fn extended_range_colors(
         .collect()
 }
 
+/// Whether color attachment `c`, of an extended-range form that holds its three color codes in
+/// one raw component (`BGR10_XR`, the two-plane forms' color word, and their `_sRGB` twins), is
+/// written unblended under a mask of some of those codes: no mask of the raw components keeps one
+/// code of a word and writes another, so the fragment function merges its codes into the word it
+/// reads first, in the interlocked storage form (`lower::fragment::fetch`), where the device orders
+/// fetch so. Over an input attachment (lavapipe) the merge is not built, and link refuses the mask
+/// `NotImplemented(Format)`; on a device that orders fetch in neither form, it names the orderings
+/// the merge needs (`lower::fragment::fetch::unordered_extended_fetch`).
+pub(crate) fn merged_extended(c: &ColorAttachmentDescriptor) -> bool {
+    use metal::format::ExtendedRange as X;
+    use metal::ColorWriteMask as M;
+    let word = matches!(
+        X::of(c.pixel_format),
+        Some(X::Bgr10 { .. } | X::Planes { .. })
+    );
+    let color = c.write_mask & M::RED.union(M::GREEN).union(M::BLUE);
+    let rgb = M::RED.union(M::GREEN).union(M::BLUE);
+    word && !c.blending_enabled && !color.is_empty() && color != rgb
+}
+
 /// The word view through which profile `p`'s device renders color attachment `index` of a
 /// render pipeline, described by `c`, that covers by alpha where `alpha_to_coverage`
 /// (`LoweringInputs::word_colors`): `metal::format::WordAttachment::of` the attachment's format,

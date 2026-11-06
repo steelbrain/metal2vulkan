@@ -165,7 +165,11 @@
 //! channel with blending disabled stores the
 //! texel Metal's unblended write stores, a `float` output rounded to `half` and encoded as a
 //! kernel's write (`stage_io::extended_color::texel`). An unblended write that stores some of its
-//! channels is not built; one whose mask covers none of them stores nothing, as above.
+//! channels encodes them so and keeps the others' codes from the texel it reads first
+//! (`extended_range::encode_keeping`), as Metal keeps a masked channel's code: the form a mask of
+//! some of the codes one word holds takes (`BGR10_XR`'s, the two-plane forms' color word,
+//! `color_writes::merged_extended`), which no mask of the raw components gives. One whose mask
+//! covers none of them stores nothing, as above.
 //!
 //! **The `half` shadow**: Metal's tile memory holds such an attachment as `half` through a render
 //! pass and rounds it to the codes only at the store, so a blend or a fetch onto what an earlier
@@ -349,12 +353,14 @@ pub(crate) fn fetch_unordered(p: &DeviceProfile) -> bool {
     !interlock_orders(p) && !inputs_order(p)
 }
 
-/// The refusal of a blend into an extended-range attachment on a device that orders framebuffer
-/// fetch in neither form ([`fetch_unordered`]): the function computes the blend over its own read
-/// of the attachment's codes, which no device's blend unit reads, and that read must be ordered
-/// after every earlier fragment's write of the pixel, through the pixel interlock (the storage
-/// form) or rasterization-order color attachment access (over the input attachment).
-pub(crate) fn unordered_extended_blend() -> Unsupported {
+/// The refusal of a blend into an extended-range attachment, or of a write of some of the codes
+/// one of its words holds (`color_writes::merged_extended`), on a device that orders framebuffer
+/// fetch in neither form ([`fetch_unordered`]): the function computes the blend, or merges the
+/// codes, over its own read of the attachment's codes, which no device's blend unit or write mask
+/// does, and that read must be ordered after every earlier fragment's write of the pixel, through
+/// the pixel interlock (the storage form) or rasterization-order color attachment access (over the
+/// input attachment).
+pub(crate) fn unordered_extended_fetch() -> Unsupported {
     Unsupported::needs_any_of(
         Feature::FramebufferFetch,
         vec![
@@ -1015,9 +1021,9 @@ pub(crate) fn storage_form(
     // form gates its write on that bit, and a write at one sample on bit 0. A kept channel of a
     // signed normalized format beside a written one is not modelled either: its two codes of -1
     // read alike, so writing back what was read would not keep the texel's bits. A write that
-    // stores some of an extended-range attachment's channels is built unblended where it stores
-    // every one, and under a blend Metal's model covers, which the shader computes: no device
-    // blends the raw texels. A write whose mask covers none of the format's channels stores
+    // stores some of an extended-range attachment's channels is built unblended (the codes of the
+    // channels it keeps merged from the texel), and under a blend Metal's model covers, which the
+    // shader computes: no device blends the raw texels. A write whose mask covers none of the format's channels stores
     // nothing, so nothing a store depends on (the blend, coverage, the sample mask, the depth and
     // stencil tests) bears on it; and a blend of one and zero, added, for color and alpha stores
     // the source as blending disabled does, a signed normalized NaN aside, and a 16-bit float
@@ -1119,10 +1125,7 @@ pub(crate) fn storage_form(
     let not_modelled = inputs.amplified
         || extended.is_some_and(ExtendedRange::padded)
         || (emulation != FormatEmulation::Direct && extended.is_none() && !alpha_in_red)
-        || (extended.is_some()
-            && stores
-            && !shader_blends
-            && (attachment.blending_enabled || !kept.is_empty()))
+        || (extended.is_some() && stores && !shader_blends && attachment.blending_enabled)
         || (srgb && uint_view.is_none())
         // An `RGB9E5Float` word's mantissas share its exponent: no field is kept apart.
         || (word == Some(WordAttachment::Rgb9e5) && stores && merged)
@@ -1254,7 +1257,7 @@ pub(crate) fn storage_form(
 /// over the attachment's input attachment holds (`input_blend`: a form Metal's model blends, not a
 /// padded or bfloat one, which stays `NotImplemented(Format)` as `stage_io::extended_color` refuses
 /// it); else what blocks it, without either ordering the two it needs one of
-/// ([`unordered_extended_blend`]).
+/// ([`unordered_extended_fetch`]).
 pub(crate) fn extended_range_blend(
     pf: crate::metal::PixelFormat,
     p: &DeviceProfile,
@@ -1273,7 +1276,7 @@ pub(crate) fn extended_range_blend(
     };
     if !interlock_orders(p) {
         if fetch_unordered(p) {
-            return Err(unordered_extended_blend());
+            return Err(unordered_extended_fetch());
         }
         // The blend over the input attachment: the attachment's raw format a color attachment,
         // and the blend Metal's model's.
@@ -2661,6 +2664,11 @@ pub(super) fn emit_return(
                 held = shadow;
                 texel
             }
+            (Some(range), None) if sc.view.merges() => {
+                let (texel, shadow) = merged_extended(cx, fb, color, &sc, range, (form, part))?;
+                held = shadow;
+                texel
+            }
             (Some(range), None) if !sc.shadowed => {
                 stage_io::extended_color::texel(fb, range, form, part)?
             }
@@ -3070,6 +3078,50 @@ pub(super) fn blend_constant(
 /// Under the instance's shadow (`StorageColor::shadowed`) the destination is the shadow's texel,
 /// Metal's tile value, and the write stores the blend's result there too (the second texel), the
 /// kept channels as the shadow held them; the codes texel is read only to keep channels.
+/// The raw texel an unblended write of output `part` (of `form`) to extended-range attachment
+/// `color` (held in `range`) stores under a write mask of some of its channels
+/// (`StorageView::kept`): the output's `half` as the unblended write takes it
+/// (`stage_io::extended_color::held`), encoded as the kernel write encodes it, the codes of the
+/// channels the mask keeps taken from the texel read first inside the interlock
+/// (`extended_range::encode_keeping`), as Metal keeps a masked channel's code. Under the instance's
+/// shadow (`StorageColor::shadowed`) the shadow's texel too: the written channels' `half`s, the
+/// kept ones as the shadow held them.
+fn merged_extended(
+    cx: &mut EmitCx<'_>,
+    fb: &mut FunctionBuilder<'_>,
+    color: u32,
+    sc: &StorageColor,
+    range: ExtendedRange,
+    (form, part): (Form, SValue),
+) -> BResult<(SValue, Option<SValue>)> {
+    let v = stage_io::extended_color::held(fb, range, form, part)?;
+    let kept = [
+        vk::ColorComponentFlags::R,
+        vk::ColorComponentFlags::G,
+        vk::ColorComponentFlags::B,
+        vk::ColorComponentFlags::A,
+    ]
+    .map(|c| sc.view.kept.contains(c));
+    let texel = read_texel(cx, fb, color, sc)?;
+    let stored = extended_range::encode_keeping(fb, range, v, (texel, kept))?;
+    let held = match sc.shadowed {
+        true => {
+            let shadow = shadow_read(cx, fb, color, range)?;
+            let lanes: Vec<u32> = kept
+                .iter()
+                .zip(0..4u32)
+                .map(|(&kept, lane)| match kept {
+                    true => 4 + lane,
+                    false => lane,
+                })
+                .collect();
+            Some(fb.vector_shuffle(v, shadow, &lanes)?)
+        }
+        false => None,
+    };
+    Ok((stored, held))
+}
+
 fn blended(
     cx: &mut EmitCx<'_>,
     fb: &mut FunctionBuilder<'_>,
