@@ -415,9 +415,9 @@ fn twin(
 /// An ended pass of a render encoder: its core, what it made resident, its log, and what its
 /// later color groups draw.
 pub(super) struct Ended {
-    pub(super) core: EncoderCore,
+    pub(super) core: Box<EncoderCore>,
     pub(super) residency: Residency,
-    pub(super) log: Option<RenderLog>,
+    pub(super) log: Option<Box<RenderLog>>,
     pub(super) later: Option<Box<Later>>,
 }
 
@@ -426,10 +426,10 @@ impl Ended {
     /// from the first group's `log`: the core they leave. A pass of one group has none
     /// (`later` `None`), and its end calls nothing here.
     pub(super) fn later_groups(
-        mut core: EncoderCore,
+        mut core: Box<EncoderCore>,
         later: &Later,
         log: Option<&RenderLog>,
-    ) -> Result<EncoderCore, Error> {
+    ) -> Result<Box<EncoderCore>, Error> {
         let log = log.ok_or_else(|| internal("a pass of several color groups without its log"))?;
         for group in 1..later.group.groups() {
             let mut encoder = RenderLowering::later_group(core, later, group, log)?;
@@ -451,7 +451,7 @@ impl RenderLowering {
     /// The encoder of later group `group` of the pass `later` and `log` describe, over `core`
     /// (the module docs).
     fn later_group(
-        core: EncoderCore,
+        core: Box<EncoderCore>,
         later: &Later,
         group: u32,
         log: &RenderLog,

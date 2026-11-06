@@ -2412,7 +2412,7 @@ impl RenderExecution {
             unsafe { core.command_buffer().end_raw(*raw) }.map_err(vulkan)?;
         }
         Ok(Recorded {
-            core,
+            core: *core,
             runs,
             storage: PassStorage {
                 tile_memory: tile_memory.into_buffer(),
@@ -2440,7 +2440,7 @@ impl RenderExecution {
         let mut shadows = InstanceShadows::default();
         shadows.add(&self.shadows, &[]);
         RenderLowering {
-            core,
+            core: Box::new(core),
             earlier: Vec::new(),
             current: Instance {
                 draws,
@@ -2624,7 +2624,7 @@ impl RenderExecution {
             encoder.settle_draws(pipeline, made);
         }
         let RenderLowering { core, .. } = encoder;
-        core
+        *core
     }
 
     /// What its check, if any, may see among commands whose records may hold `written`

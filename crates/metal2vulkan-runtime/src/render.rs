@@ -1403,6 +1403,11 @@ pub struct RenderCommandEncoder {
 // of it, so it holds its lowering in a box: the lowering's state is thousands of bytes.
 const _: () = assert!(std::mem::size_of::<RenderCommandEncoder>() <= 128);
 
+// An ended pass goes on by value through each step of its end and its later color groups'
+// passes (`color_groups::Ended`): its core and its log in their boxes, so those moves copy no core
+// state (the core's is more than a thousand bytes).
+const _: () = assert!(std::mem::size_of::<color_groups::Ended>() <= 320);
+
 impl std::fmt::Debug for RenderCommandEncoder {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("RenderCommandEncoder")
@@ -1415,7 +1420,10 @@ impl std::fmt::Debug for RenderCommandEncoder {
 /// A render encoder's lowering ([`RenderCommandEncoder`]): the encoder's state, which each of its
 /// calls runs on.
 pub(crate) struct RenderLowering {
-    core: EncoderCore,
+    /// In a box of its own, made as the encoder opens: its pass's end hands it on through each
+    /// step of the end (`color_groups::Ended`, the later color groups' passes), and those moves
+    /// copy a pointer, not the core's state.
+    core: Box<EncoderCore>,
     /// The pass's instances before the current one, which the draws record into.
     earlier: Vec<Instance>,
     /// The instance the draws record into, in the encoder's box, which its open makes once
@@ -1638,8 +1646,9 @@ pub(crate) struct RenderLowering {
     live: Arc<Mutex<LiveBind>>,
     /// Its pass's descriptor and its calls so far, where the device had a buffer over host pages
     /// as it opened (`render/replay.rs`): `None` where it logs nothing, as when it is encoded
-    /// again.
-    log: Option<RenderLog>,
+    /// again. Boxed where it is taken (`SpareLogs::render`), the box its end hands the command
+    /// buffer (`Replay::Render`).
+    log: Option<Box<RenderLog>>,
     /// The variants, plans and specializations of its draws under which the bound values'
     /// notices were quiet (`Device::degrade_bound_values`).
     quiet_bound_values: QuietKept,
@@ -1963,10 +1972,10 @@ impl CommandBuffer {
             false => self.begin_draws(&compatible)?,
         };
         // A refusal past here leaves the secondary command buffer unused, freed with the pool.
-        let mut core = match again {
+        let mut core = Box::new(match again {
             None => EncoderCore::open(self, CALL, EncoderKind::Render, false)?,
             Some(_) => EncoderCore::replaying(self, false)?,
-        };
+        });
         if let Some(pass) = &rate_map {
             let (map, state) = pass.taken();
             core.take_rate_map(map, state);
@@ -2033,7 +2042,7 @@ struct Opening {
     extended_written: BTreeSet<u32>,
     inline: Option<bool>,
     residency: Residency,
-    log: Option<RenderLog>,
+    log: Option<Box<RenderLog>>,
     grouped: Option<Box<color_groups::Grouped>>,
 }
 
@@ -2049,7 +2058,7 @@ impl Opening {
         rate_map: Option<RateMappedPass>,
         inline: Option<bool>,
         residency: Residency,
-        log: Option<RenderLog>,
+        log: Option<Box<RenderLog>>,
         grouped: Option<Box<color_groups::Grouped>>,
     ) -> Opening {
         Opening {
@@ -2075,7 +2084,7 @@ impl Opening {
 impl RenderLowering {
     /// An encoder over `core` of the pass `opening` describes, its first instance's draws
     /// recording into `draws` (null where it records inline), made in its box.
-    fn assemble(core: EncoderCore, draws: vk::CommandBuffer, opening: Opening) -> Box<Self> {
+    fn assemble(core: Box<EncoderCore>, draws: vk::CommandBuffer, opening: Opening) -> Box<Self> {
         let Opening {
             layout,
             render_target_array_length,
@@ -4084,7 +4093,7 @@ impl RenderLowering {
             later,
         } = self.end_pass()?;
         if let Some(later) = later {
-            core = color_groups::Ended::later_groups(core, &later, log.as_ref())?;
+            core = color_groups::Ended::later_groups(core, &later, log.as_deref())?;
         }
         // A notice of a kind the device refuses while lowering, announced by the end of an encoder
         // that logged its calls, refuses the end (`render/deferral.rs`).
@@ -4095,7 +4104,7 @@ impl RenderLowering {
         core.end_with_replay(
             EncoderKind::Render,
             Some(residency),
-            log.map(|log| Replay::Render(Box::new(log))),
+            log.map(Replay::Render),
         )
     }
 
@@ -4110,7 +4119,7 @@ impl RenderLowering {
             later,
         } = self.end_pass()?;
         if let Some(later) = later {
-            core = color_groups::Ended::later_groups(core, &later, log.as_ref())?;
+            core = color_groups::Ended::later_groups(core, &later, log.as_deref())?;
         }
         // Its log goes before what it recorded is placed, as it went once its groups were drawn.
         drop(log);

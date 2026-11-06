@@ -361,7 +361,7 @@ impl RenderExecution {
             Ok(Err(cause)) => Err(cause),
             Err(error) => Err(HostStepCause::Refused(error.to_string())),
         };
-        (core, form)
+        (*core, form)
     }
 
     /// What the buffer's records may hold, the primitive type and the range of an execution that

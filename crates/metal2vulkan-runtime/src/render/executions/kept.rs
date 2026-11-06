@@ -961,7 +961,7 @@ impl RenderExecution {
             unreadable,
             resident_again,
         };
-        Ok((core, carried))
+        Ok((*core, carried))
     }
 
     /// The addresses `commands` name (their buffers', where the buffer does not inherit them,
