@@ -77,8 +77,8 @@ use metal2vulkan::library::{CompiledFunction, FunctionCompileKey};
 use metal2vulkan::metal::{BindingAccess, PixelFormat, PrimitiveTopologyClass, RenderStages};
 use metal2vulkan::pipeline::{
     BandPrimitive, ColorAttachmentDescriptor, CommandWrites, MeshPipelineDescriptor,
-    PipelineInterface, RenderPipeline, RenderPipelineDescriptor, RuntimeFact, SpecKey, Stage,
-    StageEntries, StageModule, StageSource, TessellationDescriptor,
+    MeshPipelineMetalInfo, PipelineInterface, RenderPipeline, RenderPipelineDescriptor,
+    RuntimeFact, SpecKey, Stage, StageEntries, StageModule, StageSource, TessellationDescriptor,
 };
 use metal2vulkan::reflection::{LinkedUseAnswers, RenderPipelineReflection};
 use std::any::Any;
@@ -642,10 +642,20 @@ impl Device {
     /// compile the mesh render pipeline `descriptor` (an object function where it has one, a
     /// mesh function, and a fragment function where it rasterizes) into a pipeline state under
     /// `options`, as the compile layer's `Device::compile_mesh_pipeline` compiles it. Its draws
-    /// are the encoder's mesh draws ([`RenderCommandEncoder::draw_mesh_threadgroups`]). A device
-    /// without `VK_EXT_mesh_shader`, or without its stage's feature (`meshShader`, `taskShader`
-    /// for an object function), is `Unsupported{MeshShading}` naming them: no emulation draws a
-    /// mesh function's primitives in Metal's order on it. What the compile refuses otherwise is
+    /// are the encoder's mesh draws ([`RenderCommandEncoder::draw_mesh_threadgroups`]). On a
+    /// device that enables `VK_EXT_mesh_shader` and `meshShader` the object and mesh functions are
+    /// task and mesh stages, and an object function without `taskShader` is
+    /// `Unsupported{MeshShading}` naming it; on every other device both run as compute work whose
+    /// records a synthesized vertex stage draws, each draw announced `emulated-mesh-draws`
+    /// (`DeviceProfile::emulates_mesh_shading`, `render/mesh.rs`). A thread maximum, required
+    /// threadgroup size or payload length Metal refuses, as an M3 Max refuses it, is
+    /// `Compile(InvalidDescriptor(MeshPipeline))` naming Metal's rule (`MeshPipelineProblem`),
+    /// where Metal answers an error or its descriptor validation ends the process; a
+    /// `maxVertexAmplificationCount` of 0 is `Compile(InvalidDescriptor(VertexAmplificationCount))`
+    /// and one above 1, which Metal makes, `Unsupported{VertexAmplification}` (not built). The
+    /// thread maxima, mesh-grid maximum and required sizes are what the state answers
+    /// ([`RenderPipelineState::max_total_threads_per_object_threadgroup`] and the rest), and its
+    /// draws are not held to them. What the compile refuses otherwise is
     /// `Compile` or `Unsupported`, as [`Device::new_render_pipeline_state`] says, and so is an
     /// archive of another device; no binary archive holds a mesh render pipeline, so
     /// `FAIL_ON_BINARY_ARCHIVE_MISS` with archives listed is `BinaryArchiveMiss`. Each stage's
@@ -1193,6 +1203,62 @@ impl RenderPipelineState {
             Kind::Graphics(_) => 0,
             Kind::Tile(state) => state.kernel().max_total_threads_per_threadgroup(),
         }
+    }
+
+    /// The compiled pipeline's answers to Metal's mesh queries: a mesh state's; `None` for a
+    /// render state of a vertex function and a tile state.
+    fn mesh_info(&self) -> Option<MeshPipelineMetalInfo> {
+        match &self.0 {
+            Kind::Graphics(state) => state.base().mesh_info,
+            Kind::Tile(_) => None,
+        }
+    }
+
+    /// `maxTotalThreadsPerObjectThreadgroup`: a mesh state's
+    /// ([`MeshPipelineMetalInfo::max_total_threads_per_object_threadgroup`]): the descriptor's
+    /// maximum, else the object function's `[[max_total_threads_per_threadgroup(n)]]`, else
+    /// 1024, as an M3 Max answers, held to this device's limit for the stage where that is lower
+    /// (the task stage's invocations with `VK_EXT_mesh_shader`, else the compute stage's), as a
+    /// compute state's `maxTotalThreadsPerThreadgroup` is. 0 for a mesh state without an object
+    /// function, where an M3 Max answers 3 (docs/API.md, accepted differences), and for any
+    /// other state. A draw is not held to it.
+    pub fn max_total_threads_per_object_threadgroup(&self) -> u32 {
+        self.mesh_info()
+            .map_or(0, |i| i.max_total_threads_per_object_threadgroup)
+    }
+
+    /// `maxTotalThreadsPerMeshThreadgroup`: a mesh state's
+    /// ([`MeshPipelineMetalInfo::max_total_threads_per_mesh_threadgroup`]), of the mesh stage as
+    /// [`max_total_threads_per_object_threadgroup`](Self::max_total_threads_per_object_threadgroup)
+    /// is of the object stage. 0 for any other state.
+    pub fn max_total_threads_per_mesh_threadgroup(&self) -> u32 {
+        self.mesh_info()
+            .map_or(0, |i| i.max_total_threads_per_mesh_threadgroup)
+    }
+
+    /// `objectThreadExecutionWidth`: 32 for a mesh state with an object function, the width of
+    /// the simdgroups the runtime runs it in, as an M3 Max answers; 0 without one, where an M3 Max
+    /// answers 32 (docs/API.md, accepted differences), and for any other state.
+    pub fn object_thread_execution_width(&self) -> u32 {
+        self.mesh_info()
+            .map_or(0, |i| i.object_thread_execution_width)
+    }
+
+    /// `meshThreadExecutionWidth`: 32 for a mesh state, as Metal answers; 0 for any other state.
+    pub fn mesh_thread_execution_width(&self) -> u32 {
+        self.mesh_info()
+            .map_or(0, |i| i.mesh_thread_execution_width)
+    }
+
+    /// `maxTotalThreadgroupsPerMeshGrid`: a mesh state's
+    /// ([`MeshPipelineMetalInfo::max_total_threadgroups_per_mesh_grid`]): the descriptor's
+    /// maximum, else the object function's `[[max_total_threadgroups_per_mesh_grid(n)]]`, else
+    /// 2^20, as an M3 Max answers, held to the device's `maxMeshWorkGroupTotalCount` where it runs
+    /// mesh functions natively and that is lower. An object function's grid is not held to it. 0
+    /// for any other state.
+    pub fn max_total_threadgroups_per_mesh_grid(&self) -> u32 {
+        self.mesh_info()
+            .map_or(0, |i| i.max_total_threadgroups_per_mesh_grid)
     }
 
     /// `threadgroupSizeMatchesTileSize`: a tile pipeline's descriptor's; false for a drawing

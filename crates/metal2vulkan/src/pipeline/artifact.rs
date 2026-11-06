@@ -42,6 +42,9 @@ pub struct RenderPipeline {
     pub requirements: Requirements,
     /// Specialization and variant bits the pipeline can take.
     pub variant_bits: u32,
+    /// A mesh render pipeline's answers to Metal's mesh queries (`Device::compile_mesh_pipeline`);
+    /// `None` for a render pipeline of a vertex function.
+    pub mesh_info: Option<MeshPipelineMetalInfo>,
 }
 
 impl RenderPipeline {
@@ -540,6 +543,37 @@ impl RuntimeDependency {
     pub fn new(fact: RuntimeFact, mechanism: Mechanism) -> RuntimeDependency {
         RuntimeDependency { fact, mechanism }
     }
+}
+
+/// Answers to Metal's queries of a mesh render pipeline's state (`MTLRenderPipelineState`'s
+/// mesh properties), as an M3 Max under macOS 27.0.1 answers them (`mesh_pipeline_limits.m`).
+/// Each thread limit is Metal's: the descriptor's maximum, else the stage function's own
+/// `[[max_total_threads_per_threadgroup(n)]]`, else 1024 (Metal refuses the two apart and either
+/// above 1024, [`MeshPipelineProblem`](crate::error::MeshPipelineProblem)), held to this device's
+/// limit for the stage where that is lower: `maxTaskWorkGroupInvocations` and
+/// `maxMeshWorkGroupInvocations` with `VK_EXT_mesh_shader`, and `maxComputeWorkGroupInvocations`
+/// where the device runs both stages as compute work (`DeviceProfile::emulates_mesh_shading`).
+/// A required threadgroup size changes none of them, as on Metal.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct MeshPipelineMetalInfo {
+    /// `maxTotalThreadsPerObjectThreadgroup`: the object stage's thread limit (above); 0 for a
+    /// pipeline without an object function, where the M3 Max answers 3 (docs/API.md, accepted
+    /// differences).
+    pub max_total_threads_per_object_threadgroup: u32,
+    /// `maxTotalThreadsPerMeshThreadgroup`: the mesh stage's thread limit (above).
+    pub max_total_threads_per_mesh_threadgroup: u32,
+    /// `objectThreadExecutionWidth`: 32, the width of the simdgroups an object function runs
+    /// in, as a kernel's (`MetalDeviceProperties::thread_execution_width`); 0 for a pipeline
+    /// without an object function, where the M3 Max answers 32.
+    pub object_thread_execution_width: u32,
+    /// `meshThreadExecutionWidth`: 32, as [`object_thread_execution_width`](Self::object_thread_execution_width).
+    pub mesh_thread_execution_width: u32,
+    /// `maxTotalThreadgroupsPerMeshGrid`: the descriptor's maximum, else the object function's
+    /// `[[max_total_threadgroups_per_mesh_grid(n)]]`, else Metal's 2^20, held to the device's
+    /// `maxMeshWorkGroupTotalCount` where it runs mesh functions natively and that is lower.
+    pub max_total_threadgroups_per_mesh_grid: u32,
 }
 
 /// Answers to Metal's per-pipeline compute queries.

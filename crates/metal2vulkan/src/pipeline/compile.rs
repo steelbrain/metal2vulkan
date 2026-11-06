@@ -2300,14 +2300,16 @@ fn instanced_attributes(
 }
 
 /// The caller's inputs `i` for the specialized entry `spec`, its object payload kept only where it
-/// widens a mesh function's payload arena (`LoweringInputs::object_payload`): any other function,
-/// and a mesh function whose own arena holds it, compiles as without it.
+/// widens an object or mesh function's payload arena (`LoweringInputs::object_payload`): any other
+/// function, and one whose own arena holds it, compiles as without it.
 fn given_inputs(spec: &air::Entry, i: &LowerInputs) -> LowerInputs {
     let mut out = i.clone();
     out.object_payload = i.object_payload.filter(|&bytes| {
-        matches!(spec.ep.stage, AbiStage::Mesh { .. })
-            && crate::lower::mesh::payload_size(spec)
-                .is_some_and(|own| u64::from(bytes) > crate::memory::arena::payload_bytes(own))
+        matches!(
+            spec.ep.stage,
+            AbiStage::Mesh { .. } | AbiStage::Object { .. }
+        ) && crate::lower::mesh::payload_size(spec)
+            .is_some_and(|own| u64::from(bytes) > crate::memory::arena::payload_bytes(own))
     });
     out
 }
@@ -2567,6 +2569,13 @@ fn plan_one(r: &Request<'_>, p: &DeviceProfile, m: &mut Meter) -> Result<Planned
             memory.tg_metal_static
         },
         partition_oblivious,
+        max_mesh_threadgroups: match spec.ep.stage {
+            AbiStage::Object {
+                max_mesh_threadgroups,
+                ..
+            } => max_mesh_threadgroups,
+            _ => None,
+        },
     };
     Ok(Planned {
         key,

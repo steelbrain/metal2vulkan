@@ -42,7 +42,7 @@ use std::collections::{BTreeMap, HashMap};
 pub(crate) const MAGIC: &[u8; 8] = b"M2VPREC\0";
 
 /// The record format: bumped whenever a record's bytes change meaning (the module docs).
-pub(crate) const RECORD_FORMAT: u32 = 3;
+pub(crate) const RECORD_FORMAT: u32 = 4;
 
 /// The length of a record's header (magic and format) and of its checksum.
 const HEADER: usize = 8 + 4;
@@ -488,7 +488,17 @@ impl Writer {
         self.bool(d.alpha_to_coverage);
         self.bool(d.alpha_to_one);
         self.bool(d.support_indirect_command_buffers);
-        self.rounding(d.texture_write_rounding_mode)
+        self.rounding(d.texture_write_rounding_mode)?;
+        self.opt_u32(d.max_total_threads_per_object_threadgroup);
+        self.opt_u32(d.max_total_threads_per_mesh_threadgroup);
+        self.opt_u32(d.max_total_threadgroups_per_mesh_grid);
+        self.bool(d.object_threadgroup_size_is_multiple_of_thread_execution_width);
+        self.bool(d.mesh_threadgroup_size_is_multiple_of_thread_execution_width);
+        self.opt_u32(d.payload_memory_length);
+        self.u32(d.max_vertex_amplification_count);
+        self.threads(d.required_threads_per_object_threadgroup);
+        self.threads(d.required_threads_per_mesh_threadgroup);
+        Ok(())
     }
 
     fn tile(&mut self, d: &TileRenderPipelineDescriptor) -> Result<(), Unwritable> {
@@ -882,6 +892,15 @@ impl<'a> Reader<'a> {
         d.alpha_to_one = self.bool()?;
         d.support_indirect_command_buffers = self.bool()?;
         d.texture_write_rounding_mode = self.rounding()?;
+        d.max_total_threads_per_object_threadgroup = self.opt_u32()?;
+        d.max_total_threads_per_mesh_threadgroup = self.opt_u32()?;
+        d.max_total_threadgroups_per_mesh_grid = self.opt_u32()?;
+        d.object_threadgroup_size_is_multiple_of_thread_execution_width = self.bool()?;
+        d.mesh_threadgroup_size_is_multiple_of_thread_execution_width = self.bool()?;
+        d.payload_memory_length = self.opt_u32()?;
+        d.max_vertex_amplification_count = self.u32()?;
+        d.required_threads_per_object_threadgroup = self.threads()?;
+        d.required_threads_per_mesh_threadgroup = self.threads()?;
         Ok(d)
     }
 

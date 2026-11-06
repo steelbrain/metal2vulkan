@@ -204,6 +204,16 @@ impl DeviceProfile {
         crate::memory::contain::device_drops_texel_writes(self, texel_buffer)
     }
 
+    /// Whether this profile runs object and mesh functions as compute work: it does not enable
+    /// `VK_EXT_mesh_shader` and `meshShader`. Then a mesh function writes its primitives as
+    /// records that a synthesized vertex stage draws (`GraphicsState::mesh_records`), each stage's
+    /// threadgroups are held to the compute stage's limits, and the runtime announces each draw
+    /// (`emulated-mesh-draws`). Elsewhere they are `TaskEXT` and `MeshEXT` entries, held to the
+    /// task and mesh stages' limits, and an object function needs `taskShader` too.
+    pub fn emulates_mesh_shading(&self) -> bool {
+        crate::lower::mesh::emulates(self)
+    }
+
     /// Whether a function reads a two-plane YCbCr texture's planes in place where its slot reads
     /// the texture only so (`bind::YCbCrInPlace`): on an integrated GPU or a CPU device, which
     /// reads host memory with no bus between; elsewhere every such texture's image of converted

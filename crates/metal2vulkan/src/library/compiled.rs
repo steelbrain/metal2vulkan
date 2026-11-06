@@ -409,8 +409,9 @@ pub struct FunctionArtifact {
     pub specialized: Vec<crate::pipeline::artifact::SpecializedNote>,
 }
 
-/// What a kernel's `ComputePipelineMetalInfo` needs from its compile. A vertex or fragment function
-/// has the default: no attribute, not flattened, no threadgroup memory.
+/// What a kernel's `ComputePipelineMetalInfo`, and an object or mesh function's
+/// `MeshPipelineMetalInfo`, need from its compile. A vertex or fragment function has the default:
+/// no attribute, not flattened, no threadgroup memory.
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub struct KernelFacts {
@@ -429,4 +430,7 @@ pub struct KernelFacts {
     /// threadgroup memory, no barrier, no fence or atomic of threadgroup or simdgroup scope, no
     /// simdgroup or quad function, and no builtin of the partition.
     pub partition_oblivious: bool,
+    /// An object function's `[[max_total_threadgroups_per_mesh_grid(n)]]`
+    /// (`air.max_mesh_work_groups`); `None` for every other function.
+    pub max_mesh_threadgroups: Option<u32>,
 }

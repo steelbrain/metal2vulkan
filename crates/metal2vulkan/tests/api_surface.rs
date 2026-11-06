@@ -201,6 +201,7 @@ surface! {
         enum RuntimeInput N;
         enum DescriptorError N;
         enum DynamicLibraryProblem N;
+        enum MeshPipelineProblem N;
         enum LinkProblem N;
         enum Limit N;
         enum BudgetExceeded N;
@@ -326,6 +327,7 @@ surface! {
         struct EntryPlan N;
         enum EntryRef E;
         struct LinkedSource O;
+        struct MeshPipelineMetalInfo N;
         struct StageEntries O;
         struct StandaloneModule N;
         struct ModuleStats N;

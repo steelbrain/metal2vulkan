@@ -143,7 +143,7 @@ impl RenderPipeline {
     /// The pipeline's content digest: [`ComputePipeline::content_digest`]'s definition over a
     /// render pipeline. It covers every field but `key` and `profile`: each stage's module, the
     /// layout, the vertex input, the fixed-function state, the runtime dependencies, the interface,
-    /// the requirements and the variant bits. It is equal across builds whose pipelines for an
+    /// the requirements, the variant bits and a mesh pipeline's answers. It is equal across builds whose pipelines for an
     /// input say the same thing, changes whenever covered content changes, and authenticates
     /// nothing, as the compute pipeline's.
     pub fn content_digest(&self) -> Hash256 {
@@ -158,6 +158,7 @@ impl RenderPipeline {
             interface,
             requirements,
             variant_bits,
+            mesh_info,
         } = self;
         Node::fields(&mut [
             ("stages", stages.digest()),
@@ -168,6 +169,7 @@ impl RenderPipeline {
             ("interface", interface.digest()),
             ("requirements", requirements.digest()),
             ("variant_bits", variant_bits.digest()),
+            ("mesh_info", mesh_info.digest()),
         ])
         .root("render pipeline")
     }

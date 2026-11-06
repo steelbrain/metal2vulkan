@@ -1809,11 +1809,11 @@ MTLRenderPipeline.h	MTLRenderPipelineState	property	threadgroupSizeMatchesTileSi
 MTLRenderPipeline.h	MTLRenderPipelineState	property	imageblockSampleLength		I	runtime	RenderPipelineState::imageblock_sample_length			
 MTLRenderPipeline.h	MTLRenderPipelineState	method	imageblockMemoryLengthForDimensions:		I	runtime	RenderPipelineState::imageblock_memory_length_for_dimensions			
 MTLRenderPipeline.h	MTLRenderPipelineState	property	supportIndirectCommandBuffers		I	runtime	RenderPipelineState::support_indirect_command_buffers			
-MTLRenderPipeline.h	MTLRenderPipelineState	property	maxTotalThreadsPerObjectThreadgroup		M			a mesh state's thread queries	S	queries
-MTLRenderPipeline.h	MTLRenderPipelineState	property	maxTotalThreadsPerMeshThreadgroup		M			a mesh state's thread queries	S	queries
-MTLRenderPipeline.h	MTLRenderPipelineState	property	objectThreadExecutionWidth		M			a mesh state's thread queries	S	queries
-MTLRenderPipeline.h	MTLRenderPipelineState	property	meshThreadExecutionWidth		M			a mesh state's thread queries	S	queries
-MTLRenderPipeline.h	MTLRenderPipelineState	property	maxTotalThreadgroupsPerMeshGrid		M			a mesh state's thread queries	S	queries
+MTLRenderPipeline.h	MTLRenderPipelineState	property	maxTotalThreadsPerObjectThreadgroup		I	runtime	RenderPipelineState::max_total_threads_per_object_threadgroup			
+MTLRenderPipeline.h	MTLRenderPipelineState	property	maxTotalThreadsPerMeshThreadgroup		I	runtime	RenderPipelineState::max_total_threads_per_mesh_threadgroup			
+MTLRenderPipeline.h	MTLRenderPipelineState	property	objectThreadExecutionWidth		I	runtime	RenderPipelineState::object_thread_execution_width			
+MTLRenderPipeline.h	MTLRenderPipelineState	property	meshThreadExecutionWidth		I	runtime	RenderPipelineState::mesh_thread_execution_width			
+MTLRenderPipeline.h	MTLRenderPipelineState	property	maxTotalThreadgroupsPerMeshGrid		I	runtime	RenderPipelineState::max_total_threadgroups_per_mesh_grid			
 MTLRenderPipeline.h	MTLRenderPipelineState	property	gpuResourceID		I	runtime	RenderPipelineState::gpu_resource_id			
 MTLRenderPipeline.h	MTLRenderPipelineState	method	functionHandleWithFunction:stage:		I	runtime	RenderPipelineState::function_handle			
 MTLRenderPipeline.h	MTLRenderPipelineState	method	newVisibleFunctionTableWithDescriptor:stage:		I	runtime	RenderPipelineState::new_visible_function_table			
@@ -1821,8 +1821,8 @@ MTLRenderPipeline.h	MTLRenderPipelineState	method	newIntersectionFunctionTableWi
 MTLRenderPipeline.h	MTLRenderPipelineState	method	newRenderPipelineStateWithAdditionalBinaryFunctions:error:		I	runtime	RenderPipelineState::new_render_pipeline_state_with_additional_binary_functions			
 MTLRenderPipeline.h	MTLRenderPipelineState	property	shaderValidation		M			shader validation (`RuntimeGap::ShaderValidation`, not scheduled)	L	shadervalidation
 MTLRenderPipeline.h	MTLRenderPipelineState	property	requiredThreadsPerTileThreadgroup		I	runtime	RenderPipelineState::required_threads_per_tile_threadgroup			
-MTLRenderPipeline.h	MTLRenderPipelineState	property	requiredThreadsPerObjectThreadgroup		M			a mesh state's thread queries	S	queries
-MTLRenderPipeline.h	MTLRenderPipelineState	property	requiredThreadsPerMeshThreadgroup		M			a mesh state's thread queries	S	queries
+MTLRenderPipeline.h	MTLRenderPipelineState	property	requiredThreadsPerObjectThreadgroup		I	runtime	RenderPipelineState::required_threads_per_object_threadgroup			
+MTLRenderPipeline.h	MTLRenderPipelineState	property	requiredThreadsPerMeshThreadgroup		I	runtime	RenderPipelineState::required_threads_per_mesh_threadgroup			
 MTLRenderPipeline.h	MTLRenderPipelineColorAttachmentDescriptorArray	class	MTLRenderPipelineColorAttachmentDescriptorArray		I	translator	RenderPipelineDescriptor.color_attachments	an array		
 MTLRenderPipeline.h	MTLRenderPipelineColorAttachmentDescriptorArray	method	objectAtIndexedSubscript:		I	translator	RenderPipelineDescriptor.color_attachments			
 MTLRenderPipeline.h	MTLRenderPipelineColorAttachmentDescriptorArray	method	setObject:atIndexedSubscript:		I	translator	RenderPipelineDescriptor.color_attachments			
@@ -1852,12 +1852,12 @@ MTLRenderPipeline.h	MTLMeshRenderPipelineDescriptor	property	label		I	runtime	Pi
 MTLRenderPipeline.h	MTLMeshRenderPipelineDescriptor	property	objectFunction		I	translator	MeshPipelineDescriptor.object			
 MTLRenderPipeline.h	MTLMeshRenderPipelineDescriptor	property	meshFunction		I	translator	MeshPipelineDescriptor.mesh			
 MTLRenderPipeline.h	MTLMeshRenderPipelineDescriptor	property	fragmentFunction		I	translator	MeshPipelineDescriptor.fragment			
-MTLRenderPipeline.h	MTLMeshRenderPipelineDescriptor	property	maxTotalThreadsPerObjectThreadgroup		M			a mesh pipeline's thread limits: the translator's `MeshPipelineDescriptor` has no field	S	mesh-descriptor
-MTLRenderPipeline.h	MTLMeshRenderPipelineDescriptor	property	maxTotalThreadsPerMeshThreadgroup		M			a mesh pipeline's thread limits: the translator's `MeshPipelineDescriptor` has no field	S	mesh-descriptor
-MTLRenderPipeline.h	MTLMeshRenderPipelineDescriptor	property	objectThreadgroupSizeIsMultipleOfThreadExecutionWidth		M			a compile hint the translator's `MeshPipelineDescriptor` has no field for	S	mesh-descriptor
-MTLRenderPipeline.h	MTLMeshRenderPipelineDescriptor	property	meshThreadgroupSizeIsMultipleOfThreadExecutionWidth		M			a compile hint the translator's `MeshPipelineDescriptor` has no field for	S	mesh-descriptor
-MTLRenderPipeline.h	MTLMeshRenderPipelineDescriptor	property	payloadMemoryLength		M			the object payload's length: the translator's `MeshPipelineDescriptor` has no field	S	mesh-descriptor
-MTLRenderPipeline.h	MTLMeshRenderPipelineDescriptor	property	maxTotalThreadgroupsPerMeshGrid		M			the mesh grid's limit: the translator's `MeshPipelineDescriptor` has no field	S	mesh-descriptor
+MTLRenderPipeline.h	MTLMeshRenderPipelineDescriptor	property	maxTotalThreadsPerObjectThreadgroup		I	translator	MeshPipelineDescriptor.max_total_threads_per_object_threadgroup			
+MTLRenderPipeline.h	MTLMeshRenderPipelineDescriptor	property	maxTotalThreadsPerMeshThreadgroup		I	translator	MeshPipelineDescriptor.max_total_threads_per_mesh_threadgroup			
+MTLRenderPipeline.h	MTLMeshRenderPipelineDescriptor	property	objectThreadgroupSizeIsMultipleOfThreadExecutionWidth		I	translator	MeshPipelineDescriptor.object_threadgroup_size_is_multiple_of_thread_execution_width			
+MTLRenderPipeline.h	MTLMeshRenderPipelineDescriptor	property	meshThreadgroupSizeIsMultipleOfThreadExecutionWidth		I	translator	MeshPipelineDescriptor.mesh_threadgroup_size_is_multiple_of_thread_execution_width			
+MTLRenderPipeline.h	MTLMeshRenderPipelineDescriptor	property	payloadMemoryLength		I	translator	MeshPipelineDescriptor.payload_memory_length			
+MTLRenderPipeline.h	MTLMeshRenderPipelineDescriptor	property	maxTotalThreadgroupsPerMeshGrid		I	translator	MeshPipelineDescriptor.max_total_threadgroups_per_mesh_grid			
 MTLRenderPipeline.h	MTLMeshRenderPipelineDescriptor	property	objectBuffers		M			buffer mutability per stage: the translator's `MeshPipelineDescriptor` has no field (render and compute descriptors have `buffers`)	S	mesh-descriptor
 MTLRenderPipeline.h	MTLMeshRenderPipelineDescriptor	property	meshBuffers		M			buffer mutability per stage: the translator's `MeshPipelineDescriptor` has no field	S	mesh-descriptor
 MTLRenderPipeline.h	MTLMeshRenderPipelineDescriptor	property	fragmentBuffers		M			buffer mutability per stage: the translator's `MeshPipelineDescriptor` has no field	S	mesh-descriptor
@@ -1865,7 +1865,7 @@ MTLRenderPipeline.h	MTLMeshRenderPipelineDescriptor	property	rasterSampleCount		
 MTLRenderPipeline.h	MTLMeshRenderPipelineDescriptor	property	alphaToCoverageEnabled		I	translator	MeshPipelineDescriptor.alpha_to_coverage			
 MTLRenderPipeline.h	MTLMeshRenderPipelineDescriptor	property	alphaToOneEnabled		I	translator	MeshPipelineDescriptor.alpha_to_one			
 MTLRenderPipeline.h	MTLMeshRenderPipelineDescriptor	property	rasterizationEnabled		I	translator	MeshPipelineDescriptor.rasterization_enabled			
-MTLRenderPipeline.h	MTLMeshRenderPipelineDescriptor	property	maxVertexAmplificationCount		M			vertex amplification of mesh pipelines: the translator's `MeshPipelineDescriptor` has no field	S	mesh-descriptor
+MTLRenderPipeline.h	MTLMeshRenderPipelineDescriptor	property	maxVertexAmplificationCount		I	translator	MeshPipelineDescriptor.max_vertex_amplification_count	a count above 1 is refused: a mesh pipeline's vertex amplification is not built		
 MTLRenderPipeline.h	MTLMeshRenderPipelineDescriptor	property	colorAttachments		I	translator	MeshPipelineDescriptor.color_attachments			
 MTLRenderPipeline.h	MTLMeshRenderPipelineDescriptor	property	depthAttachmentPixelFormat		I	translator	MeshPipelineDescriptor.depth_format			
 MTLRenderPipeline.h	MTLMeshRenderPipelineDescriptor	property	stencilAttachmentPixelFormat		I	translator	MeshPipelineDescriptor.stencil_format			
@@ -1876,8 +1876,8 @@ MTLRenderPipeline.h	MTLMeshRenderPipelineDescriptor	property	meshLinkedFunctions
 MTLRenderPipeline.h	MTLMeshRenderPipelineDescriptor	property	fragmentLinkedFunctions		I	translator	FunctionDescriptor.linked	the fragment stage's `StageSource::Function`		
 MTLRenderPipeline.h	MTLMeshRenderPipelineDescriptor	method	reset		I	translator	MeshPipelineDescriptor::new	a plain value: assign a new one		
 MTLRenderPipeline.h	MTLMeshRenderPipelineDescriptor	property	shaderValidation		M			shader validation (`RuntimeGap::ShaderValidation`, not scheduled)	L	shadervalidation
-MTLRenderPipeline.h	MTLMeshRenderPipelineDescriptor	property	requiredThreadsPerObjectThreadgroup		M			required threadgroup sizes of a mesh pipeline: the translator's `MeshPipelineDescriptor` has no field	S	mesh-descriptor
-MTLRenderPipeline.h	MTLMeshRenderPipelineDescriptor	property	requiredThreadsPerMeshThreadgroup		M			required threadgroup sizes of a mesh pipeline: the translator's `MeshPipelineDescriptor` has no field	S	mesh-descriptor
+MTLRenderPipeline.h	MTLMeshRenderPipelineDescriptor	property	requiredThreadsPerObjectThreadgroup		I	translator	MeshPipelineDescriptor.required_threads_per_object_threadgroup			
+MTLRenderPipeline.h	MTLMeshRenderPipelineDescriptor	property	requiredThreadsPerMeshThreadgroup		I	translator	MeshPipelineDescriptor.required_threads_per_mesh_threadgroup			
 MTLResidencySet.h	MTLResidencySetDescriptor	class	MTLResidencySetDescriptor		M			residency sets (`RuntimeGap::ResidencySets`)	M	residency
 MTLResidencySet.h	MTLResidencySetDescriptor	property	label		M			residency sets (`RuntimeGap::ResidencySets`)	M	residency
 MTLResidencySet.h	MTLResidencySetDescriptor	property	initialCapacity		M			residency sets (`RuntimeGap::ResidencySets`)	M	residency

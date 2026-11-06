@@ -56,7 +56,6 @@ use super::{
 };
 use crate::air_library::AirLibrary;
 use crate::gpu::TEST_DEVICE;
-use metal2vulkan::device::{VkExtension, VkFeature};
 use metal2vulkan::error::{BindError, Feature};
 use metal2vulkan::metal::{PixelFormat, PrimitiveType};
 use metal2vulkan::pipeline::{ColorAttachmentDescriptor, MeshPipelineDescriptor, StageSource};
@@ -147,11 +146,9 @@ RESULT object-indirect-2 drawn=3
 pub(super) const EMULATED_MESH: [Degradation; 1] = [Degradation::EmulatedMeshDraws];
 
 /// Whether `device` emulates mesh draws: its profile lacks `VK_EXT_mesh_shader` or its
-/// `meshShader` feature, as the compile layer decides it.
+/// `meshShader` feature, as the compile layer decides it (`DeviceProfile::emulates_mesh_shading`).
 pub(super) fn emulates(device: &Device) -> bool {
-    let enabled = device.compile_device().profile().enabled();
-    !enabled.extensions.contains(&VkExtension::ExtMeshShader)
-        || !enabled.features.contains(&VkFeature::MeshShader)
+    device.compile_device().profile().emulates_mesh_shading()
 }
 
 /// The pass's side in pixels.
@@ -1055,6 +1052,184 @@ fn mesh_draws_answer_as_plain_metal_and_refuse_the_rest() {
             })
             .unwrap();
         assert_eq!(lines, ["RESULT refused drawn=0"], "on {name}");
+    }
+    layer_reported_nothing_at_all(&messages);
+}
+
+/// A mesh state answers Metal's queries on this device, and a descriptor Metal refuses is refused
+/// naming Metal's rule (`Compile(InvalidDescriptor(MeshPipeline))`, as an M3 Max refuses each,
+/// `mesh_pipeline_limits.m`): each stage's thread limit is the descriptor's maximum, else 1024,
+/// within the device's limit for the stage (the task and mesh stages' invocations with
+/// `VK_EXT_mesh_shader`, else the compute stage's), the widths 32, the mesh grid the
+/// descriptor's maximum, else 2^20, within the device's `maxMeshWorkGroupTotalCount` where it
+/// runs mesh functions natively; the required sizes are the descriptor's, and change no limit;
+/// without an object function the object stage answers 0. Each answer and refusal is printed.
+#[test]
+fn a_mesh_state_answers_metals_queries_and_refuses_what_metal_refuses() {
+    use metal2vulkan::error::{DescriptorError, MeshPipelineProblem as P};
+    use metal2vulkan::pipeline::Stage;
+    let cache = ScratchCache::new().unwrap();
+    let messages = Messages::default();
+    {
+        let device = validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
+        let name = device.name().to_owned();
+        let emulated = emulates(&device);
+        let (object, mesh, total) = {
+            let compile = device.compile_device();
+            let l = compile.profile().limits();
+            match emulated {
+                true => (
+                    l.max_compute_work_group_invocations,
+                    l.max_compute_work_group_invocations,
+                    u32::MAX,
+                ),
+                false => (
+                    l.mesh.max_task_work_group_invocations,
+                    l.mesh.max_mesh_work_group_invocations,
+                    l.mesh.max_mesh_work_group_total_count,
+                ),
+            }
+        };
+        eprintln!(
+            "MESH-LIMITS on {name}: emulated {emulated}, object {object}, mesh {mesh}, grid {total}"
+        );
+        let lane = Lane::new(device);
+        let make = |d: &MeshPipelineDescriptor| {
+            lane.device
+                .new_mesh_render_pipeline_state(d, &PipelineOptions::default())
+        };
+        let answers = |s: &RenderPipelineState| {
+            [
+                s.max_total_threads_per_object_threadgroup(),
+                s.max_total_threads_per_mesh_threadgroup(),
+                s.object_thread_execution_width(),
+                s.mesh_thread_execution_width(),
+                s.max_total_threadgroups_per_mesh_grid(),
+            ]
+        };
+        let plain = lane.descriptor(Some("mesh_draws_object"), "mesh_draws_mesh");
+        let state = match make(&plain) {
+            Ok(state) => state,
+            Err(refused) if mesh_refused(&refused, &name) => return,
+            Err(error) => panic!("mesh_draws_object on {name}: {error}"),
+        };
+        eprintln!("MESH-ANSWERS plain on {name}: {:?}", answers(&state));
+        assert_eq!(
+            answers(&state),
+            [object.min(1024), mesh.min(1024), 32, 32, total.min(1 << 20)],
+            "plain on {name}"
+        );
+        assert_eq!(
+            state.required_threads_per_object_threadgroup(),
+            size([0; 3])
+        );
+        let mut limited = plain.clone();
+        limited.max_total_threads_per_object_threadgroup = Some(64);
+        limited.max_total_threads_per_mesh_threadgroup = Some(32);
+        limited.max_total_threadgroups_per_mesh_grid = Some(8);
+        limited.required_threads_per_object_threadgroup = Some([16, 2, 1]);
+        limited.required_threads_per_mesh_threadgroup = Some([32, 1, 1]);
+        let state = make(&limited).unwrap_or_else(|e| panic!("limited on {name}: {e}"));
+        eprintln!("MESH-ANSWERS limited on {name}: {:?}", answers(&state));
+        assert_eq!(
+            answers(&state),
+            [object.min(64), mesh.min(32), 32, 32, total.min(8)],
+            "limited on {name}"
+        );
+        assert_eq!(
+            state.required_threads_per_object_threadgroup(),
+            size([16, 2, 1])
+        );
+        assert_eq!(
+            state.required_threads_per_mesh_threadgroup(),
+            size([32, 1, 1])
+        );
+        let alone = lane.descriptor(None, "mesh_draws_grid");
+        let state = make(&alone).unwrap_or_else(|e| panic!("alone on {name}: {e}"));
+        eprintln!("MESH-ANSWERS alone on {name}: {:?}", answers(&state));
+        assert_eq!(
+            answers(&state),
+            [0, mesh.min(1024), 0, 32, total.min(1 << 20)],
+            "alone on {name}"
+        );
+        let with = |base: &MeshPipelineDescriptor, f: &dyn Fn(&mut MeshPipelineDescriptor)| {
+            let mut d = base.clone();
+            f(&mut d);
+            d
+        };
+        let refusals = [
+            (
+                "required-object-4x0",
+                with(&plain, &|d| {
+                    d.required_threads_per_object_threadgroup = Some([4, 0, 1])
+                }),
+                P::RequiredEmptyAxis {
+                    stage: Stage::Object,
+                    required: [4, 0, 1],
+                },
+            ),
+            (
+                "required-mesh-2048",
+                with(&plain, &|d| {
+                    d.required_threads_per_mesh_threadgroup = Some([2048, 1, 1])
+                }),
+                P::RequiredOverLimit {
+                    stage: Stage::Mesh,
+                    threads: 2048,
+                    limit: 1024,
+                },
+            ),
+            (
+                "required-object-no-object",
+                with(&alone, &|d| {
+                    d.required_threads_per_object_threadgroup = Some([32, 1, 1])
+                }),
+                P::RequiredWithoutObjectFunction {
+                    required: [32, 1, 1],
+                },
+            ),
+            (
+                "max-object-2048",
+                with(&plain, &|d| {
+                    d.max_total_threads_per_object_threadgroup = Some(2048)
+                }),
+                P::MaxThreadsOverLimit {
+                    stage: Stage::Object,
+                    max: 2048,
+                    limit: 1024,
+                },
+            ),
+            (
+                "required-mesh-32-max-64",
+                with(&plain, &|d| {
+                    d.max_total_threads_per_mesh_threadgroup = Some(64);
+                    d.required_threads_per_mesh_threadgroup = Some([32, 1, 1]);
+                }),
+                P::MaxThreadsDiffer {
+                    stage: Stage::Mesh,
+                    specified: 32,
+                    max: 64,
+                },
+            ),
+            (
+                "payload-16385",
+                with(&plain, &|d| d.payload_memory_length = Some(16385)),
+                P::PayloadOverLimit {
+                    length: 16385,
+                    limit: 16384,
+                },
+            ),
+        ];
+        for (case, d, want) in refusals {
+            match make(&d).err() {
+                Some(Error::Compile(metal2vulkan::error::Error::InvalidDescriptor(
+                    DescriptorError::MeshPipeline { problem },
+                ))) if problem == want => {
+                    eprintln!("MESH-REFUSED {case} on {name}: {problem:?}");
+                }
+                other => panic!("{case} on {name}: {other:?}"),
+            }
+        }
     }
     layer_reported_nothing_at_all(&messages);
 }

@@ -427,15 +427,15 @@ pub fn payload_size(e: &Entry) -> Option<u64> {
 }
 
 /// The bytes the entry's payload arena holds, if it has a payload: its own ([`payload_size`]),
-/// and a mesh function's at least its pipeline's object function's
-/// (`LoweringInputs::object_payload`). Metal sizes a pipeline's payload by the type its object
-/// function declares (`payloadMemoryLength` 0), and a mesh function's read of its payload past the
-/// type it declares itself reads the object function's within it (measured on the M3 Max under
-/// macOS 27.0.1).
+/// and an object or mesh function's at least its pipeline's (`LoweringInputs::object_payload`).
+/// Metal sizes a pipeline's payload by the type its object function declares
+/// (`payloadMemoryLength` 0), and a mesh function's read of its payload past the type it declares
+/// itself reads the object function's within it (measured on the M3 Max under macOS 27.0.1); a
+/// descriptor's `payloadMemoryLength` sizes the payload of both stages (Metal's header).
 pub fn payload_extent(cx: &SelectCx<'_>) -> Option<u64> {
     let own = payload_size(cx.entry)?;
     let object = match cx.stage {
-        Stage::Mesh => cx.inputs.object_payload.map_or(0, u64::from),
+        Stage::Object | Stage::Mesh => cx.inputs.object_payload.map_or(0, u64::from),
         _ => 0,
     };
     Some(own.max(object))

@@ -721,4 +721,37 @@ impl RenderPipelineState {
             Kind::Tile(state) => size(state.kernel().required_threads()),
         }
     }
+
+    /// `requiredThreadsPerObjectThreadgroup`: a mesh state's descriptor's
+    /// `required_threads_per_object_threadgroup`, a zero size where it requires none and for any
+    /// other state, as an M3 Max answers the descriptor's. The descriptor's that Metal refuses
+    /// are refused at the creation ([`Device::new_mesh_render_pipeline_state`]); a draw is not
+    /// held to it.
+    pub fn required_threads_per_object_threadgroup(&self) -> Size {
+        size(
+            self.mesh_descriptor()
+                .and_then(|d| required_size(d.required_threads_per_object_threadgroup)),
+        )
+    }
+
+    /// `requiredThreadsPerMeshThreadgroup`: as
+    /// [`required_threads_per_object_threadgroup`](Self::required_threads_per_object_threadgroup),
+    /// of the mesh stage.
+    pub fn required_threads_per_mesh_threadgroup(&self) -> Size {
+        size(
+            self.mesh_descriptor()
+                .and_then(|d| required_size(d.required_threads_per_mesh_threadgroup)),
+        )
+    }
+
+    /// The descriptor of a mesh state; `None` for any other state.
+    fn mesh_descriptor(&self) -> Option<&MeshPipelineDescriptor> {
+        match self.kind() {
+            Kind::Graphics(state) => match state.descriptor() {
+                StateDescriptor::Mesh(d) => Some(d),
+                StateDescriptor::Vertex(_) => None,
+            },
+            Kind::Tile(_) => None,
+        }
+    }
 }

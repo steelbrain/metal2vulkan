@@ -678,6 +678,10 @@ driver's. Each is open work.
   holds one, the draw is refused (`NotImplemented(MeshShading)`), since the invocations past the
   smaller threadgroup would not reach the barrier. A form that runs such a body predicated, every
   invocation reaching each barrier, is not built for object functions.
+- **A mesh render pipeline's vertex amplification.** A mesh descriptor's
+  `maxVertexAmplificationCount` above 1, which Metal makes, is refused
+  (`Unsupported{VertexAmplification, NotImplemented}`): no form runs an object or mesh function's
+  draw once per view, natively (`multiviewMeshShader`) or emulated.
 - **An object threadgroup that sets a mesh grid Metal launches nothing for keeps its own writes.**
   On the M3 Max such a threadgroup's device writes (an atomic add before the set) do not land
   either, while the draw's other threadgroups run; the runtime runs the threadgroup and launches

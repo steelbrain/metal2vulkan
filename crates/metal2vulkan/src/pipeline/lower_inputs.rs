@@ -759,17 +759,19 @@ pub struct LoweringInputs {
     /// for a pipeline the device draws in one pass as it is, and for any other function.
     #[cfg_attr(feature = "serde", serde(default))]
     pub color_group: Option<ColorGroup>,
-    /// The payload bytes of the mesh function's mesh render pipeline's object function: the
-    /// object function's payload arena (`StageInterface::payload`), where it is larger than the
-    /// mesh function's own. Metal sizes a pipeline's payload by the type the object function
-    /// declares (`payloadMemoryLength` 0, the descriptor's default), and a mesh function may read
-    /// its payload past the type it declares itself, within that; so the mesh function's payload
-    /// arena holds these bytes, read as its own (`lower::mesh::payload_extent`, measured on the M3
-    /// Max under macOS 27.0.1). `Device::compile_mesh_pipeline` sets it for a `Function` mesh stage
-    /// from the pipeline's object function, and a mesh function compiled on its own for such a
-    /// pipeline compiles under the same bytes: link refuses one whose arena is smaller than its
-    /// object function's as `NeedsInput(ObjectPayload)`. `None` for a mesh function whose own
-    /// arena holds the object function's payload, and for any other function.
+    /// The payload bytes of the object or mesh function's mesh render pipeline: for a mesh
+    /// function, its object function's payload arena (`StageInterface::payload`), where it is
+    /// larger than the mesh function's own; for an object function, and a mesh function without
+    /// one, the descriptor's `payloadMemoryLength`, where it is larger than the function's payload
+    /// type. Metal sizes a pipeline's payload by the type the object function declares
+    /// (`payloadMemoryLength` 0, the descriptor's default) or by that length, and a mesh function
+    /// may read its payload past the type it declares itself, within that; so the function's
+    /// payload arena holds these bytes, read as its own (`lower::mesh::payload_extent`, measured on
+    /// the M3 Max under macOS 27.0.1). `Device::compile_mesh_pipeline` sets it for a `Function`
+    /// object and mesh stage, and a function compiled on its own for such a pipeline compiles
+    /// under the same bytes: link refuses a mesh function whose arena is smaller than its object
+    /// function's as `NeedsInput(ObjectPayload)`. `None` for a function whose own arena holds the
+    /// bytes, and for any other function.
     #[cfg_attr(feature = "serde", serde(default))]
     pub object_payload: Option<u32>,
     /// A post-tessellation vertex function compiled for a device without `tessellationShader`,

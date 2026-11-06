@@ -19,7 +19,8 @@
 //! - one [`PipelineLayout`]: dense descriptor set layouts and push-constant ranges, to create as
 //!   they are (no renumbering);
 //! - a render pipeline's [`VertexInputState`] and [`GraphicsState`] (with a
-//!   [`TessellationState`] when it tessellates), or a compute pipeline's answers to Metal's
+//!   [`TessellationState`] when it tessellates, and a mesh render pipeline's answers to Metal's
+//!   mesh queries, [`MeshPipelineMetalInfo`]), or a compute pipeline's answers to Metal's
 //!   per-pipeline queries ([`ComputePipelineMetalInfo`]);
 //! - the [`PipelineInterface`]: every statically used Metal argument slot ([`SlotRef`]), how the
 //!   shader accesses it, and each buffer's proven byte window;
@@ -104,9 +105,9 @@ pub(crate) mod tile_map;
 pub(crate) mod vertex;
 
 pub use artifact::{
-    ComputePipeline, ComputePipelineMetalInfo, EntryMath, ModuleStats, PrecisionNote,
-    Reconvergence, RenderPipeline, RuntimeDependency, SpecClause, SpecConstant, SpecTest,
-    SpecializationLayout, SpecializedNote, StageModule, StrategyCensus, StrategyUse,
+    ComputePipeline, ComputePipelineMetalInfo, EntryMath, MeshPipelineMetalInfo, ModuleStats,
+    PrecisionNote, Reconvergence, RenderPipeline, RuntimeDependency, SpecClause, SpecConstant,
+    SpecTest, SpecializationLayout, SpecializedNote, StageModule, StrategyCensus, StrategyUse,
 };
 pub use descriptor::{
     ColorAttachmentDescriptor, ComputePipelineDescriptor, DynamicLibraries, FunctionDescriptor,

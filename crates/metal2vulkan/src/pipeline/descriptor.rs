@@ -719,6 +719,66 @@ pub struct MeshPipelineDescriptor {
     /// `textureWriteRoundingMode` (Apple SPI), as a render pipeline's: the fragment function's
     /// `float` outputs to half-float color attachments round by it.
     pub texture_write_rounding_mode: metal::TextureWriteRoundingMode,
+    /// `maxTotalThreadsPerObjectThreadgroup`: `None` for Metal's 0, the object function's
+    /// `[[max_total_threads_per_threadgroup(n)]]` or else Metal's 1024. The compiled pipeline's
+    /// [`MeshPipelineMetalInfo::max_total_threads_per_object_threadgroup`] answers it within the
+    /// device's limit. Refused as Metal refuses it
+    /// ([`MeshPipelineProblem`](crate::error::MeshPipelineProblem)): above 1024, or beside a
+    /// function's maximum of other threads. A draw is not held to it.
+    ///
+    /// [`MeshPipelineMetalInfo::max_total_threads_per_object_threadgroup`]: crate::pipeline::MeshPipelineMetalInfo::max_total_threads_per_object_threadgroup
+    pub max_total_threads_per_object_threadgroup: Option<u32>,
+    /// `maxTotalThreadsPerMeshThreadgroup`: as
+    /// [`max_total_threads_per_object_threadgroup`](Self::max_total_threads_per_object_threadgroup),
+    /// of the mesh stage, answered as
+    /// [`MeshPipelineMetalInfo::max_total_threads_per_mesh_threadgroup`]; also refused beside a
+    /// required mesh threadgroup size of other threads.
+    ///
+    /// [`MeshPipelineMetalInfo::max_total_threads_per_mesh_threadgroup`]: crate::pipeline::MeshPipelineMetalInfo::max_total_threads_per_mesh_threadgroup
+    pub max_total_threads_per_mesh_threadgroup: Option<u32>,
+    /// `maxTotalThreadgroupsPerMeshGrid`: `None` for Metal's 0, the object function's
+    /// `[[max_total_threadgroups_per_mesh_grid(n)]]` or else Metal's 2^20. The compiled
+    /// pipeline's [`MeshPipelineMetalInfo::max_total_threadgroups_per_mesh_grid`] answers it,
+    /// within the device's limit where it runs mesh functions natively; Metal takes any count. An
+    /// object function's grid is not held to it.
+    ///
+    /// [`MeshPipelineMetalInfo::max_total_threadgroups_per_mesh_grid`]: crate::pipeline::MeshPipelineMetalInfo::max_total_threadgroups_per_mesh_grid
+    pub max_total_threadgroups_per_mesh_grid: Option<u32>,
+    /// `objectThreadgroupSizeIsMultipleOfThreadExecutionWidth`: a promise to Metal's optimizer
+    /// that each draw's object threadgroup is a multiple of 32 threads. No compiled module
+    /// depends on it, and a draw is not held to it.
+    pub object_threadgroup_size_is_multiple_of_thread_execution_width: bool,
+    /// `meshThreadgroupSizeIsMultipleOfThreadExecutionWidth`: as
+    /// [`object_threadgroup_size_is_multiple_of_thread_execution_width`](Self::object_threadgroup_size_is_multiple_of_thread_execution_width),
+    /// of each draw's mesh threadgroup.
+    pub mesh_threadgroup_size_is_multiple_of_thread_execution_width: bool,
+    /// `payloadMemoryLength`: `None` for Metal's 0, the size of the payload type the object
+    /// function declares. Bytes past that type widen the object and mesh functions' payload
+    /// arena to it (`LoweringInputs::object_payload`), where the device has room for it; a
+    /// length below the type leaves the type's. Above Metal's 16384 bytes it is refused as
+    /// Metal refuses it ([`MeshPipelineProblem::PayloadOverLimit`]).
+    ///
+    /// [`MeshPipelineProblem::PayloadOverLimit`]: crate::error::MeshPipelineProblem::PayloadOverLimit
+    pub payload_memory_length: Option<u32>,
+    /// `maxVertexAmplificationCount`, 1 by default as Metal's. 0 is refused as Metal's
+    /// descriptor validation ends the process at it
+    /// ([`DescriptorError::VertexAmplificationCount`](crate::error::DescriptorError::VertexAmplificationCount)).
+    /// A count above 1, which Metal makes, is
+    /// `Unsupported{VertexAmplification, NotImplemented}`: a mesh pipeline's vertex amplification
+    /// is not built.
+    pub max_vertex_amplification_count: u32,
+    /// `requiredThreadsPerObjectThreadgroup`: `None` for Metal's zero size, no requirement.
+    /// Refused as Metal's descriptor validation ends the process at it
+    /// ([`MeshPipelineProblem`](crate::error::MeshPipelineProblem)): with an axis of 0, of more
+    /// than 1024 threads or more than the stage's maximum, or without an object function. No
+    /// compiled module and no thread limit the pipeline answers depends on it, and a draw is not
+    /// held to it.
+    pub required_threads_per_object_threadgroup: Option<[u32; 3]>,
+    /// `requiredThreadsPerMeshThreadgroup`: as
+    /// [`required_threads_per_object_threadgroup`](Self::required_threads_per_object_threadgroup),
+    /// of the mesh stage, which a mesh threadgroup maximum of other threads is also refused
+    /// beside.
+    pub required_threads_per_mesh_threadgroup: Option<[u32; 3]>,
 }
 
 impl MeshPipelineDescriptor {
@@ -737,6 +797,15 @@ impl MeshPipelineDescriptor {
             alpha_to_one: false,
             support_indirect_command_buffers: false,
             texture_write_rounding_mode: metal::TextureWriteRoundingMode::TowardZero,
+            max_total_threads_per_object_threadgroup: None,
+            max_total_threads_per_mesh_threadgroup: None,
+            max_total_threadgroups_per_mesh_grid: None,
+            object_threadgroup_size_is_multiple_of_thread_execution_width: false,
+            mesh_threadgroup_size_is_multiple_of_thread_execution_width: false,
+            payload_memory_length: None,
+            max_vertex_amplification_count: 1,
+            required_threads_per_object_threadgroup: None,
+            required_threads_per_mesh_threadgroup: None,
         }
     }
 }

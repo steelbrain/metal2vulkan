@@ -1941,6 +1941,402 @@ fn a_partial_object_threadgroup_of_a_body_with_a_barrier_is_not_implemented() {
     }
 }
 
+/// A mesh render pipeline's answers to Metal's mesh queries (`RenderPipeline::mesh_info`), on
+/// every committed profile, emulated or not: each stage's thread limit is the descriptor's maximum,
+/// else the function's `[[max_total_threads_per_threadgroup(n)]]`, else 1024, within the device's
+/// limit for the stage (the task and mesh stages' invocations, or the compute stage's where it
+/// runs them as compute work); the widths are 32; the mesh grid is the descriptor's maximum, else
+/// the object function's `[[max_total_threadgroups_per_mesh_grid(n)]]`, else 2^20, within the
+/// device's `maxMeshWorkGroupTotalCount` where it runs mesh functions natively. Without an object
+/// function the object stage answers 0 and 0. A required size leaves the limits.
+#[test]
+fn a_mesh_pipeline_answers_metals_mesh_queries_within_the_device() {
+    use crate::budget::Budget;
+    use crate::library::Library;
+    use crate::pipeline::descriptor::{FunctionDescriptor, MeshPipelineDescriptor, StageSource};
+    use crate::pipeline::MeshPipelineMetalInfo;
+    let (Some(draws), Some(outputs)) = (fixture("mesh_draws"), fixture("mesh_outputs")) else {
+        return;
+    };
+    let (draws, outputs) = (
+        Library::from_air(&draws).expect("library"),
+        Library::from_air(&outputs).expect("library"),
+    );
+    let stage = |lib: &Library, name: &str| {
+        StageSource::Function(FunctionDescriptor::new(
+            lib.function(name).expect("function"),
+        ))
+    };
+    let budget = Budget::standard();
+    for (stem, p) in mesh_profiles().into_iter().chain(emulating_profiles()) {
+        let dev = device(&stem);
+        let l = &p.fields().limits;
+        let emulated = p.emulates_mesh_shading();
+        assert_eq!(emulated, crate::lower::mesh::emulates(&p), "{stem}");
+        let (object, mesh, total) = match emulated {
+            true => (
+                l.max_compute_work_group_invocations,
+                l.max_compute_work_group_invocations,
+                u32::MAX,
+            ),
+            false => (
+                l.mesh.max_task_work_group_invocations,
+                l.mesh.max_mesh_work_group_invocations,
+                l.mesh.max_mesh_work_group_total_count,
+            ),
+        };
+        let info = |d: &MeshPipelineDescriptor| {
+            dev.compile_mesh_pipeline(d, &budget)
+                .unwrap_or_else(|e| panic!("{stem}: {e}"))
+                .mesh_info
+                .unwrap_or_else(|| panic!("{stem}: a mesh pipeline's answers"))
+        };
+        let mut d = MeshPipelineDescriptor::new(stage(&draws, "mesh_draws_mesh"));
+        d.object = Some(stage(&draws, "mesh_draws_object"));
+        d.rasterization_enabled = false;
+        let answers = |o: u32, m: u32, ow: u32, g: u32| MeshPipelineMetalInfo {
+            max_total_threads_per_object_threadgroup: o,
+            max_total_threads_per_mesh_threadgroup: m,
+            object_thread_execution_width: ow,
+            mesh_thread_execution_width: 32,
+            max_total_threadgroups_per_mesh_grid: g,
+        };
+        assert_eq!(
+            info(&d),
+            answers(object.min(1024), mesh.min(1024), 32, total.min(1 << 20)),
+            "{stem}"
+        );
+        // The descriptor's maxima, a grid past 2^20 among them, and a required size, which
+        // leaves them.
+        let mut limited = d.clone();
+        limited.max_total_threads_per_object_threadgroup = Some(64);
+        limited.max_total_threads_per_mesh_threadgroup = Some(32);
+        limited.max_total_threadgroups_per_mesh_grid = Some(8);
+        assert_eq!(
+            info(&limited),
+            answers(object.min(64), mesh.min(32), 32, total.min(8)),
+            "{stem}"
+        );
+        limited.max_total_threadgroups_per_mesh_grid = Some(1 << 21);
+        limited.required_threads_per_object_threadgroup = Some([16, 2, 1]);
+        assert_eq!(
+            info(&limited),
+            answers(object.min(64), mesh.min(32), 32, total.min(1 << 21)),
+            "{stem}"
+        );
+        // The functions' own maxima (`mesh_outputs_object`'s 64 threads and 16 threadgroups,
+        // `mesh_outputs_triangles`' 32 threads), and the descriptor's equal ones.
+        let mut own = MeshPipelineDescriptor::new(stage(&outputs, "mesh_outputs_triangles"));
+        own.object = Some(stage(&outputs, "mesh_outputs_object"));
+        own.rasterization_enabled = false;
+        let theirs = answers(object.min(64), mesh.min(32), 32, total.min(16));
+        assert_eq!(info(&own), theirs, "{stem}");
+        own.max_total_threads_per_object_threadgroup = Some(64);
+        own.max_total_threads_per_mesh_threadgroup = Some(32);
+        assert_eq!(info(&own), theirs, "{stem}");
+        own.max_total_threadgroups_per_mesh_grid = Some(4);
+        assert_eq!(
+            info(&own).max_total_threadgroups_per_mesh_grid,
+            total.min(4),
+            "{stem}"
+        );
+        // Without an object function.
+        let mut alone = MeshPipelineDescriptor::new(stage(&draws, "mesh_draws_grid"));
+        alone.rasterization_enabled = false;
+        assert_eq!(
+            info(&alone),
+            answers(0, mesh.min(1024), 0, total.min(1 << 20)),
+            "{stem}"
+        );
+        alone.required_threads_per_mesh_threadgroup = Some([16, 2, 1]);
+        assert_eq!(
+            info(&alone),
+            answers(0, mesh.min(1024), 0, total.min(1 << 20)),
+            "{stem}"
+        );
+    }
+}
+
+/// A mesh render pipeline descriptor Metal refuses is refused as Metal's rule
+/// (`InvalidDescriptor(MeshPipeline)`, measured on an M3 Max, `mesh_pipeline_limits.m`), on every
+/// committed profile, and the descriptors beside each are made: a required size with an axis of
+/// 0, of more than 1024 threads or more than its stage's maximum, or of an object stage without an
+/// object function; a maximum past 1024; a mesh stage's required size of other threads than its
+/// maximum (an object stage's of fewer is made); a function's maximum other than the
+/// descriptor's; a payload past 16384 bytes. An amplification count of 0 is refused as a render
+/// pipeline's, and one above 1 is not built.
+#[test]
+fn a_mesh_descriptor_metal_refuses_is_refused_as_its_rule() {
+    use crate::budget::Budget;
+    use crate::error::MeshPipelineProblem as P;
+    use crate::library::Library;
+    use crate::pipeline::descriptor::{FunctionDescriptor, MeshPipelineDescriptor, StageSource};
+    let (Some(draws), Some(outputs)) = (fixture("mesh_draws"), fixture("mesh_outputs")) else {
+        return;
+    };
+    let (draws, outputs) = (
+        Library::from_air(&draws).expect("library"),
+        Library::from_air(&outputs).expect("library"),
+    );
+    let stage = |lib: &Library, name: &str| {
+        StageSource::Function(FunctionDescriptor::new(
+            lib.function(name).expect("function"),
+        ))
+    };
+    let budget = Budget::standard();
+    let refused = |problem| {
+        Some(Error::InvalidDescriptor(
+            crate::error::DescriptorError::MeshPipeline { problem },
+        ))
+    };
+    for (stem, _) in mesh_profiles().into_iter().chain(emulating_profiles()) {
+        let dev = device(&stem);
+        let answer = |d: &MeshPipelineDescriptor| dev.compile_mesh_pipeline(d, &budget).err();
+        let mut d = MeshPipelineDescriptor::new(stage(&draws, "mesh_draws_mesh"));
+        d.object = Some(stage(&draws, "mesh_draws_object"));
+        d.rasterization_enabled = false;
+        let mut alone = MeshPipelineDescriptor::new(stage(&draws, "mesh_draws_grid"));
+        alone.rasterization_enabled = false;
+        let with = |f: &dyn Fn(&mut MeshPipelineDescriptor)| {
+            let mut changed = d.clone();
+            f(&mut changed);
+            changed
+        };
+        let cases: Vec<(MeshPipelineDescriptor, Option<Error>)> = vec![
+            (
+                with(&|d| d.required_threads_per_object_threadgroup = Some([4, 0, 1])),
+                refused(P::RequiredEmptyAxis {
+                    stage: Stage::Object,
+                    required: [4, 0, 1],
+                }),
+            ),
+            (
+                with(&|d| d.required_threads_per_mesh_threadgroup = Some([2048, 1, 1])),
+                refused(P::RequiredOverLimit {
+                    stage: Stage::Mesh,
+                    threads: 2048,
+                    limit: 1024,
+                }),
+            ),
+            (
+                with(&|d| {
+                    d.max_total_threads_per_object_threadgroup = Some(32);
+                    d.required_threads_per_object_threadgroup = Some([64, 1, 1]);
+                }),
+                refused(P::RequiredOverMax {
+                    stage: Stage::Object,
+                    threads: 64,
+                    max: 32,
+                }),
+            ),
+            (
+                {
+                    let mut a = alone.clone();
+                    a.required_threads_per_object_threadgroup = Some([32, 1, 1]);
+                    a
+                },
+                refused(P::RequiredWithoutObjectFunction {
+                    required: [32, 1, 1],
+                }),
+            ),
+            (
+                with(&|d| d.max_vertex_amplification_count = 0),
+                Some(Error::InvalidDescriptor(
+                    crate::error::DescriptorError::VertexAmplificationCount { count: 0 },
+                )),
+            ),
+            (
+                with(&|d| d.max_total_threads_per_object_threadgroup = Some(2048)),
+                refused(P::MaxThreadsOverLimit {
+                    stage: Stage::Object,
+                    max: 2048,
+                    limit: 1024,
+                }),
+            ),
+            (
+                {
+                    let mut a = alone.clone();
+                    a.max_total_threads_per_mesh_threadgroup = Some(2048);
+                    a
+                },
+                refused(P::MaxThreadsOverLimit {
+                    stage: Stage::Mesh,
+                    max: 2048,
+                    limit: 1024,
+                }),
+            ),
+            (
+                with(&|d| {
+                    d.max_total_threads_per_mesh_threadgroup = Some(64);
+                    d.required_threads_per_mesh_threadgroup = Some([32, 1, 1]);
+                }),
+                refused(P::MaxThreadsDiffer {
+                    stage: Stage::Mesh,
+                    specified: 32,
+                    max: 64,
+                }),
+            ),
+            (
+                with(&|d| d.payload_memory_length = Some(16385)),
+                refused(P::PayloadOverLimit {
+                    length: 16385,
+                    limit: 16384,
+                }),
+            ),
+            (
+                {
+                    let mut a = alone.clone();
+                    a.payload_memory_length = Some(16385);
+                    a
+                },
+                refused(P::PayloadOverLimit {
+                    length: 16385,
+                    limit: 16384,
+                }),
+            ),
+            (
+                with(&|d| d.max_vertex_amplification_count = 2),
+                Some(Error::Unsupported(
+                    crate::error::Unsupported::not_implemented(Feature::VertexAmplification),
+                )),
+            ),
+            // Made as Metal makes them.
+            (
+                with(&|d| d.required_threads_per_object_threadgroup = Some([32, 2, 1])),
+                None,
+            ),
+            (
+                with(&|d| {
+                    d.max_total_threads_per_object_threadgroup = Some(64);
+                    d.required_threads_per_object_threadgroup = Some([32, 1, 1]);
+                }),
+                None,
+            ),
+            (
+                with(&|d| {
+                    d.max_total_threads_per_mesh_threadgroup = Some(64);
+                    d.required_threads_per_mesh_threadgroup = Some([64, 1, 1]);
+                }),
+                None,
+            ),
+            (
+                with(&|d| d.max_total_threads_per_object_threadgroup = Some(1024)),
+                None,
+            ),
+        ];
+        for (i, (d, want)) in cases.iter().enumerate() {
+            assert_eq!(&answer(d), want, "{stem}: case {i}");
+        }
+        // A function's own maximum beside another of the descriptor's
+        // (`mesh_outputs_object`'s 64, `mesh_outputs_triangles`' 32).
+        let mut own = MeshPipelineDescriptor::new(stage(&outputs, "mesh_outputs_triangles"));
+        own.object = Some(stage(&outputs, "mesh_outputs_object"));
+        own.rasterization_enabled = false;
+        for (object, mesh, want) in [
+            (
+                Some(32),
+                None,
+                refused(P::MaxThreadsDiffer {
+                    stage: Stage::Object,
+                    specified: 64,
+                    max: 32,
+                }),
+            ),
+            (
+                Some(128),
+                None,
+                refused(P::MaxThreadsDiffer {
+                    stage: Stage::Object,
+                    specified: 64,
+                    max: 128,
+                }),
+            ),
+            (
+                None,
+                Some(64),
+                refused(P::MaxThreadsDiffer {
+                    stage: Stage::Mesh,
+                    specified: 32,
+                    max: 64,
+                }),
+            ),
+            (Some(64), Some(32), None),
+        ] {
+            own.max_total_threads_per_object_threadgroup = object;
+            own.max_total_threads_per_mesh_threadgroup = mesh;
+            assert_eq!(answer(&own), want, "{stem}: {object:?} {mesh:?}");
+        }
+    }
+}
+
+/// `payloadMemoryLength` sizes the payload of both stages: in the mesh render pipeline of
+/// `mesh_outputs_object`, which declares 16 bytes, and `mesh_outputs_triangles`, which declares 16
+/// and reads 64, a length of 64 gives the object function's arena and the mesh function's its 64
+/// bytes, as the object function's declaring 64 does ([`wide_object_payload`]), emulated or not;
+/// a length the declared type holds leaves the object function's key as without it; and a stage
+/// compiled on its own without the length is refused as `NeedsInput(ObjectPayload)`.
+#[test]
+fn the_descriptors_payload_length_sizes_both_stages_payloads() {
+    use crate::budget::Budget;
+    use crate::error::RuntimeInput;
+    use crate::library::Library;
+    use crate::lower::mesh::work;
+    use crate::pipeline::descriptor::{FunctionDescriptor, MeshPipelineDescriptor, StageSource};
+    let Some(outputs) = fixture("mesh_outputs") else {
+        return;
+    };
+    let outputs = Library::from_air(&outputs).expect("library");
+    let function = |name: &str| FunctionDescriptor::new(outputs.function(name).expect("function"));
+    let budget = Budget::standard();
+    for (stem, p) in mesh_profiles().into_iter().chain(emulating_profiles()) {
+        let dev = device(&stem);
+        let emulated = p.emulates_mesh_shading();
+        let mut d =
+            MeshPipelineDescriptor::new(StageSource::Function(function("mesh_outputs_triangles")));
+        d.object = Some(StageSource::Function(function("mesh_outputs_object")));
+        d.rasterization_enabled = false;
+        d.payload_memory_length = Some(64);
+        let made = dev
+            .compile_mesh_pipeline(&d, &budget)
+            .unwrap_or_else(|e| panic!("{stem}: {e}"));
+        let arena: Vec<_> = made
+            .dependencies
+            .iter()
+            .filter_map(|d| match d.fact {
+                RuntimeFact::ObjectThreadgroupArena { payload, .. } => Some(payload),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(arena, [Some(64)], "{stem}");
+        let slot = made.graphics.mesh_records.as_ref().map(|r| r.slot_words);
+        assert_eq!(slot, emulated.then_some(work::GRID + 16), "{stem}");
+        for m in &made.stages {
+            check_words_valid(&m.spirv, &made.requirements, dev.profile())
+                .unwrap_or_else(|e| panic!("{stem} {:?}: L3: {e}", m.stage));
+        }
+        // A length the type holds compiles the object function as without it.
+        let compiled = |inputs: &LoweringInputs| {
+            dev.compile_function(&function("mesh_outputs_object"), inputs, &budget)
+                .unwrap_or_else(|e| panic!("{stem}: {e}"))
+        };
+        let mut held = LoweringInputs::new();
+        held.object_payload = Some(8);
+        assert_eq!(
+            compiled(&held).key(),
+            compiled(&LoweringInputs::new()).key(),
+            "{stem}"
+        );
+        // An object stage compiled without the length is compiled for another pipeline.
+        let mut alone = d.clone();
+        alone.object = Some(StageSource::Compiled(compiled(&LoweringInputs::new())));
+        assert_eq!(
+            dev.compile_mesh_pipeline(&alone, &budget).err(),
+            Some(Error::NeedsInput(RuntimeInput::ObjectPayload)),
+            "{stem}"
+        );
+    }
+}
+
 /// An object function's `[[threadgroup(n)]]` arguments take the render encoder's lengths
 /// (`setObjectThreadgroupMemoryLength:atIndex:`, the object stage's `threadgroup_lengths`): in the
 /// pipeline of `mesh_outputs_object` (its payload 64 bytes, [`wide_object_payload`]) and

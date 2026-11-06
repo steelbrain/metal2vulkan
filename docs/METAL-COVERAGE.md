@@ -10,12 +10,12 @@ Every public item of the macOS 27.0 SDK (Xcode 27.0, 27A266a)'s Metal headers, b
 
 | Status | Items | Of which deprecated |
 |---|---|---|
-| implemented | 961 | 36 |
-| missing | 825 | 27 |
+| implemented | 977 | 36 |
+| missing | 809 | 27 |
 | out of scope | 349 | 5 |
 | all | 2135 | 68 |
 
-Implemented by the runtime: 638; by the translator's values: 323. Missing by size: S 142, M 147, L 160, XL 376.
+Implemented by the runtime: 645; by the translator's values: 332. Missing by size: S 126, M 147, L 160, XL 376.
 
 ## Missing, in build order
 
@@ -28,14 +28,14 @@ Cheap items a plain app calls first, then medium pieces by how often a plain app
 | command queue descriptor | S | 3 | `MTLCommandQueueDescriptor`, `MTLCommandQueueDescriptor.maxCommandBufferCount`, `MTLDevice.newCommandQueueWithDescriptor:` |
 | compute, blit and resource-state pass descriptors | S | 10 | `MTLBlitPassDescriptor`, `MTLBlitPassDescriptor.blitPassDescriptor`, `MTLCommandBuffer.computeCommandEncoderWithDescriptor:`, ... |
 | libraries from a file path or URL | S | 2 | `MTLDevice.newLibraryWithFile:error:`, `MTLDevice.newLibraryWithURL:error:` |
-| device, state and resource queries | S | 52 | `MTLAllocation.allocatedSize`, `MTLBuffer.sparseBufferTier`, `MTLArchitecture`, ... |
+| device, state and resource queries | S | 45 | `MTLAllocation.allocatedSize`, `MTLBuffer.sparseBufferTier`, `MTLArchitecture`, ... |
 | `textureBarrier` and queue-stage barriers | S/M | 2 | `MTLCommandEncoder.barrierAfterQueueStages:beforeStages:`, `MTLRenderCommandEncoder.textureBarrier` |
 | a pipeline state's reflection after creation | S | 2 | `MTLComputePipelineState.reflection`, `MTLRenderPipelineState.reflection` |
 | function handles by name, and a handle's type and ID | S | 4 | `MTLComputePipelineState.functionHandleWithName:`, `MTLFunctionHandle.functionType`, `MTLFunctionHandle.gpuResourceID`, ... |
 | a specialized function's name | S | 1 | `MTLFunctionDescriptor.specializedName` |
 | more binary archive entries | S | 4 | `MTLBinaryArchive.addMeshRenderPipelineFunctionsWithDescriptor:error:`, `MTLBinaryArchive.addLibraryWithDescriptor:error:`, `MTLBinaryArchive.addFunctionWithDescriptor:library:error:`, ... |
 | the shared event listener | S | 1 | `MTLSharedEventListener.sharedListener` |
-| mesh pipeline descriptor fields | S | 12 | `MTLMeshRenderPipelineDescriptor.maxTotalThreadsPerObjectThreadgroup`, `MTLMeshRenderPipelineDescriptor.maxTotalThreadsPerMeshThreadgroup`, `MTLMeshRenderPipelineDescriptor.objectThreadgroupSizeIsMultipleOfThreadExecutionWidth`, ... |
+| mesh pipeline descriptor fields | S | 3 | `MTLMeshRenderPipelineDescriptor.objectBuffers`, `MTLMeshRenderPipelineDescriptor.meshBuffers`, `MTLMeshRenderPipelineDescriptor.fragmentBuffers` |
 | placement sparse page sizes | S | 2 | `MTLHeapDescriptor.maxCompatiblePlacementSparsePageSize`, `MTLTextureDescriptor.placementSparsePageSize` |
 | parallel render encoding | M | 9 | `MTLCommandBuffer.parallelRenderCommandEncoderWithDescriptor:`, `MTLParallelRenderCommandEncoder`, `MTLParallelRenderCommandEncoder.renderCommandEncoder`, ... |
 | depth/stencil states in argument buffers | M | 2 | `MTLArgumentEncoder.setDepthStencilState:atIndex:`, `MTLArgumentEncoder.setDepthStencilStates:withRange:` |
@@ -2262,11 +2262,11 @@ Cheap items a plain app calls first, then medium pieces by how often a plain app
 | `MTLRenderPipelineState.imageblockSampleLength` | property | implemented | `RenderPipelineState::imageblock_sample_length` (runtime) |
 | `MTLRenderPipelineState.imageblockMemoryLengthForDimensions:` | method | implemented | `RenderPipelineState::imageblock_memory_length_for_dimensions` (runtime) |
 | `MTLRenderPipelineState.supportIndirectCommandBuffers` | property | implemented | `RenderPipelineState::support_indirect_command_buffers` (runtime) |
-| `MTLRenderPipelineState.maxTotalThreadsPerObjectThreadgroup` | property | missing | S: a mesh state's thread queries |
-| `MTLRenderPipelineState.maxTotalThreadsPerMeshThreadgroup` | property | missing | S: a mesh state's thread queries |
-| `MTLRenderPipelineState.objectThreadExecutionWidth` | property | missing | S: a mesh state's thread queries |
-| `MTLRenderPipelineState.meshThreadExecutionWidth` | property | missing | S: a mesh state's thread queries |
-| `MTLRenderPipelineState.maxTotalThreadgroupsPerMeshGrid` | property | missing | S: a mesh state's thread queries |
+| `MTLRenderPipelineState.maxTotalThreadsPerObjectThreadgroup` | property | implemented | `RenderPipelineState::max_total_threads_per_object_threadgroup` (runtime) |
+| `MTLRenderPipelineState.maxTotalThreadsPerMeshThreadgroup` | property | implemented | `RenderPipelineState::max_total_threads_per_mesh_threadgroup` (runtime) |
+| `MTLRenderPipelineState.objectThreadExecutionWidth` | property | implemented | `RenderPipelineState::object_thread_execution_width` (runtime) |
+| `MTLRenderPipelineState.meshThreadExecutionWidth` | property | implemented | `RenderPipelineState::mesh_thread_execution_width` (runtime) |
+| `MTLRenderPipelineState.maxTotalThreadgroupsPerMeshGrid` | property | implemented | `RenderPipelineState::max_total_threadgroups_per_mesh_grid` (runtime) |
 | `MTLRenderPipelineState.gpuResourceID` | property | implemented | `RenderPipelineState::gpu_resource_id` (runtime) |
 | `MTLRenderPipelineState.functionHandleWithFunction:stage:` | method | implemented | `RenderPipelineState::function_handle` (runtime) |
 | `MTLRenderPipelineState.newVisibleFunctionTableWithDescriptor:stage:` | method | implemented | `RenderPipelineState::new_visible_function_table` (runtime) |
@@ -2274,8 +2274,8 @@ Cheap items a plain app calls first, then medium pieces by how often a plain app
 | `MTLRenderPipelineState.newRenderPipelineStateWithAdditionalBinaryFunctions:error:` | method | implemented | `RenderPipelineState::new_render_pipeline_state_with_additional_binary_functions` (runtime) |
 | `MTLRenderPipelineState.shaderValidation` | property | missing | L: shader validation (`RuntimeGap::ShaderValidation`, not scheduled) |
 | `MTLRenderPipelineState.requiredThreadsPerTileThreadgroup` | property | implemented | `RenderPipelineState::required_threads_per_tile_threadgroup` (runtime) |
-| `MTLRenderPipelineState.requiredThreadsPerObjectThreadgroup` | property | missing | S: a mesh state's thread queries |
-| `MTLRenderPipelineState.requiredThreadsPerMeshThreadgroup` | property | missing | S: a mesh state's thread queries |
+| `MTLRenderPipelineState.requiredThreadsPerObjectThreadgroup` | property | implemented | `RenderPipelineState::required_threads_per_object_threadgroup` (runtime) |
+| `MTLRenderPipelineState.requiredThreadsPerMeshThreadgroup` | property | implemented | `RenderPipelineState::required_threads_per_mesh_threadgroup` (runtime) |
 | `MTLRenderPipelineColorAttachmentDescriptorArray` | class | implemented | `RenderPipelineDescriptor.color_attachments` (translator): an array |
 | `MTLRenderPipelineColorAttachmentDescriptorArray.objectAtIndexedSubscript:` | method | implemented | `RenderPipelineDescriptor.color_attachments` (translator) |
 | `MTLRenderPipelineColorAttachmentDescriptorArray.setObject:atIndexedSubscript:` | method | implemented | `RenderPipelineDescriptor.color_attachments` (translator) |
@@ -2305,12 +2305,12 @@ Cheap items a plain app calls first, then medium pieces by how often a plain app
 | `MTLMeshRenderPipelineDescriptor.objectFunction` | property | implemented | `MeshPipelineDescriptor.object` (translator) |
 | `MTLMeshRenderPipelineDescriptor.meshFunction` | property | implemented | `MeshPipelineDescriptor.mesh` (translator) |
 | `MTLMeshRenderPipelineDescriptor.fragmentFunction` | property | implemented | `MeshPipelineDescriptor.fragment` (translator) |
-| `MTLMeshRenderPipelineDescriptor.maxTotalThreadsPerObjectThreadgroup` | property | missing | S: a mesh pipeline's thread limits: the translator's `MeshPipelineDescriptor` has no field |
-| `MTLMeshRenderPipelineDescriptor.maxTotalThreadsPerMeshThreadgroup` | property | missing | S: a mesh pipeline's thread limits: the translator's `MeshPipelineDescriptor` has no field |
-| `MTLMeshRenderPipelineDescriptor.objectThreadgroupSizeIsMultipleOfThreadExecutionWidth` | property | missing | S: a compile hint the translator's `MeshPipelineDescriptor` has no field for |
-| `MTLMeshRenderPipelineDescriptor.meshThreadgroupSizeIsMultipleOfThreadExecutionWidth` | property | missing | S: a compile hint the translator's `MeshPipelineDescriptor` has no field for |
-| `MTLMeshRenderPipelineDescriptor.payloadMemoryLength` | property | missing | S: the object payload's length: the translator's `MeshPipelineDescriptor` has no field |
-| `MTLMeshRenderPipelineDescriptor.maxTotalThreadgroupsPerMeshGrid` | property | missing | S: the mesh grid's limit: the translator's `MeshPipelineDescriptor` has no field |
+| `MTLMeshRenderPipelineDescriptor.maxTotalThreadsPerObjectThreadgroup` | property | implemented | `MeshPipelineDescriptor.max_total_threads_per_object_threadgroup` (translator) |
+| `MTLMeshRenderPipelineDescriptor.maxTotalThreadsPerMeshThreadgroup` | property | implemented | `MeshPipelineDescriptor.max_total_threads_per_mesh_threadgroup` (translator) |
+| `MTLMeshRenderPipelineDescriptor.objectThreadgroupSizeIsMultipleOfThreadExecutionWidth` | property | implemented | `MeshPipelineDescriptor.object_threadgroup_size_is_multiple_of_thread_execution_width` (translator) |
+| `MTLMeshRenderPipelineDescriptor.meshThreadgroupSizeIsMultipleOfThreadExecutionWidth` | property | implemented | `MeshPipelineDescriptor.mesh_threadgroup_size_is_multiple_of_thread_execution_width` (translator) |
+| `MTLMeshRenderPipelineDescriptor.payloadMemoryLength` | property | implemented | `MeshPipelineDescriptor.payload_memory_length` (translator) |
+| `MTLMeshRenderPipelineDescriptor.maxTotalThreadgroupsPerMeshGrid` | property | implemented | `MeshPipelineDescriptor.max_total_threadgroups_per_mesh_grid` (translator) |
 | `MTLMeshRenderPipelineDescriptor.objectBuffers` | property | missing | S: buffer mutability per stage: the translator's `MeshPipelineDescriptor` has no field (render and compute descriptors have `buffers`) |
 | `MTLMeshRenderPipelineDescriptor.meshBuffers` | property | missing | S: buffer mutability per stage: the translator's `MeshPipelineDescriptor` has no field |
 | `MTLMeshRenderPipelineDescriptor.fragmentBuffers` | property | missing | S: buffer mutability per stage: the translator's `MeshPipelineDescriptor` has no field |
@@ -2318,7 +2318,7 @@ Cheap items a plain app calls first, then medium pieces by how often a plain app
 | `MTLMeshRenderPipelineDescriptor.alphaToCoverageEnabled` | property | implemented | `MeshPipelineDescriptor.alpha_to_coverage` (translator) |
 | `MTLMeshRenderPipelineDescriptor.alphaToOneEnabled` | property | implemented | `MeshPipelineDescriptor.alpha_to_one` (translator) |
 | `MTLMeshRenderPipelineDescriptor.rasterizationEnabled` | property | implemented | `MeshPipelineDescriptor.rasterization_enabled` (translator) |
-| `MTLMeshRenderPipelineDescriptor.maxVertexAmplificationCount` | property | missing | S: vertex amplification of mesh pipelines: the translator's `MeshPipelineDescriptor` has no field |
+| `MTLMeshRenderPipelineDescriptor.maxVertexAmplificationCount` | property | implemented | `MeshPipelineDescriptor.max_vertex_amplification_count` (translator): a count above 1 is refused: a mesh pipeline's vertex amplification is not built |
 | `MTLMeshRenderPipelineDescriptor.colorAttachments` | property | implemented | `MeshPipelineDescriptor.color_attachments` (translator) |
 | `MTLMeshRenderPipelineDescriptor.depthAttachmentPixelFormat` | property | implemented | `MeshPipelineDescriptor.depth_format` (translator) |
 | `MTLMeshRenderPipelineDescriptor.stencilAttachmentPixelFormat` | property | implemented | `MeshPipelineDescriptor.stencil_format` (translator) |
@@ -2329,8 +2329,8 @@ Cheap items a plain app calls first, then medium pieces by how often a plain app
 | `MTLMeshRenderPipelineDescriptor.fragmentLinkedFunctions` | property | implemented | `FunctionDescriptor.linked` (translator): the fragment stage's `StageSource::Function` |
 | `MTLMeshRenderPipelineDescriptor.reset` | method | implemented | `MeshPipelineDescriptor::new` (translator): a plain value: assign a new one |
 | `MTLMeshRenderPipelineDescriptor.shaderValidation` | property | missing | L: shader validation (`RuntimeGap::ShaderValidation`, not scheduled) |
-| `MTLMeshRenderPipelineDescriptor.requiredThreadsPerObjectThreadgroup` | property | missing | S: required threadgroup sizes of a mesh pipeline: the translator's `MeshPipelineDescriptor` has no field |
-| `MTLMeshRenderPipelineDescriptor.requiredThreadsPerMeshThreadgroup` | property | missing | S: required threadgroup sizes of a mesh pipeline: the translator's `MeshPipelineDescriptor` has no field |
+| `MTLMeshRenderPipelineDescriptor.requiredThreadsPerObjectThreadgroup` | property | implemented | `MeshPipelineDescriptor.required_threads_per_object_threadgroup` (translator) |
+| `MTLMeshRenderPipelineDescriptor.requiredThreadsPerMeshThreadgroup` | property | implemented | `MeshPipelineDescriptor.required_threads_per_mesh_threadgroup` (translator) |
 
 ### MTLResidencySet.h
 

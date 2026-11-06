@@ -189,6 +189,15 @@ fn mesh() -> Pipeline {
     d.alpha_to_one = true;
     d.support_indirect_command_buffers = true;
     d.texture_write_rounding_mode = metal::TextureWriteRoundingMode::NearestEven;
+    d.max_total_threads_per_object_threadgroup = Some(64);
+    d.max_total_threads_per_mesh_threadgroup = Some(32);
+    d.max_total_threadgroups_per_mesh_grid = Some(8);
+    d.object_threadgroup_size_is_multiple_of_thread_execution_width = true;
+    d.mesh_threadgroup_size_is_multiple_of_thread_execution_width = true;
+    d.payload_memory_length = Some(256);
+    d.max_vertex_amplification_count = 2;
+    d.required_threads_per_object_threadgroup = Some([32, 2, 1]);
+    d.required_threads_per_mesh_threadgroup = Some([16, 1, 1]);
     Pipeline::Mesh(d)
 }
 

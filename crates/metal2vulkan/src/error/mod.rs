@@ -1805,9 +1805,10 @@ pub enum RuntimeInput {
     /// compiled for another pipeline, and is compiled for this one again.
     PrimitiveVaryings,
     /// A mesh function's payload arena is smaller than its mesh render pipeline's object
-    /// function's: compiled on its own or for another pipeline, it would read zeros past its own
-    /// payload where Metal reads the object function's (`LoweringInputs::object_payload`). It is
-    /// compiled for this pipeline again.
+    /// function's, or an object function's (a mesh function's without one) is smaller than its
+    /// descriptor's `payloadMemoryLength`: compiled on its own or for another pipeline, it would
+    /// read zeros past its own payload where Metal reads the pipeline's
+    /// (`LoweringInputs::object_payload`). It is compiled for this pipeline again.
     ObjectPayload,
     /// A fragment function in a render pipeline whose private sample mask drops a sample writes
     /// memory, reads `[[sample_mask]]` or declares `[[early_fragment_tests]]`, so it applies the
@@ -1891,8 +1892,10 @@ pub enum DescriptorError {
         name: DiagName,
         problem: LinkProblem,
     },
-    /// A render pipeline descriptor whose `maxVertexAmplificationCount` is 0: its encoders draw
-    /// with a count in `[1, maxVertexAmplificationCount]`, so the maximum is at least 1.
+    /// A render or mesh render pipeline descriptor whose `maxVertexAmplificationCount` is 0: its
+    /// encoders draw with a count in `[1, maxVertexAmplificationCount]`, so the maximum is at
+    /// least 1. Metal's descriptor validation ends the process at a mesh descriptor's
+    /// ("maxVertexAmplificationCount (0) cannot be set to zero.").
     VertexAmplificationCount { count: u32 },
     /// A kernel `[[stage_in]]` attribute the compute pipeline's stage-input descriptor does not
     /// describe.
@@ -1945,6 +1948,60 @@ pub enum DescriptorError {
     /// Compile the function under the pipeline's flag
     /// (`LoweringInputs::threadgroup_size_matches_tile_size`).
     TileThreadgroupSize { compiled: bool },
+    /// A mesh render pipeline descriptor's thread, threadgroup or payload field that Metal
+    /// refuses ([`MeshPipelineProblem`]).
+    MeshPipeline { problem: MeshPipelineProblem },
+}
+
+/// A field of a mesh render pipeline descriptor (`MTLMeshRenderPipelineDescriptor`) that Metal
+/// refuses, measured on an M3 Max under macOS 27.0.1 (`mesh_pipeline_limits.m`, plain and with
+/// `MTL_DEBUG_LAYER=1`, which agree). Metal's creation fails over some, an error, and its
+/// descriptor validation ends the process at the rest, with or without API validation; each
+/// variant says which. The thread limit is Metal's 1024, not a lower one of this device's (the
+/// compiled pipeline's [`MeshPipelineMetalInfo`](crate::pipeline::MeshPipelineMetalInfo)
+/// answers that one).
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum MeshPipelineProblem {
+    /// `stage`'s `maxTotalThreadsPerObjectThreadgroup` or `maxTotalThreadsPerMeshThreadgroup`
+    /// `max` above Metal's `limit`: the creation fails, code 3, "Specified total max threads per
+    /// threadgroup (2048) exceeds the maximum total threads per threadgroup supported (1024)",
+    /// with or without an object function.
+    MaxThreadsOverLimit { stage: Stage, max: u32, limit: u32 },
+    /// `stage`'s descriptor maximum `max` beside other `specified` threads: those of its
+    /// function's `[[max_total_threads_per_threadgroup(n)]]`, or of the mesh stage's required
+    /// size. The creation fails, code 3, "Kernel specified max total threads per threadgroup (64)
+    /// must match compute pipeline specified max total threads per threadgroup (32)". An object
+    /// stage's required size of fewer threads than its maximum is made.
+    MaxThreadsDiffer {
+        stage: Stage,
+        specified: u32,
+        max: u32,
+    },
+    /// `stage`'s required threads per threadgroup with an axis of 0, though not every axis (all
+    /// three 0 is no requirement): the process ends, "(4 * 0 * 1)(0) must not be 0.".
+    RequiredEmptyAxis { stage: Stage, required: [u32; 3] },
+    /// `stage`'s required threads per threadgroup, `threads` in all, above Metal's `limit`: the
+    /// process ends, "must be <= 1024 (device limit)".
+    RequiredOverLimit {
+        stage: Stage,
+        threads: u64,
+        limit: u32,
+    },
+    /// `stage`'s required threads per threadgroup, `threads` in all, above its descriptor maximum
+    /// `max`: the process ends, "must be <= maxTotalThreadsPerThreadgroup (32)".
+    RequiredOverMax {
+        stage: Stage,
+        threads: u64,
+        max: u32,
+    },
+    /// A required object threadgroup size `required` without an object function: the process
+    /// ends, "If objectFunction is nil, requiredThreadsPerObjectThreadgroup must be [0, 0, 0]".
+    RequiredWithoutObjectFunction { required: [u32; 3] },
+    /// `payloadMemoryLength` `length` above Metal's `limit` of 16384 bytes: the creation fails,
+    /// code 3, "Object shader payload size (16385) exceeds the maximum payload size allowed
+    /// (16384)" with an object function, and code 2, "Payload size > 16384", without one.
+    PayloadOverLimit { length: u32, limit: u32 },
 }
 
 /// Why a library is no dynamic library (`newDynamicLibrary:error:`), as Metal refuses it (probes,

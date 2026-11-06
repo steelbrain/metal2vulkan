@@ -4244,6 +4244,19 @@ each item named states the rule in full.
     state of the same `MTLFunction` answered 16 after a 4x4x1 state, with an 8x8x1 size and with
     none, where the runtime's answers 64 and the compiled limit.
 
+**Mesh render pipelines**
+
+- **A mesh state without an object function answers 0 for its object stage**
+  (`RenderPipelineState::max_total_threads_per_object_threadgroup` and
+  `object_thread_execution_width`), where an M3 Max under macOS 27.0.1 answers 3 and 32.
+- **A mesh draw is not held to its state's thread maxima, mesh-grid maximum or required
+  threadgroup sizes.** The state answers them as an M3 Max does
+  (`RenderPipelineState::max_total_threads_per_mesh_threadgroup`,
+  `max_total_threadgroups_per_mesh_grid`, `required_threads_per_object_threadgroup` and the
+  rest), and its creation refuses what Metal refuses of them (`MeshPipelineProblem`); a draw of
+  other threadgroup sizes within the device's limits runs, and so does an object function's mesh
+  grid past the state's maximum (within Metal's 2^20 above).
+
 **Process exit**
 
 - **On Linux, an exit while the driver runs the runtime's work ends the process at once** with the

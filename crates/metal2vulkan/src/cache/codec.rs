@@ -33,9 +33,9 @@ use crate::metal;
 use crate::metal::format::{ExtendedRange, WordAttachment, WordField};
 use crate::metal::{CompareFunction, TextureWriteRoundingMode};
 use crate::pipeline::artifact::{
-    ComputePipeline, ComputePipelineMetalInfo, ModuleStats, PrecisionNote, Reconvergence,
-    RenderPipeline, RuntimeDependency, SpecClause, SpecConstant, SpecTest, SpecializationLayout,
-    SpecializedNote, StageModule, StrategyCensus, StrategyUse,
+    ComputePipeline, ComputePipelineMetalInfo, MeshPipelineMetalInfo, ModuleStats, PrecisionNote,
+    Reconvergence, RenderPipeline, RuntimeDependency, SpecClause, SpecConstant, SpecTest,
+    SpecializationLayout, SpecializedNote, StageModule, StrategyCensus, StrategyUse,
 };
 use crate::pipeline::descriptor::TessellationDescriptor;
 use crate::pipeline::facts::{Mechanism, RuntimeFact, UniformViewChoice};
@@ -1310,6 +1310,7 @@ codec_struct! {
     TextureReferenceType { data_type, texture_type, access, depth }
     KernelFacts {
         max_total_threads, flat_local_size, static_threadgroup_bytes, partition_oblivious,
+        max_mesh_threadgroups,
     }
     StrategyCensus { entries }
     StrategyUse { uses, words }
@@ -1319,7 +1320,12 @@ codec_struct! {
     }
     RenderPipeline {
         key, profile, stages, layout, vertex_input, graphics, dependencies, interface,
-        requirements, variant_bits,
+        requirements, variant_bits, mesh_info,
+    }
+    MeshPipelineMetalInfo {
+        max_total_threads_per_object_threadgroup, max_total_threads_per_mesh_threadgroup,
+        object_thread_execution_width, mesh_thread_execution_width,
+        max_total_threadgroups_per_mesh_grid,
     }
     StageModule {
         stage, entry_point, spirv, specialization, required_subgroup_size, stage_flags,

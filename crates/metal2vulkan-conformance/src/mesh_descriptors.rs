@@ -22,12 +22,14 @@
 //!
 //! # What the site observes, and what it cannot
 //!
-//! Nine items of Metal's mesh descriptor are **not implemented** by the runtime at all — the object
-//! and mesh thread limits, the two execution-width hints, the payload length, the mesh-grid limit,
-//! the three per-stage buffer-mutability arrays, the vertex amplification count and the two
-//! required threadgroup sizes — because `MeshPipelineDescriptor` has no field for any of them. The
-//! coverage map records each as missing, and a getter whose answer nothing of ours can state is not
-//! a comparison, so no site here reads one. They are the runtime's gap, not this family's.
+//! Three items of Metal's mesh descriptor are **not implemented** by the runtime at all — the
+//! three per-stage buffer-mutability arrays — because `MeshPipelineDescriptor` has no field for
+//! them. The coverage map records each as missing, and a getter whose answer nothing of ours can
+//! state is not a comparison, so no site here reads one. They are the runtime's gap, not this
+//! family's. The object and mesh thread limits, the two execution-width hints, the payload length,
+//! the mesh-grid limit, the vertex amplification count and the two required threadgroup sizes are
+//! fields of `MeshPipelineDescriptor` with Metal's defaults, and no site here reads them yet: this
+//! family's recordings hold no answer of theirs.
 //!
 //! Four getters answer **objects a program supplies**, and the runtime takes each one somewhere
 //! other than the descriptor: `binaryArchives` is `PipelineOptions.binary_archives`, and

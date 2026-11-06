@@ -32,12 +32,12 @@ Its limits, measured rather than asserted:
 
 | | |
 |---|---|
-| implemented Metal items | 960 |
+| implemented Metal items | 976 |
 | of those, unreachable: `objc2-metal` binds no name for them | 3 |
-| so reachable by some case | 957 |
+| so reachable by some case | 973 |
 | of the reachable, exercised by the suite's Metal leg | 794 |
-| of the reachable, not exercised | 163 |
-| share of the reachable exercised | 83% |
+| of the reachable, not exercised | 179 |
+| share of the reachable exercised | 82% |
 | of those exercised, no case reaching it loosens anything | 574 |
 | of those exercised, a case reaching it loosens some site | 220 |
 | case modules | 155 |
@@ -366,11 +366,12 @@ Every container with an implemented item, by how much of it the suite reaches. *
 | `MTLArgument` | 17 | 0 | 0 | 17 |  |
 | the header's free functions | 12 | 0 | 0 | 12 |  |
 | `MTLDevice` | 65 | 2 | 51 | 12 | `alpha_coverage_pairs`, `argument_encoder_crossings`, `argument_encoders`, `astc_textures`… |
+| `MTLRenderPipelineState` | 22 | 0 | 11 | 11 | `pipeline_facts`, `pipeline_handlers`, `tile_threadgroups`, `visible_tables` |
+| `MTLMeshRenderPipelineDescriptor` | 27 | 0 | 18 | 9 | `binary_archives`, `indirect_commands`, `mesh_barriers`, `mesh_commands`… |
 | `MTLRasterizationRateLayerDescriptor` | 9 | 0 | 2 | 7 | `rate_map_degenerate_forms`, `rate_map_sweeps`, `rate_maps` |
 | `MTLComputePipelineState` | 15 | 0 | 9 | 6 | `compute_threadgroups`, `pipeline_facts`, `pipeline_handlers`, `visible_tables` |
 | `MTLIndirectRenderCommand` | 23 | 0 | 17 | 6 | `indirect_command_depth`, `indirect_commands`, `mesh_commands` |
 | `MTLComputeCommandEncoder` | 36 | 0 | 31 | 5 | `argument_encoders`, `astc_textures`, `attribute_formats`, `attribute_strides`… |
-| `MTLRenderPipelineState` | 15 | 0 | 11 | 4 | `pipeline_facts`, `pipeline_handlers`, `tile_threadgroups`, `visible_tables` |
 | `MTLTextureDescriptor` | 19 | 0 | 15 | 4 | `alpha_coverage_pairs`, `argument_encoder_crossings`, `argument_encoders`, `astc_textures`… |
 | `MTLDepthStencilState` | 3 | 0 | 0 | 3 |  |
 | `MTLFence` | 3 | 0 | 0 | 3 |  |
@@ -425,7 +426,6 @@ Every container with an implemented item, by how much of it the suite reaches. *
 | `MTLIndirectCommandBufferDescriptor` | 19 | 0 | 19 | 0 | `blit_indirect_commands`, `indirect_command_depth`, `indirect_commands`, `mesh_commands` |
 | `MTLIndirectComputeCommand` | 12 | 0 | 12 | 0 | `blit_indirect_commands`, `indirect_command_depth`, `indirect_commands` |
 | `MTLLinkedFunctions` | 6 | 0 | 6 | 0 | `mesh_pipeline_descriptors`, `pipeline_descriptors`, `tile_pipeline_descriptors`, `visible_tables` |
-| `MTLMeshRenderPipelineDescriptor` | 18 | 0 | 18 | 0 | `binary_archives`, `indirect_commands`, `mesh_barriers`, `mesh_commands`… |
 | `MTLObjectPayloadBinding` | 3 | 0 | 3 | 0 | `fragment_imageblock_reflection`, `function_bindings`, `mesh_pipeline_reflection`, `pipeline_option_reflection`… |
 | `MTLPipelineBufferDescriptor` | 2 | 0 | 2 | 0 | `compute_pipeline_descriptors`, `pipeline_descriptors`, `tile_pipeline_descriptors` |
 | `MTLPointerType` | 8 | 0 | 8 | 0 | `fragment_imageblock_reflection`, `function_bindings`, `mesh_pipeline_reflection`, `pipeline_option_reflection`… |
@@ -467,10 +467,10 @@ A container is one Objective-C type; the SDK header it sits in is the family of 
 | header | implemented | exercised | unexercised |
 |---|---|---|---|
 | `MTLRenderCommandEncoder.h` | 119 | 69 | 50 |
+| `MTLRenderPipeline.h` | 130 | 105 | 25 |
 | `MTLArgument.h` | 77 | 59 | 18 |
 | `MTLDevice.h` | 75 | 61 | 14 |
 | `MTLRasterizationRate.h` | 36 | 23 | 13 |
-| `MTLRenderPipeline.h` | 114 | 105 | 9 |
 | `MTLComputePipeline.h` | 34 | 27 | 7 |
 | `MTLTypes.h` | 7 | 0 | 7 |
 | `MTLIndirectCommandEncoder.h` | 35 | 29 | 6 |
@@ -1402,10 +1402,17 @@ One row per implemented item of the SDK, in the coverage map's order. *exercised
 | `objectFunction` | yes | `binary_archives`, `indirect_commands`, `mesh_barriers`, `mesh_commands`, `mesh_draws`, `mesh_pipeline_descriptors`, `mesh_pipeline_reflection`, `pipeline_handlers` | 54 |
 | `meshFunction` | yes | `binary_archives`, `indirect_commands`, `mesh_barriers`, `mesh_commands`, `mesh_draws`, `mesh_pipeline_descriptors`, `mesh_pipeline_reflection`, `pipeline_handlers` | 54 |
 | `fragmentFunction` | yes | `binary_archives`, `indirect_commands`, `mesh_barriers`, `mesh_commands`, `mesh_draws`, `mesh_pipeline_descriptors`, `mesh_pipeline_reflection`, `pipeline_handlers` | 54 |
+| `maxTotalThreadsPerObjectThreadgroup` | no | — | — |
+| `maxTotalThreadsPerMeshThreadgroup` | no | — | — |
+| `objectThreadgroupSizeIsMultipleOfThreadExecutionWidth` | no | — | — |
+| `meshThreadgroupSizeIsMultipleOfThreadExecutionWidth` | no | — | — |
+| `payloadMemoryLength` | no | — | — |
+| `maxTotalThreadgroupsPerMeshGrid` | no | — | — |
 | `rasterSampleCount` | yes | `mesh_pipeline_descriptors` | 3 |
 | `alphaToCoverageEnabled` | yes | `mesh_pipeline_descriptors` | 3 |
 | `alphaToOneEnabled` | yes | `mesh_pipeline_descriptors` | 3 |
 | `rasterizationEnabled` | yes | `mesh_pipeline_descriptors` | 3 |
+| `maxVertexAmplificationCount` | no | — | — |
 | `colorAttachments` | yes | `binary_archives`, `indirect_commands`, `mesh_barriers`, `mesh_commands`, `mesh_draws`, `mesh_pipeline_descriptors`, `mesh_pipeline_reflection`, `pipeline_handlers` | 54 |
 | `depthAttachmentPixelFormat` | yes | `mesh_pipeline_descriptors` | 3 |
 | `stencilAttachmentPixelFormat` | yes | `mesh_pipeline_descriptors` | 3 |
@@ -1415,6 +1422,8 @@ One row per implemented item of the SDK, in the coverage map's order. *exercised
 | `meshLinkedFunctions` | yes | `mesh_pipeline_descriptors` | 3 |
 | `fragmentLinkedFunctions` | yes | `mesh_pipeline_descriptors` | 3 |
 | `reset` | yes | `mesh_pipeline_descriptors` | 3 |
+| `requiredThreadsPerObjectThreadgroup` | no | — | — |
+| `requiredThreadsPerMeshThreadgroup` | no | — | — |
 
 ### `MTLObjectPayloadBinding`
 
@@ -1808,11 +1817,18 @@ One row per implemented item of the SDK, in the coverage map's order. *exercised
 | `imageblockSampleLength` | yes | `pipeline_facts`, `pipeline_handlers`, `tile_threadgroups` | 38 |
 | `imageblockMemoryLengthForDimensions:` | yes | `pipeline_facts`, `pipeline_handlers` | 30 |
 | `supportIndirectCommandBuffers` | yes | `pipeline_facts`, `pipeline_handlers` | 30 |
+| `maxTotalThreadsPerObjectThreadgroup` | no | — | — |
+| `maxTotalThreadsPerMeshThreadgroup` | no | — | — |
+| `objectThreadExecutionWidth` | no | — | — |
+| `meshThreadExecutionWidth` | no | — | — |
+| `maxTotalThreadgroupsPerMeshGrid` | no | — | — |
 | `gpuResourceID` | no | — | — |
 | `functionHandleWithFunction:stage:` | yes | `visible_tables` | 18 |
 | `newVisibleFunctionTableWithDescriptor:stage:` | yes | `visible_tables` | 18 |
 | `newRenderPipelineStateWithAdditionalBinaryFunctions:error:` | no | — | — |
 | `requiredThreadsPerTileThreadgroup` | yes | `pipeline_facts`, `pipeline_handlers` | 30 |
+| `requiredThreadsPerObjectThreadgroup` | no | — | — |
+| `requiredThreadsPerMeshThreadgroup` | no | — | — |
 
 ### `MTLResource`
 

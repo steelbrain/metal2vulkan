@@ -581,6 +581,15 @@ pub(crate) fn mesh_descriptor_key(
         alpha_to_one,
         support_indirect_command_buffers,
         texture_write_rounding_mode,
+        max_total_threads_per_object_threadgroup,
+        max_total_threads_per_mesh_threadgroup,
+        max_total_threadgroups_per_mesh_grid,
+        object_threadgroup_size_is_multiple_of_thread_execution_width,
+        mesh_threadgroup_size_is_multiple_of_thread_execution_width,
+        payload_memory_length,
+        max_vertex_amplification_count,
+        required_threads_per_object_threadgroup,
+        required_threads_per_mesh_threadgroup,
     } = d;
     let mut h = KeyHasher::new(b"metal2vulkan/mesh-descriptor-key/v1");
     h.bytes(profile);
@@ -603,6 +612,18 @@ pub(crate) fn mesh_descriptor_key(
         format!("{raster_sample_count} {alpha_to_coverage} {alpha_to_one}"),
         format!("{rasterization_enabled} {support_indirect_command_buffers}"),
         format!("{texture_write_rounding_mode:?}"),
+        format!(
+            "{max_total_threads_per_object_threadgroup:?} {max_total_threads_per_mesh_threadgroup:?} \
+             {max_total_threadgroups_per_mesh_grid:?}"
+        ),
+        format!(
+            "{object_threadgroup_size_is_multiple_of_thread_execution_width} \
+             {mesh_threadgroup_size_is_multiple_of_thread_execution_width}"
+        ),
+        format!("{payload_memory_length:?} {max_vertex_amplification_count}"),
+        format!(
+            "{required_threads_per_object_threadgroup:?} {required_threads_per_mesh_threadgroup:?}"
+        ),
     ];
     h.u64(fields.len() as u64);
     for field in &fields {

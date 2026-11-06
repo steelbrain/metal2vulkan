@@ -1458,6 +1458,7 @@ enum	metal2vulkan::error::Limit	#[derive(Clone, Copy, Debug, PartialEq, Eq, Part
 enum	metal2vulkan::error::LinearNeed	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum LinearNeed
 enum	metal2vulkan::error::LinkProblem	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum LinkProblem
 enum	metal2vulkan::error::LowerFamily	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum LowerFamily
+enum	metal2vulkan::error::MeshPipelineProblem	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum MeshPipelineProblem
 enum	metal2vulkan::error::Needs	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub enum Needs
 enum	metal2vulkan::error::Permanence	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum Permanence
 enum	metal2vulkan::error::PrivateRenderField	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum PrivateRenderField
@@ -4401,13 +4402,27 @@ field	metal2vulkan::pipeline::MeshPipelineDescriptor.alpha_to_one	pub alpha_to_o
 field	metal2vulkan::pipeline::MeshPipelineDescriptor.color_attachments	pub color_attachments: [Option<ColorAttachmentDescriptor>; 8]
 field	metal2vulkan::pipeline::MeshPipelineDescriptor.depth_format	pub depth_format: Option<metal::PixelFormat>
 field	metal2vulkan::pipeline::MeshPipelineDescriptor.fragment	pub fragment: Option<StageSource>
+field	metal2vulkan::pipeline::MeshPipelineDescriptor.max_total_threadgroups_per_mesh_grid	pub max_total_threadgroups_per_mesh_grid: Option<u32>
+field	metal2vulkan::pipeline::MeshPipelineDescriptor.max_total_threads_per_mesh_threadgroup	pub max_total_threads_per_mesh_threadgroup: Option<u32>
+field	metal2vulkan::pipeline::MeshPipelineDescriptor.max_total_threads_per_object_threadgroup	pub max_total_threads_per_object_threadgroup: Option<u32>
+field	metal2vulkan::pipeline::MeshPipelineDescriptor.max_vertex_amplification_count	pub max_vertex_amplification_count: u32
 field	metal2vulkan::pipeline::MeshPipelineDescriptor.mesh	pub mesh: StageSource
+field	metal2vulkan::pipeline::MeshPipelineDescriptor.mesh_threadgroup_size_is_multiple_of_thread_execution_width	pub mesh_threadgroup_size_is_multiple_of_thread_execution_width: bool
 field	metal2vulkan::pipeline::MeshPipelineDescriptor.object	pub object: Option<StageSource>
+field	metal2vulkan::pipeline::MeshPipelineDescriptor.object_threadgroup_size_is_multiple_of_thread_execution_width	pub object_threadgroup_size_is_multiple_of_thread_execution_width: bool
+field	metal2vulkan::pipeline::MeshPipelineDescriptor.payload_memory_length	pub payload_memory_length: Option<u32>
 field	metal2vulkan::pipeline::MeshPipelineDescriptor.raster_sample_count	pub raster_sample_count: u32
 field	metal2vulkan::pipeline::MeshPipelineDescriptor.rasterization_enabled	pub rasterization_enabled: bool
+field	metal2vulkan::pipeline::MeshPipelineDescriptor.required_threads_per_mesh_threadgroup	pub required_threads_per_mesh_threadgroup: Option<[u32; 3]>
+field	metal2vulkan::pipeline::MeshPipelineDescriptor.required_threads_per_object_threadgroup	pub required_threads_per_object_threadgroup: Option<[u32; 3]>
 field	metal2vulkan::pipeline::MeshPipelineDescriptor.stencil_format	pub stencil_format: Option<metal::PixelFormat>
 field	metal2vulkan::pipeline::MeshPipelineDescriptor.support_indirect_command_buffers	pub support_indirect_command_buffers: bool
 field	metal2vulkan::pipeline::MeshPipelineDescriptor.texture_write_rounding_mode	pub texture_write_rounding_mode: metal::TextureWriteRoundingMode
+field	metal2vulkan::pipeline::MeshPipelineMetalInfo.max_total_threadgroups_per_mesh_grid	pub max_total_threadgroups_per_mesh_grid: u32
+field	metal2vulkan::pipeline::MeshPipelineMetalInfo.max_total_threads_per_mesh_threadgroup	pub max_total_threads_per_mesh_threadgroup: u32
+field	metal2vulkan::pipeline::MeshPipelineMetalInfo.max_total_threads_per_object_threadgroup	pub max_total_threads_per_object_threadgroup: u32
+field	metal2vulkan::pipeline::MeshPipelineMetalInfo.mesh_thread_execution_width	pub mesh_thread_execution_width: u32
+field	metal2vulkan::pipeline::MeshPipelineMetalInfo.object_thread_execution_width	pub object_thread_execution_width: u32
 field	metal2vulkan::pipeline::MeshRecords.corners	pub corners: u32
 field	metal2vulkan::pipeline::MeshRecords.fields	pub fields: Vec<RecordField>
 field	metal2vulkan::pipeline::MeshRecords.primitive_words	pub primitive_words: u32
@@ -4473,6 +4488,7 @@ field	metal2vulkan::pipeline::RenderPipeline.graphics	pub graphics: GraphicsStat
 field	metal2vulkan::pipeline::RenderPipeline.interface	pub interface: PipelineInterface
 field	metal2vulkan::pipeline::RenderPipeline.key	pub key: PipelineKey
 field	metal2vulkan::pipeline::RenderPipeline.layout	pub layout: PipelineLayout
+field	metal2vulkan::pipeline::RenderPipeline.mesh_info	pub mesh_info: Option<MeshPipelineMetalInfo>
 field	metal2vulkan::pipeline::RenderPipeline.profile	pub profile: Hash256
 field	metal2vulkan::pipeline::RenderPipeline.requirements	pub requirements: Requirements
 field	metal2vulkan::pipeline::RenderPipeline.stages	pub stages: Vec<StageModule>
@@ -8328,12 +8344,19 @@ method	metal2vulkan-runtime::RenderPipelineState::imageblock_memory_length_for_d
 method	metal2vulkan-runtime::RenderPipelineState::imageblock_sample_length	pub fn imageblock_sample_length(&self) -> Result<u64, Error>
 method	metal2vulkan-runtime::RenderPipelineState::indirect_command_writes	pub fn indirect_command_writes(&self) -> CommandWrites
 method	metal2vulkan-runtime::RenderPipelineState::label	pub fn label(&self) -> Option<&str>
+method	metal2vulkan-runtime::RenderPipelineState::max_total_threadgroups_per_mesh_grid	pub fn max_total_threadgroups_per_mesh_grid(&self) -> u32
+method	metal2vulkan-runtime::RenderPipelineState::max_total_threads_per_mesh_threadgroup	pub fn max_total_threads_per_mesh_threadgroup(&self) -> u32
+method	metal2vulkan-runtime::RenderPipelineState::max_total_threads_per_object_threadgroup	pub fn max_total_threads_per_object_threadgroup(&self) -> u32
 method	metal2vulkan-runtime::RenderPipelineState::max_total_threads_per_threadgroup	pub fn max_total_threads_per_threadgroup(&self) -> u32
+method	metal2vulkan-runtime::RenderPipelineState::mesh_thread_execution_width	pub fn mesh_thread_execution_width(&self) -> u32
 method	metal2vulkan-runtime::RenderPipelineState::mesh_writes_textures	pub fn mesh_writes_textures(&self) -> bool
 method	metal2vulkan-runtime::RenderPipelineState::new_render_pipeline_state_with_additional_binary_functions	pub fn new_render_pipeline_state_with_additional_binary_functions(&self, functions: &RenderPipelineFunctionsDescriptor) -> Result<RenderPipelineState, Error>
 method	metal2vulkan-runtime::RenderPipelineState::new_visible_function_table	pub fn new_visible_function_table(&self, descriptor: &VisibleFunctionTableDescriptor, stage: RenderStages) -> Result<VisibleFunctionTable, Error>
+method	metal2vulkan-runtime::RenderPipelineState::object_thread_execution_width	pub fn object_thread_execution_width(&self) -> u32
 method	metal2vulkan-runtime::RenderPipelineState::object_writes_textures	pub fn object_writes_textures(&self) -> bool
 method	metal2vulkan-runtime::RenderPipelineState::reads_barycentric_coord	pub fn reads_barycentric_coord(&self) -> bool
+method	metal2vulkan-runtime::RenderPipelineState::required_threads_per_mesh_threadgroup	pub fn required_threads_per_mesh_threadgroup(&self) -> Size
+method	metal2vulkan-runtime::RenderPipelineState::required_threads_per_object_threadgroup	pub fn required_threads_per_object_threadgroup(&self) -> Size
 method	metal2vulkan-runtime::RenderPipelineState::required_threads_per_tile_threadgroup	pub fn required_threads_per_tile_threadgroup(&self) -> Size
 method	metal2vulkan-runtime::RenderPipelineState::resource_index	pub fn resource_index(&self) -> u64
 method	metal2vulkan-runtime::RenderPipelineState::support_indirect_command_buffers	pub fn support_indirect_command_buffers(&self) -> bool
@@ -8965,6 +8988,7 @@ method	metal2vulkan::device::DeviceProfile::containment	pub fn containment(&self
 method	metal2vulkan::device::DeviceProfile::descriptors	pub fn descriptors(&self) -> &DescriptorCaps
 method	metal2vulkan::device::DeviceProfile::device_drops_texel_writes	pub fn device_drops_texel_writes(&self, texel_buffer: bool) -> bool
 method	metal2vulkan::device::DeviceProfile::device_reads_texels	pub fn device_reads_texels(&self, texel_buffer: bool) -> bool
+method	metal2vulkan::device::DeviceProfile::emulates_mesh_shading	pub fn emulates_mesh_shading(&self) -> bool
 method	metal2vulkan::device::DeviceProfile::enabled	pub fn enabled(&self) -> &EnabledCaps
 method	metal2vulkan::device::DeviceProfile::fingerprint	pub fn fingerprint(&self) -> Hash256
 method	metal2vulkan::device::DeviceProfile::fragment	pub fn fragment(&self) -> &FragmentCaps
@@ -9913,6 +9937,7 @@ struct	metal2vulkan::pipeline::LinkedFunctions	#[derive(Clone, Debug, Default, P
 struct	metal2vulkan::pipeline::LinkedSource	#[derive(Clone, Copy, Debug)] pub struct LinkedSource<'a>
 struct	metal2vulkan::pipeline::LoweringInputs	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub struct LoweringInputs
 struct	metal2vulkan::pipeline::MeshPipelineDescriptor	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct MeshPipelineDescriptor
+struct	metal2vulkan::pipeline::MeshPipelineMetalInfo	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct MeshPipelineMetalInfo
 struct	metal2vulkan::pipeline::MeshRecords	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct MeshRecords
 struct	metal2vulkan::pipeline::ModuleStats	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct ModuleStats
 struct	metal2vulkan::pipeline::PipelineInterface	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct PipelineInterface
@@ -13317,6 +13342,7 @@ variant	metal2vulkan::error::DescriptorError::FunctionConstantType	FunctionConst
 variant	metal2vulkan::error::DescriptorError::LinkedFunction	LinkedFunction { name: DiagName, problem: LinkProblem }
 variant	metal2vulkan::error::DescriptorError::MaxCallStackDepth	MaxCallStackDepth { compiled: u32, given: u32 }
 variant	metal2vulkan::error::DescriptorError::MaxTessellationFactor	MaxTessellationFactor { factor: u32, partition_mode: crate::metal::TessellationPartitionMode }
+variant	metal2vulkan::error::DescriptorError::MeshPipeline	MeshPipeline { problem: MeshPipelineProblem }
 variant	metal2vulkan::error::DescriptorError::MissingStage	MissingStage { stage: Stage }
 variant	metal2vulkan::error::DescriptorError::PixelFormatUsage	PixelFormatUsage { format: u32, usage: FormatUsage }
 variant	metal2vulkan::error::DescriptorError::PlaceholderEnumValue	PlaceholderEnumValue { ty: &'static str, value: u32 }
@@ -13574,6 +13600,13 @@ variant	metal2vulkan::error::LowerFamily::Simd	Simd
 variant	metal2vulkan::error::LowerFamily::StageIo	StageIo
 variant	metal2vulkan::error::LowerFamily::Tessellation	Tessellation
 variant	metal2vulkan::error::LowerFamily::Texture	Texture
+variant	metal2vulkan::error::MeshPipelineProblem::MaxThreadsDiffer	MaxThreadsDiffer { stage: Stage, specified: u32, max: u32 }
+variant	metal2vulkan::error::MeshPipelineProblem::MaxThreadsOverLimit	MaxThreadsOverLimit { stage: Stage, max: u32, limit: u32 }
+variant	metal2vulkan::error::MeshPipelineProblem::PayloadOverLimit	PayloadOverLimit { length: u32, limit: u32 }
+variant	metal2vulkan::error::MeshPipelineProblem::RequiredEmptyAxis	RequiredEmptyAxis { stage: Stage, required: [u32; 3] }
+variant	metal2vulkan::error::MeshPipelineProblem::RequiredOverLimit	RequiredOverLimit { stage: Stage, threads: u64, limit: u32 }
+variant	metal2vulkan::error::MeshPipelineProblem::RequiredOverMax	RequiredOverMax { stage: Stage, threads: u64, max: u32 }
+variant	metal2vulkan::error::MeshPipelineProblem::RequiredWithoutObjectFunction	RequiredWithoutObjectFunction { required: [u32; 3] }
 variant	metal2vulkan::error::Needs::AnyOf	AnyOf(Vec<Vec<Capability>>)
 variant	metal2vulkan::error::Needs::DeviceCapability	DeviceCapability(&'static str)
 variant	metal2vulkan::error::Needs::DriverDefect	DriverDefect(DriverWorkaround)
@@ -14002,6 +14035,7 @@ variant	metal2vulkan::pipeline::RuntimeFact::MeshLastFirst	MeshLastFirst
 variant	metal2vulkan::pipeline::RuntimeFact::MovableStorageWrites	MovableStorageWrites { early_variant: bool }
 variant	metal2vulkan::pipeline::RuntimeFact::ObjectThreadgroupArena	ObjectThreadgroupArena { static_bytes: u32, payload: Option<u32> }
 variant	metal2vulkan::pipeline::RuntimeFact::OutOfBoundsAlpha	OutOfBoundsAlpha { slot: SlotRef }
+variant	metal2vulkan::pipeline::RuntimeFact::PartialObjectThreadgroups	PartialObjectThreadgroups
 variant	metal2vulkan::pipeline::RuntimeFact::PredicationVote	PredicationVote
 variant	metal2vulkan::pipeline::RuntimeFact::PrivateList	PrivateList
 variant	metal2vulkan::pipeline::RuntimeFact::QuadPrimitiveIds	QuadPrimitiveIds
