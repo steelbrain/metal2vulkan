@@ -1309,7 +1309,7 @@ fn a_runtime_sampler_s_filter_note_holds_only_where_the_bound_word_filters() {
                     SpecKey::BoundSamplerWord(s) if s == sampler => Some(word),
                     _ => None,
                 };
-                let held = noted.iter().any(|c| holds(*c, &value));
+                let held = noted.iter().any(|c| holds(c, &value));
                 assert_eq!(held, *filters && ycbcr, "{what}: {name} over {pf:?}");
             }
         }
