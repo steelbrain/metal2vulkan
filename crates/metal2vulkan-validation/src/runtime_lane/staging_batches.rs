@@ -16,7 +16,8 @@
 //! Where the device copies on its staging queue, the counts show the batching
 //! (`WorkCounts::staging_moves_queued`, `staging_copies_queued`, `staging_flushes`,
 //! `staging_gpu_waits`): no submission during a burst, one that carries it all, waited for on the
-//! GPU by the first batch on each `VkQueue` after it.
+//! GPU by the first batch on each `VkQueue` after it that the host submits before it saw the copy
+//! complete.
 //! Each test prints the path it saw (`STAGING-BATCH` lines).
 
 use super::host_memory::on_device;
@@ -214,11 +215,15 @@ fn a_burst_of_replace_regions_shares_one_staging_submission() {
 /// One `replace_region` of a 64 MiB `Managed` texture, then `BATCHES` command buffers committed
 /// back to back on one queue, each a blit of a 64-texel square of it of its own into a buffer:
 /// every blit reads the call's bytes. Where the device copies on its staging queue, the first
-/// batch carried the copy and waited for it on the GPU, and the batches after it on the queue,
-/// committed while the copy may still run, took no wait of their own: they follow that wait in
-/// the `VkQueue`'s submission order, which orders them after the copy (`command_buffer/submit.rs`).
-/// So the staging waits are one per staging submission, not one per batch the host submitted
-/// before it saw the copy complete.
+/// batch carried the copy, and waited for it on the GPU unless the host saw it complete by then
+/// (a loaded host can stall the batch's submission past the copy's end); the batches after it on
+/// the queue, committed while the copy may still run, took no wait of their own: they follow that
+/// wait in the `VkQueue`'s submission order, which orders them after the copy
+/// (`command_buffer/submit.rs`). So the staging waits are at most one per staging submission, not
+/// one per batch the host submitted before it saw the copy complete. The runtime's
+/// `tests::staging_waits` holds the staging submission on the GPU until every batch was
+/// submitted, so that the wait and the batches that follow it are seen whatever the host's
+/// timing.
 #[test]
 fn batches_after_one_that_waited_for_a_staging_copy_follow_its_wait() {
     const SIDE: u64 = 4096;
@@ -292,12 +297,18 @@ fn batches_after_one_that_waited_for_a_staging_copy_follow_its_wait() {
                 "{name}: the first batch carried the copy in one staging submission"
             );
             assert!(
-                (1..=1 + read.internal).contains(&read.gpu_waits),
-                "{name}: one batch on the queue waited for the staging submission on the GPU, \
-                 and the batches after it none (internal submissions wait for it themselves): \
-                 {} waits",
+                read.gpu_waits <= 1 + read.internal,
+                "{name}: at most one batch on the queue waited for the staging submission on the \
+                 GPU, and the batches after it none (internal submissions wait for it \
+                 themselves): {} waits",
                 read.gpu_waits
             );
+            if read.gpu_waits == 0 {
+                println!(
+                    "STAGING-BATCH {name}: the host saw the staging submission complete before \
+                     the first batch was submitted; no batch waited for it"
+                );
+            }
         }
     });
 }

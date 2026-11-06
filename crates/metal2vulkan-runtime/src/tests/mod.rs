@@ -367,6 +367,8 @@ mod sparse;
 mod srgb_fetch_images;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod stage_entries_shared;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod staging_waits;
 mod stand_in;
 mod storage_form;
 mod submit_stalls;

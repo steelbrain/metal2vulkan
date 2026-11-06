@@ -387,14 +387,15 @@ struct Making<'a> {
     ended: bool,
 }
 
-impl Making<'_> {
+impl<'a> Making<'a> {
     /// The import's answer into the slot, and those waiting for it told, under its lock, which
     /// the caller holds after: `made`, or not imported where it failed.
-    fn end(mut self, made: Option<Arc<RamChunk>>) -> MutexGuard<'_, Import> {
+    fn end(mut self, made: Option<Arc<RamChunk>>) -> MutexGuard<'a, Import> {
         self.ended = true;
-        let mut import = lock(&self.slot.import);
+        let slot = self.slot;
+        let mut import = lock(&slot.import);
         *import = made.map_or(Import::None, Import::Made);
-        self.slot.made.notify_all();
+        slot.made.notify_all();
         import
     }
 }

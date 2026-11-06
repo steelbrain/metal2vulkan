@@ -73,6 +73,10 @@ pub(super) struct StagingQueue {
     timeline: OnceLock<vk::Semaphore>,
     /// The value the last submission made signals, stored under `objects`' lock once it was made.
     submitted: AtomicU64,
+    /// The tests' hold on the submissions ([`Device::hold_staging_submissions`]): a timeline and
+    /// a value each waits for on the GPU besides.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    held: Mutex<Option<(vk::Semaphore, u64)>>,
 }
 
 struct Objects {
@@ -113,6 +117,8 @@ impl StagingQueue {
             objects: Mutex::new(Objects { queue, made: None }),
             timeline: OnceLock::new(),
             submitted: AtomicU64::new(0),
+            #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+            held: Mutex::new(None),
         }
     }
 
@@ -212,6 +218,9 @@ impl StagingLock<'_> {
             .map(|slot| (slot.timeline, slot.completed_value()))
             .filter(|&(_, value)| value > 0)
             .collect();
+        #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+        let completed: Vec<(vk::Semaphore, u64)> =
+            completed.into_iter().chain(*lock(&staging.held)).collect();
         let wait_semaphores: Vec<vk::Semaphore> = completed.iter().map(|w| w.0).collect();
         let wait_values: Vec<u64> = completed.iter().map(|w| w.1).collect();
         let wait_stages = vec![vk::PipelineStageFlags::ALL_COMMANDS; completed.len()];
@@ -316,6 +325,19 @@ fn wait_for(device: &Device, timeline: vk::Semaphore, value: u64) -> Result<(), 
         }
     }
     Ok(())
+}
+
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+impl Device {
+    /// Have each staging submission made from now on wait on the GPU, besides, for `hold`'s
+    /// timeline to reach its value (`None`: no more), which the test signals from the host: the
+    /// tests' way to see batches submitted while a staging submission has not completed, whatever
+    /// the host's timing. No-op on a device without a staging queue.
+    pub(crate) fn hold_staging_submissions(&self, hold: Option<(vk::Semaphore, u64)>) {
+        if let Some(staging) = self.shared().staging.as_ref() {
+            *lock(&staging.held) = hold;
+        }
+    }
 }
 
 impl Device {
