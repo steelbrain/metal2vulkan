@@ -19,6 +19,10 @@
 //! - **`one pass`**: the same calls in one encoder: one opening and one end where `passes` has
 //!   [`PASSES`] of each, so the two frames' difference over `PASSES - 1` is what a pass's opening
 //!   and end add, its effect on the draws after it included.
+//! - **`barriers`**: `one pass` with a memory barrier over buffers, textures and render targets
+//!   from the vertex and fragment stages to both before each pass's calls but the first: the
+//!   encoder's own order of everything before the barrier ahead of everything after it, as an
+//!   encoder's end orders it ahead of the next encoder's.
 //! - **`bare sets`** and **`bare pushed`**: the same frame in plain Vulkan on the runtime's own
 //!   device, through the driver's commands (loaded with `vkGetDeviceProcAddr`, not the runtime's
 //!   counted ones): per pass a `vkCmdBeginRenderPass` (one render pass object clearing, one
@@ -59,7 +63,8 @@ use crate::gpu::TEST_DEVICE;
 use metal2vulkan::bind::SamplerDescriptor;
 use metal2vulkan::library::{FunctionConstantValue, FunctionConstantValues};
 use metal2vulkan::metal::{
-    BlendFactor, DataType, PixelFormat, PrimitiveType, SamplerMinMagFilter, TextureUsage,
+    BarrierScope, BlendFactor, DataType, PixelFormat, PrimitiveType, RenderStages,
+    SamplerMinMagFilter, TextureUsage,
 };
 use metal2vulkan::pipeline::{ColorAttachmentDescriptor, RenderPipelineDescriptor, StageSource};
 use metal2vulkan_devtools::{engine_dir, llvm_assemble};
@@ -97,6 +102,7 @@ const SLOT: usize = 512;
 enum Shape {
     Passes,
     OnePass,
+    Barriers,
 }
 
 impl Shape {
@@ -104,6 +110,7 @@ impl Shape {
         match self {
             Shape::Passes => "passes",
             Shape::OnePass => "one pass",
+            Shape::Barriers => "barriers",
         }
     }
 }
@@ -268,7 +275,7 @@ impl Composite {
         let mut frame = Frame::default();
         let (encoders, passes) = match shape {
             Shape::Passes => (PASSES, 1),
-            Shape::OnePass => (1, PASSES),
+            Shape::OnePass | Shape::Barriers => (1, PASSES),
         };
         let command_buffer = self.queue.command_buffer().unwrap();
         let cpu = thread_cpu();
@@ -280,8 +287,20 @@ impl Composite {
                 command_buffer.render_command_encoder(&descriptor).unwrap()
             });
             frame.open.push(open);
-            for _ in 0..passes {
-                let (calls, ops) = step(counted, || self.pass_ops(&mut encoder, &mut n));
+            for pass in 0..passes {
+                let barrier = shape == Shape::Barriers && pass > 0;
+                let (calls, ops) = step(counted, || {
+                    if barrier {
+                        encoder.memory_barrier_with_scope(
+                            BarrierScope::BUFFERS
+                                | BarrierScope::TEXTURES
+                                | BarrierScope::RENDER_TARGETS,
+                            RenderStages::VERTEX | RenderStages::FRAGMENT,
+                            RenderStages::VERTEX | RenderStages::FRAGMENT,
+                        );
+                    }
+                    self.pass_ops(&mut encoder, &mut n) + usize::from(barrier)
+                });
                 frame.ops.push((ops, calls));
             }
             let ((), end) = step(counted, || encoder.end_encoding().unwrap());
@@ -468,6 +487,8 @@ fn measure() {
         passes.print(&name, Shape::Passes.label());
         let one = composite.measure(Shape::OnePass);
         one.print(&name, Shape::OnePass.label());
+        let barriers = composite.measure(Shape::Barriers);
+        barriers.print(&name, Shape::Barriers.label());
         println!(
             "COMPOSITE-PASS {name}: (passes - one pass) / {}: {:.2} us of CPU, {:.2} us wall a \
              pass",
@@ -475,13 +496,20 @@ fn measure() {
             (passes.frame_cpu - one.frame_cpu) * 1e3 / (PASSES - 1) as f64,
             (passes.frame_wall - one.frame_wall) * 1e3 / (PASSES - 1) as f64,
         );
+        println!(
+            "COMPOSITE-PASS {name}: (barriers - one pass) / {}: {:.2} us of CPU, {:.2} us wall a \
+             barrier",
+            PASSES - 1,
+            (barriers.frame_cpu - one.frame_cpu) * 1e3 / (PASSES - 1) as f64,
+            (barriers.frame_wall - one.frame_wall) * 1e3 / (PASSES - 1) as f64,
+        );
         for pushed in [false, true] {
             if let Some(measured) = bare.measure(pushed) {
                 measured.print(&name, bare::label(pushed));
             }
         }
     }
-    for shape in [Shape::Passes, Shape::OnePass] {
+    for shape in [Shape::Passes, Shape::OnePass, Shape::Barriers] {
         let counts = composite.counts(shape);
         let text: Vec<String> = counts
             .iter()
