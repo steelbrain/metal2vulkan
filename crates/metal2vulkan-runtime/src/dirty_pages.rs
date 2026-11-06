@@ -564,16 +564,40 @@ pub(crate) type ShadowWrite<'a> = (NonZeroU64, &'a Arc<DirtySource>, Range<u64>)
 /// One log of an object's pages ([`PagesLog`]).
 struct LogOf {
     source: Arc<DirtySource>,
-    /// The object's bytes in the source's offsets: runs, each its first byte of the object and
-    /// the source's offsets of it, in the object's order, apart.
-    runs: Box<[(u64, Range<u64>)]>,
+    /// The object's bytes in the source's offsets, as runs in the object's order, apart: each
+    /// one's first byte of the object (ascending), and the source's offsets of it.
+    firsts: Box<[u64]>,
+    offsets: Box<[Range<u64>]>,
 }
 
 impl LogOf {
+    /// The log of `source` that holds the object's bytes in `runs`: each one's first byte of the
+    /// object and the source's offsets of it, in the object's order, apart.
+    fn new(source: &Arc<DirtySource>, runs: impl IntoIterator<Item = (u64, Range<u64>)>) -> LogOf {
+        let (firsts, offsets): (Vec<u64>, Vec<Range<u64>>) = runs.into_iter().unzip();
+        LogOf {
+            source: Arc::clone(source),
+            firsts: firsts.into_boxed_slice(),
+            offsets: offsets.into_boxed_slice(),
+        }
+    }
+
+    /// Its runs, in the object's order: each one's first byte of the object and the source's
+    /// offsets of it.
+    fn runs(&self) -> impl Iterator<Item = (u64, &Range<u64>)> {
+        self.firsts.iter().copied().zip(self.offsets.iter())
+    }
+
+    /// One past the object's last byte in run `index`.
+    fn end_of(&self, index: usize) -> u64 {
+        let offsets = &self.offsets[index];
+        self.firsts[index] + (offsets.end - offsets.start)
+    }
+
     /// Each run of the object's bytes that `changed` (the source's offsets, sorted by start and
     /// apart) meets, to `each`, in the object's order.
     fn bytes_of(&self, changed: &[Range<u64>], mut each: impl FnMut(Range<u64>)) {
-        for (first, offsets) in self.runs.iter() {
+        for (first, offsets) in self.runs() {
             let from = changed.partition_point(|run| run.end <= offsets.start);
             for run in changed[from..]
                 .iter()
@@ -588,15 +612,28 @@ impl LogOf {
     }
 
     /// Each run of the source's offsets of the object's bytes `bytes`, appended to `out` in the
-    /// object's order.
+    /// object's order: the runs `bytes` meets, found by their first bytes, copied as one slice,
+    /// the first and the last cut to it.
     fn runs_of(&self, bytes: &Range<u64>, out: &mut Vec<Range<u64>>) {
-        for (first, offsets) in self.runs.iter() {
-            let end = first + (offsets.end - offsets.start);
-            let (start, stop) = (bytes.start.max(*first), bytes.end.min(end));
-            if start < stop {
-                out.push(offsets.start + (start - first)..offsets.start + (stop - first));
-            }
+        if bytes.start >= bytes.end {
+            return;
         }
+        // The runs that start at or before `bytes` does, and those that start before it ends.
+        let below = self.firsts.partition_point(|first| *first <= bytes.start);
+        let to = self.firsts.partition_point(|first| *first < bytes.end);
+        // The last run that starts at or before `bytes` meets it unless it ends by its start.
+        let from = match below.checked_sub(1) {
+            Some(last) if self.end_of(last) > bytes.start => last,
+            _ => below,
+        };
+        if from >= to {
+            return;
+        }
+        let at = out.len();
+        out.extend_from_slice(&self.offsets[from..to]);
+        out[at].start += bytes.start.saturating_sub(self.firsts[from]);
+        let last = out.len() - 1;
+        out[last].end -= self.end_of(to - 1).saturating_sub(bytes.end);
     }
 }
 
@@ -652,10 +689,10 @@ impl PagesLog {
         let mut logs = Vec::new();
         if let Some(source) = own {
             if let Some(start) = source.offset_of(pointer) {
-                logs.push(LogOf {
-                    source: Arc::clone(source),
-                    runs: Box::new([(0, start..start.saturating_add(length))]),
-                });
+                logs.push(LogOf::new(
+                    source,
+                    [(0, start..start.saturating_add(length))],
+                ));
             }
         }
         if let Some((source, window, offset)) = ram {
@@ -676,10 +713,7 @@ impl PagesLog {
                 at += size;
             }
             if !runs.is_empty() {
-                logs.push(LogOf {
-                    source: Arc::clone(source),
-                    runs: runs.into_boxed_slice(),
-                });
+                logs.push(LogOf::new(source, runs));
             }
         }
         (!logs.is_empty()).then(|| {
@@ -701,9 +735,7 @@ impl PagesLog {
     pub(crate) fn watch(&self) -> Vec<Box<dyn Send + Sync>> {
         (self.logs.iter())
             .flat_map(|log| {
-                log.runs
-                    .iter()
-                    .map(|(_, offsets)| log.source.hook.watch(offsets.clone()))
+                (log.offsets.iter()).map(|offsets| log.source.hook.watch(offsets.clone()))
             })
             .collect()
     }
@@ -711,8 +743,8 @@ impl PagesLog {
     /// The object's bytes no log keeps the writes to, in order: every copy in compares them.
     pub(crate) fn unlogged(&self) -> Vec<Range<u64>> {
         let mut kept: Vec<Range<u64>> = (self.logs.iter())
-            .flat_map(|log| log.runs.iter())
-            .map(|(first, offsets)| *first..first + (offsets.end - offsets.start))
+            .flat_map(|log| log.runs())
+            .map(|(first, offsets)| first..first + (offsets.end - offsets.start))
             .collect();
         kept.sort_by_key(|run| run.start);
         let mut unlogged = Vec::new();
@@ -743,9 +775,9 @@ impl PagesLog {
         of_source.into_iter().any(|log| {
             // The runs are in the object's order, apart.
             let mut at = start;
-            for (first, offsets) in log.runs.iter() {
+            for (first, offsets) in log.runs() {
                 let stop = first + (offsets.end - offsets.start);
-                if *first <= at && at < stop {
+                if first <= at && at < stop {
                     at = stop;
                 }
             }
