@@ -3778,10 +3778,12 @@ fn half_sign_operations_keep_a_nan_s_payload_on_every_profile() {
 /// payload (held widened as a `float` NaN that no conversion of the device made) is not in the
 /// measurement, and records the note on both, requiring nothing (`narrow::moves_unfolded`); so
 /// is a phi of a select of the `half` against a constant with the `half` itself, which Metal's
-/// compiler is measured not to fold, where a phi of that select with a constant is folded, and
-/// so are the same two merged as members of `{half, i8}` structs (a texel's shape), a phi of the
-/// structs, followed member by member (`narrow::merges`). A `half` inserted into a struct
-/// (`{half, i8}`) and extracted is the `half` itself: stored with its own bits, never widened.
+/// compiler is measured not to fold, where a phi of that select with a constant is folded. A phi
+/// of `{half, i8}` texel structs carrying the select, merged with the `half`'s or with a constant
+/// struct, is held in a function variable of the struct, whose stores the measurement does not
+/// cover (only a scalar or vector `float` variable's): noted on both profiles whatever it merges
+/// (`narrow::moves_unfolded`). A `half` inserted into a struct (`{half, i8}`) and extracted is the
+/// `half` itself: stored with its own bits, never widened.
 #[test]
 fn half_moves_are_metals_only_where_the_device_folds_them() {
     let hx = oh("hx", 0xFE01);
@@ -3865,20 +3867,48 @@ fn half_moves_are_metals_only_where_the_device_folds_them() {
             // A `half` stored as itself is never widened, out of a struct too; each select reads
             // it by the widening.
             assert_eq!(widens, !matches!(kk.name, "kept" | "member_kept"), "{what}");
-            // A struct-wrapped merge stays a merge of the struct's members: a phi of `{half, i8}`
-            // texel structs, its own value's type.
-            if kk.name.starts_with("member_merged") {
-                let structs = m.blocks().iter().flat_map(|b| &b.phis).any(|phi| {
-                    let ty = m.value(phi.result).expect("a phi's value").ty;
-                    matches!(m.types().get(ty), Ok(crate::spirv::ir::Type::Struct { .. }))
-                });
-                assert!(structs, "{what}: no struct phi");
-            }
+            // An AIR phi of `{half, i8}` texel structs is held in a function variable of the
+            // struct, its incoming structs stored to it.
+            let struct_var = |ptr| {
+                use crate::spirv::ir::{StorageClass, Type as SType};
+                let ty = m.value(ptr).expect("a store's pointer").ty;
+                match m.types().get(ty) {
+                    Ok(SType::Pointer {
+                        class: StorageClass::Function,
+                        pointee,
+                    }) => matches!(m.types().get(*pointee), Ok(SType::Struct { .. })),
+                    _ => false,
+                }
+            };
+            let struct_stores = m.blocks().iter().flat_map(|b| &b.insts).any(|n| {
+                matches!(&n.inst, crate::spirv::ir::Inst::Store { ptr, .. } if struct_var(*ptr))
+            });
+            let shapes: Vec<String> = m
+                .blocks()
+                .iter()
+                .flat_map(|b| {
+                    let phis = b.phis.iter().map(|phi| {
+                        let ty = m.value(phi.result).expect("a phi's value").ty;
+                        format!("phi {:?}", m.types().get(ty))
+                    });
+                    let stores = b.insts.iter().filter_map(|n| match &n.inst {
+                        crate::spirv::ir::Inst::Store { ptr, .. } => {
+                            let ty = m.value(*ptr).expect("a store's pointer").ty;
+                            Some(format!("store to {:?}", m.types().get(ty)))
+                        }
+                        _ => None,
+                    });
+                    phis.chain(stores).collect::<Vec<_>>()
+                })
+                .collect();
+            assert_eq!(
+                struct_stores,
+                kk.name.starts_with("member_merged"),
+                "{what}: a store to a struct variable: {shapes:?}"
+            );
             let folded = moves
-                && !matches!(
-                    kk.name,
-                    "payload_constant" | "merged_selection" | "member_merged_selection"
-                );
+                && !matches!(kk.name, "payload_constant" | "merged_selection")
+                && !kk.name.starts_with("member_merged");
             assert_eq!(
                 a.precision.contains(&PrecisionNote::NativeNanEncoding),
                 widens && !folded,
