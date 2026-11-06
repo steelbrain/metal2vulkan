@@ -28,10 +28,10 @@ use crate::gpu::TEST_DEVICE;
 use crate::literal::LiteralTexture;
 use ash::vk;
 use metal2vulkan::bind::indirect_commands::RECORDS_ID_LIMIT;
-use metal2vulkan::bind::{SamplerDescriptor, TileMapping};
+use metal2vulkan::bind::{SamplerDescriptor, TileMapping, HANDLE_TABLE_CAPACITY};
 use metal2vulkan::device::DriverFact;
 use metal2vulkan::device::VkFeature;
-use metal2vulkan::error::{Feature, RuntimeDriverDefect};
+use metal2vulkan::error::{Feature, Needs, RuntimeDriverDefect};
 use metal2vulkan::metal::format::direct_format;
 use metal2vulkan::metal::{
     CompareFunction, IndirectCommandType, PixelFormat, RenderStages, ResourceUsage,
@@ -3162,6 +3162,50 @@ fn placed_ids_past_the_limits_are_refused_typed() {
                 .unwrap_err(),
         );
     });
+}
+
+/// A texture ID at the handle table's reach (`HANDLE_TABLE_CAPACITY`, 65536 entries, within which
+/// link sizes every heap array) is one no set-1 array holds: its reservation is refused
+/// `Unsupported`, not implemented where the device's update-after-bind image limits reach past it
+/// (the device's limit named otherwise), and the ID below it is reserved. Printed
+/// (`TEXTURE_RESERVATION`).
+#[test]
+fn a_texture_reservation_at_the_handle_table_s_reach_is_refused() {
+    let reach = HANDLE_TABLE_CAPACITY;
+    let mut past = false;
+    on_device(|device, _| {
+        let l = &device.properties().description.limits;
+        let least = |limits: [u32; 3]| limits.into_iter().min().unwrap();
+        let sampled = least([
+            l.max_descriptor_set_update_after_bind_sampled_images,
+            l.max_per_stage_descriptor_update_after_bind_sampled_images,
+            l.max_per_stage_update_after_bind_resources,
+        ]);
+        let storage = least([
+            l.max_descriptor_set_update_after_bind_storage_images,
+            l.max_per_stage_descriptor_update_after_bind_storage_images,
+            l.max_per_stage_update_after_bind_resources,
+        ]);
+        past = sampled.max(storage) > reach;
+        let reserved =
+            device.reserve_resource_ids(ResourceIdKind::Texture, &[ResourceId(u64::from(reach))]);
+        eprintln!(
+            "TEXTURE_RESERVATION at={reach} sampled={sampled} storage={storage} {reserved:?}"
+        );
+        let Err(Error::Unsupported(refused)) = reserved else {
+            panic!("{reserved:?}");
+        };
+        assert_eq!(refused.feature, Feature::ArgumentBufferTextures);
+        assert_eq!(refused.needs == Needs::NotImplemented, past, "{refused:?}");
+    });
+    if past {
+        on_device(|device, _| {
+            let below = ResourceId(u64::from(reach) - 1);
+            device
+                .reserve_resource_ids(ResourceIdKind::Texture, &[below])
+                .unwrap();
+        });
+    }
 }
 
 /// A texture `new_texture` makes [`IdPlacement::Outside`] takes no resource ID (the consumer's

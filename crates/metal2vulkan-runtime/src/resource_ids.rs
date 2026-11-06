@@ -135,8 +135,10 @@
 //!   reaches every ID a heap array can (`heap_sets.rs`), so a texture Metal numbers past its
 //!   placement limit is reached as any other. A texture's ID indexes every set-1 array its usage
 //!   can bind it through (sampled where it reads, storage where it writes), so an ID past the least
-//!   of those arrays' update-after-bind limits is refused `Unsupported`; a reservation is refused
-//!   only past the larger, since no usage is known then. A sampler state is never refused for the
+//!   of those arrays' elements is refused `Unsupported`: past their update-after-bind limits,
+//!   naming the limit, or past the handle table's 65536 entries, within which link sizes every
+//!   heap array, not implemented. A reservation is refused only past the larger, since no usage is
+//!   known then. A sampler state is never refused for the
 //!   sampler arrays: its element there is not its ID but the lowest no live state holds
 //!   (`ElementHold`), which the sampler table maps its ID to (its two windows reach IDs 0 to 32767
 //!   and 32768 more from the first ID past them, a reservation's, `heap_sets.rs`); only where more
@@ -165,7 +167,8 @@ use super::error::{invalid, Error, Problem};
 use super::pipeline::{RenderShared, StateShared};
 use super::sampler::SamplerShared;
 use super::texture::TextureShared;
-use metal2vulkan::device::VkLimit;
+use metal2vulkan::bind::HANDLE_TABLE_CAPACITY;
+use metal2vulkan::device::{DeviceProfile, VkLimit};
 use metal2vulkan::error::{Capability, Feature, Unsupported};
 use metal2vulkan::metal::{TextureType, TextureUsage};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
@@ -1132,7 +1135,8 @@ impl Device {
     /// Metal's process (`Invalid`, `Problem::ResourceId`); an indirect command buffer ID of 2^31
     /// or more, at which Metal's reservation never returns (`Invalid`,
     /// `Problem::ReservationHangs`); and a texture ID no set-1 array of the device can hold
-    /// (`Unsupported`, naming the limit). Plain indirect command buffer IDs past a reservation
+    /// (`Unsupported`: naming the limit, or not implemented past the handle table's 65536
+    /// entries). Plain indirect command buffer IDs past a reservation
     /// are Metal's, to 2^31 - 1, each buffer made at any length.
     pub fn reserve_resource_ids(
         &self,
@@ -1156,8 +1160,8 @@ impl Device {
                 // Whatever texture is placed at it: an ID no texture array can hold.
                 ResourceIdKind::Texture => {
                     check_limit(CALL, id, RESERVED_POOL_LIMIT)?;
-                    let [sampled, storage] = self.texture_arrays();
-                    self.check_capacity(id, sampled.max(storage))?;
+                    let [sampled, storage] = texture_arrays(self.compile_device().profile());
+                    check_capacity(id, sampled.max(storage))?;
                 }
                 ResourceIdKind::SamplerState => check_limit(CALL, id, RESERVED_POOL_LIMIT)?,
                 ResourceIdKind::IndirectCommandBuffer if id >= RECORDS_RESERVED_LIMIT => {
@@ -1290,7 +1294,7 @@ impl Device {
         if texture_type == TextureType::TextureBuffer {
             return Ok(());
         }
-        let [sampled, storage] = self.texture_arrays();
+        let [sampled, storage] = texture_arrays(self.compile_device().profile());
         let arrays = [
             usage.contains(TextureUsage::SHADER_READ).then_some(sampled),
             usage
@@ -1298,7 +1302,7 @@ impl Device {
                 .then_some(storage),
         ];
         match arrays.into_iter().flatten().min() {
-            Some(least) => self.check_capacity(id, least),
+            Some(least) => check_capacity(id, least),
             None => Ok(()),
         }
     }
@@ -1315,54 +1319,6 @@ impl Device {
             IdPlacement::Any => Ok(()),
             IdPlacement::Outside => Err(invalid(call, Problem::OutsidePlacement)),
         }
-    }
-
-    /// Refuse ID `id` past `array`, a set-1 array's capacity and the limit that bounds it.
-    fn check_capacity(&self, id: u64, (available, limit): (u64, VkLimit)) -> Result<(), Error> {
-        if id < available {
-            return Ok(());
-        }
-        Err(Error::Unsupported(Unsupported::needs(
-            Feature::ArgumentBufferTextures,
-            Capability::Limit {
-                limit,
-                required: id + 1,
-                available,
-            },
-        )))
-    }
-
-    /// The most elements a set-1 sampled-image array and a set-1 storage-image array can have
-    /// on the device (an ID is its element), each with the limit that bounds it.
-    fn texture_arrays(&self) -> [(u64, VkLimit); 2] {
-        let l = self.compile_device().profile().limits();
-        let resources = (
-            l.max_per_stage_update_after_bind_resources,
-            VkLimit::MaxPerStageUpdateAfterBindResources,
-        );
-        let sampled = least(&[
-            (
-                l.max_descriptor_set_update_after_bind_sampled_images,
-                VkLimit::MaxDescriptorSetUpdateAfterBindSampledImages,
-            ),
-            (
-                l.max_per_stage_descriptor_update_after_bind_sampled_images,
-                VkLimit::MaxPerStageDescriptorUpdateAfterBindSampledImages,
-            ),
-            resources,
-        ]);
-        let storage = least(&[
-            (
-                l.max_descriptor_set_update_after_bind_storage_images,
-                VkLimit::MaxDescriptorSetUpdateAfterBindStorageImages,
-            ),
-            (
-                l.max_per_stage_descriptor_update_after_bind_storage_images,
-                VkLimit::MaxPerStageDescriptorUpdateAfterBindStorageImages,
-            ),
-            resources,
-        ]);
-        [sampled, storage]
     }
 
     /// The most elements a set-1 sampler array can have on the device: link's count for a
@@ -1442,11 +1398,74 @@ pub(super) fn records_placement(
     Ok(Some(kept))
 }
 
-/// The least of `limits` (each a capacity and the limit it is), as a capacity.
-fn least(limits: &[(u32, VkLimit)]) -> (u64, VkLimit) {
-    limits
-        .iter()
-        .map(|&(value, limit)| (u64::from(value), limit))
-        .min()
-        .unwrap_or((0, VkLimit::MaxPerStageUpdateAfterBindResources))
+/// What bounds a set-1 image array's elements ([`texture_arrays`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub(super) enum ArrayBound {
+    /// One of the device's update-after-bind limits.
+    Limit(VkLimit),
+    /// The handle table's reach (`bind::HANDLE_TABLE_CAPACITY`, 65536 entries), within which link
+    /// sizes every heap array (`pipeline::link`'s heap capacity): an element past it is not
+    /// built on any device.
+    HandleTable,
+}
+
+/// The most elements a set-1 sampled-image array and a set-1 storage-image array can have on a
+/// device of `p` (an ID is its element), each with what bounds it ([`least`]).
+pub(super) fn texture_arrays(p: &DeviceProfile) -> [(u64, ArrayBound); 2] {
+    let l = p.limits();
+    let resources = (
+        l.max_per_stage_update_after_bind_resources,
+        VkLimit::MaxPerStageUpdateAfterBindResources,
+    );
+    let sampled = least(&[
+        (
+            l.max_descriptor_set_update_after_bind_sampled_images,
+            VkLimit::MaxDescriptorSetUpdateAfterBindSampledImages,
+        ),
+        (
+            l.max_per_stage_descriptor_update_after_bind_sampled_images,
+            VkLimit::MaxPerStageDescriptorUpdateAfterBindSampledImages,
+        ),
+        resources,
+    ]);
+    let storage = least(&[
+        (
+            l.max_descriptor_set_update_after_bind_storage_images,
+            VkLimit::MaxDescriptorSetUpdateAfterBindStorageImages,
+        ),
+        (
+            l.max_per_stage_descriptor_update_after_bind_storage_images,
+            VkLimit::MaxPerStageDescriptorUpdateAfterBindStorageImages,
+        ),
+        resources,
+    ]);
+    [sampled, storage]
+}
+
+/// Refuse ID `id` past `array`, a set-1 array's elements and what bounds them: the limit it
+/// needs, or, past the handle table's reach, not implemented.
+pub(super) fn check_capacity(id: u64, (available, bound): (u64, ArrayBound)) -> Result<(), Error> {
+    if id < available {
+        return Ok(());
+    }
+    Err(Error::Unsupported(match bound {
+        ArrayBound::Limit(limit) => Unsupported::needs(
+            Feature::ArgumentBufferTextures,
+            Capability::Limit {
+                limit,
+                required: id + 1,
+                available,
+            },
+        ),
+        ArrayBound::HandleTable => Unsupported::not_implemented(Feature::ArgumentBufferTextures),
+    }))
+}
+
+/// The least of the handle table's reach and `limits` (each a capacity and the limit it is), as a
+/// set-1 array's elements and what bounds them: the device's limit where one equals the reach.
+fn least(limits: &[(u32, VkLimit)]) -> (u64, ArrayBound) {
+    let table = (u64::from(HANDLE_TABLE_CAPACITY), ArrayBound::HandleTable);
+    (limits.iter())
+        .map(|&(value, limit)| (u64::from(value), ArrayBound::Limit(limit)))
+        .fold(table, std::cmp::min)
 }
