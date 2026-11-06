@@ -915,8 +915,9 @@ pub enum Problem {
     ///
     /// Basis: ours (a runtime extension: Metal wraps no Vulkan buffer).
     WrappedBuffer(WrappedBufferProblem),
-    /// A pipeline's `requiredThreadsPerThreadgroup` that Metal refuses at creation, or a dispatch
-    /// whose threadgroup size is not it.
+    /// A pipeline's `requiredThreadsPerThreadgroup` that Metal refuses at creation. A dispatch
+    /// whose threadgroup size is not it runs at the size it gives, as plain Metal runs it (API
+    /// validation stops it).
     ///
     /// Basis: delegated(RequiredThreadsProblem).
     RequiredThreads(RequiredThreadsProblem),

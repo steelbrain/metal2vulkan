@@ -202,6 +202,7 @@ surface! {
         enum DescriptorError N;
         enum DynamicLibraryProblem N;
         enum MeshPipelineProblem N;
+        enum ComputePipelineProblem N;
         enum LinkProblem N;
         enum Limit N;
         enum BudgetExceeded N;
