@@ -40,6 +40,20 @@ static NSString *const SOURCE = @"#include <metal_stdlib>\n"
                                  "  if (t == 0) { out.set_primitive_count(0); }\n"
                                  "}\n";
 
+// The functions of further attributes, compiled with `SOURCE` for the cases that name them alone,
+// so that a refusal of theirs leaves the other cases.
+static NSString *const ATTRIBUTES =
+    @"[[mesh, max_total_threads_per_threadgroup(64)]]\n"
+     "void msh64(M out, const object_data P& p [[payload]],\n"
+     "           uint t [[thread_index_in_threadgroup]]) {\n"
+     "  if (t == 0) { out.set_primitive_count(p.v[0] - 1); }\n"
+     "}\n"
+     "[[object, max_total_threadgroups_per_mesh_grid(4)]]\n"
+     "void objgrid4(object_data P& p [[payload]], mesh_grid_properties g,\n"
+     "              uint t [[thread_index_in_threadgroup]]) {\n"
+     "  if (t == 0) { p.v[0] = 1; g.set_threadgroups_per_grid(uint3(1, 1, 1)); }\n"
+     "}\n";
+
 // A case: the object function (NULL for none), the mesh function, and the descriptor's fields.
 typedef struct {
     const char *name;
@@ -81,6 +95,17 @@ static const Case CASES[] = {
     {"required-mesh-2048", "obj", "msh", 0, 0, 0, 0, 1, Z, {2048, 1, 1}},
     {"required-mesh-64-max-32", "obj", "msh", 0, 32, 0, 0, 1, Z, {64, 1, 1}},
     {"required-mesh-32-max-64", "obj", "msh", 0, 64, 0, 0, 1, Z, {32, 1, 1}},
+    {"required-mesh-64-max-64", "obj", "msh", 0, 64, 0, 0, 1, Z, {64, 1, 1}},
+    {"required-object-64-max-64", "obj", "msh", 64, 0, 0, 0, 1, {64, 1, 1}, Z},
+    {"attribute-64-max-64", "obj64", "msh", 64, 0, 0, 0, 1, Z, Z},
+    {"mesh-attribute-64", "obj", "msh64", 0, 0, 0, 0, 1, Z, Z},
+    {"mesh-attribute-64-max-32", "obj", "msh64", 0, 32, 0, 0, 1, Z, Z},
+    {"mesh-attribute-64-max-64", "obj", "msh64", 0, 64, 0, 0, 1, Z, Z},
+    {"mesh-attribute-64-max-128", "obj", "msh64", 0, 128, 0, 0, 1, Z, Z},
+    {"required-mesh-32-attribute-64", "obj", "msh64", 0, 0, 0, 0, 1, Z, {32, 1, 1}},
+    {"grid-attribute-4", "objgrid4", "msh", 0, 0, 0, 0, 1, Z, Z},
+    {"grid-attribute-4-grid-8", "objgrid4", "msh", 0, 0, 8, 0, 1, Z, Z},
+    {"grid-attribute-4-grid-2", "objgrid4", "msh", 0, 0, 2, 0, 1, Z, Z},
 };
 
 static void print_size(const char *what, MTLSize s) {
@@ -109,7 +134,10 @@ int main(int argc, const char **argv) {
         }
         id<MTLDevice> device = MTLCreateSystemDefaultDevice();
         NSError *error = nil;
-        id<MTLLibrary> library = [device newLibraryWithSource:SOURCE options:nil error:&error];
+        BOOL attributes = (c->object != NULL && strcmp(c->object, "objgrid4") == 0) ||
+                          strcmp(c->mesh, "msh64") == 0;
+        NSString *source = attributes ? [SOURCE stringByAppendingString:ATTRIBUTES] : SOURCE;
+        id<MTLLibrary> library = [device newLibraryWithSource:source options:nil error:&error];
         if (library == nil) {
             printf("library %s\n", error.localizedDescription.UTF8String);
             return 1;
