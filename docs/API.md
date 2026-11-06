@@ -2392,7 +2392,10 @@ bound.
   take Metal's exact filter of the format: the stage records `PrecisionNote::HalfSampleFilter` or
   `FloatSampleFilter` under the slot's bound format, the one its binding presents (a view in its
   texture's own format as another type, and a texture over a P3 surface, present the code-reading
-  format of their codes, which Metal's sampler filters as that format's: neither is announced).
+  format of their codes, which Metal's sampler filters as that format's: neither is announced),
+  and through a runtime sampler slot only where the sampler bound there filters (a linear
+  minification, magnification or mip filter, anisotropy, or a cubic filter), read at each draw or
+  dispatch; an argument buffer's sampler announces it whatever it states.
   Cost: where the device converts the planes'
   format, the texels are its own Y′CbCr conversion's, at its precision and unclamped where it does
   not clamp, not Metal's fixed-point read; elsewhere the texels hold Metal's reads exactly, but the
@@ -3298,8 +3301,9 @@ bound.
   is accessed.
 - `metal2vulkan-degrade-half-sample-filter` (precision). `PrecisionNote::HalfSampleFilter`: The
   module samples a texture with a `half` result through a filter (linear minification or
-  magnification, or a runtime sampler) that Metal's own sampler (MoltenVK) answers otherwise than
-  Metal filters the format bound there: a two-plane YCbCr texture's.
+  magnification, a linear mip filter, anisotropy, or a runtime sampler slot whose bound sampler
+  filters so) that Metal's own sampler (MoltenVK) answers otherwise than Metal filters the format
+  bound there: a two-plane YCbCr texture's.
 - `metal2vulkan-degrade-srgb-texel-decode` (precision). `PrecisionNote::SrgbTexelDecode`: The module
   reads, samples, or gathers a texture with a `half` or `float` result through the device's sRGB
   decode, or decodes the device's filter of its codes, where the texture may be bound in an 8-bit

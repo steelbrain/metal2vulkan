@@ -1627,7 +1627,8 @@ impl Between {
 /// YCbCr textures read a texture that keeps its image where `kept`, and that made a texture the
 /// device converts itself where `by_device`: `ycbcr-filter-not-exact` once where one did on a
 /// device that samples through Metal's own sampler (a runtime sampler's slot bound to such a
-/// texture records its filter note whatever the sampler's word, `lower::sampler::linear`), or
+/// texture holds its filter note where the bound sampler filters, as the runs' linear samplers
+/// do, `lower::sampler::linear`), or
 /// where the device converted one (`ycbcr_device_reads`), none elsewhere; no generic filter
 /// notice; `device-sampling` on every device that samples natively, and only there.
 fn assert_filter_notices(
@@ -2013,6 +2014,114 @@ fn a_ycbcr_sample_through_an_unmeasured_filter_is_announced() {
                 .unwrap();
             let named = format!("texture 0 bound as {:?}", PixelFormat::YCBCR84202P);
             assert!(notice.reason.contains(&named), "{case}: {notice:?}");
+        });
+    }
+}
+
+/// A sample through a runtime sampler slot of a two-plane YCbCr texture that keeps its image
+/// announces `ycbcr-filter-not-exact` only where the sampler bound there filters (the filter
+/// note's clauses test the bound word, `lower::sampler::linear::filtering_word`): over 4:2:2
+/// textures (`YCBCR8_422_2P` over `422v`, `YCBCR10_422_2P` over `x422`), whose planes no function
+/// reads in place, a nearest sampler's `float` and `half` samples at the texels' centres, with no
+/// mip filter or a nearest one, are the texels `read()` reads, Metal's, and announce nothing;
+/// a linear one's, a linear mip filter's and an anisotropic one's, each on a device of its own,
+/// announce it once on a device that samples through Metal's own sampler
+/// (`VkProperty::MetalSampler`), naming the slot and the format. A device that samples natively
+/// announces it only where it converted a texture itself (`ycbcr_device_reads`), whatever the
+/// sampler, and never the generic filter notes.
+#[test]
+fn a_runtime_sampler_announces_the_ycbcr_filter_only_where_it_filters() {
+    type Adjust = fn(&mut SamplerDescriptor);
+    let cases: [(&str, Adjust, bool); 5] = [
+        ("nearest", |_| {}, false),
+        (
+            "nearest, nearest mip filter",
+            |d| d.mip_filter = SamplerMipFilter::Nearest,
+            false,
+        ),
+        (
+            "linear",
+            |d| {
+                d.min_filter = SamplerMinMagFilter::Linear;
+                d.mag_filter = SamplerMinMagFilter::Linear;
+            },
+            true,
+        ),
+        (
+            "nearest, linear mip filter",
+            |d| d.mip_filter = SamplerMipFilter::Linear,
+            true,
+        ),
+        ("nearest, anisotropic", |d| d.max_anisotropy = 16, true),
+    ];
+    for (name, adjust, filters) in cases {
+        on_device(|device, messages| {
+            let kernels = Kernels::new(device);
+            // The lane's pipeline states announce their own notes as they are made.
+            messages.take_notices();
+            let mut d = SamplerDescriptor::new();
+            adjust(&mut d);
+            let state = device.new_sampler_state(&d).unwrap();
+            let metal = metal_sampler(device);
+            let converted = device_conversions(device);
+            let (in_place, kept) = (
+                made_in_place(device),
+                device.work_counts().ycbcr_images_kept_layout,
+            );
+            for (seed, (pf, ostype)) in (700..).zip([
+                (PixelFormat::YCBCR84222P, "422v"),
+                (PixelFormat::YCBCR104222P, "x422"),
+            ]) {
+                let codes = ycbcr_format(pf).and_then(YCbCrCodes::of).unwrap();
+                let surface = buffer_with(device, &family_bytes(seed, codes)).unwrap();
+                let texture = family_texture(&surface, pf, ostype, None).unwrap();
+                let read = texels_of(device, &kernels.read, &texture, None);
+                let sampled = texels_of(device, &kernels.sample, &texture, Some(&state));
+                texels_of(device, &kernels.sample_half, &texture, Some(&state));
+                if !filters {
+                    assert!(
+                        sampled == read,
+                        "{name} over {pf:?}: the sample is the texel"
+                    );
+                }
+            }
+            assert_eq!(
+                made_in_place(device),
+                in_place,
+                "{name}: planes read in place"
+            );
+            // Where the device would read 4:2:0 planes in place, each keeps its image for its
+            // layout.
+            let kept = device.work_counts().ycbcr_images_kept_layout - kept;
+            let by_device = device_conversions(device) > converted;
+            let notices = messages.take_notices();
+            let counts = counts(&notices);
+            println!(
+                "YCBCR-RUNTIME-FILTER {} {name}: metal sampler {metal}, images kept for their \
+                 layout {kept}, device conversions {by_device}, notices {counts:?}",
+                device.name()
+            );
+            for kind in [
+                Degradation::FloatSampleFilter,
+                Degradation::HalfSampleFilter,
+            ] {
+                assert_eq!(counts.get(&kind), None, "{name}: {counts:?}");
+            }
+            let ycbcr = counts.get(&YCBCR_FILTERS[0]);
+            assert_eq!(
+                ycbcr,
+                ((metal && filters) || by_device).then_some(&1),
+                "{name}: {counts:?}"
+            );
+            if metal && filters && !by_device {
+                let notice = notices
+                    .iter()
+                    .filter_map(|m| m.degradation.as_ref())
+                    .find(|n| n.degradation == YCBCR_FILTERS[0])
+                    .unwrap();
+                let named = format!("texture 0 bound as {:?}", PixelFormat::YCBCR84222P);
+                assert!(notice.reason.contains(&named), "{name}: {notice:?}");
+            }
         });
     }
 }

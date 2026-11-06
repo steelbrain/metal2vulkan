@@ -1362,12 +1362,12 @@ const SPECIALIZED: [&str; 2] = [
 
 /// The precision kinds a run of `case` on `device` announces, and the specialized notes its stage
 /// records: the notes of the stage its bind shape compiles (`compile_compute_for_shape`, the
-/// runtime's own route) under its plan's specialization and the values its plan pushes
-/// (`StageModule::precision_notes_bound`, `BindingPlan::specialized_value`), but a note kept by
-/// clauses of the bound formats alone (`SpecClause::tests_bound_formats`) only where one holds of
-/// the formats `case` binds (`StageModule::bound_format_clauses`; a clause testing a slot `case`
-/// binds nothing at does not hold, as the runtime reads it: the slot reads zero), and reconvergence
-/// that is not Metal's.
+/// runtime's own route) under its plan's specialization, the values its plan pushes
+/// (`StageModule::precision_notes_bound`, `BindingPlan::specialized_value`) and the classes of the
+/// formats `case` binds (`SpecKey::BoundTexelFormat`), but a note kept by clauses of the bound
+/// formats (`SpecKey::BoundTexelFormat`) only where one holds that tests no slot `case` binds
+/// nothing at (a clause testing one does not hold, as the runtime reads it: the slot reads zero),
+/// and reconvergence that is not Metal's.
 fn run_kinds(device: &Device, case: &PublicCase) -> (BTreeSet<Degradation>, BTreeSet<Degradation>) {
     let compile = device.compile_device();
     let addressed = compile.profile().descriptors().buffer_device_address;
@@ -1384,15 +1384,17 @@ fn run_kinds(device: &Device, case: &PublicCase) -> (BTreeSet<Degradation>, BTre
         let texture = case.compute.textures.get(&slot.index)?;
         Some(bound_texel_format(pixel_format(texture.format)))
     };
-    let bound = |key| plan.specialized_value(key);
+    let bound = |key: SpecKey| match key {
+        SpecKey::BoundTexelFormat(slot) => class(slot).map(u64::from),
+        key => plan.specialized_value(key),
+    };
     let mut kinds: BTreeSet<Degradation> = stage
         .precision_notes_bound(&plan.specialization, &bound)
         .into_iter()
         .filter(|&note| {
             let held = stage.note_clauses_bound(note, &plan.specialization, &bound);
             held.is_empty()
-                || held.iter().any(|c| !c.tests_bound_formats())
-                || stage.bound_format_clauses(note, &class).iter().any(|c| {
+                || held.iter().any(|c| {
                     c.all.iter().all(|t| match t.key {
                         SpecKey::BoundTexelFormat(slot) => {
                             case.compute.textures.contains_key(&slot.index)
@@ -2156,9 +2158,10 @@ pub(super) fn refused_sets(device: &Device, layout: &PipelineLayout) -> Vec<(u32
 
 /// The kinds a dispatch of kernel `function`'s compute pipeline state on `device` may announce
 /// beyond its making's ([`made_compute_kinds`]): those of the specialized notes its stage records
-/// with a clause that tests a value the function reads as data (`SpecClause::tests_bound_values`:
-/// a bound texture's format class). No pipeline's key carries those values, so the runtime
-/// announces such a kind at a dispatch whose pushed values hold one of its clauses
+/// with a clause that tests a value the function reads as data or a bound sampler's word
+/// (`SpecClause::tests_bound_values`: a bound texture's format class, `SpecKey::BoundSamplerWord`),
+/// a filter note's as `ycbcr-filter-not-exact`. No pipeline's key carries those values, so the
+/// runtime announces such a kind at a dispatch whose pushed values hold one of its clauses
 /// (`degrade_bound_values`), and only there; a test that dispatches with values it does not model
 /// (slots it binds nothing at) takes each as allowed, not forced ([`assert_once_allowing`]).
 pub(super) fn bound_value_kinds(
@@ -2175,7 +2178,12 @@ pub(super) fn bound_value_kinds(
         .specialized_notes
         .iter()
         .filter(|s| s.when.iter().any(|c| c.tests_bound_values()))
-        .map(|s| Degradation::from_precision_note(s.note))
+        .map(|s| match s.note {
+            PrecisionNote::HalfSampleFilter | PrecisionNote::FloatSampleFilter => {
+                Degradation::YCbCrFilterNotExact
+            }
+            note => Degradation::from_precision_note(note),
+        })
         .collect()
 }
 

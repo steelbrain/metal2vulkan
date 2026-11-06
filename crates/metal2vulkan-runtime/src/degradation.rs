@@ -105,6 +105,16 @@ fn tested_slots<'a>(
         .collect()
 }
 
+/// Whether `note` is a filter note (`PrecisionNote::HalfSampleFilter`, `FloatSampleFilter`): its
+/// clauses test a two-plane YCbCr format bound at a slot that Metal's own sampler filters
+/// (`metal2vulkan::lower`'s `filter_note`), announced as [`Degradation::YCbCrFilterNotExact`].
+fn filter_note(note: PrecisionNote) -> bool {
+    matches!(
+        note,
+        PrecisionNote::HalfSampleFilter | PrecisionNote::FloatSampleFilter
+    )
+}
+
 /// The format a draw or dispatch binds at each texture slot a specialized note tests
 /// (`VariantObjects::tested_formats`), kept past the bind's tables.
 pub(crate) type TestedFormats = Vec<(SlotRef, Option<PixelFormat>)>;
@@ -1443,7 +1453,10 @@ degradations! {
         /// natively filters such a texture as its own sampler does, announced as `device-sampling`.
         /// Announced, in place of those notes' own notices for the slot, where the specialized
         /// pipeline is made, or at a draw or dispatch that binds such a texture there (through a
-        /// runtime sampler, whatever its word states), naming the slot and the format.
+        /// runtime sampler slot, only where the sampler bound there filters: a linear
+        /// minification, magnification or mip filter, anisotropy, or a cubic filter; one that
+        /// reads one texel of one level takes the texel the view holds, Metal's read), naming the
+        /// slot and the format.
         YCbCrFilterNotExact = "ycbcr-filter-not-exact", Precision,
             "where the device converts the planes' format, the texels are its own Y′CbCr \
              conversion's, at its precision and unclamped where it does not clamp, not Metal's \
@@ -2849,10 +2862,7 @@ impl Kinds {
             let notes = stage.precision_notes.iter().copied();
             for note in notes.chain(stage.specialized_notes.iter().map(|s| s.note)) {
                 kinds.add(Degradation::from_precision_note(note));
-                if matches!(
-                    note,
-                    PrecisionNote::HalfSampleFilter | PrecisionNote::FloatSampleFilter
-                ) {
+                if filter_note(note) {
                     kinds.add(Degradation::YCbCrFilterNotExact);
                 }
             }
@@ -3674,17 +3684,23 @@ impl Device {
     /// reads as data or a bound sampler's word (`SpecClause::tests_bound_values`: a bound
     /// texture's format class, `SpecKey::BoundSamplerWord`) and holds where the draw's plan gives
     /// the values `bound` gives (`BindingPlan::specialized_value`;
-    /// `StageModule::note_clauses_bound`). No pipeline's key
-    /// carries those values, so no making can announce such a clause: one `VkPipeline` serves
-    /// every bound value. The reason names each texture slot a holding clause tests and, where
-    /// the command knows them (`formats`), the format it binds there. A kind already announced
-    /// costs one atomic load.
+    /// `StageModule::note_clauses_bound`), the class of the format `formats` binds at each
+    /// texture slot such a clause also tests (`SpecKey::BoundTexelFormat`: a filter note's
+    /// two-plane YCbCr format under a runtime sampler's filtering word). A clause testing a slot
+    /// bound to nothing does not hold, as [`degrade_bound_formats`](Self::degrade_bound_formats)
+    /// reads it; a command whose formats are not known (`None`) holds each such test. No
+    /// pipeline's key carries those values, so no making can announce such a clause: one
+    /// `VkPipeline` serves every bound value. The reason names each texture slot a holding clause
+    /// tests and, where the command knows them, the format it binds there. A kind already
+    /// announced costs one atomic load (a filter note's kind `ycbcr-filter-not-exact`, which its
+    /// clauses announce).
     ///
     /// Whether it was quiet: no clause of a note it tested held. Which clauses hold is a function
-    /// of `stages`, `specialization` and `bound` alone, and a note it skipped as announced stays
-    /// skipped (a kind announced at every occurrence is never skipped), so another call with the
-    /// same three after a quiet one announces nothing: a caller may leave it out (`render.rs`,
-    /// `QuietBoundValues`).
+    /// of `stages`, `specialization`, `bound` and the formats at the slots they test, which the
+    /// plan whose values `bound` gives fixes (each bound texture's format is in the shape it is
+    /// planned for), and a note it skipped as announced stays skipped (a kind announced at every
+    /// occurrence is never skipped), so another call with the same three after a quiet one
+    /// announces nothing: a caller may leave it out (`render.rs`, `QuietBoundValues`).
     pub(crate) fn degrade_bound_values(
         &self,
         stages: &[StageModule],
@@ -3692,21 +3708,36 @@ impl Device {
         bound: &dyn Fn(SpecKey) -> Option<u64>,
         formats: Option<BoundFormats<'_>>,
     ) -> bool {
+        // The plan's values, and the class of each format the command binds.
+        let values = |key: SpecKey| match key {
+            SpecKey::BoundTexelFormat(slot) => formats
+                .and_then(|f| f(slot))
+                .map(|pf| u64::from(metal2vulkan::metal::format::bound_texel_format(pf))),
+            key => bound(key),
+        };
+        // A slot bound to nothing reads zero: a clause testing one does not hold.
+        let unbound = |slot: SlotRef| formats.is_some_and(|f| f(slot).is_none());
         let mut quiet = true;
         for stage in stages {
             for s in &stage.specialized_notes {
+                let kind = match filter_note(s.note) {
+                    true => Degradation::YCbCrFilterNotExact,
+                    false => Degradation::from_precision_note(s.note),
+                };
                 if !s.when.iter().any(|c| c.tests_bound_values())
-                    || !self
-                        .shared()
-                        .announced
-                        .pending(Degradation::from_precision_note(s.note))
+                    || !self.shared().announced.pending(kind)
                 {
                     continue;
                 }
                 let clauses: Vec<_> = stage
-                    .note_clauses_bound(s.note, specialization, bound)
+                    .note_clauses_bound(s.note, specialization, &values)
                     .into_iter()
                     .filter(|c| c.tests_bound_values())
+                    .filter(|c| {
+                        !c.all.iter().any(
+                            |t| matches!(t.key, SpecKey::BoundTexelFormat(slot) if unbound(slot)),
+                        )
+                    })
                     .collect();
                 quiet &= clauses.is_empty();
                 self.degrade_clauses(
@@ -3724,9 +3755,10 @@ impl Device {
 
     /// Announce `note` of `stage`, `at` ([`Occurrence`]), where `clauses`, the clauses of its
     /// specialized note that hold, are not empty: a filter note's slot bound to a two-plane YCbCr
-    /// texture as its own kind, and the note's kind where a clause that holds tests another slot,
-    /// or none, the reason naming each such slot (with its bound format, where `formats` knows it)
-    /// after `under`.
+    /// texture (or, where the command's formats are not known, `formats` `None`, to the format its
+    /// clause tests, a two-plane YCbCr one) as its own kind, and the note's kind where a clause
+    /// that holds tests another slot, or none, the reason naming each such slot (with its bound
+    /// format, where `formats` knows it) after `under`.
     fn degrade_clauses(
         &self,
         stage: &StageModule,
@@ -3742,26 +3774,29 @@ impl Device {
         let all = tested_slots(clauses.iter().copied());
         // A filter note's slot bound to a two-plane YCbCr texture: its own kind, naming the slot
         // and the format; the note's own where a clause that holds tests another slot, or none.
-        let filter = matches!(
-            note,
-            PrecisionNote::HalfSampleFilter | PrecisionNote::FloatSampleFilter
-        );
-        let ycbcr: Vec<(SlotRef, PixelFormat)> = all
+        let ycbcr: Vec<(SlotRef, Option<PixelFormat>)> = all
             .iter()
-            .filter(|_| filter)
-            .filter_map(|&slot| {
-                let format = formats.and_then(|f| f(slot))?;
-                metal2vulkan::metal::format::ycbcr_format(format).map(|_| (slot, format))
+            .filter(|_| filter_note(note))
+            .filter_map(|&slot| match formats {
+                Some(f) => {
+                    let format = f(slot)?;
+                    metal2vulkan::metal::format::ycbcr_format(format).map(|_| (slot, Some(format)))
+                }
+                None => Some((slot, None)),
             })
             .collect();
         let held = |slot: &SlotRef| ycbcr.iter().any(|(y, _)| y == slot);
         for &(slot, format) in &ycbcr {
             self.degrade_at(at, Degradation::YCbCrFilterNotExact, || {
+                let bound = match format {
+                    Some(format) => format!("bound as {format:?}"),
+                    None => "of a format the GPU's commands bind".to_owned(),
+                };
                 (
                     stage_object(stage.stage).to_owned(),
                     format!(
-                        "a filtered sample of texture {} bound as {format:?} takes the device's \
-                         filter, not Metal's exact filter of the format: {}",
+                        "a filtered sample of texture {} {bound} takes the device's filter, not \
+                         Metal's exact filter of the format: {}",
                         slot.index,
                         self.note_reason(note)
                     ),
@@ -3818,10 +3853,7 @@ impl Device {
                 // A filter note's clauses of the bound formats test a two-plane YCbCr format
                 // alone (`metal2vulkan::lower`'s filter of such a texture by Metal's own sampler):
                 // its own kind.
-                let filter = matches!(
-                    s.note,
-                    PrecisionNote::HalfSampleFilter | PrecisionNote::FloatSampleFilter
-                );
+                let filter = filter_note(s.note);
                 let kind = match filter {
                     true => Degradation::YCbCrFilterNotExact,
                     false => Degradation::from_precision_note(s.note),

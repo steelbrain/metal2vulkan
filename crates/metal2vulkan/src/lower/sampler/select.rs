@@ -2184,9 +2184,9 @@ fn select_one(
         _ => false,
     };
     // A filtered sample's note, where Metal's own sampler filters the slot and a two-plane YCbCr
-    // format bound there takes another filter than Metal's: the clauses test the bound format
-    // alone, which the runtime reads at each draw, whatever a runtime sampler's word states (no key
-    // carries it there).
+    // format bound there takes another filter than Metal's: the clauses test the bound format,
+    // which the runtime reads at each draw, and through a runtime sampler slot the bound word's
+    // filter (`SpecKey::BoundSamplerWord`, which the plan gives: no key carries either).
     let by = stat.map(|(r, _)| r);
     if let Some((note, when)) = super::linear::filter_note(cx, &op, form, (by, image))? {
         cx.note_when(note, when, m)?;

@@ -1031,10 +1031,14 @@ pub enum PrecisionNote {
     /// `RGBA32Float` texture's texels, within one step of the format's grid, where Metal sums the
     /// steps on the grid, each term truncated (`lower::sampler::linear`). Recorded under the slot's
     /// bound format, which the runtime reads at each draw or dispatch and announces as
-    /// `ycbcr-filter-not-exact`, through a runtime sampler whatever its word states. A sample
-    /// through a constexpr sampler that reads one texel of one level (nearest minification and
-    /// magnification, no mip filter or a nearest one, no anisotropy) and a gather are not filtered
-    /// and do not carry it. A device that samples natively records
+    /// `ycbcr-filter-not-exact`, and through a runtime sampler slot under the bound sampler's word
+    /// (`SpecKey::BoundSamplerWord`, which the plan gives) where it filters: a linear minification
+    /// or magnification filter, a linear mip filter, anisotropy, or a cubic filter. A sample
+    /// through a sampler that reads one texel of one level (nearest minification and
+    /// magnification, no mip filter or a nearest one, no anisotropy: a constexpr one, or a runtime
+    /// slot's bound one) and a gather are not filtered and do not carry it; an argument buffer's
+    /// sampler, whose word no slot's test reads, carries it whatever it states. A device that
+    /// samples natively records
     /// [`PrecisionNote::DeviceSampling`] instead. The `float` result's counterpart is
     /// [`PrecisionNote::FloatSampleFilter`]. Validation derives no tolerance from it: the class is
     /// unbounded.
@@ -1079,11 +1083,13 @@ pub enum PrecisionNote {
     /// The module samples a texture with a `float` result through a filter that Metal's own
     /// sampler (`VkProperty::MetalSampler`, MoltenVK) answers otherwise than Metal filters the
     /// format bound there: a two-plane YCbCr texture's, as for [`PrecisionNote::HalfSampleFilter`]
-    /// (a depth texture's sample and a comparison's included). A sample is filtered unless it goes
-    /// through a constexpr sampler with nearest minification and magnification, no mip filter or a
-    /// nearest one, and no anisotropy: linear minification or magnification, a linear mip filter,
-    /// anisotropy, and a runtime sampler (whose filter is not known when the function compiles) all
-    /// filter. Recorded under the slot's bound format, announced as `ycbcr-filter-not-exact`. A
+    /// (a depth texture's sample and a comparison's included). A sample is filtered unless its
+    /// sampler has nearest minification and magnification, no mip filter or a nearest one, and no
+    /// anisotropy: linear minification or magnification, a linear mip filter, anisotropy, and an
+    /// argument buffer's sampler (whose word no slot's test reads) all filter. Recorded under the
+    /// slot's bound format, and through a runtime sampler slot under the bound sampler's word
+    /// (`SpecKey::BoundSamplerWord`), whose filter is not known when the function compiles: the
+    /// runtime reads both at each draw or dispatch and announces it as `ycbcr-filter-not-exact`. A
     /// device that samples natively records [`PrecisionNote::DeviceSampling`] instead. Validation
     /// derives no tolerance from it: the class is unbounded.
     FloatSampleFilter,
