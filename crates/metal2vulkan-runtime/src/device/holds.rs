@@ -116,6 +116,7 @@ impl Holds {
 }
 
 /// The program's handle of `shared`, counted.
+#[inline]
 fn program(shared: Arc<DeviceShared>) -> Device {
     shared.holds.program.fetch_add(1, Ordering::SeqCst);
     Device(shared, Share(None))
@@ -176,60 +177,84 @@ impl Device {
 }
 
 impl Clone for Device {
+    // Inlined where it is the program's, as every handle but the holders' is: its count alone.
+    #[inline]
     fn clone(&self) -> Device {
         match &(self.1).0 {
-            Some(holds) => {
-                let mut state = lock(&holds.state);
-                state.holders += 1;
-                Device(Arc::clone(&self.0), Share(Some(Arc::clone(holds))))
-            }
+            Some(holds) => holder_clone(self, holds),
             None => program(Arc::clone(&self.0)),
         }
     }
 }
 
+/// A clone of `device`, a holder's handle of the holds `holds` (the module docs).
+#[cold]
+#[inline(never)]
+fn holder_clone(device: &Device, holds: &Arc<Holds>) -> Device {
+    let mut state = lock(&holds.state);
+    state.holders += 1;
+    Device(Arc::clone(&device.0), Share(Some(Arc::clone(holds))))
+}
+
 impl Drop for Device {
-    // A program handle's drop: the program's last stops the holds and waits for them. A holder's
-    // handle is counted gone by its `Share`, once the device's share went before it.
+    // A program handle's drop: the program's last stops the holds and waits for them
+    // (`last_drop`). A holder's handle is counted gone by its `Share`, once the device's share went
+    // before it. Inlined: every drop but the program's last counts alone.
+    #[inline]
     fn drop(&mut self) {
         if (self.1).0.is_some() {
             return;
         }
-        let holds = &self.0.holds;
-        if holds.program.fetch_sub(1, Ordering::SeqCst) > 1 {
+        if self.0.holds.program.fetch_sub(1, Ordering::SeqCst) > 1 {
             return;
         }
-        let mut state = lock(&holds.state);
-        state.stopped = true;
-        holds.stopping.store(true, Ordering::SeqCst);
-        if state.holders == 0 || exit_guard::on_runtime_thread() {
-            return;
-        }
-        #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
-        let waiting = std::time::Instant::now();
-        while state.holders > 0 {
-            state = (holds.released.wait(state)).unwrap_or_else(std::sync::PoisonError::into_inner);
-        }
-        #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
-        {
-            let nanos = u64::try_from(waiting.elapsed().as_nanos()).unwrap_or(u64::MAX);
-            holds.waited.store(nanos.max(1), Ordering::Release);
-        }
-        // The device's share goes as this returns, the last: the teardown runs here.
+        last_drop(&self.0.holds);
     }
+}
+
+/// The program's last drop of its handles of the device whose holds are `holds`: it stops the
+/// holds and, on a thread of the program's, waits for the holders' handles to go (the module docs).
+#[cold]
+#[inline(never)]
+fn last_drop(holds: &Holds) {
+    let mut state = lock(&holds.state);
+    state.stopped = true;
+    holds.stopping.store(true, Ordering::SeqCst);
+    if state.holders == 0 || exit_guard::on_runtime_thread() {
+        return;
+    }
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    let waiting = std::time::Instant::now();
+    while state.holders > 0 {
+        state = (holds.released.wait(state)).unwrap_or_else(std::sync::PoisonError::into_inner);
+    }
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    {
+        let nanos = u64::try_from(waiting.elapsed().as_nanos()).unwrap_or(u64::MAX);
+        holds.waited.store(nanos.max(1), Ordering::Release);
+    }
+    // The device's share goes as the drop returns, the last: the teardown runs there.
 }
 
 impl Drop for Share {
     // A holder's handle is counted gone here, after the device's share it held went (fields go
     // in their order): the program's last drop, which waits for this, then holds the last share.
+    // Inlined: a program handle's has nothing to count.
+    #[inline]
     fn drop(&mut self) {
-        let Some(holds) = &self.0 else {
-            return;
-        };
-        let mut state = lock(&holds.state);
-        state.holders -= 1;
-        if state.holders == 0 {
-            holds.released.notify_all();
+        if let Some(holds) = &self.0 {
+            holder_gone(holds);
         }
+    }
+}
+
+/// A holder's handle of the holds `holds` gone ([`Share`]'s drop).
+#[cold]
+#[inline(never)]
+fn holder_gone(holds: &Holds) {
+    let mut state = lock(&holds.state);
+    state.holders -= 1;
+    if state.holders == 0 {
+        holds.released.notify_all();
     }
 }
