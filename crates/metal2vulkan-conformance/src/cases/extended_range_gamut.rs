@@ -18,9 +18,10 @@
 //! - **The unwritten attachment** (`xr-unwritten-*`): a pass whose first draw fills the target
 //!   unblended and whose second is a pipeline that blends the attachment but writes no color: one
 //!   without a fragment function, and one whose function writes depth alone. Metal leaves the
-//!   attachment as the first draw left it. The padded 10-bit formats (`R10Unorm_X6`,
-//!   `RG10Unorm_X12`, `RGB10A2Unorm_sRGB`) take the pipeline without a fragment function too; the
-//!   bfloat ones do not, whose blend Metal's validation layer refuses.
+//!   attachment as the first draw left it. The padded `RGB10A2Unorm_sRGB` takes the pipeline
+//!   without a fragment function too (not `R10Unorm_X6` or `RG10Unorm_X12`, whose texels Metal
+//!   leaves in a fixed pattern after the pass, nor the bfloat formats, whose blend Metal's
+//!   validation layer refuses: `OTHER_FORMATS`).
 //! - **The masked write** (`xr-masked-*`): a first draw fills the target, and a second writes the
 //!   other values under a mask of some of the channels (red; alpha; red, green and blue; blue and
 //!   green), unblended, and under the mask of red, green and blue with source-over blending.
@@ -458,39 +459,24 @@ pub struct UnwrittenDraw {
     shape: Unwritten,
 }
 
-/// The padded 10-bit formats an unwritten case also takes: Metal leaves an unwritten attachment as
-/// it is whatever its format, these among them, where the runtime refused their blended attachment
-/// written or not. Not the bfloat formats: Metal's validation layer refuses a pipeline that blends
-/// one ("the pixelformat MTLPixelFormatR16Bfloat for this render target is not blendable", an M3
-/// Max under macOS 27.0.1), which ends the recording's process.
-const OTHER_FORMATS: [Format; 3] = [
-    Format {
-        slug: "r10unorm-x6",
-        format: PixelFormat::R10UnormX6,
-        texel: 2,
-        word: Element::U16,
-        words: 1,
-        copies: true,
-    },
-    Format {
-        slug: "rg10unorm-x12",
-        format: PixelFormat::RG10UnormX12,
-        texel: 4,
-        word: Element::U16,
-        words: 2,
-        copies: true,
-    },
-    Format {
-        slug: "rgb10a2unorm-srgb",
-        format: PixelFormat::RGB10A2UnormSRGB,
-        texel: 4,
-        word: Element::U32,
-        words: 1,
-        copies: true,
-    },
-];
+/// The padded 10-bit format an unwritten case also takes: Metal leaves an unwritten attachment as it
+/// is whatever its format, this among them, where the runtime refused its blended attachment
+/// written or not. Not `R10Unorm_X6` or `RG10Unorm_X12`: after this pass Metal's texels of either
+/// are a fixed pattern on the M3 Max under macOS 27.0.1 (each row's first sixteen words `0xffff`,
+/// the rest zero, in every run and under validation), neither the clear's nor the first draw's
+/// codes, an answer no case can compare with. Not the bfloat formats: Metal's validation layer
+/// refuses a pipeline that blends one ("the pixelformat MTLPixelFormatR16Bfloat for this render
+/// target is not blendable"), which ends the recording's process.
+const OTHER_FORMATS: [Format; 1] = [Format {
+    slug: "rgb10a2unorm-srgb",
+    format: PixelFormat::RGB10A2UnormSRGB,
+    texel: 4,
+    word: Element::U32,
+    words: 1,
+    copies: true,
+}];
 
-/// Each format under each shape, and each padded format without a fragment function.
+/// Each format under each shape, and the padded format without a fragment function.
 pub fn unwritten() -> Vec<UnwrittenDraw> {
     let names = [
         (
@@ -510,11 +496,7 @@ pub fn unwritten() -> Vec<UnwrittenDraw> {
             1,
         ),
     ];
-    let others = [
-        "xr-unwritten-r10unorm-x6-no-fragment",
-        "xr-unwritten-rg10unorm-x12-no-fragment",
-        "xr-unwritten-rgb10a2unorm-srgb-no-fragment",
-    ];
+    let others = ["xr-unwritten-rgb10a2unorm-srgb-no-fragment"];
     let mut cases: Vec<UnwrittenDraw> = names
         .into_iter()
         .map(|(name, shape, format)| UnwrittenDraw {
