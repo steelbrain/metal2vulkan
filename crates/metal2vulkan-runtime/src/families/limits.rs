@@ -934,7 +934,31 @@ impl LimitRow {
             // may lie along one, up to the 65,535 threadgroups an axis past which Metal draws
             // nothing: `bind::METAL_MESH_GRID_AXIS`, measured on the M3 Max) and in all. Object
             // grids: `taskShader` too, then the device's task group counts likewise. Payloads:
-            // `taskShader`, then `maxTaskPayloadSize`.
+            // `taskShader`, then `maxTaskPayloadSize`. Where the device runs both stages as compute
+            // work (`DeviceProfile::emulates_mesh_shading`): a mesh grid is folded into rows of
+            // `maxComputeWorkGroupCount[0]`, at most `maxComputeWorkGroupCount[1]` of them, which
+            // Vulkan's minimums (65,535 each) put past every count the tables list; an object grid
+            // is a compute dispatch, within `maxComputeWorkGroupCount` along each axis; and the
+            // payload is compute workgroup memory beside the object wrapper's 12 bytes.
+            L::MeshThreadgroupsPerGrid if f.profile.emulates_mesh_shading() => RowState::Exact,
+            L::ObjectThreadgroupsPerGrid if f.profile.emulates_mesh_shading() => {
+                let counts = l.max_compute_work_group_count;
+                let along = |i: u8| {
+                    self::at_least(
+                        need,
+                        Feature::MeshShading,
+                        VkLimit::MaxComputeWorkGroupCount(i),
+                        u64::from(counts[usize::from(i)]),
+                    )
+                };
+                first([along(0), along(1), along(2)])
+            }
+            L::MeshPayload if f.profile.emulates_mesh_shading() => first([self::at_least(
+                need,
+                Feature::MeshShading,
+                VkLimit::MaxComputeSharedMemorySize,
+                u64::from(l.max_compute_shared_memory_size).saturating_sub(12),
+            )]),
             L::MeshThreadgroupsPerGrid => {
                 let counts = l.mesh.max_mesh_work_group_count;
                 let axis = match need {

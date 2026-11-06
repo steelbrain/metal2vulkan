@@ -1081,3 +1081,52 @@ fn listed_formats_answer_at_most_their_apple9_cell() {
         }
     }
 }
+
+/// The mesh rows follow how the device runs mesh pipelines (`DeviceProfile::emulates_mesh_shading`):
+/// on every committed profile the mesh shading row is the binder's one refusal, a partial object
+/// threadgroup of an object function that waits at a barrier (`NotImplemented(MeshShading)`),
+/// whether the device runs the stages natively or as compute work; and a device that runs them as
+/// compute work answers the mesh grid, object grid and payload limits of Metal3 by its compute
+/// limits, where they were refused for `meshShader` before. Each profile's Metal3 blockers are
+/// printed (`METAL3` lines).
+#[test]
+fn mesh_rows_follow_how_the_device_runs_mesh_stages() {
+    let mut emulating = 0;
+    for (stem, desc) in committed_descriptions() {
+        let (enabled, _) = created(&stem, &desc);
+        let compile = Device::new(enabled, DevicePolicy::UNTRUSTED).unwrap();
+        let emulates = compile.profile().emulates_mesh_shading();
+        let native = compile
+            .profile()
+            .enabled()
+            .features
+            .contains(&VkFeature::TaskShader);
+        let all = all_audits(&stem, &desc);
+        let metal3 = &all[&GpuFamily::Metal3];
+        if emulates || native {
+            assert_eq!(
+                state(metal3, feature(FeatureRow::MeshShading)),
+                Some(not_implemented(Feature::MeshShading)),
+                "{stem}"
+            );
+        }
+        if emulates {
+            emulating += 1;
+            for row in [
+                LimitRow::MeshThreadgroupsPerGrid,
+                LimitRow::ObjectThreadgroupsPerGrid,
+                LimitRow::MeshPayload,
+            ] {
+                assert_eq!(
+                    state(metal3, FamilyRow::Limit(row)),
+                    Some(RowState::Exact),
+                    "{stem} {row:?}"
+                );
+            }
+        }
+        for r in metal3.iter().filter(|r| r.state.blocks()) {
+            eprintln!("METAL3 {stem} | {:?} | {:?}", r.row, r.state);
+        }
+    }
+    assert!(emulating > 0, "no committed profile emulates mesh shading");
+}
