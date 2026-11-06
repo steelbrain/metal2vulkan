@@ -319,6 +319,19 @@ pub enum Refusal {
     /// whose upper bound lies below it (255.875 on ANV, 256 on lavapipe), so a larger point draws
     /// smaller there than on Metal.
     PointSizeRange,
+    /// Metal's `maxArgumentBufferSamplerCount` as the runtime answers it on the device
+    /// ([`DeviceProperties::max_argument_buffer_sampler_count`]: what it honours) lies below the
+    /// live sampler states the family's cell lists, so a state past it reads the neutral sampler
+    /// through an argument buffer there. The answer is one fewer than the smaller of a set-1
+    /// sampler array's elements (the handle table's 65536 entries on MoltenVK, RADV and ANV) and
+    /// `maxSamplerAllocationCount` (lavapipe's 32768, NVIDIA's 4000); Metal answers 500000 on an
+    /// Apple M3 Max, Apple9's and Apple10's cell.
+    ArgumentBufferSamplerCount {
+        /// The states the family's cell lists.
+        required: u64,
+        /// The runtime's answer.
+        available: u64,
+    },
 }
 
 /// A framework layered on Metal that a feature row names.

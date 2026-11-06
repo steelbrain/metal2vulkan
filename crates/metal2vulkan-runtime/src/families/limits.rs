@@ -838,17 +838,28 @@ impl LimitRow {
             // Argument buffers' buffers, reached by device address (set 1 for dispatches, draws
             // and tile dispatches alike).
             L::ArgumentBufferBuffers => first([addressed(f, Feature::ArgumentBufferPointers)]),
-            // Argument buffers' textures and samplers: the handle table's descriptors.
+            // Argument buffers' textures: the handle table's descriptors.
             L::ArgumentBufferTextures => first([at_least(
                 Feature::ArgumentBufferTextures,
                 VkLimit::MaxDescriptorSetUpdateAfterBindSampledImages,
                 l.max_descriptor_set_update_after_bind_sampled_images,
             )]),
-            L::ArgumentBufferSamplers => first([at_least(
-                Feature::ArgumentBufferTextures,
-                VkLimit::MaxDescriptorSetUpdateAfterBindSamplers,
-                l.max_descriptor_set_update_after_bind_samplers,
-            )]),
+            // Argument buffers' samplers: the live states the runtime holds for them,
+            // `maxArgumentBufferSamplerCount` as it answers it
+            // (`DeviceProperties::max_argument_buffer_sampler_count`), from the set-1 sampler
+            // array link makes (`pipeline::heap_sampler_capacity`) and the device's live samplers.
+            L::ArgumentBufferSamplers => {
+                let available = f.properties.max_argument_buffer_sampler_count;
+                match need {
+                    Need::AtLeast(required) if available < required => {
+                        RowState::Refused(Refusal::ArgumentBufferSamplerCount {
+                            required,
+                            available,
+                        })
+                    }
+                    _ => RowState::Exact,
+                }
+            }
             // Texture sizes: the device's image limits.
             L::TextureWidth1D => first([at_least(
                 Feature::TextureSize,

@@ -471,6 +471,63 @@ fn archive_and_argument_buffer_rows() {
     }
 }
 
+/// The argument-buffer sampler row answers by what the runtime honours: Metal's
+/// `maxArgumentBufferSamplerCount` as the runtime answers it
+/// (`DeviceProperties::max_argument_buffer_sampler_count`) against each family's cell, on every
+/// committed profile. It read `maxDescriptorSetUpdateAfterBindSamplers` alone before, so MoltenVK's
+/// 500000 held Apple9's 500000 where the handle table's 65536 entries hold 65535 states. Pinned:
+/// the families whose row each venue refuses (Apple9's and Apple10's 500000 past 65535, lavapipe's
+/// 32767 and NVIDIA's 3999; every family past the desktop baseline's 15 and the floor's 0).
+#[test]
+fn the_argument_buffer_sampler_row_is_the_runtime_s_answer() {
+    use GpuFamily as G;
+    let cell = |family: GpuFamily| match family {
+        G::Apple1 | G::Apple2 | G::Apple3 | G::Apple4 | G::Apple5 => Some(16),
+        G::Apple6 => Some(128),
+        G::Apple7 | G::Apple8 | G::Metal3 => Some(996),
+        G::Apple9 | G::Apple10 => Some(500_000),
+        G::Mac1 | G::Mac2 => Some(1_024),
+        _ => None,
+    };
+    let row = FamilyRow::Limit(LimitRow::ArgumentBufferSamplers);
+    let mut refusing: BTreeMap<String, BTreeSet<GpuFamily>> = BTreeMap::new();
+    for (stem, desc) in committed_descriptions() {
+        let available = created(&stem, &desc).1.max_argument_buffer_sampler_count;
+        let mut refused = BTreeSet::new();
+        for (family, rows) in all_audits(&stem, &desc) {
+            let want = cell(family).map(|required| match available >= required {
+                true => RowState::Exact,
+                false => RowState::Refused(Refusal::ArgumentBufferSamplerCount {
+                    required,
+                    available,
+                }),
+            });
+            let got = state(&rows, row);
+            assert_eq!(got, want, "{stem} {family:?}");
+            if got.is_some_and(|s| s.blocks()) {
+                refused.insert(family);
+            }
+        }
+        refusing.insert(stem, refused);
+    }
+    let past_apple8 = BTreeSet::from([G::Apple9, G::Apple10]);
+    let every: BTreeSet<GpuFamily> = (GpuFamily::ALL.into_iter())
+        .filter(|&f| cell(f).is_some())
+        .collect();
+    for (stem, want) in [
+        ("moltenvk-m3", &past_apple8),
+        ("amd-780m-radv", &past_apple8),
+        ("intel-irisxe-rplp-anv", &past_apple8),
+        ("lavapipe", &past_apple8),
+        ("gate-lavapipe", &past_apple8),
+        ("nvidia-rtx5080-laptop", &past_apple8),
+        ("lunarg-desktop-baseline-2023", &every),
+        ("vk12-floor", &every),
+    ] {
+        assert_eq!(refusing.get(stem), Some(want), "{stem}");
+    }
+}
+
 /// The point-size row answers from the device: exact where the upper bound of its `pointSizeRange`
 /// reaches Metal's largest point (511 pixels, every family's cell), refused `PointSizeRange` where
 /// it ends below (lavapipe's 256, ANV's 255.875); before, every device refused it. Each committed

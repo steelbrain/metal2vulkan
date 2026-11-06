@@ -5,16 +5,19 @@ use super::{layer_reported_nothing_at_all, validated_device, Messages, ScratchCa
 use crate::gpu::TEST_DEVICE;
 use metal2vulkan::metal::TextureUsage;
 use metal2vulkan_runtime::{
-    FamilyRow, FormatCapability, FormatRow, GpuFamily, HeapDescriptor, HeapType, ResourceOptions,
-    RowAudit, RowState, RuntimeGap, TextureDescriptor,
+    FamilyRow, FormatCapability, FormatRow, GpuFamily, HeapDescriptor, HeapType, LimitRow, Refusal,
+    ResourceOptions, RowAudit, RowState, RuntimeGap, TextureDescriptor,
 };
 
 /// Every family answers `supportsFamily:` true exactly where none of its rows blocks, and the
 /// blocking rows are the family's rows that block. Each family's answer and its blocking rows are
 /// printed (`FAMILY` and `BLOCK` lines), the venue's burn-down. The families without a column
 /// have their one row; Apple1 and Mac1 answer as Apple2 and Mac2; a value that names no family is
-/// false. Each format row's state agrees with the runtime's per-format capability query. Once
-/// everything is dropped, the validation layer reported nothing.
+/// false. Each format row's state agrees with the runtime's per-format capability query, and
+/// Apple9's argument-buffer sampler row with the device's `maxArgumentBufferSamplerCount`
+/// (`DeviceProperties::max_argument_buffer_sampler_count`) against the cell's 500000 states,
+/// printed (`ARGUMENT_SAMPLERS`). Once everything is dropped, the validation layer reported
+/// nothing.
 #[test]
 fn every_family_answers_with_its_blocking_rows() {
     let cache = ScratchCache::new().unwrap();
@@ -55,6 +58,20 @@ fn every_family_answers_with_its_blocking_rows() {
                 }
             }
         }
+        let answer = device.properties().max_argument_buffer_sampler_count;
+        let samplers = FamilyRow::Limit(LimitRow::ArgumentBufferSamplers);
+        let apple9 = (device.family_rows(GpuFamily::Apple9).into_iter())
+            .find(|r| r.row == samplers)
+            .map(|r| r.state);
+        eprintln!("ARGUMENT_SAMPLERS answer={answer} apple9={apple9:?}");
+        let want = match answer >= 500_000 {
+            true => RowState::Exact,
+            false => RowState::Refused(Refusal::ArgumentBufferSamplerCount {
+                required: 500_000,
+                available: answer,
+            }),
+        };
+        assert_eq!(apple9, Some(want));
         assert_eq!(
             device.family_rows(GpuFamily::Metal4),
             vec![RowAudit {
