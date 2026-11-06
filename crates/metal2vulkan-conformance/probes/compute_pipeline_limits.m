@@ -15,6 +15,19 @@
 // `count` and prints what ran: how many threads added to word 0, and the
 // `threads_per_threadgroup` threadgroup 0's thread 0 stored in words 1 to 3. `--cases` lists the
 // cases. Run one case a process: a stop of Metal's ends only its own.
+//
+// Measured on an M3 Max under macOS 27.0.1, plain and with `MTL_DEBUG_LAYER=1`, which agree on
+// every creation:
+// - Refused, code 3: a maximum of 1025 or 2048 beside a kernel without one ("Specified total max
+//   threads per threadgroup (1025) exceeds the maximum total threads per threadgroup supported
+//   (1024)"); a maximum of 32, 128 or 2048 beside the kernel of 64 ("Kernel specified max total
+//   threads per threadgroup (64) must match compute pipeline specified max total threads per
+//   threadgroup (32)").
+// - Made: 64 beside the kernel of 64; 96 and 1024 beside the kernel without one.
+// - A dispatch of another size than the required 8x8 runs the size given on plain Metal:
+//   `dispatchThreadgroups` at 4x4 ran 32 threads of `threads_per_threadgroup` (4, 4, 1), at 16x4
+//   128, at 16x8 256, and `dispatchThreads` of 16x16 at 4x4 256 threads of (4, 4, 1). API
+//   validation stops each (exit 134).
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
 #include <stdio.h>
