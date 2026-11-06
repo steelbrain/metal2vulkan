@@ -187,6 +187,17 @@ pub const NOT_MIPMAPPED_MAX_LOD: f32 = 0.25;
 /// textures have 15 levels, the last level 14), so a bound at or past it clamps nothing.
 pub(crate) const LAST_WORD_LEVEL: u32 = 15;
 
+/// The `minLod` of a mipmapped sampler whose descriptor raises the level to `lo`: `lo` at or above
+/// 0, and at most [`LAST_WORD_LEVEL`]. Vulkan clamps the level into `[minLod, maxLod]` and then to
+/// the view's last level, so every bound at or past `LAST_WORD_LEVEL`, which is past every
+/// texture's last level, reads the last level alike; the device is handed the one it can hold. A
+/// driver may convert the bound to a fixed-point level: lavapipe on x86-64 (Mesa 26.0.8 and
+/// 26.2.4) reads a `minLod` of `f32::MAX` as level 0, where Metal's `lodMinClamp` of `FLT_MAX`
+/// reads the last level.
+pub(crate) fn mipmapped_min_lod(lo: f32) -> f32 {
+    lo.clamp(0.0, LAST_WORD_LEVEL as f32)
+}
+
 /// Metal's level clamp bound `c` on the sixty-fourths grid of its level and weight: its value at or
 /// above 0, truncated onto sixty-fourths. Metal clamps a sample's level into the sampler's clamp
 /// before truncating it, so a level clamped by bounds on the grid truncates to the level clamped by
@@ -421,8 +432,8 @@ pub fn vk_sampler(
             let (min_lod, max_lod) = not_mipmapped_lods(lo, hi);
             (vk::SamplerMipmapMode::NEAREST, min_lod, max_lod)
         }
-        SamplerMipFilter::Nearest => (vk::SamplerMipmapMode::NEAREST, lo.max(0.0), hi),
-        SamplerMipFilter::Linear => (linear_mip, lo.max(0.0), hi),
+        SamplerMipFilter::Nearest => (vk::SamplerMipmapMode::NEAREST, mipmapped_min_lod(lo), hi),
+        SamplerMipFilter::Linear => (linear_mip, mipmapped_min_lod(lo), hi),
     };
     let filter = |f| {
         if use_.integer_texture {
@@ -1244,6 +1255,48 @@ mod tests {
                 let device = l.clamp(s.min_lod, s.max_lod) > 0.0;
                 let metal = l.max(lo).min(hi) > 0.0;
                 assert_eq!(device, metal, "{lo} {hi} at {l}");
+            }
+        }
+    }
+
+    /// A mipmapped sampler hands the device a `minLod` it can hold, at most [`LAST_WORD_LEVEL`],
+    /// and every view's level under it is the level under the descriptor's own clamps: a
+    /// `lodMinClamp` of `f32::MAX` reads the last level, which lavapipe on x86-64 read as level 0
+    /// when handed `f32::MAX` itself.
+    #[test]
+    fn a_mipmapped_samplers_min_lod_is_held_past_every_last_level() {
+        let dev = device(&[], &[]);
+        for mip_filter in [SamplerMipFilter::Nearest, SamplerMipFilter::Linear] {
+            for (lo, hi) in [
+                (0.0, f32::MAX),
+                (1.5, f32::MAX),
+                (14.0, f32::MAX),
+                (15.0, f32::MAX),
+                (16.0, 20.0),
+                (1000.0, f32::MAX),
+                (f32::MAX, f32::MAX),
+                (-2.0, 3.0),
+            ] {
+                let mut d = metal_default();
+                d.mip_filter = mip_filter;
+                d.lod_min_clamp = lo;
+                d.lod_max_clamp = hi;
+                let s = vk_sampler(&d, SamplerUse::default(), dev.profile()).unwrap();
+                assert_eq!(
+                    s.min_lod,
+                    lo.clamp(0.0, LAST_WORD_LEVEL as f32),
+                    "{lo} {hi}"
+                );
+                assert!(s.min_lod <= s.max_lod, "{lo} {hi}");
+                // Vulkan's level: the clamped level, then the view's last level `q`.
+                for q in 0..LAST_WORD_LEVEL {
+                    let last = q as f32;
+                    for l in [-1.0f32, 0.0, 0.5, 1.0, 1.5, 7.0, 14.0, 15.0, 100.0] {
+                        let device = l.clamp(s.min_lod, s.max_lod).clamp(0.0, last);
+                        let metal = l.max(lo).min(hi).clamp(0.0, last);
+                        assert_eq!(device, metal, "{lo} {hi} at {l} of {q}");
+                    }
+                }
             }
         }
     }

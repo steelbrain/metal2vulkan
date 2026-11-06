@@ -3599,7 +3599,8 @@ bound.
 - `metal2vulkan-degrade-device-sampling` (precision). `PrecisionNote::DeviceSampling`: Native device
   sampling: the module hands a sample, gather, comparison or level query to the device's own
   sampler on a device whose sampler is not Metal's (the module requires
-  `VkProperty::DeviceSampling`), its level clamp the descriptor's as given (Metal holds it on a
+  `VkProperty::DeviceSampling`), its level clamp the descriptor's as given (a `lodMinClamp` past
+  level 15, past every texture's last level, handed as 15, which reads the same level; Metal holds it on a
   `1/64` grid, and its nearest mip filter reads the lower level at a clamp halfway between two,
   where the device may read the upper) and a subnormal coordinate the device's to read (Metal reads it as a zero before
   addressing). That includes a
