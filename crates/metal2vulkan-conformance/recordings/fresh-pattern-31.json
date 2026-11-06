@@ -199,6 +199,7 @@
         "slot_returns": 1,
         "spare_command_pools_taken": 1,
         "submit_infos": 1,
+        "submit_stalls_on_work": 1,
         "trail_waits": 1,
         "wakes_completion_waiters": 1,
         "wakes_spared": 7

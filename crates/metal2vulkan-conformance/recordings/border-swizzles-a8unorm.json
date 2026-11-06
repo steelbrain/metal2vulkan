@@ -6131,7 +6131,7 @@
         "resident_textures_looked_at": 60,
         "sampler_sets_made": 1,
         "scheduled_where_submitted": 60,
-        "scheduler_passes": 35,
+        "scheduler_passes": 10,
         "scheduler_passes_by_waiters": 60,
         "scheduler_sleeps": 60,
         "scheduler_wakes_commit": 60,
@@ -6153,7 +6153,7 @@
       "composed": {
         "addressable_buffers_made": 2,
         "arena_pools_made": 1,
-        "batches_submitted_by_waiters": 59,
+        "batches_submitted_by_waiters": 55,
         "command_buffers_begun": 64,
         "command_buffers_begun_batch_barriers": 1,
         "command_buffers_begun_batch_work": 1,

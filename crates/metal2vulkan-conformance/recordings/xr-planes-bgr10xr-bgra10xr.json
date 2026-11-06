@@ -552,7 +552,7 @@
         "scheduler_sleep_slices": 2,
         "scheduler_sleeps": 9,
         "scheduler_wakes_commit": 2,
-        "scheduler_wakes_host": 5,
+        "scheduler_wakes_host": 6,
         "shader_modules_made": 4,
         "slot_returns": 2,
         "spare_command_pools_taken": 2,

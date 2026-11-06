@@ -795,7 +795,7 @@
         "variant_pipelines_made": 8,
         "wakes_completion_waiters": 1,
         "wakes_handler_threads": 1,
-        "wakes_spared": 10
+        "wakes_spared": 9
       },
       "moving": {
         "shader_cache_writes_on_thread": 0
