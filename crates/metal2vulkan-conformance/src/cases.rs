@@ -118,6 +118,7 @@ pub mod math_routines;
 pub mod mesh_barriers;
 pub mod mesh_commands;
 pub mod mesh_draws;
+pub mod mesh_partial_barriers;
 pub mod mesh_pipeline_descriptors;
 pub mod mesh_pipeline_reflection;
 pub mod nearest_positions;
@@ -406,6 +407,9 @@ pub fn all() -> Vec<Box<dyn Case>> {
         cases.push(Box::new(case));
     }
     for case in mesh_barriers::all() {
+        cases.push(Box::new(case));
+    }
+    for case in mesh_partial_barriers::all() {
         cases.push(Box::new(case));
     }
     cases.push(Box::new(mesh_commands::own_state_commands()));
