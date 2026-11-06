@@ -1442,6 +1442,7 @@ enum	metal2vulkan::error::BitstreamError	#[derive(Clone, Debug, PartialEq, Eq)] 
 enum	metal2vulkan::error::BudgetExceeded	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum BudgetExceeded
 enum	metal2vulkan::error::CanonError	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub enum CanonError
 enum	metal2vulkan::error::Capability	#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum Capability
+enum	metal2vulkan::error::ComputePipelineProblem	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum ComputePipelineProblem
 enum	metal2vulkan::error::ConstantRecord	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum ConstantRecord
 enum	metal2vulkan::error::ContainerError	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub enum ContainerError
 enum	metal2vulkan::error::DescriptorError	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub enum DescriptorError
@@ -13313,6 +13314,8 @@ variant	metal2vulkan::error::Capability::Feature	Feature(VkFeature)
 variant	metal2vulkan::error::Capability::Format	Format { format: vk::Format, usage: FormatUsage }
 variant	metal2vulkan::error::Capability::Limit	Limit { limit: VkLimit, required: u64, available: u64 }
 variant	metal2vulkan::error::Capability::Property	Property(VkProperty)
+variant	metal2vulkan::error::ComputePipelineProblem::MaxThreadsDiffer	MaxThreadsDiffer { specified: u32, max: u32 }
+variant	metal2vulkan::error::ComputePipelineProblem::MaxThreadsOverLimit	MaxThreadsOverLimit { max: u32, limit: u32 }
 variant	metal2vulkan::error::ConstantRecord::BlockAddress	BlockAddress
 variant	metal2vulkan::error::ConstantRecord::Byte	Byte
 variant	metal2vulkan::error::ConstantRecord::Compare	Compare
@@ -13337,6 +13340,7 @@ variant	metal2vulkan::error::ContainerError::Truncated	Truncated { need: u64, ha
 variant	metal2vulkan::error::ContainerError::UnsupportedContainerVersion	UnsupportedContainerVersion { major: u16, minor: u16 }
 variant	metal2vulkan::error::DescriptorError::AmbiguousEntry	AmbiguousEntry { requested: DiagName }
 variant	metal2vulkan::error::DescriptorError::ColorAttachment	ColorAttachment { index: u32 }
+variant	metal2vulkan::error::DescriptorError::ComputePipeline	ComputePipeline { problem: ComputePipelineProblem }
 variant	metal2vulkan::error::DescriptorError::DeviceDescription	DeviceDescription { detail: String }
 variant	metal2vulkan::error::DescriptorError::DuplicateColorOutput	DuplicateColorOutput { color: u32, index: u32 }
 variant	metal2vulkan::error::DescriptorError::DuplicateFunctionConstant	DuplicateFunctionConstant { index: u32 }
