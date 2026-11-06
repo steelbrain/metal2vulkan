@@ -40,8 +40,8 @@ use crate::indirect_commands::{
 };
 use crate::library_facts::{FunctionDescriptorSpec, LibraryFacts};
 use crate::mesh_descriptors::{
-    DescriptorSpec as MeshDescriptorSpec, MeshDescriptorFacts, SuppliedLists as MeshSuppliedLists,
-    AWAY as MESH_AWAY,
+    DescriptorLimits as MeshDescriptorLimits, DescriptorSpec as MeshDescriptorSpec,
+    MeshDescriptorFacts, SuppliedLists as MeshSuppliedLists, AWAY as MESH_AWAY,
 };
 use crate::pass_descriptors::{
     AttachmentFacts, Indices, Numbers, PassDescriptorFacts, PassSpec, Reads, Row, Shape,
@@ -531,6 +531,24 @@ fn state_mesh_descriptor(descriptor: &mut MeshPipelineDescriptor, options: &mut 
     descriptor.depth_format = Some(MESH_AWAY.depth_format);
     descriptor.stencil_format = Some(MESH_AWAY.stencil_format);
     descriptor.support_indirect_command_buffers = MESH_AWAY.support_indirect_command_buffers;
+    // Metal's 0 and zero size are the runtime's `None`; the table states none of them.
+    let limits = MESH_AWAY.limits;
+    descriptor.max_total_threads_per_object_threadgroup =
+        Some(limits.max_total_threads_per_object_threadgroup);
+    descriptor.max_total_threads_per_mesh_threadgroup =
+        Some(limits.max_total_threads_per_mesh_threadgroup);
+    descriptor.object_threadgroup_size_is_multiple_of_thread_execution_width =
+        limits.object_threadgroup_size_is_multiple_of_thread_execution_width;
+    descriptor.mesh_threadgroup_size_is_multiple_of_thread_execution_width =
+        limits.mesh_threadgroup_size_is_multiple_of_thread_execution_width;
+    descriptor.payload_memory_length = Some(limits.payload_memory_length);
+    descriptor.max_total_threadgroups_per_mesh_grid =
+        Some(limits.max_total_threadgroups_per_mesh_grid);
+    descriptor.max_vertex_amplification_count = limits.max_vertex_amplification_count;
+    descriptor.required_threads_per_object_threadgroup =
+        Some(limits.required_threads_per_object_threadgroup);
+    descriptor.required_threads_per_mesh_threadgroup =
+        Some(limits.required_threads_per_mesh_threadgroup);
     for color in MESH_AWAY.colors {
         let mut attachment = ColorAttachmentDescriptor::new(color.pixel_format);
         attachment.blending_enabled = color.blending_enabled;
@@ -600,6 +618,30 @@ fn read_mesh_descriptor(
             .as_raw(),
         support_indirect_command_buffers: descriptor.support_indirect_command_buffers,
         binary_archives: options.binary_archives.len() as u64,
+        // A field the runtime holds as `None` is Metal's 0 or zero size.
+        limits: MeshDescriptorLimits {
+            max_total_threads_per_object_threadgroup: descriptor
+                .max_total_threads_per_object_threadgroup
+                .unwrap_or(0),
+            max_total_threads_per_mesh_threadgroup: descriptor
+                .max_total_threads_per_mesh_threadgroup
+                .unwrap_or(0),
+            object_threadgroup_size_is_multiple_of_thread_execution_width: descriptor
+                .object_threadgroup_size_is_multiple_of_thread_execution_width,
+            mesh_threadgroup_size_is_multiple_of_thread_execution_width: descriptor
+                .mesh_threadgroup_size_is_multiple_of_thread_execution_width,
+            payload_memory_length: descriptor.payload_memory_length.unwrap_or(0),
+            max_total_threadgroups_per_mesh_grid: descriptor
+                .max_total_threadgroups_per_mesh_grid
+                .unwrap_or(0),
+            max_vertex_amplification_count: descriptor.max_vertex_amplification_count,
+            required_threads_per_object_threadgroup: descriptor
+                .required_threads_per_object_threadgroup
+                .unwrap_or([0; 3]),
+            required_threads_per_mesh_threadgroup: descriptor
+                .required_threads_per_mesh_threadgroup
+                .unwrap_or([0; 3]),
+        },
         supplied: supplied.then_some(MeshSuppliedLists {
             object_linked_functions: object_linked,
             mesh_linked_functions: mesh_linked,

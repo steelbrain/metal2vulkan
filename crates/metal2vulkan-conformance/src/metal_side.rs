@@ -44,8 +44,8 @@ use crate::indirect_commands::{
 };
 use crate::library_facts::{FunctionDescriptorSpec, LibraryFacts};
 use crate::mesh_descriptors::{
-    DescriptorSpec as MeshDescriptorSpec, MeshDescriptorFacts, SuppliedLists as MeshSuppliedLists,
-    AWAY as MESH_AWAY,
+    DescriptorLimits as MeshDescriptorLimits, DescriptorSpec as MeshDescriptorSpec,
+    MeshDescriptorFacts, SuppliedLists as MeshSuppliedLists, AWAY as MESH_AWAY,
 };
 use crate::pass_descriptors::{
     AttachmentFacts, Indices, Numbers, PassDescriptorFacts, PassSpec, Reads, Row, Shape,
@@ -1873,6 +1873,32 @@ fn state_mesh_descriptor(descriptor: &Retained<MTLMeshRenderPipelineDescriptor>)
         MESH_AWAY.stencil_format.as_raw() as usize
     ));
     descriptor.setSupportIndirectCommandBuffers(MESH_AWAY.support_indirect_command_buffers);
+    let limits = MESH_AWAY.limits;
+    descriptor.setMaxTotalThreadsPerObjectThreadgroup(
+        limits.max_total_threads_per_object_threadgroup as usize,
+    );
+    descriptor.setMaxTotalThreadsPerMeshThreadgroup(
+        limits.max_total_threads_per_mesh_threadgroup as usize,
+    );
+    descriptor.setObjectThreadgroupSizeIsMultipleOfThreadExecutionWidth(
+        limits.object_threadgroup_size_is_multiple_of_thread_execution_width,
+    );
+    descriptor.setMeshThreadgroupSizeIsMultipleOfThreadExecutionWidth(
+        limits.mesh_threadgroup_size_is_multiple_of_thread_execution_width,
+    );
+    descriptor.setPayloadMemoryLength(limits.payload_memory_length as usize);
+    descriptor
+        .setMaxTotalThreadgroupsPerMeshGrid(limits.max_total_threadgroups_per_mesh_grid as usize);
+    // SAFETY: the count is the stated table's own 2, and nothing of this family compiles the
+    // descriptor.
+    unsafe {
+        descriptor.setMaxVertexAmplificationCount(limits.max_vertex_amplification_count as usize)
+    };
+    descriptor.setRequiredThreadsPerObjectThreadgroup(size(
+        limits.required_threads_per_object_threadgroup,
+    ));
+    descriptor
+        .setRequiredThreadsPerMeshThreadgroup(size(limits.required_threads_per_mesh_threadgroup));
     let colors: Retained<MTLRenderPipelineColorAttachmentDescriptorArray> =
         descriptor.colorAttachments();
     for color in MESH_AWAY.colors {
@@ -1916,7 +1942,32 @@ fn read_mesh_descriptor(
         stencil_attachment_pixel_format: descriptor.stencilAttachmentPixelFormat().0 as u32,
         support_indirect_command_buffers: descriptor.supportIndirectCommandBuffers(),
         binary_archives: archives.map_or(0, |held| held.len() as u64),
+        limits: read_mesh_limits(descriptor),
         supplied: supplied.then(|| read_mesh_supplied(descriptor)),
+    }
+}
+
+/// A mesh descriptor's limit fields, as its getters answer them.
+fn read_mesh_limits(
+    descriptor: &Retained<MTLMeshRenderPipelineDescriptor>,
+) -> MeshDescriptorLimits {
+    let axes = |held: MTLSize| [held.width as u32, held.height as u32, held.depth as u32];
+    MeshDescriptorLimits {
+        max_total_threads_per_object_threadgroup: descriptor.maxTotalThreadsPerObjectThreadgroup()
+            as u32,
+        max_total_threads_per_mesh_threadgroup: descriptor.maxTotalThreadsPerMeshThreadgroup()
+            as u32,
+        object_threadgroup_size_is_multiple_of_thread_execution_width: descriptor
+            .objectThreadgroupSizeIsMultipleOfThreadExecutionWidth(),
+        mesh_threadgroup_size_is_multiple_of_thread_execution_width: descriptor
+            .meshThreadgroupSizeIsMultipleOfThreadExecutionWidth(),
+        payload_memory_length: descriptor.payloadMemoryLength() as u32,
+        max_total_threadgroups_per_mesh_grid: descriptor.maxTotalThreadgroupsPerMeshGrid() as u32,
+        max_vertex_amplification_count: descriptor.maxVertexAmplificationCount() as u32,
+        required_threads_per_object_threadgroup: axes(
+            descriptor.requiredThreadsPerObjectThreadgroup(),
+        ),
+        required_threads_per_mesh_threadgroup: axes(descriptor.requiredThreadsPerMeshThreadgroup()),
     }
 }
 

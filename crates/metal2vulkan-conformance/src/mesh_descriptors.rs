@@ -28,8 +28,9 @@
 //! state is not a comparison, so no site here reads one. They are the runtime's gap, not this
 //! family's. The object and mesh thread limits, the two execution-width hints, the payload length,
 //! the mesh-grid limit, the vertex amplification count and the two required threadgroup sizes are
-//! fields of `MeshPipelineDescriptor` with Metal's defaults, and no site here reads them yet: this
-//! family's recordings hold no answer of theirs.
+//! read as [`DescriptorLimits`]: a field of `MeshPipelineDescriptor` the runtime holds as `None`
+//! is Metal's 0 or zero size. What a pipeline made under them answers is
+//! [`crate::pipeline_limits`]'s question.
 //!
 //! Four getters answer **objects a program supplies**, and the runtime takes each one somewhere
 //! other than the descriptor: `binaryArchives` is `PipelineOptions.binary_archives`, and
@@ -75,6 +76,97 @@ pub struct Away {
     pub depth_format: metal::PixelFormat,
     pub stencil_format: metal::PixelFormat,
     pub support_indirect_command_buffers: bool,
+    pub limits: DescriptorLimits,
+}
+
+/// A mesh descriptor's limit fields, each as Metal's getter answers it: 0, a zero size or false
+/// for Metal's default, and the amplification count's default 1.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DescriptorLimits {
+    pub max_total_threads_per_object_threadgroup: u32,
+    pub max_total_threads_per_mesh_threadgroup: u32,
+    pub object_threadgroup_size_is_multiple_of_thread_execution_width: bool,
+    pub mesh_threadgroup_size_is_multiple_of_thread_execution_width: bool,
+    pub payload_memory_length: u32,
+    pub max_total_threadgroups_per_mesh_grid: u32,
+    pub max_vertex_amplification_count: u32,
+    pub required_threads_per_object_threadgroup: [u32; 3],
+    pub required_threads_per_mesh_threadgroup: [u32; 3],
+}
+
+impl DescriptorLimits {
+    /// The words a case's input fingerprint covers: every field.
+    fn words(&self) -> Vec<u8> {
+        let mut out = Vec::new();
+        for word in [
+            self.max_total_threads_per_object_threadgroup,
+            self.max_total_threads_per_mesh_threadgroup,
+            self.payload_memory_length,
+            self.max_total_threadgroups_per_mesh_grid,
+            self.max_vertex_amplification_count,
+        ]
+        .into_iter()
+        .chain(self.required_threads_per_object_threadgroup)
+        .chain(self.required_threads_per_mesh_threadgroup)
+        {
+            out.extend(word.to_le_bytes());
+        }
+        out.push(u8::from(
+            self.object_threadgroup_size_is_multiple_of_thread_execution_width,
+        ));
+        out.push(u8::from(
+            self.mesh_threadgroup_size_is_multiple_of_thread_execution_width,
+        ));
+        out
+    }
+
+    /// The limits as the sites a case emits under one node.
+    fn node(&self, name: impl Into<NodeName>) -> Node {
+        let value = Observed::value;
+        let uint = |held: u32| value(Value::Uint(u64::from(held)));
+        let axes = |held: [u32; 3]| value(crate::pipeline_facts::size(&held.map(u64::from)));
+        Node::branch(name, Vec::new())
+            .with(Node::leaf(
+                "max_total_threads_per_object_threadgroup",
+                uint(self.max_total_threads_per_object_threadgroup),
+            ))
+            .with(Node::leaf(
+                "max_total_threads_per_mesh_threadgroup",
+                uint(self.max_total_threads_per_mesh_threadgroup),
+            ))
+            .with(Node::leaf(
+                "object_threadgroup_size_is_multiple_of_thread_execution_width",
+                value(Value::Bool(
+                    self.object_threadgroup_size_is_multiple_of_thread_execution_width,
+                )),
+            ))
+            .with(Node::leaf(
+                "mesh_threadgroup_size_is_multiple_of_thread_execution_width",
+                value(Value::Bool(
+                    self.mesh_threadgroup_size_is_multiple_of_thread_execution_width,
+                )),
+            ))
+            .with(Node::leaf(
+                "payload_memory_length",
+                uint(self.payload_memory_length),
+            ))
+            .with(Node::leaf(
+                "max_total_threadgroups_per_mesh_grid",
+                uint(self.max_total_threadgroups_per_mesh_grid),
+            ))
+            .with(Node::leaf(
+                "max_vertex_amplification_count",
+                uint(self.max_vertex_amplification_count),
+            ))
+            .with(Node::leaf(
+                "required_threads_per_object_threadgroup",
+                axes(self.required_threads_per_object_threadgroup),
+            ))
+            .with(Node::leaf(
+                "required_threads_per_mesh_threadgroup",
+                axes(self.required_threads_per_mesh_threadgroup),
+            ))
+    }
 }
 
 /// The one table of stated values, each away from Metal's default.
@@ -130,6 +222,19 @@ pub const AWAY: Away = Away {
     depth_format: metal::PixelFormat::Depth16Unorm,
     stencil_format: metal::PixelFormat::Stencil8,
     support_indirect_command_buffers: true,
+    // No two numbers alike, and each a value Metal's descriptor holds without checking it: no
+    // shape makes a pipeline of it.
+    limits: DescriptorLimits {
+        max_total_threads_per_object_threadgroup: 96,
+        max_total_threads_per_mesh_threadgroup: 48,
+        object_threadgroup_size_is_multiple_of_thread_execution_width: true,
+        mesh_threadgroup_size_is_multiple_of_thread_execution_width: true,
+        payload_memory_length: 80,
+        max_total_threadgroups_per_mesh_grid: 12,
+        max_vertex_amplification_count: 2,
+        required_threads_per_object_threadgroup: [8, 2, 1],
+        required_threads_per_mesh_threadgroup: [4, 3, 1],
+    },
 };
 
 impl Away {
@@ -167,6 +272,7 @@ impl Away {
             }
             out.push(u8::from(color.blending_enabled));
         }
+        out.extend(self.limits.words());
         out
     }
 }
@@ -259,6 +365,8 @@ pub struct MeshDescriptorFacts {
     pub support_indirect_command_buffers: bool,
     /// `binaryArchives`' length; a nil list is 0.
     pub binary_archives: u64,
+    /// The limit fields.
+    pub limits: DescriptorLimits,
     /// The three per-stage linked-function lists, which [`Shape::Reset`] does not read.
     pub supplied: Option<SuppliedLists>,
 }
@@ -324,7 +432,8 @@ impl MeshDescriptorFacts {
             .with(Node::leaf(
                 "binary_archives",
                 value(Value::Uint(self.binary_archives)),
-            ));
+            ))
+            .with(self.limits.node("limits"));
         if let Some(supplied) = &self.supplied {
             node = node
                 .with(Node::leaf(
