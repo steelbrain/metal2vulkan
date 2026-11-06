@@ -29,7 +29,9 @@
 //! A run is 2 untimed repetitions then 6 counted ones. Each repetition counts the calling
 //! thread's CPU time and, on macOS, its instructions and cycles (`thread_selfcounts`, libSystem's,
 //! readable unprivileged) from the first command buffer's creation through the last commit, then
-//! waits for every command buffer's handler outside the count. Printed per shape and figure: the
+//! waits for every command buffer's handler outside the count, and the process's page faults and
+//! voluntary context switches meanwhile (`getrusage`): the thread's counts hold the kernel's
+//! instructions where it ran on the thread. Printed per shape and figure: the
 //! figure a draw, the median over the runs with the lowest and the highest (`DRAW-COST` lines).
 //! Instructions are the figure to compare between builds: a busy host moves them little where it
 //! moves time. The thread asks for the performance cores (`QOS_CLASS_USER_INTERACTIVE`).
@@ -406,11 +408,14 @@ impl Bench {
     }
 }
 
-/// The calling thread's CPU time, and its instructions and cycles where the system counts them.
+/// The calling thread's CPU time, and its instructions and cycles where the system counts them;
+/// the process's page faults that needed no I/O and its voluntary context switches, every
+/// thread's (`getrusage`): what the kernel did, which the thread's counts hold where it ran on it.
 #[derive(Clone, Copy, Default)]
 struct Counts {
     nanos: u64,
     instructions: Option<[u64; 2]>,
+    process: [u64; 2],
 }
 
 impl Counts {
@@ -422,9 +427,15 @@ impl Counts {
         // SAFETY: `at` is a timespec, which the call writes.
         let answer = unsafe { libc::clock_gettime(libc::CLOCK_THREAD_CPUTIME_ID, &mut at) };
         assert_eq!(answer, 0, "clock_gettime");
+        // SAFETY: a `rusage` is plain integers, all zero valid, which the call writes.
+        let mut usage: libc::rusage = unsafe { std::mem::zeroed() };
+        // SAFETY: `usage` is a `rusage`, which the call writes.
+        let answer = unsafe { libc::getrusage(libc::RUSAGE_SELF, &mut usage) };
+        assert_eq!(answer, 0, "getrusage");
         Counts {
             nanos: at.tv_sec as u64 * 1_000_000_000 + at.tv_nsec as u64,
             instructions: instructions_and_cycles(),
+            process: [usage.ru_minflt as u64, usage.ru_nvcsw as u64],
         }
     }
 
@@ -436,6 +447,10 @@ impl Counts {
                 .instructions
                 .zip(start.instructions)
                 .map(|(now, then)| [now[0] - then[0], now[1] - then[1]]),
+            process: [
+                self.process[0] - start.process[0],
+                self.process[1] - start.process[1],
+            ],
         }
     }
 
@@ -446,6 +461,10 @@ impl Counts {
                 .instructions
                 .zip(more.instructions)
                 .map(|(a, b)| [a[0] + b[0], a[1] + b[1]]),
+            process: [
+                self.process[0] + more.process[0],
+                self.process[1] + more.process[1],
+            ],
         }
     }
 }
@@ -510,6 +529,13 @@ fn measure(bench: &Bench, shape: Shape, runs: usize, calls: bool) -> Result<()> 
         "cpu_ns",
         seen.iter().map(|c| c.nanos as f64 / draws).collect(),
     )];
+    for (figure, index) in [("process_faults", 0), ("process_switches", 1)] {
+        let values = seen
+            .iter()
+            .map(|c| c.process[index] as f64 / draws)
+            .collect();
+        figures.push((figure, values));
+    }
     if seen.iter().all(|c| c.instructions.is_some()) {
         for (figure, index) in [("instructions", 0), ("cycles", 1)] {
             let values = seen
@@ -522,7 +548,7 @@ fn measure(bench: &Bench, shape: Shape, runs: usize, calls: bool) -> Result<()> 
     for (figure, values) in figures {
         let (median, low, high) = spread(values);
         println!(
-            "DRAW-COST {} {figure} {median:.1} [{low:.1}, {high:.1}]",
+            "DRAW-COST {} {figure} {median:.3} [{low:.3}, {high:.3}]",
             shape.name
         );
     }
