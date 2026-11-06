@@ -101,6 +101,7 @@ mod direct_arguments_from_compiled;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod dirty_pages_device;
 mod dirty_reports;
+mod dirty_runs_bench;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod dispatch_pending;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
