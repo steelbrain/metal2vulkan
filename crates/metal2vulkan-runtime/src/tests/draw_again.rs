@@ -784,7 +784,8 @@ fn sampled_rectangles(
 
 /// Draws rebound after their vertex buffer's offset alone moved patch that slot's use in place,
 /// looking at no other use (`binding::patch_buffer_uses`, which finds the uses of buffer slots in
-/// the list `binding::command_uses_into` keeps of them): each draw of `tob_sample`'s rectangles
+/// the list it makes of them at the first patch after `binding::command_uses_into` made them):
+/// each draw of `tob_sample`'s rectangles
 /// also samples a texture, bound once before them, whose use no patch looks at. Builds with debug
 /// assertions, the only builds of this test, count the uses a patch looked at
 /// (`binding::patched_slot_uses`) and check the list against the uses.
@@ -823,6 +824,45 @@ fn draws_rebound_after_an_offset_moved_patch_that_slot_s_use_alone() {
     assert_eq!(
         walked, calls,
         "each patch looks at the vertex buffer's use alone"
+    );
+}
+
+/// Draws rebound after their fragment texture alone changed, another at each draw, make their
+/// uses again (`render/draw_again/rebound.rs`) and so list none of their uses of buffer slots: a
+/// draw lists those at the first patch after its uses were made (`binding::list_slot_uses`), which
+/// only a draw whose buffer slots alone changed asks for. Listed as the uses are made instead,
+/// each of these draws would list them for no patch to read. Builds with debug assertions, the
+/// only builds of this test, count the listings (`binding::listed_slot_uses`).
+#[cfg(debug_assertions)]
+#[test]
+fn draws_rebound_after_their_texture_changed_list_no_buffer_slot_uses() {
+    let scratch = Scratch::new("draw-again-listed-slot-uses");
+    let heard = Heard::default();
+    let device = device(&scratch.0, &[], &heard);
+    let state = state(&device, "engine/tob_renders.ll", ("tob_rect", "tob_sample"));
+    let rectangles = rectangles_from_columns(&device);
+    let textures = textures(&device);
+    let samplers = [sampler_addressing(
+        &device,
+        SamplerAddressMode::ClampToEdge,
+        f32::MAX,
+    )];
+    let drawn = (&state, &rectangles);
+    let bound = (&textures[..], &samplers[..]);
+    let each = |at| at as usize;
+    let first = |_| 0;
+    let draws = |encoder: &mut RenderCommandEncoder| {
+        sampled_rectangles(encoder, drawn, bound, (&each, &first), |_| {})
+    };
+    warm(&device, draws);
+    let before = crate::binding::listed_slot_uses();
+    let ran = run(&device, draws);
+    let listed = crate::binding::listed_slot_uses();
+    let rebound = ran.counted(|counts| counts.draws_rebound);
+    assert_eq!(rebound, drawn_alone(HITS));
+    assert_eq!(
+        listed, before,
+        "draws whose uses were made again listed their uses of buffer slots"
     );
 }
 
