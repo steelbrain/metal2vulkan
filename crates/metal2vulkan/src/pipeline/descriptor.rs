@@ -649,7 +649,9 @@ pub struct ComputePipelineDescriptor {
     /// `stageInputDescriptor`: how the kernel's `[[stage_in]]` attributes are fetched. A kernel
     /// reading a stage-in attribute compiles under it (`LoweringInputs::stage_input`).
     pub stage_input: Option<StageInputDescriptor>,
-    /// `None` for Metal's 0 (the device maximum).
+    /// `None` for Metal's 0 (the device maximum). Refused as Metal refuses it
+    /// ([`ComputePipelineProblem`](crate::error::ComputePipelineProblem)): above 1024, or beside a
+    /// kernel's own `[[max_total_threads_per_threadgroup(n)]]` of other threads.
     pub max_total_threads_per_threadgroup: Option<u32>,
     /// The guest's promise that interior regions' local sizes are multiples of 32.
     pub threadgroup_size_is_multiple_of_execution_width: bool,
@@ -658,8 +660,9 @@ pub struct ComputePipelineDescriptor {
     /// Metal's. The kernel compiles under it (`LoweringInputs::max_call_stack_depth`), which sizes
     /// the call stack of recursion through visible functions.
     pub max_call_stack_depth: u32,
-    /// `requiredThreadsPerThreadgroup`: `None` for Metal's zero size, no requirement. The runtime
-    /// refuses a dispatch of another threadgroup size, as Metal's API validation stops one. The
+    /// `requiredThreadsPerThreadgroup`: `None` for Metal's zero size, no requirement. A dispatch
+    /// of another threadgroup size runs at the size it gives, as plain Metal runs it (Metal's API
+    /// validation stops it; measured on an M3 Max, `compute_pipeline_limits.m`). The
     /// compiled pipeline does not depend on it, so it is not part of the key, and its
     /// `metal_info` answers the kernel's limit. The runtime's state answers the size's threads as
     /// its `maxTotalThreadsPerThreadgroup`, as Metal's state does.
@@ -836,9 +839,9 @@ pub struct TileRenderPipelineDescriptor {
     /// function, 1 by default as Metal's. A `Function` tile function compiles under it, as a
     /// compute pipeline's kernel does.
     pub max_call_stack_depth: u32,
-    /// `requiredThreadsPerThreadgroup`: `None` for Metal's zero size, no requirement. The runtime
-    /// refuses a tile dispatch of another threadgroup size, as Metal's API validation stops one.
-    /// Not part of the key. The runtime's state answers the size's threads as its
+    /// `requiredThreadsPerThreadgroup`: `None` for Metal's zero size, no requirement. A tile
+    /// dispatch of another threadgroup size runs at the size it gives, as plain Metal runs it
+    /// (Metal's API validation stops it). Not part of the key. The runtime's state answers the size's threads as its
     /// `maxTotalThreadsPerThreadgroup`, as a compute descriptor's
     /// ([`ComputePipelineDescriptor::required_threads_per_threadgroup`]).
     pub required_threads_per_threadgroup: Option<[u32; 3]>,

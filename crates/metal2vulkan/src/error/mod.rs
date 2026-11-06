@@ -1951,6 +1951,31 @@ pub enum DescriptorError {
     /// A mesh render pipeline descriptor's thread, threadgroup or payload field that Metal
     /// refuses ([`MeshPipelineProblem`]).
     MeshPipeline { problem: MeshPipelineProblem },
+    /// A compute pipeline descriptor's `maxTotalThreadsPerThreadgroup` that Metal refuses
+    /// ([`ComputePipelineProblem`]).
+    ComputePipeline { problem: ComputePipelineProblem },
+}
+
+/// A compute pipeline descriptor's `maxTotalThreadsPerThreadgroup` that Metal's creation fails
+/// over, an error of code 3, measured on an M3 Max under macOS 27.0.1
+/// (`compute_pipeline_limits.m`, plain and with `MTL_DEBUG_LAYER=1`, which agree). The limit is
+/// Metal's 1024, not a lower one of this device's (the compiled pipeline's
+/// [`ComputePipelineMetalInfo`](crate::pipeline::ComputePipelineMetalInfo) answers that one). A
+/// required threadgroup size beside the maximum is the runtime's check
+/// (`RequiredThreadsProblem`).
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum ComputePipelineProblem {
+    /// The descriptor's maximum `max` above Metal's `limit`, for a kernel without a maximum of
+    /// its own: "Specified total max threads per threadgroup (1025) exceeds the maximum total
+    /// threads per threadgroup supported (1024)".
+    MaxThreadsOverLimit { max: u32, limit: u32 },
+    /// The descriptor's maximum `max` beside the kernel's own
+    /// `[[max_total_threads_per_threadgroup(n)]]`, `specified`, another number of threads, whether
+    /// or not `max` is above Metal's limit: "Kernel specified max total threads per threadgroup
+    /// (64) must match compute pipeline specified max total threads per threadgroup (32)". A
+    /// descriptor of the kernel's own maximum is made.
+    MaxThreadsDiffer { specified: u32, max: u32 },
 }
 
 /// A field of a mesh render pipeline descriptor (`MTLMeshRenderPipelineDescriptor`) that Metal

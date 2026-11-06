@@ -27,8 +27,8 @@ use crate::cache::VariantKey;
 use crate::device::requirements::{Requirements, VkExtension, VkFeature, VkLimit, VkProperty};
 use crate::device::{mechanism, Device, DeviceProfile};
 use crate::error::{
-    DescriptorError, Error, Feature, InternalError, InternalKind, MeshPipelineProblem,
-    RuntimeInput, Unsupported,
+    ComputePipelineProblem, DescriptorError, Error, Feature, InternalError, InternalKind,
+    MeshPipelineProblem, RuntimeInput, Unsupported,
 };
 use crate::library::{CompiledFunction, FunctionArtifact, FunctionCompileKey};
 use crate::lower::select::LowerInputs;
@@ -794,6 +794,7 @@ impl Device {
         }
         let kernel = self.stage(&d.kernel, InputsFrom::Given(inputs), m)?;
         let a = kernel.artifact();
+        check_compute_maxima(d, a)?;
         check_stage_in(a, d)?;
         check_call_stack(a, d.max_call_stack_depth)?;
         let linked = link(&[a], &LinkInputs::compute(), p)?;
@@ -1437,6 +1438,30 @@ const METAL_MAX_PAYLOAD: u32 = 16384;
 /// Metal's refusal of a mesh descriptor field.
 fn mesh_refusal(problem: MeshPipelineProblem) -> Error {
     Error::InvalidDescriptor(DescriptorError::MeshPipeline { problem })
+}
+
+/// Metal's error over compute descriptor `d`'s `maxTotalThreadsPerThreadgroup` beside kernel `a`
+/// ([`ComputePipelineProblem`]): one other than the kernel's own maximum, else one above 1024.
+/// Metal's 0 is no maximum.
+fn check_compute_maxima(d: &ComputePipelineDescriptor, a: &FunctionArtifact) -> Result<(), Error> {
+    let Some(max) = d.max_total_threads_per_threadgroup.filter(|&max| max > 0) else {
+        return Ok(());
+    };
+    let refusal = |problem| {
+        Err(Error::InvalidDescriptor(DescriptorError::ComputePipeline {
+            problem,
+        }))
+    };
+    match a.kernel.max_total_threads.filter(|&n| n > 0) {
+        Some(specified) if specified != max => {
+            refusal(ComputePipelineProblem::MaxThreadsDiffer { specified, max })
+        }
+        None if max > METAL_MAX_THREADS => refusal(ComputePipelineProblem::MaxThreadsOverLimit {
+            max,
+            limit: METAL_MAX_THREADS,
+        }),
+        _ => Ok(()),
+    }
 }
 
 /// `required`, with Metal's all-zero size as none.
