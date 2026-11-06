@@ -54,10 +54,11 @@ use crate::pipeline::testing::{
     storage_buffers, typed_module, AssembleError, StatusReach,
 };
 use crate::pipeline::{
-    ComputePipelineDescriptor, FunctionDescriptor, RenderPipelineDescriptor, StageSource,
+    heap_sampler_capacity, ComputePipelineDescriptor, FunctionDescriptor, RenderPipelineDescriptor,
+    StageSource,
 };
 use crate::spirv::interp::{run_with_images, Buffer, Config, Image, Resources};
-use crate::spirv::testing::committed_profiles;
+use crate::spirv::testing::{committed_descriptions, committed_profiles};
 use crate::vk;
 
 const DATALAYOUT: &str = "e-p:64:64:64-i1:8:8-i8:8:8-i16:16:16-i32:32:32-i64:64:64-f32:32:32-f64:64:64-v16:16:16-v24:32:32-v32:32:32-v48:64:64-v64:64:64-v96:128:128-v128:128:128-v192:256:256-v256:256:256-v512:512:512-v1024:1024:1024-n8:16:32";
@@ -4361,6 +4362,83 @@ fn argument_buffer_samplers_are_heap_lookups() {
             compiled += 1;
         }
         assert!(compiled > 0, "{entry}: no committed profile has its heap");
+    }
+}
+
+/// A kernel reading a texture and its sampler from an argument buffer has one set-1 sampler
+/// array, of `heap_sampler_capacity` elements, on every committed profile that compiles it: the
+/// handle table's 65536 where the update-after-bind sampler limits pass it (MoltenVK's 500000,
+/// lavapipe's, NVIDIA's), the per-stage limit's 16 on the desktop baseline. On the M3's profile
+/// with its per-stage update-after-bind sampler limit lowered to 100, or its set's to 200, the
+/// array and the answer follow it. A profile that refuses the kernel answers 0, and so does the
+/// M3's without `descriptorBindingPartiallyBound` or `shaderSampledImageArrayNonUniformIndexing`,
+/// which refuses it.
+#[test]
+fn an_argument_sampler_array_has_the_heap_sampler_capacity() {
+    let Some(bc) = argument_samplers_fixture() else {
+        return;
+    };
+    let library = Library::from_air(&bc).expect("library");
+    // The answer on `desc`, and the element count of the kernel's set-1 sampler array or the
+    // kernel's refusal.
+    let array = |desc: DeviceDescription| -> (u32, Result<u32, Error>) {
+        let dev = Device::new(desc, DevicePolicy::default()).expect("device");
+        let f = library.function("argument_sampler_sample").expect("entry");
+        let d = ComputePipelineDescriptor::new(StageSource::Function(FunctionDescriptor::new(f)));
+        let count = dev
+            .compile_compute_pipeline(&d, &Budget::standard())
+            .map(|pipe| {
+                let samplers: Vec<u32> = (pipe.layout.sets.iter())
+                    .filter(|set| set.set == 1)
+                    .flat_map(|set| &set.bindings)
+                    .filter(|b| b.ty == vk::DescriptorType::SAMPLER)
+                    .map(|b| b.count)
+                    .collect();
+                assert_eq!(samplers.len(), 1, "one set-1 sampler array: {samplers:?}");
+                samplers[0]
+            });
+        (heap_sampler_capacity(dev.profile()), count)
+    };
+    let mut compiled = Vec::new();
+    for (stem, desc) in committed_descriptions().expect("descriptions") {
+        match array(desc.clone()) {
+            (capacity, Ok(count)) => {
+                assert_eq!(count, capacity, "{stem}");
+                compiled.push((stem.as_str(), count));
+            }
+            (capacity, Err(e)) => assert_eq!(capacity, 0, "{stem}: refused ({e})"),
+        }
+    }
+    eprintln!("set-1 sampler arrays: {compiled:?}");
+    for stem in ["moltenvk-m3", "lavapipe", "nvidia-rtx5080-laptop"] {
+        assert!(compiled.contains(&(stem, 65536)), "{stem}: {compiled:?}");
+    }
+    assert!(compiled.contains(&("lunarg-desktop-baseline-2023", 16)));
+    let m3 = || {
+        (committed_descriptions().expect("descriptions").iter())
+            .find(|(stem, _)| stem == "moltenvk-m3")
+            .map(|(_, desc)| desc.clone())
+            .expect("moltenvk-m3")
+    };
+    let mut stage = m3();
+    stage
+        .limits
+        .max_per_stage_descriptor_update_after_bind_samplers = 100;
+    let (capacity, count) = array(stage);
+    assert_eq!((capacity, count.ok()), (100, Some(100)), "per stage");
+    let mut set = m3();
+    set.limits.max_descriptor_set_update_after_bind_samplers = 200;
+    let (capacity, count) = array(set);
+    assert_eq!((capacity, count.ok()), (200, Some(200)), "per set");
+    for lacking in [
+        VkFeature::DescriptorBindingPartiallyBound,
+        VkFeature::ShaderSampledImageArrayNonUniformIndexing,
+    ] {
+        let mut desc = m3();
+        desc.features.remove(&lacking);
+        let (capacity, count) = array(desc);
+        assert_eq!(capacity, 0, "{lacking:?}");
+        assert!(count.is_err(), "{lacking:?}: {count:?}");
     }
 }
 

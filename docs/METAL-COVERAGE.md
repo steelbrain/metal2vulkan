@@ -10,12 +10,12 @@ Every public item of the macOS 27.0 SDK (Xcode 27.0, 27A266a)'s Metal headers, b
 
 | Status | Items | Of which deprecated |
 |---|---|---|
-| implemented | 977 | 36 |
-| missing | 809 | 27 |
+| implemented | 978 | 36 |
+| missing | 808 | 27 |
 | out of scope | 349 | 5 |
 | all | 2135 | 68 |
 
-Implemented by the runtime: 645; by the translator's values: 332. Missing by size: S 126, M 147, L 160, XL 376.
+Implemented by the runtime: 646; by the translator's values: 332. Missing by size: S 125, M 147, L 160, XL 376.
 
 ## Missing, in build order
 
@@ -28,7 +28,7 @@ Cheap items a plain app calls first, then medium pieces by how often a plain app
 | command queue descriptor | S | 3 | `MTLCommandQueueDescriptor`, `MTLCommandQueueDescriptor.maxCommandBufferCount`, `MTLDevice.newCommandQueueWithDescriptor:` |
 | compute, blit and resource-state pass descriptors | S | 10 | `MTLBlitPassDescriptor`, `MTLBlitPassDescriptor.blitPassDescriptor`, `MTLCommandBuffer.computeCommandEncoderWithDescriptor:`, ... |
 | libraries from a file path or URL | S | 2 | `MTLDevice.newLibraryWithFile:error:`, `MTLDevice.newLibraryWithURL:error:` |
-| device, state and resource queries | S | 45 | `MTLAllocation.allocatedSize`, `MTLBuffer.sparseBufferTier`, `MTLArchitecture`, ... |
+| device, state and resource queries | S | 44 | `MTLAllocation.allocatedSize`, `MTLBuffer.sparseBufferTier`, `MTLArchitecture`, ... |
 | `textureBarrier` and queue-stage barriers | S/M | 2 | `MTLCommandEncoder.barrierAfterQueueStages:beforeStages:`, `MTLRenderCommandEncoder.textureBarrier` |
 | a pipeline state's reflection after creation | S | 2 | `MTLComputePipelineState.reflection`, `MTLRenderPipelineState.reflection` |
 | function handles by name, and a handle's type and ID | S | 4 | `MTLComputePipelineState.functionHandleWithName:`, `MTLFunctionHandle.functionType`, `MTLFunctionHandle.gpuResourceID`, ... |
@@ -1440,7 +1440,7 @@ Cheap items a plain app calls first, then medium pieces by how often a plain app
 | `MTLDevice.newRenderPipelineStateWithMeshDescriptor:options:reflection:error:` | method | implemented | `Device::new_mesh_render_pipeline_state_with_reflection` (runtime) |
 | `MTLDevice.newRenderPipelineStateWithMeshDescriptor:options:completionHandler:` | method | implemented | `Device::new_mesh_render_pipeline_state_with_reflection` (runtime): handler form |
 | `MTLDevice.maxThreadgroupMemoryLength` | property | implemented | `DeviceProperties.max_threadgroup_memory_length` (runtime) |
-| `MTLDevice.maxArgumentBufferSamplerCount` | property | missing | S: capability query (the runtime's live sampler limit) |
+| `MTLDevice.maxArgumentBufferSamplerCount` | property | implemented | `DeviceProperties.max_argument_buffer_sampler_count` (runtime) |
 | `MTLDevice.programmableSamplePositionsSupported` | property | implemented | `DeviceProperties::are_programmable_sample_positions_supported` (runtime) |
 | `MTLDevice.getDefaultSamplePositions:count:` | method | missing | S: the standard positions a pass without `sample_positions` rasterizes at |
 | `MTLDevice.newArgumentEncoderWithArguments:` | method | implemented | `Device::new_argument_encoder_with_arguments` (runtime) |

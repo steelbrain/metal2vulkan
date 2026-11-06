@@ -903,7 +903,8 @@ for dependency in &pipeline.dependencies {
   says whether Metal binds a buffer, a visible-function table or an intersection function table
   there.
 - The layout numbers set 0 densely, in `ResourceSlot` order. Set 1 holds the heap arrays (the
-  resources reached through argument buffers and resource IDs). Push constants carry the values the
+  resources reached through argument buffers and resource IDs); `pipeline::heap_sampler_capacity`
+  is the most elements a set-1 sampler array has on a profile. Push constants carry the values the
   binder writes per command. A stage that writes the command buffer's `ExecutionStatus` (an absent
   argument's read, a `seq_cst` fence, an argument buffer's cubic sampler) reaches it by device
   address, a push hole, where the device addresses buffers (`bufferDeviceAddress` and
@@ -3883,6 +3884,13 @@ each item named states the rule in full.
 - **The device counts the sampler IDs it holds** (`Device::sampler_ids_live`,
   `Device::sampler_id_pool_size`), runtime extensions for a consumer that models Metal's sampler
   heap.
+- **`maxArgumentBufferSamplerCount` is the device's set-1 sampler array less its neutral**
+  (`DeviceProperties::max_argument_buffer_sampler_count`): one fewer than the smaller of the
+  array's elements (`pipeline::heap_sampler_capacity`: at most the handle table's 65536 entries
+  and the update-after-bind sampler limits) and `maxSamplerAllocationCount`. Metal answers 500000
+  on an M3 Max; MoltenVK there answers 65535. It counts every live sampler state, with or without
+  `supportArgumentBuffers`. A state past it reads the neutral sampler through an argument buffer
+  (`unlisted-argument-sampler`).
 - **A texture can take no resource ID** (`IdPlacement::Outside`), for a consumer's helper textures
   and its textures over its own images (`Device::new_texture_with_vk_image`), such as swapchain
   images.

@@ -17,7 +17,9 @@ use metal2vulkan::device::{
 };
 use metal2vulkan::error::{Feature, Unsupported};
 use metal2vulkan::metal::PixelFormat;
+use metal2vulkan::pipeline::heap_sampler_capacity;
 use metal2vulkan::vk::{ApiVersion, Format, SampleCountFlags};
+use std::collections::BTreeMap;
 
 /// Every committed profile's description: (file stem, description), sorted by stem.
 pub(super) fn committed_descriptions() -> Vec<(String, DeviceDescription)> {
@@ -38,9 +40,9 @@ pub(super) fn committed_descriptions() -> Vec<(String, DeviceDescription)> {
     out
 }
 
-/// The sample counts the profile `stem` states under the `VkPhysicalDeviceLimits` member `key`;
-/// none where it states none (the roadmap profiles), as the description reads its own counts.
-pub(super) fn profile_counts(stem: &str, key: &str) -> SampleCountFlags {
+/// The value the profile `stem` states under the member `key`, the first in its file; `None`
+/// where it states none.
+fn profile_value(stem: &str, key: &str) -> Option<serde_json::Value> {
     fn find<'a>(value: &'a serde_json::Value, key: &str) -> Option<&'a serde_json::Value> {
         match value {
             serde_json::Value::Object(map) => map
@@ -55,7 +57,13 @@ pub(super) fn profile_counts(stem: &str, key: &str) -> SampleCountFlags {
     let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{stem}: {e}"));
     let json: serde_json::Value =
         serde_json::from_str(&text).unwrap_or_else(|e| panic!("{stem}: {e}"));
-    let Some(list) = find(&json, key) else {
+    find(&json, key).cloned()
+}
+
+/// The sample counts the profile `stem` states under the `VkPhysicalDeviceLimits` member `key`;
+/// none where it states none (the roadmap profiles), as the description reads its own counts.
+pub(super) fn profile_counts(stem: &str, key: &str) -> SampleCountFlags {
+    let Some(list) = profile_value(stem, key) else {
         return SampleCountFlags::empty();
     };
     list.as_array()
@@ -78,11 +86,21 @@ fn identity(stem: &str) -> DeviceIdentity {
         drm_render: None,
         api_version: ApiVersion::V1_3,
         max_viewports: 16,
+        max_sampler_allocation_count: sampler_allocation_count(stem),
         gpu_core_count: None,
         sampled_sample_counts: profile_counts(stem, "sampledImageColorSampleCounts")
             & profile_counts(stem, "sampledImageDepthSampleCounts"),
         device_local_heap: None,
     }
+}
+
+/// The profile `stem`'s `maxSamplerAllocationCount`, or Vulkan's least, 4000, where it states none
+/// (the roadmap profile).
+fn sampler_allocation_count(stem: &str) -> u32 {
+    profile_value(stem, "maxSamplerAllocationCount").map_or(4000, |count| {
+        let count = count.as_u64().unwrap_or_else(|| panic!("{stem}: {count}"));
+        u32::try_from(count).unwrap_or_else(|e| panic!("{stem}: {e}"))
+    })
 }
 
 /// The properties of a device created from `desc` as the runtime creates one: the recommended
@@ -420,6 +438,45 @@ fn the_venue_devices_answer_as_pinned() {
             "{stem}"
         );
         assert_eq!(p.supports_pull_model_interpolation(), Ok(true), "{stem}");
+    }
+}
+
+/// `maxArgumentBufferSamplerCount` is one fewer than the smaller of a set-1 sampler array's
+/// elements (`heap_sampler_capacity` of the device's profile) and the device's
+/// `maxSamplerAllocationCount`, on every committed profile. Pinned: the handle table's 65536
+/// entries bound it on MoltenVK (whose driver takes 500000 samplers, as Metal's answer on the M3
+/// Max is 500000), RADV and ANV (65536 samplers); lavapipe's 32768 samplers and NVIDIA's 4000 bound
+/// it there; the desktop baseline's 16 update-after-bind samplers a stage bound it there; and on
+/// the floor, which has no descriptor indexing, no function reads a set-1 array.
+#[test]
+fn argument_buffer_samplers_are_one_fewer_than_the_array_and_the_sampler_limit() {
+    let pinned = [
+        ("moltenvk-m3", 65535),
+        ("amd-780m-radv", 65535),
+        ("intel-irisxe-rplp-anv", 65535),
+        ("intel-uhd770-rpls-anv", 65535),
+        ("lavapipe", 32767),
+        ("gate-lavapipe", 32767),
+        ("gate-lavapipe-x86_64", 32767),
+        ("nvidia-rtx5080-laptop", 3999),
+        ("lunarg-desktop-baseline-2023", 15),
+        ("vk12-floor", 0),
+    ];
+    let mut answers = BTreeMap::new();
+    for (stem, desc) in &committed_descriptions() {
+        let (enabled, p) = created(stem, desc);
+        let compile = Device::new(enabled, DevicePolicy::UNTRUSTED).unwrap();
+        let elements = heap_sampler_capacity(compile.profile());
+        let limit = sampler_allocation_count(stem);
+        assert_eq!(
+            p.max_argument_buffer_sampler_count,
+            u64::from(elements.min(limit).saturating_sub(1)),
+            "{stem}: {elements} elements, {limit} samplers"
+        );
+        answers.insert(stem.as_str(), p.max_argument_buffer_sampler_count);
+    }
+    for (stem, answer) in pinned {
+        assert_eq!(answers.get(stem), Some(&answer), "{stem}: {answers:?}");
     }
 }
 

@@ -1034,48 +1034,24 @@ fn heap_set(
     if heap.is_empty() {
         return Ok(None);
     }
-    let d = &p.fields().descriptors;
     // The layout's own features (the module states its indexing features); `select` refuses a
     // function whose heap the profile cannot hold, so a miss here is a function compiled for
     // another profile.
     let mut missing = Vec::new();
-    let mut need = |has: bool, f: VkFeature| {
-        if !has && !missing.contains(&Capability::Feature(f)) {
-            missing.push(Capability::Feature(f));
-        }
-    };
-    need(
-        d.runtime_descriptor_array,
-        VkFeature::RuntimeDescriptorArray,
-    );
-    need(
-        d.partially_bound,
-        VkFeature::DescriptorBindingPartiallyBound,
-    );
     // The feature a missing capability is refused as: the function tables' where only their array
     // needs it, else the textures'.
     let mut feature = Feature::DynamicCall;
     for h in heap.values() {
-        match h.ty {
-            vk::DescriptorType::SAMPLER | vk::DescriptorType::SAMPLED_IMAGE => {
-                feature = Feature::ArgumentBufferTextures;
-                need(
-                    d.update_after_bind_sampled_image,
-                    VkFeature::DescriptorBindingSampledImageUpdateAfterBind,
-                )
+        if h.ty != vk::DescriptorType::STORAGE_BUFFER {
+            feature = Feature::ArgumentBufferTextures;
+        }
+        let Some(lacks) = heap_layout_lacks(p, h.ty) else {
+            return Err(Unsupported::not_implemented(Feature::ArgumentBufferTextures).into());
+        };
+        for f in lacks {
+            if !missing.contains(&Capability::Feature(f)) {
+                missing.push(Capability::Feature(f));
             }
-            vk::DescriptorType::STORAGE_IMAGE => {
-                feature = Feature::ArgumentBufferTextures;
-                need(
-                    d.update_after_bind_storage_image,
-                    VkFeature::DescriptorBindingStorageImageUpdateAfterBind,
-                )
-            }
-            vk::DescriptorType::STORAGE_BUFFER => need(
-                d.update_after_bind_storage_buffer,
-                VkFeature::DescriptorBindingStorageBufferUpdateAfterBind,
-            ),
-            _ => return Err(Unsupported::not_implemented(Feature::ArgumentBufferTextures).into()),
         }
     }
     if !missing.is_empty() {
@@ -1114,6 +1090,75 @@ fn heap_set(
     }))
 }
 
+/// The features a set-1 array of descriptor type `ty` needs in its layout that `p` lacks (the
+/// module docs), in the order they are refused: `runtimeDescriptorArray`,
+/// `descriptorBindingPartiallyBound`, then the type's update-after-bind feature. `None` for a type
+/// no heap array has.
+fn heap_layout_lacks(p: &DeviceProfile, ty: vk::DescriptorType) -> Option<Vec<VkFeature>> {
+    let d = &p.fields().descriptors;
+    let typed = match ty {
+        vk::DescriptorType::SAMPLER | vk::DescriptorType::SAMPLED_IMAGE => (
+            d.update_after_bind_sampled_image,
+            VkFeature::DescriptorBindingSampledImageUpdateAfterBind,
+        ),
+        vk::DescriptorType::STORAGE_IMAGE => (
+            d.update_after_bind_storage_image,
+            VkFeature::DescriptorBindingStorageImageUpdateAfterBind,
+        ),
+        vk::DescriptorType::STORAGE_BUFFER => (
+            d.update_after_bind_storage_buffer,
+            VkFeature::DescriptorBindingStorageBufferUpdateAfterBind,
+        ),
+        _ => return None,
+    };
+    let needs = [
+        (
+            d.runtime_descriptor_array,
+            VkFeature::RuntimeDescriptorArray,
+        ),
+        (
+            d.partially_bound,
+            VkFeature::DescriptorBindingPartiallyBound,
+        ),
+        typed,
+    ];
+    Some(
+        needs
+            .into_iter()
+            .filter(|(has, _)| !has)
+            .map(|(_, f)| f)
+            .collect(),
+    )
+}
+
+/// The most elements a set-1 sampler array has on `p`. Element 0 holds the neutral sampler, so
+/// the array holds at most one sampler state fewer.
+///
+/// It is the heap capacity (the module docs) of a pipeline whose heap is one sampler array and
+/// whose set 0 counts no sampler, which no pipeline's exceeds: the least of the handle table's
+/// reach (`memory::handles::TABLE_CAPACITY`, 65536), `maxDescriptorSetUpdateAfterBindSamplers`
+/// and `maxPerStageDescriptorUpdateAfterBindSamplers`, by the same limits and arithmetic link
+/// sizes every heap array with. A pipeline whose heap has more arrays of a kind, or whose set 0
+/// counts descriptors of a kind its heap has, has fewer elements. 0 where `p` lacks a feature a
+/// function reading a set-1 sampler array needs, so no pipeline has one: the layout's
+/// (`runtimeDescriptorArray`, `descriptorBindingPartiallyBound`,
+/// `descriptorBindingSampledImageUpdateAfterBind`) or the module's, which indexes the array by an
+/// element it loads (`shaderSampledImageArrayNonUniformIndexing`).
+pub fn heap_sampler_capacity(p: &DeviceProfile) -> u32 {
+    let readable = heap_layout_lacks(p, vk::DescriptorType::SAMPLER)
+        .is_some_and(|lacks| lacks.is_empty())
+        && p.fields().descriptors.non_uniform_sampled_image;
+    if !readable {
+        return 0;
+    }
+    let capacity = heap_limits(&p.fields().limits, SAMPLERS)
+        .into_iter()
+        .map(|(_, available)| room(available, 0, 1))
+        .fold(u64::from(crate::memory::handles::TABLE_CAPACITY), u64::min);
+    // At most the table's reach, a `u32`.
+    capacity as u32
+}
+
 /// Whether set 1's heap arrays are `UPDATE_UNUSED_WHILE_PENDING` on `p`: where the profile has
 /// `descriptorBindingUpdateUnusedWhilePending`, so a consumer keeping one heap set for every
 /// command buffer can write an element no pending command buffer reads. A function that declares
@@ -1137,55 +1182,26 @@ fn heap_capacity(
         vk::DescriptorType::STORAGE_BUFFER => STORAGE,
         _ => SAMPLED,
     };
-    let kinds = [
-        (
-            SAMPLERS,
-            VkLimit::MaxDescriptorSetUpdateAfterBindSamplers,
-            l.max_descriptor_set_update_after_bind_samplers,
-            VkLimit::MaxPerStageDescriptorUpdateAfterBindSamplers,
-            l.max_per_stage_descriptor_update_after_bind_samplers,
-        ),
-        (
-            SAMPLED,
-            VkLimit::MaxDescriptorSetUpdateAfterBindSampledImages,
-            l.max_descriptor_set_update_after_bind_sampled_images,
-            VkLimit::MaxPerStageDescriptorUpdateAfterBindSampledImages,
-            l.max_per_stage_descriptor_update_after_bind_sampled_images,
-        ),
-        (
-            IMAGES,
-            VkLimit::MaxDescriptorSetUpdateAfterBindStorageImages,
-            l.max_descriptor_set_update_after_bind_storage_images,
-            VkLimit::MaxPerStageDescriptorUpdateAfterBindStorageImages,
-            l.max_per_stage_descriptor_update_after_bind_storage_images,
-        ),
-        (
-            STORAGE,
-            VkLimit::MaxDescriptorSetUpdateAfterBindStorageBuffers,
-            l.max_descriptor_set_update_after_bind_storage_buffers,
-            VkLimit::MaxPerStageDescriptorUpdateAfterBindStorageBuffers,
-            l.max_per_stage_descriptor_update_after_bind_storage_buffers,
-        ),
-    ];
     let mut capacity = u64::from(crate::memory::handles::TABLE_CAPACITY);
-    // `limit` holds `used + arrays · capacity`.
+    // `limit` holds `used + arrays · capacity` ([`room`]).
     let mut bound = |limit: VkLimit, available: u32, used: u64, arrays: u64| -> Result<(), Error> {
         if arrays == 0 {
             return Ok(());
         }
-        let room = u64::from(available).saturating_sub(used) / arrays;
-        if room == 0 {
+        let each = room(available, used, arrays);
+        if each == 0 {
             return Err(limit_error(
                 limit,
                 used.saturating_add(arrays),
                 u64::from(available),
             ));
         }
-        capacity = capacity.min(room);
+        capacity = capacity.min(each);
         Ok(())
     };
     let all = kind_counts(set0.iter())?;
-    for (k, set_limit, set_max, _, _) in kinds {
+    for k in HEAP_KINDS {
+        let [(set_limit, set_max), _] = heap_limits(l, k);
         let arrays = heap.values().filter(|h| kind(h.ty) == k).count() as u64;
         bound(set_limit, set_max, all[k], arrays)?;
     }
@@ -1193,7 +1209,8 @@ fn heap_capacity(
         let flags = i.vk_stage().flags();
         let own = kind_counts(set0.iter().filter(|b| b.stages.contains(flags)))?;
         let in_stage = |h: &&HeapDecl| h.stages.contains(flags);
-        for (k, _, _, stage_limit, stage_max) in kinds {
+        for k in HEAP_KINDS {
+            let [_, (stage_limit, stage_max)] = heap_limits(l, k);
             let arrays = heap
                 .values()
                 .filter(in_stage)
@@ -1230,6 +1247,63 @@ fn heap_capacity(
             "a heap capacity beyond u32",
         ))
     })
+}
+
+/// The kinds of heap arrays, in the order [`heap_capacity`] bounds them.
+const HEAP_KINDS: [usize; 4] = [SAMPLERS, SAMPLED, IMAGES, STORAGE];
+
+/// The update-after-bind limits on `l` of heap arrays of kind `k`, one of [`HEAP_KINDS`]: the
+/// set's (`maxDescriptorSetUpdateAfterBind*`), then a stage's
+/// (`maxPerStageDescriptorUpdateAfterBind*`), each with its value.
+fn heap_limits(l: &crate::device::profile::Limits, k: usize) -> [(VkLimit, u32); 2] {
+    match k {
+        SAMPLERS => [
+            (
+                VkLimit::MaxDescriptorSetUpdateAfterBindSamplers,
+                l.max_descriptor_set_update_after_bind_samplers,
+            ),
+            (
+                VkLimit::MaxPerStageDescriptorUpdateAfterBindSamplers,
+                l.max_per_stage_descriptor_update_after_bind_samplers,
+            ),
+        ],
+        SAMPLED => [
+            (
+                VkLimit::MaxDescriptorSetUpdateAfterBindSampledImages,
+                l.max_descriptor_set_update_after_bind_sampled_images,
+            ),
+            (
+                VkLimit::MaxPerStageDescriptorUpdateAfterBindSampledImages,
+                l.max_per_stage_descriptor_update_after_bind_sampled_images,
+            ),
+        ],
+        IMAGES => [
+            (
+                VkLimit::MaxDescriptorSetUpdateAfterBindStorageImages,
+                l.max_descriptor_set_update_after_bind_storage_images,
+            ),
+            (
+                VkLimit::MaxPerStageDescriptorUpdateAfterBindStorageImages,
+                l.max_per_stage_descriptor_update_after_bind_storage_images,
+            ),
+        ],
+        _ => [
+            (
+                VkLimit::MaxDescriptorSetUpdateAfterBindStorageBuffers,
+                l.max_descriptor_set_update_after_bind_storage_buffers,
+            ),
+            (
+                VkLimit::MaxPerStageDescriptorUpdateAfterBindStorageBuffers,
+                l.max_per_stage_descriptor_update_after_bind_storage_buffers,
+            ),
+        ],
+    }
+}
+
+/// The most elements each of `arrays` heap arrays can have under a limit of `available` that
+/// already counts `used` descriptors: `limit` holds `used + arrays · room`.
+fn room(available: u32, used: u64, arrays: u64) -> u64 {
+    u64::from(available).saturating_sub(used) / arrays
 }
 
 fn limit_error(limit: VkLimit, required: u64, available: u64) -> Error {

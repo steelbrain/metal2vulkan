@@ -318,6 +318,7 @@ surface! {
         struct UnwrittenFragmentInputs N;
     }
     "pipeline" => metal2vulkan::pipeline {
+        fn heap_sampler_capacity;
         fn heap_unused_while_pending;
         struct ComputePipeline N;
         struct ComputePipelineMetalInfo N;

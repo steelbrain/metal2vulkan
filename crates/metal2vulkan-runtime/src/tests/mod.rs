@@ -12,6 +12,8 @@ mod amplification;
 mod apple_only;
 mod argument_buffers;
 mod argument_encoder;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod argument_sampler_count;
 #[cfg(debug_assertions)]
 mod argument_table;
 mod attachmentless;

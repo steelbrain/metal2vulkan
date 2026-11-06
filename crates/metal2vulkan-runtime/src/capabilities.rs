@@ -31,6 +31,7 @@ use super::device::DeviceKind;
 use super::driver_defects;
 use super::error::{invalid, Error, Problem, RuntimeGap};
 use super::linear_plan::linear_alignment;
+use super::sampler::argument_buffer_sampler_count;
 use super::texture_descriptor::TextureRules;
 use super::values::Size;
 use metal2vulkan::device::{DeviceDescription, DriverFact, VkFeature};
@@ -127,6 +128,29 @@ pub struct DeviceProperties {
     /// `argumentBuffersSupport`: `Tier2` where buffers are reached by device address and texture
     /// and sampler handles through the descriptor heap (descriptor indexing), else `Tier1`.
     pub argument_buffers_support: ArgumentBuffersTier,
+    /// `maxArgumentBufferSamplerCount`: the most live sampler states functions can read through
+    /// argument buffers, one fewer than the smaller of two counts, each with a slot the states do
+    /// not take:
+    /// - the elements of a set-1 sampler array, which holds each live state at an element of its
+    ///   own and the neutral sampler at element 0
+    ///   ([`heap_sampler_capacity`](metal2vulkan::pipeline::heap_sampler_capacity): the least of
+    ///   the handle table's 65536 entries, `maxDescriptorSetUpdateAfterBindSamplers` and
+    ///   `maxPerStageDescriptorUpdateAfterBindSamplers`, 0 where no function can read one);
+    /// - `maxSamplerAllocationCount`, the Vulkan samplers the device holds live at once, one past
+    ///   them refused (`Error::SamplerLimit`): the array's neutral sampler and a sampler of each
+    ///   state it holds are among them.
+    ///
+    /// It is the most any pipeline reads: fewer are read where a pipeline's heap has more arrays
+    /// or its set 0 counts samplers (a smaller array), where other Vulkan samplers live (another
+    /// use's array, a slot's bind, a pipeline's constexpr samplers), or where other holders of
+    /// sampler IDs (the device's own sampler, a pipeline state's numbered samplers) hold IDs the
+    /// device's sampler tables reach, which are IDs 1 to 65535 under plain allocation. A state
+    /// left out reads the neutral sampler through an argument buffer, announced
+    /// (`Degradation::UnlistedArgumentSampler`). Every live state counts, with or without
+    /// `supportArgumentBuffers`, since Metal reads one without it through an argument buffer too;
+    /// Metal's count is of the states with it. Metal answers 500000 on an Apple M3 Max (macOS
+    /// 27.0.1), where the runtime answers 65535 on MoltenVK, the handle table's reach.
+    pub max_argument_buffer_sampler_count: u64,
     /// `readWriteTextureSupport`: the highest tier whose every format has a storage-image form
     /// on the device.
     pub read_write_texture_support: ReadWriteTextureTier,
@@ -198,6 +222,10 @@ pub(crate) struct DeviceIdentity {
     pub api_version: ApiVersion,
     /// `VkPhysicalDeviceLimits::maxViewports`.
     pub max_viewports: u32,
+    /// `VkPhysicalDeviceLimits::maxSamplerAllocationCount`: the device's live samplers are held
+    /// to it (`SamplerCount`), and it bounds
+    /// [`DeviceProperties::max_argument_buffer_sampler_count`].
+    pub max_sampler_allocation_count: u32,
     /// The GPU's cores as its driver reports them ([`DeviceProperties::gpu_core_count`]).
     pub gpu_core_count: Option<u32>,
     /// The sample counts every color and depth image can be sampled at:
@@ -307,6 +335,10 @@ impl DeviceProperties {
             max_threads_per_threadgroup: Size::new(width, height, depth),
             max_threadgroup_memory_length: u64::from(metal.max_threadgroup_memory_length),
             argument_buffers_support: metal.argument_buffers_tier,
+            max_argument_buffer_sampler_count: argument_buffer_sampler_count(
+                metal2vulkan::pipeline::heap_sampler_capacity(compile.profile()),
+                identity.max_sampler_allocation_count,
+            ),
             read_write_texture_support: metal.read_write_texture_tier,
             supports_32bit_float_filtering: metal.supports_32bit_float_filtering,
             max_viewports: identity.max_viewports,

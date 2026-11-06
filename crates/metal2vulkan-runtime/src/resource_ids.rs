@@ -1365,20 +1365,11 @@ impl Device {
         [sampled, storage]
     }
 
-    /// The most elements a set-1 sampler array can have on the device, and the limit that
-    /// bounds it.
-    pub(super) fn sampler_array(&self) -> (u64, VkLimit) {
-        let l = self.compile_device().profile().limits();
-        least(&[
-            (
-                l.max_descriptor_set_update_after_bind_samplers,
-                VkLimit::MaxDescriptorSetUpdateAfterBindSamplers,
-            ),
-            (
-                l.max_per_stage_descriptor_update_after_bind_samplers,
-                VkLimit::MaxPerStageDescriptorUpdateAfterBindSamplers,
-            ),
-        ])
+    /// The most elements a set-1 sampler array can have on the device: link's count for a
+    /// pipeline's (`metal2vulkan::pipeline::heap_sampler_capacity`), 0 where no function reads
+    /// one.
+    pub(super) fn sampler_array(&self) -> u32 {
+        metal2vulkan::pipeline::heap_sampler_capacity(self.compile_device().profile())
     }
 
     /// Say `text`, a general warning `code` names: through the device's message sink, else on

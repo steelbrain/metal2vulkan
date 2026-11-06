@@ -1117,7 +1117,7 @@ MTLDevice.h	MTLDevice	method	newRenderPipelineStateWithTileDescriptor:options:co
 MTLDevice.h	MTLDevice	method	newRenderPipelineStateWithMeshDescriptor:options:reflection:error:		I	runtime	Device::new_mesh_render_pipeline_state_with_reflection			
 MTLDevice.h	MTLDevice	method	newRenderPipelineStateWithMeshDescriptor:options:completionHandler:		I	runtime	Device::new_mesh_render_pipeline_state_with_reflection	handler form		
 MTLDevice.h	MTLDevice	property	maxThreadgroupMemoryLength		I	runtime	DeviceProperties.max_threadgroup_memory_length			
-MTLDevice.h	MTLDevice	property	maxArgumentBufferSamplerCount		M			capability query (the runtime's live sampler limit)	S	queries
+MTLDevice.h	MTLDevice	property	maxArgumentBufferSamplerCount		I	runtime	DeviceProperties.max_argument_buffer_sampler_count			
 MTLDevice.h	MTLDevice	property	programmableSamplePositionsSupported		I	runtime	DeviceProperties::are_programmable_sample_positions_supported			
 MTLDevice.h	MTLDevice	method	getDefaultSamplePositions:count:		M			the standard positions a pass without `sample_positions` rasterizes at	S	queries
 MTLDevice.h	MTLDevice	method	newArgumentEncoderWithArguments:		I	runtime	Device::new_argument_encoder_with_arguments			

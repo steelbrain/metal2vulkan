@@ -37,6 +37,7 @@ fn identity(
         drm_render,
         api_version: ApiVersion::V1_3,
         max_viewports: 16,
+        max_sampler_allocation_count: 4000,
         gpu_core_count: None,
         sampled_sample_counts: SampleCountFlags::empty(),
         device_local_heap: None,

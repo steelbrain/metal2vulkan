@@ -264,6 +264,18 @@ impl SamplerCount {
     }
 }
 
+/// Metal's `maxArgumentBufferSamplerCount` on a device whose set-1 sampler arrays have at most
+/// `elements` elements (`metal2vulkan::pipeline::heap_sampler_capacity`, which link sizes every
+/// heap array by, and [`Device::sampler_array`] answers) and whose live Vulkan samplers are held
+/// to `limit` (`maxSamplerAllocationCount`, the [`SamplerCount`] the device makes): one fewer
+/// than the smaller, since an array's element 0 and one of the device's samplers are the neutral
+/// sampler's, and each state the array holds takes an element and a sampler of its own
+/// ([`DeviceProperties::max_argument_buffer_sampler_count`](crate::DeviceProperties::max_argument_buffer_sampler_count)).
+/// 0 where `elements` is: no function reads a set-1 sampler array there.
+pub(super) fn argument_buffer_sampler_count(elements: u32, limit: u32) -> u64 {
+    u64::from(elements.min(limit).saturating_sub(1))
+}
+
 /// The Vulkan samplers a sampler state made for its binds, each by its description.
 ///
 /// Every bind of the state asks it for the sampler of one description --- a separate sampler
@@ -702,16 +714,18 @@ impl Device {
         super::heap_sets::place_sampler(self, &state);
         let id = hold.id().0;
         let element = state.heap_element();
-        let (available, limit) = self.sampler_array();
-        if element >= available {
+        // A device with no set-1 sampler array refuses every function reading one, so no array
+        // leaves the state out.
+        let available = u64::from(self.sampler_array());
+        if available > 0 && element >= available {
             self.degrade(Degradation::UnlistedArgumentSampler, || {
                 (
                     format!("sampler state at resource ID {id}"),
                     format!(
                         "more sampler states live than a set-1 sampler array of the device \
-                         holds ({limit:?} is {available}), so none holds its element {element}, \
-                         and a function reading it through an argument buffer while it lives \
-                         reads the neutral sampler"
+                         holds ({available} elements, the neutral sampler's among them), so none \
+                         holds its element {element}, and a function reading it through an \
+                         argument buffer while it lives reads the neutral sampler"
                     ),
                 )
             });

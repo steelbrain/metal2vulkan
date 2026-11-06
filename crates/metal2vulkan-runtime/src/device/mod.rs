@@ -1704,6 +1704,9 @@ impl Device {
         // device exists, so the description's version passed the floor).
         let (identity, max_allocation) =
             unsafe { properties::query(&instance.raw, physical, instance.api_version) };
+        // The limit the device's live samplers are held to, the one
+        // `DeviceProperties::max_argument_buffer_sampler_count` is derived from.
+        let sampler_limit = identity.max_sampler_allocation_count;
         let properties = DeviceProperties::new(identity, description, &compile, mac_class);
         // SAFETY: as above.
         let memory_properties =
@@ -1963,7 +1966,7 @@ impl Device {
             identifiers: Arc::default(),
             sampler_ids,
             samplers: Mutex::default(),
-            sampler_count: SamplerCount::new(limits.max_sampler_allocation_count),
+            sampler_count: SamplerCount::new(sampler_limit),
             allocations,
             frees,
             sampler_sets: Mutex::default(),

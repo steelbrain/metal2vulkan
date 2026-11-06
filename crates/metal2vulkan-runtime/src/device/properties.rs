@@ -175,6 +175,7 @@ pub(super) unsafe fn query(
         api_version: metal2vulkan::vk::ApiVersion::from_packed(core.api_version)
             .min(instance_api_version),
         max_viewports: core.limits.max_viewports,
+        max_sampler_allocation_count: core.limits.max_sampler_allocation_count,
         // SAFETY: the caller's contract.
         gpu_core_count: unsafe { gpu_core_count(instance, physical) },
         sampled_sample_counts: metal2vulkan::vk::SampleCountFlags::from_raw(

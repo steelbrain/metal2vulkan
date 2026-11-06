@@ -2069,6 +2069,7 @@ field	metal2vulkan-runtime::DeviceProperties.gpu_core_count	pub gpu_core_count: 
 field	metal2vulkan-runtime::DeviceProperties.has_unified_memory	pub has_unified_memory: bool
 field	metal2vulkan-runtime::DeviceProperties.kind	pub kind: DeviceKind
 field	metal2vulkan-runtime::DeviceProperties.lossless_compression	pub lossless_compression: bool
+field	metal2vulkan-runtime::DeviceProperties.max_argument_buffer_sampler_count	pub max_argument_buffer_sampler_count: u64
 field	metal2vulkan-runtime::DeviceProperties.max_buffer_length	pub max_buffer_length: u64
 field	metal2vulkan-runtime::DeviceProperties.max_threadgroup_memory_length	pub max_threadgroup_memory_length: u64
 field	metal2vulkan-runtime::DeviceProperties.max_threads_per_threadgroup	pub max_threads_per_threadgroup: Size
@@ -4868,6 +4869,7 @@ fn	metal2vulkan::metal::state::stencil_op	pub fn stencil_op(op: StencilOperation
 fn	metal2vulkan::metal::vertex::attribute_fetch	pub fn attribute_fetch(format: VertexFormat, step: VertexStepFunction, step_rate: u32, profile: &DeviceProfile) -> Result<AttributeFetch, Error>
 fn	metal2vulkan::metal::vertex::vertex_alignment	pub fn vertex_alignment(format: VertexFormat) -> Result<u32, Error>
 fn	metal2vulkan::metal::vertex::vk_vertex_format	pub fn vk_vertex_format(format: VertexFormat) -> Result<vk::Format, Error>
+fn	metal2vulkan::pipeline::heap_sampler_capacity	pub fn heap_sampler_capacity(p: &DeviceProfile) -> u32
 fn	metal2vulkan::pipeline::heap_unused_while_pending	pub fn heap_unused_while_pending(p: &DeviceProfile) -> bool
 macro-decl	metal2vulkan-air::ir::ArgIdx	ir_id! ArgIdx
 macro-decl	metal2vulkan-air::ir::BlockId	id_type! BlockId

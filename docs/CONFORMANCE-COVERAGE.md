@@ -32,11 +32,11 @@ Its limits, measured rather than asserted:
 
 | | |
 |---|---|
-| implemented Metal items | 976 |
+| implemented Metal items | 977 |
 | of those, unreachable: `objc2-metal` binds no name for them | 3 |
-| so reachable by some case | 973 |
+| so reachable by some case | 974 |
 | of the reachable, exercised by the suite's Metal leg | 794 |
-| of the reachable, not exercised | 179 |
+| of the reachable, not exercised | 180 |
 | share of the reachable exercised | 82% |
 | of those exercised, no case reaching it loosens anything | 574 |
 | of those exercised, a case reaching it loosens some site | 220 |
@@ -364,8 +364,8 @@ Every container with an implemented item, by how much of it the suite reaches. *
 |---|---|---|---|---|---|
 | `MTLRenderCommandEncoder` | 119 | 0 | 69 | 50 | `alpha_coverage_pairs`, `blend_interactions`, `blend_sweeps`, `blit_indirect_commands`… |
 | `MTLArgument` | 17 | 0 | 0 | 17 |  |
+| `MTLDevice` | 66 | 2 | 51 | 13 | `alpha_coverage_pairs`, `argument_encoder_crossings`, `argument_encoders`, `astc_textures`… |
 | the header's free functions | 12 | 0 | 0 | 12 |  |
-| `MTLDevice` | 65 | 2 | 51 | 12 | `alpha_coverage_pairs`, `argument_encoder_crossings`, `argument_encoders`, `astc_textures`… |
 | `MTLRenderPipelineState` | 22 | 0 | 11 | 11 | `pipeline_facts`, `pipeline_handlers`, `tile_threadgroups`, `visible_tables` |
 | `MTLMeshRenderPipelineDescriptor` | 27 | 0 | 18 | 9 | `binary_archives`, `indirect_commands`, `mesh_barriers`, `mesh_commands`… |
 | `MTLRasterizationRateLayerDescriptor` | 9 | 0 | 2 | 7 | `rate_map_degenerate_forms`, `rate_map_sweeps`, `rate_maps` |
@@ -469,7 +469,7 @@ A container is one Objective-C type; the SDK header it sits in is the family of 
 | `MTLRenderCommandEncoder.h` | 119 | 69 | 50 |
 | `MTLRenderPipeline.h` | 130 | 105 | 25 |
 | `MTLArgument.h` | 77 | 59 | 18 |
-| `MTLDevice.h` | 75 | 61 | 14 |
+| `MTLDevice.h` | 76 | 61 | 15 |
 | `MTLRasterizationRate.h` | 36 | 23 | 13 |
 | `MTLComputePipeline.h` | 34 | 27 | 7 |
 | `MTLTypes.h` | 7 | 0 | 7 |
@@ -1141,6 +1141,7 @@ One row per implemented item of the SDK, in the coverage map's order. *exercised
 | `newRenderPipelineStateWithMeshDescriptor:options:reflection:error:` | yes | `indirect_commands`, `mesh_barriers`, `mesh_commands`, `mesh_draws`, `mesh_pipeline_reflection`, `pipeline_handlers` | 45 |
 | `newRenderPipelineStateWithMeshDescriptor:options:completionHandler:` | yes | `pipeline_handlers` | 24 |
 | `maxThreadgroupMemoryLength` | no | — | — |
+| `maxArgumentBufferSamplerCount` | no | — | — |
 | `programmableSamplePositionsSupported` | no | — | — |
 | `newArgumentEncoderWithArguments:` | yes | `argument_encoder_crossings`, `argument_encoders` | 9 |
 | `supportsRasterizationRateMapWithLayerCount:` | yes | `device_queries` | 5 |
