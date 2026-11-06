@@ -2562,11 +2562,11 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `vertex-format-half4` | An attribute the function reads as `half`: Metal rounds the attribute's value to `half` (a value past the `half`'s range to infinity), and ours keeps the `float… |
 | `vertex-format-half4` | An attribute the function reads as `half`: Metal rounds the attribute's value to `half` (a value past the `half`'s range to infinity), and ours keeps the `float… |
 | `vertex-format-half4` | An attribute the function reads as `half`: Metal rounds the attribute's value to `half` (a value past the `half`'s range to infinity), and ours keeps the `float… |
-| `vertex-format-half4` | A NaN of a narrow float attribute (`half`, or a small float of `FloatRG11B10`): the first differing element is Metal 0x7FC00000 against our 0x7FFE0000, the devi… |
-| `vertex-format-half4` | A NaN of a narrow float attribute (`half`, or a small float of `FloatRG11B10`): the first differing element is Metal 0x7FC00000 against our 0x7FC02000, the devi… |
-| `vertex-format-half4` | A NaN of a narrow float attribute (`half`, or a small float of `FloatRG11B10`): the first differing element is Metal 0x7FC00000 against our 0x7FC02000, the devi… |
-| `vertex-format-half4` | A NaN of a narrow float attribute (`half`, or a small float of `FloatRG11B10`): the first differing element is Metal 0x7FC00000 against our 0x7FC02000, the devi… |
-| `vertex-format-half4` | A NaN of a narrow float attribute (`half`, or a small float of `FloatRG11B10`): the first differing element is Metal 0x7FC00000 against our 0x7FC02000, the devi… |
+| `vertex-format-half4` | A NaN of a narrow float attribute (`half`, or a small float of `FloatRG11B10`) the function reads as `half`: the first differing element is Metal 0x7FC00000 aga… |
+| `vertex-format-half4` | A NaN of a narrow float attribute (`half`, or a small float of `FloatRG11B10`) the function reads as `half`: the first differing element is Metal 0x7FC00000 aga… |
+| `vertex-format-half4` | A NaN of a narrow float attribute (`half`, or a small float of `FloatRG11B10`) the function reads as `half`: the first differing element is Metal 0x7FC00000 aga… |
+| `vertex-format-half4` | A NaN of a narrow float attribute (`half`, or a small float of `FloatRG11B10`) the function reads as `half`: the first differing element is Metal 0x7FC00000 aga… |
+| `vertex-format-half4` | A NaN of a narrow float attribute (`half`, or a small float of `FloatRG11B10`) the function reads as `half`: the first differing element is Metal 0x7FC00000 aga… |
 | `vertex-format-half4` | An attribute the function reads as `half`: Metal rounds the attribute's value to `half` (a value past the `half`'s range to infinity), and ours keeps the `float… |
 | `vertex-format-half4` | An attribute the function reads as `half`: Metal rounds the attribute's value to `half` (a value past the `half`'s range to infinity), and ours keeps the `float… |
 | `vertex-format-half4` | An attribute the function reads as `half`: Metal rounds the attribute's value to `half` (a value past the `half`'s range to infinity), and ours keeps the `float… |
@@ -2990,10 +2990,10 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `fetch-ordered-bgra8unorm-srgb` | A fragment function's colour write into an 8-bit sRGB attachment it also fetches, in the interlocked storage form (the `x1` to `x3` sites fetch and store it onc… |
 | `fetch-ordered-bgra8unorm-srgb` | A fragment function's colour write into an 8-bit sRGB attachment it also fetches, in the interlocked storage form (the `x1` to `x3` sites fetch and store it onc… |
 | `fetch-ordered-bgra8unorm-srgb` | A fragment function's colour write into an 8-bit sRGB attachment it also fetches, in the interlocked storage form (the `x1` to `x3` sites fetch and store it onc… |
-| `fetch-ordered-bgra8unorm-srgb` | A fragment function's colour write into an 8-bit sRGB attachment it also fetches (the `x1` to `x3` sites fetch and store it once to three times): the function r… |
-| `fetch-ordered-bgra8unorm-srgb` | A fragment function's colour write into an 8-bit sRGB attachment it also fetches (the `x1` to `x3` sites fetch and store it once to three times): the function r… |
-| `fetch-ordered-bgra8unorm-srgb` | A fragment function's colour write into an 8-bit sRGB attachment it also fetches (the `x1` to `x3` sites fetch and store it once to three times): the function r… |
-| `fetch-ordered-bgra8unorm-srgb` | A fragment function's colour write into an 8-bit sRGB attachment it also fetches (the `x1` to `x3` sites fetch and store it once to three times): the function r… |
+| `fetch-ordered-bgra8unorm-srgb` | A fragment function's colour write into an 8-bit sRGB attachment it also fetches (the `x1` to `x3` sites fetch and store it once to three times): on this device… |
+| `fetch-ordered-bgra8unorm-srgb` | A fragment function's colour write into an 8-bit sRGB attachment it also fetches (the `x1` to `x3` sites fetch and store it once to three times): on this device… |
+| `fetch-ordered-bgra8unorm-srgb` | A fragment function's colour write into an 8-bit sRGB attachment it also fetches (the `x1` to `x3` sites fetch and store it once to three times): on this device… |
+| `fetch-ordered-bgra8unorm-srgb` | A fragment function's colour write into an 8-bit sRGB attachment it also fetches (the `x1` to `x3` sites fetch and store it once to three times): on this device… |
 | `fetch-ordered-bgra8unorm-srgb` | A fragment function's colour write into an 8-bit sRGB attachment it also fetches (the `x1` to `x3` sites fetch and store it once to three times): the function r… |
 | `fetch-ordered-bgra8unorm-srgb` | A fragment function's colour write into an 8-bit sRGB attachment it also fetches (the `x1` to `x3` sites fetch and store it once to three times): the function r… |
 | `fetch-ordered-bgra8unorm-srgb` | A fragment function's colour write into an 8-bit sRGB attachment it also fetches (the `x1` to `x3` sites fetch and store it once to three times): the function r… |
@@ -3016,10 +3016,10 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `fetch-ordered-rgba8unorm-srgb` | A fragment function's colour write into an 8-bit sRGB attachment it also fetches, in the interlocked storage form (the `x1` to `x3` sites fetch and store it onc… |
 | `fetch-ordered-rgba8unorm-srgb` | A fragment function's colour write into an 8-bit sRGB attachment it also fetches, in the interlocked storage form (the `x1` to `x3` sites fetch and store it onc… |
 | `fetch-ordered-rgba8unorm-srgb` | A fragment function's colour write into an 8-bit sRGB attachment it also fetches, in the interlocked storage form (the `x1` to `x3` sites fetch and store it onc… |
-| `fetch-ordered-rgba8unorm-srgb` | A fragment function's colour write into an 8-bit sRGB attachment it also fetches (the `x1` to `x3` sites fetch and store it once to three times): the function r… |
-| `fetch-ordered-rgba8unorm-srgb` | A fragment function's colour write into an 8-bit sRGB attachment it also fetches (the `x1` to `x3` sites fetch and store it once to three times): the function r… |
-| `fetch-ordered-rgba8unorm-srgb` | A fragment function's colour write into an 8-bit sRGB attachment it also fetches (the `x1` to `x3` sites fetch and store it once to three times): the function r… |
-| `fetch-ordered-rgba8unorm-srgb` | A fragment function's colour write into an 8-bit sRGB attachment it also fetches (the `x1` to `x3` sites fetch and store it once to three times): the function r… |
+| `fetch-ordered-rgba8unorm-srgb` | A fragment function's colour write into an 8-bit sRGB attachment it also fetches (the `x1` to `x3` sites fetch and store it once to three times): on this device… |
+| `fetch-ordered-rgba8unorm-srgb` | A fragment function's colour write into an 8-bit sRGB attachment it also fetches (the `x1` to `x3` sites fetch and store it once to three times): on this device… |
+| `fetch-ordered-rgba8unorm-srgb` | A fragment function's colour write into an 8-bit sRGB attachment it also fetches (the `x1` to `x3` sites fetch and store it once to three times): on this device… |
+| `fetch-ordered-rgba8unorm-srgb` | A fragment function's colour write into an 8-bit sRGB attachment it also fetches (the `x1` to `x3` sites fetch and store it once to three times): on this device… |
 | `fetch-ordered-rgba8unorm-srgb` | A fragment function's colour write into an 8-bit sRGB attachment it also fetches (the `x1` to `x3` sites fetch and store it once to three times): the function r… |
 | `fetch-ordered-rgba8unorm-srgb` | A fragment function's colour write into an 8-bit sRGB attachment it also fetches (the `x1` to `x3` sites fetch and store it once to three times): the function r… |
 | `fetch-ordered-rgba8unorm-srgb` | A fragment function's colour write into an 8-bit sRGB attachment it also fetches (the `x1` to `x3` sites fetch and store it once to three times): the function r… |
