@@ -685,8 +685,10 @@ pub(super) struct State {
     making_failure_injected: Option<Error>,
     /// `commit` returned with its own work left to run once a render encoder's end is lowered
     /// (`render/queued_commits.rs`), which has not run: to the program, the command buffer is
-    /// committed.
-    queued_commit: bool,
+    /// committed. How the work, once run, hands its batches to the scheduler: as the call that
+    /// left it would have (`commit_and_submit`'s pass, [`Hand::Pass`], made by the thread that
+    /// runs it).
+    queued_commit: Option<Hand>,
     /// A render pass of it has a draw call over a `Mutable` rasterization-rate map: its commit
     /// lets a later pass of no draw call over such a map run (`rate_mapped_pass.rs`).
     pub(super) called_over_mutable_map: bool,
@@ -993,7 +995,7 @@ impl State {
     /// (`render/queued_commits.rs`): a handler added now would not run
     /// (`Problem::HandlerAfterCommit`).
     pub(crate) fn enqueued(&self) -> bool {
-        self.status != CommandBufferStatus::NotEnqueued || self.queued_commit
+        self.status != CommandBufferStatus::NotEnqueued || self.queued_commit.is_some()
     }
 
     /// An encoder of `kind` ended, its commands' uses and bindings having named `keys`, having
@@ -1394,8 +1396,8 @@ impl State {
     /// was abandoned.
     pub(super) fn refusal(&self) -> Option<Problem> {
         match self.queued_commit {
-            true => Some(Problem::AlreadyCommitted),
-            false => self.commit_refusal(),
+            Some(_) => Some(Problem::AlreadyCommitted),
+            None => self.commit_refusal(),
         }
     }
 
@@ -2096,7 +2098,7 @@ impl CommandBuffer {
                 failures_injected: 0,
                 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
                 making_failure_injected: None,
-                queued_commit: false,
+                queued_commit: None,
                 called_over_mutable_map: false,
                 committing: false,
                 pool: None,
@@ -2369,7 +2371,7 @@ impl CommandBuffer {
         let queued = {
             let mut state = self.state();
             state.end_lowered = true;
-            state.queued_commit
+            state.queued_commit.is_some()
         };
         let commits = self.0.device.shared().deferred.commits();
         if let Some(commits) = commits.filter(|commits| queued && commits.ready(&self)) {
@@ -2873,6 +2875,12 @@ impl CommandBuffer {
     ///   it, as for `commit`.
     /// - **Called from the runtime's own threads** (a handler run by the scheduler's thread or a
     ///   queue's waiter), it commits as `commit` does and submits nothing itself.
+    /// - **Left to wait for a render encoder's end** (`RenderLoweringPolicy::Worker`, an end the
+    ///   device's lowering thread has not lowered yet), it returns once Metal's checks of `commit`
+    ///   are made, as `commit` does, and the thread that runs the commit's own work once the end is
+    ///   lowered makes the pass instead: the lowering thread, or a thread that waits for the
+    ///   command buffer. The submission checks and handlers of what that pass submits run on that
+    ///   thread.
     ///
     /// Refused, changing nothing, as [`commit`](Self::commit) is. Counted:
     /// `WorkCounts::scheduler_passes_at_commit`, `WorkCounts::batches_submitted_at_commit`,
@@ -2925,7 +2933,7 @@ impl CommandBuffer {
     ) -> Result<(), Error> {
         // Left to wait for the last render encoder's end, where its call left it to the device's
         // lowering thread and the thread has not lowered it, or for the commits left so.
-        if failure.is_none() && self.queue_commit(call)? {
+        if failure.is_none() && self.queue_commit(call, hand)? {
             return Ok(());
         }
         // The last render encoder's end, where its call left it to the device's lowering thread.
@@ -2937,9 +2945,9 @@ impl CommandBuffer {
     /// end the device's lowering thread has not lowered, or a commit of the device waits for one
     /// (`render/queued_commits.rs`): make Metal's checks of `commit` at the call, of the command
     /// buffer as the program sees it (its last encoder ended), returning their refusal, and leave
-    /// the commit's own work to run after the end, and after the commits that wait. Whether it
-    /// did.
-    fn queue_commit(&self, call: &'static str) -> Result<bool, Error> {
+    /// the commit's own work to run after the end, and after the commits that wait, its batches
+    /// handed to the scheduler then as `hand` says. Whether it did.
+    fn queue_commit(&self, call: &'static str, hand: Hand) -> Result<bool, Error> {
         let Some(commits) = self.0.device.shared().deferred.commits() else {
             return Ok(false);
         };
@@ -2957,7 +2965,7 @@ impl CommandBuffer {
         if let Some(problem) = refusal {
             return Err(invalid(call, problem));
         }
-        state.queued_commit = true;
+        state.queued_commit = Some(hand);
         self.0.status.store(
             status_word(CommandBufferStatus::Committed),
             Ordering::Release,
@@ -2977,26 +2985,39 @@ impl CommandBuffer {
     /// may fail made for it ([`CommitRun::Refused`]): it completes, in its queue's order, with
     /// that error, and its completed handlers run, as every committed command buffer of Metal's
     /// does.
+    ///
+    /// Left by `commit_and_submit`, this thread then makes that call's pass
+    /// (`Scheduler::submit_at_commit`), as the call would have: it submits what is ready, this
+    /// command buffer's batches among them, and runs their submission checks and handlers, with no
+    /// wake of the scheduler's thread for them. Not on a thread command buffers' completion
+    /// depends on (a handler the scheduler's thread runs reads the work counts), which posts the
+    /// batches to that thread, as `commit_and_submit` called there does.
     pub(crate) fn commit_queued(&self, by_thread: bool) {
-        let counts = &self.0.device.shared().counts;
-        counts.render_log_commit_run(by_thread);
-        self.settle_end();
-        let Err(error) = self.commit_settled("commit", None, CommitRun::Queued, Hand::Wake) else {
-            return;
+        let shared = self.0.device.shared();
+        shared.counts.render_log_commit_run(by_thread);
+        let hand = match exit_guard::serving_completion() {
+            true => Hand::Wake,
+            false => self.state().queued_commit.unwrap_or(Hand::Wake),
         };
-        self.state().refuse_commit(error);
-        let committed = self.commit_settled("commit", None, CommitRun::Refused, Hand::Wake);
-        debug_assert!(
-            committed.is_ok(),
-            "a refused commit's commit of nothing failed: {committed:?}"
-        );
+        self.settle_end();
+        if let Err(error) = self.commit_settled("commit", None, CommitRun::Queued, hand) {
+            self.state().refuse_commit(error);
+            let committed = self.commit_settled("commit", None, CommitRun::Refused, hand);
+            debug_assert!(
+                committed.is_ok(),
+                "a refused commit's commit of nothing failed: {committed:?}"
+            );
+        }
+        if hand == Hand::Pass {
+            shared.scheduler.submit_at_commit(&self.0.device);
+        }
     }
 
     /// Before a wait for the command buffer: where its commit's own work waits
     /// (`render/queued_commits.rs`), lower on this thread the ends it and the commits before it
     /// wait for, which runs it here where the device's lowering thread has not.
     fn settle_commit(&self) {
-        if !self.state().queued_commit {
+        if self.state().queued_commit.is_none() {
             return;
         }
         let Some(commits) = self.0.device.shared().deferred.commits() else {
@@ -3348,7 +3369,7 @@ impl CommandBuffer {
             // allocates and writes its own set. The commands recorded before the commit keep the
             // sets they bound.
             state.descriptors.shut();
-            state.queued_commit = false;
+            state.queued_commit = None;
             if let Some(hang) = state.hang.take() {
                 match hangs {
                     true => hang.start(&self.0, &mut state, committed),

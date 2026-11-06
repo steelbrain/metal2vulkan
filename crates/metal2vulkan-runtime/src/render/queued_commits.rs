@@ -6,7 +6,12 @@
 //!   returns (`CommandBuffer::queue_commit`): its status reads `Committed` from then on, and a
 //!   second commit, a handler added and anything encoded are refused. The commit's own work waits
 //!   here, and runs once the end is lowered, on the thread that lowered it
-//!   (`CommandBuffer::commit_queued`).
+//!   (`CommandBuffer::commit_queued`). A `commit_and_submit` left so has that thread make its
+//!   pass too, as the call would have (`Scheduler::submit_at_commit`): the lowering thread then
+//!   submits what is ready and runs the submission checks and handlers of what it submits, so the
+//!   commit needs no wake of the scheduler's thread. A render encoder opened there (by such a
+//!   check or handler) lowers its calls at their calls (`render/deferral.rs`), as one that handed
+//!   them to that thread would wait for itself.
 //! - **In commit order.** While a commit waits here, every later commit of the device's command
 //!   buffers waits behind it, ready at once where its command buffer holds no end in flight. The
 //!   device's scheduler so takes them in commit order across all its queues, as it takes commits

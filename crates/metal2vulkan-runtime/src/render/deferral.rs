@@ -42,7 +42,9 @@
 //! - **At the call.** A call the checks do not cover is lowered inside the call, the calls logged
 //!   before it first (`Checked::Now`), and from some calls on every call of the encoder is; so is
 //!   every call of an encoder whose pass the device draws in color groups
-//!   (`render/color_groups.rs`), whose checks follow the groups.
+//!   (`render/color_groups.rs`), whose checks follow the groups, and of one opened on the
+//!   lowering thread itself (by a submission check or handler it runs for a commit that waited,
+//!   `render/queued_commits.rs`), whose hand-offs and waits for room would wait for that thread.
 //! - **Detachment.** A logged call is lowered as one made while no buffer of the device was
 //!   detached (`EncoderCore::judges_unattached`), as it was: none is logged while one is
 //!   (`render/call_checks.rs`). A detach after the call refuses nothing of it, and its command
@@ -66,7 +68,7 @@
 //!   drop gives back for the device's next encoder, its batches' room kept.
 
 use super::call_checks::{CallChecks, Checked};
-use super::lowering_worker::LoweringWorker;
+use super::lowering_worker::{self, LoweringWorker};
 use super::queued_commits::QueuedCommits;
 use super::replay::{render, DrawIndexed};
 use super::{RenderCall, RenderCommandEncoder, RenderLowering};
@@ -711,7 +713,8 @@ impl RenderCommandEncoder {
     pub(super) fn new(lowering: Box<RenderLowering>) -> RenderCommandEncoder {
         let device = lowering.core.device();
         let logs = device.compile_device().policy().render_lowering == RenderLoweringPolicy::Worker
-            && lowering.grouped.is_none();
+            && lowering.grouped.is_none()
+            && !lowering_worker::on_the_thread();
         let (own, logged) = match logs {
             false => (Some(OwnLowering(lowering)), None),
             true => {

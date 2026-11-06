@@ -11,7 +11,9 @@
 //! the device's lowering thread waits for it at the cap of its encoder's batches, and goes on; an
 //! end and a commit return before the lowering thread lowered the end, the commit's own work
 //! waiting for it, and the commits after it waiting behind it, and one whose own work fails
-//! completing with the refusal.
+//! completing with the refusal; a `commit_and_submit` so left is submitted by the lowering thread
+//! itself, which runs its submission check and handler, and an encoder opened there lowers its
+//! calls at their calls.
 //!
 //! Device tests: compiled only under the validation crate's GPU safety cfgs (`m2v_gpu`,
 //! `m2v_cpu_icd`), on the kind of device the cfg selects. The functions are the owned fixture
@@ -27,7 +29,8 @@ use crate::{
     BlitOption, Buffer, CommandBuffer, CommandBufferError, CommandBufferStatus, Degradation,
     DegradeNotice, Device, DeviceKind, DeviceOptions, EncoderCall, Error, EventRef, FailureOrigin,
     MessageSink, Origin, Problem, RenderCommandEncoder, RenderPipelineState, ResourceOptions,
-    ShaderCacheOptions, Size, Texture, TextureDescriptor, VertexAmplificationViewMapping, Viewport,
+    ShaderCacheOptions, Size, Submission, Texture, TextureDescriptor,
+    VertexAmplificationViewMapping, Viewport,
 };
 use ash::vk;
 use metal2vulkan::device::{PipelineWaitPolicy, RenderLoweringPolicy};
@@ -987,6 +990,144 @@ fn a_commit_after_an_end_in_flight_returns_and_keeps_its_order() {
         };
         assert_eq!(commits, expected, "{policy:?}: {counts:?}");
     }
+}
+
+/// The name of the thread that runs this.
+fn thread_name() -> Option<String> {
+    std::thread::current().name().map(str::to_owned)
+}
+
+/// A command buffer's submission check, submission handler and render encoder as a test of
+/// [`a_commit_and_submit_after_an_end_in_flight_is_submitted_by_the_lowering_thread`] saw them:
+/// which ran on which thread, and the command buffer the handler committed, with whether its
+/// encoder lowered its calls at their calls.
+#[derive(Default)]
+struct RanOn {
+    ran: Vec<(&'static str, Option<String>)>,
+    inner: Option<(bool, CommandBuffer)>,
+}
+
+/// Under `RenderLoweringPolicy::Worker`, a `commit_and_submit` after an end in flight returns
+/// before the end is lowered, as `commit` does, and the device's lowering thread, which then runs
+/// the commit's own work, makes the call's pass too (`CommandBuffer::commit_queued`): one pass at
+/// commit, which runs the command buffer's submission check and then its submission handler on
+/// that thread and submits its batch (`WorkCounts::scheduler_passes_at_commit`,
+/// `batches_submitted_at_commit`, `batches_checked_at_commit`), with no wake of the scheduler's
+/// thread for it; the pass completes. A render encoder the handler opens there lowers its calls
+/// at their calls (`render/deferral.rs`, "At the call"), and the command buffer the handler
+/// commits completes.
+#[test]
+fn a_commit_and_submit_after_an_end_in_flight_is_submitted_by_the_lowering_thread() {
+    let scratch = Scratch::new("deferred-commit-and-submit");
+    let policy = RenderLoweringPolicy::Worker;
+    let device = device(&scratch.0, policy, &[], &Heard::default());
+    let seen = Arc::new(Mutex::new(RanOn::default()));
+    let (opened, open) = mpsc::channel();
+    let (go, going) = mpsc::channel::<()>();
+    let (returned, returns) = mpsc::channel();
+    let (completed, completes) = mpsc::channel();
+    let encoding = std::thread::spawn({
+        let device = device.clone();
+        let seen = Arc::clone(&seen);
+        move || {
+            let state = rectangle_state(&device);
+            let queue = device.new_command_queue().unwrap();
+            let (target, inner_target) = (target(&device), target(&device));
+            let command_buffer = queue.command_buffer().unwrap();
+            let checked = Arc::clone(&seen);
+            command_buffer
+                .set_submission_check(Arc::new(move |_: &Submission<'_>| {
+                    checked.lock().unwrap().ran.push(("check", thread_name()));
+                    None
+                }))
+                .unwrap();
+            let (handled, again) = (Arc::clone(&seen), queue.clone());
+            command_buffer
+                .add_submission_handler(Box::new(move |_: &CommandBuffer| {
+                    handled.lock().unwrap().ran.push(("handler", thread_name()));
+                    let command_buffer = again.command_buffer().unwrap();
+                    let encoder = command_buffer
+                        .render_command_encoder(&pass(&inner_target))
+                        .unwrap();
+                    let at_call = encoder.lowers_at_call();
+                    encoder.end_encoding().unwrap();
+                    command_buffer.commit().unwrap();
+                    handled.lock().unwrap().inner = Some((at_call, command_buffer));
+                }))
+                .unwrap();
+            command_buffer
+                .add_completed_handler(Box::new(move |done: &CommandBuffer| {
+                    let _ = completed.send((done.status(), done.error()));
+                }))
+                .unwrap();
+            let mut encoder = command_buffer
+                .render_command_encoder(&pass(&target))
+                .unwrap();
+            opened.send(()).unwrap();
+            going.recv().unwrap();
+            rectangle(&state, &mut encoder);
+            encoder
+                .set_fragment_bytes(&bytes_of(&COLOR, f32::to_le_bytes), 0)
+                .unwrap();
+            encoder
+                .draw_primitives(PrimitiveType::Triangle, 0, 6, 1, 0)
+                .unwrap();
+            encoder.end_encoding().unwrap();
+            command_buffer.commit_and_submit().unwrap();
+            returned.send(command_buffer.status()).unwrap();
+        }
+    });
+    open.recv().unwrap();
+    let slots = device.shared().deferred.taken();
+    let [slot] = &slots[..] else {
+        panic!("{} encoders' slots taken, not one", slots.len());
+    };
+    let status = slot.while_held(|| {
+        go.send(()).unwrap();
+        returns.recv_timeout(WAIT).ok()
+    });
+    assert_eq!(
+        status,
+        Some(CommandBufferStatus::Committed),
+        "commit_and_submit waited for the held lowering, or its command buffer went on"
+    );
+    let done = completes.recv_timeout(WAIT);
+    assert_eq!(
+        done,
+        Ok((CommandBufferStatus::Completed, None)),
+        "the pass completes"
+    );
+    encoding.join().unwrap();
+    let (ran, inner) = {
+        let seen = seen.lock().unwrap();
+        (seen.ran.clone(), seen.inner.clone())
+    };
+    let lowering = Some("metal2vulkan-lowering".to_owned());
+    assert_eq!(
+        ran,
+        [("check", lowering.clone()), ("handler", lowering)],
+        "the check and the handler ran on the lowering thread"
+    );
+    let Some((at_call, inner)) = inner else {
+        panic!("the submission handler committed no command buffer");
+    };
+    assert!(
+        at_call,
+        "an encoder opened on the lowering thread logged its calls"
+    );
+    inner.wait_until_completed_for(WAIT).unwrap();
+    assert_eq!(inner.status(), CommandBufferStatus::Completed);
+    let counts = device.work_counts();
+    let passed = (
+        counts.scheduler_passes_at_commit,
+        counts.batches_submitted_at_commit,
+        counts.batches_checked_at_commit,
+    );
+    assert_eq!(passed, (1, 1, 1), "{counts:?}");
+    assert!(
+        counts.render_log_commits_by_thread >= 1,
+        "the lowering thread ran no commit: {counts:?}"
+    );
 }
 
 /// A commit after an end in flight takes a command buffer one of whose units of command predication

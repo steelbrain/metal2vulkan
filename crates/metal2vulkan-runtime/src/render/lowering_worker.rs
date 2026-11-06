@@ -22,7 +22,9 @@
 //!   encoders' logs, command buffers and the runtime's pools for them, not a queue's every command
 //!   buffer, which the thread lowers without the program, so the wait ends.
 //! - **Commits.** The device's commits that wait for its render encoders' ends lie here too
-//!   (`render/queued_commits.rs`): the thread that lowers such an end runs them.
+//!   (`render/queued_commits.rs`): the thread that lowers such an end runs them, and makes a
+//!   `commit_and_submit`'s pass, whose submission checks and handlers it runs. A render encoder
+//!   those open on the thread lowers its calls at their calls ([`on_the_thread`]).
 //! - **Started** with the device's first encoder that logs its calls, at the user-interactive
 //!   class (`exit_guard::spawn_user_interactive`), as the threads command buffers' work waits for;
 //!   stopped and joined with the device (`DeviceShared`'s drop). No slot handed to it holds the
@@ -33,9 +35,22 @@ use super::deferral::LoweringSlot;
 use super::queued_commits::QueuedCommits;
 use crate::device::lock;
 use crate::exit_guard;
+use std::cell::Cell;
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
+
+thread_local! {
+    /// This thread is a device's lowering thread ([`on_the_thread`]).
+    static LOWERING_THREAD: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Whether this thread is a device's lowering thread: the program's code it runs (a submission
+/// check or handler of a commit it runs, the module docs) hands it nothing, which it would wait
+/// for itself to take.
+pub(super) fn on_the_thread() -> bool {
+    LOWERING_THREAD.with(Cell::get)
+}
 
 /// The encoders' ends handed to the thread and not yet lowered at which the next end waits (the
 /// module docs): a few passes' lead over the thread, enough to keep it busy while the program
@@ -171,6 +186,7 @@ fn take_leaving_room<T>(queue: &mut VecDeque<T>) -> Option<T> {
 impl WorkerShared {
     /// The thread's loop: each slot handed lowered, until [`LoweringWorker::stop`].
     fn run(&self) {
+        LOWERING_THREAD.with(|on| on.set(true));
         let mut running = Running {
             shared: self,
             slot: None,

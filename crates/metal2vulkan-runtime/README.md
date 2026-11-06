@@ -368,8 +368,9 @@ Calls Metal does not have, for a consumer that emulates a Metal device:
 - `CommandBuffer::commit_failed(CommitFailure)` commits a command buffer as failed, running the
   encoders Metal would still run and keeping its signals, as a consumer measured on an M3 Max.
 - `CommandBuffer::set_submission_check` runs a check as the command buffer is submitted, and fails
-  it as Metal fails a submission. It runs on the thread that submits it: the scheduler's, or one
-  in `commit_and_submit`, so it must take no lock that thread holds and wait for no GPU work. It
+  it as Metal fails a submission. It runs on the thread that submits it: the scheduler's, one in
+  `commit_and_submit`, or the one that makes the pass of a `commit_and_submit` left for a render
+  encoder's end, so it must take no lock that thread holds and wait for no GPU work. It
   runs once the command buffer's event waits are met as Metal submits it: an `Event` wait for a
   signal already submitted is met at once and waits on the `VkQueue`; a `SharedEvent` wait that
   only a GPU signal still running reaches is held until the signal lands (measured on an M3 Max,
@@ -401,7 +402,10 @@ Calls Metal does not have, for a consumer that emulates a Metal device:
   to the scheduler's thread. One wake and one thread hop fewer per command buffer than `commit`,
   whose submission is the scheduler thread's, as Metal's is its own thread's
   (`WorkCounts::scheduler_passes_at_commit`, `batches_submitted_at_commit`,
-  `batches_checked_at_commit`).
+  `batches_checked_at_commit`). Under `RenderLoweringPolicy::Worker`, one whose last render
+  encoder's end the lowering thread has not lowered returns as `commit` does, and the thread that
+  runs its commit once the end is lowered (the lowering thread, or one waiting for the command
+  buffer) makes that pass, its checks and handlers with it.
 - `RenderCommandEncoder::set_color_resolve_target`, `set_depth_resolve_target` and
   `set_stencil_resolve_target` change where a pass resolves until it ends (the last target set
   wins), as Metal's private calls do.
