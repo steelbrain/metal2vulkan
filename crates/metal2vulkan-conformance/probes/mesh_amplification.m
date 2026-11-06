@@ -15,6 +15,16 @@
 // mesh threadgroup draws one triangle over every pixel, its fragment writing
 // (amplification id + 1, object threadgroup + 1, primitive data, 7). The probe prints the words,
 // and each slice's texel (0, 0) and how many texels of it were drawn. `--cases` lists the cases.
+//
+// Measured on an M3 Max under macOS 27.0.1 (supportsVertexAmplificationCount:2 answers 1), both
+// command buffers completed with no error:
+// - `plain`: 8 object threads, 8 mesh threads, amplification ids summing to 0, a count of 1, 2
+//   mesh threadgroups of amplification 0; slice 0 drawn whole (texel (1, 2, 1, 7)), slice 1 not.
+// - `amplified-2`: 8 object threads, 16 mesh threads, ids summing to 8, a count of 2, 2 mesh
+//   threadgroups of each amplification; slice 0 drawn whole by amplification 0 (1, 2, 2, 7) and
+//   slice 1 by amplification 1 (2, 2, 2, 7). The object function runs once for the draw, and the
+//   mesh threadgroups it launches run once per amplification, each reading its own id and
+//   rendering into its own view mapping's slice.
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
 #include <stdio.h>
