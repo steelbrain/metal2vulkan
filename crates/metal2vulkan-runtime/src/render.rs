@@ -6172,7 +6172,7 @@ impl RenderLowering {
         // resident holds its ID's slot as they state (`Residency::holds_slots_as`).
         let generation = self.residency.generation();
         let resident = live.read_from.resident(generation, moved);
-        let counts = &self.core.device().shared().counts;
+        let counts = self.core.counts();
         for (at, (stage, table)) in tables.into_iter().enumerate() {
             let kept = state.stages.entry(stage).or_default();
             // Its slots that tell the view base alignment apart are as the state holds them
@@ -7953,27 +7953,20 @@ impl RenderLowering {
         let hidden_depth = settings.hidden;
         let planes = |form: &ExtendedRange| matches!(form, ExtendedRange::Planes { .. });
         if plan.variant.extended_range.values().any(planes) {
-            self.core.device().shared().counts.two_plane_draw();
+            self.core.counts().two_plane_draw();
         }
         match provoking {
             provoking::Provoking::AsIs => {}
-            provoking::Provoking::Native => self
-                .core
-                .device()
-                .shared()
-                .counts
-                .provoking_last_pipeline_draw(),
+            provoking::Provoking::Native => self.core.counts().provoking_last_pipeline_draw(),
             provoking::Provoking::Listed(_) | provoking::Provoking::LastCorners => {
-                self.core.device().shared().counts.provoking_listed_draw()
+                self.core.counts().provoking_listed_draw()
             }
         }
         match settings.line {
             LineRoute::Plain => {}
-            LineRoute::Device { .. } => self.core.device().shared().counts.device_wide_line_draw(),
-            LineRoute::Band { .. } => self.core.device().shared().counts.line_band_draw(),
-            LineRoute::Nearest { .. } => {
-                self.core.device().shared().counts.nearest_width_line_draw()
-            }
+            LineRoute::Device { .. } => self.core.counts().device_wide_line_draw(),
+            LineRoute::Band { .. } => self.core.counts().line_band_draw(),
+            LineRoute::Nearest { .. } => self.core.counts().nearest_width_line_draw(),
         }
         self.give_up_extended_shadows(&pipeline, &live.state);
         // The draw's primitive type: a vertex function that writes the primitive ID divides by its
@@ -8115,7 +8108,7 @@ impl RenderLowering {
         // made of holds (`render/heap_part.rs`).
         let compiled = variant.pipeline();
         let heap = live.heap.bring_in(
-            &self.core.device().shared().counts,
+            self.core.counts(),
             heap_part::HeapInputs {
                 plan: &plan,
                 layout: &compiled.layout,
@@ -8906,10 +8899,11 @@ impl RenderLowering {
             &mut live.uses,
         )?;
         let resident_made = live.uses.made() as u64;
+        let counts = self.core.counts();
         if resident_made > 0 {
-            device.shared().counts.resident_uses_made(resident_made);
+            counts.resident_uses_made(resident_made);
         }
-        (device.shared().counts).resident_keys_settled(live.uses.settled() as u64);
+        counts.resident_keys_settled(live.uses.settled() as u64);
         // How many it holds of its plan's alone: a draw rebound works out those alone.
         let plan_uses = live.uses.len();
         let uses = &mut live.uses;
@@ -9289,7 +9283,7 @@ impl RenderLowering {
             }
         };
         if reused_state && reused_pipeline {
-            device.shared().counts.draw_shape_reused();
+            self.core.counts().draw_shape_reused();
         }
         // A pipeline made at the state's creation announces its notices at the first draw that
         // finds it made; a draw that began a making announced them as it began it.
@@ -9605,12 +9599,11 @@ impl RenderLowering {
         // The uses of what the encoder made resident each tracker below walks
         // (`WorkCounts::resident_uses_unordered_writes` and kin).
         let resident = uses.prefix().map_or(0, |prefix| prefix.len as u64);
-        let counts = &device.shared().counts;
         match uses.prefix() {
             None => self.unordered.add(uses),
             Some(prefix) => {
                 if self.unordered.add_draw((uses, prefix)) {
-                    counts.resident_uses_unordered_writes(resident);
+                    self.core.counts().resident_uses_unordered_writes(resident);
                 }
             }
         }
@@ -9924,7 +9917,7 @@ impl RenderLowering {
         }
         self.driver_restarts |= tessellation.is_some_and(|t| !t.emulated);
         if !pushed.is_empty() {
-            device.shared().counts.draw_pushing_set_zero();
+            self.core.counts().draw_pushing_set_zero();
         }
         if let Some(made) = made {
             self.shadow = Some(made);
@@ -9977,7 +9970,7 @@ impl RenderLowering {
             None => self.gathering().add(&draw_shadows, uses),
             Some(prefix) => {
                 if self.gathering().add_draw(&draw_shadows, (uses, prefix)) {
-                    let counts = &device.shared().counts;
+                    let counts = self.core.counts();
                     counts.resident_uses_gathered(prefix.len as u64);
                 }
             }
@@ -10092,7 +10085,7 @@ impl RenderLowering {
                 None => self.current.indirect_reads.add(uses),
                 Some(prefix) => {
                     if self.current.indirect_reads.add_draw((uses, prefix)) {
-                        counts.resident_uses_indirect_reads(resident);
+                        self.core.counts().resident_uses_indirect_reads(resident);
                     }
                 }
             }
@@ -10106,7 +10099,9 @@ impl RenderLowering {
                 Some(prefix) => {
                     let (barrier, walked) =
                         (self.current.geometry_writes).barrier_before_draw((uses, prefix));
-                    counts.resident_uses_geometry_checked(walked as u64);
+                    self.core
+                        .counts()
+                        .resident_uses_geometry_checked(walked as u64);
                     barrier
                 }
             };
@@ -10137,7 +10132,7 @@ impl RenderLowering {
                 None => self.current.geometry_writes.add(uses),
                 Some(prefix) => {
                     if self.current.geometry_writes.add_draw((uses, prefix)) {
-                        counts.resident_uses_geometry_writes(resident);
+                        self.core.counts().resident_uses_geometry_writes(resident);
                     }
                 }
             }
@@ -10288,7 +10283,7 @@ impl RenderLowering {
                 }
             }
             draw_alone = states_recorded.draw_alone();
-            states_recorded.count(&device.shared().counts);
+            states_recorded.count(self.core.counts());
             if let Some((making, state, draws, query)) = split {
                 // The record's times: the pipeline's, then those of the other `VkPipeline`s the
                 // draw records, made at the draw, set once the making made it. Every copy of the
@@ -10365,7 +10360,9 @@ impl RenderLowering {
                     let facts = match self.resident_again {
                         Some((of, facts)) if of == prefix => facts,
                         _ => {
-                            counts.resident_uses_again_checked(prefix.len as u64);
+                            self.core
+                                .counts()
+                                .resident_uses_again_checked(prefix.len as u64);
                             let facts = draw_again::unwritten(&uses[..prefix.len]);
                             self.resident_again = Some((prefix, facts));
                             facts
@@ -10724,7 +10721,7 @@ impl RenderLowering {
                 "a draw's settings derived again differ from those an earlier encoder kept for \
                  its values"
             );
-            self.core.device().shared().counts.draw_shape_carried();
+            self.core.counts().draw_shape_carried();
             let settings = Arc::clone(carried.settings());
             let token = self.shape_memo.keep(drawn, inputs, carried);
             return Ok((settings, hidden, Some(token)));
@@ -10852,8 +10849,7 @@ impl RenderLowering {
             reshape.field(&mut state.render_area, render_area);
             reshape.field(&mut state.tile_threadgroup, tile_threadgroup);
             live.reshaped(reshape);
-            let counts = &self.core.device().shared().counts;
-            let shape = live.shape(counts, |state| pipeline.kept_shape(state));
+            let shape = live.shape(self.core.counts(), |state| pipeline.kept_shape(state));
             // As the state's last recorded draw settled, where it settled the same
             // (`live_bind.rs`): no lock of the pipeline state's; else through what the pipeline
             // state settled lately (`GraphicsState::settle_shape`).

@@ -380,7 +380,7 @@ impl HostCell {
 
     /// The pages the buffer lies in now; `None` while it is detached.
     pub(super) fn current(&self) -> Option<Arc<HostPages>> {
-        self.device.shared().counts.no_copy_lie_read();
+        self.device.shared().counts.thread().no_copy_lie_read();
         match &*lock(&self.pages) {
             Lying::In(pages) => Some(Arc::clone(pages)),
             Lying::Detached(_) => None,
@@ -389,7 +389,7 @@ impl HostCell {
 
     /// Where the buffer lies now.
     pub(super) fn lying(&self) -> Lying {
-        self.device.shared().counts.no_copy_lie_read();
+        self.device.shared().counts.thread().no_copy_lie_read();
         lock(&self.pages).clone()
     }
 

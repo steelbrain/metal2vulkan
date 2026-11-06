@@ -187,6 +187,9 @@ impl WorkerShared {
     /// The thread's loop: each slot handed lowered, until [`LoweringWorker::stop`].
     fn run(&self) {
         LOWERING_THREAD.with(|on| on.set(true));
+        // The thread's own shard, for the recorder's counts of the commands it records: it opens
+        // no encoder, which takes one (`shards::Tally::take`).
+        crate::shards::shard();
         let mut running = Running {
             shared: self,
             slot: None,

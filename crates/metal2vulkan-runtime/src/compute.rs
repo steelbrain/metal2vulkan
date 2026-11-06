@@ -1975,7 +1975,7 @@ fn settle_live<'a>(
     (changed, samplers): (u64, Vec<SamplerState>),
 ) -> Result<Option<(SettledDispatch, Flat<'a>)>, Error> {
     let pipeline = tables.pipeline;
-    let counts = &pipeline.device().shared().counts;
+    let counts = pipeline.device().shared().counts.thread();
     let mut argument_samplers = samplers;
     let mut unlisted = None;
     let sampler_maps = tables.sampler_maps()?;
@@ -2066,7 +2066,9 @@ fn planned_as_before(
     direct: Option<Dispatch>,
 ) {
     match (as_before, direct) {
-        (true, _) => (pipeline.device().shared().counts).dispatch_planned_as_before(),
+        (true, _) => (pipeline.device().shared().counts)
+            .thread()
+            .dispatch_planned_as_before(),
         (false, Some(_)) => pipeline.keep_planned(Arc::clone(planned)),
         (false, None) => {}
     }
@@ -2216,7 +2218,7 @@ fn record(
                 live.memo.holds(&live.state, tables, &dispatch, counted)
             });
             if held {
-                core.device().shared().counts.dispatch_settled_as_before();
+                core.counts().dispatch_settled_as_before();
             } else {
                 // The sampler states, with the count of changes they are live at.
                 let (changed, samplers) = core.device().argument_samplers_at();
@@ -2543,7 +2545,11 @@ fn record(
                     (Cow::Owned(made), None)
                 }
                 Some(_) => {
-                    device.shared().counts.baked_sampler_dispatch_apart();
+                    device
+                        .shared()
+                        .counts
+                        .thread()
+                        .baked_sampler_dispatch_apart();
                     (Cow::Owned(Vec::new()), Some((dispatch, begun)))
                 }
                 None => (Cow::Owned(Vec::new()), Some((dispatch, begun))),
@@ -2602,7 +2608,7 @@ fn record(
     }
     core.shadow_copies(&copies);
     if !pushed.is_empty() {
-        device.shared().counts.dispatch_pushing_set_zero();
+        device.shared().counts.thread().dispatch_pushing_set_zero();
     }
     let recording = Recording {
         layout: objects.layout(),

@@ -185,11 +185,13 @@ impl RenderVariant {
             Begun::Yours(ticket) => {
                 match self.make_drawn(device, key, compatible, (state, formats), ticket) {
                     DrawPipeline::Made(made) => return Some((made, true)),
-                    DrawPipeline::Making(_) => device.shared().counts.residual_form_making(),
+                    DrawPipeline::Making(_) => {
+                        device.shared().counts.thread().residual_form_making()
+                    }
                 }
             }
         }
-        device.shared().counts.residual_form_drawn();
+        device.shared().counts.thread().residual_form_drawn();
         Some((drawn, false))
     }
 }

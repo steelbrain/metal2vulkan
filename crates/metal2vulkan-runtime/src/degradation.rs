@@ -3080,7 +3080,7 @@ impl Device {
             "a draw's uses checked against the attachments by their identity less than its uses"
         );
         if past == 0 {
-            let counts = &self.shared().counts;
+            let counts = self.shared().counts.thread();
             counts.resident_uses_against_attachments(prefix.len as u64);
             if let Some(version) = version.filter(|_| !shares) {
                 uses.apart_from(version);

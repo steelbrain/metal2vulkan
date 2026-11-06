@@ -15,7 +15,7 @@ use super::recorder::CommandsRecorded;
 use super::scheduler::HeldFor;
 use super::shadow::{Backing, CarryTally, CopyCause, Lost, ShadowCopy, ShadowSource};
 use super::Device;
-use crate::shards::{Mine, Sharded};
+use crate::shards::{Mine, Sharded, Tallies, Tally};
 use ash::vk;
 use std::panic::Location;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -39,8 +39,8 @@ pub(crate) enum Predicted {
 pub(crate) struct Counters {
     /// Released objects and shadow keeps by kind (`churn_counts.rs`).
     pub(crate) churn: super::churn_counts::ChurnCounters,
-    /// The counts draws add on the paths that take no shared lock, by thread.
-    draws: Sharded<DrawCounters>,
+    /// The counts commands add as their encoders record them, by encoder and by thread.
+    commands: CommandTallies,
     command_pools_made: AtomicU64,
     spare_command_pools_taken: AtomicU64,
     spare_command_pools_reset: AtomicU64,
@@ -74,8 +74,6 @@ pub(crate) struct Counters {
     mipmaps_filtered: AtomicU64,
     mipmap_first_levels_fetched: AtomicU64,
     pipelines_pooled: AtomicU64,
-    residual_form_draws: AtomicU64,
-    residual_form_makings: AtomicU64,
     stage_entries_specialized: AtomicU64,
     stage_entries_shared: AtomicU64,
     functions_translated: AtomicU64,
@@ -151,10 +149,8 @@ pub(crate) struct Counters {
     ycbcr_whole_conversions: AtomicU64,
     ycbcr_textures_in_place: AtomicU64,
     ycbcr_images_kept: [AtomicU64; 7],
-    ycbcr_planes_bound: AtomicU64,
     ycbcr_planes_images: AtomicU64,
     ycbcr_planes_images_kept: [AtomicU64; 3],
-    ycbcr_planes_images_bound: AtomicU64,
     ycbcr_device_conversions: AtomicU64,
     ycbcr_device_samples: AtomicU64,
     attachment_clears_recorded: AtomicU64,
@@ -276,31 +272,13 @@ pub(crate) struct Counters {
     queue_drains: AtomicU64,
     stand_in_copies_made: AtomicU64,
     stand_in_copies_made_at_draws: AtomicU64,
-    draw_shapes_made: AtomicU64,
-    draw_shapes_found: AtomicU64,
-    dispatch_shapes_made: AtomicU64,
-    dispatch_shapes_found: AtomicU64,
-    dispatch_used_resources_listed: AtomicU64,
     resident_textures_looked_at: AtomicU64,
     resident_resources_joined: AtomicU64,
     resident_address_indexes_made: AtomicU64,
     root_table_ranges_noted: AtomicU64,
     heap_tables_worked_out: AtomicU64,
     argument_samplers_taken: AtomicU64,
-    bind_views_worked_out: AtomicU64,
-    no_copy_lies_read: AtomicU64,
-    draws_settled: AtomicU64,
-    two_plane_draws: AtomicU64,
-    provoking_listed_draws: AtomicU64,
-    device_wide_line_draws: AtomicU64,
-    line_band_draws: AtomicU64,
-    nearest_width_line_draws: AtomicU64,
-    gathered_draws: AtomicU64,
-    bounded_run_draws: AtomicU64,
     bound_notices_made: AtomicU64,
-    argument_tables_retained: AtomicU64,
-    argument_objects_retained: AtomicU64,
-    graphics_pipelines_looked_up: AtomicU64,
     linear_passes_in_place: AtomicU64,
     linear_passes_through_copies: AtomicU64,
     linear_merge_scratches_made: AtomicU64,
@@ -311,18 +289,6 @@ pub(crate) struct Counters {
     color_group_passes: AtomicU64,
     color_group_twins: AtomicU64,
     color_group_draws_skipped: AtomicU64,
-    set_zero_equal_shape_switches: AtomicU64,
-    set_zero_writes_on_equal_shape_switches: AtomicU64,
-    set_zero_writes_if_shapes_shared: AtomicU64,
-    dispatches_pushing_set_zero: AtomicU64,
-    set_zero_sets_reused: AtomicU64,
-    set_zero_sets_found: AtomicU64,
-    draw_shapes_reused: AtomicU64,
-    draw_shapes_carried: AtomicU64,
-    host_holds_looked_up: AtomicU64,
-    dispatches_settled_as_before: AtomicU64,
-    dispatches_planned_as_before: AtomicU64,
-    baked_sampler_dispatches_apart: AtomicU64,
     host_deallocators_delayed: AtomicU64,
     host_import_releases_posted: AtomicU64,
     host_import_releases_pending: AtomicU64,
@@ -501,7 +467,6 @@ pub(crate) struct Counters {
     dispatch_pipelines_pooled: AtomicU64,
     tile_pipelines_pooled: AtomicU64,
     upload_chunks_in_device_memory: AtomicU64,
-    tile_dispatches_recorded: AtomicU64,
     render_log_batches_by_thread: AtomicU64,
     render_log_batches_by_program: AtomicU64,
     render_log_waits: AtomicU64,
@@ -511,11 +476,20 @@ pub(crate) struct Counters {
     render_log_commits_by_program: AtomicU64,
 }
 
-/// The counts a draw adds on the paths that take no shared lock (`render/draw_again.rs`), kept
-/// by thread (`shards.rs`) so threads that draw at once count apart: each counted as it is
-/// recorded.
+/// The counts a command adds as its encoder records it, on the paths a draw, a dispatch, a tile
+/// dispatch or a bind takes at every command: its binds and tables read, its shape and plan
+/// settled, its `VkPipeline` looked up, its set 0 bound or pushed, its uses walked, its state
+/// commands recorded. Kept apart by who adds them (`shards.rs`): the encoder that records the
+/// command, while it is open, where the count is made with its core at hand
+/// ([`Counters::of`], `EncoderCore::counts`), else the thread that makes it
+/// ([`Counters::thread`]); so encoders and threads that count at once write apart, each add a
+/// plain load and store, none an atomic another core's add contends for. A count is the sum of
+/// every encoder's and thread's, open encoders' included, so it is whole whenever it is read. A
+/// rarer event a command meets (a split of its pass, a making, a first use) stays an atomic of
+/// the device's own ([`Counters`]): it costs its event, not every command. Those a draw of a
+/// steady pass adds come first, in a shard's first 128 bytes.
 #[derive(Default)]
-struct DrawCounters {
+struct CommandCounters {
     stage_tables_read: AtomicU64,
     stage_tables_read_in_part: AtomicU64,
     commands_noted_as_before: AtomicU64,
@@ -526,9 +500,10 @@ struct DrawCounters {
     draws_as_before: AtomicU64,
     draws_rebound: AtomicU64,
     resident_uses_made: AtomicU64,
-    resident_keys_settled: AtomicU64,
     argument_tables_held_at_bind: AtomicU64,
     bound_offsets_moved: AtomicU64,
+    set_zero_sets_reused: AtomicU64,
+    set_zero_sets_found: AtomicU64,
     resident_uses_gathered: AtomicU64,
     resident_uses_against_fragments: AtomicU64,
     resident_uses_against_attachments: AtomicU64,
@@ -538,8 +513,473 @@ struct DrawCounters {
     resident_uses_geometry_writes: AtomicU64,
     resident_uses_geometry_checked: AtomicU64,
     resident_uses_again_checked: AtomicU64,
+    resident_keys_settled: AtomicU64,
     draw_heap_parts_made: AtomicU64,
     draw_resident_textures_looked_at: AtomicU64,
+    no_copy_lies_read: AtomicU64,
+    host_holds_looked_up: AtomicU64,
+    draws_settled: AtomicU64,
+    graphics_pipelines_looked_up: AtomicU64,
+    draw_shapes_reused: AtomicU64,
+    draw_shapes_carried: AtomicU64,
+    draw_shapes_made: AtomicU64,
+    draw_shapes_found: AtomicU64,
+    dispatch_shapes_made: AtomicU64,
+    dispatch_shapes_found: AtomicU64,
+    dispatch_used_resources_listed: AtomicU64,
+    dispatches_settled_as_before: AtomicU64,
+    dispatches_planned_as_before: AtomicU64,
+    dispatches_pushing_set_zero: AtomicU64,
+    baked_sampler_dispatches_apart: AtomicU64,
+    argument_tables_retained: AtomicU64,
+    argument_objects_retained: AtomicU64,
+    bind_views_worked_out: AtomicU64,
+    set_zero_equal_shape_switches: AtomicU64,
+    set_zero_writes_on_equal_shape_switches: AtomicU64,
+    set_zero_writes_if_shapes_shared: AtomicU64,
+    two_plane_draws: AtomicU64,
+    provoking_listed_draws: AtomicU64,
+    device_wide_line_draws: AtomicU64,
+    line_band_draws: AtomicU64,
+    nearest_width_line_draws: AtomicU64,
+    gathered_draws: AtomicU64,
+    bounded_run_draws: AtomicU64,
+    tile_dispatches_recorded: AtomicU64,
+    ycbcr_planes_bound: AtomicU64,
+    ycbcr_planes_images_bound: AtomicU64,
+    residual_form_draws: AtomicU64,
+    residual_form_makings: AtomicU64,
+}
+
+/// The command counts by who adds them ([`CommandCounters`]): open encoders' tallies, and
+/// threads' shards for the counts made with no encoder's core at hand.
+#[derive(Default)]
+struct CommandTallies {
+    by_encoder: Tallies<CommandCounters>,
+    by_thread: Sharded<CommandCounters>,
+}
+
+impl CommandTallies {
+    /// The count `count` picks: every encoder's and thread's additions so far, open encoders'
+    /// included.
+    fn sum(&self, count: impl Fn(&CommandCounters) -> &AtomicU64 + Copy) -> u64 {
+        self.by_encoder.sum(count) + self.by_thread.sum(count)
+    }
+}
+
+/// A command's counts, added into its encoder's tally or its thread's shard
+/// ([`CommandCounters`]).
+#[derive(Clone, Copy)]
+pub(crate) struct Counting<'a>(Mine<'a, CommandCounters>);
+
+impl Counting<'_> {
+    /// A binding of a two-plane YCbCr texture's planes read in place was written
+    /// (`binding.rs`).
+    pub(crate) fn ycbcr_planes_bound(&self) {
+        self.0.add(|counts| &counts.ycbcr_planes_bound, 1);
+    }
+
+    /// A binding of a two-plane YCbCr texture's planes image was written (`binding.rs`).
+    pub(crate) fn ycbcr_planes_image_bound(&self) {
+        self.0.add(|counts| &counts.ycbcr_planes_images_bound, 1);
+    }
+
+    /// A draw or dispatch whose key's `VkPipeline` was not made took its general form's
+    /// (`pipeline/render/residual.rs`).
+    pub(crate) fn residual_form_drawn(&self) {
+        self.0.add(|counts| &counts.residual_form_draws, 1);
+    }
+
+    /// A draw or dispatch that began its key's making took its general form's `VkPipeline`
+    /// meanwhile (`pipeline/render/residual.rs`).
+    pub(crate) fn residual_form_making(&self) {
+        self.0.add(|counts| &counts.residual_form_makings, 1);
+    }
+
+    /// A render encoder recorded a tile dispatch (`render/tile_dispatch.rs`).
+    pub(crate) fn tile_dispatch_recorded(&self) {
+        self.0.add(|counts| &counts.tile_dispatches_recorded, 1);
+    }
+
+    /// A draw made the bind shape of its bind state (`LiveBind::shape`).
+    pub(crate) fn draw_shape_made(&self) {
+        self.0.add(|counts| &counts.draw_shapes_made, 1);
+    }
+
+    /// A draw found the bind shape of its bind state among those its drawing state settled
+    /// lately (`LiveBind::shape`).
+    pub(crate) fn draw_shape_found(&self) {
+        self.0.add(|counts| &counts.draw_shapes_found, 1);
+    }
+
+    /// A compute dispatch made the bind shape of its encoder's kept bind state
+    /// (`LiveDispatch::shape`).
+    pub(crate) fn dispatch_shape_made(&self) {
+        self.0.add(|counts| &counts.dispatch_shapes_made, 1);
+    }
+
+    /// A compute dispatch found the bind shape of its encoder's kept bind state among those its
+    /// pipeline state planned for lately (`LiveDispatch::shape`).
+    pub(crate) fn dispatch_shape_found(&self) {
+        self.0.add(|counts| &counts.dispatch_shapes_found, 1);
+    }
+
+    /// A compute dispatch listed what its encoder made resident as its kept bind state's used
+    /// resources (`LiveDispatch::refresh`).
+    pub(crate) fn dispatch_used_resources_listed(&self) {
+        self.0
+            .add(|counts| &counts.dispatch_used_resources_listed, 1);
+    }
+
+    /// A render encoder's bind worked out a texture slot's view that its bind memo did not keep
+    /// (`binding::BindMemo`).
+    pub(crate) fn bind_view_worked_out(&self) {
+        self.0.add(|counts| &counts.bind_views_worked_out, 1);
+    }
+
+    /// A draw read a stage's table into its encoder's kept bind state
+    /// (`ArgumentTable::refresh_reading`).
+    pub(crate) fn stage_table_read(&self) {
+        self.0.add(|counts| &counts.stage_tables_read, 1);
+    }
+
+    /// One of those reads brought in only the slots calls changed since the table was read
+    /// (`ArgumentTable::refresh_changed`).
+    pub(crate) fn stage_table_read_in_part(&self) {
+        self.0.add(|counts| &counts.stage_tables_read_in_part, 1);
+    }
+
+    /// A look at where a no-copy buffer's bytes lie, which takes its pages' lock
+    /// (`buffer::HostCell`).
+    pub(crate) fn no_copy_lie_read(&self) {
+        self.0.add(|counts| &counts.no_copy_lies_read, 1);
+    }
+
+    /// A draw's uses were noted already: the last command its encoder noted had them
+    /// (`noted_apart.rs`).
+    pub(crate) fn command_noted_as_before(&self) {
+        self.0.add(|counts| &counts.commands_noted_as_before, 1);
+    }
+
+    /// A draw settled its variant and plan from its bind shape (`GraphicsState::settle_shape`).
+    pub(crate) fn draw_settled(&self) {
+        self.0.add(|counts| &counts.draws_settled, 1);
+    }
+
+    /// A draw ran a variant that takes a slot bound to a two-plane extended-range texture
+    /// (`VariantKey::extended_range`).
+    pub(crate) fn two_plane_draw(&self) {
+        self.0.add(|counts| &counts.two_plane_draws, 1);
+    }
+
+    /// A draw under the last provoking vertex ran a `VkPipeline` of the last vertex
+    /// (`render/provoking.rs`).
+    pub(crate) fn provoking_last_pipeline_draw(&self) {
+        self.0
+            .add(|counts| &counts.provoking_last_pipeline_draws, 1);
+    }
+
+    /// A draw under the last provoking vertex drew the list of its primitives in Metal's mode-1
+    /// order or led by their last vertices (`render/provoking.rs`).
+    pub(crate) fn provoking_listed_draw(&self) {
+        self.0.add(|counts| &counts.provoking_listed_draws, 1);
+    }
+
+    /// A draw of lines at a width other than 1 ran the device's own lines at it
+    /// (`render/line_width.rs`).
+    pub(crate) fn device_wide_line_draw(&self) {
+        self.0.add(|counts| &counts.device_wide_line_draws, 1);
+    }
+
+    /// A draw of lines, or of a triangle's edges, at a width other than 1 ran the pipeline's band
+    /// variant (`render/line_width.rs`).
+    pub(crate) fn line_band_draw(&self) {
+        self.0.add(|counts| &counts.line_band_draws, 1);
+    }
+
+    /// A draw of lines at a width other than 1 ran the device's own lines at the nearest width
+    /// they draw (`render/line_width.rs`).
+    pub(crate) fn nearest_width_line_draw(&self) {
+        self.0.add(|counts| &counts.nearest_width_line_draws, 1);
+    }
+
+    /// A direct indexed draw drawn as a list joined a run of the index gather pass, which writes
+    /// the run's lists by one dispatch (`index_rewrite.rs`).
+    pub(crate) fn gathered_draw(&self) {
+        self.0.add(|counts| &counts.gathered_draws, 1);
+    }
+
+    /// An indexed indirect draw whose index fetch the index bounds pass bounds joined a run of
+    /// it, which plans and fills the run's draws by one dispatch each (`index_bounds.rs`).
+    pub(crate) fn bounded_run_draw(&self) {
+        self.0.add(|counts| &counts.bounded_run_draws, 1);
+    }
+
+    /// A command's retain of an argument table changed since its last retain into the same
+    /// encoder looked at nothing: each object its calls bound since, the encoder held as it was
+    /// bound (`argument_table::retain_into`).
+    pub(crate) fn argument_table_held_at_bind(&self) {
+        self.0.add(|counts| &counts.argument_tables_held_at_bind, 1);
+    }
+
+    /// A stage table read in part brought in a buffer slot whose buffer's offset alone moved,
+    /// looking at no buffer (`ArgumentTable::refresh_offset`).
+    pub(crate) fn bound_offset_moved(&self) {
+        self.0.add(|counts| &counts.bound_offsets_moved, 1);
+    }
+
+    /// A command retained what an argument table binds (`ArgumentTable::retain`), taking hold of
+    /// `objects` of them, one at least.
+    pub(crate) fn argument_table_retained(&self, objects: u64) {
+        self.0.add(|counts| &counts.argument_tables_retained, 1);
+        self.0
+            .add(|counts| &counts.argument_objects_retained, objects);
+    }
+
+    /// A draw looked its `VkPipeline` up in its variant's memo by key
+    /// (`RenderVariant::begin_graphics_pipeline`, `graphics_pipeline_now`, `graphics_pipeline`).
+    pub(crate) fn graphics_pipeline_looked_up(&self) {
+        self.0.add(|counts| &counts.graphics_pipelines_looked_up, 1);
+    }
+
+    /// Draws recorded `count` state commands into their secondary command buffers
+    /// (`render::Recording::record`).
+    pub(crate) fn draw_states_recorded(&self, count: u64) {
+        if count > 0 {
+            self.0.add(|counts| &counts.draw_states_recorded, count);
+        }
+    }
+
+    /// A draw recorded with its set 0 pushed (`pipeline::objects::pushes_set_zero`).
+    pub(crate) fn draw_pushing_set_zero(&self) {
+        self.0.add(|counts| &counts.draws_pushing_set_zero, 1);
+    }
+
+    /// A dispatch encoded with its set 0 pushed (`pipeline::objects::pushes_set_zero`).
+    pub(crate) fn dispatch_pushing_set_zero(&self) {
+        self.0.add(|counts| &counts.dispatches_pushing_set_zero, 1);
+    }
+
+    /// A command that bound the set 0 its encoder's last command wrote, the same descriptors
+    /// into a set of the same layout (`binding::LastSetZero`).
+    pub(crate) fn set_zero_set_reused(&self) {
+        self.0.add(|counts| &counts.set_zero_sets_reused, 1);
+    }
+
+    /// A command that bound a set 0 an earlier command of its command buffer wrote, the same
+    /// descriptors into a set of the same layout (`binding::SetCache`).
+    pub(crate) fn set_zero_set_found(&self) {
+        self.0.add(|counts| &counts.set_zero_sets_found, 1);
+    }
+
+    /// A draw that took its settings, draw state and `VkPipeline` from its encoder's earlier
+    /// draws of the same inputs (`render/draw_shape.rs`).
+    pub(crate) fn draw_shape_reused(&self) {
+        self.0.add(|counts| &counts.draw_shapes_reused, 1);
+    }
+
+    /// A draw that found no shape in its encoder's memo and took its settings from an earlier
+    /// encoder's draw of the same drawing state and values (`render/draw_shape.rs`).
+    pub(crate) fn draw_shape_carried(&self) {
+        self.0.add(|counts| &counts.draw_shapes_carried, 1);
+    }
+
+    /// A draw a render encoder recorded as its last draw again (`render/draw_again.rs`), whose
+    /// uses were noted already; `kept` says whether the draw it repeats pushed set 0 and ran a
+    /// `VkPipeline` of the last provoking vertex.
+    pub(crate) fn draw_drawn_again(&self, kept: (bool, bool)) {
+        let counts = self.0;
+        counts.add(|counts| &counts.draws_as_before, 1);
+        counts.add(|counts| &counts.commands_noted_as_before, 1);
+        Self::kept_draw(&counts, kept);
+    }
+
+    /// `made` uses of what a render encoder made resident that a draw worked out
+    /// (`WorkCounts::resident_uses_made`).
+    pub(crate) fn resident_uses_made(&self, made: u64) {
+        self.0.add(|counts| &counts.resident_uses_made, made);
+    }
+
+    /// `moved` keys a draw's working out of what it reaches through what its render encoder made
+    /// resident alone moved (`WorkCounts::resident_keys_settled`).
+    pub(crate) fn resident_keys_settled(&self, moved: u64) {
+        if moved > 0 {
+            self.0.add(|counts| &counts.resident_keys_settled, moved);
+        }
+    }
+
+    /// `walked` uses of what a render encoder made resident that a draw's gathering for its
+    /// instance's shadowed textures walked (`WorkCounts::resident_uses_gathered`).
+    pub(crate) fn resident_uses_gathered(&self, walked: u64) {
+        self.0.add(|counts| &counts.resident_uses_gathered, walked);
+    }
+
+    /// `walked` uses of what a render encoder made resident that a draw's checks against what its
+    /// render pass's fragment stages wrote and read walked
+    /// (`WorkCounts::resident_uses_against_fragments`).
+    pub(crate) fn resident_uses_against_fragments(&self, walked: u64) {
+        self.0
+            .add(|counts| &counts.resident_uses_against_fragments, walked);
+    }
+
+    /// `walked` uses of what a render encoder made resident that a draw's check against its
+    /// render pass's attachments walked (`WorkCounts::resident_uses_against_attachments`).
+    pub(crate) fn resident_uses_against_attachments(&self, walked: u64) {
+        self.0
+            .add(|counts| &counts.resident_uses_against_attachments, walked);
+    }
+
+    /// `walked` uses of what a render encoder made resident that a draw's noting walked
+    /// (`WorkCounts::resident_uses_noted`).
+    pub(crate) fn resident_uses_noted(&self, walked: u64) {
+        self.0.add(|counts| &counts.resident_uses_noted, walked);
+    }
+
+    /// `walked` uses of what a render encoder made resident that a draw's adding of its writes
+    /// to those no barrier orders yet walked (`WorkCounts::resident_uses_unordered_writes`).
+    pub(crate) fn resident_uses_unordered_writes(&self, walked: u64) {
+        if walked > 0 {
+            self.0
+                .add(|counts| &counts.resident_uses_unordered_writes, walked);
+        }
+    }
+
+    /// `walked` uses of what a render encoder made resident that a draw's adding of its indirect
+    /// argument reads walked (`WorkCounts::resident_uses_indirect_reads`).
+    pub(crate) fn resident_uses_indirect_reads(&self, walked: u64) {
+        if walked > 0 {
+            self.0
+                .add(|counts| &counts.resident_uses_indirect_reads, walked);
+        }
+    }
+
+    /// `walked` uses of what a render encoder made resident that a draw's adding of its writes
+    /// before its fragments walked (`WorkCounts::resident_uses_geometry_writes`).
+    pub(crate) fn resident_uses_geometry_writes(&self, walked: u64) {
+        if walked > 0 {
+            self.0
+                .add(|counts| &counts.resident_uses_geometry_writes, walked);
+        }
+    }
+
+    /// `walked` uses of what a render encoder made resident that a draw's check against the
+    /// writes before earlier draws' fragments walked (`WorkCounts::resident_uses_geometry_checked`).
+    pub(crate) fn resident_uses_geometry_checked(&self, walked: u64) {
+        if walked > 0 {
+            self.0
+                .add(|counts| &counts.resident_uses_geometry_checked, walked);
+        }
+    }
+
+    /// `walked` uses of what a render encoder made resident that a draw's check whether it may be
+    /// kept for drawing again walked (`WorkCounts::resident_uses_again_checked`).
+    pub(crate) fn resident_uses_again_checked(&self, walked: u64) {
+        if walked > 0 {
+            self.0
+                .add(|counts| &counts.resident_uses_again_checked, walked);
+        }
+    }
+
+    /// A render draw that worked out its heap part (`WorkCounts::draw_heap_parts_made`).
+    pub(crate) fn draw_heap_part_made(&self) {
+        self.0.add(|counts| &counts.draw_heap_parts_made, 1);
+    }
+
+    /// A render draw or tile dispatch looked at every texture its encoder made resident for those
+    /// a carrier holds (`WorkCounts::draw_resident_textures_looked_at`).
+    pub(crate) fn draw_resident_textures_looked_at(&self) {
+        self.0
+            .add(|counts| &counts.draw_resident_textures_looked_at, 1);
+    }
+
+    /// A render draw rebound (`WorkCounts::draws_rebound`), which recorded `states` state
+    /// commands and pushed `writes` set-0 writes; `kept` as `draw_drawn_again`'s.
+    pub(crate) fn draw_rebound(&self, kept: (bool, bool), (states, writes): (u64, u64)) {
+        let counts = self.0;
+        counts.add(|counts| &counts.draws_rebound, 1);
+        if states > 0 {
+            counts.add(|counts| &counts.draw_states_recorded, states);
+        }
+        if writes > 0 {
+            counts.add(|counts| &counts.set_zero_writes_pushed, writes);
+        }
+        Self::kept_draw(&counts, kept);
+    }
+
+    /// `tables` stage tables read into a kept draw's bind state, each bringing in only the slots
+    /// calls changed (`render/draw_again/rebound.rs`), whether the draw is then rebound or takes
+    /// every step, which finds them read.
+    pub(crate) fn tables_read_in_part(&self, tables: u64) {
+        if tables > 0 {
+            let counts = self.0;
+            counts.add(|counts| &counts.stage_tables_read, tables);
+            counts.add(|counts| &counts.stage_tables_read_in_part, tables);
+        }
+    }
+
+    /// What a draw again or rebound counts as the draw it repeats did: a push of set 0 and a
+    /// `VkPipeline` of the last provoking vertex.
+    fn kept_draw(counts: &Mine<'_, CommandCounters>, (pushes_set_zero, last_vertex): (bool, bool)) {
+        if pushes_set_zero {
+            counts.add(|counts| &counts.draws_pushing_set_zero, 1);
+        }
+        if last_vertex {
+            counts.add(|counts| &counts.provoking_last_pipeline_draws, 1);
+        }
+    }
+
+    /// An encoder's hold of a key its commands named first that looked the key up among the
+    /// device's buffers over host pages (`rebind::HostedKeys`).
+    pub(crate) fn host_hold_looked_up(&self) {
+        self.0.add(|counts| &counts.host_holds_looked_up, 1);
+    }
+
+    /// A compute encoder's dispatch that took what its last dispatch settled
+    /// (`compute::DispatchMemo`).
+    pub(crate) fn dispatch_settled_as_before(&self) {
+        self.0.add(|counts| &counts.dispatches_settled_as_before, 1);
+    }
+
+    /// A direct dispatch that settled a bind state of the shape its state's last direct dispatch
+    /// planned and took what that one planned (`pipeline::Planned`).
+    pub(crate) fn dispatch_planned_as_before(&self) {
+        self.0.add(|counts| &counts.dispatches_planned_as_before, 1);
+    }
+
+    /// A dispatch of a variant that bakes samplers, its pipelines made, recorded in a
+    /// `VkCommandBuffer` of its own (`RuntimeDriverDefect::ImmutableSamplersLostAfterCopies`).
+    pub(crate) fn baked_sampler_dispatch_apart(&self) {
+        self.0
+            .add(|counts| &counts.baked_sampler_dispatches_apart, 1);
+    }
+
+    /// Draws' pushes of their set 0 carried `count` writes (`render/bound.rs`).
+    pub(crate) fn set_zero_writes_pushed(&self, count: u64) {
+        if count > 0 {
+            self.0.add(|counts| &counts.set_zero_writes_pushed, count);
+        }
+    }
+
+    /// `switches` draws' pushes carried their set 0 whole with another layout of the shape set 0
+    /// was last pushed with: `carried` writes, where `if_shared` would do if the layouts were one
+    /// (`render/bound.rs`).
+    pub(crate) fn set_zero_equal_shape_switches(
+        &self,
+        switches: u64,
+        carried: u64,
+        if_shared: u64,
+    ) {
+        if switches > 0 {
+            self.0
+                .add(|counts| &counts.set_zero_equal_shape_switches, switches);
+            self.0.add(
+                |counts| &counts.set_zero_writes_on_equal_shape_switches,
+                carried,
+            );
+            self.0
+                .add(|counts| &counts.set_zero_writes_if_shapes_shared, if_shared);
+        }
+    }
 }
 
 /// How a render pass took a shadowed texture as a color attachment
@@ -749,6 +1189,18 @@ pub(crate) enum PoolCompiled {
 }
 
 impl Counters {
+    /// The counts the commands of the encoder that holds `tally` add (`EncoderCore::counts`).
+    #[inline]
+    pub(crate) fn of(&self, tally: &Tally) -> Counting<'_> {
+        Counting(self.commands.by_encoder.of(tally))
+    }
+
+    /// The counts a command adds where no encoder's core is at hand: the calling thread's.
+    #[inline]
+    pub(crate) fn thread(&self) -> Counting<'_> {
+        Counting(self.commands.by_thread.mine())
+    }
+
     /// `count` commands of `kind` were recorded (`PoolCompiled`).
     pub(crate) fn pool_compiled(&self, kind: PoolCompiled, count: u64) {
         let counter = match kind {
@@ -800,12 +1252,6 @@ impl Counters {
         }
     }
 
-    /// A binding of a two-plane YCbCr texture's planes read in place was written
-    /// (`binding.rs`).
-    pub(crate) fn ycbcr_planes_bound(&self) {
-        self.ycbcr_planes_bound.fetch_add(1, Ordering::Relaxed);
-    }
-
     /// A two-plane YCbCr texture's planes read in place were made an image the device's
     /// conversion samples (`texture/ycbcr_planes.rs`).
     pub(crate) fn ycbcr_planes_image(&self) {
@@ -822,12 +1268,6 @@ impl Counters {
         if let Some(counter) = self.ycbcr_planes_images_kept.get(at) {
             counter.fetch_add(1, Ordering::Relaxed);
         }
-    }
-
-    /// A binding of a two-plane YCbCr texture's planes image was written (`binding.rs`).
-    pub(crate) fn ycbcr_planes_image_bound(&self) {
-        self.ycbcr_planes_images_bound
-            .fetch_add(1, Ordering::Relaxed);
     }
 
     /// A YCbCr texture's conversion, or a render shadow's load, was made to sample its planes'
@@ -1036,18 +1476,6 @@ impl Counters {
         }
     }
 
-    /// A draw or dispatch whose key's `VkPipeline` was not made took its general form's
-    /// (`pipeline/render/residual.rs`).
-    pub(crate) fn residual_form_drawn(&self) {
-        self.residual_form_draws.fetch_add(1, Ordering::Relaxed);
-    }
-
-    /// A draw or dispatch that began its key's making took its general form's `VkPipeline`
-    /// meanwhile (`pipeline/render/residual.rs`).
-    pub(crate) fn residual_form_making(&self) {
-        self.residual_form_makings.fetch_add(1, Ordering::Relaxed);
-    }
-
     /// Stage entries the device's pipeline creations specialized, and asks of theirs that found
     /// one specialized already (`pipeline/memo.rs`).
     pub(crate) fn stage_entries(&self, specialized: u64, shared: u64) {
@@ -1142,12 +1570,6 @@ impl Counters {
     /// (`pipeline/dispatch_making.rs`).
     pub(crate) fn dispatch_pipeline_pooled(&self) {
         self.dispatch_pipelines_pooled
-            .fetch_add(1, Ordering::Relaxed);
-    }
-
-    /// A render encoder recorded a tile dispatch (`render/tile_dispatch.rs`).
-    pub(crate) fn tile_dispatch_recorded(&self) {
-        self.tile_dispatches_recorded
             .fetch_add(1, Ordering::Relaxed);
     }
 
@@ -1966,36 +2388,6 @@ impl Counters {
         }
     }
 
-    /// A draw made the bind shape of its bind state (`LiveBind::shape`).
-    pub(crate) fn draw_shape_made(&self) {
-        self.draw_shapes_made.fetch_add(1, Ordering::Relaxed);
-    }
-
-    /// A draw found the bind shape of its bind state among those its drawing state settled
-    /// lately (`LiveBind::shape`).
-    pub(crate) fn draw_shape_found(&self) {
-        self.draw_shapes_found.fetch_add(1, Ordering::Relaxed);
-    }
-
-    /// A compute dispatch made the bind shape of its encoder's kept bind state
-    /// (`LiveDispatch::shape`).
-    pub(crate) fn dispatch_shape_made(&self) {
-        self.dispatch_shapes_made.fetch_add(1, Ordering::Relaxed);
-    }
-
-    /// A compute dispatch found the bind shape of its encoder's kept bind state among those its
-    /// pipeline state planned for lately (`LiveDispatch::shape`).
-    pub(crate) fn dispatch_shape_found(&self) {
-        self.dispatch_shapes_found.fetch_add(1, Ordering::Relaxed);
-    }
-
-    /// A compute dispatch listed what its encoder made resident as its kept bind state's used
-    /// resources (`LiveDispatch::refresh`).
-    pub(crate) fn dispatch_used_resources_listed(&self) {
-        self.dispatch_used_resources_listed
-            .fetch_add(1, Ordering::Relaxed);
-    }
-
     /// A compute encoder looked at the textures it made resident for their shadows or for one a
     /// carrier holds (`shadow::ResidentShadows`, `pvrtc::ResidentUnreadable`).
     pub(crate) fn resident_textures_looked_at(&self) {
@@ -2039,133 +2431,10 @@ impl Counters {
         self.render_passes_made.fetch_add(1, Ordering::Relaxed);
     }
 
-    /// A render encoder's bind worked out a texture slot's view that its bind memo did not keep
-    /// (`binding::BindMemo`).
-    pub(crate) fn bind_view_worked_out(&self) {
-        self.bind_views_worked_out.fetch_add(1, Ordering::Relaxed);
-    }
-
-    /// A draw read a stage's table into its encoder's kept bind state
-    /// (`ArgumentTable::refresh_reading`).
-    pub(crate) fn stage_table_read(&self) {
-        self.draws.mine().add(|counts| &counts.stage_tables_read, 1);
-    }
-
-    /// One of those reads brought in only the slots calls changed since the table was read
-    /// (`ArgumentTable::refresh_changed`).
-    pub(crate) fn stage_table_read_in_part(&self) {
-        self.draws
-            .mine()
-            .add(|counts| &counts.stage_tables_read_in_part, 1);
-    }
-
-    /// A look at where a no-copy buffer's bytes lie, which takes its pages' lock
-    /// (`buffer::HostCell`).
-    pub(crate) fn no_copy_lie_read(&self) {
-        self.no_copy_lies_read.fetch_add(1, Ordering::Relaxed);
-    }
-
-    /// A draw's uses were noted already: the last command its encoder noted had them
-    /// (`noted_apart.rs`).
-    pub(crate) fn command_noted_as_before(&self) {
-        self.draws
-            .mine()
-            .add(|counts| &counts.commands_noted_as_before, 1);
-    }
-
-    /// A draw settled its variant and plan from its bind shape (`GraphicsState::settle_shape`).
-    pub(crate) fn draw_settled(&self) {
-        self.draws_settled.fetch_add(1, Ordering::Relaxed);
-    }
-
-    /// A draw ran a variant that takes a slot bound to a two-plane extended-range texture
-    /// (`VariantKey::extended_range`).
-    pub(crate) fn two_plane_draw(&self) {
-        self.two_plane_draws.fetch_add(1, Ordering::Relaxed);
-    }
-
-    /// A draw under the last provoking vertex ran a `VkPipeline` of the last vertex
-    /// (`render/provoking.rs`).
-    pub(crate) fn provoking_last_pipeline_draw(&self) {
-        self.draws
-            .mine()
-            .add(|counts| &counts.provoking_last_pipeline_draws, 1);
-    }
-
-    /// A draw under the last provoking vertex drew the list of its primitives in Metal's mode-1
-    /// order or led by their last vertices (`render/provoking.rs`).
-    pub(crate) fn provoking_listed_draw(&self) {
-        self.provoking_listed_draws.fetch_add(1, Ordering::Relaxed);
-    }
-
-    /// A draw of lines at a width other than 1 ran the device's own lines at it
-    /// (`render/line_width.rs`).
-    pub(crate) fn device_wide_line_draw(&self) {
-        self.device_wide_line_draws.fetch_add(1, Ordering::Relaxed);
-    }
-
-    /// A draw of lines, or of a triangle's edges, at a width other than 1 ran the pipeline's band
-    /// variant (`render/line_width.rs`).
-    pub(crate) fn line_band_draw(&self) {
-        self.line_band_draws.fetch_add(1, Ordering::Relaxed);
-    }
-
-    /// A draw of lines at a width other than 1 ran the device's own lines at the nearest width
-    /// they draw (`render/line_width.rs`).
-    pub(crate) fn nearest_width_line_draw(&self) {
-        self.nearest_width_line_draws
-            .fetch_add(1, Ordering::Relaxed);
-    }
-
-    /// A direct indexed draw drawn as a list joined a run of the index gather pass, which writes
-    /// the run's lists by one dispatch (`index_rewrite.rs`).
-    pub(crate) fn gathered_draw(&self) {
-        self.gathered_draws.fetch_add(1, Ordering::Relaxed);
-    }
-
-    /// An indexed indirect draw whose index fetch the index bounds pass bounds joined a run of
-    /// it, which plans and fills the run's draws by one dispatch each (`index_bounds.rs`).
-    pub(crate) fn bounded_run_draw(&self) {
-        self.bounded_run_draws.fetch_add(1, Ordering::Relaxed);
-    }
-
     /// A bind of a variant made the notices it announces at every occurrence
     /// (`VariantObjects::announce_bound`).
     pub(crate) fn bound_notices_made(&self) {
         self.bound_notices_made.fetch_add(1, Ordering::Relaxed);
-    }
-
-    /// A command's retain of an argument table changed since its last retain into the same
-    /// encoder looked at nothing: each object its calls bound since, the encoder held as it was
-    /// bound (`argument_table::retain_into`).
-    pub(crate) fn argument_table_held_at_bind(&self) {
-        self.draws
-            .mine()
-            .add(|counts| &counts.argument_tables_held_at_bind, 1);
-    }
-
-    /// A stage table read in part brought in a buffer slot whose buffer's offset alone moved,
-    /// looking at no buffer (`ArgumentTable::refresh_offset`).
-    pub(crate) fn bound_offset_moved(&self) {
-        self.draws
-            .mine()
-            .add(|counts| &counts.bound_offsets_moved, 1);
-    }
-
-    /// A command retained what an argument table binds (`ArgumentTable::retain`), taking hold of
-    /// `objects` of them, one at least.
-    pub(crate) fn argument_table_retained(&self, objects: u64) {
-        self.argument_tables_retained
-            .fetch_add(1, Ordering::Relaxed);
-        self.argument_objects_retained
-            .fetch_add(objects, Ordering::Relaxed);
-    }
-
-    /// A draw looked its `VkPipeline` up in its variant's memo by key
-    /// (`RenderVariant::begin_graphics_pipeline`, `graphics_pipeline_now`, `graphics_pipeline`).
-    pub(crate) fn graphics_pipeline_looked_up(&self) {
-        self.graphics_pipelines_looked_up
-            .fetch_add(1, Ordering::Relaxed);
     }
 
     /// A pass over a bound linear attachment rendered them all in place, or one through the
@@ -2222,244 +2491,6 @@ impl Counters {
     pub(crate) fn color_group_draw_skipped(&self) {
         self.color_group_draws_skipped
             .fetch_add(1, Ordering::Relaxed);
-    }
-
-    /// Draws recorded `count` state commands into their secondary command buffers
-    /// (`render::Recording::record`).
-    pub(crate) fn draw_states_recorded(&self, count: u64) {
-        if count > 0 {
-            self.draws
-                .mine()
-                .add(|counts| &counts.draw_states_recorded, count);
-        }
-    }
-
-    /// A draw recorded with its set 0 pushed (`pipeline::objects::pushes_set_zero`).
-    pub(crate) fn draw_pushing_set_zero(&self) {
-        self.draws
-            .mine()
-            .add(|counts| &counts.draws_pushing_set_zero, 1);
-    }
-
-    /// A dispatch encoded with its set 0 pushed (`pipeline::objects::pushes_set_zero`).
-    pub(crate) fn dispatch_pushing_set_zero(&self) {
-        self.dispatches_pushing_set_zero
-            .fetch_add(1, Ordering::Relaxed);
-    }
-
-    /// A command that bound the set 0 its encoder's last command wrote, the same descriptors
-    /// into a set of the same layout (`binding::LastSetZero`).
-    pub(crate) fn set_zero_set_reused(&self) {
-        self.set_zero_sets_reused.fetch_add(1, Ordering::Relaxed);
-    }
-
-    /// A command that bound a set 0 an earlier command of its command buffer wrote, the same
-    /// descriptors into a set of the same layout (`binding::SetCache`).
-    pub(crate) fn set_zero_set_found(&self) {
-        self.set_zero_sets_found.fetch_add(1, Ordering::Relaxed);
-    }
-
-    /// A draw that took its settings, draw state and `VkPipeline` from its encoder's earlier
-    /// draws of the same inputs (`render/draw_shape.rs`).
-    pub(crate) fn draw_shape_reused(&self) {
-        self.draw_shapes_reused.fetch_add(1, Ordering::Relaxed);
-    }
-
-    /// A draw that found no shape in its encoder's memo and took its settings from an earlier
-    /// encoder's draw of the same drawing state and values (`render/draw_shape.rs`).
-    pub(crate) fn draw_shape_carried(&self) {
-        self.draw_shapes_carried.fetch_add(1, Ordering::Relaxed);
-    }
-
-    /// A draw a render encoder recorded as its last draw again (`render/draw_again.rs`), whose
-    /// uses were noted already; `kept` says whether the draw it repeats pushed set 0 and ran a
-    /// `VkPipeline` of the last provoking vertex.
-    pub(crate) fn draw_drawn_again(&self, kept: (bool, bool)) {
-        let counts = self.draws.mine();
-        counts.add(|counts| &counts.draws_as_before, 1);
-        counts.add(|counts| &counts.commands_noted_as_before, 1);
-        Self::kept_draw(&counts, kept);
-    }
-
-    /// `made` uses of what a render encoder made resident that a draw worked out
-    /// (`WorkCounts::resident_uses_made`).
-    pub(crate) fn resident_uses_made(&self, made: u64) {
-        (self.draws.mine()).add(|counts| &counts.resident_uses_made, made);
-    }
-
-    /// `moved` keys a draw's working out of what it reaches through what its render encoder made
-    /// resident alone moved (`WorkCounts::resident_keys_settled`).
-    pub(crate) fn resident_keys_settled(&self, moved: u64) {
-        if moved > 0 {
-            (self.draws.mine()).add(|counts| &counts.resident_keys_settled, moved);
-        }
-    }
-
-    /// `walked` uses of what a render encoder made resident that a draw's gathering for its
-    /// instance's shadowed textures walked (`WorkCounts::resident_uses_gathered`).
-    pub(crate) fn resident_uses_gathered(&self, walked: u64) {
-        (self.draws.mine()).add(|counts| &counts.resident_uses_gathered, walked);
-    }
-
-    /// `walked` uses of what a render encoder made resident that a draw's checks against what its
-    /// render pass's fragment stages wrote and read walked
-    /// (`WorkCounts::resident_uses_against_fragments`).
-    pub(crate) fn resident_uses_against_fragments(&self, walked: u64) {
-        (self.draws.mine()).add(|counts| &counts.resident_uses_against_fragments, walked);
-    }
-
-    /// `walked` uses of what a render encoder made resident that a draw's check against its
-    /// render pass's attachments walked (`WorkCounts::resident_uses_against_attachments`).
-    pub(crate) fn resident_uses_against_attachments(&self, walked: u64) {
-        (self.draws.mine()).add(|counts| &counts.resident_uses_against_attachments, walked);
-    }
-
-    /// `walked` uses of what a render encoder made resident that a draw's noting walked
-    /// (`WorkCounts::resident_uses_noted`).
-    pub(crate) fn resident_uses_noted(&self, walked: u64) {
-        (self.draws.mine()).add(|counts| &counts.resident_uses_noted, walked);
-    }
-
-    /// `walked` uses of what a render encoder made resident that a draw's adding of its writes
-    /// to those no barrier orders yet walked (`WorkCounts::resident_uses_unordered_writes`).
-    pub(crate) fn resident_uses_unordered_writes(&self, walked: u64) {
-        if walked > 0 {
-            (self.draws.mine()).add(|counts| &counts.resident_uses_unordered_writes, walked);
-        }
-    }
-
-    /// `walked` uses of what a render encoder made resident that a draw's adding of its indirect
-    /// argument reads walked (`WorkCounts::resident_uses_indirect_reads`).
-    pub(crate) fn resident_uses_indirect_reads(&self, walked: u64) {
-        if walked > 0 {
-            (self.draws.mine()).add(|counts| &counts.resident_uses_indirect_reads, walked);
-        }
-    }
-
-    /// `walked` uses of what a render encoder made resident that a draw's adding of its writes
-    /// before its fragments walked (`WorkCounts::resident_uses_geometry_writes`).
-    pub(crate) fn resident_uses_geometry_writes(&self, walked: u64) {
-        if walked > 0 {
-            (self.draws.mine()).add(|counts| &counts.resident_uses_geometry_writes, walked);
-        }
-    }
-
-    /// `walked` uses of what a render encoder made resident that a draw's check against the
-    /// writes before earlier draws' fragments walked (`WorkCounts::resident_uses_geometry_checked`).
-    pub(crate) fn resident_uses_geometry_checked(&self, walked: u64) {
-        if walked > 0 {
-            (self.draws.mine()).add(|counts| &counts.resident_uses_geometry_checked, walked);
-        }
-    }
-
-    /// `walked` uses of what a render encoder made resident that a draw's check whether it may be
-    /// kept for drawing again walked (`WorkCounts::resident_uses_again_checked`).
-    pub(crate) fn resident_uses_again_checked(&self, walked: u64) {
-        if walked > 0 {
-            (self.draws.mine()).add(|counts| &counts.resident_uses_again_checked, walked);
-        }
-    }
-
-    /// A render draw that worked out its heap part (`WorkCounts::draw_heap_parts_made`).
-    pub(crate) fn draw_heap_part_made(&self) {
-        (self.draws.mine()).add(|counts| &counts.draw_heap_parts_made, 1);
-    }
-
-    /// A render draw or tile dispatch looked at every texture its encoder made resident for those
-    /// a carrier holds (`WorkCounts::draw_resident_textures_looked_at`).
-    pub(crate) fn draw_resident_textures_looked_at(&self) {
-        (self.draws.mine()).add(|counts| &counts.draw_resident_textures_looked_at, 1);
-    }
-
-    /// A render draw rebound (`WorkCounts::draws_rebound`), which recorded `states` state
-    /// commands and pushed `writes` set-0 writes; `kept` as `draw_drawn_again`'s.
-    pub(crate) fn draw_rebound(&self, kept: (bool, bool), (states, writes): (u64, u64)) {
-        let counts = self.draws.mine();
-        counts.add(|counts| &counts.draws_rebound, 1);
-        if states > 0 {
-            counts.add(|counts| &counts.draw_states_recorded, states);
-        }
-        if writes > 0 {
-            counts.add(|counts| &counts.set_zero_writes_pushed, writes);
-        }
-        Self::kept_draw(&counts, kept);
-    }
-
-    /// `tables` stage tables read into a kept draw's bind state, each bringing in only the slots
-    /// calls changed (`render/draw_again/rebound.rs`), whether the draw is then rebound or takes
-    /// every step, which finds them read.
-    pub(crate) fn tables_read_in_part(&self, tables: u64) {
-        if tables > 0 {
-            let counts = self.draws.mine();
-            counts.add(|counts| &counts.stage_tables_read, tables);
-            counts.add(|counts| &counts.stage_tables_read_in_part, tables);
-        }
-    }
-
-    /// What a draw again or rebound counts as the draw it repeats did: a push of set 0 and a
-    /// `VkPipeline` of the last provoking vertex.
-    fn kept_draw(counts: &Mine<'_, DrawCounters>, (pushes_set_zero, last_vertex): (bool, bool)) {
-        if pushes_set_zero {
-            counts.add(|counts| &counts.draws_pushing_set_zero, 1);
-        }
-        if last_vertex {
-            counts.add(|counts| &counts.provoking_last_pipeline_draws, 1);
-        }
-    }
-
-    /// An encoder's hold of a key its commands named first that looked the key up among the
-    /// device's buffers over host pages (`rebind::HostedKeys`).
-    pub(crate) fn host_hold_looked_up(&self) {
-        self.host_holds_looked_up.fetch_add(1, Ordering::Relaxed);
-    }
-
-    /// A compute encoder's dispatch that took what its last dispatch settled
-    /// (`compute::DispatchMemo`).
-    pub(crate) fn dispatch_settled_as_before(&self) {
-        self.dispatches_settled_as_before
-            .fetch_add(1, Ordering::Relaxed);
-    }
-
-    /// A direct dispatch that settled a bind state of the shape its state's last direct dispatch
-    /// planned and took what that one planned (`pipeline::Planned`).
-    pub(crate) fn dispatch_planned_as_before(&self) {
-        self.dispatches_planned_as_before
-            .fetch_add(1, Ordering::Relaxed);
-    }
-
-    /// A dispatch of a variant that bakes samplers, its pipelines made, recorded in a
-    /// `VkCommandBuffer` of its own (`RuntimeDriverDefect::ImmutableSamplersLostAfterCopies`).
-    pub(crate) fn baked_sampler_dispatch_apart(&self) {
-        self.baked_sampler_dispatches_apart
-            .fetch_add(1, Ordering::Relaxed);
-    }
-
-    /// Draws' pushes of their set 0 carried `count` writes (`render/bound.rs`).
-    pub(crate) fn set_zero_writes_pushed(&self, count: u64) {
-        if count > 0 {
-            self.draws
-                .mine()
-                .add(|counts| &counts.set_zero_writes_pushed, count);
-        }
-    }
-
-    /// `switches` draws' pushes carried their set 0 whole with another layout of the shape set 0
-    /// was last pushed with: `carried` writes, where `if_shared` would do if the layouts were one
-    /// (`render/bound.rs`).
-    pub(crate) fn set_zero_equal_shape_switches(
-        &self,
-        switches: u64,
-        carried: u64,
-        if_shared: u64,
-    ) {
-        if switches > 0 {
-            self.set_zero_equal_shape_switches
-                .fetch_add(switches, Ordering::Relaxed);
-            self.set_zero_writes_on_equal_shape_switches
-                .fetch_add(carried, Ordering::Relaxed);
-            self.set_zero_writes_if_shapes_shared
-                .fetch_add(if_shared, Ordering::Relaxed);
-        }
     }
 
     /// A no-copy buffer's deallocator waits past its release: given no keep-alive, for the import
@@ -6255,7 +6286,7 @@ impl Device {
         let (render_create_nanos, compute_create_nanos) = self.shared().pipeline_create_nanos();
         let directory = self.shared().shader_cache.directory_time();
         let churn = counters.churn.snapshot();
-        let draws = |count: fn(&DrawCounters) -> &AtomicU64| counters.draws.sum(count);
+        let commands = |count: fn(&CommandCounters) -> &AtomicU64| counters.commands.sum(count);
         let group_end = |end: GroupEnd| counters.group_ends[end as usize].load(Ordering::Relaxed);
         let first_work_order = self.shared().textures.first_moves.submissions_waited();
         let held_for =
@@ -6354,8 +6385,8 @@ impl Device {
                 .mipmap_first_levels_fetched
                 .load(Ordering::Relaxed),
             pipelines_pooled: counters.pipelines_pooled.load(Ordering::Relaxed),
-            residual_form_draws: counters.residual_form_draws.load(Ordering::Relaxed),
-            residual_form_makings: counters.residual_form_makings.load(Ordering::Relaxed),
+            residual_form_draws: commands(|counts| &counts.residual_form_draws),
+            residual_form_makings: commands(|counts| &counts.residual_form_makings),
             pipeline_pool_busy: self.shared().pipeline_pool.busy() as u64,
             stage_entries_specialized: counters.stage_entries_specialized.load(Ordering::Relaxed),
             stage_entries_shared: counters.stage_entries_shared.load(Ordering::Relaxed),
@@ -6506,7 +6537,7 @@ impl Device {
             ycbcr_images_kept_elements: counters.ycbcr_images_kept[4].load(Ordering::Relaxed),
             ycbcr_images_kept_reach: counters.ycbcr_images_kept[5].load(Ordering::Relaxed),
             ycbcr_images_kept_view: counters.ycbcr_images_kept[6].load(Ordering::Relaxed),
-            ycbcr_planes_bound: counters.ycbcr_planes_bound.load(Ordering::Relaxed),
+            ycbcr_planes_bound: commands(|counts| &counts.ycbcr_planes_bound),
             ycbcr_planes_images: counters.ycbcr_planes_images.load(Ordering::Relaxed),
             ycbcr_planes_images_kept_conversion: counters.ycbcr_planes_images_kept[0]
                 .load(Ordering::Relaxed),
@@ -6514,7 +6545,7 @@ impl Device {
                 .load(Ordering::Relaxed),
             ycbcr_planes_images_kept_layout: counters.ycbcr_planes_images_kept[2]
                 .load(Ordering::Relaxed),
-            ycbcr_planes_images_bound: counters.ycbcr_planes_images_bound.load(Ordering::Relaxed),
+            ycbcr_planes_images_bound: commands(|counts| &counts.ycbcr_planes_images_bound),
             ycbcr_device_conversions: counters.ycbcr_device_conversions.load(Ordering::Relaxed),
             ycbcr_device_samples: counters.ycbcr_device_samples.load(Ordering::Relaxed),
             attachment_clears_recorded: counters.attachment_clears_recorded.load(Ordering::Relaxed),
@@ -6740,12 +6771,13 @@ impl Device {
             stand_in_copies_made_at_draws: counters
                 .stand_in_copies_made_at_draws
                 .load(Ordering::Relaxed),
-            draw_shapes_made: counters.draw_shapes_made.load(Ordering::Relaxed),
-            draw_shapes_found: counters.draw_shapes_found.load(Ordering::Relaxed),
-            dispatch_shapes_made: counters.dispatch_shapes_made.load(Ordering::Relaxed),
-            dispatch_shapes_found: counters.dispatch_shapes_found.load(Ordering::Relaxed),
-            dispatch_used_resources_listed: (counters.dispatch_used_resources_listed)
-                .load(Ordering::Relaxed),
+            draw_shapes_made: commands(|counts| &counts.draw_shapes_made),
+            draw_shapes_found: commands(|counts| &counts.draw_shapes_found),
+            dispatch_shapes_made: commands(|counts| &counts.dispatch_shapes_made),
+            dispatch_shapes_found: commands(|counts| &counts.dispatch_shapes_found),
+            dispatch_used_resources_listed: commands(|counts| {
+                &counts.dispatch_used_resources_listed
+            }),
             resident_textures_looked_at: (counters.resident_textures_looked_at)
                 .load(Ordering::Relaxed),
             resident_resources_joined: (counters.resident_resources_joined).load(Ordering::Relaxed),
@@ -6754,28 +6786,26 @@ impl Device {
                 .load(Ordering::Relaxed),
             heap_tables_worked_out: counters.heap_tables_worked_out.load(Ordering::Relaxed),
             argument_samplers_taken: counters.argument_samplers_taken.load(Ordering::Relaxed),
-            bind_views_worked_out: counters.bind_views_worked_out.load(Ordering::Relaxed),
-            stage_tables_read: draws(|counts| &counts.stage_tables_read),
-            stage_tables_read_in_part: draws(|counts| &counts.stage_tables_read_in_part),
-            no_copy_lies_read: counters.no_copy_lies_read.load(Ordering::Relaxed),
-            commands_noted_as_before: draws(|counts| &counts.commands_noted_as_before),
-            draws_settled: counters.draws_settled.load(Ordering::Relaxed),
-            two_plane_draws: counters.two_plane_draws.load(Ordering::Relaxed),
-            provoking_last_pipeline_draws: draws(|counts| &counts.provoking_last_pipeline_draws),
-            provoking_listed_draws: counters.provoking_listed_draws.load(Ordering::Relaxed),
-            device_wide_line_draws: counters.device_wide_line_draws.load(Ordering::Relaxed),
-            line_band_draws: counters.line_band_draws.load(Ordering::Relaxed),
-            nearest_width_line_draws: counters.nearest_width_line_draws.load(Ordering::Relaxed),
-            gathered_draws: counters.gathered_draws.load(Ordering::Relaxed),
-            bounded_run_draws: counters.bounded_run_draws.load(Ordering::Relaxed),
+            bind_views_worked_out: commands(|counts| &counts.bind_views_worked_out),
+            stage_tables_read: commands(|counts| &counts.stage_tables_read),
+            stage_tables_read_in_part: commands(|counts| &counts.stage_tables_read_in_part),
+            no_copy_lies_read: commands(|counts| &counts.no_copy_lies_read),
+            commands_noted_as_before: commands(|counts| &counts.commands_noted_as_before),
+            draws_settled: commands(|counts| &counts.draws_settled),
+            two_plane_draws: commands(|counts| &counts.two_plane_draws),
+            provoking_last_pipeline_draws: commands(|counts| &counts.provoking_last_pipeline_draws),
+            provoking_listed_draws: commands(|counts| &counts.provoking_listed_draws),
+            device_wide_line_draws: commands(|counts| &counts.device_wide_line_draws),
+            line_band_draws: commands(|counts| &counts.line_band_draws),
+            nearest_width_line_draws: commands(|counts| &counts.nearest_width_line_draws),
+            gathered_draws: commands(|counts| &counts.gathered_draws),
+            bounded_run_draws: commands(|counts| &counts.bounded_run_draws),
             bound_notices_made: counters.bound_notices_made.load(Ordering::Relaxed),
-            argument_tables_retained: counters.argument_tables_retained.load(Ordering::Relaxed),
-            argument_objects_retained: counters.argument_objects_retained.load(Ordering::Relaxed),
-            argument_tables_held_at_bind: draws(|counts| &counts.argument_tables_held_at_bind),
-            bound_offsets_moved: draws(|counts| &counts.bound_offsets_moved),
-            graphics_pipelines_looked_up: counters
-                .graphics_pipelines_looked_up
-                .load(Ordering::Relaxed),
+            argument_tables_retained: commands(|counts| &counts.argument_tables_retained),
+            argument_objects_retained: commands(|counts| &counts.argument_objects_retained),
+            argument_tables_held_at_bind: commands(|counts| &counts.argument_tables_held_at_bind),
+            bound_offsets_moved: commands(|counts| &counts.bound_offsets_moved),
+            graphics_pipelines_looked_up: commands(|counts| &counts.graphics_pipelines_looked_up),
             linear_passes_in_place: counters.linear_passes_in_place.load(Ordering::Relaxed),
             linear_passes_through_copies: counters
                 .linear_passes_through_copies
@@ -6792,50 +6822,52 @@ impl Device {
             color_group_passes: counters.color_group_passes.load(Ordering::Relaxed),
             color_group_twins: counters.color_group_twins.load(Ordering::Relaxed),
             color_group_draws_skipped: counters.color_group_draws_skipped.load(Ordering::Relaxed),
-            draw_states_recorded: draws(|counts| &counts.draw_states_recorded),
-            draws_pushing_set_zero: draws(|counts| &counts.draws_pushing_set_zero),
-            set_zero_writes_pushed: draws(|counts| &counts.set_zero_writes_pushed),
-            set_zero_equal_shape_switches: (counters.set_zero_equal_shape_switches)
-                .load(Ordering::Relaxed),
-            set_zero_writes_on_equal_shape_switches: (counters
-                .set_zero_writes_on_equal_shape_switches)
-                .load(Ordering::Relaxed),
-            set_zero_writes_if_shapes_shared: (counters.set_zero_writes_if_shapes_shared)
-                .load(Ordering::Relaxed),
-            dispatches_pushing_set_zero: (counters.dispatches_pushing_set_zero)
-                .load(Ordering::Relaxed),
-            set_zero_sets_reused: counters.set_zero_sets_reused.load(Ordering::Relaxed),
-            set_zero_sets_found: counters.set_zero_sets_found.load(Ordering::Relaxed),
-            draw_shapes_reused: counters.draw_shapes_reused.load(Ordering::Relaxed),
-            draw_shapes_carried: counters.draw_shapes_carried.load(Ordering::Relaxed),
-            draws_as_before: draws(|counts| &counts.draws_as_before),
-            draws_rebound: draws(|counts| &counts.draws_rebound),
-            resident_uses_made: draws(|counts| &counts.resident_uses_made),
-            resident_keys_settled: draws(|counts| &counts.resident_keys_settled),
-            resident_uses_gathered: draws(|counts| &counts.resident_uses_gathered),
-            resident_uses_against_fragments: draws(|counts| {
+            draw_states_recorded: commands(|counts| &counts.draw_states_recorded),
+            draws_pushing_set_zero: commands(|counts| &counts.draws_pushing_set_zero),
+            set_zero_writes_pushed: commands(|counts| &counts.set_zero_writes_pushed),
+            set_zero_equal_shape_switches: commands(|counts| &counts.set_zero_equal_shape_switches),
+            set_zero_writes_on_equal_shape_switches: commands(|counts| {
+                &counts.set_zero_writes_on_equal_shape_switches
+            }),
+            set_zero_writes_if_shapes_shared: commands(|counts| {
+                &counts.set_zero_writes_if_shapes_shared
+            }),
+            dispatches_pushing_set_zero: commands(|counts| &counts.dispatches_pushing_set_zero),
+            set_zero_sets_reused: commands(|counts| &counts.set_zero_sets_reused),
+            set_zero_sets_found: commands(|counts| &counts.set_zero_sets_found),
+            draw_shapes_reused: commands(|counts| &counts.draw_shapes_reused),
+            draw_shapes_carried: commands(|counts| &counts.draw_shapes_carried),
+            draws_as_before: commands(|counts| &counts.draws_as_before),
+            draws_rebound: commands(|counts| &counts.draws_rebound),
+            resident_uses_made: commands(|counts| &counts.resident_uses_made),
+            resident_keys_settled: commands(|counts| &counts.resident_keys_settled),
+            resident_uses_gathered: commands(|counts| &counts.resident_uses_gathered),
+            resident_uses_against_fragments: commands(|counts| {
                 &counts.resident_uses_against_fragments
             }),
-            resident_uses_against_attachments: draws(|counts| {
+            resident_uses_against_attachments: commands(|counts| {
                 &counts.resident_uses_against_attachments
             }),
-            resident_uses_noted: draws(|counts| &counts.resident_uses_noted),
-            resident_uses_unordered_writes: draws(|counts| &counts.resident_uses_unordered_writes),
-            resident_uses_indirect_reads: draws(|counts| &counts.resident_uses_indirect_reads),
-            resident_uses_geometry_writes: draws(|counts| &counts.resident_uses_geometry_writes),
-            resident_uses_geometry_checked: draws(|counts| &counts.resident_uses_geometry_checked),
-            resident_uses_again_checked: draws(|counts| &counts.resident_uses_again_checked),
-            draw_heap_parts_made: draws(|counts| &counts.draw_heap_parts_made),
-            draw_resident_textures_looked_at: draws(|counts| {
+            resident_uses_noted: commands(|counts| &counts.resident_uses_noted),
+            resident_uses_unordered_writes: commands(|counts| {
+                &counts.resident_uses_unordered_writes
+            }),
+            resident_uses_indirect_reads: commands(|counts| &counts.resident_uses_indirect_reads),
+            resident_uses_geometry_writes: commands(|counts| &counts.resident_uses_geometry_writes),
+            resident_uses_geometry_checked: commands(|counts| {
+                &counts.resident_uses_geometry_checked
+            }),
+            resident_uses_again_checked: commands(|counts| &counts.resident_uses_again_checked),
+            draw_heap_parts_made: commands(|counts| &counts.draw_heap_parts_made),
+            draw_resident_textures_looked_at: commands(|counts| {
                 &counts.draw_resident_textures_looked_at
             }),
-            host_holds_looked_up: counters.host_holds_looked_up.load(Ordering::Relaxed),
-            dispatches_settled_as_before: (counters.dispatches_settled_as_before)
-                .load(Ordering::Relaxed),
-            dispatches_planned_as_before: (counters.dispatches_planned_as_before)
-                .load(Ordering::Relaxed),
-            baked_sampler_dispatches_apart: (counters.baked_sampler_dispatches_apart)
-                .load(Ordering::Relaxed),
+            host_holds_looked_up: commands(|counts| &counts.host_holds_looked_up),
+            dispatches_settled_as_before: commands(|counts| &counts.dispatches_settled_as_before),
+            dispatches_planned_as_before: commands(|counts| &counts.dispatches_planned_as_before),
+            baked_sampler_dispatches_apart: commands(|counts| {
+                &counts.baked_sampler_dispatches_apart
+            }),
             host_deallocators_delayed: counters.host_deallocators_delayed.load(Ordering::Relaxed),
             host_import_releases_posted: (counters.host_import_releases_posted)
                 .load(Ordering::Relaxed),
@@ -7195,7 +7227,7 @@ impl Device {
             tile_pipelines_pooled: counters.tile_pipelines_pooled.load(Ordering::Relaxed),
             upload_chunks_in_device_memory: (counters.upload_chunks_in_device_memory)
                 .load(Ordering::Relaxed),
-            tile_dispatches_recorded: counters.tile_dispatches_recorded.load(Ordering::Relaxed),
+            tile_dispatches_recorded: commands(|counts| &counts.tile_dispatches_recorded),
         }
     }
 }

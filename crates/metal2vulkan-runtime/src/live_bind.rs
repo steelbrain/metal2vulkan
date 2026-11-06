@@ -100,7 +100,7 @@ use super::pipeline::{BufferForms, GraphicsState, ProgramName, Settled};
 use super::render::{KeptHeap, KeptStorage};
 use super::sampler::OwnedSampler;
 use super::shadow::ResidentShadows;
-use super::work_counts::Counters;
+use super::work_counts::Counting;
 
 /// The most bind states a device keeps for its render encoders to start from: one per encoder
 /// open at once beyond it starts empty, as every encoder did before.
@@ -527,7 +527,7 @@ impl LiveBind {
     /// `counts`, found or made).
     pub(super) fn shape(
         &mut self,
-        counts: &Counters,
+        counts: Counting<'_>,
         found: impl FnOnce(&BindState) -> Option<Arc<BindShape>>,
     ) -> Arc<BindShape> {
         if let Some(shape) = &self.shape {

@@ -1610,7 +1610,7 @@ fn texel_descriptor(
         WriteSource::YCbCrInPlace { slot } => {
             let texture = slot_texture(tables, *slot)
                 .ok_or_else(|| internal("the plan binds an unbound texture slot's planes"))?;
-            device.shared().counts.ycbcr_planes_bound();
+            device.shared().counts.thread().ycbcr_planes_bound();
             texture.planes_view()
         }
         other => Err(unexpected(other)),
@@ -1778,7 +1778,7 @@ fn image_descriptor(
             debug_assert_eq!(kept.texture.as_ptr() as usize, key.0);
             return Ok(kept.raw);
         }
-        device.shared().counts.bind_view_worked_out();
+        device.shared().counts.thread().bind_view_worked_out();
         let raw = texture.slot_view(call, view, storage, attached)?;
         if kept_views.len() == KEPT_VIEWS {
             kept_views.clear();
@@ -2034,7 +2034,7 @@ fn image_descriptor(
             let texture = slot_texture(tables, *slot)
                 .ok_or_else(|| internal("the plan binds an unbound texture slot's planes image"))?;
             let view = texture.planes_image_view()?;
-            device.shared().counts.ycbcr_planes_image_bound();
+            device.shared().counts.thread().ycbcr_planes_image_bound();
             image(view)
         }
         _ => return Err(unexpected(&write.source)),

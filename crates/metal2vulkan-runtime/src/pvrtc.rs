@@ -328,7 +328,11 @@ impl ResidentUnreadable {
         stages: RenderStages,
     ) -> impl Iterator<Item = &Texture> {
         self.find(residency, || {
-            device.shared().counts.draw_resident_textures_looked_at()
+            device
+                .shared()
+                .counts
+                .thread()
+                .draw_resident_textures_looked_at()
         });
         (self.textures.iter())
             .filter(move |(_, made)| made.intersects(stages))

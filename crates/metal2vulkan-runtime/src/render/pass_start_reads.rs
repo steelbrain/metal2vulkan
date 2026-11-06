@@ -299,7 +299,7 @@ impl PassStartReads {
         let walked = [checked, self.add_draw((uses, prefix))];
         let walked = walked.iter().filter(|walked| **walked).count() as u64;
         if walked > 0 {
-            let counts = &device.shared().counts;
+            let counts = device.shared().counts.thread();
             counts.resident_uses_against_fragments(walked * prefix.len as u64);
         }
     }

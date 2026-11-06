@@ -58,7 +58,7 @@ use crate::pipeline::{ComputePipelineState, WeakComputePipelineState};
 use crate::pvrtc::ResidentUnreadable;
 use crate::sampler::SamplerState;
 use crate::shadow::ResidentShadows;
-use crate::work_counts::Counters;
+use crate::work_counts::Counting;
 
 /// The most bind states a device keeps for its compute encoders to start from: one per encoder
 /// open at once beyond it starts empty, as every encoder did before.
@@ -142,7 +142,7 @@ impl LiveDispatch {
         maps: &SamplerMaps,
         (changed, samplers, trimmed): (u64, &[SamplerState], bool),
         function_tables: &[VisibleFunctionTable],
-        counts: &Counters,
+        counts: Counting<'_>,
     ) {
         let mut reshape = Reshape::default();
         let pipeline = tables.pipeline;
@@ -273,7 +273,7 @@ impl LiveDispatch {
     /// (counted in `counts`, found or made).
     pub(in crate::compute) fn shape(
         &mut self,
-        counts: &Counters,
+        counts: Counting<'_>,
         found: impl FnOnce(&BindState) -> Option<Arc<BindShape>>,
     ) -> Arc<BindShape> {
         if let Some(shape) = &self.shape {

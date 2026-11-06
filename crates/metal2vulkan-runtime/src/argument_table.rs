@@ -1483,7 +1483,12 @@ impl ArgumentTable {
             bound_buffer(buffer, offset, stride),
             "a buffer slot whose offset alone moved brought in otherwise than read whole"
         );
-        buffer.device().shared().counts.bound_offset_moved();
+        buffer
+            .device()
+            .shared()
+            .counts
+            .thread()
+            .bound_offset_moved();
         let a = kept.class_alignment(index, alignment);
         reshape.slot(&mut kept.buffers, index, bound, |b| b.shape(a));
     }
@@ -1745,7 +1750,7 @@ fn retain_into(
             #[cfg(debug_assertions)]
             retained.check_held(objects);
             retained.stamp = Some(stamp);
-            core.device().shared().counts.argument_table_held_at_bind();
+            core.counts().argument_table_held_at_bind();
             return;
         }
     }
@@ -1764,7 +1769,7 @@ fn retain_into(
     #[cfg(debug_assertions)]
     retained.note_retained(objects);
     if taken > 0 {
-        core.device().shared().counts.argument_table_retained(taken);
+        core.counts().argument_table_retained(taken);
     }
 }
 

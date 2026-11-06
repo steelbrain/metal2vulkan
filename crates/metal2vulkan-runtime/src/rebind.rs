@@ -715,7 +715,7 @@ impl Holds {
         if !shared.rebinds.hosted.may_hold(key) {
             return None;
         }
-        shared.counts.host_hold_looked_up();
+        shared.counts.thread().host_hold_looked_up();
         let pinned = shared.rebinds.hold(key)?;
         self.keys.push(key);
         Some(pinned)

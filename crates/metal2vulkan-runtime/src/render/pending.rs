@@ -242,7 +242,7 @@ impl PendingDraw {
                     .record(&mut bound);
                 }
             }
-            recorded.count(&shared.counts);
+            recorded.count(shared.counts.thread());
             if let Some(query) = &self.query {
                 query.end(raw, cb);
             }

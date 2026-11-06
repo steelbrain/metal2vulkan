@@ -51,7 +51,7 @@ use metal2vulkan::pipeline::{PipelineLayout, SlotRef};
 use crate::binding::PastHeap;
 use crate::error::{internal, Error};
 use crate::heap_sets;
-use crate::work_counts::Counters;
+use crate::work_counts::Counting;
 
 /// The most heap parts a [`KeptHeap`] keeps: one for each of the plans of a few pipeline states
 /// drawn in turn, or of one state's draws of each primitive type (Metal's five,
@@ -158,7 +158,7 @@ impl KeptHeap {
     /// through longest ago. Where its heap writes go: `None` for a layout without a heap.
     pub(crate) fn bring_in(
         &mut self,
-        counts: &Counters,
+        counts: Counting<'_>,
         inputs: HeapInputs<'_>,
     ) -> Result<Option<Arc<HeapElements>>, Error> {
         let capacity = heap_sets::capacity(inputs.layout);

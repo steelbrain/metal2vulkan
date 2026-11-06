@@ -48,8 +48,8 @@
 //!   uses' reads of fresh textures (`fresh_unwritten.rs`), records the kept Vulkan draw command
 //!   into the kept command buffer, keeps itself for recording again where its instance keeps draws
 //!   (`render/reroute.rs`), adds its execution record where the device keeps them, and counts
-//!   itself drawn. It takes no lock and changes no count other threads share: its counts, and
-//!   those the kept draw counted per draw, go into its thread's shard of the device's
+//!   itself drawn. It takes no lock and changes no count other encoders share: its counts, and
+//!   those the kept draw counted per draw, go into its encoder's tally of the device's
 //!   (`shards.rs`).
 //! - **Checked in builds with debug assertions.** The first draw again of a kept draw, and every
 //!   second one after it, takes every step instead, and checks that it announced nothing, recorded
@@ -293,8 +293,9 @@ impl RenderLowering {
                 return Again::Check;
             }
         }
-        let counts = &self.core.device().shared().counts;
-        counts.draw_drawn_again((kept.pushes_set_zero, kept.last_vertex));
+        self.core
+            .counts()
+            .draw_drawn_again((kept.pushes_set_zero, kept.last_vertex));
         // Its noting: its reads of fresh textures, where any texture is fresh, and what the
         // encoder made resident since (nothing: no call came).
         match kept.reads_images && self.core.observes_fresh() {

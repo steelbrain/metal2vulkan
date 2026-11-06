@@ -630,5 +630,5 @@ fn record_kept(
             }
         }
     }
-    recorded.count(&shared.counts);
+    recorded.count(shared.counts.thread());
 }

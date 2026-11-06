@@ -66,7 +66,8 @@ use super::used_resources::EncoderKind;
 use super::write_routes::Routes;
 use super::Device;
 use crate::device::functions::Vk;
-use crate::work_counts::{Begun, Counters};
+use crate::shards::Tally;
+use crate::work_counts::{Begun, Counters, Counting};
 use ash::vk;
 use metal2vulkan::bind::ReplayFaults;
 use std::any::Any;
@@ -385,6 +386,9 @@ pub(super) struct EncoderCore {
     /// The last [`ResidentPart`] it noted, by identity, and the state it noted it into
     /// ([`note_resident_part`](Self::note_resident_part)).
     resident_noted: Option<(ReachingPrefix, NotedInto)>,
+    /// The tally its commands count into while it is open (`shards.rs`), given back as it drops:
+    /// [`counts`](Self::counts).
+    tally: Tally,
     _not_sync: PhantomData<std::cell::Cell<()>>,
 }
 
@@ -579,6 +583,7 @@ impl EncoderCore {
             routes,
             resident_notes: ResidentNotes::Here,
             resident_noted: None,
+            tally: Tally::take(),
             _not_sync: PhantomData,
         })
     }
@@ -678,7 +683,7 @@ impl EncoderCore {
         }
         let stages = part.reaching.stages;
         self.note_reaching(stages, (&part.uses, &part.resident), None)?;
-        (self.device().shared().counts).resident_uses_noted(part.uses.len() as u64);
+        self.counts().resident_uses_noted(part.uses.len() as u64);
         self.resident_noted = Some((part.reaching, into));
         Ok(())
     }
@@ -724,6 +729,7 @@ impl EncoderCore {
             routes: Routes::default(),
             resident_notes: ResidentNotes::Here,
             resident_noted: None,
+            tally: Tally::take(),
             _not_sync: PhantomData,
         }
     }
@@ -731,6 +737,12 @@ impl EncoderCore {
     /// The device.
     pub(super) fn device(&self) -> &Device {
         self.open.command_buffer.device()
+    }
+
+    /// The counts its commands add, into its tally (`work_counts::CommandCounters`).
+    #[inline]
+    pub(super) fn counts(&self) -> Counting<'_> {
+        self.device().shared().counts.of(&self.tally)
     }
 
     /// Set 0 of a command of `objects`'s variant that writes `writes` (set 0's), and `offsets`, the
@@ -763,12 +775,12 @@ impl EncoderCore {
         let layout = objects.set_zero_layout();
         if let Some(layout) = layout {
             if let Some(set) = self.last_set_zero.holds(layout, writes) {
-                self.device().shared().counts.set_zero_set_reused();
+                self.counts().set_zero_set_reused();
                 return Ok((Some(set), None));
             }
             let found = (self.command_buffer().state().descriptors).find(layout, writes);
             if let Some(set) = found {
-                self.device().shared().counts.set_zero_set_found();
+                self.counts().set_zero_set_found();
                 self.last_set_zero.keep(layout, set, writes);
                 return Ok((Some(set), None));
             }
@@ -900,7 +912,7 @@ impl EncoderCore {
             return Ok(None);
         };
         self.joined(held, uses);
-        self.device().shared().counts.gathered_draw();
+        self.counts().gathered_draw();
         Ok(Some(list))
     }
 
@@ -930,7 +942,7 @@ impl EncoderCore {
             return Ok(None);
         };
         self.joined(held, uses);
-        self.device().shared().counts.gathered_draw();
+        self.counts().gathered_draw();
         Ok(Some(list))
     }
 
@@ -958,7 +970,7 @@ impl EncoderCore {
             return Ok(None);
         };
         self.joined(held, uses);
-        self.device().shared().counts.gathered_draw();
+        self.counts().gathered_draw();
         Ok(Some(list))
     }
 
@@ -988,7 +1000,7 @@ impl EncoderCore {
             return Ok(None);
         };
         self.joined(held, uses);
-        self.device().shared().counts.bounded_run_draw();
+        self.counts().bounded_run_draw();
         Ok(Some(slot))
     }
 
@@ -1512,7 +1524,7 @@ impl EncoderCore {
         // Read before the host aliases' uses are worked out, so a change made since counts.
         let into = self.noted_into();
         if noted.holds(stages, (uses, resident), into) {
-            self.device().shared().counts.command_noted_as_before();
+            self.counts().command_noted_as_before();
             return Ok(());
         }
         let fresh = noted.fresh(uses, into);
@@ -1566,7 +1578,7 @@ impl EncoderCore {
         // Read before the host aliases' uses are worked out, so a change made since counts.
         let into = self.noted_into();
         if noted.holds_draw(stages, (uses, resident, prefix), into) {
-            self.device().shared().counts.command_noted_as_before();
+            self.counts().command_noted_as_before();
             return Ok(());
         }
         let fresh = noted.fresh_draw((uses, prefix.prefix), into);
@@ -1579,7 +1591,7 @@ impl EncoderCore {
         // The uses of what the encoder made resident it walked: recorded whole (`fresh_draw`
         // gave them all), or touched.
         if touched == 0 || recorded == uses.len() {
-            (self.device().shared().counts).resident_uses_noted(len as u64);
+            self.counts().resident_uses_noted(len as u64);
         }
         Ok(())
     }

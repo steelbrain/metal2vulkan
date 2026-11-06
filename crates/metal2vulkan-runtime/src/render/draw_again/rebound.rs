@@ -39,7 +39,7 @@
 //!   values this draw sets, as every compare would answer; its tables' new objects
 //!   and its new samplers retained; and the rest as a draw again: kept for recording again (but
 //!   where it met a notice met at each occurrence, as its every step forgets it then), its
-//!   execution record, its counts into its thread's shard of the device's (`shards.rs`).
+//!   execution record, its counts into its encoder's tally of the device's (`shards.rs`).
 //! - **Checked in builds with debug assertions.** As a draw again is: the first rebound draw of a
 //!   kept draw and every second after it work out the rebind, then take every step instead, which
 //!   must keep the draw, with the same commands, set-0 writes, dynamic offsets, push bytes, vertex
@@ -323,7 +323,7 @@ impl RenderLowering {
             .read(stamps, (interface, || pipeline.held()), &maps, moved);
         // Read now, whatever the draw does next: a draw that takes every step from here finds
         // them read, as the draw rebound does.
-        (self.core.device().shared().counts).tables_read_in_part(read);
+        self.core.counts().tables_read_in_part(read);
         let reshaped = reshape.may_reshape();
         live.reshaped(reshape);
         (!reshaped).then_some(changed)
@@ -443,7 +443,7 @@ impl RenderLowering {
         }
         let made = live.uses.made() as u64;
         if !patched {
-            let counts = &self.core.device().shared().counts;
+            let counts = self.core.counts();
             if made > 0 {
                 counts.resident_uses_made(made);
             }
@@ -485,7 +485,7 @@ impl RenderLowering {
         // Nor a detached buffer, a draw of which records nothing (`EncoderCore::skips`).
         let uses = &live.uses;
         let named = (uses.iter().map(|used| used.key)).filter(|key| !uses.resident().contains(key));
-        let counts = &self.core.device().shared().counts;
+        let counts = self.core.counts();
         crate::shadow::shadow_uses(textures, uses).is_empty()
             && match uses.prefix() {
                 None => self.current.geometry_writes.barrier_before(uses).is_none(),
@@ -548,7 +548,7 @@ impl RenderLowering {
             None => self.unordered.add(uses),
             Some(prefix) => {
                 if self.unordered.add_draw((uses, prefix)) {
-                    (self.core.device().shared().counts).resident_uses_unordered_writes(resident);
+                    self.core.counts().resident_uses_unordered_writes(resident);
                 }
             }
         }
@@ -563,7 +563,7 @@ impl RenderLowering {
             None => self.gathering().add(&[], uses),
             Some(prefix) => {
                 if self.gathering().add_draw(&[], (uses, prefix)) {
-                    (self.core.device().shared().counts).resident_uses_gathered(prefix.len as u64);
+                    self.core.counts().resident_uses_gathered(prefix.len as u64);
                 }
             }
         }
@@ -571,7 +571,7 @@ impl RenderLowering {
             None => self.current.indirect_reads.add(uses),
             Some(prefix) => {
                 if self.current.indirect_reads.add_draw((uses, prefix)) {
-                    (self.core.device().shared().counts).resident_uses_indirect_reads(resident);
+                    self.core.counts().resident_uses_indirect_reads(resident);
                 }
             }
         }
@@ -579,7 +579,7 @@ impl RenderLowering {
             None => self.current.geometry_writes.add(uses),
             Some(prefix) => {
                 if self.current.geometry_writes.add_draw((uses, prefix)) {
-                    (self.core.device().shared().counts).resident_uses_geometry_writes(resident);
+                    self.core.counts().resident_uses_geometry_writes(resident);
                 }
             }
         }
@@ -636,7 +636,7 @@ impl RenderLowering {
         if images {
             kept.reads_images = live.uses.iter().any(super::reads_image);
         }
-        let counts = &self.core.device().shared().counts;
+        let counts = self.core.counts();
         let pushed = (recorded.states, recorded.writes_pushed);
         counts.draw_rebound((kept.pushes_set_zero, kept.last_vertex), pushed);
         recorded.count_equal_shapes(counts);

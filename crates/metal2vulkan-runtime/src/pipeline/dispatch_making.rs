@@ -165,7 +165,7 @@ impl Variant {
                 match residual {
                     // Handed to the pool: nothing waits for the making.
                     Some(made) => {
-                        counts.residual_form_making();
+                        counts.thread().residual_form_making();
                         RegionPipeline::Made(made)
                     }
                     None => RegionPipeline::Making(pending),
@@ -195,7 +195,12 @@ impl Variant {
         };
         let made = self.pipelines.made(&residual)?;
         self.first_use(&made, &residual, formats);
-        self.objects.device.shared().counts.residual_form_drawn();
+        self.objects
+            .device
+            .shared()
+            .counts
+            .thread()
+            .residual_form_drawn();
         Some(made)
     }
 

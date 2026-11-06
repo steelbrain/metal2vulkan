@@ -2335,7 +2335,7 @@ impl GraphicsState {
                 return Ok(last);
             }
         }
-        self.0.device.shared().counts.draw_settled();
+        self.0.device.shared().counts.thread().draw_settled();
         let (variant, plan) = self.settle(shape, forms)?;
         let settled = Settled {
             shape: Arc::clone(shape),
@@ -2965,10 +2965,8 @@ impl RenderVariant {
         render_pass: &Arc<RenderPassObject>,
         (state, formats): (&GraphicsState, crate::degradation::BoundFormats<'_>),
     ) -> Result<Arc<RawPipeline>, Error> {
-        self.objects
-            .device
-            .shared()
-            .counts
+        (self.objects.device.shared().counts)
+            .thread()
             .graphics_pipeline_looked_up();
         self.made_or_make(key, render_pass, (state, formats))
             .map(|(made, _)| made)
@@ -2993,7 +2991,11 @@ impl RenderVariant {
                 .graphics_pipeline(key, render_pass, (state, formats))
                 .map(DrawPipeline::Made);
         }
-        device.shared().counts.graphics_pipeline_looked_up();
+        device
+            .shared()
+            .counts
+            .thread()
+            .graphics_pipeline_looked_up();
         Ok(match self.pipelines.begin_at(key) {
             (Begun::Made(made), _) => DrawPipeline::Made(made),
             (Begun::Pending(pending), _) => DrawPipeline::Making(pending),
@@ -3226,7 +3228,11 @@ impl RenderVariant {
         if let Some(made) = self.last_made(state, key) {
             return (DrawPipeline::Made(made), true);
         }
-        device.shared().counts.graphics_pipeline_looked_up();
+        device
+            .shared()
+            .counts
+            .thread()
+            .graphics_pipeline_looked_up();
         let key = &key.key();
         match self.pipelines.begin_at(key) {
             (Begun::Made(made), at) => {
@@ -3239,7 +3245,7 @@ impl RenderVariant {
             // (`render/residual.rs`).
             (Begun::Pending(pending), _) => match self.general_made(key) {
                 Some(drawn) => {
-                    device.shared().counts.residual_form_drawn();
+                    device.shared().counts.thread().residual_form_drawn();
                     (DrawPipeline::Made(drawn), false)
                 }
                 None => (DrawPipeline::Making(pending), false),
@@ -3250,8 +3256,8 @@ impl RenderVariant {
                     // and nothing waits for the making (`render/residual.rs`).
                     DrawPipeline::Making(pending) => match self.general_made(key) {
                         Some(drawn) => {
-                            device.shared().counts.residual_form_making();
-                            device.shared().counts.residual_form_drawn();
+                            device.shared().counts.thread().residual_form_making();
+                            device.shared().counts.thread().residual_form_drawn();
                             (DrawPipeline::Made(drawn), false)
                         }
                         None => (DrawPipeline::Making(pending), false),
@@ -3281,7 +3287,11 @@ impl RenderVariant {
         if let Some(made) = self.last_made(state, key) {
             return Ok((made, true));
         }
-        device.shared().counts.graphics_pipeline_looked_up();
+        device
+            .shared()
+            .counts
+            .thread()
+            .graphics_pipeline_looked_up();
         let key = &key.key();
         if let Some((made, at)) = self.pipelines.made_with_at(key) {
             self.keep_last(state, key, at);
