@@ -462,8 +462,9 @@ fn argument_buffer_samplers_are_one_fewer_than_the_array_and_the_sampler_limit()
         ("lunarg-desktop-baseline-2023", 15),
         ("vk12-floor", 0),
     ];
+    let profiles = committed_descriptions();
     let mut answers = BTreeMap::new();
-    for (stem, desc) in &committed_descriptions() {
+    for (stem, desc) in &profiles {
         let (enabled, p) = created(stem, desc);
         let compile = Device::new(enabled, DevicePolicy::UNTRUSTED).unwrap();
         let elements = heap_sampler_capacity(compile.profile());
