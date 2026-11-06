@@ -1578,7 +1578,7 @@
         "new_buffer_bytes_cleared": 1440,
         "object_churn.buffers_evicted": 19,
         "object_churn.buffers_parked": 18,
-        "object_churn.buffers_recycled": 18,
+        "object_churn.buffers_recycled": 13,
         "object_churn.images_evicted": 3,
         "object_churn.images_own_memory": 3,
         "object_churn.images_parked": 3,

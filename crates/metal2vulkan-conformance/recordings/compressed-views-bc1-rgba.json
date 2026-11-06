@@ -1030,7 +1030,6 @@
         "slot_returns": 30,
         "spare_command_pools_taken": 30,
         "submit_infos": 30,
-        "submit_stalls_on_work": 1,
         "trail_waits": 30,
         "wakes_completion_waiters": 30,
         "wakes_spared": 210

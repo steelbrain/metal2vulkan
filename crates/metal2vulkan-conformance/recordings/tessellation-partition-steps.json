@@ -753,7 +753,7 @@
         "gate_waits": 1,
         "gate_waits_slept": 1,
         "graphics_pipelines_looked_up": 8,
-        "heads_held_for_host_steps": 11,
+        "heads_held_for_host_steps": 10,
         "heap_tables_worked_out": 16,
         "host_steps_recorded": 1,
         "linked_use_questions_asked": 24,
