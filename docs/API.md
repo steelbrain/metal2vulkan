@@ -4312,6 +4312,15 @@ each item named states the rule in full.
     tile state then answered 16 after a 4x4 one, and its 8x8 dispatch ran no thread. A compute
     state of the same `MTLFunction` answered 16 after a 4x4x1 state, with an 8x8x1 size and with
     none, where the runtime's answers 64 and the compiled limit.
+- **A reset compute pipeline descriptor is a fresh one**, every field at its default:
+  `ComputePipelineDescriptor::new` stands for `reset`, as `MTLComputePipeline.h` documents it
+  ("Restore all compute pipeline descriptor properties to their default values", and of
+  `maxTotalThreadsPerThreadgroup`, "If it is not set, returns zero"). Metal's `reset` on the M3
+  Max (macOS 27.0.1) restores every other field and keeps three as the program set them:
+  `threadGroupSizeIsMultipleOfThreadExecutionWidth`, `maxTotalThreadsPerThreadgroup` and
+  `requiredThreadsPerThreadgroup` (true, 96 and 8 by 6 by 2 in `compute-descriptor-reset`, where
+  the runtime answers false, 0 and 0 by 0 by 0). The tile and mesh render pipeline descriptors'
+  resets restore every field on the same machine.
 
 **Mesh render pipelines**
 

@@ -38,13 +38,13 @@ Its limits, measured rather than asserted:
 | of the reachable, exercised by the suite's Metal leg | 811 |
 | of the reachable, not exercised | 163 |
 | share of the reachable exercised | 83% |
-| of those exercised, no case reaching it loosens anything | 591 |
-| of those exercised, a case reaching it loosens some site | 220 |
+| of those exercised, no case reaching it loosens anything | 570 |
+| of those exercised, a case reaching it loosens some site | 241 |
 | case modules | 158 |
 | committed recordings | 1228 |
 | distinct SDK items the Metal leg reaches, of any status | 819 |
 | of those, reached only where this cannot name the family | 3 |
-| ledger rows (a case whose gap is recorded) | 2626 |
+| ledger rows (a case whose gap is recorded) | 2621 |
 | declared crossings of the option space (pairs put to Metal at once) | 26 |
 | declared crossings that are no pair of it (a boolean or numeric field, or one type in two slots) | 30 |
 
@@ -535,8 +535,8 @@ An implemented container no case's Metal leg touches. These are the families of 
 | cases whose Metal answer is `metal_run` | 1144 |
 | cases whose Metal answer is `carried` | 80 |
 | cases whose Metal answer is `never_returned` | 4 |
-| modules that loosen a measured value | 10 |
-| tolerances in all | 10 |
+| modules that loosen a measured value | 11 |
+| tolerances in all | 11 |
 | modules declaring a notice (loosening no value) | 124 |
 | loosenings used | `Unchecked`, `Absolute`, `AnyOf`, `Nonzero` |
 | justifications named | `Degradation`, `AcceptedDifference`, `WithoutCompression` |
@@ -583,7 +583,7 @@ Each case module: the cases it holds, the `Side` methods it calls, and how many 
 | `compressed_views` | 14 | 14 | every field | 48 |
 | `compute_encoder_commands` | 8 | 8 | every field | 65 |
 | `compute_heap_residency` | 1 | 1 | every field | 58 |
-| `compute_pipeline_descriptors` | 3 | 3 | every field | 24 |
+| `compute_pipeline_descriptors` | 3 | 3 | 1 tolerance(s): `AcceptedDifference` | 24 |
 | `compute_render_chains` | 3 | 3 | every field | 150 |
 | `compute_threadgroups` | 2 | 1 | every field | 28 |
 | `denormal_word_fetches` | 1 | 1 | every field | 43 |
@@ -2237,11 +2237,6 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `discard-quad-sum-placement` | Metal counts the quads the discard drops whole in a simdgroup sum that sits ahead of the discard for a measured reason -- the discard's condition reads the sum … |
 | `discard-quad-sum-placement` | Metal counts the quads the discard drops whole in a simdgroup sum that sits ahead of the discard for a measured reason -- the discard's condition reads the sum … |
 | `argb8-targets-destination-alpha` | Plain Metal on this M3 Max makes and runs a render pipeline whose ARGB8Unorm colour attachment blends with DestinationAlpha and OneMinusDestinationAlpha in the … |
-| `compute-descriptor-reset` | Metal's `MTLComputePipelineDescriptor.reset` is PARTIAL. Measured on this M3 Max (macOS 27.0.1, build 26A434), from `compute-descriptor-reset`'s own committed r… |
-| `compute-descriptor-reset` | Metal's `MTLComputePipelineDescriptor.reset` is PARTIAL. Measured on this M3 Max (macOS 27.0.1, build 26A434), from `compute-descriptor-reset`'s own committed r… |
-| `compute-descriptor-reset` | Metal's `MTLComputePipelineDescriptor.reset` is PARTIAL. Measured on this M3 Max (macOS 27.0.1, build 26A434), from `compute-descriptor-reset`'s own committed r… |
-| `compute-descriptor-reset` | Metal's `MTLComputePipelineDescriptor.reset` is PARTIAL. Measured on this M3 Max (macOS 27.0.1, build 26A434), from `compute-descriptor-reset`'s own committed r… |
-| `compute-descriptor-reset` | Metal's `MTLComputePipelineDescriptor.reset` is PARTIAL. Measured on this M3 Max (macOS 27.0.1, build 26A434), from `compute-descriptor-reset`'s own committed r… |
 | `binary-archive-mesh-adder` | `BinaryArchive` has three of Metal's four pipeline adders: `addMeshRenderPipelineFunctionsWithDescriptor:error:` has no counterpart at all. Metal takes the call… |
 | `binary-archive-sources` | Metal accepts a **metallib** as a binary archive and we refuse it. Measured on this M3 Max (macOS 27.0.1) from this case's own committed recording over three ru… |
 | `attribute-stride-buffer` | Metal's `MTLAttributeStrideStatic` on a `[[stage_in]]` layout of `MTLBufferLayoutStrideDynamic` is not "read at stride 0"; it fetches the element at the bind of… |

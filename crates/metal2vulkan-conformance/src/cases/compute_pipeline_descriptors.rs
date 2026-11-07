@@ -39,7 +39,11 @@
 //! # Exactness
 //!
 //! Every field is a number, a bool, a name or an ordinal. The family declares no tolerance and
-//! announces nothing: no case touches a texture, a sampler, a float or the GPU.
+//! announces nothing: no case touches a texture, a sampler, a float or the GPU. The one loosening
+//! is `compute-descriptor-reset`'s three thread-shape facts, which Metal's `reset` keeps on the M3
+//! Max where the runtime's fresh descriptor answers the defaults its header documents: each may be
+//! that default alone, under the accepted difference `docs/API.md` section 10 carries for it
+//! ([`RESET_IS_ACCEPTED`]).
 //!
 //! Four items are compared **at their default alone** — `binaryArchives`, the two spellings of the
 //! preloaded libraries and `linkedFunctions` — because the runtime takes each of them somewhere
@@ -53,12 +57,13 @@
 //! each makes one library, one function of it, and a descriptor it reads and drops. The one setter
 //! of Metal's that can end a process here is `setLabel:` with nil, which no shape sends.
 
+use crate::allowance::{Allowance, Justification, Loosening};
 use crate::case::{Abort, Case, Failure, Input, MetalSource, Side};
 use crate::compute_descriptors::DescriptorSpec;
 use crate::fixture::{Fixture, METAL_TEXT, RUNTIME_TEXT};
 use crate::recording::ShaderRef;
 use crate::render_descriptors::Shape;
-use crate::transcript::{Digest, Node, Observed, Sites};
+use crate::transcript::{Digest, Node, Observed, Sites, Value};
 
 /// The site the library's make sits at.
 const LIBRARY: &str = "library";
@@ -70,6 +75,28 @@ const FACTS: &str = "facts";
 /// [`crate::cases::pipeline_facts`] also borrows, so this family needs no fixture of its own.
 const FIXTURE: &str = "a27_ob1_threadgroup";
 const KERNEL: &str = "ob1_threadgroup";
+
+/// The bold lead-in of the accepted difference in `docs/API.md` section 10 that a reset
+/// descriptor's thread shape rests on: the runtime's `reset` is a fresh descriptor, as
+/// `MTLComputePipeline.h` documents it, where Metal's on the M3 Max (macOS 27.0.1) keeps the three
+/// thread-shape properties the program set. The slug of these words must be an entry of the
+/// document or the case fails.
+pub const RESET_IS_ACCEPTED: &str = "A reset compute pipeline descriptor is a fresh one";
+
+/// The thread-shape facts Metal's `reset` keeps, under [`FACTS`], with the default the runtime's
+/// fresh descriptor answers at each.
+fn kept_by_metals_reset() -> [(&'static str, Value); 5] {
+    [
+        (
+            "threadgroup_size_is_multiple_of_execution_width",
+            Value::Bool(false),
+        ),
+        ("max_total_threads_per_threadgroup", Value::Uint(0)),
+        ("required_threads_per_threadgroup/width", Value::Uint(0)),
+        ("required_threads_per_threadgroup/height", Value::Uint(0)),
+        ("required_threads_per_threadgroup/depth", Value::Uint(0)),
+    ]
+}
 
 /// A case over one compute pipeline descriptor's own facts.
 pub struct ComputeDescriptorCase {
@@ -117,6 +144,23 @@ impl Case for ComputeDescriptorCase {
 
     fn metal_source(&self) -> MetalSource {
         MetalSource::Run
+    }
+
+    fn allowances(&self) -> Vec<Allowance> {
+        if !matches!(self.spec.shape, Shape::Reset) {
+            return Vec::new();
+        }
+        let justified = Justification::accepted(crate::allowance::accepted_slug(RESET_IS_ACCEPTED));
+        kept_by_metals_reset()
+            .into_iter()
+            .map(|(site, default)| {
+                Allowance::new(
+                    format!("case/{FACTS}/{site}"),
+                    Loosening::AnyOf(vec![default]),
+                    justified.clone(),
+                )
+            })
+            .collect()
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {
@@ -204,6 +248,55 @@ mod tests {
             numbers.len(),
             "two stated numbers are equal, so a crossed getter would pass: {numbers:?}"
         );
+    }
+
+    /// The reset case alone loosens anything: each of the three thread-shape facts Metal's `reset`
+    /// keeps, to the default the runtime's fresh descriptor answers there, under an entry
+    /// `docs/API.md` section 10 holds; the defaults and the stated shapes compare exactly.
+    #[test]
+    fn only_the_reset_loosens_and_only_the_kept_thread_shape() {
+        let entry = crate::allowance::accepted_slug(RESET_IS_ACCEPTED);
+        assert!(
+            crate::allowance::accepted_differences().contains(&entry),
+            "docs/API.md section 10 holds no entry {entry}"
+        );
+        for case in all() {
+            let allowances = case.allowances();
+            if !matches!(case.spec.shape, Shape::Reset) {
+                assert!(allowances.is_empty(), "{}", case.name());
+                continue;
+            }
+            let paths: Vec<&str> = allowances.iter().map(|a| a.path.as_str()).collect();
+            assert_eq!(
+                paths,
+                [
+                    "case/facts/threadgroup_size_is_multiple_of_execution_width",
+                    "case/facts/max_total_threads_per_threadgroup",
+                    "case/facts/required_threads_per_threadgroup/width",
+                    "case/facts/required_threads_per_threadgroup/height",
+                    "case/facts/required_threads_per_threadgroup/depth",
+                ]
+            );
+            for allowance in &allowances {
+                assert_eq!(
+                    allowance.justified_by,
+                    Justification::AcceptedDifference(entry.clone()),
+                    "{}",
+                    allowance.path
+                );
+                // Metal's kept value is outside it, so the allowance takes the default alone.
+                let Loosening::AnyOf(values) = &allowance.loosening else {
+                    panic!("{}: {:?}", allowance.path, allowance.loosening);
+                };
+                assert_eq!(values.len(), 1, "{}", allowance.path);
+                assert!(
+                    !allowance.within(&values[0], &Value::Uint(96))
+                        && !allowance.within(&values[0], &Value::Bool(true)),
+                    "{}",
+                    allowance.path
+                );
+            }
+        }
     }
 
     /// Every buffer slot the stated table names is inside the bound the facts are read over, so a
