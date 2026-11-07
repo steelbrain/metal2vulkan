@@ -46,16 +46,16 @@
 //! `self_reads` is the consumer's guest's self-read shape (its `selfread` probe): one command
 //! buffer a frame of one render pass over a [`SELF_SIZE`] `BGRA8Unorm` target (a surface over host
 //! pages, as the guest's framebuffer is, its rows 64-byte aligned as IOSurface lays them out, on a
-//! device of each setting of `host_page_textures`; or a private texture), loaded but in the first frame,
-//! which clears it, and stored; [`SELF_PAIRS`] times a fill of a [`SELF_RECT`] rectangle, a memory
-//! barrier over the render targets and a draw over the same rectangle that reads the target at
-//! its own pixels (`tob_read`), through no scissor; each target also without the barriers and
+//! device of each setting of `host_page_textures`; or a private texture), loaded but in the first
+//! frame, which clears it, and stored; [`SELF_PAIRS`] times a fill of a [`SELF_RECT`] rectangle, a
+//! memory barrier over the render targets and a draw over the same rectangle that reads the target
+//! at its own pixels (`tob_read`), through no scissor; each target also without the barriers and
 //! readers, the baseline. Printed per case (`SELF-READ-COST`): the GPU time per frame, and per
 //! frame the splits, snapshots, render pass instances begun, shadow copies, texels copied in
 //! (and of them those of a surface's shadow copied in again), keeps and their texels, merges, the
 //! shadows made of render targets over host pages and the textures in place over them (once the
-//! device's in-place check answered, each line and its time printed, `SELF-READ-CHECK`), and the images made
-//! with feedback loop usage.
+//! device's in-place check answered, each line and its time printed, `SELF-READ-CHECK`), and the
+//! images made with feedback loop usage.
 //!
 //! Ignored by default: measurements, not checks. Run them by name with `--run-ignored all`.
 

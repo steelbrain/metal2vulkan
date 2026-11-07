@@ -30,9 +30,9 @@
 //!   textures that render, where the check shows a pass's load and store and the feedback loop
 //!   moves leaving every byte alone too, whatever a linear image costs the GPU: a texture over the
 //!   caller's pages is the GPU's to work on there, as a Mac's GPU works on them. The check
-//!   (`in_place_check.rs`) runs once per driver and its version, per memory class ([`PagesClass`]) and
-//!   access ([`Access`]), and its verdicts are kept in the shader cache's content records
-//!   ([`record_name`]); a class and access it did not pass keep the shadow.
+//!   (`in_place_check.rs`) runs once per driver and its version, per memory class
+//!   ([`PagesClass`]) and access ([`Access`]), and its verdicts are kept in the shader cache's
+//!   content records ([`record_name`]); a class and access it did not pass keep the shadow.
 //! - **Which textures** ([`in_place`]): those whose declared usage (as Metal reports it, an
 //!   `Unknown` one every usage) has neither `ShaderWrite` nor `ShaderAtomic`, under
 //!   `HostPageTexturePolicy::InPlace`, over a class whose check passed for the texture's access
