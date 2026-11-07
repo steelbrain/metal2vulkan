@@ -17,7 +17,7 @@ use crate::library::FunctionCompileKey;
 use crate::pipeline::artifact::{Reconvergence, StrategyCensus};
 use crate::pipeline::interface::{StageDescriptor, StageSpec};
 use crate::pipeline::stage_io::{
-    Interpolation, IoNumeric, IoRole, IoType, IoVariable, Sampling, StageIo,
+    Interpolation, IoNumeric, IoRole, IoType, IoVariable, Sampling, StageBuiltin, StageIo,
 };
 use crate::pipeline::sym::{AirUserKey, CombinedSampler, PushField, SamplerRef, SyntheticBinding};
 use crate::spirv::builder::ModuleBuilder;
@@ -97,7 +97,20 @@ pub(super) fn res(stage: Stage, kind: ResourceKind, index: u32) -> ResourceSlot 
     ResourceSlot { stage, kind, index }
 }
 
-/// A stage interface with no slots, push fields, or stage IO and these link symbols.
+/// `io` with a vertex stage's position written, as every vertex function a rasterizing pipeline
+/// takes writes it (the link refuses one without, `DescriptorError::RasterizedVoidVertex`); any
+/// other stage's as it is.
+pub(super) fn positioned(stage: Stage, mut io: StageIo) -> StageIo {
+    let writes = (io.builtins.iter()).any(|b| matches!(b, StageBuiltin::Position { .. }));
+    if stage == Stage::Vertex && !writes {
+        io.builtins
+            .push(StageBuiltin::Position { invariant: false });
+    }
+    io
+}
+
+/// A stage interface with no slots, push fields, or stage IO but a vertex stage's position, and
+/// these link symbols.
 pub(super) fn iface(
     stage: Stage,
     descriptors: Vec<StageDescriptor>,
@@ -112,7 +125,7 @@ pub(super) fn iface(
         spec,
         needs_pointer_translation: false,
         needs_handle_translation: false,
-        io: Default::default(),
+        io: positioned(stage, StageIo::default()),
         tessellation: None,
         writes_memory: false,
         mesh_records: None,
@@ -167,7 +180,7 @@ pub(super) fn from_module(stage: Stage, m: TypedModule, io: StageIo) -> Function
     let s = contract::stage_symbols(&m, &io).expect("contract");
     let module = serialize(m).expect("serialize");
     let mut i = iface(stage, s.descriptors, s.spec);
-    i.io = io;
+    i.io = positioned(stage, io);
     artifact(i, Some(module))
 }
 
@@ -664,7 +677,7 @@ fn a_mesh_pipeline_takes_its_stages_in_order() {
 /// An artifact of `stage` with no slots and stage IO `io`.
 fn with_io(stage: Stage, io: StageIo) -> FunctionArtifact {
     let mut i = iface(stage, vec![], vec![]);
-    i.io = io;
+    i.io = positioned(stage, io);
     artifact(i, None)
 }
 
