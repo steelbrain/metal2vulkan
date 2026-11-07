@@ -44,7 +44,7 @@ Its limits, measured rather than asserted:
 | committed recordings | 1229 |
 | distinct SDK items the Metal leg reaches, of any status | 820 |
 | of those, reached only where this cannot name the family | 3 |
-| ledger rows (a case whose gap is recorded) | 3014 |
+| ledger rows (a case whose gap is recorded) | 2998 |
 | declared crossings of the option space (pairs put to Metal at once) | 26 |
 | declared crossings that are no pair of it (a boolean or numeric field, or one type in two slots) | 30 |
 
@@ -2590,22 +2590,6 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `vertex-format-instance-step` | Metal converts a normalized vertex field as `c / (2^b - 1)`, correctly rounded, and this device's fixed-function vertex input is one ULP high: at the first diff… |
 | `vertex-format-instance-step` | A NaN of a narrow float attribute (`half`, or a small float of `FloatRG11B10`) fetched by fixed-function vertex input: Metal answers its canonical `0x7FC00000`,… |
 | `vertex-format-instance-step` | A NaN of a narrow float attribute (`half`, or a small float of `FloatRG11B10`): the first differing element is Metal 0x7FC00000 against our 0x7FC02000, the devi… |
-| `host-page-writes-kernel-store-read-only` | Metal DROPS what a shader or the blit engine writes into memory whose backing is read-only, silently and with no error, and we land the write. Metal's rule is m… |
-| `host-page-writes-kernel-store-read-only` | Metal DROPS what a shader or the blit engine writes into memory whose backing is read-only, silently and with no error, and we land the write. Metal's rule is m… |
-| `host-page-writes-kernel-store-read-only` | Metal DROPS what a shader or the blit engine writes into memory whose backing is read-only, silently and with no error, and we land the write. Metal's rule is m… |
-| `host-page-writes-kernel-store-read-only` | Metal DROPS what a shader or the blit engine writes into memory whose backing is read-only, silently and with no error, and we land the write. Metal's rule is m… |
-| `host-page-writes-visibility-read-only` | Metal DROPS what a shader or the blit engine writes into memory whose backing is read-only, silently and with no error, and we land the write. Metal's rule is m… |
-| `host-page-writes-visibility-read-only` | Metal DROPS what a shader or the blit engine writes into memory whose backing is read-only, silently and with no error, and we land the write. Metal's rule is m… |
-| `host-page-writes-visibility-read-only` | Metal DROPS what a shader or the blit engine writes into memory whose backing is read-only, silently and with no error, and we land the write. Metal's rule is m… |
-| `host-page-writes-visibility-read-only` | Metal DROPS what a shader or the blit engine writes into memory whose backing is read-only, silently and with no error, and we land the write. Metal's rule is m… |
-| `pass-sequence-color-actions` | Metal's `MTLStoreActionDontCare` leaves the attachment holding the texels it held BEFORE the pass, and we leave what the pass rendered. Metal's answer is this c… |
-| `pass-sequence-color-actions` | Metal's `MTLStoreActionDontCare` leaves the attachment holding the texels it held BEFORE the pass, and we leave what the pass rendered. Metal's answer is this c… |
-| `pass-sequence-color-actions` | Metal's `MTLStoreActionDontCare` leaves the attachment holding the texels it held BEFORE the pass, and we leave what the pass rendered. Metal's answer is this c… |
-| `pass-sequence-color-actions` | Metal's `MTLStoreActionDontCare` leaves the attachment holding the texels it held BEFORE the pass, and we leave what the pass rendered. Metal's answer is this c… |
-| `pass-sequence-color-actions` | Metal's `MTLStoreActionDontCare` leaves the attachment holding the texels it held BEFORE the pass, and we leave what the pass rendered. Metal's answer is this c… |
-| `pass-sequence-color-actions` | Metal's `MTLStoreActionDontCare` leaves the attachment holding the texels it held BEFORE the pass, and we leave what the pass rendered. Metal's answer is this c… |
-| `pass-sequence-color-actions` | Metal's `MTLStoreActionDontCare` leaves the attachment holding the texels it held BEFORE the pass, and we leave what the pass rendered. Metal's answer is this c… |
-| `pass-sequence-color-actions` | Metal's `MTLStoreActionDontCare` leaves the attachment holding the texels it held BEFORE the pass, and we leave what the pass rendered. Metal's answer is this c… |
 | `pixel-samplers-rgba16f-nearest-border` | Metal's 800 sampled results of this case's `norm` source digest to one value and ours to another; the row holds both. `norm` is the case's control: a normalized… |
 | `pixel-samplers-rgba16f-nearest-edge` | Metal's 800 sampled results of this case's `norm` source digest to one value and ours to another; the row holds both. `norm` is the case's control: a normalized… |
 | `pixel-samplers-rgba16f-nearest-zero` | Metal's 800 sampled results of this case's `norm` source digest to one value and ours to another; the row holds both. `norm` is the case's control: a normalized… |

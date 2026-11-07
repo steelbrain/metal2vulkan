@@ -1941,15 +1941,18 @@ bound.
   overflow Apple's tiler leaves the rendered texels, which no call can predict or detect), and the
   runtime gives the buffer's bytes, exactly, through an image the pass copies nothing back from
   (`dont-care-stand-in` below, or the texture's shadow), or by handing the attachment to Metal's
-  own `DontCare` where the driver stores it so. Nor a texture's own image stored `DontCare`:
-  Metal leaves its earlier texels (an M3 Max, the pass's clear and draws both gone, under every
-  load action), and the runtime gives them, exactly, through a backing of the attachment's shape
-  its queue keeps, into which a `Load` copies the texels over the render area first and from
-  which nothing is copied back, or by handing the attachment to Metal's own `DontCare`; it is
-  counted (`WorkCounts::kept_texels_passes`) and not announced. Only where the pass cannot (a
-  draw took a view of the texture's own image before its store action was known, the pass
-  executes render commands, the attachment is resolved, or the device copies or makes no image
-  of the format) does the pass render in place, announced so. Cost:
+  own `DontCare` where the driver stores it so. A texture's own image stored `DontCare`, of which
+  Metal leaves the earlier texels (an M3 Max, the pass's clear and draws both gone, under every
+  load action), is stored as the driver stores it under the default policy and announced so, but
+  where the pass hands it to Metal's own `DontCare` (MoltenVK). Under
+  `DevicePolicy::dont_care_colors = DontCareColorPolicy::Kept` (`DevicePolicy::exact_answers()`)
+  the runtime gives the earlier texels, exactly, through a backing of the attachment's shape its
+  queue keeps, into which a `Load` copies the texels over the render area first and from which
+  nothing is copied back; such a pass is counted (`WorkCounts::kept_texels_passes`) and not
+  announced (docs/FAST-PATHS.md). Only where the pass cannot (a draw took a view of the texture's
+  own image before its store action was known, the pass executes render commands, the attachment
+  is resolved, or the device copies or makes no image of the format) does the pass render in
+  place, announced so. Cost:
   the attachment's texels after the pass are each its earlier texel or the one the pass rendered,
   both Metal's answers, but not always the one Metal's tiler keeps. Within Metal's contract:
   `MTLStoreAction.dontCare` lets the GPU leave arbitrary data ("You need to assume that GPU
@@ -4098,12 +4101,13 @@ each item named states the rule in full.
 **Render passes**
 
 - **A texture over a buffer that a pass stores `DontCare` keeps the buffer's bytes**, in every
-  texel, with or without memory barriers between the pass's draws, **and a texture's own image
-  keeps its earlier texels**: Metal's answer, but that the first pass in a process to overflow
-  Apple's tiler (some 2 to 4 million triangle-tile entries) leaves the rendered texels in every
-  texel, which no call can predict or detect. The runtime does not model the overflow, but where
-  it hands the attachment to Metal's own `DontCare` (MoltenVK), which decides it. A pass that
-  renders such a texture in place otherwise announces `dont-care-store`.
+  texel, with or without memory barriers between the pass's draws, **and under
+  `DontCareColorPolicy::Kept` a texture's own image keeps its earlier texels**: Metal's answer,
+  but that the first pass in a process to overflow Apple's tiler (some 2 to 4 million
+  triangle-tile entries) leaves the rendered texels in every texel, which no call can predict or
+  detect. The runtime does not model the overflow, but where it hands the attachment to Metal's
+  own `DontCare` (MoltenVK), which decides it. A pass that renders such a texture in place, as
+  the default policy renders a texture's own image, otherwise announces `dont-care-store`.
 
 - **Two mesh draws of one pass with no barrier between them run in order.** Where a later draw's
   object or mesh function reads a buffer an earlier draw wrote, and no `memoryBarrier` stands

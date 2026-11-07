@@ -25,7 +25,7 @@
 use super::degrade_notices::shared_in_system_memory;
 use super::degrade_notices::{assert_made_once, forced, made_render_kinds};
 use super::{
-    buffer_with, layer_reported_nothing_at_all, read_buffer, validated_device, Messages,
+    buffer_with, layer_reported_nothing_at_all, read_buffer, validated_device_with, Messages,
     ScratchCache, WAIT,
 };
 use crate::air_library::AirLibrary;
@@ -39,8 +39,8 @@ use metal2vulkan::metal::{
 use metal2vulkan::pipeline::{ColorAttachmentDescriptor, RenderPipelineDescriptor, StageSource};
 use metal2vulkan_devtools::{engine_dir, llvm_assemble};
 use metal2vulkan_runtime::{
-    BlitOption, ClearColor, CommandQueue, Degradation, Device, Library, LoadAction, Origin,
-    PipelineOptions, Region, RenderPassDescriptor, RenderPipelineState, ResourceOptions,
+    BlitOption, ClearColor, CommandQueue, Degradation, Device, DeviceOptions, Library, LoadAction,
+    Origin, PipelineOptions, Region, RenderPassDescriptor, RenderPipelineState, ResourceOptions,
     ScissorRect, Size, StoreAction, Texture, TextureDescriptor, Viewport,
 };
 use std::collections::BTreeSet;
@@ -437,9 +437,14 @@ fn color_pass(texture: &Texture, load: LoadAction, area: [u64; 2]) -> RenderPass
 }
 
 pub(super) fn lane() -> (Messages, ScratchCache, Lane) {
+    lane_with(|_| {})
+}
+
+/// [`lane`] on a device made with the options `adjust` changes (`validated_device_with`).
+pub(super) fn lane_with(adjust: impl FnOnce(&mut DeviceOptions)) -> (Messages, ScratchCache, Lane) {
     let messages = Messages::default();
     let cache = ScratchCache::new().unwrap();
-    let device = validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
+    let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), adjust).unwrap();
     (messages, cache, Lane::new(device))
 }
 

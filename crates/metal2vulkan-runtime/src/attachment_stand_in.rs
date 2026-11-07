@@ -155,9 +155,9 @@ pub(super) enum Cause {
     /// copied into where the pass loads it and never back, so the texture keeps the samples it
     /// held before the pass, as Metal's does.
     KeptSamples,
-    /// The image a pass renders a texture's own image through where it stores it `DontCare` and
-    /// the device's own `DONT_CARE` would not leave the texture's earlier texels, which Metal
-    /// leaves (`kept_bytes.rs`): one its queue keeps for its passes of the attachment's shape
+    /// The image a pass renders a texture's own image through where it stores it `DontCare`
+    /// under `DontCareColorPolicy::Kept` and the device's own `DONT_CARE` would not leave the
+    /// texture's earlier texels, which Metal leaves (`kept_bytes.rs`): one its queue keeps for its passes of the attachment's shape
     /// ([`pooled_backing`]), copied into where the pass loads it and never back. No notice names
     /// it: the texture keeps its texels, Metal's answer.
     KeptTexels,

@@ -6,9 +6,9 @@
 //! classed, and so reaches the ledger.
 
 use crate::device::{
-    BatchOrderPolicy, CompletionPolicy, DevicePolicy, ExtendedRangeBlitPolicy, HalfChainPolicy,
-    HeapCompressionPolicy, HostPageTexturePolicy, PipelineWaitPolicy, QueueSharingPolicy,
-    RenderLoweringPolicy, WideLinePolicy,
+    BatchOrderPolicy, CompletionPolicy, DevicePolicy, DontCareColorPolicy, ExtendedRangeBlitPolicy,
+    HalfChainPolicy, HeapCompressionPolicy, HostPageTexturePolicy, PipelineWaitPolicy,
+    QueueSharingPolicy, RenderLoweringPolicy, WideLinePolicy,
 };
 use crate::pipeline::PrecisionNote;
 use std::collections::BTreeSet;
@@ -63,8 +63,8 @@ fn choices() -> Vec<Choice> {
         // encoder's calls are lowered, what holds a sampled texture over host pages, whether and
         // how long a pipeline being made is waited for (the bounds' values:
         // `the_ledger_states_the_pipeline_wait_bounds`), which lines draw a wide line, what a
-        // blit through a compressed extended-range texture writes, and which `VkQueue` a command
-        // queue submits to.
+        // blit through a compressed extended-range texture writes, which `VkQueue` a command
+        // queue submits to, and what a colour attachment stored `DontCare` keeps.
         heap_compression: _,
         completion: _,
         batch_order: _,
@@ -76,6 +76,7 @@ fn choices() -> Vec<Choice> {
         wide_lines: _,
         extended_range_blits: _,
         queue_sharing: _,
+        dont_care_colors: _,
         // The translator's: how a `half` chain rounds without `shaderFloat16`.
         half_chains: _,
     } = p;
@@ -90,6 +91,7 @@ fn choices() -> Vec<Choice> {
         choice!(p.wide_lines: WideLinePolicy { Device, Exact }),
         choice!(p.extended_range_blits: ExtendedRangeBlitPolicy { Kept, Canonical }),
         choice!(p.queue_sharing: QueueSharingPolicy { Adaptive, PerQueue }),
+        choice!(p.dont_care_colors: DontCareColorPolicy { Driver, Kept }),
     ]
 }
 
@@ -603,6 +605,38 @@ fn exact_answers_keep_each_command_queue_on_its_vk_queue() {
     assert_eq!(
         DevicePolicy::UNTRUSTED.exact_answers().queue_sharing,
         QueueSharingPolicy::PerQueue
+    );
+}
+
+/// The runtime's choice of what a colour attachment stored `DontCare` keeps (`dont_care_colors`)
+/// moves no committed profile's fingerprint: no profile carries it, so no translation follows it.
+#[test]
+fn the_runtime_s_dont_care_colors_choice_keys_no_profile() {
+    use crate::spirv::testing::committed_profiles_with;
+    let driver = committed_profiles_with(DevicePolicy::UNTRUSTED).expect("profiles");
+    let kept = committed_profiles_with(DevicePolicy {
+        dont_care_colors: DontCareColorPolicy::Kept,
+        ..DevicePolicy::UNTRUSTED
+    })
+    .expect("profiles");
+    assert_eq!(driver.len(), kept.len());
+    for ((stem, d), (other, k)) in driver.iter().zip(&kept) {
+        assert_eq!(stem, other);
+        assert_eq!(d.fingerprint(), k.fingerprint(), "{stem}");
+    }
+}
+
+/// `DevicePolicy::exact_answers()` keeps a `DontCare` colour's earlier texels, and the default
+/// stores it as the driver stores it.
+#[test]
+fn exact_answers_keep_a_dont_care_colour_s_earlier_texels() {
+    assert_eq!(
+        DevicePolicy::UNTRUSTED.dont_care_colors,
+        DontCareColorPolicy::Driver
+    );
+    assert_eq!(
+        DevicePolicy::UNTRUSTED.exact_answers().dont_care_colors,
+        DontCareColorPolicy::Kept
     );
 }
 

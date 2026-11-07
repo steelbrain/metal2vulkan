@@ -105,10 +105,12 @@
 //!   hands it so ([`handed_dont_care`], `DriverFact::DontCareStoreIsMetals`). A texture over a
 //!   buffer, which Metal leaves holding the buffer's bytes, renders through an image the pass
 //!   copies nothing back from (its shadow, or the image it keeps: `kept_bytes.rs`): the buffer's
-//!   bytes, exactly. So does a texture's own image a pass stores `DontCare` and does not hand to
-//!   Metal's own, through a backing its queue keeps (`kept_bytes.rs`): its earlier texels,
-//!   exactly. The operations below are those of an attachment such a pass renders in place. A resolve attachment is written whole over the render area (`DONT_CARE` then
-//!   `STORE`), but an aspect of a depth/stencil resolve that does not resolve keeps its texels.
+//!   bytes, exactly. Under `DontCareColorPolicy::Kept` (`DevicePolicy::exact_answers`) so does a
+//!   texture's own image a pass stores `DontCare` and does not hand to Metal's own, through a
+//!   backing its queue keeps (`kept_bytes.rs`): its earlier texels, exactly. The operations below
+//!   are those of an attachment a pass renders in place. A resolve attachment is written whole
+//!   over the render area (`DONT_CARE` then `STORE`), but an aspect of a depth/stencil resolve
+//!   that does not resolve keeps its texels.
 //!   An aspect of the attached texture's Metal format that no attachment names keeps its texels
 //!   (loaded and stored); an aspect only the Vulkan format has (the depth of a `Stencil8` texture
 //!   held in a combined format) is `DONT_CARE` both ways.

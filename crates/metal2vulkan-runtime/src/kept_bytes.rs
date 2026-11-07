@@ -1,5 +1,6 @@
 //! Color attachments a render pass does not store: a texture over a buffer keeps the buffer's
-//! bytes, and a texture's own image (`DontCare`) its earlier texels.
+//! bytes, and under `DontCareColorPolicy::Kept` a texture's own image (`DontCare`) its earlier
+//! texels.
 //!
 //! **Metal's answer** (the DontCare-store probe, an M3 Max under macOS 27.0.1, each case 20 times
 //! alike): after a pass whose color attachment over a buffer is stored `DontCare`, the buffer
@@ -61,7 +62,10 @@
 //!   pass loads it: there the pass renders in place, and `dont-care-store` announces the texels it
 //!   rendered there, Metal's answer where its tiler overflows.
 //!
-//! **A texture's own image** keeps its earlier texels too. Metal's documentation leaves them open
+//! **A texture's own image** keeps its earlier texels too, under the device policy's
+//! `dont_care_colors = DontCareColorPolicy::Kept`, which `DevicePolicy::exact_answers()` selects;
+//! under the default, `Driver`, the pass stores it as the driver stores `DONT_CARE`
+//! (`render_target.rs`), announced as `dont-care-store`. Metal's documentation leaves them open
 //! (`MTLStoreAction.dontCare`: "You need to assume that GPU discarded the texture's contents"), and
 //! what Apple's GPU leaves is measured: the attachment's texels from before the pass, the pass's
 //! clear and its draws both gone (the conformance case `pass-sequence-color-actions`, an M3 Max
@@ -69,14 +73,14 @@
 //! read the host's texels back after a `DontCare` store under either load action of the first and
 //! either load action and render area of the second; and `dont_care_stores`' passes on MoltenVK,
 //! which hands the store to Metal). Vulkan's `DONT_CARE` leaves the texels undefined, and a driver
-//! may leave neither answer: NVIDIA's left a pass's clear under its draw. So a pass that stores a
-//! color attachment `DontCare` renders it, where the texture's image is its own (not a buffer's
-//! bytes, nor a shadow of them), through a backing its queue keeps for its passes of the
-//! attachment's shape (`attachment_stand_in::pooled_backing`, [`Cause::KeptTexels`]): a `Load`
+//! may leave neither answer: NVIDIA's left a pass's clear under its draw. So under `Kept` a pass
+//! that stores a color attachment `DontCare` renders it, where the texture's image is its own (not
+//! a buffer's bytes, nor a shadow of them), through a backing its queue keeps for its passes of
+//! the attachment's shape (`attachment_stand_in::pooled_backing`, [`Cause::KeptTexels`]): a `Load`
 //! copies the texture's texels over the render area into it before the pass (what the pass's
 //! blending and tile dispatches read there), a `Clear` or a `DontCare` load is its own first
-//! operation, as above, and nothing is copied back. Its store
-//! is `DONT_CARE` (`render_target.rs`). Not where the pass hands the attachment to Metal's own
+//! operation, as above, and nothing is copied back. Its store is `DONT_CARE`
+//! (`render_target.rs`). Not where the pass hands the attachment to Metal's own
 //! `DontCare` (`HandedToMetal`, at no cost), nor in the cases above that render in place, nor for a
 //! memoryless texture (none of its texels outlive a pass in Metal), nor one the pass resolves
 //! (`MultisampleResolve`, which `resolve::keep_samples` keeps where its resolve reads the samples),
@@ -93,6 +97,7 @@ use super::error::{Error, RuntimeGap};
 use super::linear_attachment;
 use super::render_pass::ColorTarget;
 use super::render_values::{LoadAction, StoreAction};
+use metal2vulkan::device::DontCareColorPolicy;
 
 /// Whether a pass stores nothing of `color`: `DontCare`, or `MultisampleResolve` (as `Unknown`
 /// stores once the pass ends).
@@ -104,10 +109,11 @@ fn unstored(color: &ColorTarget) -> bool {
 }
 
 /// Whether `color`, a texture's own image (neither over a buffer's bytes nor a shadow of them), is
-/// one a pass renders through a backing so that it keeps its texels (the module docs): stored
-/// `DontCare`, resolving nothing, and not memoryless.
-fn keeps_texels(color: &ColorTarget) -> bool {
-    color.store == StoreAction::DontCare
+/// one a pass renders through a backing so that it keeps its texels (the module docs): under
+/// `policy`'s `Kept`, stored `DontCare`, resolving nothing, and not memoryless.
+fn keeps_texels(color: &ColorTarget, policy: DontCareColorPolicy) -> bool {
+    policy == DontCareColorPolicy::Kept
+        && color.store == StoreAction::DontCare
         && !color.memoryless
         && color.resolve.is_none()
         && color.copied_resolve.is_none()
@@ -116,12 +122,13 @@ fn keeps_texels(color: &ColorTarget) -> bool {
 
 /// Render each color attachment among `colors`, a pass's as it ends, that the pass does not
 /// store and whose texture's image lies over its buffer's bytes, through the image its texture
-/// keeps for `maker`'s queue, and each the pass stores `DontCare` whose texture's image is its
-/// own, through a backing the queue keeps (the module docs): but where the pass hands it to the
-/// driver's `DONT_CARE` as Metal's own `DontCare` (`handed`, `HandedToMetal`), a draw took a view
-/// of its image (`viewed`), the pass executes render commands (`executes`), or another color in
-/// place is bound by `VK_NV_linear_color_attachment`'s rule and the pass cannot render it apart
-/// (`taken`, as `linear_attachment::settle` asks it). The first announced; both counted.
+/// keeps for `maker`'s queue, and under the device's `DontCareColorPolicy::Kept` each the pass
+/// stores `DontCare` whose texture's image is its own, through a backing the queue keeps (the
+/// module docs): but where the pass hands it to the driver's `DONT_CARE` as Metal's own
+/// `DontCare` (`handed`, `HandedToMetal`), a draw took a view of its image (`viewed`), the pass
+/// executes render commands (`executes`), or another color in place is bound by
+/// `VK_NV_linear_color_attachment`'s rule and the pass cannot render it apart (`taken`, as
+/// `linear_attachment::settle` asks it). The first announced; both counted.
 pub(super) fn settle(
     maker: &CommandBuffer,
     colors: &mut [Option<ColorTarget>],
@@ -150,6 +157,7 @@ pub(super) fn settle(
         }
     }
     let queue = maker.command_queue().id();
+    let policy = device.compile_device().policy().dont_care_colors;
     let (mut kept, mut kept_texels) = (false, false);
     for index in 0..colors.len() {
         // The images the pass renders its other colors into, which no backing of this one is.
@@ -163,7 +171,7 @@ pub(super) fn settle(
         let over_buffer = color.target.texture.image_over_buffer();
         if !unstored(color)
             || color.stand_in.is_some()
-            || !(over_buffer || keeps_texels(color))
+            || !(over_buffer || keeps_texels(color, policy))
             || handed(index)
             || viewed(index)
             || held.iter().any(|&other| other != index)

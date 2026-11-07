@@ -5291,7 +5291,7 @@ pub struct WorkCounts {
     pub kept_bytes_passes: u64,
     /// Passes that rendered a color attachment of a texture's own image, which they store
     /// `DontCare`, through a backing their queue keeps, so that the texture keeps its earlier
-    /// texels (`kept_bytes.rs`).
+    /// texels (`kept_bytes.rs`): only under `DontCareColorPolicy::Kept`.
     pub kept_texels_passes: u64,
     /// Passes a render encoder drew past its first for a pass of more color attachments than the
     /// device draws at once, one per later color group, each of that group's colors over a twin

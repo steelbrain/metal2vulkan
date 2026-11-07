@@ -6,14 +6,15 @@ use std::time::Duration;
 
 /// Policy inputs of `Device::new`. Every field but `heap_compression`, `completion`,
 /// `batch_order`, `render_lowering`, `host_page_textures`, `pipeline_waits`,
-/// `pipeline_creation_wait`, `pipeline_commit_wait`, `wide_lines`, `extended_range_blits` and
-/// `queue_sharing` can change emitted code, so the profile carries it (containment as the encoding
-/// it selects) and its fingerprint covers it; those eleven are the runtime's alone (a heap's
-/// compressed texture's image, when the host sees a command buffer complete, how a batch begins
-/// after the earlier ones of its queue, where a render encoder's calls are lowered, what holds a
-/// sampled texture over host pages, whether and how long a pipeline the driver is still making is
-/// waited for, which lines draw a wide line, what a blit through a compressed extended-range
-/// texture writes, and which `VkQueue` a command queue submits to), and no profile carries them.
+/// `pipeline_creation_wait`, `pipeline_commit_wait`, `wide_lines`, `extended_range_blits`,
+/// `queue_sharing` and `dont_care_colors` can change emitted code, so the profile carries it
+/// (containment as the encoding it selects) and its fingerprint covers it; those twelve are the
+/// runtime's alone (a heap's compressed texture's image, when the host sees a command buffer
+/// complete, how a batch begins after the earlier ones of its queue, where a render encoder's calls
+/// are lowered, what holds a sampled texture over host pages, whether and how long a pipeline the
+/// driver is still making is waited for, which lines draw a wide line, what a blit through a
+/// compressed extended-range texture writes, which `VkQueue` a command queue submits to, and what
+/// a colour attachment stored `DontCare` keeps), and no profile carries them.
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -92,6 +93,11 @@ pub struct DevicePolicy {
     /// each keeps the `VkQueue` it took at its creation. The runtime's choice alone: no emitted
     /// code changes.
     pub queue_sharing: QueueSharingPolicy,
+    /// Whether a colour attachment of a texture's own image that a pass stores `DontCare` is
+    /// stored as the driver stores it (the default) or renders through a backing so that the
+    /// texture keeps the texels it held before the pass, as Apple's GPU leaves them. The runtime's
+    /// choice alone: no emitted code changes.
+    pub dont_care_colors: DontCareColorPolicy,
 }
 
 impl DevicePolicy {
@@ -101,8 +107,9 @@ impl DevicePolicy {
     /// them one after another, and a sampled
     /// texture over host pages in place where the device's check passed, a pipeline still
     /// being made waited for a bound (4.5 s at a state's creation, and 4.5 s from a commit), a
-    /// wide line the device's own wherever it draws the width, and command queues sharing
-    /// `VkQueue`s where the device's GPU idles between work of different ones.
+    /// wide line the device's own wherever it draws the width, command queues sharing
+    /// `VkQueue`s where the device's GPU idles between work of different ones, and a colour stored
+    /// `DontCare` stored as the driver stores it.
     pub const UNTRUSTED: DevicePolicy = DevicePolicy {
         pointer_domain: PointerDomain::ResidentTable,
         handle_domain: HandleDomain::Table,
@@ -120,6 +127,7 @@ impl DevicePolicy {
         wide_lines: WideLinePolicy::Device,
         extended_range_blits: ExtendedRangeBlitPolicy::Kept,
         queue_sharing: QueueSharingPolicy::Adaptive,
+        dont_care_colors: DontCareColorPolicy::Driver,
     };
 
     /// This policy with Metal's answer wherever the choices offer it: a heap's texture whose bytes
@@ -136,8 +144,10 @@ impl DevicePolicy {
     /// for until it is made ([`PipelineWaitPolicy::Exact`]), every wide line Metal's
     /// parallelogram where the device's own line differs ([`WideLinePolicy::Exact`]), and every
     /// blit and fill through a compressed `BGRA10_XR` texture Metal's canonical encoding of its
-    /// texels ([`ExtendedRangeBlitPolicy::Canonical`]), and every command queue on the `VkQueue`
-    /// it took at its creation ([`QueueSharingPolicy::PerQueue`]). Every other field is kept.
+    /// texels ([`ExtendedRangeBlitPolicy::Canonical`]), every command queue on the `VkQueue`
+    /// it took at its creation ([`QueueSharingPolicy::PerQueue`]), and every colour attachment of a
+    /// texture's own image stored `DontCare` keeping its earlier texels
+    /// ([`DontCareColorPolicy::Kept`]). Every other field is kept.
     pub const fn exact_answers(self) -> DevicePolicy {
         DevicePolicy {
             heap_compression: HeapCompressionPolicy::Uncompressed,
@@ -150,6 +160,7 @@ impl DevicePolicy {
             wide_lines: WideLinePolicy::Exact,
             extended_range_blits: ExtendedRangeBlitPolicy::Canonical,
             queue_sharing: QueueSharingPolicy::PerQueue,
+            dont_care_colors: DontCareColorPolicy::Kept,
             ..self
         }
     }
@@ -451,4 +462,34 @@ pub enum QueueSharingPolicy {
     /// Each command queue on the `VkQueue` it took at its creation, round robin, for its life:
     /// command queues share one only past the `VkQueue`s the device lends the round robin.
     PerQueue,
+}
+
+/// What a colour attachment of a texture's own image (not a texture over a buffer's bytes, not
+/// memoryless, resolving nothing) keeps after a render pass stores it `MTLStoreActionDontCare`.
+/// Metal's documentation leaves it open (`MTLStoreAction.dontCare`: "You need to assume that GPU
+/// discarded the texture's contents"); what Apple's GPU leaves is measured: the texels the
+/// attachment held before the pass, the pass's clear and its draws both gone (the conformance
+/// case `pass-sequence-color-actions`, an Apple M3 Max under macOS 27.0.1, eight runs alike), or
+/// the rendered texels where its tiler overflows. Vulkan's `DONT_CARE` leaves the texels
+/// undefined. On a driver that stores `DONT_CARE` as Metal's own (MoltenVK on Apple's GPUs), a
+/// pass recorded as one render pass instance is handed to it under either value. The runtime's
+/// choice alone: no emitted code changes.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub enum DontCareColorPolicy {
+    /// As the driver stores it (the default): `DONT_CARE` on a driver measured to keep one of
+    /// Metal's two answers (the earlier texels or the rendered ones) or to store as Metal's own,
+    /// else `STORE`, the rendered texels, Metal's answer where its tiler overflows. No work past
+    /// the pass. Announced `dont-care-store` at the first such pass a driver does not store as
+    /// Metal's own.
+    #[default]
+    Driver,
+    /// The texels the attachment held before the pass: the pass renders through a backing its
+    /// command queue keeps, one image of the attachment's shape, into which a `Load` copies the
+    /// texels first, and nothing is copied back. A `Load` pass costs the copy (on an RTX 5080
+    /// Laptop GPU about 19 µs more a pass at 1920x1080 than one stored `Store`, 10 µs at
+    /// 256x256); a `Clear` or `DontCare` load about none. Where a format makes no such image, the
+    /// pass stores as under `Driver`, announced as there.
+    Kept,
 }

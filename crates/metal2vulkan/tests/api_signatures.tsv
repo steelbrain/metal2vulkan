@@ -1404,6 +1404,7 @@ enum	metal2vulkan::device::BatchOrderPolicy	#[cfg_attr(feature = "serde", derive
 enum	metal2vulkan::device::CompletionPolicy	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum CompletionPolicy
 enum	metal2vulkan::device::Containment	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum Containment
 enum	metal2vulkan::device::ContainmentPolicy	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum ContainmentPolicy
+enum	metal2vulkan::device::DontCareColorPolicy	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum DontCareColorPolicy
 enum	metal2vulkan::device::DriverFact	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum DriverFact
 enum	metal2vulkan::device::DriverWorkaround	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum DriverWorkaround
 enum	metal2vulkan::device::Exposure	#[derive(Clone, Copy, Debug, PartialEq, Eq)] #[non_exhaustive] pub enum Exposure
@@ -3853,6 +3854,7 @@ field	metal2vulkan::device::DeviceDescription.vendor_id	pub vendor_id: u32
 field	metal2vulkan::device::DevicePolicy.batch_order	pub batch_order: BatchOrderPolicy
 field	metal2vulkan::device::DevicePolicy.completion	pub completion: CompletionPolicy
 field	metal2vulkan::device::DevicePolicy.containment	pub containment: ContainmentPolicy
+field	metal2vulkan::device::DevicePolicy.dont_care_colors	pub dont_care_colors: DontCareColorPolicy
 field	metal2vulkan::device::DevicePolicy.extended_range_blits	pub extended_range_blits: ExtendedRangeBlitPolicy
 field	metal2vulkan::device::DevicePolicy.half_chains	pub half_chains: HalfChainPolicy
 field	metal2vulkan::device::DevicePolicy.handle_domain	pub handle_domain: HandleDomain
@@ -12697,6 +12699,8 @@ variant	metal2vulkan::device::Containment::On	On { robust: Robustness }
 variant	metal2vulkan::device::Containment::UnsafeOff	UnsafeOff
 variant	metal2vulkan::device::ContainmentPolicy::Contained	Contained
 variant	metal2vulkan::device::ContainmentPolicy::UnsafeOff	UnsafeOff
+variant	metal2vulkan::device::DontCareColorPolicy::Driver	Driver
+variant	metal2vulkan::device::DontCareColorPolicy::Kept	Kept
 variant	metal2vulkan::device::DriverFact::Bc6hBlockDecodeIsMetals	Bc6hBlockDecodeIsMetals
 variant	metal2vulkan::device::DriverFact::Bc7BlockDecodeIsMetals	Bc7BlockDecodeIsMetals
 variant	metal2vulkan::device::DriverFact::BlendlessColorAttachmentsWarn	BlendlessColorAttachmentsWarn

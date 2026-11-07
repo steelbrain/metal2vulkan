@@ -237,6 +237,7 @@ surface! {
         enum WideLinePolicy N;
         enum ExtendedRangeBlitPolicy N;
         enum QueueSharingPolicy N;
+        enum DontCareColorPolicy N;
         struct DeviceProfile O;
         struct SpirvValidation N;
         struct EnabledCaps N;

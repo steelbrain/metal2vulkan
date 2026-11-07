@@ -5,41 +5,44 @@
 //! Metal keeps such an attachment's earlier texels on Apple's GPUs unless the tiler overflows
 //! (an M4 with macOS 27.0.1), but a pass that clears it, draws nothing, and resolves it alone,
 //! which leaves the clear where Metal compresses the texture. Vulkan leaves the texels undefined.
-//!
-//! A color attachment of a texture's own image stored `DontCare` keeps its earlier texels
-//! exactly on every driver, and announces no `dont-care-store`: on a driver with the fact
-//! (MoltenVK on the Apple M4 and M3 Max), which hands the store to Metal unchanged, in a pass
-//! recorded as one render pass instance; everywhere else, and in a pass the driver does not run
-//! unbroken (a barrier over the render targets between two draws, inside the instance, where
-//! MoltenVK restarts its Metal pass; one over buffers, which splits the pass into two
-//! instances), through a backing its queue keeps (`kept_bytes.rs`), each such pass counted
-//! (`WorkCounts::kept_texels_passes`).
-//!
-//! A `MultisampleResolve` store and a depth or stencil attachment stored `DontCare` render in
-//! place: on a driver with the fact, a pass recorded as one render pass instance keeps the texels
-//! and announces no `dont-care-store`; every other driver announces it once, and each of its
+//! On a driver with the fact (MoltenVK 1.4.1 on the Apple M4), which hands the store to Metal
+//! unchanged, a pass recorded as one render pass instance keeps the texels and announces no
+//! `dont-care-store`; every other driver announces it once, and each of its
 //! texels must be one of Metal's two answers, the earlier texel or the one the same pass stores
 //! with `Store` (Metal's under its tiler's overflow), as the notice's exactness (`OneOfMetals`)
 //! states; the counts are printed (`DONT-CARE-TEXELS`). Only a driver measured to keep one of the
 //! two (`DriverFact::DontCareStoreIsOneOfMetals`) is handed `DONT_CARE`; every other device stores
 //! the attachment, and each of its texels must be one of the two too.
 //!
+//! Those cases run under the runtime's default policy, where a color attachment of a texture's
+//! own image stored `DontCare` is stored as the driver stores it and no pass renders through a
+//! backing (`WorkCounts::kept_texels_passes` stays 0). Under `DontCareColorPolicy::Kept`, which
+//! `DevicePolicy::exact_answers()` selects, such an attachment keeps its earlier texels exactly
+//! on every driver and announces no `dont-care-store`: on a driver with the fact, in a pass
+//! recorded as one render pass instance, handed to Metal; everywhere else, and in a pass the
+//! driver does not run unbroken (the two barriers below), through a backing its queue keeps
+//! (`kept_bytes.rs`), each such pass counted.
+//!
 //! The negative cases announce it on every driver, each on a device of its own (the notice is
-//! once per device), their texels printed: a pass that clears a 4x attachment, draws nothing and
-//! resolves it; and a pass at custom sample positions. A pass whose render area (the descriptor's
-//! target size) is smaller than its attachment is a positive case: the runtime's framebuffer is
-//! the render area, so MoltenVK renders its whole framebuffer.
+//! once per device), their texels printed: a barrier over the render targets between two draws,
+//! inside the instance, where MoltenVK restarts its Metal pass and stores the attachment; one
+//! over buffers, which splits the pass into two instances, the first storing; a pass that clears
+//! a 4x attachment, draws nothing and resolves it; and a pass at custom sample positions. A pass
+//! whose render area (the descriptor's target size) is smaller than its attachment is a positive
+//! case: the runtime's framebuffer is the render area, so MoltenVK renders its whole framebuffer.
 //!
 //! The draws are the owned fixture `rt6_restart`'s (`clear_reach`'s lane): a triangle over the
 //! whole target at depth 0.25, writing (1/255, 0, 0, 1), the depth always passing and written,
 //! the stencil replaced by 0x41.
 
-use super::clear_reach::{lane, quiet, Draw, Lane, Shape, AREA, DRAWN, OLD, PLAIN, SIDE};
+use super::clear_reach::{
+    lane, lane_with, quiet, Draw, Lane, Shape, AREA, DRAWN, OLD, PLAIN, SIDE,
+};
 use super::degrade_notices::{
     assert_made_once, forced, resolve_kind, shared_in_system_memory, tie_cleared,
 };
 use super::{buffer_with, Messages, WAIT};
-use metal2vulkan::device::{DriverFact, VkExtension};
+use metal2vulkan::device::{DontCareColorPolicy, DriverFact, VkExtension};
 use metal2vulkan::metal::state::DepthStencilDescriptor;
 use metal2vulkan::metal::{
     BarrierScope, CompareFunction, PixelFormat, PrimitiveType, RenderStages, TextureUsage,
@@ -249,21 +252,25 @@ fn kept_texels(lane: &Lane) -> u64 {
     lane.device.work_counts().kept_texels_passes
 }
 
-/// A color attachment of a texture's own image stored `DontCare` keeps its earlier texels
-/// exactly on every driver (Metal's answer, `kept_bytes.rs`), and announces no
-/// `dont-care-store`: cleared and drawn, loaded and drawn, cleared and not drawn, cleared and
-/// drawn over a render area smaller than it, and cleared and drawn twice with a barrier over the
-/// render targets or over buffers between the draws. Each pass renders through a backing its
-/// queue keeps, counted, but where the driver stores `DONT_CARE` as Metal's own and the pass is
-/// one render pass instance it runs unbroken (MoltenVK, but for the barriers), handed to Metal.
-/// The controls stored `Store` keep the draw where it covers the texel.
+/// [`lane`] on a device whose colors stored `DontCare` keep their earlier texels
+/// (`DontCareColorPolicy::Kept`, which `DevicePolicy::exact_answers()` selects).
+fn kept_lane() -> (Messages, super::ScratchCache, Lane) {
+    lane_with(|options| options.policy.dont_care_colors = DontCareColorPolicy::Kept)
+}
+
+/// Passes recorded as one render pass instance keep their attachments' earlier texels under
+/// `DontCare` and `MultisampleResolve` on a driver that stores them as Metal's own (our probes'
+/// answers), and announce no `dont-care-store` there: a color attachment cleared and drawn, loaded
+/// and drawn, cleared and not drawn, and cleared and drawn over a render area smaller than it; a 4x
+/// `RGBA8Unorm` and a 4x `BGRA8Unorm_sRGB` attachment cleared, drawn and resolved, or stored
+/// `DontCare`; a `Depth32Float` and a `Depth32Float_Stencil8` attachment cleared and drawn; and a
+/// 4x `Depth32Float` attachment cleared, drawn and resolved. Every other driver announces it once,
+/// and prints whether it kept them. The resolve textures hold the draw everywhere.
 #[test]
-fn a_dont_care_color_keeps_its_earlier_texels_on_every_driver() {
+fn dont_care_stores_keep_the_texels_where_the_driver_stores_them_as_metal_s() {
     let (messages, _cache, lane) = lane();
     let pipeline = lane.pipeline(&[RGBA8], (None, None), 1);
     let old = OLD.repeat((SIDE * SIDE) as usize);
-    // Whether the device renders a pass of one unbroken instance through the backing.
-    let backed = u64::from(!metals(&lane));
     for (case, load, draw, area) in [
         ("color_clear_draw", LoadAction::Clear, Draw::Full, None),
         ("color_load_draw", LoadAction::Load, Draw::Full, None),
@@ -286,70 +293,9 @@ fn a_dont_care_color_keeps_its_earlier_texels_on_every_driver() {
             lane.read(&texture, (0, 0), 4, BlitOption::None)
         };
         let stored = run(StoreAction::Store);
-        if draw == Draw::Full && area.is_none() {
-            assert_eq!(
-                stored,
-                DRAWN.repeat((SIDE * SIDE) as usize),
-                "{case}: the control"
-            );
-        }
-        let before = kept_texels(&lane);
         let texels = run(StoreAction::DontCare);
-        assert!(texels == old, "{case}: the earlier texels are not kept");
-        assert_eq!(
-            kept_texels(&lane) - before,
-            backed,
-            "{case}: the backed passes"
-        );
-        eprintln!(
-            "KEPT-TEXELS {case} on {}: kept, {} pass(es) through the backing",
-            lane.device.name(),
-            kept_texels(&lane) - before
-        );
+        kept(&lane, case, &texels, (&old, &stored), 4);
     }
-    for (case, scope) in [
-        ("barrier_render_targets", BarrierScope::RENDER_TARGETS),
-        ("barrier_buffers", BarrierScope::BUFFERS),
-    ] {
-        let texture = lane.old_color(RGBA8, PLAIN, TARGET);
-        let descriptor = color_pass(&texture, LoadAction::Clear, StoreAction::DontCare, None);
-        let before = kept_texels(&lane);
-        encode(&lane, &descriptor, &pipeline, |encoder| {
-            triangle(encoder);
-            encoder.memory_barrier_with_scope(
-                scope,
-                RenderStages::FRAGMENT,
-                RenderStages::FRAGMENT,
-            );
-            triangle(encoder);
-        });
-        let texels = lane.read(&texture, (0, 0), 4, BlitOption::None);
-        assert!(texels == old, "{case}: the earlier texels are not kept");
-        // No driver runs these passes unbroken: each renders through the backing.
-        assert_eq!(kept_texels(&lane) - before, 1, "{case}: the backed passes");
-        eprintln!("KEPT-TEXELS {case} on {}: kept", lane.device.name());
-    }
-    // A barrier over buffers ends the pass's render pass instance (`render-pass-split`), and
-    // `color_clear_draw_small_area` clears over a render area smaller than its attachment.
-    let mut first = made(&lane, &[(&[RGBA8], (None, None), 1)], &[], true);
-    first.insert(Degradation::RenderPassSplit);
-    first.extend(tie_cleared(&lane.device, false));
-    announces(&messages, "the kept colors", false, &first);
-    quiet(lane, &messages);
-}
-
-/// Passes recorded as one render pass instance keep their attachments' earlier texels under
-/// `DontCare` and `MultisampleResolve` on a driver that stores them as Metal's own (our probes'
-/// answers), and announce no `dont-care-store` there: a 4x `RGBA8Unorm` and a 4x
-/// `BGRA8Unorm_sRGB` attachment cleared, drawn and resolved, or stored `DontCare`; a
-/// `Depth32Float` and a `Depth32Float_Stencil8` attachment cleared and drawn; and a 4x
-/// `Depth32Float` attachment cleared, drawn and resolved. Every other driver announces it once,
-/// and prints whether it kept them, but for the 4x colors stored `DontCare`, which keep them on
-/// every driver (rendered through a backing, `kept_bytes.rs`). The resolve textures hold the draw
-/// everywhere.
-#[test]
-fn dont_care_stores_keep_the_texels_where_the_driver_stores_them_as_metal_s() {
-    let (messages, _cache, lane) = lane();
     for pf in [RGBA8, PixelFormat::BGRA8UnormSRGB] {
         let pipeline = lane.pipeline(&[pf], (None, None), 4);
         let reference = resolved(&lane, &earlier_msaa(&lane, pf), pf);
@@ -371,15 +317,7 @@ fn dont_care_stores_keep_the_texels_where_the_driver_stores_them_as_metal_s() {
                 _ => StoreAction::Store,
             });
             let (texels, resolve) = run(store);
-            match store {
-                StoreAction::DontCare => {
-                    assert!(
-                        texels == reference,
-                        "{case}: the earlier texels are not kept"
-                    );
-                }
-                _ => kept(&lane, &case, &texels, (&reference, &stored), 4),
-            }
+            kept(&lane, &case, &texels, (&reference, &stored), 4);
             if let (Some(resolve), true) = (resolve, pf == RGBA8) {
                 assert_eq!(
                     lane.read(&resolve, (0, 0), 4, BlitOption::None),
@@ -472,7 +410,8 @@ fn dont_care_stores_keep_the_texels_where_the_driver_stores_them_as_metal_s() {
     }
     let depth = Some(depth);
     let combined = Some(combined);
-    let pipelines: [(&[PixelFormat], _, u64); 5] = [
+    let pipelines: [(&[PixelFormat], _, u64); 6] = [
+        (&[RGBA8], (None, None), 1),
         (&[RGBA8], (None, None), 4),
         (&[PixelFormat::BGRA8UnormSRGB], (None, None), 4),
         (&[], (depth, None), 1),
@@ -485,18 +424,65 @@ fn dont_care_stores_keep_the_texels_where_the_driver_stores_them_as_metal_s() {
         &[RGBA8, PixelFormat::BGRA8UnormSRGB],
         true,
     );
-    // The 4x colors' clears cover their attachments.
-    first.extend(tie_cleared(&lane.device, true));
+    // `color_clear_draw_small_area` clears over a render area smaller than its attachment.
+    first.extend(tie_cleared(&lane.device, false));
     announces(&messages, "the kept passes", !metals(&lane), &first);
+    // The default policy stores the colors as the driver stores them: no pass took a backing.
+    assert_eq!(kept_texels(&lane), 0, "the passes through a backing");
     quiet(lane, &messages);
 }
 
 /// Passes a driver does not store as Metal's own announce `dont-care-store` on every driver, each
-/// on a device of its own, their texels printed: a 4x attachment cleared, not drawn and resolved
-/// (Metal leaves the clear where it compresses the texture); and a 4x pass at custom sample
-/// positions, where the device takes them.
+/// on a device of its own, their texels printed: a barrier over the render targets between two
+/// draws (MoltenVK restarts its Metal pass there, storing the attachment); a barrier over
+/// buffers, which splits the pass into two render pass instances, the first storing; a 4x
+/// attachment cleared, not drawn and resolved (Metal leaves the clear where it compresses the
+/// texture); and a 4x pass at custom sample positions, where the device takes them.
 #[test]
 fn dont_care_stores_a_driver_may_store_otherwise_are_announced() {
+    let old = OLD.repeat((SIDE * SIDE) as usize);
+    for (case, scope) in [
+        ("barrier_render_targets", BarrierScope::RENDER_TARGETS),
+        ("barrier_buffers", BarrierScope::BUFFERS),
+    ] {
+        let (messages, _cache, lane) = lane();
+        let pipeline = lane.pipeline(&[RGBA8], (None, None), 1);
+        let texture = lane.old_color(RGBA8, PLAIN, TARGET);
+        let descriptor = color_pass(&texture, LoadAction::Clear, StoreAction::DontCare, None);
+        encode(&lane, &descriptor, &pipeline, |encoder| {
+            triangle(encoder);
+            encoder.memory_barrier_with_scope(
+                scope,
+                RenderStages::FRAGMENT,
+                RenderStages::FRAGMENT,
+            );
+            triangle(encoder);
+        });
+        let texels = lane.read(&texture, (0, 0), 4, BlitOption::None);
+        eprintln!(
+            "{case} on {}: the earlier texels {}",
+            lane.device.name(),
+            if texels == old {
+                "are kept"
+            } else {
+                "are not kept"
+            }
+        );
+        // A barrier over buffers ends the pass's render pass instance (`render-pass-split`).
+        let mut first = made(&lane, &[(&[RGBA8], (None, None), 1)], &[], true);
+        first.extend(forced(&[(
+            Degradation::RenderPassSplit,
+            scope == BarrierScope::BUFFERS,
+        )]));
+        first.extend(tie_cleared(&lane.device, true));
+        announces(&messages, case, true, &first);
+        assert_eq!(
+            kept_texels(&lane),
+            0,
+            "{case}: the passes through a backing"
+        );
+        quiet(lane, &messages);
+    }
     {
         let case = "ms4_clear_nodraw_resolve";
         let (messages, _cache, lane) = lane();
@@ -565,6 +551,139 @@ fn dont_care_stores_a_driver_may_store_otherwise_are_announced() {
         }
         quiet(lane, &messages);
     }
+}
+
+/// Under `DontCareColorPolicy::Kept` (`DevicePolicy::exact_answers()`), a color attachment of a
+/// texture's own image stored `DontCare` keeps its earlier texels exactly on every driver
+/// (Metal's answer, `kept_bytes.rs`), and announces no `dont-care-store`: cleared and drawn,
+/// loaded and drawn, cleared and not drawn, cleared and drawn over a render area smaller than it,
+/// and cleared and drawn twice with a barrier over the render targets or over buffers between the
+/// draws. Each pass renders through a backing its queue keeps, counted, but where the driver
+/// stores `DONT_CARE` as Metal's own and the pass is one render pass instance it runs unbroken
+/// (MoltenVK, but for the barriers), handed to Metal. The controls stored `Store` keep the draw
+/// where it covers the texel. On a device of its own, a 4x `RGBA8Unorm` and a 4x
+/// `BGRA8Unorm_sRGB` attachment cleared, drawn and stored `DontCare` keep theirs too; the
+/// resolves that read them back announce `dont-care-store` where the driver does not store as
+/// Metal's own.
+#[test]
+fn exact_answers_keep_a_dont_care_color_s_earlier_texels_on_every_driver() {
+    let (messages, _cache, lane) = kept_lane();
+    let pipeline = lane.pipeline(&[RGBA8], (None, None), 1);
+    let old = OLD.repeat((SIDE * SIDE) as usize);
+    // Whether the device renders a pass of one unbroken instance through the backing.
+    let backed = u64::from(!metals(&lane));
+    for (case, load, draw, area) in [
+        ("color_clear_draw", LoadAction::Clear, Draw::Full, None),
+        ("color_load_draw", LoadAction::Load, Draw::Full, None),
+        ("color_clear_nodraw", LoadAction::Clear, Draw::None, None),
+        (
+            "color_clear_draw_small_area",
+            LoadAction::Clear,
+            Draw::Full,
+            Some(AREA),
+        ),
+    ] {
+        let run = |store| {
+            let texture = lane.old_color(RGBA8, PLAIN, TARGET);
+            let mut descriptor = color_pass(&texture, load, store, None);
+            if let Some(area) = area {
+                descriptor.render_target_width = area;
+                descriptor.render_target_height = area;
+            }
+            lane.run(&descriptor, draw, Some(&pipeline));
+            lane.read(&texture, (0, 0), 4, BlitOption::None)
+        };
+        let stored = run(StoreAction::Store);
+        if draw == Draw::Full && area.is_none() {
+            assert_eq!(
+                stored,
+                DRAWN.repeat((SIDE * SIDE) as usize),
+                "{case}: the control"
+            );
+        }
+        let before = kept_texels(&lane);
+        let texels = run(StoreAction::DontCare);
+        assert!(texels == old, "{case}: the earlier texels are not kept");
+        assert_eq!(
+            kept_texels(&lane) - before,
+            backed,
+            "{case}: the backed passes"
+        );
+        eprintln!(
+            "KEPT-TEXELS {case} on {}: kept, {} pass(es) through the backing",
+            lane.device.name(),
+            kept_texels(&lane) - before
+        );
+    }
+    for (case, scope) in [
+        ("barrier_render_targets", BarrierScope::RENDER_TARGETS),
+        ("barrier_buffers", BarrierScope::BUFFERS),
+    ] {
+        let texture = lane.old_color(RGBA8, PLAIN, TARGET);
+        let descriptor = color_pass(&texture, LoadAction::Clear, StoreAction::DontCare, None);
+        let before = kept_texels(&lane);
+        encode(&lane, &descriptor, &pipeline, |encoder| {
+            triangle(encoder);
+            encoder.memory_barrier_with_scope(
+                scope,
+                RenderStages::FRAGMENT,
+                RenderStages::FRAGMENT,
+            );
+            triangle(encoder);
+        });
+        let texels = lane.read(&texture, (0, 0), 4, BlitOption::None);
+        assert!(texels == old, "{case}: the earlier texels are not kept");
+        // No driver runs these passes unbroken: each renders through the backing.
+        assert_eq!(kept_texels(&lane) - before, 1, "{case}: the backed passes");
+        eprintln!("KEPT-TEXELS {case} on {}: kept", lane.device.name());
+    }
+    // A barrier over buffers ends the pass's render pass instance (`render-pass-split`), and
+    // `color_clear_draw_small_area` clears over a render area smaller than its attachment.
+    let mut first = made(&lane, &[(&[RGBA8], (None, None), 1)], &[], true);
+    first.insert(Degradation::RenderPassSplit);
+    first.extend(tie_cleared(&lane.device, false));
+    announces(&messages, "the kept colors", false, &first);
+    quiet(lane, &messages);
+    // The 4x colors, on a device of their own (the notice is once per device).
+    let (messages, _cache, lane) = kept_lane();
+    for pf in [RGBA8, PixelFormat::BGRA8UnormSRGB] {
+        let pipeline = lane.pipeline(&[pf], (None, None), 4);
+        let reference = resolved(&lane, &earlier_msaa(&lane, pf), pf);
+        let case = format!("{pf:?}_ms4_clear_draw_DontCare");
+        let texture = earlier_msaa(&lane, pf);
+        let descriptor = color_pass(&texture, LoadAction::Clear, StoreAction::DontCare, None);
+        let before = kept_texels(&lane);
+        lane.run(&descriptor, Draw::Full, Some(&pipeline));
+        let backed = kept_texels(&lane) - before;
+        let texels = resolved(&lane, &texture, pf);
+        assert!(
+            texels == reference,
+            "{case}: the earlier texels are not kept"
+        );
+        assert_eq!(
+            backed,
+            u64::from(!metals(&lane)),
+            "{case}: the backed passes"
+        );
+        eprintln!(
+            "KEPT-TEXELS {case} on {}: kept, {backed} pass(es) through the backing",
+            lane.device.name()
+        );
+    }
+    let pipelines: [(&[PixelFormat], _, u64); 2] = [
+        (&[RGBA8], (None, None), 4),
+        (&[PixelFormat::BGRA8UnormSRGB], (None, None), 4),
+    ];
+    let mut first = made(
+        &lane,
+        &pipelines,
+        &[RGBA8, PixelFormat::BGRA8UnormSRGB],
+        true,
+    );
+    // The 4x colors' clears cover their attachments.
+    first.extend(tie_cleared(&lane.device, true));
+    announces(&messages, "the kept 4x colors", !metals(&lane), &first);
+    quiet(lane, &messages);
 }
 
 /// A pass of no depth attachment whose draw's state tests and writes depth renders into a hidden
