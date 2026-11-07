@@ -4455,6 +4455,7 @@ field	metal2vulkan::pipeline::PipelineInterface.numbered_samplers	pub numbered_s
 field	metal2vulkan::pipeline::PipelineInterface.push	pub push: Vec<PushPlacement>
 field	metal2vulkan::pipeline::PipelineInterface.reaches_command_buffers	pub reaches_command_buffers: bool
 field	metal2vulkan::pipeline::PipelineInterface.slots	pub slots: BTreeMap<SlotRef, SlotInterface>
+field	metal2vulkan::pipeline::PipelineInterface.stage_in	pub stage_in: Vec<crate::pipeline::stage_io::StageInFetch>
 field	metal2vulkan::pipeline::PipelineInterface.texture_writing_stages	pub texture_writing_stages: Vec<Stage>
 field	metal2vulkan::pipeline::PipelineInterface.threadgroup	pub threadgroup: Vec<ThreadgroupArgument>
 field	metal2vulkan::pipeline::PipelineLayout.push_constants	pub push_constants: Vec<PushConstantRange>
@@ -14163,6 +14164,7 @@ variant	metal2vulkan::pipeline::SpecKey::SamplerAnisotropy	SamplerAnisotropy(Slo
 variant	metal2vulkan::pipeline::SpecKey::SamplerMinLevel	SamplerMinLevel(SlotRef)
 variant	metal2vulkan::pipeline::SpecKey::SamplerState	SamplerState { slot: SlotRef, fields: u32 }
 variant	metal2vulkan::pipeline::SpecKey::SparseTexture	SparseTexture(SlotRef)
+variant	metal2vulkan::pipeline::SpecKey::StageInReach	StageInReach
 variant	metal2vulkan::pipeline::SpecKey::TexelFormat	TexelFormat(SlotRef)
 variant	metal2vulkan::pipeline::SpecKey::TextureSwizzle	TextureSwizzle(SlotRef)
 variant	metal2vulkan::pipeline::SpecKey::TgLength	TgLength(u32)
