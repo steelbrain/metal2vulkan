@@ -1268,6 +1268,24 @@ degradations! {
              writes lay them, and read as written; the later levels' texels lie apart from the \
              heap's bytes, and a 1D array's GPU reads read each texel, where Metal's paths \
              address those texels at bytes that differ by path";
+        /// A texture of one of Apple's one-plane YCbCr formats (`YCBCR8_422_1P`,
+        /// `YCBCR10_444_1P` and their twins, held for copies alone) made in a heap whose texels
+        /// lie otherwise than Metal's blits lay them (`texture/heap.rs`; an Apple M3 Max under
+        /// macOS 27.0.1, `probes/one_plane_ycbcr_heap_rows.m`): a 2D texture or array of more
+        /// than one row whose row is not a multiple of 16 bytes, whose rows Metal lays the row
+        /// rounded down to 16 bytes apart (16 for a row under 16), so they share bytes or pass
+        /// the texture's answer, where the runtime lays them one packed row apart, as that answer
+        /// counts them; and a mipmapped or 3D texture, whose texels Metal lays at bytes that
+        /// differ by path, its first level past its answer, where the runtime keeps them in
+        /// memory of its own, apart from the heap's bytes. Every other such texture lies as
+        /// Metal lays it. Announced once per device, in the call that made the first such
+        /// texture.
+        HeapOnePlaneLayout = "heap-one-plane-layout", Precision,
+            "the texture's size and alignment answers are Metal's and its copies read what they \
+             wrote, but its texels lie in the heap's bytes one packed row apart, or apart from \
+             the heap's bytes, where Metal's blits lay its rows a multiple of 16 bytes apart or \
+             its levels at bytes that differ by path: a buffer over the heap meets them at other \
+             bytes than on Metal";
         /// A MoltenVK device at a release whose `pipelineCacheUUID` layout the runtime has not
         /// read (`device/argument_buffers.rs`): whether MoltenVK binds through Metal argument
         /// buffers is unknown, so a device without them is not refused (as at a read release).

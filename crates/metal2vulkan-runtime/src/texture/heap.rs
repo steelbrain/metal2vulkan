@@ -53,15 +53,20 @@
 //!   it compressed or not).
 //! - **Where Metal's answer is not its image's** (the consumer's report): Metal answers a 4:2:2
 //!   texture its rows of 2-byte texels at a multiple of 16 bytes, the last unpadded, at an
-//!   alignment of 16, and an `X32_Stencil8` texture as a `Stencil8` one
-//!   (`Device::metal_heap_answer`; an M4), which the runtime answers too.
+//!   alignment of 16, a one-plane YCbCr texture (Apple's nine, held for copies alone) its packed
+//!   rows, an array's slices at multiples of 128 (an M3 Max), and an `X32_Stencil8` texture as a
+//!   `Stencil8` one (`Device::metal_heap_answer`; an M4), which the runtime answers too.
 //!   Where the device's image needs more bytes or a coarser alignment than that answer, and for
-//!   every 4:2:2 texture, the texture is a shadow of the heap's bytes in memory of its own
-//!   (`AliasRoute::MemoryShadow`): its planes fit the answer (an `X32_Stencil8` texture's stencil
-//!   alone, in a `Stencil8` texture's tiles where they serve, as Metal lays it, `heap_tiled.rs`,
-//!   else packed; a 4:2:2 texture's rows where Metal lays them, so a buffer over them reads
-//!   Metal's bytes; `heap_plane_layout`), so two textures side by side at the answer keep their
-//!   texels on every device.
+//!   every 4:2:2 and one-plane YCbCr texture, the texture is a shadow of the heap's bytes in
+//!   memory of its own (`AliasRoute::MemoryShadow`): its planes fit the answer (an `X32_Stencil8`
+//!   texture's stencil alone, in a `Stencil8` texture's tiles where they serve, as Metal lays it,
+//!   `heap_tiled.rs`, else packed; a 4:2:2 or one-plane YCbCr texture's rows where Metal lays
+//!   them, so a buffer over them reads Metal's bytes; `heap_plane_layout`), so two textures side
+//!   by side at the answer keep their texels on every device. A one-plane YCbCr texture Metal
+//!   lays out no one way (rows of a length off 16 bytes, which Metal's blits lay closer than
+//!   their length or past its answer; a mipmapped or 3D one, whose levels Metal addresses at
+//!   bytes that differ by path) lies in packed rows or apart from the heap's bytes
+//!   (`AliasRoute::Unaliased`), announced `heap-one-plane-layout`.
 //! - **Two-plane extended-range textures** (`RGB10A8_2P_XR10` and its sRGB twin; the consumer's
 //!   report). The runtime answers Metal's size and alignment (`two_plane_heap_answer`): plane 0's
 //!   4-byte words, rows at a multiple of 16 bytes, rounded up to 16 KiB, then plane 1's alpha
@@ -762,8 +767,9 @@ pub(crate) struct HeapPlane {
     /// The bytes from one row of blocks to the next: a row's, tightly packed, but for a 4:2:2
     /// texture's, which Metal lays at a multiple of 16 bytes (`FOUR_TWO_TWO_ALIGNMENT`).
     pub(crate) pitch: u64,
-    /// The bytes from one image to the next: its rows', but for a two-plane array's, whose
-    /// slices Metal lays at a multiple of 128 bytes (`heap_two_planes.rs`).
+    /// The bytes from one image to the next: its rows', but for a two-plane array's
+    /// (`heap_two_planes.rs`) and a one-plane YCbCr array's ([`one_plane_texel`]), whose slices
+    /// Metal lays at a multiple of 128 bytes.
     pub(crate) image_pitch: u64,
 }
 
@@ -795,7 +801,8 @@ impl HeapPlane {
 /// offsets Vulkan copies the aspect at. A texture made in `X32_Stencil8` has its stencil's planes
 /// alone: its image's depth holds no texel of it; a 4:2:2 texture's rows lie at a multiple of 16
 /// bytes, the last unpadded, as Metal lays out a heap's (an M4: a buffer over one
-/// read each row there, the bytes between untouched). The planes, and the bytes they span.
+/// read each row there, the bytes between untouched); a one-plane YCbCr array's slices lie at a
+/// multiple of 128 bytes ([`one_plane_texel`]). The planes, and the bytes they span.
 pub(crate) fn heap_plane_layout(
     format: Format,
     pf: PixelFormat,
@@ -823,6 +830,11 @@ pub(crate) fn heap_plane_layout(
                 packed
             };
             let down = u64::from(height.div_ceil(bh.max(1)));
+            let rows = pitch * down;
+            let image_pitch = match one_plane_texel(pf).is_some() && layers > 1 {
+                true => rows.next_multiple_of(ONE_PLANE_SLICE_ALIGNMENT),
+                false => rows,
+            };
             let plane = HeapPlane {
                 aspect,
                 level,
@@ -833,7 +845,7 @@ pub(crate) fn heap_plane_layout(
                 unit,
                 block: [bw.max(1), bh.max(1)],
                 pitch,
-                image_pitch: pitch * down,
+                image_pitch,
             };
             end = plane.offset + plane.span();
             planes.push(plane);
@@ -890,7 +902,9 @@ fn gcd(a: u64, b: u64) -> u64 {
 }
 
 /// The copies between a heap shadow's truth and its image ([`heap_plane_layout`]): one region per
-/// plane, its buffer offset counted from the texture's first byte, and the bytes they span.
+/// plane, or per slice of a plane whose slices lie further apart than their rows (a one-plane
+/// YCbCr array's), its buffer offset counted from the texture's first byte, and the bytes they
+/// span.
 pub(crate) fn heap_planes(
     format: Format,
     pf: PixelFormat,
@@ -901,7 +915,7 @@ pub(crate) fn heap_planes(
     let (planes, end) = heap_plane_layout(format, pf, extent, levels, layers);
     let regions = planes
         .iter()
-        .map(|plane| {
+        .flat_map(|plane| {
             let [width, height, depth] = plane.extent;
             // A row longer than its blocks is given in texels (Vulkan's `bufferRowLength`).
             let row_length = if plane.pitch == plane.blocks[0] * plane.unit {
@@ -909,15 +923,15 @@ pub(crate) fn heap_planes(
             } else {
                 (plane.pitch / plane.unit) as u32 * plane.block[0]
             };
-            vk::BufferImageCopy {
-                buffer_offset: plane.offset,
+            let region = |base_array_layer, layer_count, at| vk::BufferImageCopy {
+                buffer_offset: plane.offset + at,
                 buffer_row_length: row_length,
                 buffer_image_height: 0,
                 image_subresource: vk::ImageSubresourceLayers {
                     aspect_mask: plane.aspect.into(),
                     mip_level: plane.level,
-                    base_array_layer: 0,
-                    layer_count: layers,
+                    base_array_layer,
+                    layer_count,
                 },
                 image_offset: vk::Offset3D::default(),
                 image_extent: vk::Extent3D {
@@ -925,6 +939,14 @@ pub(crate) fn heap_planes(
                     height,
                     depth,
                 },
+            };
+            // Slices further apart than their rows, which no `bufferImageHeight` of whole rows
+            // states, are a region each.
+            match plane.image_pitch == plane.pitch * plane.blocks[1] {
+                true => vec![region(0, layers, 0)],
+                false => (0..layers)
+                    .map(|layer| region(layer, 1, u64::from(layer) * plane.image_pitch))
+                    .collect(),
             }
         })
         .collect();
@@ -1083,6 +1105,64 @@ fn two_plane_heap_answer(layout: &TextureLayout) -> SizeAndAlign {
     }
 }
 
+/// The multiple of bytes Metal lays a heap's one-plane YCbCr array's slices at
+/// ([`one_plane_heap_answer`]), as it lays a two-plane one's ([`TWO_PLANE_SLICE_ALIGNMENT`]).
+const ONE_PLANE_SLICE_ALIGNMENT: u64 = 128;
+
+/// The bytes of one texel of `pf` where Metal lays a heap's texture of it in one plane of rows,
+/// a texel after another (`metal::format::Footprint::OnePlane`: Apple's nine one-plane YCbCr
+/// formats, which the crate holds for copies alone); `None` for any other format.
+///
+/// Measured on an Apple M3 Max under macOS 27.0.1, plain Metal, a `Private` untracked placement
+/// heap with a `Private` buffer over all its bytes (`probes/one_plane_ycbcr_heap_rows.m`, each of
+/// the nine formats): a blit's copy in at the texture's packed row lays a 2D texture's rows one
+/// packed row apart where that row is a multiple of 16 bytes (8 x 8, 16 x 16, 64 x 64, and 100 x
+/// 30 at 4:4:4), a 1D texture's one row of any length (37 texels), and a 1D or 2D array's slices
+/// each at a multiple of 128 bytes (37 x 3 at 128 or 256, 16 x 16 x 2 at 512 or 1024), and its
+/// copy out reads every texel back from there. A row of another length, more than one of it,
+/// lies the row rounded down to 16 bytes apart (16 for a row under 16), so its rows share bytes
+/// or pass the texture's answer, and a mipmapped or 3D texture's texels lie at bytes that differ
+/// by path, its first level past its answer: the runtime lays those otherwise
+/// ([`one_plane_layout_difference`]).
+fn one_plane_texel(pf: PixelFormat) -> Option<u64> {
+    match footprint(pf) {
+        Some(Footprint::OnePlane { bytes, .. }) => Some(u64::from(bytes)),
+        _ => None,
+    }
+}
+
+/// Whether a heap's texture of `layout` of a one-plane YCbCr format ([`one_plane_texel`]) lies
+/// apart from the heap's bytes, in memory of its own (`AliasRoute::Unaliased`): a mipmapped or
+/// 3D one, whose texels Metal lays at bytes that differ by path, past its answer.
+fn one_plane_apart(layout: &TextureLayout) -> bool {
+    one_plane_texel(layout.pixel_format).is_some()
+        && (layout.levels > 1 || layout.texture_type == TextureType::Type3D)
+}
+
+/// Where a heap's texture of `layout` of a one-plane YCbCr format lies otherwise than Metal's
+/// blits lay it ([`one_plane_texel`]), as `Degradation::HeapOnePlaneLayout` says: `None` where it
+/// lies as Metal lays it, and for any other format.
+fn one_plane_layout_difference(layout: &TextureLayout) -> Option<&'static str> {
+    let unit = one_plane_texel(layout.pixel_format)?;
+    if one_plane_apart(layout) {
+        return Some(
+            "Metal's blits lay a mipmapped or 3D texture's texels at bytes that differ by path, \
+             its first level past the texture's answer: its texels lie in memory of its own, \
+             apart from the heap's bytes",
+        );
+    }
+    let row = u64::from(layout.extent[0]) * unit;
+    let rows = matches!(
+        layout.texture_type,
+        TextureType::Type2D | TextureType::Type2DArray
+    ) && layout.extent[1] > 1;
+    (rows && row % 16 != 0).then_some(
+        "Metal's blits lay a row of a length that is not a multiple of 16 bytes the row rounded \
+         down to 16 bytes apart (16 for a row under 16), so its rows share bytes or pass the \
+         texture's answer: its rows lie one packed row apart, as Metal's answer counts them",
+    )
+}
+
 /// Metal's answer for a heap texture of `layout` whose bytes Metal lays out in **one** linear
 /// plane of `unit`-byte texels (`metal::format::Footprint::OnePlane`, Apple's one-plane YCbCr
 /// formats): one level's texels packed, no row padding at all; a 1D or buffer texture one row; a
@@ -1110,11 +1190,11 @@ fn one_plane_heap_answer(layout: &TextureLayout, unit: u64) -> SizeAndAlign {
         TextureType::Type2DArray | TextureType::Type1DArray => {
             let slices = u64::from(layout.layers);
             let align = match layout.texture_type {
-                TextureType::Type2DArray => TWO_PLANE_SLICE_ALIGNMENT,
+                TextureType::Type2DArray => ONE_PLANE_SLICE_ALIGNMENT,
                 _ => FOUR_TWO_TWO_ALIGNMENT,
             };
             SizeAndAlign {
-                size: slices * slice.next_multiple_of(TWO_PLANE_SLICE_ALIGNMENT),
+                size: slices * slice.next_multiple_of(ONE_PLANE_SLICE_ALIGNMENT),
                 align,
             }
         }
@@ -1172,13 +1252,14 @@ pub(crate) fn footprint_answer(
 }
 
 /// Metal's answer for a heap texture of `layout` whose planes Metal's answer is measured over
-/// (`Device::metal_heap_answer`): a 4:2:2 texture's ([`four_two_two_heap_answer`]) and a
-/// two-plane extended-range texture's ([`two_plane_heap_answer`]); `None` for any other.
+/// (`Device::metal_heap_answer`): a 4:2:2 texture's ([`four_two_two_heap_answer`]), a
+/// two-plane extended-range texture's ([`two_plane_heap_answer`]) and a one-plane YCbCr texture's
+/// ([`one_plane_heap_answer`]); `None` for any other.
 fn planes_answer(layout: &TextureLayout) -> Option<SizeAndAlign> {
     match layout.pixel_format {
         PixelFormat::GBGR422 | PixelFormat::BGRG422 => Some(four_two_two_heap_answer(layout)),
         pf if two_planes::holds_planes(pf) => Some(two_plane_heap_answer(layout)),
-        _ => None,
+        pf => one_plane_texel(pf).map(|unit| one_plane_heap_answer(layout, unit)),
     }
 }
 
@@ -1244,9 +1325,10 @@ pub(crate) struct HeapTextureShape {
     /// ([`AliasRoute::Unaliased`], [`AliasRoute::Planes`], [`AliasRoute::Lossless`]), so the
     /// texture takes Metal's answer whatever the image needs.
     pub(crate) apart: bool,
-    /// A 4:2:2 texture, always a shadow of the heap's bytes: its bytes lie where Metal's linear
-    /// rows do (`heap_plane_layout`), never where its image lays them.
-    pub(crate) four_two_two: bool,
+    /// A 4:2:2 or one-plane YCbCr texture ([`one_plane_texel`]), always a shadow of the heap's
+    /// bytes: its bytes lie where Metal's linear rows do (`heap_plane_layout`), never where its
+    /// image lays them.
+    pub(crate) rows: bool,
     /// More than one sample: no copy of rows shadows its image, which lies in memory of its own
     /// instead, as one the heap's memory cannot hold.
     pub(crate) multisample: bool,
@@ -1279,7 +1361,7 @@ pub(crate) fn held_to_metal(
     shape: HeapTextureShape,
     shadowable: impl FnOnce() -> bool,
 ) -> HeldToMetal {
-    if shape.apart || (!shape.four_two_two && images_fit(images, metal)) {
+    if shape.apart || (!shape.rows && images_fit(images, metal)) {
         return HeldToMetal::Images;
     }
     match shape.multisample || shadowable() {
@@ -1463,16 +1545,16 @@ impl Device {
     /// fits at any multiple of the alignment in any heap with room. A texture buffer takes Metal's
     /// answer: its row of texels, at a multiple of 16 bytes.
     ///
-    /// A format the translator holds **no image** of, whose footprint its own structure decides
-    /// (`metal::format::footprint`: ASTC's 4x2 and 8x4 footprints, `BGRA4Unorm`,
-    /// `ARGB8Unorm_sRGB`, Apple's nine one-plane `YCBCR*` formats, the ten padded 10- and 12-bit
-    /// display formats, the four `RGB10A8_2P` ones and the two packed 10-bit ones), answers
-    /// Metal's size and alignment all the same: the footprint is arithmetic over the descriptor,
-    /// and no image decides it (`footprint_answer`; every answer of the probe and the
-    /// `format-footprints-*` recordings, 193,296 of them on an Apple M3 Max under macOS 27.0.1).
-    /// Every creator of such a texture, and every view, copy and shader access of one, stays
-    /// refused `Unsupported(Format)` needing `NotImplemented`; so does a multisample descriptor
-    /// of one, whose layout is not measured.
+    /// A format whose footprint its own structure decides, of which the translator holds no
+    /// image or one for copies alone (`metal::format::footprint`: ASTC's 4x2 and 8x4 footprints,
+    /// `BGRA4Unorm`, `ARGB8Unorm_sRGB`, Apple's nine one-plane `YCBCR*` formats, the ten padded
+    /// 10- and 12-bit display formats, the four `RGB10A8_2P` ones and the two packed 10-bit
+    /// ones), answers Metal's size and alignment all the same: the footprint is arithmetic over
+    /// the descriptor, and no image decides it (`footprint_answer`; every answer of the probe and
+    /// the `format-footprints-*` recordings, 193,296 of them on an Apple M3 Max under macOS
+    /// 27.0.1). Every creator of a texture of one held by no image, and every view, copy and
+    /// shader access of one, stays refused `Unsupported(Format)` needing `NotImplemented`; so
+    /// does a multisample descriptor of one, whose layout is not measured.
     ///
     /// A descriptor of which plain Metal makes no texture (its creators answer [`Error::Nil`]:
     /// `Unspecialized`, a two-plane extended-range cube or cube array, a format Metal makes no
@@ -1737,6 +1819,18 @@ impl Device {
                 requirements,
                 route,
             }
+        } else if one_plane_apart(&layout) {
+            // A mipmapped or 3D one-plane YCbCr texture, whose texels Metal lays at bytes that
+            // differ by path, past its answer: its image lies in memory of its own, apart from
+            // the heap's bytes, and takes Metal's answer.
+            let requirements =
+                self.planned_requirements(&free, layout.texture_type, vk::ImageTiling::OPTIMAL)?;
+            HeapImage {
+                plan: free,
+                tiling: vk::ImageTiling::OPTIMAL,
+                requirements,
+                route: AliasRoute::Unaliased,
+            }
         } else {
             match self.heap_image(
                 free.clone(),
@@ -1784,8 +1878,9 @@ impl Device {
         // to Metal's answer takes those bytes of memory of its own instead.
         let images = size_and_align;
         // Metal's answer where it is not the answer the runtime models for every descriptor
-        // (`metal_heap_answer`): a 4:2:2 or two-plane extended-range texture's planes, an
-        // `X32_Stencil8` or `BlockWritesOnly` texture as the descriptor Metal sizes it as.
+        // (`metal_heap_answer`): a 4:2:2, one-plane YCbCr or two-plane extended-range texture's
+        // planes, an `X32_Stencil8` or `BlockWritesOnly` texture as the descriptor Metal sizes it
+        // as.
         let special = self.metal_heap_answer(call, descriptor, &layout, image.plan.format)?;
         // Whether that is where Metal's answer comes from: a texture whose images do not fit such
         // a measured route's answer is refused, where one that does not fit the model's keeps its
@@ -1808,9 +1903,10 @@ impl Device {
         // Metal's answer, which a program sizes a heap and places its resources by, is the
         // answer: the image lies in it where the images fit inside it, else the texture is a
         // shadow of its bytes there, its image in memory of its own (Metal's tiles below). A
-        // 4:2:2 texture is always a shadow: its bytes then lie where Metal's linear rows do
-        // (`heap_plane_layout`). A two-plane texture's image lies apart from the heap's bytes
-        // (above). Metal's answer the texture cannot be held to, announced below.
+        // 4:2:2 or one-plane YCbCr texture is always a shadow: its bytes then lie where Metal's
+        // linear rows do (`heap_plane_layout`). A two-plane texture's image, and a mipmapped or 3D
+        // one-plane YCbCr one's, lies apart from the heap's bytes (above). Metal's answer the
+        // texture cannot be held to, announced below.
         let mut past_metal = None;
         if let Some(metal) = metal_answer {
             let shape = HeapTextureShape {
@@ -1818,7 +1914,8 @@ impl Device {
                     image.route,
                     AliasRoute::Unaliased | AliasRoute::Planes | AliasRoute::Lossless
                 ),
-                four_two_two: chroma_pairs::is_four_two_two(layout.pixel_format),
+                rows: chroma_pairs::is_four_two_two(layout.pixel_format)
+                    || one_plane_texel(layout.pixel_format).is_some(),
                 multisample: layout.samples > 1,
             };
             let plan = &image.plan;
@@ -1959,6 +2056,8 @@ impl Device {
     ///   `Stencil8` texture of the descriptor takes: the device's answer for that one.
     /// - A two-plane extended-range texture takes its planes as Metal lays them out
     ///   (`two_plane_heap_answer`).
+    /// - A one-plane YCbCr texture takes its packed rows, an array's slices each at a multiple of
+    ///   128 bytes (`one_plane_heap_answer`, [`one_plane_texel`]; an M3 Max under macOS 27.0.1).
     /// - A texture of Apple's private `BlockWritesOnly` usage (0x10000) takes what the descriptor
     ///   without it takes, one of that usage alone what a `ShaderRead` texture takes (the
     ///   consumer's report at 4ce09ab30): Metal sizes it so (a 16x16 `BGRA8Unorm` `Private` texture
@@ -1968,7 +2067,8 @@ impl Device {
     ///   own as a shadow of the heap's bytes, as for the others.
     ///
     /// With each answer, Metal's layout of the texture's bytes as the runtime holds it over host
-    /// pages: a 4:2:2 or two-plane texture's, as its route lays it (`HeapLayout::Measured`); an
+    /// pages: a 4:2:2, one-plane YCbCr or two-plane texture's, as its route lays it
+    /// (`HeapLayout::Measured`); an
     /// `X32_Stencil8` texture's, a `Stencil8` texture's tiles of its image's (of `format`) stencil
     /// aspect (`metal_heap_layout`; an M3 Max under macOS 27.0.1: every texel of one-level 8 x 8
     /// to 300 x 200 textures, both ways, where a `Stencil8` texture's lie, and 1720 answers equal
@@ -3644,8 +3744,22 @@ impl Device {
     }
 
     /// Announces, once per device, the alias route a heap texture of `layout` took where it is
-    /// other than [`AliasRoute::Direct`].
+    /// other than [`AliasRoute::Direct`], and a one-plane YCbCr texture laid out otherwise than
+    /// Metal lays it (`Degradation::HeapOnePlaneLayout`, [`one_plane_layout_difference`]).
     fn degrade_alias_route(&self, route: AliasRoute, layout: &TextureLayout) {
+        if let Some(why) = one_plane_layout_difference(layout) {
+            self.degrade(Degradation::HeapOnePlaneLayout, || {
+                let [width, height, depth] = layout.extent;
+                let object = format!(
+                    "a {} {:?} texture of {width}x{height}x{depth}, {} levels, {} slices in a heap",
+                    layout.pixel_format.name(),
+                    layout.texture_type,
+                    layout.levels,
+                    layout.layers
+                );
+                (object, why.to_owned())
+            });
+        }
         let (kind, how) = match route {
             AliasRoute::Direct | AliasRoute::Lossless => return,
             AliasRoute::Shadow => {
@@ -3733,6 +3847,8 @@ impl Device {
                     (object, why)
                 });
             }
+            // A one-plane YCbCr texture's is announced above.
+            AliasRoute::Unaliased if one_plane_apart(layout) => return,
             AliasRoute::Unaliased => {
                 return self.degrade(Degradation::HeapTwoPlaneTexture, || {
                     let [width, height, depth] = layout.extent;

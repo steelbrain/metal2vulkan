@@ -17,6 +17,10 @@
 //         Then the heap's buffer is filled with a pattern of its byte offsets and each level and
 //         slice copied out of the texture (`copyFromTexture:...toBuffer:`): whether each texel
 //         reads the bytes at the same place (`back`). And `heapTextureSizeAndAlignWithDescriptor:`.
+//   map   As `heap`, each texel's index written into it and decoded back from the heap's bytes,
+//         then the heap's bytes a pattern of their unit offsets read back out: per row (up to 8
+//         rows of each slice), the offsets its texels landed at (`w`) and were read from (`r`),
+//         as runs, `-1` for a texel found nowhere. `map <format>` runs one format.
 //   rows  A 16 x 16 2D texture, `Shared` and `Private`, no heap: a copy in from a buffer at
 //         `bytesPerRow` of 16 x 1 and 16 x 2 bytes (the texel sizes `MTLPixelFormatGetInfoForDevice`
 //         answers) and 16 x the texel's bytes, then the texture copied out at its packed row. And
@@ -32,7 +36,30 @@
 // Run without MTL_DEBUG_LAYER (the layer is not passive: it asserts on what plain Metal does):
 //
 //   ./one_plane_ycbcr_heap_rows heap
+//   ./one_plane_ycbcr_heap_rows map
 //   ./one_plane_ycbcr_heap_rows rows
+//
+// WHAT IT MEASURED, Apple M3 Max, macOS 27.0.1 (26A434), plain Metal, each of the nine formats
+// alike (4:2:2 at 2 bytes a texel, 4:4:4 at 4):
+//
+// - A 2D texture whose row is a multiple of 16 bytes (8 x 8, 16 x 16, 64 x 64; 100 x 30 at
+//   4:4:4) lies one packed row after another from the texture's offset, every texel there both
+//   ways; a 1D texture's one row of any length (37 texels) alike; a 1D or 2D array's slices each
+//   at a multiple of 128 bytes (37 x 3: 128 or 256 apart; 16 x 16 x 2: 512 or 1024). Each answer
+//   is the packed rows (an array's slices rounded up to 128), at 16, 128 for a 2D array.
+// - A 2D texture of more than one row whose row is not a multiple of 16 bytes: the copy in lays
+//   the rows the row rounded down to 16 bytes apart (6 x 3 at 4:2:2, 12-byte rows: 16 apart, past
+//   the 36-byte answer; 13 x 7, 26-byte rows: 16 apart, every odd row's shared bytes the even
+//   rows'), and the copy out reads them there, but a row under 16 bytes past the first reads
+//   none of them back.
+// - A mipmapped texture (16 x 16, 3 levels) and a 3D one (8 x 8 x 3) are laid out no one way:
+//   their first level is found nowhere in the heap's bytes by the copy in, and read back from
+//   past the answer (1536 bytes in for 501's 512-byte answer) by the copy out.
+// - `rows`: a copy in at a `bytesPerRow` below the texel's bytes returns, each row read whole from
+//   its own row's offset in the source, so the rows overlap there; a copy out at one writes each
+//   row whole at its row's offset, the later row's bytes standing; `replaceRegion:` and
+//   `getBytes:` at one move nothing ("AGX: Texture read/write assertion failed: bytes_per_row >=
+//   used_bytes_per_row"). `Shared` and `Private` alike.
 //
 // Every line is `<mode> <format> <shape> ...`; a forked case that Metal ends prints `DIED <status>`.
 

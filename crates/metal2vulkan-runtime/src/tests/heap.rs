@@ -540,7 +540,7 @@ fn a_heap_texture_is_held_to_metal_s_answer_by_its_image_or_by_a_shadow() {
     // A plain single-sample texture whose image binds in the heap's memory.
     let plain = HeapTextureShape {
         apart: false,
-        four_two_two: false,
+        rows: false,
         multisample: false,
     };
     // Whether a shadow of its bytes fits its planes, counting each time it is asked.
@@ -605,10 +605,10 @@ fn a_heap_texture_is_held_to_metal_s_answer_by_its_image_or_by_a_shadow() {
         );
     }
     assert_eq!(asked.get(), 0);
-    // A 4:2:2 texture is a shadow of the heap's bytes even where its image would fit: Metal lays
-    // its rows out linearly there, which its image does not.
+    // A 4:2:2 or one-plane YCbCr texture is a shadow of the heap's bytes even where its image
+    // would fit: Metal lays its rows out linearly there, which its image does not.
     let chroma = HeapTextureShape {
-        four_two_two: true,
+        rows: true,
         ..plain
     };
     assert_eq!(

@@ -167,6 +167,8 @@ mod heap;
 mod heap_allocated_size;
 mod heap_footprint_formats;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod heap_one_plane_rows;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod heap_refused_notice;
 mod heap_sets;
 mod heap_tiled;

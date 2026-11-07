@@ -2586,10 +2586,10 @@ field	metal2vulkan-runtime::WorkCounts.copied_merge_back_bytes	pub copied_merge_
 field	metal2vulkan-runtime::WorkCounts.copied_merges_compared	pub copied_merges_compared: u64
 field	metal2vulkan-runtime::WorkCounts.copied_merges_skipped	pub copied_merges_skipped: u64
 field	metal2vulkan-runtime::WorkCounts.copied_read_only_memory	pub copied_read_only_memory: u64
-field	metal2vulkan-runtime::WorkCounts.copied_unwritable_pages	pub copied_unwritable_pages: u64
 field	metal2vulkan-runtime::WorkCounts.copied_rebind_images_made	pub copied_rebind_images_made: u64
 field	metal2vulkan-runtime::WorkCounts.copied_rebind_pages_made	pub copied_rebind_pages_made: u64
 field	metal2vulkan-runtime::WorkCounts.copied_rebind_pages_moved	pub copied_rebind_pages_moved: u64
+field	metal2vulkan-runtime::WorkCounts.copied_unwritable_pages	pub copied_unwritable_pages: u64
 field	metal2vulkan-runtime::WorkCounts.copy_regions_split	pub copy_regions_split: u64
 field	metal2vulkan-runtime::WorkCounts.copy_sites	pub copy_sites: [CopySite; 32]
 field	metal2vulkan-runtime::WorkCounts.cpu_block_decodes	pub cpu_block_decodes: u64
@@ -5224,6 +5224,7 @@ macro-member	metal2vulkan-runtime::Degradation::HalfOutputPrecision	HalfOutputPr
 macro-member	metal2vulkan-runtime::Degradation::HalfSampleFilter	HalfSampleFilter = "half-sample-filter";
 macro-member	metal2vulkan-runtime::Degradation::HalfTexelConversion	HalfTexelConversion = "half-texel-conversion";
 macro-member	metal2vulkan-runtime::Degradation::HeapDepthStencilApart	HeapDepthStencilApart = "heap-depth-stencil-apart", Precision,
+macro-member	metal2vulkan-runtime::Degradation::HeapOnePlaneLayout	HeapOnePlaneLayout = "heap-one-plane-layout", Precision,
 macro-member	metal2vulkan-runtime::Degradation::HeapSetCopied	HeapSetCopied = "heap-set-copied", Precision,
 macro-member	metal2vulkan-runtime::Degradation::HeapTextureBlockCompressedLayout	HeapTextureBlockCompressedLayout = "heap-texture-block-compressed-layout", Precision,
 macro-member	metal2vulkan-runtime::Degradation::HeapTextureCompressed	HeapTextureCompressed = "heap-texture-compressed", Precision,

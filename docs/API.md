@@ -1529,7 +1529,8 @@ bound.
   of to the heap's memory where the heap places it: its optimal image takes no memory type of the
   heap's and no linear image of the device serves (a `Shared` heap's depth texture on MoltenVK), or
   the heap lies over host pages that no linear image over them serves, or its images ask more than
-  Metal's answer for the texture (every 4:2:2 texture among them) and a shadow of its rows serves.
+  Metal's answer for the texture (every 4:2:2 texture among them, and every one-plane YCbCr one but
+  a mipmapped or 3D one) and a shadow of its rows serves.
   And a heap's `RGB10A8_2P_XR10` texture, or its sRGB twin, of a 1D, 2D, 1D array, 2D array or 3D
   type, of any level count, of one sample, whose moves fit the device: its image holds each texel's
   colour word and alpha byte side by side where Metal keeps two planes in the heap's bytes, so the
@@ -2367,6 +2368,20 @@ bound.
   first level's texels lie in the heap's bytes as Metal's CPU copies and GPU writes lay them, and
   read as written; the later levels' texels lie apart from the heap's bytes, and a 1D array's GPU
   reads read each texel, where Metal's paths address those texels at bytes that differ by path.
+- `metal2vulkan-degrade-heap-one-plane-layout` (precision). `HeapOnePlaneLayout`: A texture of
+  one of Apple's one-plane YCbCr formats (`YCBCR8_422_1P`, `YCBCR10_444_1P` and their twins, held
+  for copies alone) made in a heap whose texels lie otherwise than Metal's blits lay them. Metal
+  lays a one-plane texture's rows one packed row apart where the row is a multiple of 16 bytes, a
+  1D texture's one row, and an array's slices at multiples of 128 bytes, and so does the runtime.
+  A 2D texture or array of more than one row whose row is not a multiple of 16 bytes Metal lays
+  the row rounded down to 16 bytes apart (16 for a row under 16), so its rows share bytes or pass
+  the texture's answer; the runtime lays them one packed row apart, as that answer counts them. A
+  mipmapped or 3D texture's texels Metal lays at bytes that differ by path, its first level past
+  its answer; the runtime keeps them in memory of its own, apart from the heap's bytes. Cost: the
+  texture's size and alignment answers are Metal's and its copies read what they wrote, but its
+  texels lie in the heap's bytes one packed row apart, or apart from the heap's bytes, where
+  Metal's blits lay its rows a multiple of 16 bytes apart or its levels at bytes that differ by
+  path: a buffer over the heap meets them at other bytes than on Metal.
 - `metal2vulkan-degrade-moltenvk-argument-buffers-unread` (precision).
   `MoltenVkArgumentBuffersUnread`: A MoltenVK device at a release whose `pipelineCacheUUID` layout
   the runtime has not read: whether MoltenVK binds through Metal argument buffers is unknown, so a
