@@ -235,7 +235,7 @@ fn carried_reads() -> Vec<(&'static str, String)> {
         (
             "nested",
             format!(
-                "{q}\n  %n = insertvalue {{ {{ <4 x float>, i8 }}, i32 }} undef, {{ <4 x float>, i8 }} %q, 0\n  %r = extractvalue {{ {{ <4 x float>, i8 }}, i32 }} %n, 0"
+                "{q}\n  %nest = insertvalue {{ {{ <4 x float>, i8 }}, i32 }} undef, {{ <4 x float>, i8 }} %q, 0\n  %r = extractvalue {{ {{ <4 x float>, i8 }}, i32 }} %nest, 0"
             ),
         ),
         (
