@@ -21,9 +21,11 @@ fn a_heap_s_one_plane_ycbcr_texture_metal_lays_no_one_way_is_announced() {
         let heap = device
             .new_heap(&HeapDescriptor::new(HeapType::Placement, 64 << 10, options))
             .unwrap();
-        let texture = |width, height, mipmapped| TextureDescriptor {
-            resource_options: options,
-            ..TextureDescriptor::texture_2d(PixelFormat::YCBCR84221P, width, height, mipmapped)
+        let texture = |width, height, mipmapped| {
+            let pf = PixelFormat::YCBCR84221P;
+            let mut descriptor = TextureDescriptor::texture_2d(pf, width, height, mipmapped);
+            descriptor.resource_options = options;
+            descriptor
         };
         heap.new_texture_at_offset(&texture(16, 16, false), 0)
             .unwrap();
