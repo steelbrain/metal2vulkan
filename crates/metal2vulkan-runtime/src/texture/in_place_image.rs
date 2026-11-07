@@ -82,7 +82,8 @@ impl Texture {
             return None;
         };
         let plan = image.plan();
-        if !(plan.usage).contains(vk::ImageUsageFlags::ATTACHMENT_FEEDBACK_LOOP_EXT) {
+        let feedback = metal2vulkan::vk::ImageUsageFlags::ATTACHMENT_FEEDBACK_LOOP_EXT;
+        if !plan.usage.contains(feedback) {
             return None;
         }
         let range = vk::ImageSubresourceRange {
@@ -658,11 +659,11 @@ impl Device {
         // one in memory the device allocates, a linear image of its own.
         let made = match pages.over_own_pages() {
             true => {
-                let access =
-                    match (image.plan().usage).contains(vk::ImageUsageFlags::COLOR_ATTACHMENT) {
-                        true => Access::Renders,
-                        false => Access::Reads,
-                    };
+                let attachment = metal2vulkan::vk::ImageUsageFlags::COLOR_ATTACHMENT;
+                let access = match image.plan().usage.contains(attachment) {
+                    true => Access::Renders,
+                    false => Access::Reads,
+                };
                 if self.in_place_verdict(PagesClass::Fresh, access)
                     != crate::in_place::Verdict::Passed
                 {

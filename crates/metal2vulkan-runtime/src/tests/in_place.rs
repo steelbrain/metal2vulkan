@@ -24,7 +24,7 @@ use metal2vulkan::metal::TextureUsage;
 use sha2::{Digest, Sha256};
 use std::time::Duration;
 
-const VERDICTS: [Verdict; 4] = [
+const ANSWERS: [Verdict; 4] = [
     Verdict::Pending,
     Verdict::Passed,
     Verdict::Failed,
@@ -79,7 +79,7 @@ fn the_decision_takes_a_texture_that_does_not_write_whose_class_passed_its_acces
     usages.push(TextureUsage::empty());
     for class in PagesClass::ALL {
         for &usage in &usages {
-            for verdict in VERDICTS {
+            for verdict in ANSWERS {
                 // Shadow: always the exact form, the check never asked.
                 let asked = std::cell::Cell::new(false);
                 let decided = in_place(HostPageTexturePolicy::Shadow, usage, class, |_, _| {

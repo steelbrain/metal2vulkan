@@ -497,12 +497,28 @@ pub(crate) struct DriverIdentity {
 impl DriverIdentity {
     /// The SHA-256 of [`NAME_TAG`], [`CHECK_KIND`], [`CHECK_VERSION`] and every field: what names
     /// a record and what the record holds again. What decides the check's answer alone: the
-    /// check, and the driver and device it ran on.
+    /// check, and the driver and device it ran on; not the runtime's version.
     pub(crate) fn digest(&self) -> [u8; 32] {
+        self.hash(NAME_TAG, CHECK_KIND, CHECK_VERSION, None)
+    }
+
+    /// The SHA-256 of `tag`, `kind`, `version`, the runtime's `RUNTIME_VERSION` and every field:
+    /// what names the record of another device check's `kind` at `version` (one whose record is
+    /// the runtime release's own), and what that record holds again.
+    pub(crate) fn digest_for(&self, tag: &[u8], kind: &[u8], version: u32) -> [u8; 32] {
+        let runtime = metal2vulkan::cache::RUNTIME_VERSION;
+        self.hash(tag, kind, version, Some(runtime))
+    }
+
+    /// The SHA-256 of `tag`, `kind`, `version`, `runtime` where given and every field.
+    fn hash(&self, tag: &[u8], kind: &[u8], version: u32, runtime: Option<u32>) -> [u8; 32] {
         let mut hash = Sha256::new();
-        hash.update(NAME_TAG);
-        hash.update(CHECK_KIND);
-        hash.update(CHECK_VERSION.to_le_bytes());
+        hash.update(tag);
+        hash.update(kind);
+        hash.update(version.to_le_bytes());
+        if let Some(runtime) = runtime {
+            hash.update(runtime.to_le_bytes());
+        }
         hash.update(self.vendor_id.to_le_bytes());
         hash.update(self.device_id.to_le_bytes());
         hash.update(self.driver_version.to_le_bytes());
