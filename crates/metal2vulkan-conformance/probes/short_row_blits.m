@@ -15,6 +15,10 @@
 //        at `bytesPerRow` into a buffer of 0xCC (`copyFromTexture:...toBuffer:`). Printed: for
 //        each 16-byte chunk of the rows' span, the row whose bytes stand there (`0`-`7`; `?` for
 //        none, `*` for bytes of more than one row), and the bytes past the span written.
+//   half For each of the nine one-plane YCbCr formats and `R8Unorm`, `R16Uint` and `RGBA8Unorm`,
+//        `Private`, widths of 8 to 100 texels and 2 to 12 rows: a copy out at half the row, as
+//        `out`. Printed: whether the buffer is the rows written in order (`later`, each later row
+//        over the one before), the odd rows written and then the even ones (`even`), or neither.
 //
 // The formats: 501 `YCBCR8_422_1P` (2 bytes a texel), 504 `YCBCR10_444_1P` (4), and `R8Unorm`,
 // `R16Uint`, `RGBA8Unorm`, `R32Uint`, `RGBA16Float`, `RGBA32Float` for the rule of the copy itself.
@@ -29,6 +33,7 @@
 //
 //   ./short_row_blits in
 //   ./short_row_blits out
+//   ./short_row_blits half
 
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
@@ -209,13 +214,115 @@ static void outCase(const struct format *f, MTLStorageMode mode, NSUInteger bpr)
     printf(" past %lu\n", (unsigned long)past);
 }
 
+/// `rows` rows of `row` bytes from `p` written `bpr` apart into `out` (of 0xCC), in the order
+/// `order` lists them.
+static void writeRows(uint8_t *out, const uint8_t *p, NSUInteger row, NSUInteger bpr,
+                      const NSUInteger *order, NSUInteger rows) {
+    for (NSUInteger k = 0; k < rows; k++) {
+        memcpy(out + order[k] * bpr, p + order[k] * row, row);
+    }
+}
+
+static void halfCase(MTLPixelFormat pf, const char *name, NSUInteger unit, NSUInteger width,
+                     NSUInteger height) {
+    NSUInteger row = width * unit, bpr = row / 2;
+    MTLTextureDescriptor *d = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:pf
+                                                                                 width:width
+                                                                                height:height
+                                                                             mipmapped:NO];
+    d.storageMode = MTLStorageModePrivate;
+    d.usage = MTLTextureUsageShaderRead;
+    id<MTLTexture> t = [gDevice newTextureWithDescriptor:d];
+    id<MTLBuffer> src = sharedBuffer(row * height, 0);
+    uint8_t *p = src.contents;
+    for (NSUInteger i = 0; i < row * height; i++) {
+        p[i] = patternByte(3, (uint32_t)i);
+    }
+    id<MTLCommandBuffer> cb = [gQueue commandBuffer];
+    id<MTLBlitCommandEncoder> blit = [cb blitCommandEncoder];
+    [blit copyFromBuffer:src
+               sourceOffset:0
+          sourceBytesPerRow:row
+        sourceBytesPerImage:row * height
+                 sourceSize:MTLSizeMake(width, height, 1)
+                  toTexture:t
+           destinationSlice:0
+           destinationLevel:0
+          destinationOrigin:MTLOriginMake(0, 0, 0)];
+    [blit endEncoding];
+    waitFor(cb);
+    NSUInteger span = bpr * (height - 1) + row;
+    id<MTLBuffer> dst = sharedBuffer(span + 64, 0xCC);
+    cb = [gQueue commandBuffer];
+    blit = [cb blitCommandEncoder];
+    [blit copyFromTexture:t
+                     sourceSlice:0
+                     sourceLevel:0
+                    sourceOrigin:MTLOriginMake(0, 0, 0)
+                      sourceSize:MTLSizeMake(width, height, 1)
+                        toBuffer:dst
+               destinationOffset:0
+          destinationBytesPerRow:bpr
+        destinationBytesPerImage:bpr * height];
+    [blit endEncoding];
+    waitFor(cb);
+    NSUInteger order[16], n = 0;
+    uint8_t *later = malloc(span + 64), *even = malloc(span + 64);
+    memset(later, 0xCC, span + 64);
+    memset(even, 0xCC, span + 64);
+    for (NSUInteger y = 0; y < height; y++) {
+        order[y] = y;
+    }
+    writeRows(later, p, row, bpr, order, height);
+    for (NSUInteger y = 1; y < height; y += 2) {
+        order[n++] = y;
+    }
+    for (NSUInteger y = 0; y < height; y += 2) {
+        order[n++] = y;
+    }
+    writeRows(even, p, row, bpr, order, height);
+    const uint8_t *q = dst.contents;
+    bool isLater = memcmp(q, later, span + 64) == 0, isEven = memcmp(q, even, span + 64) == 0;
+    printf("half %s %lux%lu row=%lu bpr=%lu: %s\n", name, (unsigned long)width,
+           (unsigned long)height, (unsigned long)row, (unsigned long)bpr,
+           isLater && isEven ? "both" : isLater ? "later" : isEven ? "even" : "neither");
+    free(later);
+    free(even);
+}
+
+static void halfMode(void) {
+    static const struct format kHalf[] = {
+        {(MTLPixelFormat)501, "YCBCR8_422_1P", 2},       {(MTLPixelFormat)504, "YCBCR10_444_1P", 4},
+        {(MTLPixelFormat)521, "YCBCR8_422_1P_sRGB", 2},  {(MTLPixelFormat)524, "YCBCR10_444_1P_sRGB", 4},
+        {(MTLPixelFormat)560, "YCBCRA8_444_1P", 4},      {(MTLPixelFormat)562, "YCBCR8_422_1P_REV", 2},
+        {(MTLPixelFormat)563, "YCBCR10_444_1P_PQ", 4},   {(MTLPixelFormat)590, "YCBCR10_444_1P_XR", 4},
+        {(MTLPixelFormat)607, "YCBCR10_444_1P_HLG", 4},  {MTLPixelFormatR8Unorm, "R8Unorm", 1},
+        {MTLPixelFormatR16Uint, "R16Uint", 2},           {MTLPixelFormatRGBA8Unorm, "RGBA8Unorm", 4},
+    };
+    static const NSUInteger widths[] = {8, 16, 24, 48, 100};
+    static const NSUInteger heights[] = {2, 3, 5, 8, 12};
+    for (size_t i = 0; i < sizeof kHalf / sizeof kHalf[0]; i++) {
+        for (size_t w = 0; w < sizeof widths / sizeof widths[0]; w++) {
+            for (size_t h = 0; h < sizeof heights / sizeof heights[0]; h++) {
+                @autoreleasepool {
+                    halfCase(kHalf[i].pf, kHalf[i].name, kHalf[i].unit, widths[w], heights[h]);
+                }
+            }
+        }
+    }
+}
+
 int main(int argc, const char **argv) {
     if (argc < 2) {
-        fprintf(stderr, "usage: %s in|out\n", argv[0]);
+        fprintf(stderr, "usage: %s in|out|half\n", argv[0]);
         return 2;
     }
     gDevice = MTLCreateSystemDefaultDevice();
     gQueue = [gDevice newCommandQueue];
+    if (strcmp(argv[1], "half") == 0) {
+        halfMode();
+        return 0;
+    }
     bool in = strcmp(argv[1], "in") == 0;
     if (!in && strcmp(argv[1], "out") != 0) {
         return 2;
