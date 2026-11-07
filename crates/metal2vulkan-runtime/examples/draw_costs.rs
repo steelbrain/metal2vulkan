@@ -313,13 +313,15 @@ impl Bench {
         // With `heap`, one chunk before the heap's pages that only the guest RAM's buffer covers.
         let ahead = u64::from(heap) * CHUNK;
         let bytes = (ahead + count * CHUNK) as usize;
-        // SAFETY: a fresh anonymous mapping, read-write, never unmapped.
+        // A fresh anonymous mapping, read-write, never unmapped: private, as RADV refuses to
+        // import shared anonymous memory (`host_memory.rs`'s `import_refused`).
+        // SAFETY: as above.
         let pages = unsafe {
             libc::mmap(
                 std::ptr::null_mut(),
                 bytes,
                 libc::PROT_READ | libc::PROT_WRITE,
-                libc::MAP_ANON | libc::MAP_SHARED,
+                libc::MAP_ANON | libc::MAP_PRIVATE,
                 -1,
                 0,
             )
