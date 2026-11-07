@@ -44,7 +44,7 @@ Its limits, measured rather than asserted:
 | committed recordings | 1228 |
 | distinct SDK items the Metal leg reaches, of any status | 819 |
 | of those, reached only where this cannot name the family | 3 |
-| ledger rows (a case whose gap is recorded) | 2619 |
+| ledger rows (a case whose gap is recorded) | 2625 |
 | declared crossings of the option space (pairs put to Metal at once) | 26 |
 | declared crossings that are no pair of it (a boolean or numeric field, or one type in two slots) | 30 |
 
@@ -2327,6 +2327,8 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `blend-interaction-format-srgb8` | Metal's stored sRGB code and ours differ at this site, and the row's count and bound are this run's. Two of the device's own answers meet in it. The device enco… |
 | `blend-interaction-format-srgb8` | Metal's stored sRGB code and ours differ at this site, and the row's count and bound are this run's. Two of the device's own answers meet in it. The device enco… |
 | `blend-interaction-format-srgb8` | Metal's stored sRGB code and ours differ at this site, and the row's count and bound are this run's. Two of the device's own answers meet in it. The device enco… |
+| `blend-interaction-format-srgb8` | Metal's stored sRGB code and ours differ at this site, and the row's count and bound are this run's. Two of the device's own answers meet in it. The device enco… |
+| `blend-interaction-format-srgb8` | Metal's stored sRGB code and ours differ at this site, and the row's count and bound are this run's. Two of the device's own answers meet in it. The device enco… |
 | `blend-sweep-operations` | Metal stores a negative zero where we store a positive one: the first differing element is Metal 0x80000000 against our 0x0, and all four of the site's elements… |
 | `half-output-blends-r16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. Metal's compiler folds the attachment's blend and its fo… |
 | `half-output-blends-r16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. Metal's compiler folds the attachment's blend and its fo… |
@@ -2992,6 +2994,8 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `fetch-ordered-bgra8unorm-srgb` | A fragment function's colour write into an 8-bit sRGB attachment it also fetches (the `x1` to `x3` sites fetch and store it once to three times): the function r… |
 | `fetch-ordered-bgra8unorm-srgb` | A fragment function's colour write into an 8-bit sRGB attachment it also fetches (the `x1` to `x3` sites fetch and store it once to three times): the function r… |
 | `fetch-ordered-bgra8unorm-srgb` | A fragment function's colour write into an 8-bit sRGB attachment it also fetches (the `x1` to `x3` sites fetch and store it once to three times): the function r… |
+| `fetch-ordered-bgra8unorm-srgb` | A fragment function's colour write into an 8-bit sRGB attachment it also fetches (the `x1` to `x3` sites fetch and store it once to three times): the function r… |
+| `fetch-ordered-bgra8unorm-srgb` | A fragment function's colour write into an 8-bit sRGB attachment it also fetches (the `x1` to `x3` sites fetch and store it once to three times): the function r… |
 | `fetch-ordered-rgba8unorm` | A fragment function's colour write into an 8-bit unorm attachment it also fetches (the `x1` to `x3` sites fetch and store it once to three times): Metal's store… |
 | `fetch-ordered-rgba8unorm` | A fragment function's colour write into an 8-bit unorm attachment it also fetches (the `x1` to `x3` sites fetch and store it once to three times): Metal's store… |
 | `fetch-ordered-rgba8unorm` | A fragment function's colour write into an 8-bit unorm attachment it also fetches (the `x1` to `x3` sites fetch and store it once to three times): Metal's store… |
@@ -3014,6 +3018,8 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `fetch-ordered-rgba8unorm-srgb` | A fragment function's colour write into an 8-bit sRGB attachment it also fetches (the `x1` to `x3` sites fetch and store it once to three times): on this device… |
 | `fetch-ordered-rgba8unorm-srgb` | A fragment function's colour write into an 8-bit sRGB attachment it also fetches (the `x1` to `x3` sites fetch and store it once to three times): on this device… |
 | `fetch-ordered-rgba8unorm-srgb` | A fragment function's colour write into an 8-bit sRGB attachment it also fetches (the `x1` to `x3` sites fetch and store it once to three times): on this device… |
+| `fetch-ordered-rgba8unorm-srgb` | A fragment function's colour write into an 8-bit sRGB attachment it also fetches (the `x1` to `x3` sites fetch and store it once to three times): the function r… |
+| `fetch-ordered-rgba8unorm-srgb` | A fragment function's colour write into an 8-bit sRGB attachment it also fetches (the `x1` to `x3` sites fetch and store it once to three times): the function r… |
 | `fetch-ordered-rgba8unorm-srgb` | A fragment function's colour write into an 8-bit sRGB attachment it also fetches (the `x1` to `x3` sites fetch and store it once to three times): the function r… |
 | `fetch-ordered-rgba8unorm-srgb` | A fragment function's colour write into an 8-bit sRGB attachment it also fetches (the `x1` to `x3` sites fetch and store it once to three times): the function r… |
 | `fetch-ordered-rgba8unorm-srgb` | A fragment function's colour write into an 8-bit sRGB attachment it also fetches (the `x1` to `x3` sites fetch and store it once to three times): the function r… |
