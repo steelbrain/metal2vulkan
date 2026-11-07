@@ -77,6 +77,7 @@ use crate::release;
 use crate::shader_cache::store::{hex, Lookup};
 use ash::vk;
 use sha2::{Digest, Sha256};
+use std::cell::Cell;
 use std::ptr::NonNull;
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, AtomicU8, Ordering};
 use std::sync::{Condvar, Mutex};
@@ -113,6 +114,7 @@ pub(crate) const TAX_FLOOR: i64 = 1_000;
 const WAIT_SLICE: Duration = Duration::from_millis(100);
 
 /// The bytes the follows check copies.
+#[cfg(target_os = "linux")]
 const COPIED: u64 = 256;
 
 /// A check, in the order they run and the record holds their verdicts.
@@ -757,11 +759,14 @@ fn follows_pair(
     answer
 }
 
-/// Anonymous private pages the check maps, read-write, unmapped as this goes, after every import
-/// of them was freed.
+/// Anonymous private pages the check maps, read-write, unmapped as this goes where every import
+/// of them was freed (an import left unreleased, as the process exits, keeps them mapped to the
+/// end).
 struct Pages {
     start: NonNull<u8>,
     length: u64,
+    /// The live imports of these pages.
+    imports: Cell<u32>,
 }
 
 impl Pages {
@@ -786,6 +791,7 @@ impl Pages {
         Some(Pages {
             start: NonNull::new(pointer.cast())?,
             length,
+            imports: Cell::new(0),
         })
     }
 
@@ -837,9 +843,11 @@ impl Pages {
 
 impl Drop for Pages {
     fn drop(&mut self) {
+        if self.imports.get() != 0 {
+            return;
+        }
         #[cfg(unix)]
-        // SAFETY: the mapping is the check's, and every import of it was freed first (each
-        // `Import` is released before its pages go).
+        // SAFETY: the mapping is the check's, and no import of it is live.
         unsafe {
             libc::munmap(self.start.as_ptr().cast(), self.length as usize);
         }
@@ -848,16 +856,17 @@ impl Drop for Pages {
 
 /// An import of a [`Pages`]' bytes by their pointer, in its own `VkDeviceMemory`, and, for the
 /// follows check, a buffer bound to it.
-struct Import {
+struct Import<'p> {
     memory: vk::DeviceMemory,
     buffer: vk::Buffer,
+    pages: &'p Pages,
 }
 
-impl Import {
+impl<'p> Import<'p> {
     /// The import of `pages`, with a buffer bound where `bound`, in a host-coherent type the
     /// pointer takes. `Some(None)` where the device imports no host pointer, the pages take no
     /// such type, or a call was refused; `None` where the process is exiting.
-    fn make(device: &Device, pages: &Pages, bound: bool) -> Option<Option<Import>> {
+    fn make(device: &Device, pages: &'p Pages, bound: bool) -> Option<Option<Import<'p>>> {
         let shared = device.shared();
         let Ok(importer) = &shared.host_import else {
             return Some(None);
@@ -924,7 +933,8 @@ impl Import {
             .memory_type_index(type_index)
             .push_next(&mut import);
         // SAFETY: the pages stay mapped until after this memory is freed (`Pages` outlives every
-        // `Import`, released first), at a multiple of the import alignment, of a type they take.
+        // `Import` and stays mapped while one is live), at a multiple of the import alignment, of
+        // a type they take.
         let memory = match unsafe { crate::creation::allocate_memory(raw, &info) } {
             Ok(memory) => memory,
             Err(_) => {
@@ -946,16 +956,18 @@ impl Import {
             }
             exit_guard::called(Call::BindBufferMemory);
         }
-        Some(Some(Import { memory, buffer }))
+        pages.imports.set(pages.imports.get() + 1);
+        Some(Some(Import {
+            memory,
+            buffer,
+            pages,
+        }))
     }
 
     /// Free it, inside a section: `None` where the process is exiting, the import then left to
-    /// its end (and its pages never unmapped before it, as the process ends first).
+    /// its end with its pages mapped.
     fn release(self, device: &Device) -> Option<()> {
-        let Some(_busy) = exit_guard::enter() else {
-            std::mem::forget(self);
-            return None;
-        };
+        let _busy = exit_guard::enter()?;
         let raw = device.shared().vk();
         // SAFETY: no submission that names them is pending (each was waited for).
         unsafe {
@@ -964,15 +976,17 @@ impl Import {
             }
             release::object(raw, self.memory);
         }
+        self.pages.imports.set(self.pages.imports.get() - 1);
         Some(())
     }
 }
 
 /// The checks' Vulkan objects: a command pool of the first `VkQueue`'s family, [`MERGED`] empty
-/// command buffers and one for the follows check's copy, and a fence.
+/// command buffers and, on Linux, one for the follows check's copy, and a fence.
 struct Objects {
     pool: vk::CommandPool,
     empty: Vec<vk::CommandBuffer>,
+    #[cfg(target_os = "linux")]
     copy: vk::CommandBuffer,
     fence: vk::Fence,
 }
@@ -993,6 +1007,7 @@ impl Objects {
         let mut objects = Objects {
             pool: pool.ok()?,
             empty: Vec::new(),
+            #[cfg(target_os = "linux")]
             copy: vk::CommandBuffer::null(),
             fence: vk::Fence::null(),
         };
@@ -1011,7 +1026,7 @@ impl Objects {
         let allocate = vk::CommandBufferAllocateInfo::default()
             .command_pool(self.pool)
             .level(vk::CommandBufferLevel::PRIMARY)
-            .command_buffer_count(MERGED as u32 + 1);
+            .command_buffer_count(MERGED as u32 + u32::from(cfg!(target_os = "linux")));
         // SAFETY: the pool is the check's, which this thread alone uses; the device's loader word
         // is put back first (`loader_word.rs`).
         let allocated = unsafe {
@@ -1019,9 +1034,11 @@ impl Objects {
             raw.allocate_command_buffers(&allocate)
         };
         exit_guard::called(Call::AllocateCommandBuffers);
-        let mut buffers = allocated.ok()?;
-        self.copy = buffers.pop()?;
-        self.empty = buffers;
+        self.empty = allocated.ok()?;
+        #[cfg(target_os = "linux")]
+        {
+            self.copy = self.empty.pop()?;
+        }
         let begin = vk::CommandBufferBeginInfo::default();
         for &buffer in &self.empty {
             // SAFETY: a new command buffer of the pool, recorded once on this thread.
