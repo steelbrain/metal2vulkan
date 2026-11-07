@@ -434,6 +434,7 @@ impl RenderLowering {
             heap_tables: &[],
             descriptor_ranges: &commands.descriptor_ranges,
             root_tables: Vec::new(),
+            root_writes: false,
             push_holes: &commands.push_holes,
             uses: &commands.uses,
             blobs: Vec::new(),

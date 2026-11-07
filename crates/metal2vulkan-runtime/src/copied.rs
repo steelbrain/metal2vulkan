@@ -32,9 +32,9 @@
 //!   since ([`CopiedBuffers::merge_back`]): a byte both changed keeps the CPU's, which the next
 //!   commit copies in. The completion compares only the copies its batches may have written: one
 //!   whose buffer's (or heap's) key a use of their command buffers' commands wrote, and every
-//!   copy where one of those may have written memory no use names (a function's loaded
-//!   addresses, an indirect command buffer's executions; `Written`), or kept its writes not all
-//!   apart. Counted: `WorkCounts::copied_merges_compared`, `copied_merges_skipped`. Bytes are compared a page (4 KiB) at a time, and inside a page that
+//!   copy where one of those may have written memory no use names (the loaded addresses of a
+//!   function that may store or update memory atomically, an indirect command buffer's
+//!   executions; `Written`), or kept its writes not all apart. Counted: `WorkCounts::copied_merges_compared`, `copied_merges_skipped`. Bytes are compared a page (4 KiB) at a time, and inside a page that
 //!   differs 8 at a time and then one at a time, so a merge writes no byte the GPU did not change
 //!   ([`sync`]). Each batch ends with a barrier that makes its writes visible to the host
 //!   (`tracker::Barrier::to_host`). Where the pages' memory came with a log of the writes to them
@@ -42,8 +42,10 @@
 //!   back reports the blocks it wrote to the log as the copy's own writes, in one call
 //!   (`DirtyPages::wrote_runs_as`, a writer of the copy's own) before it returns: the log sees no
 //!   write the runtime makes, and every other copy and shadow of the pages takes them.
-//! - **Copies in the log gates.** Where the pages' memory came with such a log, a commit's copy
-//!   in compares only the pages the log reports written since the copy's last copy in, and the
+//! - **Copies in the log gates.** Where the pages' memory came with such a log (a copy that drops
+//!   the GPU's writes included: its guest RAM's runs are asked as a writable copy's are), a
+//!   commit's copy in compares only the pages the log reports written since the copy's last copy
+//!   in, and the
 //!   bytes no log keeps (a guest RAM's runs that miss some of them): a stamp of each log is asked
 //!   at the commit, once for every copy, its publication waited for (bounded) with no lock of
 //!   the copies' or the command buffer's held, and the copy synced to it
@@ -504,9 +506,10 @@ impl CopiedBuffers {
     ///
     /// Only the copies the finished batches may have written are compared (`written`): one a
     /// use of their command buffers' commands wrote by one of its keys ([`Copied::name`]), and
-    /// every copy where a command may have written memory no use names (its function's loaded
-    /// addresses, an indirect command buffer's executions), or where its command buffer's writes
-    /// were not all kept apart. Each batch's writes are done by its own completion turn, which
+    /// every copy where a command may have written memory no use names (the loaded addresses of
+    /// a function that may store or update memory atomically, `StageInterface::writes_memory`; an
+    /// indirect command buffer's executions), or where its command buffer's writes were not all
+    /// kept apart. Each batch's writes are done by its own completion turn, which
     /// compares what they reach; a copy no batch wrote since its last comparison holds what its
     /// pages do, but for the CPU's writes, which the next commit copies in. After a batch finished
     /// with no merge (a failed wait, [`CopiedBuffers::owe`]), the next compares every copy.

@@ -925,9 +925,16 @@ pub(super) struct State {
     replay_tables: Vec<ReplayTable>,
     /// A command of it may write memory no use it noted names: a root table (a function that
     /// reaches buffers through addresses), a root table of work on the GPU alone, or work its
-    /// host steps resolve from records (`Deferred::reaches_unnamed`). The merge back of copied
-    /// host buffers then takes every copy as written by it (`copied.rs`).
+    /// host steps resolve from records (`Deferred::reaches_unnamed`).
     pub(super) reaches_unnamed: bool,
+    /// A command of it may write memory no use it noted names: one that reaches it as above
+    /// whose functions may write memory (stores or atomic updates,
+    /// `StageInterface::writes_memory`; the root table of a draw whose vertex and fragment
+    /// functions store nothing writes nothing through it), work on the GPU alone, or work its host
+    /// steps resolve from records. The merge back of copied host buffers then takes every copy as
+    /// written by it (`copied.rs`); a command buffer whose unnamed reach only reads leaves the
+    /// copies its uses did not write uncompared.
+    pub(super) writes_unnamed: bool,
     /// The ended encoders whose submissions failed so: no part of one goes to a queue with work
     /// (`submit.rs` holds it to that).
     unrunnable: BTreeSet<usize>,
@@ -1035,6 +1042,7 @@ impl State {
     /// the submitted command buffer holds.
     pub(super) fn replay_table(&mut self, table: ReplayTable) {
         self.reaches_unnamed = true;
+        self.writes_unnamed = true;
         if !self.submitted {
             self.replay_tables.push(table);
         }
@@ -1254,14 +1262,17 @@ impl State {
     /// Note a root table its commands read, uploaded at `table` (`upload`), whose own resident
     /// set is `ranges`: the commit points it at the command buffer's resident set. One a host
     /// step uploads after the commit is pointed now, at that set where it holds `ranges`, else
-    /// at a set of both made for it.
+    /// at a set of both made for it. `writes`: whether a function that reads it may write memory
+    /// ([`State::writes_unnamed`]).
     pub(super) fn root_table(
         &mut self,
         device: &Device,
         noted: NotedTable,
         ranges: Vec<ResidentRange>,
+        writes: bool,
     ) -> Result<(), Error> {
         self.reaches_unnamed = true;
+        self.writes_unnamed |= writes;
         let counts = &device.shared().counts;
         counts.root_table_ranges_noted(ranges.len() as u64);
         if self.status == CommandBufferStatus::NotEnqueued {
@@ -2170,6 +2181,7 @@ impl CommandBuffer {
                 release: None,
                 replay_tables: Vec::new(),
                 reaches_unnamed: false,
+                writes_unnamed: false,
                 unrunnable: BTreeSet::new(),
                 submitted_holds: Vec::new(),
                 failed_at_commit: None,
@@ -3232,6 +3244,7 @@ impl CommandBuffer {
                 .unzip();
             if segments.iter().any(|(work, _)| work.reaches_unnamed()) {
                 state.reaches_unnamed = true;
+                state.writes_unnamed = true;
             }
             // What of it the live buffers list once used, held weakly: the device's registries'
             // locks, which take no other, inside this one.

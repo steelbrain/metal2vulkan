@@ -410,9 +410,10 @@ completion, after that write-back: no read of the event's value shows it earlier
 on another queue (a plain `Event`'s too) is held until then rather than chained on the GPU
 (`event_signals_behind_merge`). Each completion compares every byte of each copy its command
 buffers may have written (`copied_merges_compared`, `copied_merges_skipped`): those their uses
-wrote, and every copy where a function reads addresses or an indirect command buffer runs, so keep
-copies few. Where the pages' memory carries a log of the writes to them
-(`HostMemory::with_dirty_pages`, `HostRam::with_dirty_pages`), each commit compares only the pages
+wrote, and every copy where a function that may store reads addresses or an indirect command
+buffer runs, so keep copies few. Where the pages' memory carries a log of the writes to them
+(`HostMemory::with_dirty_pages`, `HostRam::with_dirty_pages`, a copy that drops the GPU's writes
+included), each commit compares only the pages
 the log reports written since the copy's last commit, and the bytes no log keeps
 (`copied_copy_in_bytes_skipped`): it asks one stamp of each log for every copy and waits for its
 publication (bounded) on the committing thread, and every copy compares every byte at its first

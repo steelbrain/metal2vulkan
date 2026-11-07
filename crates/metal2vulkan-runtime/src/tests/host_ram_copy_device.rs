@@ -16,6 +16,10 @@
 //! - **A copied backing over the pages** (the import gate refused, the RAM's log given) takes a
 //!   scatter's bytes at the next commit, the log told of them; a gather after its merge back
 //!   reads what the GPU wrote through it.
+//! - **Memory of Metal's private option bit 24 over the pages**, where the system maps no
+//!   read-only view of them: a copy, never bound in the chunk, whose commit after the CPU wrote
+//!   one page compares that page alone (the RAM's log, `copied_copy_in_bytes_skipped`); the GPU's
+//!   writes to it are dropped.
 //! - **Refused**: runs off the page, empty or outside the RAM, a RAM the device does not use (or
 //!   no longer does), bytes past the buffer and an offset off a word; no runs copy nothing.
 //! - **A chunk taken as an object takes it**, on a device whose thread imports ahead: a gather
@@ -576,6 +580,100 @@ fn a_copied_backing_over_the_pages_takes_a_scatter_at_the_next_commit() {
     assert!(
         contents(&out).iter().all(|&byte| byte == 0x3c),
         "the merge back gathered"
+    );
+}
+
+/// Memory of Metal's private option bit 24 over the RAM's pages, where the system maps no
+/// read-only view of them: a copy whose GPU writes are dropped, never bound in the RAM's chunk,
+/// whose runs give it the RAM's log, so that a commit after the CPU wrote one page compares that
+/// page alone; a GPU write to it leaves the pages as they were, and a later command buffer reads
+/// their bytes.
+#[test]
+fn a_private_bit_copy_over_the_pages_copies_in_only_the_pages_the_log_reports() {
+    if crate::read_only_view::VIEWS_DROP_WRITES {
+        eprintln!("HOST-RAM-COPY: the private bit maps a read-only view here; nothing to test");
+        return;
+    }
+    let Some(device) = device() else {
+        return;
+    };
+    let log = Arc::new(Log::default());
+    let (ram, start) = new_ram(Some(Arc::clone(&log)));
+    let _used = device.use_host_ram(&ram).unwrap();
+    let page = host_page();
+    let length = 8 * page;
+    let at = (start + 300 * PAGE).next_multiple_of(page);
+    write_pattern(at..at + length, 21);
+    let options =
+        ResourceOptions::from_raw(ResourceOptions::default().raw() | ResourceOptions::PRIVATE_BIT)
+            .unwrap();
+    let before = device.work_counts();
+    // SAFETY: the RAM's bytes, mapped until its keep-alive goes, after every device let go.
+    let memory =
+        unsafe { HostMemory::new(NonNull::new(at as *mut u8).unwrap()) }.with_runs(itself());
+    // SAFETY: as above.
+    let copied =
+        unsafe { device.new_buffer_with_bytes_no_copy(memory, length, options, None) }.unwrap();
+    let after = device.work_counts();
+    assert_eq!(copied.host_backing(), Some(HostBacking::Copied));
+    assert_eq!(
+        after.copied_read_only_memory - before.copied_read_only_memory,
+        1,
+        "a copy for the private bit"
+    );
+    assert_eq!(
+        after.chunk_bound_buffers_made + after.run_bound_buffers_made,
+        before.chunk_bound_buffers_made + before.run_bound_buffers_made,
+        "never bound in the RAM's chunk"
+    );
+    let read = || {
+        let out = shared(&device, length, |_| 0);
+        blit(&device, |encoder| {
+            encoder
+                .copy_from_buffer_to_buffer(&copied, 0, &out, 0, length)
+                .unwrap();
+        });
+        contents(&out)
+    };
+    assert!(
+        read() == bytes(at..at + length),
+        "the copy holds the pages' bytes"
+    );
+    // The CPU writes one page, which the RAM's log reports.
+    let written = at + 3 * page..at + 4 * page;
+    write_pattern(written.clone(), 22);
+    log.told(written, 0);
+    let before = device.work_counts();
+    let out = read();
+    let after = device.work_counts();
+    let copied_in = after.copied_copy_in_bytes - before.copied_copy_in_bytes;
+    let skipped = after.copied_copy_in_bytes_skipped - before.copied_copy_in_bytes_skipped;
+    eprintln!(
+        "HOST-RAM-COPY: a private-bit copy's commit after one page written: {copied_in} bytes \
+         copied in, {skipped} of {length} not compared"
+    );
+    assert!(
+        out == bytes(at..at + length),
+        "the copy took the CPU's write"
+    );
+    assert_eq!(
+        skipped,
+        length - page,
+        "only the page the log reports compared"
+    );
+    assert!(0 < copied_in && copied_in <= page);
+    // The GPU's write to the copy is dropped.
+    let kept = bytes(at..at + length);
+    let before = device.work_counts();
+    blit(&device, |encoder| {
+        encoder.fill_buffer(&copied, 0..length, 0x5a).unwrap();
+    });
+    let after = device.work_counts();
+    assert!(bytes(at..at + length) == kept, "the GPU's write dropped");
+    assert!(after.copied_dropped_bytes > before.copied_dropped_bytes);
+    assert!(
+        read() == kept,
+        "a later command buffer reads the pages' bytes"
     );
 }
 

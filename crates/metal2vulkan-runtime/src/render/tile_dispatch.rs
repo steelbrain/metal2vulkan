@@ -1055,6 +1055,8 @@ impl RenderLowering {
                 .iter()
                 .map(|table| (metal2vulkan::vk::ShaderStageFlags::COMPUTE, table))
                 .collect(),
+            // A tile function's artifact states no proof that it stores nothing.
+            root_writes: true,
             push_holes: &commands.push_holes,
             uses: &commands.uses,
             blobs: pipeline_stage

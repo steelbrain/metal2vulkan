@@ -2416,6 +2416,8 @@ fn record(
             .iter()
             .map(|table| (metal2vulkan::vk::ShaderStageFlags::COMPUTE, table))
             .collect(),
+        // A kernel's artifact states no proof that it stores nothing.
+        root_writes: true,
         push_holes: &commands.push_holes,
         uses: &command_uses,
         blobs: pipeline_stage

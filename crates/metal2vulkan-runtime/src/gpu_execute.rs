@@ -704,6 +704,7 @@ fn variant_uses(
         heap_tables: &[],
         descriptor_ranges: &[],
         root_tables: Vec::new(),
+        root_writes: false,
         push_holes: &[],
         uses: &[],
         blobs: Vec::new(),

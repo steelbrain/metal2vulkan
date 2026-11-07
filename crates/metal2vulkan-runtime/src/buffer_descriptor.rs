@@ -560,15 +560,18 @@ impl Device {
         // once, here, holding no lock of the runtime's, before the gate. One run inside one chunk
         // is bound in the chunk's import, with no import of its own: no pin, no kernel mapping,
         // no gate. Others take the paths below, the runs kept with the buffer. A buffer whose GPU
-        // writes are dropped is never routed: it imports a read-only view of its pages, or is a
-        // copy of them.
-        let routed = match (&runs, drops_writes) {
-            (Some(resolver), false) => self.route_runs(call, importer, resolver, &window)?,
+        // writes are dropped is never bound in a chunk: it imports a read-only view of its pages,
+        // or is a copy of them, whose runs are asked all the same, so that the copy's commits
+        // copy in only the pages the RAM's log reports written ([`routes_runs`]).
+        let routed = match &runs {
+            Some(resolver) if routes_runs(drops_writes) => {
+                self.route_runs(call, importer, resolver, &window)?
+            }
             _ => None,
         };
         // SAFETY: the window's pages are the bytes of the run in the RAM (the resolver's
         // contract, `HostMemory::with_runs`).
-        let in_chunk = (routed.as_ref())
+        let in_chunk = (routed.as_ref().filter(|_| !drops_writes))
             .and_then(|routed| unsafe { self.bind_in_chunk(importer, routed, &window, length) });
         let kept_runs = routed.as_ref().map(Routed::kept);
         // The logs of the writes to the pages, where their memory came with one or their guest
@@ -876,9 +879,10 @@ impl Device {
                 // the chunk's import, with no import of its own, no pin and no gate, unless the
                 // bytes moved in their page, which take the copy laid out at the old offset.
                 // Others take the paths below, the runs kept with the new pages. A buffer whose
-                // GPU writes are dropped is never routed.
-                let routed = match (&runs, drops_writes) {
-                    (Some(resolver), false) => {
+                // GPU writes are dropped is never bound in a chunk, but its copy's runs are asked
+                // for the RAM's log ([`routes_runs`]).
+                let routed = match &runs {
+                    Some(resolver) if routes_runs(drops_writes) => {
                         let was_settled = settled.take().is_some();
                         let routed = self.route_runs(call, importer, resolver, &window);
                         if was_settled {
@@ -890,9 +894,9 @@ impl Device {
                 };
                 // SAFETY: the window's pages are the bytes of the run in the RAM (the resolver's
                 // contract, `HostMemory::with_runs`).
-                let in_chunk = (routed.as_ref().filter(|_| !moved)).and_then(|routed| unsafe {
-                    self.bind_in_chunk(importer, routed, &window, length)
-                });
+                let in_chunk = (routed.as_ref().filter(|_| !moved && !drops_writes)).and_then(
+                    |routed| unsafe { self.bind_in_chunk(importer, routed, &window, length) },
+                );
                 let chunk_bound = in_chunk.is_some();
                 let kept_runs = routed.as_ref().map(Routed::kept);
                 // Whether an import alive now holds every page of them: counted once the import
@@ -1998,6 +2002,17 @@ struct HostWindow {
     by_pointer: bool,
     /// The caller's dma-buf source, where it gave one and the device imports dma-bufs.
     source: Option<Source>,
+}
+
+/// Whether a no-copy buffer, heap or rebind whose pages the caller resolves to runs of a guest RAM
+/// (`HostMemory::with_runs`) has them asked, where its GPU writes are dropped where `drops_writes`:
+/// every one but memory whose GPU writes Metal's private option bit 24 drops on macOS, which
+/// imports a read-only view of its pages (`read_only_view.rs`). Elsewhere such memory is a copy
+/// of its pages (`copied.rs`), never bound in the RAM's chunk, whose runs give it the RAM's log of
+/// the writes to them (`dirty_pages::PagesLog`), so its commits copy in only the pages the log
+/// reports written, as a writable copy's do, where they compared every byte.
+fn routes_runs(drops_writes: bool) -> bool {
+    !drops_writes || !crate::read_only_view::VIEWS_DROP_WRITES
 }
 
 /// Whether the process cannot write some of `host`'s pages, asked by a call that imports them

@@ -371,13 +371,16 @@ driver's. Each is open work.
   compares every byte of the copy with the bytes the copy and the pages last agreed on, a page at
   a time, so 680 MiB of copies that agree take 28-30 ms at each commit without a log on an M3
   Max (52-53 ms on the RTX 5080 laptop's Core Ultra 9 275HX), and as long at each completion of
-  a command buffer whose functions read addresses (which may write every copy) or that executes
-  an indirect command buffer (`tests/copied_bench.rs`). Where the pages' memory carries a log of
-  their writes (`HostMemory::with_dirty_pages`, `HostRam::with_dirty_pages`), the commit
-  compares only the pages it reports written: 0.15 ms where none changed, 4.6 ms where 1% did
-  (0.3 and 3.5 ms on the 275HX). A completion whose command buffers' uses name the
-  copies they write compares those alone. A copy is made only where the caller's gate refuses an
-  import or an admitted import fails, never by default.
+  a command buffer whose functions read addresses and may store (which may write every copy;
+  a draw whose vertex and fragment functions store nothing writes none) or that executes an
+  indirect command buffer (`tests/copied_bench.rs`). Where the pages' memory carries a log of
+  their writes (`HostMemory::with_dirty_pages`, `HostRam::with_dirty_pages`, a copy that drops
+  the GPU's writes included), the commit compares only the pages it reports written: 0.15 ms
+  where none changed, 4.6 ms where 1% did (0.3 and 3.5 ms on the 275HX). A completion whose
+  command buffers' uses name the copies they write compares those alone. A copy is made only
+  where the caller's gate refuses an import, an admitted import fails, or the GPU's writes to
+  the pages must be dropped (pages the process cannot write, and memory of Metal's private
+  option bit 24 where the system maps no read-only view), never for other memory by default.
 - **Two memories over overlapping host bytes agree GPU to GPU only through the pages when one is
   a copied host buffer** (`copied.rs`, `copied-host-pages`): a copy and another copy or an import
   of pages that overlap without being the same first byte and length (a rebind's bytes inside a

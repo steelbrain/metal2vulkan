@@ -633,7 +633,7 @@ fn finish(watch: &Watch, lists: &mut FenceLists, mut finished: Vec<(usize, Submi
         let mut written = Written::default();
         for (_, batch) in &finished {
             let buffer = &batch.buffer;
-            if buffer.unnoted.load(Ordering::Relaxed) || lock(&buffer.state).reaches_unnamed {
+            if buffer.unnoted.load(Ordering::Relaxed) || lock(&buffer.state).writes_unnamed {
                 written = Written::all();
                 break;
             }

@@ -8922,6 +8922,18 @@ impl RenderLowering {
             .map(|dispatch| tessellation_scan::TessellationWork::new(&self.core, dispatch))
             .transpose()?;
         let pipeline_objects = variant.pipeline();
+        // Whether a function that reads a root table may write memory: a vertex or fragment
+        // function the compile found storing nothing writes none (`vertex_writes_memory`,
+        // `fragment_writes_memory`), and any other stage (an object or mesh function, a
+        // synthesized one) has no such proof.
+        let root_writes = graphics.vertex_writes_memory
+            || graphics.fragment_writes_memory
+            || (pipeline_objects.stages.iter()).any(|module| {
+                !matches!(
+                    module.stage,
+                    metal2vulkan::vk::ShaderStage::VERTEX | metal2vulkan::vk::ShaderStage::FRAGMENT
+                )
+            });
         let mut blobs = Vec::new();
         for (index, module) in pipeline_objects.stages.iter().enumerate() {
             // A tessellation pipeline's synthesized stages are its vertex function's.
@@ -8957,6 +8969,7 @@ impl RenderLowering {
                 .iter()
                 .map(|(stages, table)| (*stages, table))
                 .collect(),
+            root_writes,
             push_holes: &commands.push_holes,
             uses: &commands.uses,
             blobs,

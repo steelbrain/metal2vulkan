@@ -12,7 +12,9 @@
 //!   The same without a gate.
 //! - **Coherence.** In each, the GPU reads the caller's bytes; a CPU write before a commit reaches
 //!   the GPU, those bytes alone copied in; a fill reaches the caller's pages at its completion,
-//!   those bytes alone merged back.
+//!   those bytes alone merged back. A completion compares no copy its batch only read, nor one a
+//!   batch left unnamed whose draw only reads through the addresses it loads; a kernel's stores
+//!   through such an address still merge back.
 //! - **Unreadable pages** (mapped without access, memory Metal makes no buffer over) are never
 //!   copied: the buffer is refused, as their import is.
 //! - **A dma-buf's mapping** (Linux, where `/dev/udmabuf` opens), whose pages the kernel's read
@@ -1909,6 +1911,97 @@ fn a_write_through_an_address_no_use_names_still_merges_back() {
         "the stores through the address are in the pages"
     );
     drop((buffer, out, state, queue));
+}
+
+/// A batch whose draw reads memory through addresses it loads (a root table), with vertex and
+/// fragment functions that store nothing (`GraphicsState::vertex_writes_memory`,
+/// `fragment_writes_memory`), leaves a copy none of its uses wrote uncompared at its merge back:
+/// the draw writes no memory its uses do not name.
+#[test]
+fn a_merge_back_skips_a_copy_when_a_draw_only_reads_through_loaded_addresses() {
+    use crate::{SamplerStateOptions, TextureDescriptor};
+    use metal2vulkan::bind::SamplerDescriptor;
+    use metal2vulkan::metal::TextureUsage;
+    use metal2vulkan::metal::{PixelFormat, PrimitiveType, RenderStages, ResourceUsage};
+    let Some((device, _)) = device() else {
+        return;
+    };
+    let host = Host::new(15);
+    let asked = Arc::default();
+    let buffer = host.buffer(&device, Some(gate(&asked, false)));
+    assert!(buffer.copied(), "the buffer is a copy");
+    // The fixture's entry shape: the vertex function loads its position through the address in
+    // its table's entry, and the fragment function samples the texture the entry names.
+    let state = super::encoder_holds::render_state(
+        &device,
+        "engine/resident_draws.ll",
+        "rd_entry_vertex",
+        "rd_entry_fragment",
+    );
+    let mut sampled = TextureDescriptor::texture_2d(PixelFormat::RGBA8Unorm, 4, 4, false);
+    sampled.usage = TextureUsage::SHADER_READ;
+    let sampled = device.new_texture(&sampled).unwrap();
+    let options = SamplerStateOptions {
+        support_argument_buffers: true,
+        ..SamplerStateOptions::default()
+    };
+    let sampler = device
+        .new_sampler_state_with_options(&SamplerDescriptor::new(), options)
+        .unwrap();
+    let position: Vec<u8> = [0.0f32, 0.0, 0.0, 1.0].map(f32::to_le_bytes).concat();
+    let position = device
+        .new_buffer_with_bytes(&position, ResourceOptions::shared())
+        .unwrap();
+    let entry: Vec<u8> = [
+        position.gpu_address().0,
+        sampled.gpu_resource_id().0,
+        sampler.gpu_resource_id().0,
+    ]
+    .map(u64::to_le_bytes)
+    .concat();
+    let table = device
+        .new_buffer_with_bytes(&entry, ResourceOptions::shared())
+        .unwrap();
+    let mut target = TextureDescriptor::texture_2d(PixelFormat::RGBA8Unorm, 16, 16, false);
+    target.usage = TextureUsage::RENDER_TARGET;
+    let target = device.new_texture(&target).unwrap();
+    let before = device.work_counts();
+    let queue = device.new_command_queue().unwrap();
+    let command_buffer = queue.command_buffer().unwrap();
+    let mut encoder = command_buffer
+        .render_command_encoder(&super::encoder_holds::pass(&target))
+        .unwrap();
+    let vertex = (position.as_resource(), RenderStages::VERTEX);
+    let fragment = (sampled.as_resource(), RenderStages::FRAGMENT);
+    for (resource, stages) in [vertex, fragment] {
+        (encoder.use_resource(resource, ResourceUsage::READ, stages)).unwrap();
+    }
+    encoder.set_render_pipeline_state(&state).unwrap();
+    encoder.set_vertex_buffer(Some(&table), 0, 0).unwrap();
+    encoder.set_fragment_buffer(Some(&table), 0, 0).unwrap();
+    (encoder.draw_primitives(PrimitiveType::Triangle, 0, 3, 1, 0)).unwrap();
+    encoder.end_encoding().unwrap();
+    command_buffer.commit().unwrap();
+    command_buffer.wait_until_completed_for(WAIT).unwrap();
+    assert_eq!(command_buffer.status(), CommandBufferStatus::Completed);
+    let after = device.work_counts();
+    let compared = after.copied_merges_compared - before.copied_merges_compared;
+    let skipped = after.copied_merges_skipped - before.copied_merges_skipped;
+    eprintln!(
+        "COPIED: a draw through loaded addresses: {} root table ranges, merge back {compared} \
+         compared, {skipped} skipped",
+        after.root_table_ranges_noted - before.root_table_ranges_noted,
+    );
+    assert!(
+        after.root_table_ranges_noted > before.root_table_ranges_noted,
+        "the draw read through a root table"
+    );
+    assert_eq!(
+        compared, 0,
+        "the copy the draw did not write is not compared"
+    );
+    assert!(skipped >= 1);
+    drop((buffer, state, queue));
 }
 
 /// `Buffer::host_backing` answers what the GPU uses for each kind of buffer: the caller's pages,

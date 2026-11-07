@@ -410,6 +410,10 @@ pub(super) struct Command<'a> {
     pub(super) descriptor_ranges: &'a [DescriptorRange],
     /// Each stage's root table, by the stages its push hole names.
     pub(super) root_tables: Vec<(metal2vulkan::vk::ShaderStageFlags, &'a RootTable)>,
+    /// Whether a function that reads one of them may write memory (stores or atomic updates,
+    /// `StageInterface::writes_memory`): where none does, nothing writes memory through them
+    /// (`State::writes_unnamed`).
+    pub(super) root_writes: bool,
     pub(super) push_holes: &'a [PushHole],
     /// The command's own resources beyond the plan's uses (an index buffer, indirect arguments).
     pub(super) uses: &'a [ResourceUse],
@@ -846,7 +850,10 @@ pub(super) fn bind_into(
     }
     let mut roots = Vec::with_capacity(command.root_tables.len());
     for &(stages, table) in &command.root_tables {
-        roots.push((stages, root_table(device, state, table)?));
+        roots.push((
+            stages,
+            root_table(device, state, table, command.root_writes)?,
+        ));
     }
     let mut holes = Vec::with_capacity(command.push_holes.len());
     for hole in command.push_holes {
@@ -2355,9 +2362,14 @@ fn descriptor(
 }
 
 /// Upload `table` with a fresh sink's device address in its sink entry, at a 32-byte-aligned
-/// device address, noted for its command buffer's resident set (`live_buffers.rs`); its device
-/// address.
-fn root_table(device: &Device, state: &mut State, table: &RootTable) -> Result<u64, Error> {
+/// device address, noted for its command buffer's resident set (`live_buffers.rs`), read by
+/// functions that may write memory where `writes`; its device address.
+fn root_table(
+    device: &Device,
+    state: &mut State,
+    table: &RootTable,
+    writes: bool,
+) -> Result<u64, Error> {
     let no_address = || internal("a root table on a device without device addresses");
     let sink = state
         .uploads
@@ -2378,7 +2390,7 @@ fn root_table(device: &Device, state: &mut State, table: &RootTable) -> Result<u
         upload: uploaded,
         address,
     };
-    state.root_table(device, noted, table.resident_ranges())?;
+    state.root_table(device, noted, table.resident_ranges(), writes)?;
     Ok(address)
 }
 
