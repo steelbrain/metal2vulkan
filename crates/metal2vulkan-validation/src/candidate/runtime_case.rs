@@ -199,22 +199,20 @@ pub(crate) fn report_each_message() {
 /// degrade notices (`DebugMessage::degradation`), which fail nothing. Bounded so a flood cannot
 /// grow without limit.
 ///
-/// Three layer gaps pass, on the layer releases whose source was read with their cause in place:
+/// Four layer gaps pass, on the layer releases whose source was read with their cause in place:
 /// the layer's synchronization validation forgetting a semaphore chain once the host waited on a
 /// timeline (`runtime_case/host_wait_gap.rs`); the layer's synchronization validation not
 /// reading rasterization-order attachment access, so that it reports an input attachment read of
 /// the runtime's pipelines made with it (named so) after an earlier draw's color write
-/// (`runtime_case/raster_order_gap.rs`); and the layer's check of a host query reset reporting the
+/// (`runtime_case/raster_order_gap.rs`); the layer's check of a host query reset reporting the
 /// whole pool in use where the valid usage speaks of the range reset
-/// (`runtime_case/query_reset_gap.rs`). Each message passed prints a `LAYER-GAP` line with the
-/// layer's source, and a test's count of them prints once its messages go. On any other release
-/// each fails, marked "re-read WaitForSemaphore in layer X.Y.Z", "re-read the input attachment
-/// ordering in layer X.Y.Z" or "re-read vkResetQueryPool in layer X.Y.Z".
-///
-/// Another layer gap passes the same way: the layer's link-time check of a fragment shader's input
-/// attachments reading a pipeline made against a `VkRenderPass` as one made for dynamic rendering
-/// (`runtime_case/input_index_gap.rs`), marked "re-read the link-time input attachment check in
-/// layer X.Y.Z" on any other release.
+/// (`runtime_case/query_reset_gap.rs`); and the layer's link-time check of a fragment shader's
+/// input attachments reading a pipeline made against a `VkRenderPass` as one made for dynamic
+/// rendering (`runtime_case/input_index_gap.rs`). Each message passed prints a `LAYER-GAP` line
+/// with the layer's source, and a test's count of them prints once its messages go. On any other
+/// release each fails, marked "re-read WaitForSemaphore in layer X.Y.Z", "re-read the input
+/// attachment ordering in layer X.Y.Z", "re-read vkResetQueryPool in layer X.Y.Z" or "re-read the
+/// link-time input attachment check in layer X.Y.Z".
 ///
 /// One message about the driver passes too, once the runtime announced it: the layer's report
 /// of a vertex module's subgroup operations outside `subgroupSupportedStages`
@@ -420,7 +418,8 @@ impl Messages {
     }
 
     /// How many of the layer gaps' messages passed so far (`runtime_case/host_wait_gap.rs`,
-    /// `runtime_case/raster_order_gap.rs`, `runtime_case/query_reset_gap.rs`).
+    /// `runtime_case/raster_order_gap.rs`, `runtime_case/query_reset_gap.rs`,
+    /// `runtime_case/input_index_gap.rs`).
     pub fn layer_gaps(&self) -> usize {
         self.0.lock().unwrap_or_else(|p| p.into_inner()).layer_gaps
     }
