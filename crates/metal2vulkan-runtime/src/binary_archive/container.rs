@@ -181,7 +181,8 @@ impl<'a> Reader<'a> {
 
 /// The archive in the file `path`: an archive of ours, or a metallib, which Metal takes as an
 /// archive (`newBinaryArchiveWithDescriptor:error:` answers one, measured on an M3 Max under
-/// macOS 27.0.1) and which holds nothing of ours, so it loads as an archive holding nothing.
+/// macOS 27.0.1) and which holds nothing of ours, so it loads as an archive holding nothing,
+/// whose lookups miss as Metal's archive of a metallib does (`binary-archive-sources`).
 pub(crate) fn read(path: &Path) -> Result<Contents, Error> {
     let bytes = std::fs::read(path).map_err(|_| invalid_file(path))?;
     if let Some(contents) = decode(&bytes) {

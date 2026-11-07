@@ -22,9 +22,9 @@
 //!   its key alone, which `FAIL_ON_BINARY_ARCHIVE_MISS` finds.
 //! - **Files.** An archive is read whole from its descriptor's file (`container.rs`) and written
 //!   through a temporary file and a rename. A metallib, which Metal takes as an archive, loads as
-//!   an empty one. An archive of another profile or build loads, and
-//!   its entries miss, as Metal's archive of another device or OS does. Labels are not written,
-//!   as Metal's are not.
+//!   an empty one, whose lookups miss as Metal's do. An archive of another profile or build
+//!   loads, and its entries miss, as Metal's archive of another device or OS does. Labels are not
+//!   written, as Metal's are not.
 //! - **Differences from Metal**, accepted (docs/API.md §10): the file is read whole at load, so an
 //!   archive serializes after its file was deleted, where Metal's fails; and a file is a path,
 //!   so a URL that is not a file cannot be named, where Metal answers it as an invalid URL.
@@ -104,8 +104,10 @@ impl Device {
     /// `BinaryArchive(InvalidFile)`, as Metal answers for a missing, empty, garbage or text file
     /// and for a directory (measured on an M3 Max and an M4). A metallib, which Metal takes as an
     /// archive (measured on an M3 Max), holds nothing of ours: it loads as an empty archive,
-    /// whose lookups miss and which serializes as one nothing was added to. What Metal's archive
-    /// of a metallib holds is not measured.
+    /// whose lookups miss and which serializes as one nothing was added to. Metal's archive of a
+    /// metallib misses too: a compute pipeline of a kernel the metallib holds, listing it with
+    /// `FAIL_ON_BINARY_ARCHIVE_MISS`, is refused, and without the bit it is created (measured on
+    /// an M3 Max under macOS 27.0.1, `binary-archive-sources`).
     pub fn new_binary_archive(
         &self,
         descriptor: &BinaryArchiveDescriptor,

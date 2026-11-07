@@ -97,7 +97,7 @@
                         "value": "absent",
                         "digest": {
                           "kind": "sha256",
-                          "hex": "b04f955694f9a7fcbd3188801288670ee37b74403d8c4d1367a952761fa30e44"
+                          "hex": "0331138b03c9a66d917fe80e89279aec648d75d15909144eb62f94560b4110e3"
                         }
                       }
                     }
@@ -223,6 +223,38 @@
                     },
                     {
                       "name": "from-a-metallib",
+                      "observed": {
+                        "value": "absent"
+                      },
+                      "children": [
+                        {
+                          "name": "refused",
+                          "observed": {
+                            "value": {
+                              "bool": false
+                            }
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "name": "from-a-metallib-held-kernel",
+                      "observed": {
+                        "value": "absent"
+                      },
+                      "children": [
+                        {
+                          "name": "refused",
+                          "observed": {
+                            "value": {
+                              "bool": true
+                            }
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "name": "from-a-metallib-without-the-bit",
                       "observed": {
                         "value": "absent"
                       },
