@@ -210,9 +210,13 @@ fn submission_handlers_keep_commit_order_across_commit_and_commit_and_submit() {
         .count() as u64;
     let passes = after.scheduler_passes_at_commit - before.scheduler_passes_at_commit;
     let batches = after.batches_submitted_at_commit - before.batches_submitted_at_commit;
+    // The kernel submissions the 1000 took, and how many went in groups, to weigh what submitting
+    // at commit costs where batches may wait in a group.
+    let submissions = after.queue_submissions - before.queue_submissions;
+    let grouped = after.grouped_submissions - before.grouped_submissions;
     println!(
         "{on_committer} of {total} on a committing thread; passes at commit {passes}, batches \
-         {batches}"
+         {batches}; {submissions} queue submissions, {grouped} of them grouped"
     );
     assert!(
         on_committer > 0 && on_committer < total,
