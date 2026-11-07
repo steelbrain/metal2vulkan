@@ -201,11 +201,37 @@ impl Clone for ArgumentTable {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct Stamp(u64);
 
+/// The stamps a thread takes from the process's at once ([`Stamp::fresh`]).
+const STAMP_BLOCK: u64 = 1 << 16;
+
 impl Stamp {
-    /// A stamp no table took before.
-    fn fresh() -> Stamp {
+    /// A stamp no table took before: the next of the calling thread's block, a range of the
+    /// process's stamps no other thread draws from, its next block taken once it is spent. So a
+    /// call that changes a table writes no memory another thread's calls write: a consumer encodes
+    /// a queue's command buffers on threads of their own, and where each call drew its stamp from
+    /// one counter of the process, each thread's calls waited for that counter's line to come
+    /// back from the others'.
+    pub(super) fn fresh() -> Stamp {
         static NEXT: AtomicU64 = AtomicU64::new(0);
-        Stamp(NEXT.fetch_add(1, Ordering::Relaxed))
+        thread_local! {
+            /// The calling thread's next stamp and the end of its block.
+            static BLOCK: std::cell::Cell<(u64, u64)> = const { std::cell::Cell::new((0, 0)) };
+        }
+        BLOCK.with(|block| {
+            let (mut next, mut end) = block.get();
+            if next == end {
+                next = NEXT.fetch_add(STAMP_BLOCK, Ordering::Relaxed);
+                end = next + STAMP_BLOCK;
+            }
+            block.set((next + 1, end));
+            Stamp(next)
+        })
+    }
+
+    /// Its number, which no other stamp has.
+    #[cfg(test)]
+    pub(super) fn raw(self) -> u64 {
+        self.0
     }
 }
 
@@ -1378,15 +1404,17 @@ impl ArgumentTable {
     }
 
     /// The slots the table's calls changed since its stamp was `read`, where it keeps them
-    /// ([`Changes`]): those [`refresh_changed`](Self::refresh_changed) brings in.
+    /// ([`Changes`]): those [`refresh_changed`](Self::refresh_changed) brings in, each with
+    /// whether the call changed a buffer slot's offset alone, binding the buffer it bound
+    /// ([`changed_as`](Self::changed_as)), once for each call.
     pub(super) fn changed_since(
         &self,
         read: Stamp,
-    ) -> Option<impl Iterator<Item = (SlotClass, u32)> + '_> {
+    ) -> Option<impl Iterator<Item = (SlotClass, u32, bool)> + '_> {
         Some(
             self.changes
                 .since(read)?
-                .map(|changed| (changed.class, changed.index)),
+                .map(|changed| (changed.class, changed.index, changed.offset)),
         )
     }
 
