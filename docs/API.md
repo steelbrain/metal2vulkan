@@ -4409,6 +4409,16 @@ each item named states the rule in full.
   way moves the texels in both layouts. Which extents Metal compresses is an undocumented, per-chip
   choice, so the runtime moves the caller's bytes at every extent rather than predict it.
 
+**Textures held for copies alone** (`metal::format::copies_only`)
+
+- **A texture of one round-trips its bytes at every extent.** Plain Metal's `replaceRegion:` and
+  `getBytes:` on a 16x16 `Shared` texture of `R12Unorm_X4`, `R12Unorm_X4_PQ`, `RG12Unorm_X8`,
+  `R10Unorm_X6_PQ`, `R10Unorm_X6_HLG`, `R12Unorm_X4_HLG` or `RGB10A2Unorm_HLG` under `ShaderRead`
+  alone leave their destinations untouched, a fresh read's and a written texture's alike (an M3
+  Max under macOS 27.0.1, `metal2vulkan-conformance`'s `format-footprints-padded-wide-channels`),
+  as Metal's copies of a padded 10-bit texture it keeps compressed do (above). The runtime moves
+  the caller's bytes at every extent, as it does for those.
+
 **Rasterization-rate maps**
 
 - **A map of no layers refuses its coordinate maps, and a mutable map not yet reset its

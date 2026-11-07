@@ -585,30 +585,37 @@ driver's. Each is open work.
   ASTC texture binds the slot's neutral (`astc-storage-neutral`): its writes leave the blocks as
   they were, where Metal stores undefined bytes into them, and its reads answer zero, where Metal
   reads the blocks' decode. A resolve of an ASTC attachment is refused, unmeasured.
-- **The 26 formats this crate holds no image of** (`metal::format::footprint`:
-  `ARGB8Unorm_sRGB`, Apple's nine one-plane `YCBCR*` formats, the ten
-  padded 10- and 12-bit display formats, the four `RGB10A8_2P` ones and the two packed 10-bit
-  ones). `heapTextureSizeAndAlignWithDescriptor:` answers Metal's exact size and alignment for
-  every one, because the footprint is arithmetic over the descriptor and no image decides it. A
-  texture, a view, a copy, a read and a write of one stay refused `NotImplemented(Format)`: their
-  reads and writes are not measured yet. Plain Metal lays out no image storage for the two packed 10-bit
-  ones and makes a texture from every creator that needs none -- a placement heap's offset, the
-  shared creator in `Private`, a buffer's and an IOSurface plane's own bytes, and `Memoryless` --
-  so the refusal from each of those is this crate's own and not Metal's nil; the device's own
-  creator and an automatic heap, the two that would have to lay the image out, answer nil (an Apple
-  M3 Max, macOS 27.0.1, `conformance/probes/packed10_texture_alone.m`). Their reads are a stream of
-  10-bit codes that no Vulkan format holds, and none of that is built: no image is made, so
-  sampling, a blit, `getBytes:` and a render pass of one are all unbuilt behind the same refusal.
-  The code layout is derived in `metal/format/packed_codes.rs` and is **not** held to a texel: the
-  two measured anchors fix codes 0 and 1 only, and a padded 32-bit word and an unpadded bitstream
-  first differ at `R10Unorm_PACKED`'s texel 3, which nothing has measured. A **multisample** descriptor of one is refused there too, its layout
-  unmeasured: Metal's validation may stop such a descriptor, so none was asked.
-  `ARGB8Unorm_sRGB` is the one of them whose gap is not the bytes: they are `ARGB8Unorm`'s, which
-  this crate holds, and no Vulkan format applies the sRGB transfer function to the three channels
-  Metal's does -- every Vulkan `_SRGB` format encodes the word's low three and leaves the fourth
-  linear, and Metal's alpha is the low byte here, which a view's component mapping cannot move
-  because format conversion runs before the swizzle. Holding it needs a shader-side decode of its
-  codes by the device's transfer (`pack::srgb_decode_texel`), as a UNORM twin's are, as the only read of it.
+- **The 26 formats `metal::format::footprint` answers for** (`ARGB8Unorm_sRGB`, Apple's nine
+  one-plane `YCBCR*` formats, the ten padded 10- and 12-bit display formats, the four `RGB10A8_2P`
+  ones and the two packed 10-bit ones). `heapTextureSizeAndAlignWithDescriptor:` answers Metal's
+  exact size and alignment for every one, because the footprint is arithmetic over the descriptor
+  and no image decides it.
+  - **Twenty are held for copies alone** (`metal::format::copies_only`: `ARGB8Unorm_sRGB`, the
+    one-plane `YCBCR*` and the padded ones): a texture of each is made, its bytes in `R16_UINT` or
+    `R32_UINT`, and host copies and blits move them. A read, a write, a render pass, a view, a
+    texel buffer's read and a sparse texture of one stay refused `NotImplemented(Format)`: what a
+    function reads from one is not measured. `ARGB8Unorm_sRGB`'s reads need a shader-side decode
+    of its codes by the device's transfer (`pack::srgb_decode_texel`), as a UNORM twin's are, as
+    the only read of it: no Vulkan format applies the sRGB transfer to the three channels Metal's
+    does (every `_SRGB` format encodes the word's low three and leaves the fourth linear, and
+    Metal's alpha is the low byte here, which a view's component mapping cannot move because
+    format conversion runs before the swizzle).
+  - **The four `RGB10A8_2P` formats** stay refused `NotImplemented(Format)` at every use: Metal
+    lays them out in two planes (their footprint), as `RGB10A8_2P_XR10`'s, whose blits between
+    textures move both planes (`two_planes.rs` in the runtime); one bytes image of a texel's word
+    would not hold the second plane, and the two-plane holding is not built for them.
+  - **The two packed 10-bit ones**: plain Metal lays out no image storage for them and makes a
+    texture from every creator that needs none -- a placement heap's offset, the shared creator in
+    `Private`, a buffer's and an IOSurface plane's own bytes, and `Memoryless` -- so the refusal
+    from each of those is this crate's own and not Metal's nil; the device's own creator and an
+    automatic heap, the two that would have to lay the image out, answer nil (an Apple M3 Max,
+    macOS 27.0.1, `conformance/probes/packed10_texture_alone.m`). Their reads are a stream of
+    10-bit codes that no Vulkan format holds, and none of that is built. The code layout is
+    derived in `metal/format/packed_codes.rs` and is **not** held to a texel: the two measured
+    anchors fix codes 0 and 1 only, and a padded 32-bit word and an unpadded bitstream first
+    differ at `R10Unorm_PACKED`'s texel 3, which nothing has measured.
+  - A **multisample** descriptor of any of the 26 is refused, its layout unmeasured: Metal's
+    validation may stop such a descriptor, so none was asked.
 - **`BGRA4Unorm` as a render target on a device that does not render its word.** Its texel is
   `A4R4G4B4_UNORM_PACK16`'s word bit for bit (core 1.3, or `VK_EXT_4444_formats`), and a device
   exposing neither is refused the version or the extension at the format's first use. The two
