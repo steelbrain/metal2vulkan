@@ -1055,6 +1055,10 @@ fn the_graphics_state_states_what_the_vertex_function_writes() {
             if positioned {
                 shapes.push(vec![&*v, &*white]);
             }
+            // Metal makes a pipeline of a vertex function that writes no position only with
+            // rasterization disabled (`DescriptorError::RasterizedVoidVertex`).
+            let mut r = r.clone();
+            r.rasterization_enabled = positioned;
             for stages in shapes {
                 let graphics = link(&stages, &render(&r), &p)
                     .unwrap_or_else(|e| panic!("{what}: link: {e}"))

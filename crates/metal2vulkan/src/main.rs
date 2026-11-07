@@ -26,7 +26,7 @@ use metal2vulkan::pipeline::{
     ColorAttachmentDescriptor, ComputePipeline, ComputePipelineDescriptor,
     ComputePipelineMetalInfo, FunctionDescriptor, GraphicsState, PipelineInterface, PipelineLayout,
     PrecisionNote, Reconvergence, RenderPipeline, RenderPipelineDescriptor, RuntimeDependency,
-    SpecializationLayout, StageInputDescriptor, StageModule, StageSource,
+    SpecializationLayout, StageEntries, StageInputDescriptor, StageModule, StageSource,
     TileRenderPipelineDescriptor, VertexDescriptor, VertexInputState,
 };
 use metal2vulkan::{vk, Budget};
@@ -351,6 +351,15 @@ fn compile(args: &Args, device: &Device, library: &Library) -> Result<Compiled, 
             }
             if let Some(count) = args.vertex_amplification_count {
                 descriptor.max_vertex_amplification_count = count;
+            }
+            // Metal makes a pipeline of a vertex function that returns no value only with
+            // rasterization disabled (`DescriptorError::RasterizedVoidVertex`): with no fragment
+            // function named, the tool compiles that form of one.
+            if descriptor.fragment.is_none() {
+                let entries = StageEntries::new();
+                let returns =
+                    (descriptor.vertex_returns_value(&budget, &entries)).map_err(refusal)?;
+                descriptor.rasterization_enabled = returns;
             }
             device
                 .compile_render_pipeline(&descriptor, &budget)

@@ -260,7 +260,8 @@ fn a_vertex_function_returns_a_value_where_its_type_is_not_void() {
 /// A rasterizing render pipeline whose vertex function returns `void` is refused at its link,
 /// with or without a fragment function, as Metal refuses it (`RasterizedVoidVertex`): the compile
 /// reads it from the vertex entry it specializes anyway, so a creation asks no question for it.
-/// With rasterization disabled it links, and so does every vertex function returning a value.
+/// With rasterization disabled it links, and so does every vertex function returning a value. On
+/// a device whose vertex stage stores to buffers (lavapipe's), as the `void` function does.
 #[test]
 fn a_rasterizing_void_vertex_function_is_refused_at_its_link() {
     use crate::device::{Device, DeviceDescription, DevicePolicy};
@@ -269,7 +270,7 @@ fn a_rasterizing_void_vertex_function_is_refused_at_its_link() {
         return;
     };
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../metal2vulkan-validation/profiles/vk12-floor.json");
+        .join("../metal2vulkan-validation/profiles/lavapipe.json");
     let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
     let description = DeviceDescription::from_khronos_json(&text, None).expect("profile");
     let device = Device::new(description, DevicePolicy::default()).expect("device");

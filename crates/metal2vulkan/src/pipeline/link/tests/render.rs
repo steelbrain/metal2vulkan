@@ -2323,12 +2323,15 @@ fn multisampled_fragment_invocations_follow_metals_measured_rules() {
         })
     };
     let mut vs = iface(Stage::Vertex, vec![], vec![]);
-    vs.io = stage_io(
-        vec![],
-        ["c", "k", "s", "f"]
-            .iter()
-            .map(|n| varying(n, f4, None))
-            .collect(),
+    vs.io = positioned(
+        Stage::Vertex,
+        stage_io(
+            vec![],
+            ["c", "k", "s", "f"]
+                .iter()
+                .map(|n| varying(n, f4, None))
+                .collect(),
+        ),
     );
     let va = artifact(vs, None);
     let fragment = |inputs: Vec<IoVariable>, builtins: Vec<B>, writes: bool| {
@@ -2655,12 +2658,15 @@ fn split_pixel_fragments_are_refused_where_measured() {
         })
     };
     let mut vs = iface(Stage::Vertex, vec![], vec![]);
-    vs.io = stage_io(
-        vec![],
-        ["c", "k", "f"]
-            .iter()
-            .map(|n| varying(n, f4, None))
-            .collect(),
+    vs.io = positioned(
+        Stage::Vertex,
+        stage_io(
+            vec![],
+            ["c", "k", "f"]
+                .iter()
+                .map(|n| varying(n, f4, None))
+                .collect(),
+        ),
     );
     let va = artifact(vs, None);
     let fragment = |inputs: Vec<IoVariable>, builtins: Vec<B>| {
@@ -2746,7 +2752,7 @@ fn the_graphics_state_states_whether_the_fragment_function_reads_barycentric_coo
     let f4 = io_ty(IoNumeric::Float, 4);
     let stage = |stage: Stage, io: StageIo| {
         let mut i = iface(stage, vec![], vec![]);
-        i.io = io;
+        i.io = positioned(stage, io);
         artifact(i, None)
     };
     let reads = |va: &FunctionArtifact, fa: Option<&FunctionArtifact>| {
@@ -2795,7 +2801,7 @@ fn the_graphics_state_states_whether_the_fragment_function_reads_its_position_s_
     let f4 = io_ty(IoNumeric::Float, 4);
     let stage = |stage: Stage, io: StageIo| {
         let mut i = iface(stage, vec![], vec![]);
-        i.io = io;
+        i.io = positioned(stage, io);
         artifact(i, None)
     };
     let reads = |va: &FunctionArtifact, fa: Option<&FunctionArtifact>| {
@@ -2926,7 +2932,7 @@ fn the_graphics_state_states_whether_the_fragment_function_reads_a_flat_input() 
     let f4 = io_ty(IoNumeric::Float, 4);
     let stage = |stage: Stage, io: StageIo| {
         let mut i = iface(stage, vec![], vec![]);
-        i.io = io;
+        i.io = positioned(stage, io);
         artifact(i, None)
     };
     let flat = |va: &FunctionArtifact, fa: Option<&FunctionArtifact>| {
