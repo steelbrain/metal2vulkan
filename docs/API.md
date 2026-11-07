@@ -2945,8 +2945,9 @@ bound.
   the bytes, into which each commit writes every byte the CPU changed in the pages since, and from
   which each batch's completion writes back every byte the GPU changed, where Metal's GPU reads and
   writes the pages themselves: a CPU write the GPU reads mid-command-buffer, or a GPU write the CPU
-  reads before the batch completes, is not seen, and each commit and completion compares every
-  byte of every copy. An event signal submitted while a copy is live is seen once its batch's
+  reads before the batch completes, is not seen; each commit compares every byte of a copy whose
+  pages carry no log of their writes (only the pages its log reports written where they do), and
+  each completion every copy its batches may have written. An event signal submitted while a copy is live is seen once its batch's
   writes are back in the pages, as Metal's: its value at the completion turn, and a wait for it
   held on the host until then (`event_signals_behind_merge`). A copy and another memory over
   overlapping but not the same bytes agree GPU to GPU only through the pages, so a read committed
