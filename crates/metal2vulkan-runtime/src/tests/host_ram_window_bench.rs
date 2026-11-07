@@ -9,7 +9,13 @@
 //!   heap the one below the last;
 //! - **scattered**: 256 heaps over distinct runs drawn over a RAM of 32 chunks, 10 ms apart.
 //!
-//! Each order waits 1 s after the use begins. Each prints the makings of 5 ms or more, the
+//! Then the same three in a consumer's shape (a VMM's take of a guest's 2 MiB of fresh RAM): a
+//! RAM of 16 chunks, its takes back to back from the moment the use begins, each preceded by
+//! the CPU's zeroing of its 2 MiB (untimed), and each the heap and a 64 KiB `Shared` buffer at
+//! its offset 0: **upward** over the RAM's first 256 runs, **downward** over its last 256 from
+//! the top, **scattered** over 256 distinct runs drawn over all of it.
+//!
+//! Each of the first three waits 1 s after the use begins. Each order prints the makings of 5 ms or more, the
 //! slowest and the median, the chunks imported ahead of the objects and by their makings, and
 //! the heaps bound in a chunk (`HOST-RAM-WINDOW`), and each making of 5 ms or more: its take,
 //! its chunk, and what it made, the counts it moved (`HOST-RAM-WINDOW-SLOW`). The orders run
@@ -47,13 +53,17 @@ impl Rng {
     }
 }
 
-/// One order: its name, its RAM's chunks, and each heap's offset into the RAM with the pause
-/// before its making.
+/// One order: its name, its RAM's chunks, each heap's offset into the RAM with the pause
+/// before its making, and whether each take is a consumer's (the module docs).
 struct Order {
     name: &'static str,
     chunks: u64,
     takes: Vec<(u64, Duration)>,
+    consumer: bool,
 }
+
+/// The bytes of the buffer a consumer's take makes in its heap.
+const TAKE_BUFFER: u64 = 64 << 10;
 
 fn orders() -> Vec<Order> {
     let settle = Duration::from_secs(1);
@@ -84,22 +94,47 @@ fn orders() -> Vec<Order> {
         };
         (heap * HEAP, pause)
     });
+    let consumer_chunks = 16;
+    let slots = consumer_chunks * PER_CHUNK;
+    let mut shuffled: Vec<u64> = (0..slots).collect();
+    for index in 0..2 * BURST as usize {
+        let other = index + (rng.next() % (slots - index as u64)) as usize;
+        shuffled.swap(index, other);
+    }
+    shuffled.truncate(2 * BURST as usize);
+    let back_to_back = |heaps: Vec<u64>| -> Vec<(u64, Duration)> {
+        (heaps.into_iter())
+            .map(|heap| (heap * HEAP, Duration::ZERO))
+            .collect()
+    };
+    let order = |name, chunks, takes, consumer| Order {
+        name,
+        chunks,
+        takes,
+        consumer,
+    };
     vec![
-        Order {
-            name: "upward",
-            chunks: 16,
-            takes: upward.collect(),
-        },
-        Order {
-            name: "downward",
-            chunks: 16,
-            takes: downward.collect(),
-        },
-        Order {
-            name: "scattered",
-            chunks: 32,
-            takes: scattered.collect(),
-        },
+        order("upward", 16, upward.collect(), false),
+        order("downward", 16, downward.collect(), false),
+        order("scattered", 32, scattered.collect(), false),
+        order(
+            "consumer upward",
+            consumer_chunks,
+            back_to_back((0..2 * BURST).collect()),
+            true,
+        ),
+        order(
+            "consumer downward",
+            consumer_chunks,
+            back_to_back((slots - 2 * BURST..slots).rev().collect()),
+            true,
+        ),
+        order(
+            "consumer scattered",
+            consumer_chunks,
+            back_to_back(shuffled),
+            true,
+        ),
     ]
 }
 
@@ -112,31 +147,48 @@ fn run(device: &crate::Device, order: &Order, pages: RamPages) {
     let descriptor = HeapDescriptor::new(HeapType::Placement, HEAP, ResourceOptions::default());
     let mut times = Vec::new();
     let mut heaps = Vec::new();
+    let mut buffers = Vec::new();
     let mut slow_lines = Vec::new();
+    let mut writes = Duration::ZERO;
     for (take, &(offset, pause)) in order.takes.iter().enumerate() {
         std::thread::sleep(pause);
+        let at = (start + offset) as *mut u8;
+        if order.consumer {
+            let began = Instant::now();
+            // SAFETY: the RAM's 2 MiB of this take, mapped and writable while the RAM lives, which
+            // no object lies over yet.
+            unsafe { std::ptr::write_bytes(at, 0, HEAP as usize) };
+            writes += began.elapsed();
+        }
         // SAFETY: the RAM's bytes, mapped until its keep-alive goes, after every device let go.
-        let memory = unsafe { HostMemory::new(NonNull::new((start + offset) as *mut u8).unwrap()) }
+        let memory = unsafe { HostMemory::new(NonNull::new(at).unwrap()) }
             .with_runs(resolver(&runs, itself))
             .with_import_gate(gate(&gates, true));
         let counts = device.work_counts();
         let began = Instant::now();
         // SAFETY: as above.
         let heap = unsafe { device.new_heap_with_bytes_no_copy(memory, &descriptor, None, None) };
+        let heap = heap.unwrap();
+        let heap_took = began.elapsed();
+        if order.consumer {
+            let buffer = heap.new_buffer_at_offset(TAKE_BUFFER, ResourceOptions::shared(), 0);
+            buffers.push(buffer.unwrap());
+        }
         let took = began.elapsed();
         let now = device.work_counts();
         times.push(took);
-        heaps.push(heap.unwrap());
+        heaps.push(heap);
         if took >= SLOW {
             let delta = |field: fn(&crate::WorkCounts) -> u64| field(&now) - field(&counts);
             let ahead = delta(|counts| counts.host_ram_chunks_imported_ahead);
             slow_lines.push(format!(
-                "take {take} (chunk {}, heap {} in it): {:.2} ms; bound in its run's import {}, \
-                 in the chunk's {}; chunks imported by the making {}, ahead by the thread \
-                 meanwhile {ahead}; run imports live {}",
+                "take {take} (chunk {}, heap {} in it): {:.2} ms, the heap {:.2} ms; bound in its \
+                 run's import {}, in the chunk's {}; chunks imported by the making {}, ahead by \
+                 the thread meanwhile {ahead}; run imports live {}",
                 offset / CHUNK,
                 offset % CHUNK / HEAP,
                 took.as_secs_f64() * 1e3,
+                heap_took.as_secs_f64() * 1e3,
                 delta(|counts| counts.run_bound_buffers_made),
                 delta(|counts| counts.chunk_bound_buffers_made),
                 delta(|counts| counts.host_ram_chunks_imported) - ahead,
@@ -159,7 +211,8 @@ fn run(device: &crate::Device, order: &Order, pages: RamPages) {
         "HOST-RAM-WINDOW {} in {pages:?} pages on {}: {} makings, {slow} of 5 ms or more, \
          slowest {:.2} ms, median {:.3} ms, all {:.1} ms; chunks imported ahead {ahead}, by the \
          makings {}; heaps bound in a chunk {bound}, in their run's import {run_bound}; the gate \
-         asked {} times; shared memory in huge pages {:?} kB",
+         asked {} times; the CPU's writes before them {:.1} ms; shared memory in huge pages {:?} \
+         kB",
         order.name,
         device.name(),
         times.len(),
@@ -168,6 +221,7 @@ fn run(device: &crate::Device, order: &Order, pages: RamPages) {
         ms(total),
         imported - ahead,
         gates.lock().unwrap().len(),
+        ms(writes),
         shmem_huge_kb(),
     );
     for line in slow_lines {
@@ -176,7 +230,7 @@ fn run(device: &crate::Device, order: &Order, pages: RamPages) {
             order.name
         );
     }
-    drop((heaps, used, ram));
+    drop((buffers, heaps, used, ram));
 }
 
 /// The system's shared memory in huge pages, in kB, where it says (Linux).
