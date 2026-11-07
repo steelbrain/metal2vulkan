@@ -738,6 +738,15 @@ mod serde_round_trips {
                 ),
                 (Stage::Vertex, vec![NumberedSampler::Write]),
             ],
+            stage_in: vec![crate::pipeline::stage_io::StageInFetch {
+                format: metal::AttributeFormat::Float2,
+                buffer_index: 3,
+                offset: 8,
+                stride: None,
+                step_function: metal::StepFunction::ThreadPositionInGridY,
+                step_rate: 2,
+                index: None,
+            }],
         });
         round_trip(&RuntimeDependency {
             fact: RuntimeFact::StorageTextureFormat {

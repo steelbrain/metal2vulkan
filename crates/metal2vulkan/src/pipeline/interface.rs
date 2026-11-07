@@ -51,6 +51,11 @@ pub struct PipelineInterface {
     /// resource IDs as Metal's pipeline creation does.
     #[cfg_attr(feature = "serde", serde(default))]
     pub numbered_samplers: Vec<(Stage, Vec<NumberedSampler>)>,
+    /// The kernel's `[[stage_in]]` fetches, each as its function was compiled under it
+    /// (`StageInterface::io`'s `stage_in`), in attribute order. A dispatch decides
+    /// `SpecKey::StageInReach` from those of a thread-position step.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub stage_in: Vec<crate::pipeline::stage_io::StageInFetch>,
 }
 
 /// What one Metal argument slot is and how the shader uses it.

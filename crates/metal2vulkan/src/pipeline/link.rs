@@ -1492,6 +1492,7 @@ fn pipeline_interface(ifaces: &[&StageInterface]) -> PipelineInterface {
         out.numbered_samplers
             .push((i.stage, i.numbered_samplers.clone()));
         out.push.push(i.push.clone());
+        out.stage_in.extend(i.io.stage_in.iter().map(|s| s.fetch));
     }
     out
 }

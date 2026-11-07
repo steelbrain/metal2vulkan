@@ -887,8 +887,7 @@ fn plan(p: &ComputePipeline, device: &Device, shape: &BindShape) -> Result<Bindi
                 .iter()
                 .any(|d| d.fact == RuntimeFact::StageInRegion),
             stage_in_grid: match layout.iter().any(|c| c.key == SpecKey::StageInReach) {
-                true => (p.interface.io.stage_in.iter())
-                    .map(|s| s.fetch)
+                true => (p.interface.stage_in.iter().copied())
                     .filter(|f| crate::lower::stage_io::stage_in::grid_axis(f).is_some())
                     .collect(),
                 false => Vec::new(),
