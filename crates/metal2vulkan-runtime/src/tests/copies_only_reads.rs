@@ -64,7 +64,7 @@ fn format_refused(error: &Error) -> bool {
     matches!(
         error,
         Error::Bind(BindError::Unsupported(u))
-            if (u.feature, &u.needs) == (Feature::Format, &Needs::NotImplemented)
+            if u.feature == Feature::Format && u.needs == Needs::NotImplemented
     )
 }
 
@@ -105,7 +105,7 @@ fn a_kernel_s_read_of_a_texture_held_for_copies_alone_is_refused() {
         let row = bytes * SIDE;
         let written = vec![FILL; (row * SIDE) as usize];
         let region = Region::new_2d(0, 0, SIDE, SIDE);
-        texture.replace_region(region, 0, 0, &written, row).unwrap();
+        (texture.replace_region(region, 0, 0, &written, row, row * SIDE)).unwrap();
         let command_buffer = queue.command_buffer().unwrap();
         let mut encoder = command_buffer.compute_command_encoder().unwrap();
         encoder.set_compute_pipeline_state(&state).unwrap();
@@ -119,7 +119,7 @@ fn a_kernel_s_read_of_a_texture_held_for_copies_alone_is_refused() {
         command_buffer.commit().unwrap();
         command_buffer.wait_until_completed_for(WAIT).unwrap();
         let mut read = vec![0; written.len()];
-        texture.get_bytes(&mut read, row, region, 0).unwrap();
+        (texture.get_bytes(&mut read, row, row * SIDE, region, 0, 0)).unwrap();
         assert_eq!(read, written, "{pf:?}: the texture's bytes");
     }
 }
