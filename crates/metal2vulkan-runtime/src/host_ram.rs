@@ -774,7 +774,7 @@ impl RamOnDevice {
             })
             .collect();
         let few = runs.len() <= copy::MOST_ALONE;
-        if !alone || !few || runs.iter().any(|run| *run == span.span) {
+        if !alone || !few || runs.contains(&span.span) {
             return Ok(vec![self.chunk(device, importer, slot, By::Object)?]);
         }
         let mut imports: Vec<Arc<RamChunk>> = Vec::with_capacity(runs.len());
