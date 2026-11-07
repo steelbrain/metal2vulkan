@@ -72,7 +72,7 @@ use super::recycle::{self, BufferMaking, Recycler};
 use super::released_programs::Keepers;
 use super::render_state::DepthRanges;
 use super::render_target::KeptRenderPasses;
-use super::resource_ids::{ResourceIds, SamplerIdReads};
+use super::resource_ids::{PassingHolds, ResourceIds, SamplerIdReads};
 use super::sample_planes::PlanesObjects;
 use super::sampler::{LiveSamplers, SamplerCount};
 use super::scheduler::Scheduler;
@@ -263,6 +263,9 @@ pub(super) struct DeviceShared {
     pub(super) recycled_buffers: Mutex<Recycler<vk::Buffer, BufferMaking>>,
     /// The resource IDs of textures and sampler states (`resource_ids.rs`).
     pub(super) resource_ids: Arc<Mutex<ResourceIds>>,
+    /// The runtime's passing holds of the program's textures and sampler states, which a
+    /// program's making waits out before it takes its ID (`resource_ids.rs`).
+    pub(super) passing_holds: PassingHolds,
     /// The buffers whose records the GPU may write, which keep the programs of the pipeline
     /// states the program releases (`released_programs.rs`).
     pub(super) keepers: Keepers,
@@ -2015,6 +2018,7 @@ impl Device {
             addresses: Mutex::new(AddressSpace::new()),
             recycled_buffers: Mutex::new(Recycler::new(recycle::BUFFERS)),
             resource_ids,
+            passing_holds: PassingHolds::default(),
             keepers: Keepers::default(),
             identifiers: Arc::default(),
             sampler_ids,

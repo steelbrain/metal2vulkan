@@ -470,9 +470,14 @@ impl MessageSink {
         severity >= self.least
     }
 
-    /// Hand `message` to the sink, where it hears it; a panic inside it is caught.
+    /// Hand `message` to the sink, where it hears it; a panic inside it is caught. On a thread
+    /// inside a passing hold of the device's resources, once its outermost ended
+    /// (`resource_ids.rs`): the program's code runs in none.
     pub(crate) fn deliver(&self, message: &DebugMessage) {
         if message.degradation.is_none() && !self.hears(message.severity) {
+            return;
+        }
+        if crate::resource_ids::held_past_passing_hold(self, message) {
             return;
         }
         crate::exit_guard::program(|| (self.receive)(message));

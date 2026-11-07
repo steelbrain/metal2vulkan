@@ -100,6 +100,7 @@
 //!   (`scheduler/inbox.rs`).
 
 use super::{texture_aspects, Image, ImageObjects, Owner, Storage, Texture, TextureShared};
+use crate::buffer_texture::Texels;
 use crate::degradation::Degradation;
 use crate::device::lock;
 use crate::encoder::EncoderCore;
@@ -116,7 +117,7 @@ use crate::values::StorageMode;
 use crate::work_counts::Counters;
 use crate::Device;
 use ash::vk;
-use metal2vulkan::metal::TextureUsage;
+use metal2vulkan::metal::{TextureType, TextureUsage};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock, Weak};
 use std::time::{Duration, Instant};
@@ -250,9 +251,11 @@ impl Drop for Freed {
 }
 
 /// A texture's storage form, made and its copy recorded into the committing command buffer's
-/// last part, or a shadow's image in place, made, to swap in once the commit submitted it.
+/// last part, or a shadow's image in place, made, to swap in once the commit submitted it. The
+/// texture is held weakly while the switch rides: its end takes it again inside a passing hold
+/// (`resource_ids.rs`), on whichever thread ends it.
 pub(crate) struct Prepared {
-    texture: Texture,
+    texture: Weak<TextureShared>,
     kind: Kind,
 }
 
@@ -272,10 +275,99 @@ enum Kind {
     },
 }
 
+/// What a waiting texture's storage form takes, read inside a passing hold
+/// (`Texture::storage_form_wanted`), its image made with none under way ([`Wanted::make`]).
+enum Wanted {
+    /// A fetched render target's storage form: its image, the form's plan, and the texture's
+    /// type.
+    Form {
+        image: Arc<Image>,
+        plan: ImagePlan,
+        texture_type: TextureType,
+    },
+    /// A shadow's move in place: its texels, what it moves with, and whether the image in place
+    /// takes storage usage.
+    Move {
+        texels: Arc<Texels>,
+        pending: in_place::PendingMove,
+        storable: bool,
+    },
+}
+
+/// A waiting texture's storage form's image, made with no passing hold under way
+/// ([`Wanted::make`]).
+enum Made {
+    /// A fetched render target's storage form: its image, the form's plan, and the form's
+    /// `VkImage` in what goes with it.
+    Form {
+        image: Arc<Image>,
+        plan: ImagePlan,
+        raw: vk::Image,
+        swapped: Arc<Mutex<Swapped>>,
+    },
+    /// A shadow's image in place, and what its count takes (as [`Kind::Move`]).
+    Move {
+        storage: Storage,
+        counted: (PagesClass, bool, bool),
+    },
+    /// No image in place: the device refused it, and the shadow stops waiting.
+    Refused,
+}
+
+impl Wanted {
+    /// The storage form's image, made on `device`: `None` where the device refuses a fetched
+    /// render target's, which then stops waiting.
+    fn make(self, device: &Device) -> Option<Made> {
+        match self {
+            Wanted::Form {
+                image,
+                plan,
+                texture_type,
+            } => {
+                let class =
+                    plan.memory_class(StorageMode::Private, &device.properties().driver_defects);
+                let (raw, placement) = device
+                    .placed_image(&plan, texture_type, class, device.shared().sharing())
+                    .ok()?;
+                let swapped = Arc::new(Mutex::new(Swapped {
+                    objects: ImageObjects::new(device, raw),
+                    memory: Freed {
+                        device: device.clone(),
+                        placement,
+                    },
+                }));
+                Some(Made::Form {
+                    image,
+                    plan,
+                    raw,
+                    swapped,
+                })
+            }
+            Wanted::Move {
+                texels,
+                pending,
+                storable,
+            } => {
+                let facts = (device.shared().textures).facts(device.compile_device().profile());
+                let made = (&*texels, pending.class, storable);
+                let image = device.in_place_image(&pending.plan, &pending.descriptor, made, &facts);
+                let Ok(Ok((image, pitched))) = image else {
+                    return Some(Made::Refused);
+                };
+                let writes = InPlaceAccess::Writes.takes(pending.usage);
+                Some(Made::Move {
+                    storage: Storage::Alias { image, texels },
+                    counted: (pending.class, pitched, writes),
+                })
+            }
+        }
+    }
+}
+
 /// A switch under way (the module docs): its flag is up, and the textures it took from the
-/// waiting list, to let go of once the lock is free (a texture's last handle may go with them).
+/// waiting list, held weakly (`Switch::prepare` takes them inside a passing hold).
 pub(crate) struct Switch {
-    textures: Vec<Texture>,
+    textures: Vec<Weak<TextureShared>>,
 }
 
 /// A switch that rides on a command buffer's commit (the module docs), which holds it: its
@@ -406,41 +498,122 @@ impl Texture {
         Ok(image.export())
     }
 
-    /// The texture's storage form, made, its copy recorded into `core` (the committing command
-    /// buffer's last part); `None` where the device refuses it, or the texture may no longer
-    /// take it.
-    fn prepare_storage_form(&self, core: &mut EncoderCore) -> Option<Prepared> {
+    /// What the texture's storage form takes, read inside a passing hold (`Switch::prepare`),
+    /// its image made after: `None` where the texture may no longer take one, a shadow that may
+    /// move no more then ceasing to wait (it moved, its image was handed out, or its verdicts or
+    /// its bytes keep it a shadow).
+    fn storage_form_wanted(&self) -> Option<Wanted> {
         let image = match self.storage() {
             Storage::Image(image) => image,
-            Storage::Shadow { .. } => return self.prepare_move(),
+            Storage::Shadow { .. } => return self.move_wanted(),
             _ => return None,
         };
         if image.form.taken.get().is_some() || image.form.exported.load(Ordering::Relaxed) {
             return None;
         }
-        let device = &image.device;
-        let plan = storage_candidate(image.plan(), device.compile_device().profile())?;
-        let class = plan.memory_class(StorageMode::Private, &device.properties().driver_defects);
-        let (raw, placement) = device
-            .placed_image(&plan, self.texture_type(), class, device.shared().sharing())
-            .ok()?;
-        let swapped = Arc::new(Mutex::new(Swapped {
-            objects: ImageObjects::new(device, raw),
-            memory: Freed {
-                device: device.clone(),
-                placement,
-            },
-        }));
+        let plan = storage_candidate(image.plan(), image.device.compile_device().profile())?;
+        Some(Wanted::Form {
+            image: Arc::clone(image),
+            plan,
+            texture_type: self.texture_type(),
+        })
+    }
+
+    /// What a shadow's move in place takes (the module docs): the image in place over its
+    /// texels is made as the texture's would have been had its pages' verdicts been known as it
+    /// was made.
+    fn move_wanted(&self) -> Option<Wanted> {
+        let Storage::Shadow { image, texels, .. } = &self.0.storage else {
+            return None;
+        };
+        let mut pending = lock(&self.0.pending_move);
+        let wanted = pending.as_ref().and_then(|pending| {
+            if self.0.moved.get().is_some() || self.shadowed_again() {
+                return None;
+            }
+            let checks = &image.device.shared().in_place;
+            let verdict = |class, access| checks.verdict(class, access);
+            let policy = image.device.compile_device().policy().host_page_textures;
+            let pages = (pending.class, texels.texel_bytes());
+            if texels.buffer.detached() || texels.buffer.copied() {
+                return None;
+            }
+            in_place::in_place(policy, pending.usage, pages, verdict).ok()?;
+            // As the texture would have taken it as it was made (`Device::storage_over_buffer`).
+            let storable = InPlaceAccess::Renders.takes(pending.usage)
+                && !InPlaceAccess::Writes.takes(pending.usage)
+                && in_place::STORED_TEXEL_BYTES.contains(&pages.1)
+                && verdict(pending.class, InPlaceAccess::Writes) == Verdict::Passed;
+            Some(Wanted::Move {
+                texels: Arc::clone(texels),
+                pending: pending.clone(),
+                storable,
+            })
+        });
+        if wanted.is_none() {
+            *pending = None;
+        }
+        wanted
+    }
+
+    /// The texture's storage form, `made` for it with no passing hold under way, and its copy
+    /// recorded into `core` (the committing command buffer's last part), inside the hold that
+    /// took the texture again (`Switch::prepare`); `None` where the device refused its image, or
+    /// the texture may no longer take it, a shadow then ceasing to wait.
+    fn prepared(&self, made: Made, core: &mut EncoderCore) -> Option<Prepared> {
+        let kind = match made {
+            Made::Form {
+                image,
+                plan,
+                raw,
+                swapped,
+            } => {
+                let copied = self.form_copied((&image, &plan, raw), &swapped, core);
+                copied.then_some(Kind::Form { plan, swapped })
+            }
+            Made::Move { storage, counted } => {
+                let moves = self.0.moved.get().is_none() && !self.shadowed_again();
+                if !moves {
+                    *lock(&self.0.pending_move) = None;
+                }
+                moves.then(|| Kind::Move {
+                    storage: Mutex::new(Some(storage)),
+                    counted,
+                })
+            }
+            Made::Refused => {
+                *lock(&self.0.pending_move) = None;
+                None
+            }
+        };
+        Some(Prepared {
+            texture: self.downgrade(),
+            kind: kind?,
+        })
+    }
+
+    /// Record into `core` the copy of the texture's image into its storage form's, `raw` of
+    /// `plan` in `swapped`: whether it was recorded, not where the image was handed out or took
+    /// its storage form meanwhile.
+    fn form_copied(
+        &self,
+        (image, plan, raw): (&Image, &ImagePlan, vk::Image),
+        swapped: &Arc<Mutex<Swapped>>,
+        core: &mut EncoderCore,
+    ) -> bool {
+        if image.form.taken.get().is_some() || image.form.exported.load(Ordering::Relaxed) {
+            return false;
+        }
         let access = Access::new(
             crate::blit::TRANSFER,
             vk::AccessFlags2::TRANSFER_READ | vk::AccessFlags2::TRANSFER_WRITE,
         );
-        let written = self
-            .image_use(0..plan.levels, 0..plan.layers, access, true)
-            .ok()?;
+        let Ok(written) = self.image_use(0..plan.levels, 0..plan.layers, access, true) else {
+            return false;
+        };
         let from = image.raw.get();
-        let aspects = texture_aspects(&plan);
-        let regions = whole_copy(&plan, aspects);
+        let aspects = texture_aspects(plan);
+        let regions = whole_copy(plan, aspects);
         let family = core.queue_flags();
         core.command(
             crate::blit::TRANSFER,
@@ -488,66 +661,8 @@ impl Texture {
                 }
             },
         );
-        core.retain(Arc::clone(&swapped));
-        Some(Prepared {
-            texture: self.clone(),
-            kind: Kind::Form { plan, swapped },
-        })
-    }
-
-    /// The image in place over a shadow's texels that it moves to (the module docs), made as
-    /// the texture's would have been had its pages' verdicts been known as it was made; `None`
-    /// where it may move no more (it moved, its image was handed out, its verdicts or its bytes
-    /// keep it a shadow, or the device makes no such image), and it stops waiting then.
-    fn prepare_move(&self) -> Option<Prepared> {
-        let Storage::Shadow { image, texels, .. } = &self.0.storage else {
-            return None;
-        };
-        let mut pending = lock(&self.0.pending_move);
-        let made = pending.as_ref().and_then(|pending| {
-            if self.0.moved.get().is_some() || self.shadowed_again() {
-                return None;
-            }
-            let device = &image.device;
-            let checks = &device.shared().in_place;
-            let verdict = |class, access| checks.verdict(class, access);
-            let policy = device.compile_device().policy().host_page_textures;
-            let (class, usage) = (pending.class, pending.usage);
-            let pages = (class, texels.texel_bytes());
-            let bytes = &texels.buffer;
-            if bytes.detached() || bytes.copied() {
-                return None;
-            }
-            in_place::in_place(policy, usage, pages, verdict).ok()?;
-            // As the texture would have taken it as it was made (`Device::storage_over_buffer`).
-            let storable = InPlaceAccess::Renders.takes(usage)
-                && !InPlaceAccess::Writes.takes(usage)
-                && in_place::STORED_TEXEL_BYTES.contains(&pages.1)
-                && verdict(class, InPlaceAccess::Writes) == Verdict::Passed;
-            let facts = (device.shared().textures).facts(device.compile_device().profile());
-            let made = (&**texels, class, storable);
-            let descriptor = &pending.descriptor;
-            let (alias, pitched) = device
-                .in_place_image(&pending.plan, descriptor, made, &facts)
-                .ok()?
-                .ok()?;
-            let storage = Storage::Alias {
-                image: alias,
-                texels: Arc::clone(texels),
-            };
-            Some(Kind::Move {
-                storage: Mutex::new(Some(storage)),
-                counted: (class, pitched, InPlaceAccess::Writes.takes(usage)),
-            })
-        });
-        if made.is_none() {
-            *pending = None;
-        }
-        drop(pending);
-        Some(Prepared {
-            texture: self.clone(),
-            kind: made?,
-        })
+        core.retain(Arc::clone(swapped));
+        true
     }
 
     /// Whether a binding or a pass took an image of the texture's other than its shadow, made
@@ -609,11 +724,11 @@ impl Prepared {
     /// Swap the storage form in (the module docs): the bytes of the image's first memory and of
     /// its storage form's, where it swapped in; `None` where the texture's image was handed out
     /// meanwhile, the made image then going with the command buffer.
-    fn swap_in(&self) -> Option<(u64, u64)> {
+    fn swap_in(&self, texture: &Texture) -> Option<(u64, u64)> {
         let Kind::Form { plan, swapped } = &self.kind else {
             return None;
         };
-        let Storage::Image(image) = self.texture.storage() else {
+        let Storage::Image(image) = texture.storage() else {
             return None;
         };
         let Owner::Runtime { placement: old, .. } = &image.owner else {
@@ -653,11 +768,10 @@ impl Prepared {
     /// place over its texels (`TextureShared::moved`). Whether it moved: not where a binding or
     /// a pass took another image of it meanwhile, the image made then going with the command
     /// buffer.
-    fn move_in(&self) -> bool {
+    fn move_in(&self, texture: &Texture) -> bool {
         let Kind::Move { storage, .. } = &self.kind else {
             return false;
         };
-        let texture = &self.texture;
         if texture.shadowed_again() {
             return false;
         }
@@ -800,12 +914,8 @@ impl Device {
             return None;
         }
         waiting.given_up = false;
-        // Those gone stop waiting; the others are let go of once the lock is free.
-        let textures = waiting
-            .textures
-            .drain(..)
-            .filter_map(|weak| Texture::upgrade(&weak))
-            .collect();
+        // Those gone stop waiting as the switch prepares.
+        let textures = std::mem::take(&mut waiting.textures);
         forms.wanted.store(0, Ordering::SeqCst);
         drop(waiting);
         Some(Switch { textures })
@@ -825,18 +935,31 @@ impl Device {
     ) {
         let shared = self.shared();
         let forms = &shared.textures.storage_forms;
-        let (swapped, moved): (Vec<(&Prepared, (u64, u64))>, Vec<&Prepared>) =
-            if ran && !waiting.given_up {
-                let swapped = prepared
-                    .iter()
-                    .filter_map(|form| form.swap_in().map(|bytes| (form, bytes)))
-                    .collect();
-                (swapped, prepared.iter().filter(|p| p.move_in()).collect())
-            } else {
-                let again = prepared.iter().map(|form| form.texture.downgrade());
-                waiting.textures.extend(again);
-                (Vec::new(), Vec::new())
-            };
+        // The textures, taken again on whichever thread ends the switch (the scheduler's, or a
+        // new command buffer's): a passing hold (`resource_ids.rs`) until they go.
+        let passing = self.passing_hold();
+        let textures: Vec<Option<Texture>> = (prepared.iter())
+            .map(|form| Texture::upgrade(&form.texture))
+            .collect();
+        let made = prepared.iter().zip(&textures);
+        let made: Vec<(&Prepared, &Texture)> = made
+            .filter_map(|(form, texture)| texture.as_ref().map(|texture| (form, texture)))
+            .collect();
+        let (swapped, moved): (Vec<(&Texture, (u64, u64))>, Vec<(&Prepared, &Texture)>) = if ran
+            && !waiting.given_up
+        {
+            let swapped = (made.iter())
+                .filter_map(|&(form, texture)| form.swap_in(texture).map(|bytes| (texture, bytes)))
+                .collect();
+            let moved = (made.iter().copied())
+                .filter(|&(form, texture)| form.move_in(texture))
+                .collect();
+            (swapped, moved)
+        } else {
+            let again = made.iter().map(|&(_, texture)| texture.downgrade());
+            waiting.textures.extend(again);
+            (Vec::new(), Vec::new())
+        };
         if !swapped.is_empty() || !moved.is_empty() {
             // The texture slots' elements view the new images; no command buffer that may read
             // them is pending (the module docs).
@@ -844,30 +967,36 @@ impl Device {
             heap_sets::renew(self);
         }
         // Each move is counted as a texture in place over its class is, before the flag drops.
-        for form in &moved {
+        for (form, texture) in &moved {
             if let Kind::Move { counted, .. } = &form.kind {
                 let (class, pitched, written) = *counted;
                 shared.counts.host_texture_in_place(class, pitched, written);
                 shared.counts.host_texture_moved_in_place();
                 let feedback = metal2vulkan::vk::ImageUsageFlags::ATTACHMENT_FEEDBACK_LOOP_EXT;
-                let plan = form.texture.image_plan();
+                let plan = texture.image_plan();
                 if plan.is_ok_and(|plan| plan.usage.contains(feedback)) {
                     shared.counts.feedback_loop_alias_image();
                 }
             }
         }
-        // The lock goes, then the announcements, which run the program's callback.
-        forms.close(waiting, &shared.counts, swapped.len());
-        for (form, (old_bytes, bytes)) in swapped {
-            let texture = &form.texture;
+        // What the announcements name, for once the textures went.
+        let notices: Vec<_> = (swapped.iter())
+            .map(|&(texture, bytes)| {
+                let size = (texture.width(), texture.height());
+                (texture.pixel_format(), size, bytes)
+            })
+            .collect();
+        let swaps = swapped.len();
+        drop((swapped, moved, made));
+        // The lock goes, then the textures' handles and the passing hold, then the
+        // announcements, which run the program's callback.
+        forms.close(waiting, &shared.counts, swaps);
+        passing.let_go(textures.into_iter().flatten());
+        drop(passing);
+        for (format, (width, height), (old_bytes, bytes)) in notices {
             // Once per device: the scheduler's thread, outside any program call, may end it.
             self.degrade_once(Degradation::FetchedTargetStorage, || {
-                let object = format!(
-                    "a {:?} {}x{} render target",
-                    texture.pixel_format(),
-                    texture.width(),
-                    texture.height()
-                );
+                let object = format!("a {format:?} {width}x{height} render target");
                 let reason = format!(
                     "a pass fetched it through the pixel interlock while its image had no \
                      `STORAGE` usage, so that pass rendered into a scratch image; at the commit \
@@ -878,7 +1007,6 @@ impl Device {
                 (object, reason)
             });
         }
-        // The textures' handles go with no lock held.
         drop(prepared);
         drop(switch);
     }
@@ -893,7 +1021,7 @@ impl Device {
     /// Give up a switch before it made any storage form: every texture it took waits again.
     pub(crate) fn put_back_switch(&self, switch: Switch) {
         let mut waiting = lock(&self.shared().textures.storage_forms.waiting);
-        let again = switch.textures.iter().map(Texture::downgrade);
+        let again = switch.textures.iter().map(Weak::clone);
         waiting.textures.extend(again);
         self.end_switch(waiting, (switch, Vec::new(), false));
     }
@@ -951,11 +1079,40 @@ impl StorageForms {
 impl Switch {
     /// The waiting textures' storage forms, their copies recorded into `core` (the committing
     /// command buffer's last part). A texture the device refuses one stops waiting, as does one
-    /// that is gone.
-    pub(crate) fn prepare(&self, core: &mut EncoderCore) -> Vec<Prepared> {
-        self.textures
-            .iter()
-            .filter_map(|texture| texture.prepare_storage_form(core))
-            .collect()
+    /// that is gone. The textures are taken on the committing thread, which may be the runtime's
+    /// own (the in-place check commits its passes), inside passing holds (`resource_ids.rs`),
+    /// none of which makes an image: what each form takes is read in one, the images are made
+    /// with none under way, and the copies recorded in another.
+    pub(crate) fn prepare(&self, device: &Device, core: &mut EncoderCore) -> Vec<Prepared> {
+        let passing = device.passing_hold();
+        let textures: Vec<Texture> = (self.textures.iter())
+            .filter_map(Texture::upgrade)
+            .collect();
+        let wanted: Vec<(Weak<TextureShared>, Wanted)> = (textures.iter())
+            .filter_map(|texture| Some((texture.downgrade(), texture.storage_form_wanted()?)))
+            .collect();
+        passing.let_go(textures);
+        drop(passing);
+        let made: Vec<(Weak<TextureShared>, Made)> = (wanted.into_iter())
+            .filter_map(|(texture, wanted)| Some((texture, wanted.make(device)?)))
+            .collect();
+        let passing = device.passing_hold();
+        let mut textures = Vec::new();
+        let mut unused = Vec::new();
+        let mut prepared = Vec::new();
+        for (texture, made) in made {
+            match Texture::upgrade(&texture) {
+                Some(texture) => {
+                    prepared.extend(texture.prepared(made, core));
+                    textures.push(texture);
+                }
+                None => unused.push(made),
+            }
+        }
+        passing.let_go(textures);
+        drop(passing);
+        // The images made for textures that went meanwhile go with no passing hold under way.
+        drop(unused);
+        prepared
     }
 }

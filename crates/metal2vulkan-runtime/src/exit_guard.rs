@@ -1149,8 +1149,20 @@ pub(crate) fn at_least_user_initiated() -> bool {
 
 /// Run the program's code `f` (a handler, a notification, a deallocator, a message sink) on
 /// this thread, catching a panic: what it calls is the program's, as on the program's own
-/// threads. Every call of the program's code goes through here.
+/// threads. Every call of the program's code goes through here. In builds with debug assertions
+/// (every test run), end the process where this thread is inside a passing hold of a device's
+/// resources, which a making on another thread may wait for (`resource_ids.rs`): `f` may wait
+/// for that making.
 pub(crate) fn program(f: impl FnOnce()) {
+    if cfg!(debug_assertions) && crate::resource_ids::inside_passing_hold() {
+        let name = std::thread::current().name().map(str::to_owned);
+        eprintln!(
+            "metal2vulkan: thread {} ran the program's code inside a passing hold of a device's \
+             resources, which a making on another thread may wait for",
+            name.as_deref().unwrap_or("(unnamed)")
+        );
+        std::process::abort();
+    }
     PROGRAM.with(|program| program.set(program.get() + 1));
     let base = BASE.with(|base| base.replace(OWN.with(Cell::get)));
     let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));

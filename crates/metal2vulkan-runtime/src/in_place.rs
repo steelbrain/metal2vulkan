@@ -235,6 +235,7 @@ impl Verdict {
 /// ([`ShadowCause::CheckPending`]) needs to move in place once the verdicts pass
 /// (`texture/storage_form.rs`): its class and usage, its declared plan and its descriptor, which
 /// the image in place is made of as the texture's would have been.
+#[derive(Clone)]
 pub(crate) struct PendingMove {
     pub(crate) class: PagesClass,
     pub(crate) usage: TextureUsage,

@@ -360,23 +360,44 @@ pub(super) fn degrade_unreadable<'a>(
     textures: impl IntoIterator<Item = &'a Texture>,
     command: &str,
 ) {
-    let Some((texture, carrier)) = textures
-        .into_iter()
-        .find_map(|texture| Some((texture, held_for_copies(texture)?)))
-    else {
-        return;
-    };
-    device.degrade(Degradation::UnreadableHandleTexture, || {
-        (
-            format!(
-                "{:?} texture at resource ID {}",
-                texture.pixel_format(),
-                texture.gpu_resource_id().0
-            ),
-            format!(
-                "{command}: a function reading texture handles from memory reaches the texture, \
-                 whose bytes a {carrier:?} image holds for copies alone"
-            ),
-        )
-    });
+    if let Some(found) = textures.into_iter().find_map(Unreadable::of) {
+        found.announce(device, command);
+    }
+}
+
+/// What [`degrade_unreadable`] names of a texture whose bytes a carrier image holds for copies
+/// alone: kept without the texture, for a notice made once no lock or hold is (`heap_sets.rs`).
+pub(super) struct Unreadable {
+    pixel_format: PixelFormat,
+    id: u64,
+    carrier: Format,
+}
+
+impl Unreadable {
+    /// What `texture` is named by, where a carrier holds its bytes for copies alone.
+    pub(super) fn of(texture: &Texture) -> Option<Unreadable> {
+        Some(Unreadable {
+            carrier: held_for_copies(texture)?,
+            pixel_format: texture.pixel_format(),
+            id: texture.gpu_resource_id().0,
+        })
+    }
+
+    /// Announce it, reached by `command`.
+    pub(super) fn announce(&self, device: &Device, command: &str) {
+        let Unreadable {
+            pixel_format,
+            id,
+            carrier,
+        } = self;
+        device.degrade(Degradation::UnreadableHandleTexture, || {
+            (
+                format!("{pixel_format:?} texture at resource ID {id}"),
+                format!(
+                    "{command}: a function reading texture handles from memory reaches the \
+                     texture, whose bytes a {carrier:?} image holds for copies alone"
+                ),
+            )
+        });
+    }
 }

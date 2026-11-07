@@ -285,6 +285,8 @@ mod owned_pushes;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod pass_end_tiles;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod passing_holds;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod pending_rebind;
 mod pipeline;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]

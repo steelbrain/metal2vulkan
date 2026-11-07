@@ -690,6 +690,10 @@ impl Device {
         }
         let shared = self.shared();
         let key = SamplerKey::of(descriptor, options);
+        // The ID a state the program released held is back, whichever thread let go of it last
+        // (`resource_ids.rs`, **Passing holds**); before the map's lock, which a state's going
+        // takes.
+        shared.passing_holds.wait();
         // Under the map's lock, so equal requests on two threads get one state.
         let mut live = lock(&shared.samplers);
         if let Some(state) = live.live(&key) {

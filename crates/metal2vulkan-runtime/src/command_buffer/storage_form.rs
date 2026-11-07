@@ -56,7 +56,7 @@ impl CommandBuffer {
             device.put_back_switch(switch);
             return false;
         };
-        let prepared = switch.prepare(&mut core);
+        let prepared = switch.prepare(device, &mut core);
         if prepared.is_empty() {
             drop(core);
             device.give_up_switch(switch, prepared);

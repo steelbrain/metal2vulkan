@@ -465,25 +465,7 @@ impl Drop for TextureShared {
             (Storage::Texels(texels), _) => (Owned::TextureTexels, texels.buffer.device()),
         };
         device.shared().counts.churn.released(owned);
-        let id = self.id.id().0;
-        if id != 0 {
-            let (device, keeper): (&Device, Option<Box<dyn Any + Send + Sync>>) =
-                match &self.storage {
-                    Storage::Image(image)
-                    | Storage::Alias { image, .. }
-                    | Storage::Shadow { image, .. } => {
-                        // A shadow that moved in place keeps its image in place too, which the
-                        // command buffers since read through its ID (`texture/storage_form.rs`).
-                        let moved = match self.moved.get() {
-                            Some(Storage::Alias { image, .. }) => Some(Arc::clone(image)),
-                            _ => None,
-                        };
-                        (&image.device, Some(Box::new((Arc::clone(image), moved))))
-                    }
-                    Storage::Texels(texels) => (texels.buffer.device(), None),
-                };
-            heap_sets::gone(device, id, self.id.serial(), keeper);
-        }
+        self.leave_slot();
         // No lock is held: the token goes with no runtime lock held.
         let last = self
             .storage
@@ -501,6 +483,34 @@ impl Drop for TextureShared {
                 place.give_back(heap);
             }
         }
+    }
+}
+
+impl TextureShared {
+    /// Leave the texture's slot as it goes: the device's texture table no longer names it, and its
+    /// image waits for the command buffers that may still read it through its ID
+    /// (`heap_sets::gone`). Nothing where it holds no ID, or gave it back already
+    /// ([`Texture::id_back_if_last`]).
+    fn leave_slot(&self) {
+        let id = self.id.id().0;
+        if id == 0 {
+            return;
+        }
+        let (device, keeper): (&Device, Option<Box<dyn Any + Send + Sync>>) = match &self.storage {
+            Storage::Image(image)
+            | Storage::Alias { image, .. }
+            | Storage::Shadow { image, .. } => {
+                // A shadow that moved in place keeps its image in place too, which the command
+                // buffers since read through its ID (`texture/storage_form.rs`).
+                let moved = match self.moved.get() {
+                    Some(Storage::Alias { image, .. }) => Some(Arc::clone(image)),
+                    _ => None,
+                };
+                (&image.device, Some(Box::new((Arc::clone(image), moved))))
+            }
+            Storage::Texels(texels) => (texels.buffer.device(), None),
+        };
+        heap_sets::gone(device, id, self.id.serial(), keeper);
     }
 }
 
@@ -4257,7 +4267,12 @@ impl Texture {
     ) -> Texture {
         let ids = &device.shared().resource_ids;
         let id = match id_use {
-            IdUse::Program(placement) => IdHold::take(ids, IdSpace::Texture, placement),
+            IdUse::Program(placement) => {
+                // The ID a texture the program released held is back, whichever thread let go
+                // of it last (`resource_ids.rs`, **Passing holds**).
+                device.shared().passing_holds.wait();
+                IdHold::take(ids, IdSpace::Texture, placement)
+            }
             IdUse::Runtime => IdHold::internal(ids, IdSpace::Texture),
         };
         // A heap's image's heap lives while a texture is made from it, or while a texture of it a
@@ -4350,6 +4365,17 @@ impl Texture {
     /// The texture object, held while something else keeps it (a heap's, `heap.rs`).
     pub(super) fn downgrade(&self) -> Weak<TextureShared> {
         Arc::downgrade(&self.0)
+    }
+
+    /// Let go of this handle inside a passing hold (`resource_ids.rs`): where it is the
+    /// texture's last, the texture leaves its slot and gives its ID back now, and the rest of its
+    /// going (its image, its memory, its buffer and what the program gave with it) is handed
+    /// back, to go once the hold ended.
+    pub(super) fn id_back_if_last(self) -> Option<Box<dyn Send>> {
+        let mut shared = Arc::into_inner(self.0)?;
+        shared.leave_slot();
+        shared.id.give_back();
+        Some(Box::new(shared))
     }
 
     /// The memoryless backings it keeps (`attachment_stand_in::kept_backing`).

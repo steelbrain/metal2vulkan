@@ -114,6 +114,7 @@ use super::memory::{Memory, MemoryClass, Placement};
 use super::pipeline::{set_needs, VariantObjects};
 use super::release;
 use super::resource::ResourceKey;
+use super::resource_ids::PassingHold;
 use super::sampler::{SamplerShared, SamplerState};
 use super::texture::{Texture, TextureShared, TwinRead};
 use super::tracker::{Access, Use};
@@ -125,6 +126,7 @@ use metal2vulkan::bind::{
 };
 use metal2vulkan::error::BindError;
 use metal2vulkan::metal::sampler::{OpaqueBlackBorder, SamplerUse, SamplerWord};
+use metal2vulkan::metal::PixelFormat;
 use metal2vulkan::pipeline::{
     BindingSource, DescriptorSetLayout, HandleClass, ImageAccess, ImageHandleClass, PipelineLayout,
     RuntimeDependency, RuntimeFact, SampledType, Stage, SyntheticBinding,
@@ -189,6 +191,11 @@ pub(super) struct DeviceHeaps {
     /// The sampler tables, by what they map ([`SamplerTableKind`]), each made at the first
     /// command that binds one of its kind.
     sampler_tables: BTreeMap<SamplerTableKind, Table>,
+    /// Run by a batch's thread once it wrote the deferred slots and let go of the lock, while
+    /// it still holds their holders (`HeldSlots`): where a program's release may leave it the
+    /// last (`tests/passing_holds.rs`).
+    #[cfg(test)]
+    pub(crate) pause_holding: Option<Arc<dyn Fn() + Send + Sync>>,
 }
 
 /// A sampler state every heap set holds at its element: its hold serial and the state (not
@@ -587,14 +594,16 @@ impl DeviceHeaps {
         Ok(())
     }
 
-    /// A new heap set of `layout`, holding every live texture and sampler state. The states it
-    /// upgrades go to `held_samplers`, to drop once the lock is free.
-    fn made_set(
+    /// A new heap set of `layout`, holding every live texture and sampler state. The textures and
+    /// states it upgrades go to `held` and `held_samplers`, to let go of once the lock is free,
+    /// inside `passing`, the passing hold it takes once the set is made, before its first upgrade
+    /// (`resource_ids.rs`).
+    fn made_set<'d>(
         &mut self,
-        device: &Device,
+        device: &'d Device,
         layout: &DescriptorSetLayout,
         (held, held_samplers): (&mut Vec<Texture>, &mut Vec<SamplerState>),
-        notes: &mut Notes,
+        (notes, passing): (&mut Notes, &mut Option<PassingHold<'d>>),
     ) -> Result<Arc<HeapSet>, Error> {
         let needs = set_needs(layout)?;
         let raw_layout = Arc::new(RawLayout::create(device, layout)?);
@@ -669,6 +678,7 @@ impl DeviceHeaps {
             raws: BTreeMap::new(),
         };
         entry.write(device, neutrals)?;
+        *passing = Some(device.passing_hold());
         let mut writes = Vec::new();
         for (&id, placed) in &self.textures {
             if let Some(texture) = Texture::upgrade(&placed.texture) {
@@ -1445,11 +1455,12 @@ fn texture_info(
     }
 }
 
-/// What placing textures and writing sets announces, once no lock is held.
+/// What placing textures and writing sets announces, once no lock is held, and once the passing
+/// hold that took the textures ended (`resource_ids.rs`): it keeps no texture.
 #[derive(Default)]
 struct Notes {
-    /// A texture a class fits that it cannot view.
-    unviewable: Option<Texture>,
+    /// A texture a class fits that it cannot view: its format and resource ID.
+    unviewable: Option<(PixelFormat, u64)>,
     /// The resource ID of a shadowed texture a set holds that the command binding the set
     /// neither names nor makes resident.
     shadowed: Option<u64>,
@@ -1458,7 +1469,7 @@ struct Notes {
     /// The elements a command buffer's own version of a set was made with.
     copied: Option<usize>,
     /// A texture a set holds whose blocks a carrier holds for copies (`pvrtc.rs`).
-    unreadable: Option<Texture>,
+    unreadable: Option<super::pvrtc::Unreadable>,
     /// A sampler state a sampler table or a set's sampler array cannot hold: the first one's
     /// notice (`Degradation::UnlistedArgumentSampler`).
     unlisted: Option<(String, String)>,
@@ -1479,7 +1490,7 @@ struct Notes {
 impl Notes {
     fn unviewable(&mut self, texture: &Texture) {
         if self.unviewable.is_none() {
-            self.unviewable = Some(texture.clone());
+            self.unviewable = Some((texture.pixel_format(), texture.gpu_resource_id().0));
         }
     }
 
@@ -1537,22 +1548,17 @@ impl Notes {
 
     /// `texture` placed, into a set where `in_set`.
     fn placed(&mut self, texture: &Texture, in_set: bool) {
-        let held = || super::pvrtc::held_for_copies(texture).is_some();
-        if in_set && self.unreadable.is_none() && held() {
-            self.unreadable = Some(texture.clone());
+        if in_set && self.unreadable.is_none() {
+            self.unreadable = super::pvrtc::Unreadable::of(texture);
         }
     }
 
     /// Announce what was noted.
     fn announce(self, device: &Device) {
-        if let Some(texture) = &self.unviewable {
+        if let Some((pixel_format, id)) = self.unviewable {
             device.degrade(Degradation::UnnamedTextureUnviewable, || {
                 (
-                    format!(
-                        "{:?} texture at resource ID {}",
-                        texture.pixel_format(),
-                        texture.gpu_resource_id().0
-                    ),
+                    format!("{pixel_format:?} texture at resource ID {id}"),
                     "a heap array whose class the texture fits cannot view its format (one the \
                      device cannot sample or store without a format, or that needs its \
                      function's decode)"
@@ -1592,8 +1598,8 @@ impl Notes {
                 )
             });
         }
-        if let Some(texture) = &self.unreadable {
-            super::pvrtc::degrade_unreadable(device, [texture], "a heap set");
+        if let Some(unreadable) = &self.unreadable {
+            unreadable.announce(device, "a heap set");
         }
         if let Some(unlisted) = self.unlisted {
             device.degrade(Degradation::UnlistedArgumentSampler, || unlisted);
@@ -1762,6 +1768,9 @@ pub(crate) fn heap_set(
     device: &Device,
     layout: &DescriptorSetLayout,
 ) -> Result<Arc<HeapSet>, Error> {
+    // A new set takes every live holder once it is made: a passing hold from then
+    // (`resource_ids.rs`).
+    let mut passing = None;
     let mut held = Vec::new();
     let mut held_samplers = Vec::new();
     let mut notes = Notes::default();
@@ -1773,19 +1782,32 @@ pub(crate) fn heap_set(
             .and_then(|(_, set)| set.upgrade())
         {
             Some(set) => Ok(set),
-            None => heaps.made_set(device, layout, (&mut held, &mut held_samplers), &mut notes),
+            None => heaps.made_set(
+                device,
+                layout,
+                (&mut held, &mut held_samplers),
+                (&mut notes, &mut passing),
+            ),
         }
     };
-    drop((held, held_samplers));
+    match &passing {
+        Some(passing) => passing.let_go(held),
+        None => drop(held),
+    }
+    drop(held_samplers);
+    drop(passing);
     notes.announce(device);
     set
 }
 
 /// Place `texture`, a program's texture that just took its ID's slot, into the table and every
 /// heap set (the module docs). A failure to write it leaves the ID's entry the neutral's,
-/// announced.
+/// announced. The caller holds the texture, the slot's only holder, so no handle the write takes
+/// is its last: no passing hold (`resource_ids.rs`), and a making takes none.
 pub(super) fn place(device: &Device, texture: &Texture) {
-    sync(device, Slots::Changed(texture.gpu_resource_id().0));
+    let (held, written) = write(device, Slots::Changed(texture.gpu_resource_id().0));
+    drop(held);
+    written.announce(device);
 }
 
 /// The texture slots a [`sync`] writes.
@@ -1802,6 +1824,17 @@ enum Slots {
 /// Write `slots`: a changed one where its holder changed, the others whatever changed. While a
 /// batch holds the slots' writes ([`hold`]), they wait for it.
 fn sync(device: &Device, slots: Slots) {
+    // The slots' holders it takes, on whichever thread asked: a passing hold (`resource_ids.rs`).
+    let passing = device.passing_hold();
+    let (held, written) = write(device, slots);
+    passing.let_go(held);
+    drop(passing);
+    written.announce(device);
+}
+
+/// Write `slots` as [`sync`] does: the holders it took, to let go of with no lock held, and what
+/// it announces.
+fn write(device: &Device, slots: Slots) -> (Vec<Texture>, SlotsWritten) {
     let mut held = Vec::new();
     let mut notes = Notes::default();
     let failed = {
@@ -1815,10 +1848,23 @@ fn sync(device: &Device, slots: Slots) {
             }
         }
     };
-    drop(held);
-    notes.announce(device);
-    for (id, error) in failed {
-        failed_write(device, id, &error);
+    (held, SlotsWritten { notes, failed })
+}
+
+/// What writing slots announces once no lock is held, and once the passing hold that took their
+/// holders ended: the notes, and the slots whose write failed.
+struct SlotsWritten {
+    notes: Notes,
+    failed: Vec<(u64, Error)>,
+}
+
+impl SlotsWritten {
+    /// Announce it on `device`.
+    fn announce(self, device: &Device) {
+        self.notes.announce(device);
+        for (id, error) in self.failed {
+            failed_write(device, id, &error);
+        }
     }
 }
 
@@ -1847,6 +1893,9 @@ pub(super) fn hold(device: &Device) -> HeldSlots {
 impl Drop for HeldSlots {
     fn drop(&mut self) {
         let device = &self.device;
+        // The deferred writes take their slots' holders on the batch's thread, which the
+        // program's release may leave the last: a passing hold (`resource_ids.rs`).
+        let passing = device.passing_hold();
         let mut held = Vec::new();
         let mut notes = Notes::default();
         let failed = {
@@ -1861,7 +1910,12 @@ impl Drop for HeldSlots {
             }
             failed
         };
-        drop(held);
+        #[cfg(test)]
+        if let Some(pause) = lock(&device.shared().heaps).pause_holding.clone() {
+            pause();
+        }
+        passing.let_go(held);
+        drop(passing);
         notes.announce(device);
         for (id, error) in failed {
             failed_write(device, id, &error);
