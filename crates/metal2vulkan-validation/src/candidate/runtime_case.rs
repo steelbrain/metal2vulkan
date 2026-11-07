@@ -86,6 +86,7 @@ mod commands;
 mod host_wait_gap;
 pub(crate) mod imageblock;
 mod layer_claim;
+mod query_reset_gap;
 mod raster_order_gap;
 mod render;
 mod sparse;
@@ -197,15 +198,17 @@ pub(crate) fn report_each_message() {
 /// degrade notices (`DebugMessage::degradation`), which fail nothing. Bounded so a flood cannot
 /// grow without limit.
 ///
-/// Two layer gaps pass, on the layer releases whose source was read with their cause in place:
+/// Three layer gaps pass, on the layer releases whose source was read with their cause in place:
 /// the layer's synchronization validation forgetting a semaphore chain once the host waited on a
-/// timeline (`runtime_case/host_wait_gap.rs`); and the layer's synchronization validation not
+/// timeline (`runtime_case/host_wait_gap.rs`); the layer's synchronization validation not
 /// reading rasterization-order attachment access, so that it reports an input attachment read of
 /// the runtime's pipelines made with it (named so) after an earlier draw's color write
-/// (`runtime_case/raster_order_gap.rs`). Each message passed prints a `LAYER-GAP` line with the
+/// (`runtime_case/raster_order_gap.rs`); and the layer's check of a host query reset reporting the
+/// whole pool in use where the valid usage speaks of the range reset
+/// (`runtime_case/query_reset_gap.rs`). Each message passed prints a `LAYER-GAP` line with the
 /// layer's source, and a test's count of them prints once its messages go. On any other release
-/// each fails, marked "re-read WaitForSemaphore in layer X.Y.Z" or "re-read the input attachment
-/// ordering in layer X.Y.Z".
+/// each fails, marked "re-read WaitForSemaphore in layer X.Y.Z", "re-read the input attachment
+/// ordering in layer X.Y.Z" or "re-read vkResetQueryPool in layer X.Y.Z".
 ///
 /// One message about the driver passes too, once the runtime announced it: the layer's report
 /// of a vertex module's subgroup operations outside `subgroupSupportedStages`
@@ -411,7 +414,7 @@ impl Messages {
     }
 
     /// How many of the layer gaps' messages passed so far (`runtime_case/host_wait_gap.rs`,
-    /// `runtime_case/raster_order_gap.rs`).
+    /// `runtime_case/raster_order_gap.rs`, `runtime_case/query_reset_gap.rs`).
     pub fn layer_gaps(&self) -> usize {
         self.0.lock().unwrap_or_else(|p| p.into_inner()).layer_gaps
     }
@@ -527,7 +530,38 @@ impl Messages {
                 );
                 return;
             }
+            let reset_gap = query_reset_gap::shape(message.id, &message.id_name, &message.text);
+            if reset_gap && layer.is_some_and(query_reset_gap::read) {
+                reported.layer_gaps += 1;
+                eprintln!(
+                    "LAYER-GAP {}: passed, the layer's query-reset gap ({}): {} ({}): {}",
+                    reported.test,
+                    query_reset_gap::SOURCE,
+                    message.id_name,
+                    message.id,
+                    message.text.replace('\n', " ")
+                );
+                return;
+            }
             let mut message = message.clone();
+            if reset_gap {
+                let read: Vec<String> = query_reset_gap::READ
+                    .iter()
+                    .map(|&version| host_wait_gap::release(version))
+                    .collect();
+                message.text = format!(
+                    "re-read vkResetQueryPool in layer {}: the layer's query-reset gap passes \
+                     only on the releases read ({}). {}",
+                    layer.map_or_else(|| "of an unknown release".into(), host_wait_gap::release),
+                    read.join(", "),
+                    message.text
+                );
+                eprintln!(
+                    "LAYER-GAP {}: failed, {}",
+                    reported.test,
+                    message.text.replace('\n', " ")
+                );
+            }
             if raster_gap {
                 let read: Vec<String> = raster_order_gap::READ
                     .iter()
