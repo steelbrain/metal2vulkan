@@ -1243,7 +1243,8 @@ fn block_rows_lie_as_metal_lays_them_out(device: &Device, messages: &Messages) {
 /// layout notice, each sample of each found in the heap's bytes where Metal's tiles place it after
 /// a blit naming it, and bytes written there read back by a blit
 /// (`heap_textures::sample_round_trip`). The size query answers at least Metal's for each on every
-/// device (66048 and 65536 bytes at 128).
+/// device (66048 and 65536 bytes at 128). Once everything over the heap went and the pages were
+/// unmapped, a command buffer of the same queue runs and reads the resolved texels.
 #[test]
 fn a_host_heap_s_multisample_textures_hold_their_samples_in_metal_s_tiles() {
     use super::heap_textures::sample_round_trip;
@@ -1344,8 +1345,24 @@ fn a_host_heap_s_multisample_textures_hold_their_samples_in_metal_s_tiles() {
             );
             assert_eq!((off, read_off), (0, 0), "{what}: samples off Metal's tiles");
         }
-        drop((texture, resolved, heap));
+        // The pass and its command buffer hold the texture, which holds the heap and its import
+        // of the pages: they all go before the pages, as the heap's contract asks.
+        drop((command_buffer, pass, texture, heap));
         drop(mapping);
+        // A command buffer committed once the pages are unmapped runs: no import of them is left
+        // (RADV lists every imported memory in every kernel submission, and the kernel refuses
+        // one that lists pages no longer mapped).
+        let plain = Plain {
+            format: PixelFormat::RGBA8Unorm,
+            unit: 4,
+            extent: [64, 64],
+        };
+        let texels = blit_out(&queue, &resolved, &plain);
+        assert!(
+            texels.chunks(4).all(|texel| texel == [51, 102, 153, 255]),
+            "resolved after the unmap: {:?}",
+            &texels[..16]
+        );
         eprintln!("HEAPLAYOUT multisample: compressed and uncompressed held in Metal's tiles");
     });
 }
