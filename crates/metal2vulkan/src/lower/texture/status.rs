@@ -106,8 +106,8 @@ fn carried(kind: &InstKind, v: Value, path: &[u32]) -> Option<Vec<Box<[u32]>>> {
         _ if path.is_empty() => {}
         _ if copied(kind).is_some_and(|p| p.contains(&v)) => out.push(path.into()),
         InstKind::ExtractValue { agg, indices } if *agg == v => {
-            if path.starts_with(indices) {
-                out.push(path[indices.len()..].into());
+            if let Some(below) = path.strip_prefix(&**indices) {
+                out.push(below.into());
             } else if indices.starts_with(path) {
                 return None;
             }
