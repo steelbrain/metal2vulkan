@@ -148,13 +148,19 @@ const FORMATS: [(PixelFormat, u32, &str); 76] = [
 
 /// The bytes of one texel of `pf`, for the uncompressed colour formats this family round-trips:
 /// none for a format whose image does not hold Metal's bytes, whose host copies the runtime
-/// refuses. The lane's own predicate, over the translator's public format table.
+/// refuses. The lane's own predicate, over the translator's public format table. A format held
+/// for copies alone (`metal::format::copies_only`) is
+/// [`format_footprints`](crate::cases::format_footprints)'s, which records the same host round
+/// trip of it beside the footprints and texture types Metal answers for it, so it is none here.
 ///
 /// It is the table's guard and nothing else reads it: [`FORMATS`] holds the names a case must
 /// answer with as static strings, so the list cannot be built from the predicate at run time, and
 /// this is what keeps the two from parting.
 #[cfg(test)]
 fn texel_bytes(pf: PixelFormat) -> Option<u32> {
+    if metal2vulkan::metal::format::copies_only(pf) {
+        return None;
+    }
     let block = metal2vulkan::metal::format::byte_format(pf)?.block()?;
     let compressed =
         block.texels > 1 || (block.packed_bits.is_none() && block.component_bits.is_none());

@@ -91,15 +91,16 @@ fn sample_bytes_become_clear_words() {
 }
 
 /// Every pixel format the crate holds a texture of (one with aspects) has a fill unit, but the
-/// 24-bit depth formats, which Apple GPUs make no texture of (refused at the texture's making).
+/// 24-bit depth formats, which Apple GPUs make no texture of (refused at the texture's making),
+/// and the formats held for copies alone, whose fills are refused (Metal's are not measured).
 #[test]
 fn every_texture_format_has_a_fill_unit() {
-    use metal2vulkan::metal::format::aspects;
+    use metal2vulkan::metal::format::{aspects, copies_only};
     use PixelFormat as P;
     let none: Vec<PixelFormat> = PixelFormat::ALL
         .iter()
         .copied()
-        .filter(|&pf| aspects(pf).is_some() && fill_unit(pf).is_none())
+        .filter(|&pf| aspects(pf).is_some() && !copies_only(pf) && fill_unit(pf).is_none())
         .collect();
     assert_eq!(
         none,

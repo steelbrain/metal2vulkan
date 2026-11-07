@@ -198,8 +198,9 @@ use super::{Buffer, Degradation};
 use ash::vk;
 use metal2vulkan::bind::{PlanesCopy, YCbCrCodes};
 use metal2vulkan::device::FormatUsage;
+use metal2vulkan::error::{Feature, Unsupported};
 use metal2vulkan::metal::format::{
-    byte_format, padded_words, ycbcr_format, ClearRoute, ExtendedRange, FormatMapping,
+    byte_format, copies_only, padded_words, ycbcr_format, ClearRoute, ExtendedRange, FormatMapping,
 };
 use metal2vulkan::metal::{PixelFormat, TextureType, TextureUsage};
 use metal2vulkan::vk::{
@@ -225,7 +226,8 @@ pub(super) enum FillUnit {
 }
 
 /// The fill unit of `pf`, `None` for a format the runtime makes no texture of (`Invalid`, the
-/// private formats it holds none of, the 24-bit depth formats, which Apple GPUs make none of).
+/// private formats it holds none of, the 24-bit depth formats, which Apple GPUs make none of) and
+/// for one it holds for copies alone (`metal::format::copies_only`), whose fills are refused.
 pub(super) fn fill_unit(pf: PixelFormat) -> Option<FillUnit> {
     use PixelFormat as P;
     let texels = |bytes, option| Some(FillUnit::Texels { bytes, option });
@@ -778,7 +780,9 @@ impl BlitCommandEncoder {
     /// texture's fill is refused, `Unsupported`, where the device cannot run the sample planes'
     /// merge (sample-rate shading, the sample count among its integer color attachments') or the
     /// copy into the texture (`copy_from_texture`'s refusals of copies between multisampled
-    /// textures).
+    /// textures). A texture of a format held for copies alone (`metal::format::copies_only`) has
+    /// its fill refused `Unsupported(Format, NotImplemented)`: Metal's fills of one are not
+    /// measured.
     pub fn fill_texture(
         &mut self,
         texture: &Texture,
@@ -1278,7 +1282,15 @@ impl BlitCommandEncoder {
         texture.check_plane_copied()?;
         self.see(texture);
         check_pattern(call, texture.texture_type(), pattern)?;
-        let unit = fill_unit(texture.pixel_format())
+        let pf = texture.pixel_format();
+        // A texture held for copies alone (`metal::format::copies_only`): Metal's fills of one are
+        // not measured.
+        if copies_only(pf) {
+            return Err(Error::Unsupported(
+                Unsupported::not_implemented(Feature::Format).naming_format(pf),
+            ));
+        }
+        let unit = fill_unit(pf)
             .ok_or_else(|| internal("a fill of a format the runtime makes no texture of"))?;
         // A texture buffer's fill writes one row whatever the region's height and depth.
         if texture.texture_type() == TextureType::TextureBuffer {
