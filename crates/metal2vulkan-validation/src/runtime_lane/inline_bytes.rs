@@ -12,21 +12,20 @@
 //! - A vertex function's attribute reads them as its vertex buffer (the owned fixture
 //!   `ob3_vertex_input`, `vertex_strides.rs`): at the layout's own stride, and under
 //!   `MTLBufferLayoutStrideDynamic` at stride 0 after the plain setter and at the stride form's
-//!   stride, as plain Metal reads them; at `MTLAttributeStrideStatic` the
-//!   draw is refused (`MissingVertexStride`).
+//!   stride, as plain Metal reads them; at `MTLAttributeStrideStatic`, `2^32 - 1`, vertex 0 reads
+//!   the first element and every vertex past it zero, as an M4 read them.
 //! - A fragment function reads them through a `const device` pointer and a `constant`
 //!   reference (`cfb_ts_read_bytes` of the owned fixture `cfb_tile_shadows`).
 //!
 //! The object stage's form runs `mesh_draws`' object cases (`mesh_draws.rs`).
 
-use super::vertex_strides::{drawn, pipeline, read_at};
+use super::vertex_strides::{drawn, pipeline, read_at, read_static};
 use super::{
     buffer_with, layer_reported_nothing_at_all, read_buffer, validated_device, Messages,
     ScratchCache, WAIT,
 };
 use crate::air_library::AirLibrary;
 use crate::gpu::TEST_DEVICE;
-use metal2vulkan::error::BindError;
 use metal2vulkan::metal::{PixelFormat, PrimitiveType, TextureUsage};
 use metal2vulkan::pipeline::{
     ColorAttachmentDescriptor, ComputePipelineDescriptor, RenderPipelineDescriptor, StageSource,
@@ -217,11 +216,9 @@ fn vertex_attributes_read_inline_bytes() {
             Ok(read_at(0, 3)),
             "a stride of 2^32 + 12"
         );
-        assert!(
-            matches!(
-                draw(&|e| e.set_vertex_bytes_with_stride(&bytes, u64::MAX, 0)),
-                Err(Error::Bind(BindError::MissingVertexStride { .. }))
-            ),
+        assert_eq!(
+            draw(&|e| e.set_vertex_bytes_with_stride(&bytes, u64::MAX, 0)),
+            Ok(read_static()),
             "MTLAttributeStrideStatic"
         );
     }

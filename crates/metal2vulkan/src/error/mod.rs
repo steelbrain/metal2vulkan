@@ -2080,13 +2080,6 @@ pub enum BindError {
     InvalidDescriptor(DescriptorError),
     /// A render pipeline fetches a fixed-function vertex buffer that nothing is bound to.
     UnboundVertexBuffer { slot: SlotRef },
-    /// A vertex buffer layout with a per-bind stride (`MTLBufferLayoutStrideDynamic`) reads
-    /// inline bytes (`setVertexBytes`) bound at `MTLAttributeStrideStatic`
-    /// (`BoundBuffer::Bytes::attribute_stride` `Some(u32::MAX)`), which an M4 read as element 0
-    /// and zeros past it (Metal's debug layer stops the draw): not emulated.
-    /// Inline bytes and a buffer bound without a stride read at stride 0, as plain Metal's encoder
-    /// reads them, and at the stride bound with one.
-    MissingVertexStride { slot: SlotRef },
     /// The set-1 heap's elements (one per resident texture a handle can name, plus the null
     /// element) exceed the pipeline's heap capacity: the heap arrays' count, at most the handle
     /// table's reach.

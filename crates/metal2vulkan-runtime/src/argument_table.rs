@@ -25,13 +25,12 @@
 //! core, whichever slot binds it: a bind before each draw, and a draw that binds objects an
 //! earlier draw of the encoder bound, retain nothing of their own.
 //!
-//! A compute encoder's table differs in two answers. As plain Metal's compute encoder gave it on an
-//! M4 where its API validation asserts, it holds a buffer bound past its length, which a dispatch
+//! A compute encoder's table differs in one answer, as plain Metal's compute encoder gave it on an
+//! M4 where its API validation asserts: it holds a buffer bound past its length, which a dispatch
 //! refuses only where the kernel reads the slot (a read there is past the buffer: memory decides
-//! it); a render stage's table refuses that at the call, as Metal's validation does, and plain
-//! Metal's render form is not measured. And its stride forms hold `MTLAttributeStrideStatic` as
-//! the stride its low 32 bits name, `2^32 - 1`, where a render stage's table holds no stride for
-//! it ([`per_bind_stride`]).
+//! it). A render stage's table refuses that at the call, as Metal's validation does; plain Metal's
+//! render form is not measured. Both tables' stride forms hold a stride as its low 32 bits,
+//! `MTLAttributeStrideStatic`'s included ([`per_bind_stride`]).
 //!
 //! An offset set at an index with no buffer bound is no change in either, as plain Metal's render
 //! and compute encoders both take it ([`ArgumentTable::take_buffer_offset`]).
@@ -70,10 +69,6 @@ pub(super) const BUFFER_SLOTS: u32 = 31;
 pub(super) const TEXTURE_SLOTS: u32 = 128;
 /// Entries of a sampler table (`setSamplerState:atIndex:` and its stage forms).
 pub(super) const SAMPLER_SLOTS: u32 = 16;
-/// `MTLAttributeStrideStatic`: the stride argument of the stride forms that a render stage's
-/// table holds as no per-bind stride, as the plain setters bind, and a compute table as the
-/// stride `2^32 - 1` ([`per_bind_stride`]).
-pub(super) const ATTRIBUTE_STRIDE_STATIC: u64 = u64::MAX;
 /// The most bytes one `setBytes:length:atIndex:` (or a stage form) takes: Metal's documented
 /// limit for inline bytes, 4 KiB.
 pub(super) const INLINE_BYTES_LIMIT: u64 = 4096;
@@ -453,23 +448,24 @@ pub(super) fn check_bound_buffer(
     Ok(())
 }
 
-/// The per-bind stride a stride form's `stride` names in a compute table (`compute`) or a render
-/// stage's: its low 32 bits. Plain Metal reads a stride past 32 bits so, and its validation takes
-/// it (an M4 under macOS 27.0.1 and an M3 Max under 26.7, compute stage-in and vertex fetch, both
-/// binding forms: `2^32 + 8` and `2^63 + 8` read at 8, `2^33 + 4` at 4, `2^32` at 0).
+/// The per-bind stride a stride form's `stride` names in a compute table or a render stage's: its
+/// low 32 bits. Plain Metal reads a stride past 32 bits so, and its validation takes it (an M4
+/// under macOS 27.0.1 and an M3 Max under 26.7, compute stage-in and vertex fetch, both binding
+/// forms: `2^32 + 8` and `2^63 + 8` read at 8, `2^33 + 4` at 4, `2^32` at 0).
 ///
-/// `MTLAttributeStrideStatic` (`u64::MAX`) is no exception in a compute table: its low 32 bits,
-/// `2^32 - 1`, are the stride a kernel's stage-in layout of `MTLBufferLayoutStrideDynamic` reads.
-/// Plain Metal on an Apple M3 Max under macOS 27.0.1 answered each of the four stride forms bound
-/// so with the element at the bind offset for the first element and zero for every element past
-/// it, the bind offset reaching the first (`metal2vulkan-conformance`'s `attribute-stride-*`
-/// recordings, a buffer of 512 bytes), which is a fetch at that stride: element 1 lies `2^32 - 1`
-/// bytes on, past the buffer (an indirect command buffer's command read the byte there in a buffer
-/// that holds it, `RuntimeGap::IndirectCommandUnstridedBuffer`). A render stage's table holds no
-/// stride for it, as the plain setters bind (`render/vertex_strides.rs`).
-pub(super) fn per_bind_stride(stride: u64, compute: bool) -> Option<u32> {
+/// `MTLAttributeStrideStatic` (`u64::MAX`) is no exception: its low 32 bits, `2^32 - 1`, are the
+/// stride a layout of `MTLBufferLayoutStrideDynamic` reads, a kernel's stage-in layout or a vertex
+/// descriptor's. Plain Metal on an Apple M3 Max under macOS 27.0.1 answered each of the compute
+/// encoder's four stride forms, and the render encoder's `setVertexBuffer:offset:attributeStride:
+/// atIndex:`, bound so with the element at the bind offset for the first element and zero for
+/// every element past it, the bind offset reaching the first (`metal2vulkan-conformance`'s
+/// `attribute-stride-*` recordings, buffers of 512 and 64 bytes), which is a fetch at that stride:
+/// element 1 lies `2^32 - 1` bytes on, past the buffer (an indirect command buffer's command read
+/// the byte there in a buffer that holds it, `RuntimeGap::IndirectCommandUnstridedBuffer`).
+/// Metal's API validation stops a draw bound so.
+pub(super) fn per_bind_stride(stride: u64) -> u32 {
     // Truncation is the measured answer.
-    (compute || stride != ATTRIBUTE_STRIDE_STATIC).then_some(stride as u32)
+    stride as u32
 }
 
 /// Bind `value` at `index` of `table`, or unbind the index when `value` is `None`: what was
@@ -705,8 +701,8 @@ impl ArgumentTable {
         stride: u64,
         index: u32,
     ) -> Result<(), Error> {
-        let stride = per_bind_stride(stride, self.compute);
-        self.bind_buffer(core, call, buffer, offset, stride, index)
+        let stride = per_bind_stride(stride);
+        self.bind_buffer(core, call, buffer, offset, Some(stride), index)
     }
 
     /// [`set_buffer_with_stride`](Self::set_buffer_with_stride) at the per-bind stride `stride`,
@@ -774,9 +770,7 @@ impl ArgumentTable {
                 self.check_buffer(core, call, buffer, offset)?;
             }
         }
-        let compute = self.compute;
-        let strides =
-            (0..buffers.len()).map(|i| strides.and_then(|s| per_bind_stride(s[i], compute)));
+        let strides = (0..buffers.len()).map(|i| strides.map(|s| per_bind_stride(s[i])));
         for (((buffer, &offset), stride), index) in
             buffers.iter().zip(offsets).zip(strides).zip(first..)
         {
@@ -821,8 +815,7 @@ impl ArgumentTable {
     }
 
     /// `setBufferOffset:attributeStride:atIndex:` with the per-bind stride `stride` names
-    /// ([`per_bind_stride`]: `MTLAttributeStrideStatic` clears the index's stride in a render
-    /// stage's table). Refused as [`set_buffer_offset`](Self::set_buffer_offset) is.
+    /// ([`per_bind_stride`]). Refused as [`set_buffer_offset`](Self::set_buffer_offset) is.
     pub(super) fn set_buffer_offset_with_stride(
         &mut self,
         core: &mut EncoderCore,
@@ -831,8 +824,8 @@ impl ArgumentTable {
         stride: u64,
         index: u32,
     ) -> Result<(), Error> {
-        let stride = per_bind_stride(stride, self.compute);
-        self.move_buffer_offset(core, call, offset, stride, index)
+        let stride = per_bind_stride(stride);
+        self.move_buffer_offset(core, call, offset, Some(stride), index)
     }
 
     /// [`set_buffer_offset_with_stride`](Self::set_buffer_offset_with_stride) at the per-bind

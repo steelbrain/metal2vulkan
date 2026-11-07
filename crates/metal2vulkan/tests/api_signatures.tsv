@@ -13281,7 +13281,6 @@ variant	metal2vulkan::error::BindError::MissingGuestAddress	MissingGuestAddress 
 variant	metal2vulkan::error::BindError::MissingPrimitiveType	MissingPrimitiveType
 variant	metal2vulkan::error::BindError::MissingStageInRegion	MissingStageInRegion
 variant	metal2vulkan::error::BindError::MissingThreadgroupMemory	MissingThreadgroupMemory { index: u32 }
-variant	metal2vulkan::error::BindError::MissingVertexStride	MissingVertexStride { slot: SlotRef }
 variant	metal2vulkan::error::BindError::NeedsVariant	NeedsVariant { variant: Box<crate::cache::VariantKey> }
 variant	metal2vulkan::error::BindError::PatchControlPoints	PatchControlPoints { given: u32, expected: u32 }
 variant	metal2vulkan::error::BindError::PatchIndexRange	PatchIndexRange { needed: u64, limit: u64 }

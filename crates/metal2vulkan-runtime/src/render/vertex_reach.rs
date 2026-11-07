@@ -3,9 +3,10 @@
 //!
 //! - **What differs.** The compile layer fetches an attribute it pulls
 //!   (`VertexInputState::pulled`: a format or step fixed-function vertex input does not take, or
-//!   every attribute where the device bounds no fixed-function fetch) at a 32-bit displacement
-//!   from the buffer's bind offset, where Metal's is 64 bits (in a buffer of 4 GiB + 1 MiB, element
-//!   1 at stride `2^32 - 1` read the bytes at `2^32 - 1` and `2^32 + 3`).
+//!   every attribute where the device bounds no fixed-function fetch) whose bytes lie past `2^32`
+//!   from the buffer's bind offset as zero bytes, where Metal's displacement is 64 bits (in a
+//!   buffer of 4 GiB + 1 MiB, element 1 at stride `2^32 - 1` read the bytes at `2^32 - 1` and
+//!   `2^32 + 3`).
 //! - **The refusal.** A draw (the encoder's, or an indirect command buffer's command,
 //!   `render/executions.rs`) that may read a pulled attribute past `2^32` bytes of its buffer's
 //!   bind offset, inside a buffer that runs past them, is refused

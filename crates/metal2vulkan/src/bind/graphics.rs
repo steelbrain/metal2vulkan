@@ -22,9 +22,9 @@
 //! - **Vertex buffers.** One [`VertexBufferBind`] per fixed-function binding of the pipeline's
 //!   `VertexInputState`; the slot must be bound (`UnboundVertexBuffer`), and a `PerBind` stride
 //!   is the bind's `attributeStride`: 0 for a buffer or inline bytes bound without one, as plain
-//!   Metal's encoder reads them (its debug layer stops the draw); inline bytes
-//!   bound at `MTLAttributeStrideStatic`, which an M4 read as element 0 and zeros past it, are
-//!   `MissingVertexStride`. A binding the shape binds where fixed-function input cannot fetch it (a
+//!   Metal's encoder reads them (its debug layer stops the draw); `MTLAttributeStrideStatic`'s is
+//!   its low 32 bits, `2^32 - 1`, which the pulled fetch reads as element 0 and zeros past it, as
+//!   plain Metal does (an M4 over inline bytes, an M3 Max over a buffer). A binding the shape binds where fixed-function input cannot fetch it (a
 //!   bind offset whose alignment class misses an attribute's Vulkan alignment; a per-bind stride
 //!   past `maxVertexInputBindingStride`, not a multiple of the alignment, breaking the portability
 //!   subset's stride rule, or as dynamic state below an element's attributes) names its layout in
@@ -1788,13 +1788,9 @@ fn plan(p: &RenderPipeline, device: &Device, shape: &BindShape) -> Result<Bindin
                     match pulled_stride(layout) {
                         Some(VertexStride::Static(_)) => {}
                         Some(VertexStride::PerBind) => {
-                            // A buffer's or inline bytes' stride is its bind's, 0 without one;
-                            // inline bytes at `MTLAttributeStrideStatic` are not emulated.
+                            // A buffer's or inline bytes' stride is its bind's, 0 without one.
                             match stage_shape(Stage::Vertex).and_then(|s| s.buffers.get(&layout)) {
-                                Some(BufferShape::Buffer { .. }) => {}
-                                Some(&BufferShape::Bytes { attribute_stride }) => {
-                                    bytes_stride(attribute_stride, vertex_buffer(layout))?;
-                                }
+                                Some(BufferShape::Buffer { .. } | BufferShape::Bytes { .. }) => {}
                                 _ => {
                                     return Err(internal(format!(
                                         "the stride of vertex buffer {layout} bound by nothing"
@@ -2201,7 +2197,7 @@ fn plan(p: &RenderPipeline, device: &Device, shape: &BindShape) -> Result<Bindin
             // layout reads them at their bind's stride, 0 without one, as a buffer's.
             (Some(&BufferShape::Bytes { attribute_stride }), stride) => {
                 let per_bind = match stride {
-                    VertexStride::PerBind => Some(bytes_stride(attribute_stride, slot)?),
+                    VertexStride::PerBind => Some(attribute_stride.unwrap_or(0)),
                     VertexStride::Static(_) => None,
                 };
                 fetchable(
@@ -4628,7 +4624,7 @@ fn instantiate(
                 let (stride, per_bind) = match vb.stride {
                     VertexStride::Static(s) => (s, None),
                     VertexStride::PerBind => {
-                        let s = bytes_stride(attribute_stride, vb.slot)?;
+                        let s = attribute_stride.unwrap_or(0);
                         (s, Some(s))
                     }
                 };
@@ -4784,7 +4780,7 @@ fn pulled_stride(
             Some(&BoundBuffer::Bytes {
                 attribute_stride, ..
             }),
-        ) => bytes_stride(attribute_stride, vertex_buffer(layout))?,
+        ) => attribute_stride.unwrap_or(0),
         _ => {
             return Err(internal(format!(
                 "the bind state's shape differs from the plan's at vertex buffer {layout}"
@@ -5005,17 +5001,6 @@ fn amplification_writes(t: &GraphicsTemplate) -> Result<Vec<Vec<PushConstantWrit
         out.push(writes);
     }
     Ok(out)
-}
-
-/// The stride a per-bind layout reads inline bytes bound at `attribute_stride` at, for the
-/// vertex buffer `slot`: the bind's, 0 without one, as plain Metal reads them.
-/// `MTLAttributeStrideStatic` (`u32::MAX`), which an M4 read as element 0 and
-/// zeros past it, is not emulated: `MissingVertexStride`.
-fn bytes_stride(attribute_stride: Option<u32>, slot: SlotRef) -> Result<u32, BindError> {
-    match attribute_stride {
-        Some(u32::MAX) => Err(BindError::MissingVertexStride { slot }),
-        stride => Ok(stride.unwrap_or(0)),
-    }
 }
 
 /// Whether fixed-function vertex input can fetch vertex buffer `vb` bound at an offset of

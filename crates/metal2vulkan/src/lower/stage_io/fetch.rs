@@ -15,8 +15,15 @@
 //! element · VertexBufferStride(buffer) + offset
 //! ```
 //!
-//! from the bind offset (a view adds the bind residual `SlotBindOffset(buffer)`), in wrapping
-//! `u32` arithmetic, where `element` is the step's element index:
+//! from the bind offset (a view adds the bind residual `SlotBindOffset(buffer)`), in `u32`
+//! arithmetic, where `element` is the step's element index. Metal places an element in 64 bits,
+//! so where an element's bytes run past the first `2^32` bytes from the bind offset
+//! (`element · stride + offset + size > 2^32`, decided exactly, where the `u32` displacement would
+//! wrap back into the buffer) the read lies outside the buffer and yields zero bytes on every
+//! device (`within_reach`, `access::pulled::prepare_within`), as plain Metal on an M3 Max reads a
+//! vertex buffer bound at a stride of `2^31 + 4` (`metal2vulkan-conformance`'s
+//! `attribute-stride-vertex-buffer`): the runtime refuses a draw that may fetch there from a buffer
+//! that holds those bytes. The steps:
 //!
 //! - `PerVertex`: `VertexIndex` (it includes the base vertex in Vulkan as `[[vertex_id]]` does in
 //!   Metal); in the de-indexed and private list forms, whose draws have no indices, the vertex
@@ -60,15 +67,12 @@
 //! descriptor names, at `element · stride + offset` with the layout's stride: a fixed one compiled
 //! in, or for a layout of `MTLBufferLayoutStrideDynamic` the one the encoder binds the buffer with,
 //! from `PushField::StageInStride(buffer_index)`, where `element` is the step's ([`Step::Grid`],
-//! [`Step::Indexed`], [`Step::Constant`]; `super::stage_in` plans them). Metal places an element in
-//! 64 bits, so where an element's bytes run past the first `2^32` bytes from the bind offset
-//! (`e · stride + offset + size > 2^32`, decided exactly, where the `u32` displacement would wrap
-//! back into the buffer) the read lies outside the buffer and yields zero bytes on every device
-//! (`within_reach`, `access::pulled::prepare_within`): the runtime refuses a dispatch that may
-//! fetch there from a buffer that holds those bytes. A dynamic layout bound with
-//! `MTLAttributeStrideStatic` reads at its low 32 bits, `2^32 - 1`, so its first element is the
-//! one at the bind offset and every element past it reads zero, as plain Metal on an M3 Max
-//! answers it.
+//! [`Step::Indexed`], [`Step::Constant`]; `super::stage_in` plans them), with the same reach as a
+//! vertex attribute's: the runtime refuses a dispatch that may fetch past `2^32` bytes from a
+//! buffer that holds those bytes. A dynamic layout bound with `MTLAttributeStrideStatic`, a vertex
+//! layout's or a kernel's, reads at its low 32 bits, `2^32 - 1`, so its first element is the one
+//! at the bind offset and every element past it reads zero, as plain Metal on an M3 Max answers
+//! both.
 //!
 //! **Source buffers**. This family records which Metal buffer indices the fetch reads
 //! ([`super::StageIoPlan::buffers`]); their slots are the access family's (`lower::access::pulled`,
@@ -438,17 +442,15 @@ impl PulledRead {
             });
         // A kernel step derives the thread position in the grid (the region arithmetic), clamps it
         // to the stage-in region, reads its index the way it reads the attribute, and adds the
-        // region's origin.
+        // region's origin. Every step with an element checks its reach.
         let element = match self.step {
             Step::Grid { .. } => GRID_POSITION_WORDS + REGION_AXIS_WORDS + REACH_WORDS + 16,
             Step::Indexed { index, .. } => {
                 GRID_POSITION_WORDS + REGION_AXIS_WORDS + REACH_WORDS + index.leaf().cost() + 176
             }
             // The index read is the plan's, counted once (`super::CAPTURED_INDEX_WORDS`).
-            Step::PerVertex { .. }
-            | Step::PerInstance { .. }
-            | Step::Constant
-            | Step::CapturedVertex => 0,
+            Step::PerVertex { .. } | Step::PerInstance { .. } | Step::CapturedVertex => REACH_WORDS,
+            Step::Constant => 0,
         };
         self.encoding.leaf().cost() + 4 * lane + 160 + element
     }
@@ -459,7 +461,7 @@ impl PulledRead {
 /// threadgroup, unflattened in the flattened tiers (`dispatch::KernelDecl::value`).
 const GRID_POSITION_WORDS: u32 = 400;
 
-/// An upper bound of the words of a kernel stage-in read's reach (`within_reach` and
+/// An upper bound of the words of a pulled read's reach (`within_reach` and
 /// `pulled::prepare_within`): the division, the comparisons and their conjunctions, the
 /// selects, and their constants.
 const REACH_WORDS: u32 = 96;
@@ -1008,13 +1010,10 @@ pub(super) fn emit(
         (None, _) => None,
     };
     let n = r.encoding.bytes();
-    // A kernel stage-in element reads Metal's 64-bit displacement, which the `u32` one below
-    // wraps.
-    let fits = match (r.step, element) {
-        (Step::Grid { .. } | Step::Indexed { .. }, Some((e, s))) => {
-            within_reach(fb, e, s, r.stride, r.offset, n)?
-        }
-        _ => None,
+    // An element reads Metal's 64-bit displacement, which the `u32` one below wraps.
+    let fits = match element {
+        Some((e, s)) => within_reach(fb, e, s, r.stride, r.offset, n)?,
+        None => None,
     };
     let m = displacement(fb, element, r.offset)?;
     let read = match fits {
@@ -1024,7 +1023,7 @@ pub(super) fn emit(
     fetch_from(fb, read, r.encoding, r.form)
 }
 
-/// Whether the `n` bytes of a kernel stage-in read at element `e` of stride `s` (the value of
+/// Whether the `n` bytes of a pulled read at element `e` of stride `s` (the value of
 /// `stride`) and attribute offset `offset` lie in the first `2^32` bytes from the bind offset,
 /// as Metal's 64-bit displacement `e · s + offset` places them: `e · s + offset + n <= 2^32`,
 /// exactly, which the `u32` displacement's wrap cannot say. `None` where every element's do (a

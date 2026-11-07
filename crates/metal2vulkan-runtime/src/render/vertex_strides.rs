@@ -8,8 +8,12 @@
 //!   `VERTEX_INPUT_BINDING_STRIDE`, or the pipeline's static one), or pushes where the pipeline
 //!   pulls the buffer. It is held in the encoder's vertex table beside the buffer
 //!   (`argument_table.rs`), as the compute encoder holds a stage-in buffer's.
-//! - **`MTLAttributeStrideStatic`** (`u64::MAX`) sets no stride, as the plain setters do; a layout
-//!   of a fixed stride reads its own, whatever the bind's.
+//! - **`MTLAttributeStrideStatic`** (`u64::MAX`) is a stride of its low 32 bits, `2^32 - 1`, as
+//!   any other stride past 32 bits: a dynamic layout reads the element at the bind offset for
+//!   vertex 0 and zero past it (every later element lies past `2^32` bytes, which the pulled
+//!   fetch reads as zero), as plain Metal on an M3 Max reads it (`metal2vulkan-conformance`'s
+//!   `attribute-stride-vertex-buffer`); Metal's API validation stops such a draw. A layout of a
+//!   fixed stride reads its own, whatever the bind's.
 //! - **The plain setters** bind without a stride (`set_vertex_buffer`, `set_vertex_buffers`), and
 //!   so does `set_vertex_buffer_offset`: it clears the stride bound at the index. A draw whose
 //!   pipeline's layout is dynamic at a buffer bound without a stride reads it at stride 0, as
@@ -114,9 +118,10 @@ impl RenderLowering {
 impl RenderCommandEncoder {
     /// `setVertexBuffer:offset:attributeStride:atIndex:`: as
     /// [`set_vertex_buffer`](Self::set_vertex_buffer), the buffer read at `stride` by a layout of
-    /// `MTLBufferLayoutStrideDynamic` (the module docs); `MTLAttributeStrideStatic` (`u64::MAX`)
-    /// sets no stride; any other stride past 32 bits is taken modulo `2^32`, as plain Metal
-    /// reads it and its validation takes it (an M4). Refused as `set_vertex_buffer` is.
+    /// `MTLBufferLayoutStrideDynamic` (the module docs); a stride past 32 bits is taken modulo
+    /// `2^32`, as plain Metal reads it and its validation takes it (an M4), and
+    /// `MTLAttributeStrideStatic` (`u64::MAX`) with it: the layout reads vertex 0's element and
+    /// zero past it (an M3 Max). Refused as `set_vertex_buffer` is.
     pub fn set_vertex_buffer_with_stride(
         &mut self,
         buffer: Option<&Buffer>,
@@ -137,10 +142,9 @@ impl RenderCommandEncoder {
 
     /// `setVertexBytes:length:attributeStride:atIndex:`: as
     /// [`set_vertex_bytes`](Self::set_vertex_bytes), the bytes read at `stride`, its low 32 bits,
-    /// by a layout of `MTLBufferLayoutStrideDynamic`. At `MTLAttributeStrideStatic` (`u64::MAX`)
-    /// a draw whose layout reads them so is refused (`Bind(MissingVertexStride)`): an M4 read
-    /// element 0 of the bytes and zeros past it there, which the fetch does not emulate. Refused as
-    /// `set_vertex_bytes` is.
+    /// by a layout of `MTLBufferLayoutStrideDynamic`; at `MTLAttributeStrideStatic` (`u64::MAX`),
+    /// `2^32 - 1`, it reads element 0 of the bytes and zeros past it, as an M4 read them. Refused
+    /// as `set_vertex_bytes` is.
     pub fn set_vertex_bytes_with_stride(
         &mut self,
         bytes: &[u8],

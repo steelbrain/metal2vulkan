@@ -6,32 +6,24 @@
 use super::super::argument_table::{per_bind_stride, same_as_printed, ArgumentTable};
 use metal2vulkan::bind::{BoundSampler, SamplerDescriptor, StageTable};
 
-/// A stride form's stride is its low 32 bits in both tables, and `MTLAttributeStrideStatic`'s
-/// (`u64::MAX`) too in a compute table, where a kernel's stage-in layout of
-/// `MTLBufferLayoutStrideDynamic` reads `2^32 - 1` and so the element at the bind offset and zero
-/// past it, as plain Metal on an Apple M3 Max under macOS 27.0.1 answered all four compute stride
-/// forms (`metal2vulkan-conformance`'s `attribute-stride-*` recordings). A render stage's table
-/// holds no stride for it, as the plain setters bind.
+/// A stride form's stride is its low 32 bits, and `MTLAttributeStrideStatic`'s (`u64::MAX`) too:
+/// a layout of `MTLBufferLayoutStrideDynamic` reads `2^32 - 1` and so the element at the bind
+/// offset and zero past it, as plain Metal on an Apple M3 Max under macOS 27.0.1 answered the
+/// compute encoder's four stride forms and the render encoder's vertex form
+/// (`metal2vulkan-conformance`'s `attribute-stride-*` recordings).
 #[test]
-fn the_static_constant_is_a_compute_tables_widest_stride() {
-    for compute in [false, true] {
-        for (stride, held) in [
-            (0u64, 0u32),
-            (8, 8),
-            (1 << 32, 0),
-            ((1 << 32) + 8, 8),
-            ((1 << 63) + 8, 8),
-            (u64::from(u32::MAX), u32::MAX),
-        ] {
-            assert_eq!(
-                per_bind_stride(stride, compute),
-                Some(held),
-                "{stride} {compute}"
-            );
-        }
+fn the_static_constant_is_the_widest_stride() {
+    for (stride, held) in [
+        (0u64, 0u32),
+        (8, 8),
+        (1 << 32, 0),
+        ((1 << 32) + 8, 8),
+        ((1 << 63) + 8, 8),
+        (u64::from(u32::MAX), u32::MAX),
+        (u64::MAX, u32::MAX),
+    ] {
+        assert_eq!(per_bind_stride(stride), held, "{stride}");
     }
-    assert_eq!(per_bind_stride(u64::MAX, true), Some(u32::MAX));
-    assert_eq!(per_bind_stride(u64::MAX, false), None);
 }
 
 /// `setBufferOffset:atIndex:`, and its stride form, at an index with no buffer bound: a render

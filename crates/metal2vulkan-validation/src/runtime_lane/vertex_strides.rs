@@ -7,10 +7,11 @@
 //!
 //! - The stride form reads vertex `v` at `offset + v * stride`; so do the range form and the
 //!   offset form, which sets both.
-//! - A buffer bound without a stride (the plain setters, the plain offset form after a stride
-//!   form, or `MTLAttributeStrideStatic`) under a dynamic layout reads at stride 0, as plain
-//!   Metal does (an M4; an M3 Max and an M4), where Metal's debug layer stops the draw; a stride
-//!   past 32 bits is refused at the setter.
+//! - A buffer bound without a stride (the plain setters, or the plain offset form after a stride
+//!   form) under a dynamic layout reads at stride 0, as plain Metal does (an M4; an M3 Max and an
+//!   M4), where Metal's debug layer stops the draw; a stride past 32 bits reads at its low 32
+//!   bits, and `MTLAttributeStrideStatic` at `2^32 - 1`: vertex 0's element and zero past it, as
+//!   plain Metal on an M3 Max reads it.
 //! - An executed indirect render command's vertex buffer set without a stride under a dynamic
 //!   layout, on a command buffer whose descriptor supports dynamic attribute strides, refuses the
 //!   commit the runtime's own gap (`IndirectCommandUnstridedBuffer`): plain Metal takes such a
@@ -112,6 +113,14 @@ pub(super) fn read_at(first: u32, step: u32) -> Vec<u32> {
     (0..VERTICES).map(|v| 100 + first + v * step).collect()
 }
 
+/// The words a layout bound at `MTLAttributeStrideStatic` reads: word 0 for vertex 0, and zero for
+/// every vertex past it, whose element lies `2^32 - 1` bytes on.
+pub(super) fn read_static() -> Vec<u32> {
+    (0..VERTICES)
+        .map(|v| if v == 0 { 100 } else { 0 })
+        .collect()
+}
+
 /// Each stride form binds the stride a dynamic layout reads; a buffer bound without one reads at
 /// stride 0, as plain Metal's does; a stride past 32 bits binds its low 32 bits.
 #[test]
@@ -168,7 +177,7 @@ fn vertex_buffers_bind_the_strides_a_dynamic_layout_reads() {
         );
         assert_eq!(
             draw(&|e, b| e.set_vertex_buffer_with_stride(Some(b), 0, u64::MAX, 0)),
-            Ok(read_at(0, 0)),
+            Ok(read_static()),
             "MTLAttributeStrideStatic"
         );
         // A stride past 32 bits reads at its low 32 bits, as plain Metal reads it (an M4; Metal's

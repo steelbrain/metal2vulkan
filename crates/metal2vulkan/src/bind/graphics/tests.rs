@@ -890,9 +890,9 @@ fn draws_bind_vertex_buffers_at_aligned_offsets_with_their_windows() {
 
 /// Inline vertex bytes at a per-bind layout read at their bind's stride, 0 without one, as plain
 /// Metal reads them (`setVertexBytes:length:atIndex:` read vertex 0 for every
-/// vertex, the stride form at 0, 4 and 8 its stride); at `MTLAttributeStrideStatic`
-/// (`u32::MAX`), which an M4 read as element 0 and zeros past it, they are refused
-/// `MissingVertexStride`; and a stride fixed function cannot fetch is the plan's pulled variant.
+/// vertex, the stride form at 0, 4 and 8 its stride); and a stride fixed function cannot fetch is
+/// the plan's pulled variant, `MTLAttributeStrideStatic`'s (`u32::MAX`) among them, which the
+/// pulled fetch reads as element 0 and zeros past it, as an M4 read them.
 #[test]
 fn inline_vertex_bytes_bind_the_strides_a_dynamic_layout_reads() {
     let mut template = GraphicsTemplate {
@@ -943,14 +943,15 @@ fn inline_vertex_bytes_bind_the_strides_a_dynamic_layout_reads() {
         // Dynamic strides list every binding's, the static one included (`pStrides`).
         assert_eq!(cmds.vertex_strides, vec![(0, 24), (1, read)], "{stride:?}");
     }
-    assert_eq!(
-        instantiate(&template, &state(Some(u32::MAX)), &draw).err(),
-        Some(BindError::MissingVertexStride { slot: vslot(2) })
-    );
-    // A stride fixed function cannot fetch (past the attributes' alignment, or below the bytes
-    // an element reads) is the plan's pulled variant: a draw of this plan with it is an internal
-    // error.
+    // A stride fixed function cannot fetch (past the attributes' alignment, below the bytes an
+    // element reads, or past `maxVertexInputBindingStride`) is the plan's pulled variant: a draw of
+    // this plan with it is an internal error.
     let pulled = |r: Result<DrawCommands, BindError>| matches!(r, Err(BindError::Internal(_)));
+    assert!(pulled(instantiate(
+        &template,
+        &state(Some(u32::MAX)),
+        &draw
+    )));
     assert!(pulled(instantiate(&template, &state(Some(7)), &draw)));
     assert!(pulled(instantiate(&template, &state(Some(6)), &draw)));
     template.vertex_strides = rules(None, false);

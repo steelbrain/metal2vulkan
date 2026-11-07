@@ -1330,10 +1330,9 @@ pub enum BoundBuffer {
         /// `MTLBufferLayoutStrideDynamic` reads the bytes at; `None` for the plain setters, which
         /// such a layout reads at stride 0, as plain Metal reads them.
         /// `MTLAttributeStrideStatic` is `Some(u32::MAX)`, its low 32 bits: an M4 read element 0
-        /// of inline bytes bound so and zeros past it, which a kernel's stage-in fetch reads at
-        /// that stride (every element past the first lies past the bytes); the binder refuses a
-        /// vertex layout that reads inline bytes at it
-        /// ([`BindError::MissingVertexStride`](crate::error::BindError::MissingVertexStride)).
+        /// of inline bytes bound so and zeros past it, which the pulled fetch, a vertex
+        /// attribute's or a kernel stage-in's, reads at that stride (every element past the first
+        /// lies past the bytes).
         #[cfg_attr(feature = "serde", serde(default))]
         attribute_stride: Option<u32>,
     },
