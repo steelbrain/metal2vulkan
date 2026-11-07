@@ -116,8 +116,8 @@ fn a_render_creation_builds_one_descriptor_key() {
 /// unwritten fragment inputs) and specializes its two stages once each. Whether its vertex
 /// function returns a value is no question of its own: the compile reads it from the vertex entry
 /// it specializes anyway, and its link refuses a `void` one (`pipeline/unrasterized.rs`). A
-/// question for it cost every such creation a third question and a third stage entry, the
-/// answer's, in the cost records' render creations.
+/// question for it would cost every such creation a third question and a third stage entry, over
+/// the conformance cost records.
 #[test]
 fn a_plain_render_creation_asks_two_questions_and_specializes_two_stages() {
     let scratch = Scratch::new("plain-render-counts");
