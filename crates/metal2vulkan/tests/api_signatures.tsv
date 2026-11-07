@@ -2747,6 +2747,8 @@ field	metal2vulkan-runtime::WorkCounts.host_ram_chunks_live	pub host_ram_chunks_
 field	metal2vulkan-runtime::WorkCounts.host_ram_copies	pub host_ram_copies: u64
 field	metal2vulkan-runtime::WorkCounts.host_ram_copy_bytes	pub host_ram_copy_bytes: u64
 field	metal2vulkan-runtime::WorkCounts.host_ram_copy_dispatches	pub host_ram_copy_dispatches: u64
+field	metal2vulkan-runtime::WorkCounts.host_ram_dma_buf_imports	pub host_ram_dma_buf_imports: u64
+field	metal2vulkan-runtime::WorkCounts.host_ram_pointer_imports_failed	pub host_ram_pointer_imports_failed: u64
 field	metal2vulkan-runtime::WorkCounts.host_range_lookups	pub host_range_lookups: u64
 field	metal2vulkan-runtime::WorkCounts.host_rebind_imports_covered	pub host_rebind_imports_covered: u64
 field	metal2vulkan-runtime::WorkCounts.host_rebind_imports_made	pub host_rebind_imports_made: u64
@@ -3054,6 +3056,9 @@ field	metal2vulkan-runtime::WorkCounts.stand_ins_made	pub stand_ins_made: u64
 field	metal2vulkan-runtime::WorkCounts.storage_forms_taken	pub storage_forms_taken: u64
 field	metal2vulkan-runtime::WorkCounts.storage_placeholder_attachments	pub storage_placeholder_attachments: u64
 field	metal2vulkan-runtime::WorkCounts.storage_placeholders_made	pub storage_placeholders_made: u64
+field	metal2vulkan-runtime::WorkCounts.submit_check_calls	pub submit_check_calls: u64
+field	metal2vulkan-runtime::WorkCounts.submit_checks_recalled	pub submit_checks_recalled: u64
+field	metal2vulkan-runtime::WorkCounts.submit_checks_run	pub submit_checks_run: u64
 field	metal2vulkan-runtime::WorkCounts.submit_infos	pub submit_infos: u64
 field	metal2vulkan-runtime::WorkCounts.submit_stalls_idle	pub submit_stalls_idle: u64
 field	metal2vulkan-runtime::WorkCounts.submit_stalls_on_work	pub submit_stalls_on_work: u64
@@ -7874,6 +7879,7 @@ method	metal2vulkan-runtime::Device::enabled	pub fn enabled(&self) -> &EnableSet
 method	metal2vulkan-runtime::Device::enables_extension	pub fn enables_extension(&self, name: &std::ffi::CStr) -> bool
 method	metal2vulkan-runtime::Device::family_blockers	pub fn family_blockers(&self, family: GpuFamily) -> Vec<RowAudit>
 method	metal2vulkan-runtime::Device::family_rows	pub fn family_rows(&self, family: GpuFamily) -> Vec<RowAudit>
+method	metal2vulkan-runtime::Device::fresh_pages_pay	pub fn fresh_pages_pay(&self) -> bool
 method	metal2vulkan-runtime::Device::from_raw	pub unsafe fn from_raw(raw: RawDevice, policy: DevicePolicy) -> Result<Device, Error>
 method	metal2vulkan-runtime::Device::heap_buffer_size_and_align	pub fn heap_buffer_size_and_align(&self, length: u64, _options: ResourceOptions) -> SizeAndAlign
 method	metal2vulkan-runtime::Device::heap_texture_size_and_align	pub fn heap_texture_size_and_align(&self, descriptor: &TextureDescriptor) -> Result<SizeAndAlign, Error>
@@ -7932,6 +7938,7 @@ method	metal2vulkan-runtime::Device::new_tile_render_pipeline_state	pub fn new_t
 method	metal2vulkan-runtime::Device::new_tile_render_pipeline_state_with_reflection	pub fn new_tile_render_pipeline_state_with_reflection(&self, descriptor: &TileRenderPipelineDescriptor, options: &PipelineOptions) -> Result<(RenderPipelineState, Option<RenderPipelineReflection>), Error>
 method	metal2vulkan-runtime::Device::pixel_format_capabilities	pub fn pixel_format_capabilities(&self, format: PixelFormat) -> FormatCapabilities
 method	metal2vulkan-runtime::Device::pixel_format_info	pub fn pixel_format_info(&self, raw: u64) -> PixelFormatInfo
+method	metal2vulkan-runtime::Device::pointer_imports_follow_their_address	pub fn pointer_imports_follow_their_address(&self) -> bool
 method	metal2vulkan-runtime::Device::private_properties	pub fn private_properties(&self) -> PrivateProperties
 method	metal2vulkan-runtime::Device::properties	pub fn properties(&self) -> &DeviceProperties
 method	metal2vulkan-runtime::Device::queue_switch_check_report	pub fn queue_switch_check_report(&self) -> String
@@ -7944,6 +7951,7 @@ method	metal2vulkan-runtime::Device::sampler_id_pool_size	pub fn sampler_id_pool
 method	metal2vulkan-runtime::Device::sampler_ids_live	pub fn sampler_ids_live(&self) -> u64
 method	metal2vulkan-runtime::Device::settle_in_place_checks	pub fn settle_in_place_checks(&self, timeout: Duration) -> bool
 method	metal2vulkan-runtime::Device::settle_queue_switch_check	pub fn settle_queue_switch_check(&self, timeout: Duration) -> bool
+method	metal2vulkan-runtime::Device::settle_submit_checks	pub fn settle_submit_checks(&self, timeout: Duration) -> bool
 method	metal2vulkan-runtime::Device::shader_cache_directory	pub fn shader_cache_directory(&self) -> &Path
 method	metal2vulkan-runtime::Device::shader_cache_statistics	pub fn shader_cache_statistics(&self) -> ShaderCacheStatistics
 method	metal2vulkan-runtime::Device::shares_vk_queues	pub fn shares_vk_queues(&self) -> bool
@@ -7951,6 +7959,8 @@ method	metal2vulkan-runtime::Device::sparse_tile_size	pub fn sparse_tile_size(&s
 method	metal2vulkan-runtime::Device::sparse_tile_size_for_page	pub fn sparse_tile_size_for_page(&self, _texture_type: TextureType, pixel_format: PixelFormat, sample_count: u64, page: SparsePageSize) -> Size
 method	metal2vulkan-runtime::Device::sparse_tile_size_in_bytes	pub fn sparse_tile_size_in_bytes(&self) -> u64
 method	metal2vulkan-runtime::Device::sparse_tile_size_in_bytes_for_page	pub fn sparse_tile_size_in_bytes_for_page(&self, page: SparsePageSize) -> u64
+method	metal2vulkan-runtime::Device::submissions_merge	pub fn submissions_merge(&self) -> bool
+method	metal2vulkan-runtime::Device::submit_check_report	pub fn submit_check_report(&self) -> String
 method	metal2vulkan-runtime::Device::supports_32bit_msaa	pub fn supports_32bit_msaa(&self) -> bool
 method	metal2vulkan-runtime::Device::supports_family	pub fn supports_family(&self, family: i64) -> bool
 method	metal2vulkan-runtime::Device::system_default	pub fn system_default() -> Result<Device, Error>
@@ -8068,6 +8078,7 @@ method	metal2vulkan-runtime::HostMemory::with_import_gate	pub fn with_import_gat
 method	metal2vulkan-runtime::HostMemory::with_runs	pub fn with_runs(self, resolver: RunResolver) -> HostMemory
 method	metal2vulkan-runtime::HostRam::new	pub unsafe fn new(ranges: &[(NonNull<u8>, u64)], keep_alive: Option<KeepAlive>) -> Result<HostRam, Error>
 method	metal2vulkan-runtime::HostRam::with_dirty_pages	pub fn with_dirty_pages<D>(mut self, source: Arc<D>) -> HostRam where D: DirtyPages + ?Sized + 'static, D::Watch: 'static,
+method	metal2vulkan-runtime::HostRam::with_dma_buf	pub fn with_dma_buf(mut self, source: DmaBufSource) -> HostRam
 method	metal2vulkan-runtime::IndirectBufferBinding::new	pub fn new(address: GpuAddress, attribute_stride: Option<u64>) -> IndirectBufferBinding
 method	metal2vulkan-runtime::IndirectCommandBuffer::allocated_size	pub fn allocated_size(&self) -> u64
 method	metal2vulkan-runtime::IndirectCommandBuffer::as_resource	pub fn as_resource(&self) -> ResourceRef<'_>
@@ -11458,7 +11469,6 @@ variant	metal2vulkan-runtime::DriverFact::InterlockedPassSplitNoSlower	Interlock
 variant	metal2vulkan-runtime::DriverFact::LineTiesAreMetals	LineTiesAreMetals
 variant	metal2vulkan-runtime::DriverFact::MultisampleColorImagesLieAsMetalHeapTextures	MultisampleColorImagesLieAsMetalHeapTextures
 variant	metal2vulkan-runtime::DriverFact::MultisampledDepthFasterOutOfGeneral	MultisampledDepthFasterOutOfGeneral
-variant	metal2vulkan-runtime::DriverFact::PointerImportsFollowTheirAddress	PointerImportsFollowTheirAddress
 variant	metal2vulkan-runtime::DriverFact::PositionedDepthReadAtStandardPositions	PositionedDepthReadAtStandardPositions
 variant	metal2vulkan-runtime::DriverFact::QueueFailuresReportedByMessenger	QueueFailuresReportedByMessenger
 variant	metal2vulkan-runtime::DriverFact::RobustIndexFetchReadsZero	RobustIndexFetchReadsZero
@@ -11469,7 +11479,6 @@ variant	metal2vulkan-runtime::DriverFact::SemaphoreOperationsStallSubmits	Semaph
 variant	metal2vulkan-runtime::DriverFact::ShadowCopyBackDispatchFaster	ShadowCopyBackDispatchFaster
 variant	metal2vulkan-runtime::DriverFact::ShadowCopyInDispatchFaster	ShadowCopyInDispatchFaster
 variant	metal2vulkan-runtime::DriverFact::SignallingSubmitsStallEvery1024	SignallingSubmitsStallEvery1024
-variant	metal2vulkan-runtime::DriverFact::SubmissionsWithoutSignalsMerge	SubmissionsWithoutSignalsMerge
 variant	metal2vulkan-runtime::DriverFact::SubpixelSnapIsMetals	SubpixelSnapIsMetals
 variant	metal2vulkan-runtime::DriverFact::TileStoreIsMetals	TileStoreIsMetals
 variant	metal2vulkan-runtime::DriverFact::TimestampPoolsAreCounterSampleBuffers	TimestampPoolsAreCounterSampleBuffers
@@ -12715,7 +12724,6 @@ variant	metal2vulkan::device::DriverFact::InterlockedPassSplitNoSlower	Interlock
 variant	metal2vulkan::device::DriverFact::LineTiesAreMetals	LineTiesAreMetals
 variant	metal2vulkan::device::DriverFact::MultisampleColorImagesLieAsMetalHeapTextures	MultisampleColorImagesLieAsMetalHeapTextures
 variant	metal2vulkan::device::DriverFact::MultisampledDepthFasterOutOfGeneral	MultisampledDepthFasterOutOfGeneral
-variant	metal2vulkan::device::DriverFact::PointerImportsFollowTheirAddress	PointerImportsFollowTheirAddress
 variant	metal2vulkan::device::DriverFact::PositionedDepthReadAtStandardPositions	PositionedDepthReadAtStandardPositions
 variant	metal2vulkan::device::DriverFact::QueueFailuresReportedByMessenger	QueueFailuresReportedByMessenger
 variant	metal2vulkan::device::DriverFact::RobustIndexFetchReadsZero	RobustIndexFetchReadsZero
@@ -12726,7 +12734,6 @@ variant	metal2vulkan::device::DriverFact::SemaphoreOperationsStallSubmits	Semaph
 variant	metal2vulkan::device::DriverFact::ShadowCopyBackDispatchFaster	ShadowCopyBackDispatchFaster
 variant	metal2vulkan::device::DriverFact::ShadowCopyInDispatchFaster	ShadowCopyInDispatchFaster
 variant	metal2vulkan::device::DriverFact::SignallingSubmitsStallEvery1024	SignallingSubmitsStallEvery1024
-variant	metal2vulkan::device::DriverFact::SubmissionsWithoutSignalsMerge	SubmissionsWithoutSignalsMerge
 variant	metal2vulkan::device::DriverFact::SubpixelSnapIsMetals	SubpixelSnapIsMetals
 variant	metal2vulkan::device::DriverFact::TileStoreIsMetals	TileStoreIsMetals
 variant	metal2vulkan::device::DriverFact::TimestampPoolsAreCounterSampleBuffers	TimestampPoolsAreCounterSampleBuffers
