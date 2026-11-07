@@ -2337,6 +2337,7 @@ mod tests {
         let plan = Plan {
             bytes: CHUNK_BYTES,
             listed: true,
+            releases: true,
         };
         let on = RamOnDevice::new(&ram, plan);
         let ask = |slot: usize| on.slots[slot].asked.store(true, Ordering::Relaxed);
