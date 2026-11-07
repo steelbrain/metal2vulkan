@@ -252,3 +252,79 @@ fn bench(logged: bool, named: bool) {
     report("(c) one copy redrawn", &mut whole(true), &mut whole(false));
     drop(kept);
 }
+
+/// Copies of stitched views, the shape a consumer's guest held once its views' budget ran out
+/// (11-07, 5080: 512 copies of 1.25 GiB, each view thousands of 4 KiB runs of its guest RAM):
+/// [`STITCHED`] copies of [`STITCHED_PAGES`] pages each, every page its own run of one guest RAM
+/// log, no two adjacent. Each commit's copy in, with the RAM written at `writes` pages since the
+/// last (none, a few, many: the log's answer grows with them, the copies' runs do not), prints
+/// its median over [`STITCHED_RUNS`] commits (`COPIED-STITCHED`). Ignored: run it in release,
+/// `cargo test --release -p metal2vulkan-runtime --lib copied_stitched_bench -- --ignored --nocapture`.
+#[test]
+#[ignore = "a release-mode benchmark"]
+fn copied_stitched_bench() {
+    const STITCHED: usize = 512;
+    const STITCHED_PAGES: usize = 640;
+    const STITCHED_RUNS: usize = 15;
+    // The guest RAM's host addresses: none is read, so none need be mapped.
+    const RAM: u64 = 0x7000_0000_0000;
+    let buffers = Arc::new(CopiedBuffers::default());
+    let (counts, tally) = (Counters::default(), DirtyTally::default());
+    let log = Arc::new(BenchLog::default());
+    let source = DirtySource::new(hook(Arc::clone(&log)), RAM);
+    let length = STITCHED_PAGES * PAGE;
+    let mut pairs: Vec<Pair> = (0..STITCHED)
+        .map(|_| Pair {
+            pages: vec![0; length],
+            copy: vec![0; length],
+        })
+        .collect();
+    // Copy `c`'s page `k` is RAM page `2 * (c * STITCHED_PAGES + k)`: its offset in the log.
+    let ram_page = |c: usize, k: usize| (2 * (c * STITCHED_PAGES + k) * PAGE) as u64;
+    let mut kept = Vec::new();
+    for (c, pair) in pairs.iter_mut().enumerate() {
+        let pages = NonNull::new(pair.pages.as_mut_ptr()).unwrap();
+        let copy = NonNull::new(pair.copy.as_mut_ptr()).unwrap();
+        let read = |from: NonNull<u8>, into: &mut [u8]| {
+            // SAFETY: the pair's pages, `into.len()` bytes.
+            unsafe { std::ptr::copy_nonoverlapping(from.as_ptr(), into.as_mut_ptr(), into.len()) };
+            true
+        };
+        // SAFETY: both are the pair's own, live while the bench runs.
+        let copied = unsafe { buffers.add_reading(pages, copy, length, read, false) }.unwrap();
+        let window: Vec<Range<u64>> = (0..STITCHED_PAGES)
+            .map(|k| RAM + ram_page(c, k)..RAM + ram_page(c, k) + PAGE as u64)
+            .collect();
+        let at = pages.as_ptr() as u64;
+        let pages_log =
+            PagesLog::new((at, length as u64), None, Some((&source, &window, 0))).unwrap();
+        copied.set_log(&pages_log);
+        copied.name(ResourceKey::new());
+        kept.push(copied);
+    }
+    // Every byte agrees first, and each copy holds a stamp.
+    buffers.copy_in(&counts, &tally, Vec::new);
+    buffers.copy_in(&counts, &tally, Vec::new);
+    let mut rng = Rng(0x9E37_79B9_7F4A_7C15);
+    for writes in [0usize, 16, 256, 4096] {
+        let mut ins = Vec::new();
+        for _ in 0..STITCHED_RUNS {
+            for _ in 0..writes {
+                let (c, k) = (
+                    (rng.next() as usize) % STITCHED,
+                    (rng.next() as usize) % STITCHED_PAGES,
+                );
+                log.told(ram_page(c, k)..ram_page(c, k) + PAGE as u64, 0);
+            }
+            let started = Instant::now();
+            buffers.copy_in(&counts, &tally, Vec::new);
+            ins.push(started.elapsed().as_secs_f64() * 1e3);
+        }
+        eprintln!(
+            "COPIED-STITCHED {STITCHED} copies of {STITCHED_PAGES} runs, {} MiB, {writes} pages written: copy in {:.3} ms (median of {STITCHED_RUNS})",
+            (STITCHED * length) >> 20,
+            median(ins),
+        );
+    }
+    drop(kept);
+}
