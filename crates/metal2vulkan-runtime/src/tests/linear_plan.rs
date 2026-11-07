@@ -387,17 +387,12 @@ fn two_dimensional_textures_and_texture_buffers_follow_metal() {
         // The length: the last row's packed bytes may end on the buffer's end.
         (texture(8, 4, 3872, 64, 4096), made(3872, 64, 4, 32)),
         // Plain Metal makes a texture whose rows end past the length of a buffer under 16 KiB,
-        // whose `allocatedSize` is its length; the runtime has no bytes there (`past.m`).
-        (
-            texture(8, 4, 3888, 64, 4096),
-            Err(BufferRefusal::TexelsPastLength),
-        ),
+        // whose `allocatedSize` is its length (`past.m`); the runtime keeps the texels past it in
+        // the texture's tail.
+        (texture(8, 4, 3888, 64, 4096), made(3888, 64, 4, 32)),
         (texture(8, 4, 3856, 64, 4096), made(3856, 64, 4, 32)),
         (texture(8, 4, 3920, 48, 4096), made(3920, 48, 4, 32)),
-        (
-            texture(4, 1, 4096, 16, 4096),
-            Err(BufferRefusal::TexelsPastLength),
-        ),
+        (texture(4, 1, 4096, 16, 4096), made(4096, 16, 1, 16)),
         // Offsets and pitches are multiples of 16.
         (
             texture(4, 4, 8, 16, 4096),
@@ -523,7 +518,7 @@ fn two_dimensional_textures_and_texture_buffers_follow_metal() {
                 call: BufferTextureCall::Linear,
                 ..texture(4, 4, 0, 32, 111)
             },
-            Err(BufferRefusal::TexelsPastLength),
+            made(0, 32, 4, 16),
         ),
         (
             Case {
@@ -633,46 +628,47 @@ fn an_arrays_slices_start_at_metals_own_stride() {
 
 /// Where an array may end (probes 9b, 9c, 9e and 9f): Metal answers nil where a buffer of at
 /// least 16 KiB has the rounded slices end past its `allocatedSize`; elsewhere it makes an array
-/// whose last slice runs past the length, which the runtime refuses as not implemented. Its
-/// validation's own count, the rows as if the slices were not rounded, is no refusal: every case
-/// marked so below is one the count stops and plain Metal makes.
+/// whose last slice runs past the length, which the runtime makes too, the texels past it in the
+/// texture's tail (`past`). Its validation's own count, the rows as if the slices were not
+/// rounded, is no refusal: every case marked so below is one the count stops and plain Metal
+/// makes.
 #[test]
 fn an_array_ends_where_metal_lets_it() {
     use BufferTextureProblem as Pr;
     let nil = |end, allocation| {
         Err::<(), _>(BufferRefusal::Metal(Pr::PastAllocation { end, allocation }))
     };
-    let gap = Err::<(), _>(BufferRefusal::TexelsPastLength);
+    let past = Ok::<(), BufferRefusal>(());
     let ok = |case: Case| plan(case).map(|_| ());
     let cases = [
         // Two 4x4 slices at bytesPerRow 16 from 16128 (a 64-byte image, a 128-byte stride).
-        (array((4, 4, 2), 16128, 16, 16255), gap), // counted past
-        (array((4, 4, 2), 16128, 16, 16256), gap),
-        (array((4, 4, 2), 16128, 16, 16319), gap),
+        (array((4, 4, 2), 16128, 16, 16255), past), // counted past
+        (array((4, 4, 2), 16128, 16, 16256), past),
+        (array((4, 4, 2), 16128, 16, 16319), past),
         (array((4, 4, 2), 16128, 16, 16320), Ok(())),
         (array((4, 4, 2), 16128, 16, 16384), Ok(())),
         // From 16256 the slices end at 16512: nil in 16384 bytes, made in 16385 or more.
         (array((4, 4, 2), 16256, 16, 16384), nil(16512, 16384)),
-        (array((4, 4, 2), 16256, 16, 16385), gap),
+        (array((4, 4, 2), 16256, 16, 16385), past),
         (array((4, 4, 2), 16256, 16, 16512), Ok(())),
-        (array((4, 4, 2), 16384, 16, 16385), gap), // counted past
+        (array((4, 4, 2), 16384, 16, 16385), past), // counted past
         (array((4, 4, 2), 32640, 16, 32768), nil(32896, 32768)),
         // Small buffers: made past the length whatever the rounded slices' end.
-        (array((4, 4, 2), 0, 16, 64), gap),  // counted past
-        (array((4, 4, 2), 0, 16, 127), gap), // counted past
-        (array((4, 4, 2), 0, 16, 128), gap),
-        (array((4, 4, 2), 0, 16, 191), gap),
+        (array((4, 4, 2), 0, 16, 64), past),  // counted past
+        (array((4, 4, 2), 0, 16, 127), past), // counted past
+        (array((4, 4, 2), 0, 16, 128), past),
+        (array((4, 4, 2), 0, 16, 191), past),
         (array((4, 4, 2), 0, 16, 192), Ok(())),
-        (array((4, 4, 3), 0, 16, 300), gap),
-        (array((4, 4, 64), 0, 16, 4096), gap),
-        (array((4, 4, 128), 0, 16, 4096), gap), // counted past
-        (array((4, 4, 129), 0, 16, 4096), gap), // counted past
+        (array((4, 4, 3), 0, 16, 300), past),
+        (array((4, 4, 64), 0, 16, 4096), past),
+        (array((4, 4, 128), 0, 16, 4096), past), // counted past
+        (array((4, 4, 129), 0, 16, 4096), past), // counted past
         // bytesPerRow above the packed row: validation counts the last row's packed bytes.
-        (array((4, 4, 2), 0, 32, 239), gap), // counted past
+        (array((4, 4, 2), 0, 32, 239), past), // counted past
         (array((4, 4, 2), 0, 32, 240), Ok(())),
-        (array((4, 3, 3), 0, 48, 399), gap), // counted past
-        (array((4, 3, 3), 0, 48, 400), gap),
-        (array((4, 3, 3), 0, 48, 432), gap),
+        (array((4, 3, 3), 0, 48, 399), past), // counted past
+        (array((4, 3, 3), 0, 48, 400), past),
+        (array((4, 3, 3), 0, 48, 432), past),
     ];
     for (case, want) in cases {
         assert_eq!(ok(case), want, "{case:?}");
@@ -684,11 +680,13 @@ fn an_array_ends_where_metal_lets_it() {
 /// texture whenever its rows end inside the buffer's `allocatedSize`, however far past the
 /// `length` they run, and answers nil only past the allocation. Metal's validation counts those
 /// rows against the `length` and stops every case here but the two made ones; that count is the
-/// layer's alone, so the runtime does not refuse by it.
+/// layer's alone, so the runtime does not refuse by it. A 2D texture past the length is made,
+/// its texels there in its tail (`past`); a texture buffer there is the runtime's gap.
 #[test]
 fn a_texture_over_a_buffer_ends_where_metals_allocation_does() {
     use BufferTextureProblem as Pr;
     let gap = Err::<(), _>(BufferRefusal::TexelsPastLength);
+    let past = Ok::<(), BufferRefusal>(());
     let nil = |end, allocation| {
         Err::<(), _>(BufferRefusal::Metal(Pr::PastAllocation { end, allocation }))
     };
@@ -698,10 +696,10 @@ fn a_texture_over_a_buffer_ends_where_metals_allocation_does() {
     let cases = [
         // A 4096-byte buffer, whose `allocatedSize` is its length: made 128 and 12288 bytes past.
         (texture_buffer(64, 3968, 256, 4096), gap),
-        (texture(64, 1, 3968, 256, 4096), gap),
-        (texture(64, 64, 0, 256, 4096), gap),
+        (texture(64, 1, 3968, 256, 4096), past),
+        (texture(64, 64, 0, 256, 4096), past),
         // A 20000-byte buffer, `allocatedSize` 32768: made inside the allocation, nil past it.
-        (texture(64, 4, 19200, 256, 20000), gap),
+        (texture(64, 4, 19200, 256, 20000), past),
         (texture_buffer(64, 20000, 256, 20000), gap),
         (texture(64, 4, 32000, 256, 20000), nil(33024, 32768)),
         (texture_buffer(64, 32700, 256, 20000), nil(32956, 32768)),

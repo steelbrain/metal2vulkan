@@ -886,6 +886,60 @@ impl RowsCopy {
     pub(super) fn length(&self) -> u64 {
         self.rows.iter().map(|r| r.size).sum()
     }
+
+    /// This copy cut where a side's bytes pass `src_cut` or `dst_cut` (a texture's whose texels
+    /// run past its buffer's length, whose bytes past it lie in its tail, `buffer_texture.rs`):
+    /// up to four copies, each `(whether its source rows lie past the source's cut, whether its
+    /// destination rows lie past the destination's, the copy)`, every row in exactly one of
+    /// them, cut where it crosses either cut. A side with no cut lies before it whole.
+    pub(super) fn split(
+        &self,
+        src_cut: Option<u64>,
+        dst_cut: Option<u64>,
+    ) -> Vec<(bool, bool, RowsCopy)> {
+        let (src_cut, dst_cut) = (src_cut.unwrap_or(u64::MAX), dst_cut.unwrap_or(u64::MAX));
+        let mut parts: Vec<(bool, bool, Vec<BufferRange>)> = Vec::new();
+        for row in &self.rows {
+            // The row's cuts, from its start, where either side's bytes pass their cut.
+            let mut cuts = vec![0, row.size];
+            for (start, cut) in [(row.src, src_cut), (row.dst, dst_cut)] {
+                if start < cut && cut < start + row.size {
+                    cuts.push(cut - start);
+                }
+            }
+            cuts.sort_unstable();
+            cuts.dedup();
+            for piece in cuts.windows(2) {
+                let part = BufferRange {
+                    src: row.src + piece[0],
+                    dst: row.dst + piece[0],
+                    size: piece[1] - piece[0],
+                };
+                let side = (part.src >= src_cut, part.dst >= dst_cut);
+                match parts.iter_mut().find(|(s, d, _)| (*s, *d) == side) {
+                    Some((.., rows)) => rows.push(part),
+                    None => parts.push((side.0, side.1, vec![part])),
+                }
+            }
+        }
+        parts
+            .into_iter()
+            .map(|(src_past, dst_past, rows)| {
+                let span = |at: fn(&BufferRange) -> u64| {
+                    let start = rows.iter().map(at).min().unwrap_or(0);
+                    let end = rows.iter().map(|r| at(r) + r.size).max().unwrap_or(start);
+                    start..end
+                };
+                let (src_span, dst_span) = (span(|r| r.src), span(|r| r.dst));
+                let copy = RowsCopy {
+                    rows,
+                    src_span,
+                    dst_span,
+                };
+                (src_past, dst_past, copy)
+            })
+            .collect()
+    }
 }
 
 /// The rows of `region` (a checked region, in `unit`s of one texel or one block) of a texture

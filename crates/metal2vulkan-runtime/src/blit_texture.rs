@@ -60,6 +60,7 @@ use super::blit_plan::{
     plan_texels_rows_copy, plan_whole_copy, texel_layout, BufferCopyPlan, BufferImageRegion,
     BufferLayout, BufferRange, CopyPair, ImageCopyRegion, RowsCopy,
 };
+use super::buffer_texture::Past;
 use super::compressed_blit::{self, degrade_compressed_blit, Writer};
 use super::copy_plan::{
     check_region, colour_unit, copy_unit, depth_bytes, level_extent, shape, BlitOption,
@@ -95,6 +96,40 @@ use metal2vulkan::metal::{PixelFormat, TextureType};
 use metal2vulkan::vk::{Format, ImageAspectFlags};
 use std::ops::Range;
 use std::sync::Arc;
+
+/// One side of a copy of rows (`BlitCommandEncoder::rows_copy`): the buffer whose bytes its uses
+/// name, and the buffer its rows lie in, `rebase` bytes before their place in the first one's
+/// space: the buffer itself, or for a texture's bytes past its buffer's length the texture's tail
+/// (`buffer_texture::Past`).
+#[derive(Clone, Copy)]
+struct RowsSide<'a> {
+    uses: &'a Buffer,
+    bytes: &'a Buffer,
+    rebase: u64,
+}
+
+impl<'a> RowsSide<'a> {
+    /// `buffer`'s rows in its own bytes.
+    fn of(buffer: &'a Buffer) -> RowsSide<'a> {
+        RowsSide {
+            uses: buffer,
+            bytes: buffer,
+            rebase: 0,
+        }
+    }
+
+    /// `buffer`'s rows in a texture's tail where `past` names it, else in the buffer's own bytes.
+    fn cut(buffer: &'a Buffer, past: Option<Past<'a>>) -> RowsSide<'a> {
+        match past {
+            Some(past) => RowsSide {
+                uses: buffer,
+                bytes: past.tail,
+                rebase: past.rebase,
+            },
+            None => RowsSide::of(buffer),
+        }
+    }
+}
 
 fn copy_error(call: &'static str, refusal: CopyRefusal) -> Error {
     match refusal {
@@ -634,7 +669,12 @@ impl BlitCommandEncoder {
                 &texels.layout,
             )
             .map_err(|problem| invalid(CALL, Problem::Copy(problem)))?;
-            return self.rows_copy(source_buffer, &texels.buffer, &RowsCopy::new(&from, &to));
+            let copy = RowsCopy::new(&from, &to);
+            return self.texels_rows_copy(
+                (source_buffer, None),
+                (&texels.buffer, texels.past()),
+                &copy,
+            );
         }
         let plan = plan_copy(CALL, texture, &region, &unit, &layout, source_buffer, true)?;
         let written: Vec<ImageRegion> = plan.regions.iter().map(|r| r.image).collect();
@@ -805,7 +845,11 @@ impl BlitCommandEncoder {
                     )
                     .map_err(|problem| invalid(CALL, Problem::Copy(problem)))?;
                     let copy = RowsCopy::new(&from, &to);
-                    return this.rows_copy(&texels.buffer, destination_buffer, &copy);
+                    return this.texels_rows_copy(
+                        (&texels.buffer, texels.past()),
+                        (destination_buffer, None),
+                        &copy,
+                    );
                 }
                 let plan = plan_copy(
                     CALL,
@@ -1742,7 +1786,7 @@ impl BlitCommandEncoder {
                 let copy =
                     plan_texels_rows_copy(from.row_layouts(), to.row_layouts(), &unit, copies)
                         .map_err(Error::NotImplemented)?;
-                self.rows_copy(&from.buffer, &to.buffer, &copy)
+                self.texels_rows_copy((&from.buffer, from.past()), (&to.buffer, to.past()), &copy)
             }
             (Some(texels), None) | (None, Some(texels)) => {
                 // Rows that share bytes are no layout a buffer-image copy states: an IOSurface
@@ -1773,6 +1817,57 @@ impl BlitCommandEncoder {
                         };
                         let layout =
                             texel_layout(&texels.layout, &unit, bytes, bytes.layer + layer);
+                        // Texels past the buffer's length lie in its tail: the rows go through a
+                        // scratch buffer of the encoder, as rows of the bytes they lie in.
+                        if let Some(past) = texels.past() {
+                            let [width, height, _] = bytes.size;
+                            let row = u64::from(width) * u64::from(unit.bytes);
+                            let rows: Vec<Range<u64>> = (0..u64::from(height))
+                                .map(|y| layout.offset + y * layout.bytes_per_row)
+                                .map(|start| start..start + row)
+                                .collect();
+                            let packed: Vec<Range<u64>> = (0..u64::from(height))
+                                .map(|y| y * row..(y + 1) * row)
+                                .collect();
+                            let scratch = (self.core().device())
+                                .own_buffer(row * u64::from(height), ResourceOptions::private())?;
+                            let through = BufferLayout {
+                                offset: 0,
+                                bytes_per_row: row,
+                                bytes_per_image: 0,
+                            };
+                            let plan = plan_buffer_copy(
+                                record,
+                                &region,
+                                &image_unit,
+                                &through,
+                                scratch.length(),
+                                scratch.start(),
+                                into_texture,
+                            )
+                            .map_err(copy_problem)?;
+                            if into_texture {
+                                let copy = RowsCopy::new(&rows, &packed);
+                                self.texels_rows_copy(
+                                    (buffer, Some(past)),
+                                    (&scratch, None),
+                                    &copy,
+                                )?;
+                                texture.degrade_depth_upload(call, image_unit.aspect, true);
+                                texture.degrade_depth_denormals(call, image_unit.aspect, false);
+                                self.buffer_texture_copy(&scratch, texture, plan, true)?;
+                            } else {
+                                self.buffer_texture_copy(&scratch, texture, plan, false)?;
+                                let copy = RowsCopy::new(&packed, &rows);
+                                self.texels_rows_copy(
+                                    (&scratch, None),
+                                    (buffer, Some(past)),
+                                    &copy,
+                                )?;
+                            }
+                            self.core().retain(scratch);
+                            continue;
+                        }
                         let plan = plan_buffer_copy(
                             record,
                             &region,
@@ -1796,19 +1891,53 @@ impl BlitCommandEncoder {
         }
     }
 
+    /// Record `copy` from `source`'s bytes into `destination`'s, as [`rows_copy`](Self::rows_copy)
+    /// does, where a side's bytes past its buffer's length lie in a texture's tail (`past`,
+    /// `buffer_texture.rs`): the rows cut there, each part from and into the bytes it lies in,
+    /// its uses those of the buffer's bytes it stands for.
+    fn texels_rows_copy(
+        &mut self,
+        (source, src_past): (&Buffer, Option<Past<'_>>),
+        (destination, dst_past): (&Buffer, Option<Past<'_>>),
+        copy: &RowsCopy,
+    ) -> Result<(), Error> {
+        if src_past.is_none() && dst_past.is_none() {
+            return self.rows_copy(RowsSide::of(source), RowsSide::of(destination), copy);
+        }
+        let cuts = (src_past.map(|p| p.length), dst_past.map(|p| p.length));
+        for (src_beyond, dst_beyond, part) in copy.split(cuts.0, cuts.1) {
+            let (from, to) = (
+                RowsSide::cut(source, src_past.filter(|_| src_beyond)),
+                RowsSide::cut(destination, dst_past.filter(|_| dst_beyond)),
+            );
+            self.rows_copy(from, to, &part)?;
+            let tails = [
+                src_past.filter(|_| src_beyond),
+                dst_past.filter(|_| dst_beyond),
+            ];
+            for past in tails.into_iter().flatten() {
+                self.core().retain(past.tail.clone());
+            }
+        }
+        Ok(())
+    }
+
     /// Record `copy` from `source`'s bytes into `destination`'s, a copy that names a texture
     /// over a buffer (the module's note): its rows in one command, or, where a source row and a
     /// destination row of one buffer share bytes, through a scratch buffer of the encoder, the
     /// whole source read before any of it is written, as Metal moves them.
     fn rows_copy(
         &mut self,
-        source: &Buffer,
-        destination: &Buffer,
+        source: RowsSide<'_>,
+        destination: RowsSide<'_>,
         copy: &RowsCopy,
     ) -> Result<(), Error> {
-        // Read as a blit's (`host_residency.rs`): the command buffer holds the imports.
-        let (src, src_base) = self.core().blit_at(source, 0)?;
-        let (dst, dst_base) = self.core().blit_at(destination, 0)?;
+        // Read as a blit's (`host_residency.rs`): the command buffer holds the imports. A side's
+        // rows in a texture's tail lie `rebase` bytes before their place in the buffer's space.
+        let (src, src_base) = self.core().blit_at(source.bytes, 0)?;
+        let (dst, dst_base) = self.core().blit_at(destination.bytes, 0)?;
+        let (src_rebase, dst_rebase) = (source.rebase, destination.rebase);
+        let (source, destination) = (source.uses, destination.uses);
         let device = self.core().device().clone();
         // One buffer's bytes, or two no-copy buffers' made over the same bytes, which lie in one
         // import (`host_aliases.rs`): one `VkBuffer` from one byte 0.
@@ -1823,13 +1952,13 @@ impl BlitCommandEncoder {
             let mut packed = through_base;
             for row in &copy.rows {
                 into.push(vk::BufferCopy {
-                    src_offset: src_base + row.src,
+                    src_offset: src_base + row.src - src_rebase,
                     dst_offset: packed,
                     size: row.size,
                 });
                 out_of.push(vk::BufferCopy {
                     src_offset: packed,
-                    dst_offset: dst_base + row.dst,
+                    dst_offset: dst_base + row.dst - dst_rebase,
                     size: row.size,
                 });
                 packed += row.size;
@@ -1874,8 +2003,8 @@ impl BlitCommandEncoder {
                 .rows
                 .iter()
                 .map(|row| vk::BufferCopy {
-                    src_offset: src_base + row.src,
-                    dst_offset: dst_base + row.dst,
+                    src_offset: src_base + row.src - src_rebase,
+                    dst_offset: dst_base + row.dst - dst_rebase,
                     size: row.size,
                 })
                 .collect();

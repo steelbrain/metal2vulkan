@@ -781,6 +781,16 @@ impl ShadowCopies {
         )
     }
 
+    /// The staging buffer a 2D texture's image over a buffer's bytes is copied through, where it
+    /// has one ([`ShadowStaging`]): a texture's whose texels run past the buffer's length, its
+    /// tail, holds fewer of the buffer's bytes than the texture spans (`buffer_texture.rs`).
+    pub(super) fn staged_image(&self) -> Option<&ShadowStaging> {
+        match self.target()? {
+            ShadowTarget::Image { staging, .. } => staging.as_ref(),
+            _ => None,
+        }
+    }
+
     /// The shadow of a buffer's bytes, or `None` for an image's and for converted texels'.
     pub(super) fn target(&self) -> Option<&ShadowTarget> {
         match &self.source {
@@ -2061,7 +2071,9 @@ impl ShadowCopy {
         // when the texture was made), and the staging buffer lives with the texture.
         unsafe {
             if into_shadow {
-                if let Some(staging) = staging {
+                // A texture whose texels all lie past its buffer's length copies none of the
+                // buffer's bytes into its tail (`buffer_texture.rs`).
+                if let Some(staging) = staging.filter(|staging| staging.into.size > 0) {
                     device.cmd_copy_buffer(command_buffer, buffer, texels, &[staging.into]);
                     Barrier::everything().record(device, command_buffer);
                 }
@@ -2180,6 +2192,7 @@ pub(super) unsafe fn record_back(
     unsafe {
         match back {
             Some(rows) => rows.record(device, command_buffer),
+            None if staging.back.is_empty() => {}
             None => device.cmd_copy_buffer(command_buffer, staging.raw(), buffer, &staging.back),
         }
     }

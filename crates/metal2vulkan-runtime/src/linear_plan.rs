@@ -43,9 +43,20 @@
 //!   layer off: a 2D texture and a texture buffer over a 4096-byte buffer whose rows end 128 and
 //!   12288 bytes past it are made, as is one over a 20000-byte buffer, `allocatedSize` 32768,
 //!   from offset 20000; the same ending past 32768 is nil, and so is one over a 16384-byte
-//!   buffer, `allocatedSize` 16384, ending at 16640, where one ending at 16384 is made). The
-//!   runtime's buffers have no bytes past the length, so it refuses that texture as not
-//!   implemented ([`BufferRefusal::TexelsPastLength`]) and the nil one as Metal's nil
+//!   buffer, `allocatedSize` 16384, ending at 16640, where one ending at 16384 is made). Every
+//!   path takes those texels as the memory after the buffer's (an M3 Max under macOS 27.0.1, the
+//!   layer off, one shape and one path a process, `probes/texels_past_buffer_length.m`): over a
+//!   4096-byte `Shared` buffer, rows of 256 bytes ending 256 to 2048 bytes past it, a kernel's
+//!   `read()` and `sample()`, a blit into a buffer and `getBytes` read the buffer allocated next
+//!   (at the target's `gpuAddress` plus 4096) there, and a kernel's `write()`, a blit from a
+//!   buffer and `replaceRegion` write it there, which every read then reads; over a 20000-byte
+//!   buffer (`allocatedSize` 32768) the bytes past the length, inside the allocation, read zero,
+//!   and what each path writes there every path reads. The texels inside the length are the
+//!   buffer's bytes on every path. The runtime makes such a 2D texture or array as Metal does: its
+//!   texels inside the length are the buffer's bytes, and those past it lie in a tail of the
+//!   texture's own (`buffer_texture.rs`), zero when made, which every path reads and writes alike
+//!   and which is no other allocation's memory. A texture buffer there it refuses as not
+//!   implemented ([`BufferRefusal::TexelsPastLength`]), and the nil one as Metal's nil
 //!   ([`BufferTextureProblem::PastAllocation`]).
 //!
 //! **IOSurface planes** (`Buffer::new_texture_with_iosurface_plane`, the stand-in for
@@ -559,8 +570,11 @@ pub(super) enum BufferRefusal {
     /// What Metal asserts on or stops under validation (`Invalid`), or answers nil for (`Nil`:
     /// [`BufferTextureProblem::PastAllocation`]).
     Metal(BufferTextureProblem),
-    /// An array whose texels run past the buffer's length, which Metal makes over bytes past
-    /// the length and the runtime has no bytes for (`NotImplemented`).
+    /// A texture buffer whose texels run past the buffer's length, or an IOSurface plane's GPU
+    /// or CPU rows past the buffer standing for its surface, which Metal makes over bytes past
+    /// the length and the runtime has no bytes for (`NotImplemented`). A 2D texture or array
+    /// over a buffer keeps its texels past the length in a tail of its own instead (the module's
+    /// **Length**).
     TexelsPastLength,
     /// An IOSurface plane whose rows overlap on Metal's GPU that the runtime holds no form of
     /// (`NotImplemented`; the module's **Rows that overlap**): a plane a render pass stores into,
@@ -748,7 +762,8 @@ pub(super) fn plan_buffer_texture(
     let length = buffer.length;
     // Metal's validation counts the slices' rows as if contiguous against the length and stops
     // the texture there; plain Metal reads the buffer's allocation alone (the module's
-    // **Length**), so the runtime does too.
+    // **Length**), so the runtime does too. A 2D texture or array whose texels run past the
+    // length keeps those texels in its tail (`buffer_texture.rs`); a texture buffer has none.
     if placed.end() > length {
         let end = offset.saturating_add(slice_pitch.saturating_mul(slices));
         if length >= METAL_PAGE {
@@ -759,7 +774,9 @@ pub(super) fn plan_buffer_texture(
                 return Err(P::PastAllocation { end, allocation }.into());
             }
         }
-        return Err(BufferRefusal::TexelsPastLength);
+        if texture_type == T::TextureBuffer {
+            return Err(BufferRefusal::TexelsPastLength);
+        }
     }
     Ok(Placed::same(placed))
 }

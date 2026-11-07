@@ -614,8 +614,13 @@ impl BlitCommandEncoder {
                     ResourceRef::Buffer(buffer) => (buffer, 0..buffer.length()),
                     ResourceRef::Texture(texture) => match texture.buffer_texels() {
                         // Where the GPU or the CPU finds the texels (an IOSurface plane's two
-                        // layouts).
-                        Some(texels) => (&texels.buffer, texels.span()),
+                        // layouts), in the buffer: those past its length lie in the texture's
+                        // `Shared` tail, which takes no synchronization (`buffer_texture.rs`).
+                        Some(texels) => {
+                            let span = texels.span();
+                            let end = span.end.min(texels.buffer.length());
+                            (&texels.buffer, span.start.min(end)..end)
+                        }
                         None => return Ok(()),
                     },
                     ResourceRef::IndirectCommandBuffer(_) => return Ok(()),

@@ -2239,8 +2239,11 @@ impl Device {
         // only the rows the log reports changed (`dirty_pages.rs`), so the GPU reads the texels
         // from its own memory, where in place it reads the pages across the bus at every sample.
         // It binds no image to the pages, so the in-place check's verdict is not asked.
+        // Texels past the buffer's length lie in no image over its memory: the shadow's copies go
+        // through the texture's tail (`buffer_texture.rs`).
+        let past = texels.past().is_some();
         let device_copy = match class {
-            Some(class) if !in_place::checking() && !texels.buffer.detached() => {
+            Some(class) if !past && !in_place::checking() && !texels.buffer.detached() => {
                 let policy = self.compile_device().policy().host_page_textures;
                 in_place::in_place(policy, usage, class, |_| Verdict::Passed).is_ok()
                     && texels.device_copy(self)
@@ -2248,6 +2251,9 @@ impl Device {
             _ => false,
         };
         let why = match class {
+            _ if past => "its texels run past the buffer's length, which no image over the \
+                          buffer's memory reaches: the texture's tail holds them"
+                .to_owned(),
             Some(_) if device_copy => String::new(),
             Some(class) => {
                 let checking = in_place::checking();

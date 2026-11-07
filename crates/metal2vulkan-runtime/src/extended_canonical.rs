@@ -245,7 +245,11 @@ impl BlitCommandEncoder {
         let Some(texels) = texture.buffer_texels() else {
             return Ok(false);
         };
-        if !compressed_blit::extended(texture.pixel_format()) || texels.plane_rows_overlap() {
+        // Texels past the buffer's length lie in the texture's tail, which the kernel's binding
+        // of the buffer's words does not reach (`buffer_texture.rs`).
+        let past = texels.past().is_some();
+        if !compressed_blit::extended(texture.pixel_format()) || texels.plane_rows_overlap() || past
+        {
             return Ok(false);
         }
         let unit = texels.unit();

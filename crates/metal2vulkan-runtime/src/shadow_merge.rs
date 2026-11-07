@@ -263,6 +263,53 @@ struct Merged {
     /// from the rectangle's first word to its last (its kernel writes words of the rectangle
     /// alone, the module docs), else every byte of the texture's.
     written: Range<u64>,
+    /// Where the texture's bytes past its buffer's length lie, where its texels run past it: its
+    /// tail, the staging buffer its copies go through (`buffer_texture.rs`). A merge through a
+    /// copy takes the current part's bytes past the length from there and gives them back there.
+    tail: Option<MergeTail>,
+}
+
+/// A texture's tail as a merge reaches it ([`Merged::tail`]): `inside` bytes of the texture's
+/// lie in its buffer from its first, and the rest in `raw` from `at` on.
+#[derive(Clone, Copy)]
+struct MergeTail {
+    raw: vk::Buffer,
+    at: u64,
+    inside: u64,
+}
+
+impl Merged {
+    /// The copies between the texture's bytes (`span` of them from its first) and `current`, a
+    /// merge's current part, each `(the bytes' VkBuffer, the copy)` as the bytes go into the
+    /// part: one of every byte, or, where its texels run past its buffer's length, one of those
+    /// inside it and one of those in its tail. A copy back swaps each one's ends.
+    fn current_copies(&self, current: Part, span: u64) -> Vec<(vk::Buffer, vk::BufferCopy)> {
+        let Some(tail) = self.tail else {
+            let copy = vk::BufferCopy {
+                src_offset: self.first,
+                dst_offset: current.at,
+                size: span,
+            };
+            return vec![(self.buffer, copy)];
+        };
+        let inside = tail.inside.min(span);
+        let parts = [
+            (self.buffer, self.first, 0, inside),
+            (tail.raw, tail.at, inside, span - inside),
+        ];
+        parts
+            .into_iter()
+            .filter(|&(.., size)| size > 0)
+            .map(|(raw, from, into, size)| {
+                let copy = vk::BufferCopy {
+                    src_offset: from,
+                    dst_offset: current.at + into,
+                    size,
+                };
+                (raw, copy)
+            })
+            .collect()
+    }
 }
 
 /// The rectangle of a shadow's texels a merge is cut to (the module docs).
@@ -361,14 +408,25 @@ impl ShadowMerge {
             // only a buffer's bytes merge back (`ShadowCopies::merges_back`).
             return Err(internal("a merge of an image's shadow"));
         };
+        let span = bytes.end - bytes.start;
+        // A staging buffer that holds fewer of the buffer's bytes than the texture spans is its
+        // tail: its texels run past the buffer's length (`buffer_texture.rs`).
+        let tail = copies
+            .staged_image()
+            .filter(|staging| staging.into.size < span)
+            .map(|staging| MergeTail {
+                raw: staging.raw(),
+                at: staging.into.dst_offset + staging.into.size,
+                inside: staging.into.size,
+            });
         let mut merged = Merged {
             buffer: buffer.raw(),
             key: *key,
             bytes: bytes.clone(),
             first,
             written: bytes.clone(),
+            tail,
         };
-        let span = merged.bytes.end - merged.bytes.start;
         // A window binds the bytes only while they lie in pages: a detached buffer's `VkBuffer` is
         // the device's stand-in, smaller than any window, and a binding past a buffer's size is
         // invalid (VUID-VkDescriptorBufferInfo-range-00342). The encoder records nothing of a
@@ -1105,12 +1163,7 @@ impl ShadowMerge {
         command_buffer: vk::CommandBuffer,
         (copies, moves): (&ShadowCopies, Option<&SampleMoves>),
     ) {
-        let Merged {
-            buffer,
-            ref bytes,
-            first,
-            ..
-        } = self.merged;
+        let Merged { ref bytes, .. } = self.merged;
         let span = bytes.end - bytes.start;
         // SAFETY: the caller's contract; each part holds the texture's bytes, and the sets bind
         // windows inside the parts and, in place, inside the texture's bytes (and the shadow's
@@ -1127,16 +1180,9 @@ impl ShadowMerge {
                 Changed::Fetched => {}
             }
             if let Some(current) = self.current {
-                device.cmd_copy_buffer(
-                    command_buffer,
-                    buffer,
-                    current.raw,
-                    &[vk::BufferCopy {
-                        src_offset: first,
-                        dst_offset: current.at,
-                        size: span,
-                    }],
-                );
+                for (bytes, copy) in self.merged.current_copies(current, span) {
+                    device.cmd_copy_buffer(command_buffer, bytes, current.raw, &[copy]);
+                }
             }
             let copied = !matches!(self.changed, Changed::Fetched) || self.current.is_some();
             if copied {
@@ -1163,16 +1209,14 @@ impl ShadowMerge {
             // bytes' next use.
             Barrier::everything().record(device, command_buffer);
             if let Some(current) = self.current {
-                device.cmd_copy_buffer(
-                    command_buffer,
-                    current.raw,
-                    buffer,
-                    &[vk::BufferCopy {
-                        src_offset: current.at,
-                        dst_offset: first,
-                        size: span,
-                    }],
-                );
+                for (bytes, copy) in self.merged.current_copies(current, span) {
+                    let back = vk::BufferCopy {
+                        src_offset: copy.dst_offset,
+                        dst_offset: copy.src_offset,
+                        size: copy.size,
+                    };
+                    device.cmd_copy_buffer(command_buffer, current.raw, bytes, &[back]);
+                }
             }
         }
     }

@@ -33,10 +33,10 @@
 //!
 //! # What is deliberately not ported, and why
 //!
-//! The lane also checks five other refusals, each of which the runtime answers
-//! `Error::Invalid`: a texture whose texels end past the buffer's length, a block-compressed
-//! format, a 3D descriptor, a 2D descriptor at an offset off the format's alignment, and a 2D
-//! array through this call. `Error::Invalid` is, by the runtime's own documented model, "Metal
+//! The lane also checks four other refusals, each of which the runtime answers
+//! `Error::Invalid`: a block-compressed format, a 3D descriptor, a 2D descriptor at an offset off
+//! the format's alignment, and a 2D array through this call. (A 2D texture whose texels run past
+//! the buffer's length Metal makes, and so does the runtime: [`super::buffer_tails`].) `Error::Invalid` is, by the runtime's own documented model, "Metal
 //! stops this call" — as against `Error::Nil`, "plain Metal answers nil and the process goes on" —
 //! so handing any of them to Metal risks exactly what the stride row does. Unlike the stride row,
 //! no probe of this tree has recorded *how* Metal stops them, so there is nothing to state and the

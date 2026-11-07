@@ -4,7 +4,7 @@
 //! plane, which no test may build the texture for.
 
 use super::super::buffer_texture::{
-    rotated_rows, staged_rows_back, turned_plane, view_usage, ViewUsage,
+    inside_rows, rotated_rows, staged_rows_back, turned_plane, view_usage, ViewUsage,
 };
 use super::super::error::{Error, Invalid, Problem, RuntimeGap};
 use super::super::linear_plan::{
@@ -320,4 +320,39 @@ fn an_iosurface_pitch_below_the_textures_own_row_is_refused_at_every_rotation() 
     // added here is the other direction, the one no plan held: the texture's own row where the
     // plane's is shorter, which is the 64x16 pair above.
     assert_eq!(turned(1, 16, 64, 64), below(64, 256));
+}
+
+/// A tail's copies back into its buffer move the texels' bytes inside the buffer's length alone
+/// (`buffer_texture.rs`'s **Tails**): a row past them is dropped, one across them cut where they
+/// end, the rows before as they were.
+#[test]
+fn a_tail_s_rows_back_stop_at_the_buffer_s_length() {
+    let regions = |back: Vec<vk::BufferCopy>| -> Vec<(u64, u64, u64)> {
+        back.iter()
+            .map(|c| (c.src_offset, c.dst_offset, c.size))
+            .collect()
+    };
+    // 64x17 RGBA8 at rows of 256 over 4096 bytes: one region of the 17 rows, cut to 16 of them.
+    let whole = BufferLayout {
+        offset: 0,
+        row_pitch: 256,
+        slice_pitch: 256 * 17,
+        row_bytes: 256,
+        rows: 17,
+        slices: 1,
+    };
+    let back = staged_rows_back(&whole, 0, 0);
+    assert_eq!(regions(inside_rows(back, 0, 4096)), [(0, 0, 4096)]);
+    // Rows of 128 at a pitch of 256 from byte 32 of the buffer's VkBuffer, 2900 bytes inside:
+    // rows 0 to 10 whole, row 11 (from 2816) cut to its first 84 bytes, the rest dropped.
+    let apart = BufferLayout {
+        row_bytes: 128,
+        ..whole
+    };
+    let back = inside_rows(staged_rows_back(&apart, 0, 32), 32, 2900);
+    assert_eq!(back.len(), 12);
+    assert_eq!(regions(back[11..].to_vec()), [(2816, 2848, 84)]);
+    assert!(back[..11].iter().all(|c| c.size == 128));
+    // Every texel past the length: no row back.
+    assert!(inside_rows(staged_rows_back(&whole, 0, 0), 0, 0).is_empty());
 }

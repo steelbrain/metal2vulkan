@@ -62,7 +62,8 @@ fn texture_buffer(pf: PixelFormat, width: u64) -> TextureDescriptor {
 
 /// Texture buffers, 2D textures and arrays are made over a buffer with the buffer's options,
 /// whatever the descriptor names, and texture buffers by `new_texture` over a new buffer; what Metal stops is refused `Invalid`
-/// with its rule; an array whose texels run past its buffer's length is not implemented.
+/// with its rule; a texture buffer whose texels run past its buffer's length is not
+/// implemented, and an array there is made.
 #[test]
 fn textures_over_buffers_are_made_or_refused_as_metal_makes_them() {
     on_device(|device| {
@@ -228,15 +229,17 @@ fn textures_over_buffers_are_made_or_refused_as_metal_makes_them() {
             (TextureType::Type2D, 1)
         );
         // An array whose second slice starts past the buffer's length, inside Metal's
-        // allocation: Metal makes it over bytes the runtime's buffer does not have.
+        // allocation: Metal makes it, and so does the runtime, that slice in the texture's tail
+        // (`tests::buffer_tail_device`).
         let short = device.new_buffer(128, ResourceOptions::shared()).unwrap();
         let mut rows = TextureDescriptor::texture_2d(PixelFormat::R32Uint, 4, 3, false);
         rows.texture_type = TextureType::Type2DArray;
         rows.array_length = 2;
         rows.resource_options = ResourceOptions::shared();
+        let past = short.new_linear_texture(&rows, 0, 16, 0).unwrap();
         assert_eq!(
-            short.new_linear_texture(&rows, 0, 16, 0).unwrap_err(),
-            Error::NotImplemented(RuntimeGap::TexelsPastBufferLength)
+            (past.texture_type(), past.array_length()),
+            (TextureType::Type2DArray, 2)
         );
         // `new_texture` of a texture buffer: over a new buffer of its options.
         let made = device.new_texture(&d).unwrap();

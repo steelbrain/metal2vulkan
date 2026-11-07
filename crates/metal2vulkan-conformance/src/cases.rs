@@ -56,6 +56,7 @@ pub mod blit_indirect_commands;
 pub mod border_swizzles;
 pub mod buffer_blits;
 pub mod buffer_depth_samples;
+pub mod buffer_tails;
 pub mod buffer_target_clears;
 pub mod buffer_texture_blits;
 pub mod buffer_textures;
@@ -513,6 +514,7 @@ pub fn all() -> Vec<Box<dyn Case>> {
     cases.extend(blit_indirect_commands::all());
     cases.push(Box::new(compute_heap_residency::heap_residency()));
     cases.extend(buffer_texture_blits::all());
+    cases.extend(buffer_tails::all());
     cases.extend(buffer_textures::all());
     cases.extend(buffer_target_clears::all());
     cases.push(Box::new(host_detach::detach_in_a_completed_handler()));

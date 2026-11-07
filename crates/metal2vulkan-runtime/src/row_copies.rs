@@ -151,6 +151,9 @@ impl RowCopies {
     /// no source region meets a destination region.
     pub(super) unsafe fn record(&self, device: &Vk, command_buffer: vk::CommandBuffer) {
         match &self.form {
+            // No rows: a texture's whose texels all lie past its buffer's length, which its tail
+            // keeps (`buffer_texture::inside_rows`).
+            Form::Copy { regions, .. } if regions.is_empty() => {}
             // SAFETY: the caller's contract.
             Form::Copy { src, dst, regions } => unsafe {
                 device.cmd_copy_buffer(command_buffer, *src, *dst, regions);

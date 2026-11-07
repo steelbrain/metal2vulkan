@@ -33,6 +33,8 @@ mod blit_holds;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod blit_order;
 mod blit_plan;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod buffer_tail_device;
 mod buffer_texture;
 mod capabilities;
 mod color_reformat;

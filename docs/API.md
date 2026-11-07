@@ -4289,6 +4289,18 @@ each item named states the rule in full.
   does not reproduce the loss.
 - **A heap's buffer and texture over the same bytes alias them, in the device's layout**, not
   Apple's tiled or compressed one.
+- **A texture over a buffer keeps its texels past the buffer's length in a tail of its own.**
+  Plain Metal makes a 2D texture or array over a buffer whose texels run past its length, up to
+  the buffer's `allocatedSize` (nil past it), and its texels there are the memory after the
+  buffer's: on an Apple M3 Max under macOS 27.0.1 (`probes/texels_past_buffer_length.m`) a
+  kernel's `read()` and `sample()`, a blit and `getBytes` read the next allocation's bytes there,
+  and a kernel's `write()`, a blit and `replaceRegion` write them, changing that allocation; past
+  a 20000-byte buffer's length, inside its allocation, they read zero. On both, what one path
+  writes there every path reads, and the texels inside the length are the buffer's bytes. The
+  runtime's texels past the length lie in the texture's tail (`Buffer::new_texture`): zero when
+  made, read and written alike by its functions, blits and CPU calls, and no other allocation's
+  bytes; two textures over one buffer past its length keep a tail each. A texture buffer past the
+  length stays `NotImplemented(TexelsPastBufferLength)`.
 
 **Function constants**
 

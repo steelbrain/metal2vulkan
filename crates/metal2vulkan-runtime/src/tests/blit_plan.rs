@@ -1762,3 +1762,67 @@ fn copies_reach_the_buffer_s_last_byte_and_no_further() {
         }
     }
 }
+
+/// A copy of rows cut where a side's bytes pass its texture's tail (`buffer_texture.rs`): every
+/// byte in one part, each part's rows on one side of each cut, a row across a cut split there,
+/// and a side with no cut whole before it.
+#[test]
+fn rows_split_at_each_side_s_tail() {
+    // Two 256-byte rows from a buffer into a texture whose bytes past 4096 are its tail: the
+    // second row crosses it 128 bytes in.
+    let copy = RowsCopy::new(&[0..256, 1024..1280], &[3712..3968, 3968..4224]);
+    let parts = copy.split(None, Some(4096));
+    let rows = |past: bool| -> Vec<BufferRange> {
+        let part = parts.iter().find(|(s, d, _)| !*s && *d == past);
+        part.map_or(Vec::new(), |(.., copy)| copy.rows.clone())
+    };
+    assert_eq!(parts.len(), 2);
+    assert_eq!(
+        rows(false),
+        [
+            BufferRange {
+                src: 0,
+                dst: 3712,
+                size: 256
+            },
+            BufferRange {
+                src: 1024,
+                dst: 3968,
+                size: 128
+            }
+        ]
+    );
+    assert_eq!(
+        rows(true),
+        [BufferRange {
+            src: 1152,
+            dst: 4096,
+            size: 128
+        }]
+    );
+    let (.., past) = parts
+        .iter()
+        .find(|(_, d, _)| *d)
+        .expect("a part past the cut");
+    assert_eq!(
+        (past.src_span.clone(), past.dst_span.clone()),
+        (1152..1280, 4096..4224)
+    );
+    // Both sides cut: a row crossing both cuts at different bytes is three parts, and a row
+    // before both joins the first.
+    let both =
+        RowsCopy::new(&[0..64, 3968..4224], &[64..128, 4032..4288]).split(Some(4096), Some(4096));
+    let mut sides: Vec<(bool, bool, u64)> = both
+        .iter()
+        .map(|(s, d, copy)| (*s, *d, copy.length()))
+        .collect();
+    sides.sort_unstable();
+    assert_eq!(
+        sides,
+        [(false, false, 128), (false, true, 64), (true, true, 128)]
+    );
+    // No cut: the copy itself.
+    let whole = copy.split(None, None);
+    assert_eq!(whole.len(), 1);
+    assert_eq!(whole[0].2, copy);
+}
