@@ -675,6 +675,11 @@ impl DeviceShared {
             .map_or_else(Default::default, Slot::counts)
     }
 
+    /// The recorder's slot the device's commands go through, where it took one (`recorder`).
+    pub(crate) fn recording(&self) -> Option<&Slot> {
+        self.recording.as_ref()
+    }
+
     /// `vkAllocateCommandBuffers` of `info`: the loader serves it and reads the device's loader
     /// word first ([`DeviceWord::restored`]).
     pub(super) fn allocate_command_buffers(

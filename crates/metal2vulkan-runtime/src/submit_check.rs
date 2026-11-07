@@ -85,7 +85,9 @@
 //!   of the exit guard (`exit_guard.rs`). Its submissions are counted apart
 //!   (`WorkCounts::submit_check_calls`), not among the device's, with the relay's mark after each
 //!   of its uses of the queue where the device relays its queues' failures (`device/relay.rs`,
-//!   `By::Checks`).
+//!   `By::Checks`); the commands it records go through the driver's own entry points, counted
+//!   among none of the device's (`WorkCounts::commands_recorded`, `recorder::unrouted`). Its
+//!   submission calls hold the device's loader word (`loader_word.rs`).
 
 use crate::command_buffer::fences::Fences;
 use crate::device::functions::{Functions, Vk};
@@ -97,6 +99,7 @@ use crate::freed_memory::Parking;
 use crate::host_memory::Importer;
 use crate::in_place::DriverIdentity;
 use crate::loader_word::DeviceWord;
+use crate::recorder::{self, Command};
 use crate::release;
 use crate::shader_cache::store::{hex, Lookup, Store};
 use crate::sharing::Sharing;
@@ -710,6 +713,52 @@ struct Parts {
     /// Its memory types' properties, by index.
     type_flags: Vec<vk::MemoryPropertyFlags>,
     identity: DriverIdentity,
+    /// The commands the checks record their command buffers with.
+    recording: Recording,
+}
+
+/// The commands the checks record their own command buffers with, as the device's driver gave
+/// them (`recorder::unrouted`): counted among none of the device's (`WorkCounts::commands_recorded`,
+/// `copy_sites`), as their submissions are among none of its submissions.
+#[derive(Clone, Copy)]
+struct Recording {
+    begin: vk::PFN_vkBeginCommandBuffer,
+    end: vk::PFN_vkEndCommandBuffer,
+    #[cfg(target_os = "linux")]
+    copy: vk::PFN_vkCmdCopyBuffer,
+    #[cfg(target_os = "linux")]
+    barrier: vk::PFN_vkCmdPipelineBarrier,
+}
+
+impl Recording {
+    /// `shared`'s.
+    fn of(shared: &crate::device::DeviceShared) -> Recording {
+        let slot = shared.recording();
+        let commands = shared.vk().fp_v1_0();
+        // SAFETY: each is the device's command of its name, of its signature.
+        unsafe {
+            Recording {
+                begin: recorder::unrouted(
+                    slot,
+                    Command::BeginCommandBuffer,
+                    commands.begin_command_buffer,
+                ),
+                end: recorder::unrouted(
+                    slot,
+                    Command::EndCommandBuffer,
+                    commands.end_command_buffer,
+                ),
+                #[cfg(target_os = "linux")]
+                copy: recorder::unrouted(slot, Command::CmdCopyBuffer, commands.cmd_copy_buffer),
+                #[cfg(target_os = "linux")]
+                barrier: recorder::unrouted(
+                    slot,
+                    Command::CmdPipelineBarrier,
+                    commands.cmd_pipeline_barrier,
+                ),
+            }
+        }
+    }
 }
 
 impl Parts {
@@ -735,6 +784,7 @@ impl Parts {
             families: shared.queue_families.clone(),
             type_flags,
             identity: device.driver_identity(),
+            recording: Recording::of(shared),
         }
     }
 
@@ -1283,12 +1333,13 @@ impl Objects {
             self.copy = self.empty.pop()?;
         }
         let begin = vk::CommandBufferBeginInfo::default();
+        let recording = parts.recording;
         for &buffer in &self.empty {
             // SAFETY: a new command buffer of the pool, recorded once on this thread.
             unsafe {
-                raw.begin_command_buffer(buffer, &begin).ok()?;
+                (recording.begin)(buffer, &begin).result().ok()?;
                 exit_guard::called(Call::BeginCommandBuffer);
-                raw.end_command_buffer(buffer).ok()?;
+                (recording.end)(buffer).result().ok()?;
                 exit_guard::called(Call::EndCommandBuffer);
             }
         }
@@ -1391,34 +1442,37 @@ impl Objects {
     fn copy(&self, parts: &Parts, import: &Import, page: u64) -> Option<bool> {
         {
             let _busy = exit_guard::enter()?;
-            let raw = parts.vk();
             let region = vk::BufferCopy::default().dst_offset(page).size(COPIED);
             let barrier = vk::MemoryBarrier::default()
                 .src_access_mask(vk::AccessFlags::TRANSFER_WRITE)
                 .dst_access_mask(vk::AccessFlags::HOST_READ);
             let begin = vk::CommandBufferBeginInfo::default()
                 .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
+            let recording = parts.recording;
             // SAFETY: the copy command buffer is the check's, in no pending submission (each is
             // waited for), its pool made to reset its buffers; the buffer is live, and its two
-            // ranges do not overlap.
+            // ranges do not overlap; each array lives for its call.
             unsafe {
-                if raw.begin_command_buffer(self.copy, &begin).is_err() {
+                if (recording.begin)(self.copy, &begin) != vk::Result::SUCCESS {
                     return Some(false);
                 }
                 exit_guard::called(Call::BeginCommandBuffer);
-                raw.cmd_copy_buffer(self.copy, import.buffer, import.buffer, &[region]);
+                (recording.copy)(self.copy, import.buffer, import.buffer, 1, &region);
                 exit_guard::called(Call::CmdCopyBuffer);
-                raw.cmd_pipeline_barrier(
+                (recording.barrier)(
                     self.copy,
                     vk::PipelineStageFlags::TRANSFER,
                     vk::PipelineStageFlags::HOST,
                     vk::DependencyFlags::empty(),
-                    &[barrier],
-                    &[],
-                    &[],
+                    1,
+                    &barrier,
+                    0,
+                    std::ptr::null(),
+                    0,
+                    std::ptr::null(),
                 );
                 exit_guard::called(Call::CmdPipelineBarrier);
-                if raw.end_command_buffer(self.copy).is_err() {
+                if (recording.end)(self.copy) != vk::Result::SUCCESS {
                     return Some(false);
                 }
                 exit_guard::called(Call::EndCommandBuffer);

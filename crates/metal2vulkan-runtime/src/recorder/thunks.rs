@@ -151,6 +151,16 @@ macro_rules! commands {
             }
         }
 
+        /// Slot `index`'s `command` as its device's driver gave it: null where none is stored.
+        pub(super) fn real(index: usize, command: Command) -> *const c_void {
+            let real = match command {
+                $(Command::$v0 => REAL.$f0[index].load(Ordering::Acquire),)*
+                $(Command::$v3 => REAL.$f3[index].load(Ordering::Acquire),)*
+                $(Command::$ve => REAL.$fe[index].load(Ordering::Acquire),)*
+            };
+            real.cast_const()
+        }
+
         /// Forget slot `index`'s commands.
         pub(super) fn clear(index: usize) {
             $(REAL.$f0[index].store(std::ptr::null_mut(), Ordering::Release);)*

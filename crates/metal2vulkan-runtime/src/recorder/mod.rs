@@ -165,6 +165,26 @@ pub(crate) unsafe fn through<F: Copy>(slot: Option<&Slot>, command: Command, rea
     }
 }
 
+/// `routed`, a device's command `command` as its routed functions hold it, as the device's driver
+/// gave it, where the device has `slot`: recorded through it, a command counts for no slot. Where
+/// the device has none, its functions are its driver's, and `routed` is.
+///
+/// # Safety
+///
+/// `routed` is the command of the device `slot` is of, of `command`'s signature, `F`'s.
+pub(crate) unsafe fn unrouted<F: Copy>(slot: Option<&Slot>, command: Command, routed: F) -> F {
+    assert_eq!(
+        std::mem::size_of::<F>(),
+        std::mem::size_of::<*const c_void>()
+    );
+    let real = slot.map_or(std::ptr::null(), |slot| thunks::real(slot.index, command));
+    if real.is_null() {
+        return routed;
+    }
+    // SAFETY: the driver's entry point of `command`, of `F`'s signature (the caller's).
+    unsafe { std::mem::transmute_copy::<*const c_void, F>(&real) }
+}
+
 /// The extension commands of `VK_EXT_mesh_shader` a draw records, routed (`render.rs`).
 #[derive(Clone, Copy)]
 pub(crate) struct MeshDraws {

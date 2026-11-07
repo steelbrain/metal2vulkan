@@ -5,7 +5,9 @@
 //! - **They answer.** A device made over a fresh shader cache runs its checks once
 //!   (`WorkCounts::submit_checks_run`), each verdict an answer (never pending once settled; the
 //!   follows check answered on Linux where the device imports host pointers), their calls counted
-//!   apart (`WorkCounts::submit_check_calls`); a later device over the same cache recalls them
+//!   apart (`WorkCounts::submit_check_calls`) and their commands among none of the device's
+//!   (`commands_recorded`: a device that ran them recorded the copies one that recalled them did,
+//!   the follows check's three among neither); a later device over the same cache recalls them
 //!   (`submit_checks_recalled`), runs none, and holds the verdicts of the last device that ran
 //!   them: the first's, or, where load split its tries and nothing was recorded, those of the
 //!   next device that ran them.
@@ -91,6 +93,7 @@ fn the_checks_answer_once_and_a_second_device_recalls_them() {
         );
     }
     let counts = first.work_counts();
+    let mut copies = counts.commands_recorded.cmd_copy_buffer;
     assert_eq!(counts.submit_checks_run, 1);
     assert_eq!(counts.submit_checks_recalled, 0);
     assert!(
@@ -118,11 +121,16 @@ fn the_checks_answer_once_and_a_second_device_recalls_them() {
             assert_eq!(counts.submit_checks_run, 0);
             assert_eq!(counts.submit_check_calls, 0);
             assert_eq!(verdicts(&second), ran);
+            assert_eq!(
+                counts.commands_recorded.cmd_copy_buffer, copies,
+                "the device that ran the checks recorded other copies than one that recalled them"
+            );
             break;
         }
         if counts.submit_checks_run == 1 {
             println!("{} again: {}", second.name(), second.submit_check_report());
             ran = verdicts(&second);
+            copies = counts.commands_recorded.cmd_copy_buffer;
         }
         if start.elapsed() >= WAIT {
             let name = record_name(&second.driver_identity());
