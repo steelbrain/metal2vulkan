@@ -11,11 +11,15 @@
 //!
 //! Each order waits 1 s after the use begins. Each prints the makings of 5 ms or more, the
 //! slowest and the median, the chunks imported ahead of the objects and by their makings, and
-//! the heaps bound in a chunk (`HOST-RAM-WINDOW`). Ignored: run it in release,
+//! the heaps bound in a chunk (`HOST-RAM-WINDOW`), and each making of 5 ms or more: its take,
+//! its chunk, and what it made, the counts it moved (`HOST-RAM-WINDOW-SLOW`). The orders run
+//! [`REPEATS`] times over RAM in 2 MiB pages, the main case (QEMU's file-backed RAM where shared
+//! memory takes the advice for huge pages), then over RAM in 4 KiB pages (`RamPages`), each
+//! order's line with the system's count of shared memory in huge pages at its end. Ignored: run it in release,
 //! `cargo test --release -p metal2vulkan-runtime --lib host_ram_window_bench -- --ignored
 //! --nocapture` under `--cfg m2v_gpu`.
 
-use super::host_ram_device::{ahead_device, fresh_ram, gate, itself, resolver};
+use super::host_ram_device::{ahead_device, fresh_ram_in, gate, itself, resolver, RamPages};
 use crate::{HeapDescriptor, HeapType, HostMemory, ResourceOptions};
 use std::ptr::NonNull;
 use std::sync::{Arc, Mutex};
@@ -28,6 +32,8 @@ const PER_CHUNK: u64 = CHUNK / HEAP;
 const BURST: u64 = 128;
 /// A making this slow is one the consumer's frame notices.
 const SLOW: Duration = Duration::from_millis(5);
+/// How many times each order runs in each kind of pages, each on fresh RAM.
+const REPEATS: usize = 4;
 
 /// A small deterministic generator (xorshift).
 struct Rng(u64);
@@ -97,26 +103,46 @@ fn orders() -> Vec<Order> {
     ]
 }
 
-/// Make the order's heaps over fresh RAM, timing each making, and print what it took.
-fn run(device: &crate::Device, order: &Order) {
-    let (ram, start, _) = fresh_ram(device, order.chunks * CHUNK);
+/// Make the order's heaps over fresh RAM in `pages`, timing each making, and print what it took.
+fn run(device: &crate::Device, order: &Order, pages: RamPages) {
+    let (ram, start, _) = fresh_ram_in(device, order.chunks * CHUNK, pages);
     let before = device.work_counts();
     let used = device.use_host_ram(&ram).unwrap();
     let (runs, gates): (Arc<Mutex<_>>, Arc<Mutex<_>>) = Default::default();
     let descriptor = HeapDescriptor::new(HeapType::Placement, HEAP, ResourceOptions::default());
     let mut times = Vec::new();
     let mut heaps = Vec::new();
-    for &(offset, pause) in &order.takes {
+    let mut slow_lines = Vec::new();
+    for (take, &(offset, pause)) in order.takes.iter().enumerate() {
         std::thread::sleep(pause);
         // SAFETY: the RAM's bytes, mapped until its keep-alive goes, after every device let go.
         let memory = unsafe { HostMemory::new(NonNull::new((start + offset) as *mut u8).unwrap()) }
             .with_runs(resolver(&runs, itself))
             .with_import_gate(gate(&gates, true));
+        let counts = device.work_counts();
         let began = Instant::now();
         // SAFETY: as above.
         let heap = unsafe { device.new_heap_with_bytes_no_copy(memory, &descriptor, None, None) };
-        times.push(began.elapsed());
+        let took = began.elapsed();
+        let now = device.work_counts();
+        times.push(took);
         heaps.push(heap.unwrap());
+        if took >= SLOW {
+            let delta = |field: fn(&crate::WorkCounts) -> u64| field(&now) - field(&counts);
+            let ahead = delta(|counts| counts.host_ram_chunks_imported_ahead);
+            slow_lines.push(format!(
+                "take {take} (chunk {}, heap {} in it): {:.2} ms; bound in its run's import {}, \
+                 in the chunk's {}; chunks imported by the making {}, ahead by the thread \
+                 meanwhile {ahead}; run imports live {}",
+                offset / CHUNK,
+                offset % CHUNK / HEAP,
+                took.as_secs_f64() * 1e3,
+                delta(|counts| counts.run_bound_buffers_made),
+                delta(|counts| counts.chunk_bound_buffers_made),
+                delta(|counts| counts.host_ram_chunks_imported) - ahead,
+                now.run_imports_live,
+            ));
+        }
     }
     let after = device.work_counts();
     let ms = |time: Duration| time.as_secs_f64() * 1e3;
@@ -128,10 +154,12 @@ fn run(device: &crate::Device, order: &Order) {
     let ahead = after.host_ram_chunks_imported_ahead - before.host_ram_chunks_imported_ahead;
     let imported = after.host_ram_chunks_imported - before.host_ram_chunks_imported;
     let bound = after.chunk_bound_buffers_made - before.chunk_bound_buffers_made;
+    let run_bound = after.run_bound_buffers_made - before.run_bound_buffers_made;
     eprintln!(
-        "HOST-RAM-WINDOW {} on {}: {} makings, {slow} of 5 ms or more, slowest {:.2} ms, median \
-         {:.3} ms, all {:.1} ms; chunks imported ahead {ahead}, by the makings {}; heaps bound \
-         in a chunk {bound}, the gate asked {} times",
+        "HOST-RAM-WINDOW {} in {pages:?} pages on {}: {} makings, {slow} of 5 ms or more, \
+         slowest {:.2} ms, median {:.3} ms, all {:.1} ms; chunks imported ahead {ahead}, by the \
+         makings {}; heaps bound in a chunk {bound}, in their run's import {run_bound}; the gate \
+         asked {} times; shared memory in huge pages {:?} kB",
         order.name,
         device.name(),
         times.len(),
@@ -140,8 +168,24 @@ fn run(device: &crate::Device, order: &Order) {
         ms(total),
         imported - ahead,
         gates.lock().unwrap().len(),
+        shmem_huge_kb(),
     );
+    for line in slow_lines {
+        eprintln!(
+            "HOST-RAM-WINDOW-SLOW {} in {pages:?} pages: {line}",
+            order.name
+        );
+    }
     drop((heaps, used, ram));
+}
+
+/// The system's shared memory in huge pages, in kB, where it says (Linux).
+fn shmem_huge_kb() -> Option<u64> {
+    let meminfo = std::fs::read_to_string("/proc/meminfo").ok()?;
+    let line = meminfo
+        .lines()
+        .find(|line| line.starts_with("ShmemHugePages:"))?;
+    line.split_whitespace().nth(1)?.parse().ok()
 }
 
 /// The orders of the module docs, on a device of the cfg's kind, as the product makes it.
@@ -151,7 +195,15 @@ fn host_ram_window_bench() {
     let Some(device) = ahead_device() else {
         return;
     };
-    for order in orders() {
-        run(&device, &order);
+    for pages in [RamPages::Huge, RamPages::Small] {
+        for repeat in 0..REPEATS {
+            for order in orders() {
+                eprintln!(
+                    "HOST-RAM-WINDOW {} in {pages:?} pages, repeat {repeat}",
+                    order.name
+                );
+                run(&device, &order, pages);
+            }
+        }
     }
 }

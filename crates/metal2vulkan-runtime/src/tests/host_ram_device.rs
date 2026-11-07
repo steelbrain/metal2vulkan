@@ -261,14 +261,34 @@ fn settles(flag: &AtomicBool) -> bool {
     true
 }
 
-/// Fresh RAM of `length` bytes, never touched, advised for huge pages, unmapped by the keep-alive
-/// it is given to, of the kind `device` imports: a `memfd` mapped shared, as QEMU's
+/// Fresh RAM of `length` bytes, never touched, in 2 MiB pages where the system gives them
+/// ([`RamPages::Huge`]), unmapped by the keep-alive it is given to, of the kind `device` imports: a `memfd` mapped shared, as QEMU's
 /// `memory-backend-memfd,share=on` RAM is (anonymous shared memory off Linux), on a device that
 /// imports pointers to shared memory (`Device::imports_shared_host_pointers`), and private
 /// anonymous memory, as QEMU's `memory-backend-ram` RAM is, on one that refuses them (RADV:
 /// [`a_ram_of_shared_memory_a_device_refuses_imports_no_chunk_and_refuses_its_objects`] checks
 /// shared RAM there); its first byte, and whether its keep-alive was dropped.
 pub(super) fn fresh_ram(device: &Device, length: u64) -> (Arc<HostRam>, u64, Arc<AtomicBool>) {
+    fresh_ram_in(device, length, RamPages::Huge)
+}
+
+/// The pages a fresh RAM lies in on Linux ([`fresh_ram_in`]); elsewhere the system's own.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum RamPages {
+    /// 2 MiB pages: the mapping starts at a multiple of 2 MiB and is advised for huge pages, as
+    /// QEMU aligns and advises its file-backed RAM, so the system backs it with them where its
+    /// shared memory takes the advice (`shmem_enabled` of `advise` or `always`).
+    Huge,
+    /// 4 KiB pages: the mapping is advised against huge pages.
+    Small,
+}
+
+/// [`fresh_ram`]'s RAM in `pages`.
+pub(super) fn fresh_ram_in(
+    device: &Device,
+    length: u64,
+    pages: RamPages,
+) -> (Arc<HostRam>, u64, Arc<AtomicBool>) {
     let shared = device.imports_shared_host_pointers().unwrap();
     if !shared {
         eprintln!(
@@ -277,12 +297,16 @@ pub(super) fn fresh_ram(device: &Device, length: u64) -> (Arc<HostRam>, u64, Arc
             device.name()
         );
     }
-    fresh_ram_of(length, shared)
+    fresh_ram_of(length, shared, pages)
 }
 
 /// Fresh RAM of `length` bytes, as [`fresh_ram`]'s: shared memory where `shared`, else private
-/// anonymous memory.
-fn fresh_ram_of(length: u64, shared: bool) -> (Arc<HostRam>, u64, Arc<AtomicBool>) {
+/// anonymous memory, in `pages`.
+fn fresh_ram_of(
+    length: u64,
+    shared: bool,
+    pages: RamPages,
+) -> (Arc<HostRam>, u64, Arc<AtomicBool>) {
     #[cfg(target_os = "linux")]
     let (flags, fd) = match shared {
         true => {
@@ -300,18 +324,46 @@ fn fresh_ram_of(length: u64, shared: bool) -> (Arc<HostRam>, u64, Arc<AtomicBool
         true => (libc::MAP_SHARED | libc::MAP_ANON, -1),
         false => (libc::MAP_PRIVATE | libc::MAP_ANON, -1),
     };
-    // SAFETY: a fresh mapping of the file's first `length` bytes (or of anonymous memory).
-    let start = unsafe {
+    // The mapping at a multiple of 2 MiB: a reservation 2 MiB longer, the mapping placed over it
+    // at its first such multiple, and the reservation's ends unmapped.
+    const ALIGN: usize = 2 << 20;
+    let reserved_length = length as usize + ALIGN;
+    // SAFETY: a fresh reservation of address space, with no access.
+    let reserved = unsafe {
         libc::mmap(
             std::ptr::null_mut(),
+            reserved_length,
+            libc::PROT_NONE,
+            libc::MAP_PRIVATE | libc::MAP_ANON | libc::MAP_NORESERVE,
+            -1,
+            0,
+        )
+    };
+    assert_ne!(reserved, libc::MAP_FAILED);
+    let head = (reserved as usize).next_multiple_of(ALIGN) - reserved as usize;
+    // SAFETY: a fresh mapping of the file's first `length` bytes (or of anonymous memory), over
+    // the test's own reservation, inside it.
+    let start = unsafe {
+        libc::mmap(
+            reserved.cast::<u8>().add(head).cast(),
             length as usize,
             libc::PROT_READ | libc::PROT_WRITE,
-            flags,
+            flags | libc::MAP_FIXED,
             fd,
             0,
         )
     };
     assert_ne!(start, libc::MAP_FAILED);
+    // SAFETY: the reservation's parts before and past the mapping, which nothing uses.
+    unsafe {
+        if head > 0 {
+            libc::munmap(reserved, head);
+        }
+        let tail = reserved_length - head - length as usize;
+        if tail > 0 {
+            libc::munmap(start.cast::<u8>().add(length as usize).cast(), tail);
+        }
+    }
     if fd >= 0 {
         // SAFETY: the test's descriptor; the mapping keeps the file.
         unsafe { libc::close(fd) };
@@ -319,8 +371,14 @@ fn fresh_ram_of(length: u64, shared: bool) -> (Arc<HostRam>, u64, Arc<AtomicBool
     #[cfg(target_os = "linux")]
     // SAFETY: advice on the test's own mapping; a kernel without huge pages refuses it, harmlessly.
     unsafe {
-        libc::madvise(start, length as usize, libc::MADV_HUGEPAGE);
+        let advice = match pages {
+            RamPages::Huge => libc::MADV_HUGEPAGE,
+            RamPages::Small => libc::MADV_NOHUGEPAGE,
+        };
+        libc::madvise(start, length as usize, advice);
     }
+    #[cfg(not(target_os = "linux"))]
+    let _ = pages;
     let start = start as u64;
     let dropped = Arc::new(AtomicBool::new(false));
     let keep: KeepAlive = Box::new(Mapping {
@@ -745,7 +803,7 @@ fn a_ram_of_shared_memory_a_device_refuses_imports_no_chunk_and_refuses_its_obje
         );
         return;
     }
-    let (ram, start, dropped) = fresh_ram_of(2 * 64 * MIB, true);
+    let (ram, start, dropped) = fresh_ram_of(2 * 64 * MIB, true, RamPages::Huge);
     let before = device.work_counts();
     let used = device.use_host_ram(&ram).unwrap();
     let page = device.shared().host_import.as_ref().unwrap().page;
