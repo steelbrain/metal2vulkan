@@ -1786,27 +1786,22 @@ impl Device {
             && unsafe { crate::texture::host_copy::reaches_general(&instance.raw, physical) };
         let host_copies = general.then(|| {
             let handle = raw.handle();
+            let load = |name: &std::ffi::CStr| {
+                let bytes = name.to_bytes();
+                let core = std::ffi::CString::new(bytes.strip_suffix(b"EXT").unwrap_or(bytes))
+                    .unwrap_or_default();
+                // SAFETY: the device is live; a name it does not serve answers null.
+                let function = unsafe {
+                    (instance.raw.get_device_proc_addr(handle, core.as_ptr()))
+                        .or_else(|| instance.raw.get_device_proc_addr(handle, name.as_ptr()))
+                };
+                function.map_or(std::ptr::null(), |function| {
+                    function as *const std::ffi::c_void
+                })
+            };
             // SAFETY: as above; the loader serves `vkGetDeviceProcAddr` once the word is put
             // back.
-            unsafe {
-                loader_word.restored(|| {
-                    ash::ext::host_image_copy::DeviceFn::load(|name| {
-                        let bytes = name.to_bytes();
-                        let core =
-                            std::ffi::CString::new(bytes.strip_suffix(b"EXT").unwrap_or(bytes))
-                                .unwrap_or_default();
-                        // SAFETY: the device is live; a name it does not serve answers null.
-                        let function = unsafe {
-                            (instance.raw.get_device_proc_addr(handle, core.as_ptr())).or_else(
-                                || instance.raw.get_device_proc_addr(handle, name.as_ptr()),
-                            )
-                        };
-                        function.map_or(std::ptr::null(), |function| {
-                            function as *const std::ffi::c_void
-                        })
-                    })
-                })
-            }
+            unsafe { loader_word.restored(|| ash::ext::host_image_copy::DeviceFn::load(load)) }
         });
         // The mesh draw commands, which exist where `meshShader` is enabled (it needs
         // `VK_EXT_mesh_shader`).

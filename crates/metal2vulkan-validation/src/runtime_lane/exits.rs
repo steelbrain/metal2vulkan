@@ -465,6 +465,14 @@ fn child() {
             exit_now(case, &messages);
         }
         "cpu_work_exit" => {
+            // The device's submission checks run on a thread of their own, whose sections register
+            // the hook again (`exit_guard.rs`, "Registered again"): they end first, so that the
+            // hook's last registration comes before `release_the_gate`'s, and the hook runs after
+            // it.
+            assert!(
+                device.settle_submit_checks(WAIT),
+                "{case}: the submission checks answered"
+            );
             // Long work held at a gate, then a fill of a shared marker after it on the same queue;
             // the process exits with both held, and `release_the_gate`, first in the exit, opens
             // the gate and waits until both are submitted: the device runs the work as the

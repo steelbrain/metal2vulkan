@@ -6,9 +6,10 @@
 //! - [`sampled_textures_over_host_pages_take_the_path_their_check_answered`], under the
 //!   validation layer: once the device's check answered (printed, `IN-PLACE-CHECK`, with its
 //!   time), a 1920x1080 `BGRA8Unorm` texture of packed rows and a 64x64 `RGBA16Float` one of padded
-//!   rows, over a no-copy buffer of anonymous pages and over a buffer in fresh pages (where the
-//!   device's long buffers take them, as its submission checks answer; elsewhere a gap, printed
-//!   with their verdicts): where the class passed, each is in place (`vk_image` answers one;
+//!   rows, over a no-copy buffer of anonymous pages and over a buffer in fresh pages, once the
+//!   device's submission checks answered whether its long buffers take them (a device made again
+//!   where load split their tries; skipped, printed, only on a device whose held imports cost its
+//!   submissions or which imports no host memory): where the class passed, each is in place (`vk_image` answers one;
 //!   `host_textures_in_place`, `fresh_page_textures_in_place`) or a shadow its refusal counts;
 //!   where it did not, a shadow counted by the check's answer. Either way a blit reads the pages' bytes, and a CPU write made
 //!   after the command buffer's commit and before it runs (held by an event the CPU signals once
@@ -73,6 +74,33 @@ fn passed(device: &Device, class: &str) -> bool {
         .in_place_check_report()
         .iter()
         .any(|line| *line == format!("{class}: Passed"))
+}
+
+/// The devices made again where load beside the submission checks split their import tax's tries
+/// ([`answered_device`]).
+const DEVICES: usize = 3;
+
+/// The lane's device in place, once its submission checks answered whether a held import costs a
+/// submission, which places its long buffers in fresh pages or not (`fresh_pages.rs`): a device
+/// whose tries all split under the load beside it keeps the answer unknown for its life and
+/// records nothing, so the next device measures again, up to [`DEVICES`] of them. Each one's
+/// verdicts are printed.
+fn answered_device(messages: &Messages, cache: &std::path::Path) -> Device {
+    let mut made = 0;
+    loop {
+        made += 1;
+        let device = validated_device_with(TEST_DEVICE, messages, cache, in_place).unwrap();
+        assert!(
+            device.settle_submit_checks(CHECK_WAIT),
+            "the submission checks answered"
+        );
+        let report = device.submit_check_report();
+        eprintln!("IN-PLACE-SUBMIT-CHECKS on {}: {report}", device.name());
+        let split = report.contains("import tax Unchecked") && report.contains("tries split");
+        if !split || made == DEVICES {
+            return device;
+        }
+    }
 }
 
 /// The device's check answered, its verdicts and time printed.
@@ -178,10 +206,12 @@ fn sampled_textures_over_host_pages_take_the_path_their_check_answered() {
     let messages = Messages::default();
     let mut lapses = Vec::new();
     {
-        let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), in_place).unwrap();
+        let device = answered_device(&messages, cache.path());
         settled(&device);
         let queue = device.new_command_queue().unwrap();
         let hold = device.new_shared_event().unwrap();
+        // Whether the device imports host memory at all, as the Pointer class finds.
+        let mut imports = true;
         let mut value = 0;
         let shapes = [
             (PixelFormat::BGRA8Unorm, 4u64, 1920u64, 1080u64, 7680u64),
@@ -207,22 +237,31 @@ fn sampled_textures_over_host_pages_take_the_path_their_check_answered() {
                         Ok(buffer) => buffer,
                         Err(error) if not_importable(&error) => {
                             eprintln!("IN-PLACE: the device imports no host memory: {error:?}");
+                            imports = false;
                             continue;
                         }
                         Err(error) => panic!("new_buffer_with_bytes_no_copy: {error:?}"),
                     },
                     None => device.new_buffer(FRESH, ResourceOptions::shared()).unwrap(),
                 };
-                // A long buffer of the device's own lies in fresh pages only where its
-                // submission checks found a held import adds nothing to a submission
-                // (`fresh_pages.rs`), which load beside them may leave unanswered.
+                // A long buffer of the device's own lies in fresh pages where its submission
+                // checks found a held import adds nothing to a submission (`fresh_pages.rs`):
+                // none does on a device whose held imports cost its submissions, or which imports
+                // no host memory, and those alone skip the class.
                 let in_fresh = device.work_counts().fresh_page_buffers_made > fresh_before;
                 if class == "Fresh" && !in_fresh {
+                    let report = device.submit_check_report();
+                    let taxed = report.contains("import tax Holds");
+                    assert!(
+                        taxed || !imports,
+                        "a long buffer took no fresh pages on {}, which imports host memory and \
+                         whose held imports were not found to cost its submissions: {report}",
+                        device.name()
+                    );
                     eprintln!(
-                        "IN-PLACE on {}: gap, its long buffers take no fresh pages (submission \
-                         checks: {})",
-                        device.name(),
-                        device.submit_check_report()
+                        "IN-PLACE on {}: its long buffers take no fresh pages (held imports cost \
+                         its submissions {taxed}, it imports host memory {imports}): {report}",
+                        device.name()
                     );
                     continue;
                 }
