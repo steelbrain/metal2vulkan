@@ -300,14 +300,22 @@ fn is_normalize(kind: &InstKind) -> bool {
     )
 }
 
-/// The integer `llvm.*` operation `kind` calls, which SCCP folds over constant operands.
+/// The integer `llvm.*` bit operation `kind` calls (`ctpop`, `bitreverse`, `bswap`), which SCCP
+/// folds over a constant operand. The other integer operations (minimum and maximum, the funnel
+/// shifts, saturating arithmetic) are computed where they run.
 fn int_op(kind: &InstKind) -> Option<LlvmIntOp> {
     match kind {
         InstKind::Call(call) => match call.callee {
             Callee::Llvm {
                 op: LlvmIntrinsic::Int { op, .. } | LlvmIntrinsic::NarrowInt { op, .. },
                 ..
-            } => Some(op),
+            } if matches!(
+                op,
+                LlvmIntOp::Ctpop | LlvmIntOp::BitReverse | LlvmIntOp::Bswap
+            ) =>
+            {
+                Some(op)
+            }
             _ => None,
         },
         _ => None,
@@ -1026,13 +1034,12 @@ impl<'b> Solver<'b> {
                 },
                 None => Lat::Bottom,
             },
-            // An integer operation on constants is their constant; on an undefined value, what
+            // An integer bit operation on a constant is its constant; on an undefined value, what
             // the run computes, as any call's.
             InstKind::Call(call) if int_op(&inst.kind).is_some() => {
                 let op = int_op(&inst.kind).ok_or_else(|| invariant("an integer operation"))?;
                 match self.pure(&call.args, cx, m, |f, c, m| match c {
                     [x] => f.int_unary(op, ty, *x, m),
-                    [x, y] => f.int_minmax(op, ty, *x, *y, m),
                     _ => Ok(None),
                 })? {
                     Lat::Fc(_) => Lat::Bottom,
