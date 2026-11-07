@@ -281,9 +281,19 @@ fn layouts_off_metals_rules_copy_where_plain_metal_places_their_rows() {
     assert_eq!(at(rgba8.0, rgba8.1, 2, 6, true), Ok(vec![0, 8, 12, 20]));
     assert_eq!(at(rgba8.0, rgba8.1, 1, 0, true), Ok(vec![0, 0, 0, 0]));
     assert_eq!(at(P::R8Uint, [4, 4, 1], 1, 3, true), Ok(vec![1, 4, 7, 10]));
-    // Refused: overlapping writes out of a texture, the aligned path's pitch below a row (0
-    // reads garbage) and offsets of 16 or more on it (not measured), and depth and stencil
-    // formats but `Depth32Float` (not measured).
+    // The aligned path at a pitch below a row: each row whole from its own row's offset, the rows
+    // overlapping in the buffer (an M3 Max, `probes/short_row_blits.m`), as a one-plane YCbCr
+    // texture's copy at the row `MTLPixelFormatGetInfoForDevice` describes (half the row) takes.
+    assert_eq!(at(rgba8.0, [8, 4, 1], 0, 16, true), Ok(vec![0, 16, 32, 48]));
+    assert_eq!(
+        at(P::RGBA32Uint, [4, 4, 1], 0, 32, true),
+        Ok(vec![0, 32, 64, 96])
+    );
+    let half = at(P::YCBCR84221P, [32, 4, 1], 0, 32, true);
+    assert_eq!(half, Ok(vec![0, 32, 64, 96]));
+    // Refused: overlapping writes out of a texture, the aligned path's pitch of 0 (it reads
+    // garbage) and offsets of 16 or more on it (not measured), and depth and stencil formats but
+    // `Depth32Float` (not measured).
     let refused = Err(CopyProblem::BytesPerRow);
     assert_eq!(at(rgba8.0, rgba8.1, 0, 8, false), refused);
     assert_eq!(at(rgba8.0, rgba8.1, 0, 0, true), refused);

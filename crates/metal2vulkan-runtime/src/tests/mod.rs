@@ -91,6 +91,8 @@ mod depth_ranges;
 mod depth_stencil_resolve;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod derived_once;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod described_row_copies;
 mod descriptor_arena;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod descriptor_key_at_draw;

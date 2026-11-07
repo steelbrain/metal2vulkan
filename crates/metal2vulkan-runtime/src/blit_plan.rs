@@ -156,12 +156,16 @@ fn off_rules(layout: &BufferLayout, s: &Shape, unit: &CopyUnit) -> bool {
 /// to 4 bytes, whichever is smaller, images of a 3D texture at any `bytesPerImage` too (0, 4, 12
 /// and 18 under a 16-byte image). A copy into a texture of one image of
 /// more than one row whose `bytesPerRow` rounded down to the copy unit is a multiple of 16 takes
-/// Metal's aligned path from offset 0: its rows at that rounded pitch.
+/// Metal's aligned path from offset 0: its rows at that rounded pitch, one below a row too, each
+/// row read whole from there so that the rows overlap in the buffer (an Apple M3 Max under macOS
+/// 27.0.1, `probes/short_row_blits.m`: every row of a 32 x 8 texture, 64 x 8 for `R8Unorm`, at
+/// every pitch of the texel from 16 bytes below the row and at half the row plus a texel, in
+/// eight formats of 1 to 16 bytes a texel, `YCBCR8_422_1P` and `YCBCR10_444_1P` among them,
+/// `Private` and `Shared`).
 ///
 /// Refused (`BytesPerRow`): a copy out of a texture whose rows overlap (its writes race on
-/// Metal); on the aligned path, a pitch below a row (Metal reads garbage at pitch 0, and smaller
-/// pitches are not measured), and an offset of 16 or more (not measured). Refused
-/// (`BufferRange`): a row past `u64::MAX`, which lies past every buffer.
+/// Metal); on the aligned path, a pitch of 0 (Metal reads garbage) and an offset of 16 or more
+/// (not measured). Refused (`BufferRange`): a row past `u64::MAX`, which lies past every buffer.
 fn placed_rows(
     layout: &BufferLayout,
     s: &Shape,
@@ -177,7 +181,7 @@ fn placed_rows(
     let pitch = bpr - bpr % bytes;
     let aligned = into_texture && s.images == 1 && s.rows > 1 && pitch.is_multiple_of(16);
     if aligned && layout.offset.is_multiple_of(16) {
-        if layout.offset != 0 || pitch < s.row_bytes {
+        if layout.offset != 0 || pitch == 0 {
             return Err(CopyProblem::BytesPerRow);
         }
         return (0..s.rows)
