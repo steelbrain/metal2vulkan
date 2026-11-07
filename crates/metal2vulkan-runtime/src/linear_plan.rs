@@ -199,7 +199,11 @@
 //!   calls lay out alike only a texture buffer (its texels contiguous from the plane's offset,
 //!   however wide: past the plane's row too on the M3 Max and the 5300M, where the UHD 630's
 //!   kernels read other bytes), a 1D texture whose row fits and a 2D array of one slice, each
-//!   where the 2D texture of its rows lies; the runtime makes those. Plain Metal asserts on a cube and a cube array over a plane on the M3 Max
+//!   where the 2D texture of its rows lies; the runtime makes those. A texture buffer over a
+//!   plane at an offset or `bytesPerRow` off 16 (`bgraat8.texbuf` and `bgrarow264.texbuf`, the
+//!   M3 Max) is read by its functions from the offset rounded down to 16 and by `getBytes` and
+//!   `replaceRegion` from the offset, as a buffer's texture buffer is: the runtime makes it so.
+//!   Plain Metal asserts on a cube and a cube array over a plane on the M3 Max
 //!   ("carriesComplexTexture || numFaces == 1", the API validation layer off), which the runtime
 //!   refuses as Metal's own ([`BufferTextureProblem::TextureType`]). Every other shape lies
 //!   differently on each, or was not measured: [`BufferRefusal::PlaneShape`]
@@ -630,8 +634,8 @@ pub(super) enum BufferRefusal {
     /// rows**): rows wider than the plane's `bytesPerRow`, more than one level, a type but 2D, a
     /// texture buffer, a 1D texture, a 2D array of one slice, a cube and a cube array (which
     /// plain Metal asserts on: [`BufferTextureProblem::TextureType`]), a 1D texture wider than
-    /// the plane's row; and a texture buffer or a block-compressed texture over a plane whose
-    /// offset or `bytesPerRow` is off 16 bytes.
+    /// the plane's row; and a block-compressed texture over a plane whose offset or
+    /// `bytesPerRow` is off 16 bytes.
     PlaneShape,
 }
 
@@ -738,11 +742,14 @@ pub(super) fn plan_buffer_texture(
         });
     }
     if let BufferTextureCall::IoSurfacePlane { planar } = texture.call {
-        // A texture buffer's or a BC texture's GPU and CPU bytes are measured over a plane whose
-        // offset and `bytesPerRow` are multiples of 16 alone, where they lie alike.
+        // A BC texture's GPU and CPU bytes are measured over a plane whose offset and
+        // `bytesPerRow` are multiples of 16 alone, where they lie alike. A texture buffer's
+        // functions read a plane from its offset rounded down to 16 and its CPU calls from the
+        // offset, as a buffer's texture buffer's, at any pitch (the module's **Beyond the
+        // plane's rows**).
         let aligned = offset.is_multiple_of(LINEAR_ALIGNMENT)
             && bytes_per_row.is_multiple_of(LINEAR_ALIGNMENT);
-        if planar && (texture_type == T::TextureBuffer || blocks) && !aligned {
+        if planar && blocks && !aligned {
             return Err(BufferRefusal::PlaneShape);
         }
         let cpu = BufferLayout {

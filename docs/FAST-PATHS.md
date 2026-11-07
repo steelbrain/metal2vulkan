@@ -1050,12 +1050,12 @@ else.
   byte.
 - **Textures over an IOSurface plane past one 2D image of its rows are refused.** Over a plane of
   a surface with planes Metal makes a texture of any type, extent and levels, but its GPUs lay out
-  alike only a texture buffer, a 1D texture whose row fits and a 2D array of one slice
+  alike only a texture buffer (at any offset and pitch, its functions from the offset rounded
+  down to 16), a 1D texture whose row fits and a 2D array of one slice
   (`probes/surface_texture_envelope.m`, an AMD Radeon Pro 5300M, an Intel UHD 630 and an Apple M3
-  Max); rows wider than the plane's, more levels, slices, a 3D or multisample texture, and a
-  texture buffer or BC texture at an offset or pitch off 16 are
-  `NotImplemented(SurfacePlaneShape)`. A cube or cube array over a plane is `Invalid`, as plain
-  Metal asserts on it on the M3 Max. Texels past the surface's end, which Metal lays out in no
+  Max); rows wider than the plane's, more levels, slices, a 3D or multisample texture, and a BC
+  texture at an offset or pitch off 16 are `NotImplemented(SurfacePlaneShape)`. A cube or cube
+  array over a plane is `Invalid`, as plain Metal asserts on it on the M3 Max. Texels past the surface's end, which Metal lays out in no
   one place, lie in a tail of the texture's own (announced `surface-texels-tail`), but a two-plane
   YCbCr, two-plane extended-range, 4:2:2, depth, stencil, BC or rotated texture's, which are
   `NotImplemented(TexelsPastBufferLength)`. A texture taller than its plane, inside the surface,

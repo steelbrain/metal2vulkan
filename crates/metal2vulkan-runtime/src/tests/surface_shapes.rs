@@ -1,7 +1,8 @@
 //! Textures over an IOSurface plane beyond a 2D texture of one texel a block: a BC texture over a
 //! surface's rows, and a texture buffer, a 1D texture and a 2D array of one slice over a plane of
 //! a surface with planes (`linear_plan.rs`'s **Block-compressed surfaces** and **Beyond the
-//! plane's rows**). Each reads and writes the bytes the x86 Macs' Metal does
+//! plane's rows**). Each reads and writes the bytes the x86 Macs' Metal does, and a texture
+//! buffer at a plane offset off 16 the bytes the M3 Max's does
 //! (`surface_texture_envelope`; each shape names the `oracle_surftex` case or the probe's shape it
 //! stands for): a kernel's reads, the blits, `getBytes` and `replaceRegion` take those bytes, a
 //! kernel after a blit or a CPU write reads what they wrote, and no other byte of the surface
@@ -191,6 +192,18 @@ const BGRA1X2: Surface = Surface {
     length: 32768,
     plane: (0, 256, true),
 };
+/// A 64 x 64 `'BGRA'` surface of one plane at offset 8, in 32768 bytes (the probe's
+/// `bgraat8`).
+const BGRA_AT8: Surface = Surface {
+    length: 32768,
+    plane: (8, 256, true),
+};
+/// A 64 x 64 `'BGRA'` surface of one plane at 264 bytes a row, in 32768 bytes (the probe's
+/// `bgrarow264`).
+const BGRA_ROW264: Surface = Surface {
+    length: 32768,
+    plane: (0, 264, true),
+};
 /// A 64 x 64 `420v` CVPixelBuffer's luma plane on the x86 Macs.
 const P0: Surface = Surface {
     length: 6432,
@@ -257,6 +270,17 @@ impl Shape {
         match self.texture_type {
             TextureType::TextureBuffer => offset as usize,
             _ => (offset + row * bytes_per_row) as usize,
+        }
+    }
+
+    /// The surface's byte where a kernel reads row `row` of units from: a texture buffer's from
+    /// the plane's offset rounded down to 16, as Metal's functions read one (`bgraat8.texbuf` on
+    /// the M3 Max), every other shape's where its CPU calls do.
+    fn gpu_row_at(&self, row: u64) -> usize {
+        let (offset, _, _) = self.surface.plane;
+        match self.texture_type {
+            TextureType::TextureBuffer => (offset - offset % 16) as usize,
+            _ => self.row_at(row),
         }
     }
 
@@ -339,6 +363,30 @@ fn shapes() -> Vec<Shape> {
             [128, 1],
             BGRA1X2,
         ),
+        // At a plane offset and a pitch off 16 (the M3 Max's `bgraat8.texbuf` and
+        // `bgrarow264.texbuf`): its functions from the offset rounded down to 16, its CPU calls
+        // from the offset.
+        shape(
+            "bgraat8.texbuf.64",
+            P::BGRA8Unorm,
+            T::TextureBuffer,
+            [64, 1],
+            BGRA_AT8,
+        ),
+        shape(
+            "bgraat8.texbuf.128",
+            P::BGRA8Unorm,
+            T::TextureBuffer,
+            [128, 1],
+            BGRA_AT8,
+        ),
+        shape(
+            "bgrarow264.texbuf.128",
+            P::BGRA8Unorm,
+            T::TextureBuffer,
+            [128, 1],
+            BGRA_ROW264,
+        ),
         shape(
             "129 420v.p0.typebuffer",
             P::R8Unorm,
@@ -411,6 +459,17 @@ fn rows_of(shape: &Shape, bytes: &[u8]) -> Vec<u8> {
     (0..down)
         .flat_map(|j| {
             let at = shape.row_at(j);
+            bytes[at..at + row as usize].to_vec()
+        })
+        .collect()
+}
+
+/// The texture's rows of units as a kernel reads them, packed, out of the surface's `bytes`.
+fn gpu_rows_of(shape: &Shape, bytes: &[u8]) -> Vec<u8> {
+    let ([_, down], row) = shape.units();
+    (0..down)
+        .flat_map(|j| {
+            let at = shape.gpu_row_at(j);
             bytes[at..at + row as usize].to_vec()
         })
         .collect()
@@ -565,7 +624,7 @@ fn check(
         if !shape.read_checked() {
             return;
         }
-        let rows = rows_of(shape, model);
+        let rows = gpu_rows_of(shape, model);
         let read = kernel_reads(device, state, shape, &texture);
         let off: Vec<_> = (0..h)
             .flat_map(|y| (0..w).map(move |x| (x, y)))

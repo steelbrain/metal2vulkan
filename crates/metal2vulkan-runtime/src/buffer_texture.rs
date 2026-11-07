@@ -492,9 +492,9 @@ impl Buffer {
     /// pitch or offset, or rows that end past it, which plain Metal asserts on); what Metal makes
     /// over a plane of a surface with planes and lays out no one way across the GPUs measured
     /// (`NotImplemented(SurfacePlaneShape)`, which carries the measurements: rows wider than the
-    /// plane's, more than one level, another type, a 2D array of slices, a texture buffer or BC
-    /// texture at an offset or pitch off 16 bytes; a cube or cube array there plain Metal asserts
-    /// on, `Invalid`); `Memoryless` storage, which plain Metal makes and serves on the CPU while its
+    /// plane's, more than one level, another type, a 2D array of slices, a BC texture at an
+    /// offset or pitch off 16 bytes; a cube or cube array there plain Metal asserts on,
+    /// `Invalid`); `Memoryless` storage, which plain Metal makes and serves on the CPU while its
     /// GPU uses fail the command buffer
     /// (`NotImplemented(MemorylessSurfacePlane)`, which carries the measurement); rows that
     /// overlap on Metal's GPU where no shadow of the runtime's holds them
@@ -845,8 +845,10 @@ impl Buffer {
             );
         }
         if layout.texture_type == TextureType::TextureBuffer {
-            // Over a surface's plane, of the descriptor's options (`Buffer::new_texture_with_iosurface_plane`).
-            let texels = Texels::new(self.clone(), placed.gpu, texel_bytes, descriptor)
+            // Over a surface's plane, of the descriptor's options (`Buffer::new_texture_with_iosurface_plane`):
+            // its CPU calls at the plane's offset and its functions from the offset rounded down
+            // to 16 (`into_texture_buffer`), as Metal reads a plane's.
+            let texels = Texels::new(self.clone(), placed.cpu, texel_bytes, descriptor)
                 .with_options(options)
                 .over_surface(surface)
                 .into_texture_buffer()?;

@@ -1714,6 +1714,19 @@ fn a_surface_plane_s_other_shapes_follow_the_probe() {
         assert_eq!(lies(placed.cpu), lies(at), "{case:?}");
         assert_eq!(lies(placed.gpu), lies(at), "{case:?}");
     }
+    // A texture buffer over a plane off 16 bytes (`bgraat8.texbuf.64`, `bgrarow264.texbuf.64` on
+    // the M3 Max): its CPU calls at the offset, its functions from the offset rounded down to 16
+    // (`buffer_texture::into_texture_buffer`), at any pitch.
+    for (offset, bpr, gpu_offset) in [(36, 64, 32), (8, 256, 0), (0, 264, 0)] {
+        let case = plane(tb, bgra, (64, 1), (offset, bpr), true, 32768);
+        let placed = placed(case).unwrap_or_else(|refusal| panic!("{case:?}: {refusal:?}"));
+        assert_eq!(
+            (placed.cpu.offset, placed.cpu.row_bytes, placed.cpu.rows),
+            (offset, 256, 1),
+            "{case:?}"
+        );
+        assert_eq!(placed.gpu.offset, gpu_offset, "{case:?}");
+    }
     let gap = Err(BufferRefusal::PlaneShape);
     let stopped = |problem| Err(BufferRefusal::Metal(problem));
     let refused = [
@@ -1785,8 +1798,6 @@ fn a_surface_plane_s_other_shapes_follow_the_probe() {
         ),
         // A 1D texture wider than the plane's row.
         (plane(d1, bgra, (128, 1), (0, 256), true, 32768), gap),
-        // A texture buffer over a plane off 16 bytes, unmeasured.
-        (plane(tb, r8, (64, 1), (36, 64), true, 6432), gap),
         // Over a surface without planes Metal stops them: 136 bgra.typebuffer.65, 12 bgra.65x64,
         // 25 bgra.type1d, 27 bgra.type2darray and 38 bgra.mips2.
         (

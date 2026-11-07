@@ -1458,10 +1458,12 @@ pub enum RuntimeGap {
     /// texels it lays out no one way: rows wider than the plane's `bytesPerRow`, more than one mip
     /// level, a 2D array of more than one slice, a 3D or multisample texture or any other type but
     /// 2D, a texture buffer, 1D or a 2D array of one slice, a 1D texture wider than the plane's
-    /// row, a BC texture of another type than 2D or wider than the plane's rows, and a texture
-    /// buffer or BC texture over a plane at an offset or `bytesPerRow` off 16 bytes. A cube or
-    /// cube array there is Metal's own refusal (`Invalid`: plain Metal asserts
-    /// "carriesComplexTexture || numFaces == 1", the API validation layer off).
+    /// row, a BC texture of another type than 2D or wider than the plane's rows, and a BC texture
+    /// over a plane at an offset or `bytesPerRow` off 16 bytes. A cube or cube array there is
+    /// Metal's own refusal (`Invalid`: plain Metal asserts "carriesComplexTexture || numFaces ==
+    /// 1", the API validation layer off), and a texture buffer at an offset or `bytesPerRow` off
+    /// 16 is made, its functions reading from the offset rounded down to 16 and its CPU calls
+    /// from the offset, as the M3 Max's do.
     ///
     /// Measured (`metal2vulkan-conformance/probes/surface_texture_envelope.m`, each texel's bytes
     /// tagged, read by blit, kernel and `getBytes` and written by blit and `replaceRegion`, on an
