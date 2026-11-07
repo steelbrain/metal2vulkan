@@ -153,6 +153,11 @@ pub struct ComputeTemplate {
     /// without a region is `BindError::MissingStageInRegion`.
     #[cfg_attr(feature = "serde", serde(default))]
     pub(crate) stage_in_region: bool,
+    /// The kernel's `[[stage_in]]` fetches of a thread-position step, whose elements decide each
+    /// region's `SpecKey::StageInReach` (`dispatch::stage_in_reach`); empty where the kernel
+    /// declares no such key.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub(crate) stage_in_grid: Vec<crate::pipeline::stage_io::StageInFetch>,
 }
 
 /// The pipeline and device facts a render plan instantiates with: the buffer slots of both stages,

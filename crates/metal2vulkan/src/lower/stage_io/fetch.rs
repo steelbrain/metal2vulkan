@@ -69,10 +69,11 @@
 //! from `PushField::StageInStride(buffer_index)`, where `element` is the step's ([`Step::Grid`],
 //! [`Step::Indexed`], [`Step::Constant`]; `super::stage_in` plans them), with the same reach as a
 //! vertex attribute's: the runtime refuses a dispatch that may fetch past `2^32` bytes from a
-//! buffer that holds those bytes. A dynamic layout bound with `MTLAttributeStrideStatic`, a vertex
-//! layout's or a kernel's, reads at its low 32 bits, `2^32 - 1`, so its first element is the one
-//! at the bind offset and every element past it reads zero, as plain Metal on an M3 Max answers
-//! both.
+//! buffer that holds those bytes. A thread-position step's reach check is dropped where the binder
+//! finds that no element of the dispatch region reaches past them (`SpecKey::StageInReach`). A
+//! dynamic layout bound with `MTLAttributeStrideStatic`, a vertex layout's or a kernel's, reads at
+//! its low 32 bits, `2^32 - 1`, so its first element is the one at the bind offset and every
+//! element past it reads zero, as plain Metal on an M3 Max answers both.
 //!
 //! **Source buffers**. This family records which Metal buffer indices the fetch reads
 //! ([`super::StageIoPlan::buffers`]); their slots are the access family's (`lower::access::pulled`,
@@ -444,7 +445,9 @@ impl PulledRead {
         // to the stage-in region, reads its index the way it reads the attribute, and adds the
         // region's origin. Every step with an element checks its reach.
         let element = match self.step {
-            Step::Grid { .. } => GRID_POSITION_WORDS + REGION_AXIS_WORDS + REACH_WORDS + 16,
+            Step::Grid { .. } => {
+                GRID_POSITION_WORDS + REGION_AXIS_WORDS + REACH_WORDS + REACH_KEY_WORDS + 16
+            }
             Step::Indexed { index, .. } => {
                 GRID_POSITION_WORDS + REGION_AXIS_WORDS + REACH_WORDS + index.leaf().cost() + 176
             }
@@ -465,6 +468,10 @@ const GRID_POSITION_WORDS: u32 = 400;
 /// `pulled::prepare_within`): the division, the comparisons and their conjunctions, the
 /// selects, and their constants.
 const REACH_WORDS: u32 = 96;
+
+/// An upper bound of the words of a thread-position step's `SpecKey::StageInReach` over its
+/// reach (`stage_in::reach_key`): the constant, its decoration, `true`, and the select.
+const REACH_KEY_WORDS: u32 = 24;
 
 /// An upper bound of the words of a step's clamp to the stage-in region (`region_axis`): the
 /// region's push-field read, its origin and size, the size less 1, the `UMin`, and the origin's
@@ -1014,6 +1021,21 @@ pub(super) fn emit(
     let fits = match element {
         Some((e, s)) => within_reach(fb, e, s, r.stride, r.offset, n)?,
         None => None,
+    };
+    // A thread-position step's check holds wherever the binder finds no element of the region
+    // reaching (`SpecKey::StageInReach` false); an indexed step's element bounds nothing.
+    let fits = match (r.step, fits) {
+        (Step::Grid { .. }, Some(fits)) => {
+            let reach = super::stage_in::reach_key(fb)?;
+            let ty = fb.module().ty(Type::Bool)?;
+            let c = fb.module().constant(Constant::Scalar {
+                ty,
+                bits: ConstBits(1),
+            })?;
+            let all = fb.module().const_value(c)?;
+            Some(fb.select(reach, fits, all)?)
+        }
+        (_, fits) => fits,
     };
     let m = displacement(fb, element, r.offset)?;
     let read = match fits {

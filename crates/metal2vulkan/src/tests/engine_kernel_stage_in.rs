@@ -1104,6 +1104,24 @@ fn run_strided(bc: &[u8], d: &StageInputDescriptor, strides: &[(u32, u32)], s1: 
     );
 }
 
+/// The `SpecKey::StageInReach` each region of `cmds` takes, which `pipe`'s kernel declares.
+fn reach_values(pipe: &ComputePipeline, cmds: &DispatchCommands) -> Vec<u64> {
+    let id = (pipe.stage.specialization.constants.iter())
+        .find(|c| c.key == SpecKey::StageInReach)
+        .map(|c| c.id)
+        .expect("a thread-position fetch declares StageInReach");
+    (cmds.regions.iter())
+        .map(|r| {
+            let key = &r.specialization;
+            let e = (key.entries.iter())
+                .find(|e| e.constant_id == id)
+                .expect("each region sets StageInReach");
+            let bytes = &key.data[e.offset as usize..][..e.size as usize];
+            bytes.iter().rev().fold(0, |v, &b| v << 8 | u64::from(b))
+        })
+        .collect()
+}
+
 /// [`run_strided`] where `at1(x)` and `at2(y)` name the byte each thread reads layout 1 and
 /// layout 2 at, `None` where its element lies past the first `2^32` bytes and reads zero.
 fn run_reaching(
@@ -1123,8 +1141,16 @@ fn run_reaching(
             .unwrap_or_else(|e| panic!("{what}: {e}"));
         let mut world = World::new(fetch_buffers(), StageInRegion::new([0; 3], [W, H, 1]))
             .with_strides(strides.iter().copied());
-        execute(&dev, &pipe, &m, &mut world, &threads(W, H))
+        let cmds = execute(&dev, &pipe, &m, &mut world, &threads(W, H))
             .unwrap_or_else(|e| panic!("{what} {strides:?}: {e}"));
+        // Each region keeps the reach check (`StageInReach` 1) exactly where an element lies past
+        // the first `2^32` bytes, and drops it everywhere else.
+        let reaches = (0..W).any(|gx| at1(gx).is_none()) || (0..H).any(|gy| at2(gy).is_none());
+        assert_eq!(
+            reach_values(&pipe, &cmds),
+            vec![u64::from(reaches); cmds.regions.len()],
+            "{what} {strides:?}"
+        );
         let out = words(&world.buffers[&0].bytes);
         for gy in 0..H {
             for gx in 0..W {

@@ -165,7 +165,7 @@ pub(crate) mod color_write;
 pub(crate) mod extended_color;
 pub mod fetch;
 mod plan;
-mod stage_in;
+pub(crate) mod stage_in;
 pub(crate) mod word_color;
 
 use std::collections::{BTreeMap, BTreeSet};

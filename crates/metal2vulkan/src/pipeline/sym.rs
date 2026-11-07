@@ -850,6 +850,17 @@ pub enum SpecKey {
     /// reads. Read by a specialized note's test alone, given by a plan, as
     /// [`HeapYCbCrTextures`](Self::HeapYCbCrTextures) is.
     FilteringArgumentSampler,
+    /// Boolean: an element that a kernel's `[[stage_in]]` fetch of a thread-position step reads
+    /// in this dispatch region may lie past the first `2^32` bytes from its bind offset (default
+    /// true). Each such element is the region's origin plus the thread's position over the step
+    /// rate, clamped to the region's last element. Where an element lies there, the fetch's reach
+    /// check reads it as zero (`lower::stage_io::fetch`). The binder sets the key to false only
+    /// where every element of the region (or of the grid, in a region of size 0 on the axis)
+    /// fits, at the layout's stride and the end of its attributes' bytes. A false key drops the
+    /// check; it answers the same everywhere it holds. An indexed step's element is whatever its
+    /// index buffer holds, which bounds nothing, so an indexed step runs its check whatever the
+    /// key says.
+    StageInReach,
 }
 
 impl SpecKey {

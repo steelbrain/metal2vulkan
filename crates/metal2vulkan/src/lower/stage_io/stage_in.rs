@@ -31,6 +31,13 @@
 //! (`fetch::within_reach`), which is what `MTLAttributeStrideStatic`'s `2^32 - 1` gives every
 //! element past the first.
 //!
+//! **The reach check** of a thread-position step reads `SpecKey::StageInReach` ([`reach_key`]).
+//! Where the binder finds that no element of the dispatch region lies past those bytes, at the
+//! layout's stride and its attributes' ends ([`element_end`]), it sets the key to false. The check
+//! then holds for every element and is dropped, so a dispatch that cannot reach takes the
+//! `VkPipeline` without it, and only one that can reach takes a second. An indexed step's element
+//! is whatever its index buffer holds, so it runs its check whatever the key says.
+//!
 //! **Formats** decode as a vertex format of the same raw value (`MTLAttributeFormat` and
 //! `MTLVertexFormat` list the same formats), and they meet the attribute's numeric class exactly
 //! as a pulled vertex attribute's do (`fetch::class_match`, `fetch::decode`): an unnormalized 8- or
@@ -47,14 +54,44 @@ use crate::memory::contain;
 use crate::metal::{AttributeFormat, IndexType, StepFunction, VertexFormat};
 use crate::pipeline::facts::RuntimeFact;
 use crate::pipeline::stage_io::{StageInFetch, StageInInput};
-use crate::pipeline::sym::{PushField, Stage};
+use crate::pipeline::sym::{PushField, SpecKey, Stage};
 use crate::spirv::builder::FunctionBuilder;
 use crate::spirv::error::BResult;
 use crate::spirv::ids::Value as SValue;
+use crate::spirv::ir::{ConstBits, Type};
 
 use super::fetch::{self, IndexRead, PulledRead, Step, Stride};
 use super::plan::{io_form, io_type, param_ty};
 use super::{not_lowered, PlannedParam, Source};
+
+/// The axis (0 for x, 1 for y) of fetch `f`'s thread-position step; `None` for any other step.
+/// These are the steps whose element the region clamps, and which `SpecKey::StageInReach` bounds.
+pub(crate) fn grid_axis(f: &StageInFetch) -> Option<usize> {
+    match f.step_function {
+        StepFunction::ThreadPositionInGridX => Some(0),
+        StepFunction::ThreadPositionInGridY => Some(1),
+        _ => None,
+    }
+}
+
+/// The end of fetch `f`'s attribute bytes in an element: its offset plus its format's store
+/// size. An element `e` at stride `s` lies in the first `2^32` bytes from the bind offset exactly
+/// where `e · s` plus this end is at most `2^32` (`fetch::within_reach`). `None` for a format no
+/// fetch decodes.
+pub(crate) fn element_end(f: &StageInFetch) -> Option<u64> {
+    let format = VertexFormat::try_from(f.format.as_raw()).ok()?;
+    let bytes = fetch::encoding(format).ok()?.bytes();
+    Some(u64::from(f.offset) + u64::from(bytes))
+}
+
+/// The `SpecKey::StageInReach` of the kernel's thread-position fetches: a `bool`, true by
+/// default, false where the binder finds that no element of the region lies past the first
+/// `2^32` bytes from its bind offset, so the fetch's reach check holds everywhere and is dropped.
+pub(super) fn reach_key(fb: &mut FunctionBuilder<'_>) -> BResult<SValue> {
+    let ty = fb.module().ty(Type::Bool)?;
+    let c = fb.module().spec(SpecKey::StageInReach, ty, ConstBits(1))?;
+    fb.module().const_value(c)
+}
 
 /// Record that the kernel reads the stage-in region, which the binder writes into
 /// `PushField::StageInRegion`.
