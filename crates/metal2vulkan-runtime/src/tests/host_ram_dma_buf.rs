@@ -559,7 +559,7 @@ fn where_each_listed_import_costs_a_submission_the_ram_is_long_chunks_released_o
         return;
     }
     let spans = match largest >= RAM_BYTES {
-        true => vec![start..start + RAM_BYTES],
+        true => std::iter::once(start..start + RAM_BYTES).collect(),
         false => halves,
     };
     assert_eq!(chunks, [(true, spans.clone())]);
