@@ -260,7 +260,9 @@ fn partial(rules: &LocalRules, r: [u32; 3]) -> bool {
 /// `REQUIRE_FULL_SUBGROUPS` for a region that is not whole subgroups, a row [`partial`] admits.
 fn region_flags(rules: &LocalRules, r: [u32; 3]) -> vk::PipelineShaderStageCreateFlags {
     if unwhole(rules, r) {
-        rules.stage_flags & !vk::PipelineShaderStageCreateFlags::REQUIRE_FULL_SUBGROUPS
+        rules
+            .stage_flags
+            .difference(vk::PipelineShaderStageCreateFlags::REQUIRE_FULL_SUBGROUPS)
     } else {
         rules.stage_flags
     }

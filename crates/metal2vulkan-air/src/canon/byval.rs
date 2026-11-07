@@ -27,7 +27,7 @@ const MEMCPY: &[u8] = b"llvm.memcpy.p0.p0.i64";
 
 /// What the copies of one `byval` type need: its alignment and its byte count as a constant.
 #[derive(Clone, Copy)]
-struct Copy {
+struct CopyPlan {
     align: Option<Align>,
     len: Value,
 }
@@ -35,7 +35,7 @@ struct Copy {
 /// The constants and types every copy shares.
 struct Shared {
     /// By `byval` type.
-    copies: BTreeMap<TypeId, Copy>,
+    copies: BTreeMap<TypeId, CopyPlan>,
     ptr: TypeId,
     void: TypeId,
     one: Value,
@@ -82,7 +82,7 @@ pub(super) fn explicit(parts: &mut ModuleParts, m: &mut Meter) -> Result<(), Err
         let len = intern(parts, i64t, Const::Int(size), m)?;
         copies.insert(
             t,
-            Copy {
+            CopyPlan {
                 align: Align::from_bytes(align),
                 len,
             },
