@@ -735,6 +735,9 @@ const AMD_VENDOR_ID: u32 = 0x1002;
 /// ([`DeviceDescription::canonical_device_id`]).
 pub(crate) const AMD_RADEON_780M: u32 = 0x15bf;
 
+/// The `deviceID` of the Radeon RX 7900 XTX (Navi 31) its rows were measured on, under RADV.
+pub(crate) const AMD_RX_7900_XTX: u32 = 0x744c;
+
 /// The `deviceID` of the Intel UHD Graphics 770 of Raptor Lake-S (the committed capture
 /// `intel-uhd770-rpls-anv`).
 pub(crate) const INTEL_UHD_770_RPL_S: u32 = 0xa780;
@@ -1837,7 +1840,8 @@ const DYNAMIC_RESTART_WARNING: DriverDiagnostic = DriverDiagnostic {
 /// of the fourteen BC formats' random blocks byte for byte as plain Metal did; our probe
 /// repeats it on the M3 Max. RADV, Mesa 26.2.4, on the Radeon 780M takes the first, its BC1 to BC3
 /// texels Metal's and its BC4 and BC5 not (an endpoint of -128 clamped before the sum, some values
-/// a `float` ulp off). Each is checked by `runtime_lane::compressed_decode` against the decode
+/// a `float` ulp off); RADV, Mesa 26.2.6, on the RX 7900 XTX takes the first too, its BC1 to BC3
+/// texels, unorm and sRGB, Metal's (0 of the lane's 4096 channels of each off, 2026-11-07). Each is checked by `runtime_lane::compressed_decode` against the decode
 /// fitted to Metal's. NVIDIA's 615.71.09 (the RTX 3090 and the RTX 5080 Laptop GPU), ANV, Mesa
 /// 26.2.4, on the Iris Xe and lavapipe, Mesa 26.0.8 decode both families otherwise. Every other
 /// driver and GPU is unmeasured, and announces.
@@ -2202,6 +2206,11 @@ pub(crate) const MEASURED: &[Measured<DriverFact>] = &[
         DriverFact::ColorBlockDecodeIsMetals,
         DriverId::MESA_RADV,
         (AMD_VENDOR_ID, AMD_RADEON_780M),
+    ),
+    mesa_on(
+        DriverFact::ColorBlockDecodeIsMetals,
+        DriverId::MESA_RADV,
+        (AMD_VENDOR_ID, AMD_RX_7900_XTX),
     ),
     moltenvk_on_apple(DriverFact::ColorBlockDecodeIsMetals),
     moltenvk_on_apple(DriverFact::ChannelBlockDecodeIsMetals),

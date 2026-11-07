@@ -1759,16 +1759,16 @@ degradations! {
              differs";
         /// A texture of a BC format (`BC1_RGBA` to `BC7_RGBAUnorm_sRGB`) made on a device whose
         /// driver is not measured to decode its texels as Metal does (BC1 to BC3
-        /// `DriverFact::ColorBlockDecodeIsMetals`: MoltenVK on Apple's GPUs, RADV on the 780M;
-        /// BC4 and BC5 `DriverFact::ChannelBlockDecodeIsMetals`: MoltenVK on Apple's GPUs; BC6H
-        /// `DriverFact::Bc6hBlockDecodeIsMetals` and BC7 `DriverFact::Bc7BlockDecodeIsMetals`:
-        /// MoltenVK on Apple's GPUs, NVIDIA's on the RTX 3090 and RTX 5080 Laptop GPU, RADV on the
-        /// 780M, ANV on the Iris Xe of Raptor Lake-P, and lavapipe's BC6H). Its image is its own
-        /// BC image, which the
-        /// device samples through its own decode: a BC texture keeps no decoded twin
-        /// (`texture/decoded_twin.rs` keeps twins of carried textures alone). The bounds are the
-        /// largest differences from Metal's texels measured on random blocks of every format; a
-        /// driver not named is unmeasured, and validation derives no tolerance from them.
+        /// `DriverFact::ColorBlockDecodeIsMetals`: MoltenVK on Apple's GPUs, RADV on the 780M and
+        /// the RX 7900 XTX; BC4 and BC5 `DriverFact::ChannelBlockDecodeIsMetals`: MoltenVK on
+        /// Apple's GPUs; BC6H `DriverFact::Bc6hBlockDecodeIsMetals` and BC7
+        /// `DriverFact::Bc7BlockDecodeIsMetals`: MoltenVK on Apple's GPUs, NVIDIA's on the RTX 3090
+        /// and RTX 5080 Laptop GPU, RADV on the 780M, ANV on the Iris Xe of Raptor Lake-P, and
+        /// lavapipe's BC6H). Its image is its own BC image, which the device samples through its
+        /// own decode: a BC texture keeps no decoded twin (`texture/decoded_twin.rs` keeps twins of
+        /// carried textures alone). The bounds are the largest differences from Metal's texels
+        /// measured on random blocks of every format; a driver not named is unmeasured, and
+        /// validation derives no tolerance from them.
         CompressedTexelDecode = "compressed-texel-decode", Precision,
             "a read, sample or gather of its texels answers the device's decode of its blocks \
              (an sRGB form's code through the device's sRGB decode), where Metal interpolates \
