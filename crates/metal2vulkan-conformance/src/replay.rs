@@ -385,10 +385,11 @@ pub const WITHOUT_COMPRESSION: &str = "a-device-answers-as-the-class-of-mac-it-p
 /// **It loosens the value, and only on such a venue.** The site is unchecked, justified by
 /// [`Justification::WithoutCompression`], which holds only on a run whose venue presents no
 /// compression: on the M3 Max it justifies nothing, so every byte of the site still compares
-/// exactly there, the pattern included. A run without such a venue counts the
-/// claim as one nothing checked ([`crate::report::Report::unchecked_everywhere`]); a case names it
-/// at the sites the compression decides, never at another, and says in a comment which run it
-/// rests on.
+/// exactly there, the pattern included, and a difference there is the site's own row, with none
+/// added at the declaration's path ([`crate::allowance::Unjustified::faults_the_case`]). A run
+/// without such a venue counts the claim as one nothing checked
+/// ([`crate::report::Report::unchecked_everywhere`]); a case names it at the sites the compression
+/// decides, never at another, and says in a comment which run it rests on.
 pub fn without_compression(site: &str) -> crate::allowance::Allowance {
     crate::allowance::Allowance::new(
         format!("case/{site}/*"),

@@ -217,6 +217,17 @@ pub enum Unjustified {
     VenueCompresses,
 }
 
+impl Unjustified {
+    /// Whether an allowance that does not hold for this reason faults the case. Every reason does
+    /// but one: a venue's own answer ([`Justification::WithoutCompression`]) on a venue that
+    /// presents Metal's compression holds nowhere, as on the Mac that recorded the case, so naming
+    /// it is no fault there. The site then compares as if the case loosened nothing, and a
+    /// difference there is the site's own and nothing more.
+    pub fn faults_the_case(&self) -> bool {
+        !matches!(self, Unjustified::VenueCompresses)
+    }
+}
+
 impl std::fmt::Display for Unjustified {
     fn fmt(&self, out: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {

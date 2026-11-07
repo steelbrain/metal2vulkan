@@ -257,10 +257,9 @@ pub fn compare_run(
             }
             // A venue's own answer is checked where it fires, as a notice is: on a venue that
             // presents Metal's compression it holds nowhere, and naming it is no fault there.
-            justification => match justification.unjustified(&offered) {
-                Some(Unjustified::VenueCompresses) => None,
-                other => other,
-            },
+            justification => justification
+                .unjustified(&offered)
+                .filter(Unjustified::faults_the_case),
         };
         if let Some(why) = missing {
             found.note_bad(&allowance.path, why);
@@ -877,9 +876,12 @@ impl Walk<'_> {
                     documented_by = Some(allowance.justified_by.describe());
                     break;
                 }
-                Some(why) => {
+                // A venue's own answer on a venue that presents Metal's compression is no fault
+                // of the case's: the refusal is the site's row and nothing more.
+                Some(why) if why.faults_the_case() => {
                     first_unjustified = first_unjustified.or(Some((allowance.path.clone(), why)));
                 }
+                Some(_) => {}
             }
         }
         if documented_by.is_none() {
@@ -947,8 +949,10 @@ impl Walk<'_> {
                     break;
                 }
                 // A native-note declaration the run did not announce is no loosening of the
-                // case's: the site then differs as if the declaration were absent.
-                Some(why) if at < self.named => {
+                // case's, and a venue's own answer on a venue that presents Metal's compression
+                // holds nowhere: the site then differs as if the declaration were absent, and the
+                // difference is the site's own row, never a second one at the allowance's path.
+                Some(why) if at < self.named && why.faults_the_case() => {
                     first_unjustified = first_unjustified.or(Some((allowance, why)));
                 }
                 Some(_) => {}

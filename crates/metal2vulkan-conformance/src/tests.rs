@@ -2814,6 +2814,53 @@ fn a_refusal_reads_by_what_metals_validation_did() {
     assert!(!Verdict::of(&found, &Validated::NotRun).is_compliant());
 }
 
+/// **A venue's own answer at a site that differs on a venue presenting Metal's compression is the
+/// site's one row.** [`crate::replay::without_compression`] holds only where the venue keeps no
+/// texture compressed; on the Mac that recorded the case (MoltenVK on the M3 Max) it holds
+/// nowhere, and the site then compares as if the case loosened nothing. A difference there is the
+/// site's own divergence, or its own refusal, and the declaration adds no second row at its own
+/// path (`case/<site>/*`), which no ledger row keyed by the site could hold. On a venue keeping no
+/// compression the same difference is announced.
+#[test]
+fn a_venues_own_answer_on_a_compressing_venue_leaves_the_site_its_one_row() {
+    let leaf = |value: Value| Transcript::new(vec![Node::leaf("blit", Observed::value(value))]);
+    let allowances = vec![crate::replay::without_compression("blit")];
+    let metal = leaf(Value::Uint(0x7fc0_0000));
+    let ours = leaf(Value::Uint(0x7fc0_0001));
+    let compressing = Offered::new(&[], &Validated::NotRun);
+    let found = crate::compare::compare(&metal, &ours, &allowances, compressing);
+    assert!(found.bad_allowances.is_empty(), "{found:?}");
+    let verdict = Verdict::of(&found, &Validated::NotRun);
+    let Verdict::Divergent {
+        found: diverged, ..
+    } = &verdict
+    else {
+        panic!("the site differs on a compressing venue: {verdict}");
+    };
+    let paths: Vec<&str> = diverged.iter().map(|at| at.path.as_str()).collect();
+    assert_eq!(paths, ["case/blit"], "{verdict}");
+    // Nothing checked the claim here, and the report says why.
+    assert_eq!(found.unfired.len(), 1, "{found:?}");
+    assert_eq!(
+        found.unfired[0].why,
+        Some(Unjustified::VenueCompresses.to_string())
+    );
+
+    let refused = leaf(Value::error("Error::Invalid", Value::Absent));
+    let metal_answered = leaf(Value::ok(Value::Absent));
+    let found =
+        crate::compare::compare_run(&metal_answered, &refused, &allowances, compressing, true);
+    assert!(found.bad_allowances.is_empty(), "{found:?}");
+    assert_eq!(found.refusals.len(), 1, "{found:?}");
+    assert_eq!(found.refusals[0].documented_by, None);
+
+    let found = crate::compare::compare(&metal, &ours, &allowances, compressing.on_venue(false));
+    assert!(found.divergences.is_empty(), "{found:?}");
+    assert!(found.bad_allowances.is_empty(), "{found:?}");
+    assert_eq!(found.announced.len(), 1, "{found:?}");
+    assert_eq!(found.announced[0].path, "case/blit");
+}
+
 /// A refusal nothing documents is still exactly one refusal, and the words say plain Metal
 /// answered. This is the shape the ported lanes will mostly meet.
 #[test]
