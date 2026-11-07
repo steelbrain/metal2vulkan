@@ -80,6 +80,7 @@ use crate::pipeline::descriptor::{
     ColorAttachmentDescriptor, MeshPipelineDescriptor, RenderPipelineDescriptor,
     TessellationDescriptor, VertexDescriptor,
 };
+use crate::pipeline::facts::RuntimeFact;
 use crate::pipeline::graphics::GraphicsState;
 use crate::pipeline::interface::{PipelineInterface, StageDescriptor, StageInterface};
 use crate::pipeline::layout::{
@@ -581,11 +582,20 @@ fn render_state(
     // The extended-range blends the fragment computes over input attachments, against this
     // pipeline's attachments.
     let input_blends = fetch::input_blends(r, fragment, p)?;
+    // Those of them held with their channels rotated, whose input attachments link admits for
+    // that blend alone.
+    let rotated_inputs: BTreeSet<u32> = (fragment.into_iter().flat_map(|f| &f.facts))
+        .filter_map(|fact| match *fact {
+            RuntimeFact::RotatedInputBlend { color, .. } => Some(color),
+            _ => None,
+        })
+        .collect();
     // The word merges the fragment computes over input attachments, against this pipeline's
     // write masks.
     fetch::word_merges(r, fragment, p)?;
     let fs = fragment.map(|f| &f.interface);
-    let mut gs = graphics::graphics_state(r, (geometry, fs), vi, ts, &input_blends, p)?;
+    let blends = (&input_blends, &rotated_inputs);
+    let mut gs = graphics::graphics_state(r, (geometry, fs), vi, ts, blends, p)?;
     // The color writes the fragment rounds against this pipeline's attachments, once the
     // descriptor's checks of its outputs passed.
     crate::pipeline::color_writes::check(

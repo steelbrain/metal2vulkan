@@ -198,7 +198,6 @@ use crate::metal::state::{
 use crate::metal::PrimitiveTopologyClass;
 use crate::pipeline::artifact::PrecisionNote;
 use crate::pipeline::color_writes;
-use crate::pipeline::facts::RuntimeFact;
 use crate::pipeline::graphics::{
     ColorAttachmentState, GraphicsState, InputAttachmentUse, TessellationState,
 };
@@ -296,13 +295,15 @@ fn vertex_amplification(r: &RenderLinkInputs, mesh: bool, p: &DeviceProfile) -> 
 /// input `vi`, and, for a tessellation pipeline, its tessellation state `tessellation`: its
 /// topology is `PATCH_LIST` and never dynamic state, as its draws draw patches only.
 /// `input_blends`: the extended-range attachments whose blend the fragment function computes over
-/// their input attachments, and the channels each write keeps (`link::fetch::input_blends`).
+/// their input attachments, and the channels each write keeps (`link::fetch::input_blends`);
+/// `rotated_inputs`: those of them held with their channels rotated, whose blend the function
+/// states as `RuntimeFact::RotatedInputBlend`.
 pub fn graphics_state(
     r: &RenderLinkInputs,
     (vs, fs): (&StageInterface, Option<&StageInterface>),
     vi: &VertexInputState,
     tessellation: Option<TessellationState>,
-    input_blends: &BTreeMap<u32, vk::ColorComponentFlags>,
+    (input_blends, rotated_inputs): (&BTreeMap<u32, vk::ColorComponentFlags>, &BTreeSet<u32>),
     p: &DeviceProfile,
 ) -> Result<GraphicsState, Error> {
     if r.alpha_to_one && !p.fields().enabled.features.contains(&VkFeature::AlphaToOne) {
@@ -602,12 +603,8 @@ pub fn graphics_state(
             // `StageIo::alpha_in_red_colors`, which `color_writes::check` holds to the pipeline's.)
             // Nor is a two-plane YCbCr attachment's, whose texels Metal holds as halves and the
             // attachment as the function's floats.
-            let rotated_blend = fs.is_some_and(|f| {
-                f.facts.iter().any(|fact| {
-                    matches!(*fact, RuntimeFact::RotatedInputBlend { color: c, .. } if c == color)
-                })
-            });
-            if (metal::format::rotated_channels(attachment.pixel_format) && !rotated_blend)
+            if (metal::format::rotated_channels(attachment.pixel_format)
+                && !rotated_inputs.contains(&color))
                 || metal::format::ycbcr_renders(attachment.pixel_format)
                 || metal::format::ycbcr_pass_refused(attachment.pixel_format)
             {
