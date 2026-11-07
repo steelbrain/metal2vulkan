@@ -4381,9 +4381,12 @@ each item named states the rule in full.
 
 **Process exit**
 
-- **On Linux, an exit while the driver runs the runtime's work ends the process at once** with the
-  exit's status and one line on standard error: the exit handlers registered before the runtime's
-  last registration (a terminal's restore, say) do not run, where Metal's exit runs them.
+- **On Linux, an exit while the driver still runs the runtime's work past the exit's wait for it
+  ends the process at once** with the exit's status and one line on standard error. The exit
+  waits for that work (the runtime's calls in the driver, a CPU device's commands) for at most
+  2 s, and at most 60 s while a pipeline's making is in progress in the driver; once it ended the
+  exit handlers registered before the runtime's run, as Metal's exit runs them. Past those bounds
+  they do not run (a terminal's restore, say), where Metal's exit runs them.
 
 **Two-plane YCbCr textures**
 

@@ -17,10 +17,10 @@
 //!   hook again after the process's first pipeline made in one. Once the process is exiting, a
 //!   piece not started is dropped unrun: it fails its making (`making::Ticket`), as Metal's
 //!   pending work stays pending. While a piece's driver call makes a pipeline
-//!   (`exit_guard::driver_making`), the exit waits for it, on macOS up to
-//!   `exit_guard::MAKING_BOUND`, not the guard's two seconds: the program need not wait for the
-//!   command buffer whose making it is before it exits, and a making outlasts those. On Linux the
-//!   exit waits as for any section, and then ends the process at once (`exit_guard`).
+//!   (`exit_guard::driver_making`), the exit waits for it up to `exit_guard::MAKING_BOUND`, not
+//!   the guard's two seconds: the program need not wait for the command buffer whose making it is
+//!   before it exits, and a making outlasts those. Past it, on Linux, the process ends at once
+//!   (`exit_guard`).
 //! - **No thread.** Where the host cannot start a thread and none runs, the piece runs on the
 //!   caller's thread, as before the pool.
 //! - **At the user-initiated class** (a concurrency change). On macOS each thread runs at the

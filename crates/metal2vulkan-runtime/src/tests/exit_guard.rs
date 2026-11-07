@@ -1,9 +1,10 @@
 //! `exit_guard.rs`: sections end before the hook returns, none starts after it closed, the hook
 //! never waits for the exiting thread's own sections, its wait is bounded, only its first run
 //! waits for a CPU device's work, and it acts only in the process it was registered in. A child's
-//! exit while the driver runs the runtime's work ends at once with its status where the hook learns
-//! it (Linux). Each test uses a guard of its own; only the fork tests use the process's, which
-//! nothing here closes.
+//! exit while the driver runs the runtime's work runs the exit handlers registered before the hook
+//! once that work ended within the bound, and ends at once with its status past the bound where
+//! the hook learns it (Linux). Each test uses a guard of its own; only the fork tests use the
+//! process's, which nothing here closes.
 
 use crate::exit_guard::{self, hook, Busy, Call, Guard, InProcess, InProcessDevices};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -114,10 +115,10 @@ fn the_hook_s_wait_is_bounded() {
 }
 
 /// A section around a driver's making of a `VkPipeline` holds the hook past its bound until it
-/// ends, within the making's own bound (`MAKING_BOUND` where the hook waits, on macOS): a making
-/// outlasts the bound, and the program need not wait for it. Where the making's bound is not
-/// longer (the hook that ends the process at once, on Linux), it holds the hook no longer than the
-/// bound. One run only on a thread in a section takes such a section (`driver_making`).
+/// ends, within the making's own bound (`MAKING_BOUND`): a making outlasts the bound, and the
+/// program need not wait for it. Where the making's bound is not longer, it holds the hook no
+/// longer than the bound. One run only on a thread in a section takes such a section
+/// (`driver_making`).
 #[test]
 fn the_hook_waits_past_its_bound_for_a_making_in_progress() {
     let making = Duration::from_secs(10);
@@ -892,29 +893,115 @@ fn child_exit(child: fn(), status: libc::c_int) -> ChildExit {
     }
 }
 
+/// An exit handler a child registered before the runtime's (a terminal's restore, a VMM's
+/// re-attach of host USB devices): it ends the child with 43, so the parent sees that it ran.
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+extern "C" fn registered_before() {
+    // SAFETY: ends the child at once, from its exit handlers.
+    unsafe { libc::_exit(43) };
+}
+
+/// A CPU device whose submitted work never completes.
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+struct Stuck;
+
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+impl InProcess for Stuck {
+    fn drain(&self, deadline: Option<Instant>) -> bool {
+        let deadline = deadline.expect("the hook's bound is a deadline");
+        std::thread::sleep(deadline.saturating_duration_since(Instant::now()));
+        false
+    }
+}
+
+/// A CPU device whose submitted work completes [`BUSY_FOR`] after it was made.
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+struct Finishing(Instant);
+
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+impl InProcess for Finishing {
+    fn drain(&self, deadline: Option<Instant>) -> bool {
+        let done = self.0 + BUSY_FOR;
+        let until = deadline.map_or(done, |deadline| deadline.min(done));
+        std::thread::sleep(until.saturating_duration_since(Instant::now()));
+        Instant::now() >= done
+    }
+}
+
+/// How long the runtime's work of [`an_exit_runs_the_handlers_before_the_hook_once_the_work_ended`]
+/// runs past the exit's start: far under the hook's bound.
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+const BUSY_FOR: Duration = Duration::from_millis(100);
+
 /// Where the hook learns the exit's status (Linux with the GNU C library), an exit while the
-/// driver runs the runtime's work (a CPU device's work in flight, a section in progress on another
-/// thread) ends the process at once with that status, says so on standard error in one line, and
-/// runs no handler registered before the hook: Metal's process ends within 2 ms of its `exit`.
-/// Before, the hook waited 2 s, returned, and the handler ran.
+/// driver runs the runtime's work (a section in progress on another thread, a CPU device's work in
+/// flight) that ends within the hook's bound waits for it, and then returns: the exit handlers
+/// registered before the hook run, as Metal's exit runs them, and no notice is written. Before, the
+/// hook waited for nothing, ended the process at once with the exit's status and the notice, and
+/// the handler did not run (a VMM's re-attach of host USB devices to their drivers skipped at a
+/// quit while a pipeline was made).
 #[cfg(all(target_os = "linux", target_env = "gnu"))]
 #[test]
-fn a_busy_exit_ends_at_once_with_its_status() {
-    /// An exit handler the program registered before the runtime's (a terminal's restore): it
-    /// ends the child with 43.
-    extern "C" fn registered_before() {
-        // SAFETY: ends the child at once, from its exit handlers.
-        unsafe { libc::_exit(43) };
+fn an_exit_runs_the_handlers_before_the_hook_once_the_work_ended() {
+    fn section_ending() {
+        // SAFETY: a function with no arguments that never unwinds.
+        unsafe { libc::atexit(registered_before) };
+        exit_guard::register();
+        let (entered, held) = mpsc::channel();
+        std::thread::spawn(move || {
+            let busy = exit_guard::enter().expect("the child is not exiting");
+            entered.send(()).unwrap();
+            std::thread::sleep(BUSY_FOR);
+            drop(busy);
+            loop {
+                std::thread::park();
+            }
+        });
+        held.recv().unwrap();
     }
-    /// A CPU device whose submitted work never completes.
-    struct Stuck;
-    impl InProcess for Stuck {
-        fn drain(&self, deadline: Option<Instant>) -> bool {
-            let deadline = deadline.expect("the hook's bound is a deadline");
-            std::thread::sleep(deadline.saturating_duration_since(Instant::now()));
-            false
-        }
+    fn work_finishing() {
+        // SAFETY: as above.
+        unsafe { libc::atexit(registered_before) };
+        let device: Arc<dyn InProcess> = Arc::new(Finishing(Instant::now()));
+        exit_guard::runs_in_process(Arc::downgrade(&device));
+        // Live through the exit, as a device the program holds.
+        std::mem::forget(device);
+        exit_guard::register();
     }
+    let children: [(&str, fn()); 2] = [
+        ("a section", section_ending),
+        ("a CPU device's work", work_finishing),
+    ];
+    for (busy, child) in children {
+        let exit = child_exit(child, 0);
+        assert_eq!(
+            exit.status, 43,
+            "{busy} in progress, ending within the bound: the handler registered before the hook \
+             did not run; its standard error: {}",
+            exit.stderr
+        );
+        assert!(
+            exit.stderr.is_empty(),
+            "{busy} in progress: {}",
+            exit.stderr
+        );
+        assert!(
+            exit.took < BUSY_FOR + Duration::from_secs(1),
+            "{busy} in progress: the exit took {:?}",
+            exit.took
+        );
+    }
+}
+
+/// Where the hook learns the exit's status, an exit while the driver still runs the runtime's work
+/// once the hook's wait reached its bound (a section that never ends: a driver deadlocked inside a
+/// submission, as the GPU-assisted validation layer 1.4.357 was; a CPU device's work that never
+/// completes) ends the process at once with that status, says so on standard error in one line,
+/// and runs no handler registered before the hook, so that no destructor runs beside the driver's
+/// work: after [`BOUND`](exit_guard::BOUND), not later.
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+#[test]
+fn a_busy_exit_past_the_bound_ends_at_once_with_its_status() {
     fn work_in_flight() {
         // SAFETY: a function with no arguments that never unwinds.
         unsafe { libc::atexit(registered_before) };
@@ -952,9 +1039,11 @@ fn a_busy_exit_ends_at_once_with_its_status() {
                 exit.stderr
             );
             assert!(
-                exit.took < Duration::from_millis(100),
-                "{busy} in progress: the exit took {:?}",
-                exit.took
+                exit.took >= exit_guard::BOUND
+                    && exit.took < exit_guard::BOUND + Duration::from_secs(1),
+                "{busy} in progress: the exit took {:?}, for a bound of {:?}",
+                exit.took,
+                exit_guard::BOUND
             );
             assert_eq!(
                 exit.stderr,
@@ -962,6 +1051,20 @@ fn a_busy_exit_ends_at_once_with_its_status() {
                 "{busy} in progress"
             );
         }
+    }
+}
+
+/// The notice names the hook's bounds.
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+#[test]
+fn the_at_once_notice_names_the_bounds() {
+    for bound in [exit_guard::BOUND, exit_guard::MAKING_BOUND] {
+        let named = format!(" {} s", bound.as_secs());
+        assert!(
+            exit_guard::AT_ONCE_NOTICE.contains(&named),
+            "{named:?} in {}",
+            exit_guard::AT_ONCE_NOTICE
+        );
     }
 }
 

@@ -20,7 +20,8 @@
 //!   rather than compiling again.
 //! - **Drained when the device goes.** [`Worker::stop`] writes what is queued before the thread
 //!   ends, so an entry a creation handed over is on disk by the time the device's drop returns.
-//!   A process that ends without dropping its devices (`exit_guard`'s `end_at_once`) loses what is
+//!   A process that ends without dropping its devices (an exit, or `exit_guard`'s `end_at_once`
+//!   past its bound) loses what is
 //!   still queued: at most the bound, each of them an entry the next process compiles again, as it
 //!   would have compiled anything this process had not reached yet.
 
