@@ -1,10 +1,13 @@
 //! A render state's creation predicts the `VkPipeline` its first draw takes
-//! (`pipeline/predicted.rs`), and a draw of a shape the creation cannot see takes it:
+//! (`pipeline/predicted.rs`), and two shapes of draw take it where they made their own:
 //!
 //! - **A draw in a pass that resolves.** A creation cannot know whether its draws' passes resolve,
 //!   and render pass compatibility ignores the resolves in a pass of one subpass, so a key holds
 //!   none (`PassShape::keyed`): a draw in a four-sample pass that resolves its color takes the
 //!   pipeline the creation made, against a pass that resolves nothing.
+//! - **A draw of points under the point class.** Such a draw takes Metal's guard band where the
+//!   device takes it (`render_state::guard_points`), a variant of its own, which the creation now
+//!   predicts.
 //!
 //! Each reads one creation's makings and the draw's takings as deltas on the test's own device
 //! (`WorkCounts::creation_pipelines_made` and `creation_pipelines_drawn`), once the device's
@@ -14,7 +17,8 @@
 //! A device test: compiled only under the validation crate's GPU safety cfgs (`m2v_gpu`,
 //! `m2v_cpu_icd`), on the kind of device the cfg selects. The functions are those of the owned
 //! fixture `validation/fixtures/public/engine/rt6_render_state.ll` (`llvm-as`): `rt6_full`, a
-//! fullscreen triangle reading its depth from vertex buffer 0, and `rt6_white`.
+//! fullscreen triangle, and `rt6_point`, a point of 4 pixels that writes `[[point_size]]`, each
+//! reading its depth from vertex buffer 0, and `rt6_white`.
 
 use super::blit_holds::{device, Scratch, WAIT};
 use super::uniform_bind_offsets::idle;
@@ -149,6 +153,39 @@ fn a_draw_in_a_pass_that_resolves_takes_the_creation_s_pipeline() {
     let drawn = idle(&device);
     taken(
         "a draw in a pass that resolves",
+        reach(&before, &created, &drawn),
+    );
+}
+
+/// A point draw of a state of the point class takes the creation's pipeline, which is of the
+/// variant that takes Metal's guard band where the device takes it.
+#[test]
+fn a_point_draw_of_the_point_class_takes_the_creation_s_pipeline() {
+    let scratch = Scratch::new("creation-reach-points");
+    let device = device(&scratch.0);
+    let Some(target) = target(&device, PixelFormat::RGBA8Unorm, 1) else {
+        eprintln!("SKIPPED: no RGBA8Unorm target here");
+        return;
+    };
+    let before = idle(&device);
+    let color = ColorAttachmentDescriptor::new(PixelFormat::RGBA8Unorm);
+    let state = state(
+        &device,
+        "rt6_point",
+        color,
+        1,
+        PrimitiveTopologyClass::Point,
+    );
+    let created = idle(&device);
+    let mut pass = RenderPassDescriptor::new();
+    let attachment = &mut pass.color_attachments[0];
+    attachment.texture = Some(target);
+    attachment.load_action = LoadAction::Clear;
+    attachment.store_action = StoreAction::Store;
+    draw(&device, &state, &pass, PrimitiveType::Point);
+    let drawn = idle(&device);
+    taken(
+        "a point draw of the point class",
         reach(&before, &created, &drawn),
     );
 }

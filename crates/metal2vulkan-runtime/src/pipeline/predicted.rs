@@ -8,7 +8,8 @@
 //! defaults, built from the state alone (where it runs: the end of these docs):
 //!
 //! - **The variant** the base, where the plan of a draw binding the vertex buffers alone (below)
-//!   runs on it (a variant only a draw needs is made by that draw, as before); **the
+//!   runs on it, but for the two a first draw takes of the state alone (the tests and the points,
+//!   below; a variant only a draw needs is made by that draw, as before); **the
 //!   specialization** that plan's: each constant at the value an unbound slot gives it, and each
 //!   buffer slot read through a uniform view read at its residual (its
 //!   `SpecKey::RangeAtBindOffset` at 0, the key's residual form, `render/residual.rs`), as an
@@ -48,6 +49,13 @@
 //!
 //!   Where that shape's plan needs another variant or refuses it, the plan of the draw binding
 //!   the vertex buffers alone is predicted, as before.
+//! - **The points**: a predicted draw of points (the input assembly, below) that rasterizes takes
+//!   Metal's guard band where the device takes it under Metal's default encoder state, as such a
+//!   draw does (`render_state::guard_points`): that variant, whose vertex stage culls at the band
+//!   (`ViewportCompensation::point_guard`), is translated and its pipeline made here.
+//!
+//!   Where that shape's plan needs another variant than the one named or refuses it, the same
+//!   shape on the base is predicted.
 //! - **The pass** of the descriptor's attachments: each color's and the depth and stencil's
 //!   format as an attachment of its pixel format, its raster sample count, no resolve, and the
 //!   colors the pipeline reads through storage left out of the subpass (`framebuffer_fetch.rs`).
@@ -55,7 +63,8 @@
 //!   in a pass of one subpass, as every instance's pass is, so a draw in a pass that resolves
 //!   takes the key predicted here.
 //! - **The input assembly** of the descriptor's topology class (a list; a triangle list when
-//!   unspecified), and **the fixed state** of Metal's default encoder state.
+//!   unspecified, a point list for a state that discards rasterization), and **the fixed state**
+//!   of Metal's default encoder state.
 //!
 //! A state the prediction cannot describe from itself alone (tessellated, a mesh pipeline,
 //! separate depth and stencil formats, a fragment function that writes depth) makes nothing here.
@@ -94,7 +103,7 @@ use super::BufferForms;
 use crate::color_list::ColorList;
 use crate::fetch_reach::format_bytes;
 use crate::framebuffer_fetch;
-use crate::render_state::EncoderState;
+use crate::render_state::{self, EncoderState, OneDepth, VertexClamp};
 use crate::render_target::{self, PassShape};
 use ash::vk;
 use metal2vulkan::bind::{
@@ -104,7 +113,8 @@ use metal2vulkan::device::FormatUsage;
 use metal2vulkan::metal::vertex::MAX_VERTEX_ALIGNMENT;
 use metal2vulkan::metal::{PixelFormat, PrimitiveTopologyClass, PrimitiveType};
 use metal2vulkan::pipeline::{
-    RenderPipeline, RenderPipelineDescriptor, RuntimeFact, SlotInterface, Stage, VertexStride,
+    GraphicsState as Translated, RenderPipeline, RenderPipelineDescriptor, RuntimeFact,
+    SlotInterface, Stage, VertexStride, ViewportCompensation,
 };
 use std::sync::Arc;
 
@@ -138,16 +148,21 @@ impl GraphicsState {
         let StateDescriptor::Vertex(descriptor) = self.descriptor() else {
             return None;
         };
-        let (variant, plan) = self.predicted_plan(descriptor)?;
-        let key = self.predicted_key(descriptor, &variant, &plan)?;
+        let primitive = predicted_primitive(descriptor, &self.base().graphics)?;
+        let (variant, plan) = self.predicted_plan(descriptor, primitive)?;
+        let key = self.predicted_key(descriptor, &variant, &plan, primitive)?;
         Some((variant, key))
     }
 
-    /// The plan of the predicted first draw: [`with_default_samplers`]'s, where it plans; else
-    /// that of the draw binding the vertex layouts alone ([`bound_layouts`]).
+    /// The plan of the predicted first draw, a draw of `primitive`: [`with_default_samplers`]'s,
+    /// where it plans; else that of the draw binding the vertex layouts alone ([`bound_layouts`]).
+    /// Each on the variant the module docs name where the draw takes one (its tests, the guard
+    /// band of its points), else on the base; where that variant's plan refuses, the same shape
+    /// on the base.
     fn predicted_plan(
         &self,
         descriptor: &RenderPipelineDescriptor,
+        primitive: PrimitiveType,
     ) -> Option<(Arc<RenderVariant>, Arc<BindingPlan>)> {
         // A post-tessellation vertex function's pipeline tessellates where the descriptor's
         // tessellation state is `None` (Metal's defaults) too.
@@ -155,12 +170,24 @@ impl GraphicsState {
             return None;
         }
         let predicting = self.predicting_variant()?;
+        let graphics = &predicting.pipeline().graphics;
         let tests = predicted_tests(predicting.pipeline());
+        let compensation = match primitive {
+            PrimitiveType::Point => self.predicted_point_guard(graphics),
+            _ => None,
+        };
         let planned = |mut shape: BindShape| {
             shape.fragment_tests = tests;
-            match tests {
-                FragmentTests::Drop => self.settle(&shape, BufferForms::Bound).ok(),
-                _ => self.base_plan(&shape),
+            if tests == FragmentTests::Drop {
+                return self.settle(&shape, BufferForms::Bound).ok();
+            }
+            let base = shape.clone();
+            shape.viewport_compensation = compensation;
+            match shape == base {
+                true => self.base_plan(&shape),
+                false => {
+                    (self.settle(&shape, BufferForms::Bound).ok()).or_else(|| self.base_plan(&base))
+                }
             }
         };
         let layouts = bound_layouts(predicting.pipeline(), descriptor);
@@ -172,6 +199,45 @@ impl GraphicsState {
         )
     }
 
+    /// The viewport compensation a predicted first draw of points of `graphics` takes: Metal's
+    /// guard band where the device takes it under Metal's default encoder state
+    /// (`render_state::guard_points`), as a draw of points that rasterizes and is sized
+    /// (`render/draw_shape.rs`) takes it, over the compensation that state needs of itself (none
+    /// where the device takes its viewports natively); `None` where the draw keeps Vulkan's
+    /// clipping of points, or rasterizes nothing.
+    fn predicted_point_guard(&self, graphics: &Translated) -> Option<ViewportCompensation> {
+        if graphics.rasterizer_discard {
+            return None;
+        }
+        let device = self.device();
+        let state = EncoderState::metal_defaults([1, 1]);
+        let points = metal2vulkan::vk::PrimitiveTopology::POINT_LIST;
+        let bias = state
+            .draw_bias(points, device.compile_device().profile())
+            .ok()?;
+        let selects = graphics.writes_viewport_index;
+        let clamp = VertexClamp::of(device, &state, graphics, points, false, bias, false);
+        let compensation = state
+            .compensation(
+                selects,
+                render_state::native_depth_range(device),
+                bias,
+                OneDepth::of(device, graphics),
+                clamp,
+            )
+            .ok()?;
+        let guarded = render_state::guard_points(
+            device,
+            &state,
+            selects,
+            compensation,
+            graphics.clip_distances,
+            false,
+            false,
+        )?;
+        Some(guarded.viewport.compensation)
+    }
+
     /// The key of a predicted draw planned as `plan` on `variant` (the module docs), where the
     /// state alone describes it.
     fn predicted_key(
@@ -179,6 +245,7 @@ impl GraphicsState {
         descriptor: &RenderPipelineDescriptor,
         variant: &Arc<RenderVariant>,
         plan: &BindingPlan,
+        primitive: PrimitiveType,
     ) -> Option<GraphicsKey> {
         let pipeline = variant.pipeline();
         let graphics = &pipeline.graphics;
@@ -243,29 +310,6 @@ impl GraphicsState {
             view_mask: 0,
             locations: ColorList::new(),
         };
-        let primitive = match descriptor.input_primitive_topology {
-            PrimitiveTopologyClass::Point => PrimitiveType::Point,
-            PrimitiveTopologyClass::Line => PrimitiveType::Line,
-            // Unspecified is Metal's default and lets a draw take any primitive, so the class
-            // says nothing and this guess decides whether the prediction is used at all: a draw
-            // of another topology makes its own `VkPipeline`, and the one made here is never
-            // taken. A state that **discards rasterization** runs its vertex stage for its side
-            // effects alone -- Metal refuses such a state whose vertex function returns a value
-            // (`unrasterized.rs`), so it writes through buffers and nothing else -- and a draw
-            // like that takes a point list, which shades every vertex of any count and assembles
-            // none of them away. Measured over this suite: of the five case families that make an
-            // unrasterized state, the four that draw at all draw points, and every triangle draw
-            // belongs to a rasterizing state. A rasterizing state keeps the triangle guess, which
-            // is what its draws take.
-            PrimitiveTopologyClass::Unspecified if graphics.rasterizer_discard => {
-                PrimitiveType::Point
-            }
-            PrimitiveTopologyClass::Triangle | PrimitiveTopologyClass::Unspecified => {
-                PrimitiveType::Triangle
-            }
-            // A class this build does not know: no prediction.
-            _ => return None,
-        };
         let (topology, primitive_restart) = metal2vulkan::metal::state::input_assembly(primitive);
         let dynamic: Vec<vk::DynamicState> = graphics
             .dynamic_states
@@ -312,6 +356,39 @@ impl GraphicsState {
         };
         Some(key)
     }
+}
+
+/// The primitive a first draw of `descriptor`'s state of `graphics` is predicted to draw: its
+/// topology class's (a list), else a triangle but for the shape below; `None` for a class this
+/// build does not know.
+///
+/// A vertex function that writes `[[point_size]]` under the unspecified class is not taken for a
+/// point drawer: Metal refuses one only under the line and triangle classes, and over this suite
+/// such functions draw triangles as often as points (`rt6_restart_vertex`'s
+/// `sample-positions-*` draws, `icb_merged_vertex`'s `render-draw-forms-triangles`).
+fn predicted_primitive(
+    descriptor: &RenderPipelineDescriptor,
+    graphics: &Translated,
+) -> Option<PrimitiveType> {
+    Some(match descriptor.input_primitive_topology {
+        PrimitiveTopologyClass::Point => PrimitiveType::Point,
+        PrimitiveTopologyClass::Line => PrimitiveType::Line,
+        // Unspecified is Metal's default and lets a draw take any primitive, so the class says
+        // nothing and this guess decides whether the prediction is used at all: a draw of another
+        // topology makes its own `VkPipeline`, and the one made here is never taken. A state that
+        // **discards rasterization** runs its vertex stage for its side effects alone -- Metal
+        // refuses such a state whose vertex function returns a value (`unrasterized.rs`), so it
+        // writes through buffers and nothing else -- and a draw like that takes a point list,
+        // which shades every vertex of any count and assembles none of them away. Measured over
+        // this suite: of the five case families that make an unrasterized state, the four that
+        // draw at all draw points, and every triangle draw belongs to a rasterizing state.
+        PrimitiveTopologyClass::Unspecified if graphics.rasterizer_discard => PrimitiveType::Point,
+        PrimitiveTopologyClass::Triangle | PrimitiveTopologyClass::Unspecified => {
+            PrimitiveType::Triangle
+        }
+        // A class this build does not know: no prediction.
+        _ => return None,
+    })
 }
 
 /// The depth and stencil tests a first draw of `pipeline` is predicted to state
