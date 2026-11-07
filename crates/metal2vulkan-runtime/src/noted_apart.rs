@@ -339,12 +339,10 @@ impl NotedApart {
         (uses, prefix): (&[Use<ResourceKey>], ResidentPrefix),
         into: NotedInto,
     ) -> bool {
-        let same = self.prefix.is_some_and(|then| then.prefix == prefix);
-        if !same || !self.found_fresh(&uses[prefix.len..], into) {
-            return false;
-        }
+        let fresh = self.prefix.is_some_and(|then| then.prefix == prefix)
+            && self.found_fresh(&uses[prefix.len..], into);
         #[cfg(debug_assertions)]
-        {
+        if fresh {
             let whole = &self.whole.0;
             let differ = |(at, used): &(usize, &Use<ResourceKey>)| whole.get(*at) != Some(*used);
             assert!(
@@ -356,7 +354,7 @@ impl NotedApart {
                 "a draw noted apart found fresh by its uses' identity other uses than by its uses"
             );
         }
-        true
+        fresh
     }
 
     fn into(&self) -> NotedInto {

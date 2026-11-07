@@ -677,12 +677,12 @@ impl ArgumentTable {
             .0
             .get_mut()
             .unwrap_or_else(PoisonError::into_inner);
-        if retained.core != Some(id) || !object.held_by().is(id) {
+        let held_here = retained.core == Some(id) && object.held_by().is(id);
+        if !held_here {
             retained.unheld = true;
-            return;
         }
         #[cfg(debug_assertions)]
-        {
+        if held_here {
             let address = std::ptr::from_ref(object.held_by()).addr();
             if !retained.held.contains(&address) {
                 retained.held.push(address);
