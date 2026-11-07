@@ -338,8 +338,10 @@ use gpu::GpuForm;
 pub(super) use gpu::ReplayedDraws;
 use metal2vulkan::bind::indirect_commands::{Action, BufferStage, CommandRecord};
 use metal2vulkan::bind::{DrawCall, ReplayFaults, ViewSetup};
-use metal2vulkan::metal::{IndexType, IndirectCommandType, PrimitiveTopologyClass, PrimitiveType};
-use metal2vulkan::pipeline::CommandWrites;
+use metal2vulkan::metal::{
+    IndexType, IndirectCommandType, PrimitiveTopologyClass, PrimitiveType, VertexStepFunction,
+};
+use metal2vulkan::pipeline::{CommandWrites, VertexStride};
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Range;
@@ -1773,6 +1775,26 @@ fn pipeline_point_index_size(pipeline: &RenderPipelineState) -> Option<u64> {
     }
 }
 
+/// Whether `pipeline` reads vertex buffer `index` at the stride it is bound with: a layout of
+/// `MTLBufferLayoutStrideDynamic` (`VertexStride::PerBind`) whose step reads an element (a
+/// fixed-function binding of a nonzero divisor, or a pulled attribute of a step other than
+/// constant).
+fn reads_vertex_stride(pipeline: &RenderPipelineState, index: u32) -> bool {
+    let RenderStateKind::Graphics(state) = pipeline.kind() else {
+        return false;
+    };
+    let input = &state.base().vertex_input;
+    input
+        .bindings
+        .iter()
+        .any(|b| b.buffer_index == index && b.stride == VertexStride::PerBind && b.divisor != 0)
+        || input.pulled.iter().any(|a| {
+            a.buffer_index == index
+                && a.stride == VertexStride::PerBind
+                && a.step_function != VertexStepFunction::Constant
+        })
+}
+
 /// The object threadgroup memory lengths `record`'s mesh draw runs with: each it set, by index
 /// (`IndirectRenderCommand::set_object_threadgroup_memory_length`); one it set none of is 0.
 fn object_threadgroup_lengths(record: &CommandRecord) -> BTreeMap<u32, u32> {
@@ -2223,6 +2245,21 @@ impl RenderExecution {
                     |stage, count| self.buffers(record, (stage, count), residency, misses);
                 encoder.vertex =
                     table(BufferStage::Vertex, descriptor.max_vertex_buffer_bind_count);
+                // A vertex buffer set without a stride that a layout of
+                // `MTLBufferLayoutStrideDynamic` reads is read at `unstrided_stride`'s, as plain
+                // Metal's fetch reads it; one no such layout reads takes no stride, as the
+                // encoder's own draw binds it.
+                let unstrided = unstrided_stride(descriptor.support_dynamic_attribute_stride);
+                if let (Some(stride), Some(pipeline)) = (unstrided, encoder.pipeline.as_ref()) {
+                    let vertex = &mut encoder.vertex;
+                    let read: Vec<u32> = (vertex.buffers.keys().copied())
+                        .filter(|index| !vertex.attribute_strides.contains_key(index))
+                        .filter(|&index| reads_vertex_stride(pipeline, index))
+                        .collect();
+                    for index in read {
+                        vertex.attribute_strides.insert(index, stride);
+                    }
+                }
                 encoder.fragment = table(
                     BufferStage::Fragment,
                     descriptor.max_fragment_buffer_bind_count,
@@ -2674,25 +2711,12 @@ impl RenderExecution {
                 continue;
             };
             table.buffers.insert(index, bound);
-            // A vertex buffer set without a stride is read by a dynamic layout at
-            // `unstrided_stride`'s, as plain Metal's fetch reads it.
-            let unstrided = match stage {
-                BufferStage::Vertex => {
-                    unstrided_stride(self.icb.descriptor().support_dynamic_attribute_stride)
-                }
-                _ => None,
-            };
-            match binding.attribute_stride {
-                Some(stride) => {
-                    table
-                        .attribute_strides
-                        .insert(index, u32::try_from(stride).unwrap_or(u32::MAX));
-                }
-                None => {
-                    if let Some(stride) = unstrided {
-                        table.attribute_strides.insert(index, stride);
-                    }
-                }
+            // A vertex buffer set without a stride takes `unstrided_stride`'s where a dynamic
+            // layout reads it, once the command's state is known (`replay`).
+            if let Some(stride) = binding.attribute_stride {
+                table
+                    .attribute_strides
+                    .insert(index, u32::try_from(stride).unwrap_or(u32::MAX));
             }
         }
         table

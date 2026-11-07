@@ -458,7 +458,19 @@ impl Execute {
             if record.barrier && ran {
                 core.barrier(Barrier::between_dispatches());
             }
-            let bindings = self.bindings(record, max_length, residency, misses);
+            let mut bindings = self.bindings(record, max_length, residency, misses);
+            // A buffer set without a stride that a stage-in layout of
+            // `MTLBufferLayoutStrideDynamic` reads is read at `unstrided_stride`'s; one no such
+            // layout reads takes no stride, as the encoder's own dispatch binds it.
+            if let Some(stride) =
+                unstrided_stride(self.icb.descriptor().support_dynamic_attribute_stride)
+            {
+                for &index in &bindings.unstrided {
+                    if pipeline.reads_stage_in_stride(index) {
+                        bindings.table.attribute_strides.insert(index, stride);
+                    }
+                }
+            }
             // A stride past 32 bits that a stage-in layout of `MTLBufferLayoutStrideDynamic`
             // reads: Metal's answer is not measured, and the fetch's `u32` displacement cannot
             // place it.
@@ -659,6 +671,7 @@ impl Execute {
         let descriptor = *self.icb.descriptor();
         let mut table = ArgumentTable::default();
         let mut wide_strides = Vec::new();
+        let mut unstrided = Vec::new();
         if !descriptor.inherit_buffers {
             let bindings = record.bindings.buffers(BufferStage::Kernel);
             for (index, binding) in (0..descriptor.max_kernel_buffer_bind_count).zip(bindings) {
@@ -676,19 +689,13 @@ impl Execute {
                 table.buffers.insert(index, bound);
                 // Only a stage-in layout of `MTLBufferLayoutStrideDynamic` reads the stride;
                 // `record` refuses one past 32 bits there. One set without a stride reads at
-                // [`unstrided_stride`]'s.
+                // [`unstrided_stride`]'s where such a layout reads it (`dispatch`).
                 match binding.attribute_stride.map(u32::try_from) {
                     Some(Ok(stride)) => {
                         table.attribute_strides.insert(index, stride);
                     }
                     Some(Err(_)) => wide_strides.push(index),
-                    None => {
-                        if let Some(stride) =
-                            unstrided_stride(descriptor.support_dynamic_attribute_stride)
-                        {
-                            table.attribute_strides.insert(index, stride);
-                        }
-                    }
+                    None => unstrided.push(index),
                 }
             }
         }
@@ -701,6 +708,7 @@ impl Execute {
             table,
             lengths,
             wide_strides,
+            unstrided,
         }
     }
 }
@@ -782,6 +790,9 @@ struct Bindings {
     lengths: BTreeMap<u32, u32>,
     /// The kernel buffer indices bound with a stride past 32 bits.
     wide_strides: Vec<u32>,
+    /// The kernel buffer indices bound without a stride, which a stage-in layout of
+    /// `MTLBufferLayoutStrideDynamic` reads at [`unstrided_stride`]'s.
+    unstrided: Vec<u32>,
 }
 
 impl Bindings {
