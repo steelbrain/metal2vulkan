@@ -158,16 +158,22 @@ impl Texture {
     /// and of every view of it, made by the runtime or the caller's
     /// ([`Device::new_texture_with_vk_image`](super::Device::new_texture_with_vk_image)). `None`
     /// where the texels are a buffer's bytes the runtime copies into and out of an image of its
-    /// own (a texture buffer, a texture over a no-copy buffer's host pages, or a texture over
-    /// another buffer that does not alias it), or another image's texels it so copies (a view of
-    /// another component layout on a device whose views reinterpret none).
+    /// own (a texture buffer, a texture over a buffer whose image does not alias it, or a shadow
+    /// over a no-copy buffer's host pages, `shadowed-texture`), or another image's texels it so
+    /// copies (a view of another component layout on a device whose views reinterpret none).
     ///
     /// A texture over a buffer's bytes whose image aliases them gives a linear image of
     /// `VK_IMAGE_TILING_LINEAR`, bound to the buffer's memory, the runtime's own: such a texture's
     /// rows lie one after another and its image's subresource holds no byte but its texels. A
-    /// texture over a no-copy buffer's host pages (imported by their pointer or as dma-bufs) gives
-    /// none: an image bound to them would start `VK_IMAGE_LAYOUT_UNDEFINED`, whose first move
-    /// Vulkan lets read and write every byte bound to it (it is a shadow, `shadowed-texture`). A
+    /// texture over a no-copy buffer's host pages in place (where the device's in-place check
+    /// passed for the pages and the texture's accesses, under the default
+    /// `HostPageTexturePolicy::InPlace`) gives its image in place, bound where the texels lie: over
+    /// pages imported by their pointer, the driver's linear image where it lays the rows out at the
+    /// texture's pitch, else an image of `VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT` with
+    /// `DRM_FORMAT_MOD_LINEAR` at those pitches; over pages imported as dma-bufs, the latter. The
+    /// bytes between rows that lie apart are in its subresource. A shadow over host pages made
+    /// before the device's check answered gives none until it moves in place, at a commit once
+    /// the check passed for it (`texture/storage_form.rs`). A
     /// texture placed in a heap over host pages imported as dma-bufs (`HostMemory::with_dma_buf`)
     /// gives an image of `VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT` with `DRM_FORMAT_MOD_LINEAR`:
     /// ask its layout of its memory plane (`VK_IMAGE_ASPECT_MEMORY_PLANE_0_BIT_EXT`, not the color
