@@ -2371,6 +2371,20 @@ impl Device {
         {
             return Err(Error::NotImplemented(RuntimeGap::Textures));
         }
+        // The shadow is the image a pass renders where it renders the texture: it takes the
+        // feedback loop usage a draw takes that reads the texture its own pass renders through a
+        // snapshot (`feedback_candidate`, `texture/attached_reads.rs`) where that costs it
+        // nothing, as an image of its own does (`Device::with_free_usage`).
+        let plan = match feedback_candidate(&plan, self) {
+            Some(candidate) => self.if_free(plan, candidate, layout.texture_type)?,
+            None => plan,
+        };
+        if plan
+            .usage
+            .contains(ImageUsageFlags::ATTACHMENT_FEEDBACK_LOOP_EXT)
+        {
+            self.shared().counts.feedback_loop_shadow_image();
+        }
         // Where the device copies a shadow back faster by a dispatch, the image takes the
         // integer view the dispatch reads (`shadow_copy_back.rs`). Both views are 2D: a 1D
         // texture over an IOSurface plane's row (`linear_plan.rs`) takes neither.
@@ -4296,6 +4310,13 @@ impl Texture {
     /// detached (`detach.rs`), so a write of those bytes is a write of its texels.
     pub(super) fn aliases_buffer(&self) -> bool {
         matches!(self.0.storage, Storage::Alias { .. }) && self.linear_image().unwrap_or(false)
+    }
+
+    /// Whether a pass that renders the texture renders its buffer's bytes: in place, its image
+    /// lying over them now ([`image_over_buffer`](Self::image_over_buffer)), or through the
+    /// shadow image the encoders copy them into and back (`shadow.rs`), which the pass renders.
+    pub(crate) fn renders_bytes(&self) -> bool {
+        self.image_over_buffer() || matches!(self.0.storage, Storage::Shadow { .. })
     }
 
     /// Whether the texture's image lies over its buffer's bytes now: an aliasing image, not

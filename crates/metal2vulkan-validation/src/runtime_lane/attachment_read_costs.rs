@@ -52,8 +52,8 @@
 //! its own pixels (`tob_read`), through no scissor; each target also without the barriers and
 //! readers, the baseline. Printed per case (`SELF-READ-COST`): the GPU time per frame, and per
 //! frame the splits, snapshots, render pass instances begun, shadow copies, texels copied in
-//! (and of them those of a surface's shadow copied in again), keeps and their texels, merges, and
-//! the shadows made of render targets over host pages.
+//! (and of them those of a surface's shadow copied in again), keeps and their texels, merges, the
+//! shadows made of render targets over host pages, and the images made with feedback loop usage.
 //!
 //! Ignored by default: measurements, not checks. Run them by name with `--run-ignored all`.
 
@@ -978,7 +978,8 @@ fn self_reads_on(device: &Device, policy: HostPageTexturePolicy) {
                  {}x{}: GPU {:.3} ms/frame (median); per frame: splits {:.2}, snapshotted \
                  {:.2}, instances {:.2}, shadow copies {:.2}, bounded {:.2}, texels copied in \
                  {:.0}, of a surface again {:.0}, keeps {:.2}, texels kept {:.0}, merges {:.2}; \
-                 render-target shadows over host pages {}",
+                 render-target shadows over host pages {}, images made with feedback loop \
+                 usage: shadows {}, aliases {}",
                 SELF_PAIRS,
                 if baseline { "baseline" } else { "self-read" },
                 SELF_RECT[0],
@@ -1007,6 +1008,8 @@ fn self_reads_on(device: &Device, policy: HostPageTexturePolicy) {
                 per(kept(&before), kept(&after)),
                 per(before.shadow_merges_fetched, after.shadow_merges_fetched),
                 after.host_texture_shadows_render_target,
+                after.feedback_loop_shadow_images,
+                after.feedback_loop_alias_images,
             );
         }
     }

@@ -91,10 +91,12 @@
 //!   split, where every check of `render/snapshot.rs` holds: drawn twice, it first copies each
 //!   fragment's texel into a snapshot of the texture inside the pixel interlock, and then reads
 //!   the snapshot (`WorkCounts::reading_draws_snapshotted`). The texture's image takes feedback
-//!   loop usage where that costs it nothing ([`feedback_candidate`]): an image of its own, or the
+//!   loop usage where that costs it nothing ([`feedback_candidate`]): an image of its own, the
 //!   linear image that aliases a buffer's bytes (`Device::storage_over_buffer` tries the usage
 //!   first, its memory being the buffer's, and counts the images made with it,
-//!   `WorkCounts::feedback_loop_alias_images`), as a surface over host pages is. The instance
+//!   `WorkCounts::feedback_loop_alias_images`), or the shadow image a texture over a buffer's
+//!   bytes renders through (`shadow.rs`, `WorkCounts::feedback_loop_shadow_images`), as a surface
+//!   over host pages that renders is (`in_place.rs`). The instance
 //!   holds its attachment in the feedback loop layout, the bytes too while it renders them, when a host
 //!   access of them races the pass in Metal as well. Not the attachment itself: "In that case the overlap
 //!   is defined to occur at a per-pixel granularity" (the Render Pass chapter), but at its own
@@ -273,9 +275,10 @@ impl Texture {
 
 impl Texture {
     /// The index of the color attachment of `layout` a fragment slot binding of the texture
-    /// reads through a snapshot (the module docs), where it can: the texture is its own image or
-    /// a linear image aliasing a buffer's bytes while they lie in their pages (not a shadow, a
-    /// texture buffer or a view read through another), a single-sampled 2D texture whose image
+    /// reads through a snapshot (the module docs), where it can: the texture is its own image, a
+    /// linear image aliasing a buffer's bytes while they lie in their pages, or the shadow image
+    /// the encoders copy a buffer's bytes into and back (`shadow.rs`), which its passes render (not
+    /// a texture buffer or a view read through another), a single-sampled 2D texture whose image
     /// has feedback loop and sampled usage
     /// ([`feedback_candidate`]) and whose sampled binding takes no shadow; and the attachment
     /// renders that image in place (no stand-in or sample planes), one layer of it, at the
@@ -283,7 +286,7 @@ impl Texture {
     /// coordinate is the attachment's texel at that pixel.
     pub(crate) fn snapshot_color(&self, layout: &PassLayout) -> Option<usize> {
         let image = match &self.0.storage {
-            Storage::Image(image) => image,
+            Storage::Image(image) | Storage::Shadow { image, .. } => image,
             Storage::Alias { image, .. } if self.image_over_buffer() => image,
             _ => return None,
         };

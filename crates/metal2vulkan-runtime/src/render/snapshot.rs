@@ -359,11 +359,12 @@ impl RenderLowering {
         within
     }
 
-    /// Whether every one of the pass's `colors` renders a texture whose image lies over its
-    /// buffer's bytes (`Texture::image_over_buffer`, as a surface over host pages does, the
-    /// consumer's guest's framebuffer), whose reader takes the snapshot whatever its area: the
-    /// split's copy reads the bytes into the shadow, where the snapshot draw reads only the
-    /// pixels the draw covers. On the Iris Xe
+    /// Whether every one of the pass's `colors` renders a texture over its buffer's bytes
+    /// (`Texture::renders_bytes`: its image lies over them, or it is their shadow, as a surface
+    /// over host pages that renders is, the consumer's guest's framebuffer), whose reader takes
+    /// the snapshot whatever its area: the split's copy reads the bytes into the copy the reader
+    /// reads (through a shadow, after the instances before wrote theirs back through a keep and a
+    /// merge), where the snapshot draw reads only the pixels the draw covers. On the Iris Xe
     /// (`runtime_lane::attachment_read_costs::snapshot_crossover`, a 1920x1080 surface) the
     /// snapshot took 0.56 to 0.99 times the split's GPU time for readers through scissors of
     /// 960x540 and up, covering 1.5% to 100% of them, at most 1.08 times through the whole
@@ -372,7 +373,7 @@ impl RenderLowering {
     fn over_bytes(&self, colors: &[usize]) -> bool {
         colors.iter().all(|&index| {
             let color = self.layout.colors.get(index).and_then(Option::as_ref);
-            color.is_some_and(|color| color.target.texture.image_over_buffer())
+            color.is_some_and(|color| color.target.texture.renders_bytes())
         })
     }
 

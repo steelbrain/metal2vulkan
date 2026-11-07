@@ -34,11 +34,11 @@
 //!   of 20 against 1024 of 8), a snapshot for each where the device takes the path.
 //! - [`a_surfaces_readers_take_the_snapshot_at_any_area`]: the same draws over a surface over
 //!   host pages, an `RGBA8Unorm` texture of an IOSurface plane over a no-copy buffer, through the
-//!   whole target's scissor: a snapshot for each where the device takes the path and the
-//!   texture's image aliases the bytes with feedback loop usage
-//!   (`WorkCounts::feedback_loop_alias_images`; `RenderCommandEncoder::snapshot_cheaper` weighs no
-//!   area for it), else a split (NVIDIA's drivers, measured on an RTX 3090 and an RTX 5080, make
-//!   the linear image without the usage).
+//!   whole target's scissor: a snapshot for each where the device takes the path and the image
+//!   the pass renders took feedback loop usage, the texture's shadow (a surface over host pages
+//!   that renders is one, `in_place.rs`; `WorkCounts::feedback_loop_shadow_images`) or a linear
+//!   image aliasing the bytes (`WorkCounts::feedback_loop_alias_images`), as
+//!   `RenderCommandEncoder::snapshot_cheaper` weighs no area for either; else a split.
 //! - [`each_form_reads_what_the_split_reads`]: the first test's draws over a target of each of
 //!   `RGBA8Unorm`, `BGRA8Unorm`, `R8Unorm`, `RG8Unorm` (8-bit codes), `RGBA16Float` (half-float
 //!   codes) and `RGB10A2Unorm` (bits): the bytes the split leaves, byte for byte, with a snapshot
@@ -179,8 +179,9 @@ fn readers(
 }
 
 /// How [`readers_over`]' target was made: whether its image aliases its bytes (made as no
-/// shadow, `WorkCounts::shadowed_textures`), and whether with feedback loop usage
-/// (`WorkCounts::feedback_loop_alias_images`).
+/// shadow, `WorkCounts::shadowed_textures`), and whether the image its passes render took
+/// feedback loop usage (`WorkCounts::feedback_loop_alias_images`, or
+/// `feedback_loop_shadow_images` for a shadow).
 #[derive(Debug)]
 struct Made {
     aliased: bool,
@@ -230,7 +231,8 @@ fn readers_over(
     let counts = device.work_counts();
     let made = Made {
         aliased: counts.shadowed_textures == made.shadowed_textures,
-        feedback: counts.feedback_loop_alias_images > made.feedback_loop_alias_images,
+        feedback: counts.feedback_loop_alias_images > made.feedback_loop_alias_images
+            || counts.feedback_loop_shadow_images > made.feedback_loop_shadow_images,
     };
     let back = device
         .new_buffer(SIDE * row, ResourceOptions::shared())
@@ -539,7 +541,7 @@ fn a_surfaces_readers_take_the_snapshot_at_any_area() {
             let takes = snapshots(device);
             eprintln!("snapshot reads, surface, whole scissor: {made:?}, {moved:?}");
             holds("surface, whole scissor", &bytes, 6 * FILL);
-            let expected = if takes && made.aliased && made.feedback {
+            let expected = if takes && made.feedback {
                 (2, 0)
             } else {
                 (0, 2)

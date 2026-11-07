@@ -203,12 +203,12 @@ recorded here.
   instance (`texture/attached_reads.rs`): the texels around the draw's scissors where it reads at
   its own pixels alone, else every texel or what the instances since drew. After a barrier inside
   the instance, an own-pixel read takes a snapshot drawn in its subpass (`render/snapshot.rs`,
-  docs/API.md "Snapshot reads") or splits the instance; both are exact. Over a texture whose image
-  lies over its buffer's bytes (a linear image over an ordinary buffer's packed rows) it takes the
-  snapshot at any area, where
-  the device makes that linear image with feedback loop usage
-  (`WorkCounts::feedback_loop_alias_images`; NVIDIA's drivers make it without, and a surface's
-  readers split there): on the Iris Xe (`runtime_lane::attachment_read_costs::snapshot_crossover`,
+  docs/API.md "Snapshot reads") or splits the instance; both are exact. Over a texture over its
+  buffer's bytes (a linear image over an ordinary buffer's packed rows, or the shadow a texture
+  over host pages that renders is) it takes the snapshot at any area, where the device makes that
+  image with feedback loop usage (`WorkCounts::feedback_loop_alias_images`,
+  `feedback_loop_shadow_images`; NVIDIA's drivers make the linear one without, and such a
+  texture's readers split there): on the Iris Xe (`runtime_lane::attachment_read_costs::snapshot_crossover`,
   a 1920x1080 surface) 0.56 to 0.99 times the split's GPU time through scissors of 960x540 and up,
   at most 1.08 times through the whole target and 1.2 times through a 320x180 scissor it covers
   half of or more.

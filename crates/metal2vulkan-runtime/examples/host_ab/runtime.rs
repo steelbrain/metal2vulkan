@@ -2051,6 +2051,7 @@ impl Gpu for Runtime {
             ("reading_draws_snapshotted", c.reading_draws_snapshotted),
             ("snapshot_inline_splits", c.snapshot_inline_splits),
             ("feedback_loop_alias_images", c.feedback_loop_alias_images),
+            ("feedback_loop_shadow_images", c.feedback_loop_shadow_images),
             ("depth_attachments_moved", c.depth_attachments_moved),
             ("depth_instances_held", c.depth_instances_held),
             ("held_depths_released", c.held_depths_released),

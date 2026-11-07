@@ -459,6 +459,7 @@ pub(crate) struct Counters {
     reading_draws_snapshotted: AtomicU64,
     snapshot_inline_splits: AtomicU64,
     feedback_loop_alias_images: AtomicU64,
+    feedback_loop_shadow_images: AtomicU64,
     depth_attachments_moved: AtomicU64,
     depth_instances_held: AtomicU64,
     held_depths_released: AtomicU64,
@@ -3348,6 +3349,13 @@ impl Counters {
     /// (`Device::storage_over_buffer`, `texture::feedback_candidate`).
     pub(crate) fn feedback_loop_alias_image(&self) {
         self.feedback_loop_alias_images
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// The device made the image of a texture over a buffer's bytes that the encoders copy them
+    /// into and back (`shadow.rs`) with feedback loop usage (`texture::feedback_candidate`).
+    pub(crate) fn feedback_loop_shadow_image(&self) {
+        self.feedback_loop_shadow_images
             .fetch_add(1, Ordering::Relaxed);
     }
 
@@ -6292,6 +6300,13 @@ pub struct WorkCounts {
     /// its pass renders it (`render/snapshot.rs`): one per image made. Where the device makes no
     /// such image with the usage, it makes one without, and the texture's readers split.
     pub feedback_loop_alias_images: u64,
+    /// Images of textures over a buffer's bytes that the encoders copy them into and back (the
+    /// texture's shadow, `shadow.rs`: a texture over host pages that renders, among others) that
+    /// the device made with feedback loop usage where it cost them nothing
+    /// (`texture::feedback_candidate`), so a draw may read the texture through a snapshot while
+    /// its pass renders that image (`render/snapshot.rs`): one per image made. Where the usage
+    /// costs the image, it is made without, and the texture's readers split.
+    pub feedback_loop_shadow_images: u64,
     /// Render pass instances that held their multisampled depth/stencil attachment in
     /// `DEPTH_STENCIL_ATTACHMENT_OPTIMAL`, moved there from `GENERAL` just before each began and
     /// back just after it ended, on a device measured to render it faster so
@@ -7131,6 +7146,9 @@ impl Device {
             reading_draws_snapshotted: counters.reading_draws_snapshotted.load(Ordering::Relaxed),
             snapshot_inline_splits: counters.snapshot_inline_splits.load(Ordering::Relaxed),
             feedback_loop_alias_images: counters.feedback_loop_alias_images.load(Ordering::Relaxed),
+            feedback_loop_shadow_images: counters
+                .feedback_loop_shadow_images
+                .load(Ordering::Relaxed),
             depth_attachments_moved: counters.depth_attachments_moved.load(Ordering::Relaxed),
             depth_instances_held: counters.depth_instances_held.load(Ordering::Relaxed),
             held_depths_released: counters.held_depths_released.load(Ordering::Relaxed),
