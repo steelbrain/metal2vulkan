@@ -188,8 +188,10 @@ recorded here.
   fits in half the device's memory heaps with unified memory, or in three quarters of those that
   are not device-local without: the first kernel submission after a chunk's import waits while
   the kernel writes its page tables, and every other submission of the device with it (231 to
-  275 ms for a 3.94 GiB chunk on the Radeon 780M), where each kept chunk costs every submission
-  about half a microsecond (3 chunks for an 8 GiB RAM: 16 µs a submission, 14 µs with none).
+  462 ms for a 3.94 GiB chunk on the Radeon 780M: a gather after the idle window took 475 to
+  480 ms where its chunk was released and imported again, 2.6 to 2.8 ms where it was kept), where
+  each kept chunk costs every submission about half a microsecond (3 chunks for an 8 GiB RAM: 16 µs
+  a submission, 14 to 15 µs with none).
   Where the RAM does not fit, a chunk no buffer nor pending command buffer holds is released
   after the same window (`WorkCounts::host_ram_chunks_released`), as RADV lists every import in
   every kernel submission, which fails once they pass the kernel's GTT. The first object over
