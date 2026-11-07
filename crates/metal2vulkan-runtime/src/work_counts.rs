@@ -4654,8 +4654,9 @@ pub struct WorkCounts {
     /// was woken or [`scheduler_sleep_slices`](Self::scheduler_sleep_slices) says it timed out.
     pub scheduler_sleeps: u64,
     /// Times a commit woke the scheduler's thread, which slept: it left its batches to the
-    /// thread, or its committing thread's own pass submitted them and then woke the thread, as a
-    /// commit does (`CommandBuffer::commit_and_submit`). Each waking here is a notify of its condition variable, or a signal of its nudge
+    /// thread, or its committing thread's own pass submitted alone a batch that may wait in a
+    /// group and then woke the thread, as that batch's hand-off would have
+    /// (`CommandBuffer::commit_and_submit`). Each waking here is a notify of its condition variable, or a signal of its nudge
     /// where it slept on the GPU, made only where it slept, and once a sleep: a later waker
     /// before the thread ran makes none. With the completion and host wakings, at most one a
     /// sleep (`scheduler_sleeps`).

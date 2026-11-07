@@ -10,10 +10,11 @@
 //!   `commit_and_submit` in turn, never waiting for a command buffer (a wait would submit for
 //!   itself), see every command buffer complete within a bound: a commit whose wake was lost
 //!   would leave its batches in the inbox of an idle thread that sleeps until woken.
-//! - **Woken by a committing thread's pass too.** A `commit_and_submit` that submits its batch
-//!   itself, after an idle gap, wakes the sleeping thread once after its submission, as a
-//!   `commit` does (`scheduler/mod.rs`, "A committing thread may submit for itself"): the thread
-//!   keeps the commits' pace whichever thread submits them.
+//! - **Woken by a committing thread's pass as by the batch's hand-off.** A `commit_and_submit`
+//!   that submits its batch itself, after an idle gap, wakes the sleeping thread once after its
+//!   submission where the batch may wait in a group, which every other pass leaves to the thread,
+//!   and leaves it asleep elsewhere (`scheduler/mod.rs`, "A committing thread may submit for
+//!   itself"): the thread sleeps and wakes as it does where such batches are its own.
 //! - **Never behind a submission.** A commit that finds no pass under way wakes the thread without
 //!   the lock a pass holds across its `vkQueueSubmit`: with the `VkQueue` held and that lock held,
 //!   no pass counted, a commit from another thread returns at once.
@@ -21,10 +22,12 @@
 //! Device tests: compiled only under the validation crate's GPU safety cfgs (`m2v_gpu`,
 //! `m2v_cpu_icd`), on the kind of device the cfg selects.
 
+use crate::tests::SETTLE;
 use crate::{
     Buffer, CommandBuffer, CommandQueue, Device, DeviceKind, DeviceOptions, ResourceOptions,
     WorkCounts,
 };
+use metal2vulkan::device::CompletionPolicy;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{mpsc, Arc};
 use std::time::{Duration, Instant};
@@ -200,12 +203,19 @@ fn commits_with_idle_gaps_lose_no_wake() {
 }
 
 /// Commits made with `commit_and_submit` alone, each after an idle gap and each submitted by its
-/// committing thread: each wakes the sleeping thread once, as a `commit` does, counted as a
-/// commit's waking.
+/// committing thread: where the device's batches may wait in a group (`CompletionPolicy::Grouped`
+/// and its check found the merge, `command_buffer/group.rs`), each wakes the sleeping thread once,
+/// counted as a commit's waking; elsewhere none wakes it.
 #[test]
-fn a_commit_and_submit_wakes_the_sleeping_thread_as_a_commit_does() {
+fn a_commit_and_submit_wakes_the_sleeping_thread_only_for_a_batch_that_may_group() {
     const COMMITS: u64 = 10;
     let device = device();
+    assert!(
+        device.settle_submit_checks(SETTLE),
+        "the submission checks never answered"
+    );
+    let groups = device.compile_device().policy().completion == CompletionPolicy::Grouped
+        && device.submissions_merge();
     let queue = device.new_command_queue().unwrap();
     let target = device.new_buffer(256, ResourceOptions::private()).unwrap();
     let completed = Arc::new(AtomicU64::new(0));
@@ -225,12 +235,18 @@ fn a_commit_and_submit_wakes_the_sleeping_thread_as_a_commit_does() {
     let after = device.work_counts();
     let by_commit = after.scheduler_wakes_commit - before.scheduler_wakes_commit;
     let at_commit = after.batches_submitted_at_commit - before.batches_submitted_at_commit;
-    println!("{by_commit} wakings by a commit, {at_commit} batches submitted at commit, {COMMITS} commits");
-    assert_eq!(at_commit, COMMITS, "a batch was left to the thread");
-    assert_eq!(
-        by_commit, COMMITS,
-        "a commit_and_submit left the sleeping thread asleep"
+    println!(
+        "batches grouping {groups}: {by_commit} wakings by a commit, {at_commit} batches \
+         submitted at commit, {COMMITS} commits"
     );
+    assert_eq!(at_commit, COMMITS, "a batch was left to the thread");
+    match groups {
+        true => assert_eq!(
+            by_commit, COMMITS,
+            "a commit_and_submit of a batch that may group left the sleeping thread asleep"
+        ),
+        false => assert_eq!(by_commit, 0, "a commit_and_submit woke the sleeping thread"),
+    }
 }
 
 /// A commit that finds no pass under way wakes the scheduler's thread without the lock a pass

@@ -32,14 +32,15 @@
 //!   no earlier commit, has its checks run there too, without the lock, the head marked so this
 //!   thread leaves them ([`claim_check`]), and is submitted by a pass of the committing thread's
 //!   right after. A head another queue holds back (its checks waiting for a signal to land, or run
-//!   by this thread) so holds back no later commit that does not wait behind it. Its pass ends
-//!   by waking this thread, as the commit would have, after its submissions: for what it left,
-//!   else for the commit itself; a pass under way takes the commit in instead. So no wake and no
-//!   thread hop lies on a command buffer's way to its `VkQueue`, its submission's cost on the
-//!   committing thread, and this thread still wakes once for each commit that finds it asleep,
-//!   whichever thread submits: a thread left asleep across the commits sleeps longer, and where
-//!   the host's cores idle deeper the longer they sleep, its next wake and pass, for a `commit`,
-//!   take several times longer (`tests::completion_latency`, RADV).
+//!   by this thread) so holds back no later commit that does not wait behind it. What it leaves
+//!   goes to this thread, which it wakes, and a pass under way takes the commit in instead. So no
+//!   wake and no thread hop lies on a command buffer's way to its `VkQueue`, its submission's cost
+//!   on the committing thread. Where it submitted alone a batch that may wait in a group, which
+//!   every other pass leaves to this thread, it wakes this thread after its submissions all the
+//!   same, as that commit's hand-off would have, so this thread sleeps and wakes as it does where
+//!   such batches are its own. A thread left asleep across those commits would sleep longer, and
+//!   where the host's cores idle deeper the longer they sleep, its next wake and pass, for a
+//!   `commit`, take several times longer (`tests::completion_latency`, RADV).
 //! - **Submission handlers run in submission order, whichever thread runs them** ([`Turns`]).
 //!   Each pass that took batches with submission handlers takes a ticket under the lock, in the
 //!   order the passes ran; the handlers of a ticket run once those of every earlier one ran, on
@@ -321,8 +322,8 @@ struct GpuWait {
 /// [`Scheduler::sleeps_and_wakings`] gives them.
 #[derive(Clone, Copy)]
 enum Woken {
-    /// A commit left its batches to the thread, or a committing thread's pass took them
-    /// ([`Scheduler::submit_at_commit`]).
+    /// A commit left its batches to the thread, or a committing thread's pass submitted alone a
+    /// batch that may wait in a group ([`Scheduler::submit_at_commit`]).
     Commit,
     /// A completion turn: what a head waited for from the GPU was met, or the device was lost.
     Completion,
@@ -904,7 +905,7 @@ impl Scheduler {
             let taken = take_in(state, commits, &mut spent);
             let mut none = Handlers::new();
             let waiting = (Passer::Waiting, &mut none);
-            submitted = submit_plain_ready(state, &mut spent, waiting, PASS_SUBMISSIONS);
+            submitted = submit_plain_ready(state, &mut spent, waiting, PASS_SUBMISSIONS).batches;
             debug_assert!(
                 none.is_empty(),
                 "a waiting thread took a submission handler"
@@ -945,11 +946,12 @@ impl Scheduler {
     /// only for its submission checks and this thread may run them ([`claim_check`]), it runs them
     /// then, as the scheduler's thread does (`CommandBufferShared::run_checks`), and passes again
     /// under the lock ([`Inbox::pass_again`]), which submits that head; and so on, up to
-    /// [`PASS_SUBMISSIONS`] batches in all. Then it wakes the thread, as the commit would have
-    /// (the module docs): for what it left and anything committed or nudged meanwhile
-    /// ([`Woken::Host`]), else for the commit ([`Woken::Commit`]). Where a passer is counted, that
-    /// pass takes the commit in. Then it makes the completion turn a command buffer that needs no
-    /// GPU work left it (`Completion::turn_owed`).
+    /// [`PASS_SUBMISSIONS`] batches in all. What it leaves, and anything committed or nudged
+    /// meanwhile, goes to the thread, which it wakes ([`Woken::Host`]); else, where it submitted
+    /// alone a batch that may wait in a group ([`Plain::alone`]), it wakes the thread as that
+    /// batch's hand-off would have ([`Woken::Commit`], the module docs). Where a passer is counted,
+    /// that pass takes the commit in. Then it makes the completion turn a command buffer that needs
+    /// no GPU work left it (`Completion::turn_owed`).
     ///
     /// It runs the program's code only in the submission checks of the heads it checks and the
     /// submission handlers of the batches it submitted: a scheduled handler is run on its queue's
@@ -965,16 +967,17 @@ impl Scheduler {
                 pass
             },
             |mut pass| {
-                let (mut submitted, mut checked) = (0, 0);
+                let (mut submitted, mut alone, mut checked) = (0, 0, 0);
                 loop {
                     submitted += pass.submitted;
+                    alone += pass.alone;
                     let left_over = pass.left_over;
                     let Some(check) = pass.let_go(&shared.turns, device) else {
-                        return (submitted, checked, left_over);
+                        return (submitted, alone, checked, left_over);
                     };
                     // None once the process is exiting, as the thread then runs nothing more.
                     if !run_work(&self.shared, Kind::Check, check) {
-                        return (submitted, checked, left_over);
+                        return (submitted, alone, checked, left_over);
                     }
                     checked += 1;
                     let room = PASS_SUBMISSIONS.saturating_sub(submitted);
@@ -983,15 +986,16 @@ impl Scheduler {
                 }
             },
         );
-        let Some((submitted, checked, left_over)) = passed else {
+        let Some((submitted, alone, checked, left_over)) = passed else {
             return;
         };
         device.shared().counts.committer_passed(submitted, checked);
         // After the submissions, so none waits for the wake.
-        self.wake_for(match left_over || shared.inbox.passed_over() {
-            true => Woken::Host,
-            false => Woken::Commit,
-        });
+        if left_over || shared.inbox.passed_over() {
+            self.wake_for(Woken::Host);
+        } else if alone > 0 {
+            self.wake_for(Woken::Commit);
+        }
         device.shared().completion.turn_owed();
     }
 
@@ -1742,6 +1746,9 @@ struct AtCommit {
     segments: Vec<(usize, u64)>,
     /// The batches it submitted.
     submitted: usize,
+    /// Of those, the batches it submitted alone where they may wait in a group
+    /// ([`Plain::alone`]).
+    alone: usize,
     /// The checks of a head it left, taken for the thread to run ([`claim_check`]).
     check: Option<Work>,
     /// It left batches in the order or the group.
@@ -1760,7 +1767,7 @@ impl AtCommit {
         if !handlers.is_empty() {
             segments.push((handlers.len(), state.handler_ticket()));
         }
-        let check = match submitted < room && state.grouped.is_empty() {
+        let check = match submitted.batches < room && state.grouped.is_empty() {
             true => claim_check(state),
             false => None,
         };
@@ -1769,7 +1776,8 @@ impl AtCommit {
             spent,
             handlers,
             segments,
-            submitted,
+            submitted: submitted.batches,
+            alone: submitted.alone,
             check,
             left_over,
         }
@@ -1802,7 +1810,7 @@ impl AtCommit {
 /// no earlier commit, as the thread's own pass picks its next ([`Order::next`], [`is_behind`]). A
 /// head held (for its checks, a host step, an event value) holds back no later commit of another
 /// queue but one whose footprint runs in commit order with it while it keeps its place, as in the
-/// thread's own pass. How many it submitted.
+/// thread's own pass. How many it submitted, and how many of them alone ([`Plain`]).
 ///
 /// **It touches none of the thread's own state.** [`Awaits`] is what the thread's last pass left
 /// it asleep on, its `vkWaitSemaphores` among them, and [`Left`] is the work that pass handed it:
@@ -1816,9 +1824,9 @@ fn submit_plain_ready(
     spent: &mut Spent,
     (passer, handlers): (Passer, &mut Handlers),
     room: usize,
-) -> usize {
-    let mut submitted = 0;
-    while submitted < room && state.grouped.is_empty() {
+) -> Plain {
+    let mut submitted = Plain::default();
+    while submitted.batches < room && state.grouped.is_empty() {
         let Some(busy) = exit_guard::enter() else {
             return submitted;
         };
@@ -1875,9 +1883,12 @@ fn submit_plain_ready(
                 } = held;
                 drop(events);
                 state.binary.submitted(&binary_needs, &binary_signals);
+                submitted.batches += 1;
+                if buffer.groups() {
+                    submitted.alone += 1;
+                }
                 buffer.publish(submission);
                 spent.push(buffer);
-                submitted += 1;
             }
             // Nothing submitted or changed: a rebind encodes encoders of it again
             // (`command_buffer/reencode.rs`), or the group held must go first. It goes back at
@@ -1933,6 +1944,17 @@ fn submit_plain_ready(
         }
     }
     submitted
+}
+
+/// What [`submit_plain_ready`] submitted.
+#[derive(Clone, Copy, Debug, Default)]
+struct Plain {
+    /// The batches.
+    batches: usize,
+    /// Of those, the batches of a `VkQueue` whose batches may wait in a group, which a committing
+    /// thread submits alone where the group would go at once ([`plain`]) and every other pass
+    /// leaves to the scheduler's thread: a waiting thread's submits none.
+    alone: usize,
 }
 
 /// Who took a held batch's submission checks to run.
