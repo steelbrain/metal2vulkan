@@ -17,16 +17,29 @@
 //!
 //! Each of the first three waits 1 s after the use begins. Each order prints the makings of 5 ms or
 //! more, the slowest and the median, the chunks imported ahead of the objects and by their makings,
-//! and the heaps bound in a chunk (`HOST-RAM-WINDOW`), and each making of 5 ms or more: its take,
-//! its chunk, and what it made, the counts it moved (`HOST-RAM-WINDOW-SLOW`). The orders run
-//! [`REPEATS`] times over RAM in 2 MiB pages, the main case (QEMU's file-backed RAM where shared
-//! memory takes the advice for huge pages), then over RAM in 4 KiB pages (`RamPages`), each order's
-//! line with the system's count of shared memory in huge pages at its end. Ignored: run it in
-//! release, `cargo test --release -p metal2vulkan-runtime --lib host_ram_window_bench -- --ignored
-//! --nocapture` under `--cfg m2v_gpu`.
+//! and the heaps bound in a chunk (`HOST-RAM-WINDOW`), and its first [`SLOW_LINES`] makings of 5 ms
+//! or more: each one's take, its chunk, and what it made, the counts it moved
+//! (`HOST-RAM-WINDOW-SLOW`). The orders run [`REPEATS`] times over RAM in 2 MiB pages, the main
+//! case (QEMU's file-backed RAM where shared memory takes the advice for huge pages), then over RAM
+//! in 4 KiB pages (`RamPages`), each order's line with the system's count of shared memory in huge
+//! pages at its end.
+//!
+//! A second bench runs the consumer's three orders over RAM in 2 MiB pages on a device made with
+//! the options a consumer (a VMM) makes its device with ([`consumer_device`]), in whichever build
+//! it is compiled in, a debug build's checks included: each slow making also lists the driver's
+//! messages that reached the sink while it ran, and each order the messages of all its makings.
+//! Both are ignored: run them with `cargo test -p metal2vulkan-runtime --lib host_ram_window_bench
+//! -- --ignored --nocapture` under `--cfg m2v_gpu`, in release (`--release`) and in debug.
 
+use super::blit_holds::Scratch;
 use super::host_ram_device::{ahead_device, fresh_ram_in, gate, itself, resolver, RamPages};
-use crate::{HeapDescriptor, HeapType, HostMemory, ResourceOptions};
+use crate::{
+    Device, DeviceKind, DeviceOptions, HeapDescriptor, HeapType, HostMemory, MessageSeverity,
+    MessageSink, ResourceOptions, ShaderCacheOptions,
+};
+use std::collections::BTreeMap;
+use std::ffi::CString;
+use std::path::Path;
 use std::ptr::NonNull;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -40,6 +53,8 @@ const BURST: u64 = 128;
 const SLOW: Duration = Duration::from_millis(5);
 /// How many times each order runs in each kind of pages, each on fresh RAM.
 const REPEATS: usize = 4;
+/// The most slow makings an order lists one by one.
+const SLOW_LINES: usize = 40;
 
 /// A small deterministic generator (xorshift).
 struct Rng(u64);
@@ -138,8 +153,85 @@ fn orders() -> Vec<Order> {
     ]
 }
 
-/// Make the order's heaps over fresh RAM in `pages`, timing each making, and print what it took.
-fn run(device: &crate::Device, order: &Order, pages: RamPages) {
+/// The messages a device's sink received: each one's arrival, severity and id name.
+type Heard = Arc<Mutex<Vec<(Instant, MessageSeverity, String)>>>;
+
+/// The ids of `heard`'s messages that arrived in `from..=to`, each with its count and the
+/// severity of its last.
+fn heard_in(heard: &Heard, from: Instant, to: Instant) -> String {
+    let mut ids: BTreeMap<&str, (usize, MessageSeverity)> = BTreeMap::new();
+    let heard = heard.lock().unwrap();
+    for (at, severity, id) in heard.iter() {
+        if (from..=to).contains(at) {
+            let entry = ids.entry(id.as_str()).or_insert((0, *severity));
+            *entry = (entry.0 + 1, *severity);
+        }
+    }
+    let listed: Vec<String> = (ids.iter())
+        .map(|(id, (count, severity))| format!("{id} ({severity:?}) x{count}"))
+        .collect();
+    match listed.is_empty() {
+        true => "none".to_owned(),
+        false => listed.join(", "),
+    }
+}
+
+/// A device of the cfg's kind made with the options a consumer (a VMM) makes its device with,
+/// its shader cache in `cache`; `None` where it imports no host memory. The options: a message
+/// sink at `Info`, so the device turns on `VK_EXT_debug_utils` and the driver's messages of that
+/// severity and above reach the sink, which keeps each in `heard`; GPU times from the host's
+/// clock; a shader cache on disk; a video-decode queue beside the device's own, one queue held
+/// back, and the video-decode extensions where the device has them. The consumer also asks for
+/// its windows' instance extensions, which this device leaves out.
+fn consumer_device(cache: &Path, heard: &Heard) -> Option<Device> {
+    let heard = Arc::clone(heard);
+    let sink = MessageSink::new(move |message| {
+        let id = message.id_name.clone();
+        heard
+            .lock()
+            .unwrap()
+            .push((Instant::now(), message.severity, id));
+    });
+    let video = [
+        "VK_KHR_video_queue",
+        "VK_KHR_video_decode_queue",
+        "VK_KHR_video_decode_h264",
+        "VK_KHR_synchronization2",
+        "VK_KHR_video_decode_h265",
+        "VK_KHR_unified_image_layouts",
+    ];
+    let options = DeviceOptions {
+        kinds: match cfg!(m2v_cpu_icd) {
+            true => vec![DeviceKind::Cpu],
+            false => vec![
+                DeviceKind::Discrete,
+                DeviceKind::Integrated,
+                DeviceKind::Virtual,
+            ],
+        },
+        messages: Some(sink.with_least_severity(MessageSeverity::Info)),
+        gpu_times_from_host: true,
+        shader_cache: ShaderCacheOptions::in_directory(cache),
+        extra_queues: vec![ash::vk::QueueFlags::VIDEO_DECODE_KHR],
+        reserved_queues: 1,
+        optional_device_extensions: (video.iter())
+            .map(|&name| CString::new(name).unwrap())
+            .collect(),
+        ..DeviceOptions::default()
+    };
+    let device = Device::system_default_with(&options).unwrap();
+    if device.shared().host_import.is_err() {
+        eprintln!("HOST-RAM: the device imports no host memory here; nothing to test");
+        return None;
+    }
+    // As `ahead_device` asks it, so that no making meets the import that answers it.
+    device.imports_shared_host_pointers().unwrap();
+    Some(device)
+}
+
+/// Make the order's heaps over fresh RAM in `pages`, timing each making, and print what it took,
+/// with the messages `heard` received meanwhile where given.
+fn run(device: &Device, order: &Order, pages: RamPages, heard: Option<&Heard>) {
     let (ram, start, _) = fresh_ram_in(device, order.chunks * CHUNK, pages);
     let before = device.work_counts();
     let used = device.use_host_ram(&ram).unwrap();
@@ -150,6 +242,8 @@ fn run(device: &crate::Device, order: &Order, pages: RamPages) {
     let mut buffers = Vec::new();
     let mut slow_lines = Vec::new();
     let mut writes = Duration::ZERO;
+    let mut slow = 0;
+    let first = Instant::now();
     for (take, &(offset, pause)) in order.takes.iter().enumerate() {
         std::thread::sleep(pause);
         let at = (start + offset) as *mut u8;
@@ -179,12 +273,15 @@ fn run(device: &crate::Device, order: &Order, pages: RamPages) {
         times.push(took);
         heaps.push(heap);
         if took >= SLOW {
+            slow += 1;
+        }
+        if took >= SLOW && slow_lines.len() < SLOW_LINES {
             let delta = |field: fn(&crate::WorkCounts) -> u64| field(&now) - field(&counts);
             let ahead = delta(|counts| counts.host_ram_chunks_imported_ahead);
             slow_lines.push(format!(
                 "take {take} (chunk {}, heap {} in it): {:.2} ms, the heap {:.2} ms; bound in its \
                  run's import {}, in the chunk's {}; chunks imported by the making {}, ahead by \
-                 the thread meanwhile {ahead}; run imports live {}",
+                 the thread meanwhile {ahead}; run imports live {}{}",
                 offset / CHUNK,
                 offset % CHUNK / HEAP,
                 took.as_secs_f64() * 1e3,
@@ -193,12 +290,17 @@ fn run(device: &crate::Device, order: &Order, pages: RamPages) {
                 delta(|counts| counts.chunk_bound_buffers_made),
                 delta(|counts| counts.host_ram_chunks_imported) - ahead,
                 now.run_imports_live,
+                heard.map_or(String::new(), |heard| {
+                    format!(
+                        "; messages meanwhile: {}",
+                        heard_in(heard, began, Instant::now())
+                    )
+                }),
             ));
         }
     }
     let after = device.work_counts();
     let ms = |time: Duration| time.as_secs_f64() * 1e3;
-    let slow = times.iter().filter(|&&time| time >= SLOW).count();
     let worst = times.iter().max().copied().unwrap_or_default();
     let total: Duration = times.iter().sum();
     times.sort();
@@ -224,6 +326,13 @@ fn run(device: &crate::Device, order: &Order, pages: RamPages) {
         ms(writes),
         shmem_huge_kb(),
     );
+    if let Some(heard) = heard {
+        eprintln!(
+            "HOST-RAM-WINDOW {} in {pages:?} pages: the messages of its makings: {}",
+            order.name,
+            heard_in(heard, first, Instant::now())
+        );
+    }
     for line in slow_lines {
         eprintln!(
             "HOST-RAM-WINDOW-SLOW {} in {pages:?} pages: {line}",
@@ -256,8 +365,39 @@ fn host_ram_window_bench() {
                     "HOST-RAM-WINDOW {} in {pages:?} pages, repeat {repeat}",
                     order.name
                 );
-                run(&device, &order, pages);
+                run(&device, &order, pages, None);
             }
         }
     }
+}
+
+/// The consumer's orders over RAM in 2 MiB pages, on a device made with a consumer's options
+/// ([`consumer_device`]), in the build it is compiled in.
+#[test]
+#[ignore = "a benchmark"]
+fn host_ram_window_bench_with_a_consumer_s_options() {
+    let scratch = Scratch::new("window-bench");
+    let heard = Heard::default();
+    let made = Instant::now();
+    let Some(device) = consumer_device(&scratch.0, &heard) else {
+        return;
+    };
+    eprintln!(
+        "HOST-RAM-WINDOW a consumer's device options on {}, debug assertions {}; the messages \
+         of its making: {}",
+        device.name(),
+        cfg!(debug_assertions),
+        heard_in(&heard, made, Instant::now())
+    );
+    for repeat in 0..REPEATS {
+        for order in orders().into_iter().filter(|order| order.consumer) {
+            eprintln!(
+                "HOST-RAM-WINDOW {} in {:?} pages, repeat {repeat}",
+                order.name,
+                RamPages::Huge
+            );
+            run(&device, &order, RamPages::Huge, Some(&heard));
+        }
+    }
+    drop(device);
 }
