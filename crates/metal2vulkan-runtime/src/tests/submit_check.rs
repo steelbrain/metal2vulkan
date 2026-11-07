@@ -8,8 +8,8 @@ use crate::submit_check::{
 };
 
 /// The probe's medians (2026-11-07, Mesa 26.2.6 under Linux 7.3.1, MoltenVK 1.4.2 under macOS
-/// 27.0.1), in nanoseconds: one call of four infos and four calls apart; a submission with an
-/// import of 16 MiB held and without.
+/// 27.0.1), in nanoseconds: one call of four infos and four calls apart; a submission with one
+/// import of 16 MiB held and without (the tax check's form before it held `TAX_IMPORTS`).
 const RADEON_780M: ([i64; 2], [i64; 2]) = ([13_200, 37_300], [20_700, 10_400]);
 const RX_7900_XTX: ([i64; 2], [i64; 2]) = ([13_400, 35_000], [15_200, 8_400]);
 const RX_550: ([i64; 2], [i64; 2]) = ([11_600, 35_100], [54_700, 8_900]);
@@ -17,7 +17,7 @@ const IRIS_XE: ([i64; 2], [i64; 2]) = ([5_100, 13_100], [4_700, 4_500]);
 const M3_MAX: ([i64; 2], [i64; 2]) = ([4_500, 4_600], [2_700, 3_000]);
 
 /// Mesa's drivers merge the calls (RADV on three generations, ANV) and MoltenVK does not; RADV
-/// taxes every submission for a held import and ANV and MoltenVK do not: the verdicts each
+/// taxes every submission for one held import and ANV and MoltenVK do not: the verdicts each
 /// device's numbers give, whatever its identity.
 #[test]
 fn the_probe_s_numbers_give_each_device_its_verdicts() {

@@ -19,20 +19,26 @@
 //!   Mesa 26.2.6, Linux 7.3.1): RADV on the Radeon 780M 13.2 against 37.3 us (0.35), the RX 7900
 //!   XTX 13.4 against 35.0 (0.38), the RX 550 11.6 against 35.1 (0.33); ANV on the Iris Xe of
 //!   RPL-P 5.1 against 13.1 (0.39); MoltenVK 1.4.2 on the M3 Max 4.5 against 4.6 (0.98).
-//! - **Import tax.** One import of [`TAX_BYTES`] of anonymous pages the check maps and writes,
-//!   by their pointer, held through every other of [`TAX_PHASES`] phases of [`TAX_SUBMITS`]
-//!   submissions of one empty command buffer with a fence, none held through the rest; the time
-//!   inside each call. Where, in both halves of the phases, the floor of the submissions with the
-//!   import held passes that of those without by more than [`TAX_FLOOR`] or an eighth of it,
-//!   whichever is more, a held import costs every submission (`Holds`), and where it passes in
-//!   neither, it does not (`Fails`). Where it does, the runtime keeps its own long buffers out of
+//! - **Import tax.** [`TAX_IMPORTS`] imports of [`TAX_BYTES`] of anonymous pages in all, each of
+//!   pages of its own the check maps and writes, by their pointer, held through every other of
+//!   [`TAX_PHASES`] phases of [`TAX_SUBMITS`] submissions of one empty command buffer with a
+//!   fence, none held through the rest; the time inside each call. Where, in both halves of the
+//!   phases, the floor of the submissions with the imports held passes that of those without by
+//!   more than [`TAX_FLOOR`] or an eighth of it, whichever is more, a held import costs every
+//!   submission (`Holds`), and where it passes in neither, it does not (`Fails`). Several imports,
+//!   not one of the same bytes: a driver may pay per listed object, whatever its length, or per
+//!   page. ANV on i915, which has no `VM_BIND`, lists every buffer object of the device in every
+//!   execbuffer, about 0.35 us each whatever its size (from-scratch Vulkan on the Iris Xe of
+//!   RPL-P, Mesa 26.2.6, Linux 7.3.1: 18.6 us a submission with 32 imports of 32 MiB held, 107.5
+//!   with 256 of 1 MiB, 8.3 with none), below the floor for one import and past it for
+//!   [`TAX_IMPORTS`]. Where it does, the runtime keeps its own long buffers out of
 //!   fresh pages (`fresh_pages.rs`): each would add that cost, and more for its length, to every
 //!   submission for its whole life, where its fresh pages save one clear of its bytes. RADV lists
 //!   every memory it imported in each kernel submission, and amdgpu gets every page of a pointer
 //!   import again in each (`amdgpu_cs_parser_bos`): the probe measured 10.3 us more a submission
 //!   for one import of 16 MiB on the Radeon 780M (24.1 for 64 MiB), 6.8 on the RX 7900 XTX
-//!   (35.7), 45.8 on the RX 550 (191.3), against 0.2 on the Iris Xe (as much as a plain
-//!   allocation of 64 MiB costs there) and none on the M3 Max.
+//!   (35.7), 45.8 on the RX 550 (191.3), against 0.2 on the Iris Xe for one import (its cost is
+//!   per import, above) and none on the M3 Max.
 //! - **Follows** (Linux alone). Two pages the check maps, the first written with a pattern, are
 //!   imported by their pointer and bound to a buffer; a copy of the first page into the second is
 //!   submitted, then new anonymous pages are mapped over the first (`mmap` with `MAP_FIXED`) and
@@ -67,8 +73,9 @@
 //!   `VK_EXT_external_memory_host`, a call refused, too few rounds) or its tries disagreed, with
 //!   the same forms.
 //! - **Its cost**: [`ROUNDS`] rounds of each merge form and [`TAX_PHASES`] phases of
-//!   [`TAX_SUBMITS`] submissions, each waited for, every command buffer empty; the import of
-//!   [`TAX_BYTES`] made and freed [`TAX_PHASES`] times over pages written once; and on Linux
+//!   [`TAX_SUBMITS`] submissions, each waited for, every command buffer empty; the
+//!   [`TAX_IMPORTS`] imports of [`TAX_BYTES`] in all made and freed [`TAX_PHASES`] times over
+//!   pages written once; and on Linux
 //!   three copies of 256 bytes; each timed check again, at most [`TRIES`] times in all, where its
 //!   halves disagree. The probe's rounds took 3 to 12 ms on those devices.
 //! - **Kept.** Once every check answered, the verdicts are written as one record in the shader
@@ -129,9 +136,15 @@ pub(crate) const TRIES: usize = 3;
 /// merges them.
 pub(crate) const MERGE_RATIO: f64 = 0.6;
 
-/// The bytes of the import the tax check holds: past the import's own cost, a length's
-/// (amdgpu's work a page), half the shortest buffer of the runtime's own that takes fresh pages.
+/// The bytes of the imports the tax check holds, in all: past each import's own cost, a
+/// length's (amdgpu's work a page), half the shortest buffer of the runtime's own that takes fresh
+/// pages.
 pub(crate) const TAX_BYTES: u64 = 16 << 20;
+
+/// The imports the tax check holds, of [`TAX_BYTES`] in all: a driver's cost per listed object,
+/// whatever its length, adds up past [`TAX_FLOOR`] where it is a tenth of it or more (a guest's
+/// desktop holds a hundred imports and more).
+pub(crate) const TAX_IMPORTS: u64 = 32;
 
 /// The tax check's phases, every other one with the import held (the first without).
 pub(crate) const TAX_PHASES: usize = 8;
@@ -452,7 +465,7 @@ fn floor(times: &[i64]) -> i64 {
 
 /// The version of what the checks measure and of how their record is named and framed: a change
 /// to either bumps it, and a record of another version is never read.
-pub(crate) const CHECK_VERSION: u32 = 2;
+pub(crate) const CHECK_VERSION: u32 = 3;
 
 /// A record's first bytes.
 const MAGIC: [u8; 8] = *b"M2VSUBC\0";
@@ -689,13 +702,15 @@ impl Device {
         };
         format!(
             "merge {:?} ({:.1} us in one call of {MERGED} against {:.1} us apart), import tax \
-             {:?} ({:.1} us a submission with {} MiB held against {:.1} us), follows {:?}, \
+             {:?} ({:.1} us a submission with {} imports of {} MiB in all held against {:.1} us), \
+             follows {:?}, \
              {took}{split} (floors)",
             checks.verdict(Check::Merge),
             us(m.merged),
             us(m.apart),
             checks.verdict(Check::ImportTax),
             us(m.held),
+            TAX_IMPORTS,
             TAX_BYTES >> 20,
             us(m.bare),
             checks.verdict(Check::Follows),
@@ -932,27 +947,39 @@ fn merge(parts: &Parts, objects: &Objects) -> Option<Option<Timed>> {
     Some(Some(merge_try(&merged, &apart)))
 }
 
-/// One import tax try ([`tax_try`]) of a submission with the import of [`TAX_BYTES`] held, and
-/// without. `Some(None)` where the device imports no host pointer, the system maps no pages or a
-/// call was refused; `None` where the check stops.
+/// One import tax try ([`tax_try`]) of a submission with the [`TAX_IMPORTS`] imports of
+/// [`TAX_BYTES`] in all held, and without. `Some(None)` where the device imports no host pointer,
+/// the system maps no pages or a call was refused; `None` where the check stops.
 fn tax(parts: &Parts, objects: &Objects) -> Option<Option<Timed>> {
-    let Some(pages) = Pages::map(TAX_BYTES) else {
+    let Some(pieces) = (0..TAX_IMPORTS)
+        .map(|_| Pages::map(TAX_BYTES / TAX_IMPORTS))
+        .collect::<Option<Vec<Pages>>>()
+    else {
         return Some(None);
     };
-    pages.fill(0x5a);
+    for pages in &pieces {
+        pages.fill(0x5a);
+    }
     let mut phases = Vec::with_capacity(TAX_PHASES);
     for phase in 0..TAX_PHASES {
         let holding = phase % 2 == 1;
         if !parts.goes_on() {
             return None;
         }
-        let import = match holding {
-            true => match Import::make(parts, &pages, false)? {
-                Some(import) => Some(import),
-                None => return Some(None),
-            },
-            false => None,
-        };
+        let mut imports = Vec::new();
+        if holding {
+            for pages in &pieces {
+                match Import::make(parts, pages, false) {
+                    Some(Some(import)) => imports.push(import),
+                    made => {
+                        for import in imports {
+                            import.release(parts)?;
+                        }
+                        return made.map(|_| None);
+                    }
+                }
+            }
+        }
         let mut times = Vec::with_capacity(TAX_SUBMITS);
         let mut refused = false;
         for submission in 0..=TAX_SUBMITS {
@@ -965,7 +992,7 @@ fn tax(parts: &Parts, objects: &Objects) -> Option<Option<Timed>> {
                 }
             }
         }
-        if let Some(import) = import {
+        for import in imports {
             import.release(parts)?;
         }
         if refused {
