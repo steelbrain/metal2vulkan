@@ -19,11 +19,15 @@
 //! `submit_check.rs`) holds the lock across its submission calls ([`DeviceWord::held`]), so
 //! neither goes between the other's write and the loader's read. MoltenVK names the device from
 //! its own threads too, as a submission's Metal command buffer completes, and at other calls than
-//! submissions: on a device whose word a restore found overwritten
-//! ([`DeviceWord::overwritten`]) the checks hold the lock across each whole step, the wait for
-//! their submissions' completion included, so the runtime's loader-served calls may wait for
-//! one step of theirs while they run; elsewhere the word never changes and they hold it across
-//! their submission calls alone. Seen on MoltenVK 1.4.2 with each activity
+//! submissions: on a device whose word was found overwritten, by a restore or as a step starts
+//! ([`DeviceWord::overwritten`], a fact of the device and never of its driver), the checks hold
+//! the lock across each whole step, the wait for their submissions' completion included, so the
+//! runtime's loader-served calls on other threads may wait for one step of theirs, once, while
+//! they run (the checks run once per driver and runtime, for milliseconds); elsewhere the word
+//! never changes and they hold it across their submission calls alone. A narrower hold, around
+//! the calls that read the word alone, cannot exclude the writer: MoltenVK writes from its own
+//! threads as each of the checks' Metal command buffers completes, at no call of the runtime's,
+//! so only keeping the checks' work out of flight while a loader-served call runs does. Seen on MoltenVK 1.4.2 with each activity
 //! logged at once, before the lock: the scheduler's `vkAllocateCommandBuffers` faulted reading
 //! the magic as its table while the checks submitted beside it (`runtime_lane::device_commands`,
 //! which passed before the checks). A driver thread that writes the word on its own (a message
@@ -74,6 +78,16 @@ impl LoaderWord {
         LoaderWord { entry, word }
     }
 
+    /// Whether the word is other than the recorded one now.
+    ///
+    /// # Safety
+    ///
+    /// The handle is still live.
+    unsafe fn changed(&self) -> bool {
+        // SAFETY: the caller's contract.
+        unsafe { self.entry.read_volatile() != self.word }
+    }
+
     /// Put the recorded word back where the driver overwrote it: whether it did.
     ///
     /// # Safety
@@ -96,8 +110,11 @@ impl LoaderWord {
 /// `Device::device_proc_addr` inside its `Device::with_loader_word`).
 pub(super) struct DeviceWord {
     word: LoaderWord,
-    /// Whether a restore found the word overwritten: the driver names the device in its messages.
+    /// Whether the word was found overwritten: the driver names the device in its messages.
     overwritten: AtomicBool,
+    /// The steps of the runtime's own work held whole ([`DeviceWord::step_hold`]), for the tests.
+    #[cfg(test)]
+    steps_held: std::sync::atomic::AtomicU64,
     /// The thread that holds the lock and how many holds it has.
     holder: Mutex<Option<(ThreadId, usize)>>,
     /// Signalled as the last hold goes.
@@ -131,6 +148,8 @@ impl DeviceWord {
             // SAFETY: the caller's.
             word: unsafe { LoaderWord::of_device(device) },
             overwritten: AtomicBool::new(false),
+            #[cfg(test)]
+            steps_held: std::sync::atomic::AtomicU64::new(0),
             holder: Mutex::new(None),
             free: Condvar::new(),
         }
@@ -151,11 +170,48 @@ impl DeviceWord {
         call()
     }
 
-    /// Whether a restore found the word overwritten: on such a device the runtime's own work
-    /// beside the program's holds the lock across its whole steps, the driver's completion of its
-    /// submissions included (the module docs).
-    pub(super) fn overwritten(&self) -> bool {
-        self.overwritten.load(Ordering::Relaxed)
+    /// Whether the word was found overwritten, by a restore or now: a fact of this device, never
+    /// of its driver (MoltenVK writes it only where it names the device in a message, as with
+    /// each activity logged at once). On such a device the runtime's own work beside the
+    /// program's holds the lock across its whole steps (the module docs).
+    ///
+    /// # Safety
+    ///
+    /// The device is still live.
+    pub(super) unsafe fn overwritten(&self) -> bool {
+        if self.overwritten.load(Ordering::Relaxed) {
+            return true;
+        }
+        // SAFETY: the caller's contract.
+        let now = unsafe { self.word.changed() };
+        if now {
+            self.overwritten.store(true, Ordering::Relaxed);
+        }
+        now
+    }
+
+    /// A hold across a whole step of the runtime's own work beside the program's, the driver's
+    /// completion of the step's submissions included, where the word was found
+    /// [`overwritten`](DeviceWord::overwritten): `held`, or a new hold where none is given.
+    /// `None`, and `held` let go, on any other device.
+    ///
+    /// # Safety
+    ///
+    /// The device is still live.
+    pub(super) unsafe fn step_hold<'a>(&'a self, held: Option<Held<'a>>) -> Option<Held<'a>> {
+        // SAFETY: the caller's contract.
+        if !unsafe { self.overwritten() } {
+            return None;
+        }
+        #[cfg(test)]
+        self.steps_held.fetch_add(1, Ordering::Relaxed);
+        Some(held.unwrap_or_else(|| self.held()))
+    }
+
+    /// The steps held whole so far ([`DeviceWord::step_hold`]).
+    #[cfg(test)]
+    pub(crate) fn steps_held(&self) -> u64 {
+        self.steps_held.load(Ordering::Relaxed)
     }
 
     /// A hold of the word's lock, for work of the runtime's own that makes the driver name the

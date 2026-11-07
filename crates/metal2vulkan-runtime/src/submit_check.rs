@@ -804,10 +804,11 @@ impl Parts {
         }
     }
 
-    /// A hold of the device's loader word across a step, where a restore found the word
-    /// overwritten (`loader_word.rs`): none elsewhere.
+    /// A hold of the device's loader word across a step, where the word was found overwritten
+    /// (`loader_word.rs`): none elsewhere.
     fn step_held(&self) -> Option<Held<'_>> {
-        (self.loader_word.overwritten()).then(|| self.loader_word.held())
+        // SAFETY: the device is live while its checks run (its teardown stops them first).
+        unsafe { self.loader_word.step_hold(None) }
     }
 
     /// Whether the checks go on to their next step (the device's teardown stops them).
@@ -1417,7 +1418,8 @@ impl Objects {
             });
             // Kept through the wait where the device's word was found overwritten: MoltenVK
             // names the device as each Metal command buffer completes.
-            let step = parts.loader_word.overwritten().then_some(held);
+            // SAFETY: the device is live while its checks run.
+            let step = unsafe { parts.loader_word.step_hold(Some(held)) };
             exit_guard::called(Call::QueueSubmit);
             parts.counts.submit_check_called(calls);
             match submitted {

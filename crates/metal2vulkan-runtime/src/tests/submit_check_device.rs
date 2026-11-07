@@ -26,9 +26,10 @@ use crate::fresh_pages::FRESH_PAGES_PAST;
 use crate::submit_check::{record_name, Check, Verdict};
 use crate::tests::SETTLE;
 use crate::{
-    CommandBufferStatus, Device, DeviceKind, DeviceOptions, EventRef, ResourceOptions,
-    ShaderCacheOptions,
+    CommandBufferStatus, Device, DeviceKind, DeviceOptions, EventRef, LayerSetting,
+    LayerSettingValue, ResourceOptions, ShaderCacheOptions,
 };
+use metal2vulkan::vk::DriverId;
 use std::path::Path;
 
 /// The device the cfg selects, its shader cache in `cache`.
@@ -206,4 +207,91 @@ fn the_paths_follow_the_verdicts() {
         "fresh pages against the verdict"
     );
     assert_eq!(long.in_fresh_pages(), made == 1);
+}
+
+/// MoltenVK's settings under which every activity it tracks is logged at once, each message
+/// naming the device and so writing over its loader word (`runtime_lane::device_commands`, which
+/// says why a `VkBool32` of 1 is the immediate style). Other drivers ignore them.
+fn immediate_tracking() -> Vec<LayerSetting> {
+    [
+        c"MVK_CONFIG_PERFORMANCE_TRACKING",
+        c"MVK_CONFIG_ACTIVITY_PERFORMANCE_LOGGING_STYLE",
+    ]
+    .map(|name| {
+        LayerSetting::new(
+            c"MoltenVK".to_owned(),
+            name.to_owned(),
+            LayerSettingValue::Bool(true),
+        )
+    })
+    .to_vec()
+}
+
+/// The checks hold the device's loader word across their whole steps, the wait for their
+/// submissions included, only on a device whose word was found overwritten (`loader_word.rs`):
+/// a fact of the device, not of its driver. Two devices each run the checks (each over a cache of
+/// its own, so neither recalls them): one made as ever, whose word nothing overwrites on any
+/// driver, which holds no step; and one made with MoltenVK's activities logged at once, which on
+/// MoltenVK names the device in each message, and holds every step after its word was found
+/// overwritten (its first steps among them, as the device's own calls found it so first).
+/// Printed (`LOADER-WORD`): each device's steps held and its checks' run.
+#[test]
+fn the_checks_hold_the_loader_word_across_steps_only_where_it_was_overwritten() {
+    for immediate in [false, true] {
+        let scratch = Scratch::new(&format!("submit-checks-word-{immediate}"));
+        let options = DeviceOptions {
+            kinds: match cfg!(m2v_cpu_icd) {
+                true => vec![DeviceKind::Cpu],
+                false => vec![
+                    DeviceKind::Discrete,
+                    DeviceKind::Integrated,
+                    DeviceKind::Virtual,
+                ],
+            },
+            shader_cache: ShaderCacheOptions {
+                directory: Some(scratch.0.clone()),
+                ..ShaderCacheOptions::default()
+            },
+            layer_settings: match immediate {
+                true => immediate_tracking(),
+                false => Vec::new(),
+            },
+            ..DeviceOptions::default()
+        };
+        let device = Device::system_default_with(&options).unwrap();
+        assert!(
+            device.settle_submit_checks(SETTLE),
+            "the checks never answered"
+        );
+        let moltenvk = device.properties().description.driver_id == Some(DriverId::MOLTENVK);
+        let word = &device.shared().loader_word;
+        // SAFETY: the device is live.
+        let overwritten = unsafe { word.overwritten() };
+        let held = word.steps_held();
+        let counts = device.work_counts();
+        println!(
+            "LOADER-WORD on {}: MoltenVK {moltenvk}, activities logged at once {immediate}: \
+             overwritten {overwritten}, steps held {held}; checks run {}: {}",
+            device.name(),
+            counts.submit_checks_run,
+            device.submit_check_report()
+        );
+        assert_eq!(counts.submit_checks_run, 1, "the checks did not run");
+        assert_eq!(
+            overwritten,
+            moltenvk && immediate,
+            "the word was found overwritten on another device than MoltenVK's with its \
+             activities logged at once"
+        );
+        match overwritten {
+            true => assert!(
+                held > 0,
+                "no step was held on a device whose word was overwritten"
+            ),
+            false => assert_eq!(
+                held, 0,
+                "a step was held on a device whose word nothing wrote"
+            ),
+        }
+    }
 }

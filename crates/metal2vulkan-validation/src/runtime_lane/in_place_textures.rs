@@ -5,16 +5,17 @@
 //!
 //! - [`sampled_textures_over_host_pages_take_the_path_their_check_answered`], under the
 //!   validation layer: once the device's check answered (printed, `IN-PLACE-CHECK`, with its
-//!   time), a 1920x1080 `BGRA8Unorm` texture of packed rows and a 64x64 `RGBA16Float` one of padded
-//!   rows, over a no-copy buffer of anonymous pages and over a buffer in fresh pages, once the
-//!   device's submission checks answered whether its long buffers take them (a device made again
-//!   where load split their tries; skipped, printed, only on a device whose held imports cost its
-//!   submissions or which imports no host memory): where the class passed, each is in place (`vk_image` answers one;
-//!   `host_textures_in_place`, `fresh_page_textures_in_place`) or a shadow its refusal counts;
-//!   where it did not, a shadow counted by the check's answer. Either way a blit reads the pages' bytes, and a CPU write made
-//!   after the command buffer's commit and before it runs (held by an event the CPU signals once
-//!   it wrote) is what the blit reads: the image follows the buffer's rule (Host Write Ordering
-//!   Guarantees). Printed (`IN-PLACE`): each texture's path.
+//!   time), a 1920x1080 `BGRA8Unorm` texture of packed rows and a 64x64 `RGBA16Float` one of
+//!   padded rows, over a no-copy buffer of anonymous pages and over a buffer in fresh pages, once
+//!   the device's submission checks answered whether its long buffers take them (a device made
+//!   again where load split their tries; skipped, printed, only on a device whose held imports
+//!   cost its submissions or which imports no host memory): where the class passed, each is in
+//!   place (`vk_image` answers one; `host_textures_in_place`, `fresh_page_textures_in_place`) or
+//!   a shadow its refusal counts; where it did not, a shadow counted by the check's answer.
+//!   Either way a blit reads the pages' bytes, and a CPU write made after the command buffer's
+//!   commit and before it runs (held by an event the CPU signals once it wrote) is what the blit
+//!   reads: the image follows the buffer's rule (Host Write Ordering Guarantees). Printed
+//!   (`IN-PLACE`): each texture's path.
 //! - [`writes_and_passes_beyond_the_usage_take_their_shadows`], under the validation layer: an
 //!   in-place 64x64 `RGBA16Float` texture of `ShaderRead` usage alone, with padded rows and with
 //!   packed ones (where the device takes either in place), written by a kernel (no `ShaderWrite`)
@@ -222,7 +223,6 @@ fn sampled_textures_over_host_pages_take_the_path_their_check_answered() {
                 let len = ((bpr * h) as usize + GUEST_PAGE).next_multiple_of(GUEST_PAGE);
                 // The pages: anonymous ones mapped here, or the fresh pages of a long buffer.
                 let mapping = (class == "Pointer").then(|| Mapping::anonymous(len));
-                let fresh_before = device.work_counts().fresh_page_buffers_made;
                 let buffer = match &mapping {
                     // SAFETY: the mapping outlives the buffer and the texture (dropped first).
                     Some(mapping) => match unsafe {
@@ -245,11 +245,11 @@ fn sampled_textures_over_host_pages_take_the_path_their_check_answered() {
                     None => device.new_buffer(FRESH, ResourceOptions::shared()).unwrap(),
                 };
                 // A long buffer of the device's own lies in fresh pages where its submission
-                // checks found a held import adds nothing to a submission (`fresh_pages.rs`):
-                // none does on a device whose held imports cost its submissions, or which imports
-                // no host memory, and those alone skip the class.
-                let in_fresh = device.work_counts().fresh_page_buffers_made > fresh_before;
-                if class == "Fresh" && !in_fresh {
+                // checks found a held import adds nothing to a submission (`fresh_pages.rs`),
+                // made then or parked by an earlier one of its length (the device's in-place
+                // check makes one): none does on a device whose held imports cost its
+                // submissions, or which imports no host memory, and those alone skip the class.
+                if class == "Fresh" && !device.fresh_pages_pay() {
                     let report = device.submit_check_report();
                     let taxed = report.contains("import tax Holds");
                     assert!(
