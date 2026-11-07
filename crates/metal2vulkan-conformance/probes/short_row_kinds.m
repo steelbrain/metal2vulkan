@@ -269,11 +269,18 @@ static void outCase(const struct kind *k, NSUInteger bpr) {
     uint8_t *p = malloc(row * kHeight), *ref = malloc(row * kHeight);
     fillPattern(k, p, row * kHeight, 2);
     // A multisampled texture too is filled by a copy in at its packed row, each pixel's samples
-    // one after another, as a blit's buffer lays them.
+    // one after another, as a blit's buffer lays them. Each step is printed before it runs, so a
+    // case Metal ends names the call it ended in.
+    printf("  out %s bpr=%lu: copy in at the packed row\n", k->name, (unsigned long)bpr);
+    fflush(stdout);
     writePacked(k, t, backing, p);
+    printf("  out %s bpr=%lu: copy out at the packed row\n", k->name, (unsigned long)bpr);
+    fflush(stdout);
     readPacked(k, t, backing, ref);
     NSUInteger span = bpr * (kHeight - 1) + row;
     id<MTLBuffer> dst = sharedBuffer(span + 64, 0xCC);
+    printf("  out %s bpr=%lu: copy out at the pitch\n", k->name, (unsigned long)bpr);
+    fflush(stdout);
     copyOut(k, t, dst, bpr);
     const uint8_t *q = dst.contents;
     printf("out %s row=%lu bpr=%lu: returned; packed %s; chunks ", k->name, (unsigned long)row,
