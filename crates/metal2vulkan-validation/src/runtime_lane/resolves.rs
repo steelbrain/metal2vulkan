@@ -2517,7 +2517,8 @@ fn split_depth_and_stencil_resolves_are_metals() {
         D::Max,
         [&then[0], &then[1]],
     );
-    let max_built = !drawn(Mode::MAX) && device_resolves(Some(Mode::MAX), None, true);
+    // A drawn depth is no subpass's: it is drawn into its own texture after the pass.
+    let max_built = device_resolves(Some(Mode::MAX).filter(|&m| !drawn(m)), None, true);
     let ran = ran.and_then(|()| lane.run(&loaded, |_, _, _| {}));
     match (max_built, ran) {
         (_, Err(Error::Unsupported(u))) => {
