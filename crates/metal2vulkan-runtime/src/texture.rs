@@ -2306,7 +2306,7 @@ impl Device {
                                 && !in_place::Access::Writes.takes(usage)
                                 && in_place::STORED_TEXEL_BYTES.contains(&pages.1)
                                 && verdict(class, in_place::Access::Writes) == Verdict::Passed;
-                            let made = (&texels, class, storable);
+                            let made = (&*texels, class, storable);
                             match self.in_place_image(&plan, descriptor, made, &facts)? {
                                 Ok((image, pitched)) => {
                                     if !checking {
