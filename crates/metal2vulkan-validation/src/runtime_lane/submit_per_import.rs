@@ -136,6 +136,13 @@ const RAM_OBJECT_STRIDE: usize = 64 << 20;
 /// How long `submit_per_ram_chunk` waits after its objects went, past the first idle window of a
 /// device that releases a guest RAM's idle chunks (2 s, `host_ram.rs` of the runtime).
 const RAM_IDLE: Duration = Duration::from_secs(4);
+/// How long no chunk of `submit_per_ram_chunk`'s RAM was imported once the device's thread is
+/// done importing those asked for.
+const RAM_QUIET: Duration = Duration::from_millis(1500);
+/// The longest `submit_per_ram_chunk` waits for the chunks' imports or the runs' release.
+const RAM_WAIT: Duration = Duration::from_secs(60);
+/// The bytes of each run of `submit_per_ram_chunk`'s gathers: a guest surface's 512 KiB.
+const RAM_COPY_RUN: usize = 512 << 10;
 
 /// The kind of import a phase holds.
 #[derive(Clone, Copy, Debug)]
@@ -730,15 +737,20 @@ fn submit_per_ram_dma_buf() {
 /// `memfd`, as QEMU's guest RAM with `share=on`, with a source of dma-bufs of its pages (udmabufs
 /// within the host's limits) that says how long one may be (`HostRam::with_largest_dma_buf`, the
 /// host's udmabuf `size_limit_mb`). [`COMMITS`] command buffers of one 4-KiB fill one at a time,
-/// each waited for, after [`WARM`] untimed, in three phases: before the RAM is used; with a
-/// no-copy buffer of [`RAM_OBJECT_BYTES`] at the start of each [`RAM_OBJECT_STRIDE`] of it held
-/// (its pages resolved to the RAM's own, `HostMemory::with_runs`), each used by one command buffer
-/// first, so that every chunk of the RAM is imported; and [`RAM_IDLE`] after the buffers went.
-/// Printed as `SUBMIT-PER-IMPORT` lines (`submit_per_import`'s) and `SUBMIT-PER-RAM-CHUNK` lines:
-/// the chunks the device imported (`WorkCounts::host_ram_chunks_imported`, `host_ram_chunk_bytes`,
-/// `host_ram_chunks_live`, `host_ram_chunks_imported_ahead`, `host_ram_chunks_released`), the
-/// dma-buf memories it holds, and the buffers' makings (median and slowest, which hold a chunk's
-/// import). Skipped where `/dev/udmabuf` cannot be opened.
+/// each waited for, after [`WARM`] untimed, in four phases: before the RAM is used; with a
+/// no-copy buffer of [`RAM_OBJECT_BYTES`] at the start of each [`RAM_OBJECT_STRIDE`] of it just
+/// made over chunks not imported (its pages resolved to the RAM's own, `HostMemory::with_runs`)
+/// and used by one command buffer; once the device's thread imported the chunks, one more object
+/// was made over each stride, the first objects' run imports were released while idle and each
+/// was used again (so lies in its chunk); and [`RAM_IDLE`] after the buffers went. Then three
+/// gathers (`copy_from_host_ram`) from the released chunks, encoded, committed and waited for:
+/// [`RAM_COPY_RUN`] at 16 strides of the first chunk, the same again once that chunk is imported,
+/// and one at each stride. Printed as `SUBMIT-PER-IMPORT` lines (`submit_per_import`'s) and
+/// `SUBMIT-PER-RAM-CHUNK` lines: the chunks the device imported
+/// (`WorkCounts::host_ram_chunks_imported`, `host_ram_chunk_bytes`, `host_ram_chunks_live`,
+/// `host_ram_chunks_imported_ahead`, `host_ram_chunks_released`), the run imports and dma-buf
+/// memories it holds, the buffers' makings (the first, the median and the slowest) and the
+/// gathers' times. Skipped where `/dev/udmabuf` cannot be opened.
 #[test]
 #[ignore = "a measurement, not a check: run by name with --run-ignored all"]
 fn submit_per_ram_chunk() {
@@ -772,13 +784,20 @@ fn submit_per_ram_chunk() {
         let counts = device.work_counts();
         eprintln!(
             "SUBMIT-PER-RAM-CHUNK {}: {phase}: {} chunks imported ({} MiB, {} ahead), {} live, {} \
-             released; {} dma-buf memories live; the udmabuf limit {} MiB",
+             released; buffers made {} in a run's import, {} in a chunk's; {} run imports live; \
+             {} imports released while idle, {} imported again; {} dma-buf memories live; the \
+             udmabuf limit {} MiB",
             device.name(),
             counts.host_ram_chunks_imported - before.host_ram_chunks_imported,
             (counts.host_ram_chunk_bytes - before.host_ram_chunk_bytes) >> 20,
             counts.host_ram_chunks_imported_ahead - before.host_ram_chunks_imported_ahead,
             counts.host_ram_chunks_live,
             counts.host_ram_chunks_released - before.host_ram_chunks_released,
+            counts.run_bound_buffers_made - before.run_bound_buffers_made,
+            counts.chunk_bound_buffers_made - before.chunk_bound_buffers_made,
+            counts.run_imports_live,
+            counts.host_imports_released - before.host_imports_released,
+            counts.host_imports_reimported - before.host_imports_reimported,
             counts.dma_buf_memories_live,
             largest >> 20,
         );
@@ -795,65 +814,126 @@ fn submit_per_ram_chunk() {
     // The view is the RAM's own mapping: each object's pages are the run of its own addresses.
     let resolver: RunResolver =
         Arc::new(|at: u64, length: u64| Some(std::iter::once(at..at + length).collect()));
-    let mut makings = Vec::new();
-    let buffers: Vec<Buffer> = (0..RAM_BYTES / RAM_OBJECT_STRIDE)
-        .map(|i| {
-            // SAFETY: the RAM's pages, mapped while `memfd` lives, which outlives the buffers.
-            let memory = unsafe { HostMemory::new(memfd.whole.pointer(i * RAM_OBJECT_STRIDE)) }
-                .with_runs(Arc::clone(&resolver));
-            let began = Instant::now();
-            // SAFETY: as above.
-            let buffer = unsafe {
-                device.new_buffer_with_bytes_no_copy(
-                    memory,
-                    RAM_OBJECT_BYTES as u64,
-                    ResourceOptions::default(),
-                    None,
-                )
-            };
-            makings.push(began.elapsed());
-            buffer.unwrap_or_else(|error| panic!("the buffer at {i} x 64 MiB: {error:?}"))
-        })
-        .collect();
-    let command_buffer = queue.command_buffer().unwrap();
-    let mut blit = command_buffer.blit_command_encoder().unwrap();
-    for buffer in &buffers {
-        blit.fill_buffer(buffer, 0..4, 0x5a).unwrap();
-    }
-    blit.end_encoding().unwrap();
-    submitted(command_buffer);
-    makings.sort();
+    let object = |at: usize| -> (Buffer, Duration) {
+        // SAFETY: the RAM's pages, mapped while `memfd` lives, which outlives the buffers.
+        let memory =
+            unsafe { HostMemory::new(memfd.whole.pointer(at)) }.with_runs(Arc::clone(&resolver));
+        let began = Instant::now();
+        // SAFETY: as above.
+        let buffer = unsafe {
+            device.new_buffer_with_bytes_no_copy(
+                memory,
+                RAM_OBJECT_BYTES as u64,
+                ResourceOptions::default(),
+                None,
+            )
+        };
+        let made = began.elapsed();
+        (
+            buffer.unwrap_or_else(|error| panic!("the buffer at {at:#x}: {error:?}")),
+            made,
+        )
+    };
     let ms = |time: Duration| time.as_secs_f64() * 1e3;
-    eprintln!(
-        "SUBMIT-PER-RAM-CHUNK {}: {} buffers made, median {:.3} ms, slowest {:.1} ms, all {:.1} ms",
-        device.name(),
-        makings.len(),
-        ms(makings[makings.len() / 2]),
-        ms(*makings.last().unwrap()),
-        ms(makings.iter().sum()),
-    );
-    report("an object over each 64 MiB held", &made);
-    let held = format!(
-        "{} objects over a {} GiB RAM held, {} live dma-buf memories",
-        buffers.len(),
-        RAM_BYTES >> 30,
-        device.work_counts().dma_buf_memories_live
-    );
+    let makings = |what: &str, times: &[Duration]| {
+        let mut sorted = times.to_vec();
+        sorted.sort();
+        eprintln!(
+            "SUBMIT-PER-RAM-CHUNK {}: {what}: {} buffers made, the first {:.3} ms, median {:.3} \
+             ms, slowest {:.3} ms, all {:.1} ms",
+            device.name(),
+            times.len(),
+            ms(times[0]),
+            ms(sorted[sorted.len() / 2]),
+            ms(*sorted.last().unwrap()),
+            ms(sorted.iter().sum()),
+        );
+    };
+    let use_each = |buffers: &[Buffer]| {
+        let command_buffer = queue.command_buffer().unwrap();
+        let mut blit = command_buffer.blit_command_encoder().unwrap();
+        for buffer in buffers {
+            blit.fill_buffer(buffer, 0..4, 0x5a).unwrap();
+        }
+        blit.end_encoding().unwrap();
+        submitted(command_buffer);
+    };
+    let live = |what: &str| {
+        let counts = device.work_counts();
+        format!(
+            "{what}, {} run imports live, {} live dma-buf memories",
+            counts.run_imports_live, counts.dma_buf_memories_live
+        )
+    };
+    let objects = RAM_BYTES / RAM_OBJECT_STRIDE;
+    // The first object over each chunk asks the device's thread for it and lies in its own
+    // run's import, as do the others over it until the chunk is imported.
+    let (buffers, made_first): (Vec<Buffer>, Vec<Duration>) =
+        (0..objects).map(|i| object(i * RAM_OBJECT_STRIDE)).unzip();
+    makings("an object over each 64 MiB, no chunk imported", &made_first);
+    use_each(&buffers);
+    report("an object over each 64 MiB made and used once", &made);
+    let held = live(&format!("{objects} objects just made"));
     measure(
         &device,
         &queue,
         &target,
-        (Kind::DmaBuf, buffers.len(), &held),
+        (Kind::DmaBuf, objects, &held),
         made.dma_buf_imports,
     );
-    drop(buffers);
+    // The chunks imported by the device's thread: once no import came for a while.
+    let began = Instant::now();
+    let mut last = (
+        device.work_counts().host_ram_chunks_imported,
+        Instant::now(),
+    );
+    while last.1.elapsed() < RAM_QUIET {
+        assert!(
+            began.elapsed() < RAM_WAIT,
+            "the chunks' imports never settled"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+        let imported = device.work_counts().host_ram_chunks_imported;
+        if imported != last.0 {
+            last = (imported, Instant::now());
+        }
+    }
+    // One more object over each 64 MiB, now that its chunk is imported: in the chunk.
+    let (later, made_later): (Vec<Buffer>, Vec<Duration>) = (0..objects)
+        .map(|i| object(i * RAM_OBJECT_STRIDE + RAM_OBJECT_STRIDE / 2))
+        .unzip();
+    makings(
+        "one more over each 64 MiB, the chunks imported",
+        &made_later,
+    );
+    // The first objects' run imports, which only a blit read, released once idle; their next
+    // use binds each in its chunk.
+    let began = Instant::now();
+    while device.work_counts().run_imports_live > made.run_imports_live {
+        assert!(began.elapsed() < RAM_WAIT, "the runs' imports never went");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let released = began.elapsed();
+    use_each(&buffers);
+    report(
+        &format!(
+            "the runs' imports released {:.1} s after the chunks settled, the objects used again",
+            released.as_secs_f64()
+        ),
+        &made,
+    );
+    let in_chunks = live(&format!("{} objects in the chunks", 2 * objects));
+    measure(
+        &device,
+        &queue,
+        &target,
+        (Kind::DmaBuf, 2 * objects, &in_chunks),
+        made.dma_buf_imports,
+    );
+    drop((buffers, later));
     std::thread::sleep(RAM_IDLE);
     report("the objects gone, after the idle wait", &made);
-    let idle = format!(
-        "the objects gone {} s, {} live dma-buf memories",
-        RAM_IDLE.as_secs(),
-        device.work_counts().dma_buf_memories_live
-    );
+    let idle = live(&format!("the objects gone {} s", RAM_IDLE.as_secs()));
     measure(
         &device,
         &queue,
@@ -861,5 +941,50 @@ fn submit_per_ram_chunk() {
         (Kind::DmaBuf, 0, &idle),
         made.dma_buf_imports,
     );
+    // Copies over the released chunks: a guest-shape gather of 16 runs of 512 KiB 64 MiB apart
+    // in the first chunk, its runs imported alone; again once the chunk is imported; and one of
+    // a run at each 64 MiB of the RAM, more runs in a chunk than a copy imports alone.
+    let run_at = |at: usize, bytes: usize| {
+        let first = memfd.whole.pointer(at).as_ptr() as u64;
+        first..first + bytes as u64
+    };
+    let few: Vec<_> = (0..16)
+        .map(|i| run_at(i * RAM_OBJECT_STRIDE, RAM_COPY_RUN))
+        .collect();
+    let every: Vec<_> = (0..objects)
+        .map(|i| run_at(i * RAM_OBJECT_STRIDE + RAM_COPY_RUN, RAM_COPY_RUN))
+        .collect();
+    let out =
+        (device.new_buffer((objects * RAM_COPY_RUN) as u64, ResourceOptions::private())).unwrap();
+    let gather = |what: &str, runs: &[std::ops::Range<u64>]| {
+        let before = device.work_counts();
+        let command_buffer = queue.command_buffer().unwrap();
+        let mut blit = command_buffer.blit_command_encoder().unwrap();
+        let began = Instant::now();
+        blit.copy_from_host_ram(&ram, runs, &out, 0).unwrap();
+        let encoded = began.elapsed();
+        blit.end_encoding().unwrap();
+        let committed = Instant::now();
+        let gpu = submitted(command_buffer);
+        let counts = device.work_counts();
+        eprintln!(
+            "SUBMIT-PER-RAM-CHUNK {}: {what}: a gather of {} runs of {} KiB encoded in {:.3} ms, \
+             committed to completed in {:.3} ms ({:.3} ms on the GPU); {} dma-buf imports made, \
+             {} chunks imported by then",
+            device.name(),
+            runs.len(),
+            runs[0].end.saturating_sub(runs[0].start) >> 10,
+            ms(encoded),
+            ms(committed.elapsed()),
+            gpu * 1e3,
+            counts.host_ram_dma_buf_imports - before.host_ram_dma_buf_imports,
+            counts.host_ram_chunks_imported - before.host_ram_chunks_imported,
+        );
+    };
+    gather("16 in the first chunk, released", &few);
+    std::thread::sleep(RAM_QUIET);
+    gather("16 in the first chunk, imported again", &few);
+    gather("one at each 64 MiB, the other chunks released", &every);
+    report("after the copies", &made);
     drop(used);
 }
