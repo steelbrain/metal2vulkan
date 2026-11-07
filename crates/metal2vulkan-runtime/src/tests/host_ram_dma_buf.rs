@@ -695,22 +695,23 @@ fn where_each_listed_import_costs_a_submission_the_ram_is_long_chunks_released_o
         "no run imported again"
     );
     assert!(delta(&again_in, |counts| counts.host_imports_reimported) >= 1);
-    // Once they went, released by the device's thread after its window.
+    // Once they went, released by the device's thread after its window, and freed. The thread
+    // counts a release before the chunk's drop frees it, so a count read between the two shows
+    // the release with the chunk still live: the wait is for both.
     drop((first, second, holders));
     let gone = Instant::now();
     let released = until(
-        &|counts| delta(counts, |counts| counts.host_ram_chunks_released) == count,
-        "the idle chunks were never released",
+        &|counts| {
+            delta(counts, |counts| counts.host_ram_chunks_released) == count
+                && counts.host_ram_chunks_live + count == held.host_ram_chunks_live
+        },
+        "the idle chunks were never released and freed",
     );
     println!(
         "HOST-RAM-LISTED {}: {count} released {:.1} s after the last buffer went; {} chunk(s) live",
         device.name(),
         gone.elapsed().as_secs_f64(),
         released.host_ram_chunks_live,
-    );
-    assert_eq!(
-        released.host_ram_chunks_live + count,
-        held.host_ram_chunks_live
     );
     // A copy over a released chunk: its run imported alone for it, the chunk asked for again.
     let run = start + filled..start + filled + LENGTH;
