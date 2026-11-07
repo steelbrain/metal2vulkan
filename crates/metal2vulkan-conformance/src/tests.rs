@@ -2163,6 +2163,59 @@ fn a_set_diff_prints_what_is_missing_and_what_is_extra() {
     assert!(printed.contains("extra {\"d\"}"), "{printed}");
 }
 
+/// A getter's answer our side states is the venue's own limit (`Sites::device_gap`) reads as the
+/// venue's gap, `lacks-feature`, and the same answer unstated still diverges.
+///
+/// The shape is the SIMD blur's on lavapipe: a tile state whose descriptor states no limit answers
+/// 960 threads where Metal answers 1024, and the device refused the dispatch of Metal's 32x32
+/// threadgroup as its gap (`cases::tile_threadgroups`). Both directions, because a comparison that
+/// read every stated site as a gap without looking, or that never read one, would pass one alone.
+#[test]
+fn a_getter_our_side_states_is_the_devices_limit_is_the_venues_gap() {
+    let limit = "max_total_threads_per_threadgroup";
+    let facts = |threads: u64| {
+        Node::branch("state-facts", Vec::new())
+            .with(Node::leaf(limit, Observed::value(Value::Uint(threads))))
+    };
+    let metal = Transcript::new(vec![facts(1024)]);
+    let stated = {
+        let mut sites = Sites::new();
+        sites.push(facts(960));
+        sites.device_gap(
+            &format!("state-facts/{limit}"),
+            "960 threads of the pipeline, the device's limit: LocalSize",
+        );
+        sites.finish()
+    };
+    let found = compare(&metal, &stated, &[], Offered::notices(&[]));
+    assert!(found.divergences.is_empty(), "{:?}", found.divergences);
+    assert_eq!(found.device_gaps.len(), 1, "{found:?}");
+    assert_eq!(
+        found.device_gaps[0].path,
+        format!("case/state-facts/{limit}")
+    );
+    let verdict = Verdict::of(&found, &Validated::NotRun);
+    assert_eq!(verdict.word(), "lacks-feature", "{verdict}");
+    assert!(verdict.is_compliant());
+    // A stated site whose answer is Metal's is no gap at all: nothing differed.
+    let same = {
+        let mut sites = Sites::new();
+        sites.push(facts(1024));
+        sites.device_gap(&format!("state-facts/{limit}"), "LocalSize");
+        sites.finish()
+    };
+    let found = compare(&metal, &same, &[], Offered::notices(&[]));
+    assert!(found.device_gaps.is_empty(), "{found:?}");
+    assert_eq!(Verdict::of(&found, &Validated::NotRun).word(), "exact");
+
+    // The other direction: the same answer, not stated, is a divergence of ours.
+    let unstated = Transcript::new(vec![facts(960)]);
+    let found = compare(&metal, &unstated, &[], Offered::notices(&[]));
+    assert!(found.device_gaps.is_empty(), "{found:?}");
+    assert_eq!(found.divergences.len(), 1, "{found:?}");
+    assert_eq!(Verdict::of(&found, &Validated::NotRun).word(), "divergent");
+}
+
 /// **A site name held twice under one parent is reported, on either side, rather than compared by
 /// luck.**
 ///

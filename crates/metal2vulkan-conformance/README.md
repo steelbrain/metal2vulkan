@@ -77,7 +77,10 @@ instead. That fact rides in the failure's own recorded value, beside the typed e
 the comparison wherever in a case the refusal happened: a case whose site is one node but whose rows
 are many names the row in its abort and pushes the node at the site, and filing the fact under a
 path the case states twice is how one run came to score the same missing extension `refused` in one
-family and `lacks-feature` in another.
+family and `lacks-feature` in another. A getter whose answer is the device's limit reads the same
+way where the device refused the work of Metal's size as its gap: a tile state whose descriptor
+states no limit answers the device's `maxTotalThreadsPerThreadgroup`, below Metal's 1024 where the
+device holds fewer threads of the pipeline, and its tile dispatch of Metal's threadgroup is refused.
 
 ## Does it answer the same thing twice?
 

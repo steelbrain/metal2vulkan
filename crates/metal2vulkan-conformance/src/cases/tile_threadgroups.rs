@@ -30,7 +30,10 @@
 //!
 //! Where a device holds fewer threads than Metal does, the dispatch Metal runs is refused typed as
 //! the device's gap, and the run stops at that call, so the row reads as the refusal it is rather
-//! than as one divergence per cell a refused dispatch never wrote.
+//! than as one divergence per cell a refused dispatch never wrote. The state's
+//! `maxTotalThreadsPerThreadgroup`, where its descriptor states no limit, is then the device's
+//! limit, below Metal's 1024, and reads as the same gap (`Sites::device_gap`): lavapipe's emulated
+//! 32-lane simdgroups hold 960 threads of the SIMD blur's pipeline.
 
 use crate::allowance::{Allowance, Justification, Loosening};
 use crate::case::{
@@ -777,13 +780,32 @@ impl Case for TileThreadgroups {
                 failure,
             })?;
             sites.push(facts.node(format!("{name}-facts")));
-            first = first.or(Some(state));
+            first = first.or(Some((state, name, spec, facts)));
         }
-        let state = first.ok_or_else(|| Abort {
+        let (state, name, spec, facts) = first.ok_or_else(|| Abort {
             at: "state".to_owned(),
             failure: Failure::named("NoState", "the case makes no tile pipeline"),
         })?;
-        self.passes(side, state, sites)
+        let passed = self.passes(side, state, sites);
+        // The device-gap ruling the dispatch gets, carried to the getter it is sized by: where the
+        // device refused a dispatch Metal ran of the state as its own gap, and the state's
+        // descriptor states no limit, its `maxTotalThreadsPerThreadgroup` is the device's limit
+        // (Metal's 1024 where the device holds a threadgroup of 1024, the device's own below it),
+        // so an answer below Metal's is the same gap and not a divergence of ours.
+        let lacks = passed
+            .as_ref()
+            .err()
+            .and_then(|abort| abort.failure.lacks.as_deref());
+        if let Some(lacks) = lacks.filter(|_| spec.max_total_threads_per_threadgroup.is_none()) {
+            sites.device_gap(
+                &format!("{name}-facts/max_total_threads_per_threadgroup"),
+                format!(
+                    "{} threads of the pipeline, the device's limit: {lacks}",
+                    facts.max_total_threads_per_threadgroup
+                ),
+            );
+        }
+        passed
     }
 }
 

@@ -542,7 +542,10 @@ impl Element {
 pub struct Transcript {
     pub root: Node,
     /// The sites where the **venue honestly lacks** what the call needed, by their paths from the
-    /// root, each with what it lacks ([`crate::verdict::device_gap`]).
+    /// root, each with what it lacks ([`crate::verdict::device_gap`]). A refused call's site, and
+    /// a getter's whose answer is a limit the device holds below Metal's, where the device refused
+    /// the work of Metal's size as its gap (a tile state's `maxTotalThreadsPerThreadgroup`,
+    /// [`crate::cases::tile_threadgroups`]): either differs from Metal's as the venue's gap.
     ///
     /// Our side's own fact about the device, not an observation of anything Metal did, so it is
     /// kept apart from the tree: it is never compared, never fingerprinted and never written to a
@@ -685,6 +688,9 @@ impl Sites {
     /// Every failing call goes through [`crate::case::call`], which records this whenever the
     /// typed error names capabilities a device could enable or a measured driver defect, so a
     /// case needs no code of its own and cannot forget to say it.
+    /// A case may state it at a site whose answer is a value, not an error: a getter answering a
+    /// limit the device holds below Metal's, where the device refused the work of Metal's size as
+    /// its gap, which the comparison then reads as that gap ([`Transcript::device_gaps`]).
     /// Recording the same site twice is a no-op, so the one place that reads a case's
     /// [`Abort`](crate::case::Abort) may record the venue's gap at the site that stopped the case
     /// without having to know whether [`crate::case::call`] already did.

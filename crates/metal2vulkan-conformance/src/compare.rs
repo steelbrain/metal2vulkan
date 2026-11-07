@@ -70,7 +70,9 @@ pub struct Refusal {
 }
 
 /// A site where plain Metal answered a call and we returned a typed error that is the **venue's**
-/// honest gap rather than ours ([`crate::verdict::device_gap`]).
+/// honest gap rather than ours ([`crate::verdict::device_gap`]), or a getter answered a limit the
+/// device holds below Metal's where our side states it is the device's
+/// ([`crate::transcript::Sites::device_gap`]).
 ///
 /// Neither a pass nor a failure, and never a [`Refusal`]: the typed error names capabilities a
 /// device could enable, or a driver measured to run the thing wrong, so the device truly lacks it
@@ -84,7 +86,7 @@ pub struct DeviceGap {
     pub path: String,
     /// What the venue lacks, in words.
     pub needs: String,
-    /// Our typed error, as the report prints it.
+    /// Our typed error, or the getter's answer, as the report prints it.
     pub ours: String,
 }
 
@@ -693,6 +695,18 @@ impl Walk<'_> {
         // allowance may turn a refusal into a pass: Metal answered the call and we did not.
         if refused(metal, ours) {
             self.refusal(path, ours);
+            return;
+        }
+        // An answer our side stated is the venue's own (`Sites::device_gap`): a getter answering
+        // a limit the device holds below Metal's, where the device refused the work of Metal's
+        // size as its gap. Settled before any allowance, as a refused site's gap is: it is
+        // neither ours to answer for nor a tolerance.
+        if let Some((_, needs)) = self.device_gaps.iter().find(|(site, _)| site == path) {
+            self.found.device_gaps.push(DeviceGap {
+                path: path.to_owned(),
+                needs: needs.clone(),
+                ours: crate::diff::print(ours),
+            });
             return;
         }
         // An allowance over the whole site holds whatever kind of value moved there, so a case can
