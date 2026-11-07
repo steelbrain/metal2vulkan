@@ -750,11 +750,53 @@ fn submit_per_ram_dma_buf() {
 /// `SUBMIT-PER-RAM-CHUNK` lines: the chunks the device imported
 /// (`WorkCounts::host_ram_chunks_imported`, `host_ram_chunk_bytes`, `host_ram_chunks_live`,
 /// `host_ram_chunks_imported_ahead`, `host_ram_chunks_released`), the run imports and dma-buf
-/// memories it holds, the buffers' makings (the first, the median and the slowest) and the
-/// gathers' times. Skipped where `/dev/udmabuf` cannot be opened.
+/// memories it holds, the buffers' makings (the first, the median and the slowest), each use of
+/// the objects from commit to completion (the second, the first submission that lists the chunks
+/// just imported, pays for their page tables) and the gathers' times. The RAM in 2 MiB pages, as
+/// QEMU's guest RAM lies where it aligns the `memfd` and advises huge pages
+/// (`MADV_HUGEPAGE`) and the host's `shmem_enabled` lets it (`advise`, CachyOS's own): the main
+/// case; [`submit_per_ram_chunk_in_small_pages`] measures it in 4 KiB pages. Skipped where
+/// `/dev/udmabuf` cannot be opened.
 #[test]
 #[ignore = "a measurement, not a check: run by name with --run-ignored all"]
 fn submit_per_ram_chunk() {
+    ram_chunks(Pages::Huge);
+}
+
+/// [`submit_per_ram_chunk`] with the RAM in 4 KiB pages (`MADV_NOHUGEPAGE`), as a host whose
+/// `shmem_enabled` is `never` keeps QEMU's guest RAM.
+#[test]
+#[ignore = "a measurement, not a check: run by name with --run-ignored all"]
+fn submit_per_ram_chunk_in_small_pages() {
+    ram_chunks(Pages::Small);
+}
+
+/// The host pages a guest RAM probe's `memfd` takes.
+#[derive(Clone, Copy, Debug)]
+enum Pages {
+    /// 2 MiB pages where the host lets the advice take effect (`MADV_HUGEPAGE`).
+    Huge,
+    /// 4 KiB pages (`MADV_NOHUGEPAGE`).
+    Small,
+}
+
+/// The host's shared memory in huge pages, in MiB (`ShmemHugePages` in `/proc/meminfo`).
+fn shmem_huge_mib() -> u64 {
+    let meminfo = std::fs::read_to_string("/proc/meminfo").unwrap_or_default();
+    (meminfo.lines())
+        .find_map(|line| line.strip_prefix("ShmemHugePages:"))
+        .and_then(|rest| {
+            rest.trim()
+                .trim_end_matches("kB")
+                .trim()
+                .parse::<u64>()
+                .ok()
+        })
+        .map_or(0, |kib| kib >> 10)
+}
+
+/// [`submit_per_ram_chunk`]'s measurement with the RAM in `pages`.
+fn ram_chunks(pages: Pages) {
     if !udmabuf_openable("submit per ram chunk") {
         return;
     }
@@ -774,6 +816,20 @@ fn submit_per_ram_chunk() {
     let source = memfd.source(&memfd.whole, &calls);
     let largest = udmabuf_size_limit();
     let start = memfd.whole.pointer(0);
+    let advice = match pages {
+        Pages::Huge => libc::MADV_HUGEPAGE,
+        Pages::Small => libc::MADV_NOHUGEPAGE,
+    };
+    let huge_before = shmem_huge_mib();
+    // SAFETY: the file's whole mapping, none of whose pages is touched yet; advice only.
+    let advised = unsafe { libc::madvise(start.as_ptr().cast(), RAM_BYTES, advice) };
+    eprintln!(
+        "SUBMIT-PER-RAM-CHUNK the RAM in {pages:?} pages: madvise {}",
+        match advised {
+            0 => "took the advice".to_string(),
+            _ => format!("failed: {}", std::io::Error::last_os_error()),
+        }
+    );
     // SAFETY: the file's whole mapping, readable and writable while `memfd` lives, which outlives
     // the device's use of the RAM and every object over it.
     let ram = unsafe { HostRam::new(&[(start, RAM_BYTES as u64)], None) }
@@ -850,14 +906,17 @@ fn submit_per_ram_chunk() {
             ms(sorted.iter().sum()),
         );
     };
-    let use_each = |buffers: &[Buffer]| {
+    // One command buffer that fills a word of each buffer, from commit to completion.
+    let use_each = |buffers: &[Buffer]| -> Duration {
         let command_buffer = queue.command_buffer().unwrap();
         let mut blit = command_buffer.blit_command_encoder().unwrap();
         for buffer in buffers {
             blit.fill_buffer(buffer, 0..4, 0x5a).unwrap();
         }
         blit.end_encoding().unwrap();
+        let committed = Instant::now();
         submitted(command_buffer);
+        committed.elapsed()
     };
     let live = |what: &str| {
         let counts = device.work_counts();
@@ -872,8 +931,14 @@ fn submit_per_ram_chunk() {
     let (buffers, made_first): (Vec<Buffer>, Vec<Duration>) =
         (0..objects).map(|i| object(i * RAM_OBJECT_STRIDE)).unzip();
     makings("an object over each 64 MiB, no chunk imported", &made_first);
-    use_each(&buffers);
-    report("an object over each 64 MiB made and used once", &made);
+    let used_once = use_each(&buffers);
+    report(
+        &format!(
+            "an object over each 64 MiB made and used once ({:.3} ms from commit to completion)",
+            ms(used_once)
+        ),
+        &made,
+    );
     let held = live(&format!("{objects} objects just made"));
     measure(
         &device,
@@ -915,13 +980,21 @@ fn submit_per_ram_chunk() {
         std::thread::sleep(Duration::from_millis(50));
     }
     let released = began.elapsed();
-    use_each(&buffers);
+    let used_again = use_each(&buffers);
     report(
         &format!(
-            "the runs' imports released {:.1} s after the chunks settled, the objects used again",
-            released.as_secs_f64()
+            "the runs' imports released {:.1} s after the chunks settled, the objects used again \
+             in the chunks, the first submission that lists them ({:.3} ms from commit to \
+             completion)",
+            released.as_secs_f64(),
+            ms(used_again)
         ),
         &made,
+    );
+    eprintln!(
+        "SUBMIT-PER-RAM-CHUNK the RAM in {pages:?} pages: the host's shared memory in huge \
+         pages {huge_before} MiB before it, {} MiB with its chunks imported",
+        shmem_huge_mib()
     );
     let in_chunks = live(&format!("{} objects in the chunks", 2 * objects));
     measure(
