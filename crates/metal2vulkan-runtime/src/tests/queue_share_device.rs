@@ -279,14 +279,20 @@ fn no_queue_joins_an_unshared_queue_s_vk_queue_and_one_placed_there_leaves() {
         let others: Vec<CommandQueue> = (0..3)
             .map(|_| device.new_command_queue().unwrap())
             .collect();
+        // Where the device does not share, the unshared queue and each after it took the round
+        // robin's next `VkQueue` (`Device::new_command_queue_unshared`), so every `round_robin`-th
+        // queue after it is on its `VkQueue` (on a device of one queue, each), and no other.
+        let round_robin = device.shared().round_robin();
         for _ in 0..16 {
             let kept = burst(&unshared, &scratch, 24);
-            for queue in &others {
+            for (after, queue) in others.iter().enumerate() {
                 let made = queue.command_buffer().unwrap();
-                assert_ne!(
-                    queue.vk_queue(),
-                    home,
-                    "a queue joined the unshared queue's VkQueue"
+                let wrapped = !shares && (after + 1) % round_robin == 0;
+                assert_eq!(
+                    queue.vk_queue() == home,
+                    wrapped,
+                    "queue {after} after the unshared one, of a round robin of {round_robin} \
+                     VkQueues (shares: {shares}): on the unshared queue's VkQueue"
                 );
                 drop(made);
             }
@@ -297,7 +303,6 @@ fn no_queue_joins_an_unshared_queue_s_vk_queue_and_one_placed_there_leaves() {
             assert!(device.work_counts().joins_withheld_from_unshared > 0);
             // Every round robin's `VkQueue` holds a queue, so the next unshared queue shares
             // one with a queue, which leaves at its next idle point.
-            let round_robin = device.shared().round_robin();
             let filled: Vec<CommandQueue> = (0..round_robin)
                 .map(|_| device.new_command_queue().unwrap())
                 .collect();
