@@ -6679,6 +6679,7 @@ fn sparse_texture_descriptor(spec: &SparseTextureSpec) -> TextureDescriptor {
         TextureUsage::SHADER_READ
     };
     descriptor.resource_options = ResourceOptions::private();
+    descriptor.allow_gpu_optimized_contents = spec.gpu_optimized;
     descriptor
 }
 

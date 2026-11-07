@@ -4243,6 +4243,14 @@ each item named states the rule in full.
   update_texture_mapping`), and leaves every texel as it was: Vulkan binds nothing past an image's
   layers (`VUID-VkSparseImageMemoryBindInfo-subresource-01723`), and which texels Metal's page
   reaches is not derivable from what was measured.
+- **A sparse tile a move rebound reads all its texels, compressed or not.** Under Metal's default
+  `allowGPUOptimizedContents`, Metal may keep a sparse texture losslessly compressed, and a tile
+  `moveTextureMappingsFromTexture:…` rebound into one can then read its moved texels in only part
+  of the tile: on an Apple M3 Max under macOS 27.0.1 a `ShaderRead` `R32Float` tile held them in
+  128 of its 4,096 texels (the first 4 by 2 of each 16 by 16 block) and 0 in the rest. With
+  `allowGPUOptimizedContents` off, `ShaderWrite` or `PixelFormatView` usage, Metal's moved tile
+  read all 4,096. The runtime's moved tile holds all of its texels under every descriptor; it
+  does not reproduce the loss.
 - **A heap's buffer and texture over the same bytes alias them, in the device's layout**, not
   Apple's tiled or compressed one.
 

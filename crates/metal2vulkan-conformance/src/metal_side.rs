@@ -7288,6 +7288,7 @@ fn sparse_texture_descriptor(spec: &SparseTextureSpec) -> Retained<MTLTextureDes
     };
     descriptor.setUsage(usage);
     descriptor.setStorageMode(MTLStorageMode::Private);
+    descriptor.setAllowGPUOptimizedContents(spec.gpu_optimized);
     descriptor
 }
 

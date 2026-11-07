@@ -746,6 +746,14 @@ fn tiles_of(rect: &TileRect) -> Vec<[u64; 2]> {
 /// reading after it a measurement: four tiles holding four distinct markers say the fills landed
 /// and say which tile each one is, so a later all-zero reading is a tile the move did not reach
 /// rather than a fill that never ran.
+///
+/// Both textures are made with `allowGPUOptimizedContents` off. Under Metal's default this oracle
+/// keeps such a shader-read texture losslessly compressed, and a tile a move rebound in one then
+/// reads its own texels in only 128 of its 4,096 words and 0 in the rest, where every descriptor
+/// that turns compression off reads all 4,096 (`probes/sparse_move_compression.m`). A move is
+/// documented to move the tile's mapping, and the rows read which tiles it moved, so they read
+/// them where compression's own state cannot hide one; docs/API.md's accepted differences say
+/// what a compressed texture reads.
 fn moved(
     held: &[(usize, TileRect)],
     moves: MappingStep,
@@ -796,7 +804,8 @@ fn moved(
         });
     }
     steps.push(MappingStep::Commit);
-    program(vec![plain(), plain()], Vec::new(), 0, steps)
+    let texture = plain().unoptimized();
+    program(vec![texture, texture], Vec::new(), 0, steps)
 }
 
 /// A move of `size` tiles at `from` of level 0 slice 0 of [`SOURCE`] onto `to` of [`DESTINATION`].

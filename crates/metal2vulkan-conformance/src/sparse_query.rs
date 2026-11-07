@@ -221,6 +221,11 @@ pub struct SparseTextureSpec {
     /// Whether the texture is a render target as well as shader-read, which a multisampled sparse
     /// texture must be.
     pub render_target: bool,
+    /// `allowGPUOptimizedContents`: whether Metal may keep the texture losslessly compressed.
+    /// Metal's default, `YES`, lets it compress this shader-read texture, and a tile a move
+    /// rebound then reads back whole for only a fraction of its texels
+    /// (`probes/sparse_move_compression.m`), so the rows that read moved texels turn it off.
+    pub gpu_optimized: bool,
 }
 
 impl SparseTextureSpec {
@@ -235,6 +240,7 @@ impl SparseTextureSpec {
             samples: 1,
             array_length: 1,
             render_target: false,
+            gpu_optimized: true,
         }
     }
 
@@ -258,11 +264,18 @@ impl SparseTextureSpec {
         self
     }
 
+    /// The texture with `allowGPUOptimizedContents` off, which keeps Metal from compressing it.
+    #[must_use]
+    pub const fn unoptimized(mut self) -> Self {
+        self.gpu_optimized = false;
+        self
+    }
+
     /// The site name the texture's answers sit at: every field that can change the tail
     /// arithmetic.
     pub fn site(&self) -> String {
         format!(
-            "{}/{:?}/{}x{}x{}/levels-{}/samples-{}/slices-{}{}",
+            "{}/{:?}/{}x{}x{}/levels-{}/samples-{}/slices-{}{}{}",
             self.format.name(),
             self.texture_type,
             self.size[0],
@@ -272,10 +285,16 @@ impl SparseTextureSpec {
             self.samples,
             self.array_length,
             if self.render_target { "/target" } else { "" },
+            if self.gpu_optimized {
+                ""
+            } else {
+                "/unoptimized"
+            },
         )
     }
 
-    /// The bytes the texture fingerprints as.
+    /// The bytes the texture fingerprints as. An unoptimized texture adds a byte where Metal's
+    /// default adds none, so the fingerprints taken before the field existed still hold.
     pub fn words(&self) -> Vec<u8> {
         let mut out = Vec::new();
         out.extend(self.texture_type.as_raw().to_le_bytes());
@@ -287,6 +306,9 @@ impl SparseTextureSpec {
         out.extend(self.samples.to_le_bytes());
         out.extend(self.array_length.to_le_bytes());
         out.push(u8::from(self.render_target));
+        if !self.gpu_optimized {
+            out.push(0xA0);
+        }
         out
     }
 }

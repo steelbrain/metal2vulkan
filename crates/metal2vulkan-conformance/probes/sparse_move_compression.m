@@ -40,6 +40,23 @@
 //     "$TMPDIR/sparse_move_compression" $v; "$TMPDIR/sparse_move_compression" $v; done
 //
 // Nothing here dispatches, draws or loops on a GPU; every region lies inside its level.
+//
+// RESULTS, an Apple M3 Max (`AGXG15CDevice`) under macOS 27.0.1, plain Metal, each variant run
+// twice with one outcome both times:
+//
+//   read                     B(3,3) holds A(0,0)'s word in 128 of its 4,096 texels (the first 4
+//                            by 2 of each 16 by 16 block) and 0 in the other 3,968; B(0,0) holds
+//                            A(1,1)'s in all 4,096.
+//   read-unoptimized         Both moved tiles hold their word in all 4,096 texels.
+//   read-write               The same.
+//   read-write-unoptimized   The same.
+//   read-view                The same.
+//
+// In every variant A's two untouched tiles read their own words throughout, both moved-from tiles
+// read 0 throughout, every command buffer completed with no error, and `usedSize` stayed 262,144
+// (16 pages) across the moves. So the partial read-back is lossless compression's: each switch that
+// turns compression off, `allowGPUOptimizedContents = NO` included, lets a moved tile carry all of
+// its texels. The conformance case's move rows make their textures with that switch off.
 
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
