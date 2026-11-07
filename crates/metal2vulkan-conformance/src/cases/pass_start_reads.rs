@@ -52,7 +52,10 @@
 //! Laptop, which renders a target over a buffer's bytes as a linear image
 //! (`VK_NV_linear_color_attachment`), announces `linear-attachment-clear-copies` as well on the
 //! small rows over a buffer, for a pass that clears it, and `shared-in-system-memory` on every
-//! row.
+//! row. RADV (the RX 7900 XTX and the Radeon 780M, 2026-11-07) announces `shadowed-texture` on
+//! the small rows over a buffer instead: no linear image of its aliases the 32x32 target over
+//! the buffer's 128-byte rows, so the runtime renders and reads the target through a shadow image
+//! (`texture.rs`), and every texel of those rows still compares exactly there.
 
 use crate::allowance::{Allowance, Justification, Loosening};
 use crate::case::{
@@ -852,6 +855,7 @@ impl Case for PassStartRead {
             allowances.push(notice_allowance(
                 Degradation::LinearAttachmentClearCopies.code(),
             ));
+            allowances.push(notice_allowance(Degradation::ShadowedTexture.code()));
         }
         // Every row reads its answer back through a `Shared` buffer, so on a device without
         // unified memory the runtime announces `shared-in-system-memory`

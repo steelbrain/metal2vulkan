@@ -46,12 +46,17 @@ pub const COMMAND_BUFFER_FACTS: &str = "command-buffer-facts";
 
 /// The notices the runtime can announce over the GPU times, and the whole of what this case takes.
 ///
-/// `UncalibratedGpuTimes` is **not** here, though the runtime can announce it: on this oracle it
-/// never fires, and a declaration that outlives its own reason keeps asserting that somebody
-/// examined a notice nobody has looked at since. A venue that does announce it reads as
-/// `UndeclaredNotice`, naming the code and the case, which is the loud form and the moment to look
-/// at it.
-const GPU_TIME_NOTICES: [Degradation; 1] = [Degradation::GpuTimesFromHost];
+/// `UncalibratedGpuTimes` is here because a venue announces it. The RX 7900 XTX (RADV NAVI31)
+/// announced it for this case on 2026-11-07: its calibrated timestamps placed each of the case's
+/// two timed command buffers outside the command buffer's life
+/// (`WorkCounts::calibration_disagreements` 2 in each of three `cost` runs). So the runtime
+/// placed their times as it does on an uncalibrated device (`gpu_time.rs`), and every value of
+/// the case still compared exactly. The Radeon 780M (RADV PHOENIX) in the same machine agreed
+/// with its calibration in the same runs (0) and announced nothing.
+const GPU_TIME_NOTICES: [Degradation; 2] = [
+    Degradation::GpuTimesFromHost,
+    Degradation::UncalibratedGpuTimes,
+];
 
 /// A case over one command buffer's own answers.
 pub struct CommandBufferFactsCase {
@@ -104,8 +109,9 @@ impl Case for CommandBufferFactsCase {
         // `GpuTimesFromHost`: the runtime answers the GPU times from the host clock where the
         // driver's own timestamps wait for every queue's (MoltenVK on Apple's GPUs).
         // `UncalibratedGpuTimes`: it places them without calibrated timestamps where the device
-        // offers none. The orderings this case compares do not depend on either, which is why the
-        // case can take the notice and still compare every value exactly.
+        // offers none, or where the device's calibration disagrees with the command buffer's life
+        // (the RX 7900 XTX, `GPU_TIME_NOTICES`). The orderings this case compares do not depend on
+        // either, which is why the case can take the notice and still compare every value exactly.
         // Every row reads its answer back through a `Shared` buffer, so on a device without
         // unified memory the runtime announces `shared-in-system-memory`
         // (`crate::replay::shared_memory_notice` holds the whole reason). It declares the
