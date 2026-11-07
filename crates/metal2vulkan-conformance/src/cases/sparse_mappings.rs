@@ -40,7 +40,7 @@
 //! - **the level** moves it: level 0 of this texture is 16 tiles, level 1 is 4, level 2 is 1, and
 //!   the tail is one page however small a region names it;
 //! - **the slice** moves it: a second slice's tiles are tiles of their own, and a slice **past**
-//!   the texture's own moves it where plain Metal takes a page for one and we take none
+//!   the texture's own moves it, plain Metal's and ours alike, by a page for one
 //!   ([`a_slice_past_the_textures`], which also reads the texels four mapped tiles hold either
 //!   side of such an update, because `usedSize` cannot say which tiles one reached);
 //! - **the move** does not move it, which is the point of its row: the runtime's own
@@ -1154,8 +1154,9 @@ pub fn slices_of_an_array() -> SparseMappings {
     }
 }
 
-/// The case of a slice past the texture's own, which our side maps nothing for and plain Metal
-/// takes a page for, with the texels four mapped tiles hold either side of it.
+/// The case of a slice past the texture's own, which plain Metal and our side both take a page
+/// for, with the texels four mapped tiles hold either side of it (plain Metal's page lands in one
+/// of them, ours nowhere: an accepted difference, `docs/API.md`).
 pub fn a_slice_past_the_textures() -> SparseMappings {
     SparseMappings {
         row: &A_SLICE_PAST_THE_TEXTURES,

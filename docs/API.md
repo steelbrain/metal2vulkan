@@ -4234,6 +4234,15 @@ each item named states the rule in full.
 - **A `Shared` heap's textures are linear images** where the device's optimal images take no
   host-visible memory.
 - **A sparse texture on a device without shader residency holds all its texels' memory.**
+- **A sparse mapping update of a slice past the texture's own maps nothing.** Metal's API
+  validation refuses such an update; plain Metal takes it, charges its heap's `usedSize` one page
+  a tile of the region (clipped to the level's tiles), and binds that page at an address its own
+  page layout derives: on an Apple M3 Max under macOS 27.0.1 a 16 by 16 texel block of slice 0's
+  mapped tile (0, 0) then read Metal's unwritten pattern. The runtime charges the heap the same
+  pages, given back on an unmap of each tile (`ResourceStateCommandEncoder::
+  update_texture_mapping`), and leaves every texel as it was: Vulkan binds nothing past an image's
+  layers (`VUID-VkSparseImageMemoryBindInfo-subresource-01723`), and which texels Metal's page
+  reaches is not derivable from what was measured.
 - **A heap's buffer and texture over the same bytes alias them, in the device's layout**, not
   Apple's tiled or compressed one.
 

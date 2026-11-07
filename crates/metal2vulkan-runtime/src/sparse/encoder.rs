@@ -134,7 +134,8 @@ impl ResourceStateCommandEncoder {
     /// arguments its own validation layer stops (`UnitGrid::clipped_region`, where the
     /// measurement is): level 9 of a nine-level texture and an origin past the level's tiles map
     /// nothing, and a region running past them maps the level's own tiles. A slice past the
-    /// texture's maps none, where plain Metal's `usedSize` took one page for it.
+    /// texture's maps none, and its heap's `usedSize` counts the region's tiles there as plain
+    /// Metal's does, one page each, given back on an unmap of each.
     ///
     /// Refused, recording nothing: a texture of another device (`Invalid`); a view of a pixel
     /// format whose tile is not its texture's (`NotImplemented(SparseHeaps)`: not measured).
@@ -199,12 +200,12 @@ impl ResourceStateCommandEncoder {
     /// of no size on an axis, or of a level or slice past the texture's, maps nothing; and the
     /// regions the count names past the buffer map nothing.
     ///
-    /// Differs, in the heap's count alone: plain Metal **bounds the level and the origin and does
-    /// not bound the slice**, charging a region of a slice past the texture's exactly what the
-    /// same region on an in-bounds slice costs — the region clipped to the level's tiles, one
-    /// page each — where the runtime maps and counts none, so its `usedSize` is lower by those
-    /// tiles. Metal's charge is an ordinary one in every other way: idempotent per region, given
-    /// back on an unmap of it, and never taking the count below where it stood
+    /// Plain Metal **bounds the level and the origin and does not bound the slice**, charging a
+    /// region of a slice past the texture's exactly what the same region on an in-bounds slice
+    /// costs — the region clipped to the level's tiles, one page each — and so does the runtime's
+    /// heap, mapping none of them. Metal's charge is an ordinary one in every other way:
+    /// idempotent per tile, given back on an unmap of it, and never taking the count below where
+    /// it stood
     /// (`metal2vulkan-conformance/probes/sparse_indirect_usedsize.m`, the M3 Max under macOS
     /// 27.0.1, plain Metal, one shape per process, each reading twice, with the in-bounds region
     /// through the same selector as its control). A level past the texture's levels and an origin

@@ -215,12 +215,16 @@ pub(crate) fn bind_batch(
         });
     }
     let Images { textures, images } = known;
-    let (changed, moved) = apply(&ops, &images);
+    let Applied {
+        changed,
+        moved,
+        charged,
+    } = apply(&ops, &images);
     let kept = kept_units(&images, &moved);
     let mut changes = match plan(device, &images, &changed, &kept) {
         Ok(changes) => changes,
         Err(failure) => {
-            undo(&images, &changed);
+            undo(&images, &changed, &charged);
             return Err(failure);
         }
     };
@@ -345,7 +349,7 @@ pub(crate) fn bind_batch(
     exit_guard::called(Call::QueueBindSparse);
     if let Err(error) = bound {
         free_fresh(device, &changes);
-        undo(&images, &changed);
+        undo(&images, &changed, &charged);
         return Err(BindFailure::Vulkan(error));
     }
     let mut unbound = Vec::new();
@@ -382,14 +386,24 @@ fn free_fresh(device: &Device, changes: &[UnitChange]) {
     }
 }
 
+/// What [`apply`] changed: the units mapped and unmapped, what moved in order, and the units of
+/// slices past their textures' own their heaps took or gave back.
+struct Applied {
+    changed: Vec<Changed>,
+    moved: Vec<Moved>,
+    charged: Vec<Changed>,
+}
+
 /// Apply each update to its textures' Metal state in order: a map takes its heap's room (a heap
 /// that fills leaves the rest of that update unmapped), an unmap gives it back, and a move takes
 /// each source unit's mapping to its destination unit where that one is unmapped as it moves,
 /// one unit at a time in the move's order, leaving the heaps' counts as they are (as Metal's).
-/// What changed, and what moved in order.
-fn apply(ops: &[Op<'_>], images: &[&SparseImage]) -> (Vec<Changed>, Vec<Moved>) {
+/// A unit of a slice past its texture's own takes and gives back its heap's room alike, and
+/// nothing holds it (`UnitGrid::clipped_region`).
+fn apply(ops: &[Op<'_>], images: &[&SparseImage]) -> Applied {
     let mut changed = Vec::new();
     let mut moved = Vec::new();
+    let mut charged = Vec::new();
     for op in ops {
         match *op {
             Op::Units { image, update } => {
@@ -402,6 +416,30 @@ fn apply(ops: &[Op<'_>], images: &[&SparseImage]) -> (Vec<Changed>, Vec<Moved>) 
                 };
                 let mut state = lock(&sparse.state);
                 for &unit in &update.units {
+                    if sparse.grid.past_slices(unit) {
+                        let map = update.mode == TileMapping::Map;
+                        if map {
+                            if state.charged.contains(&unit) {
+                                continue;
+                            }
+                            if !heap.take(sparse.heap_tiles(unit)) {
+                                break;
+                            }
+                            state.charged.insert(unit);
+                        } else {
+                            if !state.charged.remove(&unit) {
+                                continue;
+                            }
+                            heap.give(sparse.heap_tiles(unit));
+                        }
+                        charged.push(Changed {
+                            image,
+                            unit,
+                            mapped: map,
+                            counted: true,
+                        });
+                        continue;
+                    }
                     match update.mode {
                         TileMapping::Map => {
                             if state.mapped.contains(&unit) {
@@ -458,7 +496,11 @@ fn apply(ops: &[Op<'_>], images: &[&SparseImage]) -> (Vec<Changed>, Vec<Moved>) 
             }
         }
     }
-    (changed, moved)
+    Applied {
+        changed,
+        moved,
+        charged,
+    }
 }
 
 /// The device units of `image`, the batch's image `index`, that `changed` touched.
@@ -493,8 +535,24 @@ fn kept_units(images: &[&SparseImage], moved: &[Moved]) -> BTreeSet<(usize, VkUn
     kept
 }
 
-/// Undo `changed`, last first: the Metal state and the heaps' counts as they were.
-fn undo(images: &[&SparseImage], changed: &[Changed]) {
+/// Undo `changed` and `charged`, last first: the Metal state and the heaps' counts as they were.
+fn undo(images: &[&SparseImage], changed: &[Changed], charged: &[Changed]) {
+    for change in charged.iter().rev() {
+        let image = images[change.image];
+        let mut state = lock(&image.state);
+        let held = image.heap.upgrade();
+        let Some(heap) = held.as_ref().and_then(Heap::sparse) else {
+            continue;
+        };
+        if change.mapped {
+            state.charged.remove(&change.unit);
+            heap.give(image.heap_tiles(change.unit));
+        } else {
+            state.charged.insert(change.unit);
+            // The room was the image's a moment ago: taking it back cannot fail.
+            heap.take(image.heap_tiles(change.unit));
+        }
+    }
     for change in changed.iter().rev() {
         let image = images[change.image];
         let mut state = lock(&image.state);

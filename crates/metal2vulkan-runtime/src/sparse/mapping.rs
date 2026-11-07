@@ -111,12 +111,16 @@ impl TexelBox {
     }
 }
 
-/// What a texture has mapped and bound: Metal's mapped units, and the memory of each bound
-/// device unit.
+/// What a texture has mapped and bound: Metal's mapped units, the memory of each bound device
+/// unit, and the units of slices past its own that its heap counts
+/// ([`UnitGrid::clipped_region`]).
 #[derive(Default)]
 pub(crate) struct SparseState {
     pub(crate) mapped: HashSet<MetalUnit>,
     pub(crate) bound: HashMap<VkUnit, crate::memory::Placement>,
+    /// Units of a slice past the texture's own that a map took: its heap counts each, as Metal's
+    /// `usedSize` does, and nothing holds texels of them.
+    pub(crate) charged: HashSet<MetalUnit>,
 }
 
 /// The units of a sparse texture, as data: Metal's (its tile, and a slice's tail from
@@ -461,13 +465,16 @@ impl UnitGrid {
     }
 
     /// Metal's units an update's `region` (in tiles) of `level` and `slice` touches, as plain Metal
-    /// maps arguments its validation stops (the M3 Max under macOS 27.0.1): none at a level or
-    /// slice past the texture's, nor for a tiled level's region whose origin is past its tiles or
-    /// whose size is 0 on an axis; else the region's tiles inside the level, the rest of it
-    /// dropped. A level past `firstMipmapInTail` touches its slice's tail.
+    /// maps arguments its validation stops (the M3 Max under macOS 27.0.1): none at a level past
+    /// the texture's, nor for a tiled level's region whose origin is past its tiles or whose size
+    /// is 0 on an axis; else the region's tiles inside the level, the rest of it dropped. A level
+    /// past `firstMipmapInTail` touches its slice's tail. A slice past the texture's own names the
+    /// units the same region names on an in-bounds slice, at that slice
+    /// ([`past_slices`](Self::past_slices)): units Metal's heap counts and nothing holds.
     ///
     /// One rule for all three mapping selectors — the direct update, the plural one and the
-    /// indirect one — and for the move. Plain Metal **takes** each of these arguments where its own
+    /// indirect one — and, with the slice bounded ([`clipped_size`](Self::clipped_size)), for the
+    /// move. Plain Metal **takes** each of these arguments where its own
     /// API validation layer stops them, so a typed refusal of ours would be a refusal where Metal
     /// allows. Measured through the direct
     /// `updateTextureMapping:mode:region:mipLevel:slice:` on this M3 Max, macOS 27.0.1
@@ -479,44 +486,63 @@ impl UnitGrid {
     /// is the control that says the measurement works at all. The three move shapes complete with
     /// no error too, leaving `usedSize` where it was.
     ///
-    /// Differs, in the heap's count alone: Metal **does not bound the slice**, where it bounds the
-    /// level and the origin. A region of a slice past the texture's costs Metal exactly what the
-    /// same region on an in-bounds slice costs — the region clipped to this level's tiles, one
-    /// page each — and that charge is then an ordinary one: idempotent per region, given back on
-    /// an unmap of it, and never taking the count below where it stood. The runtime maps and
-    /// counts none, so its `usedSize` is lower by those tiles. Measured through **both** mapping
-    /// selectors on this M3 Max (the direct one above, and the indirect one over nineteen
-    /// configurations in `metal2vulkan-conformance/probes/sparse_indirect_usedsize.m`), which
+    /// Metal **does not bound the slice**, where it bounds the level and the origin. A region of
+    /// a slice past the texture's costs Metal's heap exactly what the same region on an in-bounds
+    /// slice costs — the region clipped to this level's tiles, one page each — and that charge
+    /// is then an ordinary one: idempotent per tile, given back on an unmap of it, and never
+    /// taking the count below where it stood. So the runtime counts those units in its heap and
+    /// maps them nowhere (`SparseState::charged`). Measured through **both** mapping selectors on
+    /// this M3 Max (the direct one above, and the indirect one over nineteen configurations in
+    /// `metal2vulkan-conformance/probes/sparse_indirect_usedsize.m`), over level 0's tiles, which
     /// read alike: one page for one such tile, sixteen for a region of 8 by 8 on a level holding
     /// 4 by 4, one per out-of-bounds slice named, and nothing at all for a level or an origin
-    /// past the bounds. `tests::sparse` holds the readings row by row.
+    /// past the bounds; another level's region, a tail among them, takes the same rule
+    /// unmeasured. `tests::sparse` holds the readings row by row.
     ///
-    /// The count is not the whole of that difference, and cannot be: it cannot say which tiles an
-    /// update reached. The conformance suite's `sparse-mapping-a-slice-past-the-textures` reads
-    /// the texels four mapped tiles hold either side of such an update as well as the count.
+    /// Plain Metal's page for such a tile also lands at an address its own page layout derives,
+    /// in a block of another slice's mapped tile (`sparse-mapping-a-slice-past-the-textures`
+    /// reads it): not mirrored, an accepted difference (`docs/API.md`), since Vulkan binds
+    /// nothing past an image's layers (`VUID-VkSparseImageMemoryBindInfo-subresource-01723`) and
+    /// the address is not derivable from what is measured.
     pub(crate) fn clipped_region(&self, level: u64, slice: u64, region: &Region) -> Vec<MetalUnit> {
-        let Some(clipped) = self.clipped_size(level, slice, region) else {
+        let Some(clipped) = self.clipped_level(level, region) else {
             return Vec::new();
         };
         self.update_units(
             level as u32,
-            slice as u32,
+            u32::try_from(slice).unwrap_or(u32::MAX),
             axes_of(region.origin),
             clipped.map(|axis| axis as u32),
         )
+    }
+
+    /// Whether `unit` is of a slice past the texture's own: one Metal's heap counts and nothing
+    /// holds ([`clipped_region`](Self::clipped_region)).
+    pub(crate) fn past_slices(&self, unit: MetalUnit) -> bool {
+        let (MetalUnit::Tile { slice, .. } | MetalUnit::Tail { slice }) = unit;
+        slice >= self.slices()
     }
 
     /// The tiles of `region` of `level` and `slice` that lie inside this grid, on each axis, or
     /// `None` where the region names no unit of it at all.
     ///
     /// The one place [`clipped_region`](Self::clipped_region)'s rule is written down, so the move
-    /// below reads the same bounds the three mapping selectors do. A level at
+    /// below reads the same bounds the three mapping selectors do, the slice's too (they read
+    /// [`clipped_level`](Self::clipped_level) on a slice past the texture's). A level at
     /// `firstMipmapInTail` answers one unit however large the region is — the slice's whole tail —
     /// which is what `[1, 1, 1]` stands for here; a level past the tail, a level or slice past the
     /// texture's own, an origin past the level's tiles and a size of 0 on an axis each answer
     /// `None`.
     fn clipped_size(&self, level: u64, slice: u64, region: &Region) -> Option<[u64; 3]> {
-        if level >= self.shape.levels || slice >= u64::from(self.slices()) {
+        if slice >= u64::from(self.slices()) {
+            return None;
+        }
+        self.clipped_level(level, region)
+    }
+
+    /// [`clipped_size`](Self::clipped_size) on any slice.
+    fn clipped_level(&self, level: u64, region: &Region) -> Option<[u64; 3]> {
+        if level >= self.shape.levels {
             return None;
         }
         let level32 = level as u32;
