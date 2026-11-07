@@ -493,8 +493,9 @@ impl Buffer {
     /// over a plane of a surface with planes and lays out no one way across the GPUs measured
     /// (`NotImplemented(SurfacePlaneShape)`, which carries the measurements: rows wider than the
     /// plane's, more than one level, another type, a 2D array of slices, a texture buffer or BC
-    /// texture at an offset or pitch off 16 bytes); `Memoryless` storage, which plain
-    /// Metal makes and serves on the CPU while its GPU uses fail the command buffer
+    /// texture at an offset or pitch off 16 bytes; a cube or cube array there plain Metal asserts
+    /// on, `Invalid`); `Memoryless` storage, which plain Metal makes and serves on the CPU while its
+    /// GPU uses fail the command buffer
     /// (`NotImplemented(MemorylessSurfacePlane)`, which carries the measurement); rows that
     /// overlap on Metal's GPU where no shadow of the runtime's holds them
     /// (`NotImplemented(OverlappingSurfaceRows)`: a plane a render pass stores into, a two-plane

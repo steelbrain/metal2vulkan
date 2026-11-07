@@ -1421,8 +1421,8 @@ pub enum RuntimeGap {
     /// texels past the surface in a tail of its own
     /// ([`Buffer::new_texture_with_iosurface_plane`](crate::Buffer::new_texture_with_iosurface_plane),
     /// announced as `Degradation::SurfaceTexelsTail`), as a 2D texture, an array or a texture
-    /// buffer over a buffer is made past its length ([`Buffer::new_texture`](crate::Buffer::new_texture)).
-    /// Metal lays a plane's in no one place
+    /// buffer over a buffer is made past its length
+    /// ([`Buffer::new_texture`](crate::Buffer::new_texture)). Metal lays a plane's in no one place
     /// (`metal2vulkan-conformance/probes/surface_texture_envelope.m`, an Apple M3 Max under macOS
     /// 27.0.1): its blits read zeros past the surface, its kernels zeros and, 32 KiB on, the
     /// surface's first bytes again, its `getBytes` other memory, and its blits and
@@ -1456,16 +1456,19 @@ pub enum RuntimeGap {
     /// A texture over a plane of an IOSurface with planes (`Buffer::new_texture_with_iosurface_plane`,
     /// the stand-in for `newTextureWithDescriptor:iosurface:plane:`) that Metal makes and whose
     /// texels it lays out no one way: rows wider than the plane's `bytesPerRow`, more than one mip
-    /// level, a 2D array of more than one slice, a 3D, cube or multisample texture or any other
-    /// type but 2D, a texture buffer, 1D or a 2D array of one slice, a 1D texture wider than the
-    /// plane's row, a BC texture of another type than 2D or wider than the plane's rows, and a
-    /// texture buffer or BC texture over a plane at an offset or `bytesPerRow` off 16 bytes.
+    /// level, a 2D array of more than one slice, a 3D or multisample texture or any other type but
+    /// 2D, a texture buffer, 1D or a 2D array of one slice, a 1D texture wider than the plane's
+    /// row, a BC texture of another type than 2D or wider than the plane's rows, and a texture
+    /// buffer or BC texture over a plane at an offset or `bytesPerRow` off 16 bytes. A cube or
+    /// cube array there is Metal's own refusal (`Invalid`: plain Metal asserts
+    /// "carriesComplexTexture || numFaces == 1", the API validation layer off).
     ///
     /// Measured (`metal2vulkan-conformance/probes/surface_texture_envelope.m`, each texel's bytes
     /// tagged, read by blit, kernel and `getBytes` and written by blit and `replaceRegion`, on an
     /// AMD Radeon Pro 5300M and an Intel UHD 630 under macOS 26.7.1 and an Apple M3 Max under
-    /// 27.0.1; every one of these made on all three, but the M3's cube, at which its own assertion
-    /// ends the process): no layout holds them. Rows wider than the pitch overlap the next row on
+    /// 27.0.1; every one of these made on all three, but the M3's cube and cube array, at which
+    /// its own assertion ends the process, and its BC textures, for which it answers nil): no
+    /// layout holds them. Rows wider than the pitch overlap the next row on
     /// the M3's GPU and CPU alike, while the UHD 630's GPU keeps no texel past the pitch and the
     /// 5300M's blit into the texture changes no byte of the surface and its kernels read the rows
     /// at another pitch. Levels past 0 lie at the plane's base on the M3's CPU and elsewhere on its

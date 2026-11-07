@@ -199,7 +199,9 @@
 //!   calls lay out alike only a texture buffer (its texels contiguous from the plane's offset,
 //!   however wide: past the plane's row too on the M3 Max and the 5300M, where the UHD 630's
 //!   kernels read other bytes), a 1D texture whose row fits and a 2D array of one slice, each
-//!   where the 2D texture of its rows lies; the runtime makes those. Every other shape lies
+//!   where the 2D texture of its rows lies; the runtime makes those. Plain Metal asserts on a cube and a cube array over a plane on the M3 Max
+//!   ("carriesComplexTexture || numFaces == 1", the API validation layer off), which the runtime
+//!   refuses as Metal's own ([`BufferTextureProblem::TextureType`]). Every other shape lies
 //!   differently on each, or was not measured: [`BufferRefusal::PlaneShape`]
 //!   ([`RuntimeGap::SurfacePlaneShape`](crate::RuntimeGap::SurfacePlaneShape), which carries the
 //!   measurements). A texture taller than its plane is held as the M3 Max's GPU and CPU lay it
@@ -278,11 +280,15 @@ pub enum BufferTextureProblem {
         /// The descriptor's pixel format.
         pixel_format: PixelFormat,
     },
-    /// A texture type the call does not make over a buffer.
+    /// A texture type the call does not make over a buffer, or over a plane of an IOSurface with
+    /// planes: a cube or a cube array there.
     ///
     /// Basis: metal-measured (an Apple M3 Max, macOS 27.0.1: plain Metal asserts "Linear texture:
     /// must be of type MTLTextureType2D, textureType (MTLTextureType3D) disallowed", and the same
-    /// for a 2D array).
+    /// for a 2D array; over a surface's plane it asserts "carriesComplexTexture || numFaces == 1"
+    /// in `-[IOGPUMetalTexture initWithDevice:descriptor:iosurface:plane:field:args:argsSize:]`
+    /// on a cube and a cube array, the API validation layer off,
+    /// `metal2vulkan-conformance/probes/surface_texture_envelope.m`).
     TextureType {
         /// The descriptor's texture type.
         texture_type: TextureType,
@@ -622,9 +628,10 @@ pub(super) enum BufferRefusal {
     /// A texture over a plane of a surface with planes that Metal makes and lays out no one way
     /// across its GPUs and its CPU calls (`NotImplemented`; the module's **Beyond the plane's
     /// rows**): rows wider than the plane's `bytesPerRow`, more than one level, a type but 2D, a
-    /// texture buffer, a 1D texture and a 2D array of one slice, a 1D texture wider than the
-    /// plane's row; and a texture buffer or a block-compressed texture over a plane whose offset
-    /// or `bytesPerRow` is off 16 bytes.
+    /// texture buffer, a 1D texture, a 2D array of one slice, a cube and a cube array (which
+    /// plain Metal asserts on: [`BufferTextureProblem::TextureType`]), a 1D texture wider than
+    /// the plane's row; and a texture buffer or a block-compressed texture over a plane whose
+    /// offset or `bytesPerRow` is off 16 bytes.
     PlaneShape,
 }
 
@@ -676,6 +683,13 @@ pub(super) fn plan_buffer_texture(
             matches!(texture_type, T::Type2D | T::TextureBuffer | T::Type1D) || one_slice
         }
     };
+    // Over a plane of a surface with planes plain Metal asserts on a texture of more than one
+    // face, the API validation layer off (an Apple M3 Max under macOS 27.0.1,
+    // `probes/surface_texture_envelope.m`'s `bgra1x2.cube.16` and `bgra1x2.cubearray.16`):
+    // Metal's own refusal, where the x86 Macs make a cube.
+    if planar && matches!(texture_type, T::Cube | T::CubeArray) {
+        return Err(P::TextureType { texture_type }.into());
+    }
     if !made && planar {
         return Err(BufferRefusal::PlaneShape);
     }

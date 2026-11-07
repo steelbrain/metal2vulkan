@@ -1751,9 +1751,26 @@ fn a_surface_plane_s_other_shapes_follow_the_probe() {
             plane(TextureType::Type3D, bgra, (64, 32), (0, 256), true, 32768),
             gap,
         ),
+        // A cube and a cube array, at which plain Metal asserts over a plane on the M3 Max
+        // (`bgra1x2.cube.16`, `bgra1x2.cubearray.16`): Metal's own refusal.
         (
             plane(TextureType::Cube, bgra, (64, 64), (0, 256), true, 32768),
-            gap,
+            stopped(Pr::TextureType {
+                texture_type: TextureType::Cube,
+            }),
+        ),
+        (
+            plane(
+                TextureType::CubeArray,
+                bgra,
+                (16, 16),
+                (0, 256),
+                true,
+                32768,
+            ),
+            stopped(Pr::TextureType {
+                texture_type: TextureType::CubeArray,
+            }),
         ),
         (
             plane(
