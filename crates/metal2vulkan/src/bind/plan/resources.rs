@@ -63,9 +63,9 @@ use crate::device::DeviceProfile;
 use crate::error::{BindError, Capability, Error, Feature, LowerFamily, Unsupported};
 use crate::metal::bicubic::{texels as bicubic_texels, BicubicTexels};
 use crate::metal::format::{
-    accessed_without_format, aspects, direct_format, is_depth_stencil, sampled_type, srgb_raw_twin,
-    storage_choice, texel_buffer_alpha_in_red, vk_format, writes_dropped, ycbcr_writes_stored,
-    ExtendedRange, FormatMapping, StorageUse,
+    accessed_without_format, aspects, copies_only, direct_format, is_depth_stencil, sampled_type,
+    srgb_raw_twin, storage_choice, texel_buffer_alpha_in_red, vk_format, writes_dropped,
+    ycbcr_writes_stored, ExtendedRange, FormatMapping, StorageUse,
 };
 use crate::metal::sampler::{
     check_border_view, check_sampler, opaque_black_reads_transparent, vk_filtering,
@@ -434,16 +434,19 @@ fn texel_type_binds(pf: PixelFormat, ty: SampledType) -> bool {
 /// Metal's numeric type of a texture of `pf` bound at a slot: the format table's
 /// (`sampled_type`), and `Float` for a color format the table holds no representation of (the
 /// 4:2:2 formats, whose texels the runtime holds raw for copies, and ASTC's 4x2 and 8x4
-/// footprints).
+/// footprints) or holds for copies alone (`copies_only`: the one-plane YCbCr formats, the padded
+/// 10- and 12-bit display formats, the transfer-function twins of the 10-bit formats and
+/// `ARGB8Unorm_sRGB`, whose emulation the table admits for no usage).
 /// Metal reads each as floats, so a slot of that type holds such a texture, and its binding is
-/// the format's own refusal (it has no sampled view), not a mismatch a neutral stands in for.
+/// the format's own refusal (it has no sampled or storage view: `NotImplemented(Format)`), not a
+/// mismatch a neutral stands in for.
 /// A slot has an interface only where the function uses it, so a texture bound at an index the
 /// function never reads is refused nothing. A heap's classes keep the table's type
 /// (`heap::fit`): a resident texture the heap cannot view is the neutral at its element.
 fn bound_sampled_type(pf: PixelFormat) -> Option<SampledType> {
     sampled_type(pf).or_else(|| {
         let placeholder = matches!(pf, PixelFormat::Invalid | PixelFormat::Unspecialized);
-        (!placeholder && aspects(pf).is_none()).then_some(SampledType::Float)
+        (!placeholder && (aspects(pf).is_none() || copies_only(pf))).then_some(SampledType::Float)
     })
 }
 
