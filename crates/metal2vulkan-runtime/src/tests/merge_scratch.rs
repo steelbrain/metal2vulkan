@@ -5,16 +5,21 @@
 //! renders. The targets: over a `Shared` buffer, rows packed; over a `Private` buffer, packed rows
 //! of a multiple of 256 bytes (a `-T` stencilprobe's, rounded up to 256); over a `Shared` buffer
 //! of packed rows of no multiple of 256 bytes (an IOSurface's, `4 * width`); over a no-copy
-//! buffer's host pages, rows likewise; and over a `Private` buffer whose rows hold bytes between
-//! them, a shadow on every device (an image over them would hold those bytes), copied back.
+//! buffer's host pages, rows likewise, in place where the device's in-place check passed for
+//! render targets over such pages (`in_place.rs`) and, under `HostPageTexturePolicy::Shadow`
+//! (`blit_holds::shadow_device`), a shadow merged back; and over a `Private` buffer whose rows
+//! hold bytes between them, a shadow on every device (an image over them would hold those
+//! bytes), copied back.
 //!
 //! With the device's rule forced (`DeviceShared::linear_rule_forced`), each pass renders a target
 //! that is its own linear image apart, through the image it keeps, its changed words merged back
 //! (`linear_attachment.rs`, `linear_merge.rs`), as NVIDIA's devices render it beside a depth
 //! attachment: the passes form a run or two merged once each (`pass_runs.rs`,
 //! `tests::linear_runs`), each merge taking one scratch, and the runtime's device memory grows by
-//! no scratch a pass. A target that is a shadow merged back (host pages on every device, and
-//! rows the device's linear images do not lay out, `shadow_merge.rs`) is kept and merged back
+//! no scratch a pass. A linear image over host pages joins no run (`pass_runs.rs`, **Which passes
+//! join**: a rebind would move it and encode its encoder again): each of its passes merges alone,
+//! all through one scratch. A target that is a shadow merged back (host pages under the shadow
+//! policy, and rows the device's linear images do not lay out, `shadow_merge.rs`) is kept and merged back
 //! about its first pass, and kept before the second and merged back after the last, its later
 //! passes one run (`pass_runs.rs`, `tests::shadow_runs`). Either way the texels equal those the same passes leave in a private
 //! texture of the same first texels, and the bytes between the rows keep theirs.
@@ -23,7 +28,7 @@
 //! `m2v_cpu_icd`), on the kind of device the cfg selects. The functions are the owned fixture
 //! `validation/fixtures/public/engine/tob_renders.ll` (`llvm-as`).
 
-use super::blit_holds::{device, Scratch, WAIT};
+use super::blit_holds::{device, shadow_device, Scratch, WAIT};
 use super::encoder_holds::{bytes_of, library};
 use crate::{
     BlitOption, Buffer, ClearColor, CommandQueue, Device, Error, HostMemory, LoadAction, Origin,
@@ -33,6 +38,7 @@ use crate::{
 use metal2vulkan::metal::{BlendFactor, PixelFormat, PrimitiveType, TextureUsage};
 use metal2vulkan::pipeline::{ColorAttachmentDescriptor, RenderPipelineDescriptor, StageSource};
 use std::alloc::Layout;
+use std::path::Path;
 use std::ptr::NonNull;
 use std::sync::atomic::Ordering;
 
@@ -334,15 +340,16 @@ fn reference(queue: &CommandQueue, state: &RenderPipelineState, width: u64) -> V
     read(&out, packed * H)
 }
 
-/// [`passes`] over a target over `over`'s buffer of `width` texels a row, `row` bytes apart, the
-/// rule forced: its texels equal the private texture's, the bytes between its rows keep theirs,
-/// and its merges take few scratches (a linear image's, one a run; a shadow's merged back, one
-/// keep and one merge for the run of passes), the device's memory growing by less than an eighth
-/// of what a scratch a pass would take.
-fn one_scratch(over: Over, (width, row): (u64, u64)) {
+/// [`passes`] over a target over `over`'s buffer of `width` texels a row, `row` bytes apart, on
+/// the device `device_of` makes, the rule forced: its texels equal the private texture's, the
+/// bytes between its rows keep theirs, and its merges take few scratches (a linear image's, one
+/// a run, or one for all its passes over host pages, each merged alone; a shadow's merged back,
+/// one keep and one merge for the run of passes), the device's memory growing by less than an
+/// eighth of what a scratch a pass would take.
+fn one_scratch(device_of: fn(&Path) -> Device, over: Over, (width, row): (u64, u64)) {
     let cache = Scratch::new(&format!("merge-scratch-{over:?}-{width}"));
     let host = Host::new(row * H);
-    let device = device(&cache.0);
+    let device = device_of(&cache.0);
     let queue = device.new_command_queue().unwrap();
     let state = blending(&device);
     let expected = reference(&queue, &state, width);
@@ -354,10 +361,19 @@ fn one_scratch(over: Over, (width, row): (u64, u64)) {
     // A shadow merged back at each encoder's end: one over bytes another writer may write (all
     // but a tracked `Private` buffer's, whose shadow is copied back).
     let merged = texture.shadow().is_some_and(|copies| copies.merges_back());
+    let renders_in_place =
+        (device.in_place_check_report().iter()).any(|line| line == "Pointer renders: Passed");
     println!(
         "MERGE-SCRATCH {over:?} {width}x{H}, rows of {row}: linear image {linear}, shadow {shadow} \
-         (merged back {merged})"
+         (merged back {merged}), the in-place check passed for render targets over host pages \
+         {renders_in_place}"
     );
+    if matches!(over, Over::HostPages) {
+        assert!(
+            !linear || renders_in_place,
+            "a linear image over host pages where the check did not pass for render targets"
+        );
+    }
     let forced = &device.shared().linear_rule_forced;
     forced.store(true, Ordering::Relaxed);
     let before = device.work_counts();
@@ -383,6 +399,18 @@ fn one_scratch(over: Over, (width, row): (u64, u64)) {
         grown / scratch
     );
     match (linear, merged) {
+        // Over host pages, no run (`pass_runs.rs`, **Which passes join**): each pass merges
+        // alone, every merge through the one scratch.
+        (true, _) if matches!(over, Over::HostPages) => {
+            assert_eq!(apart, PASSES as u64, "every pass renders the texture apart");
+            assert_eq!(
+                (recorded, taken_over),
+                (PASSES as u64, 0),
+                "each pass merges alone"
+            );
+            assert_eq!(made, 1, "the merges take one scratch");
+            assert_eq!(made + reused, recorded, "each merge takes the scratch");
+        }
         // One run (`pass_runs.rs`), or two where the second pass's box reaches past the first's
         // (then one over the whole target), merged once each.
         (true, _) => {
@@ -428,33 +456,42 @@ fn one_scratch(over: Over, (width, row): (u64, u64)) {
 /// Over a `Shared` buffer, rows packed (1024 bytes).
 #[test]
 fn many_passes_over_a_shared_buffer_take_one_scratch() {
-    one_scratch(Over::Shared, (256, 1024));
+    one_scratch(device, Over::Shared, (256, 1024));
 }
 
 /// Over a `Private` buffer, packed rows of 1024 bytes, a multiple of 256 (a `-T` stencilprobe's
 /// rows rounded up to 256 bytes, with no bytes between them).
 #[test]
 fn many_passes_over_a_private_buffer_take_one_scratch() {
-    one_scratch(Over::Private, (256, 1024));
+    one_scratch(device, Over::Private, (256, 1024));
 }
 
 /// Over a `Private` buffer, rows of 200 texels rounded up to 1024 bytes: 224 bytes between them.
 #[test]
 fn many_passes_over_padded_private_rows_hold_their_texels() {
-    one_scratch(Over::Private, (200, 1024));
+    one_scratch(device, Over::Private, (200, 1024));
 }
 
 /// Over a `Shared` buffer of packed rows of 300 texels, 1200 bytes, of no multiple of 256 (an
 /// IOSurface's).
 #[test]
 fn many_passes_over_packed_rows_take_one_scratch() {
-    one_scratch(Over::Shared, (300, 1200));
+    one_scratch(device, Over::Shared, (300, 1200));
 }
 
-/// Over a no-copy buffer's host pages, packed rows of 1200 bytes: a shadow on every device.
+/// Over a no-copy buffer's host pages, packed rows of 1200 bytes, under the shadow policy: a
+/// shadow merged back on every device.
 #[test]
 fn many_passes_over_host_pages_take_one_scratch() {
-    one_scratch(Over::HostPages, (300, 1200));
+    one_scratch(shadow_device, Over::HostPages, (300, 1200));
+}
+
+/// Over a no-copy buffer's host pages, packed rows of 1200 bytes, under the default policy: a
+/// linear image over the pages where the device's check passed for render targets there, each
+/// pass merged alone through one scratch; a shadow merged back elsewhere.
+#[test]
+fn many_passes_over_host_pages_in_place_take_one_scratch() {
+    one_scratch(device, Over::HostPages, (300, 1200));
 }
 
 /// The encoders of [`two_ways_merges_take_few_scratches`]'s command buffer.

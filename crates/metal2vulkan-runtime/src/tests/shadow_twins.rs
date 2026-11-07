@@ -7,7 +7,9 @@
 //! storing its texture beside a cleared `Depth32Float` depth attachment, blending a rectangle that
 //! overlaps the one before) with blits reading one texture's texels, over a buffer whose rows hold
 //! bytes between them: a no-copy buffer's host pages, merged back, and a `Private` buffer, copied
-//! back, a shadow on every device either way. The same passes and reads over one private texture
+//! back, a shadow on every device either way (host pages under `HostPageTexturePolicy::Shadow`,
+//! `blit_holds::shadow_device`: under the default policy the device's in-place check may put a
+//! render target over them in place, with no shadow to carry). The same passes and reads over one private texture
 //! of the same first texels are the reference: each read, and the texels the command buffer
 //! leaves, are the same byte for byte, and the bytes between the rows keep theirs.
 //!
@@ -15,7 +17,7 @@
 //! `m2v_cpu_icd`), on the kind of device the cfg selects. The functions are the owned fixture
 //! `validation/fixtures/public/engine/tob_renders.ll` (`llvm-as`).
 
-use super::blit_holds::{device, Scratch, WAIT};
+use super::blit_holds::{shadow_device as device, Scratch, WAIT};
 use super::encoder_holds::bytes_of;
 use super::merge_scratch::{
     blending, blit, bytes, drawn, first_bytes, read, staged, target, texels, Host, Over, H, TEXEL,
