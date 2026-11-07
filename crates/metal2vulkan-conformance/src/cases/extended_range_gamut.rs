@@ -327,9 +327,9 @@ impl Case for GamutDraw {
     }
 
     /// Beside the family's notices, `extended-range-blends-stored-codes` (the second draw blends
-    /// over the codes the first stored, where Metal's tile holds `half`s through the pass: the
-    /// `half` shadow that keeps them is built for a single-sampled pass fetching in the pixel
-    /// interlock, so not at four samples, nor on lavapipe, which blends over the input
+    /// over the codes the first stored, where Metal's tile holds `half`s through the pass, on a
+    /// device whose passes hold no `half` shadow, `framebuffer_fetch::holds_extended_shadows`:
+    /// each venue of the suite holds it, in the pixel interlock or, on lavapipe, beside the input
     /// attachment), and at four samples what the pass's shape announces: `shader-resolve` and
     /// `extended-range-resolve` (no device's resolve averages the codes, so the runtime's own
     /// resolve does, `BGRA10_XR`'s alpha and an sRGB twin's color from the codes where Metal
@@ -785,8 +785,9 @@ impl Case for MaskedDraw {
     }
 
     /// Beside the family's notices, for the blended write, `extended-range-blends-stored-codes`:
-    /// it blends over the codes the first draw stored on lavapipe, whose blend over the input
-    /// attachment holds no `half` shadow. It loosens no code.
+    /// it blends over the codes the first draw stored on a device whose passes hold no `half`
+    /// shadow (`framebuffer_fetch::holds_extended_shadows`); on lavapipe the shadow is held beside
+    /// the input attachment. It loosens no code.
     fn allowances(&self) -> Vec<Allowance> {
         let mut named = notices(&self.format);
         if self.blend.is_some() {

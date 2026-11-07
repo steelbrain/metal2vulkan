@@ -44,7 +44,7 @@ Its limits, measured rather than asserted:
 | committed recordings | 1228 |
 | distinct SDK items the Metal leg reaches, of any status | 819 |
 | of those, reached only where this cannot name the family | 3 |
-| ledger rows (a case whose gap is recorded) | 2621 |
+| ledger rows (a case whose gap is recorded) | 2617 |
 | declared crossings of the option space (pairs put to Metal at once) | 26 |
 | declared crossings that are no pair of it (a boolean or numeric field, or one type in two slots) | 30 |
 
@@ -4774,8 +4774,8 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `xr-gradient-bgra10xr-unblended-x4` | A radial gradient (`xrg_radial_float`, a `float4` output) and over part of it a linear one (`xrg_linear_half`, a `half4` output), each evaluated from a device b… |
 | `xr-gradient-bgra10xr-blended-x1` | A radial gradient (`xrg_radial_float`, a `float4` output) and over part of it a linear one (`xrg_linear_half`, a `half4` output at alpha 0.6), each evaluated fr… |
 | `xr-gradient-bgra10xr-blended-x4` | A radial gradient (`xrg_radial_float`, a `float4` output) and over part of it a linear one (`xrg_linear_half`, a `half4` output at alpha 0.6), each evaluated fr… |
-| `xr-gradient-bgra10xr-srgb-blended-x1` | The same two gradients blended under premultiplied source-over into `BGRA10_XR_sRGB` at one sample: the function blends in the shader, over the attachment's inp… |
-| `xr-gradient-bgra10xr-srgb-blended-x4` | The same two gradients blended under premultiplied source-over into `BGRA10_XR_sRGB` at four samples, resolved at the store: the function blends in the shader, … |
+| `xr-gradient-bgra10xr-srgb-blended-x1` | The same two gradients blended under premultiplied source-over into `BGRA10_XR_sRGB` at one sample, on lavapipe as on the RTX 5080: the function blends in the s… |
+| `xr-gradient-bgra10xr-srgb-blended-x4` | The same two gradients blended under premultiplied source-over into `BGRA10_XR_sRGB` at four samples, resolved at the store, on lavapipe as on the RTX 5080: the… |
 | `xr-gradient-bgra10xr-srgb-unblended-x1` | An extended-range sRGB twin's colour read, written or blended over (`BGR10_XR_sRGB`, `BGRA10_XR_sRGB`, `RGB10A8_2P_XR10_sRGB`): the function decodes and encodes… |
 | `xr-gradient-bgra10xr-srgb-unblended-x4` | An extended-range sRGB twin's colour read, written or blended over (`BGR10_XR_sRGB`, `BGRA10_XR_sRGB`, `RGB10A8_2P_XR10_sRGB`): the function decodes and encodes… |
 | `xr-gradient-bgra10xr-unblended-x1` | A radial gradient (`xrg_radial_float`, a `float4` output) and over part of it a linear one (`xrg_linear_half`, a `half4` output), each evaluated from a device b… |
@@ -4788,10 +4788,6 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `xr-unwritten-rgb10a2unorm-srgb-no-fragment` | A fill into `RGB10A2Unorm_sRGB`, then a pipeline that blends the attachment but has no fragment function, which leaves it as the fill left it on Metal and here … |
 | `xr-masked-bgr10xr-red-over` | A fill into `BGR10_XR`, then a `half4` fill blended over it under premultiplied source-over and a mask of red alone, whose code shares the word with the two the… |
 | `xr-masked-bgr10xr-srgb-red-over` | A fill into `BGR10_XR_sRGB`, then a `half4` fill blended over it under premultiplied source-over and a mask of red alone, whose code shares the word with the tw… |
-| `xr-masked-bgr10xr-red` | A fill into `BGR10_XR`, then an unblended fill under a mask of some of the three codes its one word holds (red), on lavapipe: the function reads the word over t… |
-| `xr-masked-bgr10xr-blue-green` | A fill into `BGR10_XR`, then an unblended fill under a mask of some of the three codes its one word holds (blue and green), on lavapipe: the function reads the … |
-| `xr-masked-bgr10xr-srgb-red` | A fill into `BGR10_XR_sRGB`, then an unblended fill under a mask of some of the three codes its one word holds (red), on lavapipe: the function reads the word o… |
-| `xr-masked-bgr10xr-srgb-blue-green` | A fill into `BGR10_XR_sRGB`, then an unblended fill under a mask of some of the three codes its one word holds (blue and green), on lavapipe: the function reads… |
 | `xr-masked-bgr10xr-srgb-red` | An extended-range sRGB twin's colour read, written or blended over (`BGR10_XR_sRGB`, `BGRA10_XR_sRGB`, `RGB10A8_2P_XR10_sRGB`): the function decodes and encodes… |
 | `xr-masked-bgr10xr-srgb-blue-green` | An extended-range sRGB twin's colour read, written or blended over (`BGR10_XR_sRGB`, `BGRA10_XR_sRGB`, `RGB10A8_2P_XR10_sRGB`): the function decodes and encodes… |
 | `xr-gradient-bgra10xr-blended-x1` | A radial gradient (`xrg_radial_float`, a `float4` output) and over part of it a linear one (`xrg_linear_half`, a `half4` output at alpha 0.6), each evaluated fr… |
