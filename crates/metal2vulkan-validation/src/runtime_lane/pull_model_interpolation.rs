@@ -270,13 +270,19 @@ impl Slopes {
 }
 
 /// How far a device not measured to interpolate as Metal does may be from Metal's `metal`: the
-/// device's interpolation (`PrecisionNote::DeviceInterpolation`, about `1.5e-4` measured, `3e-4`
-/// on lavapipe, held at `1e-3` of the value's magnitude or 1), plus where Vulkan leaves the
+/// device's interpolation (`PrecisionNote::DeviceInterpolation`), plus where Vulkan leaves the
 /// location the device's: a multisampled pixel's centroid anywhere in it (twice the slope), an
 /// offset on a grid of sixteenths (half a step each way: an eighth of the slope, doubled), and a
 /// `half` result's own rounding.
-fn device_bound(metal: f32, read: Read, lanes: Lanes, slope: f32, n: u32) -> f32 {
-    let mut bound = 1e-3 * metal.abs().max(1.0);
+///
+/// The device's interpolation weighs the vertices' values, so an error in its weights moves the
+/// value by up to that error times the sum of the vertices' magnitudes, `range` ([`range_of`]),
+/// whatever the value's own: lane 3 of [`VALUES`], `(3, -2, 0.5)`, sums 5.5 where lanes 0 to 2
+/// sum 1. Held at `1e-3` of `range`, of the value's magnitude, or 1. Measured: about `1.5e-4` of
+/// it, `3e-4` on lavapipe (LLVM 23.1.1); llvmpipe (LLVM 23.1.4, Mesa 26.2.6) up to `3.5e-3` apart
+/// in lane 3, `6.3e-4` of its range, and lanes 0 to 2 within `1e-3`.
+fn device_bound(metal: f32, range: f32, read: Read, lanes: Lanes, slope: f32, n: u32) -> f32 {
+    let mut bound = 1e-3 * metal.abs().max(range).max(1.0);
     bound += match read {
         Read::Centroid if n > 1 => 2.0 * slope,
         Read::Offset => slope / 8.0,
@@ -286,6 +292,12 @@ fn device_bound(metal: f32, read: Read, lanes: Lanes, slope: f32, n: u32) -> f32
         bound += metal.abs() * 2f32.powi(-10) + 2f32.powi(-14);
     }
     bound
+}
+
+/// The sum of the vertices' magnitudes in lane `c` of every interpolant: lane `c` of [`VALUES`],
+/// which every draw's interpolants hand in that lane (`Lanes::Narrow`'s narrower ones included).
+fn range_of(c: usize) -> f32 {
+    VALUES.iter().map(|vertex| vertex[c].abs()).sum()
 }
 
 struct Lane {
@@ -629,7 +641,8 @@ fn interpolants_read_metal_s_values() {
                                 true => ours[c] == metal[c],
                                 false => {
                                     let slope = slopes.of_lane(lanes, c);
-                                    (o - m).abs() <= device_bound(m, read, lanes, slope, n)
+                                    let range = range_of(c);
+                                    (o - m).abs() <= device_bound(m, range, read, lanes, slope, n)
                                 }
                             };
                             if !agrees {
