@@ -56,12 +56,13 @@
 //!   verdict.
 //! - **Its cost** is the pattern's fill and compare of each window, at the speed of a copy and a
 //!   comparison of memory (a 3840x2160 surface's 33 MB among them), and each image's making and
-//!   first move: the writes themselves run only while the move does.
-//! - **Its verdict**, per class: passed where every image it made kept every byte, failed where
-//!   one did not (or the device was made to fail it, `DeviceOptions::fail_in_place_check`), and
-//!   unchecked where it made none (the device makes no such buffer, image or import). Each class's
-//!   is the device's as it is known, so a class that passed takes textures in place while the
-//!   next is checked. Counted (`WorkCounts::in_place_checks_*`).
+//!   first move (and pass, or kernel's stores): the writes themselves run only while those do.
+//! - **Its verdict**, per class and access: passed where every image it made kept every byte (but
+//!   the texels a pass cleared or a kernel stored), failed where one did not (or the device was
+//!   made to fail it, `DeviceOptions::fail_in_place_check`), and unchecked where it made none (the
+//!   device makes no such buffer, image, import, pass or dispatch). Each is the device's as it is
+//!   known, so a class and access that passed take textures in place while the next is checked.
+//!   Counted (`WorkCounts::in_place_checks_*`).
 //! - **Kept.** Once every class answered, the verdicts are written as one record in the shader
 //!   cache's content directory (`shader_cache/store.rs`), named by the driver's identity (its
 //!   version and the device's UUID among it) and the check's version ([`record_name`]), not the
