@@ -1638,7 +1638,7 @@ impl Device {
             )?;
         }
         let id_use = IdUse::Program(descriptor.placement);
-        let texture = self.texture_as(CALL, descriptor, (id_use, Fresh::AsMetal))?;
+        let texture = self.texture_as(CALL, descriptor, (id_use, Initial::AsMetal))?;
         self.take_device_sampler();
         Ok(texture)
     }
@@ -2105,14 +2105,14 @@ impl Device {
             framebuffer_only: false,
             ..*descriptor
         };
-        self.texture_as(call, &descriptor, (id_use, Fresh::Zero))
+        self.texture_as(call, &descriptor, (id_use, Initial::Zero))
     }
 
     fn texture_as(
         &self,
         call: &'static str,
         descriptor: &TextureDescriptor,
-        (id_use, fresh): (IdUse, Fresh),
+        (id_use, initial): (IdUse, Initial),
     ) -> Result<Texture, Error> {
         let options = descriptor.resource_options;
         let storage = options.storage_mode()?;
@@ -2162,7 +2162,7 @@ impl Device {
             false => self.with_undeclared_usage(plan, &layout, usage, &facts)?,
         };
         let plan = self.with_free_usage(plan, layout.texture_type)?;
-        let image = self.new_texture_image(plan, &layout, descriptor, (hazard, fresh))?;
+        let image = self.new_texture_image(plan, &layout, descriptor, (hazard, initial))?;
         // A multisampled depth the device renders faster out of `GENERAL` rests in the attachment
         // layout between the passes that hold it (`texture/held_depth.rs`).
         let private = storage == StorageMode::Private;
@@ -2966,7 +2966,7 @@ impl Device {
     /// GPU's does (counted, `WorkCounts::private_textures_unfilled`), except on an Apple GPU,
     /// whose own image of such a texture is compressed and would read Apple's pattern: there it
     /// reads zero, what such a Mac's reads where its memory held nothing (counted,
-    /// `WorkCounts::private_textures_zero_filled`). [`Fresh::Zero`] starts every one but a
+    /// `WorkCounts::private_textures_zero_filled`). [`Initial::Zero`] starts every one but a
     /// `Memoryless` one at zero in every texel instead, uncounted. The runtime's own images keep
     /// [`new_image`](Self::new_image)'s start: an image its first command writes in full need
     /// not be zeroed first.
@@ -2975,12 +2975,12 @@ impl Device {
         plan: ImagePlan,
         layout: &TextureLayout,
         descriptor: &TextureDescriptor,
-        (hazard, fresh): (HazardTrackingMode, Fresh),
+        (hazard, initial): (HazardTrackingMode, Initial),
     ) -> Result<Image, Error> {
         let identity = Identity::new(hazard, false);
         let storage = descriptor.resource_options.storage_mode()?;
         let memoryless = storage == StorageMode::Memoryless;
-        if fresh == Fresh::Zero && !memoryless {
+        if initial == Initial::Zero && !memoryless {
             return self.new_image_starting(
                 plan,
                 layout,
@@ -3913,7 +3913,7 @@ pub(super) fn copy_units(
 
 /// How a new texture of the program's starts ([`Device::new_texture_image`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Fresh {
+enum Initial {
     /// As Metal's new texture of its storage mode starts on the Mac the device presents.
     AsMetal,
     /// Zero in every texel, in every storage mode but `Memoryless`: a texture over an IOSurface

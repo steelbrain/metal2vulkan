@@ -30,7 +30,7 @@ use super::super::texture_descriptor::TextureDescriptor;
 use super::super::values::StorageMode;
 use super::super::view_plan::ViewRecord;
 use super::super::Device;
-use super::{image_error, IdUse, Owner, Storage, Texture};
+use super::{image_error, IdUse, Initial, Owner, Storage, Texture};
 use metal2vulkan::metal::TextureType;
 use std::sync::Arc;
 
@@ -112,7 +112,8 @@ impl Device {
             .facts(self.compile_device().profile());
         let plan = plan_image(&layout, descriptor.image_usage(), false, &facts)
             .map_err(|refusal| image_error(CALL, refusal))?;
-        let mut image = self.new_texture_image(plan, &layout, descriptor, hazard)?;
+        let mut image =
+            self.new_texture_image(plan, &layout, descriptor, (hazard, Initial::AsMetal))?;
         if let Owner::Runtime { shareable, .. } = &mut image.owner {
             *shareable = true;
         }
