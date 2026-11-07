@@ -9383,6 +9383,25 @@ impl MetalSide {
                     );
                 }
             }
+            RenderStep::VertexBytesWithStride {
+                bytes,
+                stride,
+                index,
+            } => {
+                let pointer =
+                    std::ptr::NonNull::new(bytes.as_ptr().cast::<std::ffi::c_void>().cast_mut())
+                        .ok_or_else(|| Failure::named("NoBytes", "an empty inline binding"))?;
+                // SAFETY: `bytes` lives for the call, which copies them; the stride is a number
+                // Metal reads, and what a draw fetches at it is the case's measurement.
+                unsafe {
+                    encoder.setVertexBytes_length_attributeStride_atIndex(
+                        pointer,
+                        bytes.len(),
+                        *stride as usize,
+                        *index as usize,
+                    );
+                }
+            }
         }
         Ok(())
     }

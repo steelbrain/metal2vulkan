@@ -1,13 +1,15 @@
-//! The render encoder's `setVertexBuffer:offset:attributeStride:atIndex:` at the strides whose
-//! displacement leaves 32 bits.
+//! The render encoder's `setVertexBuffer:offset:attributeStride:atIndex:` and
+//! `setVertexBytes:length:attributeStride:atIndex:` at the strides whose displacement leaves 32
+//! bits.
 //!
 //! A vertex descriptor's buffer layout of `MTLBufferLayoutStrideDynamic` reads its buffer at the
 //! stride the encoder binds it with. Metal places vertex `v`'s element at `v · stride` from the
 //! bind offset in 64 bits (`render/vertex_reach.rs` in the runtime has the measurement in a buffer
-//! past 4 GiB). This case asks what that means over a **small** buffer, where the element of
-//! every vertex past the first lies past the buffer for each of the large strides below, and where
-//! a fetch that computed the displacement in 32 bits instead would wrap and could land back
-//! inside the buffer.
+//! past 4 GiB). These cases ask what that means over a **small** binding, where the element of
+//! every vertex past the first lies past the binding for each of the large strides below, and
+//! where a fetch that computed the displacement in 32 bits instead would wrap and could land back
+//! inside it. `attribute-stride-vertex-buffer` binds a buffer, and `attribute-stride-vertex-bytes`
+//! the same bytes inline, copied by each call.
 //!
 //! # The strides
 //!
@@ -28,13 +30,14 @@
 //!
 //! The fixture's `icb_render_stride_template` writes `(v, vid)` at `out[vid]`, and the attribute
 //! buffer holds `0x10 + e` at element `e`, so each segment's words name the elements its stride
-//! fetched. `out` is made holding `UNWRITTEN` and read whole.
+//! fetched, whether a buffer or inline bytes hold them. `out` is made holding `UNWRITTEN` and read
+//! whole.
 //!
 //! # Safety
 //!
 //! Rasterization is disabled and each draw is four points of a loop-free vertex function, so
 //! nothing is rasterized and nothing loops. The fetches past the buffer are the measurement; every
-//! other byte any draw reads lies inside the attribute buffer, and every write lies inside `out`
+//! other byte any draw reads lies inside the attribute binding, and every write lies inside `out`
 //! (`every_write_lies_inside_out`).
 
 use super::indirect_commands::{
@@ -51,9 +54,6 @@ use crate::render::{
 };
 use crate::transcript::{ByteLayout, Element, Node, Observed, Sites};
 use metal2vulkan::metal::{PrimitiveType, VertexFormat};
-
-/// The case's name.
-const CASE: &str = "attribute-stride-vertex-buffer";
 
 /// The owned fixture: a rasterization-disabled vertex function that fetches one `uint`
 /// `[[stage_in]]` attribute and writes it with its vertex id.
@@ -102,9 +102,38 @@ fn attribute_bytes() -> Vec<u8> {
         .collect()
 }
 
+/// Where a case's draws read the attributes.
+#[derive(Clone, Copy)]
+enum Binding {
+    /// A buffer of [`attribute_bytes`] the side made, bound by
+    /// `setVertexBuffer:offset:attributeStride:atIndex:`.
+    Buffer(Handle),
+    /// [`attribute_bytes`] copied inline by `setVertexBytes:length:attributeStride:atIndex:`.
+    Bytes,
+}
+
+impl Binding {
+    /// The step that binds the attributes at `stride`.
+    fn step(self, stride: u64) -> RenderStep {
+        match self {
+            Binding::Buffer(buffer) => RenderStep::VertexBufferWithStride {
+                buffer,
+                offset: 0,
+                stride,
+                index: ATTRIBUTES_INDEX,
+            },
+            Binding::Bytes => RenderStep::VertexBytesWithStride {
+                bytes: attribute_bytes(),
+                stride,
+                index: ATTRIBUTES_INDEX,
+            },
+        }
+    }
+}
+
 /// The pass: no attachment at a 1 by 1 extent, and per stride `out` bound at its segment, the
 /// attributes at the stride, and a draw of [`VERTICES`] points.
-fn pass(pipeline: Handle, out: Handle, attributes: Handle) -> RenderPass {
+fn pass(pipeline: Handle, out: Handle, attributes: Binding) -> RenderPass {
     let mut steps = vec![RenderStep::Pipeline(pipeline)];
     for (at, stride) in STRIDES.into_iter().enumerate() {
         steps.push(RenderStep::VertexBuffer {
@@ -112,12 +141,7 @@ fn pass(pipeline: Handle, out: Handle, attributes: Handle) -> RenderPass {
             offset: at as u64 * SEGMENT_BYTES,
             index: 0,
         });
-        steps.push(RenderStep::VertexBufferWithStride {
-            buffer: attributes,
-            offset: 0,
-            stride,
-            index: ATTRIBUTES_INDEX,
-        });
+        steps.push(attributes.step(stride));
         steps.push(RenderStep::Draw {
             primitive: PrimitiveType::Point,
             first: 0,
@@ -128,12 +152,17 @@ fn pass(pipeline: Handle, out: Handle, attributes: Handle) -> RenderPass {
     RenderPass::sized([1, 1]).drawing(steps)
 }
 
-/// The case.
-pub struct VertexAttributeStrides;
+/// A case: the attributes in a buffer, or inline when `inline`.
+pub struct VertexAttributeStrides {
+    inline: bool,
+}
 
 impl Case for VertexAttributeStrides {
     fn name(&self) -> &'static str {
-        CASE
+        match self.inline {
+            false => "attribute-stride-vertex-buffer",
+            true => "attribute-stride-vertex-bytes",
+        }
     }
 
     fn metal_source(&self) -> MetalSource {
@@ -153,14 +182,20 @@ impl Case for VertexAttributeStrides {
     fn inputs(&self) -> Result<Vec<Input>, String> {
         let mut inputs = fixture_inputs(FIXTURE)?;
         inputs.push(Input::bytes("render-pipeline", &pipeline_spec().words()));
-        inputs.push(Input::bytes("buffer:attributes", &attribute_bytes()));
+        let attributes = match self.inline {
+            false => {
+                inputs.push(Input::bytes("buffer:attributes", &attribute_bytes()));
+                Binding::Buffer(Handle(2))
+            }
+            true => Binding::Bytes,
+        };
         inputs.push(Input::bytes(
             "buffer:out",
             &vec![UNWRITTEN; OUT_BYTES as usize],
         ));
         inputs.push(Input::bytes(
             "pass",
-            &pass(Handle(0), Handle(1), Handle(2)).words(),
+            &pass(Handle(0), Handle(1), attributes).words(),
         ));
         Ok(inputs)
     }
@@ -176,7 +211,14 @@ impl Case for VertexAttributeStrides {
             "pipeline",
             side.render_pipeline(library, &pipeline_spec()),
         )?;
-        let attributes = made(sites, "buffer:attributes", side.buffer(&attribute_bytes()))?;
+        let attributes = match self.inline {
+            false => Binding::Buffer(made(
+                sites,
+                "buffer:attributes",
+                side.buffer(&attribute_bytes()),
+            )?),
+            true => Binding::Bytes,
+        };
         let out = made(
             sites,
             "buffer:out",
@@ -204,9 +246,12 @@ impl Case for VertexAttributeStrides {
     }
 }
 
-/// The family's one case.
+/// The family's cases: the attributes in a buffer, then inline.
 pub fn all() -> Vec<Box<dyn Case>> {
-    vec![Box::new(VertexAttributeStrides)]
+    vec![
+        Box::new(VertexAttributeStrides { inline: false }),
+        Box::new(VertexAttributeStrides { inline: true }),
+    ]
 }
 
 #[cfg(test)]

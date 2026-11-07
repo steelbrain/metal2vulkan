@@ -7801,6 +7801,13 @@ fn encode_pass(command_buffer: &CommandBuffer, pass: &RenderPass, pools: &Pools)
             } => encoder
                 .set_vertex_buffer_with_stride(Some(buffer(*held)?), *offset, *stride, *index)
                 .map_err(Failure::from_error)?,
+            RenderStep::VertexBytesWithStride {
+                bytes,
+                stride,
+                index,
+            } => encoder
+                .set_vertex_bytes_with_stride(bytes, *stride, *index)
+                .map_err(Failure::from_error)?,
         }
     }
     encoder.end_encoding().map_err(Failure::from_error)

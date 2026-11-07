@@ -1997,6 +1997,13 @@ pub enum RenderStep {
         stride: u64,
         index: u32,
     },
+    /// `setVertexBytes:length:attributeStride:atIndex:`: inline vertex bytes the draws after it
+    /// read at `stride` through a layout of `MTLBufferLayoutStrideDynamic`.
+    VertexBytesWithStride {
+        bytes: Vec<u8>,
+        stride: u64,
+        index: u32,
+    },
 }
 
 impl RenderStep {
@@ -2107,6 +2114,7 @@ impl RenderStep {
             RenderStep::DrawPatches { .. } => "drawPatches",
             RenderStep::DrawIndexedPatches { .. } => "drawIndexedPatches",
             RenderStep::VertexBufferWithStride { .. } => "setVertexBufferAttributeStride",
+            RenderStep::VertexBytesWithStride { .. } => "setVertexBytesAttributeStride",
         }
     }
 
@@ -2437,6 +2445,15 @@ impl RenderStep {
                 ..
             } => {
                 bytes.extend(offset.to_le_bytes());
+                bytes.extend(stride.to_le_bytes());
+                bytes.extend(index.to_le_bytes());
+            }
+            RenderStep::VertexBytesWithStride {
+                bytes: inline,
+                stride,
+                index,
+            } => {
+                bytes.extend(inline);
                 bytes.extend(stride.to_le_bytes());
                 bytes.extend(index.to_le_bytes());
             }
@@ -3317,7 +3334,12 @@ mod tests {
                 stride: 4,
                 index: 0,
             },
-            RenderStep::VertexBufferWithStride { .. } => return None,
+            RenderStep::VertexBufferWithStride { .. } => RenderStep::VertexBytesWithStride {
+                bytes: vec![0; 4],
+                stride: 4,
+                index: 0,
+            },
+            RenderStep::VertexBytesWithStride { .. } => return None,
         })
     }
 
