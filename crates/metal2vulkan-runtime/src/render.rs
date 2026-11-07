@@ -1515,6 +1515,10 @@ pub(crate) struct RenderLowering {
     /// The splits between draws that reach the pass's tile threadgroup memory, for the split's
     /// degrade notice (`render/tile_memory.rs`).
     tile_memory_splits: usize,
+    /// The splits before a draw that reaches interlocked storage an earlier draw of its instance
+    /// wrote, on a driver whose such draws race under load (`Split::InterlockedWrites`), for the
+    /// split's degrade notice.
+    interlocked_splits: usize,
     /// The tile functions' threadgroup arguments and the pass's tile threadgroup memory
     /// (`render/tile_memory.rs`).
     tile_memory: tile_memory::TileMemory,
@@ -2188,6 +2192,7 @@ impl RenderLowering {
                 attached_read_splits: 0,
                 driver_restarts: false,
                 tile_memory_splits: 0,
+                interlocked_splits: 0,
                 tile_memory: tile_memory::TileMemory::default(),
                 residency,
                 executions: Vec::new(),
@@ -4223,6 +4228,7 @@ impl RenderLowering {
             attached_read_splits,
             driver_restarts,
             tile_memory_splits,
+            interlocked_splits,
             tile_memory,
             executions,
             pending,
@@ -6062,6 +6068,7 @@ impl RenderLowering {
                 dispatches: dispatch_count,
                 barriers: barrier_splits,
                 tile_memory: tile_memory_splits,
+                interlocked_writes: interlocked_splits,
                 attached_reads: attached_read_splits,
                 viewed: views,
             },
@@ -8703,6 +8710,7 @@ impl RenderLowering {
         };
         let split = matches!(next, Next::New { split: true, .. });
         let tile_memory_split = ordered && split;
+        let interlocked_split = storage_split && !ordered && split;
         let run_barrier_split = self.run_barrier && !ordered && split;
         // The query that continues the active one past a split.
         let continuation = match &next {
@@ -10076,6 +10084,7 @@ impl RenderLowering {
         }
         self.installed_extended_draw(&pipeline);
         self.tile_memory_splits += usize::from(tile_memory_split);
+        self.interlocked_splits += usize::from(interlocked_split);
         self.barrier_splits += usize::from(run_barrier_split);
         self.run_barrier = false;
         if let Some(clears) = copy_clears.as_deref().filter(|clears| !clears.is_empty()) {

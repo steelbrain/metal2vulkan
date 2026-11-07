@@ -1022,12 +1022,15 @@ struct Snapshot {
 type Command = (CommandRecord, Option<RenderPipelineState>);
 
 /// What an execution's recording found: resident-set misses and faults, and the runs its draws
-/// that reach the tile threadgroup memory began, and those its commands' barriers began.
+/// that reach the tile threadgroup memory began, those its draws that reach interlocked storage
+/// an earlier draw of the run wrote began where the driver's such draws race under load, and
+/// those its commands' barriers began.
 #[derive(Default)]
 struct Found {
     misses: u32,
     faults: ReplayFaults,
     tile_memory_splits: usize,
+    interlocked_splits: usize,
     barrier_splits: usize,
 }
 
@@ -2337,6 +2340,7 @@ impl RenderExecution {
             current,
             tile_memory,
             tile_memory_splits,
+            interlocked_splits,
             barrier_splits,
             imageblock,
             shadow,
@@ -2344,6 +2348,7 @@ impl RenderExecution {
             ..
         } = encoder;
         found.tile_memory_splits += tile_memory_splits;
+        found.interlocked_splits += interlocked_splits;
         found.barrier_splits += barrier_splits;
         // Commands that ran as several keep the pass's memoryless attachments across their runs,
         // in the backings of the instances that run them.
@@ -2505,6 +2510,7 @@ impl RenderExecution {
             attached_read_splits: 0,
             driver_restarts: false,
             tile_memory_splits: 0,
+            interlocked_splits: 0,
             // The pass's buffer of every tile's memory, with the arguments the encoder set at the
             // call (`render/tile_memory.rs`).
             tile_memory: snapshot
@@ -3487,6 +3493,7 @@ impl DeferredPass {
             let causes = SplitCauses {
                 shadow: shadow_runs > 0,
                 tile_memory: found.tile_memory_splits,
+                interlocked_writes: found.interlocked_splits,
                 barriers: found.barrier_splits,
                 viewed,
                 ..SplitCauses::default()

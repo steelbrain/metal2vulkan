@@ -341,6 +341,19 @@ pub(super) fn holds_extended_shadows(lane: &Lane) -> bool {
             && profile.supports_format(vk::Format::R16G16B16A16_SFLOAT, FormatUsage::StorageImage))
 }
 
+/// Whether the device splits a pass before a draw that reads and writes a color through the
+/// pixel interlock after an earlier draw of its instance wrote it: in the pixel interlock, on a
+/// driver whose such draws race under load (`DriverFact::InterlockedDrawsRaceUnderLoad`) and
+/// that is not measured to order them by the interlock alone (`DriverFact::InterlockOrdersDraws`).
+/// Such a split is announced (`render-pass-split`, and `memoryless-backed` for the backing it
+/// gives a memoryless attachment) on every device.
+fn splits_interlocked_writes(lane: &Lane) -> bool {
+    let facts = &lane.device.properties().driver_facts;
+    !through_inputs(lane)
+        && !facts.contains(&DriverFact::InterlockOrdersDraws)
+        && facts.contains(&DriverFact::InterlockedDrawsRaceUnderLoad)
+}
+
 /// Whether the device announces a split the interlock alone makes (`render-pass-split`, and
 /// `memoryless-backed` for it): in the pixel interlock, but where its driver ran such a pass no
 /// slower split than whole (`DriverFact::InterlockedPassSplitNoSlower`), its faster form.
@@ -816,6 +829,8 @@ fn a_memoryless_attachment_fetched_after_a_plain_inline_draw_starts_from_zero() 
         let splits = counts.inline_memoryless_write_splits;
         (counts.inline_passes, splits, counts.inline_split_instances)
     };
+    let raced = || lane.device.work_counts().instance_splits_interlocked_writes;
+    let raced_before = raced();
     let before = counted();
     let ran = (|| {
         let seed = pipeline(
@@ -855,6 +870,7 @@ fn a_memoryless_attachment_fetched_after_a_plain_inline_draw_starts_from_zero() 
         }
         Ok(read)
     })();
+    let raced = raced() - raced_before;
     let (inline, splits, later) = counted();
     let texel: Vec<u8> = (1u32..=4).flat_map(|c| (c * 11).to_le_bytes()).collect();
     expect(
@@ -874,6 +890,16 @@ fn a_memoryless_attachment_fetched_after_a_plain_inline_draw_starts_from_zero() 
         true => 2,
         false => 0,
     };
+    // Where the device splits before an interlocked draw an earlier draw of its instance wrote
+    // for, each pass splits before its two steps and its second fold too.
+    let want_raced = match splits_interlocked_writes(&lane) {
+        true => 6,
+        false => 0,
+    };
+    assert_eq!(
+        raced, want_raced,
+        "splits before a draw after interlocked writes"
+    );
     assert_eq!(
         (inline, splits, later),
         (2, written, 2),
@@ -1160,7 +1186,10 @@ pub(super) const FETCHES: [Degradation; 3] = [
 /// `exf_fetch_count` three times; a `SIDE`² `R32Float` one drawn white under a blend
 /// ([`blended_white`]), then fetched by `fetch_scalar`; and the memoryless pass above. Through the pixel interlock the second
 /// splits (announced but where the device runs such a split no slower than whole), the third backs
-/// its memoryless attachment, and each is announced once. A fetched texture renders into a scratch
+/// its memoryless attachment, and each is announced once. Where the device splits before a draw
+/// that reads and writes a color an earlier draw of its instance wrote in the interlock
+/// ([`splits_interlocked_writes`]), the first and third split before their second and third
+/// draws, which is announced too. A fetched texture renders into a scratch
 /// image only where the device lays its image out otherwise with `STORAGE`, the device's own
 /// answer, which the lane does not foresee: where it does, the scratch is announced once, naming
 /// one of the two fetched textures, the first the device met so. Measured at `caea7050`: MoltenVK
@@ -1231,7 +1260,9 @@ fn fetches_degrade_once_per_kind() {
         .into_iter()
         .filter(|&kind| match kind {
             Degradation::FetchThroughScratch => scratch.is_some(),
-            Degradation::RenderPassSplit => announces_interlock_splits(&lane),
+            Degradation::RenderPassSplit => {
+                announces_interlock_splits(&lane) || splits_interlocked_writes(&lane)
+            }
             _ => interlock,
         })
         .collect();
@@ -1554,7 +1585,8 @@ fn a_callers_image_without_the_fetch_usage_fetches_through_a_scratch() {
 /// white under a blend ([`blended_white`]), then `fetch_scalar`, holds 0.5 too, and in the pixel
 /// interlock splits there too. A split is announced, and the backing, once each (at the plain
 /// draws' pass), but on a device whose driver runs such a split no slower than whole, where
-/// neither is.
+/// neither is unless the device also splits before the last `fetch_scalar`, which reads and
+/// writes the color the one before it wrote in the interlock ([`splits_interlocked_writes`]).
 #[test]
 fn a_plain_draw_before_a_fetch_takes_the_devices_faster_form() {
     let (messages, cache, lane) = lane();
@@ -1613,7 +1645,8 @@ fn a_plain_draw_before_a_fetch_takes_the_devices_faster_form() {
     expect(&lane, "after an indexed plain draw", indexed, &texels(0.5));
     let interlock = !through_inputs(&lane);
     let announced_split = |splits: bool| -> Vec<Degradation> {
-        let announced = splits && announces_interlock_splits(&lane);
+        let announced =
+            splits && (announces_interlock_splits(&lane) || splits_interlocked_writes(&lane));
         split.into_iter().filter(|_| announced).collect()
     };
     let kinds = announced_split(interlock);

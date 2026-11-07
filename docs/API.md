@@ -1804,7 +1804,10 @@ bound.
   a barrier between instances does; or a draw reads a color attachment's texture after a memory
   barrier, and reads what the pass's load actions and earlier draws stored where the barrier orders
   them, but for a read of the clear alone before any draw of the pass, whose copy is cleared to it
-  instead where it can be (`WorkCounts::attachment_read_clears`). Not where the pixel interlock
+  instead where it can be (`WorkCounts::attachment_read_clears`); or a draw reads and writes a
+  color through the pixel interlock after an earlier draw of its instance wrote it, on a driver
+  whose such draws race under load (`DriverFact::InterlockedDrawsRaceUnderLoad`), and records
+  into an instance after the one that wrote it. Not where the pixel interlock
   alone splits the pass on a device whose driver ran such a pass
   no slower split than whole (`DriverFact::InterlockedPassSplitNoSlower`): the split is then its
   faster form. Cost: each instance after the first loads the attachments and each before the last

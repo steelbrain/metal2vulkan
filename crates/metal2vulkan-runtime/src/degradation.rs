@@ -543,7 +543,10 @@ degradations! {
         /// what the pass's load actions and earlier draws stored where the barrier orders them
         /// (`texture/attached_reads.rs`), but for a read of the clear alone before any draw of
         /// the pass, whose copy is cleared to it instead where it can be
-        /// (`WorkCounts::attachment_read_clears`). Not where the interlock alone splits the pass,
+        /// (`WorkCounts::attachment_read_clears`); or a draw reads and writes a color through the
+        /// pixel interlock after an earlier draw of its instance wrote it, on a driver whose such
+        /// draws race under load (`DriverFact::InterlockedDrawsRaceUnderLoad`), and records into
+        /// an instance after the one that wrote it. Not where the interlock alone splits the pass,
         /// on a device whose driver ran such a pass no slower split than whole
         /// (`DriverFact::InterlockedPassSplitNoSlower`): its faster form.
         RenderPassSplit = "render-pass-split", Performance,
@@ -4702,6 +4705,10 @@ pub(super) struct SplitCauses {
     /// The splits between draws that reach the pass's tile threadgroup memory
     /// (`render/tile_memory.rs`).
     pub(super) tile_memory: usize,
+    /// The splits before a draw that reaches interlocked storage an earlier draw of its instance
+    /// wrote, on a driver whose such draws race under load
+    /// (`DriverFact::InterlockedDrawsRaceUnderLoad`, `render.rs`'s `InterlockedStorage`).
+    pub(super) interlocked_writes: usize,
     /// The splits before a draw that reads a color attachment's texture after a memory barrier,
     /// the pass's load actions included where the barrier came before its first draw
     /// (`texture/attached_reads.rs`).
@@ -4734,6 +4741,7 @@ impl Device {
             dispatches,
             barriers,
             tile_memory,
+            interlocked_writes,
             attached_reads,
             viewed,
         } = causes;
@@ -4788,6 +4796,7 @@ impl Device {
             && dispatches == 0
             && barriers == 0
             && tile_memory == 0
+            && interlocked_writes == 0
             && attached_reads == 0;
         if instances > 1 && !chosen {
             let color = changed.and_then(|(index, interlock)| {
@@ -4846,6 +4855,13 @@ impl Device {
                          writes in order, which Vulkan gives one draw of another's storage writes \
                          across render pass instances alone, ending {tile_memory} of them, so it \
                          runs as {instances} Vulkan render pass instances"
+                    ),
+                    None if interlocked_writes > 0 => format!(
+                        "draws that read and write a color through the pixel interlock after an \
+                         earlier draw of their Vulkan render pass instance wrote it, whose order \
+                         the driver does not keep under load, each run in an instance after the \
+                         one that wrote it, ending {interlocked_writes} of them, so it runs as \
+                         {instances} Vulkan render pass instances"
                     ),
                     None if attached_reads > 0 => format!(
                         "draws that read a color attachment's texture after a memory barrier read \
