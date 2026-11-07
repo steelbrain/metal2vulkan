@@ -824,6 +824,77 @@ fn heap_alpha_in_red(
     fb.select(is, held, x)
 }
 
+/// Image texel `x` (four `f32` lanes) of a storage access through heap handle `handle`, converted
+/// by `c` (`lower::texture::heap_storage_conversions`, `read`: the image's to Metal's; else
+/// Metal's to the image's) as a slot of the member's storage choice converts it: where the
+/// handle's class and red-blue order are among `c.swap`, red and blue exchanged
+/// ([`swizzle_bgra`]); where they are among `c.srgb`, a read's color codes decoded by the device's
+/// transfer ([`srgb_raw_tap`]) and a write's encoded by its conversion ([`srgb_codes`], of the
+/// written `form`). A read exchanges before it decodes and a write encodes before it exchanges,
+/// as `SrgbEncodeBgra`'s slot does ([`from_image`], [`to_image`]). Every other member's texel is
+/// `x`.
+fn heap_converted(
+    cx: &mut EmitCx<'_>,
+    fb: &mut FunctionBuilder<'_>,
+    handle: ValueId,
+    x: SValue,
+    c: &super::HeapConversions,
+    form: TexelForm,
+    read: bool,
+) -> BResult<SValue> {
+    let mut x = x;
+    for step in match read {
+        true => [false, true],
+        false => [true, false],
+    } {
+        // `step`: the sRGB codes; else the exchange.
+        let keys = match step {
+            true => &c.srgb,
+            false => &c.swap,
+        };
+        if keys.is_empty() {
+            continue;
+        }
+        let is = heap_key_among(cx, fb, handle, keys)?;
+        let held = match (step, read) {
+            (false, _) => swizzle_bgra(fb, x)?,
+            (true, true) => srgb_raw_tap(fb, x)?,
+            (true, false) => srgb_codes(fb, form, x)?,
+        };
+        x = fb.select(is, held, x)?;
+    }
+    Ok(x)
+}
+
+/// Whether heap handle `handle` carries one of `keys`: its texel class index
+/// (`memory::handles::HANDLE_TEXEL_CLASS`) and red-blue order (`HANDLE_RED_BLUE`) together.
+fn heap_key_among(
+    cx: &mut EmitCx<'_>,
+    fb: &mut FunctionBuilder<'_>,
+    handle: ValueId,
+    keys: &[(u32, bool)],
+) -> BResult<SValue> {
+    use crate::memory::handles::{HANDLE_RED_BLUE, HANDLE_TEXEL_CLASS};
+    let h = cx.operand(fb, handle)?;
+    let field = u32s(fb, 1, HANDLE_TEXEL_CLASS | HANDLE_RED_BLUE)?;
+    let key = fb.binary(BinOp::BitwiseAnd, h, field)?;
+    let mut among = None;
+    for &(index, red_blue) in keys {
+        let class = (index << HANDLE_TEXEL_CLASS.trailing_zeros()) & HANDLE_TEXEL_CLASS;
+        let order = match red_blue {
+            true => HANDLE_RED_BLUE,
+            false => 0,
+        };
+        let k = u32s(fb, 1, class | order)?;
+        let equal = fb.binary(BinOp::IEqual, key, k)?;
+        among = Some(match among {
+            None => equal,
+            Some(any) => fb.binary(BinOp::LogicalOr, any, equal)?,
+        });
+    }
+    among.ok_or_else(|| cx.fail("no heap key of the conversion"))
+}
+
 /// The words [`srgb_codes`] emits, at most: `pack::pack`'s `unorm4x8_srgb` (the transfer's steps
 /// and their constants, the 8-bit instruction) and the codes' extraction and scale.
 pub(crate) const SRGB_WRITE_WORDS: u32 = 16 + 9 * 6 + 5 * 8 + 12 + 24 * 4 + 96;
@@ -2509,6 +2580,14 @@ fn read_texel(cx: &mut EmitCx<'_>, fb: &mut FunctionBuilder<'_>, r: &Read) -> BR
         (true, ImageRef::Heap { handle, .. }) => heap_alpha_in_red(cx, fb, handle, texel, true)?,
         _ => texel,
     };
+    // A storage member viewed through its alias: its red and blue exchanged and its sRGB codes
+    // decoded, before Metal's out-of-bounds texel is selected.
+    let texel = match r.image {
+        ImageRef::Heap { handle, .. } => {
+            heap_converted(cx, fb, handle, texel, &r.heap_conversions, r.texel, true)?
+        }
+        ImageRef::Slot(_) => texel,
+    };
     // An extended-range texel's value, decoded from its raw code before Metal's out-of-bounds
     // texel is selected.
     let texel = match r.extended {
@@ -2902,6 +2981,14 @@ fn write(cx: &mut EmitCx<'_>, fb: &mut FunctionBuilder<'_>, w: &Write) -> BResul
     let texel = match (w.heap_alpha_red, w.image) {
         (true, ImageRef::Heap { handle, .. }) => heap_alpha_in_red(cx, fb, handle, texel, false)?,
         _ => texel,
+    };
+    // A storage member viewed through its alias: its sRGB codes encoded and its red and blue
+    // exchanged.
+    let texel = match w.image {
+        ImageRef::Heap { handle, .. } => {
+            heap_converted(cx, fb, handle, texel, &w.heap_conversions, w.texel, false)?
+        }
+        ImageRef::Slot(_) => texel,
     };
     // The write's notes account for the texel's stored NaN (`moves_unfolded`).
     fb.module().note_stored_texel(texel);

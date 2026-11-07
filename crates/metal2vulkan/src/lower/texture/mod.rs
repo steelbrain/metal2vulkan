@@ -316,6 +316,10 @@ pub struct Read {
     /// where the handle's class index is `A8Unorm`'s, on a device that holds such a texture's alpha
     /// in red ([`heap_alpha_in_red`]).
     pub heap_alpha_red: bool,
+    /// The read, of a storage heap group, exchanges red and blue and decodes 8-bit sRGB codes
+    /// where the handle's class and red-blue order name a member the heap views through its
+    /// storage choice's alias ([`heap_storage_conversions`]).
+    pub heap_conversions: HeapConversions,
     /// The read, of a slot's color texture on a profile whose sparse textures are sparse images
     /// (it enables `shaderResourceResidency`), sets the lanes Metal reads as constants (a channel
     /// the format lacks, through the swizzle) after it, from the slot's `ConstantLanes`
@@ -371,6 +375,7 @@ fn read_words(r: &Read) -> u32 {
         } else {
             0
         }
+        + r.heap_conversions.words(true)
         + if r.edge.is_some() { 64 } else { 0 }
         + if r.raw || r.srgb_codes {
             SRGB_DECODE_WORDS
@@ -435,6 +440,10 @@ pub struct Write {
     /// red where the handle's class index is `A8Unorm`'s, on a device that holds such a texture's
     /// alpha in red ([`heap_alpha_in_red`]).
     pub heap_alpha_red: bool,
+    /// A `float` or `half` texel written through a heap handle encodes 8-bit sRGB codes and
+    /// exchanges red and blue where the handle's class and red-blue order name a member the heap
+    /// views through its storage choice's alias ([`heap_storage_conversions`]).
+    pub heap_conversions: HeapConversions,
     /// The slot is one of `LoweringInputs::swizzled_storage`: the write undoes the bound
     /// texture's swizzle on its held value, before converting it, under the slot's
     /// `TextureSwizzle` specialization (`emit::unswizzled`).
@@ -835,6 +844,7 @@ impl TextureStrategy {
                     } else {
                         0
                     }
+                    + w.heap_conversions.words(false)
                     + if w.cross.is_some() { 48 } else { 0 }
                     + w.saturate.words()
             }
@@ -2318,6 +2328,88 @@ pub(super) fn heap_alpha_in_red(
     applies
 }
 
+/// The conversions a storage access of a `float` or `half` texel through a heap handle makes of
+/// the members its storage array views through their storage choice's alias
+/// ([`heap_storage_conversions`]), by each member's key: its texel class index and whether its
+/// format is blue-first (`metal::format::red_blue_exchanged`), both of which its handle carries.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct HeapConversions {
+    /// The keys of the members whose red and blue the access exchanges (`SwizzleBgra`,
+    /// `SrgbEncodeBgra`).
+    pub swap: Vec<(u32, bool)>,
+    /// The keys of the members whose color lanes are 8-bit sRGB codes, decoded by a read and
+    /// encoded by a write through the device's transfer (`SrgbEncode`, `SrgbEncodeBgra`).
+    pub srgb: Vec<(u32, bool)>,
+}
+
+impl HeapConversions {
+    /// The estimated words of the conversions of a read (`read`) or a write: the key's field and
+    /// each key's comparison and disjunction, then for each kind its select and the exchange's
+    /// shuffle, the decode's transfer ([`SRGB_DECODE_WORDS`]) or the encode's
+    /// (`emit::SRGB_WRITE_WORDS`).
+    pub(crate) fn words(&self, read: bool) -> u32 {
+        let keys = |k: &[(u32, bool)]| match k.len() as u32 {
+            0 => 0,
+            n => 16 + 12 * n,
+        };
+        let swap = match self.swap.is_empty() {
+            true => 0,
+            false => keys(&self.swap) + 16,
+        };
+        let srgb = match (self.srgb.is_empty(), read) {
+            (true, _) => 0,
+            (false, true) => keys(&self.srgb) + SRGB_DECODE_WORDS + 8,
+            (false, false) => keys(&self.srgb) + emit::SRGB_WRITE_WORDS + 8,
+        };
+        swap + srgb
+    }
+}
+
+/// The conversions a storage read or write of a `float` or `half` texel (`texel`) through heap
+/// handle `image` of shape `shape` makes ([`HeapConversions`]): none but of a heap image that is
+/// not a texture buffer (no heap class holds one). A member the binder views through its storage
+/// choice's alias (`bind::heap::storage_conversions`, the list both take) is converted as a slot
+/// of that choice converts its texels: an 8-bit sRGB texture where the device stores no sRGB
+/// format through its UNORM alias, its codes decoded and encoded by the device's transfer
+/// (`PrecisionNote::SrgbTexelDecode` for a read, `PrecisionNote::DevicePackConversion` for a
+/// write, recorded by the caller), and a blue-first texture where the device stores only its
+/// RGBA-order twin, red and blue exchanged, which is exact. The handle carries its class and
+/// red-blue order (`memory::handles::Lookup::Flagged`).
+pub(super) fn heap_storage_conversions(
+    cx: &mut SelectCx<'_>,
+    image: ImageRef,
+    shape: ImageShape,
+    texel: TexelConv,
+) -> HeapConversions {
+    let mut out = HeapConversions::default();
+    if !image.heap()
+        || !matches!(texel, TexelConv::F32 | TexelConv::F16)
+        || shape.dim == ImageDim::Buffer
+    {
+        return out;
+    }
+    for c in crate::bind::heap::storage_conversions(cx.profile) {
+        let key = (c.index, c.red_blue);
+        if matches!(
+            c.class,
+            StorageImageClass::SwizzleBgra | StorageImageClass::SrgbEncodeBgra
+        ) {
+            out.swap.push(key);
+        }
+        if matches!(
+            c.class,
+            StorageImageClass::SrgbEncode | StorageImageClass::SrgbEncodeBgra
+        ) {
+            out.srgb.push(key);
+        }
+    }
+    if !(out.swap.is_empty() && out.srgb.is_empty()) {
+        cx.families.access.heap_class_index = true;
+        cx.families.access.heap_red_blue = true;
+    }
+    out
+}
+
 /// What a `float` (or `half`, held widened) texel's write in form `texel` to texture `image` of
 /// shape `shape` relies on or records where the texture's format may be a normalized one, whose
 /// conversion the device makes: Metal stores each channel's value clamped to its range (a NaN 0)
@@ -3073,6 +3165,15 @@ fn select_read_as(
         swizzles(cx, index)?;
     }
     let heap_alpha_red = storage && heap_alpha_in_red(cx, image, shape, texel.conv);
+    let heap_conversions = match storage {
+        true => heap_storage_conversions(cx, image, shape, texel.conv),
+        false => HeapConversions::default(),
+    };
+    // A member's 8-bit sRGB codes, through its UNORM alias, decoded by the device's transfer, as
+    // a storage slot's are.
+    if !heap_conversions.srgb.is_empty() {
+        cx.precision.insert(PrecisionNote::SrgbTexelDecode);
+    }
     // Where the profile's sparse textures are sparse images, a block of one that holds no mapped
     // tile reads the device's value (RADV's alpha 0), where Metal reads a channel the format
     // lacks as its constant: a color read of four 32-bit held lanes sets them after it, whether
@@ -3120,6 +3221,7 @@ fn select_read_as(
         extended,
         heap_raw,
         heap_alpha_red,
+        heap_conversions,
         constant_lanes,
         declared,
         heap_class: as_class,
@@ -3285,6 +3387,12 @@ fn select_write(
     mode_rounded_write(cx, image, texel, extended.is_some())?;
     // Its alpha in red where the class is `A8Unorm`'s and the device holds such a texture so.
     let heap_alpha_red = heap_alpha_in_red(cx, image, shape, texel.conv);
+    // A member's 8-bit sRGB codes, through its UNORM alias, encoded by the device's conversion
+    // (`emit::srgb_codes`), as a storage slot's are.
+    let heap_conversions = heap_storage_conversions(cx, image, shape, texel.conv);
+    if !heap_conversions.srgb.is_empty() {
+        cx.precision.insert(PrecisionNote::DevicePackConversion);
+    }
     // A constant texel none of whose lanes is a NaN stores none, whatever the device's encoding.
     let nans = !holds_no_nan(cx, value);
     if texel.conv == TexelConv::F32 {
@@ -3321,6 +3429,7 @@ fn select_write(
         extended,
         class,
         heap_alpha_red,
+        heap_conversions,
         swizzle,
         cross,
         saturate,

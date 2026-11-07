@@ -1084,7 +1084,8 @@ pub enum PrecisionNote {
     /// mip filter, anisotropy, or a runtime sampler) the device's filter of the codes, the decode
     /// of the codes' blend where Metal blends the decoded texels. So does a read of an 8-bit sRGB
     /// storage texture held through its UNORM alias (`StorageImageClass::SrgbEncode`, Vulkan
-    /// having no sRGB storage view). Both are recorded outright, on every device: Metal's table
+    /// having no sRGB storage view), at a slot or held by an argument buffer
+    /// (`lower::texture::heap_storage_conversions`). Both are recorded outright, on every device: Metal's table
     /// rounds the transfer to a twelve-bit step, up to half a step (`1 / 8190`) from it, where
     /// MoltenVK's `Pow` read within `1.83e-7` of the transfer through the alias
     /// (`runtime_lane::srgb_storage`). Validation derives no tolerance from it: the class is
@@ -1965,7 +1966,8 @@ pub enum PrecisionNote {
     /// through its twelve-bit table: a decode answers its step `k / 4095` nearest the transfer, an
     /// encode the byte of that table's step. Also: a write of an 8-bit sRGB storage texture held
     /// through its UNORM alias (`StorageImageClass::SrgbEncode`, Vulkan having no sRGB storage
-    /// view) encodes by `unorm4x8_srgb`'s pack. Recorded on every device but for
+    /// view), at a slot or held by an argument buffer, encodes by `unorm4x8_srgb`'s pack.
+    /// Recorded on every device but for
     /// a `float` conversion of the four named formats on a device whose functions are Metal's own
     /// (MoltenVK: Metal's own `pack_float_to_*` and `unpack_*_to_float`), and but for the forms
     /// measured to answer Metal's on a profile that takes

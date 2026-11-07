@@ -22,10 +22,13 @@
 //!   a write of either), which never holds a depth or stencil format), through its
 //!   view: a sampled one as a slot's (`plan::resources::sampled_view`), a storage one the direct
 //!   format (an `A8Unorm` texture held in red its `R8_UNORM` image, whose texels a heap access
-//!   converts where the handle carries `A8Unorm`'s class), which the class's formatless declaration
-//!   serves exactly when the format's storage choice for every access the device lets a heap make
-//!   (`heap_storage_use`) is `Identity` (or `AlphaInRed`) without an alias and the format serves
-//!   those accesses without a format
+//!   converts where the handle carries `A8Unorm`'s class), or the alias of a storage choice a heap
+//!   access converts by ([`storage_conversions`]: an 8-bit sRGB texture's UNORM twin, a blue-first
+//!   texture's RGBA-order twin, converted where the handle carries the texture's class and red-blue
+//!   order), which the class's formatless declaration serves exactly when the format's storage
+//!   choice for every access the device lets a heap make (`heap_storage_use`) is `Identity` (or
+//!   `AlphaInRed`) without an alias, or such an alias, and the view's format serves those accesses
+//!   without a format
 //!   (`metal::format::without_format_gaps`: the device's features and the format's own
 //!   `VkFormatFeatureFlags2` bits). A fitting member the heap cannot view (another storage choice,
 //!   a format the profile cannot sample or store) is `Unsupported`, as for a slot: a handle may
@@ -61,7 +64,8 @@
 //!   entry is the null entry, and every id resolves as [`lookup_host`] says. A texture no member
 //!   names misses. A member's flags are [`FLAG_OUT_OF_BOUNDS_ALPHA_ONE`] where its pixel format
 //!   has no alpha (`metal::format::out_of_bounds_alpha_one`): a module whose shader-checked heap
-//!   read observes the alpha takes Metal's out-of-bounds alpha from it; and its texel class in
+//!   read observes the alpha takes Metal's out-of-bounds alpha from it; [`FLAG_RED_BLUE`] where
+//!   its pixel format is blue-first (`metal::format::red_blue_exchanged`); and its texel class in
 //!   [`FLAG_TEXEL_CLASS`]. Every other bit is 0.
 //! - **Heap samplers**. A heap image is sampled through a separate sampler binding
 //!   (`BindingSource::HeapSampler`) in set 0: a constexpr sampler is the layout's immutable sampler
@@ -139,11 +143,12 @@ use crate::device::DeviceProfile;
 use crate::error::{BindError, Feature, Unsupported};
 use crate::memory::handles::{
     lookup_host, ENTRY_ELEMENT, ENTRY_FLAGS, ENTRY_ID_HI, ENTRY_ID_LO,
-    FLAG_OUT_OF_BOUNDS_ALPHA_ONE, FLAG_TEXEL_CLASS, NEUTRAL_ELEMENT, TABLE_CAPACITY,
+    FLAG_OUT_OF_BOUNDS_ALPHA_ONE, FLAG_RED_BLUE, FLAG_TEXEL_CLASS, NEUTRAL_ELEMENT, TABLE_CAPACITY,
     TABLE_ENTRY_BYTES,
 };
 use crate::metal::format::{
-    is_depth_stencil, sampled_type, storage_choice, vk_format, without_format_gaps, StorageUse,
+    is_depth_stencil, red_blue_exchanged, sampled_type, storage_choice, storage_view_formats,
+    vk_format, without_format_gaps, StorageUse,
 };
 use crate::metal::sampler::{
     check_argument_sampler, check_border_view, vk_filtering, SamplerUse, SamplerWord,
@@ -323,10 +328,12 @@ pub fn heap_raw_form(facts: &TextureFacts) -> Option<crate::metal::format::Exten
 /// `layout`, on `profile` (the module docs): a sampled class's as a slot's
 /// (`plan::resources::sampled_view`), a storage class's the direct format (an `A8Unorm` texture
 /// held in red its `R8_UNORM` image), which the class's formatless declaration must serve.
-/// `Unsupported` where the array cannot view it: an extended-range format (its raw texels need its
-/// function's decode) but a form a heap reads in the unsigned integer class ([`Fit::Raw`]), its raw
-/// view, a storage member whose storage choice or format the formatless declaration cannot serve,
-/// or an `A8Unorm` one held in red whose swizzle moves its alpha (its handle's class is not
+/// A storage member whose choice is an alias a heap access converts by ([`storage_conversions`])
+/// takes that alias. `Unsupported` where the array cannot view it: an extended-range format (its
+/// raw texels need its function's decode) but a form a heap reads in the unsigned integer class
+/// ([`Fit::Raw`]), its raw view, a storage member whose storage choice or format the formatless
+/// declaration cannot serve (another alias, or a converting one whose swizzle loses its class), or
+/// an `A8Unorm` one held in red whose swizzle moves its alpha (its handle's class is not
 /// `A8Unorm`'s).
 fn member_view(
     profile: &DeviceProfile,
@@ -359,6 +366,18 @@ fn member_view(
         // (`metal::texel_format::heap_alpha_in_red_index`), which a swizzle that moves its alpha
         // does not keep.
         let alpha_in_red = c.class == StorageImageClass::AlphaInRed;
+        // A texture viewed through its storage choice's alias, whose channels a heap access
+        // exchanges or whose sRGB codes it decodes and encodes where the handle carries its
+        // class and red-blue order ([`storage_conversions`]): the alias, which its image lists
+        // among its view formats.
+        let converted = aliased
+            && !c.x_channel
+            && storage_conversions(profile).contains(&StorageConversion {
+                index: crate::metal::texel_format::heap_class_index(pixel_format, shape.swizzle()),
+                red_blue: red_blue_exchanged(pixel_format),
+                class: c.class,
+            })
+            && storage_view_formats(pixel_format, profile).contains(&c.vk_format);
         if alpha_in_red
             && crate::metal::texel_format::heap_class_index(pixel_format, shape.swizzle())
                 != crate::metal::texel_format::heap_alpha_in_red_index()
@@ -367,12 +386,12 @@ fn member_view(
                 Feature::ArgumentBufferTextures,
             )));
         }
-        if !(per_element || alpha_in_red) || aliased || c.x_channel {
+        if !(per_element || alpha_in_red || converted) || (aliased && !converted) || c.x_channel {
             return Err(BindError::Unsupported(Unsupported::not_implemented(
                 Feature::ArgumentBufferTextures,
             )));
         }
-        let format = match alpha_in_red {
+        let format = match alpha_in_red || converted {
             true => c.vk_format,
             false => crate::metal::format::direct_format(pixel_format)
                 .ok_or_else(|| internal("a storage heap member without a format"))?,
@@ -448,7 +467,9 @@ pub fn heap_element(
 
 /// The flags word of the handle-table entry of a texture of `facts`, for [`handle_entry`]: bit 1
 /// where its pixel format has no alpha, so a shader-checked read past the texture takes Metal's
-/// out-of-bounds alpha of 1; bits 16 to 28 the index of the texture's texel class
+/// out-of-bounds alpha of 1; bit 2 where its pixel format is blue-first
+/// (`metal::format::red_blue_exchanged`), so a storage access exchanges red and blue where the
+/// heap views it through its RGBA-order twin; bits 16 to 28 the index of the texture's texel class
 /// (`metal::texel_format::heap_class_index` of its pixel format and swizzle), by which the shader
 /// emulates Metal's linear filter of the texture's texels, 0 for a swizzled texture; every other
 /// bit 0. A caller passes the word through as is.
@@ -464,9 +485,76 @@ fn entry_flags(shape: &TextureShape) -> u32 {
         Some(true) => FLAG_OUT_OF_BOUNDS_ALPHA_ONE,
         _ => 0,
     };
+    let red_blue = match red_blue_exchanged(pixel_format) {
+        true => FLAG_RED_BLUE,
+        false => 0,
+    };
     let index = crate::metal::texel_format::heap_class_index(pixel_format, swizzle);
     let class = index << FLAG_TEXEL_CLASS.trailing_zeros();
-    alpha | (class & FLAG_TEXEL_CLASS)
+    alpha | red_blue | (class & FLAG_TEXEL_CLASS)
+}
+
+/// A conversion a storage access through a heap handle makes of the texels of a member its
+/// storage array views through the member's storage choice's alias ([`storage_conversions`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub(crate) struct StorageConversion {
+    /// The member's texel class index (`metal::texel_format::heap_class_index`), which its
+    /// handle carries.
+    pub index: u32,
+    /// Its pixel format is blue-first (`metal::format::red_blue_exchanged`), which its handle
+    /// carries (`memory::handles::FLAG_RED_BLUE`).
+    pub red_blue: bool,
+    /// The conversion: `SwizzleBgra` exchanges red and blue, `SrgbEncode` decodes and encodes the
+    /// sRGB codes of the color lanes by the device's transfer, `SrgbEncodeBgra` both.
+    pub class: StorageImageClass,
+}
+
+/// The conversions of the storage elements of a heap on `profile`, one for each texel class and
+/// red-blue order whose formats' storage choices for every access the device lets a heap make
+/// ([`heap_storage_use`]) agree on one alias class that a function converts by (`SwizzleBgra`,
+/// `SrgbEncode` or `SrgbEncodeBgra`, as a slot of that choice converts, an RGBX format's left
+/// out): an 8-bit sRGB texture where the device stores no sRGB format, and a blue-first one where
+/// it stores its RGBA-order twin only. A class and order whose formats choose otherwise (another
+/// alias, or `Identity` beside a converting one) has none: its converting member is refused, as
+/// before. The binder views a member of such a choice through its alias ([`member_view`]) and the
+/// texture lowering converts where the handle carries the class and order
+/// (`lower::texture::heap_storage_conversions`); both come from this list, so the two agree.
+pub(crate) fn storage_conversions(profile: &DeviceProfile) -> Vec<StorageConversion> {
+    let use_ = heap_storage_use(profile);
+    let mut chosen: BTreeMap<(u32, bool), BTreeSet<Option<StorageImageClass>>> = BTreeMap::new();
+    for &pf in metal::PixelFormat::ALL {
+        let Ok(c) = storage_choice(pf, use_, profile) else {
+            continue;
+        };
+        let converts = matches!(
+            c.class,
+            StorageImageClass::SwizzleBgra
+                | StorageImageClass::SrgbEncode
+                | StorageImageClass::SrgbEncodeBgra
+        ) && c.alias.is_some()
+            && !c.x_channel;
+        let index = crate::metal::texel_format::heap_class_index(
+            pf,
+            crate::metal::TextureSwizzleChannels::DEFAULT,
+        );
+        chosen
+            .entry((index, red_blue_exchanged(pf)))
+            .or_default()
+            .insert(converts.then_some(c.class));
+    }
+    chosen
+        .into_iter()
+        .filter_map(|((index, red_blue), classes)| {
+            match classes.into_iter().collect::<Vec<_>>().as_slice() {
+                [Some(class)] => Some(StorageConversion {
+                    index,
+                    red_blue,
+                    class: *class,
+                }),
+                _ => None,
+            }
+        })
+        .collect()
 }
 
 /// The bytes of one handle-table entry (the module docs' **Tables**): resource ID `id` at heap

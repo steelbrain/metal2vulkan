@@ -781,6 +781,10 @@ pub struct AccessPlan {
     /// (`lower::texture::emit`): the handle-table search carries the index, as under
     /// [`heap_class`](Self::heap_class), but the module needs no table of the classes.
     pub heap_class_index: bool,
+    /// A heap storage access the function makes converts a member by its texel class and its
+    /// red-blue order (`lower::texture::heap_storage_conversions`): the handle-table search
+    /// carries the entry's `FLAG_RED_BLUE` too (`memory::handles::Lookup::Flagged`).
+    pub heap_red_blue: bool,
     /// The relaxed atomic loads an exit of a loop holding them depends on ([`atomic::spin`]): each
     /// acquires its memory. Planned before any instruction is selected.
     pub spins: BTreeSet<InstId>,
@@ -798,10 +802,11 @@ impl AccessPlan {
 
     /// What the function's handle-table search yields.
     pub fn lookup(&self) -> crate::memory::handles::Lookup {
-        if self.heap_alpha || self.carries_class() {
+        if self.heap_alpha || self.carries_class() || self.heap_red_blue {
             crate::memory::handles::Lookup::Flagged {
                 alpha: self.heap_alpha,
                 class: self.carries_class(),
+                red_blue: self.heap_red_blue,
             }
         } else {
             crate::memory::handles::Lookup::Element

@@ -382,13 +382,22 @@ pub const ENTRY_ID_HI: u32 = 1;
 pub const ENTRY_ELEMENT: u32 = 2;
 /// Word of an entry holding the flags: for a sampler, its
 /// [`SamplerWord`](crate::metal::sampler::SamplerWord); for a texture,
-/// [`FLAG_OUT_OF_BOUNDS_ALPHA_ONE`], and the index of its texel class in [`FLAG_TEXEL_CLASS`], every other bit 0.
+/// [`FLAG_OUT_OF_BOUNDS_ALPHA_ONE`], [`FLAG_RED_BLUE`], and the index of its texel class in
+/// [`FLAG_TEXEL_CLASS`], every other bit 0.
 pub const ENTRY_FLAGS: u32 = 3;
 /// The flag of a texture entry whose pixel format has no alpha
 /// (`metal::format::out_of_bounds_alpha_one`): Metal's out-of-bounds read of such a texture
 /// bound to a slot returns alpha 1 (MSL 4.1 section 2.9.1), which a read through the table takes
 /// too; no heap texture was measured.
 pub const FLAG_OUT_OF_BOUNDS_ALPHA_ONE: u32 = 1 << 1;
+/// The flag of a texture entry whose pixel format a storage view may hold through its RGBA-order
+/// twin, red and blue exchanged (`metal::format::red_blue_exchanged`: `BGRA8Unorm`,
+/// `BGRA8Unorm_sRGB`, `BGR10A2Unorm`), which tells such a member from the red-first format of its
+/// texel class (`RGBA8Unorm`, `RGBA8Unorm_sRGB`, `RGB10A2Unorm`): a storage access through a heap
+/// handle exchanges the channels of a member its storage array views so
+/// (`bind::heap::storage_conversions`). A handle carries it beside its class
+/// ([`HANDLE_RED_BLUE`]).
+pub const FLAG_RED_BLUE: u32 = 1 << 2;
 /// The field of a texture entry's flags holding the index of its texel class in
 /// `metal::texel_format::heap_classes`: the class a slot bound to the texture would state in its
 /// `TexelFormat` specialization, `OTHER` (index 0) for a swizzled texture, by which a function
@@ -403,11 +412,16 @@ pub const HANDLE_TEXEL_CLASS: u32 = FLAG_TEXEL_CLASS;
 /// The bit of a heap handle that carries its entry's [`FLAG_OUT_OF_BOUNDS_ALPHA_ONE`], in a
 /// module whose search carries it ([`Lookup::Flagged`]'s `alpha`).
 pub const HANDLE_ALPHA_ONE: u32 = 1 << 31;
+/// The bit of a heap handle that carries its entry's [`FLAG_RED_BLUE`], in a module whose search
+/// carries the texel class ([`Lookup::Flagged`]'s `class`).
+pub const HANDLE_RED_BLUE: u32 = 1 << 30;
 // Every element is below the table's capacity, so no carried bit is an element's, and the
 // carried fields do not overlap.
 const _: () = assert!(TABLE_CAPACITY <= 1 << HANDLE_TEXEL_CLASS.trailing_zeros());
 const _: () = assert!(HANDLE_TEXEL_CLASS & HANDLE_ALPHA_ONE == 0);
+const _: () = assert!((HANDLE_TEXEL_CLASS | HANDLE_ALPHA_ONE) & HANDLE_RED_BLUE == 0);
 const _: () = assert!(FLAG_TEXEL_CLASS & FLAG_OUT_OF_BOUNDS_ALPHA_ONE == 0);
+const _: () = assert!((FLAG_TEXEL_CLASS | FLAG_OUT_OF_BOUNDS_ALPHA_ONE) & FLAG_RED_BLUE == 0);
 
 /// Unrolled steps of the handle-table search.
 pub const SEARCH_STEPS: u32 = 16;
@@ -1300,8 +1314,15 @@ pub enum Lookup {
     /// The entry's element with flags of its entry beside it: where `alpha`, its
     /// [`FLAG_OUT_OF_BOUNDS_ALPHA_ONE`] in [`HANDLE_ALPHA_ONE`], the handle of a module whose
     /// shader-checked heap read observes the alpha; where `class`, its [`FLAG_TEXEL_CLASS`] in
-    /// [`HANDLE_TEXEL_CLASS`], the handle of a module that reads a heap texture's texel class. Every heap access masks them off ([`Lookup::element_mask`]).
-    Flagged { alpha: bool, class: bool },
+    /// [`HANDLE_TEXEL_CLASS`], the handle of a module that reads a heap texture's texel class;
+    /// where `red_blue`, its [`FLAG_RED_BLUE`] in [`HANDLE_RED_BLUE`], the handle of a module whose
+    /// storage access converts a member by it (`bind::heap::storage_conversions`). Every heap
+    /// access masks them off ([`Lookup::element_mask`]).
+    Flagged {
+        alpha: bool,
+        class: bool,
+        red_blue: bool,
+    },
     /// The index of the entry found, 0 (the null entry) for a miss: the handle of an argument
     /// buffer's sampler, whose uses read the entry's element and word ([`entry_field`]).
     Entry,
@@ -1311,7 +1332,12 @@ impl Lookup {
     /// The entry flags this form carries into the handle, each with the left shift that moves it
     /// there.
     fn carried(self) -> Vec<(u32, u32)> {
-        let Lookup::Flagged { alpha, class } = self else {
+        let Lookup::Flagged {
+            alpha,
+            class,
+            red_blue,
+        } = self
+        else {
             return Vec::new();
         };
         let alpha = alpha.then_some((
@@ -1319,7 +1345,11 @@ impl Lookup {
             HANDLE_ALPHA_ONE.trailing_zeros() - FLAG_OUT_OF_BOUNDS_ALPHA_ONE.trailing_zeros(),
         ));
         let class = class.then_some((FLAG_TEXEL_CLASS, 0));
-        alpha.into_iter().chain(class).collect()
+        let red_blue = red_blue.then_some((
+            FLAG_RED_BLUE,
+            HANDLE_RED_BLUE.trailing_zeros() - FLAG_RED_BLUE.trailing_zeros(),
+        ));
+        alpha.into_iter().chain(class).chain(red_blue).collect()
     }
 
     /// The bits of a handle this form yields that are its element, where it carries flags beside
@@ -1757,18 +1787,25 @@ mod tests {
     /// several sizes up to [`TABLE_CAPACITY`] entries (the null id, present ids, absent ids between
     /// and beyond them) gets [`lookup_host`]'s element, through an entry array (`u64` ids) and a
     /// word view. [`Lookup::Flagged`] also carries a found entry's [`FLAG_OUT_OF_BOUNDS_ALPHA_ONE`]
-    /// in [`HANDLE_ALPHA_ONE`] where it carries the alpha, and its texel class where it carries
-    /// that, carrying no other bit of the entry, and [`Lookup::Entry`] yields the index
+    /// in [`HANDLE_ALPHA_ONE`] where it carries the alpha, its texel class where it carries that,
+    /// and its [`FLAG_RED_BLUE`] in [`HANDLE_RED_BLUE`] where it carries that, carrying no other
+    /// bit of the entry, and [`Lookup::Entry`] yields the index
     /// of the last entry of the key's id, 0 for a miss.
     #[test]
     fn the_emitted_search_matches_the_host_model() {
         for int64 in [true, false] {
-            let flagged = |alpha, class| Lookup::Flagged { alpha, class };
+            let flagged = |alpha, class, red_blue| Lookup::Flagged {
+                alpha,
+                class,
+                red_blue,
+            };
             for form in [
                 Lookup::Element,
-                flagged(true, false),
-                flagged(false, true),
-                flagged(true, true),
+                flagged(true, false, false),
+                flagged(false, true, false),
+                flagged(false, false, true),
+                flagged(true, true, false),
+                flagged(true, true, true),
                 Lookup::Entry,
             ] {
                 emitted_search_matches_the_host_model(int64, form);
@@ -1779,16 +1816,24 @@ mod tests {
     /// Each flagged form's element mask clears exactly the bits it carries.
     #[test]
     fn a_flagged_handle_masks_off_the_bits_it_carries() {
-        let flagged = |alpha, class| Lookup::Flagged { alpha, class }.element_mask();
+        let flagged = |alpha, class, red_blue| {
+            Lookup::Flagged {
+                alpha,
+                class,
+                red_blue,
+            }
+            .element_mask()
+        };
         assert_eq!(Lookup::Element.element_mask(), None);
         assert_eq!(Lookup::Entry.element_mask(), None);
-        assert_eq!(flagged(false, false), None);
-        assert_eq!(flagged(true, false), Some(!HANDLE_ALPHA_ONE));
+        assert_eq!(flagged(false, false, false), None);
+        assert_eq!(flagged(true, false, false), Some(!HANDLE_ALPHA_ONE));
         assert_eq!(HANDLE_TEXEL_CLASS, 0x1fff << 16);
-        assert_eq!(flagged(false, true), Some(!HANDLE_TEXEL_CLASS));
+        assert_eq!(flagged(false, true, false), Some(!HANDLE_TEXEL_CLASS));
+        assert_eq!(flagged(false, false, true), Some(!HANDLE_RED_BLUE));
         assert_eq!(
-            flagged(true, true),
-            Some(!(HANDLE_ALPHA_ONE | HANDLE_TEXEL_CLASS)),
+            flagged(true, true, true),
+            Some(!(HANDLE_ALPHA_ONE | HANDLE_TEXEL_CLASS | HANDLE_RED_BLUE)),
             "every carried field is masked off, and the element's 16 bits stay"
         );
     }
@@ -1868,8 +1913,13 @@ mod tests {
                     };
                     let want = match form {
                         Lookup::Element => e,
-                        Lookup::Flagged { alpha, class } => {
+                        Lookup::Flagged {
+                            alpha,
+                            class,
+                            red_blue,
+                        } => {
                             e | carried(alpha, FLAG_OUT_OF_BOUNDS_ALPHA_ONE, HANDLE_ALPHA_ONE)
+                                | carried(red_blue, FLAG_RED_BLUE, HANDLE_RED_BLUE)
                                 | match class {
                                     true => flags(e) & FLAG_TEXEL_CLASS,
                                     false => 0,

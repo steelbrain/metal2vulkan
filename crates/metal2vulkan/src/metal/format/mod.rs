@@ -3034,6 +3034,18 @@ pub fn storage_view_formats(pf: PixelFormat, profile: &DeviceProfile) -> Vec<vk:
     formats
 }
 
+/// Whether a storage view of a texture of `pf` may be an RGBA-order twin, red and blue exchanged
+/// in the shader ([`storage_choice`]'s `SwizzleBgra` and `SrgbEncodeBgra`): the blue-first
+/// `BGRA8Unorm`, `BGRA8Unorm_sRGB` and `BGR10A2Unorm`, on every device. A heap texture's
+/// handle-table entry carries it (`memory::handles::FLAG_RED_BLUE`), which tells such a member
+/// from the red-first format of the same texel class.
+pub fn red_blue_exchanged(pf: PixelFormat) -> bool {
+    matches!(
+        pf,
+        PixelFormat::BGRA8Unorm | PixelFormat::BGRA8UnormSRGB | PixelFormat::BGR10A2Unorm
+    )
+}
+
 /// The RGBA-order twin of a BGRA-order direct format, whose fields are the format's with red and
 /// blue exchanged: `R8G8B8A8_UNORM` for `B8G8R8A8_UNORM` and `A2B10G10R10_UNORM_PACK32` for
 /// `A2R10G10B10_UNORM_PACK32`, each of the format's texel size and compatibility class (the

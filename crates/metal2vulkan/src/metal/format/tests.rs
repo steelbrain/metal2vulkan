@@ -1940,6 +1940,43 @@ fn storage_choices_on_committed_profiles_are_declarable() {
     }
 }
 
+/// A storage choice that exchanges red and blue in the shader (`SwizzleBgra`, `SrgbEncodeBgra`) is
+/// one of a format `red_blue_exchanged` names, on every committed profile and for every use, and
+/// each such format takes one on some profile: the flag a heap entry carries for it
+/// (`memory::handles::FLAG_RED_BLUE`) is what tells its member from the red-first format of its
+/// texel class.
+#[test]
+fn a_red_blue_exchange_is_a_blue_first_format_s() {
+    let mut exchanged = BTreeSet::new();
+    for (stem, dev) in committed_devices() {
+        for &pf in PixelFormat::ALL {
+            for use_ in [
+                StorageUse::READ_WRITE_TEXTURE,
+                StorageUse::texture(false, true),
+                StorageUse::texture(true, false),
+                StorageUse::texture(false, false),
+            ] {
+                let Ok(c) = storage_choice(pf, use_, dev.profile()) else {
+                    continue;
+                };
+                if matches!(
+                    c.class,
+                    StorageImageClass::SwizzleBgra | StorageImageClass::SrgbEncodeBgra
+                ) {
+                    assert!(red_blue_exchanged(pf), "{stem} {pf:?} {use_:?}: {c:?}");
+                    exchanged.insert(pf);
+                }
+            }
+        }
+    }
+    let named: BTreeSet<PixelFormat> = PixelFormat::ALL
+        .iter()
+        .copied()
+        .filter(|&pf| red_blue_exchanged(pf))
+        .collect();
+    assert_eq!(exchanged, named);
+}
+
 /// A half-float storage texture takes `Identity` on every committed profile, for every use, written
 /// or read, image or texel buffer: the device converts each value and NaN (`lower::texture`'s
 /// `half_storage_facts` and `half_write_nans` record what it relies on or notes). So does another
