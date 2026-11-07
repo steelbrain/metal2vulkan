@@ -1490,6 +1490,34 @@ fn a_shadowed_extended_range_attachment_over_its_input_attachment_holds_its_half
         );
         assert!(interlocked(&execution_modes(&words)), "{stem}: unblended");
         valid(&stem, "unblended", &variant, &dev);
+        // A blend under a mask of the color channels keeps alpha as the shadow held it.
+        let mut d = sampled();
+        d.raster_sample_count = 1;
+        let mut masked = over(PixelFormat::BGRA10XR);
+        masked.write_mask = ColorWriteMask::RED
+            .union(ColorWriteMask::GREEN)
+            .union(ColorWriteMask::BLUE);
+        d.color_attachments[0] = Some(masked);
+        let base = dev
+            .compile_render_pipeline(&d, &Budget::standard())
+            .unwrap_or_else(|e| panic!("{stem}: masked: {e}"));
+        let (reads, writes) = image_accesses(&fragment_words(&base));
+        let plan = base.plan(&dev, &shadowed.shape()).expect("masked plan");
+        assert_eq!(plan.variant.extended_shadows, [0].into(), "{stem}: masked");
+        let variant = dev
+            .compile_render_variant(&d, &plan.variant, &Budget::standard())
+            .unwrap_or_else(|e| panic!("{stem}: masked variant: {e}"));
+        assert_eq!(
+            shadows(&variant),
+            [(0, vk::DescriptorType::STORAGE_IMAGE)],
+            "{stem}: masked"
+        );
+        assert_eq!(
+            image_accesses(&fragment_words(&variant)),
+            (reads + 1, writes + 1),
+            "{stem}: masked: the blend's destination and the kept alpha read from the shadow"
+        );
+        valid(&stem, "masked", &variant, &dev);
         // In four samples, where the profile renders the raw format at four (a profile captured
         // without the count refuses the pipeline whatever the shadow), the plain writer's shadow
         // is refused,
