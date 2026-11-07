@@ -117,7 +117,10 @@ fn an_exportable_shared_event_s_semaphore_crosses_to_a_second_device() {
     // semaphore; a successful import owns it.
     unsafe { functions.import_semaphore_fd(&import) }.unwrap();
 
-    // The runtime's signal of 5 reaches the counter `vk_wait(5)` names, in the second device too.
+    // The runtime's signal of 5 raises the counter, and the second device reads the runtime's own
+    // counter value (`vk_wait` answers `Reached` for a value reached, so the counter is read).
+    // SAFETY: the second device's semaphore, an import of the event's.
+    let before = unsafe { second.get_semaphore_counter_value(imported) }.unwrap();
     let queue = device.new_command_queue().unwrap();
     let command_buffer = queue.command_buffer().unwrap();
     command_buffer
@@ -125,17 +128,23 @@ fn an_exportable_shared_event_s_semaphore_crosses_to_a_second_device() {
         .unwrap();
     command_buffer.commit().unwrap();
     command_buffer.wait_until_completed_for(WAIT).unwrap();
-    let VkEventWait::Counter(counter) = event.vk_wait(5) else {
-        panic!("{name}: no counter for a signalled 5");
-    };
-    let values = [counter];
+    assert_eq!(event.vk_wait(5), VkEventWait::Reached, "{name}");
+    // SAFETY: the counter is only read; the event lives.
+    let ours = unsafe {
+        handles
+            .device
+            .get_semaphore_counter_value(event.vk_semaphore())
+    }
+    .unwrap();
+    // SAFETY: as above.
+    let theirs = unsafe { second.get_semaphore_counter_value(imported) }.unwrap();
+    assert!(
+        theirs > before,
+        "{name}: the signal of 5 raised no counter there"
+    );
+    assert_eq!(theirs, ours, "{name}: the two devices' counters");
     let semaphores = [imported];
-    let wait = vk::SemaphoreWaitInfo::default()
-        .semaphores(&semaphores)
-        .values(&values);
-    // SAFETY: the second device's semaphore, an import of the event's.
-    unsafe { second.wait_semaphores(&wait, WAIT.as_nanos() as u64) }.unwrap();
-    eprintln!("EXPORTED-SEMAPHORE on {name}: the runtime's 5 is counter {counter} there");
+    eprintln!("EXPORTED-SEMAPHORE on {name}: the runtime's 5 raised the counter to {theirs} there");
 
     // A command buffer waits for 9, then fills a buffer; the second device signals the counter
     // reserved for 9, which releases the wait and raises the event's value.
