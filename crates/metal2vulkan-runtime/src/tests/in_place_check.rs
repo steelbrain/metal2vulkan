@@ -10,6 +10,7 @@
 
 use super::blit_holds::{device, Scratch};
 use crate::address::{PAGE, SPACE_BASE, SPACE_END};
+use crate::submit_check::{Check, Verdict};
 use crate::{
     AddressPlacement, Buffer, BufferContents, BufferDescriptor, Device, Error, GpuAddress,
     ResourceId, ResourceIdKind, ResourceOptions, Texture, TextureDescriptor,
@@ -28,6 +29,36 @@ const LOW: u64 = 1 << 30;
 const STRIDE: u64 = 8 << 20;
 const PINNED: u64 = 16 << 10;
 
+/// The devices made again where load beside their submission checks split the import tax's
+/// tries ([`answered`]).
+const DEVICES: usize = 3;
+
+/// A device over `scratch`'s shader cache whose submission checks answered whether a held import
+/// costs a submission: what places a long buffer in fresh pages or not (`fresh_pages.rs`), so
+/// what the check's `Fresh` class can check at all (it is unchecked where no buffer takes fresh
+/// pages). A device whose tries all split under the load beside it keeps that unknown for its
+/// life and records nothing, so the next one measures again, up to [`DEVICES`] of them.
+fn answered(scratch: &Scratch) -> Device {
+    let mut made = 0;
+    loop {
+        made += 1;
+        let device = device(&scratch.0);
+        assert!(
+            device.settle_submit_checks(WAIT),
+            "the submission checks answered"
+        );
+        let report = device.submit_check_report();
+        eprintln!(
+            "IN-PLACE-CHECK-SUBMIT-CHECKS on {}: {report}",
+            device.name()
+        );
+        let tax = device.shared().submit_checks.verdict(Check::ImportTax);
+        if tax != Verdict::Unchecked || !report.contains("tries split") || made == DEVICES {
+            return device;
+        }
+    }
+}
+
 /// A buffer of [`PINNED`] bytes pinned at `at`.
 fn pin(device: &Device, at: u64) -> Result<Buffer, Error> {
     let descriptor = BufferDescriptor::new(PINNED, ResourceOptions::shared(), BufferContents::Zero)
@@ -44,7 +75,8 @@ fn pins(odd: bool) -> impl Iterator<Item = u64> {
 
 /// A device whose check runs with the Metal space held but for runs shorter than a check's
 /// buffer (the space past its first GiB by one pool, a pin every 16 MiB of that GiB) answers
-/// every class as a device whose check ran with the space empty does, and each pin between the
+/// every class as a device whose check ran with the space empty does (each device's submission
+/// checks answered first: [`answered`]), and each pin between the
 /// held ones, made and released in turn until the check settles, is made. A check whose buffer
 /// took a range of the space would find none: that class would be unchecked, or a pin refused
 /// (`PlacementConflict::Held`).
@@ -55,7 +87,7 @@ fn the_in_place_check_takes_no_range_of_the_metal_space() {
     };
     let reference = {
         let scratch = Scratch::new("in-place-check-reference");
-        let device = device(&scratch.0);
+        let device = answered(&scratch);
         assert!(
             device.settle_in_place_checks(WAIT),
             "the reference check answered"
@@ -63,7 +95,7 @@ fn the_in_place_check_takes_no_range_of_the_metal_space() {
         verdicts(&device)
     };
     let scratch = Scratch::new("in-place-check-placement");
-    let device = device(&scratch.0);
+    let device = answered(&scratch);
     let rest = SPACE_BASE + LOW;
     // The pool's span is its pages and one guard page, to the space's end.
     let pool = device
