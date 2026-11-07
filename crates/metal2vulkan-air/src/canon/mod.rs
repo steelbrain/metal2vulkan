@@ -19,7 +19,9 @@
 //!    as undefined as the constant.
 //! 5. **Pointer erasure**: casts between identical erased pointer types disappear, so typed- and
 //!    opaque-pointer bitcode of one program canonicalize identically. Each defined function is
-//!    erased in place before inlining, so the inlined body is built erased.
+//!    erased in place before inlining, so the inlined body is built erased. Before it, each call
+//!    passing a thread-memory argument `byval` makes the callee's copy (an `alloca` and an
+//!    `llvm.memcpy`) and passes it plainly (`byval`).
 //! 6. **Inlining**: every direct call to a defined function is inlined into the entry, after a
 //!    memoized size pre-pass checked against `Limit::InlinedInstructions`; a call cycle is
 //!    `Unsupported{Recursion}`. Between the pre-pass and building the inlined body, a value use of
@@ -77,6 +79,7 @@
 mod adapt;
 mod aggregates;
 mod async_copy;
+mod byval;
 mod command_writes;
 mod const_loads;
 mod devirt;
@@ -539,6 +542,8 @@ pub fn specialize_dynamic(
     // the inliner copies erased bodies and the inlined body, as large as the entry's whole call
     // tree, is never rebuilt to erase it (that copy beside the inlined body was a translation's
     // ledger peak).
+    // Each `byval` argument's copy, made at its call, so the inliner takes the call.
+    byval::explicit(&mut parts, m)?;
     let emap = erase::erase_consts(&mut parts.consts, m)?;
     erase::erase_globals(parts.globals.values_mut(), &emap);
     erase_functions(&mut parts, &emap, m)?;

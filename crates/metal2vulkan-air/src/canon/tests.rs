@@ -1075,33 +1075,66 @@ fn the_inline_cap_is_hit_before_the_body_is_built() {
     assert!(meter.ledger_peak() < 64 * 1024, "{}", meter.ledger_peak());
 }
 
-#[test]
-fn a_byval_callee_is_refused_typed() {
+/// A kernel `k` passing `helper` a pointer `byval(i32)`: an `alloca` where `space` is thread
+/// memory, else a null pointer into `space`.
+fn byval_module(space: AddrSpace) -> (Module, AirAbi) {
     let mut m = ModuleBuilder::new();
     let void = m.void();
     let i32t = m.int(32);
-    let thread = m.ptr(AddrSpace::Thread);
-    let hty = m.fn_ty(void, &[thread]);
+    let ptr = m.ptr(space);
+    let hty = m.fn_ty(void, &[ptr]);
     let mut h = m.define("helper", hty);
     h.ret(None);
     let helper = h.finish();
     m.func_mut(helper).unwrap().params[0].attrs.byval = Some(i32t);
     let fty = m.fn_ty(void, &[]);
     let one = m.const_int(i32t, 1);
+    let null = Value::Const(m.constant(ptr, Const::Null));
     let mut f = m.define("k", fty);
-    let slot = f.push(
-        thread,
-        InstKind::Alloca {
-            ty: i32t,
-            count: one,
-            align: None,
-        },
-    );
-    call(&mut f, void, Callee::Direct(helper), &[slot]);
+    let arg = if space == AddrSpace::Thread {
+        f.push(
+            ptr,
+            InstKind::Alloca {
+                ty: i32t,
+                count: one,
+                align: None,
+            },
+        )
+    } else {
+        null
+    };
+    call(&mut f, void, Callee::Direct(helper), &[arg]);
     f.ret(None);
     let k = f.finish();
     let module = m.finish().unwrap();
-    let abi = abi(vec![kernel(k, Vec::new())], Vec::new());
+    (module, abi(vec![kernel(k, Vec::new())], Vec::new()))
+}
+
+/// A callee's `byval` parameter is its own copy of the argument's bytes: the call makes it (an
+/// `alloca` and an `llvm.memcpy`, `byval::explicit`) and the inliner then takes the call.
+#[test]
+fn a_byval_argument_is_copied_at_its_call_and_inlined() {
+    let (module, abi) = byval_module(AddrSpace::Thread);
+    let e = specialize(module, &abi, &request(&[]), &mut meter()).expect("inlined");
+    let body = e
+        .module
+        .func(e.func)
+        .and_then(|f| f.body.as_ref())
+        .expect("the entry's body");
+    assert!(
+        !body
+            .insts
+            .values()
+            .any(|i| matches!(&i.kind, InstKind::Call(c) if matches!(c.callee, Callee::Direct(_)))),
+        "{}",
+        print(&e.module)
+    );
+}
+
+/// A `byval` argument outside thread memory gets no copy, and the call stays refused, typed.
+#[test]
+fn a_byval_argument_outside_thread_memory_is_refused_typed() {
+    let (module, abi) = byval_module(AddrSpace::Device);
     let Error::Unsupported(u) = specialize(module, &abi, &request(&[]), &mut meter()).unwrap_err()
     else {
         panic!();
@@ -1111,7 +1144,7 @@ fn a_byval_callee_is_refused_typed() {
     assert_eq!(u.symbol, Some(DiagName::new("helper")));
     assert_eq!(
         u.location,
-        Some(Location::function(DiagName::new("k"), Some(0), Some(1)))
+        Some(Location::function(DiagName::new("k"), Some(0), Some(0)))
     );
 }
 

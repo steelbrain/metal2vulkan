@@ -224,7 +224,8 @@ impl Sizes {
 }
 
 /// Whether the inliner can take a call to `g`: not variadic, no `byval` parameter or argument (a
-/// callee's private copy of its argument, which inlining would have to materialize).
+/// callee's private copy of its argument, which `byval::explicit` makes before inlining wherever
+/// it can, dropping the attribute).
 fn takes(funcs: &Arena<FuncId, Function>, types: &TypeTable, g: FuncId, call: &InstKind) -> bool {
     let Some(f) = funcs.get(g) else {
         return false;
