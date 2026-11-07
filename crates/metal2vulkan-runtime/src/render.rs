@@ -1420,9 +1420,10 @@ impl std::fmt::Debug for RenderCommandEncoder {
 /// A render encoder's lowering ([`RenderCommandEncoder`]): the encoder's state, which each of its
 /// calls runs on.
 pub(crate) struct RenderLowering {
-    /// In a box of its own, made as the encoder opens: its pass's end hands it on through each
-    /// step of the end (`color_groups::Ended`, the later color groups' passes), and those moves
-    /// copy a pointer, not the core's state.
+    /// In a box of its own (`EncoderCore::boxed`), which its end empties and gives the device back
+    /// for its next render encoder (`encoder::SpareCores`): the end hands the core on through
+    /// each of its steps (`color_groups::Ended`, the later color groups' passes) as a pointer, not
+    /// the core's state, and the box costs an allocation only where the device has none kept.
     core: Box<EncoderCore>,
     /// The pass's instances before the current one, which the draws record into.
     earlier: Vec<Instance>,
@@ -1972,10 +1973,11 @@ impl CommandBuffer {
             false => self.begin_draws(&compatible)?,
         };
         // A refusal past here leaves the secondary command buffer unused, freed with the pool.
-        let mut core = Box::new(match again {
+        let mut core = match again {
             None => EncoderCore::open(self, CALL, EncoderKind::Render, false)?,
             Some(_) => EncoderCore::replaying(self, false)?,
-        });
+        }
+        .boxed();
         if let Some(pass) = &rate_map {
             let (map, state) = pass.taken();
             core.take_rate_map(map, state);
@@ -4106,7 +4108,7 @@ impl RenderLowering {
             core.fail_command_buffer(CommandBufferError::CallRefused(call));
             (core.command_buffer().state()).refuse_call(Error::Degraded(Box::new(notice)));
         }
-        core.end_with_replay(
+        EncoderCore::unboxed(core).end_with_replay(
             EncoderKind::Render,
             Some(residency),
             log.map(Replay::Render),
@@ -4128,7 +4130,7 @@ impl RenderLowering {
         }
         // Its log goes before what it recorded is placed, as it went once its groups were drawn.
         drop(log);
-        Ok((core.finish_replay()?, Some(residency)))
+        Ok((EncoderCore::unboxed(core).finish_replay()?, Some(residency)))
     }
 
     /// An encoder of `command_buffer`'s, ended and committed, opened again over `descriptor`

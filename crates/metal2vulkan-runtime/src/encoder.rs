@@ -66,6 +66,7 @@ use super::used_resources::EncoderKind;
 use super::write_routes::Routes;
 use super::Device;
 use crate::device::functions::Vk;
+use crate::device::lock;
 use crate::shards::Tally;
 use crate::work_counts::{Begun, Counters, Counting};
 use ash::vk;
@@ -73,12 +74,41 @@ use metal2vulkan::bind::ReplayFaults;
 use std::any::Any;
 use std::collections::BTreeSet;
 use std::marker::PhantomData;
+use std::mem::MaybeUninit;
 use std::panic::Location;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Weak};
+use std::sync::{Arc, Mutex, Weak};
 
 /// The next core's [`EncoderCore::id`]: from 1, so none is `retained::HeldBy`'s 0.
 static CORES: AtomicU64 = AtomicU64::new(1);
+
+/// The most emptied core boxes a device keeps ([`SpareCores`]): one per render encoder ending at
+/// once beyond it makes a box again, as every encoder did before.
+const SPARE_CORES: usize = 4;
+
+/// The boxes of a device's render encoders' cores, emptied as their encoders end, which the next
+/// render encoders it opens take. A render encoder holds its core in a box (`render.rs`), so its
+/// end hands the core on through each step as a pointer rather than its state; its open takes the
+/// box an ended encoder gave back, so the box costs no allocation once the device has one.
+#[derive(Default)]
+pub(crate) struct SpareCores(Mutex<Vec<Box<MaybeUninit<EncoderCore>>>>);
+
+impl SpareCores {
+    /// Room for a core: the latest box an ended encoder gave back, else a new one.
+    fn take(&self) -> Box<MaybeUninit<EncoderCore>> {
+        let room = lock(&self.0).pop();
+        room.unwrap_or_else(Box::new_uninit)
+    }
+
+    /// Keep `room`, an ended encoder's core's box, emptied, where fewer than [`SPARE_CORES`] are
+    /// kept; else it goes.
+    fn give(&self, room: Box<MaybeUninit<EncoderCore>>) {
+        let mut spare = lock(&self.0);
+        if spare.len() < SPARE_CORES {
+            spare.push(room);
+        }
+    }
+}
 
 /// One ended encoder's recording, or one part of it (`EncoderUses::split`), in its command
 /// buffer's encoding order.
@@ -502,6 +532,29 @@ pub(super) fn check_device(
 }
 
 impl EncoderCore {
+    /// The core in a box its device kept from an ended encoder's ([`SpareCores`]), else a new one.
+    pub(super) fn boxed(self) -> Box<EncoderCore> {
+        let room = self.device().shared().cores.take();
+        Box::write(room, self)
+    }
+
+    /// The core out of its box, `core`, which its device keeps emptied for the next
+    /// ([`SpareCores`]).
+    pub(super) fn unboxed(core: Box<EncoderCore>) -> EncoderCore {
+        let raw = Box::into_raw(core);
+        // SAFETY: `raw` is a box's pointer, its core live and read out once, here; the box is then
+        // made again over the same allocation as room for a core (`MaybeUninit<EncoderCore>` has
+        // `EncoderCore`'s layout), so the core is neither dropped through it nor read again.
+        let (core, room) = unsafe {
+            (
+                raw.read(),
+                Box::from_raw(raw.cast::<MaybeUninit<EncoderCore>>()),
+            )
+        };
+        core.device().shared().cores.give(room);
+        core
+    }
+
     /// Open an encoder on `command_buffer` for Metal's `call`, `ordered` when Metal runs its
     /// commands in encoded order (a blit or serial compute encoder). Refused when the command
     /// buffer is committed, has an open encoder, or has an abandoned one.

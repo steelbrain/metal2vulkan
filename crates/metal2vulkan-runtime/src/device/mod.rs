@@ -540,6 +540,9 @@ pub(super) struct DeviceShared {
     pub(super) heap_textures_end: std::sync::atomic::AtomicU64,
     /// The bind memos its ended render encoders left, which the next ones take (`binding.rs`).
     pub(super) bind_memos: crate::binding::SpareBindMemos,
+    /// The boxes of its ended render encoders' cores, emptied, which the next ones take
+    /// (`encoder::SpareCores`).
+    pub(super) cores: crate::encoder::SpareCores,
     /// The rooms its ended render encoders' draws gathered into, which the next ones take
     /// (`render/draw_room.rs`).
     pub(super) draw_rooms: crate::render::SpareDrawRooms,
@@ -2063,6 +2066,7 @@ impl Device {
             usage_shadows_made: Default::default(),
             heap_textures_end: Default::default(),
             bind_memos: Default::default(),
+            cores: Default::default(),
             draw_rooms: Default::default(),
             kept_rooms: Default::default(),
             counts: Default::default(),
