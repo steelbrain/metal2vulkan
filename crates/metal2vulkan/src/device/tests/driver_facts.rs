@@ -410,6 +410,7 @@ const SAMPLED_HIZ: DriverFact = DriverFact::SampledDepthKeepsHiZ;
 const MSAA_DEPTH: DriverFact = DriverFact::MultisampledDepthFasterOutOfGeneral;
 const TILE_STORE: DriverFact = DriverFact::TileStoreIsMetals;
 const INTERLOCK_ORDER: DriverFact = DriverFact::InterlockOrdersDraws;
+const INTERLOCK_RACE: DriverFact = DriverFact::InterlockedDrawsRaceUnderLoad;
 const BLENDLESS: DriverFact = DriverFact::BlendlessColorAttachmentsWarn;
 const HEAP_COLORS: DriverFact = DriverFact::ColorImagesLieAsMetalHeapTextures;
 const HEAP_MULTISAMPLE_COLORS: DriverFact =
@@ -523,6 +524,7 @@ fn the_committed_profiles_drivers_have_their_facts() {
                 SCARCE_POOLS,
                 MESSENGER,
                 TILE_STORE,
+                INTERLOCK_RACE,
                 HEAP_COLORS,
                 HEAP_MULTISAMPLE_COLORS,
                 LINE_TIES,

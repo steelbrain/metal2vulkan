@@ -1076,6 +1076,10 @@ pub(crate) enum Split {
     /// A draw ordered after draws of the instance that reached the tile threadgroup memory
     /// (`render/tile_memory.rs`).
     TileMemory,
+    /// A draw that reaches storage the pixel interlock orders that an earlier draw of the instance
+    /// wrote, on a driver whose such draws race under load
+    /// (`DriverFact::InterlockedDrawsRaceUnderLoad`, `render.rs`'s `InterlockedStorage`).
+    InterlockedWrites,
     /// A draw that samples a color attachment's texture after a barrier inside the instance, or a
     /// color the pass clears after a barrier before its first draw (`texture/attached_reads.rs`).
     AttachedRead,
@@ -1101,7 +1105,7 @@ pub(crate) enum Split {
 
 impl Split {
     /// How many there are.
-    pub(crate) const COUNT: usize = 10;
+    pub(crate) const COUNT: usize = 11;
 }
 
 /// What kept a render pass's first instance from recording inline (`render/inline_first.rs`): the
@@ -4982,12 +4986,15 @@ pub struct WorkCounts {
     /// Splits of render encoders' passes, each a new render pass instance after one that
     /// recorded, or that runs the pass's load actions alone (`render.rs`, **Instances**), at a
     /// memory barrier of the program's (`fence.rs`).
-    /// With the nine fields after this one, every split, by its first cause in this order.
+    /// With the ten fields after this one, every split, by its first cause in this order.
     pub instance_splits_barrier: u64,
     /// At a tile dispatch, or for the store actions after the pass's last one.
     pub instance_splits_tile_dispatch: u64,
     /// At a draw ordered after draws that reached the tile threadgroup memory.
     pub instance_splits_tile_memory: u64,
+    /// At a draw that reaches interlocked storage an earlier draw of the instance wrote, on a
+    /// driver whose such draws race under load (`DriverFact::InterlockedDrawsRaceUnderLoad`).
+    pub instance_splits_interlocked_writes: u64,
     /// At a draw that samples a color attachment's texture after a barrier inside the instance,
     /// or a color the pass clears after a barrier before its first draw.
     pub instance_splits_attached_read: u64,
@@ -6900,6 +6907,7 @@ impl Device {
             instance_splits_barrier: split(Split::Barrier),
             instance_splits_tile_dispatch: split(Split::TileDispatch),
             instance_splits_tile_memory: split(Split::TileMemory),
+            instance_splits_interlocked_writes: split(Split::InterlockedWrites),
             instance_splits_attached_read: split(Split::AttachedRead),
             instance_splits_feedback: split(Split::Feedback),
             instance_splits_memoryless_write: split(Split::MemorylessWrite),

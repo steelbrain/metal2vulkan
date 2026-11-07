@@ -1273,6 +1273,10 @@ impl Gpu for Runtime {
             ("splits_barrier", c.instance_splits_barrier),
             ("splits_tile_dispatch", c.instance_splits_tile_dispatch),
             ("splits_tile_memory", c.instance_splits_tile_memory),
+            (
+                "splits_interlocked_writes",
+                c.instance_splits_interlocked_writes,
+            ),
             ("splits_attached_read", c.instance_splits_attached_read),
             ("splits_feedback", c.instance_splits_feedback),
             (

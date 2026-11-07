@@ -48,7 +48,11 @@
 //! order such draws by the interlock alone, and a memoryless color's copy through a fetch read
 //! texels as they were before the blends of the draws just before it. Not on a driver measured to
 //! order them (`DriverFact::InterlockOrdersDraws`: ANV on the Iris Xe), where the colors' barrier
-//! goes, about 15,000 GPU cycles a draw there.
+//! goes, about 15,000 GPU cycles a draw there. On a driver whose such draws race under load
+//! (`DriverFact::InterlockedDrawsRaceUnderLoad`: MoltenVK on Apple's GPUs, where a later draw read
+//! whole 8x4 groups of fragments from before the earlier one's writes, barrier or not, while other
+//! processes' work ran on the GPU), the later draw records into a new render pass instance after
+//! the earlier one's instead: the instances' boundary orders them.
 //!
 //! An 8-bit sRGB attachment (with the compile form) is read and written through a storage view in
 //! the unsigned-integer format of its texel size ([`storage_view_format`]): Metal's tile keeps the

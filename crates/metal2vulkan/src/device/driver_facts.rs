@@ -1450,6 +1450,16 @@ pub enum DriverFact {
     /// shader's writes to its reads and writes, which RADV on the Radeon 780M needs (a later draw
     /// read texels from before an earlier one's writes without it).
     InterlockOrdersDraws,
+    /// Under the GPU work of other processes, consecutive draws of a subpass whose fragment
+    /// shaders read and write a storage image in the ordered pixel interlock, every access
+    /// coherent, are not ordered for every fragment, though Vulkan orders them by the interlock
+    /// alone (`InterlockOrdersDraws`'s sentences): a later draw read, in whole 8x4 groups of
+    /// fragments, a color's texels as they were before an earlier draw of the instance wrote them,
+    /// with or without a by-region barrier from the fragment shader's writes between the draws. On
+    /// a driver with it the runtime records such a draw into a new render pass instance after the
+    /// one the earlier draw wrote in, in place of the barrier (`render.rs`'s
+    /// `InterlockedStorage`), and the instances' boundary orders the two.
+    InterlockedDrawsRaceUnderLoad,
     /// A single-sample colour image bound to memory lies in it as Metal lays out a heap texture
     /// of the image's usage there: a buffer over the memory meets each texel at the byte Metal's
     /// tiles place it. Vulkan leaves an optimal image's layout to the driver. On a driver without
@@ -1911,6 +1921,14 @@ const DYNAMIC_RESTART_WARNING: DriverDiagnostic = DriverDiagnostic {
 /// leaves 19 of the second's 495 bands wrong. Every other driver is unmeasured, and takes the
 /// barrier.
 ///
+/// `InterlockedDrawsRaceUnderLoad`, measured by a scratch loop of
+/// `runtime_lane::framebuffer_fetch::coverage_chain`'s 21 passes, six processes of it at once on
+/// the Apple M3 Max under macOS 27.0.1 (MoltenVK 1.4.2): with the barrier between such draws, 2 of
+/// 7,560 passes lost whole 8x4 groups of the target's texels (the colour draw's fetch read the
+/// coverage as it was before the draw before it wrote it), every one in a pass whose coverage
+/// writes and fetches share one render pass instance; without the barrier, 6 of 7,560; split
+/// where the barrier went, 0 of 7,560; one process alone, 0 of 840 with the barrier.
+///
 /// `ColorImagesLieAsMetalHeapTextures`, measured by
 /// `runtime_lane::heap_textures::device_heap_textures_lie_in_metal_s_tiles` (textures Metal keeps
 /// uncompressed in a `Private` placement heap: `RGBA8Unorm`, `R8Unorm` and `RG16Float` ones of
@@ -2281,6 +2299,7 @@ pub(crate) const MEASURED: &[Measured<DriverFact>] = &[
         (INTEL_VENDOR_ID, INTEL_IRIS_XE_RPL_P),
     ),
     moltenvk_on_apple(DriverFact::TileStoreIsMetals),
+    moltenvk_on_apple(DriverFact::InterlockedDrawsRaceUnderLoad),
     mesa_on(
         DriverFact::InterlockOrdersDraws,
         DriverId::INTEL_OPEN_SOURCE_MESA,

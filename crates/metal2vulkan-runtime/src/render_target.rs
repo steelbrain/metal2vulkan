@@ -872,7 +872,9 @@ pub(super) unsafe fn between_draws(raw: &ash::Device, draws: vk::CommandBuffer, 
 /// under multiview). RADV on an AMD 780M (Mesa 26.2.4) does not order such draws by the interlock
 /// alone, as Vulkan's rasterization order promises: a later draw, of the same pipeline or
 /// another, read texels as they were before the earlier one's writes. A driver measured to order
-/// them takes none between draws that reach only colors (`DriverFact::InterlockOrdersDraws`).
+/// them takes none between draws that reach only colors (`DriverFact::InterlockOrdersDraws`); on
+/// one whose such draws race under load (`DriverFact::InterlockedDrawsRaceUnderLoad`) the later
+/// draw records into a new render pass instance instead (`render.rs`).
 ///
 /// # Safety
 ///

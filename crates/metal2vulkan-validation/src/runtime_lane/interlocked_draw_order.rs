@@ -2,14 +2,17 @@
 //! selects, under the validation layer. Metal orders a fragment function's read of its color
 //! attachment after every earlier fragment of the pixel, across draws. In the pixel interlock
 //! (`metal2vulkan_runtime`'s `framebuffer_fetch`) the runtime records a barrier between two draws
-//! of a render pass instance where the later one reaches interlocked color storage the earlier
-//! one wrote, except on a driver measured to order such draws by the interlock alone
-//! (`DriverFact::InterlockOrdersDraws`): Vulkan orders them so, its ordered interlock's
-//! operations happening "before interlocked operations in fragment shader invocations that execute
-//! later in rasterization order and cover at least one sample in the same pixel" (Fragment
-//! Operations, "Interlocked Operations"), rasterization order following primitive order through a
-//! subpass, submission order first ("Primitive Order"), and the critical section's accesses
-//! coherent. This test is that measurement, and the check of every device's answer either way.
+//! of a render pass instance where the later one reaches interlocked color storage the earlier one
+//! wrote, except on a driver measured to order such draws by the interlock alone
+//! (`DriverFact::InterlockOrdersDraws`), which records nothing there, and on one whose such draws
+//! race under load (`DriverFact::InterlockedDrawsRaceUnderLoad`), where the later draw records into
+//! a new render pass instance instead. Vulkan orders them by the interlock alone, its ordered
+//! interlock's operations happening "before interlocked operations in fragment shader invocations
+//! that execute later in rasterization order and cover at least one sample in the same pixel"
+//! (Fragment Operations, "Interlocked Operations"), rasterization order following primitive order
+//! through a subpass, submission order first ("Primitive Order"), and the critical section's
+//! accesses coherent. This test is that measurement, and the check of every device's answer either
+//! way.
 //!
 //! Each pass clears an `R32Uint` target to [`CLEAR`] and draws fullscreen triangles
 //! (`ido_draw_order`'s `ido_full`), each `ido_triple` (`3c + 1`) or `ido_quintuple` (`5c + 3`), in
@@ -22,7 +25,9 @@
 //! samples over 960x540, each sample copied out by `ido_samples`; then both over 64x36, whose
 //! banded draws cover two rows each, so many draws run at once. Every texel of every pass must
 //! hold its band's composition; the wrong ones are counted and printed per pass, with the GPU time
-//! of each pass and whether the device records the barrier.
+//! of each pass and what the runtime records between the draws: nothing, a barrier, or a split
+//! (`WorkCounts::instance_splits_interlocked_writes`), which every draw after a pass's first must
+//! take where the runtime splits there.
 
 use super::{
     buffer_with, layer_reported_nothing_at_all, read_buffer, validated_device, Messages,
@@ -223,10 +228,23 @@ fn consecutive_fetching_draws_read_each_others_writes() {
     let library = device
         .new_library_with_air(&llvm_assemble(&ll).unwrap())
         .unwrap();
-    let ordered = device
-        .properties()
-        .driver_facts
-        .contains(&DriverFact::InterlockOrdersDraws);
+    let facts = &device.properties().driver_facts;
+    let ordered = facts.contains(&DriverFact::InterlockOrdersDraws);
+    let races = facts.contains(&DriverFact::InterlockedDrawsRaceUnderLoad);
+    // What the runtime records between two such draws of an instance: nothing where the driver
+    // orders them by the interlock alone, else a new instance where its draws race under load,
+    // else a barrier.
+    let between = match (ordered, races) {
+        (true, _) => "nothing",
+        (false, true) => "a split",
+        (false, false) => "a barrier",
+    };
+    // Every draw reads and writes the target in the interlock, so each after a pass's first
+    // splits the pass where the runtime splits there.
+    let want_splits = match !ordered && races {
+        true => steps().len() as u64 - 1,
+        false => 0,
+    };
     let steps = steps();
     let mut wrong_passes = Vec::new();
     for (samples, sides) in [
@@ -241,7 +259,10 @@ fn consecutive_fetching_draws_read_each_others_writes() {
         let pipelines = pipelines(&device, &library, samples);
         let target = target(&device, samples, sides);
         for run in 0..RUNS {
+            let counted = device.work_counts();
             let gpu = draw(&device, &target, &pipelines);
+            let splits = device.work_counts().instance_splits_interlocked_writes
+                - counted.instance_splits_interlocked_writes;
             let texels = match samples {
                 1 => single_texels(&device, &target, sides),
                 _ => sample_texels(&device, &library, &target, sides),
@@ -256,10 +277,15 @@ fn consecutive_fetching_draws_read_each_others_writes() {
                 .count();
             eprintln!(
                 "INTERLOCKED-ORDER on {}: {samples} sample(s), pass {run}: {wrong} of {} texels \
-                 wrong, GPU {gpu:.2} ms; barrier between draws: {}",
+                 wrong, GPU {gpu:.2} ms; between draws: {between}, {splits} splits",
                 device.name(),
                 texels.len(),
-                !ordered
+            );
+            assert_eq!(
+                splits,
+                want_splits,
+                "{}: {samples} sample(s), pass {run}: the splits between draws ({between})",
+                device.name()
             );
             if wrong > 0 {
                 wrong_passes.push((samples, run, wrong));

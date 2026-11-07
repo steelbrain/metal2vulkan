@@ -2814,6 +2814,7 @@ field	metal2vulkan-runtime::WorkCounts.instance_splits_attached_read	pub instanc
 field	metal2vulkan-runtime::WorkCounts.instance_splits_barrier	pub instance_splits_barrier: u64
 field	metal2vulkan-runtime::WorkCounts.instance_splits_execution	pub instance_splits_execution: u64
 field	metal2vulkan-runtime::WorkCounts.instance_splits_feedback	pub instance_splits_feedback: u64
+field	metal2vulkan-runtime::WorkCounts.instance_splits_interlocked_writes	pub instance_splits_interlocked_writes: u64
 field	metal2vulkan-runtime::WorkCounts.instance_splits_memoryless_write	pub instance_splits_memoryless_write: u64
 field	metal2vulkan-runtime::WorkCounts.instance_splits_pending_pipeline	pub instance_splits_pending_pipeline: u64
 field	metal2vulkan-runtime::WorkCounts.instance_splits_shape	pub instance_splits_shape: u64
@@ -11500,6 +11501,7 @@ variant	metal2vulkan-runtime::DriverFact::FragmentDepthKeepsDepth16Codes	Fragmen
 variant	metal2vulkan-runtime::DriverFact::FragmentDepthStoresUnchanged	FragmentDepthStoresUnchanged
 variant	metal2vulkan-runtime::DriverFact::HostTransferImagesKeepTheirBytes	HostTransferImagesKeepTheirBytes
 variant	metal2vulkan-runtime::DriverFact::InterlockOrdersDraws	InterlockOrdersDraws
+variant	metal2vulkan-runtime::DriverFact::InterlockedDrawsRaceUnderLoad	InterlockedDrawsRaceUnderLoad
 variant	metal2vulkan-runtime::DriverFact::InterlockedPassSplitNoSlower	InterlockedPassSplitNoSlower
 variant	metal2vulkan-runtime::DriverFact::LineTiesAreMetals	LineTiesAreMetals
 variant	metal2vulkan-runtime::DriverFact::MultisampleColorImagesLieAsMetalHeapTextures	MultisampleColorImagesLieAsMetalHeapTextures
@@ -12757,6 +12759,7 @@ variant	metal2vulkan::device::DriverFact::FragmentDepthKeepsDepth16Codes	Fragmen
 variant	metal2vulkan::device::DriverFact::FragmentDepthStoresUnchanged	FragmentDepthStoresUnchanged
 variant	metal2vulkan::device::DriverFact::HostTransferImagesKeepTheirBytes	HostTransferImagesKeepTheirBytes
 variant	metal2vulkan::device::DriverFact::InterlockOrdersDraws	InterlockOrdersDraws
+variant	metal2vulkan::device::DriverFact::InterlockedDrawsRaceUnderLoad	InterlockedDrawsRaceUnderLoad
 variant	metal2vulkan::device::DriverFact::InterlockedPassSplitNoSlower	InterlockedPassSplitNoSlower
 variant	metal2vulkan::device::DriverFact::LineTiesAreMetals	LineTiesAreMetals
 variant	metal2vulkan::device::DriverFact::MultisampleColorImagesLieAsMetalHeapTextures	MultisampleColorImagesLieAsMetalHeapTextures

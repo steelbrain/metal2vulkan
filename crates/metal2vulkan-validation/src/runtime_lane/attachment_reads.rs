@@ -967,6 +967,7 @@ fn instances(before: &WorkCounts, after: &WorkCounts) -> [u64; 2] {
         c.instance_splits_barrier
             + c.instance_splits_tile_dispatch
             + c.instance_splits_tile_memory
+            + c.instance_splits_interlocked_writes
             + c.instance_splits_attached_read
             + c.instance_splits_feedback
             + c.instance_splits_memoryless_write

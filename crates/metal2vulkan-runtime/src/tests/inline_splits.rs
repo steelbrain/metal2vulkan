@@ -199,6 +199,7 @@ fn instances_after_splits_record_inline_and_read_the_copies_from_before_them() {
         c.instance_splits_barrier
             + c.instance_splits_tile_dispatch
             + c.instance_splits_tile_memory
+            + c.instance_splits_interlocked_writes
             + c.instance_splits_feedback
             + c.instance_splits_memoryless_write
             + c.instance_splits_pending_pipeline

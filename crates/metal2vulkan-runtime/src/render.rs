@@ -1016,8 +1016,11 @@ impl DrawStates {
 /// takes the barrier but where its driver is measured to order such draws' colors by the
 /// interlock alone (`DriverFact::InterlockOrdersDraws`, by
 /// `runtime_lane::interlocked_draw_order`): there a draw's colors are no kind of it
-/// ([`InterlockedStorage::of`]). Another kind of storage a draw reads and writes inside the
-/// interlock joins as a field here and in [`InterlockedStorage::of`].
+/// ([`InterlockedStorage::of`]). On a driver whose such draws race under load
+/// (`DriverFact::InterlockedDrawsRaceUnderLoad`) the draw records into a new instance instead of
+/// after the barrier (`Split::InterlockedWrites`), whose boundary orders it after the draws before.
+/// Another kind of storage a draw reads and writes inside the interlock joins as a field here and
+/// in [`InterlockedStorage::of`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct InterlockedStorage {
     /// The pass's fragment imageblock storage (`fragment_imageblock.rs`).
@@ -8533,13 +8536,19 @@ impl RenderLowering {
         // The instance the draw records into, and what stands in for the pass's attachments from
         // the draw on: the encoder's layout once the draw is recorded.
         let storage = self.storage_attachments(graphics)?;
-        let colors_ordered =
-            (device.properties().driver_facts).contains(&DriverFact::InterlockOrdersDraws);
+        let driver_facts = &device.properties().driver_facts;
+        let colors_ordered = driver_facts.contains(&DriverFact::InterlockOrdersDraws);
         // The shadows a draw of a pass that fetches through input attachments reads and writes
         // in the interlock (`render/extended_shadow.rs`), where the storage form holds none.
         let shadows = self.layout.fetch_inputs && !live.state.extended_shadows.is_empty();
         let (interlocked, interlocked_writes) =
             InterlockedStorage::of(graphics, (&storage, shadows), colors_ordered);
+        // On a driver whose draws of one instance race on the interlocked storage under load
+        // (`DriverFact::InterlockedDrawsRaceUnderLoad`), a draw that reaches storage an earlier
+        // draw of the instance wrote records into a new instance, after the one that wrote it, in
+        // place of the barrier between them (`InterlockedStorage`).
+        let storage_split = driver_facts.contains(&DriverFact::InterlockedDrawsRaceUnderLoad)
+            && interlocked.meets(self.current.interlocked_writes);
         let failing = match &failing_state {
             None => None,
             Some(state) => {
@@ -8632,7 +8641,8 @@ impl RenderLowering {
             (stencil_use.is_some(), tests_use.is_some()),
             views,
             (
-                (ordered || after_barrier || apart || first_write) && !self.replaying,
+                (ordered || storage_split || after_barrier || apart || first_write)
+                    && !self.replaying,
                 behind_loads,
             ),
             hidden,
@@ -8681,8 +8691,13 @@ impl RenderLowering {
         if self.rerouting && !matches!(next, Next::Current) {
             return Err(Error::NotImplemented(RuntimeGap::Render));
         }
-        // So does one whose command's barrier stands (`run_barrier`).
-        let next = match (self.replaying && (ordered || self.run_barrier), next) {
+        // So does one whose command's barrier stands (`run_barrier`), and one that reaches
+        // interlocked storage an earlier command of the run wrote where the driver's draws race
+        // on it (`storage_split`).
+        let next = match (
+            self.replaying && (ordered || storage_split || self.run_barrier),
+            next,
+        ) {
             (true, Next::Current) => self.next_run()?,
             (_, next) => next,
         };
@@ -10035,6 +10050,8 @@ impl RenderLowering {
         // Why the draw splits the pass where it does: the first that holds.
         let cause = if ordered {
             Split::TileMemory
+        } else if storage_split {
+            Split::InterlockedWrites
         } else if after_barrier {
             Split::AttachedRead
         } else if apart {
