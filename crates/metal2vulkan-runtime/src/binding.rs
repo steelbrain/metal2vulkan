@@ -2845,7 +2845,6 @@ pub(super) fn patch_buffer_uses(
 /// assertions count the uses it looked at (`listed_slot_uses`).
 fn list_slot_uses((plan, command): (&BindingPlan, &Command<'_>), into: &mut CommandUses) {
     let CommandUses {
-        uses,
         sources,
         slots,
         slots_listed,
@@ -2873,7 +2872,7 @@ fn list_slot_uses((plan, command): (&BindingPlan, &Command<'_>), into: &mut Comm
     #[cfg(debug_assertions)]
     LISTED_SLOT_USES.with(|listed| {
         let (calls, walked) = listed.get();
-        listed.set((calls + 1, walked + (uses.len() - *used) as u64));
+        listed.set((calls + 1, walked + (sources.len() - *used) as u64));
     });
 }
 
