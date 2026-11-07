@@ -9,7 +9,12 @@
 //!
 //! The draws are of the owned fixture `ob3_index_buffer`, a vertex function with rasterization
 //! disabled that marks `seen[min(vertex_id, 7)]`, here through a no-copy buffer over a second
-//! mapping of a page of guest RAM (a shared memory object, as the consumer maps it). The state's
+//! mapping of a page of guest RAM (a shared memory object, as the consumer maps it). On Linux the
+//! guest RAM is a `memfd` sealed against growing and shrinking, as QEMU's
+//! `memory-backend-memfd,share=on` makes it, and each buffer's memory comes with a source of
+//! dma-bufs of its pages (`HostMemory::with_dma_buf`): RADV, which refuses the pointer of shared
+//! memory, imports those (`WorkCounts::dma_buf_imports`); a device that imports the pointer never
+//! calls the source. The state's
 //! creation predicts a point list's pipeline, so a line's and a triangle's draw each hand their
 //! own pipeline's making to the device's pool, and the pass records them later
 //! (`render/pending.rs`). The pool's test hold (`pool::held`) keeps those makings waiting from
@@ -22,6 +27,8 @@
 
 use super::blit_holds::{Scratch, WAIT};
 use super::encoder_holds::library;
+#[cfg(target_os = "linux")]
+use super::host_residency::udmabuf;
 use super::layer_claim::Watched;
 use super::pending_rebind::device;
 use crate::pipeline::pool::held;
@@ -29,11 +36,16 @@ use crate::{
     Buffer, CommandBuffer, CommandBufferStatus, CommandQueue, Device, Error, HostMemory,
     PipelineOptions, RenderPassDescriptor, RenderPipelineState, ResourceOptions, WorkCounts,
 };
+#[cfg(target_os = "linux")]
+use crate::{DmaBufChunk, DmaBufRequest, DmaBufSource};
 use metal2vulkan::error::Feature;
 use metal2vulkan::metal::PrimitiveType;
 use metal2vulkan::pipeline::{RenderPipelineDescriptor, StageSource};
 use std::ptr::NonNull;
+#[cfg(not(target_os = "linux"))]
 use std::sync::atomic::{AtomicUsize, Ordering};
+#[cfg(target_os = "linux")]
+use std::sync::Arc;
 use std::time::Instant;
 
 /// The consumer's guest page: 16 KiB, a whole number of any host's pages.
@@ -53,29 +65,84 @@ struct GuestRam {
     view: Mapping,
 }
 
+/// A new shared memory object of `len` bytes: a `memfd` sealed against growing and shrinking, so
+/// that `/dev/udmabuf` makes dma-bufs of its pages.
+#[cfg(target_os = "linux")]
+fn shared_memory(len: usize) -> libc::c_int {
+    // SAFETY: a new anonymous file, then sized and sealed.
+    unsafe {
+        let fd = libc::memfd_create(
+            c"m2v-dropped-uncommitted".as_ptr(),
+            libc::MFD_CLOEXEC | libc::MFD_ALLOW_SEALING,
+        );
+        assert!(fd >= 0, "memfd_create: {}", std::io::Error::last_os_error());
+        assert_eq!(libc::ftruncate(fd, len as libc::off_t), 0, "ftruncate");
+        let seals = libc::F_SEAL_GROW | libc::F_SEAL_SHRINK;
+        assert_eq!(libc::fcntl(fd, libc::F_ADD_SEALS, seals), 0, "seals");
+        fd
+    }
+}
+
+/// A new shared memory object of `len` bytes, unlinked at once: only the descriptor names it.
+#[cfg(not(target_os = "linux"))]
+fn shared_memory(len: usize) -> libc::c_int {
+    static NEXT: AtomicUsize = AtomicUsize::new(0);
+    let name = std::ffi::CString::new(format!(
+        "/m2v-du-{}-{}",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    ))
+    .unwrap();
+    // SAFETY: a new shared memory object, unlinked at once.
+    unsafe {
+        let fd = libc::shm_open(
+            name.as_ptr(),
+            libc::O_RDWR | libc::O_CREAT | libc::O_EXCL,
+            0o600 as libc::c_uint,
+        );
+        assert!(fd >= 0, "shm_open: {}", std::io::Error::last_os_error());
+        libc::shm_unlink(name.as_ptr());
+        assert_eq!(libc::ftruncate(fd, len as libc::off_t), 0, "ftruncate");
+        fd
+    }
+}
+
 impl GuestRam {
     fn new(len: usize) -> GuestRam {
-        static NEXT: AtomicUsize = AtomicUsize::new(0);
-        let name = std::ffi::CString::new(format!(
-            "/m2v-du-{}-{}",
-            std::process::id(),
-            NEXT.fetch_add(1, Ordering::Relaxed)
-        ))
-        .unwrap();
-        // SAFETY: a new shared memory object, unlinked at once: only the descriptor names it.
-        let fd = unsafe {
-            let fd = libc::shm_open(
-                name.as_ptr(),
-                libc::O_RDWR | libc::O_CREAT | libc::O_EXCL,
-                0o600 as libc::c_uint,
-            );
-            assert!(fd >= 0, "shm_open: {}", std::io::Error::last_os_error());
-            libc::shm_unlink(name.as_ptr());
-            assert_eq!(libc::ftruncate(fd, len as libc::off_t), 0, "ftruncate");
-            fd
-        };
+        let fd = shared_memory(len);
         let view = Mapping::of(fd, 0, len);
         GuestRam { fd, len, view }
+    }
+
+    /// The memory of `mapping`, one of its mappings, with a source of one dma-buf of the
+    /// object's pages behind each request's.
+    #[cfg(target_os = "linux")]
+    fn memory(&self, mapping: &Mapping) -> HostMemory {
+        // SAFETY: the object's descriptor, open while it lives; the source keeps a duplicate.
+        let fd = unsafe { std::os::fd::BorrowedFd::borrow_raw(self.fd) };
+        let fd = fd.try_clone_to_owned().unwrap();
+        let base = mapping.at.as_ptr() as usize;
+        let file_at = mapping.file_at;
+        let source: DmaBufSource = Arc::new(move |request: DmaBufRequest| {
+            let at = (request.start.as_ptr() as usize)
+                .checked_sub(base)
+                .ok_or_else(|| std::io::Error::other("pages before the mapping"))?;
+            Ok(vec![DmaBufChunk {
+                fd: udmabuf(&fd, (file_at + at) as u64, request.length)?,
+                length: request.length,
+            }])
+        });
+        // SAFETY: the caller keeps the mapping while a buffer over it lives (each buffer goes
+        // first), and each dma-buf holds exactly the object's pages the mapping maps there.
+        unsafe { HostMemory::with_dma_buf(mapping.at, source) }
+    }
+
+    /// The memory of `mapping`, one of its mappings.
+    #[cfg(not(target_os = "linux"))]
+    fn memory(&self, mapping: &Mapping) -> HostMemory {
+        // SAFETY: the caller keeps the mapping while a buffer over it lives (each buffer goes
+        // first).
+        unsafe { HostMemory::new(mapping.at) }
     }
 
     /// A second mapping of its `len` bytes from `offset`, as the consumer maps a task's pages.
@@ -105,10 +172,13 @@ impl Drop for GuestRam {
     }
 }
 
-/// A shared, readable and writable mapping, unmapped when dropped.
+/// A shared, readable and writable mapping of the object's bytes from `file_at`, unmapped when
+/// dropped.
 struct Mapping {
     at: NonNull<u8>,
     len: usize,
+    #[cfg(target_os = "linux")]
+    file_at: usize,
 }
 
 impl Mapping {
@@ -128,6 +198,8 @@ impl Mapping {
         Mapping {
             at: NonNull::new(at.cast()).unwrap(),
             len,
+            #[cfg(target_os = "linux")]
+            file_at: offset,
         }
     }
 
@@ -181,12 +253,12 @@ fn pipelines_settled(device: &Device) -> WorkCounts {
     }
 }
 
-/// A no-copy buffer over `mapping`, with the consumer's resource options (0).
-fn over(device: &Device, mapping: &Mapping) -> Buffer {
+/// A no-copy buffer over `mapping`, one of `ram`'s, with the consumer's resource options (0).
+fn over(device: &Device, ram: &GuestRam, mapping: &Mapping) -> Buffer {
     // SAFETY: the caller keeps the mapping while the buffer lives (each buffer goes first).
     let made = unsafe {
         device.new_buffer_with_bytes_no_copy(
-            HostMemory::new(mapping.at),
+            ram.memory(mapping),
             mapping.len as u64,
             ResourceOptions::default(),
             None,
@@ -253,7 +325,7 @@ fn a_dropped_uncommitted_command_buffer_touches_no_host_memory_once_dropped() {
         // the draws'.
         let before = pipelines_settled(&device);
         let dropped_view = ram.map(GUEST_PAGE, GUEST_PAGE);
-        let dropped_buffer = over(&device, &dropped_view);
+        let dropped_buffer = over(&device, &ram, &dropped_view);
         // Every making the pool starts waits from here until the pages are unmapped.
         let hold = held::hold();
         let command_buffer = encode_marks(&queue, &state, &dropped_buffer);
@@ -274,7 +346,7 @@ fn a_dropped_uncommitted_command_buffer_touches_no_host_memory_once_dropped() {
         pipelines_settled(&device);
         // The same queue, the pipelines made, over the next page.
         let next_view = ram.map(2 * GUEST_PAGE, GUEST_PAGE);
-        let next_buffer = over(&device, &next_view);
+        let next_buffer = over(&device, &ram, &next_view);
         let next = encode_marks(&queue, &state, &next_buffer);
         next.commit().unwrap();
         next.wait_until_completed_for(WAIT).unwrap();
@@ -294,6 +366,10 @@ fn a_dropped_uncommitted_command_buffer_touches_no_host_memory_once_dropped() {
         assert!(
             ram.read(0..GUEST_PAGE) == vec![UNTOUCHED; GUEST_PAGE],
             "a page no buffer was over"
+        );
+        eprintln!(
+            "DROPPED-UNCOMMITTED: {} dma-buf import(s) of the guest pages",
+            device.work_counts().dma_buf_imports - before.dma_buf_imports
         );
         drop(dropped_view);
     }
