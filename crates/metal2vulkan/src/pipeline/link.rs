@@ -87,6 +87,7 @@ use crate::pipeline::layout::{
     BindingSource, DescriptorBinding, DescriptorSetLayout, PipelineLayout, PushConstantRange,
 };
 use crate::pipeline::lower_inputs::ColorGroup;
+use crate::pipeline::stage_io::StageBuiltin;
 use crate::pipeline::sym::{
     CombinedSampler, HandleClass, ResourceKind, ResourceSlot, SlotClass, SlotRef, SpecKey, Stage,
 };
@@ -653,7 +654,8 @@ fn mismatch(expected: Stage, found: Stage) -> Error {
 
 /// The stages match the pipeline kind: one kernel; a vertex stage and a fragment stage exactly
 /// when rasterization is enabled; an optional object stage, a mesh stage, and a fragment stage
-/// exactly when rasterization is enabled; or any one stage alone.
+/// exactly when rasterization is enabled; or any one stage alone. A rasterizing render
+/// pipeline's vertex stage writes its position (`DescriptorError::RasterizedVoidVertex`).
 fn check_stages(ifaces: &[&StageInterface], inputs: &LinkInputs) -> Result<(), Error> {
     let stages: Vec<Stage> = ifaces.iter().map(|i| i.stage).collect();
     match inputs {
@@ -707,9 +709,19 @@ fn check_stages(ifaces: &[&StageInterface], inputs: &LinkInputs) -> Result<(), E
                     None => return Err(missing_stage(*want)),
                 }
             }
-            match stages.get(expected.len()) {
-                Some(extra) => Err(mismatch(*expected.last().unwrap_or(&Stage::Vertex), *extra)),
-                None => Ok(()),
+            if let Some(extra) = stages.get(expected.len()) {
+                return Err(mismatch(*expected.last().unwrap_or(&Stage::Vertex), *extra));
+            }
+            // Metal refuses a rasterizing pipeline whose vertex function returns `void`, the one
+            // vertex function without a position, which the compile read from its entry.
+            let positioned = |iface: &StageInterface| {
+                (iface.io.builtins.iter()).any(|b| matches!(b, StageBuiltin::Position { .. }))
+            };
+            match ifaces.first() {
+                Some(vertex) if r.rasterization_enabled && !positioned(vertex) => Err(
+                    Error::InvalidDescriptor(DescriptorError::RasterizedVoidVertex),
+                ),
+                _ => Ok(()),
             }
         }
     }

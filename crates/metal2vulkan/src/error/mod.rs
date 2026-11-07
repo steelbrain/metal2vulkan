@@ -1867,6 +1867,13 @@ pub enum DescriptorError {
     UnknownEnumValue { ty: &'static str, value: u32 },
     /// A pipeline descriptor without a required stage.
     MissingStage { stage: Stage },
+    /// A render pipeline that rasterizes whose vertex function writes no `[[position]]`: one
+    /// returning `void`, as every other vertex function Metal's compiler builds returns its
+    /// position. `newRenderPipelineStateWithDescriptor:` refuses it ("RasterizationEnabled is true
+    /// but the vertex shader's return type is void", on an M3 Max under macOS 27.0.1), and makes it
+    /// under `PrivateRenderState::open_gl_mode_enabled` as a state that rasterizes nothing, which
+    /// is the descriptor with rasterization disabled: the link refuses it whatever the mode.
+    RasterizedVoidVertex,
     /// A device description (or the Khronos profile JSON it was read from) is malformed or
     /// inconsistent.
     DeviceDescription { detail: String },

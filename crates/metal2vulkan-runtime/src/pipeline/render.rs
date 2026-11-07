@@ -1421,7 +1421,9 @@ impl GraphicsState {
         // Metal answers nil with an `NSError` for a state with rasterization disabled whose vertex
         // function returns a value, and for a rasterizing one whose vertex function returns none
         // outside OpenGL mode, which makes it rasterizing nothing (`unrasterized.rs`), before it
-        // compiles anything.
+        // compiles anything. The second's answer outside OpenGL mode is the compile's, which reads
+        // it from the vertex entry it specializes anyway (`DescriptorError::RasterizedVoidVertex`),
+        // so only the others ask.
         // Each answer below is the one a creation of a descriptor of the same key worked out, where
         // one kept it in memory or in the cache directory (`shader_cache/creation.rs`), else worked
         // out now; kept where this creation worked one out and every question has its answer.
@@ -1437,15 +1439,16 @@ impl GraphicsState {
         // earlier creation read reads its entries and its plain answers rather than decoding and
         // specializing them again (`pipeline/memo.rs`).
         let entries = cache.memo.stage_entries();
-        let returns = match known.vertex_returns_value {
-            Some(returns) => Ok(returns),
-            None => {
-                learned = true;
-                device.shared().counts.linked_use_question_asked();
-                descriptor.vertex_returns_value(&options.budget(), entries)
-            }
-        };
-        answers.vertex_returns_value = returns.as_ref().ok().copied();
+        let returns =
+            super::unrasterized::asks(descriptor).then(|| match known.vertex_returns_value {
+                Some(returns) => Ok(returns),
+                None => {
+                    learned = true;
+                    device.shared().counts.linked_use_question_asked();
+                    descriptor.vertex_returns_value(&options.budget(), entries)
+                }
+            });
+        answers.vertex_returns_value = returns.as_ref().and_then(|r| r.as_ref().ok().copied());
         let rasterizes =
             super::unrasterized::rasterizes("new_render_pipeline_state", descriptor, returns)?;
         // Metal links the fragment function whether or not the pipeline rasterizes, and answers
@@ -1540,7 +1543,8 @@ impl GraphicsState {
                 (descriptor, options, used, added_unsupported),
                 entries,
                 &made_key,
-            )?;
+            )
+            .map_err(|e| super::unrasterized::compiled("new_render_pipeline_state", e))?;
             let reflected = match (kept, making) {
                 (Some(Some(reflection)), _) => Some(Reflected::Kept(reflection)),
                 (_, Some((key, making))) => Some(Reflected::Made(
@@ -2584,14 +2588,15 @@ fn large_form(
 }
 
 /// Whether `answers` holds an answer to every linked-use question a creation of `descriptor`
-/// asks (`GraphicsState::create_adding`): the stages using a direct argument where it supports
-/// indirect command buffers, and always whether its vertex function returns a value, the
-/// fragment's depth write and the unwritten fragment inputs.
+/// asks (`GraphicsState::create_adding`): whether its vertex function returns a value where it
+/// asks that (`unrasterized::asks`), the stages using a direct argument where it supports
+/// indirect command buffers, and always the fragment's depth write and the unwritten fragment
+/// inputs.
 fn answers_every_question(
     answers: &LinkedUseAnswers,
     descriptor: &RenderPipelineDescriptor,
 ) -> bool {
-    answers.vertex_returns_value.is_some()
+    (!super::unrasterized::asks(descriptor) || answers.vertex_returns_value.is_some())
         && answers.fragment_writes_depth_unattached.is_some()
         && (!descriptor.support_indirect_command_buffers
             || answers.stages_using_direct_arguments.is_some())

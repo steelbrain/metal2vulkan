@@ -13396,6 +13396,7 @@ variant	metal2vulkan::error::DescriptorError::MissingStage	MissingStage { stage:
 variant	metal2vulkan::error::DescriptorError::OpenClMode	OpenClMode { compiled: bool }
 variant	metal2vulkan::error::DescriptorError::PixelFormatUsage	PixelFormatUsage { format: u32, usage: FormatUsage }
 variant	metal2vulkan::error::DescriptorError::PlaceholderEnumValue	PlaceholderEnumValue { ty: &'static str, value: u32 }
+variant	metal2vulkan::error::DescriptorError::RasterizedVoidVertex	RasterizedVoidVertex
 variant	metal2vulkan::error::DescriptorError::SamplerLodClamp	SamplerLodClamp
 variant	metal2vulkan::error::DescriptorError::SpecializationConflict	SpecializationConflict { key: SpecKey }
 variant	metal2vulkan::error::DescriptorError::StageInputAttribute	StageInputAttribute { attribute: u32 }

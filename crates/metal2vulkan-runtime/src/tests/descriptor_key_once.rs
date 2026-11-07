@@ -111,6 +111,30 @@ fn a_render_creation_builds_one_descriptor_key() {
     );
 }
 
+/// A plain render creation -- rasterizing, a vertex and a fragment function, no indirect command
+/// buffers -- on a fresh device asks two linked-use questions (the fragment's depth write and the
+/// unwritten fragment inputs) and specializes its two stages once each. Whether its vertex
+/// function returns a value is no question of its own: the compile reads it from the vertex entry
+/// it specializes anyway, and its link refuses a `void` one (`pipeline/unrasterized.rs`). A
+/// question for it cost every such creation a third question and a third stage entry, the
+/// answer's, in the cost records' render creations.
+#[test]
+fn a_plain_render_creation_asks_two_questions_and_specializes_two_stages() {
+    let scratch = Scratch::new("plain-render-counts");
+    let device = device(&scratch.0);
+    let descriptor = descriptor(&device);
+    let before = built(&device);
+    device
+        .new_render_pipeline_state(&descriptor, &PipelineOptions::default())
+        .unwrap();
+    let made = built(&device);
+    assert_eq!(
+        [made[4] - before[4], made[5] - before[5]],
+        [2, 2],
+        "stage entries specialized and linked-use questions asked"
+    );
+}
+
 /// A state made of the descriptor again builds one key of its own: the key belongs to the
 /// creation, not to the state, so a second state of one descriptor neither keeps nor reuses the
 /// first's.
