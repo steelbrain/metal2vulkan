@@ -54,9 +54,9 @@
 //! whole, and the `isRGB10A2GammaSupported` check, which is a device property rather than an
 //! observation.
 //!
-//! Every word and every sample compares exactly and the cases carry **no allowance**: on both
-//! venues this round covers, the runtime announces nothing here. A venue that does will read as
-//! divergent until whoever adds it names the notice with a run behind it.
+//! Every word and every sample compares exactly: the cases' allowances are notice declarations
+//! alone, each loosening the notices site and nothing else. A venue that announces another notice
+//! will read as divergent until whoever adds it names the notice with a run behind it.
 //!
 //! Nothing here can fault a GPU: one compute or render pass a case, one texture and two or three
 //! buffers, no loop. The sampled positions do reach outside the texture, which is what clamp to
@@ -738,8 +738,9 @@ impl Case for Rgb10A2Srgb {
     }
 
     /// What a store case's pass announced on MoltenVK, measured: a pass that loads nothing into
-    /// the tile, and the `half` fragment's output conversion. Nothing else announced anything, so
-    /// no other case here names one.
+    /// the tile, and the `half` fragment's output conversion; and what a sample case's pipeline
+    /// announced on every venue run, its module's filter of the decoded taps. The read and write
+    /// cases name no notice of their own.
     fn allowances(&self) -> Vec<Allowance> {
         use metal2vulkan_runtime::Degradation as D;
         // Every question reads its answer back through a `Shared` buffer, and a device with no
@@ -754,6 +755,14 @@ impl Case for Rgb10A2Srgb {
                 notice_allowance(D::DontCareLoadTiles.code()),
                 notice_allowance(D::HalfOutputFastMathBlend.code()),
             ]),
+            // The sample goes through a runtime sampler, whose state the module does not know, so
+            // the module holds the linear filter of the decoded taps whatever the slot's filter,
+            // and that filter's sum is the device's arithmetic (`bicubic-filter-arithmetic`,
+            // announced for the four cases on the M3 Max, the RTX 5080 and lavapipe), as
+            // `two_plane_samples` declares for its own.
+            Question::Samples { .. } => {
+                named.push(notice_allowance(D::BicubicFilterArithmetic.code()))
+            }
             _ => {}
         }
         named
