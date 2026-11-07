@@ -412,7 +412,7 @@ impl ShadowMerge {
         // A staging buffer that holds fewer of the buffer's bytes than the texture spans is its
         // tail: its texels run past the buffer's length (`buffer_texture.rs`).
         let tail = copies
-            .staged_image()
+            .staged_bytes()
             .filter(|staging| staging.into.size < span)
             .map(|staging| MergeTail {
                 raw: staging.raw(),

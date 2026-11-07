@@ -497,13 +497,11 @@ fn two_dimensional_textures_and_texture_buffers_follow_metal() {
                 row_bytes: 256,
             }),
         ),
-        (
-            texture_buffer(64, 3856, 256, 4096),
-            Err(BufferRefusal::TexelsPastLength),
-        ),
+        // Past the length, where the texels there lie in the texture's tail.
+        (texture_buffer(64, 3856, 256, 4096), made(3856, 256, 1, 256)),
         (
             texture_buffer(1024, 16, 4096, 4096),
-            Err(BufferRefusal::TexelsPastLength),
+            made(16, 4096, 1, 4096),
         ),
         // Through the SPI, a 2D texture keeps the 2D rules.
         (
@@ -680,12 +678,11 @@ fn an_array_ends_where_metal_lets_it() {
 /// texture whenever its rows end inside the buffer's `allocatedSize`, however far past the
 /// `length` they run, and answers nil only past the allocation. Metal's validation counts those
 /// rows against the `length` and stops every case here but the two made ones; that count is the
-/// layer's alone, so the runtime does not refuse by it. A 2D texture past the length is made,
-/// its texels there in its tail (`past`); a texture buffer there is the runtime's gap.
+/// layer's alone, so the runtime does not refuse by it. A 2D texture or a texture buffer past
+/// the length is made, its texels there in its tail (`past`).
 #[test]
 fn a_texture_over_a_buffer_ends_where_metals_allocation_does() {
     use BufferTextureProblem as Pr;
-    let gap = Err::<(), _>(BufferRefusal::TexelsPastLength);
     let past = Ok::<(), BufferRefusal>(());
     let nil = |end, allocation| {
         Err::<(), _>(BufferRefusal::Metal(Pr::PastAllocation { end, allocation }))
@@ -695,12 +692,12 @@ fn a_texture_over_a_buffer_ends_where_metals_allocation_does() {
     // RGBA8Unorm: 64 texels are a 256-byte row.
     let cases = [
         // A 4096-byte buffer, whose `allocatedSize` is its length: made 128 and 12288 bytes past.
-        (texture_buffer(64, 3968, 256, 4096), gap),
+        (texture_buffer(64, 3968, 256, 4096), past),
         (texture(64, 1, 3968, 256, 4096), past),
         (texture(64, 64, 0, 256, 4096), past),
         // A 20000-byte buffer, `allocatedSize` 32768: made inside the allocation, nil past it.
         (texture(64, 4, 19200, 256, 20000), past),
-        (texture_buffer(64, 20000, 256, 20000), gap),
+        (texture_buffer(64, 20000, 256, 20000), past),
         (texture(64, 4, 32000, 256, 20000), nil(33024, 32768)),
         (texture_buffer(64, 32700, 256, 20000), nil(32956, 32768)),
         // A 16384-byte buffer, whose `allocatedSize` is its length: the last row may end on it.

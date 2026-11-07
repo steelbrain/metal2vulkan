@@ -182,6 +182,7 @@ pub mod tessellation_sweeps;
 pub mod texel_swizzles;
 pub mod texture_accesses;
 pub mod texture_buffer_fills;
+pub mod texture_buffer_tails;
 pub mod texture_descriptor_pairs;
 pub mod texture_fills;
 pub mod texture_views;
@@ -515,6 +516,7 @@ pub fn all() -> Vec<Box<dyn Case>> {
     cases.push(Box::new(compute_heap_residency::heap_residency()));
     cases.extend(buffer_texture_blits::all());
     cases.extend(buffer_tails::all());
+    cases.push(Box::new(texture_buffer_tails::TextureBufferTails));
     cases.extend(buffer_textures::all());
     cases.extend(buffer_target_clears::all());
     cases.push(Box::new(host_detach::detach_in_a_completed_handler()));

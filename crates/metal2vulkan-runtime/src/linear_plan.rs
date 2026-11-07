@@ -52,11 +52,14 @@
 //!   buffer and `replaceRegion` write it there, which every read then reads; over a 20000-byte
 //!   buffer (`allocatedSize` 32768) the bytes past the length, inside the allocation, read zero,
 //!   and what each path writes there every path reads. The texels inside the length are the
-//!   buffer's bytes on every path. The runtime makes such a 2D texture or array as Metal does: its
-//!   texels inside the length are the buffer's bytes, and those past it lie in a tail of the
-//!   texture's own (`buffer_texture.rs`), zero when made, which every path reads and writes alike
-//!   and which is no other allocation's memory. A texture buffer there it refuses as not
-//!   implemented ([`BufferRefusal::TexelsPastLength`]), and the nil one as Metal's nil
+//!   buffer's bytes on every path. A texture buffer's paths answer alike
+//!   (`probes/texture_buffer_past_length.m`, 64 `RGBA8Unorm` texels ending 128 to 256 bytes past
+//!   a 4096-byte buffer, and 96 past a 20000-byte one), its kernels from its offset rounded down
+//!   to 16 bytes and its blits and `getBytes` from the offset itself, as inside the length. The
+//!   runtime makes such a 2D texture, array or texture buffer as Metal does: its texels inside
+//!   the length are the buffer's bytes, and those past it lie in a tail of the texture's own
+//!   (`buffer_texture.rs`), zero when made, which every path reads and writes alike and which is
+//!   no other allocation's memory; the nil one it answers as Metal's nil
 //!   ([`BufferTextureProblem::PastAllocation`]).
 //!
 //! **IOSurface planes** (`Buffer::new_texture_with_iosurface_plane`, the stand-in for
@@ -570,11 +573,10 @@ pub(super) enum BufferRefusal {
     /// What Metal asserts on or stops under validation (`Invalid`), or answers nil for (`Nil`:
     /// [`BufferTextureProblem::PastAllocation`]).
     Metal(BufferTextureProblem),
-    /// A texture buffer whose texels run past the buffer's length, or an IOSurface plane's GPU
-    /// or CPU rows past the buffer standing for its surface, which Metal makes over bytes past
-    /// the length and the runtime has no bytes for (`NotImplemented`). A 2D texture or array
-    /// over a buffer keeps its texels past the length in a tail of its own instead (the module's
-    /// **Length**).
+    /// An IOSurface plane's GPU or CPU rows past the buffer standing for its surface, which
+    /// Metal makes over bytes past the length and the runtime has no bytes for
+    /// (`NotImplemented`). A 2D texture, an array or a texture buffer over a buffer keeps its
+    /// texels past the length in a tail of its own instead (the module's **Length**).
     TexelsPastLength,
     /// An IOSurface plane whose rows overlap on Metal's GPU that the runtime holds no form of
     /// (`NotImplemented`; the module's **Rows that overlap**): a plane a render pass stores into,
@@ -762,8 +764,8 @@ pub(super) fn plan_buffer_texture(
     let length = buffer.length;
     // Metal's validation counts the slices' rows as if contiguous against the length and stops
     // the texture there; plain Metal reads the buffer's allocation alone (the module's
-    // **Length**), so the runtime does too. A 2D texture or array whose texels run past the
-    // length keeps those texels in its tail (`buffer_texture.rs`); a texture buffer has none.
+    // **Length**), so the runtime does too. A 2D texture, an array or a texture buffer whose
+    // texels run past the length keeps those texels in its tail (`buffer_texture.rs`).
     if placed.end() > length {
         let end = offset.saturating_add(slice_pitch.saturating_mul(slices));
         if length >= METAL_PAGE {
@@ -773,9 +775,6 @@ pub(super) fn plan_buffer_texture(
             if end > allocation {
                 return Err(P::PastAllocation { end, allocation }.into());
             }
-        }
-        if texture_type == T::TextureBuffer {
-            return Err(BufferRefusal::TexelsPastLength);
         }
     }
     Ok(Placed::same(placed))

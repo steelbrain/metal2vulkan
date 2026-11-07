@@ -286,7 +286,8 @@ degradations! {
              back after it; over a tracked private buffer of the runtime's own, copied in again \
              only once another command buffer wrote it)";
         /// A texture buffer is viewed through a staging buffer: its texels start where the
-        /// device views none (`minTexelBufferOffsetAlignment`).
+        /// device views none (`minTexelBufferOffsetAlignment`), or run past its buffer's length,
+        /// where its staging buffer is its tail.
         StagedTextureBuffer = "staged-texture-buffer", Performance,
             "its texels are copied into a staging buffer before each use and back after each \
              write";

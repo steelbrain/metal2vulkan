@@ -1400,16 +1400,15 @@ pub enum RuntimeGap {
     ExtensionEnable(VkExtension),
     /// Render pipelines, passes and draws.
     Render,
-    /// A texture buffer over a buffer whose texels run past the buffer's length, which Metal
-    /// makes over bytes its buffer's allocation has past the length (up to the allocation, past
-    /// which Metal answers nil: [`Problem::BufferTexture`]'s `PastAllocation`), or a texture over
-    /// a plane of a surface with planes whose rows or GPU texels run past the buffer standing for
-    /// the surface: the runtime's buffers have no bytes there. A 2D texture or array over a
-    /// buffer is made there instead, its texels past the length in a tail of its own
-    /// ([`Buffer::new_texture`](crate::Buffer::new_texture)). Metal lays those in no one place
-    /// (`metal2vulkan-conformance/probes/surface_texture_envelope.m`, an Apple M3 Max under
-    /// macOS 27.0.1): its blits read zeros past the surface, its kernels zeros and, 32 KiB on, the
-    /// surface's first bytes again, its `getBytes` other memory, and its blits and
+    /// A texture over a plane of a surface with planes whose rows or GPU texels run past the
+    /// buffer standing for the surface, which Metal makes: the runtime's buffer has no bytes
+    /// there. A 2D texture, an array or a texture buffer over a buffer is made past its length,
+    /// up to the allocation Metal holds it to (past which Metal answers nil:
+    /// [`Problem::BufferTexture`]'s `PastAllocation`), its texels past the length in a tail of
+    /// its own ([`Buffer::new_texture`](crate::Buffer::new_texture)). Metal lays a plane's in no
+    /// one place (`metal2vulkan-conformance/probes/surface_texture_envelope.m`, an Apple M3 Max
+    /// under macOS 27.0.1): its blits read zeros past the surface, its kernels zeros and, 32 KiB
+    /// on, the surface's first bytes again, its `getBytes` other memory, and its blits and
     /// `replaceRegion` write the surface's bytes alone. The x86 Macs' are not measured, as a read
     /// past a surface can fault their GPUs.
     TexelsPastBufferLength,

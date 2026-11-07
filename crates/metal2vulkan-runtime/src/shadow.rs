@@ -781,12 +781,14 @@ impl ShadowCopies {
         )
     }
 
-    /// The staging buffer a 2D texture's image over a buffer's bytes is copied through, where it
-    /// has one ([`ShadowStaging`]): a texture's whose texels run past the buffer's length, its
-    /// tail, holds fewer of the buffer's bytes than the texture spans (`buffer_texture.rs`).
-    pub(super) fn staged_image(&self) -> Option<&ShadowStaging> {
+    /// The staging buffer a 2D texture's image over a buffer's bytes is copied through, or a
+    /// texture buffer's bindings view, where it has one ([`ShadowStaging`]): a texture's whose
+    /// texels run past the buffer's length, its tail, holds fewer of the buffer's bytes than the
+    /// texture spans (`buffer_texture.rs`).
+    pub(super) fn staged_bytes(&self) -> Option<&ShadowStaging> {
         match self.target()? {
             ShadowTarget::Image { staging, .. } => staging.as_ref(),
+            ShadowTarget::Buffer(staging) => Some(staging),
             _ => None,
         }
     }
@@ -1131,10 +1133,16 @@ impl ShadowCopies {
                 }
             }
             ShadowTarget::Buffer(staging) => {
+                // Every byte of the texels': a tail's past the buffer's length too, past the ones
+                // its copy in takes from the buffer (`buffer_texture.rs`).
+                let size = match &self.source {
+                    ShadowSource::Bytes { bytes, .. } => bytes.end - bytes.start,
+                    _ => staging.into.size,
+                };
                 let region = vk::BufferCopy {
                     src_offset: staging.into.dst_offset,
                     dst_offset: at,
-                    size: staging.into.size,
+                    size,
                 };
                 // SAFETY: the caller's contract; the staging buffer holds the texture's bytes.
                 unsafe { device.cmd_copy_buffer(command_buffer, staging.raw(), to, &[region]) };
@@ -2050,15 +2058,18 @@ impl ShadowCopy {
             }
             ShadowTarget::Buffer(staging) => {
                 // SAFETY: the caller's contract; the copies lie in both buffers (planned when
-                // the texture was made), and the staging buffer lives with the texture.
+                // the texture was made), and the staging buffer lives with the texture. A tail
+                // wholly past the buffer's length takes none of its bytes.
                 unsafe {
                     if into_shadow {
-                        device.cmd_copy_buffer(
-                            command_buffer,
-                            buffer,
-                            staging.raw(),
-                            &[staging.into],
-                        );
+                        if staging.into.size > 0 {
+                            device.cmd_copy_buffer(
+                                command_buffer,
+                                buffer,
+                                staging.raw(),
+                                &[staging.into],
+                            );
+                        }
                     } else {
                         record_back(device, command_buffer, (staging, buffer), back);
                     }

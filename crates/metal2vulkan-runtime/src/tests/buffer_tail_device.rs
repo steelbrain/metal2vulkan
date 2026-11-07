@@ -453,3 +453,223 @@ fn an_array_s_slice_past_the_length_lies_in_its_tail() {
     );
     assert!(tail.around_kept(), "no write reaches another buffer");
 }
+
+/// The texels of texture buffers: `ob1_texel_buffer` (the owned fixture
+/// `validation/fixtures/public/engine/ob1_texel_buffer.ll`), whose thread `t` of eight reads
+/// texel `idx[t]` of its first texture buffer into `out[t]` and writes `0xA0000000 | t` to texel
+/// `idx[8 + t]` of its second.
+struct TexelKernel {
+    queue: CommandQueue,
+    pipeline: ComputePipelineState,
+    device: Device,
+}
+
+impl TexelKernel {
+    fn new(device: &Device) -> TexelKernel {
+        let library = library(device, "engine/ob1_texel_buffer.ll");
+        let function = library.new_function_with_name("ob1_texel_buffer").unwrap();
+        let options = PipelineOptions::default();
+        TexelKernel {
+            queue: device.new_command_queue().unwrap(),
+            pipeline: device
+                .new_compute_pipeline_state_with_function(&function, &options)
+                .unwrap(),
+            device: device.clone(),
+        }
+    }
+
+    /// A texture buffer of `width` `R32Uint` texels at `offset` of `buffer`, read and written by
+    /// shaders.
+    fn over(buffer: &Buffer, width: u64, offset: u64) -> Texture {
+        let usage = TextureUsage::SHADER_READ | TextureUsage::SHADER_WRITE;
+        let descriptor = TextureDescriptor::texture_buffer(
+            PixelFormat::R32Uint,
+            width,
+            buffer.resource_options(),
+            usage,
+        );
+        buffer.new_texture(&descriptor, offset, width * 4).unwrap()
+    }
+
+    /// One dispatch: texels `reads` of `from` into the answer, `0xA0000000 | t` into texel
+    /// `writes[t]` of `into`.
+    fn run(
+        &self,
+        (from, reads): (&Texture, [u32; 8]),
+        (into, writes): (&Texture, [u32; 8]),
+    ) -> Vec<u32> {
+        let words: Vec<u8> = reads
+            .iter()
+            .chain(&writes)
+            .flat_map(|w| w.to_le_bytes())
+            .collect();
+        let shared = ResourceOptions::shared();
+        let idx = self.device.new_buffer(64, shared).unwrap();
+        let out = self.device.new_buffer(32, shared).unwrap();
+        // SAFETY: the buffer's 64 mapped bytes, which no command uses yet.
+        unsafe {
+            std::ptr::copy_nonoverlapping(words.as_ptr(), idx.contents().unwrap().as_ptr(), 64)
+        };
+        let command_buffer = self.queue.command_buffer().unwrap();
+        let mut encoder = command_buffer.compute_command_encoder().unwrap();
+        encoder.set_compute_pipeline_state(&self.pipeline).unwrap();
+        encoder.set_buffer(Some(&idx), 0, 0).unwrap();
+        encoder.set_buffer(Some(&out), 0, 1).unwrap();
+        encoder.set_texture(Some(from), 0).unwrap();
+        encoder.set_texture(Some(into), 1).unwrap();
+        (encoder.dispatch_threads(Size::new(8, 1, 1), Size::new(8, 1, 1))).unwrap();
+        encoder.end_encoding().unwrap();
+        command_buffer.commit().unwrap();
+        command_buffer.wait_until_completed_for(WAIT).unwrap();
+        // SAFETY: the answer's 32 mapped bytes, which no command uses now.
+        let bytes = unsafe { std::slice::from_raw_parts(out.contents().unwrap().as_ptr(), 32) };
+        bytes
+            .chunks(4)
+            .map(|w| u32::from_le_bytes(w.try_into().unwrap()))
+            .collect()
+    }
+
+    /// Every texel of `texture`, `width` of them, through `get_bytes` and through a blit.
+    fn cpu_and_blit(&self, texture: &Texture, width: u64) -> (Vec<u32>, Vec<u32>) {
+        let words = |bytes: &[u8]| -> Vec<u32> {
+            bytes
+                .chunks(4)
+                .map(|w| u32::from_le_bytes(w.try_into().unwrap()))
+                .collect()
+        };
+        let mut cpu = vec![0; width as usize * 4];
+        let row = Region::new_1d(0, width);
+        texture
+            .get_bytes(&mut cpu, width * 4, 0, row, 0, 0)
+            .unwrap();
+        let read = self
+            .device
+            .new_buffer(width * 4, ResourceOptions::shared())
+            .unwrap();
+        let command_buffer = self.queue.command_buffer().unwrap();
+        let mut blit = command_buffer.blit_command_encoder().unwrap();
+        let (origin, size) = (Origin::new(0, 0, 0), Size::new(width, 1, 1));
+        let copy = blit.copy_from_texture_to_buffer(
+            texture,
+            0,
+            0,
+            origin,
+            size,
+            &read,
+            0,
+            width * 4,
+            width * 4,
+            BlitOption::None,
+        );
+        copy.unwrap();
+        blit.end_encoding().unwrap();
+        command_buffer.commit().unwrap();
+        command_buffer.wait_until_completed_for(WAIT).unwrap();
+        // SAFETY: the read buffer's mapped bytes, which no command uses now.
+        let blitted = unsafe {
+            std::slice::from_raw_parts(read.contents().unwrap().as_ptr(), width as usize * 4)
+        };
+        (words(&cpu), words(blitted))
+    }
+}
+
+/// A texture buffer whose texels run past its buffer's length, as Metal makes one (64 `R32Uint`
+/// texels from 3968 of a 4096-byte buffer, the last 32 past it; and from 4096, every one past
+/// it): its texels inside the length are the buffer's words, those past it its tail's, zero when
+/// made, and what a kernel, the CPU and a blit write there each path reads, the buffer's words
+/// and every other buffer's as they were.
+#[test]
+fn a_texture_buffer_past_its_buffer_s_length_keeps_those_texels_in_its_tail() {
+    let scratch = Scratch::new("buffer-tail-texel-buffer");
+    let device = device(&scratch.0);
+    let kernel = TexelKernel::new(&device);
+    let word = |at: u64| 0x5000_0000 | at as u32;
+    for (offset, inside) in [(3968u64, 32usize), (4096, 0)] {
+        let tail = Tail::new(&device, (4096, ResourceOptions::shared()), 0, 1);
+        let words: Vec<u8> = (0..1024u64)
+            .flat_map(|at| word(at * 4).to_le_bytes())
+            .collect();
+        // SAFETY: the buffer's 4096 mapped bytes, which no command uses yet.
+        unsafe {
+            std::ptr::copy_nonoverlapping(
+                words.as_ptr(),
+                tail.buffer.contents().unwrap().as_ptr(),
+                4096,
+            )
+        };
+        let texels = TexelKernel::over(&tail.buffer, 64, offset);
+        let other = TexelKernel::over(
+            &device.new_buffer(256, ResourceOptions::shared()).unwrap(),
+            64,
+            0,
+        );
+        let made: Vec<u32> = (0..64)
+            .map(|t| {
+                if t < inside {
+                    word(offset + 4 * t as u64)
+                } else {
+                    0
+                }
+            })
+            .collect();
+        let (cpu, blit) = kernel.cpu_and_blit(&texels, 64);
+        assert_eq!(
+            (&cpu, &blit),
+            (&made, &made),
+            "{offset}: as made, CPU and blit"
+        );
+        let reads = [0, 31, 32, 63, 1, 30, 33, 62];
+        let got = kernel.run((&texels, reads), (&other, [0; 8]));
+        let want: Vec<u32> = reads.iter().map(|&t| made[t as usize]).collect();
+        assert_eq!(got, want, "{offset}: as made, a kernel");
+        // A kernel writes texels 28 to 35, across the length where it lies inside the texels.
+        let writes = [28, 29, 30, 31, 32, 33, 34, 35];
+        kernel.run((&other, [0; 8]), (&texels, writes));
+        let mut written = made.clone();
+        for (t, &at) in writes.iter().enumerate() {
+            written[at as usize] = 0xA000_0000 | t as u32;
+        }
+        let (cpu, blit) = kernel.cpu_and_blit(&texels, 64);
+        assert_eq!(
+            (&cpu, &blit),
+            (&written, &written),
+            "{offset}: the kernel's, CPU and blit"
+        );
+        let got = kernel.run((&texels, writes), (&other, [0; 8]));
+        assert_eq!(got, &written[28..36], "{offset}: the kernel's, a kernel");
+        // The CPU writes texels 40 to 47, past the length: a kernel and a blit read them.
+        let by_cpu: Vec<u8> = (0..8u32)
+            .flat_map(|t| (0x7000_0000 | t).to_le_bytes())
+            .collect();
+        (texels.replace_region(Region::new_1d(40, 8), 0, 0, &by_cpu, 32, 0)).unwrap();
+        for t in 0..8 {
+            written[40 + t] = 0x7000_0000 | t as u32;
+        }
+        let got = kernel.run(
+            (&texels, [40, 41, 42, 43, 44, 45, 46, 47]),
+            (&other, [0; 8]),
+        );
+        assert_eq!(got, &written[40..48], "{offset}: the CPU's, a kernel");
+        let (cpu, blit) = kernel.cpu_and_blit(&texels, 64);
+        assert_eq!(
+            (&cpu, &blit),
+            (&written, &written),
+            "{offset}: the CPU's, CPU and blit"
+        );
+        // The buffer's words: the texels' inside the length as written, every other as it was.
+        let mut buffer_words: Vec<u32> = (0..1024u64).map(|at| word(at * 4)).collect();
+        for t in 0..inside {
+            buffer_words[(offset / 4) as usize + t] = written[t];
+        }
+        let now = tail.buffer_bytes(0..4096);
+        let now: Vec<u32> = now
+            .chunks(4)
+            .map(|w| u32::from_le_bytes(w.try_into().unwrap()))
+            .collect();
+        assert_eq!(now, buffer_words, "{offset}: the buffer's words");
+        assert!(
+            tail.around_kept(),
+            "{offset}: no write reaches another buffer"
+        );
+    }
+}

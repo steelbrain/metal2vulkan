@@ -19,7 +19,7 @@ use metal2vulkan::metal::{PixelFormat, TextureType, TextureUsage};
 use metal2vulkan_runtime::{
     BlitOption, BufferTextureProblem, CommandBufferStatus, CopyProblem, CpuCacheMode, Device,
     Error, HazardTrackingMode, IdPlacement, Invalid, Origin, Problem, Region, ResourceOptions,
-    RuntimeGap, Size, StorageMode, TextureDescriptor, ViewProblem,
+    Size, StorageMode, TextureDescriptor, ViewProblem,
 };
 
 /// A case that writes through a texture buffer, and a case that reads four.
@@ -62,8 +62,8 @@ fn texture_buffer(pf: PixelFormat, width: u64) -> TextureDescriptor {
 
 /// Texture buffers, 2D textures and arrays are made over a buffer with the buffer's options,
 /// whatever the descriptor names, and texture buffers by `new_texture` over a new buffer; what Metal stops is refused `Invalid`
-/// with its rule; a texture buffer whose texels run past its buffer's length is not
-/// implemented, and an array there is made.
+/// with its rule; a texture buffer or an array whose texels run past its buffer's length is
+/// made.
 #[test]
 fn textures_over_buffers_are_made_or_refused_as_metal_makes_them() {
     on_device(|device| {
@@ -94,11 +94,13 @@ fn textures_over_buffers_are_made_or_refused_as_metal_makes_them() {
             )
         );
         // A texture buffer whose row ends past the buffer's length, which Metal's validation
-        // counts and stops: plain Metal makes it over bytes past the length, which the runtime's
-        // buffer does not have (`past.m`, an M3 Max under macOS 27.0.1).
+        // counts and stops: plain Metal makes it over bytes past the length (`past.m`, an M3 Max
+        // under macOS 27.0.1), and so does the runtime, those texels in the texture's tail
+        // (`tests::buffer_tail_device`).
+        let past = buffer.new_texture(&d, 3968, 256).unwrap();
         assert_eq!(
-            refused(&d, 3968, 256),
-            Error::NotImplemented(RuntimeGap::TexelsPastBufferLength)
+            (past.texture_type(), past.width()),
+            (TextureType::TextureBuffer, 64)
         );
         // A plain run takes the buffer's options whatever the descriptor names.
         let mut private = d;

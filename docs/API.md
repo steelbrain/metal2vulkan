@@ -1539,8 +1539,9 @@ bound.
   16-bit float ones among them, copies them.
 - `metal2vulkan-degrade-staged-texture-buffer` (performance). `StagedTextureBuffer`: A texture
   buffer is viewed through a staging buffer: its texels start where the device views none
-  (`minTexelBufferOffsetAlignment`). Cost: its texels are copied into a staging buffer before each
-  use and back after each write.
+  (`minTexelBufferOffsetAlignment`), or run past its buffer's length, where its staging buffer is
+  its tail. Cost: its texels are copied into a staging buffer before each use and back after each
+  write.
 - `metal2vulkan-degrade-shadow-merge` (performance). `ShadowMerge`: One command writes a buffer's
   bytes through a shadowed texture or a staged texture buffer and also another way. Cost: the
   shadow's texels are kept in a scratch buffer of one to three times the texture's bytes (or an
@@ -4290,17 +4291,18 @@ each item named states the rule in full.
 - **A heap's buffer and texture over the same bytes alias them, in the device's layout**, not
   Apple's tiled or compressed one.
 - **A texture over a buffer keeps its texels past the buffer's length in a tail of its own.**
-  Plain Metal makes a 2D texture or array over a buffer whose texels run past its length, up to
-  the buffer's `allocatedSize` (nil past it), and its texels there are the memory after the
-  buffer's: on an Apple M3 Max under macOS 27.0.1 (`probes/texels_past_buffer_length.m`) a
-  kernel's `read()` and `sample()`, a blit and `getBytes` read the next allocation's bytes there,
-  and a kernel's `write()`, a blit and `replaceRegion` write them, changing that allocation; past
-  a 20000-byte buffer's length, inside its allocation, they read zero. On both, what one path
-  writes there every path reads, and the texels inside the length are the buffer's bytes. The
-  runtime's texels past the length lie in the texture's tail (`Buffer::new_texture`): zero when
-  made, read and written alike by its functions, blits and CPU calls, and no other allocation's
-  bytes; two textures over one buffer past its length keep a tail each. A texture buffer past the
-  length stays `NotImplemented(TexelsPastBufferLength)`.
+  Plain Metal makes a 2D texture, an array or a texture buffer over a buffer whose texels run
+  past its length, up to the buffer's `allocatedSize` (nil past it), and its texels there are the
+  memory after the buffer's: on an Apple M3 Max under macOS 27.0.1
+  (`probes/texels_past_buffer_length.m`, `probes/texture_buffer_past_length.m`) a kernel's
+  `read()` and `sample()`, a blit and `getBytes` read the next allocation's bytes there, and a
+  kernel's `write()`, a blit and `replaceRegion` write them, changing that allocation; past a
+  20000-byte buffer's length, inside its allocation, they read zero. On both, what one path writes
+  there every path reads, and the texels inside the length are the buffer's bytes. The runtime's
+  texels past the length lie in the texture's tail (`Buffer::new_texture`): zero when made, read
+  and written alike by its functions, blits and CPU calls, and no other allocation's bytes; two
+  textures over one buffer past its length keep a tail each. A texture over an IOSurface plane
+  past its surface stays `NotImplemented(TexelsPastBufferLength)`.
 
 **Function constants**
 

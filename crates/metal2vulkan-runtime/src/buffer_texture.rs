@@ -5,15 +5,18 @@
 //! - **Metal's rules** decide which textures a buffer backs and where they lie in it
 //!   (`linear_plan.rs`); what Metal stops is refused `Invalid`, and a texture buffer whose texels
 //!   run past its buffer's length, which Metal makes, `NotImplemented`.
-//! - **Tails.** A 2D texture or array whose texels run past its buffer's length, which plain
-//!   Metal makes up to the buffer's allocation (`linear_plan.rs`'s **Length**), keeps the texels'
-//!   bytes past the length in a tail of its own ([`Texels::past`]): a runtime `Shared` buffer of
-//!   its bytes from the first to the last, zero when made. Its texels inside the length are the
-//!   buffer's bytes, as every texture's over a buffer are. The texture is a shadow image whose
-//!   copies go through the tail, as a staging buffer: in, the buffer's bytes inside the length
-//!   into the tail and the tail into the image; back, the image into the tail and the tail's rows
-//!   inside the length into the buffer; a merge back takes its current bytes from both and gives
-//!   them back to both (`shadow_merge.rs`). The CPU's `replace_region` and `get_bytes`, and a
+//! - **Tails.** A 2D texture, an array or a texture buffer whose texels run past its buffer's
+//!   length, which plain Metal makes up to the buffer's allocation (`linear_plan.rs`'s
+//!   **Length**), keeps the texels' bytes past the length in a tail of its own
+//!   ([`Texels::past`]): a runtime `Shared` buffer of its bytes from the first to the last (a
+//!   texture buffer's from its functions' first, its offset rounded down to 16), zero when made.
+//!   Its texels inside the length are the buffer's bytes, as every texture's over a buffer are.
+//!   A 2D texture or array is a shadow image whose copies go through the tail, as a staging
+//!   buffer: in, the buffer's bytes inside the length into the tail and the tail into the image;
+//!   back, the image into the tail and the tail's rows inside the length into the buffer. A
+//!   texture buffer's bindings view the tail, as a staged texture buffer's view its staging
+//!   buffer, with the same copies in and back but the image. A merge back takes its current
+//!   bytes from both and gives them back to both (`shadow_merge.rs`). The CPU's `replace_region` and `get_bytes`, and a
 //!   blit's rows, take each row's bytes inside the length from the buffer and the rest from the
 //!   tail; a copy between such texels and an image goes through a scratch buffer of the
 //!   encoder, as those rows (`blit_texture.rs`). The tail's uses are the buffer's bytes past its
@@ -135,14 +138,14 @@ pub(super) struct Texels {
     pub(super) objects: ObjectsToken,
     /// The texels lie in an IOSurface's plane (`Buffer::new_texture_with_iosurface_plane`).
     surface: bool,
-    /// The tail of a 2D texture or array whose texels run past the buffer's length
-    /// (`linear_plan.rs`'s **Length**), which holds the texels' bytes there: a runtime `Shared`
-    /// buffer of the bytes from the texels' first to their last, laid out as in the buffer from
-    /// its start, zero when made. Its bytes inside the buffer's length mirror the buffer's for
-    /// the shadow's copies, which go through it ([`Texels::shadow_copies`]); every other access
-    /// to the texels (the CPU's, a blit's rows) takes the bytes inside the length from the
-    /// buffer and those past it from here ([`Texels::past`]). `None` for texels inside their
-    /// buffer.
+    /// The tail of a 2D texture, an array or a texture buffer whose texels run past the buffer's
+    /// length (`linear_plan.rs`'s **Length**), which holds the texels' bytes there: a runtime
+    /// `Shared` buffer of the bytes from the texels' first to their last, laid out as in the
+    /// buffer from its start (`Texels::tail_base`), zero when made. Its bytes inside the buffer's
+    /// length mirror the buffer's for the shadow's copies, which go through it
+    /// ([`Texels::shadow_copies`], `into_texture_buffer`); every other access to the texels (the
+    /// CPU's, a blit's rows) takes the bytes inside the length from the buffer and those past it
+    /// from here ([`Texels::past`]). `None` for texels inside their buffer.
     tail: Option<Buffer>,
 }
 
@@ -361,19 +364,19 @@ impl Buffer {
     /// row pitch, bytes past the buffer); a format with no exact Vulkan format (a 4:2:2 one among
     /// them, which plain Metal makes over a buffer), and an image the device lacks (`Unsupported`);
     /// a 2D texture of a format the device cannot copy (`NotImplemented`); a swizzle that writes
-    /// under `write_swizzle_enabled`, which Metal makes (`NotImplemented(WriteSwizzle)`); a texture
-    /// buffer whose texels run past the buffer's length, which Metal makes
-    /// (`NotImplemented(TexelsPastBufferLength)`). A texture buffer of more than one level is
-    /// stopped (`BufferTextureProblem::MipmapLevelCount`), as Metal's validation stops it here.
+    /// under `write_swizzle_enabled`, which Metal makes (`NotImplemented(WriteSwizzle)`). A texture
+    /// buffer of more than one level is stopped (`BufferTextureProblem::MipmapLevelCount`), as
+    /// Metal's validation stops it here.
     ///
-    /// A 2D texture whose texels run past the buffer's length, which plain Metal makes up to the
-    /// buffer's `allocatedSize` (and answers nil past it, `Nil` with
+    /// A 2D texture or a texture buffer whose texels run past the buffer's length, which plain
+    /// Metal makes up to the buffer's `allocatedSize` (and answers nil past it, `Nil` with
     /// `BufferTextureProblem::PastAllocation`), is made: its texels inside the length are the
     /// buffer's bytes, and those past it lie in a tail the texture keeps, zero when made, which
     /// its functions, blits and CPU calls read and write alike. Metal's texels there are the
     /// memory after the buffer's, another allocation's bytes, which its writes there change
-    /// (docs/API.md's accepted differences). Such a texture is a shadow image, announced
-    /// `shadowed-texture`.
+    /// (docs/API.md's accepted differences). Such a 2D texture is a shadow image, announced
+    /// `shadowed-texture`; such a texture buffer's functions view its tail, announced
+    /// `staged-texture-buffer`.
     pub fn new_texture(
         &self,
         descriptor: &TextureDescriptor,
@@ -1369,13 +1372,13 @@ impl Texels {
     /// [`Device::own_buffer`] makes a buffer: all zero.
     fn with_tail(self) -> Result<Texels, Error> {
         let length = self.buffer.length();
-        let end = self.layout.end().max(self.cpu.end());
+        let end = self.layout.end().max(self.cpu.end()).max(self.shader.end());
         if end <= length {
             return Ok(self);
         }
         let hazard = self.options.hazard_tracking_mode()?;
         let options = ResourceOptions::new(StorageMode::Shared, CpuCacheMode::DefaultCache, hazard);
-        let span = end - self.layout.offset;
+        let span = end - self.tail_base();
         let tail = (self.buffer.device()).own_buffer(span.next_multiple_of(4), options)?;
         Ok(Texels {
             tail: Some(tail),
@@ -1389,8 +1392,18 @@ impl Texels {
         self.tail.as_ref().map(|tail| Past {
             tail,
             length: self.buffer.length(),
-            rebase: self.layout.offset,
+            rebase: self.tail_base(),
         })
+    }
+
+    /// The byte of the buffer's space the tail's first byte stands for: the texels' first, as
+    /// the GPU, the CPU or a function lays them out (a texture buffer's functions read it from its
+    /// offset rounded down to 16 bytes, `into_texture_buffer`).
+    fn tail_base(&self) -> u64 {
+        self.layout
+            .offset
+            .min(self.cpu.offset)
+            .min(self.shader.offset)
     }
 
     /// What holds the texels' bytes, as the CPU may write them (`shadow::Backing`).
@@ -1433,7 +1446,8 @@ impl Texels {
     /// device's `minTexelBufferOffsetAlignment`, which the binding plan holds a view's offset to,
     /// divides the functions' offset in the buffer's `VkBuffer`; else through a staging buffer of
     /// their own, at its start (a no-copy buffer's bytes, or Metal's offset, need not lie at a
-    /// multiple of it). Refused as `new_buffer` refuses the staging buffer.
+    /// multiple of it), and through their tail where they run past the buffer's length, which no
+    /// view of the buffer reaches. Refused as `new_buffer` refuses the staging buffer.
     fn into_texture_buffer(self) -> Result<Texels, Error> {
         let mut texels = self;
         let placed = texels.layout;
@@ -1441,17 +1455,22 @@ impl Texels {
             offset: placed.offset - placed.offset % LINEAR_ALIGNMENT,
             ..placed
         };
+        // Texels past the buffer's length lie in a tail of their own (the module's **Tails**),
+        // which their bindings view, as a staging buffer's: no view of the buffer reaches them.
+        let mut texels = texels.with_tail()?;
         let (raw, at) = (texels.buffer).at_for(texels.shader.offset, ReadApart::Texture);
         let device = texels.buffer.device();
         let limits = device.compile_device().profile().limits();
-        if at.is_multiple_of(limits.min_texel_buffer_offset_alignment.max(1)) {
+        let past = texels.tail.is_some();
+        if !past && at.is_multiple_of(limits.min_texel_buffer_offset_alignment.max(1)) {
             return Ok(texels);
         }
         let staging = texels.staging(&texels.shader, at)?;
         let layout = &texels.shader;
         let shadow = staging.buffer.identity();
         let (bytes, tracked) = texels.buffer.tracked(layout.offset..layout.end());
-        let shadow_range = UseRange::Bytes(0..staging.into.size);
+        // Every byte of the texels' its bindings view, those past the length among them.
+        let shadow_range = UseRange::Bytes(0..layout.end() - layout.offset);
         let copies = ShadowCopies {
             source: ShadowSource::Bytes {
                 buffer: ShadowBuffer::of(&texels.buffer, raw),
@@ -1474,16 +1493,23 @@ impl Texels {
             texels.layout.offset,
             limits.min_texel_buffer_offset_alignment,
         );
+        let length = texels.buffer.length();
         texels
             .buffer
             .device()
             .degrade(Degradation::StagedTextureBuffer, || {
                 let object = format!("texture buffer over a buffer at offset {offset}");
-                let reason = format!(
-                    "its texels start at byte {at} of the buffer's VkBuffer, and the device views \
-                     texels only at multiples of {alignment} bytes \
-                     (minTexelBufferOffsetAlignment)"
-                );
+                let reason = match past {
+                    true => format!(
+                        "its texels run past the buffer's {length} bytes, where no view of the \
+                         buffer's VkBuffer reaches: those lie in a tail of the texture's own"
+                    ),
+                    false => format!(
+                        "its texels start at byte {at} of the buffer's VkBuffer, and the device \
+                         views texels only at multiples of {alignment} bytes \
+                         (minTexelBufferOffsetAlignment)"
+                    ),
+                };
                 (object, reason)
             });
         Ok(texels)
