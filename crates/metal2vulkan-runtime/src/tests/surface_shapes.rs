@@ -26,15 +26,9 @@ use metal2vulkan::metal::{PixelFormat, TextureType, TextureUsage};
 use std::path::Path;
 use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
-use std::time::Duration;
 
 /// The device the cfg selects, its shader cache in `cache`, asking for the validation layer, and
-/// what its instance had the layer report; its check of textures over host pages in place
-/// settled first where it runs one (`in_place_check.rs`), so that the check's own command buffers
-/// (a render round's pass) are not in flight beside the shapes' (the layer 1.4.363 reports a
-/// host reset of one timestamp slot while a command buffer holding another slot of the same pool
-/// is in flight, VUID-vkResetQueryPool-firstQuery-02741, which the validation crate's runtime
-/// cases let pass on that release and this crate's `layer_claim.rs` does not).
+/// what its instance had the layer report.
 fn watched(cache: &Path) -> (Device, Watched) {
     let watched = Watched::default();
     let options = DeviceOptions {
@@ -54,10 +48,7 @@ fn watched(cache: &Path) -> (Device, Watched) {
         messages: Some(watched.sink(|_| {})),
         ..DeviceOptions::default()
     };
-    let device = Device::system_default_with(&options).unwrap();
-    let settled = device.settle_in_place_checks(Duration::from_secs(120));
-    println!("SURFACE-SHAPES: the in-place check settled: {settled}");
-    (device, watched)
+    (Device::system_default_with(&options).unwrap(), watched)
 }
 
 /// How a kernel reads a texture of one type: its argument's type, the read's call and

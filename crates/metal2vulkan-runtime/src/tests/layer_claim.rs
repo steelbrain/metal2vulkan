@@ -14,8 +14,13 @@
 //! list. The decision is the instance's alone -- never the loader's listing, which a layer it lists
 //! and cannot load passes alike, and never the host or the driver's name.
 //!
+//! One gap of the layer's passes, on the layer releases whose source was read with it: its
+//! whole-pool report of a host query reset (`query_reset_gap.rs`), as the validation crate's
+//! runtime cases let it pass ([`kept`]).
+//!
 //! A device test: compiled only under the validation crate's GPU safety cfgs.
 
+use super::query_reset_gap;
 use crate::device::create::LAYERS_DROPPED;
 use crate::{DebugMessage, MessageSeverity, MessageSink};
 use std::ffi::{CStr, CString};
@@ -50,6 +55,10 @@ struct Seen {
     dropped: bool,
     /// Whether a device reporting here asked for the validation layer.
     asked: bool,
+    /// The release of the validation layer the system's loader offers, read as a device asked for
+    /// it (`query_reset_gap::layer_release`): never inside the sink, which runs within the
+    /// device's Vulkan calls.
+    release: Option<u32>,
 }
 
 /// The most messages kept of one list.
@@ -65,7 +74,10 @@ impl Watched {
     /// loader may be unable to provide it, which the device itself says
     /// ([`Watched::layer_reported_nothing`] reads that answer, not this list).
     pub(super) fn layers(&self) -> Vec<CString> {
-        self.0.lock().unwrap_or_else(|p| p.into_inner()).asked = true;
+        let release = query_reset_gap::layer_release();
+        let mut seen = self.0.lock().unwrap_or_else(|p| p.into_inner());
+        seen.asked = true;
+        seen.release = release;
         vec![VALIDATION.to_owned()]
     }
 
@@ -86,7 +98,9 @@ impl Watched {
             let fails = message.severity == MessageSeverity::Error
                 || (message.severity == MessageSeverity::Warning && message.kind.validation);
             if fails && message.degradation.is_none() && seen.failing.len() < MAX {
-                seen.failing.push(message.clone());
+                if let Some(message) = kept(message, seen.release) {
+                    seen.failing.push(message);
+                }
             }
         })
     }
@@ -129,9 +143,42 @@ impl Watched {
     }
 }
 
+/// What a list keeps of `message`, one that fails a run, the validation layer of `release`
+/// reporting: nothing where it is the layer's query-reset gap (`query_reset_gap.rs`) on a release
+/// whose source was read with it, which passes and says so; the message marked "re-read
+/// vkResetQueryPool in layer X.Y.Z" where it is the gap's on another release, or one unknown; else
+/// the message as it is.
+fn kept(message: &DebugMessage, release: Option<u32>) -> Option<DebugMessage> {
+    if !query_reset_gap::shape(message.id, &message.id_name, &message.text) {
+        return Some(message.clone());
+    }
+    if release.is_some_and(query_reset_gap::read) {
+        eprintln!(
+            "LAYER-GAP: passed, the layer's query-reset gap ({}): {} ({}): {}",
+            query_reset_gap::SOURCE,
+            message.id_name,
+            message.id,
+            message.text.replace('\n', " ")
+        );
+        return None;
+    }
+    let read: Vec<String> = (query_reset_gap::READ.iter())
+        .map(|&version| query_reset_gap::release(version))
+        .collect();
+    let layer = release.map_or_else(|| "of an unknown release".into(), query_reset_gap::release);
+    let mut message = message.clone();
+    message.text = format!(
+        "re-read vkResetQueryPool in layer {layer}: the layer's query-reset gap passes only on \
+         the releases read ({}). {}",
+        read.join(", "),
+        message.text
+    );
+    Some(message)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{loader_layer_message, Watched, VALIDATION};
+    use super::{kept, loader_layer_message, Watched, VALIDATION};
     use crate::device::create::LAYERS_DROPPED;
     use crate::{DebugMessage, MessageKind, MessageSeverity};
 
@@ -149,6 +196,39 @@ mod tests {
             text: text.to_owned(),
             degradation: None,
         }
+    }
+
+    /// The layer's query-reset gap (`query_reset_gap.rs`) passes on the release whose source was
+    /// read with it alone: on another, or one unknown, it is kept, marked for a re-read; any other
+    /// message is kept as it is. Its own input: no device, no loader, no host.
+    #[test]
+    fn the_query_reset_gap_passes_on_the_releases_read_alone() {
+        let mut gap = message(
+            MessageSeverity::Error,
+            "VUID-vkResetQueryPool-firstQuery-02741",
+            &super::query_reset_gap::seen(),
+        );
+        gap.id = 150880399;
+        let read = ash::vk::make_api_version(0, 1, 4, 363);
+        assert!(
+            kept(&gap, Some(read)).is_none(),
+            "the gap, on the release read"
+        );
+        for release in [Some(ash::vk::make_api_version(0, 1, 4, 357)), None] {
+            let held = kept(&gap, release).expect("the gap, on another release");
+            assert!(
+                held.text.starts_with("re-read vkResetQueryPool in layer "),
+                "{release:?}: {}",
+                held.text
+            );
+            assert!(
+                held.text.ends_with(&gap.text),
+                "{release:?}: the layer's text kept"
+            );
+        }
+        let other = message(MessageSeverity::Error, "VUID-other", "another report");
+        let held = kept(&other, Some(read)).expect("another message");
+        assert_eq!(held.text, other.text, "another message as it is");
     }
 
     /// The loader's own complaint about the layer it cannot provide, and nothing wider.
