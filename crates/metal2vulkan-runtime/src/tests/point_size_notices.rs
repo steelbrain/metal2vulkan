@@ -128,10 +128,7 @@ fn only_a_draw_of_points_announces_the_device_s_point_size() {
     let scratch = Scratch::new("point-size-notices");
     let heard = Heard::default();
     let device = device(&scratch.0, &heard);
-    let limited = (device.compile_device().profile().fields())
-        .limits
-        .max_point_size
-        < METAL_LARGEST_POINT;
+    let limited = device.compile_device().profile().limits().max_point_size < METAL_LARGEST_POINT;
     let state = state(&device);
     assert_eq!(point_size_notices(&heard), 0, "the state's creation");
     let point = usize::from(limited);
