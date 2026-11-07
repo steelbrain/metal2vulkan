@@ -139,12 +139,15 @@ fn command_buffers_let_go_of_while_pending_keep_their_pools_until_they_ran() {
         let releasing = std::thread::spawn(move || {
             let mut pending = 0_usize;
             for item in released {
-                if let Released::CommandBuffer(command_buffer) = &item {
-                    if command_buffer.status() != CommandBufferStatus::Completed {
-                        pending += 1;
+                match item {
+                    Released::CommandBuffer(command_buffer) => {
+                        if command_buffer.status() != CommandBufferStatus::Completed {
+                            pending += 1;
+                        }
+                        drop(command_buffer);
                     }
+                    Released::Queue(queue) => drop(queue),
                 }
-                drop(item);
             }
             pending
         });
