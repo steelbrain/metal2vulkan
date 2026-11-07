@@ -21,6 +21,52 @@
 // one of the name without it). Nothing dereferences a pointer the reference did not pass.
 //
 // The double case compiles `float double_param(float a, double b)` alone.
+//
+// WHAT IT MEASURED on an Apple M3 Max under macOS 27.0.1, `MTL_DEBUG_LAYER` out of the
+// environment (potluck jobs m3-max-3238, with the same sources inline, and m3-max-3300): every
+// pipeline was made, every command buffer completed (status 4) with no error, and every kernel
+// stored word 1. Word 0, by case (reference's type -> definition's):
+//
+//   stitched_extra, _private  (f, f, f) -> stitched (f, f)   0x40a00000  5: the third dropped
+//   extra, extra_private      (f, f, f) -> (f, f)            0x40a00000  5
+//   extra_two                 (f, f, f, f) -> (f)            0x40000000  2
+//   extra_pointer             (f, f, device*) -> (f, f)      0x40a00000  5
+//   missing                   (f, f) -> (f, f, f) a + b + c  0x40a00000  5: c read 0
+//   missing_unused            (f, f) -> (f, f, f) a + b      0x40a00000  5
+//   missing_pointer_unused    (f, f) -> (f, f, device*)      0x40a00000  5
+//   int_param                 (f, f, f) -> (f, int, f)       0x4e808000  2 + 3.0's bits
+//   half2_param               (f, f) -> (f, half2)           0x40840000  4.125: 3.0's bits
+//   uint2_param               (float2) -> (uint2)            0x4f004000  the bits as uints
+//   int_return                int (f, f) -> float            0x40a00000  5.0's bits
+//   pair_for_floats           (f, f) -> (struct {f, f})      0x40a00000  5: its fields
+//   uints_for_floats          (f, f) -> (struct {u, u})      0x4f004000  the bits as uints
+//   bytes_extra               (B8, f, f) -> (B8, f)          0x40400000  3
+//   void_for_value            void (f, f) -> float           0x00000007  the call ran
+//   pointer_for_value         (ulong 0) -> (device*)         0x3f800000  p == nullptr
+//   half_param                (f, f) -> (f, half)            nothing stored (0xffffffff)
+//   uint_for_half             uint (f, half) -> (f, uint)    nothing stored
+//   long_param                (f, f) -> (f, long)            nothing stored
+//   float2_for_two            (float2, f) -> (f, f)          nothing stored
+//   bool_param                (f, f) -> (bool, f)            nothing stored
+//   float_for_half_return     float -> half                  nothing stored
+//   half_for_float_return     half -> float                  nothing stored
+//   value_for_void            float -> void                  nothing stored
+//   value_for_pointer         (device*) -> (f)               nothing stored
+//   constant_for_device       (device*) -> (constant*)       nothing stored
+//   device_for_constant       (constant*) -> (device*)       nothing stored
+//   uint_array_for_float_array (U6) -> (F6)                  nothing stored
+//   double_param              "'double' is not supported in Metal"
+//
+// So Metal resolves a reference by name whatever the types, and passes the arguments by
+// position: one past the definition's parameters is dropped, a parameter past the arguments reads
+// 0, and a plain value of the same width passes its bits, as a result does. Where the widths or
+// kinds differ the read is undefined: the compiler drops the store of a value computed from it.
+// The consumer's probes on a Radeon Pro 5300M and a UHD Graphics 630 under macOS 26.7.1 agree on
+// the defined cases; there the 5300M read a `float` passed to a `half` as its low 16 bits, a value
+// for a pointer as the pointer's low 32 bits, and a `constant` pointer for a `device` one through
+// it, where the 630 stored nothing. The translator's tests (`tests::engine_linked_signatures`,
+// `runtime_lane::linked_signatures`) hold these answers, from
+// `metal2vulkan_devtools::linked_signatures`.
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
 #include <stdio.h>
