@@ -66,10 +66,10 @@ impl Buffer {
         };
         let backing = if pages.copied() {
             HostBacking::Copied
-        } else if pages.over_dma_buf() {
-            HostBacking::ImportedAsDmaBuf
         } else if pages.in_ram_chunk() {
             HostBacking::InHostRam
+        } else if pages.over_dma_buf() {
+            HostBacking::ImportedAsDmaBuf
         } else {
             HostBacking::ImportedByPointer
         };

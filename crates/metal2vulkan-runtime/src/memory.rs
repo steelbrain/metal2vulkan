@@ -954,13 +954,16 @@ impl Placement {
     /// memory of `chunk`, the device's import of the chunk of a guest RAM they lie in
     /// (`host_ram.rs`), whose host address the caller reaches at `mapped` (its own view of the
     /// pages). No block of the runtime's, so freeing it returns nothing; it keeps the chunk until
-    /// it goes.
+    /// it goes. A chunk imported as a dma-buf lends the placement its import, with the RAM's
+    /// source (`dma_buf_pages`), for the images of textures over the bytes.
     pub(super) fn ram_chunk(
         chunk: Arc<RamChunk>,
         offset: u64,
         size: u64,
         mapped: Mapped,
     ) -> Placement {
+        #[cfg(unix)]
+        let dma_buf = chunk.dma_buf_pages().cloned();
         Placement {
             type_index: chunk.type_index(),
             holds: Holds::Buffers,
@@ -974,7 +977,7 @@ impl Placement {
             read_only_view: false,
             overflowed: false,
             #[cfg(unix)]
-            dma_buf: None,
+            dma_buf,
             ram_chunk: Some(chunk),
         }
     }
@@ -1059,10 +1062,27 @@ impl Placement {
     }
 
     /// The imports of the caller's dma-bufs the placement lies in, with their source
-    /// (`dma_buf.rs`); `None` for any other placement.
+    /// (`dma_buf.rs`): its own, or those of the guest RAM's chunk it lies in (`host_ram.rs`);
+    /// `None` for any other placement.
     #[cfg(unix)]
     pub(super) fn dma_buf_pages(&self) -> Option<&Arc<DmaBufPages>> {
         self.dma_buf.as_ref()
+    }
+
+    /// The address, among the pages its dma-buf imports were made of ([`dma_buf_pages`]), of
+    /// the byte the caller reaches at host address `view`: `view` itself, but in a guest RAM's
+    /// chunk (`host_ram.rs`), whose import is of the RAM's own addresses while the caller reaches
+    /// the placement's bytes through its own view of them, from `mapped`, the RAM's address of
+    /// the same byte. What a texture over the bytes asks the source for its own pages at.
+    ///
+    /// [`dma_buf_pages`]: Placement::dma_buf_pages
+    #[cfg(unix)]
+    pub(super) fn dma_buf_address(&self, view: u64) -> u64 {
+        match (&self.ram_chunk, self.mapped) {
+            (Some(chunk), Some(mapped)) => (chunk.ram_address(self.offset))
+                .wrapping_add(view.wrapping_sub(mapped.as_ptr() as u64)),
+            _ => view,
+        }
     }
 
     /// Wait until the sparse binding of the buffer over the placement's dma-bufs completed,

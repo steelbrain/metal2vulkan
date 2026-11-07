@@ -5,12 +5,22 @@
 //!
 //! - **The RAM** is the consumer's ranges of host memory, each mapped, readable and writable, for
 //!   as long as any device uses it ([`HostRam::new`]). A device that uses it imports it by host
-//!   pointer (`VK_EXT_external_memory_host`) in chunks of [`CHUNK_BYTES`], never across a range's
-//!   end, each once ([`Import`], a chunk's state behind a lock of its own, never held across an
-//!   import). The chunks stay imported while the device uses the RAM, are never released while
-//!   idle (`host_residency.rs`), and are freed once the use is let go of ([`HostRamUse`]'s drop)
-//!   and nothing holds them: no buffer bound in them, no command buffer that used one. The RAM's
-//!   keep-alive is dropped after its last chunk is freed.
+//!   pointer (`VK_EXT_external_memory_host`), or as dma-bufs (below), in chunks of [`CHUNK_BYTES`],
+//!   never across a range's end, each once ([`Import`], a chunk's state behind a lock of its own,
+//!   never held across an import). The chunks stay imported while the device uses the RAM, are
+//!   never released while idle (`host_residency.rs`), and are freed once the use is let go of
+//!   ([`HostRamUse`]'s drop) and nothing holds them: no buffer bound in them, no command buffer
+//!   that used one. The RAM's keep-alive is dropped after its last chunk is freed.
+//! - **As dma-bufs.** A RAM with a source of dma-bufs of its pages ([`HostRam::with_dma_buf`])
+//!   has each import of it, a chunk or an object's run alone, made as one dma-buf of those pages
+//!   where the device's held pointer imports add to the cost of every submission (its submission
+//!   checks' import tax, `submit_check.rs`: RADV lists every import in each kernel submission and
+//!   amdgpu gets every page of a pointer import again there), the pointer where that fails;
+//!   elsewhere the pointer first, the dma-buf where the pointer is refused (RADV refuses any
+//!   shared mapping). A dma-buf costs each submission what one import does, whatever its length.
+//!   A `VkBuffer` bound in such a chunk is made for dma-bufs; a texture over it is an image over a
+//!   dma-buf of its own pages from the same source (`dma_buf.rs`), asked at the RAM's addresses
+//!   of them (`Placement::dma_buf_address`). Counted: `WorkCounts::host_ram_dma_buf_imports`.
 //! - **A window ahead of the objects.** From [`Device::use_host_ram`] on, a thread of the
 //!   device's ([`import_ahead`]) keeps imported the chunk an object last took and a window of
 //!   chunks past it, in the direction the takes go, up the RAM or down it, and waits while they
@@ -60,7 +70,7 @@
 //!   ([`Device::give_back_ahead_near_the_limit`], `WorkCounts::host_ram_chunks_given_back`), so
 //!   that they are never what an allocation is refused for.
 //! - **Only here.** The thread is started by [`Device::use_host_ram`] alone, for the chunks of a
-//!   RAM imported by host pointer. A no-copy object's own imports, of its pointer or of the
+//!   RAM. A no-copy object's own imports, of its pointer or of the
 //!   caller's dma-bufs (`dma_buf.rs`), never start one and import nothing ahead.
 //! - **One run in place.** A no-copy object whose pages are one run inside one chunk is a
 //!   `VkBuffer` bound in that chunk's import (`buffer_descriptor.rs`), made and bound as an import
@@ -88,6 +98,7 @@ use super::memory::{ImportFailure, Mapped, MemoryClass, Placement};
 use super::program_objects::ProgramObject;
 use super::Device;
 use crate::device::WeakDevice;
+use crate::dma_buf::DmaBufSource;
 use crate::release;
 use ash::vk;
 use metal2vulkan::error::{Feature, RuntimeDriverDefect, Unsupported};
@@ -119,6 +130,8 @@ pub struct HostRam {
     dirty: Option<Arc<DirtySource>>,
     /// What keeps the ranges mapped, dropped once no device holds a chunk of them.
     keep_alive: Mutex<Option<ProgramObject<KeepAlive>>>,
+    /// The caller's source of dma-bufs of the RAM's pages ([`HostRam::with_dma_buf`]).
+    dma_buf: Option<DmaBufSource>,
 }
 
 impl std::fmt::Debug for HostRam {
@@ -126,6 +139,7 @@ impl std::fmt::Debug for HostRam {
         f.debug_struct("HostRam")
             .field("ranges", &self.ranges.len())
             .field("dirty_pages", &self.dirty.is_some())
+            .field("dma_buf", &self.dma_buf.is_some())
             .finish()
     }
 }
@@ -161,6 +175,7 @@ impl HostRam {
             ranges,
             dirty: None,
             keep_alive: Mutex::new(keep_alive.map(ProgramObject::new)),
+            dma_buf: None,
         })
     }
 
@@ -175,6 +190,27 @@ impl HostRam {
         D::Watch: 'static,
     {
         self.dirty = Some(DirtySource::new(hook(source), 0));
+        self
+    }
+
+    /// This RAM, with the caller's source of dma-bufs of its pages (a runtime extension,
+    /// [`DmaBufSource`]): a device that imports dma-bufs imports each chunk of the RAM as one
+    /// dma-buf of its pages where its held pointer imports add to the cost of every submission
+    /// (the device's submission checks' import tax, `submit_check.rs`), and, where they do not,
+    /// where it refuses the chunk's pointer (RADV refuses any shared mapping, a `memfd`'s among
+    /// them); elsewhere it imports the pointer as without one. A chunk imported as a dma-buf costs
+    /// each submission what one import does, whatever its length, where a pointer import's cost
+    /// grows with its pages (measured with a probe on the Radeon 780M, Mesa 26.2.6, Linux 7.3.1:
+    /// one held import of 64 MiB by pointer added 24.1 us to every submission). Each request is
+    /// for whole host pages inside one chunk of the RAM (a chunk, [`CHUNK_BYTES`] or the rest of
+    /// its range; an object's run inside one; a texture's pages inside one), its `granule` its
+    /// `length`: the source answers one dma-buf of exactly those pages. The source is called on
+    /// the thread importing the chunk (the device's, or one making an object over it), with no
+    /// lock of the runtime's held, and is kept with each import it made until that import is
+    /// freed. A source that fails, or answers otherwise, leaves the chunk to its pointer. No Metal
+    /// counterpart.
+    pub fn with_dma_buf(mut self, source: DmaBufSource) -> HostRam {
+        self.dma_buf = Some(source);
         self
     }
 
@@ -800,7 +836,9 @@ pub(crate) struct RamChunk {
     of: Imported,
     /// The `VkBuffer` over the whole chunk.
     raw: vk::Buffer,
-    /// The import's placement: a dedicated block of the device's memory (`memory::import_host`).
+    /// The import's placement: a dedicated block of the device's memory (`memory::import_host`),
+    /// or the import of the RAM's dma-buf of the span, which the placement keeps
+    /// (`Placement::dma_buf`).
     placement: Placement,
     /// The RAM, let go of once the memory is freed; `None` once let go of.
     ram: Option<Arc<HostRam>>,
@@ -825,6 +863,28 @@ impl RamChunk {
     pub(crate) fn type_index(&self) -> u32 {
         self.placement.type_index()
     }
+
+    /// The external memory the import is, which a `VkBuffer` bound in it is made for
+    /// (`VUID-vkBindBufferMemory-memory-02985`).
+    fn handle_type(&self) -> vk::ExternalMemoryHandleTypeFlags {
+        match self.placement.over_dma_buf() {
+            true => vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT,
+            false => vk::ExternalMemoryHandleTypeFlags::HOST_ALLOCATION_EXT,
+        }
+    }
+
+    /// The RAM's address of the byte at `offset` of the chunk's memory.
+    pub(crate) fn ram_address(&self, offset: u64) -> u64 {
+        self.span.start + (offset - self.placement.offset)
+    }
+
+    /// The import of the RAM's dma-buf of the span, with the RAM's source, where the chunk is
+    /// one: what a texture over an object bound in it makes the image of its own pages from
+    /// (`dma_buf.rs`).
+    #[cfg(unix)]
+    pub(crate) fn dma_buf_pages(&self) -> Option<&Arc<crate::dma_buf::DmaBufPages>> {
+        self.placement.dma_buf_pages()
+    }
 }
 
 impl Drop for RamChunk {
@@ -844,8 +904,17 @@ impl Drop for RamChunk {
         let after = ram.map(|ram| Box::new(RamAfterFree(Some(ram))) as Box<dyn Send>);
         // Every buffer bound in the chunk went before it (each holds it), and every command
         // buffer that used one completed; the free may wait for the batches in flight
-        // (`freed_memory.rs`), and the RAM with it.
+        // (`freed_memory.rs`), and the RAM with it. An import of a dma-buf is freed as the
+        // placement drops, after this: the RAM waits for that free.
         let after = lock(&shared.memory).release_then(shared.vk(), &self.placement, after);
+        #[cfg(unix)]
+        let after = match (after, self.placement.dma_buf_pages()) {
+            (Some(after), Some(imports)) => {
+                imports.after_free(after);
+                None
+            }
+            (after, _) => after,
+        };
         match self.of {
             Imported::Chunk => shared.counts.host_ram_chunk_freed(),
             Imported::Run => shared.counts.run_import_freed(),
@@ -1026,7 +1095,11 @@ impl Device {
     /// system that cannot start the thread, or a thread that stopped, leaves each chunk to the
     /// first object over it, which imports it. The use lasts until the returned [`HostRamUse`]
     /// is dropped; a device may use several RAMs at once whose ranges are apart, and a new RAM
-    /// once an earlier use of the same ranges ended (a VMM's next guest).
+    /// once an earlier use of the same ranges ended (a VMM's next guest). A RAM with a source of
+    /// dma-bufs ([`HostRam::with_dma_buf`]) has its chunks imported as dma-bufs where the
+    /// device's held pointer imports add to every submission's cost, or it refuses their pointer
+    /// (`WorkCounts::host_ram_dma_buf_imports`); for it the call first waits for the device's
+    /// submission checks, which take milliseconds, for at most 10 s.
     ///
     /// Refused: a device without `VK_EXT_external_memory_host` (`Unsupported`, naming it); a RAM
     /// whose ranges meet those of a RAM the device uses already, itself among them (`Invalid`,
@@ -1043,6 +1116,12 @@ impl Device {
         let shared = self.shared();
         if let Err(unsupported) = &shared.host_import {
             return Err(Error::Unsupported(unsupported.clone()));
+        }
+        // A RAM with a source of dma-bufs imports its chunks by the import tax's verdict, so the
+        // device's submission checks answer first (`submit_check.rs`), waited for at most
+        // `ANSWER_WAIT`: they take milliseconds.
+        if ram.dma_buf.is_some() {
+            self.settle_submit_checks(crate::submit_check::ANSWER_WAIT);
         }
         let used = (shared.host_ram.add(ram)).ok_or_else(|| invalid(CALL, Problem::HostRam))?;
         #[cfg(test)]
@@ -1107,7 +1186,8 @@ impl Device {
     /// A no-copy object's `VkBuffer`, of `length` bytes `window.offset` into `window`, bound in
     /// the chunk its pages' one run lies in (`routed`, [`Routed::InChunk`]), or, where that chunk
     /// is not imported yet, in an import of the run alone ([`RamOnDevice::for_object`]): made as
-    /// an import of the window's own pages would make it (`Device::host_buffer`) and bound where
+    /// an import of the window's own pages would make it (`Device::host_buffer`), for the
+    /// import's memory (host allocations, or dma-bufs, [`HostRam::with_dma_buf`]), and bound where
     /// its bytes lie in the import, with `binds_in`'s checks against the window, so its size
     /// reaches no page past the window's. The placement holds the import; its host address is the
     /// window's, so the buffer's `contents` stays the caller's pointer. `None` where neither can
@@ -1131,7 +1211,7 @@ impl Device {
         let chunk = ram.for_object(self, importer, *slot, run).ok()?;
         let shared = self.shared();
         let raw_device = shared.vk();
-        let buffer = self.host_buffer(window, length).ok()?;
+        let buffer = self.host_buffer(window, length, chunk.handle_type()).ok()?;
         let requirements = buffer.requirements;
         // Where the window starts in the import, and the buffer in the window.
         let in_chunk = start - chunk.span.start;
@@ -1170,18 +1250,87 @@ impl Device {
         Some((buffer, placement))
     }
 
-    /// Import `span`, host pages of `ram`, as `of` (a chunk, or an object's run inside one): a
-    /// dedicated block of memory of a coherent type both the pages and a host-allocation buffer
-    /// allow, with the device-address flag where
-    /// the device enables `bufferDeviceAddress` (`memory::import_host`), and a `VkBuffer` over the
-    /// whole of it. Refused where the device's import alignment misses the span's start or end,
-    /// it passes the device's allocation size, or the driver refuses the pages (or the runtime
-    /// does for it, `Device::refuse_unpinnable`).
+    /// Import `span`, host pages of `ram`, as `of` (a chunk, or an object's run inside one): by
+    /// its pointer ([`Device::import_chunk_by_pointer`]), or, for a RAM with a source of
+    /// dma-bufs ([`HostRam::with_dma_buf`]), as one dma-buf of it (`Device::ram_span_as_dma_buf`):
+    /// that first where the device's held pointer imports add to the cost of every submission
+    /// (its submission checks' import tax, `submit_check.rs`), the pointer where that fails; the
+    /// pointer first elsewhere, the dma-buf where the pointer is refused. Counted:
+    /// `WorkCounts::host_ram_dma_buf_imports` (each import of a dma-buf).
+    ///
+    /// # Safety
+    ///
+    /// `span` is pages of `ram`'s ranges, which stay mapped while the chunk holds `ram`, and the
+    /// RAM's source's dma-bufs hold exactly the pages asked for.
+    unsafe fn import_chunk(
+        &self,
+        importer: &Importer,
+        ram: &Arc<HostRam>,
+        span: Range<u64>,
+        of: Imported,
+    ) -> Result<RamChunk, Error> {
+        let Some(source) = ram.dma_buf.as_ref() else {
+            // SAFETY: the caller's.
+            return unsafe { self.import_chunk_by_pointer(importer, ram, span, of) };
+        };
+        let as_dma_buf = |span: Range<u64>| {
+            // SAFETY: the caller's.
+            let (raw, placement) =
+                unsafe { self.ram_span_as_dma_buf(importer, span.clone(), source) }?;
+            self.shared().counts.host_ram_dma_buf_imported();
+            Ok(self.ram_chunk(ram, span, of, raw, placement))
+        };
+        match self.pointer_imports_tax_submissions() {
+            true => as_dma_buf(span.clone()).or_else(|_: Error| {
+                // SAFETY: the caller's.
+                unsafe { self.import_chunk_by_pointer(importer, ram, span, of) }
+            }),
+            // SAFETY: the caller's.
+            false => match unsafe { self.import_chunk_by_pointer(importer, ram, span.clone(), of) }
+            {
+                Ok(chunk) => Ok(chunk),
+                Err(refused) => as_dma_buf(span).map_err(|_: Error| refused),
+            },
+        }
+    }
+
+    /// The chunk of `span`, as `of`, whose `VkBuffer` `raw` over the whole of it is bound in
+    /// `placement`, holding `ram`; counted made.
+    fn ram_chunk(
+        &self,
+        ram: &Arc<HostRam>,
+        span: Range<u64>,
+        of: Imported,
+        raw: vk::Buffer,
+        placement: Placement,
+    ) -> RamChunk {
+        let counts = &self.shared().counts;
+        match of {
+            Imported::Chunk => counts.host_ram_chunk_imported(span.end - span.start),
+            Imported::Run => counts.run_import_made(),
+        }
+        RamChunk {
+            device: self.clone(),
+            span,
+            of,
+            raw,
+            placement,
+            ram: Some(Arc::clone(ram)),
+        }
+    }
+
+    /// Import `span`, host pages of `ram`, as `of` (a chunk, or an object's run inside one), by
+    /// its pointer: a dedicated block of memory of a coherent type both the pages and a
+    /// host-allocation buffer allow, with the device-address flag where the device enables
+    /// `bufferDeviceAddress` (`memory::import_host`), and a `VkBuffer` over the whole of it.
+    /// Refused where the device's import alignment misses the span's start or end, it passes the
+    /// device's allocation size, or the driver refuses the pages (or the runtime does for it,
+    /// `Device::refuse_unpinnable`).
     ///
     /// # Safety
     ///
     /// `span` is pages of `ram`'s ranges, which stay mapped while the chunk holds `ram`.
-    unsafe fn import_chunk(
+    unsafe fn import_chunk_by_pointer(
         &self,
         importer: &Importer,
         ram: &Arc<HostRam>,
@@ -1267,18 +1416,7 @@ impl Device {
             discard();
             return Err(vulkan(error));
         }
-        match of {
-            Imported::Chunk => shared.counts.host_ram_chunk_imported(size),
-            Imported::Run => shared.counts.run_import_made(),
-        }
-        Ok(RamChunk {
-            device: self.clone(),
-            span,
-            of,
-            raw,
-            placement,
-            ram: Some(Arc::clone(ram)),
-        })
+        Ok(self.ram_chunk(ram, span, of, raw, placement))
     }
 }
 

@@ -339,6 +339,7 @@ pub(crate) struct Counters {
     host_ram_copy_bytes: AtomicU64,
     host_ram_copy_dispatches: AtomicU64,
     host_ram_chunks_imported: AtomicU64,
+    host_ram_dma_buf_imports: AtomicU64,
     host_ram_chunks_imported_ahead: AtomicU64,
     host_ram_chunks_given_back: AtomicU64,
     host_ram_chunk_bytes: AtomicU64,
@@ -2716,6 +2717,12 @@ impl Counters {
         (self.host_ram_chunks_imported).fetch_add(1, Ordering::Relaxed);
         (self.host_ram_chunk_bytes).fetch_add(bytes, Ordering::Relaxed);
         (self.host_ram_chunks_live).fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// The device imported a chunk of a guest RAM, or an object's run inside one, as a dma-buf
+    /// of the RAM's source (`host_ram.rs`), besides counting it as a chunk or a run.
+    pub(crate) fn host_ram_dma_buf_imported(&self) {
+        (self.host_ram_dma_buf_imports).fetch_add(1, Ordering::Relaxed);
     }
 
     /// The device's thread imported a chunk of a guest RAM ahead of every object over it
@@ -5667,6 +5674,10 @@ pub struct WorkCounts {
     /// range each (its last fewer), each once, by the device's own thread ahead of the objects
     /// over it or by the first object made over it where that thread had not imported it.
     pub host_ram_chunks_imported: u64,
+    /// The imports of guest RAM, chunks and objects' runs alike, made as one dma-buf each of the
+    /// RAM's source (`HostRam::with_dma_buf`), not by their pointer: where the device's held
+    /// pointer imports add to every submission's cost, or it refused the pointer.
+    pub host_ram_dma_buf_imports: u64,
     /// Of `host_ram_chunks_imported`, those the device's own thread imported ahead of every
     /// object over them, so that no making waited for their import: the few chunks past the one
     /// an object last took. The thread imports while the device's allocations leave a quarter of
@@ -5718,8 +5729,9 @@ pub struct WorkCounts {
     /// buffer): an import alive then held each of their pages.
     pub host_rebind_imports_covered: u64,
     /// The live no-copy buffers' imports of host pages by their pointer, never released while
-    /// idle as the device's driver is not measured to read the pages mapped at the pointer at
-    /// each submission (`DriverFact::PointerImportsFollowTheirAddress`), or off Unix.
+    /// idle as the device's submission checks did not find its pointer imports to read the pages
+    /// mapped at the pointer at each submission
+    /// (`Device::pointer_imports_follow_their_address`), or off Unix.
     pub host_imports_kept_pointer: u64,
     /// The live no-copy buffers' imports the device would release while idle, but keeps, as it
     /// could make no stand-in buffer for a read of a released one.
@@ -6969,6 +6981,7 @@ impl Device {
             host_ram_copy_bytes: counters.host_ram_copy_bytes.load(Ordering::Relaxed),
             host_ram_copy_dispatches: counters.host_ram_copy_dispatches.load(Ordering::Relaxed),
             host_ram_chunks_imported: counters.host_ram_chunks_imported.load(Ordering::Relaxed),
+            host_ram_dma_buf_imports: counters.host_ram_dma_buf_imports.load(Ordering::Relaxed),
             host_ram_chunks_imported_ahead: counters
                 .host_ram_chunks_imported_ahead
                 .load(Ordering::Relaxed),

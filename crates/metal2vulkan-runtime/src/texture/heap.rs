@@ -3126,7 +3126,8 @@ impl Device {
 
     /// The images of `heap`'s live textures bound to its bytes, made for a rebind's new pages,
     /// which it imported as dma-bufs (`imports`, of memory type `type_index`), the heap's bytes at
-    /// `pointer`, into `remade`: for each, a `DRM_FORMAT_MOD_LINEAR` image of its plan in the
+    /// `at` among the pages the imports were made of (`Placement::dma_buf_address`), into
+    /// `remade`: for each, a `DRM_FORMAT_MOD_LINEAR` image of its plan in the
     /// driver's layout ([`Device::dma_buf_natural_layout`]) at its offset, over the one dma-buf the
     /// pages' source makes of its own pages ([`Device::dma_buf_image`]). With no lock of the
     /// runtime's held, as the source is called once for each. Refused
@@ -3137,7 +3138,7 @@ impl Device {
         heap: &Heap,
         imports: &crate::dma_buf::DmaBufPages,
         type_index: u32,
-        pointer: NonNull<u8>,
+        at: u64,
         remade: &mut Remade,
     ) -> Result<(), Error> {
         let facts = self
@@ -3155,7 +3156,7 @@ impl Device {
             if remade.0.iter().any(|(made, _)| Arc::ptr_eq(made, image)) {
                 continue;
             }
-            let pages = (imports, type_index, pointer.as_ptr() as u64 + place.offset);
+            let pages = (imports, type_index, at + place.offset);
             let made = self.dma_buf_heap_image(image.plan(), &facts, pages, place.size)?;
             let made = made.map_err(|_| Error::NotImplemented(RuntimeGap::RebindTextures))?;
             let objects = ImageObjects::imported(self, made.raw, made.import);

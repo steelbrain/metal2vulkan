@@ -122,10 +122,6 @@ impl Shape {
     }
 }
 
-/// The longest the fresh-pages class waits for the device's submission checks, which answer
-/// whether its buffers take fresh pages (`submit_check.rs`): their run takes milliseconds.
-const SUBMIT_CHECKS_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
-
 /// The bytes of each class's buffer: past half a pooled block, so that a buffer of the runtime's
 /// own lies in fresh pages (`fresh_pages.rs`), and room for the largest shape's window.
 const BUFFER_BYTES: u64 = 40 << 20;
@@ -314,7 +310,7 @@ impl ClassPages {
         // (`submit_check.rs`): the class is checked once they gave it, as the product makes its
         // buffers then.
         if matches!(class, PagesClass::Fresh) {
-            device.settle_submit_checks(SUBMIT_CHECKS_WAIT);
+            device.settle_submit_checks(crate::submit_check::ANSWER_WAIT);
         }
         let _busy = exit_guard::enter()?;
         match class {

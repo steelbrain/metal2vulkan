@@ -51,9 +51,9 @@
 //!   takes by its pointer is made exactly as before, with no call more.
 //! - **When**. The pages are imported when the buffer is made, on every platform, as Metal wires
 //!   them then: the GPU uses the pages mapped at the pointer when the buffer was made, whatever is
-//!   mapped there later, but on a driver whose pointer imports follow their address
-//!   (`DriverFact::PointerImportsFollowTheirAddress`: ANV on i915, RADV, lavapipe), the import of
-//!   the pointer reads the pages mapped there at each submission (a remap under a live buffer,
+//!   mapped there later, but on a driver whose pointer imports follow their address (as the
+//!   device's submission checks find, `submit_check.rs`: ANV on i915, RADV, lavapipe), the import
+//!   of the pointer reads the pages mapped there at each submission (a remap under a live buffer,
 //!   which [`HostMemory::new`] forbids, reaches it there; `docs/FAST-PATHS.md`, known gaps). Memory
 //!   the device cannot import is refused by the call that makes the buffer, as Metal answers nil
 //!   there. The import costs work per page there: on macOS MoltenVK's

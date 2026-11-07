@@ -477,7 +477,9 @@ Calls Metal does not have, for a consumer that emulates a Metal device:
   `RunResolver`): a guest's RAM imported whole, in 64 MiB chunks, for a device that refuses views
   of guest pages made through dma-bufs; a no-copy object whose pages the consumer resolves to one
   run inside one chunk is bound in the chunk, with no import of its own
-  ([HOWTO](../../docs/HOWTO.md#guest-ram-imported-whole)).
+  ([HOWTO](../../docs/HOWTO.md#guest-ram-imported-whole)). `HostRam::with_dma_buf` gives the RAM a
+  source of dma-bufs of its pages: a device whose own check finds held pointer imports taxing
+  every submission (RADV), or that refuses the RAM's pointer, imports each chunk as one dma-buf.
 - `BlitCommandEncoder::copy_from_host_ram` and `copy_to_host_ram`: runs of a used guest RAM
   (4 KiB-aligned host addresses, whole 4 KiB pages) gathered into consecutive bytes of a buffer,
   or scattered back, by one compute dispatch per chunk the runs touch, from the device's chunk

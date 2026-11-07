@@ -19,8 +19,15 @@
 //! - **Which.** A buffer that takes a block of its own (`memory.rs`'s `place`): longer than half a
 //!   pooled block ([`FRESH_PAGES_PAST`]), not of a heap, whose bytes the host maps in memory of
 //!   its class (`Shared`, write-combined, `Managed` with unified memory). The device must import
-//!   host pointers (`host_memory.rs`'s `Importer`), and the class's best memory type for the buffer
-//!   must take the pages: else the buffer lies where it would have, made as ever. Measured
+//!   host pointers (`host_memory.rs`'s `Importer`), its submission checks must have found that a
+//!   held pointer import adds nothing to the cost of every submission (`submit_check.rs`'s import
+//!   tax; a check not answered yet counts as a tax), and the class's best memory type for the
+//!   buffer must take the pages: else the buffer lies where it would have, made as ever. The tax
+//!   decides because such a buffer's import is held for its whole life: on RADV every submission
+//!   gets every page of every held pointer import again (`amdgpu_cs_parser_bos`), so one fresh
+//!   64 MiB buffer raised a commit's p50 from 10.7 to 36.6 us on the Radeon 780M and from 14.7 to
+//!   164.7 us on the RX 550 (`runtime_lane::submit_per_import::submit_per_fresh_page_buffer`,
+//!   Mesa 26.2.6, Linux 7.3.1), where its fresh pages save one clear of 64 MiB once. Measured
 //!   (2026-10-24, RADV, Mesa 26.2.4): on the unified-memory Radeon 780M all three classes take the
 //!   pages; on the RX 7900 XTX the write-combined class's best type for the buffer is a device-local
 //!   host-visible one, which a host-pointer import cannot bind, so such a buffer is placed as ever

@@ -822,7 +822,11 @@ impl HostPages {
         let placement = &pages.memory.placement;
         let imports = Arc::clone(placement.dma_buf_pages()?);
         let start = (placement.mapped?.as_ptr() as u64).checked_add(pages.offset)?;
-        Some((imports, start, placement.type_index()))
+        Some((
+            imports,
+            placement.dma_buf_address(start),
+            placement.type_index(),
+        ))
     }
 
     /// As the buffer that lies in them is released (`BufferShared`'s drop, a no-copy heap's own
@@ -1061,8 +1065,8 @@ pub(crate) enum KeptBecause {
     Heap,
     /// A rebind's import (`rebind.rs`).
     Rebind,
-    /// An import by pointer on a device whose driver is not measured to follow the pointer
-    /// (`DriverFact::PointerImportsFollowTheirAddress`), or off Unix.
+    /// An import by pointer on a device whose pointer imports its submission checks did not
+    /// find to follow their address (`submit_check.rs`), or off Unix.
     Pointer,
     /// No stand-in buffer for a read of a released one.
     NoStandIn,
@@ -1110,7 +1114,8 @@ impl std::ops::Deref for ImportPages<'_> {
 
 impl HostImport {
     /// The import of `pages`, no pages lying in it yet, which the device keeps imported for
-    /// `because` (`None`: an import of dma-bufs whose descriptors did not fit, counted as such).
+    /// `because` (`None`: an import of dma-bufs whose descriptors did not fit, counted as such,
+    /// or pages bound in a guest RAM's chunk imported as a dma-buf, which the RAM's use keeps).
     fn new(device: &Device, pages: Pages, because: Option<KeptBecause>) -> HostImport {
         if let Some(because) = because {
             device.shared().counts.host_import_kept(because, true);
@@ -1642,10 +1647,15 @@ impl Pages {
     /// Let `after` go once the pages' memory is freed, their import released
     /// ([`release_import`](Self::release_import)): at once, but where the memory is imports of
     /// the caller's dma-bufs (`dma_buf.rs`), which the placement holds and are freed as their
-    /// last holder lets go of them, then.
+    /// last holder lets go of them, then. Pages bound in a guest RAM's chunk (`host_ram.rs`) free
+    /// no memory of their own, whatever the chunk's import: at once.
     fn after_free(&self, after: Box<dyn Send>) {
+        let placement = &self.memory.placement;
         #[cfg(unix)]
-        if let Some(imports) = self.memory.placement.dma_buf_pages() {
+        if let Some(imports) = placement
+            .dma_buf_pages()
+            .filter(|_| !placement.over_ram_chunk())
+        {
             imports.after_free(after);
             return;
         }

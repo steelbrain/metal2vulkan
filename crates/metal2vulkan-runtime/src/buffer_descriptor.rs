@@ -367,10 +367,10 @@ impl Device {
     /// imports, and stay ordered with each other as before. Their pages are those their imports
     /// read: an import of dma-bufs keeps the pages it was made over, as Metal's buffer does, and so
     /// does an import of the pointer on a driver that keeps them; on a driver whose pointer imports
-    /// follow their address (`DriverFact::PointerImportsFollowTheirAddress`: ANV on i915, RADV,
-    /// lavapipe), an import of the pointer reads the pages mapped there at each submission, the new
-    /// ones from the remap on (`docs/FAST-PATHS.md`, known gaps). Not a Metal call: Metal needs
-    /// none. A `length` of 0 tells nothing.
+    /// follow their address (as the device's submission checks find, `submit_check.rs`: ANV on
+    /// i915, RADV, lavapipe), an import of the pointer reads the pages mapped there at each
+    /// submission, the new ones from the remap on (`docs/FAST-PATHS.md`, known gaps). Not a Metal
+    /// call: Metal needs none. A `length` of 0 tells nothing.
     ///
     /// The call may come at the unmap or after the new map, but before a buffer is made over the
     /// new pages: a buffer made over those bytes while it runs may lie in either pages. The bytes
@@ -916,7 +916,42 @@ impl Device {
                         Err(error) => return Err(error),
                     },
                 };
+                // The heap's images bound to its bytes, and the images in place over them, made
+                // over dma-bufs of their own pages where the new pages lie in imports of
+                // dma-bufs, each of which their source makes: with no lock held.
+                let images_again = |placement: &Placement| {
+                    let mut remade = match heap {
+                        Some(heap) => self.dma_buf_images_again(heap, placement, pointer)?,
+                        None => Remade::default(),
+                    };
+                    self.dma_buf_in_place_again(&in_place, placement, pointer, &mut remade)?;
+                    Ok::<_, Error>(remade)
+                };
                 let imported = match imported {
+                    // Bound in a guest RAM's chunk imported as a dma-buf (`host_ram.rs`): the
+                    // images made again from the RAM's source, with no lock of the runtime's
+                    // held, the textures over detached bytes settled again after it.
+                    Ok(Ok((host, placement))) if placement.over_dma_buf() => {
+                        let was_settled = settled.take().is_some();
+                        let remade = match images_again(&placement) {
+                            Ok(remade) => remade,
+                            Err(error) => {
+                                self.discard_import(host, placement);
+                                return Err(error);
+                            }
+                        };
+                        if was_settled {
+                            match cell.settled() {
+                                Some(again) => settled = Some(again),
+                                None => {
+                                    drop(remade);
+                                    self.discard_import(host, placement);
+                                    return Err(detached_textures());
+                                }
+                            }
+                        }
+                        Ok((host, placement, remade))
+                    }
                     Ok(Ok((host, placement))) => Ok((host, placement, Remade::default())),
                     // The source is called with no lock of the runtime's held (`dma_buf.rs`):
                     // the textures over detached bytes are let go of meanwhile, and must be
@@ -934,26 +969,8 @@ impl Device {
                         .map_err(|failed| source_failure(failed, refusal));
                         let made = match from_source {
                             Ok((host, placement, _)) => {
-                                // The heap's images bound to its bytes, and the images in place
-                                // over them, made over dma-bufs of their own pages, each of which
-                                // the source makes: still with no lock held.
-                                let again = match heap {
-                                    Some(heap) => {
-                                        self.dma_buf_images_again(heap, &placement, pointer)
-                                    }
-                                    None => Ok(Remade::default()),
-                                };
-                                let again = again.and_then(|mut remade| {
-                                    let watches = &in_place;
-                                    self.dma_buf_in_place_again(
-                                        watches,
-                                        &placement,
-                                        pointer,
-                                        &mut remade,
-                                    )?;
-                                    Ok(remade)
-                                });
-                                match again {
+                                // Still with no lock held.
+                                match images_again(&placement) {
                                     Ok(remade) => Ok((host, placement, remade)),
                                     Err(error) => {
                                         self.discard_import(host, placement);
@@ -1130,7 +1147,8 @@ impl Device {
     }
 
     /// The `VkBuffer` of a no-copy buffer of `length` bytes at `window.offset` in its window,
-    /// made for host allocations, whose bytes start [`buffer_base`] bytes into it. The memory
+    /// made for memory of `handle` (host allocations, or dma-bufs for a guest RAM's chunk imported
+    /// as one, `host_ram.rs`), whose bytes start [`buffer_base`] bytes into it. The memory
     /// alignment is a buffer's whatever its size, so the buffer is made first for bytes at 0,
     /// and again, at its own size, where its alignment misses the bytes.
     ///
@@ -1142,12 +1160,12 @@ impl Device {
         &self,
         window: &ImportWindow,
         length: u64,
+        handle: vk::ExternalMemoryHandleTypeFlags,
     ) -> Result<HostBuffer, Error> {
         let shared = self.shared();
         let raw_device = shared.vk();
         let make_sized = |base: u64, size: u64| {
-            let mut external = vk::ExternalMemoryBufferCreateInfo::default()
-                .handle_types(vk::ExternalMemoryHandleTypeFlags::HOST_ALLOCATION_EXT);
+            let mut external = vk::ExternalMemoryBufferCreateInfo::default().handle_types(handle);
             let info = shared.sharing().buffer(
                 vk::BufferCreateInfo::default()
                     .size(size)
@@ -1260,7 +1278,8 @@ impl Device {
         class: MemoryClass,
         drops_writes: bool,
     ) -> Result<(HostBuffer, Placement), Error> {
-        let buffer = self.host_buffer(window, length)?;
+        let host = vk::ExternalMemoryHandleTypeFlags::HOST_ALLOCATION_EXT;
+        let buffer = self.host_buffer(window, length, host)?;
         // The window starts `window.offset` bytes before the pointer, in the pages it touches.
         let start = pointer.as_ptr().wrapping_sub(window.offset as usize);
         let class = (class, drops_writes);
@@ -1277,7 +1296,7 @@ impl Device {
 
     /// The pages of a released import of the window's pages at `pointer`, made again there as
     /// `again` made it (`host_residency.rs`), on a driver whose pointer imports follow their
-    /// address (`DriverFact::PointerImportsFollowTheirAddress`): a new `VkBuffer` made and bound
+    /// address (`Device::pointer_imports_follow_their_address`): a new `VkBuffer` made and bound
     /// as the first was, over an import of the pages mapped at the pointer now, which the kept
     /// import would read too. Refused as the first import may be, typed as the import answers
     /// (out of memory among them), or with the device lost.

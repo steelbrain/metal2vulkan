@@ -2848,7 +2848,8 @@ impl Device {
             return Ok(remade);
         };
         let type_index = placement.type_index();
-        self.dma_buf_heap_images_again(heap, imports, type_index, pointer, &mut remade)?;
+        let at = placement.dma_buf_address(pointer.as_ptr() as u64);
+        self.dma_buf_heap_images_again(heap, imports, type_index, at, &mut remade)?;
         Ok(remade)
     }
 

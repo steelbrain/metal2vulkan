@@ -261,12 +261,13 @@ released:
   buffers stand at once, raise the soft limit toward the hard one at startup (`setrlimit`), as QEMU
   does.
   A blit whose released buffer the device cannot import again (out of memory) is refused.
-- An import of the pointer, on a driver whose pointer imports follow their address
-  (`DriverFact::PointerImportsFollowTheirAddress`: ANV, Mesa 26.2.4 on the Iris Xe of Raptor
-  Lake-P; RADV, Mesa 26.2.4 on the Radeon 780M of Phoenix or Hawk Point and on the RX 7900 XTX; and
-  lavapipe). There a live import reads, at each submission, the pages mapped at its pointer then,
-  so the new import at the same pointer reads what the kept one would. A blit whose released buffer the device cannot import again is refused,
-  typed as the first import would be. Elsewhere a pointer import stays imported.
+- An import of the pointer, on a driver whose pointer imports follow their address, as the device
+  checks once per driver, release and kernel by remapping pages of its own under a live import
+  (`Device::pointer_imports_follow_their_address`, Linux only; ANV, RADV and lavapipe answer yes,
+  NVIDIA no). There a live import reads, at each submission, the pages mapped at its pointer then,
+  so the new import at the same pointer reads what the kept one would. Buffers made before the check
+  answered keep their imports. A blit whose released buffer the device cannot import again is
+  refused, typed as the first import would be. Elsewhere a pointer import stays imported.
 
 A buffer stays imported for good once its Metal address is handed out (`gpu_address`, a binding, an
 argument buffer or table, an indirect command buffer, `use_resource`), its `VkBuffer` is read, a
@@ -440,7 +441,8 @@ or alignment), or where the buffer's GPU writes are dropped and its bytes moved 
 ### Guest RAM imported whole
 
 A VMM whose device refuses views of guest pages made through dma-bufs (each import of scattered
-pages then takes a kernel mapping per page) can give the device the guest's RAM once instead:
+pages then takes a kernel mapping per page), or whose driver lists every import in every
+submission, can give the device the guest's RAM once instead:
 
 - `unsafe HostRam::new(ranges, keep_alive)` takes the RAM's ranges of host memory (whole host pages,
   mapped readable and writable until the keep-alive goes) and `Device::use_host_ram(&ram)` uses it
@@ -517,6 +519,21 @@ pages then takes a kernel mapping per page) can give the device the guest's RAM 
   robust descriptor range nor a root entry reaches the rest of the chunk. A no-copy heap's own
   buffer, and a buffer's or heap's rebind, take the same path; a buffer's rebind to bytes at
   another offset in their page under a texture takes the copy laid out at the old offset instead.
+- `HostRam::with_dma_buf(source)` gives the RAM a `DmaBufSource` of its pages. A device that imports
+  dma-bufs then imports each chunk (and each object's run imported alone) as one dma-buf of it, from
+  the source, where the device's own check finds that a held host-pointer import adds to the cost of
+  every submission (the import tax, RADV's: amdgpu gets every page of every held pointer import
+  again in each submission), or where it refuses the chunk's pointer (RADV refuses any shared
+  mapping, a `memfd`'s among them); elsewhere (ANV and MoltenVK pay no such tax) the pointer, as
+  without a source (`WorkCounts::host_ram_dma_buf_imports`). A dma-buf chunk costs a submission what
+  one import does, whatever its length: on the Radeon 780M (Mesa 26.2.6, Linux 7.3.1) one held
+  pointer import of 64 MiB added 24.1 us to every submission, and 100 held dma-bufs added 42 us
+  (`runtime_lane::submit_per_import`). Each request asks for whole host pages inside one chunk of
+  the RAM, by the RAM's own addresses, with a `granule` of its `length`: answer one dma-buf of
+  exactly those pages (a `udmabuf` of the `memfd` behind them; `udmabuf`'s default `size_limit_mb`
+  is 64, a chunk's size). A texture over an object bound in such a chunk is an image over a dma-buf
+  of its own pages, as over an object's own dma-buf imports, asked of the same source. A source that
+  fails leaves the chunk to its pointer.
 - Any other answer (several runs, one run crossing a chunk's end, `None`) takes the paths above:
   the gate, then the import or the copy. The runs are kept with the object.
 - The chunks are never released while idle. Once the use is dropped, each is freed when nothing

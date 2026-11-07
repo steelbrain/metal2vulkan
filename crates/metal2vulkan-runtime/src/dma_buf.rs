@@ -88,6 +88,7 @@ use crate::release;
 use ash::vk;
 use metal2vulkan::error::RuntimeDriverDefect;
 use metal2vulkan::vk::{Format, FormatFeatureFlags2, ImageCreateFlags, SampleCountFlags};
+use std::ops::Range;
 use std::os::fd::{AsFd, BorrowedFd, OwnedFd};
 use std::ptr::NonNull;
 use std::sync::{Arc, Mutex, PoisonError};
@@ -464,6 +465,62 @@ impl Device {
         }
         let placement = Placement::dma_buf(Arc::new(pages), memory, type_index, window.size, start);
         Ok((buffer, placement, again))
+    }
+
+    /// `span`, host pages of a guest RAM (`host_ram.rs`), imported as the one dma-buf of them
+    /// that the RAM's `source` makes: a chunk of the RAM or an object's run inside one, asked for
+    /// with a granule of its whole length, so that one import holds it. The `VkBuffer` over the
+    /// whole span, made for dma-bufs and bound to the import at its start, and its placement,
+    /// which keeps the import and the source. Refused, everything made released, as
+    /// [`Device::import_from_source`] is, where the device makes no such buffer, the source fails
+    /// or answers more than one chunk, or the driver refuses the dma-buf.
+    ///
+    /// # Safety
+    ///
+    /// `span` is pages of the RAM's ranges, which stay mapped while the placement holds the
+    /// import, and the source's dma-bufs hold exactly those pages (`HostRam::with_dma_buf`).
+    pub(super) unsafe fn ram_span_as_dma_buf(
+        &self,
+        importer: &Importer,
+        span: Range<u64>,
+        source: &DmaBufSource,
+    ) -> Result<(vk::Buffer, Placement), Error> {
+        if !importer.imports_dma_bufs()
+            || !self.imports_dma_buf_buffers(vk::BufferCreateFlags::empty())
+        {
+            return Err(not_importable());
+        }
+        let start = NonNull::new(span.start as *mut u8).ok_or_else(not_importable)?;
+        let length = span.end - span.start;
+        let request = DmaBufRequest {
+            start,
+            length,
+            granule: length,
+        };
+        let chunks = source(request).map_err(|_| not_importable())?;
+        if chunks.len() != 1 || !answers(&chunks, &request, importer.page) {
+            return Err(invalid("use_host_ram", Problem::DmaBuf));
+        }
+        let window = ImportWindow {
+            start: span.start,
+            size: length,
+            offset: 0,
+        };
+        let mut pages = DmaBufPages::new(self, Arc::clone(source), request, false);
+        // SAFETY: the caller's.
+        let (buffer, memory, type_index) = unsafe {
+            self.chunks_buffer(
+                importer,
+                chunks,
+                &mut pages,
+                length,
+                &window,
+                MemoryClass::Shared,
+            )
+        }?;
+        self.shared().counts.dma_buf_imported(pages.memories.len());
+        let placement = Placement::dma_buf(Arc::new(pages), memory, type_index, length, start);
+        Ok((buffer.raw, placement))
     }
 
     /// The pages of a released import made again from the dma-bufs `chunks` it kept, which

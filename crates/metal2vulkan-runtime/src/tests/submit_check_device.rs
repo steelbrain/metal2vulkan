@@ -19,7 +19,7 @@
 
 use super::blit_holds::{Scratch, WAIT};
 use crate::fresh_pages::FRESH_PAGES_PAST;
-use crate::submit_check::{Check, Verdict};
+use crate::submit_check::{record_name, Check, Verdict};
 use crate::tests::SETTLE;
 use crate::{
     CommandBufferStatus, Device, DeviceKind, DeviceOptions, EventRef, ResourceOptions,
@@ -45,6 +45,23 @@ fn device(cache: &Path) -> Device {
         ..DeviceOptions::default()
     };
     Device::system_default_with(&options).unwrap()
+}
+
+/// The files under `directory` named `name`.
+fn files_named(directory: &Path, name: &str) -> Vec<std::path::PathBuf> {
+    let mut found = Vec::new();
+    let mut pending = vec![directory.to_owned()];
+    while let Some(at) = pending.pop() {
+        for entry in std::fs::read_dir(&at).into_iter().flatten().flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                pending.push(path);
+            } else if entry.file_name().to_str() == Some(name) {
+                found.push(path);
+            }
+        }
+    }
+    found
 }
 
 /// Each check's verdict on `device`.
@@ -93,7 +110,19 @@ fn the_checks_answer_once_and_a_second_device_recalls_them() {
             assert_eq!(verdicts(&second), answered);
             break;
         }
-        assert!(start.elapsed() < WAIT, "no device recalled the record");
+        if start.elapsed() >= WAIT {
+            let name = record_name(&second.driver_identity());
+            let found = files_named(&scratch.0, &name);
+            let statistics = second.shader_cache_statistics();
+            panic!(
+                "no device recalled the record {name}: found at {found:?}; the second device's \
+                 cache rejected {} and failed {} reads; identities {:?} and {:?}",
+                statistics.rejected,
+                statistics.read_failures,
+                first.driver_identity(),
+                second.driver_identity(),
+            );
+        }
         drop(second);
         std::thread::sleep(std::time::Duration::from_millis(50));
     }

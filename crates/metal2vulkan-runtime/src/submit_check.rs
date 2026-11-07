@@ -113,6 +113,11 @@ pub(crate) const TAX_FLOOR: i64 = 1_000;
 /// How long one wait for a fence lasts before it is repeated.
 const WAIT_SLICE: Duration = Duration::from_millis(100);
 
+/// The longest a making whose path the verdicts choose once for good waits for them (the in-place
+/// check's fresh-pages class, `in_place_check.rs`; a guest RAM with a source of dma-bufs,
+/// `host_ram.rs`): their run takes milliseconds.
+pub(crate) const ANSWER_WAIT: Duration = Duration::from_secs(10);
+
 /// The bytes the follows check copies.
 #[cfg(target_os = "linux")]
 const COPIED: u64 = 256;
@@ -478,6 +483,13 @@ impl Device {
     #[doc(hidden)]
     pub fn fresh_pages_pay(&self) -> bool {
         self.shared().submit_checks.fails(Check::ImportTax)
+    }
+
+    /// Whether a host-pointer import the device holds adds to the cost of every submission, as
+    /// its check found (`submit_check.rs`): where it does, a guest RAM with a source of dma-bufs
+    /// imports its chunks as dma-bufs first (`host_ram.rs`). `false` until it answers.
+    pub(crate) fn pointer_imports_tax_submissions(&self) -> bool {
+        self.shared().submit_checks.holds(Check::ImportTax)
     }
 
     /// No Metal counterpart: whether the device's imports of host memory by its pointer read the

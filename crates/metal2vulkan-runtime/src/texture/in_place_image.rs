@@ -686,7 +686,7 @@ impl Device {
             let texels = crate::dma_buf::DmaBufTexels {
                 pages: imports,
                 type_index: placement.type_index(),
-                at: pointer.as_ptr() as u64 + watch.from_base,
+                at: placement.dma_buf_address(pointer.as_ptr() as u64 + watch.from_base),
                 row_pitch: watch.layout.row_pitch,
                 slice_pitch: watch.layout.slice_pitch,
             };
