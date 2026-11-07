@@ -29,7 +29,12 @@
 //!   since the image has no attachment usage; their copies into it touch its texels alone. One that
 //!   renders also takes the feedback loop usage a draw takes that reads the texture its own pass
 //!   renders through a snapshot (`texture::feedback_candidate`, `render/snapshot.rs`) where the
-//!   device makes the image with it, as an aliasing image over a buffer of the runtime's does:
+//!   device makes the image with it, as an aliasing image over a buffer of the runtime's does,
+//!   and with it the storage usage the snapshot's fetch of the attachment in the pixel interlock
+//!   reads through (`framebuffer_fetch::storage_candidate`, which may list a view in another
+//!   format), where the device's check passed for a shader's writes over the pages' class too and
+//!   the texel is one its kernel stores (with that usage a shader writes the texels in place, as
+//!   one declared to does): the first of those plans the device makes the image in place with,
 //!   else the declared plan's image.
 //! - **A rebind** (`rebind.rs`) makes it again over the new pages, its texels as far from their
 //!   first byte as from the old pages', as a no-copy heap's images are
@@ -46,6 +51,7 @@ use crate::buffer::{Buffer, InPlaceWatch, ReadApart};
 use crate::buffer_texture::Texels;
 use crate::device::lock;
 use crate::error::{vulkan, Error, RuntimeGap};
+use crate::framebuffer_fetch::storage_candidate;
 use crate::image_plan::{ImageFacts, ImagePlan};
 use crate::in_place::{Access, PagesClass, Refusal};
 use crate::linear_plan::{check_linear_limits, linear_lack, BufferLayout, LinearLack};
@@ -206,8 +212,8 @@ impl Texture {
 
 impl Device {
     /// The image in place of a texture of `plan` (its declared usage's, with the feedback loop
-    /// usage where the device makes it so: the module docs) made with `descriptor` over `texels`,
-    /// host pages of `class`, with whether it is a `DRM_FORMAT_MOD_LINEAR` image at Metal's pitch
+    /// usage where the device makes it so, and the storage usage too where `storable`: the module
+    /// docs) made with `descriptor` over `texels`, host pages of `class`, with whether it is a `DRM_FORMAT_MOD_LINEAR` image at Metal's pitch
     /// made for host allocations; why not where the device makes none, the declared plan's
     /// refusal (the module docs). Over a no-copy buffer's pages (or a no-copy heap's) it is noted
     /// for a rebind to make again. Its first move is noted, for the device's next submission that
@@ -216,8 +222,7 @@ impl Device {
         &self,
         plan: &ImagePlan,
         descriptor: &TextureDescriptor,
-        texels: &Texels,
-        class: PagesClass,
+        (texels, class, storable): (&Texels, PagesClass, bool),
         facts: &ImageFacts<'_>,
     ) -> Result<InPlace, Error> {
         let layout = texels.layout;
@@ -238,11 +243,22 @@ impl Device {
                 self.host_in_place(plan, descriptor, texels, class, facts)
             }
         };
-        let with_feedback = match feedback_candidate(plan, self) {
-            Some(candidate) => make(&candidate)?.ok(),
-            None => None,
-        };
-        let (image, pitched) = match with_feedback {
+        // The wider plans, widest first: the feedback loop usage, and with it the storage usage
+        // where `storable`.
+        let profile = self.compile_device().profile();
+        let feedback = feedback_candidate(plan, self);
+        let storage = feedback
+            .as_ref()
+            .filter(|_| storable)
+            .and_then(|feedback| storage_candidate(feedback, profile));
+        let mut made = None;
+        for wider in storage.iter().chain(&feedback) {
+            if let Ok(image) = make(wider)? {
+                made = Some(image);
+                break;
+            }
+        }
+        let (image, pitched) = match made {
             Some(made) => made,
             None => match make(plan)? {
                 Ok(made) => made,

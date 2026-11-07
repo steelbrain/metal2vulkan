@@ -36,8 +36,11 @@
 //!   host pages, an `RGBA8Unorm` texture of an IOSurface plane over a no-copy buffer, through the
 //!   whole target's scissor: a snapshot for each where the device takes the path and the image
 //!   the pass renders took feedback loop usage, the texture's shadow (a surface over host pages
-//!   that renders is one, `in_place.rs`; `WorkCounts::feedback_loop_shadow_images`) or a linear
-//!   image aliasing the bytes (`WorkCounts::feedback_loop_alias_images`), as
+//!   that renders is one where the device's check did not pass for it, `in_place.rs`;
+//!   `WorkCounts::feedback_loop_shadow_images`) or a linear image aliasing the bytes
+//!   (`WorkCounts::feedback_loop_alias_images`), with the storage usage the snapshot's fetch reads
+//!   through, which one over host pages takes where the check passed for a shader's writes there
+//!   (`Pointer writes: Passed`), as
 //!   `RenderCommandEncoder::snapshot_cheaper` weighs no area for either; else a split.
 //! - [`each_form_reads_what_the_split_reads`]: the first test's draws over a target of each of
 //!   `RGBA8Unorm`, `BGRA8Unorm`, `R8Unorm`, `RG8Unorm` (8-bit codes), `RGBA16Float` (half-float
@@ -180,10 +183,14 @@ fn readers(
 
 /// How [`readers_over`]' target was made: whether the image its passes render took feedback loop
 /// usage (`WorkCounts::feedback_loop_alias_images` for an image aliasing its bytes, or
-/// `feedback_loop_shadow_images` for a shadow).
+/// `feedback_loop_shadow_images` for a shadow), and whether a snapshot's fetch reads it there: a
+/// shadow's, or an image over host pages in place where the device's check passed for a shader's
+/// writes over such pages (`Pointer writes: Passed`), with which it takes the storage usage the
+/// fetch reads through (`texture/in_place_image.rs`).
 #[derive(Debug)]
 struct Made {
     feedback: bool,
+    fetched: bool,
 }
 
 /// [`readers`]' pass over a new target of `format`: private, or where `surface` a surface over
@@ -227,9 +234,15 @@ fn readers_over(
         }
     };
     let counts = device.work_counts();
+    let alias = counts.feedback_loop_alias_images > made.feedback_loop_alias_images;
+    let shadow = counts.feedback_loop_shadow_images > made.feedback_loop_shadow_images;
+    // An image in place over host pages takes the storage usage the snapshot's fetch reads
+    // through where the device's check passed for a shader's writes over such pages.
+    let writes =
+        (device.in_place_check_report().iter()).any(|line| line == "Pointer writes: Passed");
     let made = Made {
-        feedback: counts.feedback_loop_alias_images > made.feedback_loop_alias_images
-            || counts.feedback_loop_shadow_images > made.feedback_loop_shadow_images,
+        feedback: alias || shadow,
+        fetched: shadow || (alias && (!surface || writes)),
     };
     let back = device
         .new_buffer(SIDE * row, ResourceOptions::shared())
@@ -538,7 +551,7 @@ fn a_surfaces_readers_take_the_snapshot_at_any_area() {
             let takes = snapshots(device);
             eprintln!("snapshot reads, surface, whole scissor: {made:?}, {moved:?}");
             holds("surface, whole scissor", &bytes, 6 * FILL);
-            let expected = if takes && made.feedback {
+            let expected = if takes && made.feedback && made.fetched {
                 (2, 0)
             } else {
                 (0, 2)

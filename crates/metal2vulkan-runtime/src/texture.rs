@@ -2296,7 +2296,18 @@ impl Device {
                     let pages = (class, texels.texel_bytes());
                     match in_place::in_place(policy, usage, pages, verdict) {
                         Ok(()) => {
-                            match self.in_place_image(&plan, descriptor, &texels, class, &facts)? {
+                            // A texture that renders takes the storage usage too where the check
+                            // passed for a shader's writes over the class and its texel is one the
+                            // check's kernel stores: a draw that reads it through a snapshot
+                            // fetches it in the pixel interlock through that usage
+                            // (`render/snapshot.rs`), and with it a shader's writes reach the
+                            // texels in place, as the check's writes do.
+                            let storable = in_place::Access::Renders.takes(usage)
+                                && !in_place::Access::Writes.takes(usage)
+                                && in_place::STORED_TEXEL_BYTES.contains(&pages.1)
+                                && verdict(class, in_place::Access::Writes) == Verdict::Passed;
+                            let made = (&texels, class, storable);
+                            match self.in_place_image(&plan, descriptor, made, &facts)? {
                                 Ok((image, pitched)) => {
                                     if !checking {
                                         let counts = &self.shared().counts;

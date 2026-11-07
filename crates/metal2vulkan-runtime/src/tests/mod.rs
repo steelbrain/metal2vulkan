@@ -199,6 +199,8 @@ mod image_plan;
 mod in_place;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod in_place_check;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod in_place_storage;
 mod inbox;
 mod indirect_command_buffer;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]

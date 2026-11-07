@@ -331,8 +331,11 @@ from `VK_QUEUE_FAMILY_FOREIGN_EXT`) wherever the device makes such an image and 
 passed for that kind of pages and each of its accesses (`WorkCounts::host_textures_in_place`,
 `dma_buf_textures_in_place`, `fresh_page_textures_in_place`, and `host_textures_in_place_written`
 for one a shader writes), on a discrete GPU as on any other. A texture that renders takes the
-feedback loop usage where the device makes the image with it, so a draw that reads it after a
-render-target barrier reads it through a snapshot (`WorkCounts::feedback_loop_alias_images`). The
+feedback loop usage where the device makes the image with it, and the storage usage too where the
+check passed for a shader's writes over that kind of pages and its texels are of 4, 8 or 16 bytes
+(with it a shader writes the texels in place, as one declared to), so a draw that reads it after
+a render-target barrier reads it through a snapshot (`WorkCounts::feedback_loop_alias_images`);
+without the storage usage such a draw splits its pass. The
 check makes such images of every texel size, small and 3840x2160, over each kind of pages while a
 CPU thread writes beside their texels, and passes a kind only where every first move kept every
 byte; for a texture that renders it checks images made with `RenderTarget` usage apart, through
