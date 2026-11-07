@@ -79,13 +79,13 @@
 //! two-plane, YCbCr, padded, `Invalid` and the private formats) Metal packs nothing and fills
 //! bytes of the calling thread's stack, the texel's bytes of a 16-byte buffer the packing writes:
 //! a probe that set the stack below its call to one byte read that byte back in every texel, and
-//! two consecutive color fills in one encoder find the first's packed texel there. Whether calls
-//! between them keep it depends on the calling code's stack: in our probe `slot.m` an encoder's
-//! end, a blit or a byte fill between them left other bytes (pointers of the process, differing
-//! between processes), while the consumer's process found the first's packed texel across the
-//! encoders of one command buffer. The runtime holds that buffer per command buffer, zeros at its
-//! start, each color fill's packed texel over its first bytes, and fills its bytes there, as
-//! Metal's consecutive fills and the consumer's encoders do; announced once
+//! two consecutive color fills in one encoder find the first's packed texel there. A call between
+//! them leaves other bytes: in our probe `slot.m` an encoder's end, a blit or a byte fill between
+//! them left pointers of the process (differing between processes), and a plain Objective-C
+//! process on the M3 Max (macOS 27.0.1) found the earlier fill's texel only where no call came
+//! between the two fills. The runtime holds that buffer per command buffer, zeros at its start,
+//! each color fill's packed texel over its first bytes, and fills its bytes there: Metal's bytes
+//! for consecutive fills, and bytes the stack may hold elsewhere; announced once
 //! (`Degradation::UnpackedFillColor`). Metal's
 //! validation stops such a fill ("must be a color format", "is not compatible with the texture
 //! format").
