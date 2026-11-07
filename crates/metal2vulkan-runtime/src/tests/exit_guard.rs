@@ -1759,7 +1759,7 @@ fn the_device_s_functions_are_reached_through_checked_accessors() {
 /// tuple field, a type argument or a by-value parameter) fails
 /// `only_the_listed_modules_keep_the_device_s_functions`; so does a listed module that keeps none
 /// any more.
-const KEEPERS: [(&str, &str); 27] = [
+const KEEPERS: [(&str, &str); 28] = [
     (
         "binding.rs",
         "the push command (vkCmdPushDescriptorSet), a call's parameter (`push_set`) and the \
@@ -1801,6 +1801,10 @@ const KEEPERS: [(&str, &str); 27] = [
     (
         "dynamic_state.rs",
         "the device's extended dynamic state commands (DeviceShared)",
+    ),
+    (
+        "exported_memory.rs",
+        "the device's export of buffers' memory as opaque fds (DeviceShared)",
     ),
     (
         "free_thread.rs",
