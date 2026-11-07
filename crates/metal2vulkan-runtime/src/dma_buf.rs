@@ -27,7 +27,10 @@
 //! - **The bytes.** The runtime never maps a dma-buf: `contents` stays the caller's pointer, and
 //!   the CPU's writes through it and the GPU's through the imports meet in the same pages with no
 //!   flush or invalidate (the types are host-coherent).
-//! - **Textures** placed in a heap over such pages (and their views), where the device also lists
+//! - **Textures** placed in a heap over such pages (and their views) that Metal does not tile
+//!   there (one it keeps losslessly compressed, one of a format or shape whose tiles are not
+//!   measured: `texture/heap.rs`; one Metal tiles is a shadow of its elements in Metal's tiles),
+//!   where the device also lists
 //!   `VK_EXT_image_drm_format_modifier` and `VK_EXT_queue_family_foreign` (enabled beside the
 //!   route, `create.rs`'s `dma_buf_image_names`), are each an image of `DRM_FORMAT_MOD_LINEAR` made
 //!   for dma-bufs and bound to a dedicated import (`VkMemoryDedicatedAllocateInfo`) of the one
@@ -816,12 +819,11 @@ pub(super) struct DmaBufImage {
 
 /// The layout the driver gives a `DRM_FORMAT_MOD_LINEAR` image of its own choosing
 /// ([`Device::dma_buf_natural_layout`]): its plane's row and array pitches, and its memory's
-/// bytes and alignment, from the plane's first byte.
+/// bytes from the plane's first byte.
 pub(super) struct NaturalLayout {
     pub(super) row_pitch: u64,
     pub(super) slice_pitch: u64,
     pub(super) size: u64,
-    pub(super) alignment: u64,
 }
 
 /// The one memory plane of an image of `DRM_FORMAT_MOD_LINEAR`, whose layout Vulkan reports
@@ -1273,7 +1275,6 @@ impl Device {
             row_pitch: report.row_pitch,
             slice_pitch: report.array_pitch,
             size: requirements.size,
-            alignment: requirements.alignment,
         }))
     }
 

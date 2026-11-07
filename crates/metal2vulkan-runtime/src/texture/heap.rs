@@ -2357,7 +2357,11 @@ impl Device {
     /// A texture of a plain format Metal lays out tiled (`HeapLayout::Tiled`) is a shadow of its
     /// elements tiled in the heap's bytes (`AliasRoute::Tiled`, `heap_tiled.rs`), where its optimal
     /// image takes copies and the moves fit the device; elsewhere it takes the routes above,
-    /// announced untiled when it is made.
+    /// announced untiled when it is made. One Metal keeps losslessly compressed, whose bytes on
+    /// Metal are no layout of its texels, takes the image over the pages above where one serves
+    /// (in the driver's rows, with no copy), and the shadow of its uncompressed tiles planned for
+    /// it (`HeapLayout::Uncompressed`) in a copied heap or where none serves; announced
+    /// `heap-texture-lossless-layout` either way.
     ///
     /// A multisample texture is a shadow of its samples in Metal's tiles (`AliasRoute::Tiled`, a
     /// compressed one's uncompressed tiles, [`sample_tiles`](Self::sample_tiles)), where one
@@ -2405,8 +2409,13 @@ impl Device {
             };
             return Ok(HeapPlan { image, ..p });
         }
-        // A shadow of Metal's tiles serves it over host pages as in any heap.
-        if p.image.route == AliasRoute::Tiled {
+        // A shadow of Metal's tiles serves it over host pages as in any heap. One of the tiles a
+        // texture Metal keeps losslessly compressed lays out in uncompressed
+        // (`HeapLayout::Uncompressed`: Metal's bytes are no layout of its texels) serves it in a
+        // copied heap, and where no image over the pages does (below); one that does serves it
+        // with no copy, its rows no less Metal's layout than those tiles.
+        let uncompressed = matches!(p.metal_layout, HeapLayout::Uncompressed(_));
+        if p.image.route == AliasRoute::Tiled && (!uncompressed || bytes.copied()) {
             return Ok(p);
         }
         // A copied heap's bytes the GPU uses lie in a copy of the caller's pages (`copied.rs`),
@@ -2487,6 +2496,11 @@ impl Device {
                 }
             }
         }
+        // Where no linear image serves: the shadow of the uncompressed tiles planned, else one
+        // of the bytes in rows.
+        if p.image.route == AliasRoute::Tiled {
+            return Ok(p);
+        }
         let image = self.memory_shadow(linear, &p)?;
         Ok(HeapPlan { image, ..p })
     }
@@ -2495,8 +2509,11 @@ impl Device {
     /// (`dma_buf.rs`), `linear` its plan: an image of the driver's `DRM_FORMAT_MOD_LINEAR` layout
     /// ([`Device::dma_buf_natural_layout`]) at the texture's offset, made and bound to a dedicated
     /// import of a dma-buf of its own pages as the texture is made (`heap_texture_at`), where the
-    /// device makes one of the plan and its bytes and alignment fit the heap's answer; else a
-    /// shadow of the heap's bytes ([`dma_buf_heap_shadow`](Self::dma_buf_heap_shadow)).
+    /// device makes one of the plan and its bytes fit the heap's answer; else a shadow of the
+    /// heap's bytes ([`dma_buf_heap_shadow`](Self::dma_buf_heap_shadow)). Its memory's alignment
+    /// binds no offset of the heap's: the import is the image's own, bound at its start, its
+    /// plane at the texels' offset in their first page, which the driver takes or refuses as the
+    /// texture is made (RADV: a multiple of 256 bytes), the shadow taken where it refuses.
     #[cfg(unix)]
     fn dma_buf_heap_plan(
         &self,
@@ -2504,9 +2521,9 @@ impl Device {
         p: &HeapPlan,
         facts: &crate::image_plan::ImageFacts<'_>,
     ) -> Result<HeapImage, Error> {
-        let SizeAndAlign { size, align } = p.size_and_align;
+        let size = p.size_and_align.size;
         let why = match self.dma_buf_natural_layout(&linear, facts)? {
-            Ok(natural) if natural.size <= size && natural.alignment <= align => {
+            Ok(natural) if natural.size <= size => {
                 return Ok(HeapImage {
                     plan: linear,
                     tiling: vk::ImageTiling::DRM_FORMAT_MODIFIER_EXT,
@@ -2516,9 +2533,9 @@ impl Device {
                 });
             }
             Ok(natural) => format!(
-                "the driver's DRM_FORMAT_MOD_LINEAR image of it takes {} bytes at an alignment \
-                 of {}, past the {size} at {align} the heap answers",
-                natural.size, natural.alignment
+                "the driver's DRM_FORMAT_MOD_LINEAR image of it takes {} bytes, past the {size} \
+                 the heap answers",
+                natural.size
             ),
             Err(why) => why,
         };
