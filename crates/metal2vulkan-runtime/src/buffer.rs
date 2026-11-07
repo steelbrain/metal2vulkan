@@ -296,6 +296,71 @@ pub(super) fn host_cells_moved() -> u64 {
     HOST_CELLS_MOVED.load(Ordering::Acquire)
 }
 
+/// The most buffers over host pages a [`KeptSpaces`] keeps where they lie.
+const KEPT_SPACES: usize = 4;
+
+/// Where buffers over host pages (no-copy buffers, and no-copy heaps' own buffers, which their
+/// placed buffers lie in) lay as an encoder's binds last read them ([`Buffer::space_kept`]): a
+/// bind reads where a buffer lies at each draw (`binding::rebind_into`), which for one over host
+/// pages locks its pages and takes a hold of them, and a heap's own buffer is one every encoder
+/// of its device's threads reads, as the consumer binds its draws' bytes in a heap over the guest's
+/// RAM. Each is kept while no no-copy buffer of the process moved since ([`host_cells_moved`]): a
+/// buffer lies where it lay until one moves (`HostCell::replace`), and its import, read for a
+/// binding once, stays imported (`HostImport::pages`). A buffer is kept by its cell's address,
+/// held weakly: a cell that goes leaves its allocation, and so its address, to its weak handles, so
+/// no other cell is at the address while it is kept.
+#[derive(Default)]
+pub(super) struct KeptSpaces {
+    kept: Vec<KeptSpace>,
+    /// The entry the next buffer kept takes once every one is taken.
+    next: usize,
+}
+
+/// A buffer over host pages a [`KeptSpaces`] keeps: its cell, the count of moves it was read
+/// under, and what [`HostCell::binding_pages`] read.
+struct KeptSpace {
+    cell: Weak<HostCell>,
+    moved: u64,
+    pages: (vk::Buffer, u64, u64),
+}
+
+impl KeptSpaces {
+    /// [`HostCell::binding_pages`] of `cell`, kept or read and kept.
+    fn of(&mut self, cell: &Arc<HostCell>) -> (vk::Buffer, u64, u64) {
+        // Read before the cell: a move after it makes the next look read the cell again.
+        let moved = host_cells_moved();
+        let at = Arc::as_ptr(cell);
+        let found = (self.kept.iter()).find(|kept| kept.moved == moved && kept.cell.as_ptr() == at);
+        if let Some(kept) = found {
+            #[cfg(debug_assertions)]
+            assert_eq!(
+                kept.pages,
+                cell.binding_pages(),
+                "a buffer kept where it no longer lies"
+            );
+            return kept.pages;
+        }
+        let pages = cell.binding_pages();
+        let entry = KeptSpace {
+            cell: Arc::downgrade(cell),
+            moved,
+            pages,
+        };
+        // A stale entry or this cell's goes first; else the entries in turn.
+        let stale =
+            (self.kept.iter()).position(|kept| kept.moved != moved || kept.cell.as_ptr() == at);
+        match stale {
+            Some(index) => self.kept[index] = entry,
+            None if self.kept.len() < KEPT_SPACES => self.kept.push(entry),
+            None => {
+                self.kept[self.next] = entry;
+                self.next = (self.next + 1) % KEPT_SPACES;
+            }
+        }
+        pages
+    }
+}
+
 /// A texture being made over a buffer's host pages ([`Buffer::making_texture`]): a detach
 /// refuses until it goes, once the texture is noted (`Buffer::note_texture`) or its making
 /// failed.
@@ -391,6 +456,22 @@ impl HostCell {
     pub(super) fn lying(&self) -> Lying {
         self.device.shared().counts.thread().no_copy_lie_read();
         lock(&self.pages).clone()
+    }
+
+    /// The `VkBuffer` its bytes lie in now, where its byte 0 lies there (`Pages::base`), and
+    /// where they start in their first page (`Shape::base`), read for a binding
+    /// (`ReadApart::Binding`): what [`Buffer::space`] and [`Buffer::at_for`] read of it.
+    fn binding_pages(&self) -> (vk::Buffer, u64, u64) {
+        match self.lying() {
+            Lying::In(pages) => {
+                let read = pages.import.pages(ReadApart::Binding);
+                (read.raw, read.base, pages.import.shape.base)
+            }
+            Lying::Detached(detached) => {
+                let pages = &detached.pages;
+                (pages.raw, pages.base, Shape::of(pages).base)
+            }
+        }
     }
 
     /// The host addresses of the buffer's bytes, from its byte 0 over the bytes a copy reads,
@@ -3061,6 +3142,38 @@ impl Buffer {
                 },
             },
             Bytes::Heap(bytes) => bytes.bytes.at_for(bytes.offset, ReadApart::Binding),
+        }
+    }
+
+    /// [`space`](Self::space), where the buffer lies over host pages (or is placed in a heap that
+    /// does) read through `kept`, which keeps where such buffers lie ([`KeptSpaces`]): the same
+    /// answer, with no lock taken and nothing written that other threads read, while no no-copy
+    /// buffer moved since `kept` read it.
+    pub(super) fn space_kept(&self, kept: &mut KeptSpaces) -> (vk::Buffer, u64) {
+        match &self.0.bytes {
+            Bytes::Own(own) => match &own.lie {
+                Lie::Host(cell) => {
+                    let (raw, base, shape_base) = kept.of(cell);
+                    (raw, base - shape_base)
+                }
+                Lie::Fixed(_) => self.space(),
+            },
+            Bytes::Heap(bytes) => bytes.bytes.at_kept(bytes.offset, kept),
+        }
+    }
+
+    /// [`at_for`](Self::at_for) for a binding, read through `kept` as
+    /// [`space_kept`](Self::space_kept) reads.
+    fn at_kept(&self, offset: u64, kept: &mut KeptSpaces) -> (vk::Buffer, u64) {
+        match &self.0.bytes {
+            Bytes::Own(own) => match &own.lie {
+                Lie::Host(cell) => {
+                    let (raw, base, _) = kept.of(cell);
+                    (raw, base + offset)
+                }
+                Lie::Fixed(_) => self.at_for(offset, ReadApart::Binding),
+            },
+            Bytes::Heap(bytes) => bytes.bytes.at_kept(bytes.offset + offset, kept),
         }
     }
 

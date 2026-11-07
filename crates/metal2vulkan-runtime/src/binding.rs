@@ -53,7 +53,7 @@ use std::mem::MaybeUninit;
 
 use super::address_map::SamplerMaps;
 use super::argument_table::{ArgumentTable, InlineBytes};
-use super::buffer::Buffer;
+use super::buffer::{Buffer, KeptSpaces};
 use super::command_buffer::{NotedTable, State};
 use super::degradation::EachWatch;
 use super::device::lock;
@@ -569,10 +569,13 @@ pub(super) fn rebind_into(
             return Ok(false);
         }
         let info = match buffer {
-            true => match slot_descriptor(command, tables, planned)? {
-                Some(info) => Info::Buffer(info),
-                None => return Err(internal("a slot's buffer write of another source")),
-            },
+            true => {
+                let spaces = memo.as_deref_mut().map(|memo| &mut memo.spaces);
+                match slot_descriptor(command, tables, planned, spaces)? {
+                    Some(info) => Info::Buffer(info),
+                    None => return Err(internal("a slot's buffer write of another source")),
+                }
+            }
             false => {
                 let kept = (&mut *samplers, memo.as_deref_mut());
                 Info::Image(image_descriptor(call, device, tables, planned, ty, kept)?)
@@ -976,7 +979,7 @@ fn written(
     state: &mut State,
     (command, tables): (&Command<'_>, &Tables<'_>),
     (write, element): (&DescriptorWrite, u32),
-    (samplers, memo): (&mut Vec<Arc<OwnedSampler>>, Option<&mut BindMemo>),
+    (samplers, mut memo): (&mut Vec<Arc<OwnedSampler>>, Option<&mut BindMemo>),
 ) -> Result<Write, Error> {
     let ty: vk::DescriptorType = write.ty.into();
     let info = match (&write.source, ty) {
@@ -985,7 +988,8 @@ fn written(
         }
         (_, ty) => match ty {
             vk::DescriptorType::UNIFORM_BUFFER | vk::DescriptorType::STORAGE_BUFFER => {
-                Info::Buffer(descriptor(device, state, command, tables, write)?)
+                let spaces = memo.as_deref_mut().map(|memo| &mut memo.spaces);
+                Info::Buffer(descriptor(device, state, command, tables, (write, spaces))?)
             }
             vk::DescriptorType::UNIFORM_TEXEL_BUFFER | vk::DescriptorType::STORAGE_TEXEL_BUFFER => {
                 let storage = ty == vk::DescriptorType::STORAGE_TEXEL_BUFFER;
@@ -1656,6 +1660,9 @@ pub(super) struct BindMemo {
     epoch: u64,
     views: KeyMap<ViewKey, KeptView>,
     samplers: Vec<KeptSampler>,
+    /// Where the buffers over host pages its binds' buffer descriptors named lay
+    /// (`buffer::KeptSpaces`).
+    spaces: KeptSpaces,
 }
 
 /// What a view a bind made or found is a function of ([`BindMemo`]): a binding of the texture at
@@ -2086,29 +2093,38 @@ fn planned_range(command: &Command<'_>, key: (u32, u32)) -> Result<BufferRange, 
 /// The descriptor of `range` of `buffer`. A buffer's range is in the buffer's space, which the
 /// bind state states it in (`ArgumentTable::stage_table`, `tessellation.rs`): a heap buffer's
 /// starts at its offset in the heap's `VkBuffer`.
-fn in_space(buffer: &Buffer, range: BufferRange) -> vk::DescriptorBufferInfo {
-    let (raw, start) = buffer.space();
+fn in_space(
+    buffer: &Buffer,
+    range: BufferRange,
+    spaces: Option<&mut KeptSpaces>,
+) -> vk::DescriptorBufferInfo {
+    let (raw, start) = match spaces {
+        Some(spaces) => buffer.space_kept(spaces),
+        None => buffer.space(),
+    };
     vk::DescriptorBufferInfo::default()
         .buffer(raw)
         .offset(start + range.offset)
         .range(range.range)
 }
 
-/// The buffer descriptor of `write` where its source is a slot's: the buffer it binds, or the
-/// call's copy of the bytes it sets (whose planned range counts from the region's start), at
-/// the range `command` plans; `None` for any other source. It takes nothing of the command
-/// buffer's state, so a draw rebound at buffer slots locks none (`binding::rebind_into`).
+/// The buffer descriptor of `write` where its source is a slot's: the buffer it binds, where it
+/// lies read through `spaces` where given (`buffer::KeptSpaces`), or the call's copy of the bytes
+/// it sets (whose planned range counts from the region's start), at the range `command` plans;
+/// `None` for any other source. It takes nothing of the command buffer's state, so a draw rebound
+/// at buffer slots locks none (`binding::rebind_into`).
 fn slot_descriptor(
     command: &Command<'_>,
     tables: &Tables<'_>,
     write: &DescriptorWrite,
+    spaces: Option<&mut KeptSpaces>,
 ) -> Result<Option<vk::DescriptorBufferInfo>, Error> {
     let range = || planned_range(command, (write.set, write.binding));
     Ok(Some(match &write.source {
         WriteSource::Buffer { slot } => {
             let (buffer, _) = slot_buffer(tables, *slot)
                 .ok_or_else(|| internal("the plan binds an unbound buffer slot"))?;
-            in_space(buffer, range()?)
+            in_space(buffer, range()?, spaces)
         }
         WriteSource::InlineBytes { slot } => {
             let bytes = slot_bytes(tables, *slot)
@@ -2131,7 +2147,7 @@ fn descriptor(
     state: &mut State,
     command: &Command<'_>,
     tables: &Tables<'_>,
-    write: &DescriptorWrite,
+    (write, spaces): (&DescriptorWrite, Option<&mut KeptSpaces>),
 ) -> Result<vk::DescriptorBufferInfo, Error> {
     let key = (write.set, write.binding);
     let ty: vk::DescriptorType = write.ty.into();
@@ -2148,10 +2164,11 @@ fn descriptor(
             .offset(upload.offset())
             .range(upload.len())
     };
-    if let Some(info) = slot_descriptor(command, tables, write)? {
+    if let Some(info) = slot_descriptor(command, tables, write, spaces)? {
         return Ok(info);
     }
-    let ranged = |buffer: &Buffer| Ok::<_, Error>(in_space(buffer, planned_range(command, key)?));
+    let ranged =
+        |buffer: &Buffer| Ok::<_, Error>(in_space(buffer, planned_range(command, key)?, None));
     let mut upload = |bytes: &[u8], len: u64| state.uploads.upload(device, bytes, len);
     Ok(match &write.source {
         WriteSource::TessellationFactors => {
