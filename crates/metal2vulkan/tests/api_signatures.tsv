@@ -14064,6 +14064,7 @@ variant	metal2vulkan::pipeline::RuntimeFact::QuadPrimitiveIds	QuadPrimitiveIds
 variant	metal2vulkan::pipeline::RuntimeFact::RenderTargetArrayLength	RenderTargetArrayLength { layer_dropped: bool }
 variant	metal2vulkan::pipeline::RuntimeFact::ReplayBindings	ReplayBindings
 variant	metal2vulkan::pipeline::RuntimeFact::ResourcePresence	ResourcePresence { slot: SlotRef }
+variant	metal2vulkan::pipeline::RuntimeFact::RotatedInputBlend	RotatedInputBlend { color: u32, blend: crate::pipeline::lower_inputs::BlendEquation, kept: crate::vk::ColorComponentFlags }
 variant	metal2vulkan::pipeline::RuntimeFact::RotatedWeights	RotatedWeights
 variant	metal2vulkan::pipeline::RuntimeFact::SampleCount	SampleCount
 variant	metal2vulkan::pipeline::RuntimeFact::SamplerCoordinates	SamplerCoordinates { slot: SlotRef }
