@@ -5865,11 +5865,13 @@ pub struct WorkCounts {
     /// (`HostPageTexturePolicy::InPlace`): no shadow, and no copy in or back. One that renders
     /// whose image took feedback loop usage is also counted in `feedback_loop_alias_images`.
     pub host_textures_in_place: u64,
-    /// Textures over host pages that `host_textures_in_place` would count (or a shadow made
-    /// before the check answered or where it failed), made instead a copy in the device's memory
-    /// on a discrete GPU, where their memory carries a log of its writes
-    /// (`HostMemory::with_dirty_pages`): a shadow whose copies in take only the rows the log
-    /// reports changed (`dirty_copies_in_gated` and kin), announced nowhere.
+    /// `Managed` textures over a buffer's host pages (not an IOSurface's) that only sample or
+    /// read, which `host_textures_in_place` would count (or a shadow made before the check
+    /// answered or where it failed), made instead a copy in the device's memory on a discrete
+    /// GPU, where their memory carries a log of its writes (`HostMemory::with_dirty_pages`): the
+    /// GPU's copy of the two a `Managed` resource is on a Mac with a discrete GPU, a shadow whose
+    /// copies in take only the rows the log reports changed (`dirty_copies_in_gated` and kin),
+    /// announced nowhere. A `Shared` texture and an IOSurface's are in place over the pages.
     pub device_copy_textures: u64,
     /// Of `host_textures_in_place`, those over pages imported as dma-bufs: each a
     /// `DRM_FORMAT_MOD_LINEAR` image over a dma-buf of its own pages (also counted in

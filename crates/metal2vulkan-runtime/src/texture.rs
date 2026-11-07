@@ -2236,12 +2236,13 @@ impl Device {
             None if texels.buffer.in_fresh_pages() => Some(PagesClass::Fresh),
             _ => None,
         };
-        // On a discrete GPU, a texture that only samples or reads whose policy takes the image in
-        // place, over pages whose memory carries a log, is a device copy instead: a shadow whose
-        // copies in take only the rows the log reports changed (`dirty_pages.rs`), so the GPU
-        // reads the texels from its own memory, where in place it reads the pages across the bus
-        // at every sample. It binds no image to the pages, so the in-place check's verdict is not
-        // asked. One that renders works on the pages in place, as a discrete Mac's GPU does.
+        // On a discrete GPU, a `Managed` texture over a buffer's bytes that only samples or reads
+        // whose policy takes the image in place, over pages whose memory carries a log, is a
+        // device copy instead (`Texels::device_copy`): a shadow whose copies in take only the
+        // rows the log reports changed (`dirty_pages.rs`), the GPU's copy of the two a `Managed`
+        // resource is on a Mac with a discrete GPU. It binds no image to the pages, so the
+        // in-place check's verdict is not asked. A `Shared` texture, an IOSurface's, and one that
+        // renders work on the pages in place, across the bus, as such a Mac's GPU does.
         // Texels past the buffer's length lie in no image over its memory: the shadow's copies go
         // through the texture's tail (`buffer_texture.rs`).
         let past = texels.past().is_some();

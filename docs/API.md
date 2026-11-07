@@ -359,12 +359,15 @@ before a use and back (merged back: only the bytes the commands changed) after a
 is bound to the pages, and `Texture::vk_image` gives `None` for it. A texture in place renders and
 is written beyond its declared usage, as plain Metal allows, through its usage shadow and an
 attachment stand-in, whose copies touch its texels alone.
-On a discrete GPU, a texture that only samples or reads whose policy takes the image in place, over
-a no-copy buffer whose memory carries a log of its writes (`HostMemory::with_dirty_pages`),
-tracked, one slice laid out as one copy, is instead a device copy (`WorkCounts::device_copy_textures`,
-whatever the check answered): a shadow whose copies in take only the bands of rows the log reports changed
-(`dirty_copies_in_gated` and kin). Its notice is not announced: it holds the bytes wherever a
-command reads it.
+On a discrete GPU, a `Managed` texture over a no-copy buffer's bytes (not an IOSurface plane's)
+that only samples or reads, whose policy takes the image in place, over memory that carries a log
+of its writes (`HostMemory::with_dirty_pages`), tracked, one slice laid out as one copy, is instead
+a device copy (`WorkCounts::device_copy_textures`, whatever the check answered): the GPU's copy of
+the two a `Managed` resource is on a Mac with a discrete GPU, a shadow whose copies in take only
+the bands of rows the log reports changed (`dirty_copies_in_gated` and kin). Its notice is not
+announced: it holds the bytes wherever a command reads it. A `Shared` texture and an IOSurface's
+are the pages' alone there too, in place where the check passed, which the GPU reads across the
+bus as a discrete Mac's GPU reads them.
 A texture placed in a heap over dma-buf pages is an image over a dma-buf of its own pages, which its
 first submission acquires from `VK_QUEUE_FAMILY_FOREIGN_EXT`; a linear image over a buffer of the
 runtime's own memory starts `VK_IMAGE_LAYOUT_PREINITIALIZED`, and its move from there keeps its

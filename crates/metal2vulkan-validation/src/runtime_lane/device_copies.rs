@@ -1,12 +1,13 @@
-//! Device tests of device copies on the device the cfg selects: on a discrete GPU, a texture that
-//! would read host pages in place, over a no-copy buffer whose memory carries a log of its writes
-//! (`HostMemory::with_dirty_pages`), is a shadow in the device's memory whose copies in take only
-//! the rows the log reports changed (the runtime's `dirty_pages.rs`); on any other device, and
-//! without a log, it is placed as before.
+//! Device tests of device copies on the device the cfg selects: on a discrete GPU, a `Managed`
+//! texture that would read host pages in place, over a no-copy buffer whose memory carries a log
+//! of its writes (`HostMemory::with_dirty_pages`), is a shadow in the device's memory whose copies
+//! in take only the rows the log reports changed (the runtime's `dirty_pages.rs`): the GPU's copy
+//! of the two a `Managed` resource is on a Mac with a discrete GPU. A `Shared` texture there, any
+//! texture on any other device, and one without a log, is placed as before.
 //!
 //! - [`a_sampled_surface_over_logged_pages_follows_the_guest_s_writes`], under the validation
-//!   layer: a 1920x1080 `BGRA8Unorm` surface over logged pages, read whole each frame by a
-//!   fragment function into a private target, which then holds the pages' texels after each
+//!   layer: a 1920x1080 `BGRA8Unorm` `Managed` surface over logged pages, read whole each frame by
+//!   a fragment function into a private target, which then holds the pages' texels after each
 //!   frame's CPU write of a run of a row. On a discrete GPU it is a device copy
 //!   (`device_copy_textures`, no `vk_image`): its first copy in moves every row, each later one
 //!   only the rows the log reported (`dirty_copies_in_gated`, `dirty_copy_in_bytes_copied`), one
@@ -17,24 +18,29 @@
 //!   (on a discrete GPU a whole copy in: the fill let go of the copy's hold).
 //! - [`without_a_log_the_surface_is_placed_as_before`], under the validation layer: the same
 //!   surface over pages without a log is no device copy.
+//! - [`a_shared_surface_over_logged_pages_is_no_device_copy`], under the validation layer: a
+//!   `Shared` surface over logged pages is no device copy on any device, in place where the
+//!   device's check passed for pointer pages (on a discrete GPU, read across the bus as a
+//!   discrete Mac's GPU reads a `Shared` texture), its reads the pages' texels.
 //! - [`device_copy_costs`], without the validation layer, report only (built in release for the
-//!   numbers): a 3840x2160 `BGRA8Unorm` surface read whole each frame, with a few CPU-written
+//!   numbers): a 3840x2160 `BGRA8Unorm` `Managed` surface read whole each frame, with a few CPU-written
 //!   runs a frame, in one pass and in three, over pages without a log (in place where the check
 //!   passed) and with one (a device copy on a discrete GPU): the median and fastest GPU time of a
 //!   frame's command buffer (`DEVICE-COPY-COST`).
 
 use super::first_use_writes::CHECK_WAIT;
 use super::host_memory::{counting, Mapping, GUEST_PAGE};
-use super::in_place_textures::{in_place, sampled};
+use super::in_place_textures::{in_place, passed, sampled};
 use super::no_copy_textures::{floats, staged};
 use super::pitched_surfaces::reading;
 use super::{layer_reported_nothing_at_all, validated_device_with, Messages, ScratchCache, WAIT};
 use crate::gpu::TEST_DEVICE;
 use metal2vulkan::metal::{PixelFormat, PrimitiveType, TextureUsage};
 use metal2vulkan_runtime::{
-    BlitOption, Buffer, CommandQueue, Device, DeviceKind, DirtyPages, DirtyStamp, HostMemory,
-    LoadAction, Origin, RenderPassDescriptor, RenderPipelineState, ResourceOptions, ScissorRect,
-    Size, StoreAction, Texture, TextureDescriptor, WorkCounts,
+    BlitOption, Buffer, CommandQueue, CpuCacheMode, Device, DeviceKind, DirtyPages, DirtyStamp,
+    HazardTrackingMode, HostMemory, LoadAction, Origin, RenderPassDescriptor, RenderPipelineState,
+    ResourceOptions, ScissorRect, Size, StorageMode, StoreAction, Texture, TextureDescriptor,
+    WorkCounts,
 };
 use std::ops::Range;
 use std::sync::{Arc, Mutex};
@@ -104,9 +110,30 @@ impl DirtyPages for Log {
     }
 }
 
-/// A no-copy buffer over `mapping`'s `len` bytes on `device`, its memory carrying `log` where
-/// given.
+/// `Managed` storage, the other modes at their defaults: the storage whose textures a discrete GPU
+/// makes device copies.
+fn managed() -> ResourceOptions {
+    ResourceOptions::new(
+        StorageMode::Managed,
+        CpuCacheMode::DefaultCache,
+        HazardTrackingMode::Default,
+    )
+}
+
+/// A no-copy `Managed` buffer over `mapping`'s `len` bytes on `device`, its memory carrying `log`
+/// where given.
 fn over(device: &Device, mapping: &Mapping, len: usize, log: Option<&Arc<Log>>) -> Buffer {
+    over_as(device, mapping, len, log, managed())
+}
+
+/// [`over`], of `options`.
+fn over_as(
+    device: &Device,
+    mapping: &Mapping,
+    len: usize,
+    log: Option<&Arc<Log>>,
+    options: ResourceOptions,
+) -> Buffer {
     // SAFETY: the mapping outlives the buffer (dropped first by every caller), and stays
     // writable.
     let memory = unsafe { HostMemory::new(mapping.pointer()) };
@@ -115,10 +142,7 @@ fn over(device: &Device, mapping: &Mapping, len: usize, log: Option<&Arc<Log>>) 
         None => memory,
     };
     // SAFETY: as above.
-    unsafe {
-        device.new_buffer_with_bytes_no_copy(memory, len as u64, ResourceOptions::default(), None)
-    }
-    .unwrap()
+    unsafe { device.new_buffer_with_bytes_no_copy(memory, len as u64, options, None) }.unwrap()
 }
 
 /// One frame's command buffer on `queue`: `passes` passes, each reading the top `rows` rows of
@@ -407,6 +431,86 @@ fn without_a_log_the_surface_is_placed_as_before() {
         "in place or a shadow, as before"
     );
     drop((texture, buffer));
+    drop(mapping);
+    layer_reported_nothing_at_all(&messages);
+}
+
+#[test]
+fn a_shared_surface_over_logged_pages_is_no_device_copy() {
+    let cache = ScratchCache::new().unwrap();
+    let messages = Messages::default();
+    let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), in_place).unwrap();
+    let queue = device.new_command_queue().unwrap();
+    let reads = reading(&device, PixelFormat::BGRA8Unorm, "tob_read");
+    let corners = staged(&device, &floats([-1.0, -1.0, 1.0, 1.0]));
+    let (w, h, bpr) = (256u64, 256u64, 1024u64);
+    let len = ((bpr * h) as usize).next_multiple_of(GUEST_PAGE);
+    // A texture over host pages starts the device's in-place check, which the one measured then
+    // follows.
+    {
+        let mapping = Mapping::anonymous(GUEST_PAGE);
+        let buffer = over_as(
+            &device,
+            &mapping,
+            GUEST_PAGE,
+            None,
+            ResourceOptions::shared(),
+        );
+        drop(sampled(&buffer, PixelFormat::BGRA8Unorm, (16, 16, 64)));
+        assert!(
+            device.settle_in_place_checks(CHECK_WAIT),
+            "the check answered"
+        );
+    }
+    let mapping = Mapping::anonymous(len);
+    mapping.write(0, &counting(len, 7));
+    let log = Arc::new(Log::default());
+    let before = device.work_counts();
+    let buffer = over_as(
+        &device,
+        &mapping,
+        len,
+        Some(&log),
+        ResourceOptions::shared(),
+    );
+    let texture = sampled(&buffer, PixelFormat::BGRA8Unorm, (w, h, bpr));
+    let after = device.work_counts();
+    // SAFETY: the handle is only compared.
+    let in_place = unsafe { texture.vk_image() }.is_some();
+    let pointer = passed(&device, "Pointer");
+    eprintln!(
+        "DEVICE-COPY on {} ({:?}): a Shared surface over logged pages: device copy {}, in place \
+         {in_place}, in places {}, the check passed for pointer pages {pointer}",
+        device.name(),
+        device.properties().kind,
+        copied(&before, &after)[0],
+        after.host_textures_in_place - before.host_textures_in_place,
+    );
+    assert_eq!(
+        copied(&before, &after)[0],
+        0,
+        "no device copy of a Shared texture"
+    );
+    assert_eq!(in_place, pointer, "in place where the check passed");
+    let target = target_of(&device, (w, h));
+    let objects = (&reads, &corners);
+    frame(&queue, objects, (&texture, &target), (w, h), 1);
+    let read = texels(&queue, &target, (w, h));
+    assert!(
+        read == guest_texels(&mapping, (w, h, bpr)),
+        "the pages' texels"
+    );
+    // A logged CPU write of a run of row 9 reaches the next frame.
+    let offset = 9 * bpr + 64;
+    mapping.write(offset as usize, &[0xc3; 64]);
+    log.mark(offset..offset + 64);
+    frame(&queue, objects, (&texture, &target), (w, h), 1);
+    let read = texels(&queue, &target, (w, h));
+    assert!(
+        read == guest_texels(&mapping, (w, h, bpr)),
+        "the write's texels"
+    );
+    drop((texture, buffer, target));
     drop(mapping);
     layer_reported_nothing_at_all(&messages);
 }

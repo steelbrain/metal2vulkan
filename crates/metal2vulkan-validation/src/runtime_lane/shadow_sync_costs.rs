@@ -25,7 +25,7 @@
 //! - `WriteUnscissored`: the same rectangle drawn with no scissor.
 //! - `WriteReadApart`: as `Write`, the read through a second texture of the plane whose usage only
 //!   samples it (as another process's texture over the same surface): in place where the
-//!   device's check passed, a device copy on a discrete GPU over logged pages.
+//!   device's check passed, on a discrete GPU too (an IOSurface's texture takes no device copy).
 //! - `WriteThenReadApart`: as `WriteReadApart`, the write and the read in two command buffers one
 //!   after the other (one process's pass into its window, then the compositor's read of it).
 //! - `Rewrite`: as `Write`, the same color every frame: the GPU writes and no word changes.

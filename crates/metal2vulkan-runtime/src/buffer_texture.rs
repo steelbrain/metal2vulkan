@@ -1598,15 +1598,20 @@ impl Texels {
     /// its image's view of its own 8-bit unsigned normalized format, where given so
     /// (`shadow_merge.rs`). Refused as `new_buffer` refuses the staging buffer.
     /// Whether these texels take a device copy on `device` (`texture.rs`, `dirty_pages.rs`): on
-    /// a discrete GPU, tracked, over host pages whose memory carries a log, where the shadow's
-    /// copy in is one region straight from the texels' place in the buffer's `VkBuffer` (one
-    /// slice, rows that share no bytes, a first texel at a multiple of the texel's size there),
-    /// the copy in a log decides.
+    /// a discrete GPU, a `Managed` texture over a buffer's bytes (not an IOSurface plane's),
+    /// tracked, over host pages whose memory carries a log, where the shadow's copy in is one
+    /// region straight from the texels' place in the buffer's `VkBuffer` (one slice, rows that
+    /// share no bytes, a first texel at a multiple of the texel's size there), the copy in a log
+    /// decides. A `Managed` resource on a Mac with a discrete GPU is two copies, the system
+    /// memory's and the GPU's own; a `Shared` texture and an IOSurface's are the system memory's
+    /// alone, which that GPU reads across the bus, so they take none.
     pub(super) fn device_copy(&self, device: &Device) -> bool {
         let layout = &self.layout;
         // The looks at the pages last: each takes their lock (`WorkCounts::no_copy_lies_read`),
         // which a texture on any other GPU never needs.
         device.properties().kind == crate::DeviceKind::Discrete
+            && !self.surface
+            && matches!(self.options.storage_mode(), Ok(StorageMode::Managed))
             && self.tracked()
             && layout.slices == 1
             && layout.shared_bytes() == 0
