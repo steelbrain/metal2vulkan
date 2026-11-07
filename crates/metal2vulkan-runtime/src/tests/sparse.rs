@@ -1115,3 +1115,93 @@ fn a_slice_past_the_textures_is_the_one_axis_metal_does_not_bound() {
         "slice 1 of 1"
     );
 }
+
+/// **A slice past the texture's on its other levels and its tail costs what the same region
+/// inside it costs**, as on level 0 above, against plain Metal's own `usedSize` readings.
+///
+/// The readings are `metal2vulkan-conformance/probes/sparse_slice_past_levels_usedsize.m` on an
+/// Apple M3 Max (the name read back off the device) under macOS 27.0.1, plain Metal with the layer
+/// off, one shape a process and every shape run twice, each command buffer `Completed` with no
+/// error, through all three forms a mapping update takes: the direct selector, the indirect one,
+/// and the direct one through a view of the texture's slice 1, which names the texture's slice
+/// 2. The three forms read alike in every shape and run. The texture is the probe's 2-slice 256
+/// by 256 nine-level `R32Float` texture, whose level 1 holds 2 by 2 of Metal's 16-KiB tiles,
+/// level 2 one, and whose tail starts at level 3 (`firstMipmapInTail`) and is one page a slice
+/// (`tailSizeInBytes` 16384).
+///
+/// Each row is a probe shape on slice 2, past the texture's, with its control: the same region on
+/// an in-bounds slice, read after it, whose count **must** move where the rule maps anything, or
+/// the row measured nothing. The runtime counts the units [`UnitGrid::clipped_region`] names,
+/// a tile one page and a slice's tail its tail's pages (`SparseImage::heap_tiles`), and maps
+/// those past the slices nowhere (`SparseState::charged`).
+#[test]
+fn a_slice_past_the_textures_costs_every_level_and_the_tail_what_it_costs_inside() {
+    let array = grid([256, 256, 1], 9, 2, 3, false);
+    assert_eq!(
+        array.first_mipmap_in_tail, 3,
+        "the probe's firstMipmapInTail"
+    );
+    let tail_bytes = tail_size_in_bytes(
+        TextureType::Type2DArray,
+        PixelFormat::R32Float,
+        1,
+        [256, 256, 1],
+        9,
+        3,
+        K16,
+    );
+    assert_eq!(tail_bytes, K16, "the probe's tailSizeInBytes");
+    let pages = |units: &[MetalUnit]| {
+        (units.iter())
+            .map(|unit| match unit.is_tail() {
+                true => tail_bytes / K16,
+                false => 1,
+            })
+            .sum::<u64>()
+    };
+    let one = Region::new_2d(0, 0, 1, 1);
+    // shape, level, region, Metal's pages for slice 2 and for its control on slice 0.
+    let rows = [
+        // One tile of level 1, and a region of 8 by 8 tiles where the level holds 2 by 2: the
+        // region clipped to the level's tiles, one page each.
+        ("l1", 1, one, 1, 1),
+        ("l1-big", 1, Region::new_2d(0, 0, 8, 8), 4, 4),
+        // Level 2's one tile.
+        ("l2", 2, one, 1, 1),
+        // A tile of level 3, `firstMipmapInTail`: the slice's whole tail, one page here.
+        ("tail", 3, one, 1, 1),
+        // Level 5, inside the tail past its first level: nothing, slice 2's and the control's
+        // alike.
+        ("tail-inner", 5, one, 0, 0),
+    ];
+    for (shape, level, region, metal, control) in rows {
+        let past = array.clipped_region(level, 2, &region);
+        assert_eq!(pages(&past), metal, "{shape}: slice 2 of 2");
+        assert!(
+            past.iter().all(|&unit| array.past_slices(unit)),
+            "{shape}: every unit past the texture's slices"
+        );
+        let inside = array.clipped_region(level, 0, &region);
+        assert_eq!(pages(&inside), control, "{shape}: the control on slice 0");
+        assert!(
+            !inside.iter().any(|&unit| array.past_slices(unit)),
+            "{shape}"
+        );
+    }
+    assert!(
+        array
+            .clipped_region(3, 2, &one)
+            .iter()
+            .all(|unit| unit.is_tail()),
+        "level 3's tile is the slice's tail"
+    );
+    // `l1-unmap`: a map of level 1's tile on slice 2 took one page and an unmap of it gave the
+    // page back (16384 -> 0), as the control's did (16384 -> 0) and as level 0's did through the
+    // indirect selector above. The runtime gives back a unit's page only where its map took it
+    // (`sparse/bind.rs`), and an unmap names the same unit the map did.
+    assert_eq!(
+        array.clipped_region(1, 2, &one),
+        vec![tile(1, 2, [0, 0])],
+        "the unit the map and the unmap name"
+    );
+}

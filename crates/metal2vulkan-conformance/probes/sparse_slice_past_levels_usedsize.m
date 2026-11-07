@@ -11,7 +11,22 @@
 // `sparse_mapping_past_the_bounds.m` measured the charge on level 0 alone; the runtime applies the
 // same rule (`UnitGrid::clipped_region`: the region clipped to the level's tiles, one page a
 // tile, the slice's whole tail one unit at `firstMipmapInTail`, nothing at a level inside the
-// tail past it) to every other level, unmeasured. This probe measures it.
+// tail past it) to every other level. This probe measures it there.
+//
+// MEASURED, on an Apple M3 Max under macOS 27.0.1, plain Metal with the layer off, one shape a
+// process and every shape run twice (eighteen shapes, thirty-six processes), each command buffer
+// status 4 (`Completed`) with no error, `usedSize`'s two readings agreeing at every step. The
+// three forms read alike in every shape and run, and so did the two runs:
+//
+//   l1          one page (16384); the control one page more.
+//   l1-big      four pages, the level's 2 by 2 tiles; the control four more.
+//   l2          one page; the control one more.
+//   tail        one page, the slice's tail (`tailSizeInBytes` 16384); the control one more.
+//   tail-inner  nothing; the control nothing.
+//   l1-unmap    one page, then 0 after the unmap; the control the same, 16384 then 0.
+//
+// So the rule holds on every level measured and on the tail: a slice past the texture's costs
+// what the same region on an in-bounds slice costs, and an unmap gives it back.
 //
 // Build and run (one shape per process, so a configuration is never perturbed by another's
 // mapping, and a fault is attributable to the shape that caused it):

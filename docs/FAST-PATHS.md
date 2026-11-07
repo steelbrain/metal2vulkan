@@ -492,8 +492,10 @@ driver's. Each is open work.
 - **A sparse mapping update of a slice past the texture's own slices** maps nothing for us, where
   plain Metal takes the call and reaches real memory: it binds one page, keeps it through an unmap
   of the same slice, and part of that page lands inside an in-bounds mapped tile, whose texels then
-  read Metal's unwritten pattern (`0xFFFFFFFF`). The runtime maps and counts none
-  (`UnitGrid::clipped_size`), so it loses no texel and no page. The address Metal's out-of-bounds
+  read Metal's unwritten pattern (`0xFFFFFFFF`). The runtime maps none (`UnitGrid::clipped_size`),
+  so it loses no texel, and counts the pages Metal's heap counts, on every level and the tail,
+  given back on an unmap (`UnitGrid::clipped_region`,
+  `probes/sparse_slice_past_levels_usedsize.m`). The address Metal's out-of-bounds
   slice produced is Apple's own page layout for the chip and no rule for it is measured, so the
   exact form cannot be derived yet; the conformance case
   `sparse-mapping-a-slice-past-the-textures` holds every side of the difference visible, with its

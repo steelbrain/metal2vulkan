@@ -496,8 +496,12 @@ impl UnitGrid {
     /// `metal2vulkan-conformance/probes/sparse_indirect_usedsize.m`), over level 0's tiles, which
     /// read alike: one page for one such tile, sixteen for a region of 8 by 8 on a level holding
     /// 4 by 4, one per out-of-bounds slice named, and nothing at all for a level or an origin
-    /// past the bounds; another level's region, a tail among them, takes the same rule
-    /// unmeasured. `tests::sparse` holds the readings row by row.
+    /// past the bounds. Another level's region takes the same rule, a tail among them, through
+    /// the direct selector, the indirect one and a view alike
+    /// (`metal2vulkan-conformance/probes/sparse_slice_past_levels_usedsize.m`, on this M3 Max: a
+    /// tile of level 1 or 2 one page, 8 by 8 tiles on a level holding 2 by 2 four, a tile of the
+    /// first tail level the slice's tail, a level inside the tail past it nothing, and an unmap
+    /// giving the page back). `tests::sparse` holds the readings row by row.
     ///
     /// Plain Metal's page for such a tile also lands at an address its own page layout derives,
     /// in a block of another slice's mapped tile (`sparse-mapping-a-slice-past-the-textures`
