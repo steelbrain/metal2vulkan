@@ -481,12 +481,15 @@ submission, can give the device the guest's RAM once instead:
   reach, or the chunk the thread is importing) is bound in an import of its own run alone, made on
   its own thread, which faults in and pins its own pages (2 MiB for such a heap), while the thread
   imports the chunk; the objects over the chunk after that are bound in it
-  (`run_bound_buffers_made`). Each run's import goes with its object (`run_imports_live`), and its
-  uses order against those of the objects over the same bytes in the chunk, and of the copies of
-  them (below), by their host addresses, as any two no-copy buffers over shared bytes do. So no
-  object's making waits for a chunk's fault-in. The price is up to one more allocation and pin per
-  object made while its chunk is not imported, for the object's life: a burst of heaps that outruns
-  the thread takes one for each heap over a chunk the thread has not imported yet. Where the thread
+  (`run_bound_buffers_made`). Each run's import goes with its object (`run_imports_live`); a
+  buffer's (not a heap's) that only blits have read is released after its idle window, as a
+  no-copy buffer's own import is (above), and the buffer is bound in the chunk at its next
+  blit. Its uses order against those of the objects over the same bytes in the chunk, and of the
+  copies of them (below), by their host addresses, as any two no-copy buffers over shared bytes
+  do. So no object's making waits for a chunk's fault-in. The price is up to one more allocation
+  and pin per object made while its chunk is not imported, for the life of a heap or of a buffer
+  whose address was handed out: a burst of heaps that outruns the thread takes one for each heap
+  over a chunk the thread has not imported yet. Where the thread
   does not run (it stopped at the allocation limit's margin, below), failed the chunk or gave it
   back, where the device's allocations are within that margin, where the object's run is the whole
   chunk, or on a driver whose barriers do not order blits through two imports of the same pages
@@ -551,13 +554,17 @@ submission, can give the device the guest's RAM once instead:
   each chunk is as long as that, the device's `maxMemoryAllocationSize`, `maxBufferSize` and
   `maxStorageBufferRange` all take, in whole 64 MiB (RADV's allocation limit is just under 4 GiB:
   an 8 GiB RAM in three chunks); without the call, or where a kernel caps it at 64 MiB, the
-  chunks stay 64 MiB. On such a device no chunk is imported ahead and no run is imported alone:
-  the first object over a chunk imports it on its own thread, and the objects over it meanwhile
-  wait for that import, which pins every page of the chunk (all of it resident, where 64 MiB
-  chunks pinned only those the objects and the window reached). A chunk no buffer bound in it and no pending command buffer that used it
-  holds for its idle window (2 s, doubled at each release of the chunk up to 64 s) is released by
-  a thread of the device's (`host_ram_chunks_released`), and the next object over it imports it
-  again.
+  chunks stay 64 MiB. On such a device no chunk is imported ahead. The first object over a chunk
+  not imported asks a thread of the device's for it, and that thread imports it, which pins
+  every page of the chunk (all of it resident, where 64 MiB chunks pinned only those the objects
+  and the window reached; 660 to 692 ms for 2.7 GiB on the Radeon 780M and the RX 7900 XTX). That
+  object, and every object over the chunk until the import is done, is bound in an import of its
+  own run alone, as above, so no making waits for the chunk; each is one more listed import, a
+  buffer's released after its idle window and a heap's, or a buffer's whose address was handed
+  out, kept while the object lives. A chunk no buffer bound in it and no pending command buffer that
+  used it holds for its idle window (2 s, doubled at each release of the chunk up to 64 s) is
+  released by the same thread (`host_ram_chunks_released`), and the next object over it asks for
+  it again.
 - Any other answer (several runs, one run crossing a chunk's end, `None`) takes the paths above:
   the gate, then the import or the copy. The runs are kept with the object.
 - Elsewhere the chunks are never released while idle. Once the use is dropped, each is freed when

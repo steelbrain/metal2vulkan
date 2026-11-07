@@ -185,9 +185,13 @@ recorded here.
   there (`Device::use_host_ram`, with a source of dma-bufs) is imported in a few long chunks
   (`HostRam::with_largest_dma_buf`, within the device's allocation, buffer and storage-range
   limits), none ahead of the objects, and a chunk no buffer nor pending command buffer holds is
-  released after the same window (`WorkCounts::host_ram_chunks_released`): the first object over
-  a chunk not imported, and every object over it meanwhile, waits for its import, which pins
-  every page of the chunk.
+  released after the same window (`WorkCounts::host_ram_chunks_released`). The first object over
+  a chunk not imported asks a thread of the device's for it, which imports it off the object's
+  thread (it pins every page of the chunk: 660 to 692 ms for 2.7 GiB on the Radeon 780M and the
+  RX 7900 XTX), and the objects over it meanwhile are each bound in an import of its own run,
+  one more listed import apiece: a buffer's is released after its idle window and the buffer
+  bound in the chunk at its next blit, but a heap's, or a buffer's whose address was handed out,
+  stays while it lives.
 - **A pass in color groups runs once per group** (the `ColorAttachmentGroups` row above), the later
   groups' draws again over a twin of the depth and stencil, made for the pass and loaded by a copy
   or a clear (`render/color_groups.rs`). On lavapipe restricted to four colors

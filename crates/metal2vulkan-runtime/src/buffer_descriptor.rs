@@ -580,7 +580,18 @@ impl Device {
             window.offset,
         );
         let (buffer, memory, again, unwritable) = match in_chunk {
-            Some((buffer, memory)) => (buffer, memory, None, false),
+            // A buffer (not a heap) bound in an import of its own run alone, its chunk not
+            // imported yet, is released while idle and bound in the chunk's import at its next
+            // use where that is made by then (`host_residency.rs`).
+            Some((buffer, memory)) => {
+                #[cfg(unix)]
+                let again = (routed.as_ref().filter(|_| !of_heap))
+                    .and_then(|routed| routed.run_again(&memory))
+                    .map(|run| Again::ram_run(self, run, (length, window, class)));
+                #[cfg(not(unix))]
+                let again = None;
+                (buffer, memory, again, false)
+            }
             None => {
                 // A no-copy buffer or heap whose pointer the device would import (not one whose GPU
                 // writes are dropped) may be a copy instead (`copied.rs`): where the caller's gate

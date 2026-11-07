@@ -23,9 +23,12 @@
 //! - **Few listed imports.** Where each listed import costs every submission (the import tax
 //!   held, dma-bufs imported: RADV), a RAM whose source's dma-bufs may be as long as it is one
 //!   chunk ([`HostRam::with_largest_dma_buf`]), the source asked once for all of it; no chunk is
-//!   imported ahead nor any run alone; the chunk is kept while an object over it lives, and
-//!   released by the device's thread once none did for its idle window
-//!   (`WorkCounts::host_ram_chunks_released`), the next object over it importing it again.
+//!   imported ahead: the first object over a chunk lies in its own run's import and asks the
+//!   device's thread for the chunk, which imports it; those after it lie in the chunk. The runs'
+//!   imports, which only blits read, are released once idle, the next blit binding the buffer in
+//!   the chunk; the chunk is kept while an object over it lives, and released by the device's
+//!   thread once none did for its idle window (`WorkCounts::host_ram_chunks_released`); a copy
+//!   over it then imports its run alone and asks for the chunk again.
 //!   Elsewhere the RAM keeps its 64 MiB chunks.
 //!
 //! Each run prints the device's verdict and the route its chunk took: the evidence of which path
@@ -525,8 +528,9 @@ fn udmabuf_size_limit() -> u64 {
 
 /// Where each listed import costs every submission, a RAM whose dma-bufs may be as long as the
 /// host's udmabuf limit allows is imported in chunks that long (the whole RAM where the limit
-/// takes it, else two of 64 MiB), none ahead, and released once idle (the module docs); elsewhere
-/// it keeps its 64 MiB chunks. The device's thread runs (no hold), so the release is its.
+/// takes it, else two of 64 MiB), none ahead, each by the device's thread once an object over it
+/// asked, and released once idle (the module docs); elsewhere it keeps its 64 MiB chunks. The
+/// device's thread runs (no hold), so the imports and the release are its.
 #[test]
 fn where_each_listed_import_costs_a_submission_the_ram_is_long_chunks_released_once_idle() {
     let scratch = Scratch::new();
@@ -565,20 +569,86 @@ fn where_each_listed_import_costs_a_submission_the_ram_is_long_chunks_released_o
     assert_eq!(chunks, [(true, spans.clone())]);
     let count = spans.len() as u64;
     let before = device.work_counts();
+    let delta =
+        |now: &crate::WorkCounts, field: fn(&crate::WorkCounts) -> u64| field(now) - field(&before);
+    let run_bound = |counts: &crate::WorkCounts| counts.run_bound_buffers_made;
+    let chunk_bound = |counts: &crate::WorkCounts| counts.chunk_bound_buffers_made;
+    let imported = |counts: &crate::WorkCounts| counts.host_ram_chunks_imported;
+    let runs_live = |counts: &crate::WorkCounts| counts.run_imports_live;
+    let until = |done: &dyn Fn(&crate::WorkCounts) -> bool, what: &str| {
+        let began = Instant::now();
+        loop {
+            let counts = device.work_counts();
+            if done(&counts) {
+                return counts;
+            }
+            assert!(began.elapsed() < WAIT, "{what}");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    };
+    // The first object over a chunk not imported: bound in an import of its own run, made on
+    // this thread, and the chunk asked for, which the device's thread imports.
     let first = buffer(&device, view, start, AT, LENGTH);
-    let second = buffer(&device, view, start, 64 * MIB + AT, LENGTH);
     let made = device.work_counts();
-    let delta = |field: fn(&crate::WorkCounts) -> u64| field(&made) - field(&before);
-    assert_eq!(delta(|counts| counts.host_ram_chunks_imported), count);
-    assert_eq!(delta(|counts| counts.host_ram_dma_buf_imports), count);
-    assert_eq!(delta(|counts| counts.host_ram_chunk_bytes), RAM_BYTES);
-    assert_eq!(delta(|counts| counts.host_ram_chunks_imported_ahead), 0);
-    assert_eq!(delta(|counts| counts.run_bound_buffers_made), 0);
-    assert_eq!(delta(|counts| counts.chunk_bound_buffers_made), 2);
-    let asked_for: Vec<(u64, u64, u64)> = (spans.iter())
-        .map(|span| (span.start, span.end - span.start, span.end - span.start))
+    assert_eq!(
+        (delta(&made, run_bound), delta(&made, chunk_bound)),
+        (1, 0),
+        "the first object over a chunk not imported lies in its run's import"
+    );
+    until(
+        &|counts| delta(counts, imported) == 1,
+        "the asked chunk was never imported",
+    );
+    // Past the first 64 MiB: in the chunk where the RAM is one, else in its run's import while
+    // the device's thread imports the second chunk.
+    let second = buffer(&device, view, start, 64 * MIB + AT, LENGTH);
+    let all = until(
+        &|counts| delta(counts, imported) == count,
+        "the second asked chunk was never imported",
+    );
+    // One more over each chunk, now imported: in it, holding it.
+    let holders: Vec<Buffer> = (spans.iter())
+        .map(|span| {
+            buffer(
+                &device,
+                view,
+                start,
+                span.start - start + AT + 2 * LENGTH,
+                LENGTH,
+            )
+        })
         .collect();
-    assert_eq!(asked.lock().unwrap().requests, asked_for);
+    let held = device.work_counts();
+    assert_eq!(delta(&held, run_bound), count, "one run's import per chunk");
+    assert_eq!(
+        delta(&held, chunk_bound),
+        2,
+        "the objects after the chunks' imports"
+    );
+    assert_eq!(
+        delta(&held, |counts| counts.host_ram_chunks_imported_ahead),
+        0
+    );
+    assert_eq!(
+        delta(&held, |counts| counts.host_ram_chunk_bytes),
+        RAM_BYTES
+    );
+    assert_eq!(
+        delta(&all, |counts| counts.host_ram_dma_buf_imports),
+        2 * count
+    );
+    let runs_asked = [start + AT, start + 64 * MIB + AT];
+    let mut asked_for: Vec<(u64, u64, u64)> = (spans.iter())
+        .map(|span| (span.start, span.end - span.start, span.end - span.start))
+        .chain((runs_asked.iter().take(count as usize)).map(|&at| (at, LENGTH, LENGTH)))
+        .collect();
+    asked_for.sort_unstable();
+    let mut requests = asked.lock().unwrap().requests.clone();
+    requests.sort_unstable();
+    assert_eq!(
+        requests, asked_for,
+        "each chunk and each run's import asked once"
+    );
     // The GPU's fill through the second buffer, past the first 64 MiB, reaches the file's pages.
     blit(&device, |encoder| {
         encoder.fill_buffer(&second, 0..LENGTH, 0x3c).unwrap()
@@ -590,25 +660,43 @@ fn where_each_listed_import_costs_a_submission_the_ram_is_long_chunks_released_o
             .all(|&b| b == 0x3c),
         "the GPU's fill"
     );
-    // Held past the idle window by the buffers: kept.
+    // Held past the idle window by the buffers in them: kept. The runs' imports, which only a
+    // blit read, are released once idle.
     std::thread::sleep(IDLE_WAIT);
-    let held = device.work_counts();
+    let kept = until(
+        &|counts| runs_live(counts) == runs_live(&before),
+        "the runs' idle imports were never released",
+    );
     assert_eq!(
-        held.host_ram_chunks_released,
+        kept.host_ram_chunks_released,
         before.host_ram_chunks_released
     );
-    assert_eq!(held.host_ram_chunks_live, made.host_ram_chunks_live);
+    assert_eq!(kept.host_ram_chunks_live, held.host_ram_chunks_live);
+    assert!(delta(&kept, |counts| counts.host_imports_released) >= count);
+    // The next blit through the first is bound in its chunk's import, and reads the file's bytes.
+    let read = read_back(&device, LENGTH, |encoder, own| {
+        (encoder.copy_from_buffer_to_buffer(&first, 0, own, 0, LENGTH)).unwrap();
+    });
+    assert!(
+        read.iter()
+            .zip(AT..)
+            .all(|(&b, offset)| b == pattern(offset)),
+        "the read through the chunk's import"
+    );
+    let again_in = device.work_counts();
+    assert_eq!(
+        runs_live(&again_in),
+        runs_live(&before),
+        "no run imported again"
+    );
+    assert!(delta(&again_in, |counts| counts.host_imports_reimported) >= 1);
     // Once they went, released by the device's thread after its window.
-    drop((first, second));
+    drop((first, second, holders));
     let gone = Instant::now();
-    let released = loop {
-        let counts = device.work_counts();
-        if counts.host_ram_chunks_released - before.host_ram_chunks_released == count {
-            break counts;
-        }
-        assert!(gone.elapsed() < WAIT, "the idle chunks were never released");
-        std::thread::sleep(Duration::from_millis(50));
-    };
+    let released = until(
+        &|counts| delta(counts, |counts| counts.host_ram_chunks_released) == count,
+        "the idle chunks were never released",
+    );
     println!(
         "HOST-RAM-LISTED {}: {count} released {:.1} s after the last buffer went; {} chunk(s) live",
         device.name(),
@@ -617,15 +705,29 @@ fn where_each_listed_import_costs_a_submission_the_ram_is_long_chunks_released_o
     );
     assert_eq!(
         released.host_ram_chunks_live + count,
-        made.host_ram_chunks_live
+        held.host_ram_chunks_live
     );
-    // The next object over one imports it again, and reads the GPU's bytes.
-    let again = buffer(&device, view, start, 64 * MIB + AT, LENGTH);
-    let after = device.work_counts();
+    // A copy over a released chunk: its run imported alone for it, the chunk asked for again.
+    let run = start + filled..start + filled + LENGTH;
+    let gathered = read_back(&device, LENGTH, |encoder, own| {
+        (encoder.copy_from_host_ram(&ram, std::slice::from_ref(&run), own, 0)).unwrap();
+    });
+    assert!(gathered.iter().all(|&b| b == 0x3c), "the copy's gather");
+    let copied = until(
+        &|counts| {
+            imported(counts) == imported(&released) + 1 && runs_live(counts) == runs_live(&before)
+        },
+        "the copy's chunk was never imported again, or its run's import outlived it",
+    );
     assert_eq!(
-        after.host_ram_chunks_imported - released.host_ram_chunks_imported,
-        1
+        copied.host_ram_dma_buf_imports - released.host_ram_dma_buf_imports,
+        2,
+        "the copy's run alone, and its chunk"
     );
+    // The next object over that chunk lies in it, and reads the GPU's bytes.
+    let again = buffer(&device, view, start, filled, LENGTH);
+    let after = device.work_counts();
+    assert_eq!(chunk_bound(&after) - chunk_bound(&copied), 1);
     let read = read_back(&device, LENGTH, |encoder, own| {
         (encoder.copy_from_buffer_to_buffer(&again, 0, own, 0, LENGTH)).unwrap();
     });

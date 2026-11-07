@@ -422,9 +422,9 @@ impl HostMemory {
     /// the device's thread imports it, the buffer is bound in an import of the run alone, the
     /// gate not asked either, so that its making waits for no chunk's import (but on a driver
     /// whose barriers do not order blits through two imports of the same pages,
-    /// `RuntimeDriverDefect::AliasedImportBlitsUnordered`, and on a device where each listed
-    /// import costs every submission, [`Device::use_host_ram`](crate::Device::use_host_ram)).
-    /// Pages of more than
+    /// `RuntimeDriverDefect::AliasedImportBlitsUnordered`); a buffer's (not a heap's) is
+    /// released while idle, and the buffer bound in the chunk at its next use
+    /// ([`Device::use_host_ram`](crate::Device::use_host_ram)). Pages of more than
     /// one run, or of a run crossing a chunk's end, take the runtime's other paths (the gate,
     /// then an import or a copy), the runs kept with the object. Counted:
     /// `WorkCounts::chunk_bound_buffers_made`, `run_bound_buffers_made`. No Metal counterpart.

@@ -5757,7 +5757,9 @@ pub struct WorkCounts {
     pub run_bound_buffers_made: u64,
     /// The imports of runs of guest RAM those buffers were bound in that are not yet let go of
     /// (a gauge): each goes with its last holder, the buffer or a command buffer that used it,
-    /// whatever became of the chunk.
+    /// whatever became of the chunk, or, a buffer's (not a heap's) whose address was never
+    /// handed out, once released while idle, the buffer bound in the chunk's import at its next
+    /// use where that is made by then.
     pub run_imports_live: u64,
     /// The live host imports the device never releases while idle as a heap's own import (a
     /// no-copy heap's). With the next three and `host_imports_kept_for_fds`, they are every live

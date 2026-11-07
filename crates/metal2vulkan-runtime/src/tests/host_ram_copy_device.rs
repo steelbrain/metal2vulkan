@@ -20,8 +20,9 @@
 //!   no longer does), bytes past the buffer and an offset off a word; no runs copy nothing.
 //! - **A chunk taken as an object takes it**, on a device whose thread imports ahead: a gather
 //!   from the RAM's first chunk finds it imported ahead and opens the full window past it, and a
-//!   scatter into a chunk past the window imports that chunk itself; the thread imports nothing
-//!   past the window.
+//!   scatter into a chunk past the window imports its page alone while the thread imports the
+//!   chunk (on a device with `AliasedImportBlitsUnordered`, the chunk itself); the thread imports
+//!   nothing past the window.
 //!
 //! Every other test holds the device's thread back (`Device::hold_host_ram_imports`).
 //!
@@ -728,8 +729,12 @@ fn a_copy_takes_its_chunks_as_an_object_does_and_the_window_ahead_moves_past_the
         0,
         "the copy found its chunk imported ahead"
     );
-    // A scatter into the chunk past the window: the copy imports it itself, and the window past
-    // it is the RAM's end.
+    // A scatter into the chunk past the window: its page imported alone for the copy while the
+    // thread imports the chunk, and the window past it is the RAM's end. On a device whose
+    // barriers do not order blits through two imports of the same pages
+    // (`AliasedImportBlitsUnordered`) the copy imports the chunk itself.
+    let defect = metal2vulkan::error::RuntimeDriverDefect::AliasedImportBlitsUnordered;
+    let a = u64::from(!device.properties().driver_defects.contains(&defect));
     let last_page = page_of(CHUNKS - 1);
     blit(&device, |encoder| {
         encoder.copy_to_host_ram(&out, 0, &ram, &last_page).unwrap();
@@ -738,13 +743,16 @@ fn a_copy_takes_its_chunks_as_an_object_does_and_the_window_ahead_moves_past_the
         bytes(last_page[0].clone()) == gathered(&first_page),
         "the scattered page"
     );
-    let jumped = settled(&device, |counts| by_copies(counts) == 1);
+    let jumped = settled(&device, |counts| {
+        by_copies(counts) + ahead(counts) == 2 + WINDOW
+            && counts.run_imports_live == before.run_imports_live
+    });
     assert_eq!(
-        by_copies(&jumped),
-        1,
-        "the copy outside the window imported its chunk"
+        (by_copies(&jumped), ahead(&jumped)),
+        (1 - a, 1 + WINDOW + a),
+        "the copy outside the window imported its page alone, or its chunk; nothing past the \
+         RAM's end"
     );
-    assert_eq!(ahead(&jumped), 1 + WINDOW, "nothing past the RAM's end");
     assert_eq!(
         jumped.host_ram_chunks_live - before.host_ram_chunks_live,
         CHUNKS

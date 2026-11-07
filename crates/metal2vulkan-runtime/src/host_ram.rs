@@ -30,14 +30,19 @@
 //!   source holds ([`HostRam::with_largest_dma_buf`]) and the device's
 //!   `maxMemoryAllocationSize`, `maxBufferSize` and `maxStorageBufferRange` take, in whole
 //!   [`CHUNK_BYTES`] ([`listed_chunk_bytes`]): an 8 GiB RAM is three imports where RADV's
-//!   allocation limit is just under 4 GiB. There no thread imports ahead and no run is imported
-//!   alone (each would be one more listed import): the first object over a chunk imports it,
-//!   pinning all its pages, the rest over it wait for that import, and a chunk only its slot
-//!   holds (no buffer bound in it, no
+//!   allocation limit is just under 4 GiB. There no thread imports ahead: a chunk is imported
+//!   once an object over it asks, by a thread of the device's ([`listed_chunks`]), off the
+//!   object's thread, as one long chunk's import pins all its pages (measured with a probe on the
+//!   Radeon 780M and the RX 7900 XTX, Mesa 26.2.6: 660 to 692 ms for 2.7 GiB, which a making
+//!   that waited for it took). Meanwhile each object over it is bound in an import of its own run
+//!   alone, as below; those after it in the chunk's import. A buffer's run import is one more
+//!   listed import, released while idle as a no-copy buffer's own import is (`host_residency.rs`),
+//!   and the buffer is bound in the chunk at its next use; a heap's, or a buffer's whose address
+//!   was handed out, stays while it lives. A chunk only its slot holds (no buffer bound in it, no
 //!   pending command buffer that used one) is released once it stayed so for its window, as a
-//!   no-copy buffer's idle import is (`host_residency.rs`: 2 s, doubled at each release of the
-//!   chunk up to 64 s), by a thread of the device's ([`release_idle`]); the next object over it
-//!   imports it again. Counted: `WorkCounts::host_ram_chunks_released`.
+//!   no-copy buffer's idle import is (2 s, doubled at each release of the chunk up to 64 s), by
+//!   the same thread; the next object over it asks for it again. Counted:
+//!   `WorkCounts::host_ram_chunks_released`.
 //! - **A window ahead of the objects.** From [`Device::use_host_ram`] on, a thread of the
 //!   device's ([`import_ahead`]) keeps imported the chunk an object last took and a window of
 //!   chunks past it, in the direction the takes go, up the RAM or down it, and waits while they
@@ -54,8 +59,11 @@
 //!   window, or the one the thread is importing, [`Import::Making`]) is bound in an import of its
 //!   own run alone, made on the thread making the object, which faults in and pins the run's
 //!   pages and no more ([`RamOnDevice::for_object`]), while the device's thread imports the chunk,
-//!   first of its window since that take; the objects over the chunk after that are bound in the
-//!   chunk's import. The run's import and the chunk's are two imports of the same pages, as an object's
+//!   first of its window since that take (or as the object asked, [`Plan::listed`]); the objects
+//!   over the chunk after that are bound in the chunk's import. A buffer's (not a heap's) run
+//!   import is released while idle, its address never handed out, and the buffer bound in the
+//!   chunk's import at its next use where that is made by then, else in its run's alone again
+//!   (`host_residency.rs`). The run's import and the chunk's are two imports of the same pages, as an object's
 //!   own import of a view of pages a chunk holds is; the object's uses order against those of
 //!   every other object over its bytes, and of every copy of them through the chunk's import
 //!   (`copy.rs`), by their host addresses, whichever import each is bound in
@@ -101,17 +109,19 @@
 //!
 //! [`Device::use_host_ram`]: crate::Device::use_host_ram
 
-use super::buffer::usage;
+use super::buffer::{usage, Pages};
 use super::buffer_descriptor::HostBuffer;
 use super::device::lock;
 use super::dirty_pages::{hook, DirtyPages, DirtySource};
-use super::error::{invalid, vulkan, Error, MemoryKind, Problem};
+use super::error::{internal, invalid, vulkan, Error, MemoryKind, Problem};
 use super::exit_guard;
 use super::host_memory::{
     binds_in, host_page, import_refused, not_importable, ImportWindow, Importer, KeepAlive,
     RunResolver,
 };
 use super::host_residency;
+#[cfg(unix)]
+use super::host_residency::Again;
 use super::memory::{ImportFailure, Mapped, MemoryClass, Placement};
 use super::program_objects::ProgramObject;
 use super::Device;
@@ -446,6 +456,10 @@ struct ChunkSlot {
     /// The device's thread failed to import the chunk, or gave its import back: it does not try
     /// again, and the first object over it imports it, as it would have.
     tried: AtomicBool,
+    /// An object over the chunk found it not imported and was bound in its own run's import, on
+    /// a device whose plan is [`Plan::listed`]: the device's thread imports it next
+    /// ([`RamOnDevice::next_asked`]). Changed inside [`ChunkSlot::import`]'s lock.
+    asked: AtomicBool,
     /// The device's thread imported the chunk and no object took it since: given back once the
     /// device's allocations come near its limit ([`Device::give_back_ahead_near_the_limit`]).
     untaken: AtomicBool,
@@ -505,12 +519,15 @@ impl Drop for Making<'_> {
     }
 }
 
-/// Who imports a chunk: the first object over it, on the thread making it, or the device's
-/// thread, ahead of every object over it ([`import_ahead`]).
+/// Who imports a chunk: the first object over it, on the thread making it; the device's
+/// thread, ahead of every object over it ([`import_ahead`]); or the device's thread, for an
+/// object over it that was bound in its own run's import meanwhile, on a device whose plan is
+/// [`Plan::listed`] ([`listed_chunks`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum By {
     Object,
     Ahead,
+    Asked,
 }
 
 /// What an import of a RAM's pages ([`RamChunk`]) is: one of its chunks, kept in its slot while
@@ -529,7 +546,8 @@ pub(crate) struct Plan {
     pub(crate) bytes: u64,
     /// The device's held imports add to the cost of every submission and the RAM's chunks are
     /// its dma-bufs (the module docs): its chunks are as long as [`listed_chunk_bytes`] allows,
-    /// none is imported ahead, and one no object holds is released while idle.
+    /// none is imported ahead, each is imported by the device's thread once an object over it
+    /// asked, and one no object holds is released while idle.
     pub(crate) listed: bool,
 }
 
@@ -595,6 +613,7 @@ impl RamOnDevice {
                 import: Mutex::new(Import::None),
                 made: Condvar::new(),
                 tried: AtomicBool::new(false),
+                asked: AtomicBool::new(false),
                 untaken: AtomicBool::new(false),
                 idle: Mutex::new(Idle {
                     since: None,
@@ -622,9 +641,10 @@ impl RamOnDevice {
     /// [`Import::Making`], so an object over the chunk the device's thread (or another object)
     /// is importing waits for that import. A failed import is not kept: the next object over the
     /// chunk tries again. An object's call moves the device's thread's window to this chunk
-    /// ([`RamOnDevice::take`]), and wakes the thread where that moved it. An import of the
-    /// thread's is counted once the chunk is in its slot, so that the count of imports ahead
-    /// never runs before the chunks an object finds there.
+    /// ([`RamOnDevice::take`]), and wakes the thread where that moved it, on a device that
+    /// imports ahead (not [`Plan::listed`]). An import ahead is counted once the chunk is in its
+    /// slot, so that the count of imports ahead never runs before the chunks an object finds
+    /// there.
     fn chunk(
         &self,
         device: &Device,
@@ -632,7 +652,7 @@ impl RamOnDevice {
         slot: usize,
         by: By,
     ) -> Result<Arc<RamChunk>, Error> {
-        if by == By::Object && self.take(slot) {
+        if by == By::Object && !self.plan.listed && self.take(slot) {
             self.wake.notify();
         }
         let span = &self.slots[slot];
@@ -680,15 +700,18 @@ impl RamOnDevice {
     /// The import an object over `run`, host pages inside chunk `slot`, is bound in
     /// ([`Device::bind_in_chunk`]), never waiting for the chunk's: the chunk's import where it is
     /// made; else, while the device's thread runs and has not failed the chunk, an import of the
-    /// run alone ([`Imported::Run`]), made now on the object's thread, which faults in and pins
-    /// the run's pages and no more, while the thread imports the chunk, first of its window
-    /// since this take ([`Window`]). The run's import is one more allocation, made only where
-    /// one more leaves the device the margin of its `maxMemoryAllocationCount` the thread's
-    /// imports leave (`Allocations::room_ahead`), and freed as its last holder goes, the object
-    /// or a command buffer that used it (`WorkCounts::run_imports_live`). Where the run is the
-    /// whole chunk, the thread does not run (never started, or ended: the use's end, the
-    /// allocation limit's margin) or failed the chunk, the device's allocations are within that
-    /// margin, the device's barriers do not order blits through two imports of the same pages
+    /// run alone ([`RamOnDevice::run_alone`]), made now on the object's thread, which faults in
+    /// and pins the run's pages and no more, while the thread imports the chunk: first of its
+    /// window since this take ([`Window`]), or, on a device whose plan is [`Plan::listed`], as
+    /// the object asked it to ([`listed_chunks`]). The run's import is one more allocation, made
+    /// only where one more leaves the device the margin of its `maxMemoryAllocationCount` the
+    /// thread's imports leave (`Allocations::room_ahead`), and freed as its last holder goes, the
+    /// object or a command buffer that used it (`WorkCounts::run_imports_live`); a buffer's is
+    /// released while idle, and the buffer bound in the chunk at its next use where the chunk is
+    /// imported by then (`host_residency.rs`). Where the run is the whole chunk, the thread does
+    /// not run (never started, or ended: the use's end, the allocation limit's margin) or failed
+    /// the chunk, the device's allocations are within that margin, the device's barriers do not
+    /// order blits through two imports of the same pages
     /// (`RuntimeDriverDefect::AliasedImportBlitsUnordered`: there every object over a chunk's
     /// pages lies in its one import), or the run's import fails, the chunk's import, made here or
     /// waited for ([`RamOnDevice::chunk`]).
@@ -702,7 +725,6 @@ impl RamOnDevice {
         let span = &self.slots[slot];
         let unordered = RuntimeDriverDefect::AliasedImportBlitsUnordered;
         let alone = run != span.span
-            && !self.plan.listed
             && self.wake.running.load(Ordering::Relaxed)
             && !span.tried.load(Ordering::Relaxed)
             && device.shared().allocations.allocations.room_ahead()
@@ -710,27 +732,118 @@ impl RamOnDevice {
         if !alone {
             return self.chunk(device, importer, slot, By::Object);
         }
-        if self.take(slot) {
+        (self.run_alone(device, importer, slot, run))
+            .or_else(|_| self.chunk(device, importer, slot, By::Object))
+    }
+
+    /// The imports a copy over chunk `slot` reads or writes its bytes `ranges` (offsets in the
+    /// chunk, by start, apart) through (`host_ram/copy.rs`), never waiting for the chunk's, as an
+    /// object over it is bound ([`RamOnDevice::for_object`]), the device's thread's window moved
+    /// to the chunk as an object's take moves it: the chunk's import where it is
+    /// made; else, where an object's run would be imported alone and the ranges are at most
+    /// `copy::MOST_ALONE`, an import of each range alone, widened to whole host pages within the
+    /// chunk ([`RamOnDevice::run_alone`]: the device's thread asked for the chunk), held by the
+    /// copy's command buffer until it completed; else the chunk's, made here or waited for
+    /// ([`RamOnDevice::chunk`]). Each import's span lies in the
+    /// chunk's and holds every range it is given for.
+    pub(crate) fn for_copy(
+        &self,
+        device: &Device,
+        importer: &Importer,
+        slot: usize,
+        ranges: &[Range<u64>],
+    ) -> Result<Vec<Arc<RamChunk>>, Error> {
+        let span = &self.slots[slot];
+        if !self.plan.listed && self.take(slot) {
+            self.wake.notify();
+        }
+        if let Some(chunk) = self.made(slot) {
+            return Ok(vec![chunk]);
+        }
+        let page = importer.page.max(1);
+        let unordered = RuntimeDriverDefect::AliasedImportBlitsUnordered;
+        let alone = self.wake.running.load(Ordering::Relaxed)
+            && !span.tried.load(Ordering::Relaxed)
+            && device.shared().allocations.allocations.room_ahead()
+            && !device.properties().driver_defects.contains(&unordered);
+        let runs: Vec<Range<u64>> = (ranges.iter())
+            .map(|range| {
+                let start = span.span.start + range.start / page * page;
+                let end = span.span.start + range.end.div_ceil(page) * page;
+                start..end.min(span.span.end)
+            })
+            .collect();
+        let few = runs.len() <= copy::MOST_ALONE;
+        if !alone || !few || runs.iter().any(|run| *run == span.span) {
+            return Ok(vec![self.chunk(device, importer, slot, By::Object)?]);
+        }
+        let mut imports: Vec<Arc<RamChunk>> = Vec::with_capacity(runs.len());
+        for run in runs {
+            if imports
+                .iter()
+                .any(|import| import.span.start <= run.start && run.end <= import.span.end)
+            {
+                continue;
+            }
+            match self.run_alone(device, importer, slot, run) {
+                Ok(import) if !import.is_run() => return Ok(vec![import]),
+                Ok(import) => imports.push(import),
+                Err(_) => return Ok(vec![self.chunk(device, importer, slot, By::Object)?]),
+            }
+        }
+        Ok(imports)
+    }
+
+    /// Chunk `slot`'s import where it is made; else an import of `run` (host pages inside it)
+    /// alone ([`Imported::Run`]), made now on this thread, with the device's thread asked for the
+    /// chunk: its window moved to the chunk ([`RamOnDevice::take`]), or, on a device whose plan
+    /// is [`Plan::listed`], the chunk asked for ([`ChunkSlot::asked`]); woken either way. Never
+    /// the chunk's own import, nor a wait for one under way. Refused as the run's import is.
+    fn run_alone(
+        &self,
+        device: &Device,
+        importer: &Importer,
+        slot: usize,
+        run: Range<u64>,
+    ) -> Result<Arc<RamChunk>, Error> {
+        let span = &self.slots[slot];
+        let listed = self.plan.listed;
+        if !listed && self.take(slot) {
             self.wake.notify();
         }
         // The chunk's import where it is made; none where it is not, or is being made (by the
         // thread, or an object): the run's own import then.
-        let found = match &*lock(&span.import) {
+        let (found, ask) = match &*lock(&span.import) {
+            Import::Made(chunk) => {
+                span.untaken.store(false, Ordering::Relaxed);
+                (Some(Arc::clone(chunk)), false)
+            }
+            Import::None => (None, listed && !span.asked.swap(true, Ordering::Relaxed)),
+            Import::Making => (None, false),
+        };
+        if let Some(chunk) = found {
+            return Ok(chunk);
+        }
+        if ask {
+            self.wake.notify();
+        }
+        fault_in(&run);
+        // SAFETY: the run is pages of the RAM's ranges inside the chunk, which stay mapped,
+        // readable and writable, while an import holds the RAM (`HostRam::new`).
+        let alone = unsafe { device.import_chunk(importer, &self.ram, run, Imported::Run) };
+        alone.map(Arc::new)
+    }
+
+    /// Chunk `slot`'s import, where it is made: what a buffer bound in an import of its own run
+    /// alone is bound in again once that import was released (`host_residency.rs`).
+    fn made(&self, slot: usize) -> Option<Arc<RamChunk>> {
+        let span = &self.slots[slot];
+        match &*lock(&span.import) {
             Import::Made(chunk) => {
                 span.untaken.store(false, Ordering::Relaxed);
                 Some(Arc::clone(chunk))
             }
             Import::None | Import::Making => None,
-        };
-        if let Some(chunk) = found {
-            return Ok(chunk);
-        }
-        fault_in(&run);
-        // SAFETY: the run is pages of the RAM's ranges inside the chunk, which stay mapped,
-        // readable and writable, while an import holds the RAM (`HostRam::new`).
-        match unsafe { device.import_chunk(importer, &self.ram, run, Imported::Run) } {
-            Ok(alone) => Ok(Arc::new(alone)),
-            Err(_) => self.chunk(device, importer, slot, By::Object),
         }
     }
 
@@ -809,6 +922,22 @@ impl RamOnDevice {
             !slot.tried.load(Ordering::Relaxed) && matches!(*lock(&slot.import), Import::None)
         })
     }
+
+    /// The chunk the device's thread imports next on a device whose plan is [`Plan::listed`]
+    /// ([`listed_chunks`]): the first an object asked for ([`ChunkSlot::asked`]) that is neither
+    /// imported, nor being imported now, nor failed by that thread; `None` while there is none.
+    /// Each ask it passes is answered: cleared.
+    fn next_asked(&self) -> Option<usize> {
+        (0..self.slots.len()).find(|&index| {
+            let slot = &self.slots[index];
+            if !slot.asked.load(Ordering::Relaxed) {
+                return false;
+            }
+            let import = lock(&slot.import);
+            slot.asked.store(false, Ordering::Relaxed);
+            matches!(*import, Import::None) && !slot.tried.load(Ordering::Relaxed)
+        })
+    }
 }
 
 /// The device's thread that imports a RAM's chunks ahead of the objects over them
@@ -862,21 +991,47 @@ fn import_ahead(device: WeakDevice, ram: Weak<RamOnDevice>, wake: Arc<Wake>) {
 }
 
 /// The device's thread for a RAM it imports as [`Plan::listed`] says, in place of
-/// [`import_ahead`]: every `host_residency::TICK`, the chunks only their slot has held for their
-/// window are released ([`RamOnDevice::idle`]), each freed inside a section of the exit guard as
-/// its last holder goes, and imported again by the next object over it. Counted:
-/// `WorkCounts::host_ram_chunks_released`. It ends once the use ended, the device went or was
-/// lost, or the process exits, and holds the device and the RAM weakly while it waits.
-fn release_idle(device: WeakDevice, ram: Weak<RamOnDevice>, wake: Arc<Wake>) {
+/// [`import_ahead`]: it imports each chunk an object over it asked for
+/// ([`RamOnDevice::next_asked`]), one at a time, each once ([`RamOnDevice::chunk`]) and inside a
+/// section of the exit guard, off the threads making the objects, which are bound in imports of
+/// their own runs meanwhile ([`RamOnDevice::run_alone`]); between imports, and every
+/// `host_residency::TICK` while it waits, it releases the chunks only their slot has held for
+/// their window ([`RamOnDevice::idle`]), each freed inside a section of the exit guard as its last
+/// holder goes, and imported again once an object over it asks. Counted:
+/// `WorkCounts::host_ram_chunks_released`. A chunk it fails to import is left to the objects
+/// over it, which import it on their own threads, as without this thread; so is a chunk asked
+/// for once one more import would leave the device less than a quarter of its
+/// `maxMemoryAllocationCount` (`allocations.rs`). It ends once the use ended, the device went or
+/// was lost, or the process exits, and holds the device and the RAM weakly between chunks and
+/// while it waits. Paced as [`import_ahead`] is ([`pace`], [`fault_in`]).
+fn listed_chunks(device: WeakDevice, ram: Weak<RamOnDevice>, wake: Arc<Wake>) {
+    let _ends = Ends(Arc::clone(&wake));
     pace();
     loop {
-        wake.wait_for(host_residency::TICK);
         let (Some(device), Some(ram)) = (device.upgrade(), ram.upgrade()) else {
             return;
         };
         let shared = device.shared();
+        let Ok(importer) = shared.host_import.as_ref() else {
+            return;
+        };
         if device.is_lost() || !shared.host_ram.uses(&ram) {
             return;
+        }
+        let asked = (ram.next_asked()).filter(|_| shared.allocations.allocations.room_ahead());
+        if let Some(slot) = asked {
+            // With no lock held: an object over the chunk meanwhile is bound in its run's import.
+            fault_in(&ram.slots[slot].span);
+            let Some(busy) = exit_guard::enter() else {
+                return;
+            };
+            if ram.chunk(&device, importer, slot, By::Asked).is_err() {
+                ram.slots[slot].tried.store(true, Ordering::Relaxed);
+            }
+            drop(busy);
+            drop((ram, device));
+            std::thread::yield_now();
+            continue;
         }
         let gone = ram.idle(Instant::now());
         for _ in &gone {
@@ -884,6 +1039,7 @@ fn release_idle(device: WeakDevice, ram: Weak<RamOnDevice>, wake: Arc<Wake>) {
         }
         drop(gone);
         drop((ram, device));
+        wake.wait_for(host_residency::TICK);
     }
 }
 
@@ -986,7 +1142,7 @@ fn give_back_untaken(device: WeakDevice) {
 /// the RAM ([`HostRamUse`]). The last holder destroys the `VkBuffer` and frees the memory, and the
 /// RAM, which the chunk holds, goes after the free: its keep-alive with it once no chunk holds it.
 /// Released while idle only where each listed import costs every submission ([`Plan::listed`],
-/// [`release_idle`]). Left to the process's end while it exits.
+/// [`listed_chunks`]). Left to the process's end while it exits.
 pub(crate) struct RamChunk {
     device: Device,
     /// The host bytes imported.
@@ -1016,6 +1172,11 @@ impl RamChunk {
     /// The memory imported.
     pub(crate) fn memory(&self) -> vk::DeviceMemory {
         self.placement.memory
+    }
+
+    /// Whether it is one object's run alone ([`Imported::Run`]), not a chunk.
+    pub(crate) fn is_run(&self) -> bool {
+        self.of == Imported::Run
     }
 
     /// The index of the memory's type.
@@ -1128,6 +1289,29 @@ impl Routed {
             Routed::Runs { ram, runs } => (Arc::clone(ram), runs.clone().into_boxed_slice()),
         }
     }
+
+    /// What binds a buffer routed so and bound at `placement` again once its import is released
+    /// while idle (`host_residency.rs`), where that is an import of its own run alone
+    /// ([`Imported::Run`]): its chunk was not imported at its making.
+    pub(crate) fn run_again(&self, placement: &Placement) -> Option<RunAgain> {
+        let Routed::InChunk { ram, slot, start } = self else {
+            return None;
+        };
+        (placement.over_ram_run()).then(|| RunAgain {
+            ram: Arc::clone(ram),
+            slot: *slot,
+            start: *start,
+        })
+    }
+}
+
+/// What binds a buffer bound in an import of its own run alone ([`Imported::Run`]) again, once
+/// that import is released while idle (`host_residency.rs`): the RAM, the run's chunk, and the
+/// run's first host address.
+pub(crate) struct RunAgain {
+    ram: Arc<RamOnDevice>,
+    slot: usize,
+    start: u64,
 }
 
 /// How `runs`, a resolver's answer for `length` bytes of whole `page`s, lie in the chunks
@@ -1270,11 +1454,14 @@ impl Device {
     /// in a few long chunks instead: as long as one dma-buf of its source holds
     /// ([`HostRam::with_largest_dma_buf`]) and the device's `maxMemoryAllocationSize`,
     /// `maxBufferSize` and `maxStorageBufferRange` take, in whole 64 MiB. There the thread
-    /// imports nothing ahead and no run is imported alone: the first object over a chunk imports
-    /// it, and those over it meanwhile wait for that import. The thread releases a chunk no
-    /// object nor pending command buffer held for 2 s, the window doubled at each release of the
-    /// chunk up to 64 s (`WorkCounts::host_ram_chunks_released`); the next object over it
-    /// imports it again.
+    /// imports nothing ahead: the first object over a chunk not imported asks it for the chunk,
+    /// which it imports off the object's thread (a long chunk's import pins all its pages,
+    /// hundreds of milliseconds), and that object and those over the chunk meanwhile are bound in
+    /// imports of their own runs alone, as above; a buffer's is released while idle, the buffer
+    /// bound in the chunk at its next use, and a heap's, or a buffer's whose address was handed
+    /// out, stays while it lives. The thread releases a chunk no object nor pending command
+    /// buffer held for 2 s, the window doubled at each release of the chunk up to 64 s
+    /// (`WorkCounts::host_ram_chunks_released`); the next object over it asks for it again.
     ///
     /// A RAM with a source of dma-bufs ([`HostRam::with_dma_buf`]) has its chunks imported as
     /// dma-bufs where the device's held pointer imports add to every submission's cost, or where
@@ -1314,23 +1501,77 @@ impl Device {
             let (device, ram) = (self.downgrade(), Arc::downgrade(&used));
             let wake = Arc::clone(&used.wake);
             let builder = std::thread::Builder::new().name("m2v-host-ram".to_owned());
-            if plan.listed {
-                // A thread the system cannot start leaves every chunk imported while the use
-                // lasts, as on any other device.
-                let _ = exit_guard::spawn(builder, move || release_idle(device, ram, wake));
-            } else {
-                used.wake.running.store(true, Ordering::Relaxed);
-                // A thread the system cannot start leaves every chunk to the first object over it.
-                let started = exit_guard::spawn(builder, move || import_ahead(device, ram, wake));
-                if started.is_err() {
-                    used.wake.running.store(false, Ordering::Relaxed);
-                }
+            used.wake.running.store(true, Ordering::Relaxed);
+            // A thread the system cannot start leaves every chunk to the first object over it,
+            // and, on a device whose plan is listed, every chunk imported while the use lasts.
+            let started = match plan.listed {
+                true => exit_guard::spawn(builder, move || listed_chunks(device, ram, wake)),
+                false => exit_guard::spawn(builder, move || import_ahead(device, ram, wake)),
+            };
+            if started.is_err() {
+                used.wake.running.store(false, Ordering::Relaxed);
             }
         }
         Ok(HostRamUse {
             device: self.clone(),
             ram: used,
         })
+    }
+}
+
+impl Device {
+    /// The pages of a buffer bound in an import of its own run alone, that import released
+    /// while idle (`host_residency.rs`), bound again in the run's chunk's import as `again`
+    /// says (its window and length), as at its making ([`Device::bind_in`]): `None` where the
+    /// chunk is not imported, or the buffer cannot be bound in it.
+    #[cfg(unix)]
+    pub(crate) fn ram_run_in_chunk(&self, run: &RunAgain, again: &Again) -> Option<Pages> {
+        let chunk = run.ram.made(run.slot)?;
+        // SAFETY: the window's pages are the bytes of the run in the RAM, as at the buffer's
+        // making (`HostMemory::with_runs`).
+        let (buffer, placement) =
+            unsafe { self.bind_in(&chunk, run.start, &again.window, again.length) }?;
+        let base = buffer.base;
+        Some(self.pages_of(
+            buffer.raw,
+            placement,
+            again.window.offset,
+            base,
+            buffer.size - base,
+        ))
+    }
+
+    /// The pages of a buffer bound in an import of its own run alone, that import released
+    /// while idle (`host_residency.rs`), bound again in a new import of the run alone
+    /// ([`RamOnDevice::run_alone`]: the chunk's import where it is made, the device's thread
+    /// asked for it where not), never the chunk's own import nor a wait for one. Refused as the
+    /// run's import is, or with the device lost.
+    #[cfg(unix)]
+    pub(crate) fn ram_run_alone_again(
+        &self,
+        run: &RunAgain,
+        again: &Again,
+    ) -> Result<Pages, Error> {
+        if self.is_lost() {
+            return Err(Error::DeviceLost);
+        }
+        let importer = (self.shared().host_import.as_ref()).map_err(|_| {
+            internal("a guest RAM's run imported again on a device that imports none")
+        })?;
+        let window = &again.window;
+        let span = run.start..run.start + window.size;
+        let chunk = run.ram.run_alone(self, importer, run.slot, span)?;
+        // SAFETY: as in `ram_run_in_chunk`.
+        let (buffer, placement) = unsafe { self.bind_in(&chunk, run.start, window, again.length) }
+            .ok_or_else(|| internal("a buffer bound again in its guest RAM run's import"))?;
+        let base = buffer.base;
+        Ok(self.pages_of(
+            buffer.raw,
+            placement,
+            window.offset,
+            base,
+            buffer.size - base,
+        ))
     }
 }
 
@@ -1426,6 +1667,30 @@ impl Device {
         };
         let run = *start..*start + window.size;
         let chunk = ram.for_object(self, importer, *slot, run).ok()?;
+        // SAFETY: the caller's.
+        let bound = unsafe { self.bind_in(&chunk, *start, window, length) }?;
+        match chunk.of {
+            Imported::Chunk => self.shared().counts.chunk_bound_buffer_made(),
+            Imported::Run => self.shared().counts.run_bound_buffer_made(),
+        }
+        Some(bound)
+    }
+
+    /// A `VkBuffer` of `length` bytes over `window`, whose pages are the RAM's from host address
+    /// `start`, inside `chunk`'s span, bound where they lie in `chunk`'s import, as
+    /// [`Device::bind_in_chunk`] binds it, and its placement, which holds the import; `None`
+    /// where it cannot be bound there exactly (its alignment, its memory types).
+    ///
+    /// # Safety
+    ///
+    /// The window's pages are the bytes of the run in the RAM's chunk: the same backing.
+    unsafe fn bind_in(
+        &self,
+        chunk: &Arc<RamChunk>,
+        start: u64,
+        window: &ImportWindow,
+        length: u64,
+    ) -> Option<(HostBuffer, Placement)> {
         let shared = self.shared();
         let raw_device = shared.vk();
         let buffer = self.host_buffer(window, length, chunk.handle_type()).ok()?;
@@ -1454,12 +1719,8 @@ impl Device {
             unsafe { release::object(raw_device, buffer.raw) };
             return None;
         }
-        match chunk.of {
-            Imported::Chunk => shared.counts.chunk_bound_buffer_made(),
-            Imported::Run => shared.counts.run_bound_buffer_made(),
-        }
         let placement = Placement::ram_chunk(
-            Arc::clone(&chunk),
+            Arc::clone(chunk),
             chunk.placement.offset + in_chunk,
             window.size,
             Mapped::of_caller(mapped),
@@ -1937,6 +2198,59 @@ mod tests {
         done(&last, full + 2);
         assert_eq!(last.next_ahead(), None, "nothing past the RAM's end");
         drop((on, fresh, last, ram));
+        // SAFETY: the test's mapping, which nothing uses any more.
+        unsafe { libc::munmap(start, length as usize) };
+    }
+
+    #[test]
+    fn a_listed_ram_s_thread_imports_the_chunks_asked_for_and_only_those() {
+        // Four long chunks of address space mapped and never touched (no device imports them).
+        let length = 4 * CHUNK_BYTES;
+        // SAFETY: a fresh anonymous mapping that reserves no memory until touched.
+        let start = unsafe {
+            libc::mmap(
+                std::ptr::null_mut(),
+                length as usize,
+                libc::PROT_READ | libc::PROT_WRITE,
+                libc::MAP_PRIVATE | libc::MAP_ANON | libc::MAP_NORESERVE,
+                -1,
+                0,
+            )
+        };
+        assert_ne!(start, libc::MAP_FAILED);
+        let at = NonNull::new(start.cast::<u8>()).unwrap();
+        // SAFETY: the mapping is readable and writable until the end of the test, and nothing
+        // imports it.
+        let ram = Arc::new(unsafe { HostRam::new(&[(at, length)], None) }.unwrap());
+        let plan = Plan {
+            bytes: CHUNK_BYTES,
+            listed: true,
+        };
+        let on = RamOnDevice::new(&ram, plan);
+        let ask = |slot: usize| on.slots[slot].asked.store(true, Ordering::Relaxed);
+        assert_eq!(on.next_asked(), None, "nothing ahead of an ask");
+        // A take moves no window the thread reads: it imports none but those asked for.
+        assert!(on.take(0));
+        assert_eq!(on.next_asked(), None, "a take asks for nothing");
+        ask(3);
+        ask(1);
+        assert_eq!(on.next_asked(), Some(1), "the first asked for");
+        assert_eq!(on.next_asked(), Some(3), "each ask answered once");
+        assert_eq!(on.next_asked(), None);
+        // A chunk being imported (by an object) or failed by the thread: its ask passed, and
+        // answered.
+        *lock(&on.slots[2].import) = Import::Making;
+        ask(2);
+        on.slots[0].tried.store(true, Ordering::Relaxed);
+        ask(0);
+        assert_eq!(
+            on.next_asked(),
+            None,
+            "neither a chunk under way nor a failed one"
+        );
+        *lock(&on.slots[2].import) = Import::None;
+        assert_eq!(on.next_asked(), None, "those asks were answered");
+        drop((on, ram));
         // SAFETY: the test's mapping, which nothing uses any more.
         unsafe { libc::munmap(start, length as usize) };
     }
