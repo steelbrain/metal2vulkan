@@ -678,6 +678,7 @@ fn the_inputs_encoding_is_the_earlier_derived_debug() {
                 .replace(", ycbcr_planes_sampled: {}", "")
                 .replace(", viewport_index_varying: false", "")
                 .replace(", max_call_stack_depth: None", "")
+                .replace(", open_cl_mode: false", "")
                 .replace(", flat_grid: false", "")
                 .replace(", render_target_array_index_varying: false", "")
                 .replace(", primitive_id_varying: false", "")
