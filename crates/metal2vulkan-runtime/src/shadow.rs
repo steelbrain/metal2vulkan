@@ -145,7 +145,9 @@
 //!   slice each way ([`plane_copy_regions`](super::buffer_texture::plane_copy_regions)): going
 //!   in each shared byte is read for both the rows that hold it, and going back it is
 //!   written once, from the earlier row, one of the rows Metal's own writes leave it from (its
-//!   order follows the command, the GPU pitch and the row count). The rules above are the same;
+//!   order follows the command, the GPU pitch and the row count). A heap's one-plane YCbCr
+//!   texture whose rows share bytes (`texture/heap.rs`'s `heap_planes`) takes the same copies.
+//!   The rules above are the same;
 //!   no copy of such a shadow is cut to a rectangle, and none dispatches, both of which take one
 //!   region.
 //! - **Render passes** (`render/shadows.rs`). A render pass instance is one command: its draws

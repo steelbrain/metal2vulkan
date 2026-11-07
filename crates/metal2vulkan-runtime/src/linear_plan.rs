@@ -517,10 +517,11 @@ pub(super) struct BufferLayout {
 impl BufferLayout {
     /// The bytes consecutive rows share, where the rows overlap: a row's bytes past the pitch, 0
     /// where each row lies at or past the end of the one above. Only an IOSurface plane's GPU
-    /// layout overlaps: at its pitch rounded down to 16 ([`iosurface_gpu_layout`]) by 1 to 15
-    /// bytes, a whole number of texels, between consecutive rows alone; and where its rows are
-    /// wider than its pitch ([`wide_rows`]), its CPU layout too, by any whole number of texels, a
-    /// byte shared by as many rows as reach it (`tests::linear_plan`).
+    /// layout overlaps, and a heap's one-plane YCbCr texture's rows (`texture/heap.rs`,
+    /// `one_plane_pitch`): at a pitch rounded down to 16 ([`iosurface_gpu_layout`]) by 1 to 15
+    /// bytes, a whole number of texels, between consecutive rows alone; and where a plane's rows
+    /// are wider than its pitch ([`wide_rows`]), its CPU layout too, by any whole number of
+    /// texels, a byte shared by as many rows as reach it (`tests::linear_plan`).
     pub(super) fn shared_bytes(&self) -> u64 {
         match self.rows > 1 {
             true => self.row_bytes.saturating_sub(self.row_pitch),

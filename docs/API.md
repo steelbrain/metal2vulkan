@@ -2390,16 +2390,17 @@ bound.
   one of Apple's one-plane YCbCr formats (`YCBCR8_422_1P`, `YCBCR10_444_1P` and their twins, held
   for copies alone) made in a heap whose texels lie otherwise than Metal's blits lay them. Metal
   lays a one-plane texture's rows one packed row apart where the row is a multiple of 16 bytes, a
-  1D texture's one row, and an array's slices at multiples of 128 bytes, and so does the runtime.
-  A 2D texture or array of more than one row whose row is not a multiple of 16 bytes Metal lays
-  the row rounded down to 16 bytes apart (16 for a row under 16), so its rows share bytes or pass
-  the texture's answer; the runtime lays them one packed row apart, as that answer counts them. A
-  mipmapped or 3D texture's texels Metal lays at bytes that differ by path, its first level past
-  its answer; the runtime keeps them in memory of its own, apart from the heap's bytes. Cost: the
-  texture's size and alignment answers are Metal's and its copies read what they wrote, but its
-  texels lie in the heap's bytes one packed row apart, or apart from the heap's bytes, where
-  Metal's blits lay its rows a multiple of 16 bytes apart or its levels at bytes that differ by
-  path: a buffer over the heap meets them at other bytes than on Metal.
+  1D texture's one row, an array's slices at multiples of 128 bytes, and a row of 16 bytes or more
+  that is not a multiple of 16 the row rounded down to 16 bytes apart, and so does the runtime. A
+  2D texture or array of more than one row whose row is under 16 bytes Metal lays 16 bytes apart,
+  past the texture's answer, and its copies out read none of the rows past the first back from
+  there; the runtime lays them one packed row apart, as that answer counts them. A mipmapped or
+  3D texture's texels Metal lays at bytes that differ by path, its first level past its answer;
+  the runtime keeps them in memory of its own, apart from the heap's bytes. Cost: the texture's
+  size and alignment answers are Metal's and its copies read what they wrote, but its texels lie
+  in the heap's bytes one packed row apart, or apart from the heap's bytes, where Metal's blits
+  lay its rows 16 bytes apart or its levels at bytes that differ by path: a buffer over the heap
+  meets them at other bytes than on Metal.
 - `metal2vulkan-degrade-moltenvk-argument-buffers-unread` (precision).
   `MoltenVkArgumentBuffersUnread`: A MoltenVK device at a release whose `pipelineCacheUUID` layout
   the runtime has not read: whether MoltenVK binds through Metal argument buffers is unknown, so a
@@ -4387,6 +4388,14 @@ each item named states the rule in full.
   does not reproduce the loss.
 - **A heap's buffer and texture over the same bytes alias them, in the device's layout**, not
   Apple's tiled or compressed one.
+- **A heap's one-plane YCbCr texture whose rows share bytes keeps the earlier row's bytes
+  there.** Metal's blits lay a one-plane YCbCr texture's rows of 16 bytes or more that are not a
+  multiple of 16 the row rounded down to 16 bytes apart, so consecutive rows share the row's last
+  `row % 16` bytes, and so does the runtime, each row read whole from its own offset. Metal's
+  blits leave the shared bytes from no one row: on the Apple M3 Max under macOS 27.0.1
+  (`probes/one_plane_ycbcr_heap_rows.m`), the even rows' at 10 x 3, 12 x 3, 20 x 3 and 13 x 7,
+  the later row's at 33 x 3 and the earlier row's at 100 x 30. The runtime's GPU writes leave
+  the earlier row's, one of those, the same every time.
 - **A texture over a buffer keeps its texels past the buffer's length in a tail of its own.**
   Plain Metal makes a 2D texture, an array or a texture buffer over a buffer whose texels run
   past its length, up to the buffer's `allocatedSize` (nil past it), and its texels there are the

@@ -1,16 +1,19 @@
 //! A placement heap's texture of one of Apple's one-plane YCbCr formats (held for copies alone,
 //! `metal2vulkan::metal::format::copies_only`) lies in the heap's bytes as Metal lays it: a 2D
-//! texture's rows one packed row apart where the row is a multiple of 16 bytes, a 1D texture's one
-//! row, and an array's slices each at a multiple of 128 bytes, its blits' copies in and out moving
-//! the bytes there and no other (an Apple M3 Max under macOS 27.0.1, a `Private` untracked
+//! texture's rows one packed row apart where the row is a multiple of 16 bytes, and the row
+//! rounded down to 16 bytes apart where it is 16 bytes or more off a multiple of 16, so that
+//! consecutive rows share bytes; a 1D texture's one row; and an array's slices each at a multiple
+//! of 128 bytes; its blits' copies in and out moving the bytes there and no other, each row read
+//! whole from its own offset and a shared byte left from the earlier row, one of the rows Metal's
+//! blits leave there (an Apple M3 Max under macOS 27.0.1, a `Private` untracked
 //! placement heap with a `Private` buffer over all its bytes,
 //! `metal2vulkan-conformance/probes/one_plane_ycbcr_heap_rows.m`, every byte of these shapes in
 //! each of the nine formats). The texture takes Metal's answer of the heap. While it lay in the
 //! carrier's tiles (`R16Uint`, `R32Uint`), its texels lay elsewhere in its bytes.
 //!
 //! A shape Metal lays no one way lies otherwise, announced `heap-one-plane-layout`: a 2D texture
-//! of rows off 16 bytes in packed rows, and a mipmapped one in memory of its own, the heap's bytes
-//! untouched.
+//! of rows under 16 bytes in packed rows, and a mipmapped one in memory of its own, the heap's
+//! bytes untouched.
 //!
 //! A device test: compiled only under the validation crate's GPU safety cfgs (`m2v_gpu`,
 //! `m2v_cpu_icd`), on the kind of device the cfg selects.
@@ -113,14 +116,19 @@ impl Shape {
     }
 
     /// Where Metal lays slice `slice`'s row `y` in the texture's bytes: rows one packed row apart,
-    /// an array's slices each at a multiple of 128 bytes.
+    /// or the row rounded down to 16 bytes apart where it is 16 bytes or more off a multiple of
+    /// 16; an array's slices each at a multiple of 128 bytes.
     fn metal_row(self, unit: u64, slice: u64, y: u64) -> u64 {
         let (row, rows) = self.packed(unit);
         let slice_pitch = match self.slices > 1 {
             true => rows.next_multiple_of(128),
             false => rows,
         };
-        slice * slice_pitch + y * row
+        let pitch = match self.height > 1 && row >= 16 {
+            true => row - row % 16,
+            false => row,
+        };
+        slice * slice_pitch + y * pitch
     }
 }
 
@@ -241,9 +249,9 @@ struct Copies {
 }
 
 /// Each shape Metal lays out one way, in a 4:2:2 and a 4:4:4 format: the heap's bytes after the
-/// copies in hold each slice's rows where Metal's do and [`UNTOUCHED`] everywhere else, the
-/// copies out read the heap's bytes from there, the texture takes Metal's answer, and nothing is
-/// announced.
+/// copies in hold each slice's rows where Metal's do (a byte two rows share the earlier row's)
+/// and [`UNTOUCHED`] everywhere else, the copies out read each row whole from there, the texture
+/// takes Metal's answer, and nothing is announced.
 #[test]
 fn a_one_plane_ycbcr_heap_texture_lies_in_the_heap_s_bytes_as_metal_lays_it() {
     use TextureType as T;
@@ -254,6 +262,9 @@ fn a_one_plane_ycbcr_heap_texture_lies_in_the_heap_s_bytes_as_metal_lays_it() {
         Shape::new(T::Type1D, 37, 1, 1),
         Shape::new(T::Type1DArray, 37, 1, 3),
         Shape::new(T::Type2DArray, 16, 16, 2),
+        Shape::new(T::Type2D, 13, 7, 1),
+        Shape::new(T::Type2D, 33, 3, 1),
+        Shape::new(T::Type2DArray, 13, 7, 3),
     ];
     let (device, heard) = listening();
     for (pf, unit) in FORMATS {
@@ -267,10 +278,14 @@ fn a_one_plane_ycbcr_heap_texture_lies_in_the_heap_s_bytes_as_metal_lays_it() {
                 let mut out = Vec::new();
                 for y in 0..shape.height {
                     let at = shape.metal_row(unit, slice as u64, y) as usize;
+                    out.extend((at..at + row as usize).map(|i| pattern(2, i as u64)));
+                }
+                // The later rows first, so a byte two rows share is the earlier row's.
+                for y in (0..shape.height).rev() {
+                    let at = shape.metal_row(unit, slice as u64, y) as usize;
                     let from = (y * row) as usize;
                     let texels = &written[from..from + row as usize];
                     expected[at..at + row as usize].copy_from_slice(texels);
-                    out.extend((at..at + row as usize).map(|i| pattern(2, i as u64)));
                 }
                 laid_out.push(out);
             }
@@ -295,14 +310,14 @@ fn a_one_plane_ycbcr_heap_texture_lies_in_the_heap_s_bytes_as_metal_lays_it() {
     );
 }
 
-/// A 2D texture of 13 x 7 texels, whose rows are off 16 bytes, lies in packed rows, its copies in
-/// writing them and its copies out reading them; a mipmapped one in memory of its own, the heap's
-/// bytes untouched, its copies out reading what its copies in wrote: each announced
+/// A 2D texture of 6 x 3 texels at 4:2:2, whose rows are under 16 bytes, lies in packed rows, its
+/// copies in writing them and its copies out reading them; a mipmapped one in memory of its own,
+/// the heap's bytes untouched, its copies out reading what its copies in wrote: each announced
 /// `heap-one-plane-layout`.
 #[test]
 fn a_one_plane_ycbcr_heap_texture_metal_lays_no_one_way_is_announced() {
     let (pf, unit) = FORMATS[0];
-    let odd = Shape::new(TextureType::Type2D, 13, 7, 1);
+    let odd = Shape::new(TextureType::Type2D, 6, 3, 1);
     let (device, heard) = listening();
     let c = copies(&device, pf, unit, odd);
     let (row, rows) = odd.packed(unit);
@@ -318,7 +333,7 @@ fn a_one_plane_ycbcr_heap_texture_metal_lays_no_one_way_is_announced() {
         .lock()
         .unwrap()
         .contains(&Degradation::HeapOnePlaneLayout);
-    assert!(announced, "rows off 16 bytes: no heap-one-plane-layout");
+    assert!(announced, "rows under 16 bytes: no heap-one-plane-layout");
     let mipmapped = Shape {
         levels: 3,
         ..Shape::new(TextureType::Type2D, 16, 16, 1)

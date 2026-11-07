@@ -840,9 +840,8 @@ fn a_heap_shadow_keeps_each_aspect_in_planes_at_multiples_of_four_bytes() {
     use metal2vulkan::vk::Format as F;
     // (aspect, level, layers, offset, width, height) of each region, and the bytes spanned.
     let planes = |format, pf, extent, levels, layers| {
-        let (regions, length) = heap_planes(format, pf, extent, levels, layers);
-        let regions: Vec<_> = regions
-            .iter()
+        let (copies, length) = heap_planes(format, pf, extent, levels, layers);
+        let regions: Vec<_> = (copies.into.iter())
             .map(|r| {
                 let s = r.image_subresource;
                 assert_eq!((r.buffer_row_length, r.buffer_image_height), (0, 0));
@@ -959,8 +958,7 @@ fn a_heap_shadow_lays_colour_compressed_and_3d_levels_out_tightly() {
     assert_eq!(end, 26);
     assert_eq!(planes[0].row(3, 1, 2), 23);
     let (regions, length) = heap_planes(F::R8_UNORM, P::R8Unorm, [3, 2, 4], 2, 1);
-    let copies: Vec<_> = regions
-        .iter()
+    let copies: Vec<_> = (regions.into.iter())
         .map(|r| {
             (
                 r.buffer_offset,
@@ -971,6 +969,119 @@ fn a_heap_shadow_lays_colour_compressed_and_3d_levels_out_tightly() {
         .collect();
     assert_eq!(copies, vec![(0, 4, 1), (24, 2, 1)]);
     assert_eq!(length, 26);
+}
+
+/// Each texel of `regions` (`VkBufferImageCopy`s of `unit`-byte texels of a 2D image or array):
+/// its slice, column and row in the image, and its first byte in the buffer.
+fn region_texels(regions: &[ash::vk::BufferImageCopy], unit: u64) -> Vec<((u32, u32, u32), u64)> {
+    let mut texels = Vec::new();
+    for r in regions {
+        let e = r.image_extent;
+        let row = u64::from(match r.buffer_row_length {
+            0 => e.width,
+            length => length,
+        });
+        let height = u64::from(match r.buffer_image_height {
+            0 => e.height,
+            rows => rows,
+        });
+        let s = r.image_subresource;
+        for layer in 0..s.layer_count {
+            for y in 0..e.height {
+                for x in 0..e.width {
+                    let at = r.buffer_offset
+                        + (u64::from(layer) * height * row + u64::from(y) * row + u64::from(x))
+                            * unit;
+                    let texel = (
+                        s.base_array_layer + layer,
+                        r.image_offset.x as u32 + x,
+                        r.image_offset.y as u32 + y,
+                    );
+                    texels.push((texel, at));
+                }
+            }
+        }
+    }
+    texels
+}
+
+/// A heap's one-plane YCbCr texture lies as Metal's blits lay it (`texture/heap.rs`,
+/// `one_plane_pitch`; an Apple M3 Max under macOS 27.0.1, `probes/one_plane_ycbcr_heap_rows.m`):
+/// a row of 16 bytes or more off a multiple of 16 the row rounded down to 16 bytes apart, so
+/// consecutive rows share the rest (13 x 7 at 4:2:2, 26-byte rows 16 apart; 33 x 3, 66-byte rows
+/// 64 apart; 13 x 7 at 4:4:4, 52-byte rows 48 apart; a 13 x 7 x 3 array's slices 256 bytes apart,
+/// as its answer counts them); a row that is a multiple of 16, or under 16 bytes, one packed row
+/// apart. Into the shadow's image every texel reads its bytes at `slice x slicePitch + y x pitch +
+/// x x texel`, the shared ones for both rows; back out of it every byte of the span is written
+/// once, a shared one from the earlier row, as Vulkan asks of one copy's destination regions
+/// (`VUID-vkCmdCopyImageToBuffer-pRegions-12485`).
+#[test]
+fn a_heap_one_plane_texture_s_rows_lie_as_metal_s_blits_lay_them() {
+    use crate::texture::heap::{heap_plane_layout, heap_planes};
+    use metal2vulkan::metal::PixelFormat as P;
+    use metal2vulkan::vk::Format as F;
+    let (four_two_two, four_four_four) = (
+        (F::R16_UINT, P::YCBCR84221P, 2),
+        (F::R32_UINT, P::YCBCR104441P, 4),
+    );
+    for ((format, pf, unit), [w, h], layers, pitch, slice_pitch) in [
+        (four_two_two, [13u32, 7u32], 1u32, 16u64, 112u64),
+        (four_two_two, [33, 3], 1, 64, 192),
+        (four_two_two, [100, 30], 1, 192, 5760),
+        (four_four_four, [13, 7], 1, 48, 336),
+        (four_two_two, [13, 7], 3, 16, 256),
+        (four_two_two, [16, 4], 1, 32, 128),
+        (four_two_two, [6, 3], 1, 12, 36),
+        (four_two_two, [13, 1], 1, 26, 26),
+    ] {
+        let what = format!("{pf:?} {w} x {h} x {layers}");
+        let (planes, end) = heap_plane_layout(format, pf, [w, h, 1], 1, layers);
+        let plane = &planes[0];
+        assert_eq!(
+            (plane.pitch, plane.image_pitch),
+            (pitch, slice_pitch),
+            "{what}"
+        );
+        let row = u64::from(w) * unit;
+        let span = u64::from(layers - 1) * slice_pitch + u64::from(h - 1) * pitch + row;
+        assert_eq!(end, span, "{what}");
+        let (copies, length) = heap_planes(format, pf, [w, h, 1], 1, layers);
+        assert_eq!(length, span, "{what}");
+        let at = |(slice, x, y): (u32, u32, u32)| {
+            u64::from(slice) * slice_pitch + u64::from(y) * pitch + u64::from(x) * unit
+        };
+        let mut into = region_texels(&copies.into, unit);
+        into.sort_unstable();
+        let every: Vec<_> = (0..layers)
+            .flat_map(|slice| (0..h).flat_map(move |y| (0..w).map(move |x| (slice, x, y))))
+            .map(|texel| (texel, at(texel)))
+            .collect();
+        let mut sorted = every.clone();
+        sorted.sort_unstable();
+        assert_eq!(into, sorted, "{what}: into the image");
+        // Back out of it: every byte of each slice's rows once, a shared byte from the earlier
+        // row (rows are written later to earlier, so the earlier's bytes stand).
+        let mut writer = vec![None; span as usize];
+        for (texel, at) in region_texels(&copies.back, unit) {
+            for byte in at..at + unit {
+                let earlier = writer[byte as usize].replace(texel);
+                assert_eq!(earlier, None, "{what}: byte {byte} written twice");
+            }
+        }
+        let mut standing = vec![None; span as usize];
+        for &(texel, at) in every.iter().rev() {
+            for byte in at..at + unit {
+                standing[byte as usize] = Some(texel);
+            }
+        }
+        for slice in 0..u64::from(layers) {
+            let rows = slice * slice_pitch..slice * slice_pitch + u64::from(h - 1) * pitch + row;
+            for byte in rows {
+                let byte = byte as usize;
+                assert_eq!(writer[byte], standing[byte], "{what}: byte {byte} back");
+            }
+        }
+    }
 }
 
 /// A heap's one-level 2D two-plane texture lays its planes out as an Apple M4 does: plane 0's rows

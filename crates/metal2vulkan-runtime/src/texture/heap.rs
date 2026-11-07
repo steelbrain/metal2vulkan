@@ -62,11 +62,12 @@
 //!   texture's stencil alone, in a `Stencil8` texture's tiles where they serve, as Metal lays it,
 //!   `heap_tiled.rs`, else packed; a 4:2:2 or one-plane YCbCr texture's rows where Metal lays
 //!   them, so a buffer over them reads Metal's bytes; `heap_plane_layout`), so two textures side
-//!   by side at the answer keep their texels on every device. A one-plane YCbCr texture Metal
-//!   lays out no one way (rows of a length off 16 bytes, which Metal's blits lay closer than
-//!   their length or past its answer; a mipmapped or 3D one, whose levels Metal addresses at
-//!   bytes that differ by path) lies in packed rows or apart from the heap's bytes
-//!   (`AliasRoute::Unaliased`), announced `heap-one-plane-layout`.
+//!   by side at the answer keep their texels on every device; a one-plane YCbCr texture's rows of
+//!   16 bytes or more off a multiple of 16 lie closer than their length, as Metal's blits lay
+//!   them, sharing bytes (`one_plane_pitch`). A one-plane YCbCr texture Metal lays out no one way
+//!   (rows under 16 bytes, which Metal's blits lay past its answer; a mipmapped or 3D one, whose
+//!   levels Metal addresses at bytes that differ by path) lies in packed rows or apart from the
+//!   heap's bytes (`AliasRoute::Unaliased`), announced `heap-one-plane-layout`.
 //! - **Two-plane extended-range textures** (`RGB10A8_2P_XR10` and its sRGB twin; the consumer's
 //!   report). The runtime answers Metal's size and alignment (`two_plane_heap_answer`): plane 0's
 //!   4-byte words, rows at a multiple of 16 bytes, rounded up to 16 KiB, then plane 1's alpha
@@ -216,7 +217,9 @@ use crate::address::ObjectsToken;
 use crate::buffer::{
     buffer_class, usage as buffer_usage, Buffer, CallerMemory, HostPages, MemoryHold, Modes,
 };
-use crate::buffer_texture::{texture_buffer_bytes, texture_buffer_over, TexelsHome};
+use crate::buffer_texture::{
+    plane_copy_regions, texture_buffer_bytes, texture_buffer_over, TexelsHome,
+};
 use crate::chroma_pairs;
 use crate::copy_plan::{CopyProblem, HostLayout, ImageRegion};
 use crate::degradation::Degradation;
@@ -225,7 +228,9 @@ use crate::error::{internal, invalid, nil, vulkan, Error, MemoryKind, Nil, Probl
 use crate::heap::{Heap, HeapProblem, HeapType, SizeAndAlign, WeakHeap};
 use crate::image_plan::{check_image_limits, plan_image, ImagePlan};
 use crate::key_hash::KeyMap;
-use crate::linear_plan::{check_linear_limits, linear_lack, LinearLack, LINEAR_ALIGNMENT};
+use crate::linear_plan::{
+    check_linear_limits, linear_lack, BufferLayout as RowsLayout, LinearLack, LINEAR_ALIGNMENT,
+};
 use crate::memory::{Memory, MemoryClass, Placement};
 use crate::metal_release::NO_TEXTURE_STACK_ALIGNMENT;
 use crate::release;
@@ -765,7 +770,9 @@ pub(crate) struct HeapPlane {
     /// The texels a block spans across and down.
     pub(crate) block: [u32; 2],
     /// The bytes from one row of blocks to the next: a row's, tightly packed, but for a 4:2:2
-    /// texture's, which Metal lays at a multiple of 16 bytes (`FOUR_TWO_TWO_ALIGNMENT`).
+    /// texture's, which Metal lays at a multiple of 16 bytes (`FOUR_TWO_TWO_ALIGNMENT`), and a
+    /// one-plane YCbCr texture's of a row off 16 bytes, which Metal lays the row rounded down to
+    /// 16 bytes apart, below the row ([`one_plane_pitch`]).
     pub(crate) pitch: u64,
     /// The bytes from one image to the next: its rows', but for a two-plane array's
     /// (`heap_two_planes.rs`) and a one-plane YCbCr array's ([`one_plane_texel`]), whose slices
@@ -801,8 +808,9 @@ impl HeapPlane {
 /// offsets Vulkan copies the aspect at. A texture made in `X32_Stencil8` has its stencil's planes
 /// alone: its image's depth holds no texel of it; a 4:2:2 texture's rows lie at a multiple of 16
 /// bytes, the last unpadded, as Metal lays out a heap's (an M4: a buffer over one
-/// read each row there, the bytes between untouched); a one-plane YCbCr array's slices lie at a
-/// multiple of 128 bytes ([`one_plane_texel`]). The planes, and the bytes they span.
+/// read each row there, the bytes between untouched); a one-plane YCbCr texture's rows lie at
+/// [`one_plane_pitch`] and an array's slices at a multiple of 128 bytes ([`one_plane_texel`]).
+/// The planes, and the bytes they span.
 pub(crate) fn heap_plane_layout(
     format: Format,
     pf: PixelFormat,
@@ -824,16 +832,19 @@ pub(crate) fn heap_plane_layout(
             let [width, height, depth] = level_extent;
             let across = u64::from(width.div_ceil(bw.max(1)));
             let packed = across * unit;
+            let down = u64::from(height.div_ceil(bh.max(1)));
+            let one_plane = one_plane_texel(pf).is_some();
             let pitch = if chroma_pairs::is_four_two_two(pf) {
                 packed.next_multiple_of(FOUR_TWO_TWO_ALIGNMENT)
+            } else if one_plane {
+                one_plane_pitch(packed, down)
             } else {
                 packed
             };
-            let down = u64::from(height.div_ceil(bh.max(1)));
-            let rows = pitch * down;
-            let image_pitch = match one_plane_texel(pf).is_some() && layers > 1 {
-                true => rows.next_multiple_of(ONE_PLANE_SLICE_ALIGNMENT),
-                false => rows,
+            // A one-plane array's slices lie as its answer counts them, whatever its rows' pitch.
+            let image_pitch = match one_plane && layers > 1 {
+                true => (packed * down).next_multiple_of(ONE_PLANE_SLICE_ALIGNMENT),
+                false => pitch * down,
             };
             let plane = HeapPlane {
                 aspect,
@@ -901,56 +912,88 @@ fn gcd(a: u64, b: u64) -> u64 {
     }
 }
 
+/// The copies between a heap shadow's truth and its image ([`heap_plane_layout`]): those into the
+/// image, and those back out of it.
+pub(crate) struct PlaneCopies {
+    pub(crate) into: Vec<vk::BufferImageCopy>,
+    pub(crate) back: Vec<vk::BufferImageCopy>,
+}
+
 /// The copies between a heap shadow's truth and its image ([`heap_plane_layout`]): one region per
 /// plane, or per slice of a plane whose slices lie further apart than their rows (a one-plane
-/// YCbCr array's), its buffer offset counted from the texture's first byte, and the bytes they
-/// span.
+/// YCbCr array's), its buffer offset counted from the texture's first byte, the same both ways;
+/// and the bytes they span. A one-plane YCbCr plane whose rows share bytes ([`one_plane_pitch`])
+/// takes two regions a slice each way, as an IOSurface plane whose GPU rows share bytes does
+/// ([`plane_copy_regions`]): into the image each row's texels whole from its own offset, the
+/// shared bytes read for both rows, as Metal's blit reads them; back out of it each shared byte
+/// once, from the earlier row, one of the rows Metal's blits leave there (the probe's 2D textures
+/// left the even rows' bytes at 10 x 3, 12 x 3, 20 x 3 and 13 x 7, the later row's at 33 x 3, the
+/// earlier row's at 100 x 30).
 pub(crate) fn heap_planes(
     format: Format,
     pf: PixelFormat,
     extent: [u32; 3],
     levels: u32,
     layers: u32,
-) -> (Vec<vk::BufferImageCopy>, u64) {
+) -> (PlaneCopies, u64) {
     let (planes, end) = heap_plane_layout(format, pf, extent, levels, layers);
-    let regions = planes
-        .iter()
-        .flat_map(|plane| {
-            let [width, height, depth] = plane.extent;
-            // A row longer than its blocks is given in texels (Vulkan's `bufferRowLength`).
-            let row_length = if plane.pitch == plane.blocks[0] * plane.unit {
-                0
-            } else {
-                (plane.pitch / plane.unit) as u32 * plane.block[0]
+    let mut copies = PlaneCopies {
+        into: Vec::new(),
+        back: Vec::new(),
+    };
+    for plane in &planes {
+        let [width, height, depth] = plane.extent;
+        let row_bytes = plane.blocks[0] * plane.unit;
+        if plane.pitch < row_bytes && plane.blocks[1] > 1 {
+            let rows = RowsLayout {
+                offset: 0,
+                row_pitch: plane.pitch,
+                slice_pitch: plane.image_pitch,
+                row_bytes,
+                rows: plane.blocks[1],
+                slices: plane.images,
             };
-            let region = |base_array_layer, layer_count, at| vk::BufferImageCopy {
-                buffer_offset: plane.offset + at,
-                buffer_row_length: row_length,
-                buffer_image_height: 0,
-                image_subresource: vk::ImageSubresourceLayers {
-                    aspect_mask: plane.aspect.into(),
-                    mip_level: plane.level,
-                    base_array_layer,
-                    layer_count,
-                },
-                image_offset: vk::Offset3D::default(),
-                image_extent: vk::Extent3D {
-                    width,
-                    height,
-                    depth,
-                },
-            };
-            // Slices further apart than their rows, which no `bufferImageHeight` of whole rows
-            // states, are a region each.
-            match plane.image_pitch == plane.pitch * plane.blocks[1] {
-                true => vec![region(0, layers, 0)],
-                false => (0..layers)
-                    .map(|layer| region(layer, 1, u64::from(layer) * plane.image_pitch))
-                    .collect(),
-            }
-        })
-        .collect();
-    (regions, end)
+            let (into, back) =
+                plane_copy_regions(&rows, (plane.unit, None), plane.offset, plane.aspect.into());
+            copies.into.extend(into);
+            copies.back.extend(back);
+            continue;
+        }
+        // A row longer than its blocks is given in texels (Vulkan's `bufferRowLength`).
+        let row_length = if plane.pitch == row_bytes {
+            0
+        } else {
+            (plane.pitch / plane.unit) as u32 * plane.block[0]
+        };
+        let region = |base_array_layer, layer_count, at| vk::BufferImageCopy {
+            buffer_offset: plane.offset + at,
+            buffer_row_length: row_length,
+            buffer_image_height: 0,
+            image_subresource: vk::ImageSubresourceLayers {
+                aspect_mask: plane.aspect.into(),
+                mip_level: plane.level,
+                base_array_layer,
+                layer_count,
+            },
+            image_offset: vk::Offset3D::default(),
+            image_extent: vk::Extent3D {
+                width,
+                height,
+                depth,
+            },
+        };
+        // Slices further apart than their rows, which no `bufferImageHeight` of whole rows
+        // states, are a region each.
+        let regions = match plane.image_pitch == plane.pitch * plane.blocks[1] {
+            true => vec![region(0, layers, 0)],
+            false => (0..layers)
+                .map(|layer| region(layer, 1, u64::from(layer) * plane.image_pitch))
+                .collect(),
+        };
+        copies.into.extend(regions.iter().copied());
+        copies.back.extend(regions);
+    }
+    (copies, end)
 }
 
 /// Whether `regions` copy every aspect of an image of `format`: every aspect but an
@@ -1109,6 +1152,23 @@ fn two_plane_heap_answer(layout: &TextureLayout) -> SizeAndAlign {
 /// ([`one_plane_heap_answer`]), as it lays a two-plane one's ([`TWO_PLANE_SLICE_ALIGNMENT`]).
 const ONE_PLANE_SLICE_ALIGNMENT: u64 = 128;
 
+/// The bytes from one row of a heap's one-plane YCbCr texture to the next ([`one_plane_texel`]),
+/// of `rows` rows of `row` bytes, as Metal's blits lay them: a row of 16 bytes or more off a
+/// multiple of 16 the row rounded down to 16 bytes apart, so consecutive rows share its last
+/// `row % 16` bytes (an Apple M3 Max under macOS 27.0.1, `probes/one_plane_ycbcr_heap_rows.m`:
+/// 10 x 3, 12 x 3, 13 x 7, 20 x 3, 33 x 3 and 100 x 30 at 4:2:2, 10 x 3, 13 x 7 and 33 x 3 at
+/// 4:4:4, and a 13 x 7 x 3 array, its slices as its answer counts them; the copy out reads each
+/// row whole from there); any other row one packed row apart. A row under 16 bytes, more than one
+/// of it, Metal lays 16 bytes apart, past the texture's answer, and its copy out reads none of
+/// the rows past the first back from there: the runtime lays them one packed row apart, as the
+/// answer counts them ([`one_plane_layout_difference`]).
+fn one_plane_pitch(row: u64, rows: u64) -> u64 {
+    match rows > 1 && row >= 16 {
+        true => row - row % 16,
+        false => row,
+    }
+}
+
 /// The bytes of one texel of `pf` where Metal lays a heap's texture of it in one plane of rows,
 /// a texel after another (`metal::format::Footprint::OnePlane`: Apple's nine one-plane YCbCr
 /// formats, which the crate holds for copies alone); `None` for any other format.
@@ -1120,10 +1180,10 @@ const ONE_PLANE_SLICE_ALIGNMENT: u64 = 128;
 /// 30 at 4:4:4), a 1D texture's one row of any length (37 texels), and a 1D or 2D array's slices
 /// each at a multiple of 128 bytes (37 x 3 at 128 or 256, 16 x 16 x 2 at 512 or 1024), and its
 /// copy out reads every texel back from there. A row of another length, more than one of it,
-/// lies the row rounded down to 16 bytes apart (16 for a row under 16), so its rows share bytes
-/// or pass the texture's answer, and a mipmapped or 3D texture's texels lie at bytes that differ
-/// by path, its first level past its answer: the runtime lays those otherwise
-/// ([`one_plane_layout_difference`]).
+/// lies the row rounded down to 16 bytes apart, so its rows share bytes ([`one_plane_pitch`]),
+/// or 16 apart for a row under 16, past the texture's answer; and a mipmapped or 3D texture's
+/// texels lie at bytes that differ by path, its first level past its answer: the runtime lays
+/// those two otherwise ([`one_plane_layout_difference`]).
 fn one_plane_texel(pf: PixelFormat) -> Option<u64> {
     match footprint(pf) {
         Some(Footprint::OnePlane { bytes, .. }) => Some(u64::from(bytes)),
@@ -1156,10 +1216,10 @@ fn one_plane_layout_difference(layout: &TextureLayout) -> Option<&'static str> {
         layout.texture_type,
         TextureType::Type2D | TextureType::Type2DArray
     ) && layout.extent[1] > 1;
-    (rows && row % 16 != 0).then_some(
-        "Metal's blits lay a row of a length that is not a multiple of 16 bytes the row rounded \
-         down to 16 bytes apart (16 for a row under 16), so its rows share bytes or pass the \
-         texture's answer: its rows lie one packed row apart, as Metal's answer counts them",
+    (rows && row < 16).then_some(
+        "Metal's blits lay rows under 16 bytes 16 bytes apart, past the texture's answer, and \
+         its copies out read none of the rows past the first back from there: its rows lie one \
+         packed row apart, as Metal's answer counts them",
     )
 }
 
@@ -3510,13 +3570,15 @@ impl Device {
         // other pages (`rebind.rs`).
         let buffer = ShadowBuffer::of(bytes, raw);
         let (heap_bytes, tracked) = bytes.tracked(place.offset..place.offset + length);
-        let regions: Vec<vk::BufferImageCopy> = planes
-            .into_iter()
-            .map(|region| vk::BufferImageCopy {
-                buffer_offset: start + region.buffer_offset,
-                ..region
-            })
-            .collect();
+        let at_start = |regions: Vec<vk::BufferImageCopy>| -> Vec<vk::BufferImageCopy> {
+            (regions.into_iter())
+                .map(|region| vk::BufferImageCopy {
+                    buffer_offset: start + region.buffer_offset,
+                    ..region
+                })
+                .collect()
+        };
+        let (regions, back) = (at_start(planes.into), at_start(planes.back));
         let every = copies_every_aspect(&regions, plan.format);
         let shadow_range = UseRange::Image {
             aspects: image_aspects(plan.format).into(),
@@ -3537,9 +3599,9 @@ impl Device {
                     bytes: tracked,
                     target: ShadowTarget::Image {
                         image,
-                        // A heap's depth or stencil texture holds no byte twice: its copies back
-                        // are its copies in.
-                        back: regions.clone(),
+                        // A heap's texture holds no byte twice, but a one-plane YCbCr one whose
+                        // rows share bytes: its copies back are its copies in.
+                        back,
                         regions,
                         staging: None,
                         texel: None,
@@ -3689,6 +3751,7 @@ impl Device {
             plan.levels,
             plan.layers,
         );
+        let regions = regions.into;
         let every = copies_every_aspect(&regions, plan.format);
         if tiled.size > place.size {
             return Err(internal("a tiled heap texture's elements past its range"));

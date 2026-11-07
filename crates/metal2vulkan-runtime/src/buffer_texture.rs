@@ -2200,7 +2200,8 @@ pub(super) fn inside_rows(back: Vec<vk::BufferCopy>, at: u64, inside: u64) -> Ve
 /// of every texel size.
 ///
 /// Where consecutive rows share bytes (an IOSurface plane's on Metal's GPU,
-/// `linear_plan::iosurface_gpu_layout`: 1 to 15 bytes, a whole number of texels, between
+/// `linear_plan::iosurface_gpu_layout`, and a heap's one-plane YCbCr texture's,
+/// `texture/heap.rs`'s `heap_planes`: 1 to 15 bytes, a whole number of texels, between
 /// consecutive rows alone; and a plane's whose rows are wider than its pitch, any whole number
 /// of texels, a byte shared by as many rows as reach it), no one region states a slice: a region
 /// addresses its rows one `bufferRowLength` apart, which is at least its width
