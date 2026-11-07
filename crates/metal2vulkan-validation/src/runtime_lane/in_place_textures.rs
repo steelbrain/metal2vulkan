@@ -527,7 +527,9 @@ fn textures_that_render_or_write_count_their_shadows_apart() {
                 delta(|c| c.host_texture_shadows_shader_write),
                 delta(|c| c.host_texture_shadows_exact),
             );
-            let writes = usage.intersects(U::SHADER_WRITE | U::SHADER_ATOMIC);
+            // An `Unknown` usage is every usage, as Metal reports it.
+            let writes =
+                usage == U::UNKNOWN || usage.intersects(U::SHADER_WRITE | U::SHADER_ATOMIC);
             // SAFETY: the handle is only read, while the texture lives.
             let aliased = unsafe { texture.vk_image() }.is_some();
             eprintln!(
