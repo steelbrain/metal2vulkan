@@ -269,14 +269,18 @@ mod tests {
         rust_sources(&crates.join("metal2vulkan-runtime/src"), &mut files);
         rust_sources(&crates.join("metal2vulkan-validation/src"), &mut files);
         assert!(files.len() > 100, "{} sources", files.len());
-        // Spelled in pieces so this file does not match itself.
         let names = [
             concat!("PipelineRendering", "CreateInfo"),
             concat!("cmd_begin", "_rendering("),
             concat!("RenderingInfo", "::default()"),
         ];
+        // This module quotes the layer's message, which names the structure.
+        let quoting =
+            crates.join("metal2vulkan-validation/src/candidate/runtime_case/input_index_gap.rs");
+        assert!(files.contains(&quoting));
         let found: Vec<String> = files
             .iter()
+            .filter(|file| **file != quoting)
             .flat_map(|file| {
                 let text = std::fs::read_to_string(file).unwrap();
                 names
