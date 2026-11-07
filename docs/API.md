@@ -613,6 +613,9 @@ layout stride of `None` is `MTLBufferLayoutStrideDynamic`: the stride comes from
     reflection lists it as such a buffer of its own data type, size and alignment, a struct as
     `Struct` with its members, as the M3 Max answers: `float k` is `Float`, 4 bytes aligned to 4,
     and `struct { float a; int b; }` is `Struct`, 8 bytes aligned to 4.
+  - A required work-group size (`reqd_work_group_size(x, y, z)`, `air.work_group_size`) caps
+    the pipeline's `max_total_threads_per_threadgroup` at `x * y * z` threads, as the M3 Max
+    answers (64 for `(64, 1, 1)`). A dispatch in smaller threadgroups runs, as it does there.
   - OpenCL mode. Metal makes a pipeline of such a kernel only with
     `ComputePipelineDescriptor::open_cl_mode_enabled` (`openCLModeEnabled`, Apple SPI), and the
     crate compiles the kernel as Metal links it then (`LoweringInputs::open_cl_mode`, part of the

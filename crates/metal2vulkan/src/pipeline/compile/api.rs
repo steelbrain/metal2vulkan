@@ -1109,9 +1109,15 @@ impl Device {
             let groups = free / per_simdgroup;
             max = max.min(u32::try_from(groups.saturating_mul(32)).unwrap_or(u32::MAX));
         }
-        // Metal's own answer: Apple's 1024 under the same caps, without the device's limits.
+        // Metal's own answer: Apple's 1024 under the same caps, without the device's limits. A
+        // required work-group size caps both at its threads (64 for `reqd_work_group_size(64, 1,
+        // 1)` on the M3 Max, macOS 27.0.1).
+        let required = c
+            .kernel
+            .work_group_size
+            .map(|[x, y, z]| x.saturating_mul(y).saturating_mul(z));
         let mut metal = METAL_MAX_THREADS;
-        for cap in [c.kernel.max_total_threads, max_threads]
+        for cap in [c.kernel.max_total_threads, required, max_threads]
             .into_iter()
             .flatten()
             // Metal's 0 is "the device maximum".

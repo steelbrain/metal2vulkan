@@ -368,6 +368,10 @@ pub enum Stage {
     Kernel {
         /// `air.max_work_group_size` (`[[max_total_threads_per_threadgroup]]`).
         max_total_threads: Option<u32>,
+        /// `air.work_group_size`: the threadgroup size an OpenCL C kernel requires
+        /// (`reqd_work_group_size(x, y, z)`). Metal caps the pipeline's threadgroup at its
+        /// `x * y * z` threads.
+        work_group_size: Option<[u32; 3]>,
     },
     /// A vertex function (`!air.vertex`).
     Vertex {
@@ -395,10 +399,22 @@ pub enum Stage {
 }
 
 impl Stage {
+    /// `air.work_group_size`, a kernel's.
+    pub fn work_group_size(&self) -> Option<[u32; 3]> {
+        match *self {
+            Stage::Kernel {
+                work_group_size, ..
+            } => work_group_size,
+            _ => None,
+        }
+    }
+
     /// `air.max_work_group_size`, the stages that state it: kernels, object and mesh functions.
     pub fn max_total_threads(&self) -> Option<u32> {
         match *self {
-            Stage::Kernel { max_total_threads }
+            Stage::Kernel {
+                max_total_threads, ..
+            }
             | Stage::Object {
                 max_total_threads, ..
             }

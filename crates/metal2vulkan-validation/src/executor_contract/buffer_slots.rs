@@ -211,6 +211,7 @@ mod tests {
         let interface = AirInterface::synthetic(
             metal2vulkan_air::abi::Stage::Kernel {
                 max_total_threads: None,
+                work_group_size: None,
             },
             vec![
                 param(0, ParamRole::FunctionTable(table)),

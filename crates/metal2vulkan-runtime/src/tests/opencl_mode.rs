@@ -8,6 +8,9 @@
 //! - **scale**: `b[i] *= k` for `i < n`, `k` and `n` passed by value, over 128 threads, `b[i] = i`:
 //!   `k = 2.5, n = 100` set as bytes, then `k = 3, n = 50` in a buffer at offsets 16 and 32.
 //! - **st**: `o[i] = s.a + s.b` for a struct passed by value, `s = {2.5, 4}`: 6.5.
+//! - **wg**: `o[i] = get_local_size(0)` of `reqd_work_group_size(64, 1, 1)`: a pipeline of at most
+//!   64 threads a threadgroup, which answers 64 in threadgroups of 64 and 32 in threadgroups of
+//!   32.
 //! - **lsum**: each threadgroup of 64 sums its `in[i] = i` through `__local` memory and a barrier:
 //!   2016, 6112, 10208, 14304.
 //! - **cmul**: `o[i] *= c[i & 3]` through a `__constant` pointer, `o[i] = i + 1`, `c = 1, 2, 3, 4`:
@@ -105,9 +108,15 @@ fn constant(n: u32, index: u32, size: u32, ty: &str, name: &str, layout: Option<
 
 /// The kernel list of `entry` with argument nodes `args`.
 fn kernel_list(entry: &str, args: &[String]) -> String {
+    kernel_list_with(entry, args, "")
+}
+
+/// The kernel list of `entry` with argument nodes `args` and the trailing entry attributes
+/// `attributes` (each `, !n`).
+fn kernel_list_with(entry: &str, args: &[String], attributes: &str) -> String {
     let refs: Vec<String> = (0..args.len()).map(|i| format!("!{}", 3 + i)).collect();
     let mut out = format!(
-        "!air.kernel = !{{!0}}\n!0 = !{{ptr @{entry}, !1, !2}}\n!1 = !{{}}\n!2 = !{{{}}}\n",
+        "!air.kernel = !{{!0}}\n!0 = !{{ptr @{entry}, !1, !2{attributes}}}\n!1 = !{{}}\n!2 = !{{{}}}\n",
         refs.join(", ")
     );
     for (i, a) in args.iter().enumerate() {
@@ -201,6 +210,26 @@ declare float @air.convert.f.f32.s.i32(i32) #3\n\
         constant(1, 1, 8, "S", "s", Some("!50")),
     ];
     format!("{body}{}", kernel_list("__entry_st", &args))
+}
+
+/// `__kernel __attribute__((reqd_work_group_size(64, 1, 1))) void wg(__global float *o)`:
+/// `o[get_global_id(0)] = get_local_size(0)`.
+fn wg() -> String {
+    let body = "define void @__entry_wg(ptr addrspace(1) %0) #0 {\n\
+entry:\n\
+  tail call fastcc void @wg(ptr addrspace(1) %0)\n\
+  ret void\n}\n\
+define internal fastcc void @wg(ptr addrspace(1) %o) #1 {\n\
+entry:\n\
+  %i = tail call fastcc i64 @_Z13get_global_idj(i32 0)\n\
+  %n = tail call fastcc i64 @_Z14get_local_sizej(i32 0)\n\
+  %f = uitofp i64 %n to float\n\
+  %po = getelementptr inbounds float, ptr addrspace(1) %o, i64 %i\n\
+  store float %f, ptr addrspace(1) %po, align 4\n\
+  ret void\n}\n\
+!51 = !{!\"air.work_group_size\", i32 64, i32 1, i32 1}\n";
+    let args = [buffer(0, 0, "read_write", 1, "float", "o")];
+    format!("{body}{}", kernel_list_with("__entry_wg", &args, ", !51"))
 }
 
 /// `__kernel void lsum(__global const float *in, __global float *out, __local float *tmp)`:
@@ -599,6 +628,21 @@ fn opencl_mode_kernels_compute_what_metal_computes() {
         None,
     );
     assert_eq!(floats(&o), [6.5; 16], "st");
+
+    let wg_state = state(&device, &wg(), "__entry_wg");
+    assert_eq!(wg_state.max_total_threads_per_threadgroup(), 64);
+    for group in [64u64, 32] {
+        let o = floats_buffer(&device, &[0.0; 128]);
+        run(
+            &device,
+            &wg_state,
+            line(128, group),
+            one,
+            &[whole(&o)],
+            None,
+        );
+        assert_eq!(floats(&o), [group as f32; 128], "wg in groups of {group}");
+    }
 }
 
 /// The eight words thread `(x, y)` of [`items`] stores over the 8-by-4 grid in groups of 4 by 2 at

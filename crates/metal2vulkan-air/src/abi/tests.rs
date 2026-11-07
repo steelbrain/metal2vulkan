@@ -207,7 +207,8 @@ fn kernel_roles_decode() {
     assert_eq!(
         e.stage,
         Stage::Kernel {
-            max_total_threads: None
+            max_total_threads: None,
+            work_group_size: None
         }
     );
     assert!(e.outputs.is_empty());
@@ -606,7 +607,8 @@ fn kernel_attributes_and_predicates() {
     assert_eq!(
         e.stage,
         Stage::Kernel {
-            max_total_threads: Some(64)
+            max_total_threads: Some(64),
+            work_group_size: None
         }
     );
     assert_eq!(
@@ -680,8 +682,60 @@ fn an_unread_stage_attribute_is_refused_by_its_key() {
     assert_eq!(
         abi.entries[0].stage,
         Stage::Kernel {
-            max_total_threads: Some(32)
+            max_total_threads: Some(32),
+            work_group_size: None
         }
+    );
+}
+
+/// OpenCL C's `reqd_work_group_size(64, 1, 1)` (`air.work_group_size`, as Apple's OpenCL compiler
+/// writes it after the kernel's argument list) is the kernel's required size. Each dimension is
+/// at least 1, it is stated once, and only a kernel states it.
+#[test]
+fn a_kernel_s_required_work_group_size_decodes() {
+    let size = |b: &mut ModuleBuilder, x| N(node(b, &[S("air.work_group_size"), I(x), I(1), I(1)]));
+    let abi = kernel_with_attribute(|b| size(b, 64)).expect("a required size decodes");
+    assert_eq!(
+        abi.entries[0].stage,
+        Stage::Kernel {
+            max_total_threads: None,
+            work_group_size: Some([64, 1, 1]),
+        }
+    );
+    assert_eq!(abi.entries[0].stage.work_group_size(), Some([64, 1, 1]));
+    expect_abi(kernel_with_attribute(|b| size(b, 0)), AbiError::BadValue);
+    let mut b = ModuleBuilder::new();
+    let params = kernel_params(&mut b);
+    let void = b.void();
+    let f = entry_fn(&mut b, "k", void, &params);
+    let args = [buffer_arg(0), texture_arg(1), sampler_arg(2), gid_arg(3)];
+    let arg_nodes: Vec<_> = args.iter().map(|a| N(node(&mut b, a))).collect();
+    let inputs = node(&mut b, &arg_nodes);
+    let outputs = node(&mut b, &[]);
+    let [once, twice] = [size(&mut b, 64), size(&mut b, 32)];
+    let e = node(&mut b, &[F(f), N(outputs), N(inputs), once, twice]);
+    b.named_md("air.kernel", &[e]);
+    let m = b.finish().unwrap();
+    expect_abi(
+        decode(&m, &PointeeTable::default(), &mut meter()),
+        AbiError::BadValue,
+    );
+    let position: &[O<'_>] = &[S("air.position")];
+    let mut b = ModuleBuilder::new();
+    let i32t = b.int(32);
+    let ret = b.float();
+    let f = entry_fn(&mut b, "v", ret, &[i32t]);
+    let out = node(&mut b, position);
+    let outs = node(&mut b, &[N(out)]);
+    let id = node(&mut b, &[I(0), S("air.vertex_id")]);
+    let ins = node(&mut b, &[N(id)]);
+    let attr = size(&mut b, 64);
+    let e = node(&mut b, &[F(f), N(outs), N(ins), attr]);
+    b.named_md("air.vertex", &[e]);
+    let m = b.finish().unwrap();
+    expect_abi(
+        decode(&m, &PointeeTable::default(), &mut meter()),
+        AbiError::UnknownStageAttribute(DiagName::new("air.work_group_size")),
     );
 }
 
@@ -4744,6 +4798,7 @@ fn reach_entry(roles: Vec<ParamRole>) -> EntryPoint {
         func: FuncId::new(0),
         stage: Stage::Kernel {
             max_total_threads: None,
+            work_group_size: None,
         },
         params: roles
             .into_iter()

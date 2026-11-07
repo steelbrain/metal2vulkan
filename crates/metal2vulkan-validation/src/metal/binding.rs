@@ -145,6 +145,7 @@ mod tests {
         AirInterface::synthetic(
             Stage::Kernel {
                 max_total_threads: None,
+                work_group_size: None,
             },
             params,
             vec![],

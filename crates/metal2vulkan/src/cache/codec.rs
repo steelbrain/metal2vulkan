@@ -1312,7 +1312,8 @@ codec_struct! {
     PointerType { element_type, access, alignment, data_size, element_is_argument_buffer, element }
     TextureReferenceType { data_type, texture_type, access, depth }
     KernelFacts {
-        max_total_threads, flat_local_size, static_threadgroup_bytes, partition_oblivious,
+        max_total_threads, work_group_size, flat_local_size, static_threadgroup_bytes,
+        partition_oblivious,
     }
     StrategyCensus { entries }
     StrategyUse { uses, words }

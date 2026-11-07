@@ -417,6 +417,9 @@ pub struct FunctionArtifact {
 pub struct KernelFacts {
     /// `[[max_total_threads_per_threadgroup(n)]]` (`air.max_work_group_size`).
     pub max_total_threads: Option<u32>,
+    /// OpenCL C's `reqd_work_group_size(x, y, z)` (`air.work_group_size`): Metal caps the
+    /// pipeline's `maxTotalThreadsPerThreadgroup` at `x * y * z`.
+    pub work_group_size: Option<[u32; 3]>,
     /// The Direct or Cluster32 tier flattened the local size.
     pub flat_local_size: bool,
     /// Bytes of the static part of Metal's threadgroup layout: the static objects, and with

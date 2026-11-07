@@ -2646,6 +2646,7 @@ fn plan_one(r: &Request<'_>, p: &DeviceProfile, m: &mut Meter) -> Result<Planned
     let plan = crate::lower::select::select(&spec, &memory, p, &inputs, m)?;
     let kernel = KernelFacts {
         max_total_threads: spec.ep.stage.max_total_threads(),
+        work_group_size: spec.ep.stage.work_group_size(),
         flat_local_size: plan
             .dispatch
             .as_ref()

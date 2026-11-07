@@ -128,6 +128,7 @@ fn kernel_interface(params: Vec<crate::check::interface::Param>) -> AirInterface
     AirInterface::synthetic(
         metal2vulkan_air::abi::Stage::Kernel {
             max_total_threads: None,
+            work_group_size: None,
         },
         params,
         vec![],

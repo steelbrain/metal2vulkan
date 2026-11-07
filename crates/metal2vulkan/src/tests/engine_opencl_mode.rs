@@ -140,6 +140,38 @@ attributes #3 = { nounwind readnone willreturn }\n\
 !7 = !{i32 2, i32 9, i32 0}\n\
 !8 = !{!\"Metal\", i32 1, i32 1, i32 0}\n";
 
+/// `__kernel __attribute__((reqd_work_group_size(64, 1, 1))) void wg(__global float *o)`:
+/// `o[get_global_id(0)] = get_local_size(0)`.
+const WG: &str = "target datalayout = \"e-p:64:64:64-i1:8:8-i8:8:8-i16:16:16-i32:32:32-i64:64:64-f32:32:32-f64:64:64-v16:16:16-v24:32:32-v32:32:32-v48:64:64-v64:64:64-v96:128:128-v128:128:128-v192:256:256-v256:256:256-v512:512:512-v1024:1024:1024-n8:16:32\"\n\
+target triple = \"air64_v29-apple-macosx27.0.0\"\n\
+define void @__entry_wg(ptr addrspace(1) %0) #0 {\n\
+entry:\n\
+  tail call fastcc void @wg(ptr addrspace(1) %0)\n\
+  ret void\n}\n\
+define internal fastcc void @wg(ptr addrspace(1) %o) #1 {\n\
+entry:\n\
+  %i = tail call i32 @air.get_global_id.i32(i32 0) #2\n\
+  %n = tail call i32 @air.get_local_size.i32(i32 0) #2\n\
+  %f = uitofp i32 %n to float\n\
+  %po = getelementptr inbounds float, ptr addrspace(1) %o, i32 %i\n\
+  store float %f, ptr addrspace(1) %po, align 4\n\
+  ret void\n}\n\
+declare i32 @air.get_global_id.i32(i32) #2\n\
+declare i32 @air.get_local_size.i32(i32) #2\n\
+attributes #0 = { nounwind }\n\
+attributes #1 = { convergent nounwind }\n\
+attributes #2 = { nounwind readnone willreturn }\n\
+!air.kernel = !{!0}\n\
+!air.version = !{!5}\n\
+!air.language_version = !{!6}\n\
+!0 = !{ptr @__entry_wg, !1, !2, !4}\n\
+!1 = !{}\n\
+!2 = !{!3}\n\
+!3 = !{i32 0, !\"air.buffer\", !\"air.location_index\", i32 0, i32 1, !\"air.read_write\", !\"air.address_space\", i32 1, !\"air.arg_type_size\", i32 4, !\"air.arg_type_align_size\", i32 4, !\"air.arg_type_name\", !\"float\", !\"air.arg_name\", !\"o\"}\n\
+!4 = !{!\"air.work_group_size\", i32 64, i32 1, i32 1}\n\
+!5 = !{i32 2, i32 9, i32 0}\n\
+!6 = !{!\"Metal\", i32 1, i32 1, i32 0}\n";
+
 /// The kernel's function, or `None` (a skip) without `llvm-as`.
 fn kernel() -> Option<FunctionDescriptor> {
     function(MODULE, "__entry_k")
@@ -388,4 +420,27 @@ fn an_opencl_mode_argument_by_value_reflects_as_a_constant_buffer_of_its_type() 
             &Budget::standard(),
         )
         .expect("an OpenCL-mode pipeline");
+}
+
+/// A kernel's required work-group size (`reqd_work_group_size(64, 1, 1)`) caps the pipeline's
+/// `maxTotalThreadsPerThreadgroup` at its 64 threads, Metal's answer and the device's, as the M3
+/// Max answers; a kernel without one answers the profile's 1024.
+#[test]
+fn a_required_work_group_size_caps_the_threadgroup() {
+    let (Some(wg), Some(k)) = (function(WG, "__entry_wg"), kernel()) else {
+        return;
+    };
+    let dev = device("moltenvk-m3");
+    let b = Budget::standard();
+    let maxima = |f: FunctionDescriptor| {
+        let p = dev
+            .compile_compute_pipeline(&descriptor(StageSource::Function(f), true), &b)
+            .expect("an OpenCL-mode pipeline");
+        (
+            p.metal_info.max_total_threads_per_threadgroup,
+            p.metal_info.metal_max_total_threads_per_threadgroup,
+        )
+    };
+    assert_eq!(maxima(wg), (64, 64));
+    assert_eq!(maxima(k), (1024, 1024));
 }

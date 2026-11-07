@@ -7320,6 +7320,7 @@ method	metal2vulkan-air::abi::Member::handle	pub fn handle(&self) -> Option<AbiH
 method	metal2vulkan-air::abi::ParamRole::handle	pub fn handle(&self) -> Option<AbiHandle>
 method	metal2vulkan-air::abi::SamplerState::from_words	pub fn from_words(words: [u64; 2]) -> Option<SamplerState>
 method	metal2vulkan-air::abi::Stage::max_total_threads	pub fn max_total_threads(&self) -> Option<u32>
+method	metal2vulkan-air::abi::Stage::work_group_size	pub fn work_group_size(&self) -> Option<[u32; 3]>
 method	metal2vulkan-air::bitcode::AttrList::resolve	pub fn resolve(&self, types: &BitcodeTypes, arity: usize, pointee: impl Fn(usize) -> Option<u32>, keep_enums: bool, m: &mut Meter) -> Result<Option<ResolvedAttrs>, Error>
 method	metal2vulkan-air::bitcode::BitcodeTypes::get	pub fn get(&self, idx: u64) -> Option<BcType>
 method	metal2vulkan-air::bitcode::BitcodeTypes::params	pub fn params(&self, idx: u64) -> Option<&[u32]>
@@ -10455,7 +10456,7 @@ variant	metal2vulkan-air::abi::Sampling::Centroid	Centroid
 variant	metal2vulkan-air::abi::Sampling::Interpolant	Interpolant
 variant	metal2vulkan-air::abi::Sampling::Sample	Sample
 variant	metal2vulkan-air::abi::Stage::Fragment	Fragment { early_fragment_tests: bool }
-variant	metal2vulkan-air::abi::Stage::Kernel	Kernel { max_total_threads: Option<u32> }
+variant	metal2vulkan-air::abi::Stage::Kernel	Kernel { max_total_threads: Option<u32>, work_group_size: Option<[u32; 3]> }
 variant	metal2vulkan-air::abi::Stage::Mesh	Mesh { max_total_threads: Option<u32> }
 variant	metal2vulkan-air::abi::Stage::Object	Object { max_total_threads: Option<u32>, max_mesh_threadgroups: Option<u32> }
 variant	metal2vulkan-air::abi::Stage::Vertex	Vertex { patch: Option<PatchInfo> }

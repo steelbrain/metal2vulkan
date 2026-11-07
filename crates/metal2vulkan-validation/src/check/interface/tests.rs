@@ -117,6 +117,7 @@ pub(crate) fn argument_buffer(slot: u32, members: &[(u32, ParamRole)]) -> AirInt
     AirInterface::synthetic(
         Stage::Kernel {
             max_total_threads: None,
+            work_group_size: None,
         },
         vec![param(0, role)],
         Vec::new(),
@@ -482,6 +483,7 @@ fn object_roles_bind_their_slots() {
     let interface = AirInterface::synthetic(
         Stage::Kernel {
             max_total_threads: None,
+            work_group_size: None,
         },
         vec![param(0, ParamRole::FunctionTable(object(3)))],
         Vec::new(),

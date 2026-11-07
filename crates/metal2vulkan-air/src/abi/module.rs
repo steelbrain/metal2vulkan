@@ -492,6 +492,7 @@ fn entry(cx: &mut Cx<'_, '_>, stage: Named, id: MdId) -> Result<EntryPoint, Erro
     let mut stage = match stage {
         Named::Kernel => Stage::Kernel {
             max_total_threads: None,
+            work_group_size: None,
         },
         Named::Vertex => Stage::Vertex { patch: None },
         Named::Fragment => Stage::Fragment {
@@ -565,6 +566,7 @@ fn entry(cx: &mut Cx<'_, '_>, stage: Named, id: MdId) -> Result<EntryPoint, Erro
 }
 
 /// One trailing entry attribute: `!{"air.max_work_group_size", i32 N}` (kernel, object, mesh),
+/// `!{"air.work_group_size", i32 X, i32 Y, i32 Z}` (kernel, OpenCL C's `reqd_work_group_size`),
 /// `!{"air.max_mesh_work_groups", i32 N}` (object),
 /// `!{"air.patch", !"quad"|"triangle"[, "air.patch_control_point", i32 N]}` (vertex),
 /// `!"early_fragment_tests"` (fragment), or `!{"air.user_annotation", !"text"}` (any stage, kept
@@ -606,7 +608,9 @@ fn stage_attribute(
         (
             Tok::Node(id),
             Some(b"air.max_work_group_size"),
-            Stage::Kernel { max_total_threads }
+            Stage::Kernel {
+                max_total_threads, ..
+            }
             | Stage::Object {
                 max_total_threads, ..
             }
@@ -619,6 +623,23 @@ fn stage_attribute(
                 return Err(site.err(AbiError::BadValue, key));
             }
             a.finish()?;
+        }
+        (
+            Tok::Node(id),
+            Some(b"air.work_group_size"),
+            Stage::Kernel {
+                work_group_size, ..
+            },
+        ) => {
+            let key = Some("air.work_group_size");
+            let mut a = Ops::node(m, id, site.clone())?;
+            a.string(key)?;
+            let size = [a.u32(key)?, a.u32(key)?, a.u32(key)?];
+            a.finish()?;
+            // OpenCL C requires each dimension to be at least 1.
+            if size.contains(&0) || work_group_size.replace(size).is_some() {
+                return Err(site.err(AbiError::BadValue, key));
+            }
         }
         (
             Tok::Node(id),

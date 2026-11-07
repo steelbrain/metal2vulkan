@@ -136,6 +136,7 @@ fn entry(
             func,
             stage: AbiStage::Kernel {
                 max_total_threads: None,
+                work_group_size: None,
             },
             params,
             outputs: Vec::new(),

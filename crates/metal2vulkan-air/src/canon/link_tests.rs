@@ -120,6 +120,7 @@ fn caller(dead: bool) -> (Module, AirAbi) {
         func: k,
         stage: Stage::Kernel {
             max_total_threads: None,
+            work_group_size: None,
         },
         params: vec![ParamBinding {
             param: 0,

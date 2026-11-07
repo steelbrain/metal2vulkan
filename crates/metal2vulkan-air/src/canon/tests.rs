@@ -80,6 +80,7 @@ fn kernel(func: FuncId, params: Vec<ParamBinding>) -> EntryPoint {
         func,
         stage: Stage::Kernel {
             max_total_threads: None,
+            work_group_size: None,
         },
         params,
         outputs: Vec::new(),
