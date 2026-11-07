@@ -885,9 +885,11 @@ impl Case for HeldReadWrite {
         // The venue's memory model for the `Shared` read-back ([`crate::replay::shared_memory_notice`]),
         // and the notice a device announces for a held texture whose format its heap array cannot
         // view (`unnamed-texture-unviewable`): the array holds the class's neutral at the
-        // texture's ID. Measured firing on llvmpipe (LLVM 21.1.8), in the run whose `beyond` rows
-        // of the two sRGB formats and `BGR10A2Unorm` are refused at their dispatch. Both sit at
-        // the notices site alone: every texel is still compared. And the held textures' heap set,
+        // texture's ID. It fired on lavapipe and the RTX 5080 for the two sRGB formats and
+        // `BGR10A2Unorm` until the heap viewed them through their storage aliases
+        // (`bind::heap::storage_conversions`); it stays declared for a device whose alias for a
+        // swept format the heap's formatless declaration cannot serve. Both sit at the notices
+        // site alone: every texel is still compared. And the held textures' heap set,
         // which MoltenVK's layout query refuses ([`crate::replay::set_past_layout_notice`]):
         // announced on the M3 Max under MoltenVK 1.4.2, not on lavapipe.
         vec![

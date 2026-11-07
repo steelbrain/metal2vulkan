@@ -51,7 +51,7 @@ use crate::device::{Device, DeviceDescription, DevicePolicy};
 use crate::error::{BindError, Capability, Feature, Needs, Unsupported};
 use crate::library::{FunctionArtifact, Library};
 use crate::memory::handles::{
-    declare_table, define_lookup, lookup_host, Lookup, FLAG_OUT_OF_BOUNDS_ALPHA_ONE,
+    declare_table, define_lookup, lookup_host, Lookup, FLAG_OUT_OF_BOUNDS_ALPHA_ONE, FLAG_RED_BLUE,
     FLAG_TEXEL_CLASS, HANDLE_ALPHA_ONE, TABLE_ENTRY_BYTES,
 };
 use crate::memory::leaf::k32;
@@ -247,8 +247,8 @@ fn table(bytes: &[DescriptorBytes], set: u32, binding: u32) -> Vec<(u64, u32)> {
 }
 
 /// The entries `(id, element, flags)` of the table bytes at `(set, binding)`: a texture entry's
-/// flags hold its out-of-bounds-alpha flag and its texel class's index alone, and the null entry's
-/// none.
+/// flags hold its out-of-bounds-alpha flag, its red-blue order and its texel class's index alone,
+/// and the null entry's none.
 fn entries(bytes: &[DescriptorBytes], set: u32, binding: u32) -> Vec<(u64, u32, u32)> {
     let b = &bytes
         .iter()
@@ -261,7 +261,7 @@ fn entries(bytes: &[DescriptorBytes], set: u32, binding: u32) -> Vec<(u64, u32, 
             let w = |i: usize| u32::from_le_bytes(e[4 * i..4 * i + 4].try_into().expect("word"));
             let id = u64::from(w(0)) | (u64::from(w(1)) << 32);
             assert_eq!(
-                w(3) & !(FLAG_OUT_OF_BOUNDS_ALPHA_ONE | FLAG_TEXEL_CLASS),
+                w(3) & !(FLAG_OUT_OF_BOUNDS_ALPHA_ONE | FLAG_RED_BLUE | FLAG_TEXEL_CLASS),
                 0,
                 "other flags are reserved"
             );
@@ -574,11 +574,21 @@ fn a_sampled_heap_writes_each_member_and_its_table() {
     // every other member's format has one, and the null entries have none (beside its texel class,
     // which `table_entries_state_each_members_texel_class` reads).
     let flag = FLAG_OUT_OF_BOUNDS_ALPHA_ONE;
-    let flags: Vec<u32> = entries(&cmds.descriptor_bytes, set, binding)
+    let listed = entries(&cmds.descriptor_bytes, set, binding);
+    let flags: Vec<u32> = listed
         .iter()
-        .map(|e| e.2 & !FLAG_TEXEL_CLASS)
+        .map(|e| e.2 & !(FLAG_TEXEL_CLASS | FLAG_RED_BLUE))
         .collect();
     assert_eq!(flags, vec![0, 0, 0, 0, 0, 0, flag, 0, 0]);
+    // And its red-blue order: `[[texture(3)]]`'s `BGRA8Unorm` (element 8) is blue-first, every
+    // other member red-first.
+    for &(id, element, flags) in &listed {
+        assert_eq!(
+            flags & FLAG_RED_BLUE != 0,
+            element == 8,
+            "id {id:#x} element {element}"
+        );
+    }
     // The search's flagged form carries the found entry's alpha flag in the handle's bit 31; a
     // miss is the null handle without it.
     let alpha: Vec<u32> = want

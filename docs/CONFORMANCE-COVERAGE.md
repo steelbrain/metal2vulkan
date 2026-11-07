@@ -44,7 +44,7 @@ Its limits, measured rather than asserted:
 | committed recordings | 1228 |
 | distinct SDK items the Metal leg reaches, of any status | 819 |
 | of those, reached only where this cannot name the family | 3 |
-| ledger rows (a case whose gap is recorded) | 2635 |
+| ledger rows (a case whose gap is recorded) | 2619 |
 | declared crossings of the option space (pairs put to Metal at once) | 26 |
 | declared crossings that are no pair of it (a boolean or numeric field, or one type in two slots) | 30 |
 
@@ -2608,7 +2608,6 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `host-page-writes-visibility-read-only` | Metal DROPS what a shader or the blit engine writes into memory whose backing is read-only, silently and with no error, and we land the write. Metal's rule is m… |
 | `host-page-writes-visibility-read-only` | Metal DROPS what a shader or the blit engine writes into memory whose backing is read-only, silently and with no error, and we land the write. Metal's rule is m… |
 | `norm-storage-fields-bgr10a2unorm` | Metal dispatches a kernel that writes a `BGR10A2Unorm` storage texture reached through its resource ID inside an argument buffer, and we refuse the bind state `… |
-| `norm-storage-fields-bgr10a2unorm` | Metal dispatches a kernel that writes a `BGR10A2Unorm` storage texture reached through its resource ID inside an argument buffer, and we refuse the bind state `… |
 | `pass-sequence-color-actions` | Metal's `MTLStoreActionDontCare` leaves the attachment holding the texels it held BEFORE the pass, and we leave what the pass rendered. Metal's answer is this c… |
 | `pass-sequence-color-actions` | Metal's `MTLStoreActionDontCare` leaves the attachment holding the texels it held BEFORE the pass, and we leave what the pass rendered. Metal's answer is this c… |
 | `pass-sequence-color-actions` | Metal's `MTLStoreActionDontCare` leaves the attachment holding the texels it held BEFORE the pass, and we leave what the pass rendered. Metal's answer is this c… |
@@ -3366,28 +3365,13 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `pixel-samplers-rgba8-nearest-zero` | A pixel-coordinate sample through the device's own sampler: the digest of the site's output differs, so the report gives no count or bound here. The case reads … |
 | `pixel-samplers-rgba8-nearest-zero` | A pixel-coordinate sample through the device's own sampler: the digest of the site's output differs, so the report gives no count or bound here. The case reads … |
 | `read-write-tier-held` | A read of the round-tripped `A8Unorm` texels through the device's conversion: an 8-bit code's value is one `f32` ulp off at the site's largest difference (Metal… |
-| `read-write-tier-held` | Metal round-trips a read-write texel of `BGR10A2Unorm` -- one of the `beyond` formats no read-write tier names but this Metal reads and writes -- through a text… |
-| `read-write-tier-held` | Metal round-trips a read-write texel of `BGR10A2Unorm` -- one of the `beyond` formats no read-write tier names but this Metal reads and writes -- through a text… |
-| `read-write-tier-held` | Metal round-trips a read-write texel of `BGR10A2Unorm` -- one of the `beyond` formats no read-write tier names but this Metal reads and writes -- through a text… |
-| `read-write-tier-held` | Metal round-trips a read-write texel of `BGR10A2Unorm` -- one of the `beyond` formats no read-write tier names but this Metal reads and writes -- through a text… |
-| `read-write-tier-held` | Metal round-trips a read-write texel of `BGR10A2Unorm` -- one of the `beyond` formats no read-write tier names but this Metal reads and writes -- through a text… |
-| `read-write-tier-held` | Metal round-trips a read-write texel of `BGR10A2Unorm` -- one of the `beyond` formats no read-write tier names but this Metal reads and writes -- through a text… |
 | `read-write-tier-held` | A read of the round-tripped `BGRA8Unorm` texels through the device's conversion: an 8-bit code's value is one `f32` ulp off at the site's largest difference (Me… |
-| `read-write-tier-held` | Metal round-trips a read-write texel of `BGRA8Unorm_sRGB` -- one of the `beyond` formats no read-write tier names but this Metal reads and writes -- through a t… |
-| `read-write-tier-held` | Metal round-trips a read-write texel of `BGRA8Unorm_sRGB` -- one of the `beyond` formats no read-write tier names but this Metal reads and writes -- through a t… |
-| `read-write-tier-held` | Metal round-trips a read-write texel of `BGRA8Unorm_sRGB` -- one of the `beyond` formats no read-write tier names but this Metal reads and writes -- through a t… |
-| `read-write-tier-held` | Metal round-trips a read-write texel of `BGRA8Unorm_sRGB` -- one of the `beyond` formats no read-write tier names but this Metal reads and writes -- through a t… |
-| `read-write-tier-held` | Metal round-trips a read-write texel of `BGRA8Unorm_sRGB` -- one of the `beyond` formats no read-write tier names but this Metal reads and writes -- through a t… |
-| `read-write-tier-held` | Metal round-trips a read-write texel of `BGRA8Unorm_sRGB` -- one of the `beyond` formats no read-write tier names but this Metal reads and writes -- through a t… |
+| `read-write-tier-held` | A read of a `BGR10A2Unorm` texel of a texture held in an argument buffer, through the device's conversion: the device stores no `A2R10G10B10_UNORM_PACK32`, so t… |
+| `read-write-tier-held` | A read of an 8-bit sRGB texel of a texture held in an argument buffer: the device stores no sRGB format, so the heap views the texture through its UNORM alias (… |
+| `read-write-tier-held` | A read of an 8-bit sRGB texel of a texture held in an argument buffer: the device stores no sRGB format, so the heap views the texture through its UNORM alias (… |
 | `read-write-tier-held` | A read of the round-tripped `R8Unorm` texels through the device's conversion: an 8-bit code's value is one `f32` ulp off at the site's largest difference (Metal… |
 | `read-write-tier-held` | A read of the round-tripped `RG8Unorm` texels through the device's conversion: an 8-bit code's value is one `f32` ulp off at the site's largest difference (Meta… |
 | `read-write-tier-held` | A read of the round-tripped `RGBA8Unorm` texels through the device's conversion: an 8-bit code's value is one `f32` ulp off at the site's largest difference (Me… |
-| `read-write-tier-held` | Metal round-trips a read-write texel of `RGBA8Unorm_sRGB` -- one of the `beyond` formats no read-write tier names but this Metal reads and writes -- through a t… |
-| `read-write-tier-held` | Metal round-trips a read-write texel of `RGBA8Unorm_sRGB` -- one of the `beyond` formats no read-write tier names but this Metal reads and writes -- through a t… |
-| `read-write-tier-held` | Metal round-trips a read-write texel of `RGBA8Unorm_sRGB` -- one of the `beyond` formats no read-write tier names but this Metal reads and writes -- through a t… |
-| `read-write-tier-held` | Metal round-trips a read-write texel of `RGBA8Unorm_sRGB` -- one of the `beyond` formats no read-write tier names but this Metal reads and writes -- through a t… |
-| `read-write-tier-held` | Metal round-trips a read-write texel of `RGBA8Unorm_sRGB` -- one of the `beyond` formats no read-write tier names but this Metal reads and writes -- through a t… |
-| `read-write-tier-held` | Metal round-trips a read-write texel of `RGBA8Unorm_sRGB` -- one of the `beyond` formats no read-write tier names but this Metal reads and writes -- through a t… |
 | `read-write-tier-round-trip-float` | A read of a `BGR10A2Unorm` texel through the device's conversion: its 10-bit codes read one `f32` ulp low at the site's largest difference. This device converts… |
 | `read-write-tier-round-trip-float` | A read of the round-tripped `BGRA8Unorm` texels through the device's conversion: an 8-bit code's value is one `f32` ulp off at the site's largest difference (Me… |
 | `read-write-tier-round-trip-float` | A read of the round-tripped `RG8Unorm` texels through the device's conversion: an 8-bit code's value is one `f32` ulp off at the site's largest difference (Meta… |
