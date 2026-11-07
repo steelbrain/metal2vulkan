@@ -378,7 +378,7 @@ pub fn shared_memory_notice() -> crate::allowance::Allowance {
 /// [`notice_allowance`] it loosens the notices site alone: every value still compares exactly.
 ///
 /// **Its evidence.** Measured on the M3 Max (MoltenVK 1.4.2, macOS 27.0.1): it fired for every row
-/// of `fetch-ordered-*`, `xr-gamut-*`, `xr-masked-*` whose second draw blends or writes a
+/// of `fetch-ordered-*` (its sRGB rows among them), `xr-gamut-*`, `xr-masked-*` whose second draw blends or writes a
 /// `BGR10_XR` word under a mask, and `xr-gradient-*-blended-*`, the families that name it.
 pub fn interlocked_split_notice() -> crate::allowance::Allowance {
     notice_allowance(metal2vulkan_runtime::Degradation::RenderPassSplit.code())

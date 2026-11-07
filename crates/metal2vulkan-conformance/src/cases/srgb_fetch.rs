@@ -231,6 +231,9 @@ impl Case for SrgbFetch {
                 // The buffer each pass reads its target back through is `Shared`
                 // ([`crate::replay::shared_memory_notice`]).
                 crate::replay::shared_memory_notice(),
+                // Each draw after the first fetches in the pixel interlock what the one before
+                // wrote there ([`crate::replay::interlocked_split_notice`]).
+                crate::replay::interlocked_split_notice(),
             ])
             .collect()
     }
