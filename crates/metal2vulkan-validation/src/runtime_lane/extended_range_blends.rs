@@ -36,7 +36,11 @@ use metal2vulkan::metal::{
     BarrierScope, BlendFactor, ColorWriteMask, IndirectCommandType, PixelFormat, PrimitiveType,
     RenderStages, TextureUsage,
 };
-use metal2vulkan::pipeline::{ColorAttachmentDescriptor, RenderPipelineDescriptor, StageSource};
+use metal2vulkan::pipeline::{
+    ColorAttachmentDescriptor, PrecisionNote, RenderPipelineDescriptor, StageSource,
+};
+use metal2vulkan::vk;
+use metal2vulkan::Budget;
 use metal2vulkan_runtime::{
     BlitOption, Buffer, ClearColor, DebugMessage, Degradation, Error,
     IndirectCommandBufferDescriptor, LoadAction, PipelineOptions, Region, RenderPassDescriptor,
@@ -949,6 +953,18 @@ pub(super) fn tile_of(word: u32, alpha: u8) -> [f32; 4] {
     [color(20), color(10), color(0), a].map(|v| half_away(f64::from(v)))
 }
 
+/// The tile value of an `RGB10A8_2P_XR10` texel of color word `word` and alpha byte `alpha` where
+/// the device drops its conversion pair to `half` and back (`PrecisionNote::NativeHalfConversion`'s
+/// bound, `lower::arith::narrow::converted`): each color code clamped to 1022, `float(code - 384)`
+/// times the `f32` nearest `1 / 510`, alpha `float(alpha)` times the `f32` nearest `1 / 255`, as
+/// `lower::arith::extended_range` decodes them, unrounded.
+fn tile_unrounded(word: u32, alpha: u8) -> [f32; 4] {
+    let color = |shift: u32| (((word >> shift) & 0x3FF).min(1022) as i32 - 384) as f32;
+    let n = [color(20), color(10), color(0), f32::from(alpha)];
+    let r = [510.0f32, 510.0, 510.0, 255.0].map(|d| 1.0 / d);
+    std::array::from_fn(|k| n[k] * r[k])
+}
+
 /// `x` rounded to `half`, nearest even, as an `f32`.
 fn half_even(x: f32) -> f32 {
     half_value(half_bits(x))
@@ -987,6 +1003,10 @@ fn tile_read(held: [f32; 4]) -> [f32; 4] {
 /// from the second draw on (`render/extended_shadow.rs`), one with raster-order attachment access
 /// reads an input attachment of the raw texels and writes the raw output, each draw reading the
 /// codes the one before stored, which the runtime announces (`extended-range-blends-stored-codes`).
+/// Where the fragment stage records `PrecisionNote::NativeHalfConversion`, the device's conversion
+/// to `half` and back may be dropped (the note's bound): a texel through the codes then holds as
+/// Metal's rule or as the same draws over each fetch's unrounded decode (`tile_unrounded`), as
+/// lavapipe answers (Mesa 26.2.6, all 8,192 texels).
 #[test]
 fn a_fetched_two_plane_attachment_written_unblended_stores_metals_write() {
     use crate::air_library::AirLibrary;
@@ -1022,6 +1042,18 @@ fn a_fetched_two_plane_attachment_written_unblended_stores_metals_write() {
         .device
         .new_render_pipeline_state(&pipeline, &PipelineOptions::default())
         .unwrap_or_else(|e| panic!("the guest's pipeline on {name}: {e}"));
+    let unrounded = lane
+        .device
+        .compile_device()
+        .compile_render_pipeline(&pipeline, &Budget::standard())
+        .unwrap_or_else(|e| panic!("the guest's pipeline's compile on {name}: {e}"))
+        .stages
+        .iter()
+        .filter(|s| s.stage == vk::ShaderStage::FRAGMENT)
+        .any(|s| {
+            s.precision_notes
+                .contains(&PrecisionNote::NativeHalfConversion)
+        });
     let through = match super::framebuffer_fetch::through_inputs(&lane) {
         true => "input attachments",
         false => "the pixel interlock",
@@ -1077,13 +1109,12 @@ fn a_fetched_two_plane_attachment_written_unblended_stores_metals_write() {
     .unwrap_or_else(|e| panic!("the pass on {name}: {e}"));
     // Metal's rule, texel by texel: through the shadow in the interlock, else through the codes.
     let shadowed = !super::framebuffer_fetch::through_inputs(&lane);
-    let mut want_plane = Vec::with_capacity(4 * COUNT);
-    let mut want_alpha = Vec::with_capacity(COUNT);
-    for (i, (word, &a)) in plane.chunks(4).zip(&alpha).enumerate() {
+    // The texel the three draws leave from `word` and `a`, each fetch through the codes decoded by
+    // `fetch`.
+    let drawn = |i: usize, word: u32, a: u8, fetch: fn(u32, u8) -> [f32; 4]| -> [u32; 2] {
         let (x, y) = ((i % WIDTH) as f32 + 0.5, (i / WIDTH) as f32 + 0.5);
-        let word = u32::from_le_bytes([word[0], word[1], word[2], word[3]]);
         let mut texel = [word, u32::from(a)];
-        let mut d = tile_of(word, a);
+        let mut d = fetch(word, a);
         for _ in 0..3 {
             let source = [x, y, 1.0, -0.5];
             let out: [f64; 4] = std::array::from_fn(|k| f64::from((source[k] + d[k]) * 0.5));
@@ -1091,11 +1122,22 @@ fn a_fetched_two_plane_attachment_written_unblended_stores_metals_write() {
             texel = [raw[0], raw[1]];
             d = match shadowed {
                 true => tile_read(out.map(|v| half_even(v as f32))),
-                false => tile_of(texel[0], texel[1] as u8),
+                false => fetch(texel[0], texel[1] as u8),
             };
         }
+        texel
+    };
+    let mut want_plane = Vec::with_capacity(4 * COUNT);
+    let mut want_alpha = Vec::with_capacity(COUNT);
+    let mut device_rule = Vec::with_capacity(COUNT);
+    for (i, (word, &a)) in plane.chunks(4).zip(&alpha).enumerate() {
+        let word = u32::from_le_bytes([word[0], word[1], word[2], word[3]]);
+        let texel = drawn(i, word, a, tile_of);
         want_plane.extend(texel[0].to_le_bytes());
         want_alpha.push(texel[1] as u8);
+        if unrounded && !shadowed {
+            device_rule.push(drawn(i, word, a, tile_unrounded));
+        }
     }
     let got = lane.read(&t, (0, 0), 4, BlitOption::None);
     let read = kernel(&lane, "xr2p_read_float");
@@ -1117,8 +1159,20 @@ fn a_fetched_two_plane_attachment_written_unblended_stores_metals_write() {
             .collect()
     };
     let (got_words, want_words) = (words(&got), words(&want_plane));
-    let differ: Vec<String> = (0..COUNT)
+    let unrounded_at = |i: usize| {
+        (device_rule.get(i))
+            .is_some_and(|t| got_words[i] == t[0] && u32::from(got_alpha[i]) == t[1])
+    };
+    let off = |i: &usize| {
+        let i = *i;
+        (got_words[i] != want_words[i] || got_alpha[i] != want_alpha[i]) && !unrounded_at(i)
+    };
+    let held_unrounded = (0..COUNT)
         .filter(|&i| got_words[i] != want_words[i] || got_alpha[i] != want_alpha[i])
+        .filter(|&i| unrounded_at(i))
+        .count();
+    let differ: Vec<String> = (0..COUNT)
+        .filter(off)
         .take(4)
         .map(|i| {
             format!(
@@ -1127,9 +1181,7 @@ fn a_fetched_two_plane_attachment_written_unblended_stores_metals_write() {
             )
         })
         .collect();
-    let count = (0..COUNT)
-        .filter(|&i| got_words[i] != want_words[i] || got_alpha[i] != want_alpha[i])
-        .count();
+    let count = (0..COUNT).filter(off).count();
     // Color 2, loaded and unwritten, keeps its bytes, the device's store, where Metal's pass
     // zeroes its color words' top two bits in each tile a draw reaches.
     let kept = lane.read(&other, (0, 0), 4, BlitOption::None) == other_plane
@@ -1137,7 +1189,13 @@ fn a_fetched_two_plane_attachment_written_unblended_stores_metals_write() {
         && lane.read(&covered, (0, 0), 4, BlitOption::None) == covered_texels;
     println!(
         "XR-FETCH-UNBLENDED {name}: made, through {through}; {count} of {COUNT} texels differ \
-         from Metal's rule{}; colors 1 and 2 {}",
+         from Metal's rule{}{}; colors 1 and 2 {}",
+        match unrounded {
+            true => format!(
+                " and the unrounded fetch's (native-half-conversion), {held_unrounded} held by it"
+            ),
+            false => String::new(),
+        },
         if differ.is_empty() {
             String::new()
         } else {
