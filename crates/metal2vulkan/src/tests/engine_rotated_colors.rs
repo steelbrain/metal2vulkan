@@ -11,7 +11,10 @@
 //!   output of copies of it (`StageIo::rotated_factors`, an output of index 1 the function's
 //!   last shuffle fills) through Vulkan's `SRC1` factors where the device blends dual-source and
 //!   the function writes no more attachments than its dual-source limit, else names the feature
-//!   or the limit; and one no Vulkan factor gives, or alpha to coverage over it, is refused
+//!   or the limit; one no Vulkan factor gives the function computes over the texel where the
+//!   device orders framebuffer fetch (the interlocked storage form, or over the input attachment,
+//!   `RotatedInputBlend`), noting the device's conversion, and a device that orders it in neither
+//!   form refuses naming both orderings; alpha to coverage over the image is refused
 //!   `NotImplemented(Format)` at the attachment;
 //! - where the device's blend is Apple's, straight alpha takes the measured premultiplied form: a
 //!   second output of `(0, 0, 0, a)` and Metal's blue times Metal's alpha in the image's alpha; a
@@ -168,16 +171,18 @@ fn premultiplies(pipeline: &RenderPipeline) -> bool {
             .any(|o| o.len() == 7 && o[3] == FMA && of_clamped(o[4], o[5]))
 }
 
-/// Whether the pipeline's fragment stage records `PrecisionNote::RotatedBlendRounding`.
-fn announces_rounding(pipeline: &RenderPipeline) -> bool {
+/// Whether the pipeline's fragment stage records `note`.
+fn notes(pipeline: &RenderPipeline, note: PrecisionNote) -> bool {
     pipeline
         .stages
         .iter()
         .filter(|s| s.stage == vk::ShaderStage::FRAGMENT)
-        .any(|s| {
-            s.precision_notes
-                .contains(&PrecisionNote::RotatedBlendRounding)
-        })
+        .any(|s| s.precision_notes.contains(&note))
+}
+
+/// Whether the pipeline's fragment stage records `PrecisionNote::RotatedBlendRounding`.
+fn announces_rounding(pipeline: &RenderPipeline) -> bool {
+    notes(pipeline, PrecisionNote::RotatedBlendRounding)
 }
 
 fn blended(
@@ -313,28 +318,83 @@ fn argb8_attachments_take_the_output_mask_and_blend_rotated() {
                 Err(e) => panic!("{stem}: {c:?} beside color 2: {e}"),
             }
         }
-        // Blends no Vulkan factor gives on the image, and alpha to coverage over it.
-        let coverage = ColorAttachmentDescriptor::new(PixelFormat::ARGB8Unorm);
-        for (c, alpha_to_coverage) in [
-            (blended(F::DestinationAlpha, F::Zero, O::Add, O::Add), false),
-            (blended(F::BlendColor, F::Zero, O::Add, O::Add), false),
-            (blended(F::One, F::One, O::Add, O::Subtract), false),
-            (blended(F::One, F::One, O::Min, O::Max), false),
-            (coverage, true),
+        // Blends no Vulkan factor gives on the image: the function computes Metal's 8-bit unorm
+        // blend over the texel where the device orders framebuffer fetch, in the interlocked
+        // storage form (color 0 is no attachment of the subpass) or over the attachment's input
+        // attachment (`RotatedInputBlend`, no Vulkan blend there), and a device that orders it in
+        // neither form names both orderings.
+        let interlock = crate::lower::fragment::interlock_orders(dev.profile());
+        let inputs = crate::lower::fragment::inputs_order(dev.profile());
+        for c in [
+            blended(F::DestinationAlpha, F::Zero, O::Add, O::Add),
+            blended(F::BlendColor, F::Zero, O::Add, O::Add),
+            blended(F::One, F::One, O::Add, O::Subtract),
+            blended(F::One, F::One, O::Min, O::Max),
         ] {
-            let mut d = descriptor(&bc, c, true);
-            d.alpha_to_coverage = alpha_to_coverage;
+            let d = descriptor(&bc, c, true);
             match dev.compile_render_pipeline(&d, &Budget::standard()) {
-                Err(Error::Unsupported(u)) => {
+                Ok(p) if interlock => {
+                    assert!(p.graphics.color_attachments[0].is_none(), "{stem}: {c:?}");
+                    let stored = &p.graphics.storage_attachments;
+                    assert!(
+                        stored.iter().any(|s| s.color_index == 0
+                            && s.writes
+                            && s.format == vk::Format::R8G8B8A8_UNORM),
+                        "{stem}: {c:?}: {stored:?}"
+                    );
+                    assert!(notes(&p, PrecisionNote::DeviceColorConversion), "{stem}");
+                }
+                Ok(p) if inputs => {
+                    let state = p.graphics.color_attachments[0].expect("color 0");
+                    assert_eq!(state.blend, None, "{stem}: {c:?}");
+                    assert_eq!(state.format, vk::Format::R8G8B8A8_UNORM, "{stem}");
+                    let fact = p.dependencies.iter().any(|d| {
+                        matches!(
+                            d.fact,
+                            crate::pipeline::RuntimeFact::RotatedInputBlend { color: 0, .. }
+                        )
+                    });
+                    assert!(fact, "{stem}: {c:?}");
+                    assert!(notes(&p, PrecisionNote::DeviceColorConversion), "{stem}");
+                }
+                Ok(_) => panic!("{stem}: {c:?}: made on a device that orders no fetch"),
+                Err(Error::Unsupported(u)) if !interlock && !inputs => {
+                    assert_eq!(u.feature, Feature::FramebufferFetch, "{stem}: {c:?}");
                     assert_eq!(
-                        (u.feature, u.needs),
-                        (Feature::Format, Needs::NotImplemented)
+                        u.needs,
+                        Needs::AnyOf(vec![
+                            vec![Capability::Feature(VkFeature::FragmentShaderPixelInterlock)],
+                            vec![Capability::Feature(
+                                VkFeature::RasterizationOrderColorAttachmentAccess
+                            )],
+                        ]),
+                        "{stem}: {c:?}"
                     );
                     let at = u.location.as_ref().and_then(|l| l.attachment());
                     assert_eq!(at, Some(Attachment::Color(0)), "{stem}: {c:?}");
                 }
+                // A device that orders fetch but lacks what the form needs names it.
+                Err(Error::Unsupported(u)) if u.needs != Needs::NotImplemented => {}
                 other => panic!("{stem}: {c:?}: {:?}", other.map(|_| ())),
             }
+        }
+        // Alpha to coverage over the image.
+        let mut d = descriptor(
+            &bc,
+            ColorAttachmentDescriptor::new(PixelFormat::ARGB8Unorm),
+            true,
+        );
+        d.alpha_to_coverage = true;
+        match dev.compile_render_pipeline(&d, &Budget::standard()) {
+            Err(Error::Unsupported(u)) => {
+                assert_eq!(
+                    (u.feature, u.needs),
+                    (Feature::Format, Needs::NotImplemented)
+                );
+                let at = u.location.as_ref().and_then(|l| l.attachment());
+                assert_eq!(at, Some(Attachment::Color(0)), "{stem}");
+            }
+            other => panic!("{stem}: alpha to coverage: {:?}", other.map(|_| ())),
         }
     }
     assert!(checked > 0);

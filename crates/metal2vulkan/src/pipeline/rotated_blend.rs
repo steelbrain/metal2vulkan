@@ -23,11 +23,17 @@
 //!   the very value Metal's blend reads, and computes one minus it itself, as Metal's does. This
 //!   needs `dualSrcBlend`. A blend of Metal's own second output (`Source1` factors) reads that
 //!   output, which the function stores rotated as the image's channels are.
-//! - **What no such factor gives is `NotImplemented(Format)`:** Metal's destination alpha in a
-//!   color factor, the saturated source alpha, the blend color's red, green or blue, a second
-//!   output of Metal's own beside one the rotation needs, and different color and alpha
-//!   operations. A one minus a value the function would compute is not offered: it would round
-//!   apart from the blend's own.
+//! - **What no such factor gives, the fragment function computes:** Metal's destination alpha in
+//!   a color factor, the saturated source alpha, the blend color's red, green or blue, and
+//!   different color and alpha operations (`rotated_blend` refuses them `NotImplemented(Format)`).
+//!   Where the device orders framebuffer fetch, the function reads the texel, rotates it into
+//!   Metal's order, and computes Metal's 8-bit unorm blend over it
+//!   (`color_writes::shader_rotated_blend`: the interlocked storage form, or over the input
+//!   attachment); a device that orders fetch in neither form refuses the pipeline naming both
+//!   orderings. A factor of the second source (Metal's own second output beside one the rotation
+//!   needs, or any `Source1` factor where no Vulkan state gives the blend) stays
+//!   `NotImplemented(Format)`. A one minus a value the function would compute is not offered
+//!   among Vulkan's factors: it would round apart from the blend's own.
 //!
 //! **Measured forms.** Apple's blend does not compute every factor pair alike in its color and
 //! alpha arithmetic, and the rotation moves Metal's blue into the image's alpha and Metal's alpha

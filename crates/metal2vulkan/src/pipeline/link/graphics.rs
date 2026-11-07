@@ -495,6 +495,25 @@ pub fn graphics_state(
                         (true, _) => None,
                         (false, false) => blend_factors(a, p)?,
                         (false, true) if alpha_red => alpha_in_red_blend(a, p)?,
+                        // A blend no Vulkan state on the rotated image gives, which a stage
+                        // compiled for this pipeline computes itself, in the storage form (no
+                        // color attachment here) or over the input attachment (above): one that
+                        // does not was compiled for another pipeline. Unwritten, it writes nothing.
+                        (false, true) if color_writes::shader_rotated_blend(a, p) => {
+                            match written_here {
+                                true => {
+                                    return Err(Error::NeedsInput(RuntimeInput::FramebufferFetch))
+                                }
+                                false => None,
+                            }
+                        }
+                        // Where the device orders fetch in neither form, the orderings that
+                        // blend needs.
+                        (false, true) if color_writes::rotated_blend_in_shader(a, p) => {
+                            return Err(
+                                crate::lower::fragment::fetch::unordered_extended_fetch().into()
+                            );
+                        }
                         // The second output the rotation needs is the function's only beside
                         // a first output to the attachment; without one the draw writes nothing
                         // there whatever the blend (its mask is empty).

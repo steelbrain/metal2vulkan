@@ -30,6 +30,19 @@
 //! (`extended_range::encode_keeping`), as Metal's tile keeps a masked channel's code; it states
 //! `RuntimeFact::WordInputMerge`, and link writes every raw component.
 //!
+//! An attachment held with its channels rotated (`ARGB8Unorm` in `R8G8B8A8_UNORM`) whose blend no
+//! Vulkan state on its image gives (`color_writes::shader_rotated_blend`) takes Metal's blend there
+//! too ([`RotatedInputBlend`]): Metal blends the format as `RGBA8Unorm` with its channels rotated, so
+//! the first output's write reads the pixel's texel through the input attachment, rotates it into
+//! Metal's order, computes Metal's 8-bit unorm blend of the clamped output over it
+//! (`extended_range::Blend::unorm8`, `extended_range::blend::blend_unorm8`, as the storage form
+//! computes it), and writes the result through the output variable, which the stage interface
+//! rotates into the image's order as every output to such an attachment
+//! (`stage_io::output_part`); the device's conversion stores its code
+//! (`PrecisionNote::DeviceColorConversion`), and the descriptor's write mask, rotated, keeps the
+//! channels it leaves out. It states `RuntimeFact::RotatedInputBlend`, and link gives the
+//! attachment no Vulkan blend.
+//!
 //! The blend takes a `half4` or `float4` output under every factor, operation and write mask, as
 //! the storage form does (another output is refused, `Feature::ExtendedRangeBlend` `Output`); its
 //! second source is the function's index-1 output, read from the returned value and stored nowhere
@@ -44,11 +57,12 @@ use crate::air::ir::TypeId as AirTypeId;
 use crate::error::{
     Attachment, DescriptorError, Error, ExtendedRangeBlend, Feature, RuntimeInput, Unsupported,
 };
-use crate::lower::arith::{extended_range, Form};
+use crate::lower::arith::{extended_range, FloatFmt, Form};
 use crate::lower::emit::EmitCx;
 use crate::lower::select::SelectCx;
 use crate::metal::format::ExtendedRange;
-use crate::metal::ColorWriteMask;
+use crate::metal::{ColorWriteMask, PixelFormat};
+use crate::pipeline::artifact::PrecisionNote;
 use crate::pipeline::facts::RuntimeFact;
 use crate::pipeline::lower_inputs::BlendEquation;
 use crate::pipeline::sym::{PushField, Stage};
@@ -89,6 +103,24 @@ impl InputBlend {
     /// Whether the write reads the attachment's input attachment: a blend, or a merge.
     pub fn reads(&self) -> bool {
         self.blend.is_some() || self.merges()
+    }
+}
+
+/// An attachment held with its channels rotated (`ARGB8Unorm`) whose blend the function computes
+/// over its input attachment (see the module docs).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RotatedInputBlend {
+    /// The pipeline's blend at the attachment.
+    pub equation: BlendEquation,
+    /// Metal's channels the write stores: those the descriptor's write mask covers, none where it
+    /// covers none (the write then reads and blends nothing).
+    pub written: ColorWriteMask,
+}
+
+impl RotatedInputBlend {
+    /// Whether the write reads the attachment's input attachment: it stores some channel.
+    pub fn reads(&self) -> bool {
+        !self.written.is_empty()
     }
 }
 
@@ -202,8 +234,11 @@ pub(super) fn plan(cx: &mut SelectCx<'_>) -> Result<(), Error> {
         );
     }
     merged(cx, &inputs, &mut planned)?;
-    let reads = planned.values().any(InputBlend::reads);
+    let rotated = rotated(cx, &inputs)?;
+    let reads =
+        planned.values().any(InputBlend::reads) || rotated.values().any(RotatedInputBlend::reads);
     cx.families.fragment.input_blends = planned;
+    cx.families.fragment.rotated_blends = rotated;
     match reads {
         true => fetch::plan_sample(cx),
         false => Ok(()),
@@ -270,6 +305,99 @@ fn merged(
         );
     }
     Ok(())
+}
+
+/// Plan the attachments held with their channels rotated that the function writes through a first
+/// output and the pipeline's state `inputs` names (`color_writes::shader_rotated_blend`, the only
+/// reason such an attachment is named on this device): each one whose write stores some of its
+/// channels reads its input attachment and computes Metal's 8-bit unorm blend there, and each
+/// states `RuntimeFact::RotatedInputBlend` (see the module docs).
+fn rotated(
+    cx: &mut SelectCx<'_>,
+    inputs: &crate::pipeline::lower_inputs::FramebufferFetchInputs,
+) -> Result<BTreeMap<u32, RotatedInputBlend>, Error> {
+    let mut planned = BTreeMap::new();
+    let outputs: Vec<(u32, AirTypeId)> = cx
+        .entry
+        .ep
+        .outputs
+        .iter()
+        .zip(crate::lower::stage_io::output_types(cx)?.1)
+        .filter_map(|(o, ty)| match o.role {
+            OutputRole::RenderTarget {
+                attachment: AbiInt::Const(color),
+                index: 0,
+                ..
+            } => Some((color, ty)),
+            _ => None,
+        })
+        .collect();
+    for (color, ty) in outputs {
+        let Some(a) = inputs.attachments.get(&color).copied().flatten() else {
+            continue;
+        };
+        if !crate::metal::format::rotated_channels(a.pixel_format)
+            || !cx.inputs.rotated_colors.contains(&color)
+        {
+            continue;
+        }
+        let tied = |e: Error| e.at_attachment(Attachment::Color(color));
+        let Some(eq) = a.equation.filter(|_| a.blending_enabled) else {
+            // Compiled under the state of a pipeline for another function.
+            return Err(Error::NeedsInput(RuntimeInput::FramebufferFetch));
+        };
+        let kept = fetch::kept_channels(a.pixel_format, a.write_mask, true);
+        let written = ColorWriteMask::ALL.difference(kept);
+        let kept = crate::metal::state::color_write_mask(kept).map_err(tied)?;
+        cx.facts.insert(RuntimeFact::RotatedInputBlend {
+            color,
+            blend: eq,
+            kept,
+        });
+        let rb = RotatedInputBlend {
+            equation: eq,
+            written: match kept == vk::ColorComponentFlags::known_bits() {
+                true => ColorWriteMask::NONE,
+                false => written,
+            },
+        };
+        if rb.reads() {
+            let f = super::color::form(cx, ty).map_err(tied)?;
+            let arith = match (f.lanes, f.float_fmt()) {
+                (4, Some(FloatFmt::Half)) => extended_range::blend::BlendArith::Half,
+                (4, Some(FloatFmt::F32)) => extended_range::blend::BlendArith::Float,
+                // An output of fewer lanes to a rotated attachment (`stage_io`).
+                _ => {
+                    let refused = Unsupported::not_implemented(Feature::Format);
+                    return Err(tied(refused.into()));
+                }
+            };
+            let math = fetch::blend_math(cx);
+            let b = extended_range::Blend::unorm8(
+                &eq,
+                PixelFormat::ARGB8Unorm,
+                rb.written,
+                (math, arith),
+            )
+            .map_err(tied)?;
+            if b.reads_constant() {
+                cx.push.insert(PushField::HalfBlendColor);
+            }
+            // The attachment's input attachment.
+            cx.descriptors.input_attachments = cx.descriptors.input_attachments.saturating_add(1);
+            cx.facts.insert(RuntimeFact::FramebufferFetch { color });
+            // The result is the device's to convert to its code; the blend is Metal's where the
+            // module states its math (Metal clamps the output first, so none of the output's
+            // arithmetic folds into it), as the storage form's is.
+            cx.precision.insert(PrecisionNote::DeviceColorConversion);
+            if cx.entry.compile.fast_math.is_none() {
+                let note = crate::lower::arith::output_precision::half_output_note(cx);
+                cx.precision.insert(note);
+            }
+        }
+        planned.insert(color, rb);
+    }
+    Ok(planned)
 }
 
 /// Whether the function's second (index-1) output to `color` is the second source of the blend
@@ -358,22 +486,70 @@ pub(crate) fn texel(
     extended_range::encode_keeping(fb, ib.form, v, (codes, kept))
 }
 
+/// The Metal-ordered value a write of first output `part` (of `form`: four `half` or `float`
+/// lanes held as `f32`s) to attachment `color`, held with its channels rotated, stores, whose blend
+/// the function computes over its input attachment (`rb`; see the module docs): the texel read
+/// there, rotated into Metal's order, and Metal's 8-bit unorm blend of the output over it
+/// (`extended_range::blend::blend_unorm8`), the blend color from `PushField::HalfBlendColor` where
+/// the blend reads it. For a write that stores none of the format's channels, the output.
+pub(crate) fn rotated_texel(
+    cx: &mut EmitCx<'_>,
+    fb: &mut FunctionBuilder<'_>,
+    (color, rb): (u32, &RotatedInputBlend),
+    (form, part): (Form, SValue),
+) -> BResult<SValue> {
+    if !rb.reads() {
+        return Ok(part);
+    }
+    let arith = match (form.lanes, form.float_fmt()) {
+        (4, Some(FloatFmt::Half)) => extended_range::blend::BlendArith::Half,
+        (4, Some(FloatFmt::F32)) => extended_range::blend::BlendArith::Float,
+        _ => return Err(cx.fail("an 8-bit unorm blend of another output")),
+    };
+    let math = extended_range::blend::BlendMath::of(cx.entry.compile.fast_math);
+    let pf = PixelFormat::ARGB8Unorm;
+    let Ok(b) = extended_range::Blend::unorm8(&rb.equation, pf, rb.written, (math, arith)) else {
+        return Err(cx.fail("an 8-bit unorm blend outside Metal's model"));
+    };
+    let texel = super::color::input_texel(cx, fb, color)?;
+    // The image's red, green, blue and alpha hold Metal's alpha, red, green and blue.
+    let texel = fb.vector_shuffle(texel, texel, &[1, 2, 3, 0])?;
+    let constant = match b.reads_constant() {
+        true => {
+            let field = cx.push_field(fb, PushField::HalfBlendColor)?;
+            Some(fb.composite_extract(field, &[0])?)
+        }
+        false => None,
+    };
+    extended_range::blend::blend_unorm8(fb, &b, arith, (part, texel), constant)
+}
+
 /// The words the planned blends add at `rets` returns: one input attachment each beside the
 /// reads `color` counts, and at each return the read, decode, blend and encode.
 pub(super) fn words(cx: &SelectCx<'_>, rets: u64) -> u64 {
-    cx.families
-        .fragment
-        .input_blends
+    let fp = &cx.families.fragment;
+    let extended = fp.input_blends.values().filter(|ib| ib.reads()).map(|ib| {
+        let blend = ib.blend.as_ref().map_or(0, |b| b.words());
+        let each = WRITE_WORDS
+            .saturating_add(u64::from(blend))
+            .saturating_add(u64::from(
+                extended_range::DECODE_WORDS + extended_range::ENCODE_WORDS,
+            ));
+        each.saturating_mul(rets.max(1))
+    });
+    let math = fetch::blend_math(cx);
+    let rotated = fp
+        .rotated_blends
         .values()
-        .filter(|ib| ib.reads())
-        .map(|ib| {
-            let blend = ib.blend.as_ref().map_or(0, |b| b.words());
-            let each = WRITE_WORDS
+        .filter(|rb| rb.reads())
+        .map(|rb| {
+            let half = extended_range::blend::BlendArith::Half;
+            let pf = PixelFormat::ARGB8Unorm;
+            let blend = extended_range::Blend::unorm8(&rb.equation, pf, rb.written, (math, half))
+                .map_or(0, |b| b.words());
+            WRITE_WORDS
                 .saturating_add(u64::from(blend))
-                .saturating_add(u64::from(
-                    extended_range::DECODE_WORDS + extended_range::ENCODE_WORDS,
-                ));
-            each.saturating_mul(rets.max(1))
-        })
-        .fold(0u64, u64::saturating_add)
+                .saturating_mul(rets.max(1))
+        });
+    extended.chain(rotated).fold(0u64, u64::saturating_add)
 }

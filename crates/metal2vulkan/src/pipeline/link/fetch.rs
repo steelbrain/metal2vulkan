@@ -30,6 +30,9 @@
 //! attachment of the subpass, which `graphics_state` gives no Vulkan blend and a write of every raw
 //! component, the function merging the channels the descriptor's mask keeps; a stage compiled under
 //! another blend or mask there was compiled for another pipeline, `NeedsInput(FramebufferFetch)`.
+//! There too the function computes the blend of an attachment held with its channels rotated that
+//! no Vulkan state on its image gives (`RuntimeFact::RotatedInputBlend`, [`input_blends`]), which
+//! `graphics_state` gives no Vulkan blend and the descriptor's write mask, rotated.
 //! There too the function merges its word of a word attachment written under a mask of some of
 //! the word's channels into the word its input attachment holds (`RuntimeFact::WordInputMerge`,
 //! [`word_merges`]); `graphics_state` writes the whole word, and a stage compiled under another
@@ -177,7 +180,9 @@ pub fn storage_attachments(
 
 /// The extended-range attachments whose blend fragment stage `fragment` computes over their
 /// input attachments (`RuntimeFact::ExtendedRangeInputBlend`), or whose codes it merges there
-/// (`RuntimeFact::WordInputMerge` of such an attachment), on a device that orders fetch through
+/// (`RuntimeFact::WordInputMerge` of such an attachment), and the attachments held with their
+/// channels rotated whose blend it computes there (`RuntimeFact::RotatedInputBlend`, which link
+/// gives no Vulkan blend and the descriptor's write mask, rotated), on a device that orders fetch through
 /// rasterization-order input attachments, against the attachments of render inputs `r`: by color
 /// index, the channels each write keeps from its texel, where the pipeline's blend and write mask
 /// there are those the function compiled under; `NeedsInput(FramebufferFetch)` where they are
@@ -201,6 +206,30 @@ pub fn input_blends(
             if extended {
                 out.insert(color, kept);
             }
+            continue;
+        }
+        // An attachment held with its channels rotated whose blend the function computes over its
+        // input attachment (`color_writes::shader_rotated_blend`): its write keeps the channels the
+        // descriptor's mask leaves out through the attachment's write mask.
+        if let RuntimeFact::RotatedInputBlend { color, blend, kept } = *fact {
+            if !inputs_order(p) {
+                return Err(Error::Internal(InternalError::new(
+                    InternalKind::Invariant,
+                    "a rotated blend over an input attachment on a device that fetches otherwise",
+                )));
+            }
+            let Some(a) = r.color_attachments.get(color as usize).copied().flatten() else {
+                return Err(Error::NeedsInput(RuntimeInput::FramebufferFetch));
+            };
+            let pipeline_kept =
+                color_write_mask(kept_channels(a.pixel_format, a.write_mask, true))?;
+            if !crate::pipeline::color_writes::shader_rotated_blend(&a, p)
+                || BlendEquation::of(&a) != Some(blend)
+                || pipeline_kept != kept
+            {
+                return Err(Error::NeedsInput(RuntimeInput::FramebufferFetch));
+            }
+            out.insert(color, kept);
             continue;
         }
         let RuntimeFact::ExtendedRangeInputBlend { color, blend, kept } = *fact else {

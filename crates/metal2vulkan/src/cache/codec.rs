@@ -1273,6 +1273,7 @@ codec_enum! {
         PrivateList,
         YCbCrInPlace { slot, samplers, device },
         PartialObjectThreadgroups,
+        RotatedInputBlend { color, blend, kept },
     }
     UniformViewChoice { Viewed, Spare, Kept }
     Mechanism {

@@ -1209,7 +1209,8 @@ impl Blend {
         use BlendFactor as F;
         let has_alpha = match pf {
             PixelFormat::R8Unorm | PixelFormat::RG8Unorm => false,
-            PixelFormat::RGBA8Unorm | PixelFormat::BGRA8Unorm => true,
+            // `ARGB8Unorm` blends as `RGBA8Unorm`, its channels rotated (`fetch::unorm8_format`).
+            PixelFormat::RGBA8Unorm | PixelFormat::BGRA8Unorm | PixelFormat::ARGB8Unorm => true,
             _ => return Err(Unsupported::not_implemented(Feature::FramebufferFetch).into()),
         };
         let factors = [

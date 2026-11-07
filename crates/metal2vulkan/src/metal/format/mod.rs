@@ -156,8 +156,9 @@ pub enum FormatEmulation {
     /// rotated (`LoweringInputs::rotated_colors`), whose clear color and write mask the consumer
     /// rotates too; Metal stores, clears, masks, resolves and blends the format as `RGBA8Unorm`
     /// with its channels rotated. Admitted for those usages, and for blending
-    /// through the factors `pipeline::rotated_blend` finds Metal's blend in, which refuses the
-    /// rest.
+    /// through the factors `pipeline::rotated_blend` finds Metal's blend in; a blend no such
+    /// factor gives the fragment function computes over the texel where the device orders
+    /// framebuffer fetch (`pipeline::color_writes::shader_rotated_blend`).
     RotatedView,
     /// A render pass's color attachment of a two-plane YCbCr format whose store Metal's planes
     /// are matched for ([`ycbcr_renders`]): `R32G32B32A32_SFLOAT` of the values the pass leaves

@@ -2189,6 +2189,30 @@ fn output_part(
         Some(color) if cx.plan.families.fragment.input_blends.contains_key(&color) => {
             input_blended(cx, fb, (x, returned), color, (o.link.form, part))?
         }
+        // An attachment held with its channels rotated whose blend the function computes over its
+        // input attachment, in Metal's order: the rotation below takes it into the image's.
+        Some(color)
+            if cx
+                .plan
+                .families
+                .fragment
+                .rotated_blends
+                .contains_key(&color) =>
+        {
+            let plan = cx.plan;
+            let Some(rb) = plan.families.fragment.rotated_blends.get(&color) else {
+                return Err(
+                    cx.fail("a rotated input blend of an attachment the plan does not name")
+                );
+            };
+            let v = crate::lower::fragment::rotated_input_texel(
+                cx,
+                fb,
+                (color, rb),
+                (o.link.form, part),
+            )?;
+            color_write::round(cx, fb, color, o.link.form, v)?
+        }
         Some(color) => match (
             cx.plan.families.stage_io.words_written.get(&color).copied(),
             cx.plan.families.stage_io.extended.get(&color).copied(),

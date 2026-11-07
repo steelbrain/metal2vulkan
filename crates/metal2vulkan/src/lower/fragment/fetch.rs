@@ -69,7 +69,11 @@
 //!   to Metal's `(0, 0, 0, r)` and every one written to it holding Metal's alpha in red
 //!   ([`metal_order`], [`image_order`]), so a read, a merge of the channels a write mask keeps
 //!   (in Metal's channels, of which only alpha is stored) and the per-sample forms are Metal's
-//!   (probe `a8`'s uses on an M3 Max under macOS 27.0.1); an
+//!   (probe `a8`'s uses on an M3 Max under macOS 27.0.1); an `ARGB8Unorm` attachment through its
+//!   `R8G8B8A8_UNORM` image, whose red, green, blue and alpha hold Metal's alpha, red, green and
+//!   blue (`StorageView::rotated`), every texel read from it rotated into Metal's order and every
+//!   one written to it out of it ([`metal_order`], [`image_order`]), blended as `RGBA8Unorm`
+//!   (below; Metal stores the format as `RGBA8Unorm` with its channels rotated); an
 //!   8-bit sRGB format the device renders (`R8Unorm_sRGB`, `RG8Unorm_sRGB`, `RGBA8Unorm_sRGB`,
 //!   `BGRA8Unorm_sRGB`) through a view of the attachment in the unsigned integer format of its
 //!   texel (`R8_UINT`, `R16_UINT`, `R32_UINT`; `StorageView::uint_view`), whose bytes the function
@@ -241,7 +245,8 @@
 //! storage form (`VariantKey::interlocked_colors`) and its blend is exact; elsewhere the variant
 //! is refused and the render pass splits around the draw, whose blend is the device's.
 //!
-//! **An 8-bit unorm attachment's blend** (`R8Unorm`, `RG8Unorm`, `RGBA8Unorm`, `BGRA8Unorm`) of a
+//! **An 8-bit unorm attachment's blend** (`R8Unorm`, `RG8Unorm`, `RGBA8Unorm`, `BGRA8Unorm`, and
+//! `ARGB8Unorm` as `RGBA8Unorm` in Metal's channel order) of a
 //! `half4` or `float4` output the shader computes as Metal does ([`unorm8_blended`]): the write
 //! reads the texel at the pixel inside the interlock in Metal's channel order, clamps the output to
 //! `[0, 1]` (a NaN to 0), reads each code `c` as `h(c / 255)` (`f(c / 255)` for a `float4` output)
@@ -261,7 +266,12 @@
 //! value), so the blend is Metal's wherever the module states its math (`HalfOutputPrecision` for
 //! one naming none). A format without alpha's fast-math lerp, common factor or contracted pair
 //! (Metal sums those in forms of their own) and an output of fewer lanes take the generic blend
-//! (below), as do a factor of the second source and a second (index 1) output.
+//! (below), as do a factor of the second source and a second (index 1) output. An `ARGB8Unorm`
+//! attachment whose blend no Vulkan state on its image gives (`color_writes::shader_rotated_blend`)
+//! takes this form whether or not the function reads it, as the device blends it in no other: the
+//! pipeline's state names it (`LoweringInputs::framebuffer_fetch`): Metal's blend where the module
+//! states its math, else the same arithmetic, noted as a module stating none is
+//! (`output_precision::half_output_note`).
 //!
 //! **A 32-bit float attachment's blend** (`R32Float`, `RG32Float`, `RGBA32Float`) takes the generic
 //! blend below where the function reads the attachment. Every device the translation targets blends
@@ -382,11 +392,16 @@ pub(crate) fn half_float_format(pf: crate::metal::PixelFormat) -> bool {
     matches!(pf, P::R16Float | P::RG16Float | P::RGBA16Float)
 }
 
-/// Whether `pf` is an 8-bit unorm color format held directly, whose blend Metal computes in the
-/// arithmetic of the output's type over the clamped output ([`extended_range::Blend::unorm8`]).
+/// Whether `pf` is an 8-bit unorm color format, whose blend Metal computes in the arithmetic of
+/// the output's type over the clamped output ([`extended_range::Blend::unorm8`]): one held
+/// directly, or `ARGB8Unorm`, which Metal blends as `RGBA8Unorm` with its channels rotated and
+/// whose image the function reads and writes in Metal's order ([`StorageView::rotated`]).
 pub(crate) fn unorm8_format(pf: crate::metal::PixelFormat) -> bool {
     use crate::metal::PixelFormat as P;
-    matches!(pf, P::R8Unorm | P::RG8Unorm | P::RGBA8Unorm | P::BGRA8Unorm)
+    matches!(
+        pf,
+        P::R8Unorm | P::RG8Unorm | P::RGBA8Unorm | P::BGRA8Unorm | P::ARGB8Unorm
+    )
 }
 
 /// Whether `pf` is an 8-bit sRGB color format, whose blend Metal computes as its unorm twin's over
@@ -784,6 +799,11 @@ pub struct StorageView {
     /// `R8_UNORM`'s, a texel read from the image, `(r, 0, 0, 1)`, is Metal's `(0, 0, 0, r)`, and a
     /// texel written to it holds Metal's alpha in red ([`metal_order`], [`image_order`]).
     pub alpha_in_red: bool,
+    /// The attachment's image holds Metal's channels rotated (`ARGB8Unorm` in `R8G8B8A8_UNORM`,
+    /// `metal::format::FormatEmulation::RotatedView`): its red, green, blue and alpha are Metal's
+    /// alpha, red, green and blue, so a texel read from the image is rotated into Metal's order and
+    /// one written to it out of it ([`metal_order`], [`image_order`]).
+    pub rotated: bool,
 }
 
 impl StorageView {
@@ -1122,11 +1142,14 @@ pub(crate) fn storage_form(
     let alpha_in_red = emulation == FormatEmulation::AlphaInRed
         && crate::metal::format::alpha_in_red(pf, p)
         && word.is_none();
+    // An `ARGB8Unorm` attachment is read and written through its `R8G8B8A8_UNORM` image, the
+    // function rotating Metal's channels into and out of the image's.
+    let rotated = emulation == FormatEmulation::RotatedView;
     // An unblended write of every channel stores Metal's write of the output. A padded 10-bit
     // attachment's tile value and blends are not measured: no storage form.
     let not_modelled = inputs.amplified
         || extended.is_some_and(ExtendedRange::padded)
-        || (emulation != FormatEmulation::Direct && extended.is_none() && !alpha_in_red)
+        || (emulation != FormatEmulation::Direct && extended.is_none() && !alpha_in_red && !rotated)
         || (extended.is_some() && stores && !shader_blends && attachment.blending_enabled)
         || (srgb && uint_view.is_none())
         // An `RGB9E5Float` word's mantissas share its exponent: no field is kept apart.
@@ -1229,6 +1252,7 @@ pub(crate) fn storage_form(
             rgba_view,
             word,
             alpha_in_red,
+            rotated,
         })),
         _ => {
             // A BGRA-order format no declaration reaches, whose RGBA-order twin lacks something
@@ -1711,6 +1735,15 @@ pub(super) fn plan(cx: &mut SelectCx<'_>) -> Result<(), Error> {
                     // no device blends the format.
                     (Some(Ok(_)), Some(_)) if view.word.is_some() => {
                         sixteen_exact = false;
+                        Ok((view, None))
+                    }
+                    // A blend into an attachment held with its channels rotated
+                    // (`StorageView::rotated`), which no Vulkan state on its image may give
+                    // (`color_writes::shader_rotated_blend`): Metal's 8-bit unorm blend wherever
+                    // the module states its math, else a near-equivalent the function notes,
+                    // taken whether or not the function reads the attachment.
+                    (Some(Ok(_)), Some((_, 4))) if view.rotated => {
+                        sixteen_exact = cx.entry.compile.fast_math.is_some();
                         Ok((view, None))
                     }
                     (Some(Ok(b)), Some((_, lanes))) => {
@@ -2484,27 +2517,33 @@ fn read_texel(
 }
 
 /// Texel `texel` of storage-form attachment `sc`'s image, in Metal's channel order: an attachment
-/// viewed in its RGBA-order twin ([`StorageView::rgba_view`]) has red and blue exchanged, and one
+/// viewed in its RGBA-order twin ([`StorageView::rgba_view`]) has red and blue exchanged, one
 /// whose image holds Metal's alpha in red ([`StorageView::alpha_in_red`]) reads `(r, 0, 0, 1)` as
-/// Metal's `(0, 0, 0, r)`; any other is as it is. Every texel read from the attachment's image
-/// goes through here ([`read_texel`]), and every one written to it through [`image_order`].
+/// Metal's `(0, 0, 0, r)`, and one holding Metal's channels rotated ([`StorageView::rotated`])
+/// reads Metal's red, green, blue and alpha from the image's green, blue, alpha and red; any other
+/// is as it is. Every texel read from the attachment's image goes through here ([`read_texel`]),
+/// and every one written to it through [`image_order`].
 fn metal_order(fb: &mut FunctionBuilder<'_>, sc: &StorageColor, texel: SValue) -> BResult<SValue> {
-    match (sc.view.rgba_view, sc.view.alpha_in_red) {
-        (Some(_), _) => fb.vector_shuffle(texel, texel, &[2, 1, 0, 3]),
-        (None, true) => super::color::alpha_in_red(fb, texel),
-        (None, false) => Ok(texel),
+    match (sc.view.rgba_view, sc.view.alpha_in_red, sc.view.rotated) {
+        (Some(_), _, _) => fb.vector_shuffle(texel, texel, &[2, 1, 0, 3]),
+        (None, true, _) => super::color::alpha_in_red(fb, texel),
+        (None, false, true) => fb.vector_shuffle(texel, texel, &[1, 2, 3, 0]),
+        (None, false, false) => Ok(texel),
     }
 }
 
 /// Metal-ordered texel `texel` of storage-form attachment `sc`, in its image's channel order:
-/// [`metal_order`]'s exchange of red and blue, which is its own inverse, and for an image holding
-/// Metal's alpha in red, Metal's alpha in every lane (the image keeps its red). Every texel
-/// written to the attachment's image goes through here ([`emit_return`]).
+/// [`metal_order`]'s exchange of red and blue, which is its own inverse, for an image holding
+/// Metal's alpha in red, Metal's alpha in every lane (the image keeps its red), and for one holding
+/// Metal's channels rotated, Metal's alpha, red, green and blue as the image's red, green, blue
+/// and alpha (the inverse of [`metal_order`]'s rotation). Every texel written to the attachment's
+/// image goes through here ([`emit_return`]).
 fn image_order(fb: &mut FunctionBuilder<'_>, sc: &StorageColor, texel: SValue) -> BResult<SValue> {
-    match (sc.view.rgba_view, sc.view.alpha_in_red) {
-        (Some(_), _) => fb.vector_shuffle(texel, texel, &[2, 1, 0, 3]),
-        (None, true) => fb.vector_shuffle(texel, texel, &[3, 3, 3, 3]),
-        (None, false) => Ok(texel),
+    match (sc.view.rgba_view, sc.view.alpha_in_red, sc.view.rotated) {
+        (Some(_), _, _) => fb.vector_shuffle(texel, texel, &[2, 1, 0, 3]),
+        (None, true, _) => fb.vector_shuffle(texel, texel, &[3, 3, 3, 3]),
+        (None, false, true) => fb.vector_shuffle(texel, texel, &[3, 0, 1, 2]),
+        (None, false, false) => Ok(texel),
     }
 }
 

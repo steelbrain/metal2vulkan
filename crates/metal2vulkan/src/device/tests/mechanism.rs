@@ -209,6 +209,18 @@ fn every_fact() -> Vec<RuntimeFact> {
             },
             kept: crate::vk::ColorComponentFlags::empty(),
         },
+        RuntimeFact::RotatedInputBlend {
+            color: 0,
+            blend: {
+                let mut c = crate::pipeline::ColorAttachmentDescriptor::new(
+                    crate::metal::PixelFormat::ARGB8Unorm,
+                );
+                c.blending_enabled = true;
+                c.destination_rgb_blend_factor = crate::metal::BlendFactor::DestinationAlpha;
+                crate::pipeline::lower_inputs::BlendEquation::of(&c).expect("a blend")
+            },
+            kept: crate::vk::ColorComponentFlags::empty(),
+        },
         RuntimeFact::WordInputMerge {
             color: 1,
             kept: crate::vk::ColorComponentFlags::G,
@@ -357,6 +369,7 @@ fn variant(f: &RuntimeFact) -> usize {
         RuntimeFact::MeshLastFirst => 71,
         RuntimeFact::YCbCrInPlace { .. } => 65,
         RuntimeFact::PartialObjectThreadgroups => 89,
+        RuntimeFact::RotatedInputBlend { .. } => 90,
     }
 }
 
@@ -364,7 +377,7 @@ fn variant(f: &RuntimeFact) -> usize {
 fn mechanism_is_total_over_every_fact_and_profile() {
     let facts = every_fact();
     let covered: std::collections::BTreeSet<usize> = facts.iter().map(variant).collect();
-    assert_eq!(covered, (0..90).collect(), "every_fact misses a variant");
+    assert_eq!(covered, (0..91).collect(), "every_fact misses a variant");
     for (stem, _) in super::committed_profiles() {
         let dev = device(&stem);
         let p = dev.profile();
@@ -482,6 +495,7 @@ fn mechanism_is_total_over_every_fact_and_profile() {
                 | RuntimeFact::ShaderStencilTest { .. }
                 | RuntimeFact::TileImageblock { .. }
                 | RuntimeFact::ExtendedRangeInputBlend { .. }
+                | RuntimeFact::RotatedInputBlend { .. }
                 | RuntimeFact::WordInputMerge { .. } => Mechanism::RenderPassContract,
                 RuntimeFact::ExecutionStatus => match f.buffer_access {
                     crate::device::profile::BufferAccess::Addressed => Mechanism::PushConstant,

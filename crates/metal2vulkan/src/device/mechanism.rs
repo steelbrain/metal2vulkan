@@ -230,6 +230,9 @@ pub fn mechanism(fact: &RuntimeFact, profile: &DeviceProfile) -> Mechanism {
         // Link gives the attachment no Vulkan blend and its input attachment, which the consumer
         // binds as `GraphicsState::input_attachments` states.
         RuntimeFact::ExtendedRangeInputBlend { .. } => Mechanism::RenderPassContract,
+        // Link gives the rotated attachment no Vulkan blend and its input attachment, which the
+        // consumer binds as `GraphicsState::input_attachments` states.
+        RuntimeFact::RotatedInputBlend { .. } => Mechanism::RenderPassContract,
         // Link writes the whole word and gives the attachment its input attachment, which the
         // consumer binds as `GraphicsState::input_attachments` states.
         RuntimeFact::WordInputMerge { .. } => Mechanism::RenderPassContract,

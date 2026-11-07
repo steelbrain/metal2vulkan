@@ -614,6 +614,21 @@ pub enum RuntimeFact {
         kept: crate::vk::ColorComponentFlags,
     },
     /// On a device that orders framebuffer fetch through rasterization-order input attachments,
+    /// the function computes Metal's blend `blend` into color attachment `color`, held with its
+    /// channels rotated (`ARGB8Unorm` in `R8G8B8A8_UNORM`), where no Vulkan state on that image
+    /// gives it (`color_writes::shader_rotated_blend`): it reads the texel through the
+    /// attachment's input attachment (`RuntimeFact::FramebufferFetch`), blends its output over it
+    /// in Metal's channel order by Metal's 8-bit unorm blend, and writes the result through its
+    /// first output, rotated as every output there is. `kept` is the format's channels the
+    /// descriptor's write mask leaves out, which the attachment's write mask keeps. Link gives the
+    /// attachment no Vulkan blend, and a pipeline of another blend or write mask there is
+    /// `NeedsInput(FramebufferFetch)`.
+    RotatedInputBlend {
+        color: u32,
+        blend: crate::pipeline::lower_inputs::BlendEquation,
+        kept: crate::vk::ColorComponentFlags,
+    },
+    /// On a device that orders framebuffer fetch through rasterization-order input attachments,
     /// the function writes color attachment `color`, which renders through a view of its word
     /// (`metal::format::WordAttachment`, an 8-bit sRGB one), under a write mask of some of the
     /// word's channels: it reads the texel's word through the attachment's input attachment

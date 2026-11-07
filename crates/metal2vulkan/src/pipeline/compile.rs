@@ -2097,7 +2097,9 @@ pub(crate) fn unattached_colors_written(
 /// interlock, the state of every attachment the entry declares a `[[color(n)]]` input of a constant
 /// index for, of every extended-range attachment it writes that the pass blends (whose blend the
 /// function computes from the texel it reads) or writes unblended under a mask of some of the codes
-/// one word holds (`color_writes::merged_extended`), and of every attachment variant `v`'s instance keeps
+/// one word holds (`color_writes::merged_extended`), of every attachment held with its channels
+/// rotated whose blend the function computes (`color_writes::shader_rotated_blend`, in either form
+/// below), and of every attachment variant `v`'s instance keeps
 /// out of its subpass that the entry writes through its first output
 /// (`VariantKey::interlocked_colors`); `None` on another device or for an entry that declares none
 /// of them. On a device that orders fetch through rasterization-order input attachments, the state
@@ -2164,6 +2166,15 @@ pub(crate) fn fetch_inputs(
             })
             .is_some()
     };
+    // An attachment held with its channels rotated whose blend the function computes over the
+    // texel it reads, in either form (`color_writes::shader_rotated_blend`).
+    let rotated_blend = |color: u32| {
+        d.color_attachments
+            .get(color as usize)
+            .copied()
+            .flatten()
+            .is_some_and(|c| crate::pipeline::color_writes::shader_rotated_blend(&c, p))
+    };
     let read: BTreeSet<u32> = spec
         .ep
         .params
@@ -2181,6 +2192,7 @@ pub(crate) fn fetch_inputs(
                 index: 0,
                 ..
             } if blended(color)
+                || rotated_blend(color)
                 || (interlock && (stored_word(color) || merged_extended(color)))
                 || (inputs && (merged_word(color) || merged_extended(color))) =>
             {

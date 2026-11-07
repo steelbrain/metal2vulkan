@@ -114,8 +114,10 @@ pub use fetch::{
     StorageColor,
 };
 pub use imageblock::{select_output as select_imageblock_output, ImageblockPlan};
-pub(crate) use input_blend::texel as input_blend_texel;
-pub use input_blend::{select_second_output as select_input_second_output, InputBlend};
+pub(crate) use input_blend::{rotated_texel as rotated_input_texel, texel as input_blend_texel};
+pub use input_blend::{
+    select_second_output as select_input_second_output, InputBlend, RotatedInputBlend,
+};
 pub use input_shadow::InputShadow;
 pub(crate) use input_shadow::{shadows as input_shadow, store as input_shadow_store};
 #[cfg(test)]
@@ -207,6 +209,10 @@ pub struct FragmentPlan {
     /// The extended-range attachments whose blend the function computes over their input
     /// attachments, on a device that orders fetch through them (`input_blend`), by index.
     pub input_blends: BTreeMap<u32, InputBlend>,
+    /// The attachments held with their channels rotated whose blend the function computes over
+    /// their input attachments, on a device that orders fetch through them (`input_blend`), by
+    /// index.
+    pub rotated_blends: BTreeMap<u32, RotatedInputBlend>,
     /// The word attachments whose word the function merges into the texel's over their input
     /// attachments, on a device that orders fetch through them (`word_input`), by index: the bits
     /// of the fields each write keeps from the texel.
@@ -521,6 +527,7 @@ pub fn declare(
         mb,
         &fp.colors,
         (&fp.fetch, &fp.input_blends, &fp.word_merges),
+        &fp.rotated_blends,
         fp.fetch_sample.is_some(),
     )?;
     for (&color, sc) in &fp.fetch {

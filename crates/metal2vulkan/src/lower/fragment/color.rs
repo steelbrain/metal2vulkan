@@ -194,7 +194,13 @@ pub(super) fn select_param(cx: &mut SelectCx<'_>, b: &ParamBinding) -> Result<Co
         .fragment
         .input_blends
         .get(&color)
-        .is_some_and(super::InputBlend::reads);
+        .is_some_and(super::InputBlend::reads)
+        || cx
+            .families
+            .fragment
+            .rotated_blends
+            .get(&color)
+            .is_some_and(super::RotatedInputBlend::reads);
     if !known.iter().any(|c| c.color == color) && !blended {
         cx.descriptors.input_attachments = cx.descriptors.input_attachments.saturating_add(1);
         cx.facts.insert(RuntimeFact::FramebufferFetch { color });
@@ -338,8 +344,10 @@ pub(super) const ALPHA_IN_RED_WORDS: u64 = 16;
 /// function (`multisampled`), or its storage image in the interlocked storage form (`fetch`), which
 /// holds the samples as its view states; the storage image of every other attachment in that form
 /// (one the function only writes); the input attachment of every extended-range attachment whose
-/// blend the function computes over it (`input_blend`); and that of every word attachment whose
-/// word the function merges into the texel's (`word_input`), of `uint` texels.
+/// blend the function computes over it (`input_blend`) and that of every word attachment whose
+/// word the function merges into the texel's (`word_input`), of `uint` texels; and that of every
+/// attachment held with its channels rotated whose blend the function computes over it
+/// (`rotated`, `input_blend`), of `float` texels.
 pub(super) fn declare(
     mb: &mut ModuleBuilder,
     colors: &[ColorInput],
@@ -348,6 +356,7 @@ pub(super) fn declare(
         &BTreeMap<u32, super::InputBlend>,
         &BTreeMap<u32, u32>,
     ),
+    rotated: &BTreeMap<u32, super::RotatedInputBlend>,
     multisampled: bool,
 ) -> BResult<BTreeMap<u32, GlobalId>> {
     let mut out = BTreeMap::new();
@@ -374,6 +383,13 @@ pub(super) fn declare(
     for color in blended.chain(merges.keys().copied()) {
         if let std::collections::btree_map::Entry::Vacant(e) = out.entry(color) {
             e.insert(input_attachment(mb, color, false, multisampled)?);
+        }
+    }
+    // An attachment held with its channels rotated, whose 8-bit unorm texels its blend reads as
+    // `float`s.
+    for (&color, _) in rotated.iter().filter(|(_, rb)| rb.reads()) {
+        if let std::collections::btree_map::Entry::Vacant(e) = out.entry(color) {
+            e.insert(input_attachment(mb, color, true, multisampled)?);
         }
     }
     Ok(out)
