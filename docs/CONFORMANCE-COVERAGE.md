@@ -44,7 +44,7 @@ Its limits, measured rather than asserted:
 | committed recordings | 1229 |
 | distinct SDK items the Metal leg reaches, of any status | 820 |
 | of those, reached only where this cannot name the family | 3 |
-| ledger rows (a case whose gap is recorded) | 2596 |
+| ledger rows (a case whose gap is recorded) | 2616 |
 | declared crossings of the option space (pairs put to Metal at once) | 26 |
 | declared crossings that are no pair of it (a boolean or numeric field, or one type in two slots) | 30 |
 
@@ -4830,4 +4830,24 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `pixel-samplers-subnormal-mirror` | A pixel-coordinate sample of a texture at subnormal coordinates through the device's own sampler: the digest of the site's output differs, so the report gives n… |
 | `pixel-samplers-subnormal-mirror` | A pixel-coordinate sample of a texture at subnormal coordinates through the device's own sampler: the digest of the site's output differs, so the report gives n… |
 | `pixel-samplers-subnormal-mirror` | A pixel-coordinate sample of a texture at subnormal coordinates through the device's own sampler: the digest of the site's output differs, so the report gives n… |
+| `ycbcr-gathers-edge` | The site holds `ycg_float`'s lanes over the `420v` surface through one linear sampler state addressed by clamp to the edge on both axes: at each position a samp… |
+| `ycbcr-gathers-edge` | The site holds `ycg_half`'s lanes over the `420v` surface through one linear sampler state addressed by clamp to the edge on both axes: at each position a sampl… |
+| `ycbcr-gathers-edge` | The site holds `ycg_float`'s lanes over the `x420` surface through one linear sampler state addressed by clamp to the edge on both axes: at each position a samp… |
+| `ycbcr-gathers-edge` | The site holds `ycg_half`'s lanes over the `x420` surface through one linear sampler state addressed by clamp to the edge on both axes: at each position a sampl… |
+| `ycbcr-gathers-zero` | The site holds `ycg_float`'s lanes over the `420v` surface through one linear sampler state addressed by clamp to zero on both axes: at each position a sample, … |
+| `ycbcr-gathers-zero` | The site holds `ycg_half`'s lanes over the `420v` surface through one linear sampler state addressed by clamp to zero on both axes: at each position a sample, a… |
+| `ycbcr-gathers-zero` | The site holds `ycg_float`'s lanes over the `x420` surface through one linear sampler state addressed by clamp to zero on both axes: at each position a sample, … |
+| `ycbcr-gathers-zero` | The site holds `ycg_half`'s lanes over the `x420` surface through one linear sampler state addressed by clamp to zero on both axes: at each position a sample, a… |
+| `ycbcr-gathers-white` | The site holds `ycg_float`'s lanes over the `420v` surface through one linear sampler state addressed by the opaque-white border on both axes: at each position … |
+| `ycbcr-gathers-white` | The site holds `ycg_half`'s lanes over the `420v` surface through one linear sampler state addressed by the opaque-white border on both axes: at each position a… |
+| `ycbcr-gathers-white` | The site holds `ycg_float`'s lanes over the `x420` surface through one linear sampler state addressed by the opaque-white border on both axes: at each position … |
+| `ycbcr-gathers-white` | The site holds `ycg_half`'s lanes over the `x420` surface through one linear sampler state addressed by the opaque-white border on both axes: at each position a… |
+| `ycbcr-gathers-repeat` | The site holds `ycg_float`'s lanes over the `420v` surface through one linear sampler state addressed by repeat (which a 4:2:0 texture samples as clamp to the e… |
+| `ycbcr-gathers-repeat` | The site holds `ycg_half`'s lanes over the `420v` surface through one linear sampler state addressed by repeat (which a 4:2:0 texture samples as clamp to the ed… |
+| `ycbcr-gathers-repeat` | The site holds `ycg_float`'s lanes over the `x420` surface through one linear sampler state addressed by repeat (which a 4:2:0 texture samples as clamp to the e… |
+| `ycbcr-gathers-repeat` | The site holds `ycg_half`'s lanes over the `x420` surface through one linear sampler state addressed by repeat (which a 4:2:0 texture samples as clamp to the ed… |
+| `ycbcr-minify-band-x` | The site is the whole band's 34,816 samples, held by their digest alone: a 4K `x420` (`YCBCR10_420_2P`) surface minified along x through a linear sampler, at th… |
+| `ycbcr-minify-band-x` | The site is the first and last 256 samples of the band: a 4K `x420` (`YCBCR10_420_2P`) surface minified along x through a linear sampler, at the 2,048 places al… |
+| `ycbcr-minify-band-y` | The site is the whole band's 34,816 samples, held by their digest alone: a 4K `x420` (`YCBCR10_420_2P`) surface minified along y through a linear sampler, at th… |
+| `ycbcr-minify-band-y` | The site is the first and last 256 samples of the band: a 4K `x420` (`YCBCR10_420_2P`) surface minified along y through a linear sampler, at the 2,048 places al… |
 
