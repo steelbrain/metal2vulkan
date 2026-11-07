@@ -360,6 +360,7 @@ mod serde_round_trips {
                 ..Default::default()
             }),
             max_call_stack_depth: Some(8),
+            open_cl_mode: true,
             flat_grid: true,
             render_target_array_index_varying: true,
             primitive_id_varying: true,
