@@ -298,7 +298,8 @@ impl Device {
     }
 
     /// The device's read-only zero buffer of `bytes` bytes, made at its first use and kept for
-    /// the device's lifetime ([`Neutrals::zeros`]).
+    /// the device's lifetime ([`Neutrals::zeros`]): made under the neutrals' lock, as the other
+    /// neutrals are, so threads that first ask for one length at once make one buffer.
     ///
     /// Only a **read-only** binding may be served from it: every draw and dispatch of the device
     /// binds the one buffer, so a shader that could store through the binding would be writing
@@ -307,13 +308,15 @@ impl Device {
     /// keeps its own region, as before.
     pub(super) fn neutral_zero_buffer(&self, bytes: u64) -> Result<vk::Buffer, Error> {
         let shared = self.shared();
-        if let Some(zeros) = lock(&shared.textures.neutrals).zeros.get(&bytes) {
+        let mut neutrals = lock(&shared.textures.neutrals);
+        if let Some(zeros) = neutrals.zeros.get(&bytes) {
             return Ok(zeros.buffer);
         }
         let zeros = self.new_neutral_zeros(bytes)?;
-        let mut neutrals = lock(&shared.textures.neutrals);
+        let buffer = zeros.buffer;
         neutrals.zeros_made += 1;
-        Ok(neutrals.zeros.entry(bytes).or_insert(zeros).buffer)
+        neutrals.zeros.insert(bytes, zeros);
+        Ok(buffer)
     }
 
     /// How many zero buffers the device has made: one per length its plans ask for, however many

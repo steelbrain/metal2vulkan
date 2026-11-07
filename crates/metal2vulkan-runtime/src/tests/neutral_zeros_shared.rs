@@ -55,6 +55,14 @@
 //! whole. It is gone -- a chunk is made without a clear -- and `tests::upload_chunk_zeros` is
 //! where that is held.
 //!
+//! # First asks at once
+//!
+//! Threads that first ask for one length at the same moment share one buffer: the device makes it
+//! under its neutrals' lock. Made outside it, each racing thread made a buffer of its own and all
+//! but one were dropped unreleased, a `VkBuffer` and its memory leaked until the device was
+//! destroyed (the validation layer's `VUID-vkDestroyDevice-device-05137` on lavapipe, in
+//! `runtime_lane::cache::makings_on_several_threads_each_read_their_own_cache`).
+//!
 //! What none of it covers: a draw or dispatch whose read-only slot is unbound **and** whose
 //! length differs from `zero_buffer_bytes` on this device, since one device offers one length; and
 //! the fully-bound case, which binds no neutral at all and whose per-draw work was already one
@@ -106,6 +114,41 @@ fn device(cache: &Path) -> Device {
         ..DeviceOptions::default()
     };
     Device::system_default_with(&options).unwrap()
+}
+
+/// Eight threads, released together, each first ask the device for a zero buffer of one length,
+/// a new length a round: each round makes one buffer, which every thread is handed.
+#[test]
+fn threads_that_first_ask_at_once_share_one_zero_buffer() {
+    const THREADS: usize = 8;
+    const ROUNDS: u64 = 16;
+    let scratch = Scratch::new();
+    let device = device(&scratch.0);
+    let made_before = device.neutral_zeros_made();
+    for round in 0..ROUNDS {
+        let bytes = 256 * (round + 1);
+        let start = std::sync::Barrier::new(THREADS);
+        let buffers: Vec<_> = std::thread::scope(|scope| {
+            let asks: Vec<_> = (0..THREADS)
+                .map(|_| {
+                    scope.spawn(|| {
+                        start.wait();
+                        device.neutral_zero_buffer(bytes).unwrap()
+                    })
+                })
+                .collect();
+            asks.into_iter().map(|ask| ask.join().unwrap()).collect()
+        });
+        assert!(
+            buffers.iter().all(|&buffer| buffer == buffers[0]),
+            "round {round}: the threads were handed different zero buffers of {bytes} bytes"
+        );
+        assert_eq!(
+            device.neutral_zeros_made() - made_before,
+            round + 1,
+            "round {round}: zero buffers made"
+        );
+    }
 }
 
 fn state(device: &Device, fragment: &str) -> RenderPipelineState {
