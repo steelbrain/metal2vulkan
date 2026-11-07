@@ -1,0 +1,283 @@
+{
+  "format": 1,
+  "case": "attribute-stride-vertex-buffer",
+  "suite_version": 1,
+  "shaders": [
+    {
+      "fixture": "icb_render_stride_template.ll",
+      "entry": "icb_render_stride_template",
+      "source_sha256": "1b6def77f2d7875e65ded90342ce1fa0d6c575772d0509066b888e48dc8fd882"
+    },
+    {
+      "fixture": "icb_render_stride_template.air.ll",
+      "entry": "icb_render_stride_template",
+      "source_sha256": "db4c8dcf8925e4544a499e1aa095e80cc417783c3f51f8efaa7134cddb5111bb"
+    }
+  ],
+  "answers": [
+    {
+      "key": {
+        "chip": "apple-m3-max",
+        "os_version": "27.0.1",
+        "os_build": "26A434",
+        "metal_level": "27.0.1"
+      },
+      "provenance": "metal_run",
+      "device": "Apple M3 Max",
+      "runs": 3,
+      "outcomes": [
+        {
+          "runs": 3,
+          "transcript": {
+            "root": {
+              "name": "case",
+              "observed": {
+                "value": "absent"
+              },
+              "children": [
+                {
+                  "name": "inputs",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "air",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "1b6def77f2d7875e65ded90342ce1fa0d6c575772d0509066b888e48dc8fd882"
+                        }
+                      }
+                    },
+                    {
+                      "name": "air-typed",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "db4c8dcf8925e4544a499e1aa095e80cc417783c3f51f8efaa7134cddb5111bb"
+                        }
+                      }
+                    },
+                    {
+                      "name": "render-pipeline",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "bb359be4499d17c777f1b79fcd2a4c288c755e101a25a537f8bf04d987ced732"
+                        }
+                      }
+                    },
+                    {
+                      "name": "buffer:attributes",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "e9512b567a9e967b6e872380418de278fda0606358af1a6720aa0a173a532e8f"
+                        }
+                      }
+                    },
+                    {
+                      "name": "buffer:out",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "f2eaacf85101341c5933f3b734b3d021b1da74f0513917b2d29613b3925f8dbb"
+                        }
+                      }
+                    },
+                    {
+                      "name": "pass",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "2c1ad4d4e15159cd03c8c301b2cd79b41dd6782c38110a18b20c658eda856575"
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "library",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "pipeline",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer:attributes",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer:out",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "render",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": {
+                          "variant": {
+                            "name": "Completed",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "program",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "calls",
+                      "observed": {
+                        "value": "absent"
+                      },
+                      "children": [
+                        {
+                          "name": "0-renderCommandEncoder",
+                          "observed": {
+                            "value": {
+                              "variant": {
+                                "name": "Ok",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "name": "status",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": {
+                              "variant": {
+                                "name": "Completed",
+                                "payload": "absent"
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "command-buffer-error",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "None",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "out",
+                  "observed": {
+                    "value": {
+                      "bytes": "EAAAAAAAAAARAAAAAQAAABIAAAACAAAAEwAAAAMAAAAQAAAAAAAAAAAAAAABAAAAAAAAAAIAAAAAAAAAAwAAABAAAAAAAAAAAAAAAAEAAAAAAAAAAgAAAAAAAAADAAAAEAAAAAAAAAAAAAAAAQAAAAAAAAACAAAAAAAAAAMAAAA="
+                    },
+                    "shape": {
+                      "bytes": {
+                        "region": {
+                          "buffer": {
+                            "offset": 0,
+                            "length": 128
+                          }
+                        },
+                        "element": "u32",
+                        "row_offset": 0,
+                        "row_elements": 32,
+                        "row_pitch": 128,
+                        "rows": 1,
+                        "image_pitch": 128,
+                        "images": 1,
+                        "gaps": "ignored"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "notices",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "set",
+                      "observed": {
+                        "value": {
+                          "nothing": "announced_nothing"
+                        }
+                      }
+                    },
+                    {
+                      "name": "counts",
+                      "observed": {
+                        "value": {
+                          "fields": {}
+                        }
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "validated": {
+        "stopped": {
+          "call": "render",
+          "message": "Draw Errors Validation\nproviding `MTLAttributeStrideStatic` to `attributeStride` when stride at buffer-layout index 1 is dynamic."
+        }
+      }
+    }
+  ]
+}
