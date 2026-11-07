@@ -153,22 +153,39 @@ fn orders() -> Vec<Order> {
     ]
 }
 
-/// The messages a device's sink received: each one's arrival, severity and id name.
-type Heard = Arc<Mutex<Vec<(Instant, MessageSeverity, String)>>>;
+/// The messages a device's sink received: each one's arrival, severity and id name, and the
+/// time the sink's receiver took over it before it kept it.
+type Heard = Arc<Mutex<Vec<(Instant, MessageSeverity, String, Duration)>>>;
 
-/// The ids of `heard`'s messages that arrived in `from..=to`, each with its count and the
-/// severity of its last.
+/// A receiver keeping each message it is called with in `heard`.
+fn hearing(heard: &Heard) -> impl Fn(&crate::DebugMessage) + Send + Sync + 'static {
+    let heard = Arc::clone(heard);
+    move |message| {
+        let began = Instant::now();
+        let id = message.id_name.clone();
+        let entry = (began, message.severity, id, began.elapsed());
+        heard.lock().unwrap().push(entry);
+    }
+}
+
+/// The ids of `heard`'s messages that arrived in `from..=to`, each with its count, the severity
+/// of its last and the receiver's time over all of them.
 fn heard_in(heard: &Heard, from: Instant, to: Instant) -> String {
-    let mut ids: BTreeMap<&str, (usize, MessageSeverity)> = BTreeMap::new();
+    let mut ids: BTreeMap<&str, (usize, MessageSeverity, Duration)> = BTreeMap::new();
     let heard = heard.lock().unwrap();
-    for (at, severity, id) in heard.iter() {
+    for (at, severity, id, took) in heard.iter() {
         if (from..=to).contains(at) {
-            let entry = ids.entry(id.as_str()).or_insert((0, *severity));
-            *entry = (entry.0 + 1, *severity);
+            let entry = ids
+                .entry(id.as_str())
+                .or_insert((0, *severity, Duration::ZERO));
+            *entry = (entry.0 + 1, *severity, entry.2 + *took);
         }
     }
     let listed: Vec<String> = (ids.iter())
-        .map(|(id, (count, severity))| format!("{id} ({severity:?}) x{count}"))
+        .map(|(id, (count, severity, took))| {
+            let us = took.as_secs_f64() * 1e6;
+            format!("{id} ({severity:?}) x{count}, the receiver's {us:.1} us")
+        })
         .collect();
     match listed.is_empty() {
         true => "none".to_owned(),
@@ -176,22 +193,42 @@ fn heard_in(heard: &Heard, from: Instant, to: Instant) -> String {
     }
 }
 
-/// A device of the cfg's kind made with the options a consumer (a VMM) makes its device with,
-/// its shader cache in `cache`; `None` where it imports no host memory. The options: a message
-/// sink at `Info`, so the device turns on `VK_EXT_debug_utils` and the driver's messages of that
-/// severity and above reach the sink, which keeps each in `heard`; GPU times from the host's
-/// clock; a shader cache on disk; a video-decode queue beside the device's own, one queue held
-/// back, and the video-decode extensions where the device has them. The consumer also asks for
-/// its windows' instance extensions, which this device leaves out.
+/// The time a sink at `Info` takes over one driver message, the path the debug-utils callback
+/// takes after the driver called it: its text and id copied out of C strings, the sink's
+/// severity filter and its panic guard, and [`hearing`]'s receiver; the mean over `count`.
+fn delivery_time(count: u32) -> Duration {
+    let heard = Heard::default();
+    let sink = MessageSink::new(hearing(&heard)).with_least_severity(MessageSeverity::Info);
+    let id = c"Driver-Info-Message-Id";
+    let text = c"A message of the driver's, as long as an informational line about an allocation \
+        it made, the memory type it chose and the bytes it pinned for an import of host memory.";
+    let began = Instant::now();
+    for _ in 0..count {
+        let message = crate::DebugMessage {
+            severity: MessageSeverity::Info,
+            kind: crate::MessageKind::default(),
+            id_name: id.to_string_lossy().into_owned(),
+            id: 7,
+            text: text.to_string_lossy().into_owned(),
+            degradation: None,
+        };
+        sink.deliver(&message);
+    }
+    let took = began.elapsed() / count;
+    assert_eq!(heard.lock().unwrap().len(), count as usize);
+    took
+}
+
+/// A device of the cfg's kind made with the options a consumer (a VMM) makes its device with, its
+/// shader cache in `cache`; `None` where it imports no host memory. The options: a message sink at
+/// `Info`, which turns on `VK_EXT_debug_utils` (whose messenger asks the driver for its warnings
+/// and errors; the sink's severity filters the runtime's own messages) and keeps each message it
+/// hears in `heard` ([`hearing`]); GPU times from the host's clock; a shader cache on disk; a
+/// video-decode queue beside the device's own, one queue held back, and the video-decode extensions
+/// where the device has them. The consumer also asks for its windows' instance extensions, which
+/// this device leaves out.
 fn consumer_device(cache: &Path, heard: &Heard) -> Option<Device> {
-    let heard = Arc::clone(heard);
-    let sink = MessageSink::new(move |message| {
-        let id = message.id_name.clone();
-        heard
-            .lock()
-            .unwrap()
-            .push((Instant::now(), message.severity, id));
-    });
+    let sink = MessageSink::new(hearing(heard));
     let video = [
         "VK_KHR_video_queue",
         "VK_KHR_video_decode_queue",
@@ -388,6 +425,10 @@ fn host_ram_window_bench_with_a_consumer_s_options() {
         device.name(),
         cfg!(debug_assertions),
         heard_in(&heard, made, Instant::now())
+    );
+    eprintln!(
+        "HOST-RAM-WINDOW a sink's delivery of one driver message outside the driver: {:.2} us",
+        delivery_time(10_000).as_secs_f64() * 1e6
     );
     for repeat in 0..REPEATS {
         for order in orders().into_iter().filter(|order| order.consumer) {
