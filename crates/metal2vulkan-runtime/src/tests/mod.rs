@@ -392,6 +392,8 @@ mod surface_two_planes;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod teardown_threads;
 mod texture;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod texture_aggregates;
 mod texture_descriptor;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod texture_facts;
