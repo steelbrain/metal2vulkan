@@ -2856,14 +2856,6 @@ bound.
   buffer that may still reach the pages (through a texture over them, or a table of the live buffers
   it holds) lets go of them, or the batches submitted before the import's memory went complete,
   where Metal's runs at the release; the pages stay mapped until then.
-- `metal2vulkan-degrade-read-only-pages-written` (precision). `ReadOnlyPagesWritten`: A no-copy
-  buffer, heap or rebind was made over host pages the process maps read-only, from the caller's
-  dma-buf source (`HostMemory::with_dma_buf`): on Linux, where drivers pin a pointer's imported
-  pages for writing, such pages are imported only as dma-bufs of their pages, whose memory the GPU
-  writes. Where the caller's gate refuses their import, or that import fails, they are a copy whose
-  GPU writes are dropped instead (`copied-host-pages`). Cost: the GPU's writes through it reach the pages, and the CPU then reads them there,
-  where after Metal's GPU writes into pages the process maps read-only the CPU reads them as they
-  were (an M3 Max under macOS 27.0.1, private and shared memory alike).
 - `metal2vulkan-degrade-copied-host-pages` (precision). `CopiedHostPages`: A no-copy buffer, a
   no-copy heap or a buffer's rebind was made over a copy of the caller's host pages in memory of
   the device's own, which no import maps (a heap's textures shadows of its bytes):
@@ -2872,10 +2864,12 @@ bound.
   another Vulkan error, such as a driver out of the mappings the host kernel allows), or the
   runtime kept pages the kernel cannot pin (a dma-buf's mapping) from NVIDIA's driver, whose failed
   import of them breaks it (`RuntimeDriverDefect::UnpinnablePagesBreakHostMemory`), and no dma-buf
-  of them served. The gate is
-  asked before the pages' write permission: pages the process maps read-only (a VMM's alias of a
-  read-only replace) are copied as any, and the copy drops the GPU's writes, as Metal drops them:
-  each batch's completion takes them back out of the copy and writes nothing to the pages
+  of them served; or, on Linux, the process maps some of the pages read-only (a VMM's alias of a
+  read-only replace), whose pointer drivers pin for writing and whose dma-bufs would take the
+  GPU's writes (`copied_unwritable_pages`), with or without a dma-buf source, which is never
+  called for them. The gate is asked before the pages' write permission, where the pointer would
+  be imported. A copy of pages the process maps read-only drops the GPU's writes, as Metal drops
+  them: each batch's completion takes them back out of the copy and writes nothing to the pages
   (`copied_dropped_bytes`; the detail says so). The copy reads the pages through the kernel, and
   where the kernel cannot (on Linux it pins each page, which a dma-buf's mapping does not allow),
   with plain loads where the process maps every page readable. Pages not mapped, or mapped

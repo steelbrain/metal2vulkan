@@ -822,8 +822,9 @@ const PACKED: [Layout; 2] = [
 ];
 
 /// A texture that only reads, of `layout`, over a no-copy buffer whose pages the process maps
-/// read-only by its first use: made read-only after the buffer was made (Linux refuses read-only
-/// pages at the import, `a_read_only_page_is_refused_on_linux_and_read_elsewhere`, but not later),
+/// read-only by its first use: made read-only after the buffer was made (Linux makes a copy of
+/// read-only pages at the import, `a_read_only_page_is_a_copy_on_linux_and_read_elsewhere`, but
+/// not of pages made read-only later),
 /// or, where `from_the_start`, before it (a guest's pages the host maps read-only, which MoltenVK
 /// imports in place). It is a shadow, whose first use copies the pages' texels in and stores
 /// nothing into them, or in place ([`in_place_form`]), whose first move the device's check showed

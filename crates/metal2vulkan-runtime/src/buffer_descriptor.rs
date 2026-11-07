@@ -579,7 +579,7 @@ impl Device {
             kept_runs.as_ref(),
             window.offset,
         );
-        let (buffer, memory, again, unwritable) = match in_chunk {
+        let (buffer, memory, again) = match in_chunk {
             // A buffer (not a heap) bound in an import of its own run alone, its chunk not
             // imported yet, is released while idle and bound in the chunk's import at its next
             // use where that is made by then (`host_residency.rs`).
@@ -590,15 +590,16 @@ impl Device {
                     .map(|run| Again::ram_run(self, run, (length, window, class)));
                 #[cfg(not(unix))]
                 let again = None;
-                (buffer, memory, again, false)
+                (buffer, memory, again)
             }
             None => {
                 // A no-copy buffer or heap whose pointer the device would import (not one whose GPU
                 // writes are dropped) may be a copy instead (`copied.rs`): where the caller's gate
                 // refuses the import, asked here with the pages it would map, holding no lock of
                 // the runtime's, before their write permission is asked (a copy pins no page, and
-                // drops the GPU's writes to pages the process cannot write); or where the import it
-                // admitted fails, of the pointer or of the caller's dma-bufs.
+                // drops the GPU's writes to pages the process cannot write); where the process
+                // cannot write them; or where the import it admitted fails, of the pointer or of
+                // the caller's dma-bufs.
                 let copyable = !drops_writes;
                 let copy = (call, pointer, length, modes, placement, of_heap);
                 // Memory whose GPU writes Metal's private option bit 24 drops, where the system
@@ -634,8 +635,14 @@ impl Device {
                 // Only a buffer that imports its pages pins them, and so has their writability
                 // asked: one that lies in a live import pins none, that import's making asked for
                 // the same window, and the pages stay writable while imported (`HostMemory::new`).
-                let host = writability_settled(host, writable, &shared.counts)?;
-                let unwritable = host.unwritable;
+                // Pages the process cannot write are a copy whose GPU writes are dropped, as
+                // Metal drops them, their source never called ([`unwritable_pages`]).
+                if unwritable_pages(&host, writable, &shared.counts)? {
+                    // SAFETY: the caller's contract.
+                    let copied =
+                        unsafe { self.copied_buffer(copy, release, dirty, CopiedFor::Unwritable) };
+                    return copied.map(|buffer| noted(kept(buffer, log, kept_runs)));
+                }
                 // SAFETY: the window lies in the pages of the caller's bytes, which stay mapped
                 // (`HostMemory::new`), and the source's pieces hold them
                 // (`HostMemory::with_dma_buf`). No lock of the runtime's is held. A no-copy
@@ -680,12 +687,9 @@ impl Device {
                     }
                     Err(error) => return Err(error),
                 };
-                (buffer, memory, again, unwritable)
+                (buffer, memory, again)
             }
         };
-        if unwritable {
-            self.degrade_read_only_pages(call, pointer, length);
-        }
         let (address, reserved) = match self.place_window(placement, &window, length) {
             Ok(held) => held,
             Err(error) => {
@@ -925,13 +929,12 @@ impl Device {
                 if refused_by_host {
                     shared.counts.host_import_refused_by_host();
                 }
-                // Only pages imported here are pinned, and so have their writability asked.
+                // Only pages imported here are pinned, and so have their writability asked; pages
+                // the process cannot write are a copy whose GPU writes are dropped
+                // ([`unwritable_pages`]).
                 let imports = !chunk_bound && !refused_by_host && !moved && !read_only_copy;
-                let host = match imports {
-                    true => writability_settled(host, writable, &shared.counts)?,
-                    false => host,
-                };
-                let unwritable = imports && host.unwritable;
+                let unwritable = imports && unwritable_pages(&host, writable, &shared.counts)?;
+                let imports = imports && !unwritable;
                 // The heap's images bound to its bytes, and the images in place over the bytes,
                 // are made again over the copy (`Device::rebound_heap_images`,
                 // `Device::rebound_in_place_images`): its memory holds whole pages from a multiple
@@ -1056,15 +1059,13 @@ impl Device {
                             (true, _) => CopiedBecause::Moved,
                             (false, Some(_)) => CopiedBecause::Failed,
                             (false, None) if read_only_copy => CopiedBecause::ReadOnly,
+                            (false, None) if unwritable => CopiedBecause::Unwritable,
                             (false, None) => CopiedBecause::Refused,
                         };
                         let (host, placement, copied) = copy(failed)?;
                         (host, placement, Remade::default(), Some((copied, cause)))
                     }
                 };
-                if unwritable && copied.is_none() {
-                    self.degrade_read_only_pages(call, pointer, length);
-                }
                 // A copy lies at the offset it was laid out at: the old one where the bytes moved.
                 let offset = match copied {
                     Some(_) => copy_window.offset,
@@ -1289,7 +1290,6 @@ impl Device {
             window,
             by_pointer,
             source,
-            unwritable: _,
             drops_writes,
         } = host;
         let refusal = match by_pointer {
@@ -1399,21 +1399,6 @@ impl Device {
         _keep: bool,
     ) -> Result<(HostBuffer, Placement, Option<std::convert::Infallible>), Error> {
         match source {}
-    }
-
-    /// Announce that `call` made the `length` bytes at `pointer`, over pages the process maps
-    /// read-only, from the caller's dma-buf source, whose memory the GPU writes
-    /// (`Degradation::ReadOnlyPagesWritten`).
-    fn degrade_read_only_pages(&self, call: &'static str, pointer: NonNull<u8>, length: u64) {
-        self.degrade(Degradation::ReadOnlyPagesWritten, || {
-            (
-                format!("{call} over {length:#x} bytes at {pointer:p}"),
-                "the process maps some of their pages read-only, which Linux drivers do not \
-                 import by pointer, so they are imported as dma-bufs of their pages from the \
-                 caller's source"
-                    .to_owned(),
-            )
-        });
     }
 
     /// A copy of the `length` bytes at `pointer` for a rebind's new pages (`copied.rs`), laid
@@ -1587,9 +1572,13 @@ impl Device {
                     "Metal's private option bit 24 (0x1000000) makes them memory the GPU's \
                      writes do not reach, and no import of them here keeps the GPU's writes out"
                 }
+                CopiedBecause::Unwritable => {
+                    "the process maps some of them read-only, which Linux drivers pin no pointer \
+                     of, and whose dma-bufs would take the GPU's writes, which Metal drops"
+                }
             };
             let dropped = match (drops, cause) {
-                (true, CopiedBecause::ReadOnly) => {
+                (true, CopiedBecause::ReadOnly | CopiedBecause::Unwritable) => {
                     ", whose GPU writes are dropped, as Metal drops them, and never written to \
                      the pages"
                 }
@@ -1671,6 +1660,7 @@ impl Device {
             CopiedFor::Refused => (CopiedBecause::Refused, None),
             CopiedFor::Failed(failed) => (CopiedBecause::Failed, Some(failed)),
             CopiedFor::ReadOnly => (CopiedBecause::ReadOnly, None),
+            CopiedFor::Unwritable => (CopiedBecause::Unwritable, None),
         };
         let shared = self.shared();
         let raw_device = shared.vk();
@@ -2008,33 +1998,25 @@ struct HostWindow {
     by_pointer: bool,
     /// The caller's dma-buf source, where it gave one and the device imports dma-bufs.
     source: Option<Source>,
-    /// The process cannot write every page, so they go to the source alone
-    /// ([`writability_settled`]).
-    unwritable: bool,
 }
 
-/// `host`, its pages' write permission settled, for a call that imports them itself (not a
-/// buffer that lies in a live import of them): Linux drivers pin a pointer's imported pages for
-/// writing, so where the process cannot write one of them ([`refuse_unwritable`]) the pointer is
-/// not imported, and the pages go to the caller's dma-buf source where it gave one the device can
-/// use (a dma-buf of the pages pins nothing of the process's mapping, and the GPU's writes reach
-/// the pages: `unwritable`, announced), else are refused. Pages whose write permission the caller
-/// vouched for (`vouched`, `HostMemory::assume_writable`) are not asked about.
-fn writability_settled(
-    host: HostWindow,
-    vouched: bool,
-    counts: &Counters,
-) -> Result<HostWindow, Error> {
+/// Whether the process cannot write some of `host`'s pages, asked by a call that imports them
+/// itself (not a buffer that lies in a live import of them): such pages are a copy whose GPU
+/// writes are dropped (`copied.rs`), on every device, never imported and their dma-buf source
+/// never called. Linux drivers pin a pointer's imported pages for writing (RADV refused such a
+/// page, NVIDIA failed it as out of device memory, ANV imported it and lost the device at the
+/// GPU's first read), and a dma-buf of them would take the GPU's writes, where Metal's leave the
+/// CPU's view of them as it was (an M3 Max under macOS 27.0.1, private and shared memory alike).
+/// Pages whose write permission the caller vouched for (`vouched`, `HostMemory::assume_writable`)
+/// are not asked about. Refused where the process's mappings cannot be asked
+/// ([`refuse_unwritable`]); off Linux nothing is asked.
+fn unwritable_pages(host: &HostWindow, vouched: bool, counts: &Counters) -> Result<bool, Error> {
     if vouched {
-        return Ok(host);
+        return Ok(false);
     }
     match refuse_unwritable(&host.window, counts) {
-        Ok(()) => Ok(host),
-        Err(error) if refused(&error) && host.source.is_some() => Ok(HostWindow {
-            by_pointer: false,
-            unwritable: true,
-            ..host
-        }),
+        Ok(()) => Ok(false),
+        Err(error) if refused(&error) => Ok(true),
         Err(error) => Err(error),
     }
 }
@@ -2057,6 +2039,9 @@ enum CopiedFor {
     /// Metal's private option bit 24 drops the GPU's writes to the memory, and the system maps
     /// no read-only view of the pages (`read_only_view.rs`): the copy drops them.
     ReadOnly,
+    /// The process cannot write every page ([`unwritable_pages`]): the copy drops the GPU's
+    /// writes, as Metal drops them.
+    Unwritable,
 }
 
 /// Whether `error`, an import's failure that is not the device's refusal of the pages, leaves the
@@ -2108,7 +2093,6 @@ fn host_window(
         window,
         by_pointer,
         source,
-        unwritable: false,
     })
 }
 

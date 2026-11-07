@@ -17,6 +17,10 @@
 //!   copied: the buffer is refused, as their import is.
 //! - **A dma-buf's mapping** (Linux, where `/dev/udmabuf` opens), whose pages the kernel's read
 //!   cannot pin, is copied where the gate refuses its import, with the same coherence.
+//! - **Read-only pages** (a read-only view of shared memory) are a copy whose GPU writes are
+//!   dropped, a buffer's and a rebind's: where the gate refuses their import, counted as a
+//!   refusal; on Linux where it admits it, counted as a copy of unwritable pages
+//!   (`WorkCounts::copied_unwritable_pages`). Their dma-buf source is never called.
 //! - **Rebinds.** A rebind's new pages are a copy where the gate refuses their import or the
 //!   admitted import fails, with the same coherence; the old pages stay as they were, and a later
 //!   rebind imports again.
@@ -1739,14 +1743,13 @@ fn copied_heap_rebind_over_read_only_pages_drops_the_gpu_s_writes() {
     drop((buffer, imported));
 }
 
-/// A buffer's rebind to read-only pages whose import the gate admits goes to the caller's source
-/// (Linux drivers pin a pointer's pages for writing); where the device's import of those dma-bufs
-/// then fails (the RTX 5080's, out of device memory), the buffer is a copy of them all the same,
-/// counted as degraded, whose GPU writes are dropped. Where the device imports them, or none, the
-/// test says what it took and passes.
+/// A buffer's rebind to read-only pages whose import the gate admits gives it a copy of them on
+/// every device, their source never called (a dma-buf of them would take the GPU's writes, and
+/// Linux drivers pin a pointer's pages for writing), counted as a copy of unwritable pages, whose
+/// GPU writes are dropped; the old pages stay as they were.
 #[cfg(target_os = "linux")]
 #[test]
-fn copied_rebind_over_read_only_pages_whose_admitted_import_fails_drops_the_gpu_s_writes() {
+fn copied_rebind_over_read_only_pages_the_gate_admits_drops_the_gpu_s_writes() {
     let (first, second) = (Host::new(33), ReadOnlyHost::new(34));
     let Some((device, heard)) = device() else {
         return;
@@ -1761,26 +1764,64 @@ fn copied_rebind_over_read_only_pages_whose_admitted_import_fails_drops_the_gpu_
         buffer.rebind_bytes_no_copy(second.memory(gate(&asked, true), &calls), None, None)
     };
     let after = device.work_counts();
-    let called = calls.load(std::sync::atomic::Ordering::Acquire);
+    rebound.expect("a rebind to read-only pages the gate admits is a copy");
+    assert!(buffer.copied(), "a copy");
+    assert_eq!(moved(&before, &after), [0, 1, 0, 0, 0]);
+    assert_eq!(
+        after.copied_unwritable_pages - before.copied_unwritable_pages,
+        1
+    );
     assert_eq!(asked.lock().unwrap().len(), 1, "the gate was asked once");
-    // An import that failed is never the answer: the copy is.
-    if let Err(error @ (crate::Error::OutOfMemory(_) | crate::Error::Vulkan(_))) = &rebound {
-        panic!("the admitted import failed and no copy was made: {error:?}");
-    }
-    if !buffer.copied() {
-        eprintln!(
-            "COPIED-READ-ONLY-ADMITTED: not a copy here ({rebound:?}, the source called {called} \
-             times, {} dma-buf imports made): nothing to test",
-            after.dma_buf_imports - before.dma_buf_imports
-        );
-        return;
-    }
-    rebound.unwrap();
-    assert_eq!(moved(&before, &after), [0, 1, 0, 1, 0]);
-    assert_eq!(called, 1, "the source was asked once");
+    assert_eq!(
+        calls.load(std::sync::atomic::Ordering::Acquire),
+        0,
+        "the source unasked"
+    );
+    assert_eq!(after.dma_buf_imports, before.dma_buf_imports);
     assert_eq!(announced(&heard), 1, "announced once");
     drops_the_gpu_s_writes(&device, (&buffer, 0), &second);
-    eprintln!("COPIED-READ-ONLY-ADMITTED: the source's import failed, and the copy was made");
+    assert_eq!(first.bytes(), first.pattern(), "the old pages stay");
+}
+
+/// A no-copy buffer over read-only pages whose import the gate admits is a copy of them on every
+/// device, their source never called, counted as a copy of unwritable pages, whose GPU writes are
+/// dropped.
+#[cfg(target_os = "linux")]
+#[test]
+fn copied_buffer_over_read_only_pages_the_gate_admits_drops_the_gpu_s_writes() {
+    let host = ReadOnlyHost::new(35);
+    let Some((device, heard)) = device() else {
+        return;
+    };
+    let asked: Arc<Mutex<Vec<ImportRequest>>> = Arc::default();
+    let calls: Arc<std::sync::atomic::AtomicUsize> = Arc::default();
+    let before = device.work_counts();
+    // SAFETY: the view outlives the buffer and the device (dropped after both).
+    let buffer = unsafe {
+        device.new_buffer_with_bytes_no_copy(
+            host.memory(gate(&asked, true), &calls),
+            LENGTH as u64,
+            ResourceOptions::default(),
+            None,
+        )
+    }
+    .expect("a buffer over read-only pages the gate admits is a copy");
+    let after = device.work_counts();
+    assert!(buffer.copied(), "a copy");
+    assert_eq!(moved(&before, &after), [0, 1, 0, 0, 0]);
+    assert_eq!(
+        after.copied_unwritable_pages - before.copied_unwritable_pages,
+        1
+    );
+    assert_eq!(
+        calls.load(std::sync::atomic::Ordering::Acquire),
+        0,
+        "the source unasked"
+    );
+    assert_eq!(after.dma_buf_imports, before.dma_buf_imports);
+    assert_eq!(announced(&heard), 1, "announced once");
+    drops_the_gpu_s_writes(&device, (&buffer, 0), &host);
+    drop(buffer);
 }
 
 /// A batch that only reads a copied buffer leaves it uncompared at its merge back

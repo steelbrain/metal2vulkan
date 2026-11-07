@@ -422,7 +422,10 @@ with read permission: on Linux the kernel's read pins each page, which a mapping
 without read permission, are never copied: the buffer is refused, as their import is.
 
 Pages the process maps read-only (a VMM's alias of `replaceBackingWithRanges:readOnly:`, its
-maximum protection lowered to read) are copied the same way, and the copy drops the GPU's writes,
+maximum protection lowered to read) are copied the same way on Linux, whatever the gate answers
+and whether or not a dma-buf source was given, which is never called for them
+(`copied_unwritable_pages`): Linux drivers pin an imported pointer's pages for writing, and a
+dma-buf of the pages would take the GPU's writes. The copy drops the GPU's writes,
 as Metal drops them: each batch's completion takes the bytes the GPU changed back out of the copy
 and writes nothing to the pages (`copied_dropped_bytes`), so later commands of the same command
 buffer read the writes back and a later command buffer reads the pages' bytes. The runtime asks

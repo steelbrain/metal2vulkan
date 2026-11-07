@@ -21,11 +21,11 @@
 //!   alignment above the host page whose rounding would take pages the range does not touch, an
 //!   offset in the pages that misses the buffer's memory alignment, no memory type both allow, or
 //!   a driver that refuses the pointer.
-//! - **Pages the process cannot write** are refused typed on Linux, before the buffer's own import,
-//!   unless the caller gave a dma-buf source the device can use: then they are imported from it
-//!   alone, never by their pointer, and the device announces `read-only-pages-written`, as the
-//!   GPU's writes reach them where Metal's leave the CPU's view of them as it was
-//!   ([`refuse_unwritable`] asks the kernel for the process's own mappings over the window, with
+//! - **Pages the process cannot write** are never imported on Linux: the buffer is a copy of them
+//!   whose GPU writes are dropped (`copied.rs`, announced as `copied-host-pages`,
+//!   `WorkCounts::copied_unwritable_pages`), on every device, its dma-buf source never called, as
+//!   a dma-buf of them would take the GPU's writes where Metal's leave the CPU's view of them as it
+//!   was ([`refuse_unwritable`] asks the kernel for the process's own mappings over the window, with
 //!   `PROCMAP_QUERY` on `/proc/self/maps`, a file kept open for them (`kept_maps`), or reads
 //!   that file's lines where the kernel predates the query, Linux 6.11;
 //!   `WorkCounts::host_mappings_queried`). A buffer that lies in a live
@@ -34,9 +34,9 @@
 //!   writable. Nor does one over pages whose write permission the caller vouched for
 //!   ([`HostMemory::assume_writable`]). Linux drivers pin user pages for writing: NVIDIA failed
 //!   a read-only page as out of device memory, RADV refused it, and ANV imported it and lost the
-//!   device at the GPU's first read. lavapipe read one, so there the rule refuses a little more
-//!   than the driver would. On macOS, MoltenVK hands the range to Metal, which reads read-only
-//!   pages, so there is no check.
+//!   device at the GPU's first read. lavapipe read one, so there the rule copies a little more
+//!   than the driver would need. On macOS, MoltenVK hands the range to Metal, which reads
+//!   read-only pages, so there is no check.
 //! - **What drivers answered**. Private anonymous memory was imported on every venue measured. RADV
 //!   refused shared memory typed: anonymous shared memory, and any mapping of a file, a shared
 //!   memory object or a `memfd` among them (QEMU's `memory-backend-memfd,share=on` guest RAM). It
@@ -244,16 +244,15 @@ impl HostMemory {
     /// Reading or writing them through the pointer while the GPU writes them is a data race, as
     /// Metal's `contents` is.
     ///
-    /// On Linux a buffer over a page this process maps without write permission is refused
-    /// (`Unsupported`, `HostMemory`), though Metal reads such pages: Linux drivers pin imported
-    /// pages for writing, and one (ANV) imported a read-only page and then lost the device at the
-    /// GPU's first read. So on Linux the pages also stay writable while they are imported: RADV
-    /// failed every command buffer submitted after a page of an import was made read-only
-    /// (`mprotect`). With a dma-buf source ([`HostMemory::with_dma_buf`]) pages the process maps
-    /// read-only are instead imported from the source alone, announced
-    /// (`read-only-pages-written`). Under a gate that refuses their import
-    /// ([`HostMemory::with_import_gate`]), or where the source's import fails, they are a copy
-    /// whose GPU writes are dropped, as Metal drops them (`copied-host-pages`). Some drivers also
+    /// On Linux a buffer over a page this process maps without write permission is a copy of the
+    /// pages whose GPU writes are dropped, as Metal drops them (`copied-host-pages`), with or
+    /// without a dma-buf source ([`HostMemory::with_dma_buf`]), which is never called for them:
+    /// Linux drivers pin imported pages for writing (one, ANV, imported a read-only page and then
+    /// lost the device at the GPU's first read), and a dma-buf of them would take the GPU's
+    /// writes. So on Linux the pages also stay writable while they are imported: RADV failed every
+    /// command buffer submitted after a page of an import was made read-only (`mprotect`). The
+    /// caller's gate ([`HostMemory::with_import_gate`]) is asked first where the pointer would be
+    /// imported. Some drivers also
     /// refuse shared memory (RADV refused anonymous shared memory and mappings of shared memory
     /// objects, `memfd` mappings among them); private memory imports everywhere measured.
     /// [`HostMemory::with_dma_buf`] imports such memory where the device imports dma-bufs.

@@ -2586,6 +2586,7 @@ field	metal2vulkan-runtime::WorkCounts.copied_merge_back_bytes	pub copied_merge_
 field	metal2vulkan-runtime::WorkCounts.copied_merges_compared	pub copied_merges_compared: u64
 field	metal2vulkan-runtime::WorkCounts.copied_merges_skipped	pub copied_merges_skipped: u64
 field	metal2vulkan-runtime::WorkCounts.copied_read_only_memory	pub copied_read_only_memory: u64
+field	metal2vulkan-runtime::WorkCounts.copied_unwritable_pages	pub copied_unwritable_pages: u64
 field	metal2vulkan-runtime::WorkCounts.copied_rebind_images_made	pub copied_rebind_images_made: u64
 field	metal2vulkan-runtime::WorkCounts.copied_rebind_pages_made	pub copied_rebind_pages_made: u64
 field	metal2vulkan-runtime::WorkCounts.copied_rebind_pages_moved	pub copied_rebind_pages_moved: u64
@@ -5288,7 +5289,6 @@ macro-member	metal2vulkan-runtime::Degradation::QuadsSplitByClipping	QuadsSplitB
 macro-member	metal2vulkan-runtime::Degradation::QueueSharing	QueueSharing = "queue-sharing", Performance,
 macro-member	metal2vulkan-runtime::Degradation::RasterizationRateMap	RasterizationRateMap = "rasterization-rate-map";
 macro-member	metal2vulkan-runtime::Degradation::RateMapResetUnencoded	RateMapResetUnencoded = "rate-map-reset-unencoded", Precision,
-macro-member	metal2vulkan-runtime::Degradation::ReadOnlyPagesWritten	ReadOnlyPagesWritten = "read-only-pages-written", Precision,
 macro-member	metal2vulkan-runtime::Degradation::ReductionOrder	ReductionOrder = "reduction-order";
 macro-member	metal2vulkan-runtime::Degradation::ReleasedCommandState	ReleasedCommandState = "released-command-state", Precision,
 macro-member	metal2vulkan-runtime::Degradation::RenderPassSplit	RenderPassSplit = "render-pass-split", Performance,

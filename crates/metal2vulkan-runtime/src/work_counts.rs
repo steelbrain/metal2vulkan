@@ -328,6 +328,7 @@ pub(crate) struct Counters {
     copied_host_buffers_degraded: AtomicU64,
     copied_rebind_pages_moved: AtomicU64,
     copied_read_only_memory: AtomicU64,
+    copied_unwritable_pages: AtomicU64,
     copied_rebind_pages_made: AtomicU64,
     copied_rebind_images_made: AtomicU64,
     copied_heaps_made: AtomicU64,
@@ -2707,6 +2708,7 @@ impl Counters {
             CopiedBecause::Refused => &self.copied_host_buffers_refused,
             CopiedBecause::Moved => &self.copied_rebind_pages_moved,
             CopiedBecause::ReadOnly => &self.copied_read_only_memory,
+            CopiedBecause::Unwritable => &self.copied_unwritable_pages,
         }
         .fetch_add(1, Ordering::Relaxed);
     }
@@ -5676,7 +5678,7 @@ pub struct WorkCounts {
     pub host_imports_refused_by_host: u64,
     /// The copied host buffers made (`copied-host-pages`): no-copy buffers whose bytes the GPU
     /// uses in a copy of the caller's pages in memory of the device's own, which no import maps.
-    /// Each is one of the next three.
+    /// Each is one of the next five.
     pub copied_host_buffers_made: u64,
     /// Of those, the ones made because the caller's gate refused the import.
     pub copied_host_buffers_refused: u64,
@@ -5692,6 +5694,13 @@ pub struct WorkCounts {
     /// Metal's private option bit 24 drops, made over a copy that drops them where the system
     /// maps no read-only view of the pages (`copied.rs`, `read_only_view.rs`).
     pub copied_read_only_memory: u64,
+    /// Of `copied_host_buffers_made`: no-copy buffers, heaps and rebinds over pages the process
+    /// maps read-only, on Linux, made over a copy that drops the GPU's writes, as Metal drops
+    /// them: Linux drivers pin a pointer's imported pages for writing, and a dma-buf of the pages
+    /// would take the GPU's writes (`buffer_descriptor.rs`, `copied.rs`). Their import is never
+    /// tried and their dma-buf source never called; the caller's gate is asked first where the
+    /// pointer would be imported, and a copy it refused is counted as refused.
+    pub copied_unwritable_pages: u64,
     /// Of the copies made, those a rebind gave a buffer as its new pages
     /// (`Buffer::rebind_bytes_no_copy`), in `copied_host_buffers_made` and its kin too.
     pub copied_rebind_pages_made: u64,
@@ -7071,6 +7080,7 @@ impl Device {
                 .load(Ordering::Relaxed),
             copied_rebind_pages_moved: counters.copied_rebind_pages_moved.load(Ordering::Relaxed),
             copied_read_only_memory: counters.copied_read_only_memory.load(Ordering::Relaxed),
+            copied_unwritable_pages: counters.copied_unwritable_pages.load(Ordering::Relaxed),
             copied_rebind_pages_made: counters.copied_rebind_pages_made.load(Ordering::Relaxed),
             copied_rebind_images_made: counters.copied_rebind_images_made.load(Ordering::Relaxed),
             copied_heaps_made: counters.copied_heaps_made.load(Ordering::Relaxed),
@@ -7403,4 +7413,7 @@ pub(crate) enum CopiedBecause {
     /// Metal's private option bit 24 drops the GPU's writes to the memory, and the system maps no
     /// read-only view of the pages (`read_only_view.rs`): the copy drops them.
     ReadOnly,
+    /// The process maps some of the pages read-only, whose GPU writes Metal drops and no import
+    /// on Linux keeps out of them: the copy drops them.
+    Unwritable,
 }

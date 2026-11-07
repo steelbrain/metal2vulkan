@@ -90,8 +90,7 @@
 //! each command buffer's own copy on a device withholding
 //! `descriptorBindingUpdateUnusedWhilePending`, [`OWN_COPIES`]; a no-copy buffer's deallocator
 //! that waits for its pages' import, which a texture's image a submitted command buffer may read
-//! holds, [`DELAYED_DEALLOCATORS`]), a no-copy buffer over pages the process maps read-only,
-//! made from its dma-buf source in `dma_buf_imports` on Linux ([`READ_ONLY_PAGES`]),
+//! holds, [`DELAYED_DEALLOCATORS`]),
 //! pass colors a draw keeps where Metal's compiler may fold the output
 //! and zero them in `color_reformat` ([`KEPT_COLORS`]), multisampled depth copied in by an
 //! inexact fragment-depth draw in `sample_copies` ([`DRAWN_DEPTH`]), textures bound beyond their
@@ -181,7 +180,7 @@ use super::grouped_submissions::GROUPED;
 use super::heap_layouts::HEAP_LAYOUTS;
 use super::heap_metal_sizes::{PAST_METAL_SIZES, UNMODELLED_SIZES};
 use super::heap_textures::{ALIASES, APART, COMPRESSED, OPTIMIZED};
-use super::host_memory::{not_importable, Mapping, GUEST_PAGE, READ_ONLY_PAGES};
+use super::host_memory::{not_importable, Mapping, GUEST_PAGE};
 use super::index_fetches::INDEX_FETCHES;
 use super::indirect_command_buffers::UNMEASURED_IDENTIFIERS;
 use super::indirect_dispatches::INDIRECT_DISPATCHES;
@@ -576,7 +575,6 @@ fn every_kind_has_a_site_a_lane_test_takes() {
         &CHOSEN_COPIES,
         &KEPT_BYTES,
         &DELAYED_DEALLOCATORS,
-        &READ_ONLY_PAGES,
         &MISPLACED,
         &STILL_MAKING,
         &COPIED_PAGES,

@@ -23,8 +23,8 @@ use metal2vulkan::metal::{PixelFormat, TextureUsage};
 use metal2vulkan::vk::DriverId;
 use metal2vulkan_runtime::{
     BlitOption, Buffer, BufferContents, BufferDescriptor, CommandBuffer, CommandBufferStatus,
-    CommandQueue, CopyProblem, CpuCacheMode, Deallocator, DebugMessage, Degradation, Device, Error,
-    EventRef, HazardTrackingMode, HostMemory, Invalid, Nil, Origin, Problem, PurgeableState,
+    CommandQueue, CopyProblem, CpuCacheMode, Deallocator, DebugMessage, Device, Error, EventRef,
+    HazardTrackingMode, HostBacking, HostMemory, Invalid, Nil, Origin, Problem, PurgeableState,
     Region, ResourceOptions, Size, StorageMode, TextureDescriptor,
 };
 #[cfg(any(m2v_cpu_icd, m2v_gpu_hazards))]
@@ -409,10 +409,6 @@ pub(super) fn gpu_fill(
     blit.end_encoding().unwrap();
     run(&command_buffer);
 }
-
-/// The kind a no-copy buffer over pages the process maps read-only, made from its dma-buf source,
-/// announces once (`dma_buf_imports`'s `read_only_pages_are_made_from_the_source`, on Linux).
-pub(super) const READ_ONLY_PAGES: [Degradation; 1] = [Degradation::ReadOnlyPagesWritten];
 
 /// Bytes `i % 251` from `start`.
 pub(super) fn counting(len: usize, start: usize) -> Vec<u8> {
@@ -1514,21 +1510,22 @@ fn host_memory_kinds_are_imported_or_refused_typed() {
     });
 }
 
-/// A read-only page (Metal makes the buffer, and its GPU reads it). On Linux the runtime refuses
-/// it typed before the import, as it refuses every page the process cannot write: Linux drivers
-/// pin imported pages for writing (measured at 83a57ba2: RADV refused the page,
-/// NVIDIA failed it as out of device memory, ANV made it and lost the device at the GPU's read;
-/// lavapipe read it, so there the rule refuses more than the driver would). Elsewhere (MoltenVK,
-/// which hands the range to Metal) it is made, and the GPU reads what the CPU wrote before the
-/// page became read-only. The GPU never writes the page.
+/// A read-only page (Metal makes the buffer, its GPU reads it, and its GPU's writes to it are
+/// dropped). On Linux the runtime makes the buffer over a copy of it whose GPU writes are dropped
+/// (`WorkCounts::copied_unwritable_pages`), as it does every page the process cannot write: Linux
+/// drivers pin imported pages for writing (measured at 83a57ba2: RADV refused the page, NVIDIA
+/// failed it as out of device memory, ANV made it and lost the device at the GPU's read; lavapipe
+/// read it). Elsewhere (MoltenVK, which hands the range to Metal) it is imported. Either way the
+/// GPU reads what the CPU wrote before the page became read-only; on Linux the GPU's fill of the
+/// copy leaves the page as it was.
 #[test]
-fn a_read_only_page_is_refused_on_linux_and_read_elsewhere() {
+fn a_read_only_page_is_a_copy_on_linux_and_read_elsewhere() {
     on_device(|device| {
         let memory = Mapping::anonymous(GUEST_PAGE);
         let bytes = counting(GUEST_PAGE, 3);
         memory.write(0, &bytes);
         memory.protect_read_only();
-        // SAFETY: the mapping outlives the buffer, and nothing writes the buffer.
+        // SAFETY: the mapping outlives the buffer, and the GPU writes only its copy (Linux).
         let made = unsafe {
             no_copy(
                 device,
@@ -1538,14 +1535,24 @@ fn a_read_only_page_is_refused_on_linux_and_read_elsewhere() {
                 None,
             )
         };
+        let queue = device.new_command_queue().unwrap();
+        let buffer = made.unwrap();
+        assert_eq!(gpu_read(&queue, &buffer, 0..GUEST_PAGE as u64), bytes);
         if cfg!(target_os = "linux") {
-            let error = made.unwrap_err();
-            assert!(not_importable(&error), "{error:?}");
-            eprintln!("runtime read-only page: refused");
+            assert_eq!(buffer.host_backing(), Some(HostBacking::Copied));
+            assert_eq!(
+                device.work_counts().copied_unwritable_pages,
+                1,
+                "one copy, counted"
+            );
+            gpu_fill(&queue, &buffer, 0..64, 0x5a);
+            assert_eq!(
+                memory.read(0..GUEST_PAGE),
+                bytes,
+                "the GPU's write was dropped"
+            );
+            eprintln!("runtime read-only page: a copy, read, the GPU's write dropped");
         } else {
-            let queue = device.new_command_queue().unwrap();
-            let buffer = made.unwrap();
-            assert_eq!(gpu_read(&queue, &buffer, 0..GUEST_PAGE as u64), bytes);
             eprintln!("runtime read-only page: made, read");
         }
     });
@@ -1731,9 +1738,8 @@ fn a_lost_device_s_command_buffers_let_go_of_their_pools_after_the_driver_s_comp
 /// every later one fail `DeviceLost`, and the device refuses new buffers `DeviceLost`;
 /// no runtime thread reaches the lost device outside a section of the exit
 /// guard on the way (a debug build once ended the process there). MoltenVK's reports of the failure
-/// are the only messages. On MoltenVK alone: a Linux driver is refused the pages
-/// (`a_read_only_page_is_refused_on_linux_and_read_elsewhere`), and lavapipe's CPU would fault
-/// the process itself. A GPU hazard (`m2v_gpu_hazards`): it faults the GPU on purpose twice, and
+/// are the only messages. On MoltenVK alone: on Linux the buffer is a copy whose GPU writes are
+/// dropped, which no write faults (`a_read_only_page_is_a_copy_on_linux_and_read_elsewhere`). A GPU hazard (`m2v_gpu_hazards`): it faults the GPU on purpose twice, and
 /// Metal's recovery fails other processes' command buffers in flight.
 #[cfg(any(m2v_cpu_icd, m2v_gpu_hazards))]
 #[test]

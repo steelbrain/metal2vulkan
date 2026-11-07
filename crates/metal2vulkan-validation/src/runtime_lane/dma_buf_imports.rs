@@ -25,7 +25,6 @@
 use super::degrade_notices;
 use super::first_use::{read_mark, release, scheduled, Busy, ENDED};
 use super::first_use_writes::CHECK_WAIT;
-use super::host_memory::READ_ONLY_PAGES;
 use super::host_memory::{
     counting, gpu_fill, gpu_read, host_page, not_importable, on_device, run, Mapping,
 };
@@ -48,8 +47,8 @@ use metal2vulkan::vk::DriverId;
 use metal2vulkan_runtime::{
     BlitOption, Buffer, BufferContents, BufferDescriptor, CommandBuffer, CommandQueue,
     DebugMessage, Degradation, Device, DmaBufChunk, DmaBufRequest, DmaBufSource, Error, EventRef,
-    Heap, HeapDescriptor, HeapType, HostMemory, KeepAlive, Origin, Problem, ResourceOptions,
-    RuntimeGap, Size, TextureDescriptor,
+    Heap, HeapDescriptor, HeapType, HostBacking, HostMemory, KeepAlive, Origin, Problem,
+    ResourceOptions, RuntimeGap, Size, TextureDescriptor,
 };
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd, OwnedFd};
 use std::ptr::NonNull;
@@ -856,16 +855,15 @@ fn a_buffer_that_lies_in_a_live_import_asks_about_no_mapping() {
     });
 }
 
-/// Memfd pages a view maps read-only, with a source: the process cannot write them, so no pointer
-/// of them is imported (Linux drivers pin imported pages for writing), and the buffer is made from
-/// the source alone on a device that imports dma-bufs, whatever it does with a pointer of such
-/// memory (`ReadOnlyPagesWritten`, announced once for two such buffers over different pages). The
-/// GPU reads the CPU's bytes through it, and its writes reach the file's pages, where the CPU
-/// reads them through the file's own mapping (where Metal's leave the pages as they were). The
-/// same pages with no source are refused typed, as before, and so is the source's memory on a
-/// device that imports no dma-buf.
+/// Memfd pages a view maps read-only: the process cannot write them, so on every device the
+/// buffer over them is a copy whose GPU writes are dropped, as Metal drops them, made without a
+/// source and with one, which is never called (`WorkCounts::copied_unwritable_pages`, announced
+/// once as `copied-host-pages` for the two buffers over different pages). Neither pointer is
+/// imported (Linux drivers pin imported pages for writing), nor the pages as dma-bufs, which would
+/// take the GPU's writes. The GPU reads the CPU's bytes through each, and after its fill the
+/// file's pages, which the CPU reads through the file's own mapping, are as they were.
 #[test]
-fn read_only_pages_are_made_from_the_source() {
+fn read_only_pages_are_a_copy_whose_gpu_writes_are_dropped() {
     const TEST: &str = "dma-buf read-only pages";
     if !udmabuf_openable(TEST) {
         return;
@@ -876,55 +874,52 @@ fn read_only_pages_are_made_from_the_source() {
         let ram = Memfd::new(6 * page);
         let bytes = counting(6 * page, 9);
         ram.whole.write(0, &bytes);
-        // Whether the device's route for these pages is a dma-buf import. A device that imports
-        // the pointer instead (NVIDIA, lavapipe) has no working import for pages the process maps
-        // read-only, which it refuses the pointer of: NVIDIA's 615.71.09 answers
-        // `ERROR_OUT_OF_DEVICE_MEMORY` with the whole card free. Its answer is printed, not held
-        // to a class, since it is the driver's.
-        let route = imports_dma_buf(device) == Some(true);
-        let read_only = |notices: &[DebugMessage]| {
+        let copied = |notices: &[DebugMessage]| {
             let kind = |m: &&DebugMessage| {
-                (m.degradation.as_ref()).is_some_and(|n| READ_ONLY_PAGES.contains(&n.degradation))
+                (m.degradation.as_ref())
+                    .is_some_and(|n| n.degradation == Degradation::CopiedHostPages)
             };
             notices.iter().filter(kind).count()
         };
         let mut made = Vec::new();
-        for (pieces, at) in [([(page, 2 * page)], page), ([(4 * page, page)], 4 * page)] {
+        let cases = [
+            ([(page, 2 * page)], page, false),
+            ([(4 * page, page)], 4 * page, true),
+        ];
+        for (pieces, at, sourced) in cases {
             let view = ram.view(&pieces);
             view.protect_read_only();
             let length = pieces[0].1;
-            // SAFETY: the view outlives the buffer, and nothing is made of it.
-            let plain = unsafe {
-                device.new_buffer_with_bytes_no_copy(
-                    HostMemory::new(view.pointer(0)),
-                    length as u64,
-                    ResourceOptions::default(),
-                    None,
-                )
-            };
-            let error = plain.unwrap_err();
-            assert!(not_importable(&error), "{TEST}: no source: {error:?}");
             let calls = Calls::default();
-            let before = dma_buf_counts(device);
-            let buffer = no_copy(device, &view, 0, length, ram.source(&view, &calls));
-            let buffer = match (route, buffer) {
-                (true, Ok(buffer)) => buffer,
-                (true, made) => panic!("{TEST}: the dma-buf route: {:?}", made.err()),
-                (false, made) => {
-                    eprintln!(
-                        "{TEST}: on {}: the pages' route is not a dma-buf import: {:?}",
-                        device.name(),
-                        made.err()
-                    );
-                    return;
-                }
+            let before = device.work_counts();
+            let buffer = match sourced {
+                true => no_copy(device, &view, 0, length, ram.source(&view, &calls)),
+                // SAFETY: the view outlives the buffer, and nothing is made of it.
+                false => unsafe {
+                    device.new_buffer_with_bytes_no_copy(
+                        HostMemory::new(view.pointer(0)),
+                        length as u64,
+                        ResourceOptions::default(),
+                        None,
+                    )
+                },
             };
-            let calls = calls.lock().unwrap().clone();
-            assert_eq!(calls.len(), 1, "{TEST}: the source's calls: {calls:?}");
-            assert!(
-                dma_buf_counts(device).0 > before.0,
-                "{TEST}: no chunk imported"
+            let buffer = buffer.unwrap_or_else(|error| {
+                panic!("{TEST}: read-only pages, a source {sourced}: {error:?}")
+            });
+            let after = device.work_counts();
+            assert_eq!(
+                (
+                    after.copied_unwritable_pages - before.copied_unwritable_pages,
+                    after.dma_buf_imports - before.dma_buf_imports,
+                    after.host_pointer_imports_made - before.host_pointer_imports_made,
+                ),
+                (1, 0, 0),
+                "{TEST}: a source {sourced}: a copy, and no import"
             );
+            assert_eq!(buffer.host_backing(), Some(HostBacking::Copied));
+            let calls = calls.lock().unwrap().clone();
+            assert!(calls.is_empty(), "{TEST}: the source's calls: {calls:?}");
             assert!(
                 gpu_read(&queue, &buffer, 0..length as u64) == bytes[at..at + length],
                 "{TEST}: the GPU's read"
@@ -932,14 +927,14 @@ fn read_only_pages_are_made_from_the_source() {
             gpu_fill(&queue, &buffer, 0..64, 0x5a);
             assert_eq!(
                 ram.whole.read(at..at + 64),
-                [0x5a; 64],
-                "{TEST}: the GPU's write in the file's pages"
+                bytes[at..at + 64],
+                "{TEST}: a source {sourced}: the GPU's write reached the file's pages"
             );
             made.push((buffer, view));
         }
-        assert_eq!(read_only(&messages.take_notices()), 1, "{TEST}: announced");
+        assert_eq!(copied(&messages.take_notices()), 1, "{TEST}: announced");
         eprintln!(
-            "{TEST}: on {}: made from the source, the GPU's writes in the pages",
+            "{TEST}: on {}: a copy with a source and without, the GPU's writes dropped",
             device.name()
         );
         drop(made);
@@ -962,8 +957,8 @@ impl Drop for LiveAtDrop {
 
 /// A no-copy buffer's keep-alive goes once the imports of its pages are freed, as
 /// `HostMemory`'s contract has it (the pages must stay mapped until then): a buffer over two
-/// pages the process maps read-only, made from the source's dma-bufs on a device whose route for
-/// such pages is a dma-buf import ([`imports_dma_buf`]), with a keep-alive and no deallocator,
+/// memfd pages, made from the source's dma-bufs on a device whose route for such pages is a
+/// dma-buf import ([`imports_dma_buf`]), with a keep-alive and no deallocator,
 /// released; as the keep-alive drops, every import the buffer made is freed (the live dma-buf
 /// imports are back to their count before it).
 #[test]
@@ -973,8 +968,8 @@ fn a_keep_alive_goes_after_the_imports_of_its_pages() {
         return;
     }
     degrade_notices::on_device(|device, _| {
-        // As `read_only_pages_are_made_from_the_source`: only a device whose route for these
-        // pages is a dma-buf import has imports to order the keep-alive against.
+        // Only a device whose route for these pages is a dma-buf import has imports to order the
+        // keep-alive against.
         if imports_dma_buf(device) != Some(true) {
             eprintln!(
                 "{TEST}: on {}: the pages' route is not a dma-buf import",
@@ -985,7 +980,6 @@ fn a_keep_alive_goes_after_the_imports_of_its_pages() {
         let page = host_page();
         let ram = Memfd::new(4 * page);
         let view = ram.view(&[(page, 2 * page)]);
-        view.protect_read_only();
         let live = || device.work_counts().dma_buf_memories_live;
         let before = live();
         let seen = Arc::new(Mutex::new(None));
