@@ -434,6 +434,9 @@ impl Printer<'_> {
                     Callee::Air { decl, op } => w!(self, "@f{} [air {op:?}]", decl.raw()),
                     Callee::Llvm { decl, op } => w!(self, "@f{} [llvm {op:?}]", decl.raw()),
                     Callee::UnknownIntrinsic(f) => w!(self, "@f{} [unknown]", f.raw()),
+                    Callee::Unbound { decl, template } => {
+                        w!(self, "@f{} [unbound {template:?}]", decl.raw())
+                    }
                 }
                 self.out.push('(');
                 for (i, &a) in call.args.iter().enumerate() {

@@ -596,6 +596,17 @@ layout stride of `None` is `MTLBufferLayoutStrideDynamic`: the stride comes from
   does.
 - **Dynamic libraries.** `DynamicLibrary::new(library, &budget)` checks a dynamic metallib as
   Metal's `newDynamicLibrary:` does; pipelines link its exported functions.
+- **OpenCL C kernels.** Metal compiles OpenCL C (`newLibraryWithSource` with the compile options'
+  `sourceLanguage` 1, which the GL renderer's compute path uses), naming each kernel
+  `__entry_<name>`, and its AIR has shapes MSL's does not:
+  - A helper left out of line that passes its parameter on as an intrinsic's immediate operand:
+    OpenCL C's `barrier(flags)` passes its flags to `air.wg.barrier`, and `mem_fence(flags)`
+    computes `air.atomic.fence`'s flags from them with `llvm.bitreverse.i2`. Each inlined copy
+    reads its own call site's constants, folded through the integer arithmetic between them. An
+    immediate that is still not a constant after that is
+    `InvalidInput(Intrinsic(ImmediateNotConstant))` at the call. An integer operation on a width
+    no SPIR-V type has (`i2`) is folded over constants; one that is not folded is refused
+    (`Lowering(Arith)`).
 
 ## 4. A render pipeline
 

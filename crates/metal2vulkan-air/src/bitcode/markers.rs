@@ -376,6 +376,7 @@ impl Plan {
                 match &mut call.callee {
                     Callee::Direct(f)
                     | Callee::UnknownIntrinsic(f)
+                    | Callee::Unbound { decl: f, .. }
                     | Callee::Air { decl: f, .. }
                     | Callee::Llvm { decl: f, .. } => *f = self.func(*f)?,
                     Callee::Indirect { fn_ty, .. } => *fn_ty = self.ty(*fn_ty)?,

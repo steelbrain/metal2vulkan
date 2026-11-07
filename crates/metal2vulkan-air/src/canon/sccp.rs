@@ -36,9 +36,10 @@
 use std::collections::{BTreeSet, HashMap, HashSet};
 
 use crate::budget::{vec_bytes, Meter};
-use crate::error::{AbiError, CanonError, DiagName, Error, InputError, InputErrorKind, Location};
-use crate::intrinsics::{AirIntrinsic, FunctionConstant};
-use crate::ir::{Arena, BlockId, Body, Callee, Const, ConstId, ConstTable, Constant, Global};
+use crate::error::{AbiError, CanonError, DiagName, Error, InputError, InputErrorKind};
+use crate::error::{IntrinsicError, Location};
+use crate::intrinsics::{AirIntrinsic, Bound, FunctionConstant, LlvmIntOp, LlvmIntrinsic};
+use crate::ir::{Arena, BlockId, Body, Call, Callee, Const, ConstId, ConstTable, Constant, Global};
 use crate::ir::{ArgIdx, BinOp, GlobalId, Idx, InstId, InstKind, Type, Value};
 
 use super::const_loads;
@@ -297,6 +298,20 @@ fn is_normalize(kind: &InstKind) -> bool {
             }
         )
     )
+}
+
+/// The integer `llvm.*` operation `kind` calls, which SCCP folds over constant operands.
+fn int_op(kind: &InstKind) -> Option<LlvmIntOp> {
+    match kind {
+        InstKind::Call(call) => match call.callee {
+            Callee::Llvm {
+                op: LlvmIntrinsic::Int { op, .. } | LlvmIntrinsic::NarrowInt { op, .. },
+                ..
+            } => Some(op),
+            _ => None,
+        },
+        _ => None,
+    }
 }
 
 /// What the lattice value of a branch condition decides.
@@ -1011,6 +1026,19 @@ impl<'b> Solver<'b> {
                 },
                 None => Lat::Bottom,
             },
+            // An integer operation on constants is their constant; on an undefined value, what
+            // the run computes, as any call's.
+            InstKind::Call(call) if int_op(&inst.kind).is_some() => {
+                let op = int_op(&inst.kind).ok_or_else(|| invariant("an integer operation"))?;
+                match self.pure(&call.args, cx, m, |f, c, m| match c {
+                    [x] => f.int_unary(op, ty, *x, m),
+                    [x, y] => f.int_minmax(op, ty, *x, *y, m),
+                    _ => Ok(None),
+                })? {
+                    Lat::Fc(_) => Lat::Bottom,
+                    lat => lat,
+                }
+            }
             kind @ InstKind::Call(_) => match is_defined_arg(kind, cx.folder.consts, cx.fcs) {
                 Some(Some(g)) => {
                     let supplied = cx.fcs.get(&g).is_some_and(|f| f.supplied);
@@ -1146,6 +1174,51 @@ impl<'b> Solver<'b> {
         found.into_iter().try_for_each(|k| read(reads, k, m))
     }
 
+    /// The call `call` (at block and instruction `at`) bound, when it is `Callee::Unbound` and
+    /// its immediates are constants now: its constant operands are written in, and the
+    /// intrinsic binds as decode binds it. `None` for any other call, and for one whose
+    /// immediates are still not all constants (the post-check refuses it).
+    fn bound(
+        &self,
+        call: &Call,
+        cx: &Context<'_>,
+        (b, i): (BlockId, InstId),
+        m: &mut Meter,
+        held: &mut usize,
+    ) -> Result<Option<InstKind>, Error> {
+        let Callee::Unbound { decl, template } = call.callee else {
+            return Ok(None);
+        };
+        // The rewritten call is the edit's until the body is rebuilt.
+        let bytes = std::mem::size_of::<Call>().saturating_add(call.heap_bytes());
+        m.charge(bytes)?;
+        *held = held.saturating_add(bytes);
+        let mut args = call.args.clone();
+        for a in args.iter_mut() {
+            if let Lat::Const(c) = self.lat(*a) {
+                *a = Value::Const(c);
+            }
+        }
+        let callee = match template.bind(&args, cx.folder.consts) {
+            Ok(Bound::Air(op)) => Callee::Air { decl, op },
+            Ok(Bound::Llvm(op)) => Callee::Llvm { decl, op },
+            Ok(Bound::Unknown) => Callee::UnknownIntrinsic(decl),
+            Err(IntrinsicError::ImmediateNotConstant) => return Ok(None),
+            Err(e) => {
+                let at = Location::function(cx.name.clone(), Some(b.raw()), Some(i.raw()));
+                return Err(InputError::new(InputErrorKind::Intrinsic(e), at).into());
+            }
+        };
+        Ok(Some(InstKind::Call(Box::new(Call {
+            callee,
+            args,
+            fmf: call.fmf,
+            tail: call.tail,
+            attrs: call.attrs.clone(),
+            range: call.range.clone(),
+        }))))
+    }
+
     fn edit(
         &self,
         cx: &mut Context<'_>,
@@ -1171,6 +1244,7 @@ impl<'b> Solver<'b> {
                 let lat = self.val.get(i.index()).copied().unwrap_or(Lat::Bottom);
                 let deletable = is_pure(&inst.kind)
                     || is_normalize(&inst.kind)
+                    || int_op(&inst.kind).is_some()
                     || is_defined_arg(&inst.kind, cx.folder.consts, cx.fcs).is_some();
                 match (&inst.kind, lat) {
                     // A field's address constant serves the loads it folds; the instruction stays,
@@ -1242,6 +1316,11 @@ impl<'b> Solver<'b> {
                                     hints: *hints,
                                 },
                             );
+                        }
+                    }
+                    (InstKind::Call(call), _) => {
+                        if let Some(bound) = self.bound(call, cx, (b, i), m, held)? {
+                            edit.rewrite.insert(i, bound);
                         }
                     }
                     _ => {}

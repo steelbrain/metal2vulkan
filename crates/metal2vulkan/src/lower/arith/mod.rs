@@ -1760,7 +1760,9 @@ fn llvm_math(op: &LlvmIntrinsic) -> Result<Fun, Error> {
         LlvmIntrinsic::Abs { .. } => Fun::Int(IntFn::Abs),
         LlvmIntrinsic::Cttz { .. } => Fun::Int(IntFn::Ctz),
         LlvmIntrinsic::Ctlz { .. } => Fun::Int(IntFn::Clz),
-        LlvmIntrinsic::Memset { .. }
+        // An operation on a narrow integer that constant propagation did not fold.
+        LlvmIntrinsic::NarrowInt { .. }
+        | LlvmIntrinsic::Memset { .. }
         | LlvmIntrinsic::Memcpy { .. }
         | LlvmIntrinsic::Memmove { .. }
         | LlvmIntrinsic::Agx(_) => return Err(not_lowered()),

@@ -29,14 +29,17 @@
 //!    call through a table a switch over the functions it may call; the direct calls this makes are
 //!    inlined in turn, round after round, until none is made.
 //! 7. **SCCP** over the inlined entry, including `air.is_function_constant_defined`, loads of
-//!    bound constants, and loads of the integer fields of a constant-space global whose value is
-//!    its initializer (`const_loads`); unreachable blocks are deleted. A value use of an unsupplied
+//!    bound constants, loads of the integer fields of a constant-space global whose value is
+//!    its initializer (`const_loads`), and the integer `llvm.*` operations on constants;
+//!    unreachable blocks are deleted. A call whose immediates were not constants where it was
+//!    decoded (`Callee::Unbound`: an internal function's parameter passed on to the intrinsic) is
+//!    bound where they now are, each inlined copy with its own call site's constants. A value use of an unsupplied
 //!    constant that survives is `Error::NeedsInput(FunctionConstant)`. **Unrolling**: a loop whose
 //!    trip count SCCP made constant, and whose counter decides a branch of its body, is unrolled
 //!    within fixed ceilings, and SCCP runs again over the copies; the result is kept where it is
 //!    no larger than the loops it replaces (`unroll`).
-//! 8. **Post-check**: no unknown intrinsic, indirect call, or call to an undefined non-intrinsic
-//!    function survives, and no reachable branch tests `undef`. A table call's refused candidate,
+//! 8. **Post-check**: no unknown or unbound intrinsic, indirect call, or call to an undefined
+//!    non-intrinsic function survives, and no reachable branch tests `undef`. A table call's refused candidate,
 //!    a table call no linked function answers, and a function pointer used as a value are refused
 //!    here, as stubs are. Indirect calls, calls to functions of a dynamic library, and ray
 //!    intersection are refused as their typed features, not implemented yet, naming the callee; a
@@ -389,7 +392,9 @@ fn calls(module: &Module, ep: &EntryPoint, wanted: impl Fn(&AirIntrinsic) -> boo
         .any(|inst| match &inst.kind {
             InstKind::Call(call) => match call.callee {
                 Callee::Air { op, .. } => wanted(&op),
-                Callee::Indirect { .. } | Callee::UnknownIntrinsic(_) => true,
+                Callee::Indirect { .. } | Callee::UnknownIntrinsic(_) | Callee::Unbound { .. } => {
+                    true
+                }
                 Callee::Llvm { .. } => false,
                 Callee::Direct(f) => declared(f) && !ep.is_control_point_function(f),
             },
@@ -1245,7 +1250,8 @@ pub fn select<'a>(module: &Module, abi: &'a AirAbi, entry: &str) -> Result<&'a E
 }
 
 /// Each refusal carries the call's location in the inlined body (the entry's function, block, and
-/// instruction) and names its callee's symbol where it has one. Indirect calls devirtualization
+/// instruction) and names its callee's symbol where it has one. A call whose immediates are still
+/// not constants (`Callee::Unbound`) is `InvalidInput(Intrinsic(ImmediateNotConstant))`. Indirect calls devirtualization
 /// left (a function pointer loaded from memory or computed, a table that is no entry parameter),
 /// calls to functions this module does not define (linking), and unknown intrinsics of a typed
 /// family (`intrinsics::UNDECODED_FEATURES`) are refused as their features, not implemented yet;
@@ -1323,6 +1329,11 @@ fn post_check(
                 };
             let refusal = match call.callee {
                 Callee::Air { .. } | Callee::Llvm { .. } => continue,
+                // An immediate that inlining and constant propagation did not make a constant.
+                Callee::Unbound { .. } => {
+                    let kind = InputErrorKind::Intrinsic(IntrinsicError::ImmediateNotConstant);
+                    return Err(InputError::new(kind, at).into());
+                }
                 // The decoder keeps a call through a function's own constant address indirect when
                 // the call's function type is not the function's (`bitcode::function`): its callee
                 // is still that one function, so it is classified by the function, not as dynamic.

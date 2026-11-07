@@ -53,7 +53,7 @@ use std::collections::{BTreeMap, HashMap};
 use crate::budget::Meter;
 use crate::error::{CanonError, DiagName, InputError, InputErrorKind, Location};
 use crate::error::{Error, Feature, Unsupported};
-use crate::intrinsics::{AirIntrinsic, FunctionConstant, LlvmIntOp, LlvmIntrinsic, NumKind};
+use crate::intrinsics::{AirIntrinsic, FunctionConstant, LlvmIntrinsic, NumKind};
 use crate::ir::layout::Endian;
 use crate::ir::{AddrSpace, Arena, BlockId, Body, Callee, CastOp, Const, ConstExpr, ConstId};
 use crate::ir::{Constant, FuncId, Function, Global, GlobalId, Idx, InstId, InstKind};
@@ -520,16 +520,16 @@ impl<'a> Eval<'a> {
                     SVal::C(c.ok_or_else(|| not_evaluable(at.clone()))?)
                 }
                 Callee::Llvm {
-                    op: LlvmIntrinsic::Int { op, .. },
+                    op: LlvmIntrinsic::Int { op, .. } | LlvmIntrinsic::NarrowInt { op, .. },
                     ..
                 } => match &call.args[..] {
                     [a, b] => {
                         let (a, b) = (val(*a)?, val(*b)?);
                         self.pure2(a, b, &at, m, |f, x, y, m| f.int_minmax(op, ty, x, y, m))?
                     }
-                    [x] if op == LlvmIntOp::Ctpop => {
+                    [x] => {
                         let x = val(*x)?;
-                        self.pure2(x, x, &at, m, |f, x, _, m| f.ctpop(ty, x, m))?
+                        self.pure2(x, x, &at, m, |f, x, _, m| f.int_unary(op, ty, x, m))?
                     }
                     _ => return Err(not_evaluable(at)),
                 },

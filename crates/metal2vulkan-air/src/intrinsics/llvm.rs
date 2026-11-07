@@ -228,6 +228,16 @@ pub enum LlvmIntrinsic {
         /// The overload type: the result and every operand.
         ty: NumTy,
     },
+    /// A kept integer operation on a scalar integer of a width no [`NumTy`] names (2 to 63 bits
+    /// but 8, 16 and 32), as Metal's compiler leaves OpenCL C's fences computing their flags with
+    /// `llvm.bitreverse.i2`. Canonicalization folds it over constants; lowering refuses one that
+    /// remains.
+    NarrowInt {
+        /// The operation.
+        op: LlvmIntOp,
+        /// The width in bits of the result and of every operand.
+        bits: u8,
+    },
     /// `llvm.abs`, with its `is_int_min_poison` immediate.
     Abs {
         /// The integer overload type.
@@ -497,14 +507,30 @@ pub(super) fn parse(
             spells(0, ty)?;
             LlvmIntrinsic::Float { op, ty }
         }
-        Base::Int(op) => {
-            let ty = num(*ret)?;
-            let bswap_ok = op != LlvmIntOp::Bswap || ty.elem.bits() % 16 == 0;
-            check(ty.elem.is_int() && bswap_ok && params.len() == op.arity())?;
-            count(1)?;
-            spells(0, ty)?;
-            LlvmIntrinsic::Int { op, ty }
-        }
+        Base::Int(op) => match types.get(*ret) {
+            // A scalar integer of a width no `NumTy` names, the result and every operand.
+            Some(&Type::Int(bits)) if NumTy::of(types, *ret).is_none() => {
+                let bswap_ok = op != LlvmIntOp::Bswap || bits % 16 == 0;
+                check(
+                    (2..64).contains(&bits)
+                        && bswap_ok
+                        && params.len() == op.arity()
+                        && params.iter().all(|p| p == ret),
+                )?;
+                count(1)?;
+                let width = token(0).and_then(|t| t.strip_prefix('i'));
+                check(width.and_then(|w| w.parse::<u8>().ok()) == Some(bits))?;
+                LlvmIntrinsic::NarrowInt { op, bits }
+            }
+            _ => {
+                let ty = num(*ret)?;
+                let bswap_ok = op != LlvmIntOp::Bswap || ty.elem.bits() % 16 == 0;
+                check(ty.elem.is_int() && bswap_ok && params.len() == op.arity())?;
+                count(1)?;
+                spells(0, ty)?;
+                LlvmIntrinsic::Int { op, ty }
+            }
+        },
         Base::Abs | Base::Cttz | Base::Ctlz => {
             let ty = num(*ret)?;
             check(ty.elem.is_int())?;
@@ -614,7 +640,9 @@ fn len_elem(types: &TypeTable, id: TypeId) -> Result<Elem, Fail> {
 }
 
 impl LlvmIntrinsic {
-    /// The typed signature; `None` for an AGX operation without a modeled contract.
+    /// The typed signature; `None` for an AGX operation without a modeled contract, and for an
+    /// operation on a narrow integer, whose declaration's type the name's parse checks (it has
+    /// no immediates and no handles).
     pub fn signature(&self) -> Option<Signature> {
         let flag = Operand::Imm(ImmKind::Bool);
         let mem = |dst: AddrSpace, src: Option<AddrSpace>, len: Elem| {
@@ -635,6 +663,7 @@ impl LlvmIntrinsic {
         Some(match *self {
             LlvmIntrinsic::Float { op, ty } => same(ty, op.arity()),
             LlvmIntrinsic::Int { op, ty } => same(ty, op.arity()),
+            LlvmIntrinsic::NarrowInt { .. } => return None,
             LlvmIntrinsic::Abs { ty, .. }
             | LlvmIntrinsic::Cttz { ty, .. }
             | LlvmIntrinsic::Ctlz { ty, .. } => {

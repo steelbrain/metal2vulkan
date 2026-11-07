@@ -14,8 +14,12 @@
 //! `Callee::UnknownIntrinsic` and the post-canonical check refuses them only if they survive
 //! function-constant specialization. The same holds for a known name whose immediate names an
 //! enumerator the model does not define. A known name whose declaration disagrees with its
-//! signature is [`IntrinsicError::SignatureMismatch`], and a non-constant immediate is
-//! [`IntrinsicError::ImmediateNotConstant`] (both malformed input). The `llvm.*` markers
+//! signature is [`IntrinsicError::SignatureMismatch`] (malformed input). A call whose immediate is
+//! not an integer constant in the function that makes it keeps its [`Template`]
+//! (`Callee::Unbound`): an internal function's parameter passed on to the intrinsic, as Metal's
+//! compiler leaves OpenCL C's `barrier(flags)`, is each call site's constant once inlining gives
+//! the parameter its argument, and the inliner binds the call there. An immediate still not a
+//! constant after inlining is [`IntrinsicError::ImmediateNotConstant`]. The `llvm.*` markers
 //! [`Dropped`] lists are dropped at decode.
 //!
 //! A [`Signature`]'s `Operand::Handle` parameters and [`Signature::ret_handle`] give the typed handle positions that
@@ -444,6 +448,42 @@ pub fn classify(name: &[u8], sym: Sym, fn_ty: TypeId, types: &TypeTable) -> Opti
         }
     };
     Some(class)
+}
+
+impl DeclClass {
+    /// The template of an intrinsic in the closed set: `None` for a dropped marker, an unknown
+    /// name or a mismatched declaration.
+    pub fn template(self) -> Option<Template> {
+        match self {
+            DeclClass::Air(op) => Some(Template::Air(op)),
+            DeclClass::Llvm(op) => Some(Template::Llvm(op)),
+            DeclClass::Drop(_) | DeclClass::Unknown | DeclClass::Mismatch => None,
+        }
+    }
+}
+
+/// An intrinsic in the closed set before a call's immediates are read in: the template its
+/// declaration classifies as. A call whose immediate operand is not an integer constant in the
+/// function that makes it keeps its template (`Callee::Unbound`) until canonicalization reads
+/// the immediates where inlining gives them each call site's arguments ([`Template::bind`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Template {
+    /// An `air.*` intrinsic's template.
+    Air(AirIntrinsic),
+    /// An `llvm.*` intrinsic's template.
+    Llvm(LlvmIntrinsic),
+}
+
+impl Template {
+    /// Bind one call with `args` to an intrinsic of this template, as [`bind`] binds a call to
+    /// its declaration's class.
+    pub fn bind(self, args: &[Value], consts: &ConstTable) -> Result<Bound, IntrinsicError> {
+        let class = match self {
+            Template::Air(op) => DeclClass::Air(op),
+            Template::Llvm(op) => DeclClass::Llvm(op),
+        };
+        bind(class, args, consts)
+    }
 }
 
 /// A call's decoded callee, from its declaration's class and its arguments.

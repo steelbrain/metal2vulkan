@@ -348,6 +348,9 @@ impl Render<'_> {
                     Callee::Air { decl, op } => format!("air @{} {op:?}", self.fname(*decl)),
                     Callee::Llvm { decl, .. } => format!("llvm @{}", self.fname(*decl)),
                     Callee::UnknownIntrinsic(f) => format!("unknown @{}", self.fname(*f)),
+                    Callee::Unbound { decl, template } => {
+                        format!("unbound @{} {template:?}", self.fname(*decl))
+                    }
                 };
                 format!(
                     "call {callee} {:?} {:?} {} {:?}",

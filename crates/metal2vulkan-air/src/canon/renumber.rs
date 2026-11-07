@@ -19,7 +19,7 @@ use std::collections::HashMap;
 
 use crate::budget::Meter;
 use crate::error::Error;
-use crate::intrinsics::{AgxOp, LlvmIntrinsic};
+use crate::intrinsics::{AgxOp, LlvmIntrinsic, Template};
 use crate::ir::{Arena, Block, Body, Call, CallAttrs, Callee, Const, ConstExpr, ConstId};
 use crate::ir::{ConstTable, Constant, FnAttrs, FuncId, Function, Global, GlobalId, Idx};
 use crate::ir::{Inst, InstKind, ParamAttrs, Section, Sym, Symbols, Type, TypeId};
@@ -591,6 +591,17 @@ impl<'a> Renumber<'a> {
         Ok(out)
     }
 
+    /// `op` with its symbol renumbered: an unmodeled AGX operation is the one that keeps its
+    /// name, for diagnostics.
+    fn llvm_op(&mut self, op: LlvmIntrinsic, m: &mut Meter) -> Result<LlvmIntrinsic, Error> {
+        Ok(match op {
+            LlvmIntrinsic::Agx(AgxOp::Unmodeled(s)) => {
+                LlvmIntrinsic::Agx(AgxOp::Unmodeled(self.sym(s, m)?))
+            }
+            other => other,
+        })
+    }
+
     fn call(&mut self, call: &mut Call, m: &mut Meter) -> Result<(), Error> {
         call.callee = match call.callee {
             Callee::Direct(f) => Callee::Direct(self.func_id(f)?),
@@ -604,15 +615,16 @@ impl<'a> Renumber<'a> {
             },
             Callee::Llvm { decl, op } => Callee::Llvm {
                 decl: self.func_id(decl)?,
-                // The one operation that keeps its name, for diagnostics.
-                op: match op {
-                    LlvmIntrinsic::Agx(AgxOp::Unmodeled(s)) => {
-                        LlvmIntrinsic::Agx(AgxOp::Unmodeled(self.sym(s, m)?))
-                    }
-                    other => other,
-                },
+                op: self.llvm_op(op, m)?,
             },
             Callee::UnknownIntrinsic(f) => Callee::UnknownIntrinsic(self.func_id(f)?),
+            Callee::Unbound { decl, template } => Callee::Unbound {
+                decl: self.func_id(decl)?,
+                template: match template {
+                    Template::Llvm(op) => Template::Llvm(self.llvm_op(op, m)?),
+                    air => air,
+                },
+            },
         };
         if let Some(a) = &call.attrs {
             let mut params = Vec::with_capacity(a.params.len());

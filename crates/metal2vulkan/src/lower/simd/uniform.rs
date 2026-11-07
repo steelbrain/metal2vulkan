@@ -233,6 +233,7 @@ fn per_invocation_arithmetic(callee: &Callee) -> bool {
             op,
             LlvmIntrinsic::Float { .. }
                 | LlvmIntrinsic::Int { .. }
+                | LlvmIntrinsic::NarrowInt { .. }
                 | LlvmIntrinsic::Abs { .. }
                 | LlvmIntrinsic::Cttz { .. }
                 | LlvmIntrinsic::Ctlz { .. }

@@ -1191,6 +1191,7 @@ enum	metal2vulkan-air::intrinsics::SamplerOp	#[derive(Clone, Copy, Debug, Partia
 enum	metal2vulkan-air::intrinsics::Sign	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] pub enum Sign
 enum	metal2vulkan-air::intrinsics::SimdMatrix	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] pub enum SimdMatrix
 enum	metal2vulkan-air::intrinsics::Sync	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] pub enum Sync
+enum	metal2vulkan-air::intrinsics::Template	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] pub enum Template
 enum	metal2vulkan-air::intrinsics::Tensor	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] pub enum Tensor
 enum	metal2vulkan-air::intrinsics::TexOp	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] pub enum TexOp
 enum	metal2vulkan-air::intrinsics::TexRole	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] pub enum TexRole
@@ -7450,6 +7451,7 @@ method	metal2vulkan-air::intrinsics::AtomicSpace::space	pub const fn space(self)
 method	metal2vulkan-air::intrinsics::BoolReduce::signature	pub fn signature(&self) -> Signature
 method	metal2vulkan-air::intrinsics::Coherent::signature	pub fn signature(&self) -> Signature
 method	metal2vulkan-air::intrinsics::Convert::signature	pub fn signature(&self) -> Signature
+method	metal2vulkan-air::intrinsics::DeclClass::template	pub fn template(self) -> Option<Template>
 method	metal2vulkan-air::intrinsics::Derivative::signature	pub fn signature(&self) -> Signature
 method	metal2vulkan-air::intrinsics::Elem::bits	pub const fn bits(self) -> u32
 method	metal2vulkan-air::intrinsics::Elem::is_float	pub const fn is_float(self) -> bool
@@ -7511,6 +7513,7 @@ method	metal2vulkan-air::intrinsics::SimdMatrix::signature	pub fn signature(&sel
 method	metal2vulkan-air::intrinsics::SimdgroupSize::signature	pub fn signature(&self) -> Signature
 method	metal2vulkan-air::intrinsics::Sync::barrier_order	pub fn barrier_order(&self) -> Option<MemoryOrder>
 method	metal2vulkan-air::intrinsics::Sync::signature	pub fn signature(&self) -> Signature
+method	metal2vulkan-air::intrinsics::Template::bind	pub fn bind(self, args: &[Value], consts: &ConstTable) -> Result<Bound, IntrinsicError>
 method	metal2vulkan-air::intrinsics::Tensor::signature	pub fn signature(&self) -> Signature
 method	metal2vulkan-air::intrinsics::Texture::layout	pub fn layout(&self) -> Layout<TexRole>
 method	metal2vulkan-air::intrinsics::Texture::signature	pub fn signature(&self) -> Signature
@@ -10892,6 +10895,7 @@ variant	metal2vulkan-air::intrinsics::LlvmIntrinsic::Int	Int { op: LlvmIntOp, ty
 variant	metal2vulkan-air::intrinsics::LlvmIntrinsic::Memcpy	Memcpy { dst: AddrSpace, src: AddrSpace, len: Elem, volatile: bool }
 variant	metal2vulkan-air::intrinsics::LlvmIntrinsic::Memmove	Memmove { dst: AddrSpace, src: AddrSpace, len: Elem, volatile: bool }
 variant	metal2vulkan-air::intrinsics::LlvmIntrinsic::Memset	Memset { dst: AddrSpace, len: Elem, volatile: bool }
+variant	metal2vulkan-air::intrinsics::LlvmIntrinsic::NarrowInt	NarrowInt { op: LlvmIntOp, bits: u8 }
 variant	metal2vulkan-air::intrinsics::LodMode::Bias	Bias
 variant	metal2vulkan-air::intrinsics::LodMode::Level	Level
 variant	metal2vulkan-air::intrinsics::MatElem::BF16	BF16
@@ -11055,6 +11059,8 @@ variant	metal2vulkan-air::intrinsics::SimdMatrix::Store8x8	Store8x8 { elem: MatE
 variant	metal2vulkan-air::intrinsics::SimdMatrix::Store8x8Legacy	Store8x8Legacy { elem: MatElem, space: AddrSpace }
 variant	metal2vulkan-air::intrinsics::Sync::Barrier	Barrier { name: BarrierName, flags: MemFlags, order: Option<MemoryOrder>, scope: ThreadScope, memory: ThreadScope }
 variant	metal2vulkan-air::intrinsics::Sync::Fence	Fence { flags: MemFlags, order: MemoryOrder, scope: ThreadScope }
+variant	metal2vulkan-air::intrinsics::Template::Air	Air(AirIntrinsic)
+variant	metal2vulkan-air::intrinsics::Template::Llvm	Llvm(LlvmIntrinsic)
 variant	metal2vulkan-air::intrinsics::Tensor::DescriptorSize	DescriptorSize
 variant	metal2vulkan-air::intrinsics::Tensor::Extent	Extent
 variant	metal2vulkan-air::intrinsics::Tensor::InitStrided	InitStrided { data: AddrSpace }
@@ -11148,6 +11154,7 @@ variant	metal2vulkan-air::ir::Callee::Air	Air { decl: FuncId, op: AirIntrinsic }
 variant	metal2vulkan-air::ir::Callee::Direct	Direct(FuncId)
 variant	metal2vulkan-air::ir::Callee::Indirect	Indirect { callee: Value, fn_ty: TypeId }
 variant	metal2vulkan-air::ir::Callee::Llvm	Llvm { decl: FuncId, op: LlvmIntrinsic }
+variant	metal2vulkan-air::ir::Callee::Unbound	Unbound { decl: FuncId, template: Template }
 variant	metal2vulkan-air::ir::Callee::UnknownIntrinsic	UnknownIntrinsic(FuncId)
 variant	metal2vulkan-air::ir::CastOp::AddrSpaceCast	AddrSpaceCast
 variant	metal2vulkan-air::ir::CastOp::Bitcast	Bitcast

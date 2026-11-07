@@ -676,7 +676,7 @@ impl CallGraph {
                             local.resize(edges.len(), false);
                         }
                     }
-                    Callee::Air { .. } | Callee::Llvm { .. } => {}
+                    Callee::Air { .. } | Callee::Llvm { .. } | Callee::Unbound { .. } => {}
                 }
             }
             graph.edges[node] = edges;

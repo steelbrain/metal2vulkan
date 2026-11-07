@@ -373,7 +373,7 @@ fn atomics_read_their_immediates() {
         let args = [ptr, val, c.i32(order), c.i32(scope), yes];
         assert_eq!(bind(template, &args, &c.table), Ok(Bound::Unknown));
     }
-    // A non-constant immediate is malformed.
+    // A non-constant immediate does not bind (decode keeps the call unbound).
     let args = [ptr, val, val, device, yes];
     assert_eq!(
         bind(template, &args, &c.table),
@@ -691,6 +691,56 @@ fn llvm_bitreverse_decodes_at_every_integer_width() {
         ("llvm.bitreverse.f32", f32s, &[f32s][..]),
     ] {
         assert_eq!(llvm(name, ret, params), DeclClass::Mismatch, "{name}");
+    }
+}
+
+/// An integer operation on a scalar of a width no `NumTy` names (Metal's compiler leaves
+/// `llvm.bitreverse.i2` in OpenCL C's fences) decodes as its narrow form, checked against its
+/// declaration: every operand the result's width, the suffix spelling it.
+#[test]
+fn llvm_integer_operations_on_narrow_widths_decode() {
+    let m = &mut meter();
+    let mut t = TypeTable::new();
+    let mut decl = |t: &mut TypeTable, ret: u8, params: &[u8]| {
+        let ret = t.intern(Type::Int(ret), m).unwrap();
+        let params: Vec<_> = params
+            .iter()
+            .map(|&w| t.intern(Type::Int(w), m).unwrap())
+            .collect();
+        let f = Type::Function {
+            ret,
+            params: params.into(),
+            vararg: false,
+        };
+        t.intern(f, m).unwrap()
+    };
+    for (name, op, bits, arity) in [
+        ("llvm.bitreverse.i2", LlvmIntOp::BitReverse, 2, 1),
+        ("llvm.ctpop.i3", LlvmIntOp::Ctpop, 3, 1),
+        ("llvm.bswap.i48", LlvmIntOp::Bswap, 48, 1),
+        ("llvm.umax.i24", LlvmIntOp::UMax, 24, 2),
+    ] {
+        let ty = decl(&mut t, bits, &vec![bits; arity]);
+        assert_eq!(
+            classify(name.as_bytes(), sym(), ty, &t),
+            Some(DeclClass::Llvm(LlvmIntrinsic::NarrowInt { op, bits })),
+            "{name}"
+        );
+    }
+    // A declaration that disagrees: an operand of another width, the suffix, the arity, a
+    // `bswap` of a width that is no multiple of 16 bits.
+    for (name, ret, params) in [
+        ("llvm.bitreverse.i2", 2, &[3][..]),
+        ("llvm.bitreverse.i3", 2, &[2][..]),
+        ("llvm.bitreverse.i2", 2, &[2, 2][..]),
+        ("llvm.bswap.i24", 24, &[24][..]),
+    ] {
+        let ty = decl(&mut t, ret, params);
+        assert_eq!(
+            classify(name.as_bytes(), sym(), ty, &t),
+            Some(DeclClass::Mismatch),
+            "{name}"
+        );
     }
 }
 

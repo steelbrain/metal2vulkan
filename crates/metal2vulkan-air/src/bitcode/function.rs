@@ -1461,9 +1461,19 @@ impl FnDecoder {
                     let at = Location::function(self.symbol_name(cx, self.func), None, None);
                     return Err(InputError::new(kind, at).into());
                 }
-                Err(e) => {
-                    return Err(InputError::new(InputErrorKind::Intrinsic(e), s.location()).into())
-                }
+                // An immediate this function computes, such as one of its parameters (OpenCL
+                // C's `barrier(flags)` out of line): specialization binds the call where inlining
+                // and constant propagation make it each call site's constant.
+                Err(e) => match (e, class.template()) {
+                    (IntrinsicError::ImmediateNotConstant, Some(template)) => {
+                        Callee::Unbound { decl: f, template }
+                    }
+                    (e, _) => {
+                        return Err(
+                            InputError::new(InputErrorKind::Intrinsic(e), s.location()).into()
+                        )
+                    }
+                },
             },
         };
         let call = Call {

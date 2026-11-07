@@ -8,7 +8,7 @@
 
 use super::attrs::CallAttrs;
 use super::id::{ArgIdx, BlockId, ConstId, FuncId, InstId, TypeId};
-use crate::intrinsics::{AirIntrinsic, LlvmIntrinsic};
+use crate::intrinsics::{AirIntrinsic, LlvmIntrinsic, Template};
 
 /// An SSA operand. Globals and functions are operands through [`super::Const::GlobalAddr`] /
 /// [`super::Const::FuncAddr`] constants, so every value has exactly one spelling.
@@ -662,14 +662,16 @@ impl Callee {
             Callee::Indirect { callee, fn_ty } => no_heap(callee).saturating_add(no_heap(fn_ty)),
             Callee::Air { decl, op } => no_heap(decl).saturating_add(no_heap(op)),
             Callee::Llvm { decl, op } => no_heap(decl).saturating_add(no_heap(op)),
+            Callee::Unbound { decl, template } => no_heap(decl).saturating_add(no_heap(template)),
         }
     }
 }
 
 /// What a call calls. Every call to a declaration named `air.*` or `llvm.*` is decoded once
-/// into [`Callee::Air`] / [`Callee::Llvm`], or kept as [`Callee::UnknownIntrinsic`] until after
-/// function-constant specialization; afterwards no code inspects intrinsic names. The declaration
-/// is kept on every form so the verifier checks arguments against its type.
+/// into [`Callee::Air`] / [`Callee::Llvm`], kept as [`Callee::Unbound`] until its immediates are
+/// constants, or kept as [`Callee::UnknownIntrinsic`] until after function-constant
+/// specialization; afterwards no code inspects intrinsic names. The declaration is kept on every
+/// form so the verifier checks arguments against its type.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Callee {
     /// A defined or declared (non-intrinsic) function.
@@ -697,6 +699,19 @@ pub enum Callee {
     },
     /// An `air.*`/`llvm.*` declaration outside the closed set.
     UnknownIntrinsic(FuncId),
+    /// An intrinsic in the closed set whose immediate operands are not all integer constants in
+    /// the function that makes the call: an operand computed from the function's parameters, as
+    /// Metal's compiler leaves OpenCL C's `barrier(flags)` out of line, passing its flags to
+    /// `air.wg.barrier`. Specialization's constant propagation reads the immediates where
+    /// inlining gives the parameters each call site's arguments, making the call
+    /// [`Callee::Air`] or [`Callee::Llvm`]; one whose immediates are still not constant there is
+    /// refused (`IntrinsicError::ImmediateNotConstant`).
+    Unbound {
+        /// The intrinsic's declaration.
+        decl: FuncId,
+        /// The declaration's template, its immediates not read in.
+        template: Template,
+    },
 }
 
 impl Callee {
@@ -706,7 +721,8 @@ impl Callee {
             Callee::Direct(f)
             | Callee::Air { decl: f, .. }
             | Callee::Llvm { decl: f, .. }
-            | Callee::UnknownIntrinsic(f) => Some(*f),
+            | Callee::UnknownIntrinsic(f)
+            | Callee::Unbound { decl: f, .. } => Some(*f),
             Callee::Indirect { .. } => None,
         }
     }

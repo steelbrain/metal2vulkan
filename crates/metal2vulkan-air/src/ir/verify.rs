@@ -910,6 +910,7 @@ impl<'a> Verifier<'a> {
                     Callee::Direct(f) => self.callee_ty(cx, *f, false)?,
                     Callee::Air { decl, .. }
                     | Callee::Llvm { decl, .. }
+                    | Callee::Unbound { decl, .. }
                     | Callee::UnknownIntrinsic(decl) => self.callee_ty(cx, *decl, true)?,
                 };
                 let Some((ret, params, vararg)) = fn_sig(types, fn_ty) else {

@@ -2291,7 +2291,7 @@ fn texture_immediates_bind() {
             ..
         }
     ));
-    // An access outside the qualifiers stays unknown; a non-constant flag is malformed.
+    // An access outside the qualifiers stays unknown; a non-constant flag does not bind.
     let args = [v(0), v(1), v(2), no, v(4), no, v(6), v(7), c.i32(4)];
     assert_eq!(bind(sample, &args, &c.table), Ok(Bound::Unknown));
     let args = [v(0), v(1), v(2), v(3), v(4), no, v(6), v(7), zero];
@@ -2719,7 +2719,7 @@ fn air_2_9_atomics_read_their_flags() {
         // The same call in both forms: only the flags differ.
         assert_eq!(b.flags, Some(flags), "{name}");
         assert_eq!(Atomic { flags: None, ..b }, a, "{name}");
-        // A flag bit outside Metal's five stays unknown; a non-constant one is malformed.
+        // A flag bit outside Metal's five stays unknown; a non-constant one does not bind.
         let mut args = new_args.clone();
         let at = args.len() - 2;
         args[at] = c.i32(32);

@@ -27,6 +27,7 @@ mod global_builtins;
 mod private_memory;
 mod table_copies;
 mod texture_writes;
+mod unbound_immediates;
 mod unobserved;
 mod unrolling;
 

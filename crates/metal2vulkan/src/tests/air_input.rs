@@ -746,6 +746,7 @@ fn structural(d: &Decoded) -> Vec<String> {
                     Callee::Indirect { fn_ty, .. } => format!("indirect {}", ty(fn_ty)),
                     Callee::Air { op, .. } => format!("{op:?}"),
                     Callee::Llvm { op, .. } => format!("{op:?}"),
+                    Callee::Unbound { template, .. } => format!("unbound {template:?}"),
                 },
                 InstKind::Gep { src_ty, .. } => ty(*src_ty),
                 InstKind::Alloca { ty: t, .. } => ty(*t),
@@ -1097,18 +1098,27 @@ fn a_declaration_mismatch_names_the_declaration_and_its_function() {
 #[test]
 fn intrinsic_call_errors_are_typed() {
     use crate::air::error::{DiagName, InputErrorKind, IntrinsicError};
+    /// What decode makes of the call.
+    #[derive(Debug)]
+    enum Want {
+        Refused(IntrinsicError),
+        Unbound,
+        Unknown,
+    }
     let cases = [
         (
             "declare float @air.fmax.f32(float)\n\
              define float @k(float %x) {\n  %r = call float @air.fmax.f32(float %x)\n  ret float %r\n}\n",
-            Some(IntrinsicError::DeclaredSignatureMismatch {
+            Want::Refused(IntrinsicError::DeclaredSignatureMismatch {
                 name: DiagName::new("air.fmax.f32"),
             }),
         ),
+        // An immediate the function computes keeps the call unbound: specialization binds it
+        // where its call sites' constants reach it, or refuses it (`canon`'s tests).
         (
             "declare i32 @air.clz.i32(i32, i1)\n\
              define i32 @k(i32 %x, i1 %f) {\n  %r = call i32 @air.clz.i32(i32 %x, i1 %f)\n  ret i32 %r\n}\n",
-            Some(IntrinsicError::ImmediateNotConstant),
+            Want::Unbound,
         ),
         // A declared but never called mismatch is not an error; an unmodeled scope keeps the
         // call unknown.
@@ -1116,7 +1126,7 @@ fn intrinsic_call_errors_are_typed() {
             "declare float @air.fmax.f32(float)\n\
              declare i32 @air.atomic.local.load.i32(ptr addrspace(3), i32, i32, i1)\n\
              define i32 @k(ptr addrspace(3) %p) {\n  %r = call i32 @air.atomic.local.load.i32(ptr addrspace(3) %p, i32 0, i32 9, i1 true)\n  ret i32 %r\n}\n",
-            None,
+            Want::Unknown,
         ),
     ];
     for (text, want) in cases {
@@ -1125,14 +1135,16 @@ fn intrinsic_call_errors_are_typed() {
             return;
         };
         match (got, want) {
-            (Err(Error::InvalidInput(e)), Some(want)) => {
+            (Err(Error::InvalidInput(e)), Want::Refused(want)) => {
                 assert_eq!(e.kind, InputErrorKind::Intrinsic(want), "{text}")
             }
-            (Ok(d), None) => {
-                assert!(matches!(
-                    calls(&d, "k")[0].callee,
-                    Callee::UnknownIntrinsic(_)
-                ));
+            (Ok(d), Want::Unbound) => {
+                let callee = &calls(&d, "k")[0].callee;
+                assert!(matches!(callee, Callee::Unbound { .. }), "{callee:?}");
+            }
+            (Ok(d), Want::Unknown) => {
+                let callee = &calls(&d, "k")[0].callee;
+                assert!(matches!(callee, Callee::UnknownIntrinsic(_)), "{callee:?}");
             }
             (got, want) => panic!("{text}: {got:?}, want {want:?}"),
         }

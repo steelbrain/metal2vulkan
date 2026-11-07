@@ -874,7 +874,7 @@ impl<'a> Flow<'a> {
                         ..
                     }
                     | Callee::Llvm {
-                        op: LlvmIntrinsic::Int { .. },
+                        op: LlvmIntrinsic::Int { .. } | LlvmIntrinsic::NarrowInt { .. },
                         ..
                     } => self.union(f, &call.args, m)?,
                     _ => return Ok(Some(Unfollowed)),

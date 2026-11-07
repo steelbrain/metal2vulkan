@@ -701,17 +701,26 @@ impl Folder<'_> {
             .map(Some)
     }
 
-    /// `llvm.ctpop` over a scalar integer.
-    pub fn ctpop(
+    /// `llvm.{ctpop,bitreverse,bswap}` over a scalar integer (`bswap` of a width that is a
+    /// multiple of 16 bits, as LLVM defines it).
+    pub fn int_unary(
         &mut self,
+        op: LlvmIntOp,
         ty: TypeId,
         x: ConstId,
         m: &mut Meter,
     ) -> Result<Option<ConstId>, Error> {
-        match self.int(x) {
-            Some(v) => self.mk_int(ty, u64::from(v.count_ones()), m),
-            None => Ok(None),
-        }
+        let (Some(w), Some(v)) = (self.int_bits(ty), self.int(x)) else {
+            return Ok(None);
+        };
+        let shift = 64 - u32::from(w.min(64));
+        let r = match op {
+            LlvmIntOp::Ctpop => u64::from(v.count_ones()),
+            LlvmIntOp::BitReverse if w <= 64 => v.reverse_bits() >> shift,
+            LlvmIntOp::Bswap if w <= 64 && w % 16 == 0 => v.swap_bytes() >> shift,
+            _ => return Ok(None),
+        };
+        self.mk_int(ty, r, m)
     }
 
     /// An integer-to-float conversion (`sitofp`/`uitofp`, `air.convert.f.*.{s,u}.*`) of a scalar

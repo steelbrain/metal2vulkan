@@ -217,9 +217,10 @@ fn contribution(cx: &SelectCx<'_>, id: InstId, inst: &Inst) -> Reach {
                 _ => 0,
             },
             // Refused by `select` before this runs; counted as everything to stay conservative.
-            Callee::Direct(_) | Callee::Indirect { .. } | Callee::UnknownIntrinsic(_) => {
-                Reach::TANGLED | Reach::SIDE_EFFECT | Reach::NON_QUAD
-            }
+            Callee::Direct(_)
+            | Callee::Indirect { .. }
+            | Callee::UnknownIntrinsic(_)
+            | Callee::Unbound { .. } => Reach::TANGLED | Reach::SIDE_EFFECT | Reach::NON_QUAD,
         },
         _ => 0,
     };

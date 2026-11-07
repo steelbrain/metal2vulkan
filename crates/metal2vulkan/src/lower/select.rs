@@ -908,6 +908,9 @@ fn route_llvm(op: &LlvmIntrinsic) -> Route {
         L::Float { .. } | L::Int { .. } | L::Abs { .. } | L::Cttz { .. } | L::Ctlz { .. } => {
             Route::Family(LowerFamily::Arith)
         }
+        // A narrow integer's operation canonicalization did not fold over constants: no SPIR-V
+        // type has its width.
+        L::NarrowInt { .. } => Route::Refuse(not_lowered(LowerFamily::Arith)),
     }
 }
 
@@ -978,6 +981,10 @@ fn route(cx: &SelectCx<'_>, id: InstId, inst: &Inst) -> Route {
             Callee::Direct(_) => Route::Refuse(invariant("a direct call survived inlining")),
             Callee::UnknownIntrinsic(_) => {
                 Route::Refuse(Unsupported::not_implemented(Feature::UnknownIntrinsic).into())
+            }
+            // Canon's post-check refuses every call whose immediates are not constants.
+            Callee::Unbound { .. } => {
+                Route::Refuse(invariant("an unbound intrinsic survived canon"))
             }
         },
     }

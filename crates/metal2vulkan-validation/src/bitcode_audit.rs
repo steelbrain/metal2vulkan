@@ -18,7 +18,8 @@
 //! exactly.
 //!
 //! The same lane is the intrinsic census: every decoded row reports how many of its calls decoded
-//! to `Callee::Air` / `Callee::Llvm` and which callee names stayed `Callee::UnknownIntrinsic`, so
+//! to `Callee::Air` / `Callee::Llvm` (or to their templates, `Callee::Unbound`, whose immediates
+//! specialization binds) and which callee names stayed `Callee::UnknownIntrinsic`, so
 //! decode completeness is measured over the corpus rather than asserted. Each unknown name is
 //! reported as `listed` when it belongs to a family the decoder lists as not decoded
 //! (`metal2vulkan_air::intrinsics::UNDECODED`), else `unlisted`: a closed census has no unlisted
@@ -37,7 +38,7 @@ use metal2vulkan::error::Error;
 use metal2vulkan::Budget;
 use metal2vulkan_air::bitcode::{decode, Decoded};
 use metal2vulkan_air::budget::Meter;
-use metal2vulkan_air::intrinsics::dropped_family;
+use metal2vulkan_air::intrinsics::{dropped_family, Template};
 use metal2vulkan_air::ir::{Callee, CastOp, Const, ConstExpr, FuncId, InstKind, Value};
 use serde::{Deserialize, Serialize};
 use wait_timeout::ChildExt;
@@ -180,7 +181,9 @@ pub fn ir_fingerprint(d: &Decoded) -> Fingerprint {
             };
             let callee = match &call.callee {
                 Callee::Direct(f) | Callee::UnknownIntrinsic(f) => fn_name(*f),
-                Callee::Air { decl, .. } | Callee::Llvm { decl, .. } => fn_name(*decl),
+                Callee::Air { decl, .. }
+                | Callee::Llvm { decl, .. }
+                | Callee::Unbound { decl, .. } => fn_name(*decl),
                 // A call whose type differs from its callee's still names the function, also
                 // through typed-pointer bitcasts, which opaque-pointer `llvm-dis` folds away.
                 Callee::Indirect {
@@ -477,8 +480,16 @@ pub fn intrinsic_census(d: &Decoded) -> IntrinsicCensus {
                 continue;
             };
             match &call.callee {
-                Callee::Air { .. } => out.air += 1,
-                Callee::Llvm { .. } => out.llvm += 1,
+                Callee::Air { .. }
+                | Callee::Unbound {
+                    template: Template::Air(_),
+                    ..
+                } => out.air += 1,
+                Callee::Llvm { .. }
+                | Callee::Unbound {
+                    template: Template::Llvm(_),
+                    ..
+                } => out.llvm += 1,
                 Callee::UnknownIntrinsic(decl) => {
                     *out.unknown.entry(name(*decl)).or_default() += 1;
                 }

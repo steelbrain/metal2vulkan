@@ -1080,11 +1080,15 @@ fn value_only(kind: &InstKind) -> bool {
             op,
             LlvmIntrinsic::Float { .. }
                 | LlvmIntrinsic::Int { .. }
+                | LlvmIntrinsic::NarrowInt { .. }
                 | LlvmIntrinsic::Abs { .. }
                 | LlvmIntrinsic::Cttz { .. }
                 | LlvmIntrinsic::Ctlz { .. }
         ),
-        Callee::Direct(_) | Callee::Indirect { .. } | Callee::UnknownIntrinsic(_) => false,
+        Callee::Direct(_)
+        | Callee::Indirect { .. }
+        | Callee::UnknownIntrinsic(_)
+        | Callee::Unbound { .. } => false,
     }
 }
 

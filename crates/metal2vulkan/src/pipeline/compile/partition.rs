@@ -137,7 +137,10 @@ fn observes(callee: &Callee) -> bool {
         Callee::Air { op, .. } => op,
         Callee::Llvm { .. } => return false,
         // Canonicalization inlines every defined callee; what remains is not the kernel's own.
-        Callee::Direct(_) | Callee::Indirect { .. } | Callee::UnknownIntrinsic(_) => return true,
+        Callee::Direct(_)
+        | Callee::Indirect { .. }
+        | Callee::UnknownIntrinsic(_)
+        | Callee::Unbound { .. } => return true,
     };
     let scoped =
         |scope: ThreadScope| matches!(scope, ThreadScope::Threadgroup | ThreadScope::Simdgroup);

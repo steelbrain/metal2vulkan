@@ -182,7 +182,9 @@ pub(super) fn command_writes(module: &Module, ep: &EntryPoint) -> CommandWrites 
                 ..
             } => writes = writes.union(CommandWrites::of(op, call, parts)),
             Callee::Air { .. } | Callee::Llvm { .. } => {}
-            Callee::Indirect { .. } | Callee::UnknownIntrinsic(_) => return CommandWrites::ANY,
+            Callee::Indirect { .. } | Callee::UnknownIntrinsic(_) | Callee::Unbound { .. } => {
+                return CommandWrites::ANY
+            }
             Callee::Direct(f) => {
                 if declared(f) && !ep.is_control_point_function(f) {
                     return CommandWrites::ANY;

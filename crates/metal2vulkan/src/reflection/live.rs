@@ -655,6 +655,7 @@ impl<'a> Engine<'a> {
             Callee::Llvm { op, .. } => match op {
                 LlvmIntrinsic::Float { .. }
                 | LlvmIntrinsic::Int { .. }
+                | LlvmIntrinsic::NarrowInt { .. }
                 | LlvmIntrinsic::Abs { .. }
                 | LlvmIntrinsic::Cttz { .. }
                 | LlvmIntrinsic::Ctlz { .. } => false,
@@ -669,7 +670,10 @@ impl<'a> Engine<'a> {
                 }
                 LlvmIntrinsic::Agx(_) => true,
             },
-            Callee::Direct(_) | Callee::Indirect { .. } | Callee::UnknownIntrinsic(_) => true,
+            Callee::Direct(_)
+            | Callee::Indirect { .. }
+            | Callee::UnknownIntrinsic(_)
+            | Callee::Unbound { .. } => true,
         }
     }
 

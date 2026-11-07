@@ -166,7 +166,10 @@ fn has_side_effect(kind: &InstKind) -> bool {
                     | crate::intrinsics::LlvmIntrinsic::Memcpy { .. }
                     | crate::intrinsics::LlvmIntrinsic::Memmove { .. }
             ),
-            Callee::Direct(_) | Callee::Indirect { .. } | Callee::UnknownIntrinsic(_) => true,
+            Callee::Direct(_)
+            | Callee::Indirect { .. }
+            | Callee::UnknownIntrinsic(_)
+            | Callee::Unbound { .. } => true,
         },
         _ => false,
     }

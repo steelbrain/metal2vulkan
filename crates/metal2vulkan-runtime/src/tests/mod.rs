@@ -255,6 +255,8 @@ mod no_copy_lies;
 mod noted_apart;
 mod numbered_samplers;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod opencl_kernels;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod optional_extensions;
 mod options;
 mod own;

@@ -125,7 +125,7 @@ fn call_kind(
             Some(targets) => CallKind::Local(targets.iter().copied().collect()),
             None => CallKind::Barrier,
         },
-        Callee::UnknownIntrinsic(_) => CallKind::Barrier,
+        Callee::UnknownIntrinsic(_) | Callee::Unbound { .. } => CallKind::Barrier,
     }
 }
 
