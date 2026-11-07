@@ -81,7 +81,7 @@ use super::host_bytes::HostBytes;
 use super::image_plan::{
     check_image_limits, plan_image, DepthImageFacts, ImageFacts, ImagePlan, ImageRefusal,
 };
-use super::in_place::{self, Access, PagesClass, Refusal, ShadowCause, Verdict};
+use super::in_place::{self, PagesClass, Refusal, ShadowCause, Verdict};
 use super::key_hash::KeyMap;
 use super::linear_plan::{
     aliases, check_linear_limits, holding, linear_lack, LinearImage, LinearLack,
@@ -2248,7 +2248,7 @@ impl Device {
         let device_copy = match class {
             Some(class) if !past && !in_place::checking() && !texels.buffer.detached() => {
                 let policy = self.compile_device().policy().host_page_textures;
-                Access::of(usage) == Access::Reads
+                in_place::Access::of(usage) == in_place::Access::Reads
                     && in_place::in_place(policy, usage, class, |_, _| Verdict::Passed).is_ok()
                     && texels.device_copy(self)
             }
@@ -2318,7 +2318,7 @@ impl Device {
                         "the in-place check's texture takes no image in place",
                     ));
                 }
-                let renders = Access::of(usage) == Access::Renders;
+                let renders = in_place::Access::of(usage) == in_place::Access::Renders;
                 self.shared().counts.host_texture_shadowed(&cause, renders);
                 if class == PagesClass::Fresh {
                     self.shared().counts.shadow_over_fresh_pages();
