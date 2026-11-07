@@ -69,6 +69,7 @@
 //! Inlining runs before SCCP: SCCP over the one inlined body sees each call's constant arguments,
 //! which per-function SCCP could not, and deletes the callees' dead paths with the caller's.
 
+mod adapt;
 mod aggregates;
 mod async_copy;
 mod command_writes;
@@ -1309,7 +1310,7 @@ fn post_check(
                         }
                         Some(Stub::Refused(Error::Unsupported(u))) => Ok(u.clone()),
                         Some(Stub::Refused(e)) => Err(e.clone()),
-                        Some(Stub::Resolved(_)) => {
+                        Some(Stub::Resolved { .. }) => {
                             Err(invariant("a call to a resolved stub survived linking"))
                         }
                         // A dynamic-library import, or a declaration no library can define.

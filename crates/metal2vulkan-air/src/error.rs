@@ -942,8 +942,6 @@ pub enum LinkProblem {
     Ambiguous,
     /// The function is not a visible function of its module (`!air.visible`).
     NotVisible,
-    /// The reference's function type is not the linked function's.
-    Signature,
     /// The linked function's module has another data layout than the module that references it.
     DataLayout,
     /// The linked function was made unspecialized (`newFunctionWithName:`), and what it reaches

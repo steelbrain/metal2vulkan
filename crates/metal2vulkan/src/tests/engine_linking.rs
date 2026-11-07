@@ -7,8 +7,8 @@
 //! `[[visible]]` functions. Through the public API (`Library::from_air`, `FunctionDescriptor`
 //! with `LinkedFunctions`, `Device::compile_compute_pipeline`) the caller compiles once its
 //! references resolve: a reference nothing supplies is `NeedsInput(LinkedFunction)`, a function
-//! of another signature is a descriptor error, a visible function is not a stage, and the linked
-//! functions are part of the compile key. The linked kernel validates on every committed
+//! of another signature links with the arguments by position, a visible function is not a stage,
+//! and the linked functions are part of the compile key. The linked kernel validates on every committed
 //! profile and computes Metal's values on the CPU interpreter. No GPU is used.
 //!
 //! `llvm-as` assembles the fixtures; a missing tool skips visibly.
@@ -20,7 +20,7 @@ use crate::air::ir::print::print_inst;
 use crate::air::ir::InstId;
 use crate::budget::{Budget, SPIRV_WORDS};
 use crate::device::{Device, DeviceDescription, DevicePolicy};
-use crate::error::{DescriptorError, Error, Feature, LinkProblem, LowerFamily, RuntimeInput};
+use crate::error::{DescriptorError, Error, Feature, LowerFamily, RuntimeInput};
 use crate::library::{FunctionConstantValue, FunctionConstantValues, FunctionStage, Library};
 use crate::lower::select::LowerInputs;
 use crate::metal::DataType;
@@ -452,14 +452,18 @@ fn linked_functions_are_part_of_the_key() {
     }
 }
 
-/// A linked function whose type is not the reference's is a descriptor error, not a
-/// conversion: here `linked_scale` is renamed onto `linked_blend`'s `float(float, float)`.
+/// A linked function whose type is not the reference's links with the arguments by position, as
+/// Metal links it (the probe `linked_function_signatures.m`, the conformance crate's `probes/`):
+/// here `linked_scale`, referenced as `uint (uint)`, is `linked_blend`'s
+/// `float (float a, float b) = a * b + 1` renamed onto it. Its `a` takes the bits of the
+/// argument, its `b`, which the reference does not pass, reads zero, and its result passes back
+/// as its bits: every word is 1.0's.
 #[test]
-fn a_linked_function_of_another_signature_is_a_descriptor_error() {
-    let Some(caller) = fixture(CALLER) else {
+fn a_linked_function_of_another_signature_links_by_position() {
+    let Some((caller, functions)) = fixtures() else {
         return;
     };
-    let Some(functions) = edited(FUNCTIONS, |text| {
+    let Some(renamed) = edited(FUNCTIONS, |text| {
         text.replace("@linked_scale", "@linked_int")
             .replace("!\"linked_scale\"", "!\"linked_int\"")
             .replace("@linked_blend", "@linked_scale")
@@ -468,14 +472,11 @@ fn a_linked_function_of_another_signature_is_a_descriptor_error() {
         return;
     };
     let none = FunctionConstantValues::defaults();
-    let linked = [LinkedSource::new("linked_scale", &functions, &none)];
-    assert_eq!(
-        compile_linked(&caller, &linked, "moltenvk-m3").map(|_| ()),
-        Err(Error::InvalidDescriptor(DescriptorError::LinkedFunction {
-            name: crate::error::DiagName::new("linked_scale"),
-            problem: LinkProblem::Signature,
-        }))
-    );
+    let linked = [
+        LinkedSource::new("linked_scale", &renamed, &none),
+        LinkedSource::new("linked_blend", &functions, &none),
+    ];
+    assert_eq!(caller_words(&caller, &linked), vec![1.0f32.to_bits(); 32]);
 }
 
 /// A constexpr sampler inside a linked function links with it: the linked module's

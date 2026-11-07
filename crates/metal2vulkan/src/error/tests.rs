@@ -305,11 +305,11 @@ fn front_end_errors_map_one_to_one() {
         (
             Air::InvalidRequest(RequestError::LinkedFunction {
                 name: DiagName::new("g"),
-                problem: LinkProblem::Signature,
+                problem: LinkProblem::Ambiguous,
             }),
             Error::InvalidDescriptor(DescriptorError::LinkedFunction {
                 name: DiagName::new("g"),
-                problem: LinkProblem::Signature,
+                problem: LinkProblem::Ambiguous,
             }),
         ),
         (

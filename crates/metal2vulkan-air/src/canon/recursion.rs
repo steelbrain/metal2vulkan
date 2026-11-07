@@ -249,8 +249,9 @@ fn signature(parts: &ModuleParts, ty: TypeId) -> Result<(TypeId, Vec<TypeId>), E
     }
 }
 
-/// The defined function a call through constant `callee` at type `ty` calls (a stub's linked
-/// definition), as devirtualization makes it direct.
+/// The defined function a call through constant `callee` at type `ty` calls (for a stub's, what a
+/// call to the stub calls: its linked definition, or the definition's adapter), as
+/// devirtualization makes it direct.
 fn constant_callee(
     parts: &ModuleParts,
     stubs: &Stubs,
@@ -264,7 +265,7 @@ fn constant_callee(
         return None;
     };
     let target = match stubs.get(*f) {
-        Some(Stub::Resolved(def)) => *def,
+        Some(Stub::Resolved { call, .. }) => *call,
         _ => *f,
     };
     let func = parts.funcs.get(target)?;
@@ -294,7 +295,8 @@ fn graph_node(
 }
 
 /// Push to `found` each defined function whose address constant `c` holds, itself or among its
-/// elements and operands (a stub's linked definition for a stub's), and each stub declaration no
+/// elements and operands (for a stub's, what a call to the stub calls: its linked definition, or
+/// the definition's adapter), and each stub declaration no
 /// linked function resolves whose address it holds (its address has a word too), reading each
 /// constant once (`seen`). Each push is charged to `held`.
 fn addressed(
@@ -318,7 +320,7 @@ fn addressed(
         };
         if let Const::FuncAddr(f) = k.value {
             let def = match stubs.get(f) {
-                Some(Stub::Resolved(def)) => *def,
+                Some(Stub::Resolved { call, .. }) => *call,
                 _ => f,
             };
             if parts.funcs.get(def).is_some_and(|d| d.body.is_some()) || stubs.get(def).is_some() {

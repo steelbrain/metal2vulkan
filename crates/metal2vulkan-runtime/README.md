@@ -99,8 +99,10 @@ A `[[visible]]` function a stage calls but does not define comes from the functi
 (`function.function_descriptor().with_linked(linked)`, `MTLLinkedFunctions`). A call resolves to
 the linked function of its name, `Function::name`: the specialized name
 `Library::new_function_with_descriptor` made it with (`FunctionDescriptor::specialized_name`,
-Metal's `specializedName`), else its own. A linked function computes with the constant values it
-was made with, and a constant it was given no value for reads as undefined, as Metal's does; one
+Metal's `specializedName`), else its own, whatever the definition's type: the arguments pass by
+position ([docs/API.md](../../docs/API.md) section 3, "Linked functions: types"). A linked
+function computes with the constant values it was made with, and a constant it was given no value
+for reads as undefined, as Metal's does; one
 made by `new_function_with_name` that reaches a constant of its module refuses the pipeline state
 (`Compile`, `LinkProblem::UnresolvedConstant`), as Metal fails its creation. A function in the
 stage's `binary_functions` is one a visible-function table calls: no call by name resolves to it

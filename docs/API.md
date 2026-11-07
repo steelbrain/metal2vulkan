@@ -569,6 +569,19 @@ layout stride of `None` is `MTLBufferLayoutStrideDynamic`: the stride comes from
   reference"). Two different functions of one name, one in `functions` and one in
   `binary_functions`, are two functions a table holds, each with its handle, and the reference
   calls the one of `functions`, as Metal links them.
+- **Linked functions: types.** A reference resolves to the linked function of its name whatever
+  the definition's type is, and Metal makes every such pipeline (the probe
+  `linked_function_signatures.m`, an M3 Max under macOS 27.0.1). The call passes its arguments by
+  position: one past the definition's last parameter is dropped, and a parameter past the
+  reference's last argument reads zero. An argument of another plain-value type (an integer or
+  floating-point scalar or vector, a `bool` as one bit) passes its bits: all of them at the same
+  width, its low bits to a narrower parameter, its bits with zeros above to a wider one. The result
+  passes back the same way; a definition returning nothing returns zero, and a reference returning
+  nothing drops the result. A struct a `[[visible]]` function takes by value reaches it as its
+  fields, so a reference passing the fields one by one is passing it. A pointer for a value or a
+  value for a pointer, a pointer of another address space, and an aggregate of another type refuse
+  the pipeline at a call that survives specialization, `Unsupported` with `Feature::Linking`
+  (section 10, "Linked functions").
 - **Stitched functions.** A function Metal's stitcher made (`newLibraryWithStitchedDescriptor:`)
   links like any other visible function, in `functions` or in `privateFunctions`: hand the
   stitched library's bytes to `Library::from_metallib`, and link its function. Each stitched
@@ -4243,6 +4256,23 @@ each item named states the rule in full.
   specialized (section 3, "Linked functions: names and constants"). Metal makes that pipeline,
   and its read is undefined: a kernel storing `x * scale + 1` of such a function stored nothing on
   an M3 Max under macOS 27.0.1.
+
+**Linked functions**
+
+- **A reference of another type reads zero or its arguments' bits where Metal's read is
+  undefined** (section 3, "Linked functions: types"). A parameter the reference passes nothing
+  for reads zero, as Metal's read zero on an M3 Max under macOS 27.0.1 and on a Radeon Pro 5300M
+  and a UHD Graphics 630 under macOS 26.7.1. An argument of another width passes its low bits to a
+  narrower parameter, as the 5300M did for a `float` passed to a `half`, where the M3 Max and the
+  UHD 630 left the parameter undefined (a kernel storing a value computed from it stored nothing);
+  it passes its bits with zeros above to a wider parameter, and a result of another width or one a
+  definition returning nothing gives passes the same way or reads zero, where the M3 Max stored
+  nothing.
+- **A reference passing a pointer for a value or a value for a pointer, a pointer of another
+  address space, or an aggregate of another type is refused** (`Unsupported`,
+  `Feature::Linking`), where Metal makes the pipeline: on the M3 Max each such read was undefined
+  (the kernel stored nothing); on the 5300M a value for a pointer read the pointer's low 32 bits
+  and a `constant` pointer for a `device` one read through it.
 
 **Inline assembly**
 

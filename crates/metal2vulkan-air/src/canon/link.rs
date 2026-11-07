@@ -10,11 +10,15 @@
 //! function is imported into the module with everything it reaches (its helpers, globals,
 //! constants, types, and declarations; its own stubs are resolved in turn, against the same linked
 //! functions), and every direct call to the stub is redirected to the imported definition, which
-//! inlining then takes like any other callee. A call cycle through linked functions is inlining's
-//! `Recursion`. Types map as LLVM's IR linker maps them: the definition's type pairs with the
-//! stub's structurally, identified structs by body whatever their names (the Metal compiler numbers
-//! a struct `%struct.T.153` in one module and `%struct.T` in another), and any other identified
-//! struct is the module's first struct of the same body.
+//! inlining then takes like any other callee. The reference resolves whatever the definition's
+//! type is, as Metal's does: where it differs from the stub's, the calls are redirected to an
+//! adapter of the stub's type that calls the definition with the arguments by position
+//! ([`super::adapt`]). A call cycle through linked functions is inlining's `Recursion`. Types map
+//! as LLVM's IR linker maps them: the definition's type pairs with the stub's structurally, by
+//! position (its return type and each parameter the two share), identified structs by body
+//! whatever their names (the Metal compiler numbers a struct `%struct.T.153` in one module and
+//! `%struct.T` in another), and any other identified struct is the module's first struct of the
+//! same body.
 //!
 //! A linked module's linkage signature (`!air.signature`) is read as the entry module's is: it
 //! describes how a closed module was produced, and the module's own code is what is imported. A
@@ -26,10 +30,10 @@
 //! what the specialized function calls. Each stub that is not resolved keeps a [`Stub`] state,
 //! and the post-check refuses a call to it that survives SCCP: `NeedsInput(LinkedFunction)` when
 //! no linked function has its name, and otherwise the reason the named function cannot resolve
-//! it (another function type, a function that is not visible, two linked functions of that name,
-//! another data layout, a function constant an unspecialized function reaches, or a module
-//! feature linking does not implement yet: a linked-constants signature on a module that still
-//! declares constants, or a global it only declares and does not import).
+//! it (a function that is not visible, two linked functions of that name, another data layout, a
+//! function constant an unspecialized function reaches, or a module feature linking does not
+//! implement yet: a type no adapter passes the arguments of, a linked-constants signature on a
+//! module that still declares constants, or a global it only declares and does not import).
 //!
 //! When the entry takes a visible-function table, every function the pipeline can place in one (a
 //! [`LinkedName`] with a table word) is imported the same way, after the stubs, as a [`Candidate`]
@@ -64,6 +68,7 @@ use crate::ir::{Arena, Callee, Const, ConstId, ConstTable, DataLayout, FuncId, F
 use crate::ir::{GlobalId, Idx, InstKind, Linkage, Module, ModuleParts, Section, Sym, Symbols};
 use crate::ir::{Type, TypeId, TypeTable, Visibility};
 
+use super::adapt;
 use super::fc;
 use super::fold::Folder;
 use super::renumber::{bodies, inst_refs, isomorphism, Bodies, Renumber, Syms};
@@ -177,8 +182,15 @@ impl DynamicLinks {
 /// What linking made of one stub declaration.
 #[derive(Clone, Debug)]
 pub(super) enum Stub {
-    /// Its calls now call this imported definition.
-    Resolved(FuncId),
+    /// It resolves to the imported definition `def`, and its calls now call `call`: `def` where
+    /// the stub's type is the definition's, else an adapter of the stub's type that calls `def`
+    /// with the arguments by position ([`super::adapt`]).
+    Resolved {
+        /// The linked function's imported definition.
+        def: FuncId,
+        /// The function a call to the stub calls.
+        call: FuncId,
+    },
     /// No linked function has the name it references.
     Missing(VisibleSymbol),
     /// The linked function of its name cannot resolve it: a surviving call is refused with this.
@@ -213,11 +225,12 @@ impl Stubs {
         self.of.get(&f)
     }
 
-    /// The function a call to `f` calls: the definition a stub or a function import of that id
-    /// was resolved to, or `f`.
+    /// The function a call to `f` calls: what a call to a stub of that id calls (its definition,
+    /// or the definition's adapter), the definition a function import of that id was resolved to,
+    /// or `f`.
     pub fn target(&self, f: FuncId) -> FuncId {
         match self.of.get(&f) {
-            Some(Stub::Resolved(def)) => *def,
+            Some(Stub::Resolved { call, .. }) => *call,
             _ => self.dynamic.get(&f).copied().unwrap_or(f),
         }
     }
@@ -245,10 +258,11 @@ impl Stubs {
         })
     }
 
-    /// The linked definitions the stubs resolved to.
+    /// The linked definitions the stubs resolved to (not their adapters, which Metal inlines as
+    /// it inlines a function that is not visible).
     pub fn resolved(&self) -> impl Iterator<Item = FuncId> + '_ {
         self.of.values().filter_map(|s| match s {
-            Stub::Resolved(f) => Some(*f),
+            Stub::Resolved { def, .. } => Some(*def),
             Stub::Missing(_) | Stub::Refused(_) => None,
         })
     }
@@ -607,23 +621,28 @@ fn link_in(
                 match def {
                     Err(refusal) => Stub::Refused(refusal),
                     Ok(def) => {
-                        let ty = |f: FuncId| {
+                        let decl = |f: FuncId| {
                             funcs
                                 .get(f)
-                                .map(|f| f.ty)
+                                .map(|f| (f.name, f.ty))
                                 .ok_or_else(|| invariant("a linked function out of range"))
                         };
-                        let (want, got) = (ty(stub)?, ty(def)?);
-                        let types = (&tables.types, &tables.types);
+                        let ((name, want), (_, got)) = (decl(stub)?, decl(def)?);
                         if want == got {
-                            Stub::Resolved(def)
-                        } else if isomorphism(types, (got, want), |_| None, m)?.is_some() {
-                            // Another reference to a definition already imported for a reference
-                            // of a different but isomorphic type (two identified structs of one
-                            // body): the call would need the value converted between them.
-                            Stub::Refused(not_implemented(&symbol.0, "type"))
+                            Stub::Resolved { def, call: def }
                         } else {
-                            Stub::Refused(link_problem(&symbol.0, LinkProblem::Signature))
+                            // Metal passes the arguments by position whatever the two types are.
+                            // A difference no adapter passes (a pointer for a value, another
+                            // address space, an aggregate of another type, two identified
+                            // structs of one body) is not implemented.
+                            let interned = (&mut tables.types, &mut tables.consts);
+                            match adapt::adapter((name, want), (def, got), interned, m)? {
+                                Some(adapter) => Stub::Resolved {
+                                    def,
+                                    call: funcs.push(adapter, m)?,
+                                },
+                                None => Stub::Refused(not_implemented(&symbol.0, "type")),
+                            }
                         }
                     }
                 }
@@ -1388,17 +1407,34 @@ fn bring(
     )?;
     let parts = code.module.parts();
     // The root's type is the reference's when they are isomorphic (the check that follows the
-    // import compares them), and a variable's definition takes its declaration's type.
+    // import compares them), and a variable's definition takes its declaration's type. A
+    // function's pairs by position, as a call passes its arguments: its return type and each
+    // parameter the reference shares with it take the reference's types where they are
+    // isomorphic, whatever the rest of the two types are.
     let mut pairs = Vec::new();
     if let Some(want) = want {
         let root = match plan.root {
             Item::Func(f) => parts.funcs.get(f).map(|f| f.ty),
             Item::Global(g) => parts.globals.get(g).map(|g| g.value_ty),
         };
-        pairs.push((
-            root.ok_or_else(|| invariant("the root out of range"))?,
-            want,
-        ));
+        let root = root.ok_or_else(|| invariant("the root out of range"))?;
+        match (parts.types.get(root), tables.types.get(want)) {
+            (
+                Some(Type::Function { ret, params, .. }),
+                Some(Type::Function {
+                    ret: want_ret,
+                    params: want_params,
+                    ..
+                }),
+            ) => {
+                let n = 1 + params.len().min(want_params.len());
+                m.charge(n * std::mem::size_of::<(TypeId, TypeId)>())?;
+                *held += n * std::mem::size_of::<(TypeId, TypeId)>();
+                pairs.push((*ret, *want_ret));
+                pairs.extend(params.iter().copied().zip(want_params.iter().copied()));
+            }
+            _ => pairs.push((root, want)),
+        }
     }
     for (k, place) in places.globals.iter().enumerate() {
         if let Place::Into(d) = place {
@@ -2015,7 +2051,7 @@ fn redirect(
     stubs: &Stubs,
     m: &mut Meter,
 ) -> Result<(), Error> {
-    let resolves = |s: &Stub| matches!(s, Stub::Resolved(_));
+    let resolves = |s: &Stub| matches!(s, Stub::Resolved { .. });
     if !stubs.of.values().any(resolves) && stubs.dynamic.is_empty() {
         return Ok(());
     }

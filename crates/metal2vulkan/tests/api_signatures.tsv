@@ -10587,7 +10587,6 @@ variant	metal2vulkan-air::error::Limit::WorkUnits	WorkUnits
 variant	metal2vulkan-air::error::LinkProblem::Ambiguous	Ambiguous
 variant	metal2vulkan-air::error::LinkProblem::DataLayout	DataLayout
 variant	metal2vulkan-air::error::LinkProblem::NotVisible	NotVisible
-variant	metal2vulkan-air::error::LinkProblem::Signature	Signature
 variant	metal2vulkan-air::error::LinkProblem::UnresolvedConstant	UnresolvedConstant { index: u32 }
 variant	metal2vulkan-air::error::MissingInput::DynamicLibrary	DynamicLibrary { install_name: DiagName }
 variant	metal2vulkan-air::error::MissingInput::DynamicSymbol	DynamicSymbol { symbol: DiagName }
@@ -13595,7 +13594,6 @@ variant	metal2vulkan::error::LinearNeed::SampleCount	SampleCount(u32)
 variant	metal2vulkan::error::LinkProblem::Ambiguous	Ambiguous
 variant	metal2vulkan::error::LinkProblem::DataLayout	DataLayout
 variant	metal2vulkan::error::LinkProblem::NotVisible	NotVisible
-variant	metal2vulkan::error::LinkProblem::Signature	Signature
 variant	metal2vulkan::error::LinkProblem::UnresolvedConstant	UnresolvedConstant { index: u32 }
 variant	metal2vulkan::error::LowerFamily::Access	Access
 variant	metal2vulkan::error::LowerFamily::Arith	Arith

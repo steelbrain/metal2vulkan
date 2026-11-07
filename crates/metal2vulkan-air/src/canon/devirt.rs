@@ -533,7 +533,7 @@ impl Escapes {
                         symbol: DiagName::new(String::from_utf8_lossy(&s.0)),
                     }),
                     Some(Stub::Refused(e)) => e.clone(),
-                    Some(Stub::Resolved(_)) | None => {
+                    Some(Stub::Resolved { .. }) | None => {
                         return Err(invariant("a word of a stub that is not unresolved"))
                     }
                 };
@@ -601,7 +601,7 @@ fn constant_target(
         return None;
     };
     let target = match stubs.get(*f) {
-        Some(link::Stub::Resolved(def)) => *def,
+        Some(link::Stub::Resolved { call, .. }) => *call,
         _ => *f,
     };
     let func = parts.funcs.get(target)?;
@@ -867,8 +867,8 @@ struct IdOp {
     index: Option<Value>,
 }
 
-/// The function constant `v` holds the address of, a stub's linked definition for a resolved
-/// stub's, with its word when it has one.
+/// The function constant `v` holds the address of, what a call to a resolved stub calls (its
+/// linked definition, or the definition's adapter) for the stub's, with its word when it has one.
 fn addr_word(parts: &ModuleParts, stubs: &Stubs, cx: &Cx<'_>, v: Value) -> Option<(FuncId, u32)> {
     let Value::Const(c) = v else {
         return None;
@@ -877,7 +877,7 @@ fn addr_word(parts: &ModuleParts, stubs: &Stubs, cx: &Cx<'_>, v: Value) -> Optio
         return None;
     };
     let target = match stubs.get(*f) {
-        Some(Stub::Resolved(def)) => *def,
+        Some(Stub::Resolved { call, .. }) => *call,
         _ => *f,
     };
     cx.words.word(target).map(|w| (target, w))
