@@ -237,14 +237,18 @@ fn immediate_tracking() -> Vec<LayerSetting> {
 /// where its queue's failures are relayed, waits for the relay's marks after its submissions
 /// before it lets go (MoltenVK names the device as each mark completes too); the queue-switch
 /// check's held rounds wait for fences of their own on their batches, which cover them where no
-/// mark follows (an adopted device's queues, never relayed). The checks' threads
+/// mark follows (an adopted device's queues, never relayed). A third device is made with its
+/// word taken as found overwritten from the start (`loader_word::take_words_as_overwritten`, a
+/// test's mark), on every driver: it holds every step, and where the queue-switch check runs its
+/// rounds wait for fences of their own: the path an adopted MoltenVK device's rounds take, seen
+/// on a driver whose check measures (MoltenVK's answers `Unchecked`). The checks' threads
 /// make no call the loader serves (their command buffers are made as the device is made).
 /// Printed (`LOADER-WORD`): each device's steps held, the marks waited for, the restores on the
 /// checks' threads and its checks' run.
 #[test]
 fn the_checks_hold_the_loader_word_across_steps_only_where_it_was_overwritten() {
-    for immediate in [false, true] {
-        let scratch = Scratch::new(&format!("submit-checks-word-{immediate}"));
+    for (immediate, taken) in [(false, false), (true, false), (false, true)] {
+        let scratch = Scratch::new(&format!("submit-checks-word-{immediate}-{taken}"));
         let options = DeviceOptions {
             kinds: match cfg!(m2v_cpu_icd) {
                 true => vec![DeviceKind::Cpu],
@@ -264,7 +268,10 @@ fn the_checks_hold_the_loader_word_across_steps_only_where_it_was_overwritten() 
             },
             ..DeviceOptions::default()
         };
-        let device = Device::system_default_with(&options).unwrap();
+        crate::loader_word::take_words_as_overwritten(taken);
+        let device = Device::system_default_with(&options);
+        crate::loader_word::take_words_as_overwritten(false);
+        let device = device.unwrap();
         assert!(
             device.settle_submit_checks(SETTLE),
             "the checks never answered"
@@ -284,9 +291,9 @@ fn the_checks_hold_the_loader_word_across_steps_only_where_it_was_overwritten() 
         let fences = device.shared().queue_switch.fences_waited();
         let counts = device.work_counts();
         println!(
-            "LOADER-WORD on {}: MoltenVK {moltenvk}, activities logged at once {immediate}: \
-             overwritten {overwritten}, steps held {held}, relay's marks waited {marks} \
-             (relayed {relayed}), restores on the checks' threads {restores}; checks run {}: {}; \
+            "LOADER-WORD on {}: MoltenVK {moltenvk}, activities logged at once {immediate}, \
+             taken as overwritten {taken}: overwritten {overwritten}, steps held {held}, relay's \
+             marks waited {marks} (relayed {relayed}), restores on the checks' threads {restores}; checks run {}: {}; \
              queue-switch checks run {}, their own fences waited {fences}: {}",
             device.name(),
             counts.submit_checks_run,
@@ -297,9 +304,9 @@ fn the_checks_hold_the_loader_word_across_steps_only_where_it_was_overwritten() 
         assert_eq!(counts.submit_checks_run, 1, "the checks did not run");
         assert_eq!(
             overwritten,
-            moltenvk && immediate,
+            (moltenvk && immediate) || taken,
             "the word was found overwritten on another device than MoltenVK's with its \
-             activities logged at once"
+             activities logged at once, or one taken so"
         );
         match overwritten {
             true => assert!(

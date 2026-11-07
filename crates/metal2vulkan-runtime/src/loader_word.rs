@@ -61,6 +61,31 @@ use std::thread::ThreadId;
 thread_local! {
     /// Whether this thread is one of the device's checks' ([`on_a_check_s_thread`]).
     static CHECK_THREAD: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// Whether the devices this thread makes take their word as found overwritten from the
+    /// start ([`take_words_as_overwritten`]).
+    static TAKEN_AS_OVERWRITTEN: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Make the devices this thread makes while `taken` take their word as found overwritten from the
+/// start, whatever their driver writes, so a test sees the checks' holds on a driver that never
+/// overwrites it (`DeviceWord::overwritten`).
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+pub(crate) fn take_words_as_overwritten(taken: bool) {
+    TAKEN_AS_OVERWRITTEN.with(|cell| cell.set(taken));
+}
+
+/// Whether a device made now takes its word as found overwritten from the start: only where a test
+/// asked so ([`take_words_as_overwritten`]).
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+fn taken_as_overwritten() -> bool {
+    TAKEN_AS_OVERWRITTEN.with(std::cell::Cell::get)
+}
+
+/// Whether a device made now takes its word as found overwritten from the start: never, outside
+/// the device tests.
+#[cfg(not(all(test, any(m2v_gpu, m2v_cpu_icd))))]
+fn taken_as_overwritten() -> bool {
+    false
 }
 
 /// Mark this thread as one of the device's checks' (a thread of its own, for good), so the tests
@@ -185,7 +210,7 @@ impl DeviceWord {
         DeviceWord {
             // SAFETY: the caller's.
             word: unsafe { LoaderWord::of_device(device) },
-            overwritten: AtomicBool::new(false),
+            overwritten: AtomicBool::new(taken_as_overwritten()),
             #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
             steps_held: std::sync::atomic::AtomicU64::new(0),
             #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
