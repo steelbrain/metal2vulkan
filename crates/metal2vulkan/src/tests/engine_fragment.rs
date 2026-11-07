@@ -1407,12 +1407,14 @@ fn a_shadowed_extended_range_attachment_over_its_input_attachment_holds_its_half
         let text = std::fs::read_to_string(path).expect("profile");
         let desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
         let dev = Device::new(desc, DevicePolicy::default()).expect("device");
-        checked += 1;
         // The blend over the input attachment, beside depth and stencil.
         let d = blended();
-        let base = dev
-            .compile_render_pipeline(&d, &Budget::standard())
-            .unwrap_or_else(|e| panic!("{stem}: {e}"));
+        let base = match dev.compile_render_pipeline(&d, &Budget::standard()) {
+            Ok(base) => base,
+            // A device without the raw formats' storage refuses the form whatever the shadow.
+            Err(Error::Unsupported(u)) if u.needs != Needs::NotImplemented => continue,
+            Err(e) => panic!("{stem}: {e}"),
+        };
         assert!(shadows(&base).is_empty(), "{stem}");
         assert!(inputs(&base).contains(&1), "{stem}: {:?}", inputs(&base));
         let base_words = fragment_words(&base);
@@ -1420,6 +1422,19 @@ fn a_shadowed_extended_range_attachment_over_its_input_attachment_holds_its_half
         let (reads, writes) = image_accesses(&base_words);
         let plan = base.plan(&dev, &state.shape()).expect("plan");
         assert_eq!(plan.variant.extended_shadows, [0].into(), "{stem}");
+        // A device without the interlock (SwiftShader) has no shadow beside an input attachment,
+        // which its runtime never asks for: the variant is refused by what the device lacks.
+        if !p.fields().fragment.pixel_interlock {
+            match dev.compile_render_variant(&d, &plan.variant, &Budget::standard()) {
+                Err(Error::Unsupported(u)) => {
+                    assert_eq!(u.feature, Feature::FramebufferFetch, "{stem}");
+                    assert_ne!(u.needs, Needs::NotImplemented, "{stem}");
+                }
+                other => panic!("{stem}: {:?}", other.map(|_| ())),
+            }
+            continue;
+        }
+        checked += 1;
         let variant = dev
             .compile_render_variant(&d, &plan.variant, &Budget::standard())
             .unwrap_or_else(|e| panic!("{stem}: variant: {e}"));
