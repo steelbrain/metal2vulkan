@@ -278,9 +278,11 @@ impl Slopes {
 /// The device's interpolation weighs the vertices' values, so an error in its weights moves the
 /// value by up to that error times the sum of the vertices' magnitudes, `range` ([`range_of`]),
 /// whatever the value's own: lane 3 of [`VALUES`], `(3, -2, 0.5)`, sums 5.5 where lanes 0 to 2
-/// sum 1. Held at `1e-3` of `range`, of the value's magnitude, or 1. Measured: about `1.5e-4` of
-/// it, `3e-4` on lavapipe (LLVM 23.1.1); llvmpipe (LLVM 23.1.4, Mesa 26.2.6) up to `3.5e-3` apart
-/// in lane 3, `6.3e-4` of its range, and lanes 0 to 2 within `1e-3`.
+/// sum 1. Lanes 0 to 2 are the weights themselves, so lane 3 lies within `range` times their
+/// bound exactly where its error is the weights' that lanes 0 to 2 are held to. Held at `1e-3` of
+/// `range`, of the value's magnitude, or 1. Measured: about `1.5e-4` of it, `3e-4` on lavapipe
+/// (LLVM 23.1.1); llvmpipe (LLVM 23.1.4, Mesa 26.2.6) up to `4.6e-3` apart in lane 3, `8.4e-4` of
+/// its range, and lanes 0 to 2 within `1e-3`.
 fn device_bound(metal: f32, range: f32, read: Read, lanes: Lanes, slope: f32, n: u32) -> f32 {
     let mut bound = 1e-3 * metal.abs().max(range).max(1.0);
     bound += match read {
