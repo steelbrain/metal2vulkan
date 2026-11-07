@@ -289,8 +289,10 @@ fn layouts_counted(before: &WorkCounts, after: &WorkCounts) -> [u64; 4] {
 /// A plain texture in a heap over host pages lies in Metal's tiles (the module docs): its
 /// answered size holds them; the bytes it is made over, `replaceRegion`, a blit into it, the CPU's
 /// writes and a buffer's over the bytes meet its texels there, and `getBytes` and a blit out of it
-/// read them; no byte between them changes. Counted tiled, with no layout notice; made with no
-/// zeros (`WorkCounts::images_started_on_the_host`, `staging_submissions`, `staging_moves_queued`).
+/// read them; no byte between them changes, and its CPU copies are made in the heap's bytes with
+/// no submission (`WorkCounts::heap_shadow_cpu_copies`). Counted tiled, with no layout notice;
+/// made with no zeros (`WorkCounts::images_started_on_the_host`, `staging_submissions`,
+/// `staging_moves_queued`).
 #[test]
 fn a_host_heap_s_plain_texture_lies_in_metal_s_tiles() {
     on_device(|device, messages| {
@@ -346,8 +348,9 @@ fn a_host_heap_s_plain_texture_lies_in_metal_s_tiles() {
             mapping.fill(0);
 
             // `replaceRegion` writes the texels into Metal's tiles; `getBytes` and a blit read
-            // them back.
+            // them back. Both CPU copies are made in the heap's bytes on the host.
             let first = named(len, 1);
+            let copied = device.work_counts();
             texture
                 .replace_region(plain.region(), 0, 0, &first, plain.row(), 0)
                 .unwrap();
@@ -360,6 +363,15 @@ fn a_host_heap_s_plain_texture_lies_in_metal_s_tiles() {
                 .get_bytes(&mut read, plain.row(), 0, plain.region(), 0, 0)
                 .unwrap();
             assert_eq!(read, first, "{what}: getBytes");
+            let read_back = device.work_counts();
+            assert_eq!(
+                (
+                    read_back.heap_shadow_cpu_copies - copied.heap_shadow_cpu_copies,
+                    read_back.internal_submissions - copied.internal_submissions,
+                ),
+                (2, 0),
+                "{what}: replaceRegion and getBytes in the heap's bytes, with no submission"
+            );
             assert_eq!(blit_out(&queue, &texture, &plain), first, "{what}: a blit");
 
             // A blit into the texture lands in the tiles, no other byte.

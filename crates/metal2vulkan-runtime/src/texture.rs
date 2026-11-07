@@ -5555,7 +5555,9 @@ impl Texture {
         // A heap shadow's texels are the heap's bytes (but a two-plane texture's later levels').
         if let Owner::HeapShadow(shadow) = &image.owner {
             if shadow.holds(image.plan(), &image_region) {
-                return shadow.write(CALL, image.plan(), &image_region, &host, bytes.slice());
+                shadow.write(CALL, image.plan(), &image_region, &host, bytes.slice())?;
+                self.shared().counts.heap_shadow_cpu_copy();
+                return Ok(());
             }
         }
         // A two-plane texture's color words over its texels as they are, the alpha words kept.
@@ -5865,7 +5867,9 @@ impl Texture {
         // A heap shadow's texels are the heap's bytes (but a two-plane texture's later levels').
         if let Owner::HeapShadow(shadow) = &image.owner {
             if shadow.holds(image.plan(), image_region) {
-                return shadow.read(call, image.plan(), image_region, host, bytes);
+                shadow.read(call, image.plan(), image_region, host, bytes)?;
+                self.shared().counts.heap_shadow_cpu_copy();
+                return Ok(());
             }
         }
         // A shadowed view's texels are its texture's (`texture/view_shadow.rs`).

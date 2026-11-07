@@ -27,9 +27,11 @@
 //!   memory whose fills are not transfers its zeros are one `vkCmdFillBuffer`
 //!   (`WorkCounts::new_buffer_zero_fills`), elsewhere copies of the device's zeros.
 //! - **A heap texture's `replace_region` waits for nothing**: its copy is staged for the device's
-//!   next submission; a later command buffer reads the later of two calls' bytes, and `get_bytes`
-//!   the staged bytes. A new heap texture's staged copy lands where that submission also carries
-//!   the texture's first move, a command buffer's or `get_bytes`'s, in one `vkQueueSubmit`.
+//!   next submission, or made in the heap's bytes where the texture is a shadow of them; a later
+//!   command buffer reads the later of two calls' bytes, and `get_bytes` the staged bytes. A new
+//!   heap texture's staged copy lands where that submission also carries the texture's first move,
+//!   a command buffer's or `get_bytes`'s, in one `vkQueueSubmit`; a shadow's `get_bytes` reads the
+//!   heap's bytes on the host, with no submission.
 //! - **Neutrals and sparse textures wait for nothing**: kernels whose texture and texel-buffer
 //!   slots nothing is bound to are encoded and committed, and a sparse texture is made, while the
 //!   busy work runs, with no internal submission; the kernels then complete cleanly and the sparse
@@ -1340,8 +1342,13 @@ fn a_heap_texture_s_replace_region_waits_for_no_gpu_work() {
 /// `get_bytes`'s internal submission (`device/submit.rs`) each read the copy's bytes, in one
 /// `vkQueueSubmit` of one `VkSubmitInfo` (the internal one followed by the relay's call of no
 /// work where the runtime relays the driver's failures, `commit_work::relay_marks`: after the
-/// runtime's own submission a fence alone, of no `VkSubmitInfo`). Then an empty command buffer committed after a new texture is made carries its
-/// first move in its batch's one `VkSubmitInfo`.
+/// runtime's own submission a fence alone, of no `VkSubmitInfo`). A texture that is a shadow of
+/// the heap's bytes (its elements in Metal's tiles there, a compressed one's uncompressed tiles:
+/// the RX 7900 XTX's `Shared` one here) stages nothing: `replace_region` writes those bytes and
+/// `get_bytes` reads them on the host (`WorkCounts::heap_shadow_cpu_copies`), with no
+/// submission, and the blit's submission carries the move from them. Then an empty command
+/// buffer committed after a new texture is made carries its first move in its batch's one
+/// `VkSubmitInfo`.
 #[test]
 fn a_new_heap_texture_s_staged_copy_lands_in_its_first_move_s_submission() {
     on_device(|device| {
@@ -1363,6 +1370,14 @@ fn a_new_heap_texture_s_staged_copy_lands_in_its_first_move_s_submission() {
                 .unwrap();
             let staged = device.work_counts();
             let path = if by_get_bytes { "get_bytes" } else { "a blit" };
+            // A shadow of the heap's bytes copies in them on the host: nothing is staged.
+            let hosted = staged.heap_shadow_cpu_copies - before.heap_shadow_cpu_copies;
+            assert!(
+                hosted <= 1,
+                "{path} on {name}: {hosted} copies in the heap's bytes"
+            );
+            let hosted = hosted == 1;
+            println!("FIRST-USE on {name}: {path}: replace_region in the heap's bytes {hosted}");
             assert_eq!(
                 (
                     staged.queue_submissions,
@@ -1402,18 +1417,29 @@ fn a_new_heap_texture_s_staged_copy_lands_in_its_first_move_s_submission() {
                 after.host_texel_copies, before.host_texel_copies,
                 "{path} on {name}: a host copy"
             );
+            // get_bytes of a shadow of the heap's bytes reads them on the host: no submission.
+            let read_hosted = by_get_bytes && hosted;
+            assert_eq!(
+                after.heap_shadow_cpu_copies - staged.heap_shadow_cpu_copies,
+                u64::from(read_hosted),
+                "{path} on {name}: get_bytes in the heap's bytes"
+            );
             assert_eq!(
                 after.internal_submissions - before.internal_submissions,
-                u64::from(by_get_bytes),
+                u64::from(by_get_bytes && !read_hosted),
                 "{path} on {name}: internal submissions"
             );
-            let calls = 1 + if by_get_bytes { marks } else { 0 };
+            let (calls, infos) = match (by_get_bytes, read_hosted) {
+                (_, true) => (0, 0),
+                (true, false) => (1 + marks, 1),
+                (false, false) => (1, 1),
+            };
             assert_eq!(
                 (
                     after.queue_submissions - before.queue_submissions,
                     after.submit_infos - before.submit_infos,
                 ),
-                (calls, 1),
+                (calls, infos),
                 "{path} on {name}: the move, the copy and the work in one VkSubmitInfo"
             );
             drop((texture, heap));

@@ -255,6 +255,7 @@ pub(crate) struct Counters {
     private_textures_unfilled: AtomicU64,
     private_textures_zero_filled: AtomicU64,
     host_texel_copies: AtomicU64,
+    heap_shadow_cpu_copies: AtomicU64,
     texel_shadows_made: AtomicU64,
     texel_shadow_bytes: AtomicU64,
     texel_shadow_reads: AtomicU64,
@@ -3430,6 +3431,11 @@ impl Counters {
         self.host_texel_copies.fetch_add(1, Ordering::Relaxed);
     }
 
+    /// A heap shadow's CPU copy ran in the heap's bytes (`texture/heap.rs`, `HeapShadow::pieces`).
+    pub(crate) fn heap_shadow_cpu_copy(&self) {
+        self.heap_shadow_cpu_copies.fetch_add(1, Ordering::Relaxed);
+    }
+
     /// A texture's host shadow of `bytes` was made at a CPU read of it
     /// (`texture/host_shadow.rs`).
     pub(crate) fn texel_shadow_made(&self, bytes: u64) {
@@ -5043,6 +5049,11 @@ pub struct WorkCounts {
     /// `replace_region` and `get_bytes` copies that ran on the host, with no submission
     /// (`texture/host_copy.rs`).
     pub host_texel_copies: u64,
+    /// `replace_region` and `get_bytes` copies of a heap's texture that is a shadow of the heap's
+    /// bytes (a texture Metal tiles there, in a heap over host pages or one whose memory takes no
+    /// image of it, and a two-plane texture's first level), made in those bytes on the host, the
+    /// texels' truth, with no submission and no staging (`texture/heap.rs`).
+    pub heap_shadow_cpu_copies: u64,
     /// Host shadows of textures' texels made at a CPU read of them (`texture/host_shadow.rs`):
     /// one a texture whose CPU reads the driver keeps off the host and that the program reads
     /// back, made by the submission its first read waits for either way. A texture the program
@@ -6843,6 +6854,7 @@ impl Device {
             private_textures_zero_filled: (counters.private_textures_zero_filled)
                 .load(Ordering::Relaxed),
             host_texel_copies: counters.host_texel_copies.load(Ordering::Relaxed),
+            heap_shadow_cpu_copies: counters.heap_shadow_cpu_copies.load(Ordering::Relaxed),
             texel_shadows_made: counters.texel_shadows_made.load(Ordering::Relaxed),
             texel_shadow_bytes: counters.texel_shadow_bytes.load(Ordering::Relaxed),
             texel_shadow_reads: counters.texel_shadow_reads.load(Ordering::Relaxed),
