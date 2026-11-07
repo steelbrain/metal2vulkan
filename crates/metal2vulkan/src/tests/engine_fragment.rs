@@ -1262,6 +1262,250 @@ fn a_multisampled_blend_holds_its_half_shadow_per_sample() {
     assert_eq!(seen.len(), 2, "both shapes compiled");
 }
 
+/// The execution modes the SPIR-V module `words` declares (`OpExecutionMode`, 16).
+fn execution_modes(words: &[u32]) -> Vec<u32> {
+    let mut out = Vec::new();
+    let mut at = 5;
+    while let Some(&word) = words.get(at) {
+        let count = ((word >> 16) as usize).max(1);
+        if word & 0xffff == 16 {
+            out.extend(words.get(at + 2).copied());
+        }
+        at += count;
+    }
+    out
+}
+
+/// Whether `modes` holds one of the fragment shader interlocks (`PixelInterlockOrderedEXT` 5366
+/// to `ShadingRateInterlockUnorderedEXT` 5371).
+fn interlocked(modes: &[u32]) -> bool {
+    modes.iter().any(|m| (5366..=5371).contains(m))
+}
+
+/// On a device that orders framebuffer fetch through rasterization-order input attachments (the
+/// committed lavapipe profiles), a draw whose instance holds an extended-range attachment's `half`
+/// shadow runs the variant that keeps the attachment the subpass's and reads and writes the shadow
+/// beside it inside the pixel interlock (`lower::fragment`'s `input_shadow`).
+/// `con_fetch_coverage`, blending a `half4` into its `RGB10A8_2P_XR10` color 0 (premultiplied
+/// over) beside a depth and stencil attachment and fetching color 1, planned with colors 0 and 5
+/// shadowed asks for color 0's alone: the variant binds an `ExtendedShadow(0)` storage image, keeps
+/// both colors' input attachments and no storage attachment, reads the blend's destination from
+/// the shadow in place of the codes (as many image reads as the pipeline unshadowed) and writes it
+/// (one write more), declares the interlock the pipeline did not and early fragment tests, passes
+/// L3 and plans the same variant against itself. `rt6_resolve_white`, writing a `BGRA10_XR` color 0
+/// unblended through an ordinary output, writes the shadow and reads nothing; in four samples its
+/// shadow is refused (the function would run per sample), where `rt6_samples`' four-sample blend
+/// holds a multisampled shadow. Before, the runtime kept every such draw on the codes.
+#[test]
+fn a_shadowed_extended_range_attachment_over_its_input_attachment_holds_its_half() {
+    use crate::metal::{BlendFactor, ColorWriteMask};
+    let (Some(coverage), Some(io), Some(resolves), Some(fills)) = (
+        fixture("con_fetch_coverage"),
+        fixture("stage_io"),
+        fixture("rt6_resolves"),
+        fixture("rt6_samples"),
+    ) else {
+        return;
+    };
+    let function = |bc: &[u8], name: &str| {
+        StageSource::Function(FunctionDescriptor::new(
+            Library::from_air(bc)
+                .expect("library")
+                .function(name)
+                .expect("function"),
+        ))
+    };
+    let over = |pf: PixelFormat| {
+        let mut c = ColorAttachmentDescriptor::new(pf);
+        c.blending_enabled = true;
+        c.source_rgb_blend_factor = BlendFactor::One;
+        c.destination_rgb_blend_factor = BlendFactor::OneMinusSourceAlpha;
+        c.destination_alpha_blend_factor = BlendFactor::OneMinusSourceAlpha;
+        c
+    };
+    let blended = || {
+        let mut d = RenderPipelineDescriptor::new(function(&io, "stage_io_vertex_position"));
+        d.fragment = Some(function(&coverage, "con_fetch_coverage"));
+        let mut read = ColorAttachmentDescriptor::new(PixelFormat::RG16Float);
+        read.write_mask = ColorWriteMask::NONE;
+        let mut unwritten = ColorAttachmentDescriptor::new(PixelFormat::RGB10A82PXR10);
+        unwritten.write_mask = ColorWriteMask::NONE;
+        d.color_attachments[0] = Some(over(PixelFormat::RGB10A82PXR10));
+        d.color_attachments[1] = Some(read);
+        d.color_attachments[2] = Some(unwritten);
+        d.depth_format = Some(PixelFormat::Depth32FloatStencil8);
+        d.stencil_format = Some(PixelFormat::Depth32FloatStencil8);
+        d
+    };
+    let plain = || {
+        let mut d = RenderPipelineDescriptor::new(function(&resolves, "rt6_resolve_full"));
+        d.fragment = Some(function(&resolves, "rt6_resolve_white"));
+        d.color_attachments[0] = Some(ColorAttachmentDescriptor::new(PixelFormat::BGRA10XR));
+        d
+    };
+    let sampled = || {
+        let mut d = RenderPipelineDescriptor::new(function(&fills, "rt6_fill_vertex"));
+        d.fragment = Some(function(&fills, "rt6_fill_rgba16float"));
+        d.color_attachments[0] = Some(over(PixelFormat::BGRA10XR));
+        d.raster_sample_count = 4;
+        d
+    };
+    let fragment_words = |p: &crate::pipeline::RenderPipeline| {
+        p.stages
+            .iter()
+            .find(|m| m.stage == vk::ShaderStage::FRAGMENT)
+            .map(|m| m.spirv.to_vec())
+            .expect("a fragment stage")
+    };
+    let shadows = |p: &crate::pipeline::RenderPipeline| -> Vec<(u32, vk::DescriptorType)> {
+        p.layout
+            .sets
+            .iter()
+            .flat_map(|s| &s.bindings)
+            .filter_map(|b| match b.source {
+                BindingSource::ExtendedShadow(c) => Some((c, b.ty)),
+                _ => None,
+            })
+            .collect()
+    };
+    let inputs = |p: &crate::pipeline::RenderPipeline| -> Vec<u32> {
+        p.graphics
+            .input_attachments
+            .iter()
+            .map(|a| a.color_index)
+            .collect()
+    };
+    let refused = |r: Result<crate::bind::BindingPlan, BindError>| match r {
+        Err(BindError::Unsupported(u)) => {
+            (u.feature, u.needs) == (Feature::FramebufferFetch, Needs::NotImplemented)
+        }
+        _ => false,
+    };
+    let valid = |stem: &str, what: &str, p: &crate::pipeline::RenderPipeline, dev: &Device| {
+        for m in &p.stages {
+            check_words_valid(&m.spirv, &p.requirements, dev.profile())
+                .unwrap_or_else(|e| panic!("{stem}: {what}: L3: {e}"));
+        }
+    };
+    let state = BindState {
+        extended_shadows: [0, 5].into(),
+        ..Default::default()
+    };
+    let shadowed = BindState {
+        extended_shadows: [0].into(),
+        ..Default::default()
+    };
+    let mut checked = 0;
+    for (stem, p) in committed_profiles().expect("profiles") {
+        if !crate::lower::fragment::fetch::inputs_order(&p)
+            || crate::lower::fragment::interlock_orders(&p)
+        {
+            continue;
+        }
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join(format!("../metal2vulkan-validation/profiles/{stem}.json"));
+        let text = std::fs::read_to_string(path).expect("profile");
+        let desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
+        let dev = Device::new(desc, DevicePolicy::default()).expect("device");
+        checked += 1;
+        // The blend over the input attachment, beside depth and stencil.
+        let d = blended();
+        let base = dev
+            .compile_render_pipeline(&d, &Budget::standard())
+            .unwrap_or_else(|e| panic!("{stem}: {e}"));
+        assert!(shadows(&base).is_empty(), "{stem}");
+        assert!(inputs(&base).contains(&1), "{stem}: {:?}", inputs(&base));
+        let base_words = fragment_words(&base);
+        assert!(!interlocked(&execution_modes(&base_words)), "{stem}");
+        let (reads, writes) = image_accesses(&base_words);
+        let plan = base.plan(&dev, &state.shape()).expect("plan");
+        assert_eq!(plan.variant.extended_shadows, [0].into(), "{stem}");
+        let variant = dev
+            .compile_render_variant(&d, &plan.variant, &Budget::standard())
+            .unwrap_or_else(|e| panic!("{stem}: variant: {e}"));
+        assert_eq!(
+            shadows(&variant),
+            [(0, vk::DescriptorType::STORAGE_IMAGE)],
+            "{stem}"
+        );
+        assert!(variant.graphics.storage_attachments.is_empty(), "{stem}");
+        assert!(inputs(&variant).contains(&1), "{stem}");
+        let words = fragment_words(&variant);
+        assert_eq!(shadow_image_types(&words), [(false, false)], "{stem}");
+        assert_eq!(
+            image_accesses(&words),
+            (reads, writes + 1),
+            "{stem}: the shadow's read replaces the codes' and it is written"
+        );
+        let modes = execution_modes(&words);
+        assert!(interlocked(&modes), "{stem}: {modes:?}");
+        assert!(
+            modes.contains(&9),
+            "{stem}: early fragment tests: {modes:?}"
+        );
+        valid(&stem, "blended", &variant, &dev);
+        let again = variant.plan(&dev, &state.shape()).expect("variant plan");
+        assert_eq!(again.variant, plan.variant, "{stem}: a fixed point");
+        assert!(
+            again
+                .descriptors
+                .iter()
+                .any(|w| w.source == WriteSource::ExtendedShadow { color_index: 0 }),
+            "{stem}: {:?}",
+            again.descriptors
+        );
+        // An unblended write: the shadow written, nothing read.
+        let d = plain();
+        let base = dev
+            .compile_render_pipeline(&d, &Budget::standard())
+            .unwrap_or_else(|e| panic!("{stem}: unblended: {e}"));
+        let plan = base.plan(&dev, &shadowed.shape()).expect("unblended plan");
+        assert_eq!(plan.variant.extended_shadows, [0].into(), "{stem}");
+        let variant = dev
+            .compile_render_variant(&d, &plan.variant, &Budget::standard())
+            .unwrap_or_else(|e| panic!("{stem}: unblended variant: {e}"));
+        assert!(variant.graphics.storage_attachments.is_empty(), "{stem}");
+        let words = fragment_words(&variant);
+        assert_eq!(
+            image_accesses(&words),
+            (0, 1),
+            "{stem}: the shadow written, nothing read"
+        );
+        assert!(interlocked(&execution_modes(&words)), "{stem}: unblended");
+        valid(&stem, "unblended", &variant, &dev);
+        // In four samples the plain writer's shadow is refused.
+        let mut d = plain();
+        d.raster_sample_count = 4;
+        let base = dev
+            .compile_render_pipeline(&d, &Budget::standard())
+            .unwrap_or_else(|e| panic!("{stem}: multisampled: {e}"));
+        assert!(
+            refused(base.plan(&dev, &shadowed.shape())),
+            "{stem}: multisampled plain writer"
+        );
+        // And a four-sample blend holds a multisampled shadow.
+        let d = sampled();
+        let base = dev
+            .compile_render_pipeline(&d, &Budget::standard())
+            .unwrap_or_else(|e| panic!("{stem}: four-sample blend: {e}"));
+        let (reads, writes) = image_accesses(&fragment_words(&base));
+        let plan = base
+            .plan(&dev, &shadowed.shape())
+            .expect("four-sample plan");
+        let variant = dev
+            .compile_render_variant(&d, &plan.variant, &Budget::standard())
+            .unwrap_or_else(|e| panic!("{stem}: four-sample variant: {e}"));
+        let words = fragment_words(&variant);
+        assert_eq!(shadow_image_types(&words), [(false, true)], "{stem}");
+        assert_eq!(image_accesses(&words), (reads, writes + 1), "{stem}");
+        valid(&stem, "four-sample blend", &variant, &dev);
+    }
+    assert!(
+        checked > 0,
+        "no profile orders fetch through input attachments"
+    );
+}
+
 /// `fragment_fetch` with `fetch_scalar` discarding a fragment whose color input is negative.
 fn fetch_with_discard() -> Option<Vec<u8>> {
     let src = engine_dir().join("fragment_fetch.ll");
