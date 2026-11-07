@@ -2206,8 +2206,9 @@ impl Counters {
         (self.submit_checks_recalled).fetch_add(1, Ordering::Relaxed);
     }
 
-    /// The submission checks made `calls` `vkQueueSubmit` calls, which `queue_submissions` does
-    /// not count (`submit_check.rs`).
+    /// The submission checks made `calls` `vkQueueSubmit` calls, theirs or the relay's marks
+    /// after their uses of a queue, which `queue_submissions` does not count (`submit_check.rs`,
+    /// `device/relay.rs`).
     pub(crate) fn submit_check_called(&self, calls: usize) {
         (self.submit_check_calls).fetch_add(calls as u64, Ordering::Relaxed);
     }
@@ -4797,7 +4798,9 @@ pub struct WorkCounts {
     /// Devices whose submission checks' verdicts were read from the record of an earlier run of
     /// the same driver, device, kernel and runtime: no check ran for them.
     pub submit_checks_recalled: u64,
-    /// The `vkQueueSubmit` calls the submission checks made, which `queue_submissions` leaves out.
+    /// The `vkQueueSubmit` calls the submission checks made, which `queue_submissions` leaves out:
+    /// theirs, and on a device that relays its queues' failures the relay's mark after each of
+    /// their uses of a queue.
     pub submit_check_calls: u64,
     /// Devices of `QueueSharingPolicy::Adaptive` with two `VkQueue`s of one family to share that
     /// do not share, because their command buffers write no calibrated GPU timestamps the host

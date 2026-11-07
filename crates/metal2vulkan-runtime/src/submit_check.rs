@@ -83,7 +83,9 @@
 //!   step in progress, the release of its objects and of its parts, and the checks end
 //!   unrecorded, what had not answered `Unchecked`. Each step's Vulkan work runs inside a section
 //!   of the exit guard (`exit_guard.rs`). Its submissions are counted apart
-//!   (`WorkCounts::submit_check_calls`), not among the device's.
+//!   (`WorkCounts::submit_check_calls`), not among the device's, with the relay's mark after each
+//!   of its uses of the queue where the device relays its queues' failures (`device/relay.rs`,
+//!   `By::Checks`).
 
 use crate::command_buffer::fences::Fences;
 use crate::device::functions::{Functions, Vk};
@@ -1321,7 +1323,7 @@ impl Objects {
             // recorded, ended and in no pending submission (each round waits for the last); the
             // fence is unsignaled and in no pending submission.
             let uses = parts.queue_uses();
-            let submitted = uses.use_queue(0, By::Runtime, Uses::Unknown, |queue| unsafe {
+            let submitted = uses.use_queue(0, By::Checks, Uses::Unknown, |queue| unsafe {
                 let mut spent = Duration::ZERO;
                 let last = infos.len() - 1;
                 let calls: Vec<(&[vk::SubmitInfo<'_>], vk::Fence)> = match together {
@@ -1448,7 +1450,7 @@ impl Objects {
         let _busy = exit_guard::enter()?;
         let raw = parts.vk();
         // SAFETY: the queue is used under its lock, inside a section.
-        let _ = (parts.queue_uses()).use_queue(0, By::Runtime, Uses::Unknown, |queue| unsafe {
+        let _ = (parts.queue_uses()).use_queue(0, By::Checks, Uses::Unknown, |queue| unsafe {
             raw.queue_wait_idle(queue)
         });
         exit_guard::called(Call::QueueWaitIdle);

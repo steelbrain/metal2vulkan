@@ -163,7 +163,7 @@ impl Relay {
         match flights.first_pending() {
             Some(By::Batch(failed)) => failed.fail(code, Some(description)),
             Some(By::Program) => {}
-            Some(By::Runtime) | None => {
+            Some(By::Runtime | By::Checks) | None => {
                 flights.lost.store(true, Ordering::Release);
                 for each in queues
                     .iter()
@@ -216,12 +216,19 @@ pub(crate) enum By {
     Program,
     /// The runtime's own use outside a batch.
     Runtime,
+    /// The device's submission checks' use (`submit_check.rs`): the runtime's own, its mark
+    /// counted with the checks' calls (`WorkCounts::submit_check_calls`), not the device's.
+    Checks,
 }
 
-/// A submission in flight: the fence it signals, and whose it is.
+/// A submission in flight: the fence it signals, whose it is, and whether its call returned.
 struct Flight {
     fence: vk::Fence,
     by: By,
+    /// Whether the `vkQueueSubmit` that signals the fence returned: until it did, the fence is the
+    /// submitting thread's (a submission's fence is externally synchronized, and a driver may
+    /// signal it before the call returns), so no other thread reads, resets or gives it back.
+    made: bool,
 }
 
 /// One `VkQueue`'s submissions in flight, in submission order (the module docs).
@@ -258,9 +265,23 @@ impl Flights {
         }
     }
 
-    /// A submission of `fence`, `by`'s, is made next.
-    pub(super) fn push(&self, fence: vk::Fence, by: By) {
-        lock(&self.log).push_back(Flight { fence, by });
+    /// A submission of `fence`, `by`'s, is made next, under the queue's lock: until it is
+    /// [`made`](Self::made), the log holds it pending and reads nothing of its fence.
+    pub(crate) fn push(&self, fence: vk::Fence, by: By) {
+        lock(&self.log).push_back(Flight {
+            fence,
+            by,
+            made: false,
+        });
+    }
+
+    /// The submission of `fence` pushed last was made: its call returned, and its fence may be
+    /// read.
+    pub(crate) fn made(&self, fence: vk::Fence) {
+        let mut log = lock(&self.log);
+        if let Some(flight) = log.iter_mut().rev().find(|flight| flight.fence == fence) {
+            flight.made = true;
+        }
     }
 
     /// The submission of `fence` pushed last was not made.
@@ -301,14 +322,14 @@ impl Flights {
         lock(&self.log).retain(|flight| flight.fence != fence);
     }
 
-    /// The first submissions not of a batch whose fences are signaled, each before any other in
-    /// the log: they leave it, and their fences are for the caller to reset and give back.
-    /// Inside a section of the exit guard.
-    pub(super) fn done_marks(&self) -> Vec<vk::Fence> {
+    /// The first submissions not of a batch whose calls returned and whose fences are signaled,
+    /// each before any other in the log: they leave it, and their fences are for the caller to
+    /// reset and give back. Inside a section of the exit guard.
+    pub(crate) fn done_marks(&self) -> Vec<vk::Fence> {
         let mut log = lock(&self.log);
         let mut done = Vec::new();
         while let Some(front) = log.front() {
-            if matches!(front.by, By::Batch(_)) || !self.signaled(front.fence) {
+            if matches!(front.by, By::Batch(_)) || !front.made || !self.signaled(front.fence) {
                 break;
             }
             done.extend(log.pop_front().map(|flight| flight.fence));
@@ -324,11 +345,15 @@ impl Flights {
             .collect()
     }
 
-    /// Whose the first submission is whose fence is unsignaled; `None` when every fence is
-    /// signaled or one cannot be read. Inside a section of the exit guard.
+    /// Whose the first submission is whose fence is unsignaled, or whose call has not returned
+    /// (its fence unread: pending); `None` when every fence is signaled or one cannot be read.
+    /// Inside a section of the exit guard.
     fn first_pending(&self) -> Option<By> {
         let log = lock(&self.log);
         for flight in log.iter() {
+            if !flight.made {
+                return Some(flight.by.clone());
+            }
             // SAFETY: the fence is the device's and in the log, so not yet released.
             let status = unsafe {
                 self.functions
@@ -379,7 +404,8 @@ impl super::DeviceShared {
 
     /// Submit a batch of a command buffer's to `VkQueue` `queue` with `f`, under the queue's
     /// lock: where its failures are relayed, the submission of `fence` is logged first, its
-    /// failure for `failed` ([`By::Batch`]), and dropped from the log again when `f` fails. A
+    /// failure for `failed` ([`By::Batch`]), made once `f` returns ([`Flights::made`]), and
+    /// dropped from the log again when `f` fails. A
     /// batch that signals the queue's timeline to `value` notes it once submitted (the exit
     /// hook's value, and where freed memory waits for the batches in flight, theirs, under the
     /// gate's read lock: `freed_memory.rs`). The time `f` takes, the driver's, is counted
@@ -412,9 +438,13 @@ impl super::DeviceShared {
             if submitted.is_ok() && period.called(Caller::Work, nanos, end) {
                 self.counts.submit_stall_on_work();
             }
-            match (&submitted, logged, value) {
-                (Err(_), Some((fence, flights)), _) => flights.unpush(fence),
-                (Ok(()), _, Some(value)) => {
+            match (&submitted, logged) {
+                (Err(_), Some((fence, flights))) => flights.unpush(fence),
+                (Ok(()), Some((fence, flights))) => flights.made(fence),
+                _ => {}
+            }
+            match (&submitted, value) {
+                (Ok(()), Some(value)) => {
                     slot.submitted(value);
                     if let Some(parking) = parking {
                         parking.submitted(queue, value);
@@ -433,7 +463,10 @@ impl super::DeviceShared {
     /// `f` with `VkQueue` `queue` under its lock: a use outside a batch, `by`'s. Where the
     /// queue's failures are relayed, a submission of no work after `f`'s, under the same lock,
     /// signals a fence logged as `by`'s, which ends where `f`'s submissions end (the module
-    /// docs); the marks before it whose fences are signaled go back first. Where freed memory
+    /// docs), made once its call returns ([`Flights::made`]); the marks before it whose fences
+    /// are signaled go back first. The mark is counted among the device's submissions
+    /// (`WorkCounts::queue_submissions`), or the submission checks' for theirs
+    /// ([`By::Checks`]). Where freed memory
     /// waits for the work in flight, the program's use takes a value of the queue's timeline of
     /// such marks before `f` runs, which that submission signals too (`freed_memory.rs`); should
     /// the submission fail, the value counts as reached once the queue is idle. Each reach of the
@@ -487,6 +520,7 @@ impl QueueUses<'_> {
         let slot = &self.queues[queue];
         let flights = slot.flights.get();
         let parking = self.parking.filter(|_| matches!(by, By::Program));
+        let checks = matches!(by, By::Checks);
         if flights.is_none() && parking.is_none() {
             return match uses {
                 Uses::Unknown => slot.with(f),
@@ -556,7 +590,10 @@ impl QueueUses<'_> {
                     true => std::slice::from_ref(&submit),
                     false => &[],
                 };
-                self.counts.queue_submitted(submits.len(), 0);
+                match checks {
+                    true => self.counts.submit_check_called(1),
+                    false => self.counts.queue_submitted(submits.len(), 0),
+                }
                 // SAFETY: a submission of no work, with an unsignaled fence in no pending
                 // submission where it has one, signalling the timeline of marks above every
                 // value signalled there before where it has one; the queue is used under its
@@ -564,6 +601,9 @@ impl QueueUses<'_> {
                 let submitted =
                     unsafe { raw.queue_submit(vk_queue, submits, fence.unwrap_or_default()) };
                 exit_guard::called(Call::QueueSubmit);
+                if let (Ok(()), Some((fence, flights))) = (&submitted, logged) {
+                    flights.made(fence);
+                }
                 if submitted.is_err() {
                     if let Some((fence, flights)) = logged {
                         flights.unpush(fence);
