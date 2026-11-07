@@ -20,10 +20,11 @@
 //! `m2v_cpu_icd`), on the kind of device the cfg selects.
 
 use super::blit_holds::{device, Scratch, WAIT};
+use super::draw_again::{device as hearing_device, Heard};
 use super::encoder_holds::library;
 use crate::{
-    BlitOption, Buffer, CommandQueue, ComputePipelineState, Device, Origin, PipelineOptions,
-    Region, ResourceOptions, Size, Texture, TextureDescriptor,
+    BlitOption, Buffer, CommandQueue, ComputePipelineState, Degradation, Device, IoSurfacePlane,
+    Origin, PipelineOptions, Region, ResourceOptions, Size, Texture, TextureDescriptor,
 };
 use metal2vulkan::metal::{PixelFormat, TextureUsage};
 
@@ -72,6 +73,31 @@ impl Tail {
         offset: u64,
         height: u64,
     ) -> Tail {
+        let made = |buffer: &Buffer, descriptor: &TextureDescriptor| {
+            buffer.new_texture(descriptor, offset, ROW).unwrap()
+        };
+        Tail::made(device, (length, options), (offset, height), made)
+    }
+
+    /// As [`new`](Self::new), the texture a 2D one of a plane at `offset` of a surface with
+    /// planes, rows [`ROW`] apart, which the buffer stands for.
+    fn over_plane(device: &Device, length: u64, offset: u64, height: u64) -> Tail {
+        let made = |buffer: &Buffer, descriptor: &TextureDescriptor| {
+            let plane = IoSurfacePlane::new(offset, ROW, true);
+            (buffer.new_texture_with_iosurface_plane(descriptor, plane)).unwrap()
+        };
+        let options = ResourceOptions::shared();
+        Tail::made(device, (length, options), (offset, height), made)
+    }
+
+    /// The world of a `height`-row texture at `offset` over a buffer of `length` bytes of
+    /// `options`, `made` over the buffer.
+    fn made(
+        device: &Device,
+        (length, options): (u64, ResourceOptions),
+        (offset, height): (u64, u64),
+        made: impl FnOnce(&Buffer, &TextureDescriptor) -> Texture,
+    ) -> Tail {
         let around_buffer = || {
             let buffer = device.new_buffer(4096, ResourceOptions::shared()).unwrap();
             // SAFETY: the buffer's 4096 mapped bytes, which no command uses yet.
@@ -92,7 +118,7 @@ impl Tail {
             TextureDescriptor::texture_2d(PixelFormat::RGBA8Unorm, WIDTH, height, false);
         descriptor.usage = TextureUsage::SHADER_READ | TextureUsage::SHADER_WRITE;
         descriptor.resource_options = options;
-        let texture = buffer.new_texture(&descriptor, offset, ROW).unwrap();
+        let texture = made(&buffer, &descriptor);
         let examples = library(device, "examples/runtime_examples.ll");
         let kernel = examples.new_function_with_name("invert_texels").unwrap();
         let pipeline = PipelineOptions::default();
@@ -362,6 +388,87 @@ fn every_shape_past_the_length_reads_its_tail_and_its_buffer() {
         past.around_kept(),
         "wholly past: no write reaches another buffer"
     );
+}
+
+/// A 2D texture of a plane of an IOSurface with planes whose rows run past the buffer standing
+/// for the surface (`linear_plan.rs`'s **Beyond the plane's rows**): Metal makes it and lays the
+/// rows past the surface in no one place (an Apple M3 Max under macOS 27.0.1,
+/// `metal2vulkan-conformance/probes/surface_texture_envelope.m`'s `bgra1.64x65` and
+/// `bgra1.64x128`: its blits and kernels read zeros there, its `getBytes` zeros and other memory,
+/// and its writes there change no byte of the surface), where the runtime keeps them in the
+/// texture's tail, zero when made, which every path reads and writes alike, announced once as
+/// `surface-texels-tail`. The rows inside the surface are its bytes on every path, as Metal's
+/// are, and what the kernel writes there reaches them. Two shapes: 64 by 17 over 4096 bytes (row
+/// 16 past), and 64 by 16 from offset 2048 (rows 8 to 15 past); every buffer around keeps its
+/// bytes.
+#[test]
+fn a_plane_past_its_surface_keeps_those_texels_in_its_tail() {
+    let scratch = Scratch::new("buffer-tail-plane");
+    let heard = Heard::default();
+    let device = hearing_device(&scratch.0, &[], &heard);
+    for (offset, height, rows) in [(0, 17, [0, 15, 16]), (2048, 16, [0, 7, 8])] {
+        let tail = Tail::over_plane(&device, 4096, offset, height);
+        for y in rows {
+            let want = tail.made_row(y);
+            assert_eq!(
+                tail.cpu_row(&tail.texture, y),
+                want,
+                "{offset} get_bytes {y}"
+            );
+            assert_eq!(tail.blit_row(y), want, "{offset} blit {y}");
+            assert_eq!(tail.kernel_row(y), want, "{offset} kernel {y}");
+        }
+        let written: Vec<Vec<u8>> = (0..height)
+            .map(|y| row(|x, c| (y * 13 + x * 3 + c * 7) as u8 | 0x80))
+            .collect();
+        tail.kernel_write(&written);
+        let inside = rows[1];
+        let start = offset + inside * ROW;
+        assert_eq!(
+            tail.buffer_bytes(start..start + ROW),
+            written[inside as usize],
+            "{offset}: the kernel's row {inside} reaches the surface's bytes"
+        );
+        for y in rows {
+            let want = &written[y as usize];
+            assert_eq!(
+                &tail.cpu_row(&tail.texture, y),
+                want,
+                "{offset} get_bytes {y}"
+            );
+            assert_eq!(&tail.blit_row(y), want, "{offset} blit {y}");
+            assert_eq!(&tail.kernel_row(y), want, "{offset} kernel {y}");
+        }
+        let past = rows[2];
+        let by_cpu = row(|x, c| (x * 5 + c) as u8 | 0x40);
+        let region = Region::new_2d(0, past, WIDTH, 1);
+        (tail.texture.replace_region(region, 0, 0, &by_cpu, ROW, 0)).unwrap();
+        assert_eq!(
+            tail.kernel_row(past),
+            by_cpu,
+            "{offset}: kernel after replace_region"
+        );
+        assert_eq!(
+            tail.blit_row(past),
+            by_cpu,
+            "{offset}: blit after replace_region"
+        );
+        assert_eq!(
+            tail.buffer_bytes(start..start + ROW),
+            written[inside as usize],
+            "{offset}: the surface's bytes as the kernel left them"
+        );
+        assert!(
+            tail.around_kept(),
+            "{offset}: no write reaches another buffer"
+        );
+    }
+    let notices = heard.lock().unwrap();
+    let tails = notices
+        .iter()
+        .filter(|notice| notice.degradation == Degradation::SurfaceTexelsTail)
+        .count();
+    assert_eq!(tails, 1, "announced once");
 }
 
 /// Over a `Private` buffer, whose shadow copies back rather than merging, a blit's write past the

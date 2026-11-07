@@ -1469,12 +1469,19 @@ fn iosurface_planes_lie_where_metal_puts_them() {
             Err(BufferRefusal::PlaneShape),
         ),
         // A plane of a surface with planes whose rows end past the buffer: plain Metal makes such
-        // a texture and reads zeros past the plane, which the runtime has no bytes for. Over a
-        // surface without planes plain Metal asserts on it ("Descriptor height*arrayLength >
-        // IOSurface height"), so the runtime refuses the same shape `Invalid` there (`past.m`).
+        // a texture and lays the texels past the surface in no one place
+        // (`surface_texture_envelope`), which the runtime keeps in the texture's tail, so the
+        // plan places them as inside it: the CPU's rows end at 16 past a buffer of 15, the GPU's
+        // at 52 past one of 16. Over a surface without planes plain Metal asserts on it
+        // ("Descriptor height*arrayLength > IOSurface height"), so the runtime refuses the same
+        // shape `Invalid` there (`past.m`).
         (
             plane(r8, (4, 4), (0, 4), true, 15),
-            Err(BufferRefusal::TexelsPastLength),
+            Ok(Placed {
+                gpu: at(0, 16, 4, 4),
+                cpu: at(0, 4, 4, 4),
+                narrow: true,
+            }),
         ),
         (
             plane(r8, (4, 4), (0, 16), false, 48),
@@ -1485,6 +1492,37 @@ fn iosurface_planes_lie_where_metal_puts_them() {
         ),
         (
             plane(r8, (4, 4), (0, 4), true, 16),
+            Ok(Placed {
+                gpu: at(0, 16, 4, 4),
+                cpu: at(0, 4, 4, 4),
+                narrow: true,
+            }),
+        ),
+        (
+            plane(r8, (4, 8), (0, 16), true, 64),
+            Ok(Placed {
+                gpu: at(0, 16, 4, 8),
+                cpu: at(0, 16, 4, 8),
+                narrow: false,
+            }),
+        ),
+        // The shapes whose texels another form holds than a shadow's copies of the rows keep no
+        // tail: a two-plane extended-range texture's, a 4:2:2 one's pairs, a depth or stencil
+        // plane's elements. (This table counts the two-plane format's texel as its image's
+        // eight-byte word, so its rows here are 32 bytes.)
+        (
+            plane(P::RGB10A82PXR10, (4, 8), (0, 32), true, 64),
+            Err(BufferRefusal::TexelsPastLength),
+        ),
+        (
+            plane(P::GBGR422, (4, 8), (0, 16), true, 64),
+            Err(BufferRefusal::TexelsPastLength),
+        ),
+        (
+            Case {
+                storage: StorageMode::Private,
+                ..plane(P::Depth32Float, (4, 8), (0, 16), true, 64)
+            },
             Err(BufferRefusal::TexelsPastLength),
         ),
         // Slices or levels over such a plane, which Metal makes and lays out alike on no two
@@ -1624,6 +1662,20 @@ fn a_surface_plane_s_other_shapes_follow_the_probe() {
         (
             plane(tb, bgra, (128, 1), (0, 256), true, 32768),
             one_row(0, 512),
+        ),
+        // Past the buffer standing for the surface, which the texture's tail keeps: a texture
+        // buffer, a 1D texture and a 2D array of one slice, as a 2D texture's rows.
+        (
+            plane(tb, bgra, (128, 1), (16128, 256), true, 16384),
+            one_row(16128, 512),
+        ),
+        (
+            plane(d1, bgra, (64, 1), (16256, 256), true, 16384),
+            one_row(16256, 256),
+        ),
+        (
+            plane(a, bgra, (64, 65), (0, 256), true, 16384),
+            rows(0, 256, 256, 65),
         ),
         // 129 420v.p0.typebuffer, at the x86 Macs' plane offset of 32.
         (

@@ -56,7 +56,8 @@
 //! `rate_mapped_passes` ([`ZERO_LAYER_AFTER_RELEASE`]), and passes over a map reset after they took
 //! it that the runtime cannot encode again there ([`RESET_UNENCODED`]),
 //! IOSurface planes under 16 bytes a row in `buffer_texture_blits` ([`NARROW_ROWS`]) and
-//! planes whose GPU rows share bytes there ([`COLLIDING_ROWS`]), one
+//! planes whose GPU rows share bytes there ([`COLLIDING_ROWS`]), planes past their surface there
+//! ([`SURFACE_TAILS`]), one
 //! texture's depth stored and resolved beside its stencil resolved alone in `resolves` ([`MIXED_RESOLVES`]), mesh
 //! draws emulated on a device without `VK_EXT_mesh_shader` in `mesh_draws` ([`EMULATED_MESH`]),
 //! draws under Apple's last provoking vertex on a device without its own in `provoking` and
@@ -155,7 +156,7 @@ use super::attachment_reads::IN_PLACE;
 use super::barycentric_weights::SYNTHESIZED_GEOMETRY;
 use super::binary_archives::ARCHIVES;
 use super::blits::SYSTEM_MEMORY;
-use super::buffer_texture_blits::{COLLIDING_ROWS, NARROW_ROWS, OVERLAPS};
+use super::buffer_texture_blits::{COLLIDING_ROWS, NARROW_ROWS, OVERLAPS, SURFACE_TAILS};
 use super::buffer_texture_order::USAGE_SHADOWS;
 use super::buffer_texture_renders::MERGES;
 use super::cache::UNWRITTEN_ENTRY;
@@ -523,6 +524,7 @@ fn every_kind_has_a_site_a_lane_test_takes() {
         &ROTATED_LOADS,
         &NARROW_ROWS,
         &COLLIDING_ROWS,
+        &SURFACE_TAILS,
         &MIXED_RESOLVES,
         &EMULATED_MESH,
         &PROVOKING,

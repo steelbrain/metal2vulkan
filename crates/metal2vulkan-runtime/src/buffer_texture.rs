@@ -3,11 +3,13 @@
 //! image (`shadow.rs`) over these texels.
 //!
 //! - **Metal's rules** decide which textures a buffer backs and where they lie in it
-//!   (`linear_plan.rs`); what Metal stops is refused `Invalid`, and a texture buffer whose texels
-//!   run past its buffer's length, which Metal makes, `NotImplemented`.
+//!   (`linear_plan.rs`); what Metal stops is refused `Invalid`, and an IOSurface plane past its
+//!   surface of a shape that keeps no tail (below), which Metal makes, `NotImplemented`.
 //! - **Tails.** A 2D texture, an array or a texture buffer whose texels run past its buffer's
 //!   length, which plain Metal makes up to the buffer's allocation (`linear_plan.rs`'s
-//!   **Length**), keeps the texels' bytes past the length in a tail of its own
+//!   **Length**), and a colour texture of an IOSurface plane whose texels run past the buffer
+//!   standing for its surface (`linear_plan.rs`'s **Beyond the plane's rows**: announced
+//!   `SurfaceTexelsTail`), keep the texels' bytes past the length in a tail of their own
 //!   ([`Texels::past`]): a runtime `Shared` buffer of its bytes from the first to the last (a
 //!   texture buffer's from its functions' first, its offset rounded down to 16), zero when made.
 //!   Its texels inside the length are the buffer's bytes, as every texture's over a buffer are.
@@ -498,9 +500,17 @@ impl Buffer {
     /// (`NotImplemented(OverlappingSurfaceRows)`: a plane a render pass stores into, a two-plane
     /// YCbCr, two-plane extended-range, 4:2:2, depth or stencil one, and a blit that addresses
     /// such a plane's rows as bytes; `linear_plan.rs`); a plane's own rows or its GPU texels past
-    /// the buffer, which Metal's surface holds in its pages
-    /// (`NotImplemented(TexelsPastBufferLength)`); and as [`new_texture`](Self::new_texture)
-    /// refuses a format or an image.
+    /// the buffer, of a shape that keeps no tail (`NotImplemented(TexelsPastBufferLength)`: a
+    /// two-plane YCbCr, two-plane extended-range, 4:2:2, depth, stencil, BC or rotated one); and
+    /// as [`new_texture`](Self::new_texture) refuses a format or an image.
+    ///
+    /// A colour texture of a plane of a surface with planes whose texels run past the buffer
+    /// standing for the surface is made: Metal makes it and lays those texels out in no one place
+    /// (its blits read zeros there, its kernels zeros and the plane's rows again 32 KiB on, its
+    /// `getBytes` other memory, and its writes keep to the surface; an Apple M3 Max under macOS
+    /// 27.0.1). The runtime keeps them in a tail of the texture's own, zero when made, which every
+    /// path reads and writes alike, and its texels inside the surface are the buffer's bytes
+    /// (the module's **Tails**). Announced once by [`Degradation::SurfaceTexelsTail`].
     ///
     /// A depth or stencil texture (`Depth16Unorm`, `Depth32Float`, `Depth32Float_Stencil8`,
     /// `Stencil8`, `X32_Stencil8`) over a plane of a surface with planes is made as Metal makes
@@ -839,16 +849,25 @@ impl Buffer {
                 .with_options(options)
                 .over_surface(surface)
                 .into_texture_buffer()?;
-            Ok(texels.texture(descriptor, &layout, id_use))
+            let tail = surface && texels.tail.is_some();
+            let texture = texels.texture(descriptor, &layout, id_use);
+            if tail {
+                self.degrade_surface_tail(&layout, &placed);
+            }
+            Ok(texture)
         } else {
             // Texels past the buffer's length lie in a tail of their own (`linear_plan.rs`).
             let texels = Texels::placed(self.clone(), placed, texel_bytes, descriptor)
                 .with_options(options)
                 .over_surface(surface)
                 .with_tail()?;
+            let tail = surface && texels.tail.is_some();
             let texture = self
                 .device()
                 .new_texture_over_buffer(call, texels, descriptor, &layout, id_use)?;
+            if tail {
+                self.degrade_surface_tail(&layout, &placed);
+            }
             if placed.narrow {
                 self.degrade_narrow_rows(&layout, &placed);
             }
@@ -867,7 +886,8 @@ impl Buffer {
 /// extent's plan does not hold it to. Refused as that texture is, and
 /// (`NotImplemented(RotatedTexture)`) for a plane whose offset or `bytesPerRow` is off 16 bytes,
 /// or a format of a texel size other than 1, 2, 4, 8 or 16 bytes (a 4:2:2 one among them), whose
-/// rotation is not measured.
+/// rotation is not measured; and (`NotImplemented(TexelsPastBufferLength)`) for a stored frame
+/// past the buffer standing for the surface, whose turned texels are not measured there.
 ///
 /// A rotated plane's `bytesPerRow` must be a multiple of 16 here, so its GPU rows lie at the
 /// pitch itself and never share bytes, which no shadow of a turned frame holds
@@ -901,6 +921,11 @@ pub(super) fn turned_plane(
     };
     let placed =
         plan_buffer_texture(&stored, buffer).map_err(|refusal| refusal_error(call, refusal))?;
+    // A stored frame past the buffer standing for the surface has no tail: its turned texels
+    // are not measured there.
+    if placed.gpu.end().max(placed.cpu.end()) > buffer.length {
+        return Err(Error::NotImplemented(RuntimeGap::TexelsPastBufferLength));
+    }
     Ok((rotation, placed))
 }
 
@@ -959,6 +984,26 @@ impl Buffer {
                 "Metal's GPU writes its rows {} bytes apart from byte {} and reads every row past \
                  the first as memory-dependent bytes",
                 placed.gpu.row_pitch, placed.gpu.offset
+            );
+            (object, reason)
+        });
+    }
+
+    /// Announce `SurfaceTexelsTail` for an IOSurface plane of `layout` placed as `placed`, whose
+    /// texels run past the buffer standing for its surface into the texture's tail, once it is
+    /// made (`linear_plan.rs`'s **Beyond the plane's rows**).
+    fn degrade_surface_tail(&self, layout: &TextureLayout, placed: &Placed) {
+        self.device().degrade(Degradation::SurfaceTexelsTail, || {
+            let [width, height, _] = layout.extent;
+            let object = format!(
+                "{width}x{height} {:?} texture of an IOSurface plane at offset {}, {} bytes a row",
+                layout.pixel_format, placed.cpu.offset, placed.cpu.row_pitch
+            );
+            let reason = format!(
+                "its texels run to byte {} of the {} bytes standing for its surface, and Metal \
+                 lays those past the surface in no one place",
+                placed.gpu.end().max(placed.cpu.end()),
+                self.length()
             );
             (object, reason)
         });

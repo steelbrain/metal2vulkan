@@ -144,7 +144,7 @@ gap	AccelerationStructures	rare	ray tracing (out of scope by ruling)
 gap	FeatureEnable	none	device creation with a feature the runtime's chain lacks
 gap	ExtensionEnable	none	device creation with an extension under an unknown name
 gap	Render	system	render pass, resolve and attachment forms not built (20 sites: see the appendix)
-gap	TexelsPastBufferLength	rare	a texture over an IOSurface plane past its surface
+gap	TexelsPastBufferLength	rare	a YCbCr, two-plane, 4:2:2, depth, BC or rotated texture over an IOSurface plane past its surface
 gap	OverlappingSurfaceRows	rare	an IOSurface plane whose rows overlap
 gap	MemorylessSurfacePlane	rare	a memoryless texture over an IOSurface plane
 gap	SurfacePlaneShape	rare	a texture over an IOSurface plane past one 2D image of its rows

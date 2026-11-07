@@ -1183,6 +1183,63 @@ fn an_iosurface_plane_whose_gpu_rows_share_bytes_is_announced() {
     layer_reported_nothing_at_all(&messages);
 }
 
+/// The kind [`a_plane_past_its_surface_is_made_and_announced`] takes: a colour texture of a plane
+/// of an IOSurface with planes whose texels run past the buffer standing for its surface, those
+/// texels in a tail of the texture's own.
+pub(super) const SURFACE_TAILS: [Degradation; 1] = [Degradation::SurfaceTexelsTail];
+
+/// A 64x66 `RGBA8Unorm` plane of a planar surface at 256 bytes a row over the 16-KiB ordinary
+/// buffer standing for the surface, its last two rows past the surface, is made, which plain
+/// Metal makes too and lays out in no one place past the surface (an Apple M3 Max under macOS
+/// 27.0.1, `metal2vulkan-conformance/probes/surface_texture_envelope.m`). The device announces
+/// [`SURFACE_TAILS`] once for it, with the shadow its tail takes and the `Shared` buffer's system
+/// memory where the device forces it. The CPU reads its rows inside the surface as the buffer's
+/// bytes and its rows past it as zero, what it writes past the surface reads back, and no byte of
+/// the buffer changes. `tests::buffer_tail_device` in the runtime holds every path's bytes over
+/// more shapes.
+#[test]
+fn a_plane_past_its_surface_is_made_and_announced() {
+    let messages = Messages::default();
+    let cache = ScratchCache::new().unwrap();
+    {
+        let device = validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
+        eprintln!("device {}", device.name());
+        // What the device announced as it was made.
+        messages.take_notices();
+        let held = Held::new(&device, Kind::Ordinary).expect("an ordinary buffer");
+        let (w, row) = (64u64, 256u64);
+        let inside = LEN as u64 / row;
+        let h = inside + 2;
+        let read = TextureUsage::SHADER_READ.union(TextureUsage::SHADER_WRITE);
+        let texture = surface_plane(&held, [w, h], row, read)
+            .unwrap_or_else(|e| panic!("a plane past its surface: {e}"));
+        let first = forced(&[
+            (Degradation::ShadowedTexture, true),
+            (
+                Degradation::SharedInSystemMemory,
+                shared_in_system_memory(&device),
+            ),
+        ]);
+        assert_made_once(&messages, &SURFACE_TAILS, &first);
+        let get = |y: u64| {
+            let mut bytes = vec![0xEE; row as usize];
+            let region = Region::new_2d(0, y, w, 1);
+            (texture.get_bytes(&mut bytes, row, 0, region, 0, 0)).unwrap();
+            bytes
+        };
+        let last = (inside - 1) as usize * row as usize;
+        assert_eq!(get(inside - 1), held.model[last..last + row as usize]);
+        assert_eq!(get(inside), vec![0; row as usize], "the first row past");
+        let written: Vec<u8> = (0..row as usize).map(|i| (i * 5 + 1) as u8).collect();
+        let past = Region::new_2d(0, inside + 1, w, 1);
+        (texture.replace_region(past, 0, 0, &written, row, 0)).unwrap();
+        assert_eq!(get(inside + 1), written, "a row written past the surface");
+        assert_eq!(held.bytes(), held.model, "the buffer's bytes");
+        assert_made_once(&messages, &[], &forced(&[]));
+    }
+    layer_reported_nothing_at_all(&messages);
+}
+
 /// A texture of a `w` x `h` `RGBA8Unorm` plane of a planar surface at offset 0 of `held`'s buffer,
 /// `bpr` bytes a row, of `usage` and the buffer's own resource options.
 fn surface_plane(

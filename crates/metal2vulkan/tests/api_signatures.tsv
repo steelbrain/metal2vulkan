@@ -5322,6 +5322,7 @@ macro-member	metal2vulkan-runtime::Degradation::SrgbTexelDecode	SrgbTexelDecode 
 macro-member	metal2vulkan-runtime::Degradation::StagedTextureBuffer	StagedTextureBuffer = "staged-texture-buffer", Performance,
 macro-member	metal2vulkan-runtime::Degradation::StagedTextureCopy	StagedTextureCopy = "staged-texture-copy", Performance,
 macro-member	metal2vulkan-runtime::Degradation::StaleDetachedReach	StaleDetachedReach = "stale-detached-reach", Precision,
+macro-member	metal2vulkan-runtime::Degradation::SurfaceTexelsTail	SurfaceTexelsTail = "surface-texels-tail", Precision,
 macro-member	metal2vulkan-runtime::Degradation::SynthesizedGeometryStage	SynthesizedGeometryStage = "synthesized-geometry-stage", Performance,
 macro-member	metal2vulkan-runtime::Degradation::TessellationFactorEdgeCases	TessellationFactorEdgeCases = "tessellation-factor-edge-cases";
 macro-member	metal2vulkan-runtime::Degradation::TessellationFactorInstance	TessellationFactorInstance = "tessellation-factor-instance";

@@ -1414,14 +1414,18 @@ pub enum RuntimeGap {
     /// Render pipelines, passes and draws.
     Render,
     /// A texture over a plane of a surface with planes whose rows or GPU texels run past the
-    /// buffer standing for the surface, which Metal makes: the runtime's buffer has no bytes
-    /// there. A 2D texture, an array or a texture buffer over a buffer is made past its length,
-    /// up to the allocation Metal holds it to (past which Metal answers nil:
-    /// [`Problem::BufferTexture`]'s `PastAllocation`), its texels past the length in a tail of
-    /// its own ([`Buffer::new_texture`](crate::Buffer::new_texture)). Metal lays a plane's in no
-    /// one place (`metal2vulkan-conformance/probes/surface_texture_envelope.m`, an Apple M3 Max
-    /// under macOS 27.0.1): its blits read zeros past the surface, its kernels zeros and, 32 KiB
-    /// on, the surface's first bytes again, its `getBytes` other memory, and its blits and
+    /// buffer standing for the surface, which Metal makes, of a shape whose texels another form
+    /// holds than a shadow's copies of its rows: a two-plane YCbCr texture's codes, a two-plane
+    /// extended-range one's, a 4:2:2 one's pairs, a depth or stencil plane's elements, a BC
+    /// texture's blocks, and a rotated texture's stored frame. A colour plane is made, its
+    /// texels past the surface in a tail of its own
+    /// ([`Buffer::new_texture_with_iosurface_plane`](crate::Buffer::new_texture_with_iosurface_plane),
+    /// announced as `Degradation::SurfaceTexelsTail`), as a 2D texture, an array or a texture
+    /// buffer over a buffer is made past its length ([`Buffer::new_texture`](crate::Buffer::new_texture)).
+    /// Metal lays a plane's in no one place
+    /// (`metal2vulkan-conformance/probes/surface_texture_envelope.m`, an Apple M3 Max under macOS
+    /// 27.0.1): its blits read zeros past the surface, its kernels zeros and, 32 KiB on, the
+    /// surface's first bytes again, its `getBytes` other memory, and its blits and
     /// `replaceRegion` write the surface's bytes alone. The x86 Macs' are not measured, as a read
     /// past a surface can fault their GPUs.
     TexelsPastBufferLength,

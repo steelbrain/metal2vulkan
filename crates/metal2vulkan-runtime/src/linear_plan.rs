@@ -206,16 +206,21 @@
 //!   out, its rows past the plane at the plane's pitch, inside the surface; the x86 Macs' GPUs
 //!   keep it to the plane (the UHD 630's reads other bytes there and drops the writes, the 5300M's
 //!   reads zeros and its blit into it writes nothing), which the runtime does not, as it is given
-//!   no plane's height. Rows past the surface's end lie in no one place either (the M3 Max's
-//!   blits read zeros there, its kernels wrap to the surface's start 32 KiB on, its `getBytes`
-//!   reads other memory, and its writes keep to the surface): [`BufferRefusal::TexelsPastLength`].
+//!   no plane's height. Rows past the surface's end lie in no one place (the M3 Max under macOS
+//!   27.0.1, `probes/surface_texture_envelope.m`'s `bgra1.64x65`, `bgra1.64x128` and
+//!   `420v.p1.32x512`: its blits read zeros there, its kernels zeros and, 32 KiB past the plane,
+//!   the plane's rows again, its `getBytes` zeros and other memory, and its blits' and
+//!   `replaceRegion`'s writes there change no byte of the surface). The runtime keeps those texels
+//!   in a tail of the texture's own, zero when made, which every path reads and writes alike
+//!   (`buffer_texture.rs`'s **Tails**), announced (`Degradation::SurfaceTexelsTail`); the rows
+//!   inside the surface are its bytes, as Metal's are on every path. The shapes it holds no tail
+//!   of are refused there ([`BufferRefusal::TexelsPastLength`], [`tail_held`]).
 //!
 //! The runtime holds both layouts: the GPU's ([`Placed::gpu`]) is the texture's texels for every
 //! command, the copies of its shadow, an aliasing image and their hazards; the CPU's
-//! ([`Placed::cpu`]) is `replace_region`'s and `get_bytes`'s. Both lie in the buffer, else the
-//! texture is refused: a plane past the buffer `NotImplemented` (`TexelsPastBufferLength`;
-//! Metal's lie in the surface's pages past the plane, where it reads zeros), and over a surface
-//! without planes, which plain Metal holds the rows to, `Invalid` (`PastBuffer`).
+//! ([`Placed::cpu`]) is `replace_region`'s and `get_bytes`'s. Both lie in the buffer, or past it
+//! in the texture's tail (a plane of a surface with planes, above), else the texture is refused:
+//! over a surface without planes, which plain Metal holds the rows to, `Invalid` (`PastBuffer`).
 //! A surface without planes starts at a multiple of 16 in the buffer, as a surface's base does
 //! (`OffsetAlignment` otherwise).
 //!
@@ -330,11 +335,12 @@ pub enum BufferTextureProblem {
     /// height*arrayLength > IOSurface height": a 16 by 8 and a 16 by 64 descriptor over a 16 by 4
     /// `BGRA` surface, on an M3 Max under macOS 27.0.1, where the 16 by 4 one is made).
     ///
-    /// A *plane* of a surface with planes is not held to it: Metal makes a texture taller than
-    /// the plane and reads zeros past it, which the runtime's buffer has no bytes for
-    /// ([`RuntimeGap::TexelsPastBufferLength`](crate::RuntimeGap::TexelsPastBufferLength)), and a
+    /// A *plane* of a surface with planes is not held to it: Metal makes a texture whose rows
+    /// run past the surface, which the runtime keeps in a tail of the texture's own, or refuses
+    /// for a shape it keeps no tail of
+    /// ([`RuntimeGap::TexelsPastBufferLength`](crate::RuntimeGap::TexelsPastBufferLength)); and a
     /// texture over a buffer past its bytes Metal makes or answers nil for by the buffer's
-    /// allocation alone (the module's **Length**).
+    /// allocation alone (the module's **Length** and **Beyond the plane's rows**).
     ///
     /// Basis: metal-measured (an M3 Max, macOS 27.0.1: plain Metal asserts "Descriptor
     /// height*arrayLength > IOSurface height", the API validation layer off, where the surface-high
@@ -567,6 +573,28 @@ fn overlap_held(texture: &BufferTexture) -> bool {
         && !is_depth_stencil(pf)
 }
 
+/// Whether the runtime keeps the texels of an IOSurface plane of `texture` that lie past the
+/// buffer standing for its surface in a tail of the texture's own, zero when made (the module's
+/// **Beyond the plane's rows**), or refuses them ([`BufferRefusal::TexelsPastLength`]).
+///
+/// A colour plane's are kept, a 2D texture's, a 1D texture's, a one-slice array's and a texture
+/// buffer's: the shadow's copies, its blits and its CPU calls reach the tail as they reach a
+/// buffer's texture's (`buffer_texture.rs`'s **Tails**). Refused are the shapes whose texels
+/// another form holds than those copies of their rows: a two-plane YCbCr texture's codes, which
+/// a conversion reads (`ycbcr.rs`); a two-plane extended-range one's, its alpha in the surface's
+/// other plane (`texture/surface_two_planes.rs`); a 4:2:2 one's pairs (`chroma_pairs.rs`); a
+/// depth or stencil plane's elements, which a render pass stores in Metal's tiled layout
+/// (`texture/surface_depth.rs`); and a BC texture's blocks, whose rows past a surface no GPU of
+/// Metal's that makes them was measured at.
+fn tail_held(texture: &BufferTexture) -> bool {
+    let pf = texture.layout.pixel_format;
+    !ycbcr(pf)
+        && !two_planes::holds_planes(pf)
+        && !is_four_two_two(pf)
+        && !is_depth_stencil(pf)
+        && !surface_blocks(pf)
+}
+
 /// Why a texture over a buffer is not made.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum BufferRefusal {
@@ -574,9 +602,10 @@ pub(super) enum BufferRefusal {
     /// [`BufferTextureProblem::PastAllocation`]).
     Metal(BufferTextureProblem),
     /// An IOSurface plane's GPU or CPU rows past the buffer standing for its surface, which
-    /// Metal makes over bytes past the length and the runtime has no bytes for
-    /// (`NotImplemented`). A 2D texture, an array or a texture buffer over a buffer keeps its
-    /// texels past the length in a tail of its own instead (the module's **Length**).
+    /// Metal makes over bytes past the length, of a shape the runtime keeps no tail of
+    /// ([`tail_held`]: `NotImplemented`). A colour plane keeps those texels in a tail of its own
+    /// instead, as a 2D texture, an array or a texture buffer over a buffer does (the module's
+    /// **Length**).
     TexelsPastLength,
     /// An IOSurface plane whose rows overlap on Metal's GPU that the runtime holds no form of
     /// (`NotImplemented`; the module's **Rows that overlap**): a plane a render pass stores into,
@@ -725,7 +754,8 @@ pub(super) fn plan_buffer_texture(
                 .into());
             }
         }
-        return plan_iosurface_plane(cpu, planar, buffer.length, overlap_held(texture));
+        let held = (overlap_held(texture), tail_held(texture));
+        return plan_iosurface_plane(cpu, planar, buffer.length, held);
     }
     let array = texture_type == T::Type2DArray;
     let alignment = if array {
@@ -790,12 +820,13 @@ fn units(pf: PixelFormat, [width, height]: [u64; 2]) -> [u64; 2] {
 /// An IOSurface plane laid out as `cpu` in a buffer of `length` bytes, of a planar surface or
 /// not (`planar`), by the module's rules; its type, levels, options and row were checked as
 /// every texture over a buffer's are. `held` says whether the runtime holds the plane where its
-/// GPU rows overlap ([`overlap_held`]), or refuses it there.
+/// GPU rows overlap ([`overlap_held`]), or refuses it there; `tail` whether it keeps the plane's
+/// texels past the buffer in a tail of the texture's own ([`tail_held`]), or refuses them.
 fn plan_iosurface_plane(
     cpu: BufferLayout,
     planar: bool,
     length: u64,
-    held: bool,
+    (held, tail): (bool, bool),
 ) -> Result<Placed, BufferRefusal> {
     use BufferTextureProblem as P;
     let alignment = LINEAR_ALIGNMENT;
@@ -814,23 +845,22 @@ fn plan_iosurface_plane(
         .into());
     }
     // A surface without planes holds the texture's rows: plain Metal asserts on a descriptor
-    // taller than it (`P::PastBuffer`). Over a plane Metal makes such a texture and reads zeros
-    // past the plane, which the runtime's buffer has no bytes for.
-    if cpu.end() > length {
-        return Err(match planar {
-            true => BufferRefusal::TexelsPastLength,
-            false => P::PastBuffer {
-                counted: cpu.end(),
-                length,
-            }
-            .into(),
-        });
+    // taller than it (`P::PastBuffer`).
+    if cpu.end() > length && !planar {
+        return Err(P::PastBuffer {
+            counted: cpu.end(),
+            length,
+        }
+        .into());
     }
     let gpu = iosurface_gpu_layout(&cpu);
     if gpu.shared_bytes() != 0 && !held {
         return Err(BufferRefusal::OverlappingRows);
     }
-    if gpu.end() > length {
+    // Over a plane Metal makes a texture whose rows run past the surface and lays those texels
+    // in no one place (the module's **Beyond the plane's rows**): the runtime keeps them in a
+    // tail of the texture's own (`buffer_texture.rs`), or refuses the shapes it holds no tail of.
+    if gpu.end().max(cpu.end()) > length && !tail {
         return Err(BufferRefusal::TexelsPastLength);
     }
     Ok(Placed {

@@ -2233,6 +2233,14 @@ bound.
   refused. Cost: where two of the plane's rows write the bytes they share the earlier row's stand,
   one of the rows a kernel of Metal's leaves there, whose winner moves with the threadgroup shape;
   reads, CPU access and every other byte are Metal's.
+- `metal2vulkan-degrade-surface-texels-tail` (precision). `SurfaceTexelsTail`: A texture of a
+  plane of an IOSurface with planes whose texels run past the buffer standing for its surface,
+  which Metal makes and lays out in no one place there (an Apple M3 Max under macOS 27.0.1): its
+  blits read zeros past the surface, its kernels zeros and, 32 KiB past the plane, the plane's
+  rows again, its `getBytes` zeros and other memory, and its writes there change no byte of the
+  surface. Cost: its texels past the surface lie in a tail of the texture's own, zero when made,
+  which every path reads and writes alike, where Metal's blits read zeros there and its writes
+  keep to the surface; its texels inside the surface are Metal's.
 - `metal2vulkan-degrade-absent-argument-read` (precision). `AbsentArgumentRead`: A pipeline state's
   function may read an argument its function constants removed (a texture's read, sample, gather,
   query or atomic, or a sample through a removed sampler; `RuntimeFact::AbsentArgumentRead`), which
@@ -4342,8 +4350,11 @@ each item named states the rule in full.
   there every path reads, and the texels inside the length are the buffer's bytes. The runtime's
   texels past the length lie in the texture's tail (`Buffer::new_texture`): zero when made, read
   and written alike by its functions, blits and CPU calls, and no other allocation's bytes; two
-  textures over one buffer past its length keep a tail each. A texture over an IOSurface plane
-  past its surface stays `NotImplemented(TexelsPastBufferLength)`.
+  textures over one buffer past its length keep a tail each. A colour texture over a plane of an
+  IOSurface with planes keeps its texels past the surface in a tail of its own too, announced
+  (`metal2vulkan-degrade-surface-texels-tail`), where Metal lays them in no one place; the plane
+  shapes that keep no tail (a two-plane YCbCr, two-plane extended-range, 4:2:2, depth, stencil,
+  BC or rotated texture) stay `NotImplemented(TexelsPastBufferLength)` there.
 
 **Function constants**
 

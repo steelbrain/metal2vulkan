@@ -1054,7 +1054,9 @@ else.
   (`probes/surface_texture_envelope.m`, an AMD Radeon Pro 5300M, an Intel UHD 630 and an Apple M3
   Max); rows wider than the plane's, more levels, slices, a 3D, cube or multisample texture, and
   a texture buffer or BC texture at an offset or pitch off 16 are
-  `NotImplemented(SurfacePlaneShape)`, and rows past the surface's end
+  `NotImplemented(SurfacePlaneShape)`. Texels past the surface's end, which Metal lays out in no
+  one place, lie in a tail of the texture's own (announced `surface-texels-tail`), but a two-plane
+  YCbCr, two-plane extended-range, 4:2:2, depth, stencil, BC or rotated texture's, which are
   `NotImplemented(TexelsPastBufferLength)`. A texture taller than its plane, inside the surface,
   is held as the M3 Max lays it out (its rows on at the plane's pitch); the x86 Macs' GPUs keep it
   to the plane, which the runtime cannot, as `IoSurfacePlane` gives no plane height.
