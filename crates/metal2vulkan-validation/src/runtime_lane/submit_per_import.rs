@@ -114,6 +114,16 @@ const FRESH_PHASES: [(&str, usize, usize, bool); 7] = [
     ("none again", 0, 0, true),
 ];
 
+/// The guest RAM of `submit_per_ram_dma_buf`: a `memfd`'s pages, as QEMU's guest RAM with
+/// `share=on`, of a guest of 8 GiB.
+const RAM_BYTES: usize = 8 << 30;
+
+/// The phases of `submit_per_ram_dma_buf`: how many dma-bufs cover the RAM's start, each of the
+/// RAM's bytes over that many rounded down to 2 MiB (none for 0): the RAM imported whole in the
+/// 64-MiB chunks of the runtime's guest RAM (`host_ram.rs` of the runtime), in 16, and in 3 (as
+/// few as keep each below RADV's `maxMemoryAllocationSize` of 4 GiB less 4 bytes).
+const RAM_PHASES: [usize; 5] = [0, 128, 16, 3, 0];
+
 /// The kind of import a phase holds.
 #[derive(Clone, Copy, Debug)]
 enum Kind {
@@ -620,5 +630,61 @@ fn submit_per_fresh_page_buffer() {
             after.memory_blocks_live,
         );
         drop(held);
+    }
+}
+
+/// What one commit costs beside a guest RAM's pages held as dma-bufs, for each count of
+/// [`RAM_PHASES`]: the dma-bufs, each a no-copy buffer over its share of a [`RAM_BYTES`] `memfd`
+/// (one udmabuf each, where the host's udmabuf limits take it), made, then [`COMMITS`] command
+/// buffers of one 4-KiB fill one at a time, each waited for, after [`WARM`] untimed, at once
+/// (every import resident, as a guest RAM's chunks always are). Printed as `SUBMIT-PER-IMPORT`
+/// lines (`submit_per_import`'s), with the dma-buf memories the device holds
+/// (`WorkCounts::dma_buf_memories_live`). Skipped where `/dev/udmabuf` cannot be opened.
+#[test]
+#[ignore = "a measurement, not a check: run by name with --run-ignored all"]
+fn submit_per_ram_dma_buf() {
+    if !udmabuf_openable("submit per ram dma-buf") {
+        return;
+    }
+    let cache = ScratchCache::new().unwrap();
+    let messages = Messages::default();
+    let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), |options| {
+        options.layers.clear();
+        // A consumer's device keeps no execution record.
+        options.record_executions = false;
+    })
+    .unwrap();
+    settled(&device);
+    let queue = device.new_command_queue().unwrap();
+    let target = device.new_buffer(4096, ResourceOptions::shared()).unwrap();
+    let ram = Memfd::new(RAM_BYTES);
+    let calls = Calls::default();
+    let source = ram.source(&ram.whole, &calls);
+    for n in RAM_PHASES {
+        let each = match n {
+            0 => 0,
+            n => (RAM_BYTES / n) & !((2 << 20) - 1),
+        };
+        let made = device.work_counts().dma_buf_imports;
+        let buffers: Vec<Buffer> = (0..n)
+            .map(|i| {
+                dma_buf_no_copy(&device, &ram.whole, i * each, each, source.clone())
+                    .unwrap_or_else(|error| panic!("{n} dma-bufs of {each} bytes: {error:?}"))
+            })
+            .collect();
+        let residency = format!(
+            "of {} MiB over a {} GiB RAM, {} live dma-buf memories, at once",
+            each >> 20,
+            RAM_BYTES >> 30,
+            device.work_counts().dma_buf_memories_live
+        );
+        measure(
+            &device,
+            &queue,
+            &target,
+            (Kind::DmaBuf, n, &residency),
+            made,
+        );
+        drop(buffers);
     }
 }
