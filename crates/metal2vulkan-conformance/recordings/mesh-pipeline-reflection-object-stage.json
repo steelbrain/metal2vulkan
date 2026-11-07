@@ -5167,16 +5167,21 @@
         "pooled_memory_blocks_made": 3,
         "shader_modules_made": 4,
         "shader_modules_shared": 28,
-        "stage_entries_shared": 22,
-        "stage_entries_specialized": 2
+        "stage_entries_shared": 24,
+        "stage_entries_specialized": 2,
+        "variants_taken_back": 1
       },
       "composed": {
         "addressable_buffers_made": 0,
-        "device_memory_allocated": 201326592
+        "device_memory_allocated": 201326592,
+        "stage_entries_shared": 22,
+        "stage_entries_specialized": 2
       },
       "ceilings": {
         "addressable_buffers_made": 2,
-        "pooled_memory_blocks_made": 3
+        "pipeline_layouts_made": 1,
+        "pooled_memory_blocks_made": 3,
+        "shader_modules_made": 4
       },
       "per_state": {
         "pipelines": 0,
