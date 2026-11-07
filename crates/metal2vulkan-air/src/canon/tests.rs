@@ -24,6 +24,7 @@ mod constant_fields;
 mod conversions;
 mod float_compares;
 mod global_builtins;
+mod opencl;
 mod private_memory;
 mod table_copies;
 mod texture_writes;
@@ -169,6 +170,7 @@ fn int(v: u32) -> ConstValue {
 fn request(constants: &[(u32, ConstValue)]) -> SpecRequest {
     SpecRequest {
         call_stack_depth: 1,
+        open_cl_mode: false,
         entry: "k".into(),
         constants: constants.iter().cloned().collect::<BTreeMap<_, _>>(),
     }
@@ -2633,6 +2635,7 @@ fn a_static_initializer_branch_on_an_unsupplied_constant_takes_its_false_way() {
     assert_eq!(on.unwrap(), [Ok(1)]);
     let r = SpecRequest {
         call_stack_depth: 1,
+        open_cl_mode: false,
         entry: "k".into(),
         constants: [(3, boolean(1))].into_iter().collect(),
     };

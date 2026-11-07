@@ -76,7 +76,7 @@ pub use sig::{HandleKind, ImageDim, ImageShape, Immediates, Operand, Signature};
 pub use simd::{Group, GroupOp, GroupScope, IsUniform, SimdgroupSize};
 pub use stage::Imageblock;
 pub use stage::{AbsentAccess, BoolReduce, Derivative, DerivativeOp, Fragment, FunctionConstant};
-pub use stage::{GlobalBuiltin, GlobalVar};
+pub use stage::{GlobalBuiltin, GlobalVar, WorkItem};
 pub use stage::{Interpolate, InterpolateAt};
 pub use sync::{BarrierName, MemFlags, Sync};
 #[cfg(test)]
@@ -121,6 +121,9 @@ pub enum AirIntrinsic {
     SimdgroupSize(SimdgroupSize),
     /// `air.get_<built-in>.<i16|i32>`: a kernel built-in a program-scope variable declares.
     GlobalBuiltin(GlobalBuiltin),
+    /// `air.get_global_offset.i32` and `air.get_work_dim.i32`: an OpenCL C work-item function no
+    /// Metal built-in answers.
+    WorkItem(WorkItem),
     /// A simdgroup-matrix operation: `air.simdgroup_matrix_{8x8,16x16x16}_*`.
     SimdMatrix(SimdMatrix),
     /// A function-constant query, resolved by canonicalization's specialization.
@@ -192,6 +195,7 @@ impl AirIntrinsic {
             .or_else(|| IsUniform::parse(rest).map(A::IsUniform))
             .or_else(|| SimdgroupSize::parse(rest).map(A::SimdgroupSize))
             .or_else(|| GlobalBuiltin::parse(rest).map(A::GlobalBuiltin))
+            .or_else(|| WorkItem::parse(rest).map(A::WorkItem))
             .or_else(|| SimdMatrix::parse(rest).map(A::SimdMatrix))
             .or_else(|| FunctionConstant::parse(rest).map(A::FunctionConstant))
             .or_else(|| Fragment::parse(rest).map(A::Fragment))
@@ -238,6 +242,7 @@ impl AirIntrinsic {
             AirIntrinsic::IsUniform(u) => u.signature(),
             AirIntrinsic::SimdgroupSize(s) => s.signature(),
             AirIntrinsic::GlobalBuiltin(g) => g.signature(),
+            AirIntrinsic::WorkItem(w) => w.signature(),
             AirIntrinsic::SimdMatrix(m) => m.signature(),
             AirIntrinsic::FunctionConstant(f) => f.signature(),
             AirIntrinsic::Fragment(f) => f.signature(),

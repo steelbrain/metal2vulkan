@@ -503,3 +503,36 @@ impl GlobalBuiltin {
         }
     }
 }
+
+/// An OpenCL C work-item function no Metal built-in answers, as Apple's OpenCL compiler emits it
+/// (`newLibraryWithSource` with `sourceLanguage` 1, macOS 27.0.1): `get_global_offset(d)` is
+/// `air.get_global_offset.i32(i32 d)` and `get_work_dim()` is `air.get_work_dim.i32()`, each
+/// widened to OpenCL's `size_t` or `uint` in its caller. A pipeline of OpenCL mode reads both from
+/// its first hidden buffer (`canon::opencl`); lowering refuses a read any other pipeline keeps.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum WorkItem {
+    /// `air.get_global_offset.i32`: the dispatch's global offset in the dimension its operand
+    /// names.
+    GlobalOffset,
+    /// `air.get_work_dim.i32`: the dispatch's dimension count.
+    WorkDim,
+}
+
+impl WorkItem {
+    pub(super) fn parse(rest: &str) -> Option<WorkItem> {
+        match rest {
+            "get_global_offset.i32" => Some(WorkItem::GlobalOffset),
+            "get_work_dim.i32" => Some(WorkItem::WorkDim),
+            _ => None,
+        }
+    }
+
+    /// The typed signature: `i32 (i32)` for the offset, `i32 ()` for the dimension count.
+    pub fn signature(&self) -> Signature {
+        let t = num(Elem::I32, 1);
+        match self {
+            WorkItem::GlobalOffset => Signature::new(t, &[t]),
+            WorkItem::WorkDim => Signature::new(t, &[]),
+        }
+    }
+}

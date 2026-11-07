@@ -501,7 +501,7 @@ impl Kernel {
     }
 
     /// The lowering inputs of the function's variant `key`: a compute descriptor's stage input
-    /// descriptor, or a tile descriptor's color attachment formats by index and its
+    /// descriptor and OpenCL mode, or a tile descriptor's color attachment formats by index and its
     /// `threadgroupSizeMatchesTileSize`, and either's `maxCallStackDepth` past Metal's default, 1,
     /// as the compile layer compiles a `Function` stage of each.
     fn inputs(&self, key: &VariantKey) -> metal2vulkan::pipeline::LoweringInputs {
@@ -511,6 +511,7 @@ impl Kernel {
                 inputs.stage_input = descriptor.stage_input.clone();
                 inputs.max_call_stack_depth =
                     Some(descriptor.max_call_stack_depth).filter(|&k| k > 1);
+                inputs.open_cl_mode = descriptor.open_cl_mode_enabled;
             }
             Kernel::Tile(descriptor) => {
                 inputs.tile_attachments = Some(

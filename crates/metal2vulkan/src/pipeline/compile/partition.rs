@@ -174,6 +174,8 @@ fn observes(callee: &Callee) -> bool {
         | AirIntrinsic::FunctionConstant(_)
         | AirIntrinsic::FunctionTable(_)
         | AirIntrinsic::IndirectCommand(_) => false,
+        // The dispatch's offset and dimension count, which every threadgroup reads alike.
+        AirIntrinsic::WorkItem(_) => false,
         // A global built-in read canonicalization left a call (its lane is no constant, and
         // lowering refuses it) reads its built-in as the parameter would.
         AirIntrinsic::GlobalBuiltin(g) => partition_builtin(g.var.builtin()),

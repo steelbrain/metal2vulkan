@@ -792,6 +792,7 @@ impl Device {
         check_compute_maxima(d, a)?;
         check_stage_in(a, d)?;
         check_call_stack(a, d.max_call_stack_depth)?;
+        check_open_cl_mode(a, d.open_cl_mode_enabled)?;
         let linked = link(&[a], &LinkInputs::compute(), p)?;
         let stage = stage_module(&kernel, &linked, 0)?;
         let profile = self.profile_fingerprint();
@@ -1337,11 +1338,13 @@ fn invariant(detail: &str) -> Error {
 }
 
 /// The lowering inputs a `Function` kernel of compute pipeline `d` compiles under: its
-/// stage-input descriptor and its `maxCallStackDepth` when not Metal's default, 1.
+/// stage-input descriptor, its `maxCallStackDepth` when not Metal's default, 1, and its OpenCL
+/// mode.
 fn kernel_inputs(d: &ComputePipelineDescriptor) -> LoweringInputs {
     LoweringInputs {
         stage_input: d.stage_input.clone(),
         max_call_stack_depth: (d.max_call_stack_depth > 1).then_some(d.max_call_stack_depth),
+        open_cl_mode: d.open_cl_mode_enabled,
         ..LowerInputs::new()
     }
 }
@@ -1633,6 +1636,19 @@ fn check_stage_in(a: &FunctionArtifact, d: &ComputePipelineDescriptor) -> Result
                 DescriptorError::StageInputAttribute { attribute: s.index },
             ));
         }
+    }
+    Ok(())
+}
+
+/// The kernel of artifact `a` was compiled in its compute pipeline's OpenCL mode, `given`
+/// (`RuntimeFact::OpenClMode`): a `Compiled` kernel of the other mode is
+/// `InvalidDescriptor(OpenClMode)` (a `Function` kernel is compiled under `given`).
+fn check_open_cl_mode(a: &FunctionArtifact, given: bool) -> Result<(), Error> {
+    let compiled = a.facts.contains(&RuntimeFact::OpenClMode);
+    if compiled != given {
+        return Err(Error::InvalidDescriptor(DescriptorError::OpenClMode {
+            compiled,
+        }));
     }
     Ok(())
 }

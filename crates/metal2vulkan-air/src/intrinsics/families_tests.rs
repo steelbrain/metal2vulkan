@@ -760,6 +760,10 @@ const OBSERVED: &[(&str, &str)] = &[
     ("air.get_dispatch_threads_per_threadgroup.i32", "i32 (i32)"),
     ("air.get_local_linear_id.i32", "i32 ()"),
     ("air.get_quadgroups_per_threadgroup.i32", "i32 ()"),
+    // OpenCL C's `get_global_offset(d)` and `get_work_dim()` (Apple's OpenCL compiler, macOS
+    // 27.0.1).
+    ("air.get_global_offset.i32", "i32 (i32)"),
+    ("air.get_work_dim.i32", "i32 ()"),
     // Simdgroup matrices.
     (
         "air.simdgroup_matrix_8x8_load.v64f32.p3f32",

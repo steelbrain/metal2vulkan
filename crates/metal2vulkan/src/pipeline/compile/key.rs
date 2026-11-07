@@ -310,6 +310,10 @@ pub fn function_key(
         h.bytes(b"max-call-stack-depth").u64(u64::from(k));
     }
     // Appended only when set.
+    if inputs.open_cl_mode {
+        h.bytes(b"open-cl-mode");
+    }
+    // Appended only when set.
     if inputs.flat_grid {
         h.bytes(b"flat-grid");
     }

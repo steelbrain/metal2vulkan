@@ -224,6 +224,16 @@ impl<'a> InputsFrom<'a> {
         }
     }
 
+    /// Whether the stage compiles as the kernel of a compute pipeline of OpenCL mode
+    /// (`LoweringInputs::open_cl_mode`): the given inputs' say; a render pipeline's stage never
+    /// does.
+    fn open_cl_mode(&self) -> bool {
+        match self {
+            InputsFrom::Given(i) => i.open_cl_mode,
+            InputsFrom::Vertex(..) | InputsFrom::Fragment(..) => false,
+        }
+    }
+
     /// The group of its pipeline's color attachments a fragment stage compiles for
     /// (`LoweringInputs::color_group`): the given inputs', or the render pipeline variant's.
     fn color_group(&self) -> Option<&'a crate::pipeline::lower_inputs::ColorGroup> {
@@ -558,7 +568,8 @@ pub fn stage_inputs(
     m: &mut Meter,
 ) -> Result<StageInputs, Error> {
     guarded(|| {
-        let specialized = entries.specialized(fd, inputs.call_stack_depth(), m)?;
+        let specialized =
+            entries.specialized(fd, inputs.call_stack_depth(), inputs.open_cl_mode(), m)?;
         // A color group's variant reads its own renumbering of the entry the creation shares.
         let grouped = match inputs.color_group() {
             Some(_) => Some(grouped_entry(specialized.spec.clone(), inputs, p)?),
@@ -633,18 +644,44 @@ pub(crate) fn argument_buffer_layout(
     }
 }
 
+/// Entry point `ep` of `module` as its pipeline binds it: where `open_cl_mode`, a kernel as a
+/// pipeline of OpenCL mode binds it (`air::canon::opencl::entry`), its hidden buffers the
+/// parameters past the function's own, as specialization appends them; else `ep` itself.
+fn bound_entry<'a>(
+    module: &air::ir::Module,
+    ep: &'a air::abi::EntryPoint,
+    open_cl_mode: bool,
+) -> Result<std::borrow::Cow<'a, air::abi::EntryPoint>, Error> {
+    if !open_cl_mode || !matches!(ep.stage, AbiStage::Kernel { .. }) {
+        return Ok(std::borrow::Cow::Borrowed(ep));
+    }
+    let params = module.func(ep.func).map(|f| f.params.len());
+    let first = params.and_then(|n| u32::try_from(n).ok()).ok_or_else(|| {
+        Error::Internal(InternalError::new(
+            InternalKind::Invariant,
+            "the entry's function is not in its module",
+        ))
+    })?;
+    Ok(std::borrow::Cow::Owned(air::canon::opencl::entry(
+        ep.clone(),
+        first,
+    )?))
+}
+
 /// What a pipeline's reflection states for its stage `fd`, its calls nesting `depth` deep through
-/// visible functions: the entry's bindings and the attributes it reads, from the entry its
+/// visible functions (a kernel of OpenCL mode where `open_cl_mode`): the entry's bindings and the attributes it reads, from the entry its
 /// constants and linked functions specialize where they decide a binding
 /// (`reflection::needs_resolution`) or which arguments it reads
 /// (`reflection::specialization_decides_reads`), else from the decoded entry.
 pub(crate) fn stage_reflection(
     fd: &FunctionDescriptor,
     depth: u32,
+    open_cl_mode: bool,
     m: &mut Meter,
 ) -> Result<reflection::StageReflection, Error> {
     let mut inputs = LowerInputs::new();
     inputs.max_call_stack_depth = call_stack_input(depth);
+    inputs.open_cl_mode = open_cl_mode;
     guarded(|| {
         with_request(
             &fd.function,
@@ -658,18 +695,20 @@ pub(crate) fn stage_reflection(
                 }
                 let mut req = spec_request(&decoded, r.entry, r.consts)?;
                 req.call_stack_depth = r.inputs.call_stack_depth();
+                req.open_cl_mode = r.inputs.open_cl_mode();
                 let ep = air::canon::select(&decoded.module, &decoded.abi, &req.entry)?;
                 if !reflection::needs_resolution(ep, &decoded.abi.structs)
                     && !reflection::specialization_decides_reads(&decoded.abi)
                 {
+                    let ep = bound_entry(&decoded.module, ep, req.open_cl_mode)?;
                     return Ok(reflection::StageReflection {
                         bindings: reflection::bindings(
-                            ep,
+                            &ep,
                             &decoded.abi.structs,
                             reflection::Channel::Pipeline,
                             &BTreeSet::new(),
                         )?,
-                        attributes: reflection::read_attributes(ep)?,
+                        attributes: reflection::read_attributes(&ep)?,
                     });
                 }
                 let before = reflection::UnspecializedReads::of(&decoded.module, &decoded.abi, ep);
@@ -689,18 +728,20 @@ pub(crate) fn stage_reflection(
     })
 }
 
-/// What stage `fd`, its calls nesting `depth` deep through visible functions, may store through
-/// each slot its arguments bind: of the entry [`stage_reflection`] reads, its parameters' roles,
+/// What stage `fd`, its calls nesting `depth` deep through visible functions (a kernel of OpenCL
+/// mode where `open_cl_mode`), may store through each slot its arguments bind: of the entry [`stage_reflection`] reads, its parameters' roles,
 /// declared accesses and slots alone (`reflection::entry_slot_writes`). It derives no type
 /// description, so an argument whose reflection Metal's answer has not been measured for does not
 /// refuse it: only the decode and the specialization can.
 pub(crate) fn stage_slot_writes(
     fd: &FunctionDescriptor,
     depth: u32,
+    open_cl_mode: bool,
     m: &mut Meter,
 ) -> Result<Vec<reflection::SlotWrite>, Error> {
     let mut inputs = LowerInputs::new();
     inputs.max_call_stack_depth = call_stack_input(depth);
+    inputs.open_cl_mode = open_cl_mode;
     guarded(|| {
         with_request(
             &fd.function,
@@ -714,11 +755,13 @@ pub(crate) fn stage_slot_writes(
                 }
                 let mut req = spec_request(&decoded, r.entry, r.consts)?;
                 req.call_stack_depth = r.inputs.call_stack_depth();
+                req.open_cl_mode = r.inputs.open_cl_mode();
                 let ep = air::canon::select(&decoded.module, &decoded.abi, &req.entry)?;
                 if !reflection::needs_resolution(ep, &decoded.abi.structs)
                     && !reflection::specialization_decides_reads(&decoded.abi)
                 {
-                    return Ok(reflection::entry_slot_writes(ep));
+                    let ep = bound_entry(&decoded.module, ep, req.open_cl_mode)?;
+                    return Ok(reflection::entry_slot_writes(&ep));
                 }
                 let before = reflection::UnspecializedReads::of(&decoded.module, &decoded.abi, ep);
                 let spec = specialize_request(decoded, &req, r, m)?;
@@ -896,6 +939,8 @@ struct StageEntry {
     air_hash: Hash256,
     function: FunctionDescriptor,
     depth: u32,
+    /// Specialized as the kernel of a compute pipeline of OpenCL mode.
+    open_cl_mode: bool,
     /// What specializing it charged the ledger, which the byte bound counts.
     bytes: u64,
     specialized: Arc<Specialized>,
@@ -1015,17 +1060,19 @@ impl StageEntries {
         &self,
         fd: &FunctionDescriptor,
         depth: u32,
+        open_cl_mode: bool,
         m: &mut Meter,
     ) -> Result<Arc<Specialized>, Error> {
         let depth = depth.max(1);
         // The library's table states it without decoding (`Function::info`).
         let air_hash = fd.function.info().air_hash;
         let lock = || self.kept.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(specialized) = lock().take(&air_hash, fd, depth) {
+        if let Some(specialized) = lock().take(&air_hash, fd, depth, open_cl_mode) {
             return Ok(specialized);
         }
         let mut inputs = LowerInputs::new();
         inputs.max_call_stack_depth = call_stack_input(depth);
+        inputs.open_cl_mode = open_cl_mode;
         // What the specialization charged the ledger, which the byte bound counts: the entry is
         // what the charge is still held for once this returns.
         let before = m.ledger();
@@ -1041,7 +1088,7 @@ impl StageEntries {
         let mut kept = lock();
         // Another caller may have specialized the same stage meanwhile: its entry is this one, so
         // the two share one.
-        if let Some(theirs) = kept.take(&air_hash, fd, depth) {
+        if let Some(theirs) = kept.take(&air_hash, fd, depth, open_cl_mode) {
             return Ok(theirs);
         }
         kept.made += 1;
@@ -1050,6 +1097,7 @@ impl StageEntries {
             air_hash,
             function: fd.clone(),
             depth,
+            open_cl_mode,
             bytes,
             specialized: Arc::clone(&specialized),
         });
@@ -1067,11 +1115,14 @@ impl Kept {
         air_hash: &Hash256,
         fd: &FunctionDescriptor,
         depth: u32,
+        open_cl_mode: bool,
     ) -> Option<Arc<Specialized>> {
-        let at = self
-            .entries
-            .iter()
-            .position(|e| e.depth == depth && e.air_hash == *air_hash && e.function == *fd)?;
+        let at = self.entries.iter().position(|e| {
+            e.depth == depth
+                && e.open_cl_mode == open_cl_mode
+                && e.air_hash == *air_hash
+                && e.function == *fd
+        })?;
         let entry = self.entries.remove(at);
         let specialized = Arc::clone(&entry.specialized);
         self.entries.push(entry);
@@ -1138,7 +1189,8 @@ pub(crate) fn stage_entry<T>(
     f: impl FnOnce(&air::Entry, &mut Meter) -> Result<T, Error>,
 ) -> Result<T, Error> {
     guarded(|| {
-        let specialized = entries.specialized(fd, depth, m)?;
+        // A render or mesh pipeline's stage, never a kernel of OpenCL mode.
+        let specialized = entries.specialized(fd, depth, false, m)?;
         f(&specialized.spec, m)
     })
 }
@@ -1377,7 +1429,7 @@ pub(crate) fn reads_primitive_id_varying(
     use crate::pipeline::descriptor::StageSource;
     Ok(match fragment {
         Some(StageSource::Function(fd)) => entries
-            .specialized(fd, depth, m)?
+            .specialized(fd, depth, false, m)?
             .spec
             .ep
             .params
@@ -1913,6 +1965,7 @@ pub(crate) fn spec_request(
         entry: name,
         constants: constant_values(&decoded.abi, consts)?,
         call_stack_depth: 1,
+        open_cl_mode: false,
     })
 }
 
@@ -2025,7 +2078,8 @@ pub(crate) fn kernel_inputs_read(
         let Some(given) = inputs.stage_input.as_ref() else {
             return Ok(inputs.clone());
         };
-        let specialized = entries.specialized(fd, inputs.max_call_stack_depth.unwrap_or(1), m)?;
+        let depth = inputs.max_call_stack_depth.unwrap_or(1);
+        let specialized = entries.specialized(fd, depth, inputs.open_cl_mode, m)?;
         let read = stage_in_attributes(&specialized.spec);
         let mut out = inputs.clone();
         out.stage_input = Some(given.narrowed_to(&read));
@@ -2334,9 +2388,11 @@ fn instanced_attributes(
 
 /// The caller's inputs `i` for the specialized entry `spec`, its object payload kept only where it
 /// widens an object or mesh function's payload arena (`LoweringInputs::object_payload`): any other
-/// function, and one whose own arena holds it, compiles as without it.
+/// function, and one whose own arena holds it, compiles as without it. OpenCL mode is kept for a
+/// kernel alone (`LoweringInputs::open_cl_mode`).
 fn given_inputs(spec: &air::Entry, i: &LowerInputs) -> LowerInputs {
     let mut out = i.clone();
+    out.open_cl_mode = i.open_cl_mode && matches!(spec.ep.stage, AbiStage::Kernel { .. });
     out.object_payload = i.object_payload.filter(|&bytes| {
         matches!(
             spec.ep.stage,
@@ -2474,7 +2530,8 @@ fn specialize_one(r: &Request<'_>, m: &mut Meter) -> Result<Specialized, Error> 
     // The creation's entry of this stage: the same request's, made by a check or key of the
     // creation, else made there now.
     if let Shared::Entry(entries, fd) = r.shared {
-        let kept = entries.specialized(fd, r.inputs.call_stack_depth(), m)?;
+        let kept =
+            entries.specialized(fd, r.inputs.call_stack_depth(), r.inputs.open_cl_mode(), m)?;
         return Ok(Specialized::clone(&kept));
     }
     let mut decoded = decoded_module(r, m)?;
@@ -2482,8 +2539,10 @@ fn specialize_one(r: &Request<'_>, m: &mut Meter) -> Result<Specialized, Error> 
         decoded.abi.check_container(&decoded.module, f, m)?;
     }
     let mut req = spec_request(&decoded, r.entry, r.consts)?;
-    // A stage compiles under its pipeline's `maxCallStackDepth` for it.
+    // A stage compiles under its pipeline's `maxCallStackDepth` for it, and a kernel under its
+    // pipeline's OpenCL mode.
     req.call_stack_depth = r.inputs.call_stack_depth();
+    req.open_cl_mode = r.inputs.open_cl_mode();
     // Only a module that declares function constants needs them; specialization selects the
     // entry the same way.
     let before = if reflection::specialization_decides_reads(&decoded.abi) {

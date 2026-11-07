@@ -132,6 +132,7 @@ canon constants_read use(reads::constants_read)
 canon discard_sink mod
 canon function_table mod
 canon imports_dynamically use(link::imports_dynamically)
+canon opencl mod
 canon rate_map_data mod
 canon select fn
 canon specialize fn
@@ -146,6 +147,7 @@ canon::function_table FIRST_ENTRY_WORD const
 canon::function_table FIRST_FUNCTION_WORD const
 canon::function_table PRESENT_WORD const
 canon::function_table SIZE_WORD const
+canon::opencl entry fn
 canon::rate_map_data BYTES const
 canon::rate_map_data ENTRIES const
 canon::rate_map_data ENTRY_WORDS const
@@ -339,6 +341,7 @@ intrinsics Texture use(texture::Texture)
 intrinsics ThreadScope use(atomic::ThreadScope)
 intrinsics UNDECODED const
 intrinsics UNDECODED_FEATURES const
+intrinsics WorkItem use(stage::WorkItem)
 intrinsics bind fn
 intrinsics classify fn
 intrinsics dropped_family use(llvm::dropped_family)

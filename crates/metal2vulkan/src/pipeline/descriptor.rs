@@ -678,6 +678,22 @@ pub struct ComputePipelineDescriptor {
     /// `needsCustomBorderColorSamplers` (Apple SPI, default off): changes nothing Metal runs, as
     /// the render descriptor's ([`PrivateRenderState::needs_custom_border_color_samplers`]).
     pub needs_custom_border_color_samplers: bool,
+    /// `openCLModeEnabled` (Apple SPI, `setOpenCLModeEnabled:`, default off): the kernel is a
+    /// kernel of Apple's OpenCL compiler (`__entry_<name>` of a library of `sourceLanguage` 1),
+    /// linked as Metal links it for OpenCL C. Metal binds three hidden buffers ahead of the
+    /// kernel's own: `__global_offset_and_num_dims` at index 0, four `uint`s the dispatcher fills
+    /// with the dispatch's global offset in each of its dimensions and its dimension count;
+    /// `__printf_buffer` at 1; and `__image_order_data_type_table` at 2. Each of the kernel's
+    /// arguments bound at a buffer index sits 3 past its own; threadgroup memory, textures and
+    /// samplers keep theirs. OpenCL C's work-item functions read the dispatch: `get_global_id`
+    /// adds the offset to the thread's position in the grid, `get_global_offset` and
+    /// `get_work_dim` read buffer 0, and a dimension past 2 answers OpenCL's 0 or 1 (where the M3
+    /// Max leaves a store of such a value unwritten). The pipeline's reflection lists the three
+    /// buffers after the kernel's arguments. The kernel compiles under it
+    /// (`LoweringInputs::open_cl_mode`), so it is part of the key. Without it Metal refuses a
+    /// pipeline of such a kernel ("Internal compiler error"); the crate compiles it as the AIR's
+    /// own Metal reading, refusing a read of `get_global_offset` or `get_work_dim`.
+    pub open_cl_mode_enabled: bool,
 }
 
 impl ComputePipelineDescriptor {
@@ -694,6 +710,7 @@ impl ComputePipelineDescriptor {
             support_adding_binary_functions: false,
             buffers: BTreeMap::new(),
             needs_custom_border_color_samplers: false,
+            open_cl_mode_enabled: false,
         }
     }
 }

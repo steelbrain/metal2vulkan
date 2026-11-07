@@ -61,7 +61,9 @@
 //!    and vector members' accesses, joined by `insertvalue` or split by `extractvalue`
 //!    (`aggregates`). **Global built-in
 //!    variables**: each `air.get_*` read of a program-scope built-in becomes a read of a built-in
-//!    parameter appended to the entry (`global_builtin`).
+//!    parameter appended to the entry (`global_builtin`); in OpenCL mode, first, the entry takes
+//!    the three hidden buffers and each OpenCL C work-item read becomes a read of its built-in or
+//!    of the first buffer ([`opencl`]).
 //! 10. **ABI resolution and pruning**: predicate-gated parameters and outputs that are off
 //!     disappear from the entry point, a read of an absent argument takes its absent value (the
 //!     null reference of a resource argument) or is refused, global-valued ABI integers become
@@ -97,6 +99,7 @@ mod link;
 #[cfg(test)]
 mod link_tests;
 mod matmul2d;
+pub mod opencl;
 mod out;
 mod pieces;
 mod prune;
@@ -161,6 +164,11 @@ pub struct SpecRequest {
     /// The pipeline's `maxCallStackDepth`: it sizes the explicit call stack of a recursion through
     /// visible functions. 0 is taken as 1, Metal's default.
     pub call_stack_depth: u32,
+    /// The entry is a kernel of a compute pipeline of OpenCL mode (`openCLModeEnabled`, Apple
+    /// SPI): it takes three hidden buffers before its own, each of its buffer-indexed arguments
+    /// sits 3 past its index, and OpenCL C's work-item functions read the dispatch's values
+    /// ([`opencl`]). Any other entry than a kernel specializes as without it.
+    pub open_cl_mode: bool,
 }
 
 /// The constexpr samplers of one linked function that a pipeline state numbers
@@ -667,6 +675,14 @@ pub fn specialize_dynamic(
     } else {
         body
     };
+    // OpenCL mode: the three hidden buffers appended to the entry, and each OpenCL work-item read
+    // a read of its built-in or of the first buffer, which the global built-ins below take.
+    let (body, hidden) = if req.open_cl_mode && matches!(ep.stage, Stage::Kernel { .. }) {
+        let (body, first) = opencl::expand(body, &mut parts, func, m)?;
+        (body, Some(first))
+    } else {
+        (body, None)
+    };
     // Global built-in variables: each read becomes a read of a built-in parameter added to the
     // entry, but one Metal refuses in the entry's stage.
     let (body, global_builtins) = global_builtin::expand(body, &mut parts, func, &ep.stage, m)?;
@@ -691,6 +707,10 @@ pub fn specialize_dynamic(
     // The lane parameters `matmul2d`'s lowering added.
     if let Some(lanes) = lanes {
         ep.params.extend(lanes.bindings());
+    }
+    // OpenCL mode's indices and hidden buffers.
+    if let Some(first) = hidden {
+        ep = opencl::entry(ep, first)?;
     }
     // The built-in parameters the global built-ins' reads became.
     ep.params.extend(global_builtins);

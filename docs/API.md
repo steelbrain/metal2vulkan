@@ -607,6 +607,26 @@ layout stride of `None` is `MTLBufferLayoutStrideDynamic`: the stride comes from
     `InvalidInput(Intrinsic(ImmediateNotConstant))` at the call. `llvm.ctpop`, `llvm.bitreverse`
     and `llvm.bswap` are folded over constants, on a width no SPIR-V type has (`i2`) too; an
     integer `llvm.*` operation on such a width that is not folded is refused (`Lowering(Arith)`).
+  - OpenCL mode. Metal makes a pipeline of such a kernel only with
+    `ComputePipelineDescriptor::open_cl_mode_enabled` (`openCLModeEnabled`, Apple SPI), and the
+    crate compiles the kernel as Metal links it then (`LoweringInputs::open_cl_mode`, part of the
+    key). Three hidden buffers come before the kernel's own: `__global_offset_and_num_dims` at
+    index 0, four `uint`s the dispatcher fills with the dispatch's global offset in each of its
+    dimensions and its dimension count, `__printf_buffer` at 1 and
+    `__image_order_data_type_table` at 2. Each argument the kernel binds at a buffer index sits 3
+    past its own; threadgroup memory (`__local`), textures and samplers keep theirs. The
+    reflection lists the kernel's arguments at those indices, then the three buffers (read-only
+    `uint` 4 bytes, read-write `char` 1 byte, read-only `uint` 4 bytes), each used, as the M3 Max
+    answers. OpenCL C's work-item functions read the dispatch: `get_global_id(d)` is the thread's
+    position in the grid plus the offset in `d`, `get_global_offset(d)` and `get_work_dim()` read
+    buffer 0, `get_local_id`, `get_group_id`, `get_local_size`, `get_global_size` and
+    `get_num_groups` are the built-ins of those names, and a dimension the kernel reads from its
+    data selects among the three. A dimension past 2 answers OpenCL's 0 for an id or an offset
+    and 1 for a size or a count. A compiled kernel serves only a pipeline of the mode it was
+    compiled in (`RuntimeFact::OpenClMode`, `InvalidDescriptor(OpenClMode)` otherwise). Without
+    the mode Metal refuses the pipeline ("Internal compiler error"); the crate compiles the AIR as
+    Metal AIR, its buffers at their own indices, and refuses a read of `get_global_offset` or
+    `get_work_dim` (`Unsupported` with `Lowering(Dispatch)`).
 
 ## 4. A render pipeline
 
@@ -4392,6 +4412,11 @@ each item named states the rule in full.
   `requiredThreadsPerThreadgroup` (true, 96 and 8 by 6 by 2 in `compute-descriptor-reset`, where
   the runtime answers false, 0 and 0 by 0 by 0). The tile and mesh render pipeline descriptors'
   resets restore every field on the same machine.
+- **An OpenCL work-item read of a dimension past 2 answers OpenCL's value** in a pipeline of
+  OpenCL mode: 0 for `get_global_id`, `get_local_id`, `get_group_id` and `get_global_offset`, 1
+  for `get_local_size`, `get_global_size` and `get_num_groups`, as OpenCL C defines them. The M3
+  Max (macOS 27.0.1) leaves unwritten the store of `get_global_id(3) + get_local_size(4) +
+  get_global_size(5)`, where the runtime stores 2.
 
 **Mesh render pipelines**
 

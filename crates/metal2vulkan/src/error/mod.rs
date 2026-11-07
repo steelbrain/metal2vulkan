@@ -1927,6 +1927,11 @@ pub enum DescriptorError {
     /// pipeline's vertex or fragment depth. The stack would hold another number of frames than the
     /// pipeline's Metal stage has. Compile the stage under the pipeline's depth.
     MaxCallStackDepth { compiled: u32, given: u32 },
+    /// A `StageSource::Compiled` kernel compiled in another OpenCL mode than its compute
+    /// pipeline's (`RuntimeFact::OpenClMode`; `compiled` says whether it was compiled in OpenCL
+    /// mode): its arguments sit at other indices than the pipeline's Metal kernel takes them at.
+    /// Compile the kernel under the pipeline's `open_cl_mode_enabled`.
+    OpenClMode { compiled: bool },
     /// A tile function that declares threadgroup variables: Metal refuses its tile pipeline
     /// state ("Tile shaders do not support shader declared threadgroup variables", measured on an
     /// M4 and an M3 Max). Its threadgroup memory is its `[[threadgroup(n)]]` arguments alone.

@@ -42,7 +42,7 @@ use std::collections::{BTreeMap, HashMap};
 pub(crate) const MAGIC: &[u8; 8] = b"M2VPREC\0";
 
 /// The record format: bumped whenever a record's bytes change meaning (the module docs).
-pub(crate) const RECORD_FORMAT: u32 = 4;
+pub(crate) const RECORD_FORMAT: u32 = 5;
 
 /// The length of a record's header (magic and format) and of its checksum.
 const HEADER: usize = 8 + 4;
@@ -447,6 +447,7 @@ impl Writer {
         self.bool(d.support_adding_binary_functions);
         self.mutability(&d.buffers)?;
         self.bool(d.needs_custom_border_color_samplers);
+        self.bool(d.open_cl_mode_enabled);
         Ok(())
     }
 
@@ -849,6 +850,7 @@ impl<'a> Reader<'a> {
         d.support_adding_binary_functions = self.bool()?;
         d.buffers = self.mutability()?;
         d.needs_custom_border_color_samplers = self.bool()?;
+        d.open_cl_mode_enabled = self.bool()?;
         Ok(d)
     }
 

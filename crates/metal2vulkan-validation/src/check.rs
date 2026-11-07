@@ -571,6 +571,7 @@ fn omitted_constants_error(
 ) -> Option<String> {
     let request = metal2vulkan_air::canon::SpecRequest {
         call_stack_depth: 1,
+        open_cl_mode: false,
         entry: entry.to_string(),
         constants,
     };

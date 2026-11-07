@@ -150,6 +150,9 @@ pub fn mechanism(fact: &RuntimeFact, profile: &DeviceProfile) -> Mechanism {
         // The depth a kernel's call stack was sized for: the compile layer checks it against the
         // pipeline's; nothing on the device reads it.
         RuntimeFact::CallStackDepth { .. } => Mechanism::None,
+        // The mode a kernel was compiled in: the compile layer checks it against the pipeline's;
+        // nothing on the device reads it.
+        RuntimeFact::OpenClMode => Mechanism::None,
         // A pipeline compiled under the flat-grid variant; its plans state it.
         RuntimeFact::FlatGrid => Mechanism::Variant,
         // A sparse texture's writes are dropped under the slot's `SparseTexture` specialization;

@@ -206,6 +206,16 @@ pub struct LoweringInputs {
     /// `max_fragment_call_stack_depth`. Any other function compiles as without it.
     #[cfg_attr(feature = "serde", serde(default))]
     pub max_call_stack_depth: Option<u32>,
+    /// The kernel is the kernel of a compute pipeline of OpenCL mode
+    /// (`ComputePipelineDescriptor::open_cl_mode_enabled`): it takes Metal's three hidden buffers
+    /// at indices 0 to 2, each of its arguments bound at a buffer index sits 3 past its own, and
+    /// OpenCL C's work-item functions read the dispatch's values (`air::canon::opencl`).
+    /// `Device::compile_compute_pipeline` compiles a `Function` kernel under the pipeline's, and a
+    /// kernel compiled on its own for such a pipeline compiles under it too: the pipeline refuses
+    /// a kernel compiled under the other mode (`InvalidDescriptor(OpenClMode)`). Any other
+    /// function compiles as without it.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub open_cl_mode: bool,
     /// The kernel runs its dispatch's grid flat (`VariantKey::flat_grid`): the dispatch is any
     /// number of threadgroups of the variant's local size, whose invocations count the grid's
     /// threads in order (`x` fastest) from the `threads_per_grid` of the 32-byte region record at

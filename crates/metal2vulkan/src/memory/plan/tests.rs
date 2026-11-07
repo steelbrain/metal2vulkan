@@ -1393,6 +1393,7 @@ fn every_public_fixture_analyzes_without_an_internal_error() {
             let d = crate::air::decode(&bitcode, &mut meter()).expect("decode");
             let req = crate::air::SpecRequest {
                 call_stack_depth: 1,
+                open_cl_mode: false,
                 entry: name.clone(),
                 constants: Default::default(),
             };
@@ -1445,6 +1446,7 @@ fn hand_checked_fixtures() {
         let d = crate::air::decode(&bitcode, &mut meter()).expect("decode");
         let req = crate::air::SpecRequest {
             call_stack_depth: 1,
+            open_cl_mode: false,
             entry: stem.to_owned(),
             constants: Default::default(),
         };

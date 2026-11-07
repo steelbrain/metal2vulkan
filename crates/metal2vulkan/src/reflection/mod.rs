@@ -247,8 +247,21 @@ pub(crate) struct StageReflection {
 /// entry it compiled (`FunctionArtifact::reflection`); one whose answer was unmeasured kept none
 /// and is refused (its library function's reflection names the binding).
 fn stage(source: &StageSource, depth: u32, m: &mut Meter) -> Result<StageReflection, Error> {
+    kernel_stage(source, depth, false, m)
+}
+
+/// [`stage`], a kernel of a compute pipeline of OpenCL mode where `open_cl_mode`
+/// (`ComputePipelineDescriptor::open_cl_mode_enabled`).
+fn kernel_stage(
+    source: &StageSource,
+    depth: u32,
+    open_cl_mode: bool,
+    m: &mut Meter,
+) -> Result<StageReflection, Error> {
     match source {
-        StageSource::Function(fd) => crate::pipeline::compile::stage_reflection(fd, depth, m),
+        StageSource::Function(fd) => {
+            crate::pipeline::compile::stage_reflection(fd, depth, open_cl_mode, m)
+        }
         StageSource::Compiled(c) => {
             c.artifact().reflection.clone().ok_or_else(|| {
                 Error::Unsupported(Unsupported::not_implemented(Feature::Reflection))
@@ -266,8 +279,20 @@ fn stage(source: &StageSource, depth: u32, m: &mut Meter) -> Result<StageReflect
 /// It derives no type description, so no argument's unmeasured type refuses it: a stage that
 /// compiles answers.
 fn stage_writes(source: &StageSource, depth: u32, m: &mut Meter) -> Result<Vec<SlotWrite>, Error> {
+    kernel_stage_writes(source, depth, false, m)
+}
+
+/// [`stage_writes`], a kernel of a compute pipeline of OpenCL mode where `open_cl_mode`.
+fn kernel_stage_writes(
+    source: &StageSource,
+    depth: u32,
+    open_cl_mode: bool,
+    m: &mut Meter,
+) -> Result<Vec<SlotWrite>, Error> {
     match source {
-        StageSource::Function(fd) => crate::pipeline::compile::stage_slot_writes(fd, depth, m),
+        StageSource::Function(fd) => {
+            crate::pipeline::compile::stage_slot_writes(fd, depth, open_cl_mode, m)
+        }
         StageSource::Compiled(c) => Ok(c.artifact().slot_writes.clone()),
     }
 }
@@ -346,7 +371,8 @@ impl ComputePipelineDescriptor {
     /// out-parameter of `newComputePipelineStateWithDescriptor:options:reflection:error:` answers
     /// it (the rules are [`reflection`](crate::reflection)'s): the stage input descriptor's
     /// buffers, then the kernel's arguments, of the entry the kernel's constants specialize where
-    /// they decide one. It decodes the kernel's AIR under `budget`; a kernel the compile layer
+    /// they decide one; in OpenCL mode ([`open_cl_mode_enabled`](Self::open_cl_mode_enabled)) each
+    /// buffer-indexed argument 3 past its index, then the three hidden buffers. It decodes the kernel's AIR under `budget`; a kernel the compile layer
     /// already compiled (`StageSource::Compiled`) answers what its compile kept of the same entry,
     /// decoding nothing.
     ///
@@ -356,7 +382,12 @@ impl ComputePipelineDescriptor {
     /// decode's and specialization's own errors.
     pub fn reflection(&self, budget: &crate::Budget) -> Result<ComputePipelineReflection, Error> {
         let mut m = Meter::new(budget);
-        let kernel = stage(&self.kernel, self.max_call_stack_depth, &mut m)?;
+        let kernel = kernel_stage(
+            &self.kernel,
+            self.max_call_stack_depth,
+            self.open_cl_mode_enabled,
+            &mut m,
+        )?;
         let mut bindings = match &self.stage_input {
             Some(s) => {
                 s.check_layouts()?;
@@ -408,7 +439,12 @@ impl ComputePipelineDescriptor {
     pub fn slot_writes(&self, budget: &crate::Budget) -> Result<SlotWrites, Error> {
         let mut m = Meter::new(budget);
         Ok(SlotWrites {
-            kernel: stage_writes(&self.kernel, self.max_call_stack_depth, &mut m)?,
+            kernel: kernel_stage_writes(
+                &self.kernel,
+                self.max_call_stack_depth,
+                self.open_cl_mode_enabled,
+                &mut m,
+            )?,
             ..SlotWrites::default()
         })
     }

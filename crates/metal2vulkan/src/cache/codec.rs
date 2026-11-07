@@ -1232,6 +1232,7 @@ codec_enum! {
         ViewportCount,
         AliasedImageblock { data_size },
         CallStackDepth { depth },
+        OpenClMode,
         FlatGrid,
         SparseTextureWrites { slot, atomic },
         TileThreadgroupMemory { index },

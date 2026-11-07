@@ -329,6 +329,13 @@ pub enum RuntimeFact {
     /// (`InvalidDescriptor(MaxCallStackDepth)` otherwise); a `Function` stage is compiled under
     /// its pipeline's. Nothing on the device reads it.
     CallStackDepth { depth: u32 },
+    /// The kernel was compiled as the kernel of a compute pipeline of OpenCL mode
+    /// (`LoweringInputs::open_cl_mode`): it takes the three hidden buffers at indices 0 to 2 and
+    /// its own buffer-indexed arguments 3 past their indices. A `StageSource::Compiled` kernel
+    /// serves only a pipeline of the mode it was compiled in (`InvalidDescriptor(OpenClMode)`
+    /// otherwise); a `Function` kernel is compiled under its pipeline's. Nothing on the device
+    /// reads it.
+    OpenClMode,
     /// The kernel was compiled under `VariantKey::flat_grid` (`LoweringInputs::flat_grid`): it
     /// runs any grid in threadgroups of its own size, reading the grid from the 32-byte region
     /// record at its `PushField::ReplayRegionAddress`, which a preprocess writes beside the

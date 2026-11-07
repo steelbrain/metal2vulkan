@@ -891,6 +891,14 @@ fn route_air(cx: &SelectCx<'_>, op: &AirIntrinsic, decl: FuncId) -> Route {
         A::GlobalBuiltin(_) => Route::Refuse(
             Unsupported::not_implemented(Feature::Lowering(LowerFamily::Dispatch)).into(),
         ),
+        // Canonicalization reads each of them from the hidden buffer of a kernel compiled in
+        // OpenCL mode; no other pipeline has the values, and Metal makes no other pipeline of a
+        // function that reads them.
+        A::WorkItem(_) => Route::Refuse(
+            Unsupported::not_implemented(Feature::Lowering(LowerFamily::Dispatch))
+                .naming(decl_name(cx, decl))
+                .into(),
+        ),
     }
 }
 
@@ -1198,9 +1206,10 @@ pub fn select(
         stage,
         values: mp.values,
         push: BTreeSet::new(),
-        // A call stack's depth, which a compiled kernel's pipeline must match.
+        // A call stack's depth, and OpenCL mode, which a compiled kernel's pipeline must match.
         facts: (e.call_stack.into_iter())
             .map(|stack| RuntimeFact::CallStackDepth { depth: stack.depth })
+            .chain(inputs.open_cl_mode.then_some(RuntimeFact::OpenClMode))
             .collect(),
         // Private memory past the floor of a device not measured rests on no measurement, as
         // does a group operation in a branch no measurement says Metal speculates. A rate-map

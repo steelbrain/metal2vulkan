@@ -251,6 +251,7 @@ fn code(l: &mut LinkedModule) -> &mut LinkedCode {
 fn request() -> SpecRequest {
     SpecRequest {
         call_stack_depth: 1,
+        open_cl_mode: false,
         entry: "k".into(),
         constants: BTreeMap::new(),
     }
