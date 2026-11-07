@@ -75,13 +75,20 @@
 //!   laying, whose first instance does not record inline, that names neither the bytes' buffer
 //!   nor its host range and touches nothing past its attachments (as above), whose other
 //!   attachments lie over none of the bytes, and that renders over no rasterization-rate map.
-//!   A linear attachment's pass joins only where it is encoded once: neither its commands nor its
-//!   attachments name a buffer over host pages, which a rebind would move and encode its encoder
-//!   again (`command_buffer/reencode.rs`), and it executes no render commands. A shadowed
+//!   A linear attachment's pass joins only where it is encoded again with every other pass of its
+//!   run alone: its commands name no buffer over host pages, which a rebind would move and encode
+//!   its encoder again for (`command_buffer/reencode.rs`), and none of its attachments lies over
+//!   host pages but the run's own bytes (an image in place over a no-copy buffer's pages, which
+//!   every pass of the run renders, so a rebind of them encodes the whole run again: **Encoded
+//!   again**); and it executes no render commands. A shadowed
 //!   texture's: one loaded and stored as a color (no stand-in, no planes, no resolve), whose
 //!   truth is a buffer's bytes it merges back into, laid out as one image's texels. Every other
 //!   pass merges after itself, as before; an encoder encoded again changes no run.
-//! - **Encoded again.** A shadowed texture's run may hold passes over host pages, which a rebind
+//! - **Encoded again.** A linear attachment's run over host pages is encoded again whole by a
+//!   rebind of them: each of its passes leaves the run ([`RunMerge::leave`]) and, encoded again,
+//!   copies in, keeps and merges after itself as a pass alone does, in order, so the bytes hold
+//!   what the passes before it wrote when it copies them in. A shadowed texture's run may hold
+//!   passes over host pages, which a rebind
 //!   before the command buffer's first submission encodes again (`command_buffer/reencode.rs`):
 //!   each pass whose commands named a buffer that moved, and no other. Such a pass leaves its
 //!   run ([`RunMerge::leave`]): encoded again, it copies in, keeps and merges after itself as a
@@ -165,7 +172,7 @@ impl RunMerge {
     /// The keep its pass, encoded again, records after itself where a later pass of its run took
     /// its merge over: of the image that pass went on over into the scratch its run's merge
     /// compares (the module's **Encoded again**). `None` for a linear attachment's run, whose
-    /// passes are never encoded again, and a merge no later pass took over.
+    /// passes are encoded again all together or not at all, and a merge no later pass took over.
     pub(super) fn keep_after(&self) -> Option<ShadowCopy> {
         let RunWork::Shadow(copy) = &self.work else {
             return None;

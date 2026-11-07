@@ -16,9 +16,7 @@
 //! (`linear_attachment.rs`, `linear_merge.rs`), as NVIDIA's devices render it beside a depth
 //! attachment: the passes form a run or two merged once each (`pass_runs.rs`,
 //! `tests::linear_runs`), each merge taking one scratch, and the runtime's device memory grows by
-//! no scratch a pass. A linear image over host pages joins no run (`pass_runs.rs`, **Which passes
-//! join**: a rebind would move it and encode its encoder again): each of its passes merges alone,
-//! all through one scratch. A target that is a shadow merged back (host pages under the shadow
+//! no scratch a pass, over host pages as over the runtime's memory. A target that is a shadow merged back (host pages under the shadow
 //! policy, and rows the device's linear images do not lay out, `shadow_merge.rs`) is kept and merged back
 //! about its first pass, and kept before the second and merged back after the last, its later
 //! passes one run (`pass_runs.rs`, `tests::shadow_runs`). Either way the texels equal those the same passes leave in a private
@@ -141,6 +139,30 @@ impl Host {
         // SAFETY: the layout's size is not zero.
         let pointer = unsafe { std::alloc::alloc_zeroed(layout) };
         Host(NonNull::new(pointer).unwrap(), layout)
+    }
+
+    /// The memory, for a buffer over it.
+    ///
+    /// # Safety
+    ///
+    /// As for `HostMemory::new`: it outlives every buffer over it.
+    pub(super) unsafe fn memory(&self) -> HostMemory {
+        // SAFETY: the caller's contract.
+        unsafe { HostMemory::new(self.0) }
+    }
+
+    /// Write `bytes` at its start, which no command uses now.
+    pub(super) fn write(&self, bytes: &[u8]) {
+        assert!(bytes.len() <= self.1.size());
+        // SAFETY: inside the allocation, which no command uses now.
+        unsafe { std::ptr::copy_nonoverlapping(bytes.as_ptr(), self.0.as_ptr(), bytes.len()) };
+    }
+
+    /// Its first `length` bytes, which no command writes now.
+    pub(super) fn bytes(&self, length: u64) -> Vec<u8> {
+        assert!(length as usize <= self.1.size());
+        // SAFETY: inside the allocation, which no command writes now.
+        unsafe { std::slice::from_raw_parts(self.0.as_ptr(), length as usize) }.to_vec()
     }
 }
 
@@ -343,9 +365,8 @@ fn reference(queue: &CommandQueue, state: &RenderPipelineState, width: u64) -> V
 /// [`passes`] over a target over `over`'s buffer of `width` texels a row, `row` bytes apart, on
 /// the device `device_of` makes, the rule forced: its texels equal the private texture's, the
 /// bytes between its rows keep theirs, and its merges take few scratches (a linear image's, one
-/// a run, or one for all its passes over host pages, each merged alone; a shadow's merged back,
-/// one keep and one merge for the run of passes), the device's memory growing by less than an
-/// eighth of what a scratch a pass would take.
+/// a run; a shadow's merged back, one keep and one merge for the run of passes), the device's
+/// memory growing by less than an eighth of what a scratch a pass would take.
 fn one_scratch(device_of: fn(&Path) -> Device, over: Over, (width, row): (u64, u64)) {
     let cache = Scratch::new(&format!("merge-scratch-{over:?}-{width}"));
     let host = Host::new(row * H);
@@ -399,18 +420,6 @@ fn one_scratch(device_of: fn(&Path) -> Device, over: Over, (width, row): (u64, u
         grown / scratch
     );
     match (linear, merged) {
-        // Over host pages, no run (`pass_runs.rs`, **Which passes join**): each pass merges
-        // alone, every merge through the one scratch.
-        (true, _) if matches!(over, Over::HostPages) => {
-            assert_eq!(apart, PASSES as u64, "every pass renders the texture apart");
-            assert_eq!(
-                (recorded, taken_over),
-                (PASSES as u64, 0),
-                "each pass merges alone"
-            );
-            assert_eq!(made, 1, "the merges take one scratch");
-            assert_eq!(made + reused, recorded, "each merge takes the scratch");
-        }
         // One run (`pass_runs.rs`), or two where the second pass's box reaches past the first's
         // (then one over the whole target), merged once each.
         (true, _) => {
@@ -487,8 +496,8 @@ fn many_passes_over_host_pages_take_one_scratch() {
 }
 
 /// Over a no-copy buffer's host pages, packed rows of 1200 bytes, under the default policy: a
-/// linear image over the pages where the device's check passed for render targets there, each
-/// pass merged alone through one scratch; a shadow merged back elsewhere.
+/// linear image over the pages where the device's check passed for render targets there, its
+/// passes one run or two; a shadow merged back elsewhere.
 #[test]
 fn many_passes_over_host_pages_in_place_take_one_scratch() {
     one_scratch(device, Over::HostPages, (300, 1200));

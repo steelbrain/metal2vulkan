@@ -4884,14 +4884,15 @@ impl RenderLowering {
                     attach(&target.texture);
                 }
             }
-            // A pass encoded once: neither its commands nor its attachments name a buffer over
-            // host pages, which a rebind moves (`command_buffer/reencode.rs`); outside a
-            // predicated loop's laying.
+            // A pass encoded again only with every other pass of its run: its commands name no
+            // buffer over host pages, which a rebind moves and encodes the pass again for
+            // (`command_buffer/reencode.rs`), nor does any of its attachments lie over host pages
+            // but the run's own bytes, which every pass of the run renders, so a rebind of them
+            // encodes the whole run again, each pass merging alone (`pass_runs.rs`'s **Encoded
+            // again**); outside a predicated loop's laying.
             let laying = core.command_buffer().state().predication_mut().laying();
             let over_pages = |key: &ResourceKey| rebinds.host_range(*key).is_some();
-            let once = !named.iter().any(over_pages)
-                && !attached.iter().any(|(key, _)| over_pages(key))
-                && !laying;
+            let once = !named.iter().any(over_pages) && !laying;
             let mut joining = Vec::new();
             for &(index, c, own) in &merging {
                 let bytes = own.own.texture.use_key();
@@ -4902,8 +4903,11 @@ impl RenderLowering {
                 };
                 // Its bytes are its own attachment's alone: no other attachment lies over them.
                 let alone = attached.iter().filter(|&&(k, _)| k == bytes).count() == 1;
+                let others_over_pages =
+                    (attached.iter()).any(|(k, _)| *k != bytes && over_pages(k));
                 let joins = quiet
                     && once
+                    && !others_over_pages
                     && !inline
                     && own.cause == Cause::Linear
                     && !named.contains(&bytes)

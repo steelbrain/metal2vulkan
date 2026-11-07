@@ -329,6 +329,12 @@ fn runs_hold_their_texels(over: Over, (width, row): (u64, u64)) {
         let Some((buffer, texture)) = target(&queue, over, (width, row), &host) else {
             return;
         };
+        // Over host pages, a linear image in place where the device's check passed for render
+        // targets there (`in_place.rs`), else a shadow, which `tests::shadow_runs` covers.
+        if over == Over::HostPages && !texture.linear_image().unwrap() {
+            println!("LINEAR-RUNS {over:?}: the target is a shadow, its runs shadow_runs'");
+            return;
+        }
         assert!(
             texture.linear_image().unwrap(),
             "the target is a linear image"
@@ -393,4 +399,127 @@ fn runs_over_a_shared_buffer_hold_their_texels() {
 #[test]
 fn runs_over_a_private_buffer_hold_their_texels() {
     runs_hold_their_texels(Over::Private, (256, 1024));
+}
+
+/// Over a no-copy buffer's host pages, packed rows of 1200 bytes (an IOSurface's), where the
+/// target is a linear image in place.
+#[test]
+fn runs_over_host_pages_hold_their_texels() {
+    runs_hold_their_texels(Over::HostPages, (300, 1200));
+}
+
+/// The passes of [`a_rebound_run_over_host_pages_is_encoded_again_whole`].
+const REBOUND_PASSES: usize = 6;
+
+/// Passes over a render target in place over a no-copy buffer's host pages (rows of 1200 bytes),
+/// the rule forced, behind a wait for a shared event only the host signals: one run, merged once
+/// (`pass_runs.rs`). The buffer is rebound over other pages holding the same first bytes before
+/// the signal: the rebind encodes every pass again (`command_buffer/reencode.rs`), each leaving
+/// the run and merging alone (`pass_runs.rs`'s **Encoded again**), and the new pages hold the
+/// texels a private texture of the same first texels holds after the same passes.
+#[test]
+fn a_rebound_run_over_host_pages_is_encoded_again_whole() {
+    let (width, row) = (300, 1200);
+    let (host, moved_to) = (Host::new(row * H), Host::new(row * H));
+    let cache = Scratch::new("linear-runs-rebound");
+    let device = device(&cache.0);
+    let queue = device.new_command_queue().unwrap();
+    let blending = blending(&device);
+    let packed = width * TEXEL;
+    let usage = TextureUsage::RENDER_TARGET | TextureUsage::SHADER_READ;
+    let depth_usage = TextureUsage::RENDER_TARGET;
+    let depth = private_texture(&device, PixelFormat::Depth32Float, width, depth_usage);
+    let reference = private_texture(&device, PixelFormat::RGBA8Unorm, width, usage);
+    let source = staged(&device, &first_bytes(width, packed));
+    blit(&queue, |b| {
+        (b.copy_from_buffer_to_texture(
+            &source,
+            0,
+            packed,
+            packed * H,
+            Size::new(width, H, 1),
+            &reference,
+            0,
+            0,
+            Origin::new(0, 0, 0),
+            BlitOption::None,
+        ))
+        .unwrap()
+    });
+    let command_buffer = queue.command_buffer().unwrap();
+    for i in 0..REBOUND_PASSES {
+        pass(
+            &command_buffer,
+            (&reference, &depth),
+            &blending,
+            drawn(i),
+            None,
+        );
+    }
+    command_buffer.commit().unwrap();
+    command_buffer.wait_until_completed_for(WAIT).unwrap();
+    let left = texels_of(&queue, &reference);
+    let Some((buffer, texture)) = target(&queue, Over::HostPages, (width, row), &host) else {
+        return;
+    };
+    if !texture.linear_image().unwrap() {
+        println!("LINEAR-RUNS rebound: the target is a shadow, its runs shadow_runs'");
+        return;
+    }
+    moved_to.write(&first_bytes(width, row));
+    let gate = device.new_shared_event().unwrap();
+    let forced = &device.shared().linear_rule_forced;
+    forced.store(true, Ordering::Relaxed);
+    let before = device.work_counts();
+    let command_buffer = queue.command_buffer().unwrap();
+    (command_buffer.encode_wait_for_event(EventRef::Shared(&gate), 1)).unwrap();
+    for i in 0..REBOUND_PASSES {
+        pass(
+            &command_buffer,
+            (&texture, &depth),
+            &blending,
+            drawn(i),
+            None,
+        );
+    }
+    command_buffer.commit().unwrap();
+    let encoded = device.work_counts();
+    assert_eq!(buffer.detach_backing(), Ok(true), "the detach");
+    // SAFETY: the pages outlive every buffer over them, which alone uses them while it lives.
+    unsafe { buffer.rebind_bytes_no_copy(moved_to.memory(), None, None) }.unwrap();
+    let rebound = device.work_counts();
+    gate.set_signaled_value(1);
+    command_buffer.wait_until_completed_for(WAIT).unwrap();
+    let after = device.work_counts();
+    forced.store(false, Ordering::Relaxed);
+    let delta = |of: fn(&WorkCounts) -> u64, (a, b): (&WorkCounts, &WorkCounts)| of(b) - of(a);
+    let first_taken = delta(|c| c.linear_merges_taken_over, (&before, &encoded));
+    let again = delta(|c| c.encoders_reencoded, (&encoded, &rebound));
+    let refused = delta(|c| c.reencodes_refused, (&encoded, &rebound));
+    let recorded = delta(|c| c.linear_merges_recorded, (&before, &after));
+    println!(
+        "LINEAR-RUNS rebound: {:?} {:?}; first encoding's merges taken over {first_taken}; \
+         encoders encoded again {again}, refused {refused}; linear merges recorded {recorded}",
+        command_buffer.status(),
+        command_buffer.error(),
+    );
+    assert_eq!(command_buffer.error(), None);
+    assert_eq!(
+        first_taken,
+        REBOUND_PASSES as u64 - 1,
+        "the passes form one run as first encoded"
+    );
+    assert_eq!(
+        (again, refused),
+        (REBOUND_PASSES as u64, 0),
+        "the rebind encodes every pass of the run again"
+    );
+    drop(texture);
+    let got = texels(&moved_to.bytes(row * H), width, row);
+    let differ = (0..got.len()).filter(|&i| got[i] != left[i]).count();
+    assert_eq!(
+        differ, 0,
+        "the new pages' texels differ from the private texture's"
+    );
+    drop(buffer);
 }
