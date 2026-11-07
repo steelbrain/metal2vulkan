@@ -9,9 +9,11 @@
 //!   render check; else its read check), else a shadow naming the check's answer (pending,
 //!   failed, unchecked) and the access.
 //! - **The record.** Its verdicts read back for the identity it was written for, and nothing else
-//!   reads: a record cut short or grown, of another check version or runtime, of another identity,
-//!   with a byte changed (its checksum), or holding a pending or unknown verdict.
-//! - **Its name** changes with every field of the driver's identity.
+//!   reads: a record cut short or grown, of another check version, of another identity, with a
+//!   byte changed (its checksum), or holding a pending or unknown verdict.
+//! - **Its name** changes with every field of the driver's identity, and with nothing else: not
+//!   the runtime's version, so a pin move keeps the driver's verdicts.
+//! - **A waiter** for one verdict wakes as that verdict is given, or as the check settles.
 
 use crate::in_place::{
     decode, encode, in_place, record_name, verdict_index, Access, DriverIdentity, InPlaceChecks,
@@ -189,17 +191,13 @@ fn a_record_reads_back_for_its_identity_alone() {
         assert_eq!(decode(&identity, &changed), None, "byte {at}");
     }
 
-    // Another check version, or another runtime, with a checksum that holds.
+    // Another check version, with a checksum that holds.
     let mut version = bytes.clone();
     version[8..12].copy_from_slice(&(CHECK_VERSION + 1).to_le_bytes());
     assert_eq!(decode(&identity, &rechecked(version)), None);
-    let mut runtime = bytes.clone();
-    let other = metal2vulkan::cache::RUNTIME_VERSION.wrapping_add(1);
-    runtime[12..16].copy_from_slice(&other.to_le_bytes());
-    assert_eq!(decode(&identity, &rechecked(runtime)), None);
 
     // A pending or unknown verdict, at any of their places, with a checksum that holds.
-    for at in 48..48 + VERDICTS {
+    for at in 44..44 + VERDICTS {
         for byte in [0u8, 4, 0xff] {
             let mut verdict = bytes.clone();
             verdict[at] = byte;
@@ -222,6 +220,24 @@ fn a_record_s_name_follows_every_field_of_the_identity() {
     let base = identity();
     let name = record_name(&base);
     assert_eq!(name.len(), 64);
+    // The name hashes the check's tag, kind and version and the identity alone: no runtime
+    // version is in it.
+    let mut hash = Sha256::new();
+    hash.update(b"metal2vulkan in-place check record\0");
+    hash.update(b"first move\0");
+    hash.update(CHECK_VERSION.to_le_bytes());
+    hash.update(base.vendor_id.to_le_bytes());
+    hash.update(base.device_id.to_le_bytes());
+    hash.update(base.driver_version.to_le_bytes());
+    hash.update(base.driver_id.to_le_bytes());
+    for text in [&base.driver_name, &base.driver_info] {
+        hash.update((text.len() as u64).to_le_bytes());
+        hash.update(text.as_bytes());
+    }
+    hash.update(base.device_uuid);
+    let alone: [u8; 32] = hash.finalize().into();
+    let hex: String = alone.iter().map(|byte| format!("{byte:02x}")).collect();
+    assert_eq!(name, hex);
     let changes: [fn(&mut DriverIdentity); 7] = [
         |id| id.vendor_id += 1,
         |id| id.device_id += 1,
@@ -281,4 +297,28 @@ fn the_checks_state_settles_once_and_wakes_its_waiters() {
     });
     assert_eq!(checks.took(), Some(Duration::from_millis(5)));
     assert!(InPlaceChecks::new(true).forced_failure());
+}
+
+#[test]
+fn a_waiter_for_a_verdict_wakes_as_it_is_given() {
+    let checks = InPlaceChecks::new(false);
+    let (class, access) = (PagesClass::Pointer, Access::Renders);
+    // Nothing given: the wait runs out, pending.
+    assert_eq!(
+        checks.wait_for(class, access, Duration::from_millis(1)),
+        Verdict::Pending
+    );
+    std::thread::scope(|scope| {
+        let waiter = scope.spawn(|| checks.wait_for(class, access, Duration::from_secs(60)));
+        // Another verdict wakes it to wait on; its own ends the wait.
+        checks.set(class, Access::Reads, Verdict::Failed);
+        checks.set(class, access, Verdict::Passed);
+        assert_eq!(waiter.join().ok(), Some(Verdict::Passed));
+    });
+    // A settled check ends a wait for a verdict it never gave.
+    checks.settle(None);
+    assert_eq!(
+        checks.wait_for(PagesClass::DmaBuf, access, Duration::from_secs(60)),
+        Verdict::Pending
+    );
 }

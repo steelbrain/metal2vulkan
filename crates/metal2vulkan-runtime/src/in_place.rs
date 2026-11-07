@@ -30,7 +30,7 @@
 //!   textures that render, where the check shows a pass's load and store and the feedback loop
 //!   moves leaving every byte alone too, whatever a linear image costs the GPU: a texture over the
 //!   caller's pages is the GPU's to work on there, as a Mac's GPU works on them. The check
-//!   (`in_place_check.rs`) runs once per driver and release, per memory class ([`PagesClass`]) and
+//!   (`in_place_check.rs`) runs once per driver and its version, per memory class ([`PagesClass`]) and
 //!   access ([`Access`]), and its verdicts are kept in the shader cache's content records
 //!   ([`record_name`]); a class and access it did not pass keep the shadow.
 //! - **Which textures** ([`in_place`]): those whose declared usage (as Metal reports it, an
@@ -44,9 +44,14 @@
 //!   Elsewhere the texture is a shadow (`shadow.rs`), its notice naming why ([`ShadowCause`]) and
 //!   counted by cause (`WorkCounts::host_texture_shadows_*`, and those that render apart).
 //! - **Before the verdict.** A texture made before its class's verdict for its access is known
-//!   waits for nothing: it is a shadow ([`ShadowCause::CheckPending`], counted apart). The first
-//!   such texture starts the check on a thread of its own; a device whose record holds the
-//!   verdicts knows them as it is made, and starts none.
+//!   starts the check on a thread of its own, unless it started, and waits for that verdict, up to
+//!   [`VERDICT_WAIT`] (`WorkCounts::in_place_verdicts_waited` counts the textures whose wait
+//!   ended with it): a texture made as a program starts, a compositor's framebuffer among them,
+//!   would otherwise be a shadow for its life. The wait is the check's rounds of the class and
+//!   access, and of those before them, once per driver (each round's submission waiting, as an
+//!   internal one does, for the work submitted before it on the device's first `VkQueue`). Past
+//!   it the texture is a shadow ([`ShadowCause::CheckPending`], counted apart). A device whose
+//!   record holds the verdicts knows them as it is made, and starts none.
 //! - **Visibility.** A command reads the image's texels in the memory a buffer over the same pages
 //!   reads: the pages' host-visible, host-coherent import (a dma-buf's own import is of the same
 //!   memory type). So a CPU write reaches a command through the image as it reaches the buffer's
@@ -328,6 +333,11 @@ pub(crate) fn in_place(
     }
 }
 
+/// The longest a texture over host pages waits as it is made for its class's verdict for its
+/// access while the device's check runs (the module docs): past it, the texture is a shadow
+/// ([`ShadowCause::CheckPending`]).
+pub(crate) const VERDICT_WAIT: Duration = Duration::from_secs(5);
+
 /// A device's check verdicts (`DeviceShared::in_place`): one per class and access
 /// ([`VERDICTS`]), and whether its check started and settled.
 pub(crate) struct InPlaceChecks {
@@ -382,6 +392,27 @@ impl InPlaceChecks {
     /// Give `class` its verdict for `access`.
     pub(crate) fn set(&self, class: PagesClass, access: Access, verdict: Verdict) {
         self.verdicts[verdict_index(class, access)].store(verdict.byte(), Ordering::Release);
+        // Under the lock a waiter reads the verdict under, so that none misses the wake.
+        let _held = lock(&self.settled);
+        self.wake.notify_all();
+    }
+
+    /// `class`'s verdict for `access` once it is known, the check settled, or `timeout` passed,
+    /// whichever comes first.
+    pub(crate) fn wait_for(&self, class: PagesClass, access: Access, timeout: Duration) -> Verdict {
+        let deadline = Instant::now() + timeout;
+        let mut settled = lock(&self.settled);
+        loop {
+            let verdict = self.verdict(class, access);
+            let left = deadline.saturating_duration_since(Instant::now());
+            if verdict != Verdict::Pending || *settled || left.is_zero() {
+                return verdict;
+            }
+            settled = match self.wake.wait_timeout(settled, left) {
+                Ok((settled, _)) => settled,
+                Err(poisoned) => poisoned.into_inner().0,
+            };
+        }
     }
 
     /// Whether the check is to fail whatever the moves did.
@@ -430,9 +461,12 @@ impl InPlaceChecks {
     }
 }
 
-/// The version of what the check does and of how a record of it is named and framed: a change to
-/// either bumps it, and a record of another version is never read (its name differs, and so does
-/// the version it holds).
+/// The version of what the check does, of the images over host pages it checks as the product
+/// makes them (their usage, layout and moves), and of how a record of it is named and framed: a
+/// change to any of them bumps it, and a record of another version is never read (its name
+/// differs, and so does the version it holds). The runtime's own version is not in the record: a
+/// release that changes none of these keeps the verdicts the driver gave, so a device made after
+/// it reads them again rather than checking anew.
 pub(crate) const CHECK_VERSION: u32 = 2;
 
 /// A record's first bytes.
@@ -461,21 +495,14 @@ pub(crate) struct DriverIdentity {
 }
 
 impl DriverIdentity {
-    /// The SHA-256 of [`NAME_TAG`], [`CHECK_KIND`], [`CHECK_VERSION`], the runtime's
-    /// `RUNTIME_VERSION` and every field: what names a record and what the record holds again.
+    /// The SHA-256 of [`NAME_TAG`], [`CHECK_KIND`], [`CHECK_VERSION`] and every field: what names
+    /// a record and what the record holds again. What decides the check's answer alone: the
+    /// check, and the driver and device it ran on.
     pub(crate) fn digest(&self) -> [u8; 32] {
-        self.digest_for(NAME_TAG, CHECK_KIND, CHECK_VERSION)
-    }
-
-    /// The SHA-256 of `tag`, `kind`, `version`, the runtime's `RUNTIME_VERSION` and every field:
-    /// what names the record of the check of `kind` at `version` (another device check's, as
-    /// [`digest`](Self::digest) is this one's), and what that record holds again.
-    pub(crate) fn digest_for(&self, tag: &[u8], kind: &[u8], version: u32) -> [u8; 32] {
         let mut hash = Sha256::new();
-        hash.update(tag);
-        hash.update(kind);
-        hash.update(version.to_le_bytes());
-        hash.update(metal2vulkan::cache::RUNTIME_VERSION.to_le_bytes());
+        hash.update(NAME_TAG);
+        hash.update(CHECK_KIND);
+        hash.update(CHECK_VERSION.to_le_bytes());
         hash.update(self.vendor_id.to_le_bytes());
         hash.update(self.device_id.to_le_bytes());
         hash.update(self.driver_version.to_le_bytes());
@@ -499,7 +526,6 @@ pub(crate) fn record_name(identity: &DriverIdentity) -> String {
 /// ```text
 /// magic          8 bytes   "M2VINPL\0"
 /// version        u32       CHECK_VERSION
-/// runtime        u32       RUNTIME_VERSION
 /// identity       32 bytes  DriverIdentity::digest
 /// verdicts       6 bytes   one per class and access, VERDICTS' order (verdict_index)
 /// checksum       32 bytes  SHA-256 of every byte before it
@@ -510,7 +536,6 @@ pub(crate) fn encode(identity: &DriverIdentity, verdicts: [Verdict; VERDICTS]) -
     let mut bytes = Vec::with_capacity(RECORD_BYTES);
     bytes.extend_from_slice(&MAGIC);
     bytes.extend_from_slice(&CHECK_VERSION.to_le_bytes());
-    bytes.extend_from_slice(&metal2vulkan::cache::RUNTIME_VERSION.to_le_bytes());
     bytes.extend_from_slice(&identity.digest());
     bytes.extend(verdicts.map(Verdict::byte));
     let checksum: [u8; 32] = Sha256::digest(&bytes).into();
@@ -519,7 +544,7 @@ pub(crate) fn encode(identity: &DriverIdentity, verdicts: [Verdict; VERDICTS]) -
 }
 
 /// A record's length.
-const RECORD_BYTES: usize = 8 + 4 + 4 + 32 + VERDICTS + 32;
+const RECORD_BYTES: usize = 8 + 4 + 32 + VERDICTS + 32;
 
 /// The verdicts `bytes` record for `identity`: `None` for anything but a whole record of this
 /// version and runtime, for this identity, whose checksum holds and whose every verdict is an
@@ -535,14 +560,9 @@ pub(crate) fn decode(identity: &DriverIdentity, bytes: &[u8]) -> Option<[Verdict
     }
     let (magic, rest) = body.split_at(8);
     let (version, rest) = rest.split_at(4);
-    let (runtime, rest) = rest.split_at(4);
     let (digest, rest) = rest.split_at(32);
     let word = |bytes: &[u8]| u32::from_le_bytes(bytes.try_into().unwrap_or([0xff; 4]));
-    if magic != MAGIC
-        || word(version) != CHECK_VERSION
-        || word(runtime) != metal2vulkan::cache::RUNTIME_VERSION
-        || digest != identity.digest()
-    {
+    if magic != MAGIC || word(version) != CHECK_VERSION || digest != identity.digest() {
         return None;
     }
     let mut verdicts = [Verdict::Pending; VERDICTS];
@@ -620,12 +640,19 @@ impl Device {
         }
     }
 
-    /// `class`'s verdict for `access` for a texture asking it now: a pending one starts the
-    /// check, unless it started already. Never waits.
+    /// `class`'s verdict for `access` for a texture asking it as it is made: a pending one
+    /// starts the check, unless it started already, and waits for that verdict, up to
+    /// [`VERDICT_WAIT`] (the module docs).
     pub(crate) fn in_place_verdict(&self, class: PagesClass, access: Access) -> Verdict {
-        let verdict = self.shared().in_place.verdict(class, access);
-        if verdict == Verdict::Pending {
-            self.start_in_place_checks();
+        let checks = &self.shared().in_place;
+        let verdict = checks.verdict(class, access);
+        if verdict != Verdict::Pending {
+            return verdict;
+        }
+        self.start_in_place_checks();
+        let verdict = checks.wait_for(class, access, VERDICT_WAIT);
+        if verdict != Verdict::Pending {
+            self.shared().counts.in_place_verdict_waited();
         }
         verdict
     }

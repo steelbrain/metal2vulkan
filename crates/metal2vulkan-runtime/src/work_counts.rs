@@ -376,6 +376,7 @@ pub(crate) struct Counters {
     in_place_checks_failed: AtomicU64,
     in_place_checks_unchecked: AtomicU64,
     in_place_checks_recalled: AtomicU64,
+    in_place_verdicts_waited: AtomicU64,
     fresh_page_buffers_made: AtomicU64,
     fresh_page_bytes: AtomicU64,
     new_buffer_bytes_cleared: AtomicU64,
@@ -2982,6 +2983,12 @@ impl Counters {
     /// A class's verdict was read from the record of an earlier check (`in_place.rs`).
     pub(crate) fn in_place_check_recalled(&self) {
         (self.in_place_checks_recalled).fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A texture over host pages waited as it was made for its class's verdict for its access,
+    /// and the verdict came (`in_place.rs`).
+    pub(crate) fn in_place_verdict_waited(&self) {
+        (self.in_place_verdicts_waited).fetch_add(1, Ordering::Relaxed);
     }
 
     /// A buffer was made in `bytes` of fresh pages it imported, which read zero unwritten
@@ -5926,6 +5933,12 @@ pub struct WorkCounts {
     /// Classes and accesses whose verdict was read from the record of an earlier check of the
     /// same driver, device and runtime: no check ran for them.
     pub in_place_checks_recalled: u64,
+    /// Textures over host pages made while the device's check had not answered for their class
+    /// and access, which waited as they were made for that verdict and had it: each took the
+    /// path the verdict answers rather than a shadow (`in_place.rs`, `in_place::VERDICT_WAIT`). A
+    /// wait that ran out leaves the texture a shadow, counted in
+    /// `host_texture_shadows_check_pending`.
+    pub in_place_verdicts_waited: u64,
     /// Buffers of the runtime's own made in fresh anonymous pages imported by their pointer
     /// (`VK_EXT_external_memory_host`), which read zero with nothing written: host-visible ones
     /// longer than half a pooled block, not of a heap, where the device takes such pages. A
@@ -7145,6 +7158,7 @@ impl Device {
             in_place_checks_failed: counters.in_place_checks_failed.load(Ordering::Relaxed),
             in_place_checks_unchecked: counters.in_place_checks_unchecked.load(Ordering::Relaxed),
             in_place_checks_recalled: counters.in_place_checks_recalled.load(Ordering::Relaxed),
+            in_place_verdicts_waited: counters.in_place_verdicts_waited.load(Ordering::Relaxed),
             fresh_page_buffers_made: counters.fresh_page_buffers_made.load(Ordering::Relaxed),
             fresh_page_bytes: counters.fresh_page_bytes.load(Ordering::Relaxed),
             new_buffer_bytes_cleared: counters.new_buffer_bytes_cleared.load(Ordering::Relaxed),

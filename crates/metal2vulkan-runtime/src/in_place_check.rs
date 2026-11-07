@@ -50,10 +50,12 @@
 //!   is the device's as it is known, so a class that passed takes textures in place while the
 //!   next is checked. Counted (`WorkCounts::in_place_checks_*`).
 //! - **Kept.** Once every class answered, the verdicts are written as one record in the shader
-//!   cache's content directory (`shader_cache/store.rs`), named by the driver's identity, the
-//!   check's version and the runtime's ([`record_name`]): a device of the same driver and release
-//!   reads them as it is made and runs no check. A failed write leaves the verdicts for the
-//!   device's life. A forced failure is kept nowhere.
+//!   cache's content directory (`shader_cache/store.rs`), named by the driver's identity (its
+//!   version and the device's UUID among it) and the check's version ([`record_name`]), not the
+//!   runtime's: a device of the same driver and version reads them as it is made and runs no
+//!   check, whatever runtime release made it, until the check itself changes
+//!   (`in_place::CHECK_VERSION`). A failed write leaves the verdicts for the device's life. A
+//!   forced failure is kept nowhere.
 //! - **Its thread.** Each round's Vulkan work (the buffer, the texture, the submission and its
 //!   wait, the releases) runs inside a section of the exit guard (`exit_guard.rs`), as every
 //!   runtime thread's does. It holds its device through the registry of the runtime's own holds

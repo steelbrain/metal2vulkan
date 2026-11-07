@@ -296,15 +296,18 @@ back after, which would undo a CPU write made meanwhile, where Metal keeps every
 command buffer does not write.
 
 By default (`HostPageTexturePolicy::InPlace`) the runtime relies on the driver there, checked. A
-texture whose declared usage only samples or reads it is a linear image aliasing the pages wherever
-the device's own check passed for that kind of pages (pointer imports, dma-buf imports, fresh
-pages): the check makes such images while a CPU thread writes beside their texels and passes a kind
-only where every first move kept every byte. It runs on a thread of its own, started by the first
-such texture, once per driver, driver version and runtime release; with a shader-cache directory
-its verdict is kept there and recalled as the next device is made, else it runs once per process.
-Until it answers, a texture is a shadow (`WorkCounts::host_texture_shadows_check_pending`), so the
-first frames of a first session pay the shadow's copies. A texture that renders or writes
-(`RenderTarget`, `ShaderWrite`, `ShaderAtomic`), one the check failed or could not cover, and one
+texture whose declared usage samples, reads or renders into it and does not write it through a
+shader is a linear image aliasing the pages wherever the device makes one and its own check passed
+for that kind of pages (pointer imports, dma-buf imports, fresh pages) and that access (a texture
+that renders is checked apart): the check makes such images while a CPU thread writes beside their
+texels and passes a kind only where every first move (and render pass, for one that renders) kept
+every byte. It runs on a thread of its own, started by the first such texture, once per driver and
+driver version; with a shader-cache directory its verdicts are kept there, named by the driver and
+the check's own version (not the runtime release), and recalled as the next device is made, else
+it runs once per process. The first texture waits for its verdict as it is made, up to 5 seconds
+(`WorkCounts::in_place_verdicts_waited`); past that it is a shadow
+(`WorkCounts::host_texture_shadows_check_pending`). A texture that writes through a shader
+(`ShaderWrite`, `ShaderAtomic`), one the check failed or could not cover, and one
 no image in place serves (a pitch the device's linear images do not take --
 `host_texture_shadows_refused_pitch`; over dma-buf pages, a source that makes no one dma-buf of
 the texture's own pages, as a chunked `udmabuf` import does -- `host_texture_shadows_refused_source`)

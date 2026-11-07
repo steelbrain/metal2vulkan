@@ -337,9 +337,11 @@ CPU thread writes beside their texels, and passes a kind only where every first 
 byte; for a texture that renders it checks images made with `RenderTarget` usage apart, through
 their first move, their moves into the feedback loop layout and back, and a render pass that
 clears and stores them, while the CPU writes the bytes between their rows and after them. It runs
-on a thread of its own, which the first such texture starts, once per driver, driver version and
-runtime release: its verdicts are kept in the shader cache's directory (a device without one
-checks once per process) and recalled as the next device is made
+on a thread of its own, which the first such texture starts and waits for, up to 5 seconds, for
+its kind of pages and access (`WorkCounts::in_place_verdicts_waited`; past it the texture is a
+shadow), once per driver and driver version: its verdicts are kept in the shader cache's
+directory, named by the driver and the check's own version, not the runtime's (a device without
+one checks once per process), and recalled as the next device is made
 (`WorkCounts::in_place_checks_run`, `_passed`, `_failed`, `_unchecked`, `_recalled`). Such a
 texture's commands read and write the texels in the memory the buffer's commands read, so a CPU
 write reaches them as it reaches the buffer's.
