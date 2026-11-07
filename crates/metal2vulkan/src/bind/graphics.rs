@@ -1152,13 +1152,19 @@ fn plan(p: &RenderPipeline, device: &Device, shape: &BindShape) -> Result<Bindin
         device.profile().fields().limits.max_multiview_view_count,
     )?;
     let (views, amplification_draws, amplifications) = match route {
+        // A mesh pipeline's draw of more than one amplification is not built: multiview may run
+        // the task stage once a view, where Metal runs the object function once a draw, and a
+        // mesh function does not add a view mapping's offsets yet, as a draw of each amplification
+        // in turn would need. One amplification draws as a pipeline without amplification does.
+        Route::Views(views) if mesh && views.view_mask != 0 => {
+            return Err(not_implemented(Feature::VertexAmplification))
+        }
         Route::Views(views) => (views, None, Vec::new()),
         // A tessellation pipeline's patches are not drawn one amplification at a time.
         Route::Draws { .. } if tessellation => {
             return Err(not_implemented(Feature::VertexAmplification))
         }
-        // A mesh function does not add a view mapping's offsets yet.
-        Route::Draws { .. } if mesh => return Err(not_implemented(Feature::MeshShading)),
+        Route::Draws { .. } if mesh => return Err(not_implemented(Feature::VertexAmplification)),
         Route::Draws { offsets, layered } => {
             let viewports = offsets.iter().any(|&[_, viewport]| viewport != 0);
             (

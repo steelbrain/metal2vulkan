@@ -2014,7 +2014,7 @@ fn a_mesh_pipeline_answers_metals_mesh_queries_within_the_device() {
 /// object function; a maximum past 1024; a mesh stage's required size of other threads than its
 /// maximum (an object stage's of fewer is made); a function's maximum other than the
 /// descriptor's; a payload past 16384 bytes. An amplification count of 0 is refused as a render
-/// pipeline's, and one above 1 is not built.
+/// pipeline's, and one of 2 is made, as Metal makes it ([`an_amplified_mesh_pipeline_draws_one_amplification`]).
 #[test]
 fn a_mesh_descriptor_metal_refuses_is_refused_as_its_rule() {
     use crate::budget::Budget;
@@ -2144,13 +2144,8 @@ fn a_mesh_descriptor_metal_refuses_is_refused_as_its_rule() {
                     limit: 16384,
                 }),
             ),
-            (
-                with(&|d| d.max_vertex_amplification_count = 2),
-                Some(Error::Unsupported(
-                    crate::error::Unsupported::not_implemented(Feature::VertexAmplification),
-                )),
-            ),
             // Made as Metal makes them.
+            (with(&|d| d.max_vertex_amplification_count = 2), None),
             (
                 with(&|d| d.required_threads_per_object_threadgroup = Some([32, 2, 1])),
                 None,
@@ -2221,6 +2216,69 @@ fn a_mesh_descriptor_metal_refuses_is_refused_as_its_rule() {
         own.max_total_threads_per_mesh_threadgroup = None;
         own.required_threads_per_mesh_threadgroup = Some([16, 1, 1]);
         assert_eq!(answer(&own), None, "{stem}");
+    }
+}
+
+/// A mesh render pipeline of `maxVertexAmplificationCount` 2, which Metal makes (the
+/// `mesh-limits-amplification-2` conformance recording, an M3 Max under macOS 27.0.1), is made on
+/// every committed profile without multiview, and draws one amplification, Metal's default, as a
+/// pipeline without amplification does. Its draw of two is refused
+/// `NotImplemented(VertexAmplification)`: Vulkan's multiview may run the task stage once a view,
+/// where Metal runs the object function once a draw, and a mesh function does not add a view
+/// mapping's offsets, as a draw of each amplification in turn would need.
+#[test]
+fn an_amplified_mesh_pipeline_draws_one_amplification() {
+    use crate::bind::{BindState, DrawCall, VertexAmplification};
+    use crate::budget::Budget;
+    use crate::library::Library;
+    use crate::pipeline::descriptor::{FunctionDescriptor, MeshPipelineDescriptor, StageSource};
+    let Some(draws) = fixture("mesh_draws") else {
+        return;
+    };
+    let draws = Library::from_air(&draws).expect("library");
+    let stage = |name: &str| {
+        StageSource::Function(FunctionDescriptor::new(
+            draws.function(name).expect("function"),
+        ))
+    };
+    for (stem, _) in mesh_profiles().into_iter().chain(emulating_profiles()) {
+        let dev = device(&stem);
+        let mut d = MeshPipelineDescriptor::new(stage("mesh_draws_mesh"));
+        d.object = Some(stage("mesh_draws_object"));
+        d.rasterization_enabled = false;
+        d.max_vertex_amplification_count = 2;
+        let p = dev
+            .compile_mesh_pipeline(&d, &Budget::standard())
+            .unwrap_or_else(|e| panic!("{stem}: {e}"));
+        assert_eq!(p.graphics.max_vertex_amplification_count, 2, "{stem}");
+        assert!(
+            !p.requirements.features.contains(&VkFeature::Multiview),
+            "{stem}"
+        );
+        let state = BindState::default();
+        let plan = p
+            .plan(&dev, &state.shape())
+            .unwrap_or_else(|e| panic!("{stem}: plan: {e}"));
+        let draw = DrawCall::MeshThreadgroups {
+            groups: [2, 1, 1],
+            threads_per_object_group: [1; 3],
+            threads_per_mesh_group: [8, 1, 1],
+        };
+        plan.instantiate_draw(&state, &draw)
+            .unwrap_or_else(|e| panic!("{stem}: a draw: {e}"));
+        for mappings in [Vec::new(), vec![Default::default(); 2]] {
+            let two = BindState {
+                vertex_amplification: VertexAmplification::new(2, mappings),
+                ..Default::default()
+            };
+            assert_eq!(
+                p.plan(&dev, &two.shape()).err(),
+                Some(crate::bind::plan::compute::not_implemented(
+                    Feature::VertexAmplification
+                )),
+                "{stem}"
+            );
+        }
     }
 }
 

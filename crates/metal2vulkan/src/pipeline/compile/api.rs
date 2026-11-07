@@ -571,11 +571,6 @@ impl Device {
         };
         let mesh = self.stage(&d.mesh, InputsFrom::Given(&mesh_inputs), m)?;
         check_function_maxima(d, object.as_ref(), &mesh)?;
-        // A mesh pipeline's vertex amplification is not built: refused once Metal's own
-        // refusals are answered.
-        if d.max_vertex_amplification_count > 1 {
-            return Err(Unsupported::not_implemented(Feature::VertexAmplification).into());
-        }
         // A stage compiled on its own holds the descriptor's length only where it was compiled
         // under it.
         if let Some(bytes) = payload_length {
@@ -1277,10 +1272,13 @@ fn graphics_requirements(
     // A multiview pipeline needs `multiview` and its view count whether or not a stage reads the
     // view index; the binder draws more amplifications than the device has views one at a time, so
     // the views it needs are at most those.
+    // A mesh pipeline draws no amplification as a view: its draws of more than one amplification
+    // are refused at the draw (`bind::graphics`), and one draws without multiview.
+    let mesh = artifacts.iter().any(|a| a.interface.stage == Stage::Mesh);
     let views = graphics
         .max_vertex_amplification_count
         .min(p.fields().limits.max_multiview_view_count.max(1));
-    if views > 1 {
+    if views > 1 && !mesh {
         requirements.features.insert(VkFeature::Multiview);
         if linked.control.is_some() {
             requirements

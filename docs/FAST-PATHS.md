@@ -695,13 +695,14 @@ driver's. Each is open work.
   the command buffer of an indirect one past the compute limits with
   `CommandBufferError::MeshGridPastLimits` (ANV's y and z axes stop at 65,535; MoltenVK's limits
   pass every grid Metal runs).
-- **A mesh render pipeline's vertex amplification.** A mesh descriptor's
-  `maxVertexAmplificationCount` above 1, which Metal makes, is refused
+- **A mesh render pipeline's amplified draws.** A mesh descriptor's `maxVertexAmplificationCount`
+  above 1 is made, as Metal makes it, and its draws of one amplification (Metal's default) draw as
+  a pipeline without amplification does; a draw of more than one is refused
   (`Unsupported{VertexAmplification, NotImplemented}`). An M3 Max runs the object function once
-  for the draw and each mesh threadgroup once per amplification (`mesh_amplification.m`). No
-  form is built: a draw per amplification runs the object function again, and Vulkan multiview
-  may invoke a task shader once per view; an exact form runs the object stage once and the mesh
-  stage per amplification.
+  for the draw and each mesh threadgroup once per amplification (`mesh_amplification.m`). No form
+  is built: a draw per amplification runs the object function again and needs the mesh function
+  to add a view mapping's offsets, and Vulkan multiview may run the task shader once per view.
+  Open: the form that runs the object stage once and the mesh stage per amplification.
 - **An object threadgroup that sets a mesh grid Metal launches nothing for keeps its own writes.**
   On the M3 Max such a threadgroup's device writes (an atomic add before the set) do not land
   either, while the draw's other threadgroups run; the runtime runs the threadgroup and launches
