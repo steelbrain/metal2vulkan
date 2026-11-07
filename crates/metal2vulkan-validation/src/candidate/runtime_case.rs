@@ -85,6 +85,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 mod commands;
 mod host_wait_gap;
 pub(crate) mod imageblock;
+mod input_index_gap;
 mod layer_claim;
 mod query_reset_gap;
 mod raster_order_gap;
@@ -209,6 +210,11 @@ pub(crate) fn report_each_message() {
 /// layer's source, and a test's count of them prints once its messages go. On any other release
 /// each fails, marked "re-read WaitForSemaphore in layer X.Y.Z", "re-read the input attachment
 /// ordering in layer X.Y.Z" or "re-read vkResetQueryPool in layer X.Y.Z".
+///
+/// Another layer gap passes the same way: the layer's link-time check of a fragment shader's input
+/// attachments reading a pipeline made against a `VkRenderPass` as one made for dynamic rendering
+/// (`runtime_case/input_index_gap.rs`), marked "re-read the link-time input attachment check in
+/// layer X.Y.Z" on any other release.
 ///
 /// One message about the driver passes too, once the runtime announced it: the layer's report
 /// of a vertex module's subgroup operations outside `subgroupSupportedStages`
@@ -504,6 +510,20 @@ impl Messages {
                 );
                 return;
             }
+            let index_gap = input_index_gap::shape(message.id, &message.id_name, &message.text);
+            if index_gap && layer.is_some_and(input_index_gap::read) {
+                reported.layer_gaps += 1;
+                eprintln!(
+                    "LAYER-GAP {}: passed, the layer's link-time input attachment gap ({}): {} \
+                     ({}): {}",
+                    reported.test,
+                    input_index_gap::SOURCE,
+                    message.id_name,
+                    message.id,
+                    message.text.replace('\n', " ")
+                );
+                return;
+            }
             let gap = host_wait_gap::shape(message.id, &message.id_name, &message.text);
             if gap && layer.is_some_and(host_wait_gap::read) {
                 reported.layer_gaps += 1;
@@ -588,6 +608,24 @@ impl Messages {
                 message.text = format!(
                     "re-read WaitForSemaphore in layer {}: the layer's host-wait gap passes only \
                      on the releases read ({}). {}",
+                    layer.map_or_else(|| "of an unknown release".into(), host_wait_gap::release),
+                    read.join(", "),
+                    message.text
+                );
+                eprintln!(
+                    "LAYER-GAP {}: failed, {}",
+                    reported.test,
+                    message.text.replace('\n', " ")
+                );
+            }
+            if index_gap {
+                let read: Vec<String> = input_index_gap::READ
+                    .iter()
+                    .map(|&version| host_wait_gap::release(version))
+                    .collect();
+                message.text = format!(
+                    "re-read the link-time input attachment check in layer {}: the layer's \
+                     link-time input attachment gap passes only on the releases read ({}). {}",
                     layer.map_or_else(|| "of an unknown release".into(), host_wait_gap::release),
                     read.join(", "),
                     message.text
