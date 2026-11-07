@@ -43,6 +43,17 @@
 //! one command buffer over one 4K-wide private target, each clearing it, its first draw sampling a
 //! quarter of it and three blended draws sampling other textures.
 //!
+//! `self_reads` is the consumer's guest's self-read shape (its `selfread` probe): one command
+//! buffer a frame of one render pass over a [`SELF_SIZE`] `BGRA8Unorm` target (a surface over host
+//! pages, as the guest's framebuffer is, or a private texture), loaded but in the first frame,
+//! which clears it, and stored; [`SELF_PAIRS`] times a fill of a [`SELF_RECT`] rectangle, a memory
+//! barrier over the render targets and a draw over the same rectangle that reads the target at
+//! its own pixels (`tob_read`), through no scissor; each target also without the barriers and
+//! readers, the baseline. Printed per case (`SELF-READ-COST`): the GPU time per frame, and per
+//! frame the splits, snapshots, render pass instances begun, shadow copies, texels copied in
+//! (and of them those of a surface's shadow copied in again), keeps and their texels, merges, and
+//! the shadows made of render targets over host pages.
+//!
 //! Ignored by default: measurements, not checks. Run them by name with `--run-ignored all`.
 
 use super::attachment_reads::{floats, function};
@@ -810,4 +821,173 @@ fn pass_start_clear_read_costs() {
             after.shadow_texels_copied_in + after.shadow_texels_copied_in_images
         ),
     );
+}
+
+/// The `self_reads` target's size: the guest's desktop framebuffer's.
+const SELF_SIZE: [u64; 2] = [3662, 2039];
+/// The fill and reader pairs of a `self_reads` pass, and the rectangle each covers.
+const SELF_PAIRS: u64 = 30;
+const SELF_RECT: [u64; 2] = [600, 400];
+/// The untimed and the timed `self_reads` frames of each case.
+const SELF_WARM: usize = 3;
+const SELF_TIMED: usize = 20;
+
+/// Pair `pair`'s rectangle in frame `frame` of `self_reads`, at a place of its own.
+fn self_rect(frame: usize, pair: u64) -> [u64; 4] {
+    let ([width, height], [w, h]) = (SELF_SIZE, SELF_RECT);
+    let n = frame as u64 + pair;
+    let (x, y) = (n * 1373 % (width - w), (n * 3 + 1) * 787 % (height - h));
+    [x, y, x + w, y + h]
+}
+
+/// One `self_reads` frame (the module docs) over `target`, its `frame`th, on `queue`; with no
+/// barriers or readers where `baseline`. Its GPU time, in seconds.
+fn self_frame(
+    queue: &CommandQueue,
+    target: &Texture,
+    (fill, read): (&RenderPipelineState, &RenderPipelineState),
+    frame: usize,
+    baseline: bool,
+) -> f64 {
+    let mut d = RenderPassDescriptor::new();
+    let color = &mut d.color_attachments[0];
+    color.texture = Some(target.clone());
+    color.load_action = match frame {
+        0 => LoadAction::Clear,
+        _ => LoadAction::Load,
+    };
+    color.store_action = StoreAction::Store;
+    let [width, height] = SELF_SIZE;
+    let corners = |[x0, y0, x1, y1]: [u64; 4]| {
+        let x = |p: u64| p as f32 / width as f32 * 2.0 - 1.0;
+        let y = |p: u64| 1.0 - p as f32 / height as f32 * 2.0;
+        floats([x(x0), y(y1), x(x1), y(y0)])
+    };
+    let command_buffer = queue.command_buffer().unwrap();
+    let mut encoder = command_buffer.render_command_encoder(&d).unwrap();
+    for pair in 0..SELF_PAIRS {
+        let rect = corners(self_rect(frame, pair));
+        encoder.set_render_pipeline_state(fill).unwrap();
+        let red = pair as f32 / SELF_PAIRS as f32;
+        encoder
+            .set_fragment_bytes(&floats([red, 0.5, 0.0, 1.0]), 0)
+            .unwrap();
+        encoder.set_vertex_bytes(&rect, 0).unwrap();
+        encoder
+            .draw_primitives(PrimitiveType::Triangle, 0, 6, 1, 0)
+            .unwrap();
+        if baseline {
+            continue;
+        }
+        barrier(&mut encoder);
+        encoder.set_render_pipeline_state(read).unwrap();
+        encoder.set_fragment_texture(Some(target), 0).unwrap();
+        encoder
+            .draw_primitives(PrimitiveType::Triangle, 0, 6, 1, 0)
+            .unwrap();
+    }
+    encoder.end_encoding().unwrap();
+    command_buffer.commit().unwrap();
+    command_buffer.wait_until_completed_for(WAIT).unwrap();
+    assert_eq!(command_buffer.error(), None);
+    command_buffer.gpu_end_time().unwrap() - command_buffer.gpu_start_time().unwrap()
+}
+
+#[test]
+#[ignore = "a release-mode measurement: run by name"]
+fn self_reads() {
+    let device = open_device(TEST_DEVICE, DeviceOptions::default()).unwrap();
+    let bgra = PixelFormat::BGRA8Unorm;
+    let draws = (
+        state(&device, "tob_solid", "tob_renders.ll", bgra),
+        state(&device, "tob_read", "tob_renders.ll", bgra),
+    );
+    let [width, height] = SELF_SIZE;
+    let row = 4 * width;
+    let len = ((row * height) as usize).next_multiple_of(GUEST_PAGE);
+    let mapping = Mapping::anonymous(len);
+    // SAFETY: the measurement drops the texture and the buffer before the mapping.
+    let buffer = unsafe {
+        no_copy(
+            &device,
+            mapping.pointer(),
+            len,
+            ResourceOptions::default(),
+            None,
+        )
+    }
+    .unwrap();
+    let mut d = TextureDescriptor::texture_2d(bgra, width, height, false);
+    d.usage = TextureUsage::RENDER_TARGET | TextureUsage::SHADER_READ;
+    d.resource_options = buffer.resource_options();
+    let surface = buffer
+        .new_texture_with_iosurface_plane(&d, IoSurfacePlane::new(0, row, false))
+        .unwrap();
+    d.resource_options = ResourceOptions::private();
+    let private = device.new_texture(&d).unwrap();
+    let queue = device.new_command_queue().unwrap();
+    let name = device.name().to_owned();
+    for (target, kind) in [(&surface, "surface"), (&private, "private")] {
+        for baseline in [true, false] {
+            let mut frames = 0..;
+            let mut next = || frames.next().unwrap();
+            for _ in 0..SELF_WARM {
+                self_frame(&queue, target, (&draws.0, &draws.1), next(), baseline);
+            }
+            let before = device.work_counts();
+            let mut gpu = Vec::new();
+            for _ in 0..SELF_TIMED {
+                gpu.push(self_frame(
+                    &queue,
+                    target,
+                    (&draws.0, &draws.1),
+                    next(),
+                    baseline,
+                ));
+            }
+            let after = device.work_counts();
+            let per = |a: u64, b: u64| (b - a) as f64 / SELF_TIMED as f64;
+            let keeps = |c: &WorkCounts| c.shadow_keeps.render_cut + c.shadow_keeps.render_whole;
+            let kept = |c: &WorkCounts| {
+                c.shadow_keeps.render_cut_texels + c.shadow_keeps.render_whole_texels
+            };
+            println!(
+                "SELF-READ-COST {name} {kind} {width}x{height} {} pairs {} {}x{}: GPU {:.3} \
+                 ms/frame (median); per frame: splits {:.2}, snapshotted {:.2}, instances {:.2}, \
+                 shadow copies {:.2}, bounded {:.2}, texels copied in {:.0}, of a surface again \
+                 {:.0}, keeps {:.2}, texels kept {:.0}, merges {:.2}; render-target shadows over \
+                 host pages {}",
+                SELF_PAIRS,
+                if baseline { "baseline" } else { "self-read" },
+                SELF_RECT[0],
+                SELF_RECT[1],
+                median(gpu) * 1e3,
+                per(before.attachment_read_splits, after.attachment_read_splits),
+                per(
+                    before.reading_draws_snapshotted,
+                    after.reading_draws_snapshotted
+                ),
+                per(
+                    before.render_passes_begun_instances,
+                    after.render_passes_begun_instances
+                ),
+                per(before.shadow_copies, after.shadow_copies),
+                per(before.bounded_shadow_copies, after.bounded_shadow_copies),
+                per(
+                    before.shadow_texels_copied_in,
+                    after.shadow_texels_copied_in
+                ),
+                per(
+                    before.shadow_texels_recopied_in_surfaces,
+                    after.shadow_texels_recopied_in_surfaces
+                ),
+                per(keeps(&before), keeps(&after)),
+                per(kept(&before), kept(&after)),
+                per(before.shadow_merges_fetched, after.shadow_merges_fetched),
+                after.host_texture_shadows_render_target,
+            );
+        }
+    }
+    drop((surface, private, buffer));
+    drop(mapping);
 }
