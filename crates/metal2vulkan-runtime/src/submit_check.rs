@@ -59,28 +59,35 @@
 //!   kernel's release (the import tax is the kernel's work on RADV), the check's version and the
 //!   runtime's ([`record_name`]): a device of the same driver, release and kernel reads them as
 //!   it is made and runs no check. A failed write leaves the verdicts for the device's life.
-//! - **Its thread** holds its device through the registry of the runtime's own holds
-//!   (`device/holds.rs`) for its whole run, and reads the stop between its steps (each round, each
-//!   phase, each copy): the program's last drop stops it there and waits for the step in progress
-//!   and the release of its objects, so the device goes on the program's thread, and the check
-//!   ends unrecorded. Each step's Vulkan work runs inside a section of the exit guard
-//!   (`exit_guard.rs`). Its submissions are counted apart (`WorkCounts::submit_check_calls`), not
-//!   among the device's.
+//! - **Its thread** holds nothing of the device, as the queue-switch check's does
+//!   (`queue_switch_check.rs`): only the parts of it the checks work with ([`Parts`]), never a
+//!   handle, so the device's last handle never goes on it. It reads the stop between its steps
+//!   (each round, each phase, each copy): the device's teardown stops it there and waits for the
+//!   step in progress, the release of its objects and of its parts, and the checks end
+//!   unrecorded, what had not answered `Unchecked`. Each step's Vulkan work runs inside a section
+//!   of the exit guard (`exit_guard.rs`). Its submissions are counted apart
+//!   (`WorkCounts::submit_check_calls`), not among the device's.
 
-use crate::device::holds::Holder;
-use crate::device::relay::By;
+use crate::command_buffer::fences::Fences;
+use crate::device::functions::{Functions, Vk};
+use crate::device::relay::{By, QueueUses};
 use crate::device::submit_stalls::Uses;
-use crate::device::{lock, Device, WeakDevice};
+use crate::device::{lock, Device, QueueSlot};
 use crate::exit_guard::{self, Call};
+use crate::freed_memory::Parking;
+use crate::host_memory::Importer;
 use crate::in_place::DriverIdentity;
+use crate::loader_word::LoaderWord;
 use crate::release;
-use crate::shader_cache::store::{hex, Lookup};
+use crate::shader_cache::store::{hex, Lookup, Store};
+use crate::sharing::Sharing;
+use crate::work_counts::Counters;
 use ash::vk;
 use sha2::{Digest, Sha256};
 use std::cell::Cell;
 use std::ptr::NonNull;
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, AtomicU8, Ordering};
-use std::sync::{Condvar, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
 /// The command buffers of each merge round, and the `VkSubmitInfo`s of its one call.
@@ -194,6 +201,15 @@ pub(crate) struct SubmitChecks {
     wake: Condvar,
     /// The checks' run in this process, in nanoseconds; 0 where none ended.
     took: AtomicU64,
+    /// The device's teardown stopped the checks ([`SubmitChecks::stop`]): read between steps.
+    stopping: AtomicBool,
+    /// Whether the checks' thread runs, and what tells its end.
+    running: Mutex<bool>,
+    ending: Condvar,
+    /// The crate's device tests' hold of the checks between their steps
+    /// (`tests/teardown_threads.rs`).
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) held: crate::freed_memory::held::Held,
 }
 
 impl SubmitChecks {
@@ -206,6 +222,11 @@ impl SubmitChecks {
             settled: Mutex::new(false),
             wake: Condvar::new(),
             took: AtomicU64::new(0),
+            stopping: AtomicBool::new(false),
+            running: Mutex::new(false),
+            ending: Condvar::new(),
+            #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+            held: Default::default(),
         }
     }
 
@@ -260,6 +281,38 @@ impl SubmitChecks {
     /// Note the checks started; whether they had not before.
     fn start(&self) -> bool {
         !self.started.swap(true, Ordering::AcqRel)
+    }
+
+    /// Whether the device's teardown stopped the checks: read between their steps.
+    fn stopping(&self) -> bool {
+        self.stopping.load(Ordering::SeqCst)
+    }
+
+    /// The checks' thread runs, or (`false`) ended: the device's teardown waits for its end.
+    fn set_running(&self, running: bool) {
+        *lock(&self.running) = running;
+        if !running {
+            self.ending.notify_all();
+        }
+    }
+
+    /// The device's teardown: the checks stop at their next step, and this waits until their
+    /// thread ended, its objects released. That thread holds no device handle (its [`Parts`]),
+    /// so it never runs this teardown.
+    pub(crate) fn stop(&self) {
+        self.stopping.store(true, Ordering::SeqCst);
+        let mut running = lock(&self.running);
+        while *running {
+            running =
+                (self.ending.wait(running)).unwrap_or_else(std::sync::PoisonError::into_inner);
+        }
+    }
+
+    /// Let the tests' hold of the checks go once the device's teardown stopped them, or once it
+    /// was let go already.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) fn release_once_stopping(&self) {
+        self.held.release_once(&self.stopping);
     }
 
     /// Every verdict still pending is unchecked, and the checks settle.
@@ -467,9 +520,18 @@ impl Device {
         if !checks.start() {
             return;
         }
-        let weak = self.downgrade();
+        let parts = Parts::of(self);
         let builder = std::thread::Builder::new().name("m2v-submit-check".to_owned());
-        if exit_guard::spawn(builder, move || run(&weak)).is_err() {
+        checks.set_running(true);
+        let spawned = exit_guard::spawn(builder, move || {
+            // Made first, so it goes last: the parts' shares go before the teardown that waits
+            // for the thread's end goes on, however the run ends.
+            let _ends = Ends(Arc::clone(&parts.checks));
+            let parts = parts;
+            run(&parts);
+        });
+        if spawned.is_err() {
+            checks.set_running(false);
             checks.settle_unchecked();
         }
     }
@@ -545,43 +607,121 @@ impl Device {
     }
 }
 
-/// The checks' thread: the device held through its run, each check's verdict given as it is
-/// known, then the record. Stopped by the program's last drop, it records nothing.
-fn run(weak: &WeakDevice) {
-    let Some(device) = weak.hold() else {
-        return;
-    };
+/// The parts of a device its checks work with, none of which holds the device (the module
+/// docs): shares of its functions, its `VkQueue`s and what a use of one reaches, its loader
+/// word, its verdicts and its shader cache's store, and what it reads of the device as the checks
+/// start.
+struct Parts {
+    functions: Arc<Functions>,
+    queues: Arc<[QueueSlot]>,
+    parking: Option<Arc<Parking>>,
+    counts: Arc<Counters>,
+    fences: Arc<Fences>,
+    loader_word: Arc<LoaderWord>,
+    checks: Arc<SubmitChecks>,
+    store: Arc<Store>,
+    /// The device's importer of host pointers, where it imports them.
+    importer: Option<Importer>,
+    /// The queue families its buffers are shared among.
+    families: Vec<u32>,
+    /// Its memory types' properties, by index.
+    type_flags: Vec<vk::MemoryPropertyFlags>,
+    identity: DriverIdentity,
+}
+
+impl Parts {
+    /// `device`'s.
+    fn of(device: &Device) -> Parts {
+        let shared = device.shared();
+        let type_flags = {
+            let memory = lock(&shared.memory);
+            (0..vk::MAX_MEMORY_TYPES as u32)
+                .map_while(|index| memory.type_flags(index))
+                .collect()
+        };
+        Parts {
+            functions: shared.functions(),
+            queues: Arc::clone(&shared.queues),
+            parking: shared.parking.get().cloned(),
+            counts: Arc::clone(&shared.counts),
+            fences: Arc::clone(&shared.fences),
+            loader_word: Arc::clone(&shared.loader_word),
+            checks: Arc::clone(&shared.submit_checks),
+            store: shared.shader_cache.content_store_share(),
+            importer: shared.host_import.as_ref().ok().cloned(),
+            families: shared.queue_families.clone(),
+            type_flags,
+            identity: device.driver_identity(),
+        }
+    }
+
+    /// The device's functions.
+    fn vk(&self) -> &Vk {
+        self.functions.get()
+    }
+
+    /// What a use of one of the device's `VkQueue`s reaches.
+    fn queue_uses(&self) -> QueueUses<'_> {
+        QueueUses {
+            queues: &self.queues,
+            parking: self.parking.as_deref(),
+            counts: &self.counts,
+            fences: &self.fences,
+            functions: &self.functions,
+        }
+    }
+
+    /// Whether the checks go on to their next step (the device's teardown stops them).
+    fn goes_on(&self) -> bool {
+        #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+        self.checks.held.pass();
+        !self.checks.stopping()
+    }
+}
+
+/// Tells the device's teardown that the checks' thread ended, however it ends.
+struct Ends(Arc<SubmitChecks>);
+
+impl Drop for Ends {
+    fn drop(&mut self) {
+        self.0.set_running(false);
+    }
+}
+
+/// The checks' thread: each check's verdict given as it is known, then the record. Stopped by
+/// the device's teardown, it settles what it had not answered `Unchecked` and records nothing.
+fn run(parts: &Parts) {
+    let checks = &*parts.checks;
     let started = Instant::now();
-    let checks = &device.shared().submit_checks;
-    let Some(objects) = Objects::make(&device) else {
+    let Some(objects) = Objects::make(parts) else {
         checks.settle_unchecked();
         return;
     };
-    let ran = measure(&device, &objects);
-    let released = objects.release(&device);
+    let ran = measure(parts, &objects);
+    let released = objects.release(parts);
     let Some(measured) = ran.filter(|_| released) else {
-        // The process is exiting, or the program let the device go: nothing is kept.
+        // The process is exiting, or the device's teardown stopped the checks: nothing is kept.
+        checks.settle_unchecked();
         return;
     };
     checks.set_measured(measured);
-    device.shared().counts.submit_checks_ran();
+    parts.counts.submit_checks_ran();
     let verdicts = Check::ALL.map(|check| checks.verdict(check));
     if !verdicts.contains(&Verdict::Pending) {
-        let identity = device.driver_identity();
-        let bytes = encode(&identity, verdicts, measured);
+        let identity = &parts.identity;
+        let bytes = encode(identity, verdicts, measured);
         // A failed write leaves the verdicts to the device's life alone.
-        let _ = (device.shared().shader_cache.content_store())
-            .write_record_soon(&record_name(&identity), bytes);
+        let _ = parts.store.write_record_soon(&record_name(identity), bytes);
     }
     checks.settle(Some(started.elapsed()));
 }
 
 /// Each check in turn, its verdict set as it is known: what they measured, `None` where the
-/// process is exiting or the program's last drop stopped the device's holds.
-fn measure(device: &Device, objects: &Objects) -> Option<Measured> {
-    let checks = &device.shared().submit_checks;
+/// process is exiting or the device's teardown stopped the checks.
+fn measure(parts: &Parts, objects: &Objects) -> Option<Measured> {
+    let checks = &parts.checks;
     let mut measured = Measured::default();
-    match merge(device, objects)? {
+    match merge(parts, objects)? {
         Some((merged, apart)) => {
             measured.merged = merged;
             measured.apart = apart;
@@ -589,7 +729,7 @@ fn measure(device: &Device, objects: &Objects) -> Option<Measured> {
         }
         None => checks.set(Check::Merge, Verdict::Unchecked),
     }
-    match tax(device, objects)? {
+    match tax(parts, objects)? {
         Some((held, bare)) => {
             measured.held = held;
             measured.bare = bare;
@@ -597,26 +737,21 @@ fn measure(device: &Device, objects: &Objects) -> Option<Measured> {
         }
         None => checks.set(Check::ImportTax, Verdict::Unchecked),
     }
-    checks.set(Check::Follows, follows(device, objects)?);
+    checks.set(Check::Follows, follows(parts, objects)?);
     Some(measured)
-}
-
-/// Whether the check goes on to its next step (the program's last drop stops it).
-fn goes_on(device: &Device) -> bool {
-    device.holds_go_on(Holder::SubmitCheck)
 }
 
 /// The merge's medians, in nanoseconds: one call of [`MERGED`] infos, and [`MERGED`] calls.
 /// `Some(None)` where a call was refused; `None` where the check stops.
-fn merge(device: &Device, objects: &Objects) -> Option<Option<(i64, i64)>> {
+fn merge(parts: &Parts, objects: &Objects) -> Option<Option<(i64, i64)>> {
     let mut merged = Vec::with_capacity(ROUNDS);
     let mut apart = Vec::with_capacity(ROUNDS);
     for round in 0..WARM + ROUNDS {
         for together in [true, false] {
-            if !goes_on(device) {
+            if !parts.goes_on() {
                 return None;
             }
-            let Some(nanos) = objects.submit_round(device, together)? else {
+            let Some(nanos) = objects.submit_round(parts, together)? else {
                 return Some(None);
             };
             if round >= WARM {
@@ -633,7 +768,7 @@ fn merge(device: &Device, objects: &Objects) -> Option<Option<(i64, i64)>> {
 /// The import tax's medians, in nanoseconds: a submission with the import of [`TAX_BYTES`]
 /// held, and without. `Some(None)` where the device imports no host pointer, the system maps no
 /// pages or a call was refused; `None` where the check stops.
-fn tax(device: &Device, objects: &Objects) -> Option<Option<(i64, i64)>> {
+fn tax(parts: &Parts, objects: &Objects) -> Option<Option<(i64, i64)>> {
     let Some(pages) = Pages::map(TAX_BYTES) else {
         return Some(None);
     };
@@ -642,11 +777,11 @@ fn tax(device: &Device, objects: &Objects) -> Option<Option<(i64, i64)>> {
     let mut bare = Vec::with_capacity(TAX_PHASES / 2 * TAX_SUBMITS);
     for phase in 0..TAX_PHASES {
         let holding = phase % 2 == 1;
-        if !goes_on(device) {
+        if !parts.goes_on() {
             return None;
         }
         let import = match holding {
-            true => match Import::make(device, &pages, false)? {
+            true => match Import::make(parts, &pages, false)? {
                 Some(import) => Some(import),
                 None => return Some(None),
             },
@@ -655,7 +790,7 @@ fn tax(device: &Device, objects: &Objects) -> Option<Option<(i64, i64)>> {
         let mut times = Vec::with_capacity(TAX_SUBMITS);
         let mut refused = false;
         for submission in 0..=TAX_SUBMITS {
-            match objects.submit_one(device)? {
+            match objects.submit_one(parts)? {
                 Some(nanos) if submission > 0 => times.push(nanos),
                 Some(_) => {}
                 None => {
@@ -665,7 +800,7 @@ fn tax(device: &Device, objects: &Objects) -> Option<Option<(i64, i64)>> {
             }
         }
         if let Some(import) = import {
-            import.release(device)?;
+            import.release(parts)?;
         }
         if refused {
             return Some(None);
@@ -680,19 +815,19 @@ fn tax(device: &Device, objects: &Objects) -> Option<Option<(i64, i64)>> {
 
 /// The follows check's verdict (the module docs); `None` where the check stops.
 #[cfg(target_os = "linux")]
-fn follows(device: &Device, objects: &Objects) -> Option<Verdict> {
+fn follows(parts: &Parts, objects: &Objects) -> Option<Verdict> {
     let Some(page) = crate::host_memory::host_page() else {
         return Some(Verdict::Unchecked);
     };
     // The kept import, its first page replaced between two submissions.
-    let Some(kept) = follows_pair(device, objects, page, false)? else {
+    let Some(kept) = follows_pair(parts, objects, page, false)? else {
         return Some(Verdict::Unchecked);
     };
-    if !goes_on(device) {
+    if !parts.goes_on() {
         return None;
     }
     // An import whose first page is replaced before its first submission.
-    let Some(fresh) = follows_pair(device, objects, page, true)? else {
+    let Some(fresh) = follows_pair(parts, objects, page, true)? else {
         return Some(Verdict::Unchecked);
     };
     Some(match (kept, fresh) {
@@ -704,7 +839,7 @@ fn follows(device: &Device, objects: &Objects) -> Option<Verdict> {
 
 /// Not run off Linux (the module docs).
 #[cfg(not(target_os = "linux"))]
-fn follows(_device: &Device, _objects: &Objects) -> Option<Verdict> {
+fn follows(_parts: &Parts, _objects: &Objects) -> Option<Verdict> {
     Some(Verdict::Unchecked)
 }
 
@@ -732,7 +867,7 @@ const NEW: u8 = 0xb2;
 /// takes no such import or a copy failed; `None` where the check stops.
 #[cfg(target_os = "linux")]
 fn follows_pair(
-    device: &Device,
+    parts: &Parts,
     objects: &Objects,
     page: u64,
     before_first: bool,
@@ -741,7 +876,7 @@ fn follows_pair(
         return Some(None);
     };
     pages.fill(OLD);
-    let Some(import) = Import::make(device, &pages, true)? else {
+    let Some(import) = Import::make(parts, &pages, true)? else {
         return Some(None);
     };
     let read = |pages: &Pages| {
@@ -758,7 +893,7 @@ fn follows_pair(
     let answer = (|| {
         if !before_first {
             pages.clear_second(page);
-            if !objects.copy(device, &import, page)? {
+            if !objects.copy(parts, &import, page)? {
                 return Some(None);
             }
             if read(&pages) != Read::Old {
@@ -769,12 +904,12 @@ fn follows_pair(
             return Some(None);
         }
         pages.clear_second(page);
-        if !objects.copy(device, &import, page)? {
+        if !objects.copy(parts, &import, page)? {
             return Some(None);
         }
         Some(Some(read(&pages)))
     })();
-    import.release(device)?;
+    import.release(parts)?;
     answer
 }
 
@@ -885,13 +1020,12 @@ impl<'p> Import<'p> {
     /// The import of `pages`, with a buffer bound where `bound`, in a host-coherent type the
     /// pointer takes. `Some(None)` where the device imports no host pointer, the pages take no
     /// such type, or a call was refused; `None` where the process is exiting.
-    fn make(device: &Device, pages: &'p Pages, bound: bool) -> Option<Option<Import<'p>>> {
-        let shared = device.shared();
-        let Ok(importer) = &shared.host_import else {
+    fn make(parts: &Parts, pages: &'p Pages, bound: bool) -> Option<Option<Import<'p>>> {
+        let Some(importer) = &parts.importer else {
             return Some(None);
         };
         let _busy = exit_guard::enter()?;
-        let raw = shared.vk();
+        let raw = parts.vk();
         // SAFETY: the pages are this process's, at a host page, whose size the import alignment
         // divides where the device imports at all (it is checked below).
         let Ok(types) = (unsafe { importer.memory_types(raw, pages.start) }) else {
@@ -907,7 +1041,7 @@ impl<'p> Import<'p> {
         if bound {
             let mut external = vk::ExternalMemoryBufferCreateInfo::default()
                 .handle_types(vk::ExternalMemoryHandleTypeFlags::HOST_ALLOCATION_EXT);
-            let info = shared.sharing().buffer(
+            let info = Sharing::new(&parts.families).buffer(
                 vk::BufferCreateInfo::default()
                     .size(pages.length)
                     .usage(vk::BufferUsageFlags::TRANSFER_SRC | vk::BufferUsageFlags::TRANSFER_DST)
@@ -926,14 +1060,9 @@ impl<'p> Import<'p> {
         }
         let coherent =
             vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT;
-        let memory = lock(&shared.memory);
-        let type_index = (0..32).find(|&index| {
-            allowed & (1 << index) != 0
-                && memory
-                    .type_flags(index)
-                    .is_some_and(|flags| flags.contains(coherent))
-        });
-        drop(memory);
+        let type_index = (parts.type_flags.iter().zip(0u32..))
+            .find(|&(flags, index)| allowed & (1 << index) != 0 && flags.contains(coherent))
+            .map(|(_, index)| index);
         let discard = |buffer: vk::Buffer| {
             if buffer != vk::Buffer::null() {
                 // SAFETY: the buffer is unused.
@@ -985,9 +1114,9 @@ impl<'p> Import<'p> {
 
     /// Free it, inside a section: `None` where the process is exiting, the import then left to
     /// its end with its pages mapped.
-    fn release(self, device: &Device) -> Option<()> {
+    fn release(self, parts: &Parts) -> Option<()> {
         let _busy = exit_guard::enter()?;
-        let raw = device.shared().vk();
+        let raw = parts.vk();
         // SAFETY: no submission that names them is pending (each was waited for).
         unsafe {
             if self.buffer != vk::Buffer::null() {
@@ -1013,13 +1142,12 @@ struct Objects {
 impl Objects {
     /// The objects, the empty command buffers recorded; `None` where a call was refused (what was
     /// made released) or the process is exiting.
-    fn make(device: &Device) -> Option<Objects> {
-        let shared = device.shared();
+    fn make(parts: &Parts) -> Option<Objects> {
         let _busy = exit_guard::enter()?;
-        let raw = shared.vk();
+        let raw = parts.vk();
         let info = vk::CommandPoolCreateInfo::default()
             .flags(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER)
-            .queue_family_index(shared.queues[0].family);
+            .queue_family_index(parts.queues[0].family);
         // SAFETY: the device is live, inside a section.
         let pool = unsafe { raw.create_command_pool(&info, None) };
         exit_guard::called(Call::CreateCommandPool);
@@ -1030,18 +1158,17 @@ impl Objects {
             copy: vk::CommandBuffer::null(),
             fence: vk::Fence::null(),
         };
-        if objects.fill(device).is_none() {
+        if objects.fill(parts).is_none() {
             drop(_busy);
-            objects.release(device);
+            objects.release(parts);
             return None;
         }
         Some(objects)
     }
 
     /// Make and record the command buffers and make the fence, inside the caller's section.
-    fn fill(&mut self, device: &Device) -> Option<()> {
-        let shared = device.shared();
-        let raw = shared.vk();
+    fn fill(&mut self, parts: &Parts) -> Option<()> {
+        let raw = parts.vk();
         let allocate = vk::CommandBufferAllocateInfo::default()
             .command_pool(self.pool)
             .level(vk::CommandBufferLevel::PRIMARY)
@@ -1049,7 +1176,7 @@ impl Objects {
         // SAFETY: the pool is the check's, which this thread alone uses; the device's loader word
         // is put back first (`loader_word.rs`).
         let allocated = unsafe {
-            shared.loader_word.restore();
+            parts.loader_word.restore();
             raw.allocate_command_buffers(&allocate)
         };
         exit_guard::called(Call::AllocateCommandBuffers);
@@ -1080,18 +1207,17 @@ impl Objects {
     /// is exiting.
     fn submit(
         &self,
-        device: &Device,
+        parts: &Parts,
         buffers: &[vk::CommandBuffer],
         together: bool,
     ) -> Option<Option<i64>> {
-        let shared = device.shared();
         let calls = match together {
             true => 1,
             false => buffers.len(),
         };
         let nanos = {
             let _busy = exit_guard::enter()?;
-            let raw = shared.vk();
+            let raw = parts.vk();
             let infos: Vec<vk::SubmitInfo<'_>> = (buffers.iter())
                 .map(|buffer| {
                     vk::SubmitInfo::default().command_buffers(std::slice::from_ref(buffer))
@@ -1100,10 +1226,11 @@ impl Objects {
             // SAFETY: the queue is used under its lock, inside a section; each command buffer is
             // recorded, ended and in no pending submission (each round waits for the last); the
             // fence is unsignaled and in no pending submission.
-            let submitted = shared.use_queue(0, By::Runtime, Uses::Unknown, |queue| unsafe {
+            let uses = parts.queue_uses();
+            let submitted = uses.use_queue(0, By::Runtime, Uses::Unknown, |queue| unsafe {
                 let mut spent = Duration::ZERO;
                 let last = infos.len() - 1;
-                let parts: Vec<(&[vk::SubmitInfo<'_>], vk::Fence)> = match together {
+                let calls: Vec<(&[vk::SubmitInfo<'_>], vk::Fence)> = match together {
                     true => vec![(&infos[..], self.fence)],
                     false => (infos.iter().enumerate())
                         .map(|(i, info)| {
@@ -1116,7 +1243,7 @@ impl Objects {
                         })
                         .collect(),
                 };
-                for (infos, fence) in parts {
+                for (infos, fence) in calls {
                     let start = Instant::now();
                     let made = raw.queue_submit(queue, infos, fence);
                     spent += start.elapsed();
@@ -1127,7 +1254,7 @@ impl Objects {
                 Ok(spent)
             });
             exit_guard::called(Call::QueueSubmit);
-            shared.counts.submit_check_called(calls);
+            parts.counts.submit_check_called(calls);
             match submitted {
                 Ok(spent) => Some(spent),
                 Err(_) if calls > 1 => None,
@@ -1137,32 +1264,32 @@ impl Objects {
         // A refused call among several: those before it, and so the fence, were not all
         // submitted, so the device waits for its queue rather than the fence.
         let Some(nanos) = nanos else {
-            return self.idle(device).map(|_| None);
+            return self.idle(parts).map(|_| None);
         };
-        if !self.wait(device)? {
+        if !self.wait(parts)? {
             return Some(None);
         }
         Some(Some(i64::try_from(nanos.as_nanos()).unwrap_or(i64::MAX)))
     }
 
     /// One merge round ([`submit`](Self::submit) of every empty command buffer).
-    fn submit_round(&self, device: &Device, together: bool) -> Option<Option<i64>> {
-        self.submit(device, &self.empty, together)
+    fn submit_round(&self, parts: &Parts, together: bool) -> Option<Option<i64>> {
+        self.submit(parts, &self.empty, together)
     }
 
     /// One submission of one empty command buffer with the fence.
-    fn submit_one(&self, device: &Device) -> Option<Option<i64>> {
-        self.submit(device, &self.empty[..1], true)
+    fn submit_one(&self, parts: &Parts) -> Option<Option<i64>> {
+        self.submit(parts, &self.empty[..1], true)
     }
 
     /// Record and submit a copy of [`COPIED`] bytes from the start of `import`'s buffer to
     /// `page` bytes in, then a barrier to the host's reads, and wait for it: whether it ran.
     /// `None` where the process is exiting.
     #[cfg(target_os = "linux")]
-    fn copy(&self, device: &Device, import: &Import, page: u64) -> Option<bool> {
+    fn copy(&self, parts: &Parts, import: &Import, page: u64) -> Option<bool> {
         {
             let _busy = exit_guard::enter()?;
-            let raw = device.shared().vk();
+            let raw = parts.vk();
             let region = vk::BufferCopy::default().dst_offset(page).size(COPIED);
             let barrier = vk::MemoryBarrier::default()
                 .src_access_mask(vk::AccessFlags::TRANSFER_WRITE)
@@ -1195,15 +1322,15 @@ impl Objects {
                 exit_guard::called(Call::EndCommandBuffer);
             }
         }
-        Some(self.submit(device, &[self.copy], true)?.is_some())
+        Some(self.submit(parts, &[self.copy], true)?.is_some())
     }
 
     /// Wait for the fence, a slice at a time, each a section, then reset it: whether it was
     /// signalled. `None` where the process is exiting.
-    fn wait(&self, device: &Device) -> Option<bool> {
+    fn wait(&self, parts: &Parts) -> Option<bool> {
         loop {
             let _busy = exit_guard::enter()?;
-            let raw = device.shared().vk();
+            let raw = parts.vk();
             // SAFETY: the check's fence, signalled by a submission made.
             let waited =
                 unsafe { raw.wait_for_fences(&[self.fence], true, WAIT_SLICE.as_nanos() as u64) };
@@ -1223,12 +1350,11 @@ impl Objects {
 
     /// Wait until the first `VkQueue` is idle and reset the fence, after a refused call: `None`
     /// where the process is exiting.
-    fn idle(&self, device: &Device) -> Option<()> {
+    fn idle(&self, parts: &Parts) -> Option<()> {
         let _busy = exit_guard::enter()?;
-        let shared = device.shared();
-        let raw = shared.vk();
+        let raw = parts.vk();
         // SAFETY: the queue is used under its lock, inside a section.
-        let _ = shared.use_queue(0, By::Runtime, Uses::Unknown, |queue| unsafe {
+        let _ = (parts.queue_uses()).use_queue(0, By::Runtime, Uses::Unknown, |queue| unsafe {
             raw.queue_wait_idle(queue)
         });
         exit_guard::called(Call::QueueWaitIdle);
@@ -1241,11 +1367,11 @@ impl Objects {
     /// Let the objects go, inside a section: whether it ran (`false` once the process is
     /// exiting, the objects then left to its end). No submission naming them is pending: each
     /// was waited for.
-    fn release(&self, device: &Device) -> bool {
+    fn release(&self, parts: &Parts) -> bool {
         let Some(_busy) = exit_guard::enter() else {
             return false;
         };
-        let raw = device.shared().vk();
+        let raw = parts.vk();
         // SAFETY: no pending submission names them; a null handle is skipped.
         unsafe {
             if self.fence != vk::Fence::null() {

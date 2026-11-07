@@ -348,7 +348,7 @@ pub(super) struct DeviceShared {
     pub(crate) in_place: crate::in_place::InPlaceChecks,
     /// Its checks of what its submissions cost and whether its pointer imports follow their
     /// address, and their verdicts (`submit_check.rs`).
-    pub(crate) submit_checks: crate::submit_check::SubmitChecks,
+    pub(crate) submit_checks: Arc<crate::submit_check::SubmitChecks>,
     /// How no-copy buffers import host memory, or why they are refused.
     pub(super) host_import: Result<Importer, metal2vulkan::error::Unsupported>,
     /// Whether the device imports a pointer to shared memory, once asked
@@ -774,6 +774,8 @@ impl Drop for DeviceShared {
         // The queue-switch check holds nothing of the device either: it stops at its next step,
         // and its objects go before the wait returns (`queue_switch_check.rs`).
         self.queue_switch.stop();
+        // So do the submission checks (`submit_check.rs`).
+        self.submit_checks.stop();
         // The watch of the program's marks and the releases of freed memory, posted to the
         // handler threads, hold nothing of the device: those that begin from here on call
         // nothing, and the threads' stop below waits for those running (`freed_memory.rs`).
@@ -1998,7 +2000,7 @@ impl Device {
             textures,
             shader_cache,
             in_place: crate::in_place::InPlaceChecks::new(fail_in_place_check),
-            submit_checks: crate::submit_check::SubmitChecks::new(),
+            submit_checks: Arc::new(crate::submit_check::SubmitChecks::new()),
             host_import,
             shared_pointer_imports: OnceLock::new(),
             extended_dynamic_state,

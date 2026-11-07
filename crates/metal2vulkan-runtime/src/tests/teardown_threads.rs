@@ -49,6 +49,11 @@
 //!   most one step and its release of its objects, within the 16 ms the owner allows a wait. A
 //!   device that runs no check (one family of one `VkQueue`, or no calibrated timestamps) skips
 //!   it, saying so.
+//! - **Nor the submission checks' thread**: a device's checks of its submissions
+//!   (`submit_check.rs`), which start as it is made, held between two of their steps, hold
+//!   nothing of it either: the program's drop tears the device down on its own thread before it
+//!   returns, the teardown stopping the checks at their next step. A device whose checks ended
+//!   before the hold skips it, saying so.
 //! - **Not the runtime's own holders' threads**: the check of textures over host pages
 //!   (`in_place_check.rs`), held before a round while it holds the device, and the warm pass
 //!   (`warm/pass.rs`), held before a record while it holds it. The program's last drop stops the
@@ -625,6 +630,52 @@ fn a_running_queue_switch_check_leaves_the_device_to_the_program_s_thread() {
     ending
         .watched
         .layer_reported_nothing("the teardown that stopped the check left no object and used none");
+}
+
+/// A device whose submission checks run, held between two of their steps (`submit_check.rs`):
+/// the checks hold no device handle, so the program's last drop tears the device down on its own
+/// thread before it returns. Unheld, they run some milliseconds after the device is made, the
+/// window in which checks that held their device took a last drop's teardown on one of the
+/// runtime's threads to their own.
+#[test]
+fn running_submit_checks_leave_the_device_to_the_program_s_thread() {
+    let scratch = Scratch::new("submit");
+    let (device, ending) = watched(&scratch.0);
+    let checks = Arc::clone(&device.shared().submit_checks);
+    checks.held.hold();
+    // The checks started as the device was made: they wait at their next step, or ended.
+    let deadline = Instant::now() + WAIT;
+    while checks.held.waiting() == 0 && !device.settle_submit_checks(Duration::ZERO) {
+        assert!(
+            Instant::now() < deadline,
+            "the checks neither held nor ended"
+        );
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    if checks.held.waiting() == 0 {
+        checks.held.release();
+        println!(
+            "SKIPPED {}: the device's submission checks ended before the hold",
+            device.name()
+        );
+        return;
+    }
+    let releasing = std::thread::spawn({
+        let checks = Arc::clone(&checks);
+        move || checks.release_once_stopping()
+    });
+    drop(device);
+    let torn_down = ending.thread.try_recv();
+    checks.held.release();
+    releasing.join().unwrap();
+    assert_eq!(
+        torn_down,
+        Ok(program_thread()),
+        "the device was not torn down on this thread before its last drop returned"
+    );
+    ending.watched.layer_reported_nothing(
+        "the teardown that stopped the checks left no object and used none",
+    );
 }
 
 /// The device whose holds `holder` takes, `holder` held at its next step while it holds the device

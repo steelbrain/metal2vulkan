@@ -1030,7 +1030,9 @@ fn mapping(line: &str, access: Access) -> Option<(u64, u64, bool)> {
     ))
 }
 
-/// What a device knows to import host memory.
+/// What a device knows to import host memory. A clone is the submission checks' own
+/// (`submit_check.rs`), which hold nothing of the device.
+#[derive(Clone)]
 pub(super) struct Importer {
     functions: ash::ext::external_memory_host::DeviceFn,
     /// The host's page size.
