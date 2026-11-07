@@ -24,7 +24,7 @@
 //!   by 2 at offset (3, 5), of two dimensions, answers each value of every thread, for constant
 //!   dimensions and for a dimension the kernel is given.
 //!
-//! [`expand`] runs after SCCP, whose constants name each read's dimension, and before the global
+//! `expand` runs after SCCP, whose constants name each read's dimension, and before the global
 //! built-ins (`global_builtin`) take the reads it leaves. It appends the three buffers to the entry
 //! and rewrites each read of a dimension `c` below 3: `get_global_id(c)` becomes the built-in's
 //! read of lane `c` plus word `c` of the first buffer, `get_global_offset(c)` that word, and
