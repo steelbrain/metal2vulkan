@@ -276,7 +276,6 @@ fn checked_execution<S>(
 ) -> Result<CheckedCase<S>, Vec<String>> {
     let pipeline_templates = resolve_pipeline_templates(root, &primary.case, &primary.interface)?;
     check_render_replay_templates(&primary.case, &primary.interface, &pipeline_templates)?;
-    check_replayed_strides(&primary.case, &pipeline_templates)?;
     Ok(CheckedCase {
         primary,
         pipeline_templates,
@@ -818,107 +817,6 @@ fn check_render_replay_templates(
             if !runs {
                 return Err(vec![format!(
                     "{what} draws what the pipeline it runs does not draw"
-                )]);
-            }
-        }
-    }
-    Ok(())
-}
-
-/// Each executed host command of `case` that draws or dispatches, on a command buffer whose
-/// descriptor supports dynamic attribute strides, binds every buffer its pipeline's layout of
-/// `MTLBufferLayoutStrideDynamic` reads (the template's dynamic stage or vertex inputs, at their
-/// slots) with the stride form: Metal's fetch reads one bound without a stride there at stride
-/// 2^32 - 1, which the runtime's 32-bit fetch cannot place, so it refuses such a command at the
-/// commit (`RuntimeGap::IndirectCommandUnstridedBuffer`). Without that support the records hold
-/// no stride word, Metal reads stride 0 and the runtime gives it, so nothing is required. A
-/// command that inherits its buffers, or runs nothing, binds none of its own.
-fn check_replayed_strides(
-    case: &AuthoredCase,
-    resolved: &BTreeMap<String, CheckedShader<Arc<SourceRow>>>,
-) -> Result<(), Vec<String>> {
-    use crate::case::indirect_commands::CommandDescriptor;
-    use crate::executor_contract::{buffer_slots, stage_inputs};
-    let states: BTreeMap<u64, &String> = case
-        .pipeline_states
-        .iter()
-        .map(|resource| (resource.token, &resource.case_id))
-        .collect();
-    for resource in &case.command_buffers {
-        let Some(execution) = &resource.execute else {
-            continue;
-        };
-        if resource.inherit_buffers {
-            continue;
-        }
-        // Without dynamic attribute strides a record holds no stride word, so Metal reads stride
-        // 0 and so does the runtime: nothing to require.
-        let dynamic_strides = match resource.descriptor {
-            CommandDescriptor::Compute {
-                support_dynamic_attribute_stride,
-                ..
-            }
-            | CommandDescriptor::Render {
-                support_dynamic_attribute_stride,
-                ..
-            } => support_dynamic_attribute_stride,
-        };
-        if !dynamic_strides {
-            continue;
-        }
-        let [start, end] = resource.execution_range;
-        for command in &resource.commands {
-            if command.action.is_none() || !(start..end).contains(&command.index) {
-                continue;
-            }
-            let case_id = if resource.inherit_pipeline_state {
-                execution
-                    .pipeline
-                    .as_ref()
-                    .map(|template| &template.case_id)
-            } else {
-                command
-                    .pipeline
-                    .and_then(|token| states.get(&token).copied())
-            };
-            let Some(template) = case_id.and_then(|id| resolved.get(id)) else {
-                continue;
-            };
-            let (dynamic, bindings) = match command_family(resource) {
-                PipelineClass::Compute => {
-                    let fetches = stage_inputs::authored(
-                        &template.case.kernel_stage_inputs,
-                        &template.interface,
-                    )
-                    .map_err(|error| vec![error])?;
-                    let slots = stage_inputs::bound_strides(&fetches)
-                        .into_keys()
-                        .collect::<Vec<_>>();
-                    (slots, &command.buffers)
-                }
-                PipelineClass::Render => {
-                    let slots =
-                        buffer_slots::vertex_input_slots(&template.case, &template.interface)
-                            .map_err(|error| vec![error])?;
-                    let dynamic = template
-                        .case
-                        .vertex_inputs
-                        .iter()
-                        .filter(|input| input.dynamic_stride)
-                        .filter_map(|input| slots.get(&input.location).copied())
-                        .collect::<Vec<_>>();
-                    (dynamic, &command.vertex_buffers)
-                }
-            };
-            let unstrided = bindings.iter().find(|binding| {
-                binding.attribute_stride.is_none() && dynamic.contains(&binding.index)
-            });
-            if let Some(binding) = unstrided {
-                return Err(vec![format!(
-                    "host command {} of command buffer ({}, {}) binds buffer index {} without a \
-                     stride, which its pipeline's dynamic layout reads: Metal's fetch reads it at \
-                     stride 2^32 - 1 there and the runtime refuses the command",
-                    command.index, resource.buffer_binding, resource.field_offset, binding.index
                 )]);
             }
         }

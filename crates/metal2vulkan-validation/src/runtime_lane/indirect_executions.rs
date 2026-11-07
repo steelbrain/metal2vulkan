@@ -1183,11 +1183,12 @@ fn inheriting_commands_run_the_encoder_s_state() {
 
 /// A command's kernel buffer set without a stride, where the pipeline's stage-in layout of
 /// `MTLBufferLayoutStrideDynamic` reads it, on a buffer that supports dynamic attribute strides,
-/// refuses the commit the runtime's own gap (`IndirectCommandUnstridedBuffer`): plain Metal takes
-/// such a command and completes it, and its fetch reads the buffer at stride 2^32 - 1, which the
-/// runtime's 32-bit fetch cannot place.
+/// is read at stride `2^32 - 1`, as plain Metal's fetch reads it (the record's 32-bit stride word;
+/// the stride form at `attributeStride:0xFFFFFFFF` read the same on an M3 Max under macOS 27.0.1):
+/// the plain setter's command and the stride form's at `2^32 - 1` commit, complete and leave the
+/// same output, which the case's own stride's does not.
 #[test]
-fn a_command_s_unstrided_stage_in_buffer_is_refused() {
+fn a_command_s_unstrided_stage_in_buffer_reads_at_the_record_s_stride() {
     on_device(|device, _| {
         let case = public_case(DYNAMIC).unwrap();
         let index = *case
@@ -1197,26 +1198,36 @@ fn a_command_s_unstrided_stage_in_buffer_is_refused() {
             .next()
             .expect("a dynamic layout");
         let pipeline = icb_state(device, &case).unwrap();
-        let resources = CaseResources::new(device, &case).unwrap();
-        let buffers = bound_buffers(device, &case.compute, &resources).unwrap();
-        let icb = icb(device, 1, true);
-        encode_command(&icb, 0, Some(&pipeline), &case.compute, &buffers).unwrap();
-        icb.indirect_compute_command_at(0)
-            .unwrap()
-            .set_kernel_buffer(Some(&buffers[&index]), 0, index)
-            .unwrap();
-        let queue = device.new_command_queue().unwrap();
-        let command_buffer = queue.command_buffer().unwrap();
-        let mut encoder = command_buffer.compute_command_encoder().unwrap();
-        make_resident(&mut encoder, &buffers, &resources);
-        encoder.execute_commands_in_buffer(&icb, 0..1).unwrap();
-        encoder.end_encoding().unwrap();
-        assert_eq!(
-            command_buffer.commit().err(),
-            Some(Error::NotImplemented(
-                RuntimeGap::IndirectCommandUnstridedBuffer { index }
-            ))
-        );
+        let run = |bind: &dyn Fn(&metal2vulkan_runtime::IndirectComputeCommand, &Buffer)| {
+            let resources = CaseResources::new(device, &case).unwrap();
+            let buffers = bound_buffers(device, &case.compute, &resources).unwrap();
+            let icb = icb(device, 1, true);
+            encode_command(&icb, 0, Some(&pipeline), &case.compute, &buffers).unwrap();
+            bind(
+                &icb.indirect_compute_command_at(0).unwrap(),
+                &buffers[&index],
+            );
+            let queue = device.new_command_queue().unwrap();
+            let command_buffer = queue.command_buffer().unwrap();
+            let mut encoder = command_buffer.compute_command_encoder().unwrap();
+            make_resident(&mut encoder, &buffers, &resources);
+            encoder.execute_commands_in_buffer(&icb, 0..1).unwrap();
+            encoder.end_encoding().unwrap();
+            complete(&command_buffer);
+            output(&case.compute, &buffers)
+        };
+        let plain = run(&|command, buffer| {
+            command.set_kernel_buffer(Some(buffer), 0, index).unwrap();
+        });
+        let wide = run(&|command, buffer| {
+            command
+                .set_kernel_buffer_with_stride(Some(buffer), 0, 0xFFFF_FFFF, index)
+                .unwrap();
+        });
+        let own = run(&|_, _| {});
+        assert_eq!(plain, wide);
+        assert_eq!(own, case.metal_output);
+        assert_ne!(plain, own);
     });
 }
 

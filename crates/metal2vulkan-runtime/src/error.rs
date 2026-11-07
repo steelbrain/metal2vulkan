@@ -1515,37 +1515,6 @@ pub enum RuntimeGap {
         /// The range's offset in the buffer.
         offset: u64,
     },
-    /// An executed indirect command's kernel or vertex buffer at `index` set without an attribute
-    /// stride (the plain setter, or the stride form at `MTLAttributeStrideStatic`), on an indirect
-    /// command buffer whose descriptor supports dynamic attribute strides, where its pipeline
-    /// state's `[[stage_in]]` or vertex-descriptor layout of `MTLBufferLayoutStrideDynamic` reads
-    /// the stride. Plain Metal takes the command, and its API validation layer stops it no more
-    /// than plain Metal does: the setters, the execution and the commit all return and the command
-    /// buffer completes, nothing faulting (an M3 Max under macOS 27.0.1, the layer off, on a buffer
-    /// of `ConcurrentDispatch` whose command bound its stage-in buffer with the plain setter and
-    /// with `MTLAttributeStrideStatic`).
-    ///
-    /// On that device the fetch reads the buffer at a stride of 2^32 - 1: the record's stride word
-    /// is 32 bits, and `MTLAttributeStrideStatic` truncates into it. Measured on an Apple M3 Max
-    /// under macOS 27.0.1 with markers planted at byte 2^32 - 1 and at byte 2^32 of a buffer of
-    /// 4 GiB + 256 bytes: element 1 read the byte 2^32 - 1 marker, never the byte 2^32 one, never
-    /// zero and never element 0's or element 1's own bytes, from a compute command and from a
-    /// render command alike (three runs each with the layer off, one with it on); the stride form
-    /// at `attributeStride:0xFFFFFFFF` read the same, while strides of 4 and 8 read element 1 of
-    /// those strides. Other devices and releases are unmeasured. The runtime refuses rather than
-    /// place a displacement it cannot: 2^32 - 1 does not fit the 32-bit fetch
-    /// [`StageInFetchPast4GiB`](Self::StageInFetchPast4GiB) and
-    /// [`VertexFetchPast4GiB`](Self::VertexFetchPast4GiB) name, and it holds no bytes 4 GiB on.
-    ///
-    /// A buffer whose descriptor does *not* support dynamic attribute strides is not this and is
-    /// taken: its records hold no stride word, so Metal's fetch reads stride 0, which the runtime
-    /// gives exactly (the same device, the plain setter reading element 1 at stride 0 in five runs
-    /// of five). Nor is the encoder's *own* dispatch or draw, which reads a buffer bound without a
-    /// stride at stride 0, as plain Metal reads it (`render/vertex_strides.rs`).
-    IndirectCommandUnstridedBuffer {
-        /// The buffer's index.
-        index: u32,
-    },
     /// A render pass whose custom sample positions Vulkan takes only through what the runtime
     /// does not build: a depth/stencil attachment of a caller's image not made with
     /// `VK_IMAGE_CREATE_SAMPLE_LOCATIONS_COMPATIBLE_DEPTH_BIT_EXT`, of a format the device does

@@ -461,7 +461,7 @@ pub(super) fn check_bound_buffer(
 /// every element past it, the bind offset reaching the first (`metal2vulkan-conformance`'s
 /// `attribute-stride-*` recordings, buffers of 512 and 64 bytes), which is a fetch at that stride:
 /// element 1 lies `2^32 - 1` bytes on, past the buffer (an indirect command buffer's command read
-/// the byte there in a buffer that holds it, `RuntimeGap::IndirectCommandUnstridedBuffer`).
+/// the byte there in a buffer that holds it, `indirect_execute::unstrided_stride`).
 /// Metal's API validation stops a draw bound so.
 pub(super) fn per_bind_stride(stride: u64) -> u32 {
     // Truncation is the measured answer.

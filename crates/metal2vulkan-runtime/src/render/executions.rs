@@ -263,12 +263,11 @@
 //!   (above): Metal lets a program write the records until it commits. A command's vertex buffer
 //!   set without an attribute stride, where its pipeline state's layout of
 //!   `MTLBufferLayoutStrideDynamic` reads the stride, on a buffer whose descriptor supports
-//!   dynamic attribute strides, is the runtime's own gap, as a compute encoder's kernel buffer is
-//!   (`NotImplemented(RuntimeGap::IndirectCommandUnstridedBuffer)`): plain Metal takes the command
-//!   and completes it, and its fetch reads the buffer at stride 2^32 - 1, which the 32-bit fetch
-//!   cannot place (the gap's doc). On a buffer without that support the records hold no stride
-//!   word and Metal reads stride 0, which the plan path gives exactly, so the command is taken, as
-//!   the encoder's own draw reads such a buffer at stride 0 (`render/vertex_strides.rs`).
+//!   dynamic attribute strides, is read at stride 2^32 - 1, as plain Metal's fetch reads it and as
+//!   a compute encoder's kernel buffer is (`indirect_execute::unstrided_stride`): vertex 0's
+//!   element, and zero for one past the buffer. On a buffer without that support the records hold
+//!   no stride word and Metal reads stride 0, which the plan path gives exactly, as the encoder's
+//!   own draw reads such a buffer at stride 0 (`render/vertex_strides.rs`).
 
 use super::bound::Bound;
 use super::mesh::MeshGrid;
@@ -304,7 +303,7 @@ use crate::indirect_command_buffer::{
     WrittenRecords,
 };
 use crate::indirect_dispatch;
-use crate::indirect_execute::{self, unstrided_buffer, ExecutionRange};
+use crate::indirect_execute::{self, unstrided_stride, ExecutionRange};
 use crate::kept_commands;
 use crate::pipeline::budget::Urgency;
 use crate::pipeline::RenderPipelineState;
@@ -339,10 +338,8 @@ use gpu::GpuForm;
 pub(super) use gpu::ReplayedDraws;
 use metal2vulkan::bind::indirect_commands::{Action, BufferStage, CommandRecord};
 use metal2vulkan::bind::{DrawCall, ReplayFaults, ViewSetup};
-use metal2vulkan::metal::{
-    IndexType, IndirectCommandType, PrimitiveTopologyClass, PrimitiveType, VertexStepFunction,
-};
-use metal2vulkan::pipeline::{CommandWrites, VertexStride};
+use metal2vulkan::metal::{IndexType, IndirectCommandType, PrimitiveTopologyClass, PrimitiveType};
+use metal2vulkan::pipeline::CommandWrites;
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Range;
@@ -1776,26 +1773,6 @@ fn pipeline_point_index_size(pipeline: &RenderPipelineState) -> Option<u64> {
     }
 }
 
-/// Whether `pipeline` reads vertex buffer `index` at the stride it is bound with: a layout of
-/// `MTLBufferLayoutStrideDynamic` (`VertexStride::PerBind`) whose step reads an element (a
-/// fixed-function binding of a nonzero divisor, or a pulled attribute of a step other than
-/// constant).
-fn reads_vertex_stride(pipeline: &RenderPipelineState, index: u32) -> bool {
-    let RenderStateKind::Graphics(state) = pipeline.kind() else {
-        return false;
-    };
-    let input = &state.base().vertex_input;
-    input
-        .bindings
-        .iter()
-        .any(|b| b.buffer_index == index && b.stride == VertexStride::PerBind && b.divisor != 0)
-        || input.pulled.iter().any(|a| {
-            a.buffer_index == index
-                && a.stride == VertexStride::PerBind
-                && a.step_function != VertexStepFunction::Constant
-        })
-}
-
 /// The object threadgroup memory lengths `record`'s mesh draw runs with: each it set, by index
 /// (`IndirectRenderCommand::set_object_threadgroup_memory_length`); one it set none of is 0.
 fn object_threadgroup_lengths(record: &CommandRecord) -> BTreeMap<u32, u32> {
@@ -2253,27 +2230,6 @@ impl RenderExecution {
                 encoder.object =
                     table(BufferStage::Object, descriptor.max_object_buffer_bind_count);
                 encoder.mesh = table(BufferStage::Mesh, descriptor.max_mesh_buffer_bind_count);
-                // A vertex buffer set without a stride that a dynamic layout reads, on a buffer
-                // that supports dynamic attribute strides: Metal takes the command and its fetch
-                // reads at stride 2^32 - 1, which the 32-bit fetch cannot place
-                // (`unstrided_buffer`). Without that support Metal reads stride 0, which the plan
-                // path gives exactly.
-                let table = &encoder.vertex;
-                let unstrided = encoder.pipeline.as_ref().and_then(|pipeline| {
-                    let bound = table
-                        .buffers
-                        .keys()
-                        .copied()
-                        .filter(|index| !table.attribute_strides.contains_key(index));
-                    unstrided_buffer(
-                        descriptor.support_dynamic_attribute_stride,
-                        bound,
-                        |index| reads_vertex_stride(pipeline, index),
-                    )
-                });
-                if let Some(refusal) = unstrided {
-                    return Err(refusal);
-                }
             }
             match draw {
                 Draw::Primitives(assembly, draw) => {
@@ -2718,10 +2674,25 @@ impl RenderExecution {
                 continue;
             };
             table.buffers.insert(index, bound);
-            if let Some(stride) = binding.attribute_stride {
-                table
-                    .attribute_strides
-                    .insert(index, u32::try_from(stride).unwrap_or(u32::MAX));
+            // A vertex buffer set without a stride is read by a dynamic layout at
+            // `unstrided_stride`'s, as plain Metal's fetch reads it.
+            let unstrided = match stage {
+                BufferStage::Vertex => {
+                    unstrided_stride(self.icb.descriptor().support_dynamic_attribute_stride)
+                }
+                _ => None,
+            };
+            match binding.attribute_stride {
+                Some(stride) => {
+                    table
+                        .attribute_strides
+                        .insert(index, u32::try_from(stride).unwrap_or(u32::MAX));
+                }
+                None => {
+                    if let Some(stride) = unstrided {
+                        table.attribute_strides.insert(index, stride);
+                    }
+                }
             }
         }
         table

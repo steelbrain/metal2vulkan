@@ -222,81 +222,18 @@ fn an_execution_range_metal_takes_is_the_runtime_s_gap() {
     );
 }
 
-/// An executed indirect command's buffer bound without the attribute stride its pipeline state's
-/// layout of `MTLBufferLayoutStrideDynamic` reads is input plain Metal takes: the setters, the
-/// execution and the commit return and the command buffer completes, nothing faulting (an M3 Max
-/// under macOS 27.0.1, the API validation layer off, our probe `unstrided.m`; and an M3 Max and an
-/// M4 before it, with and without the layer). On a buffer whose descriptor supports dynamic
-/// attribute strides the fetch reads at stride 2^32 - 1 there, which the 32-bit fetch cannot
-/// place, so the runtime has no exact answer, which makes this its own gap and never misuse
-/// ([`unstrided_buffer`], the decision both encoders' executions make): the lowest index that is
-/// both bound without a stride and read by such a layout is refused, and a command whose layouts
-/// read none of them is taken.
+/// An executed indirect command's buffer bound without an attribute stride (the plain setter, or
+/// the stride form at `MTLAttributeStrideStatic`) is read by a layout of
+/// `MTLBufferLayoutStrideDynamic` at the stride plain Metal's fetch reads it at: `2^32 - 1` on an
+/// indirect command buffer whose descriptor supports dynamic attribute strides (the record's
+/// 32-bit stride word; an M3 Max under macOS 27.0.1 read element 1 at byte `2^32 - 1` of a buffer
+/// past 4 GiB, from a compute and a render command alike), and the plan path's stride 0 for a
+/// binding without a stride on one that does not, whose records hold no stride word (the plain
+/// setter's command read element 1 at stride 0 in five runs of five) -- decided by the
+/// descriptor's bit and by nothing else ([`unstrided_stride`]).
 #[test]
-fn an_unstrided_executed_buffer_is_the_runtime_s_gap_not_misuse() {
-    use crate::error::{Error, RuntimeGap};
-    use crate::indirect_execute::unstrided_buffer;
-    let gap = |index| {
-        Some(Error::NotImplemented(
-            RuntimeGap::IndirectCommandUnstridedBuffer { index },
-        ))
-    };
-    // Nothing bound without a stride: nothing refused, whatever the layouts read.
-    assert_eq!(unstrided_buffer(true, [], |_| true), None);
-    // Bound without a stride only at indices no dynamic layout reads: taken, as Metal takes it.
-    assert_eq!(unstrided_buffer(true, [1, 3], |index| index == 2), None);
-    assert_eq!(unstrided_buffer(true, [1, 3], |_| false), None);
-    // The lowest index that is both, whatever the order the indices come in.
-    assert_eq!(
-        unstrided_buffer(true, [3, 1, 7], |index| index != 7),
-        gap(1)
-    );
-    assert_eq!(
-        unstrided_buffer(true, [3, 1, 7], |index| index == 7),
-        gap(7)
-    );
-    assert_eq!(unstrided_buffer(true, [0], |_| true), gap(0));
-    // The refusal is the runtime's own gap, never `Error::Invalid`.
-    for refusal in [
-        unstrided_buffer(true, [0], |_| true),
-        unstrided_buffer(true, [30], |_| true),
-    ] {
-        assert!(
-            matches!(refusal, Some(Error::NotImplemented(_))),
-            "{refusal:?}"
-        );
-    }
-}
-
-/// A command of an indirect command buffer whose descriptor does *not* support dynamic attribute
-/// strides holds no stride word in its records at all, so Metal's fetch reads a buffer bound there
-/// at stride 0, which the plan path gives exactly (`bind::dispatch`'s `PushField::StageInStride`
-/// and `bind::graphics`'s per-bind stride read a binding without a stride at 0; the fetch itself
-/// is `engine_kernel_stage_in`'s `a_dynamic_layout_reads_the_bound_stride`, whose unbound stride
-/// reads 0). Measured on an Apple M3 Max under macOS 27.0.1, the API validation layer silent
-/// there: the plain setter's command read element 1 at stride 0 in five runs of five. So the gap
-/// is refused only with that support, where the fetch reads at stride 2^32 - 1
-/// ([`unstrided_buffer`]) -- the two halves of one input, decided by the descriptor's bit and by
-/// nothing else.
-#[test]
-fn an_unstrided_buffer_without_dynamic_stride_support_reads_stride_zero() {
-    use crate::error::{Error, RuntimeGap};
-    use crate::indirect_execute::unstrided_buffer;
-    // Every shape the supporting buffer refuses is taken without the support, at every index a
-    // dynamic layout reads: the execution goes on to the plan path's stride 0.
-    for unstrided in [vec![0], vec![30], vec![3, 1, 7]] {
-        let refusal = unstrided_buffer(false, unstrided.iter().copied(), |_| true);
-        assert_eq!(refusal, None, "without support, {unstrided:?}");
-        let index = unstrided.iter().copied().min().expect("an index");
-        assert_eq!(
-            unstrided_buffer(true, unstrided.iter().copied(), |_| true),
-            Some(Error::NotImplemented(
-                RuntimeGap::IndirectCommandUnstridedBuffer { index }
-            )),
-            "with support, {unstrided:?}"
-        );
-    }
-    // Nothing a layout reads: taken either way.
-    assert_eq!(unstrided_buffer(false, [1, 3], |_| false), None);
-    assert_eq!(unstrided_buffer(true, [1, 3], |_| false), None);
+fn an_unstrided_executed_buffer_reads_the_stride_metal_reads() {
+    use crate::indirect_execute::unstrided_stride;
+    assert_eq!(unstrided_stride(true), Some(u32::MAX));
+    assert_eq!(unstrided_stride(false), None);
 }

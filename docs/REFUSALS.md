@@ -28,7 +28,7 @@ Columns:
 | Kind | Variants | With a site | Reach system | Reach app | Reach rare | Reach none | Unassessed |
 |---|---|---|---|---|---|---|---|
 | Translator and front-end refusals | 128 | 128 | 6 | 32 | 71 | 19 | 0 |
-| Runtime gaps | 74 | 74 | 1 | 8 | 47 | 18 | 0 |
+| Runtime gaps | 73 | 73 | 1 | 8 | 46 | 18 | 0 |
 | Apple-only calls | 4 | 4 | 0 | 0 | 0 | 4 | 0 |
 | Binder refusals at a device limit | 9 | 9 | 0 | 1 | 7 | 1 | 0 |
 | Translation caps | 14 | 14 | 0 | 0 | 7 | 7 | 0 |
@@ -42,7 +42,7 @@ Columns:
 | Kind | `metal-measured` | `metal-documented` | `metal-takes` | `device` | `ours` | `unknown` | `delegated` | `-` |
 |---|---|---|---|---|---|---|---|---|
 | Translator and front-end refusals | 0 | 0 | 0 | 48 | 57 | 0 | 0 | 23 |
-| Runtime gaps | 0 | 0 | 0 | 0 | 74 | 0 | 0 | 0 |
+| Runtime gaps | 0 | 0 | 0 | 0 | 73 | 0 | 0 | 0 |
 | Apple-only calls | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 4 |
 | Binder refusals at a device limit | 0 | 0 | 0 | 9 | 0 | 0 | 0 | 0 |
 | Translation caps | 0 | 0 | 0 | 0 | 14 | 0 | 0 | 0 |
@@ -212,7 +212,6 @@ Columns:
 | `IndirectCommandPastSize` | A command of an indirect command buffer at or past its size (`indirectComputeCommandAtIndex:`, `indirectRenderCommandAtIndex:`) | every device (runtime piece not built) | `ours` | 1: `crates/metal2vulkan-runtime/src/indirect_command_buffer.rs (command_at)` | `none`: an indirect command at or past the buffer's size |
 | `ExecutionRangePastBuffer` | An `MTLIndirectCommandBufferExecutionRange` whose 8 bytes run past the buffer it is read from (`execute_commands_in_buffer_indirect`, a compute... | every device (runtime piece not built) | `ours` | 1: `crates/metal2vulkan-runtime/src/indirect_execute.rs (check_range_buffer)` | `rare`: an execution range whose 8 bytes run past its buffer |
 | `ExecutionRangeOffFour` | An `MTLIndirectCommandBufferExecutionRange` read at an offset that is not a multiple of 4 bytes (`execute_commands_in_buffer_indirect`, a compute... | every device (runtime piece not built) | `ours` | 1: `crates/metal2vulkan-runtime/src/indirect_execute.rs (check_range_buffer)` | `rare`: an execution range at an offset off 4 bytes |
-| `IndirectCommandUnstridedBuffer` | An executed indirect command's kernel or vertex buffer at `index` set without an attribute stride (the plain setter, or the stride form at... | every device (runtime piece not built) | `ours` | 1: `crates/metal2vulkan-runtime/src/indirect_execute.rs (unstrided_buffer)` | `rare`: an executed indirect command's buffer bound without the attribute stride the dynamic layout of its pipeline reads, where the pipeline's descriptor turned `support_dynamic_attribute_stride` on (with it off there is no stride word, and the runtime answers the bind at stride 0 as Metal does) |
 | `SamplePositionsAtBegin` | A render pass whose custom sample positions Vulkan takes only through what the runtime does not build | every device (runtime piece not built) | `ours` | 3: `crates/metal2vulkan-runtime/src/depth_stencil_scratch.rs (stencil_scratch)`, `crates/metal2vulkan-runtime/src/render_pass.rs (positioned_stand_in)` (+1) | `rare`: custom sample positions Vulkan takes only at begin |
 | `InterpolateAtSampleWithPositions` | A draw at custom sample positions (`setSamplePositions:count:`) through a pipeline whose fragment function reads an `interpolant` at a sample it... | every device (runtime piece not built) | `ours` | 1: `crates/metal2vulkan-runtime/src/render.rs (settle_draw)` | `rare`: interpolate_at_sample in a pass at custom sample positions |
 | `SharedEventAcrossDevices` | A shared event handle opened on a device other than its event's | every device (runtime piece not built) | `ours` | 1: `crates/metal2vulkan-runtime/src/event.rs (new_shared_event_with_handle)` | `rare`: a shared event opened on another device |
@@ -719,7 +718,6 @@ Each refusal's sites, with the function that builds it.
 - `gap::IndirectCommandPastSize`: `crates/metal2vulkan-runtime/src/indirect_command_buffer.rs (command_at)`
 - `gap::ExecutionRangePastBuffer`: `crates/metal2vulkan-runtime/src/indirect_execute.rs (check_range_buffer)`
 - `gap::ExecutionRangeOffFour`: `crates/metal2vulkan-runtime/src/indirect_execute.rs (check_range_buffer)`
-- `gap::IndirectCommandUnstridedBuffer`: `crates/metal2vulkan-runtime/src/indirect_execute.rs (unstrided_buffer)`
 - `gap::SamplePositionsAtBegin`: `crates/metal2vulkan-runtime/src/depth_stencil_scratch.rs (stencil_scratch)`; `crates/metal2vulkan-runtime/src/render_pass.rs (positioned_stand_in)`; `crates/metal2vulkan-runtime/src/sample_positions.rs (refusal_error)`
 - `gap::InterpolateAtSampleWithPositions`: `crates/metal2vulkan-runtime/src/render.rs (settle_draw)`
 - `gap::SharedEventAcrossDevices`: `crates/metal2vulkan-runtime/src/event.rs (new_shared_event_with_handle)`

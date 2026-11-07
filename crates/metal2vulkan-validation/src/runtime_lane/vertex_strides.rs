@@ -13,10 +13,8 @@
 //!   bits, and `MTLAttributeStrideStatic` at `2^32 - 1`: vertex 0's element and zero past it, as
 //!   plain Metal on an M3 Max reads it.
 //! - An executed indirect render command's vertex buffer set without a stride under a dynamic
-//!   layout, on a command buffer whose descriptor supports dynamic attribute strides, refuses the
-//!   commit the runtime's own gap (`IndirectCommandUnstridedBuffer`): plain Metal takes such a
-//!   command and completes it, and its fetch reads the buffer at stride 2^32 - 1, which the
-//!   runtime's 32-bit fetch cannot place.
+//!   layout, on a command buffer whose descriptor supports dynamic attribute strides, reads at
+//!   stride 2^32 - 1, as plain Metal's fetch reads it: vertex 0's element and zero past it.
 
 use super::{
     buffer_with, layer_reported_nothing_at_all, read_buffer, validated_device, Messages,
@@ -260,12 +258,12 @@ fn executed(
 }
 
 /// An executed indirect render command's vertex buffer set without a stride under a dynamic
-/// layout, on a command buffer that supports dynamic attribute strides, refuses the commit the
-/// runtime's own gap (`IndirectCommandUnstridedBuffer`), where plain Metal takes the command and
-/// its fetch reads the buffer at stride 2^32 - 1; the same command with the stride form draws as
-/// the encoder's draw at that stride.
+/// layout, on a command buffer that supports dynamic attribute strides, is read at stride
+/// `2^32 - 1`, as plain Metal's fetch reads it (the record's 32-bit stride word): vertex 0 reads
+/// word 0 and every vertex past it zero, its element past the buffer, as the stride form at
+/// `2^32 - 1` reads; the stride form at another stride draws as the encoder's draw at that stride.
 #[test]
-fn an_executed_command_s_unstrided_vertex_buffer_is_refused() {
+fn an_executed_command_s_unstrided_vertex_buffer_reads_at_the_record_s_stride() {
     let cache = ScratchCache::new().unwrap();
     let messages = Messages::default();
     {
@@ -280,10 +278,15 @@ fn an_executed_command_s_unstrided_vertex_buffer_is_refused() {
                 0,
                 0
             )),
-            Err(Error::NotImplemented(
-                RuntimeGap::IndirectCommandUnstridedBuffer { index: 0 }
-            )),
+            Ok(read_static()),
             "the plain form"
+        );
+        assert_eq!(
+            executed(&queue, &pipeline, &data, |c, b| {
+                c.set_vertex_buffer_with_stride(Some(b), 0, 0xFFFF_FFFF, 0)
+            }),
+            Ok(read_static()),
+            "the stride form at 2^32 - 1"
         );
         assert_eq!(
             executed(&queue, &pipeline, &data, |c, b| {

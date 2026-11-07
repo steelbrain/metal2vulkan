@@ -48,13 +48,11 @@
 //!   32 bits, at an index a stage-in layout of `MTLBufferLayoutStrideDynamic` reads, is refused
 //!   (`Unsupported{KernelStageIn, NotImplemented}`): Metal's answer is not measured. A kernel
 //!   buffer set without a stride there, on a buffer whose descriptor supports dynamic attribute
-//!   strides, is refused the runtime's own gap
-//!   (`NotImplemented(RuntimeGap::IndirectCommandUnstridedBuffer)`, `unstrided_buffer`): plain
-//!   Metal takes the command and completes it, and its fetch reads the buffer at stride 2^32 - 1,
-//!   which the 32-bit fetch cannot place (the gap's doc). On a buffer without that support the
-//!   records hold no stride word and Metal reads stride 0, which the plan path gives exactly, so
-//!   the command is taken; and an inheriting buffer's command reads the encoder's buffer set
-//!   without one at stride 0, as the encoder's own dispatch does. A command with no dispatch, no pipeline state, or a threadgroup
+//!   strides, is read at stride 2^32 - 1, as plain Metal's fetch reads it (`unstrided_stride`):
+//!   element 0, and zero for an element past the buffer. On a buffer without that support the
+//!   records hold no stride word and Metal reads stride 0, which the plan path gives exactly; and
+//!   an inheriting buffer's command reads the encoder's buffer set without one at stride 0, as the
+//!   encoder's own dispatch does. A command with no dispatch, no pipeline state, or a threadgroup
 //!   that is empty or holds more threads than the state's `max_total_threads_per_threadgroup` runs
 //!   nothing, as Metal's runs nothing, and its neighbours run (ruling a). A
 //!   command whose dispatch the plan path refuses refuses the commit, with that error, or fails the
@@ -473,17 +471,6 @@ impl Execute {
                     Unsupported::not_implemented(Feature::KernelStageIn),
                 )));
             }
-            // A buffer set without a stride that such a layout reads, on a buffer that supports
-            // dynamic attribute strides: Metal takes the command and its fetch reads at stride
-            // 2^32 - 1, which the 32-bit fetch cannot place (`unstrided_buffer`). Without that
-            // support Metal reads stride 0, which the plan path gives exactly.
-            if let Some(refusal) = unstrided_buffer(
-                self.icb.descriptor().support_dynamic_attribute_stride,
-                bindings.unstrided.iter().copied(),
-                |index| pipeline.reads_stage_in_stride(index),
-            ) {
-                return Err(refusal);
-            }
             let tables = bindings.tables(self, pipeline, record, residency, forms)?;
             record_dispatch(core, &tables, CALL, dispatch)?;
             ran = true;
@@ -672,7 +659,6 @@ impl Execute {
         let descriptor = *self.icb.descriptor();
         let mut table = ArgumentTable::default();
         let mut wide_strides = Vec::new();
-        let mut unstrided = Vec::new();
         if !descriptor.inherit_buffers {
             let bindings = record.bindings.buffers(BufferStage::Kernel);
             for (index, binding) in (0..descriptor.max_kernel_buffer_bind_count).zip(bindings) {
@@ -689,13 +675,20 @@ impl Execute {
                 };
                 table.buffers.insert(index, bound);
                 // Only a stage-in layout of `MTLBufferLayoutStrideDynamic` reads the stride;
-                // `record` refuses one past 32 bits there.
+                // `record` refuses one past 32 bits there. One set without a stride reads at
+                // [`unstrided_stride`]'s.
                 match binding.attribute_stride.map(u32::try_from) {
                     Some(Ok(stride)) => {
                         table.attribute_strides.insert(index, stride);
                     }
                     Some(Err(_)) => wide_strides.push(index),
-                    None => unstrided.push(index),
+                    None => {
+                        if let Some(stride) =
+                            unstrided_stride(descriptor.support_dynamic_attribute_stride)
+                        {
+                            table.attribute_strides.insert(index, stride);
+                        }
+                    }
                 }
             }
         }
@@ -708,37 +701,25 @@ impl Execute {
             table,
             lengths,
             wide_strides,
-            unstrided,
         }
     }
 }
 
-/// The refusal of an executed indirect command's buffers, where `unstrided` names the indices it
-/// bound without an attribute stride and `reads_stride` the indices its pipeline state's layout of
-/// `MTLBufferLayoutStrideDynamic` reads: the lowest index that is both, as
-/// [`RuntimeGap::IndirectCommandUnstridedBuffer`], and `None` where no layout reads one. Plain
-/// Metal takes such a command, so this is the runtime's own gap and not misuse (the gap's doc).
-/// Both encoders' executions decide it so: a kernel buffer's stage-in layout here, a vertex
-/// buffer's vertex-descriptor layout in `render/executions.rs`.
-///
-/// `dynamic_strides` is the indirect command buffer descriptor's
-/// `support_dynamic_attribute_stride`. A buffer without it holds no stride word in its records at
-/// all, so Metal's fetch reads stride 0, which the plan path gives exactly (`bind::dispatch` and
-/// `bind::graphics` read a binding bound without a stride at stride 0): nothing is refused there,
-/// whatever the layouts read.
-pub(crate) fn unstrided_buffer(
-    dynamic_strides: bool,
-    unstrided: impl IntoIterator<Item = u32>,
-    reads_stride: impl Fn(u32) -> bool,
-) -> Option<Error> {
-    if !dynamic_strides {
-        return None;
-    }
-    unstrided
-        .into_iter()
-        .filter(|&index| reads_stride(index))
-        .min()
-        .map(|index| Error::NotImplemented(RuntimeGap::IndirectCommandUnstridedBuffer { index }))
+/// The stride an executed indirect command's buffer set without one (the plain setter, or the
+/// stride form at `MTLAttributeStrideStatic`) is read at by a layout of
+/// `MTLBufferLayoutStrideDynamic`, on an indirect command buffer whose descriptor supports dynamic
+/// attribute strides where `dynamic_strides`: `2^32 - 1`, the record's 32-bit stride word that
+/// `MTLAttributeStrideStatic` truncates into, which the fetch places past 32 bits (an element past
+/// the buffer reads zero). Measured on an Apple M3 Max under macOS 27.0.1, with markers planted at
+/// byte `2^32 - 1` and at byte `2^32` of a buffer of 4 GiB + 256 bytes: element 1 read the byte
+/// `2^32 - 1` marker, never the byte `2^32` one, from a compute command and from a render command
+/// alike, and the stride form at `attributeStride:0xFFFFFFFF` read the same. `None` without that
+/// support: the records hold no stride word, so Metal's fetch reads stride 0, which the plan path
+/// gives a binding without a stride (the plain setter's command read element 1 at stride 0 in five
+/// runs of five). Both encoders' executions read it: a kernel buffer's stage-in layout here, a
+/// vertex buffer's vertex-descriptor layout in `render/executions.rs`.
+pub(crate) fn unstrided_stride(dynamic_strides: bool) -> Option<u32> {
+    dynamic_strides.then_some(u32::MAX)
 }
 
 /// Announce `Degradation::IndirectNilBufferOffset` for a command's `binding` at `index`, a nil
@@ -801,8 +782,6 @@ struct Bindings {
     lengths: BTreeMap<u32, u32>,
     /// The kernel buffer indices bound with a stride past 32 bits.
     wide_strides: Vec<u32>,
-    /// The kernel buffer indices bound without a stride.
-    unstrided: Vec<u32>,
 }
 
 impl Bindings {
