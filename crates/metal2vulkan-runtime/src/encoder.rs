@@ -1584,10 +1584,9 @@ impl EncoderCore {
             self.counts().command_noted_as_before();
             return Ok(());
         }
-        let fresh = noted.fresh(uses, into);
-        self.record_aliased(stages, fresh);
+        let record = |fresh: &[Use<ResourceKey>]| self.record_aliased(stages, fresh);
+        noted.note_fresh(stages, (uses, resident), into, record);
         self.touch_reaching(uses, resident);
-        noted.note(stages, (uses, resident), into);
         Ok(())
     }
 
@@ -1638,15 +1637,16 @@ impl EncoderCore {
             self.counts().command_noted_as_before();
             return Ok(());
         }
-        let fresh = noted.fresh_draw((uses, prefix.prefix), into);
-        let recorded = fresh.len();
-        self.record_aliased(stages, fresh);
+        let record = |fresh: &[Use<ResourceKey>]| {
+            self.record_aliased(stages, fresh);
+            fresh.len()
+        };
+        let recorded = noted.note_draw_fresh(stages, (uses, resident, prefix), into, record);
         let rebinds = self.device().shared().rebinds.any();
         let touched = noted.touched(prefix.prefix, (into.core, rebinds));
         self.touch_draw((uses, resident), touched, rebinds);
-        noted.note_draw(stages, (uses, resident, prefix), into);
-        // The uses of what the encoder made resident it walked: recorded whole (`fresh_draw`
-        // gave them all), or touched.
+        // The uses of what the encoder made resident it walked: recorded whole
+        // (`note_draw_fresh` gave them all), or touched.
         if touched == 0 || recorded == uses.len() {
             self.counts().resident_uses_noted(len as u64);
         }
