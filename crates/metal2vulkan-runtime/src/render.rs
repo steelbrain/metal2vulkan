@@ -8547,8 +8547,8 @@ impl RenderLowering {
         // (`DriverFact::InterlockedDrawsRaceUnderLoad`), a draw that reaches storage an earlier
         // draw of the instance wrote records into a new instance, after the one that wrote it, in
         // place of the barrier between them (`InterlockedStorage`).
-        let storage_split = driver_facts.contains(&DriverFact::InterlockedDrawsRaceUnderLoad)
-            && interlocked.meets(self.current.interlocked_writes);
+        let storage_split = interlocked.meets(self.current.interlocked_writes)
+            && driver_facts.contains(&DriverFact::InterlockedDrawsRaceUnderLoad);
         let failing = match &failing_state {
             None => None,
             Some(state) => {
