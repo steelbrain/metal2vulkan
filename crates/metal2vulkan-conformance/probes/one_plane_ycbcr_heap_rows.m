@@ -39,6 +39,7 @@
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -321,6 +322,197 @@ static void heapMode(void) {
     }
 }
 
+/// Print the offsets `at[0..n)` of a row's texels as runs of texels `unit` bytes apart.
+static void printRuns(const long *at, NSUInteger n, NSUInteger unit) {
+    NSUInteger i = 0;
+    while (i < n) {
+        NSUInteger j = i;
+        while (j + 1 < n && at[j] >= 0 && at[j + 1] == at[j] + (long)unit) {
+            j++;
+        }
+        printf(" %ld+%lu", at[i], (unsigned long)(j - i + 1));
+        i = j + 1;
+    }
+    printf("\n");
+}
+
+/// The map question for one format and shape: each texel's index written into the texture (2 or
+/// 4 bytes, little-endian), the heap's bytes read and each unit decoded back to the texel it
+/// holds; then the heap's bytes a pattern of their unit offsets, the texture read out, and each
+/// texel's value its offset. Printed per row (up to 8 rows, each slice): the offsets of its texels
+/// as runs, written and read.
+static void mapCase(NSUInteger format, const struct shape *s) {
+    NSUInteger unit = texelBytes(format);
+    MTLTextureDescriptor *d = descriptorOf(format, s, MTLTextureUsageShaderRead,
+                                           MTLStorageModePrivate);
+    MTLSizeAndAlign sa = [gDevice heapTextureSizeAndAlignWithDescriptor:d];
+    NSUInteger heapBytes = (sa.size * 4 + 65536 + 16383) & ~(NSUInteger)16383;
+    MTLHeapDescriptor *hd = [MTLHeapDescriptor new];
+    hd.type = MTLHeapTypePlacement;
+    hd.storageMode = MTLStorageModePrivate;
+    hd.hazardTrackingMode = MTLHazardTrackingModeUntracked;
+    hd.size = heapBytes;
+    id<MTLHeap> heap = [gDevice newHeapWithDescriptor:hd];
+    const MTLResourceOptions options =
+        MTLResourceStorageModePrivate | MTLResourceHazardTrackingModeUntracked;
+    id<MTLBuffer> over = [heap newBufferWithLength:heap.size options:options offset:0];
+    id<MTLTexture> t = [heap newTextureWithDescriptor:d offset:0];
+    NSUInteger h = (s->type == MTLTextureType1D || s->type == MTLTextureType1DArray) ? 1 : s->height;
+    NSUInteger w = s->width, slices = s->slices, row = w * unit, image = row * h;
+    printf("map %lu %s answer=%lu align=%lu texture=%s\n", (unsigned long)format, s->name,
+           (unsigned long)sa.size, (unsigned long)sa.align, t ? "made" : "nil");
+    if (!t || !over) {
+        return;
+    }
+    NSUInteger heapLength = over.length;
+    // Write: texel k of slice z holds k + 1 + z * w * h (0 is the fill).
+    id<MTLCommandBuffer> cb = [gQueue commandBuffer];
+    id<MTLBlitCommandEncoder> blit = [cb blitCommandEncoder];
+    [blit fillBuffer:over range:NSMakeRange(0, heapLength) value:0];
+    [blit endEncoding];
+    waitFor(cb);
+    for (NSUInteger z = 0; z < slices; z++) {
+        id<MTLBuffer> src = sharedBuffer(image);
+        uint8_t *p = src.contents;
+        for (NSUInteger k = 0; k < w * h; k++) {
+            uint32_t v = (uint32_t)(k + 1 + z * w * h);
+            memcpy(p + k * unit, &v, unit);
+        }
+        cb = [gQueue commandBuffer];
+        blit = [cb blitCommandEncoder];
+        [blit copyFromBuffer:src
+                   sourceOffset:0
+              sourceBytesPerRow:row
+            sourceBytesPerImage:image
+                     sourceSize:MTLSizeMake(w, h, 1)
+                      toTexture:t
+               destinationSlice:z
+               destinationLevel:0
+              destinationOrigin:MTLOriginMake(0, 0, 0)];
+        [blit endEncoding];
+        waitFor(cb);
+    }
+    id<MTLBuffer> back = sharedBuffer(heapLength);
+    cb = [gQueue commandBuffer];
+    blit = [cb blitCommandEncoder];
+    [blit copyFromBuffer:over sourceOffset:0 toBuffer:back destinationOffset:0 size:heapLength];
+    [blit endEncoding];
+    waitFor(cb);
+    NSUInteger count = w * h * slices;
+    long *where = malloc(sizeof(long) * count);
+    NSUInteger *seen = calloc(count, sizeof(NSUInteger));
+    for (NSUInteger k = 0; k < count; k++) {
+        where[k] = -1;
+    }
+    const uint8_t *b = back.contents;
+    NSUInteger stray = 0, last = 0;
+    for (NSUInteger off = 0; off + unit <= heapLength; off += unit) {
+        uint32_t v = 0;
+        memcpy(&v, b + off, unit);
+        if (v == 0) {
+            continue;
+        }
+        if (v > count) {
+            stray++;
+            continue;
+        }
+        if (where[v - 1] < 0) {
+            where[v - 1] = (long)off;
+        }
+        seen[v - 1]++;
+        last = off + unit;
+    }
+    NSUInteger missing = 0, twice = 0;
+    for (NSUInteger k = 0; k < count; k++) {
+        missing += seen[k] == 0;
+        twice += seen[k] > 1;
+    }
+    printf("  written: last byte %lu, missing %lu, twice %lu, stray units %lu\n",
+           (unsigned long)last, (unsigned long)missing, (unsigned long)twice,
+           (unsigned long)stray);
+    for (NSUInteger z = 0; z < slices; z++) {
+        for (NSUInteger y = 0; y < h && y < 8; y++) {
+            printf("  w z%lu y%lu:", (unsigned long)z, (unsigned long)y);
+            printRuns(where + z * w * h + y * w, w, unit);
+        }
+    }
+    // Read: the heap's units hold their unit offsets + 1.
+    id<MTLBuffer> offsets = sharedBuffer(heapLength);
+    uint8_t *o = offsets.contents;
+    for (NSUInteger off = 0; off + unit <= heapLength; off += unit) {
+        uint32_t v = (uint32_t)(off / unit + 1);
+        memcpy(o + off, &v, unit);
+    }
+    cb = [gQueue commandBuffer];
+    blit = [cb blitCommandEncoder];
+    [blit copyFromBuffer:offsets sourceOffset:0 toBuffer:over destinationOffset:0 size:heapLength];
+    [blit endEncoding];
+    waitFor(cb);
+    for (NSUInteger z = 0; z < slices; z++) {
+        id<MTLBuffer> out = sharedBuffer(image);
+        cb = [gQueue commandBuffer];
+        blit = [cb blitCommandEncoder];
+        [blit copyFromTexture:t
+                         sourceSlice:z
+                         sourceLevel:0
+                        sourceOrigin:MTLOriginMake(0, 0, 0)
+                          sourceSize:MTLSizeMake(w, h, 1)
+                            toBuffer:out
+                   destinationOffset:0
+              destinationBytesPerRow:row
+            destinationBytesPerImage:image];
+        [blit endEncoding];
+        waitFor(cb);
+        const uint8_t *q = out.contents;
+        for (NSUInteger y = 0; y < h && y < 8; y++) {
+            long at[4096];
+            for (NSUInteger x = 0; x < w && x < 4096; x++) {
+                uint32_t v = 0;
+                memcpy(&v, q + y * row + x * unit, unit);
+                at[x] = v ? (long)(v - 1) * (long)unit : -1;
+            }
+            printf("  r z%lu y%lu:", (unsigned long)z, (unsigned long)y);
+            printRuns(at, w < 4096 ? w : 4096, unit);
+        }
+    }
+    free(where);
+    free(seen);
+    fflush(stdout);
+}
+
+static const struct shape kMapShapes[] = {
+    {"2d-1x3", MTLTextureType2D, 1, 3, 1, 1, 1},
+    {"2d-2x3", MTLTextureType2D, 2, 3, 1, 1, 1},
+    {"2d-3x3", MTLTextureType2D, 3, 3, 1, 1, 1},
+    {"2d-4x3", MTLTextureType2D, 4, 3, 1, 1, 1},
+    {"2d-5x3", MTLTextureType2D, 5, 3, 1, 1, 1},
+    {"2d-6x3", MTLTextureType2D, 6, 3, 1, 1, 1},
+    {"2d-7x3", MTLTextureType2D, 7, 3, 1, 1, 1},
+    {"2d-10x3", MTLTextureType2D, 10, 3, 1, 1, 1},
+    {"2d-12x3", MTLTextureType2D, 12, 3, 1, 1, 1},
+    {"2d-13x7", MTLTextureType2D, 13, 7, 1, 1, 1},
+    {"2d-20x3", MTLTextureType2D, 20, 3, 1, 1, 1},
+    {"2d-24x3", MTLTextureType2D, 24, 3, 1, 1, 1},
+    {"2d-33x3", MTLTextureType2D, 33, 3, 1, 1, 1},
+    {"2d-100x30", MTLTextureType2D, 100, 30, 1, 1, 1},
+    {"2darray-13x7x3", MTLTextureType2DArray, 13, 7, 1, 3, 1},
+    {"2darray-6x3x2", MTLTextureType2DArray, 6, 3, 1, 2, 1},
+};
+
+static void mapMode(int argc, const char **argv) {
+    for (NSUInteger f = 0; f < sizeof kFormats / sizeof kFormats[0]; f++) {
+        NSUInteger format = kFormats[f];
+        if (argc > 2 && (NSUInteger)atoi(argv[2]) != format) {
+            continue;
+        }
+        for (NSUInteger i = 0; i < sizeof kMapShapes / sizeof kMapShapes[0]; i++) {
+            @autoreleasepool {
+                mapCase(format, &kMapShapes[i]);
+            }
+        }
+    }
+}
+
 /// One row-length case of `rows`, in a process of its own: a copy in at `bytesPerRow`, by a blit
 /// (`cpu` false) or `replaceRegion:` (`cpu` true), then the texture read back at its packed row.
 static void rowsCase(NSUInteger format, MTLStorageMode mode, bool cpu, NSUInteger bytesPerRow) {
@@ -355,7 +547,8 @@ static void rowsCase(NSUInteger format, MTLStorageMode mode, bool cpu, NSUIntege
           destinationOrigin:MTLOriginMake(0, 0, 0)];
     [blit endEncoding];
     waitFor(cb);
-    NSUInteger length = bytesPerRow * side;
+    // The source holds every row a copy reads from y x bytesPerRow: the last row whole.
+    NSUInteger length = bytesPerRow * (side - 1) + packed;
     id<MTLBuffer> src = sharedBuffer(length);
     uint8_t *p = src.contents;
     for (NSUInteger i = 0; i < length; i++) {
@@ -430,6 +623,41 @@ static void rowsCase(NSUInteger format, MTLStorageMode mode, bool cpu, NSUIntege
         printf("%02x", q[packed + x]);
     }
     printf("\n");
+    if (!cpu) {
+        // The texture's packed rows (`q`) copied out at the same row length into a buffer of
+        // 0xCC: where each row's bytes land.
+        id<MTLBuffer> outRows = sharedBuffer(bytesPerRow * side + packed);
+        memset(outRows.contents, 0xCC, outRows.length);
+        cb = [gQueue commandBuffer];
+        blit = [cb blitCommandEncoder];
+        [blit copyFromTexture:t
+                         sourceSlice:0
+                         sourceLevel:0
+                        sourceOrigin:MTLOriginMake(0, 0, 0)
+                          sourceSize:MTLSizeMake(side, side, 1)
+                            toBuffer:outRows
+                   destinationOffset:0
+              destinationBytesPerRow:bytesPerRow
+            destinationBytesPerImage:bytesPerRow * side];
+        [blit endEncoding];
+        waitFor(cb);
+        const uint8_t *r = outRows.contents;
+        // Row y's bytes whole at y x bytesPerRow, the last row's last, and the bytes past it.
+        NSUInteger whole = 0, untouched = 0;
+        for (NSUInteger y = 0; y < side; y++) {
+            whole += memcmp(r + y * bytesPerRow, q + y * packed, packed) == 0;
+        }
+        for (NSUInteger i = 0; i < outRows.length; i++) {
+            untouched += r[i] == 0xCC;
+        }
+        printf("rows %lu %s out bpr=%lu: rows whole at y x bytesPerRow %lu of %lu, last row "
+               "there %s, bytes untouched %lu of %lu\n",
+               (unsigned long)format, mode == MTLStorageModeShared ? "shared" : "private",
+               (unsigned long)bytesPerRow, (unsigned long)whole, (unsigned long)side,
+               memcmp(r + (side - 1) * bytesPerRow, q + (side - 1) * packed, packed) == 0 ? "yes"
+                                                                                       : "no",
+               (unsigned long)untouched, (unsigned long)outRows.length);
+    }
     if (cpu) {
         // getBytes at the same row length, into a buffer of 0xCC.
         NSMutableData *got = [NSMutableData dataWithLength:length];
@@ -457,14 +685,14 @@ static void rowsCase(NSUInteger format, MTLStorageMode mode, bool cpu, NSUIntege
 static void rowsMode(void) {
     for (NSUInteger f = 0; f < sizeof kFormats / sizeof kFormats[0]; f++) {
         NSUInteger format = kFormats[f];
-        NSUInteger lengths[] = {16, 32, 16 * texelBytes(format)};
+        NSUInteger lengths[] = {16, 32, 16 * texelBytes(format), 8};
         for (int m = 0; m < 2; m++) {
             MTLStorageMode mode = m ? MTLStorageModePrivate : MTLStorageModeShared;
             for (int cpu = 0; cpu < 2; cpu++) {
                 if (cpu && mode == MTLStorageModePrivate) {
                     continue;
                 }
-                for (int l = 0; l < 3; l++) {
+                for (int l = 0; l < 4; l++) {
                     if (l == 2 && (lengths[2] == lengths[0] || lengths[2] == lengths[1])) {
                         continue;
                     }
@@ -502,6 +730,10 @@ int main(int argc, const char **argv) {
         printf("DEVICE %s / RELEASE %s\n", gDevice.name.UTF8String,
                [NSProcessInfo processInfo].operatingSystemVersionString.UTF8String);
         heapMode();
+    } else if (strcmp(argv[1], "map") == 0) {
+        gDevice = MTLCreateSystemDefaultDevice();
+        gQueue = [gDevice newCommandQueue];
+        mapMode(argc, argv);
     } else if (strcmp(argv[1], "rows") == 0) {
         rowsMode();
     } else {
