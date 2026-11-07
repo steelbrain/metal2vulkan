@@ -9546,11 +9546,11 @@
         "heap_tables_worked_out": 36,
         "host_steps_recorded": 36,
         "new_buffer_bytes_cleared": 24832,
-        "object_churn.buffers_evicted": 23,
+        "object_churn.buffers_evicted": 24,
         "object_churn.buffers_parked": 37,
         "object_churn.buffers_recycled": 3,
         "object_churn.vk_buffer_bindings": 34,
-        "object_churn.vk_buffers_destroyed": 23,
+        "object_churn.vk_buffers_destroyed": 24,
         "object_churn.vk_buffers_made": 34,
         "pipeline_layouts_made": 1,
         "pipeline_layouts_shared": 35,
@@ -9574,7 +9574,7 @@
         "trail_waits": 36,
         "variant_pipelines_made": 36,
         "wakes_completion_waiters": 36,
-        "wakes_spared": 279
+        "wakes_spared": 277
       },
       "moving": {
         "gate_waits_slept": 34,
