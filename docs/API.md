@@ -604,9 +604,9 @@ layout stride of `None` is `MTLBufferLayoutStrideDynamic`: the stride comes from
     computes `air.atomic.fence`'s flags from them with `llvm.bitreverse.i2`. Each inlined copy
     reads its own call site's constants, folded through the integer arithmetic between them. An
     immediate that is still not a constant after that is
-    `InvalidInput(Intrinsic(ImmediateNotConstant))` at the call. An integer operation on a width
-    no SPIR-V type has (`i2`) is folded over constants; one that is not folded is refused
-    (`Lowering(Arith)`).
+    `InvalidInput(Intrinsic(ImmediateNotConstant))` at the call. `llvm.ctpop`, `llvm.bitreverse`
+    and `llvm.bswap` are folded over constants, on a width no SPIR-V type has (`i2`) too; an
+    integer `llvm.*` operation on such a width that is not folded is refused (`Lowering(Arith)`).
 
 ## 4. A render pipeline
 
