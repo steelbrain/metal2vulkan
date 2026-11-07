@@ -15,8 +15,8 @@
 //! flag: nothing in `layers/sync` names it, and `AccessState::DetectHazard` orders an input
 //! attachment read only after a load op, "Input attachment is ordered against load op but not
 //! against regular draws (requires subpass barrier)" (Vulkan-ValidationLayers v1.4.357, commit
-//! e4786f7c, `layers/sync/sync_access_state.cpp` line 115; unchanged in main aea761f of
-//! 2026-10-18). So every fetch through an input attachment after an earlier draw wrote the pixel
+//! e4786f7c, `layers/sync/sync_access_state.cpp` line 115; the same line in v1.4.363, commit
+//! 2ea16de8; unchanged in main aea761f of 2026-10-18). So every fetch through an input attachment after an earlier draw wrote the pixel
 //! reports a `READ_AFTER_WRITE`.
 //!
 //! The runtime fetches through input attachments where the device has
@@ -73,12 +73,24 @@ pub(super) const NAME: &str =
     "metal2vulkan: a pipeline reading its input attachments in rasterization order";
 
 /// The layer releases (`VkLayerProperties::specVersion` of `VK_LAYER_KHRONOS_validation`) whose
-/// synchronization code was read with the gap in place: v1.4.357 (tag commit e4786f7c).
-pub(super) const READ: &[u32] = &[vk::make_api_version(0, 1, 4, 357)];
+/// synchronization code was read with the gap in place: v1.4.357 (tag commit e4786f7c) and
+/// v1.4.363 (tag commit 2ea16de8). In v1.4.363 the descriptor check moved
+/// (`sync_command_buffer.cpp` line 589 to `sync_command.cpp` line 1335,
+/// `ShaderAccessCommand::ValidateImageShaderAccess`) with its test unchanged: an input attachment
+/// read is still found by `DetectAttachmentHazard` with `SyncOrdering::kRaster`, ordered by
+/// `AccessState::DetectHazard` only after a load op (line 115), and no file of `layers/sync`
+/// names the rasterization-order flags; the record-time message is made of the same text. What
+/// v1.4.363 adds, the same hazard reported again at a submission's replay ("Shader stage ... in
+/// vkCmdDraw... (from VkCommandBuffer ... submitted on the current VkQueue ...)"), is another
+/// message, which [`shape`] does not take.
+pub(super) const READ: &[u32] = &[
+    vk::make_api_version(0, 1, 4, 357),
+    vk::make_api_version(0, 1, 4, 363),
+];
 
 /// Where the gap is, for the line each message let pass prints.
-pub(super) const SOURCE: &str = "Vulkan-ValidationLayers v1.4.357 (e4786f7c) \
-    layers/sync/sync_access_state.cpp:115, AccessState::DetectHazard: \"Input attachment is \
+pub(super) const SOURCE: &str = "Vulkan-ValidationLayers v1.4.357 (e4786f7c) and v1.4.363 \
+    (2ea16de8) layers/sync/sync_access_state.cpp:115, AccessState::DetectHazard: \"Input attachment is \
     ordered against load op but not against regular draws (requires subpass barrier).\"; \
     layers/sync never reads the rasterization-order attachment access flags";
 
@@ -260,6 +272,7 @@ mod tests {
     #[test]
     fn only_the_releases_read_pass() {
         assert!(read(vk::make_api_version(0, 1, 4, 357)));
+        assert!(read(vk::make_api_version(0, 1, 4, 363)));
         assert!(!read(vk::make_api_version(0, 1, 4, 356)));
         assert!(!read(vk::make_api_version(0, 1, 4, 358)));
         assert!(!read(vk::make_api_version(0, 1, 5, 0)));
