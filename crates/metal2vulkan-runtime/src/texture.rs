@@ -5556,7 +5556,7 @@ impl Texture {
         if let Owner::HeapShadow(shadow) = &image.owner {
             if shadow.holds(image.plan(), &image_region) {
                 shadow.write(CALL, image.plan(), &image_region, &host, bytes.slice())?;
-                self.shared().counts.heap_shadow_cpu_copy();
+                self.device().shared().counts.heap_shadow_cpu_copy();
                 return Ok(());
             }
         }
@@ -5868,7 +5868,7 @@ impl Texture {
         if let Owner::HeapShadow(shadow) = &image.owner {
             if shadow.holds(image.plan(), image_region) {
                 shadow.read(call, image.plan(), image_region, host, bytes)?;
-                self.shared().counts.heap_shadow_cpu_copy();
+                self.device().shared().counts.heap_shadow_cpu_copy();
                 return Ok(());
             }
         }
