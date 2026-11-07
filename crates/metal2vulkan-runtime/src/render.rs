@@ -9861,11 +9861,11 @@ impl RenderLowering {
         // Its execution record's creation times, which its making sets once made.
         let mut later = None;
         // Whether the draw can record again into an instance that leaves more colors out of its
-        // subpass (`render/reroute.rs`). A stand-in arriving with it does not stop it: the pass's
-        // layout keeps the stand-in from the draw on, so the draw records again into it, as a later
+        // subpass, or in a pass that fetches through input attachments one of the same shape
+        // (`render/reroute.rs`). A stand-in arriving with it does not stop it: the pass's layout
+        // keeps the stand-in from the draw on, so the draw records again into it, as a later
         // draw would.
         let again = !self.replaying
-            && !self.layout.fetch_inputs
             && self.layout.samples == 1
             && self.rate_map.is_none()
             && !self.counts_visibility()

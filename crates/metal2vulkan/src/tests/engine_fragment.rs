@@ -1449,6 +1449,8 @@ fn a_shadowed_extended_range_attachment_over_its_input_attachment_holds_its_half
         );
         assert!(variant.graphics.storage_attachments.is_empty(), "{stem}");
         assert!(inputs(&variant).contains(&1), "{stem}");
+        // The shadow's writes are the product's, not the function's.
+        assert!(!variant.graphics.fragment_writes_memory, "{stem}: blended");
         let words = fragment_words(&variant);
         assert_eq!(shadow_image_types(&words), [(false, false)], "{stem}");
         assert_eq!(
@@ -1491,6 +1493,10 @@ fn a_shadowed_extended_range_attachment_over_its_input_attachment_holds_its_half
             "{stem}: the shadow written, nothing read"
         );
         assert!(interlocked(&execution_modes(&words)), "{stem}: unblended");
+        assert!(
+            !variant.graphics.fragment_writes_memory,
+            "{stem}: unblended"
+        );
         valid(&stem, "unblended", &variant, &dev);
         // A blend under a mask of the color channels keeps alpha as the shadow held it, and the
         // codes keep their own alpha code.
