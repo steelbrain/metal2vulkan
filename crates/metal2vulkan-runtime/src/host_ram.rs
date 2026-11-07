@@ -202,7 +202,7 @@ impl HostRam {
     /// each submission what one import does, whatever its length, where a pointer import's cost
     /// grows with its pages (measured with a probe on the Radeon 780M, Mesa 26.2.6, Linux 7.3.1:
     /// one held import of 64 MiB by pointer added 24.1 us to every submission). Each request is
-    /// for whole host pages inside one chunk of the RAM (a chunk, [`CHUNK_BYTES`] or the rest of
+    /// for whole host pages inside one chunk of the RAM (a chunk, 64 MiB or the rest of
     /// its range; an object's run inside one; a texture's pages inside one), its `granule` its
     /// `length`: the source answers one dma-buf of exactly those pages. The source is called on
     /// the thread importing the chunk (the device's, or one making an object over it), with no

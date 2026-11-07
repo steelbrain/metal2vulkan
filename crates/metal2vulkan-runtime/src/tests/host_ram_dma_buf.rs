@@ -184,7 +184,7 @@ fn try_buffer(
 ) -> Result<Buffer, Error> {
     let runs: RunResolver = Arc::new(move |at, length| {
         let ram = at - view + start;
-        Some(Vec::from([ram..ram + length]))
+        Some(std::iter::once(ram..ram + length).collect())
     });
     // SAFETY: the view's bytes, mapped until the RAM's keep-alive goes, after every device let go.
     let memory = unsafe { HostMemory::new(NonNull::new((view + offset) as *mut u8).unwrap()) }
