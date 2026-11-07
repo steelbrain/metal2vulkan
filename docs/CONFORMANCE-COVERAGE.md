@@ -44,7 +44,7 @@ Its limits, measured rather than asserted:
 | committed recordings | 1228 |
 | distinct SDK items the Metal leg reaches, of any status | 819 |
 | of those, reached only where this cannot name the family | 3 |
-| ledger rows (a case whose gap is recorded) | 2658 |
+| ledger rows (a case whose gap is recorded) | 2638 |
 | declared crossings of the option space (pairs put to Metal at once) | 26 |
 | declared crossings that are no pair of it (a boolean or numeric field, or one type in two slots) | 30 |
 
@@ -2521,7 +2521,6 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `vertex-format-float4` | A NaN of a narrow float attribute (`half`, or a small float of `FloatRG11B10`): the first differing element is Metal 0x7FC00000 against our 0x7FC02000, the devi… |
 | `vertex-format-float4` | A NaN of a narrow float attribute (`half`, or a small float of `FloatRG11B10`): the first differing element is Metal 0x7FC00000 against our 0x7FC02000, the devi… |
 | `vertex-format-float4` | This is NOT a rounding difference and it is not the narrow-float NaN rows of the same case. Metal's `float4` fetch of an `MTLVertexFormatFloatRGB9E5` attribute … |
-| `vertex-format-float4` | This is NOT a rounding difference and it is not the narrow-float NaN rows of the same case. Metal's `float4` fetch of an `MTLVertexFormatFloatRGB9E5` attribute … |
 | `vertex-format-half4` | A normalized attribute the function reads as `half`: Metal rounds the field's value to `half`, and ours hands on the device's `float` conversion unrounded (Meta… |
 | `vertex-format-half4` | A normalized attribute the function reads as `half`: Metal rounds the field's value to `half`, and ours hands on the device's `float` conversion unrounded (Meta… |
 | `vertex-format-half4` | A normalized attribute the function reads as `half`: Metal rounds the field's value to `half`, and ours hands on the device's `float` conversion unrounded (Meta… |
@@ -2594,7 +2593,6 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `vertex-format-half4` | An attribute the function reads as `half`: Metal rounds the attribute's value to `half` (a value past the `half`'s range to infinity), and ours keeps the `float… |
 | `vertex-format-half4` | An attribute the function reads as `half`: Metal rounds the attribute's value to `half` (a value past the `half`'s range to infinity), and ours keeps the `float… |
 | `vertex-format-half4` | An attribute the function reads as `half`: Metal rounds the attribute's value to `half` (a value past the `half`'s range to infinity), and ours keeps the `float… |
-| `vertex-format-half4` | This is NOT a rounding difference and it is not the narrow-float NaN rows of the same case. Metal's `float4` fetch of an `MTLVertexFormatFloatRGB9E5` attribute … |
 | `vertex-format-half4` | This is NOT a rounding difference and it is not the narrow-float NaN rows of the same case. Metal's `float4` fetch of an `MTLVertexFormatFloatRGB9E5` attribute … |
 | `vertex-format-instance-step` | This is NOT a rounding difference and it is not the narrow-float NaN rows of the same case. Metal's `float4` fetch of an `MTLVertexFormatFloatRGB9E5` attribute … |
 | `vertex-format-instance-step` | Metal converts a normalized vertex field as `c / (2^b - 1)`, correctly rounded, and this device's fixed-function vertex input is one ULP high: at the first diff… |
@@ -3393,24 +3391,6 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `read-write-tier-held` | Metal round-trips a read-write texel of `RGBA8Unorm_sRGB` -- one of the `beyond` formats no read-write tier names but this Metal reads and writes -- through a t… |
 | `read-write-tier-held` | Metal round-trips a read-write texel of `RGBA8Unorm_sRGB` -- one of the `beyond` formats no read-write tier names but this Metal reads and writes -- through a t… |
 | `read-write-tier-held` | Metal round-trips a read-write texel of `RGBA8Unorm_sRGB` -- one of the `beyond` formats no read-write tier names but this Metal reads and writes -- through a t… |
-| `read-write-tier-held` | Metal round-trips a read-write texel of a `beyond` format (one no read-write tier names but this Metal reads and writes) through a texture held in an argument b… |
-| `read-write-tier-held` | Metal round-trips a read-write texel of a `beyond` format (one no read-write tier names but this Metal reads and writes) through a texture held in an argument b… |
-| `read-write-tier-held` | Metal round-trips a read-write texel of a `beyond` format (one no read-write tier names but this Metal reads and writes) through a texture held in an argument b… |
-| `read-write-tier-held` | Metal round-trips a read-write texel of a `beyond` format (one no read-write tier names but this Metal reads and writes) through a texture held in an argument b… |
-| `read-write-tier-held` | Metal round-trips a read-write texel of a `beyond` format (one no read-write tier names but this Metal reads and writes) through a texture held in an argument b… |
-| `read-write-tier-held` | Metal round-trips a read-write texel of a `beyond` format (one no read-write tier names but this Metal reads and writes) through a texture held in an argument b… |
-| `read-write-tier-held` | Metal round-trips a read-write texel of a `beyond` format (one no read-write tier names but this Metal reads and writes) through a texture held in an argument b… |
-| `read-write-tier-held` | Metal round-trips a read-write texel of a `beyond` format (one no read-write tier names but this Metal reads and writes) through a texture held in an argument b… |
-| `read-write-tier-held` | Metal round-trips a read-write texel of a `beyond` format (one no read-write tier names but this Metal reads and writes) through a texture held in an argument b… |
-| `read-write-tier-held` | Metal round-trips a read-write texel of a `beyond` format (one no read-write tier names but this Metal reads and writes) through a texture held in an argument b… |
-| `read-write-tier-held` | Metal round-trips a read-write texel of a `beyond` format (one no read-write tier names but this Metal reads and writes) through a texture held in an argument b… |
-| `read-write-tier-held` | Metal round-trips a read-write texel of a `beyond` format (one no read-write tier names but this Metal reads and writes) through a texture held in an argument b… |
-| `read-write-tier-held` | Metal round-trips a read-write texel of a `beyond` format (one no read-write tier names but this Metal reads and writes) through a texture held in an argument b… |
-| `read-write-tier-held` | Metal round-trips a read-write texel of a `beyond` format (one no read-write tier names but this Metal reads and writes) through a texture held in an argument b… |
-| `read-write-tier-held` | Metal round-trips a read-write texel of a `beyond` format (one no read-write tier names but this Metal reads and writes) through a texture held in an argument b… |
-| `read-write-tier-held` | Metal round-trips a read-write texel of a `beyond` format (one no read-write tier names but this Metal reads and writes) through a texture held in an argument b… |
-| `read-write-tier-held` | Metal round-trips a read-write texel of a `beyond` format (one no read-write tier names but this Metal reads and writes) through a texture held in an argument b… |
-| `read-write-tier-held` | Metal round-trips a read-write texel of a `beyond` format (one no read-write tier names but this Metal reads and writes) through a texture held in an argument b… |
 | `read-write-tier-round-trip-float` | A read of a `BGR10A2Unorm` texel through the device's conversion: its 10-bit codes read one `f32` ulp low at the site's largest difference. This device converts… |
 | `read-write-tier-round-trip-float` | A read of the round-tripped `BGRA8Unorm` texels through the device's conversion: an 8-bit code's value is one `f32` ulp off at the site's largest difference (Me… |
 | `read-write-tier-round-trip-float` | A read of the round-tripped `RG8Unorm` texels through the device's conversion: an 8-bit code's value is one `f32` ulp off at the site's largest difference (Meta… |
