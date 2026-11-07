@@ -11,20 +11,27 @@
 //! `sparse_color` keeps only `from_resident_pages : 1`, built from bit 0, so the other bits are
 //! not established, and a function whose effects depend on one of them is refused.
 //!
-//! The whole `{T, i8}` value may be copied before its parts are taken: a `phi` merging reads from
-//! different blocks, a `select`, or a `freeze`. Such a copy carries the status without observing
-//! it. A carrier (the call or such a copy) used other than by `extractvalue 0` (the texel),
-//! `extractvalue 1` (the word), or another copy exposes the whole word, which is refused.
+//! **Carriers**. The word travels in values before it is taken: a carrier is a value with the
+//! member path at which it holds a call's word (`[1]` in the call's own `{T, i8}`, empty in the
+//! word itself). A copy (a `phi` merging reads from different blocks, a `select`, a `freeze`)
+//! carries it at the same path. An `insertvalue` into a carrier carries it on unless it writes the
+//! word's own member (Apple's GL code generator writes a read's swizzled texel back into member 0,
+//! and the word goes on in member 1); one that inserts a carrier carries it below the member it
+//! writes (a word re-inserted in a rebuilt `{T, i8}`, a read nested in a larger aggregate). An
+//! `extractvalue` of a member that holds the word carries it below that member; of another member
+//! (the texel), it observes nothing; of the word's own member, it takes the word. Every other use
+//! of a carrier (a store, a call, a return, ...) exposes the whole word, which is refused.
 //!
 //! **Demanded bits**. Which bits of a word the function's effects depend on is a backward
 //! demanded-bits analysis over the word's forward slice: `and` with a constant keeps the constant's
 //! bits, `or`, `xor`, `phi`, `freeze`, and a `select`'s two values pass the bits demanded of
 //! their result, shifts by a constant move them, `zext`, `sext`, and `trunc` re-width them, and
 //! `add`, `sub`, and `mul` demand every bit at or below the highest bit demanded of their result
-//! (carries only rise). Every other use (a store, a call, a comparison, a branch, a conversion,
-//! a vector insertion, ...) demands every bit of the value it uses. Front-end spellings of
-//! `resident()` (`and 1` then `xor 1` or `icmp eq 0`, `trunc` to `i1`, and the optimizer's
-//! `shl k` / `and (1 << k)` / `or` packing of several words) demand bit 0 alone.
+//! (carries only rise). A word inserted whole into an aggregate demands nothing there: its bits are
+//! demanded where a carrier takes it again. Every other use (a store, a call, a comparison, a
+//! branch, a conversion, a vector insertion, ...) demands every bit of the value it uses.
+//! Front-end spellings of `resident()` (`and 1` then `xor 1` or `icmp eq 0`, `trunc` to `i1`, and
+//! the optimizer's `shl k` / `and (1 << k)` / `or` packing of several words) demand bit 0 alone.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -70,6 +77,44 @@ fn copied(kind: &InstKind) -> Option<Vec<Value>> {
         InstKind::Freeze(v) => vec![*v],
         _ => return None,
     })
+}
+
+/// Where a carrier holds a word: the value, and the member path of the word in it (empty: the
+/// value is the word).
+type Place = (InstId, Box<[u32]>);
+
+/// The paths at which user `kind` of the carrier `v` holding a word at `path` holds it in its
+/// result, or `None` where the use exposes the word. The word itself (`path` empty) is carried
+/// only by an `insertvalue` of it; its other uses are the demanded-bits slice's.
+fn carried(kind: &InstKind, v: Value, path: &[u32]) -> Option<Vec<Box<[u32]>>> {
+    let mut out = Vec::new();
+    match kind {
+        InstKind::InsertValue { agg, val, indices } if *agg == v || *val == v => {
+            if *agg == v {
+                if indices.starts_with(path) && indices.len() > path.len() {
+                    // Into the word's own member: a member no word has.
+                    return None;
+                }
+                if !path.starts_with(indices) {
+                    out.push(path.into());
+                }
+            }
+            if *val == v {
+                out.push(indices.iter().chain(path).copied().collect());
+            }
+        }
+        _ if path.is_empty() => {}
+        _ if copied(kind).is_some_and(|p| p.contains(&v)) => out.push(path.into()),
+        InstKind::ExtractValue { agg, indices } if *agg == v => {
+            if path.starts_with(indices) {
+                out.push(path[indices.len()..].into());
+            } else if indices.starts_with(path) {
+                return None;
+            }
+        }
+        _ => return None,
+    }
+    Some(out)
 }
 
 /// The low `w` bits.
@@ -168,71 +213,49 @@ fn transfer(
 pub(super) fn observed(cx: &SelectCx<'_>, body: &Body) -> BTreeMap<InstId, StatusUse> {
     // Every instruction that uses each instruction.
     let users = Users::of(body);
-    // The carriers: the texel calls and every whole copy of a carrier, each with the calls it
-    // carries.
-    let calls: Vec<InstId> = body
+    // The carriers, each with the calls whose word it holds there: the texel calls (the word at
+    // member 1) and every value a carrier's use carries one into.
+    let mut carries: BTreeMap<Place, BTreeSet<InstId>> = body
         .insts
         .iter()
         .filter(|(_, i)| texel_call(&i.kind))
-        .map(|(at, _)| at)
+        .map(|(at, _)| ((at, Box::from([1u32])), BTreeSet::from([at])))
         .collect();
-    let mut carries: BTreeMap<InstId, BTreeSet<InstId>> =
-        calls.iter().map(|c| (*c, BTreeSet::from([*c]))).collect();
-    let mut work = calls.clone();
-    while let Some(c) = work.pop() {
-        let from = carries.get(&c).cloned().unwrap_or_default();
-        for &u in users.get(c) {
-            let passes = body
-                .insts
-                .get(u)
-                .and_then(|i| copied(&i.kind))
-                .is_some_and(|p| p.contains(&Value::Inst(c)));
-            if !passes {
-                continue;
-            }
-            let set = carries.entry(u).or_default();
-            let before = set.len();
-            set.extend(from.iter().copied());
-            if set.len() != before {
-                work.push(u);
-            }
-        }
-    }
-    // Each carrier's uses: copies and texel extractions pass; a word extraction starts a slice;
-    // anything else exposes the whole value.
     let mut out: BTreeMap<InstId, StatusUse> = BTreeMap::new();
-    let mut words: Vec<(InstId, InstId)> = Vec::new();
-    for (&c, from) in &carries {
-        for &u in users.get(c) {
+    let mut work: Vec<Place> = carries.keys().cloned().collect();
+    while let Some(place) = work.pop() {
+        let from = carries.get(&place).cloned().unwrap_or_default();
+        let (c, path) = &place;
+        for &u in users.get(*c) {
             let Some(inst) = body.insts.get(u) else {
                 continue;
             };
-            if copied(&inst.kind).is_some_and(|p| p.contains(&Value::Inst(c))) {
-                continue;
-            }
-            match &inst.kind {
-                InstKind::ExtractValue { agg, indices } if *agg == Value::Inst(c) => {
-                    match indices.as_ref() {
-                        [0] => continue,
-                        [1] => words.push((u, c)),
-                        _ => {
-                            for call in from {
-                                out.insert(*call, StatusUse::Other);
-                            }
-                        }
-                    }
+            let Some(paths) = carried(&inst.kind, Value::Inst(*c), path) else {
+                for call in &from {
+                    out.insert(*call, StatusUse::Other);
                 }
-                _ => {
-                    for call in from {
-                        out.insert(*call, StatusUse::Other);
-                    }
+                continue;
+            };
+            for p in paths {
+                let set = carries.entry((u, p.clone())).or_default();
+                let before = set.len();
+                set.extend(from.iter().copied());
+                if set.len() != before {
+                    work.push((u, p));
                 }
             }
         }
     }
+    // The words taken, each with the calls it is the word of.
+    let words: Vec<(InstId, &BTreeSet<InstId>)> = carries
+        .iter()
+        .filter(|((_, path), _)| path.is_empty())
+        .map(|((w, _), calls)| (*w, calls))
+        .collect();
+    let taken: BTreeSet<InstId> = words.iter().map(|(w, _)| *w).collect();
     // Demanded bits over the words' forward slices: a value joins the slice through a use that
     // passes bits; every other use demands all of its bits.
-    let mut slice: BTreeSet<InstId> = words.iter().map(|(w, _)| *w).collect();
+    let mut slice: BTreeSet<InstId> = taken.clone();
     let mut work: Vec<InstId> = slice.iter().copied().collect();
     while let Some(v) = work.pop() {
         let Some(wv) = width(cx, body, v) else {
@@ -263,6 +286,11 @@ pub(super) fn observed(cx: &SelectCx<'_>, body: &Body) -> BTreeMap<InstId, Statu
             let passed = if slice.contains(&u) {
                 let du = demanded.get(&u).copied().unwrap_or(0);
                 transfer(cx, &inst.kind, Value::Inst(v), wv, width(cx, body, u), du)
+            } else if taken.contains(&v)
+                && matches!(&inst.kind, InstKind::InsertValue { val, .. } if *val == Value::Inst(v))
+            {
+                // A word inserted whole: demanded where it is taken again.
+                Some(0)
             } else {
                 None
             };
@@ -282,14 +310,14 @@ pub(super) fn observed(cx: &SelectCx<'_>, body: &Body) -> BTreeMap<InstId, Statu
             }
         }
     }
-    for (w, c) in words {
+    for (w, calls) in words {
         let d = demanded.get(&w).copied().unwrap_or(0) & mask(8);
         let used = match d {
             0 => continue,
             1 => StatusUse::Residency,
             _ => StatusUse::Other,
         };
-        for call in carries.get(&c).into_iter().flatten() {
+        for call in calls {
             let e = out.entry(*call).or_insert(used);
             if used == StatusUse::Other {
                 *e = StatusUse::Other;

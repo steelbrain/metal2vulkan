@@ -1054,7 +1054,12 @@ announced, `restricted-depth-upload`, `depth-denormals`), `ulong` textures and t
 64-bit images where the device has them, and `half` and sRGB reads give Metal's values or record
 their bound (an sRGB texel is the device's own decode wherever the device samples its format,
 `srgb-texel-decode`). The
-rustdoc of `BindState`, `TextureFacts` and `BindingPlan` states each rule.
+rustdoc of `BindState`, `TextureFacts` and `BindingPlan` states each rule. A read's, sample's or
+gather's `{T, i8}` result (the texel and its residency word) may pass through phis, selects,
+freezes and member insertions and extractions, Apple's GL code generator's swizzled read among
+them. A function whose effects depend on a bit of the word other than bit 0 (`resident()`'s), or
+that stores, passes or returns a value holding the word, is refused (`Lowering(Texture)`): Metal
+establishes no other bit.
 
 ## 6. At bind time
 

@@ -214,11 +214,54 @@ declare {{ <4 x float>, i8 }} @air.read_texture_2d.v4f32(ptr addrspace(1), ptr a
 
 const PHI: &str = "%r = phi { <4 x float>, i8 } [ %r0, %even ], [ %r1, %other ]";
 
-/// The merges whose texel only is taken: a phi, a frozen phi, and a select of the frozen phi and
-/// a constant.
+/// `%r` as values that carry the merged read `%q`'s status word on through member insertions:
+/// `%q` with its texel written back into member 0 (as Apple's GL code generator writes a swizzled
+/// read), a `{T, i8}` rebuilt from `%q`'s two members, `%q` nested in a larger aggregate and taken
+/// out again, and a select of `%q` and its rewritten copy.
+fn carried_reads() -> Vec<(&'static str, String)> {
+    let q = "%q = phi { <4 x float>, i8 } [ %r0, %even ], [ %r1, %other ]";
+    let t = "%q0 = extractvalue { <4 x float>, i8 } %q, 0";
+    vec![
+        (
+            "texel reinserted",
+            format!("{q}\n  {t}\n  %r = insertvalue {{ <4 x float>, i8 }} %q, <4 x float> %q0, 0"),
+        ),
+        (
+            "rebuilt",
+            format!(
+                "{q}\n  {t}\n  %q1 = extractvalue {{ <4 x float>, i8 }} %q, 1\n  %a0 = insertvalue {{ <4 x float>, i8 }} undef, <4 x float> %q0, 0\n  %r = insertvalue {{ <4 x float>, i8 }} %a0, i8 %q1, 1"
+            ),
+        ),
+        (
+            "nested",
+            format!(
+                "{q}\n  %n = insertvalue {{ {{ <4 x float>, i8 }}, i32 }} undef, {{ <4 x float>, i8 }} %q, 0\n  %r = extractvalue {{ {{ <4 x float>, i8 }}, i32 }} %n, 0"
+            ),
+        ),
+        (
+            "select of reinserted",
+            format!(
+                "{q}\n  {t}\n  %w = insertvalue {{ <4 x float>, i8 }} %q, <4 x float> %q0, 0\n  %r = select i1 %c, {{ <4 x float>, i8 }} %w, {{ <4 x float>, i8 }} %q"
+            ),
+        ),
+    ]
+}
+
+/// The merges whose texel only is taken: a phi, a frozen phi, a select of the frozen phi and a
+/// constant, the phi with its word overwritten, and each of [`carried_reads`].
 fn texel_only_merges() -> Vec<(&'static str, String)> {
     let take = "%v = extractvalue { <4 x float>, i8 } %r2, 0";
+    let carried = carried_reads().into_iter().map(|(n, head)| {
+        (
+            n,
+            format!("{head}\n  %r2 = freeze {{ <4 x float>, i8 }} %r"),
+        )
+    });
     vec![
+        (
+            "word overwritten",
+            format!("{PHI}\n  %r2 = insertvalue {{ <4 x float>, i8 }} %r, i8 0, 1"),
+        ),
         (
             "phi",
             "%r2 = phi { <4 x float>, i8 } [ %r0, %even ], [ %r1, %other ]".to_owned(),
@@ -232,13 +275,15 @@ fn texel_only_merges() -> Vec<(&'static str, String)> {
         ),
     ]
     .into_iter()
+    .chain(carried)
     .map(|(n, m)| (n, format!("{m}\n  {take}")))
     .collect()
 }
 
-/// A `{T, i8}` read result carried whole through phis, freezes, and selects before its texel is
-/// taken does not observe the status word; each form compiles on every profile, and its texels are
-/// the Metal ones on the interpreter (even columns read slot 0, odd columns slot 1).
+/// A `{T, i8}` read result carried through phis, freezes, selects, and member insertions and
+/// extractions before its texel is taken does not observe the status word; each form compiles on
+/// every profile, and its texels are the Metal ones on the interpreter (even columns read slot 0,
+/// odd columns slot 1).
 #[test]
 fn status_words_carried_by_copies_are_not_observed() {
     let mut ran = 0;
@@ -285,7 +330,8 @@ fn status_words_carried_by_copies_are_not_observed() {
 /// converted; bit 1 tested; the word shifted down; bits 0 and 1 kept; bit 7 moved down by an
 /// arithmetic shift; the sign extension's bit 8 (the word's bit 7); the whole word compared with 0;
 /// a division; bit 1 of a product and of a negation (their carries reach it from bit 0 and bit 1);
-/// and a select on bit 0 that chooses the word shifted down.
+/// a select on bit 0 that chooses the word shifted down; the whole word taken after each of
+/// [`carried_reads`]; and the read stored whole.
 #[test]
 fn status_words_with_another_bit_observed_are_refused() {
     let take = "%st = extractvalue { <4 x float>, i8 } %r, 1";
@@ -346,6 +392,26 @@ fn status_words_with_another_bit_observed_are_refused() {
             ),
         ),
     ];
+    // The whole word, taken after a carrier, and a carrier stored whole.
+    let carried = carried_reads().into_iter().map(|(n, head)| {
+        (
+            n,
+            format!(
+                "{head}\n  {take}\n  %mf = uitofp i8 %st to float\n  %v = insertelement <4 x float> zeroinitializer, float %mf, i32 0"
+            ),
+        )
+    });
+    let stored = (
+        "stored",
+        format!(
+            "{PHI}\n  store {{ <4 x float>, i8 }} %r, ptr addrspace(1) %out, align 16\n  %v = extractvalue {{ <4 x float>, i8 }} %r, 0"
+        ),
+    );
+    let observing: Vec<_> = observing
+        .into_iter()
+        .chain(carried)
+        .chain([stored])
+        .collect();
     for stem in ["moltenvk-m3", "lavapipe"] {
         let p = profile(stem, DevicePolicy::default()).expect("profile");
         for (name, merge) in &observing {
@@ -363,13 +429,11 @@ fn status_words_with_another_bit_observed_are_refused() {
 /// packing of the bit into a wider word (`zext`, `shl`, `and`, `xor`). And forms whose bit 0
 /// depends on the word's bit 0 alone: bit 0 shifted to bit 7 and back; bit 0 of a negation and of
 /// a product; the word as either value of a select on another condition (the other value keeps
-/// the word's bit 0).
-fn resident_tails() -> Vec<(&'static str, String, [f32; 2])> {
-    let head = format!(
-        "{PHI}\n  %t = extractvalue {{ <4 x float>, i8 }} %r, 0\n  %st = extractvalue {{ <4 x float>, i8 }} %r, 1"
-    );
+/// the word's bit 0). The first spelling also after each of [`carried_reads`].
+fn resident_tails() -> Vec<(String, String, [f32; 2])> {
+    let take = "%t = extractvalue { <4 x float>, i8 } %r, 0\n  %st = extractvalue { <4 x float>, i8 } %r, 1";
     let put = "%v = insertelement <4 x float> %t, float %mf, i32 3";
-    [
+    let tails = [
         (
             "and xor",
             "%m = and i8 %st, 1\n  %n = xor i8 %m, 1\n  %mf = uitofp i8 %n to float",
@@ -410,10 +474,26 @@ fn resident_tails() -> Vec<(&'static str, String, [f32; 2])> {
             "%w = or i8 %st, 4\n  %sv = select i1 %c, i8 %st, i8 %w\n  %m = and i8 %sv, 1\n  %n = xor i8 %m, 1\n  %mf = uitofp i8 %n to float",
             [1.0, 0.0],
         ),
-    ]
-    .into_iter()
-    .map(|(n, tail, want)| (n, format!("{head}\n  {tail}\n  {put}"), want))
-    .collect()
+    ];
+    let (first, first_tail, first_want) = tails[0];
+    let mut out: Vec<_> = tails
+        .into_iter()
+        .map(|(n, tail, want)| {
+            (
+                n.to_owned(),
+                format!("{PHI}\n  {take}\n  {tail}\n  {put}"),
+                want,
+            )
+        })
+        .collect();
+    for (carrier, head) in carried_reads() {
+        out.push((
+            format!("{carrier} {first}"),
+            format!("{head}\n  {take}\n  {first_tail}\n  {put}"),
+            first_want,
+        ));
+    }
+    out
 }
 
 /// `OpImageSparseFetch` and `OpImageSparseRead`.
@@ -450,7 +530,7 @@ fn residency_of_status_words_is_lowered() {
                     "!\"air.{access}\", !\"air.arg_type_name\", !\"texture2d<float, {access}>\""
                 ),
             );
-            let Some(bc) = assemble(name, &text) else {
+            let Some(bc) = assemble(&name, &text) else {
                 return;
             };
             for (stem, p) in committed_profiles().expect("profiles") {
