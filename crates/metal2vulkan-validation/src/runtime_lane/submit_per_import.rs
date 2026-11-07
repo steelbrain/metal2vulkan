@@ -637,9 +637,11 @@ fn submit_per_fresh_page_buffer() {
 /// [`RAM_PHASES`]: the dma-bufs, each a no-copy buffer over its share of a [`RAM_BYTES`] `memfd`
 /// (one udmabuf each, where the host's udmabuf limits take it), made, then [`COMMITS`] command
 /// buffers of one 4-KiB fill one at a time, each waited for, after [`WARM`] untimed, at once
-/// (every import resident, as a guest RAM's chunks always are). Printed as `SUBMIT-PER-IMPORT`
-/// lines (`submit_per_import`'s), with the dma-buf memories the device holds
-/// (`WorkCounts::dma_buf_memories_live`). Skipped where `/dev/udmabuf` cannot be opened.
+/// (every import resident, as a guest RAM's chunks always are: one command buffer that uses each
+/// goes first). Printed as `SUBMIT-PER-IMPORT` lines (`submit_per_import`'s), with the dma-buf
+/// memories the device holds (`WorkCounts::dma_buf_memories_live`), and a `SUBMIT-PER-RAM` line
+/// after the commits: the imports still resident, and those released or imported again, which
+/// say whether the commits ran beside every one. Skipped where `/dev/udmabuf` cannot be opened.
 #[test]
 #[ignore = "a measurement, not a check: run by name with --run-ignored all"]
 fn submit_per_ram_dma_buf() {
@@ -672,6 +674,18 @@ fn submit_per_ram_dma_buf() {
                     .unwrap_or_else(|error| panic!("{n} dma-bufs of {each} bytes: {error:?}"))
             })
             .collect();
+        // One command buffer that fills a word of each, so that every import is resident when
+        // the commits start however long the making took (the device's residency thread
+        // releases an import idle for its window, `host_residency.rs` of the runtime).
+        if !buffers.is_empty() {
+            let command_buffer = queue.command_buffer().unwrap();
+            let mut blit = command_buffer.blit_command_encoder().unwrap();
+            for buffer in &buffers {
+                blit.fill_buffer(buffer, 0..4, 0x5a).unwrap();
+            }
+            blit.end_encoding().unwrap();
+            submitted(command_buffer);
+        }
         let residency = format!(
             "of {} MiB over a {} GiB RAM, {} live dma-buf memories, at once",
             each >> 20,
@@ -684,6 +698,16 @@ fn submit_per_ram_dma_buf() {
             &target,
             (Kind::DmaBuf, n, &residency),
             made,
+        );
+        let after = device.work_counts();
+        eprintln!(
+            "SUBMIT-PER-RAM {}: {n} after the commits: {} dma-buf memories live, {} host imports \
+             resident, {} released, {} imported again",
+            device.name(),
+            after.dma_buf_memories_live,
+            after.host_imports_resident,
+            after.host_imports_released,
+            after.host_imports_reimported,
         );
         drop(buffers);
     }
