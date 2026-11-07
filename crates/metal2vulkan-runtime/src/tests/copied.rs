@@ -224,6 +224,52 @@ fn copied_sync_by_pages_answers_as_byte_by_byte() {
     }
 }
 
+/// The page-at-a-time restore writes exactly the bytes the GPU changed back to the snapshot's, as a
+/// byte-at-a-time one would: over lengths that end inside a block, inside an 8-byte span and on
+/// either edge, with single bytes, runs crossing a block's edge and whole blocks changed.
+#[test]
+fn copied_restore_by_pages_answers_as_byte_by_byte() {
+    let mut rng = Rng(0x9E37_79B9_7F4A_7C15);
+    let lengths = [
+        1,
+        7,
+        8,
+        9,
+        4095,
+        4096,
+        4097,
+        8191,
+        3 * 4096 + 5,
+        64 * 1024 + 3,
+    ];
+    for round in 0..200 {
+        let length = lengths[round % lengths.len()];
+        let snapshot: Vec<u8> = (0..length).map(|_| rng.next() as u8).collect();
+        let mut copy = snapshot.clone();
+        for _ in 0..rng.below(12) {
+            let at = rng.below(length);
+            copy[at] = copy[at].wrapping_add(1 + rng.below(255) as u8);
+        }
+        if rng.below(3) == 0 {
+            let start = rng.below(length);
+            let end = (start + rng.below(9000)).min(length);
+            for byte in &mut copy[start..end] {
+                *byte = rng.next() as u8;
+            }
+        }
+        let want = (copy.iter().zip(&snapshot))
+            .filter(|(copy, snapshot)| copy != snapshot)
+            .count() as u64;
+        // SAFETY: the copy is the snapshot's length.
+        let got = unsafe { restore(at(&mut copy), &snapshot) };
+        assert_eq!(got, want, "round {round}: bytes written");
+        assert!(
+            copy == snapshot,
+            "round {round}: the copy holds the agreed bytes again"
+        );
+    }
+}
+
 /// Where the kernel's read of the pages fails (a mapping it cannot pin), pages the process maps
 /// readable are read with plain loads and copied; where a page is not mapped readable, the copy
 /// is refused and nothing written; where the kernel reads them, no mapping is asked about.

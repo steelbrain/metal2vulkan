@@ -832,7 +832,11 @@ unsafe fn merge_block(now: &[u8], to: *mut u8, was: &mut [u8], keep_to: bool) ->
 }
 
 /// Write into `copy` each byte of `snapshot` that `copy` differs from: the GPU's writes to a copy
-/// of pages the process cannot write, dropped. The bytes written.
+/// whose GPU writes are dropped. The bytes written.
+///
+/// Read a block of [`SYNC_BLOCK`] bytes of `copy` at a time and compared whole with the
+/// snapshot's, as [`sync`] reads; only a block that differs is looked into ([`merge_block`]), so
+/// no byte the comparison found equal is written.
 ///
 /// # Safety
 ///
@@ -840,20 +844,17 @@ unsafe fn merge_block(now: &[u8], to: *mut u8, was: &mut [u8], keep_to: bool) ->
 pub(crate) unsafe fn restore(copy: NonNull<u8>, snapshot: &[u8]) -> u64 {
     let copy = copy.as_ptr();
     let mut written = 0u64;
+    let mut block = [0u8; SYNC_BLOCK];
     let mut at = 0;
     while at < snapshot.len() {
-        let span = (snapshot.len() - at).min(8);
-        let mut now = [0u8; 8];
-        // SAFETY: `span` bytes at `at` lie in `copy` (the caller's).
+        let span = (snapshot.len() - at).min(SYNC_BLOCK);
+        let now = &mut block[..span];
+        // SAFETY: `span` bytes at `at` lie in `copy` (the caller's); `block` is this call's own.
         unsafe { std::ptr::copy_nonoverlapping(copy.add(at), now.as_mut_ptr(), span) };
-        if now[..span] != snapshot[at..at + span] {
-            for byte in 0..span {
-                if now[byte] != snapshot[at + byte] {
-                    // SAFETY: as above.
-                    unsafe { copy.add(at + byte).write_volatile(snapshot[at + byte]) };
-                    written += 1;
-                }
-            }
+        let agreed = &snapshot[at..at + span];
+        if now != agreed {
+            // SAFETY: as above.
+            written += unsafe { merge_block(agreed, copy.add(at), now, false) };
         }
         at += span;
     }
