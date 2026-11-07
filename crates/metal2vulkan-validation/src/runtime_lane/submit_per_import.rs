@@ -793,7 +793,8 @@ fn submit_per_ram_chunk() {
     );
     let used = device.use_host_ram(&ram).unwrap();
     // The view is the RAM's own mapping: each object's pages are the run of its own addresses.
-    let resolver: RunResolver = Arc::new(|at: u64, length: u64| Some(vec![at..at + length]));
+    let resolver: RunResolver =
+        Arc::new(|at: u64, length: u64| Some(std::iter::once(at..at + length).collect()));
     let mut makings = Vec::new();
     let buffers: Vec<Buffer> = (0..RAM_BYTES / RAM_OBJECT_STRIDE)
         .map(|i| {
