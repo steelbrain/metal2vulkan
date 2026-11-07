@@ -267,10 +267,15 @@ impl InstanceShadows {
         for shadow in shadows {
             shadow::join(&mut self.shadows, shadow);
         }
-        let last = &self.last;
-        let gathered = |(at, used): &(usize, &Use<ResourceKey>)| last.get(*at) == Some(*used);
-        let fresh = uses.iter().enumerate().filter(|at| !gathered(at));
-        for (_, used) in fresh {
+        // Its storage is kept from one draw to the next: only the uses that differ from the last
+        // draw's at their place change in it (those past the last draw's are added, in order).
+        self.last.truncate(uses.len());
+        for (at, used) in uses.iter().enumerate() {
+            match self.last.get_mut(at) {
+                Some(kept) if *kept == *used => continue,
+                Some(kept) => kept.clone_from(used),
+                None => self.last.push(used.clone()),
+            }
             for (write, access) in [(false, used.read), (true, used.write)] {
                 if access.is_empty() {
                     continue;
@@ -293,9 +298,6 @@ impl InstanceShadows {
                 }
             }
         }
-        // Its storage is kept from one draw to the next.
-        self.last.clear();
-        self.last.extend_from_slice(uses);
     }
 
     /// [`add`](Self::add) a draw's `shadows` and `uses`, which begin with the uses of what its
@@ -963,6 +965,45 @@ mod tests {
         // Its list took room for every range it keeps and the merge's one at its first, and
         // never grew.
         assert_eq!(ranges.capacity(), RANGES_PER_BUFFER + 1);
+    }
+
+    /// A draw's use equal to the last draw's at its place is gathered already, and only the
+    /// uses that differ change the last draw's kept: draws that change some uses, take more or
+    /// fewer, gather what one gathering of all their uses gathers, each kept whole as the last.
+    #[test]
+    fn an_instance_gathers_the_uses_each_draw_changed() {
+        let (a, b, c) = (ResourceKey::new(), ResourceKey::new(), ResourceKey::new());
+        let image = |levels: Range<u32>| Use {
+            range: UseRange::Image {
+                aspects: vk::ImageAspectFlags::COLOR,
+                levels,
+                layers: 0..1,
+            },
+            ..bytes(c, 0..0, false)
+        };
+        let draws = [
+            vec![bytes(a, 0..16, false), bytes(b, 0..4, true)],
+            vec![bytes(a, 16..32, false), bytes(b, 0..4, true)],
+            vec![bytes(a, 16..32, false), bytes(b, 8..12, true), image(0..1)],
+            vec![bytes(b, 8..12, true), bytes(a, 64..80, false), image(2..3)],
+            vec![bytes(a, 200..300, true)],
+            vec![],
+            vec![
+                bytes(a, 0..8, false),
+                image(0..1),
+                bytes(b, 100..104, false),
+            ],
+        ];
+        let mut each = InstanceShadows::default();
+        for draw in &draws {
+            each.add(&[], draw);
+            assert_eq!(each.last, *draw);
+        }
+        let mut all = InstanceShadows::default();
+        all.add(&[], &draws.concat());
+        let uses = |gathered: &InstanceShadows| gathered.uses().collect::<Vec<_>>();
+        assert_eq!(uses(&each), uses(&all));
+        assert_eq!(each.images, all.images);
     }
 
     /// Cleared, an instance's gathering gathers nothing, keeps its lists' room, and gathers the
