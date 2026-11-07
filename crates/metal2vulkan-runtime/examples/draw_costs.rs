@@ -3,7 +3,7 @@
 //! through the runtime's public calls alone, on one thread.
 //!
 //! ```sh
-//! cargo run --release -p metal2vulkan-runtime --example draw_costs [-- [ws|many|10k]... [--runs N] [--calls] [--counts] [--metallib PATH]]
+//! cargo run --release -p metal2vulkan-runtime --example draw_costs [-- [ws|many|10k]... [--runs N] [--calls] [--counts] [--heap] [--threads N] [--metallib PATH]]
 //! ```
 //!
 //! Each shape is command buffers committed back to back, each of one render pass over a 512x512
@@ -19,7 +19,13 @@
 //! - **10k**: 3 command buffers of 10,000 such draws.
 //!
 //! The slots lie in 64 KiB no-copy buffers over host pages (`new_buffer_with_bytes_no_copy`), as
-//! a guest's upload chunks do, each command buffer's in chunks of its own. A command buffer ends
+//! a guest's upload chunks do, each command buffer's in chunks of its own. With `--heap`, the
+//! chunks are instead buffers placed at their offsets in one `Placement` heap over the pages
+//! (`new_heap_with_bytes_no_copy`, then `new_buffer_at_offset`), as the consumer places a guest's
+//! upload chunks in a heap over the guest's own RAM, beside a no-copy buffer over pages that hold
+//! the heap's and one chunk more, which stands for the guest RAM's own key over them: the
+//! heap's bytes meet it, so each use of them takes a use of it too (`host_aliases.rs`'s
+//! placements), as the guest RAM's do. A command buffer ends
 //! with `end_encoding`, `add_completed_handler` and `commit`. The four pipeline states pair one
 //! vertex function (positions from vertex buffer 0, a colour from buffer 1) with a fragment
 //! function that returns fragment buffer 0's first value or samples texture 0 with sampler 0,
@@ -27,14 +33,23 @@
 //! the host's clock and a message sink, the rest at its defaults.
 //!
 //! A run is 2 untimed repetitions then 6 counted ones. Each repetition counts the calling
-//! thread's CPU time and, on macOS, its instructions and cycles (`thread_selfcounts`, libSystem's,
-//! readable unprivileged) from the first command buffer's creation through the last commit, then
-//! waits for every command buffer's handler outside the count, and the process's page faults and
-//! voluntary context switches meanwhile (`getrusage`): the thread's counts hold the kernel's
-//! instructions where it ran on the thread. Printed per shape and figure: the
-//! figure a draw, the median over the runs with the lowest and the highest (`DRAW-COST` lines).
-//! Instructions are the figure to compare between builds: a busy host moves them little where it
-//! moves time. The thread asks for the performance cores (`QOS_CLASS_USER_INTERACTIVE`).
+//! thread's CPU time and its instructions and cycles from the first command buffer's creation
+//! through the last commit, then waits for every command buffer's handler outside the count, and
+//! the process's page faults and voluntary context switches meanwhile (`getrusage`). On macOS the
+//! instructions and cycles are libSystem's `thread_selfcounts` (readable unprivileged), which hold
+//! the kernel's where it ran on the thread; on Linux they are the thread's own user-space counts
+//! (`perf_event_open`, where `kernel.perf_event_paranoid` is at most 2; on a hybrid Intel CPU its
+//! performance cores' counters alone, so pin the run there with `taskset`). Printed per shape and
+//! figure: the figure a draw, the median over the runs with the lowest and the highest
+//! (`DRAW-COST` lines). Instructions are the figure to compare between builds: a busy host moves
+//! them little where it moves time. The thread asks for the performance cores
+//! (`QOS_CLASS_USER_INTERACTIVE`).
+//!
+//! With `--threads N`, N threads encode at once on the one device and queue, each its own command
+//! buffers of the shape over chunks of its own (in the one heap, with `--heap`), every repetition
+//! started together, as the consumer walks a queue's command buffers on threads of their own:
+//! each figure is then the threads' together a draw, so a cost that grows with the threads is
+//! work they contend on (a lock, a counter every thread writes).
 //!
 //! With `--calls`, a run also counts each call's instructions apart, reading the counter around
 //! each call (the read's own cost, measured as the run starts, taken off): printed per call
@@ -54,14 +69,15 @@ use metal2vulkan::metal::{BlendFactor, PixelFormat, PrimitiveType, TextureUsage}
 use metal2vulkan::pipeline::{ColorAttachmentDescriptor, RenderPipelineDescriptor, StageSource};
 use metal2vulkan_runtime::{
     Buffer, ClearColor, CommandBuffer, CommandBufferStatus, CommandQueue, Device, DeviceOptions,
-    HostMemory, Library, LoadAction, MessageSink, PipelineOptions, RenderPassDescriptor,
-    RenderPipelineState, ResourceOptions, SamplerState, StoreAction, Texture, TextureDescriptor,
+    Heap, HeapDescriptor, HeapType, HostMemory, Library, LoadAction, MessageSink, PipelineOptions,
+    RenderPassDescriptor, RenderPipelineState, ResourceOptions, SamplerState, StoreAction, Texture,
+    TextureDescriptor,
 };
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::ptr::NonNull;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::mpsc;
+use std::sync::{mpsc, Barrier};
 use std::time::Duration;
 
 /// The example's result: every runtime refusal is a typed `metal2vulkan_runtime::Error`.
@@ -223,6 +239,14 @@ struct Bench {
     constants: Buffer,
 }
 
+/// A shape's chunks, and with `--heap` the heap they are placed in and the buffer over the guest
+/// RAM's pages that stands beside it ([`Bench::chunks`]).
+struct Chunks {
+    buffers: Vec<Buffer>,
+    _heap: Option<Heap>,
+    _ram: Option<Buffer>,
+}
+
 impl Bench {
     fn new(device: Device, library: &Library) -> Result<Bench> {
         let function = |name: &str| -> Result<StageSource> {
@@ -281,11 +305,14 @@ impl Bench {
         })
     }
 
-    /// `shape`'s chunks: no-copy buffers over fresh host pages, kept mapped for the process's
-    /// life, so no import outlives its pages.
-    fn chunks(&self, shape: Shape) -> Result<Vec<Buffer>> {
-        let count = shape.chunks_a_buffer() * shape.buffers as u64;
-        let bytes = (count * CHUNK) as usize;
+    /// `shape`'s chunks, `threads` times over: no-copy buffers over fresh host pages, or with
+    /// `heap` buffers placed in one heap over them beside a buffer over them and one chunk more
+    /// (the module docs), kept mapped for the process's life, so no import outlives its pages.
+    fn chunks(&self, shape: Shape, threads: usize, heap: bool) -> Result<Chunks> {
+        let count = shape.chunks_a_buffer() * (shape.buffers * threads) as u64;
+        // With `heap`, one chunk before the heap's pages that only the guest RAM's buffer covers.
+        let ahead = u64::from(heap) * CHUNK;
+        let bytes = (ahead + count * CHUNK) as usize;
         // SAFETY: a fresh anonymous mapping, read-write, never unmapped.
         let pages = unsafe {
             libc::mmap(
@@ -300,24 +327,65 @@ impl Bench {
         if pages == libc::MAP_FAILED {
             return Err(format!("mmap: {}", std::io::Error::last_os_error()).into());
         }
-        (0..count)
+        let at = |offset: u64| {
+            // SAFETY: inside the mapping, which stays mapped and writable for the process's
+            // life; CHUNK is a multiple of the host's page.
+            NonNull::new(unsafe { pages.cast::<u8>().add(offset as usize) }).ok_or("a null mapping")
+        };
+        if !heap {
+            let buffers = (0..count)
+                .map(|n| {
+                    // SAFETY: page-aligned read-write memory that outlives the buffer.
+                    let buffer = unsafe {
+                        self.device.new_buffer_with_bytes_no_copy(
+                            HostMemory::new(at(n * CHUNK)?),
+                            CHUNK,
+                            ResourceOptions::shared(),
+                            None,
+                        )
+                    }?;
+                    Ok(buffer)
+                })
+                .collect::<Result<Vec<_>>>()?;
+            return Ok(Chunks {
+                buffers,
+                _heap: None,
+                _ram: None,
+            });
+        }
+        // SAFETY: as above, the whole mapping.
+        let ram = unsafe {
+            self.device.new_buffer_with_bytes_no_copy(
+                HostMemory::new(at(0)?),
+                bytes as u64,
+                ResourceOptions::shared(),
+                None,
+            )
+        }?;
+        let descriptor = HeapDescriptor::new(
+            HeapType::Placement,
+            count * CHUNK,
+            ResourceOptions::shared(),
+        );
+        // SAFETY: as above, the mapping past its first chunk.
+        let placed = unsafe {
+            self.device.new_heap_with_bytes_no_copy(
+                HostMemory::new(at(ahead)?),
+                &descriptor,
+                None,
+                None,
+            )
+        }?;
+        let buffers = (0..count)
             .map(|n| {
-                // SAFETY: inside the mapping, which stays mapped and writable for the process's
-                // life; CHUNK is a multiple of the host's page.
-                let at = NonNull::new(unsafe { pages.cast::<u8>().add((n * CHUNK) as usize) })
-                    .ok_or("a null mapping")?;
-                // SAFETY: as above: page-aligned read-write memory that outlives the buffer.
-                let buffer = unsafe {
-                    self.device.new_buffer_with_bytes_no_copy(
-                        HostMemory::new(at),
-                        CHUNK,
-                        ResourceOptions::shared(),
-                        None,
-                    )
-                }?;
-                Ok(buffer)
+                Ok(placed.new_buffer_at_offset(CHUNK, ResourceOptions::shared(), n * CHUNK)?)
             })
-            .collect()
+            .collect::<Result<Vec<_>>>()?;
+        Ok(Chunks {
+            buffers,
+            _heap: Some(placed),
+            _ram: Some(ram),
+        })
     }
 
     /// Command buffer `buffer`'s calls of a repetition of `shape`, over `chunks`.
@@ -486,8 +554,93 @@ fn instructions_and_cycles() -> Option<[u64; 2]> {
     (answer == 0).then_some(words)
 }
 
+/// On Linux, the calling thread's user-space instructions and cycles since its counters opened
+/// at its first call (`perf_event_open`, where `kernel.perf_event_paranoid` is at most 2): on a
+/// hybrid Intel CPU its performance cores' counters (`cpu_core`), which count only there.
+#[cfg(target_os = "linux")]
+fn instructions_and_cycles() -> Option<[u64; 2]> {
+    use std::cell::Cell;
+
+    /// `struct perf_event_attr` as its first published size (`PERF_ATTR_SIZE_VER0`).
+    #[repr(C)]
+    struct Attr {
+        kind: u32,
+        size: u32,
+        config: u64,
+        sample_period: u64,
+        sample_type: u64,
+        read_format: u64,
+        flags: u64,
+        wakeup_events: u32,
+        bp_type: u32,
+        config1: u64,
+    }
+
+    /// `PERF_TYPE_HARDWARE`; `PERF_COUNT_HW_CPU_CYCLES` and `PERF_COUNT_HW_INSTRUCTIONS`; the
+    /// `exclude_kernel` and `exclude_hv` flags.
+    const HARDWARE: u32 = 0;
+    const CYCLES: u64 = 0;
+    const INSTRUCTIONS: u64 = 1;
+    const EXCLUDE_KERNEL_HV: u64 = (1 << 5) | (1 << 6);
+
+    thread_local! {
+        /// The thread's two counters' descriptors, opened at its first read; -1 where one is not.
+        static COUNTERS: Cell<Option<[i32; 2]>> = const { Cell::new(None) };
+    }
+
+    fn open(event: u64) -> i32 {
+        // A hybrid CPU's performance cores' PMU, in the config's upper half; none elsewhere.
+        let pmu = std::fs::read_to_string("/sys/bus/event_source/devices/cpu_core/type")
+            .ok()
+            .and_then(|text| text.trim().parse::<u64>().ok())
+            .unwrap_or(0);
+        let attr = Attr {
+            kind: HARDWARE,
+            size: size_of::<Attr>() as u32,
+            config: event | (pmu << 32),
+            sample_period: 0,
+            sample_type: 0,
+            read_format: 0,
+            flags: EXCLUDE_KERNEL_HV,
+            wakeup_events: 0,
+            bp_type: 0,
+            config1: 0,
+        };
+        // SAFETY: `attr` is a valid `perf_event_attr` of its stated size, live for the call; the
+        // calling thread (0), any CPU (-1), no group (-1), no flags.
+        let fd = unsafe {
+            libc::syscall(
+                libc::SYS_perf_event_open,
+                &attr as *const Attr,
+                0,
+                -1,
+                -1,
+                0,
+            )
+        };
+        i32::try_from(fd).unwrap_or(-1)
+    }
+
+    fn read(fd: i32) -> Option<u64> {
+        let mut count = 0u64;
+        // SAFETY: `count` is 8 writable bytes, the size of the counter's value.
+        let read = unsafe { libc::read(fd, (&mut count as *mut u64).cast(), 8) };
+        (read == 8).then_some(count)
+    }
+
+    let [instructions, cycles] = COUNTERS.with(|cell| match cell.get() {
+        Some(fds) => fds,
+        None => {
+            let fds = [open(INSTRUCTIONS), open(CYCLES)];
+            cell.set(Some(fds));
+            fds
+        }
+    });
+    Some([read(instructions)?, read(cycles)?])
+}
+
 /// Elsewhere the CPU time alone.
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
 fn instructions_and_cycles() -> Option<[u64; 2]> {
     None
 }
@@ -503,31 +656,104 @@ fn spread(mut values: Vec<f64>) -> (f64, f64, f64) {
     (median, values[0], values[n - 1])
 }
 
-/// Run `shape` `runs` times and print its figures a draw, and with `calls` each call's.
-fn measure(bench: &Bench, shape: Shape, runs: usize, (calls, counts): (bool, bool)) -> Result<()> {
-    let chunks = bench.chunks(shape)?;
+/// How a run is made beside its shape: `--calls`, `--counts`, `--heap` and `--threads`.
+#[derive(Clone, Copy)]
+struct Options {
+    calls: bool,
+    counts: bool,
+    heap: bool,
+    threads: usize,
+}
+
+/// One thread's run of its command buffers' `buffers`: its counted repetitions' counts together,
+/// and its calls' tally where `calls`, each repetition started with the other threads' at
+/// `start`.
+fn thread_run(
+    bench: &Bench,
+    buffers: &[Vec<Step<'_>>],
+    calls: bool,
+    start: &Barrier,
+) -> Result<(Counts, Tally)> {
+    // On a Mac, the performance cores, as the main thread asks for them.
+    #[cfg(target_os = "macos")]
+    // SAFETY: sets the calling thread's own class; it takes no pointer.
+    unsafe {
+        libc::pthread_set_qos_class_self_np(libc::qos_class_t::QOS_CLASS_USER_INTERACTIVE, 0);
+    }
+    let mut total: Option<Counts> = None;
+    let mut tally: Tally = [(0, 0); CALLS.len()];
+    for repetition in 0..WARM + COUNTED {
+        let counted = repetition >= WARM;
+        start.wait();
+        let spent = bench.repetition(buffers, (calls && counted).then_some(&mut tally))?;
+        if counted {
+            total = Some(total.map_or(spent, |total| total.plus(spent)));
+        }
+    }
+    Ok((total.unwrap_or_default(), tally))
+}
+
+/// Run `shape` `runs` times and print its figures a draw, and with `--calls` each call's.
+fn measure(bench: &Bench, shape: Shape, runs: usize, options: Options) -> Result<()> {
+    let Options {
+        calls,
+        counts,
+        heap,
+        threads,
+    } = options;
+    let chunks = bench.chunks(shape, threads, heap)?;
     let before = counts.then(|| bench.device.work_counts());
-    let buffers: Vec<Vec<Step<'_>>> = (0..shape.buffers)
-        .map(|buffer| bench.steps(&chunks, shape, buffer))
+    // Each thread's command buffers, the chunks of thread `t`'s from its `t * shape.buffers`th.
+    let buffers: Vec<Vec<Vec<Step<'_>>>> = (0..threads)
+        .map(|thread| {
+            let first = thread * shape.buffers;
+            (first..first + shape.buffers)
+                .map(|buffer| bench.steps(&chunks.buffers, shape, buffer))
+                .collect()
+        })
         .collect();
-    let draws = (COUNTED * shape.buffers * shape.draws) as f64;
+    let draws = (COUNTED * threads * shape.buffers * shape.draws) as f64;
     let mut seen = Vec::with_capacity(runs);
     let mut tallies = Vec::with_capacity(runs);
     for _ in 0..runs {
+        let start = Barrier::new(threads);
+        let ran: Vec<Result<(Counts, Tally)>> = match threads {
+            1 => vec![thread_run(bench, &buffers[0], calls, &start)],
+            _ => std::thread::scope(|scope| {
+                // Each thread's refusal as its text, which crosses threads.
+                let running: Vec<_> = (buffers.iter())
+                    .map(|own| {
+                        let start = &start;
+                        scope.spawn(move || {
+                            thread_run(bench, own, calls, start).map_err(|error| error.to_string())
+                        })
+                    })
+                    .collect();
+                (running.into_iter())
+                    .map(|thread| match thread.join() {
+                        Ok(ran) => ran.map_err(Into::into),
+                        Err(_) => Err("a thread panicked".into()),
+                    })
+                    .collect()
+            }),
+        };
         let mut total: Option<Counts> = None;
         let mut tally: Tally = [(0, 0); CALLS.len()];
-        for repetition in 0..WARM + COUNTED {
-            let counted = repetition >= WARM;
-            let spent = bench.repetition(&buffers, (calls && counted).then_some(&mut tally))?;
-            if counted {
-                total = Some(total.map_or(spent, |total| total.plus(spent)));
+        for answer in ran {
+            let (spent, own) = answer?;
+            total = Some(total.map_or(spent, |total| total.plus(spent)));
+            for (all, one) in tally.iter_mut().zip(own) {
+                *all = (all.0 + one.0, all.1 + one.1);
             }
         }
-        seen.push(total.unwrap_or_default());
+        // The process's counts each thread took over the same span: theirs once.
+        let mut total = total.unwrap_or_default();
+        total.process = total.process.map(|count| count / threads as u64);
+        seen.push(total);
         tallies.push(tally);
     }
     if let Some(before) = before {
-        let drawn = (WARM + COUNTED) * runs * shape.buffers * shape.draws;
+        let drawn = (WARM + COUNTED) * runs * threads * shape.buffers * shape.draws;
         println!("WORK-COUNTS {} draws {drawn}", shape.name);
         println!("WORK-COUNTS {} before {before:?}", shape.name);
         println!(
@@ -537,8 +763,15 @@ fn measure(bench: &Bench, shape: Shape, runs: usize, (calls, counts): (bool, boo
         );
     }
     println!(
-        "{}: {} command buffers of {} draws, {runs} runs of {COUNTED} counted repetitions; a draw:",
-        shape.name, shape.buffers, shape.draws
+        "{}: {} command buffers of {} draws on {threads} thread(s), chunks in {}, {runs} runs of \
+         {COUNTED} counted repetitions; a draw:",
+        shape.name,
+        shape.buffers,
+        shape.draws,
+        match heap {
+            true => "a heap",
+            false => "buffers",
+        }
     );
     let mut figures: Vec<(&str, Vec<f64>)> = vec![(
         "cpu_ns",
@@ -626,13 +859,26 @@ fn compile(scratch: &Path) -> Result<PathBuf> {
 
 fn main() -> Result<()> {
     let mut shapes = Vec::new();
-    let (mut runs, mut metallib, mut calls, mut counts) = (RUNS, None, false, false);
+    let (mut runs, mut metallib) = (RUNS, None);
+    let mut options = Options {
+        calls: false,
+        counts: false,
+        heap: false,
+        threads: 1,
+    };
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--runs" => runs = args.next().ok_or("--runs N")?.parse()?,
-            "--calls" => calls = true,
-            "--counts" => counts = true,
+            "--calls" => options.calls = true,
+            "--counts" => options.counts = true,
+            "--heap" => options.heap = true,
+            "--threads" => {
+                options.threads = args.next().ok_or("--threads N")?.parse()?;
+                if options.threads == 0 {
+                    return Err("--threads N: at least 1".into());
+                }
+            }
             "--metallib" => metallib = Some(PathBuf::from(args.next().ok_or("--metallib PATH")?)),
             name => shapes.push(
                 *SHAPES
@@ -652,19 +898,19 @@ fn main() -> Result<()> {
     unsafe {
         libc::pthread_set_qos_class_self_np(libc::qos_class_t::QOS_CLASS_USER_INTERACTIVE, 0);
     }
-    let mut options = DeviceOptions::default();
-    options.gpu_times_from_host = true;
-    options.messages = Some(MessageSink::new(|message| {
+    let mut device_options = DeviceOptions::default();
+    device_options.gpu_times_from_host = true;
+    device_options.messages = Some(MessageSink::new(|message| {
         if message.degradation.is_some() {
             NOTICES.fetch_add(1, Ordering::Relaxed);
         }
     }));
-    let device = Device::system_default_with(&options)?;
+    let device = Device::system_default_with(&device_options)?;
     println!("device: {}", device.name());
     let library = library(&device, metallib.as_deref())?;
     let bench = Bench::new(device, &library)?;
     for shape in shapes {
-        measure(&bench, shape, runs, (calls, counts))?;
+        measure(&bench, shape, runs, options)?;
     }
     println!("notices heard: {}", NOTICES.load(Ordering::Relaxed));
     Ok(())
