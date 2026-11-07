@@ -514,6 +514,13 @@ impl Device {
         candidate: ImagePlan,
         texture_type: TextureType,
     ) -> Result<ImagePlan, Error> {
+        #[cfg(test)]
+        if (self.shared().storage_costs_forced).load(std::sync::atomic::Ordering::Relaxed)
+            && candidate.usage.contains(ImageUsageFlags::STORAGE)
+            && !plan.usage.contains(ImageUsageFlags::STORAGE)
+        {
+            return Ok(plan);
+        }
         let answers = &self.shared().textures.usage_answers;
         let known = lock(answers).answer(&plan, &candidate);
         let free = match known {

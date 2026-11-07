@@ -362,6 +362,8 @@ mod scheduler;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod scheduler_wakes;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod self_read_storage;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod set_zero_at_offsets;
 mod shader_cache;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]

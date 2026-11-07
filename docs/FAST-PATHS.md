@@ -220,7 +220,12 @@ recorded here.
   instance (`texture/attached_reads.rs`): the texels around the draw's scissors where it reads at
   its own pixels alone, else every texel or what the instances since drew. After a barrier inside
   the instance, an own-pixel read takes a snapshot drawn in its subpass (`render/snapshot.rs`,
-  docs/API.md "Snapshot reads") or splits the instance; both are exact. Over a texture over its
+  docs/API.md "Snapshot reads") or splits the instance; both are exact. A private texture of the
+  runtime's own whose image lacks `STORAGE` (the device lays it out otherwise with it) splits at
+  its first such read, as a later fetch would render it through a stand-in its snapshot does not
+  see, and takes its storage form at a later commit (`texture/storage_form.rs`,
+  `WorkCounts::storage_forms_taken`, `fetched-target-storage`): its later passes' readers take the
+  snapshot. Over a texture over its
   buffer's bytes (a linear image over an ordinary buffer's packed rows or over host pages, or the
   shadow a texture over host pages that renders is where it is one) it takes the snapshot at any
   area, where the device makes that image with feedback loop usage

@@ -77,7 +77,10 @@
 //!   of a texture the attachment renders in place, at the binding's own first level and slice,
 //!   with feedback loop usage (`Texture::snapshot_color`, `texture::feedback_candidate`), not
 //!   through a view of another format, and which no later fetch can render through a stand-in
-//!   (`RenderCommandEncoder::keeps_own_attachment`), no two of the colors of one image (whose
+//!   (`RenderCommandEncoder::keeps_own_attachment`: its image has `STORAGE`, which a texture of
+//!   the runtime's own without it, its device laying it out otherwise with it, takes at a later
+//!   commit where it may, noted at its reader's split, `texture/storage_form.rs`, so its later
+//!   passes' readers take the snapshot), no two of the colors of one image (whose
 //!   snapshot is one); the draw costs no more so than the split would
 //!   (`RenderCommandEncoder::snapshot_cheaper`: at any area where every such color is a texture
 //!   whose image lies over its buffer's bytes, `RenderCommandEncoder::over_bytes`; else its
@@ -314,6 +317,12 @@ impl RenderLowering {
             .collect();
         for &index in &colors {
             if !self.keeps_own_attachment(index) {
+                // A texture of the runtime's own whose image lacks `STORAGE` (the device lays it
+                // out otherwise with it) takes its storage form at a later commit, where it may
+                // (`texture/storage_form.rs`): its later passes' readers take the snapshot.
+                if let Some(color) = self.layout.colors.get(index).and_then(Option::as_ref) {
+                    color.target.texture.want_storage_form();
+                }
                 return self.snapshot_fallback(
                     "a framebuffer fetch of the attachment would render it through a stand-in",
                 );

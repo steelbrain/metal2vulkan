@@ -1838,7 +1838,8 @@ bound.
   copied into it before the pass on a `Load` and back after it on a `Store`.
 - `metal2vulkan-degrade-fetched-target-storage` (performance). `FetchedTargetStorage`: A runtime
   texture that a pass rendered into a scratch image for want of `STORAGE` (`fetch-through-scratch`
-  through the pixel interlock) took its storage form: its image made again with `STORAGE` and its
+  through the pixel interlock), or whose draw that read it at its own pixels after a memory barrier
+  split its pass for want of it, took its storage form: its image made again with `STORAGE` and its
   texels copied in once, at the commit of the device's only uncommitted command buffer; with a
   submission check, once that command buffer's checks ran at its submission and every encoder of it
   ran. Announced once per device, whatever `DeviceOptions::announce_each` says, before that command

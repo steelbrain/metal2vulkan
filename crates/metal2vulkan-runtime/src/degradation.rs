@@ -590,7 +590,9 @@ degradations! {
             "a scratch image per pass, the texture copied into it before the pass on a `Load` \
              and back after it on a `Store`";
         /// A runtime texture that a pass rendered into a scratch image for want of `STORAGE`
-        /// (`fetch-through-scratch` through the pixel interlock) took its storage form: its image
+        /// (`fetch-through-scratch` through the pixel interlock), or whose draw that read it at
+        /// its own pixels after a barrier split its pass for want of it (`render/snapshot.rs`),
+        /// took its storage form: its image
         /// made again with `STORAGE` and its texels copied in once, at the commit of the device's
         /// only uncommitted command buffer (`texture/storage_form.rs`); with a submission check,
         /// once that command buffer's checks ran at its submission and every encoder of it ran.

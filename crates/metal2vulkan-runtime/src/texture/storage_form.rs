@@ -10,7 +10,10 @@
 //!   whose plan [`storage_candidate`] gives `STORAGE`, and whose `VkImage`
 //!   was never handed out ([`Texture::vk_image`](crate::Texture::vk_image) keeps it for good).
 //!   Noted once, at the first fetching pass that renders it into a scratch image for want of
-//!   `STORAGE`. An untracked texture keeps its scratch: the program orders its uses on other
+//!   `STORAGE`, or at the first draw that reads it after a barrier in a pass that renders it and
+//!   splits the pass for want of `STORAGE` (`render/snapshot.rs`: a later fetch would render it
+//!   through a stand-in its snapshot does not see), whose later passes' readers then take the
+//!   snapshot. An untracked texture keeps its scratch: the program orders its uses on other
 //!   queues with its own fences and events, which the copy below could not follow.
 //! - **When: the commit of the only uncommitted command buffer.** A command buffer that commits
 //!   while it is the device's only one not committed (`queue.rs`'s
@@ -272,7 +275,8 @@ impl Image {
 
 impl Texture {
     /// Note the texture, a color render target that a pass fetches through the pixel interlock
-    /// and renders into a scratch image for want of `STORAGE`, to take its storage form where it
+    /// and renders into a scratch image for want of `STORAGE`, or whose reader after a barrier
+    /// splits its pass for want of it (`render/snapshot.rs`), to take its storage form where it
     /// may (the module docs); once.
     pub(crate) fn want_storage_form(&self) {
         if self.0.parent.is_some() {
@@ -289,7 +293,10 @@ impl Texture {
                 ..
             }
         );
-        if !own
+        // Noted already: a reader that splits its pass notes it at each such draw
+        // (`render/snapshot.rs`), so the plan is asked no more.
+        if form.noted.load(Ordering::Relaxed)
+            || !own
             || !image.identity.tracked
             || self.storage_mode() != StorageMode::Private
             || form.taken.get().is_some()

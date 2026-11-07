@@ -485,6 +485,11 @@ pub(super) struct DeviceShared {
     /// (`linear_attachment::bound`).
     #[cfg(test)]
     pub(crate) linear_rule_forced: AtomicBool,
+    /// `STORAGE` costs every image whose plan lacks it something (`Device::if_free`), whatever
+    /// the device lays out: for the tests of `tests/self_read_storage.rs` on a device that gives a
+    /// render target `STORAGE` for nothing.
+    #[cfg(test)]
+    pub(crate) storage_costs_forced: AtomicBool,
     /// The logs of its shadows over host pages a consumer logs the writes to
     /// (`dirty_pages.rs`).
     pub(super) dirty: super::dirty_pages::DirtyShadows,
@@ -2061,6 +2066,8 @@ impl Device {
             failing_host_imports: Default::default(),
             #[cfg(test)]
             linear_rule_forced: Default::default(),
+            #[cfg(test)]
+            storage_costs_forced: Default::default(),
             dirty: Default::default(),
             standings: Default::default(),
             fresh: Default::default(),
