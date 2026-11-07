@@ -4201,6 +4201,15 @@ each item named states the rule in full.
   (`drawn-depth-copy`).
 - **A blit copy of 24-bit depth between textures of different formats is refused**: Apple's
   reference GPUs make no `Depth24Unorm_Stencil8` texture, so there is no Metal answer to match.
+- **A blit copy out of a texture whose rows overlap in the buffer writes them in turn, the later
+  row's bytes standing**: a `bytesPerRow` below the row, as `MTLPixelFormatGetInfoForDevice`
+  describes a one-plane YCbCr format's row, places each row at `y x bytesPerRow`, as Metal's blit
+  does. Metal writes such rows in no one order: on the Apple M3 Max under macOS 27.0.1, of 300
+  shapes of 12 formats copied out at half the row, about a fifth left the later rows' bytes
+  standing, a fifth every even row's and the rest neither order's, and 15 answered otherwise in
+  another process (`probes/short_row_blits.m`). The runtime's answer is one of those, the same
+  every time. A multisampled texture's copy out at such a pitch stays refused
+  (`Copy(BytesPerRow)`): where Metal places its rows there is not measured.
 
 **Render passes**
 

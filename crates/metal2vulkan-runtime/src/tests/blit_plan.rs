@@ -9,7 +9,7 @@ use super::super::blit_plan::{
     texel_rows, BufferCopyPlan, BufferLayout, BufferRange, CopyPair, ImageCopyRegion, RowsCopy,
 };
 use super::super::copy_plan::{
-    copy_unit, BlitOption, CopyProblem, CopyRefusal, CopyUnit, ImageRegion, TextureRegion,
+    copy_unit, shape, BlitOption, CopyProblem, CopyRefusal, CopyUnit, ImageRegion, TextureRegion,
 };
 use super::super::error::RuntimeGap;
 use super::super::image_plan::{plan_image, ImagePlan};
@@ -291,11 +291,17 @@ fn layouts_off_metals_rules_copy_where_plain_metal_places_their_rows() {
     );
     let half = at(P::YCBCR84221P, [32, 4, 1], 0, 32, true);
     assert_eq!(half, Ok(vec![0, 32, 64, 96]));
-    // Refused: overlapping writes out of a texture, the aligned path's pitch of 0 (it reads
-    // garbage) and offsets of 16 or more on it (not measured), and depth and stencil formats but
-    // `Depth32Float` (not measured).
+    // Out of a texture at a pitch below a row: each row at its own offset, the rows overlapping in
+    // the buffer (written in turn: `a_copy_out_at_a_pitch_below_the_row_leaves_the_later_rows`).
+    assert_eq!(at(rgba8.0, rgba8.1, 0, 8, false), Ok(vec![0, 8, 16, 24]));
+    assert_eq!(at(rgba8.0, rgba8.1, 0, 0, false), Ok(vec![0, 0, 0, 0]));
+    assert_eq!(
+        at(rgba8.0, [8, 4, 1], 0, 16, false),
+        Ok(vec![0, 16, 32, 48])
+    );
+    // Refused: the aligned path's pitch of 0 (it reads garbage) and offsets of 16 or more on it
+    // (not measured), and depth and stencil formats but `Depth32Float` (not measured).
     let refused = Err(CopyProblem::BytesPerRow);
-    assert_eq!(at(rgba8.0, rgba8.1, 0, 8, false), refused);
     assert_eq!(at(rgba8.0, rgba8.1, 0, 0, true), refused);
     assert_eq!(at(P::RGBA32Uint, [1, 4, 1], 0, 8, true), refused);
     assert_eq!(at(rgba8.0, rgba8.1, 16, 18, true), refused);
@@ -336,6 +342,55 @@ fn unstage(plan: &BufferCopyPlan, texels: &[u8], len: usize) -> Vec<u8> {
         out[s..s + n].copy_from_slice(&texels[d..d + n]);
     }
     out
+}
+
+/// A copy out of a texture at a pitch below its row writes each row at `y x bytesPerRow`, in turn,
+/// the later row's bytes over the earlier's, one of the orders plain Metal's blit leaves (an Apple
+/// M3 Max under macOS 27.0.1, `probes/short_row_blits.m`: no one order holds), nothing past the
+/// last row written: a one-plane YCbCr texture at the row `MTLPixelFormatGetInfoForDevice`
+/// describes (half the row), a 16-byte texel at a pitch off the row's half, and every row at the
+/// first at a pitch of 0. Each row's buffer bytes are one region, apart from every other's.
+#[test]
+fn a_copy_out_at_a_pitch_below_the_row_leaves_the_later_rows() {
+    use PixelFormat as P;
+    for (pf, extent, bpr) in [
+        (P::YCBCR84221P, [32u32, 4u32], 32u64),
+        (P::RGBA8Unorm, [8, 4], 16),
+        (P::RGBA32Float, [4, 3], 48),
+        (P::R8Unorm, [16, 4], 0),
+    ] {
+        let t = tex(
+            pf,
+            TextureType::Type2D,
+            [u64::from(extent[0]), u64::from(extent[1]), 1],
+        );
+        let u = unit(&t, BlitOption::None).unwrap();
+        let s = shape([extent[0], extent[1], 1], &u);
+        let r = region([0, 0, 0], [extent[0], extent[1], 1]);
+        let len = ((s.rows - 1) * bpr + s.row_bytes) as usize;
+        let plan = plan_buffer_copy(&t.record, &r, &u, &layout(0, bpr, 0), len as u64, 0, false);
+        let plan = plan.unwrap_or_else(|problem| panic!("{pf:?} at {bpr}: {problem:?}"));
+        assert_eq!(plan.span, 0..len as u64, "{pf:?} at {bpr}");
+        let staging = plan.staging.as_ref().expect("a staged copy");
+        assert!(
+            staging.rows.len() as u64 <= s.rows,
+            "{pf:?}: {:?}",
+            staging.rows
+        );
+        let texels: Vec<u8> = (0..s.rows * s.row_bytes)
+            .map(|i| (i * 7 % 253) as u8)
+            .collect();
+        let mut want = vec![0xabu8; len + 16];
+        for y in 0..s.rows {
+            let (at, from, n) = (
+                (y * bpr) as usize,
+                (y * s.row_bytes) as usize,
+                s.row_bytes as usize,
+            );
+            want[at..at + n].copy_from_slice(&texels[from..from + n]);
+        }
+        assert_eq!(unstage(&plan, &texels, len + 16), want, "{pf:?} at {bpr}");
+    }
 }
 
 /// A `bytesPerImage` off Metal's rules (an M4 under macOS 27.0.1; its validation

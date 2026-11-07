@@ -699,7 +699,10 @@ impl BlitCommandEncoder {
     /// texture's region into the buffer, laid out as
     /// [`copy_from_buffer_to_texture`](Self::copy_from_buffer_to_texture) reads it. The bytes
     /// between rows and images are left as they are; images closer than the region's rows are
-    /// written in turn, the later image's bytes staying, as plain Metal writes them.
+    /// written in turn, the later image's bytes staying, as plain Metal writes them. Rows closer
+    /// than a row (a `bytesPerRow` below it, as `MTLPixelFormatGetInfoForDevice` describes a
+    /// one-plane YCbCr format's) are written in turn too, the later row's bytes staying: plain
+    /// Metal writes them in no one order, and that is one of its answers.
     ///
     /// Refused as `copy_from_buffer_to_texture` is, except that depth is copied out on every
     /// device.

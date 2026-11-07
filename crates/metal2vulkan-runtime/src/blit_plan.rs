@@ -12,8 +12,8 @@
 //! stops it): each row at `offset + z * bytesPerImage + y * bytesPerRow` rounded down to the copy
 //! unit or to 4 bytes, whichever is smaller, and a copy into a texture of one image of more than
 //! one row, from offset 0, with `bytesPerRow` rounded down to the copy unit a multiple of 16, at
-//! that rounded pitch (Metal's aligned path). Out of a texture, images that overlap are written in
-//! turn, a later image's bytes over an earlier one's. A region of one image ignores
+//! that rounded pitch (Metal's aligned path). Out of a texture, rows and images that overlap are
+//! written in turn, a later one's bytes over an earlier one's. A region of one image ignores
 //! `bytesPerImage`. [`placed_rows`] states what stays refused.
 
 use super::chroma_pairs::is_four_two_two;
@@ -163,9 +163,15 @@ fn off_rules(layout: &BufferLayout, s: &Shape, unit: &CopyUnit) -> bool {
 /// eight formats of 1 to 16 bytes a texel, `YCBCR8_422_1P` and `YCBCR10_444_1P` among them,
 /// `Private` and `Shared`).
 ///
-/// Refused (`BytesPerRow`): a copy out of a texture whose rows overlap (its writes race on
-/// Metal); on the aligned path, a pitch of 0 (Metal reads garbage) and an offset of 16 or more
-/// (not measured). Refused (`BufferRange`): a row past `u64::MAX`, which lies past every buffer.
+/// A copy out of a texture at a pitch below a row writes each row at its own offset, the rows
+/// overlapping in the buffer: Metal writes them in no one order, and the runtime writes them in
+/// turn, the later row's bytes over the earlier's (`plan_placed_copy`), one of Metal's own answers
+/// (the same probe: copies out at half the row and below, rows `y x bytesPerRow` apart and nothing
+/// past their span written, the later rows' bytes standing in about a fifth of its shapes).
+///
+/// Refused (`BytesPerRow`): on the aligned path, a pitch of 0 (Metal reads garbage) and an offset
+/// of 16 or more (not measured). Refused (`BufferRange`): a row past `u64::MAX`, which lies past
+/// every buffer.
 fn placed_rows(
     layout: &BufferLayout,
     s: &Shape,
@@ -175,9 +181,6 @@ fn placed_rows(
     let bytes = u64::from(unit.bytes);
     let word = bytes.min(4);
     let bpr = layout.bytes_per_row;
-    if s.rows > 1 && bpr < s.row_bytes && !into_texture {
-        return Err(CopyProblem::BytesPerRow);
-    }
     let pitch = bpr - bpr % bytes;
     let aligned = into_texture && s.images == 1 && s.rows > 1 && pitch.is_multiple_of(16);
     if aligned && layout.offset.is_multiple_of(16) {
@@ -354,10 +357,11 @@ pub(super) fn plan_buffer_copy(
 
 /// A copy of a layout off Metal's rules (shape `s`, of the checked `image`) through a tightly
 /// packed staging layout, each row where plain Metal places it ([`placed_rows`]); the rows stay
-/// in the buffer. Out of the texture, rows that overlap (images closer than the region's rows)
-/// are written in turn, as plain Metal writes them (in order in every run of
-/// 3D textures up to 256x64x4): each row's bytes that a later row writes are left out of it
-/// ([`later_rows_win`]), so the copies' regions are disjoint.
+/// in the buffer. Out of the texture, rows that overlap are written in turn: images closer than
+/// the region's rows as plain Metal writes them (in order in every run of 3D textures up to
+/// 256x64x4), and rows closer than a row, which Metal writes in no one order, as one of its
+/// answers (the later row's bytes standing). Each row's bytes that a later row writes are left
+/// out of it ([`later_rows_win`]), so the regions of the one copy into the buffer are disjoint.
 fn plan_placed_copy(
     layout: &BufferLayout,
     s: &Shape,
