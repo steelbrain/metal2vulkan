@@ -12,15 +12,20 @@
 //! the tie-heavy set, the one its Metal probes measured) over a 256 x 256 target of each format
 //! loaded with the same pseudo-random texels (rotated for `ARGB8Unorm`), under one write mask and
 //! blend state ([`CASES`]), and checks every `ARGB8Unorm` texel holds the `RGBA8Unorm` texel's
-//! bytes rotated, as Metal's do. A blend no Vulkan factor gives on the rotated image must be
-//! refused `NotImplemented(Format)`, and a case the device refuses for a need of its own
-//! (`dualSrcBlend`) is printed as refused. A differing case is printed with its first differing
+//! bytes rotated, as Metal's do. A blend no Vulkan factor gives on the rotated image (Metal's
+//! destination alpha in a color factor) the function computes over the texel where the device
+//! orders framebuffer fetch: its bytes must be the `RGBA8Unorm` target's rotated where the
+//! device's blend is Apple's (`VkProperty::MetalColorWrites`), and elsewhere how many differ is
+//! printed, the `RGBA8Unorm` target's blend being the device's own; a device that orders fetch in
+//! neither form refuses it naming `FramebufferFetch`. A case the device refuses for a need of its
+//! own (`dualSrcBlend`) is printed as refused. A differing case is printed with its first differing
 //! texels on one `ARGB8-TARGETS-DIFFERS` line.
 
 use super::buffer_with;
 use super::resolves::{lane, quiet, Lane};
 use super::two_plane_copies::Rng;
 use crate::candidate::runtime_samples::{library, shape};
+use metal2vulkan::device::VkProperty;
 use metal2vulkan::error::{Feature, Needs};
 use metal2vulkan::metal::{
     BlendFactor, BlendOperation, ColorWriteMask, PixelFormat, PrimitiveType, TextureUsage,
@@ -260,7 +265,8 @@ fn attachment(pf: PixelFormat, (_, mask, blend): Case) -> ColorAttachmentDescrip
 }
 
 /// Every case's `ARGB8Unorm` target holds its `RGBA8Unorm` target's bytes rotated, as Metal's
-/// does, and a blend of Metal's destination alpha in a color factor is refused typed.
+/// does, and a blend of Metal's destination alpha in a color factor, which the function computes
+/// over the texel, holds them too where the device's blend is Apple's.
 #[test]
 fn argb8_targets_hold_rgba8_texels_rotated() {
     let (messages, _cache, lane) = lane();
@@ -321,21 +327,46 @@ fn argb8_targets_hold_rgba8_texels_rotated() {
             wrong.push(format!("{}: {}", case.0, differing.join("; ")));
         }
     }
-    // Metal's destination alpha in a color factor: no Vulkan factor reads it on the image.
+    // Metal's destination alpha in a color factor: no Vulkan factor reads it on the image, so the
+    // function computes Metal's blend over the texel where the device orders framebuffer fetch,
+    // and a device that orders it in neither form refuses the pipeline naming both orderings.
     let mut dst_alpha = ColorAttachmentDescriptor::new(PixelFormat::ARGB8Unorm);
     dst_alpha.blending_enabled = true;
     dst_alpha.source_rgb_blend_factor = BlendFactor::DestinationAlpha;
     dst_alpha.destination_rgb_blend_factor = BlendFactor::OneMinusDestinationAlpha;
+    let mut plain_dst_alpha = dst_alpha;
+    plain_dst_alpha.pixel_format = PixelFormat::RGBA8Unorm;
+    let plain = target(&lane, PixelFormat::RGBA8Unorm, &dst);
+    draw(&lane, &plain, &values, plain_dst_alpha)
+        .unwrap_or_else(|e| panic!("a destination alpha blend: RGBA8Unorm: {e}"));
     let held = target(&lane, PixelFormat::ARGB8Unorm, &dst_rotated);
-    match draw(&lane, &held, &values, dst_alpha) {
-        Err(Error::Unsupported(u)) => {
-            assert_eq!(
-                (u.feature, u.needs),
-                (Feature::Format, Needs::NotImplemented)
+    let shader_blend = match draw(&lane, &held, &values, dst_alpha) {
+        Ok(()) => {
+            let want: Vec<u8> = lane
+                .read(&plain, (0, 0), 4, BlitOption::None)
+                .chunks(4)
+                .flat_map(|t| rotated([t[0], t[1], t[2], t[3]]))
+                .collect();
+            let got = lane.read(&held, (0, 0), 4, BlitOption::None);
+            let differing = got.iter().zip(&want).filter(|(g, w)| g != w).count();
+            let largest = got
+                .iter()
+                .zip(&want)
+                .map(|(&g, &w)| g.abs_diff(w))
+                .max()
+                .unwrap_or(0);
+            println!(
+                "ARGB8-TARGETS {name}: destination alpha: {differing} bytes differ from \
+                 RGBA8Unorm's rotated, the largest by {largest}"
             );
+            Some(differing)
         }
-        other => panic!("a destination alpha blend: {:?}", other.map(|_| ())),
-    }
+        Err(Error::Unsupported(u)) if u.feature == Feature::FramebufferFetch => {
+            println!("ARGB8-TARGETS {name}: destination alpha: refused: {u:?}");
+            None
+        }
+        Err(e) => panic!("a destination alpha blend: ARGB8Unorm: {e}"),
+    };
     for line in &wrong {
         println!("ARGB8-TARGETS-DIFFERS {name}: {line}");
     }
@@ -345,6 +376,25 @@ fn argb8_targets_hold_rgba8_texels_rotated() {
         wrong.len()
     );
     assert!(wrong.is_empty(), "{} cases differ", wrong.len());
+    // Metal blends the format as `RGBA8Unorm` with its channels rotated, and where the device's
+    // blend is Apple's (`VkProperty::MetalColorWrites`) its `RGBA8Unorm` target's blend is Metal's
+    // too: there the function's blend holds those bytes exactly. Elsewhere the `RGBA8Unorm`
+    // target's blend is the device's own and the function's Metal's, so the line above counts
+    // what they differ by.
+    let metals = lane
+        .device
+        .compile_device()
+        .profile()
+        .enabled()
+        .properties
+        .contains(&VkProperty::MetalColorWrites);
+    if metals {
+        assert_eq!(
+            shader_blend,
+            Some(0),
+            "a destination alpha blend on Apple's blend"
+        );
+    }
     assert!(checked >= 6, "{checked} cases checked");
     quiet(lane, &messages);
 }
