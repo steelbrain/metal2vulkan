@@ -828,7 +828,7 @@ enum Carried {
 /// ([`behind_running_work`]).
 #[derive(Debug, Default)]
 struct Taken {
-    /// Groups kept, and kernel submissions made, since the one before was taken in.
+    /// Groups kept, and kernel submissions made, since the one before read `Scheduled`.
     kept: u64,
     submissions: u64,
     /// It read `Scheduled` (or later), its scheduled handler had run, and its kernel end time was
@@ -931,10 +931,15 @@ fn behind_running_work(completion: CompletionPolicy, stretch: usize, carried: Ca
                 }
                 command_buffer.commit().unwrap();
                 taken_in(&device);
-                let counts = device.work_counts();
                 // Its scheduled handler runs on the queue's context, at once where its transition
                 // was posted as it was submitted or held.
                 command_buffer.wait_until_scheduled().unwrap();
+                // Read once it is `Scheduled`: a checked batch is held for its check in the pass
+                // that took it in, and a later pass, once the check ran, submits or holds it and
+                // keeps or sends its group; its submission handler runs once that pass's lock is
+                // free, before its transition to `Scheduled`. Read at the take-in, its own
+                // submission lands in the next one's counts.
+                let counts = device.work_counts();
                 taken.push(Taken {
                     kept: counts.groups_kept_pending - last.groups_kept_pending,
                     submissions: counts.queue_submissions - last.queue_submissions,
