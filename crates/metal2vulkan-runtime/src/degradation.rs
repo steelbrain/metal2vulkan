@@ -2038,8 +2038,10 @@ degradations! {
              changed in the pages since, and from which each batch's completion writes back \
              every byte the GPU changed, where Metal's GPU reads and writes the pages \
              themselves: a CPU write the GPU reads mid-command-buffer, or a GPU write the CPU \
-             reads before the batch completes, is not seen, and each commit and completion \
-             compares every byte of every copy";
+             reads before the batch completes, is not seen; each commit compares every byte of a \
+             copy whose pages carry no log of their writes (only the pages its log reports \
+             written where they do), and each completion every copy its batches may have \
+             written";
         /// Batches of command buffers committed on one queue that the scheduler found ready
         /// together, or held while two or more earlier submissions of their queue ran, went to the
         /// driver in one `vkQueueSubmit`, only the last signalling its queue's timeline and their

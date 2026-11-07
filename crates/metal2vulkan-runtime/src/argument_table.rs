@@ -228,8 +228,9 @@ impl Stamp {
         })
     }
 
-    /// Its number, which no other stamp has.
-    #[cfg(test)]
+    /// Its number, which no other stamp has (read by `tests::argument_table`, a debug-build
+    /// test).
+    #[cfg(all(test, debug_assertions))]
     pub(super) fn raw(self) -> u64 {
         self.0
     }
