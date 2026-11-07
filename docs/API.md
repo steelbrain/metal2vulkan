@@ -2562,14 +2562,18 @@ bound.
   as half through the pass and rounds it once at the store: a blended or read value can differ from
   Metal's by a code, and the difference can grow over many draws that blend onto each other. Not
   announced for a color whose half shadow the runtime holds: in a pass of one layer on a device that
-  orders framebuffer fetch through the pixel interlock alone (MoltenVK, NVIDIA, ANV, RADV), at one
-  sample or more, from the pass's clear or, at one sample, its load, each blend and read sees the half
-  Metal's tile holds. Over input attachments (lavapipe), in a multisampled pass that loads the color,
-  and after a draw the shadow cannot follow (one that writes the color without reading it at more
-  than one sample), the codes stay and the notice fires. Over input attachments it also fires for a
-  draw that writes some of an extended-range word's codes under a mask (`BGR10_XR`'s, or a two-plane
-  format's color word), whose function reads the word only to keep the other codes, which it keeps
-  exactly: the pipeline's state does not tell that read from the function's own fetch.
+  orders framebuffer fetch through the pixel interlock alone (MoltenVK, NVIDIA, ANV, RADV), or
+  through input attachments with the pixel interlock, fragment stores and `Rgba16f` storage images
+  (lavapipe, whose draws read and write the shadow beside the input attachment), at one sample or
+  more, from the pass's clear or, at one sample, its load, each blend and read sees the half Metal's
+  tile holds. In a multisampled pass that loads the color, and after a draw the shadow cannot follow
+  (one that writes the color without reading it at more than one sample, or over input attachments
+  one whose shadow the depth and stencil tests or the coverage could leave apart from its codes),
+  the codes stay and the notice fires. Over input attachments in a pass that holds no shadow it also
+  fires for a draw that writes some of an extended-range word's codes under a mask (`BGR10_XR`'s, or
+  a two-plane format's color word), whose function reads the word only to keep the other codes,
+  which it keeps exactly: the pipeline's state does not tell that read from the function's own
+  fetch.
 - `metal2vulkan-degrade-unmeasured-heap-texture-size` (precision). `UnmeasuredHeapTextureSize`: A
   heap texture sized or made (`heap_texture_size_and_align`, `Heap::new_texture`) whose size Metal's
   layout the runtime does not model: a format or a sample count whose layout in Metal's heaps is not

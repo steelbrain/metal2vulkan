@@ -1660,10 +1660,11 @@ degradations! {
         /// storage images (multisampled ones at more than one sample), from the pass's clear or
         /// (at one sample) its load, a draw's blend or read sees the `half` Metal's tile holds.
         /// In a multisampled pass that loads the color, and once a draw ends the shadow, the
-        /// codes stay. Over input attachments it also names a draw that writes some of an
-        /// extended-range word's codes under a mask (`BGR10_XR`'s, a two-plane format's color
-        /// word), whose function reads the word only to keep the other codes, exactly: the
-        /// pipeline's state does not tell that read from the function's own fetch.
+        /// codes stay. Over input attachments in a pass that holds no shadow it also names a draw
+        /// that writes some of an extended-range word's codes under a mask (`BGR10_XR`'s, a
+        /// two-plane format's color word), whose function reads the word only to keep the other
+        /// codes, exactly: the pipeline's state does not tell that read from the function's own
+        /// fetch.
         ExtendedRangeBlendsStoredCodes = "extended-range-blends-stored-codes", Precision,
             "a blend into, or a read of, an extended-range color an earlier draw of the pass \
              wrote sees the codes the runtime stored at that draw (each channel rounded to its \
