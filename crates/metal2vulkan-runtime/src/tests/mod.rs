@@ -180,6 +180,8 @@ mod host_ram_copy_bench;
 mod host_ram_copy_device;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod host_ram_device;
+#[cfg(all(any(m2v_gpu, m2v_cpu_icd), target_os = "linux"))]
+mod host_ram_dma_buf;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod host_ram_window_bench;
 #[cfg(all(any(m2v_gpu, m2v_cpu_icd), target_os = "linux"))]
