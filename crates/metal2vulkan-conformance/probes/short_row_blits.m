@@ -43,8 +43,8 @@
 //   bytes that stand follow the format and the pitch (at a 64-byte row and a 32-byte pitch,
 //   `R8Unorm`'s later rows over the earlier, `R16Uint`'s and `YCBCR8_422_1P`'s even rows over the
 //   odd ones), and 7 of 166 cases answered otherwise in another of three processes.
-// - `half`: of 300 shapes of 12 formats at half the row, each in three processes, about a third
-//   of a format's shapes left the later rows' bytes standing (every width of 48 texels), a sixth
+// - `half`: of 300 shapes of 12 formats at half the row, each in three processes, about a fifth
+//   of a format's shapes left the later rows' bytes standing (a width of 48 texels), about a fifth
 //   every even row's (a width of 16) and the rest neither order's; 15 shapes answered otherwise
 //   in another process. No one order holds a copy out whose rows overlap.
 
