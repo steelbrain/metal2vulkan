@@ -59,7 +59,7 @@ use crate::error::{vulkan, Error};
 use crate::exit_guard::{self, Call};
 use crate::freed_memory::Parking;
 use crate::in_place::DriverIdentity;
-use crate::loader_word::LoaderWord;
+use crate::loader_word::DeviceWord;
 use crate::queue_share::{encode, record_name, QueueSwitch, Verdict, SWITCH_IDLES};
 use crate::release;
 use crate::shader_cache::store::Store;
@@ -132,7 +132,7 @@ struct Parts {
     parking: Option<Arc<Parking>>,
     counts: Arc<Counters>,
     fences: Arc<Fences>,
-    loader_word: Arc<LoaderWord>,
+    loader_word: Arc<DeviceWord>,
     switch: Arc<QueueSwitch>,
     store: Arc<Store>,
     /// The primary family, its pool's.
@@ -302,8 +302,9 @@ impl Objects {
         // check's, which this thread alone uses; its loader word is put back first
         // (`loader_word.rs`).
         let allocated = unsafe {
-            parts.loader_word.restore();
-            raw.allocate_command_buffers(&allocate)
+            parts
+                .loader_word
+                .restored(|| raw.allocate_command_buffers(&allocate))
         };
         exit_guard::called(Call::AllocateCommandBuffers);
         self.buffers = allocated.map_err(vulkan)?;

@@ -39,7 +39,7 @@ use crate::error::{vulkan, Error, InstanceApiVersion, LoaderNotFound};
 use crate::exit_guard;
 use crate::gpu_time;
 use crate::image_barrier::MemoryReads;
-use crate::loader_word::LoaderWord;
+use crate::loader_word::DeviceWord;
 use crate::release;
 use crate::shader_cache::{CacheSetup, ShaderCacheOptions};
 use crate::sparse;
@@ -1790,7 +1790,7 @@ fn create_on(
         })
         .map_err(vulkan)?;
     // SAFETY: the device was just created: its word is the loader's.
-    let loader_word = unsafe { LoaderWord::of_device(raw.handle()) };
+    let loader_word = unsafe { DeviceWord::of_device(raw.handle()) };
     let primary = families.get(queue_family as usize);
     let memory_reads = MemoryReads::of(
         primary.map_or(vk::QueueFlags::empty(), |family| family.queue_flags),

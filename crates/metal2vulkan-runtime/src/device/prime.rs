@@ -80,7 +80,7 @@ use crate::generated_commands::{
     TOKEN_EXECUTION_SET,
 };
 use crate::gpu_time::Calibration;
-use crate::loader_word::LoaderWord;
+use crate::loader_word::DeviceWord;
 use crate::memory;
 use crate::release::{self, Generated, Released};
 use crate::sharing::Sharing;
@@ -421,7 +421,7 @@ pub(super) unsafe fn prime(
     instance: &ash::Instance,
     physical: vk::PhysicalDevice,
     device: &Vk,
-    loader_word: &LoaderWord,
+    loader_word: &DeviceWord,
     queue_family: u32,
     queues: &[QueueSlot],
     sharing: Sharing<'_>,
@@ -534,7 +534,7 @@ type Release = Box<dyn FnOnce(&ash::Device) -> Call>;
 struct Primer<'a> {
     device: &'a Vk,
     /// The device's loader word, put back before each call the loader serves.
-    loader_word: &'a LoaderWord,
+    loader_word: &'a DeviceWord,
     /// How the device's buffers and images are shared among its queue families.
     sharing: Sharing<'a>,
     /// The push command, where the device has it (`binding::push_descriptor_command`).
@@ -571,8 +571,8 @@ impl Primer<'_> {
     ) -> Result<vk::CommandBuffer, Error> {
         // SAFETY: the caller's; the device is live while it is primed.
         let buffers = unsafe {
-            self.loader_word.restore();
-            self.device.allocate_command_buffers(info)
+            self.loader_word
+                .restored(|| self.device.allocate_command_buffers(info))
         };
         Ok(buffers.map_err(vulkan)?[0])
     }
@@ -1454,11 +1454,10 @@ impl Primer<'_> {
             // Its debug name, where the instance reports messages, as a making names its pipeline
             // (`pipeline/graphics.rs`): the loader serves the call.
             if let Some(name) = device.object_name() {
-                self.loader_word.restore();
                 let info = vk::DebugUtilsObjectNameInfoEXT::default()
                     .object_handle(pipeline)
                     .object_name(PRIMING_PIPELINE);
-                let _ = name(device.handle(), &info);
+                let _ = self.loader_word.restored(|| name(device.handle(), &info));
                 self.made(Call::SetDebugUtilsObjectName);
             }
 

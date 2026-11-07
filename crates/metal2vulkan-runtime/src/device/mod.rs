@@ -63,7 +63,7 @@ use super::gpu_time::{self, FromHost, Timing};
 use super::heap_sets::DeviceHeaps;
 use super::host_memory::Importer;
 use super::interop::Interop;
-use super::loader_word::LoaderWord;
+use super::loader_word::{DeviceWord, LoaderWord};
 use super::memory::Memory;
 use super::memory_log::MemoryLog;
 use super::mipmap_scratch::MipmapScratch;
@@ -334,7 +334,7 @@ pub(super) struct DeviceShared {
     pub(super) contexts: Contexts<Item>,
     /// Shared with the queue-switch check's thread, which allocates command buffers
     /// (`queue_switch_check.rs`).
-    pub(super) loader_word: Arc<LoaderWord>,
+    pub(super) loader_word: Arc<DeviceWord>,
     /// The runtime created the `VkDevice` and destroys it.
     owned: bool,
     /// The device was lost: no further submission. Shared with the relay (`relay.rs`), which
@@ -676,7 +676,7 @@ impl DeviceShared {
     }
 
     /// `vkAllocateCommandBuffers` of `info`: the loader serves it and reads the device's loader
-    /// word first ([`LoaderWord`]).
+    /// word first ([`DeviceWord::restored`]).
     pub(super) fn allocate_command_buffers(
         &self,
         info: &vk::CommandBufferAllocateInfo<'_>,
@@ -684,8 +684,8 @@ impl DeviceShared {
         // SAFETY: the device is live; `info` names one of its pools, which the caller holds
         // exclusively.
         let allocated = unsafe {
-            self.loader_word.restore();
-            self.vk().allocate_command_buffers(info)
+            self.loader_word
+                .restored(|| self.vk().allocate_command_buffers(info))
         };
         exit_guard::called(Call::AllocateCommandBuffers);
         allocated.map_err(super::error::vulkan)
@@ -693,7 +693,7 @@ impl DeviceShared {
 
     /// Name `pipeline`, just made and held by this thread alone, `name` for the layers' messages,
     /// where the device's instance reports messages (`Vk::object_name`): the loader serves the
-    /// call and reads the device's loader word first ([`LoaderWord`]). A failure to name it is
+    /// call and reads the device's loader word first ([`DeviceWord::restored`]). A failure to name it is
     /// ignored: the name serves messages alone.
     pub(crate) fn name_pipeline(&self, pipeline: vk::Pipeline, name: &std::ffi::CStr) {
         let functions = self.vk();
@@ -707,8 +707,8 @@ impl DeviceShared {
         // instance enables `VK_EXT_debug_utils` (it reports messages), and the function is the
         // device's.
         let _ = unsafe {
-            self.loader_word.restore();
-            object_name(functions.handle(), &info)
+            self.loader_word
+                .restored(|| object_name(functions.handle(), &info))
         };
         exit_guard::called(Call::SetDebugUtilsObjectName);
     }
@@ -898,8 +898,9 @@ impl Drop for DeviceShared {
             // SAFETY: the runtime created the device, every object made from it is destroyed,
             // and the loader's `vkDestroyDevice` reads the device's loader word first.
             unsafe {
-                self.loader_word.restore();
-                release::object(self.vk(), release::WholeDevice);
+                self.loader_word.restored(|| {
+                    release::object(self.vk(), release::WholeDevice);
+                })
             }
         }
     }
@@ -1245,7 +1246,7 @@ pub(super) struct Parts {
     pub(super) physical: vk::PhysicalDevice,
     pub(super) raw: ash::Device,
     /// The device's loader word as it stood when the device reached the runtime.
-    pub(super) loader_word: LoaderWord,
+    pub(super) loader_word: DeviceWord,
     /// The primary queue family, the first queue's.
     pub(super) queue_family: u32,
     /// The queues the runtime submits to, each its family and index there, the primary family's
@@ -1400,8 +1401,9 @@ impl Device {
                     release::object(&raw, timeline);
                 }
                 if owned {
-                    loader_word.restore();
-                    release::object(&raw, release::WholeDevice);
+                    loader_word.restored(|| {
+                        release::object(&raw, release::WholeDevice);
+                    })
                 }
             }
         };
@@ -1464,10 +1466,7 @@ impl Device {
             .map(|(&(family, index), &timeline)| {
                 // SAFETY: the queue exists (the caller's contract), and the loader serves the
                 // call after the word is put back.
-                let queue = unsafe {
-                    loader_word.restore();
-                    raw.get_device_queue(family, index)
-                };
+                let queue = unsafe { loader_word.restored(|| raw.get_device_queue(family, index)) };
                 QueueSlot {
                     raw: Mutex::new((queue, submit_stalls::Period::default())),
                     stall_due: AtomicBool::new(false),
@@ -1499,9 +1498,10 @@ impl Device {
             // SAFETY: the queue exists (the caller's contract), and the loader serves the call
             // after the word is put back; it was just returned, its word the loader's.
             unsafe {
-                loader_word.restore();
-                let queue = raw.get_device_queue(family, index);
-                staging::StagingQueue::new(family, flags_of(family), queue, &queue_families)
+                loader_word.restored(|| {
+                    let queue = raw.get_device_queue(family, index);
+                    staging::StagingQueue::new(family, flags_of(family), queue, &queue_families)
+                })
             }
         });
         let reserved_queues = (reserved_places.iter())
@@ -1509,10 +1509,7 @@ impl Device {
                 family,
                 // SAFETY: the queue exists (the caller's contract), and the loader serves the
                 // call after the word is put back.
-                queue: unsafe {
-                    loader_word.restore();
-                    raw.get_device_queue(family, index)
-                },
+                queue: unsafe { loader_word.restored(|| raw.get_device_queue(family, index)) },
             })
             .collect();
         let extra_queues = (extra_places.iter())
@@ -1521,10 +1518,7 @@ impl Device {
                 family,
                 // SAFETY: the queue exists (the caller's contract), and the loader serves the
                 // call after the word is put back.
-                queue: unsafe {
-                    loader_word.restore();
-                    raw.get_device_queue(family, index)
-                },
+                queue: unsafe { loader_word.restored(|| raw.get_device_queue(family, index)) },
             })
             .collect();
         let family = (families.get(queue_family as usize).copied()).unwrap_or_default();
@@ -1540,11 +1534,12 @@ impl Device {
             // SAFETY: the device enables the extension; the loader serves `vkGetDeviceProcAddr`
             // once the word is put back.
             unsafe {
-                loader_word.restore();
-                Commands::load(raw.handle(), |name| {
-                    instance
-                        .raw
-                        .get_device_proc_addr(raw.handle(), name.as_ptr())
+                loader_word.restored(|| {
+                    Commands::load(raw.handle(), |name| {
+                        instance
+                            .raw
+                            .get_device_proc_addr(raw.handle(), name.as_ptr())
+                    })
                 })
             }
             .map(|commands| commands.routed(recording.as_ref()))
@@ -1564,13 +1559,14 @@ impl Device {
         );
         // SAFETY: as above; the loader serves `vkGetDeviceProcAddr` once the word is put back.
         let push_descriptor = unsafe {
-            loader_word.restore();
-            crate::binding::push_descriptor_command(
-                &instance.raw,
-                &raw,
-                description.api_version,
-                &enabled,
-            )
+            loader_word.restored(|| {
+                crate::binding::push_descriptor_command(
+                    &instance.raw,
+                    &raw,
+                    description.api_version,
+                    &enabled,
+                )
+            })
         }
         .filter(|_| pushes_whole_sets)
         .map(|push| {
@@ -1586,10 +1582,12 @@ impl Device {
             // SAFETY: as above; the instance enables `VK_EXT_debug_utils` where it reports
             // messages, and the loader serves `vkGetDeviceProcAddr` once the word is put back.
             Some(_) => unsafe {
-                loader_word.restore();
-                instance
-                    .raw
-                    .get_device_proc_addr(raw.handle(), c"vkSetDebugUtilsObjectNameEXT".as_ptr())
+                loader_word.restored(|| {
+                    instance.raw.get_device_proc_addr(
+                        raw.handle(),
+                        c"vkSetDebugUtilsObjectNameEXT".as_ptr(),
+                    )
+                })
             },
             None => None,
         }
@@ -1607,37 +1605,40 @@ impl Device {
         // SAFETY: the device enables `calibration`'s form where it is set; the loader serves
         // `vkGetDeviceProcAddr` once the word is put back.
         let calibrated = unsafe {
-            loader_word.restore();
-            gpu_time::calibrated(&instance.entry, &instance.raw, physical, &raw, calibration)
+            loader_word.restored(|| {
+                gpu_time::calibrated(&instance.entry, &instance.raw, physical, &raw, calibration)
+            })
         }
         .filter(|_| timestamp_bits > 0);
         // The render encoder's commands of extensions and of Vulkan 1.3, which priming makes too.
         // SAFETY: as above; the loader serves `vkGetDeviceProcAddr` once the word is put back.
         let extended_dynamic_state = unsafe {
-            loader_word.restore();
-            ExtendedDynamicState::load(
-                &instance.raw,
-                &raw,
-                description.api_version,
-                &enabled,
-                recording.as_ref(),
-            )
+            loader_word.restored(|| {
+                ExtendedDynamicState::load(
+                    &instance.raw,
+                    &raw,
+                    description.api_version,
+                    &enabled,
+                    recording.as_ref(),
+                )
+            })
         };
         // SAFETY: as above; the loader serves `vkGetDeviceProcAddr` once the word is put back.
-        let sized_index_bind = unsafe {
-            loader_word.restore();
-            sized_index_bind(&instance.raw, &raw, &enabled)
-        }
-        .map(|bind| {
-            // SAFETY: the device's own command of that name.
-            unsafe {
-                crate::recorder::through(recording.as_ref(), Command::CmdBindIndexBuffer2, bind)
-            }
-        });
+        let sized_index_bind =
+            unsafe { loader_word.restored(|| sized_index_bind(&instance.raw, &raw, &enabled)) }
+                .map(|bind| {
+                    // SAFETY: the device's own command of that name.
+                    unsafe {
+                        crate::recorder::through(
+                            recording.as_ref(),
+                            Command::CmdBindIndexBuffer2,
+                            bind,
+                        )
+                    }
+                });
         // SAFETY: as above; the loader serves `vkGetDeviceProcAddr` once the word is put back.
         let color_write_masks = unsafe {
-            loader_word.restore();
-            ColorWriteMasks::load(&instance.raw, &raw, &enabled)
+            loader_word.restored(|| ColorWriteMasks::load(&instance.raw, &raw, &enabled))
         }
         .map(|ColorWriteMasks(masks)| {
             // SAFETY: the device's own command of that name.
@@ -1779,23 +1780,28 @@ impl Device {
         let general = host_image_copy
             && unsafe { crate::texture::host_copy::reaches_general(&instance.raw, physical) };
         let host_copies = general.then(|| {
+            let handle = raw.handle();
             // SAFETY: as above; the loader serves `vkGetDeviceProcAddr` once the word is put
             // back.
-            unsafe { loader_word.restore() };
-            let handle = raw.handle();
-            ash::ext::host_image_copy::DeviceFn::load(|name| {
-                let bytes = name.to_bytes();
-                let core = std::ffi::CString::new(bytes.strip_suffix(b"EXT").unwrap_or(bytes))
-                    .unwrap_or_default();
-                // SAFETY: the device is live; a name it does not serve answers null.
-                let function = unsafe {
-                    (instance.raw.get_device_proc_addr(handle, core.as_ptr()))
-                        .or_else(|| instance.raw.get_device_proc_addr(handle, name.as_ptr()))
-                };
-                function.map_or(std::ptr::null(), |function| {
-                    function as *const std::ffi::c_void
+            unsafe {
+                loader_word.restored(|| {
+                    ash::ext::host_image_copy::DeviceFn::load(|name| {
+                        let bytes = name.to_bytes();
+                        let core =
+                            std::ffi::CString::new(bytes.strip_suffix(b"EXT").unwrap_or(bytes))
+                                .unwrap_or_default();
+                        // SAFETY: the device is live; a name it does not serve answers null.
+                        let function = unsafe {
+                            (instance.raw.get_device_proc_addr(handle, core.as_ptr())).or_else(
+                                || instance.raw.get_device_proc_addr(handle, name.as_ptr()),
+                            )
+                        };
+                        function.map_or(std::ptr::null(), |function| {
+                            function as *const std::ffi::c_void
+                        })
+                    })
                 })
-            })
+            }
         });
         // The mesh draw commands, which exist where `meshShader` is enabled (it needs
         // `VK_EXT_mesh_shader`).
@@ -1805,8 +1811,9 @@ impl Device {
         {
             // SAFETY: as above; the loader serves `vkGetDeviceProcAddr` once the word is put
             // back.
-            unsafe { loader_word.restore() };
-            let loaded = ash::ext::mesh_shader::Device::new(&instance.raw, &raw);
+            let loaded = unsafe {
+                loader_word.restored(|| ash::ext::mesh_shader::Device::new(&instance.raw, &raw))
+            };
             Some(MeshDraws::new(&loaded, recording.as_ref()))
         } else {
             None
@@ -1863,15 +1870,16 @@ impl Device {
         );
         // SAFETY: as above; the loader serves `vkGetDeviceProcAddr` once the word is put back.
         let functions = unsafe {
-            loader_word.restore();
-            Functions::new(
-                &instance.raw,
-                raw.clone(),
-                memory_reads,
-                push_descriptor,
-                object_name,
-                recording.as_ref(),
-            )
+            loader_word.restored(|| {
+                Functions::new(
+                    &instance.raw,
+                    raw.clone(),
+                    memory_reads,
+                    push_descriptor,
+                    object_name,
+                    recording.as_ref(),
+                )
+            })
         };
         let shader_cache = match ShaderCache::start(
             cache,

@@ -96,7 +96,7 @@ use crate::exit_guard::{self, Call};
 use crate::freed_memory::Parking;
 use crate::host_memory::Importer;
 use crate::in_place::DriverIdentity;
-use crate::loader_word::LoaderWord;
+use crate::loader_word::DeviceWord;
 use crate::release;
 use crate::shader_cache::store::{hex, Lookup, Store};
 use crate::sharing::Sharing;
@@ -700,7 +700,7 @@ struct Parts {
     parking: Option<Arc<Parking>>,
     counts: Arc<Counters>,
     fences: Arc<Fences>,
-    loader_word: Arc<LoaderWord>,
+    loader_word: Arc<DeviceWord>,
     checks: Arc<SubmitChecks>,
     store: Arc<Store>,
     /// The device's importer of host pointers, where it imports them.
@@ -1272,8 +1272,9 @@ impl Objects {
         // SAFETY: the pool is the check's, which this thread alone uses; the device's loader word
         // is put back first (`loader_word.rs`).
         let allocated = unsafe {
-            parts.loader_word.restore();
-            raw.allocate_command_buffers(&allocate)
+            parts
+                .loader_word
+                .restored(|| raw.allocate_command_buffers(&allocate))
         };
         exit_guard::called(Call::AllocateCommandBuffers);
         self.empty = allocated.ok()?;
@@ -1321,9 +1322,12 @@ impl Objects {
                 .collect();
             // SAFETY: the queue is used under its lock, inside a section; each command buffer is
             // recorded, ended and in no pending submission (each round waits for the last); the
-            // fence is unsignaled and in no pending submission.
+            // fence is unsignaled and in no pending submission. The device's word is held across
+            // the calls and the relay's mark after them (MoltenVK names the device as it logs
+            // each, `loader_word.rs`), taken inside the queue's lock, and let go before the wait.
             let uses = parts.queue_uses();
-            let submitted = uses.use_queue(0, By::Checks, Uses::Unknown, |queue| unsafe {
+            let (held, submitted) = uses.use_queue(0, By::Checks, Uses::Unknown, |queue| unsafe {
+                let held = parts.loader_word.held();
                 let mut spent = Duration::ZERO;
                 let last = infos.len() - 1;
                 let calls: Vec<(&[vk::SubmitInfo<'_>], vk::Fence)> = match together {
@@ -1339,16 +1343,18 @@ impl Objects {
                         })
                         .collect(),
                 };
+                let mut submitted = Ok(());
                 for (infos, fence) in calls {
                     let start = Instant::now();
-                    let made = raw.queue_submit(queue, infos, fence);
+                    submitted = raw.queue_submit(queue, infos, fence);
                     spent += start.elapsed();
-                    if made.is_err() {
-                        return Err(spent);
+                    if submitted.is_err() {
+                        break;
                     }
                 }
-                Ok(spent)
+                (held, submitted.map(|()| spent))
             });
+            drop(held);
             exit_guard::called(Call::QueueSubmit);
             parts.counts.submit_check_called(calls);
             match submitted {

@@ -107,7 +107,7 @@ use super::dirty_pages::{hook, DirtyHook, DirtyPages, DirtySource};
 use super::dma_buf::DmaBufSource;
 use super::error::{vulkan, Error};
 use super::exit_guard;
-use super::loader_word::LoaderWord;
+use super::loader_word::DeviceWord;
 use super::program_objects::ProgramObject;
 use super::work_counts::Counters;
 use ash::vk;
@@ -1067,7 +1067,7 @@ impl Importer {
         device: &ash::Device,
         enabled: &EnableSet,
         usage: vk::BufferUsageFlags,
-        loader_word: &LoaderWord,
+        loader_word: &DeviceWord,
         dma_buf: bool,
         dma_buf_images: bool,
     ) -> Result<Importer, Unsupported> {
@@ -1105,8 +1105,7 @@ impl Importer {
             // SAFETY: the device is live, and the loader serves `vkGetDeviceProcAddr` after its
             // word is put back; the extension is enabled.
             let function = unsafe {
-                loader_word.restore();
-                instance.get_device_proc_addr(handle, name.as_ptr())
+                loader_word.restored(|| instance.get_device_proc_addr(handle, name.as_ptr()))
             };
             function.map_or(std::ptr::null(), |function| function as *const c_void)
         };

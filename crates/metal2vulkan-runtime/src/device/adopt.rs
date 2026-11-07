@@ -11,7 +11,7 @@ use super::{device_error, Device, InstanceShared, Parts};
 use crate::error::Error;
 use crate::gpu_time;
 use crate::image_barrier::MemoryReads;
-use crate::loader_word::LoaderWord;
+use crate::loader_word::DeviceWord;
 use crate::shader_cache::{CacheSetup, ShaderCacheOptions};
 use crate::sparse::device::SparseFeatures;
 use ash::vk;
@@ -248,13 +248,11 @@ impl Device {
         let compile =
             metal2vulkan::device::Device::new(enabled.clone(), policy).map_err(device_error)?;
         // SAFETY: the caller's contract: the word is still the loader's.
-        let loader_word = unsafe { LoaderWord::of_device(raw.device) };
+        let loader_word = unsafe { DeviceWord::of_device(raw.device) };
         // SAFETY: the device is live; the loader's `vkGetDeviceProcAddr` reads the word, which
         // is the loader's.
-        let device = unsafe {
-            loader_word.restore();
-            ash::Device::load(instance.fp_v1_0(), raw.device)
-        };
+        let device =
+            unsafe { loader_word.restored(|| ash::Device::load(instance.fp_v1_0(), raw.device)) };
         // The vocabulary does not say whether a portability subset's
         // `imageViewFormatReinterpretation` was enabled: the consumer says so beside it, and a
         // device with the subset whose consumer does not reinterprets nothing.

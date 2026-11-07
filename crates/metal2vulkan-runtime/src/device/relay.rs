@@ -443,14 +443,11 @@ impl super::DeviceShared {
                 (Ok(()), Some((fence, flights))) => flights.made(fence),
                 _ => {}
             }
-            match (&submitted, value) {
-                (Ok(()), Some(value)) => {
-                    slot.submitted(value);
-                    if let Some(parking) = parking {
-                        parking.submitted(queue, value);
-                    }
+            if let (Ok(()), Some(value)) = (&submitted, value) {
+                slot.submitted(value);
+                if let Some(parking) = parking {
+                    parking.submitted(queue, value);
                 }
-                _ => {}
             }
             submitted
         });
