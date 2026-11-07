@@ -609,9 +609,12 @@ pub struct ComputePipelineMetalInfo {
     pub metal_max_total_threads_per_threadgroup: u32,
     /// Always 32.
     pub thread_execution_width: u32,
-    /// Bytes of statically sized threadgroup memory. A kernel whose simdgroups are emulated
-    /// also counts the scratch of `max_total_threads_per_threadgroup` threads and the declared
-    /// arena's minimum, so any `[[threadgroup(n)]]` lengths that fit beside it fit.
+    /// Bytes of statically sized threadgroup memory: the static part of Metal's own layout
+    /// (`KernelFacts::static_threadgroup_bytes`), as Metal reports it. The threadgroup memory of
+    /// ours beside it, an emulated simdgroup's scratch and the arena's minimum or a predicated
+    /// walk's vote word, is not counted: the planner counts it in each dispatch's total and
+    /// refuses a threadgroup whose `[[threadgroup(n)]]` lengths fit beside this length and not
+    /// beside it (`ThreadgroupMemorySize`, the device's gap).
     pub static_threadgroup_memory_length: u32,
     /// Echoed from the descriptor.
     pub support_indirect_command_buffers: bool,

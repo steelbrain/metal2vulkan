@@ -1124,21 +1124,11 @@ impl Device {
             max = max.min(cap);
             metal = metal.min(cap);
         }
-        // The emulated scratch of the most threads counts as static threadgroup memory, so any
-        // `[[threadgroup(n)]]` lengths that fit beside the reported length fit every threadgroup
-        // up to the maximum (the arena grows by exactly their rounded lengths).
-        // A predicated walk's vote word is static threadgroup memory beside the arena.
-        let vote = if c.facts.contains(&RuntimeFact::PredicationVote) {
-            u64::from(crate::lower::simd::divergent::VOTE_BYTES)
-        } else {
-            0
-        };
-        let static_bytes = match emulation {
-            Some((per_simdgroup, fixed)) => {
-                fixed.saturating_add(u64::from(max).div_ceil(32).saturating_mul(per_simdgroup))
-            }
-            None => c.kernel.static_threadgroup_bytes.saturating_add(vote),
-        };
+        // The static part of Metal's own layout, as Metal reports it: neither the emulated
+        // simdgroups' scratch nor a predicated walk's vote word, which are ours and which the
+        // planner counts in each dispatch's total (`bind::plan::compute`), refusing a threadgroup
+        // whose lengths fit beside this length and not beside them (`ThreadgroupMemorySize`).
+        let static_bytes = c.kernel.static_threadgroup_bytes;
         ComputePipelineMetalInfo {
             max_total_threads_per_threadgroup: max,
             thread_execution_width: self.metal_properties().thread_execution_width,

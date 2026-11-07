@@ -1430,8 +1430,9 @@ fn arena_kernel(words: u32) -> Option<Vec<u8>> {
 
 /// The scratch takes 128 bytes per simdgroup and word beside the kernel's threadgroup memory. A
 /// kernel whose arena leaves less than one simdgroup's scratch is refused at compile time;
-/// otherwise the pipeline reports the threads whose scratch fits as its maximum, and the planner
-/// refuses a larger threadgroup as `ThreadgroupMemorySize`.
+/// otherwise the pipeline reports the threads whose scratch fits as its maximum and its own
+/// threadgroup memory as its static length, as Metal reports it, and the planner refuses a larger
+/// threadgroup as `ThreadgroupMemorySize`.
 #[test]
 fn the_scratch_must_fit_beside_the_threadgroup_memory() {
     // vk12-floor: 16 KiB. An arena of exactly 16 KiB leaves nothing for the scratch.
@@ -1453,14 +1454,14 @@ fn the_scratch_must_fit_beside_the_threadgroup_memory() {
         other => panic!("{other:?}"),
     }
     // lavapipe: 32 KiB. An arena of 31 KiB leaves 1 KiB, the scratch of 8 simdgroups, which the
-    // reported static length counts.
+    // reported static length, the kernel's own 31 KiB, does not count.
     let Some(bc) = arena_kernel(31 * 256) else {
         return;
     };
     let dev = lavapipe();
     let pipe = pipeline(&dev, &bc, "barrier_k");
     assert_eq!(pipe.metal_info.max_total_threads_per_threadgroup, 256);
-    assert_eq!(pipe.metal_info.static_threadgroup_memory_length, 32 * 1024);
+    assert_eq!(pipe.metal_info.static_threadgroup_memory_length, 31 * 1024);
     let state = bind_state(None);
     let plan = pipe.plan(&dev, &state.shape()).expect("plan");
     assert!(plan.instantiate_dispatch(&state, &threads(256)).is_ok());
@@ -1470,8 +1471,10 @@ fn the_scratch_must_fit_beside_the_threadgroup_memory() {
 /// A kernel that reads a `[[threadgroup(0)]]` region declares the threadgroup arena, a `u32` array
 /// of at least `MIN_ARENA_BYTES` even when the region is empty, beside the scratch. `region_k`
 /// publishes eight words per lane (1 KiB per simdgroup): lavapipe's 32 KiB fits 31 simdgroups
-/// beside the 32-byte arena, not 32. The reported static length counts the arena and the scratch of
-/// the most threads, so the remainder a Metal client gives the region fits.
+/// beside the 32-byte arena, not 32. The reported static length is the kernel's own, 0, as Metal
+/// reports it: neither the arena's minimum nor the scratch, which the planner still counts, so the
+/// remainder a Metal client gives the region beside that length is refused at the most threads
+/// (the device's gap, `ThreadgroupMemorySize`), and a region that fits beside the scratch runs.
 #[test]
 fn an_empty_region_declares_the_arena_beside_the_scratch() {
     let Some(bc) = assemble("simd_uniform") else {
@@ -1487,13 +1490,18 @@ fn an_empty_region_declares_the_arena_beside_the_scratch() {
     );
     assert!(plan.instantiate_dispatch(&state, &threads(31 * 32)).is_ok());
     assert_eq!(pipe.metal_info.max_total_threads_per_threadgroup, 31 * 32);
-    assert_eq!(
-        pipe.metal_info.static_threadgroup_memory_length,
-        32 + 31 * 1024
-    );
-    // The remainder beside the reported static length, at the most threads.
+    assert_eq!(pipe.metal_info.static_threadgroup_memory_length, 0);
+    // The remainder beside the reported static length, at the most threads: the arena and the
+    // scratch of 31 simdgroups do not fit beside it.
     let remainder = 32 * 1024 - pipe.metal_info.static_threadgroup_memory_length;
     let state = bind_state(Some(remainder));
+    let plan = pipe.plan(&dev, &state.shape()).expect("plan");
+    match plan.instantiate_dispatch(&state, &threads(31 * 32)) {
+        Err(BindError::Unsupported(u)) => assert_eq!(u.feature, Feature::ThreadgroupMemorySize),
+        other => panic!("{other:?}"),
+    }
+    // A region that fits beside the arena and the scratch runs.
+    let state = bind_state(Some(32 * 1024 - 32 - 31 * 1024));
     let plan = pipe.plan(&dev, &state.shape()).expect("plan");
     assert!(plan.instantiate_dispatch(&state, &threads(31 * 32)).is_ok());
 }

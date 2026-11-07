@@ -712,8 +712,8 @@ fn plan(p: &ComputePipeline, device: &Device, shape: &BindShape) -> Result<Bindi
     }
     record_specialized(&push, shape, &mut resources)?;
     record_noted([&p.stage], shape, &mut resources, &|_| vec![Stage::Kernel])?;
-    // Emulated simdgroups: the reported static length also counts the scratch of the most threads,
-    // so the arena's own static part comes from the fact.
+    // Emulated simdgroups: the arena's own static part comes from the fact (the reported static
+    // length is Metal's layout's, without the arena's minimum).
     let emulation = p.dependencies.iter().find_map(|d| match d.fact {
         RuntimeFact::SimdgroupEmulation {
             bytes_per_simdgroup,
@@ -721,8 +721,8 @@ fn plan(p: &ComputePipeline, device: &Device, shape: &BindShape) -> Result<Bindi
         } => Some((bytes_per_simdgroup, arena)),
         _ => None,
     });
-    // A predicated walk's vote word sits beside the arena; the reported static length counts it, so
-    // the arena's own static part is the rest.
+    // A predicated walk's vote word sits beside the arena, counted in the total beside the static
+    // part, which the reported static length is.
     let vote = if p
         .dependencies
         .iter()
@@ -734,7 +734,7 @@ fn plan(p: &ComputePipeline, device: &Device, shape: &BindShape) -> Result<Bindi
     };
     let static_bytes = match emulation {
         Some((_, arena)) => arena.map_or(0, u64::from),
-        None => u64::from(p.metal_info.static_threadgroup_memory_length).saturating_sub(vote),
+        None => u64::from(p.metal_info.static_threadgroup_memory_length),
     };
     // The imageblock, the arena's last region, starts 16-byte aligned.
     let static_bytes = if imageblock.is_some() {

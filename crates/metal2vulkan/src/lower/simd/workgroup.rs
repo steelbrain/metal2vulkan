@@ -63,8 +63,9 @@
 //! `RuntimeFact::SimdgroupEmulation{bytes_per_simdgroup, arena}`: the planner checks every
 //! dispatch region's total (the arena with the `[[threadgroup(n)]]` lengths, and the scratch of
 //! its simdgroups); the pipeline's `max_total_threads_per_threadgroup` is at most the threads
-//! whose scratch fits beside the static arena, and its `static_threadgroup_memory_length` counts
-//! the scratch of that many threads, so any threadgroup memory length Metal allows beside it fits.
+//! whose scratch fits beside the static arena, and its `static_threadgroup_memory_length` is the
+//! kernel's own, as Metal reports it, so a dispatch whose threadgroup memory lengths fit beside
+//! that length but not beside the scratch of its simdgroups is refused (the device's gap).
 //!
 //! **Reconvergence**. The emulated operations exchange through workgroup memory between workgroup
 //! barriers in workgroup-uniform control flow (predicated where the source diverges), so no result

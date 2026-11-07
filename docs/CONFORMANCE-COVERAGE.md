@@ -44,7 +44,7 @@ Its limits, measured rather than asserted:
 | committed recordings | 1228 |
 | distinct SDK items the Metal leg reaches, of any status | 819 |
 | of those, reached only where this cannot name the family | 3 |
-| ledger rows (a case whose gap is recorded) | 2603 |
+| ledger rows (a case whose gap is recorded) | 2602 |
 | declared crossings of the option space (pairs put to Metal at once) | 26 |
 | declared crossings that are no pair of it (a boolean or numeric field, or one type in two slots) | 30 |
 
@@ -2591,7 +2591,6 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `vertex-format-instance-step` | Metal converts a normalized vertex field as `c / (2^b - 1)`, correctly rounded, and this device's fixed-function vertex input is one ULP high: at the first diff… |
 | `vertex-format-instance-step` | A NaN of a narrow float attribute (`half`, or a small float of `FloatRG11B10`) fetched by fixed-function vertex input: Metal answers its canonical `0x7FC00000`,… |
 | `vertex-format-instance-step` | A NaN of a narrow float attribute (`half`, or a small float of `FloatRG11B10`): the first differing element is Metal 0x7FC00000 against our 0x7FC02000, the devi… |
-| `compute-threadgroup-simd-scratch` | Metal's compute pipeline state answers `staticThreadgroupMemoryLength` 24576 -- the fixture's own 24 KiB `threadgroup` array -- and we answer 32768 on this venu… |
 | `host-page-writes-kernel-store-read-only` | Metal DROPS what a shader or the blit engine writes into memory whose backing is read-only, silently and with no error, and we land the write. Metal's rule is m… |
 | `host-page-writes-kernel-store-read-only` | Metal DROPS what a shader or the blit engine writes into memory whose backing is read-only, silently and with no error, and we land the write. Metal's rule is m… |
 | `host-page-writes-kernel-store-read-only` | Metal DROPS what a shader or the blit engine writes into memory whose backing is read-only, silently and with no error, and we land the write. Metal's rule is m… |
