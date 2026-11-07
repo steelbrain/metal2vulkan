@@ -663,6 +663,8 @@ mod patch_primitive_ids;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod patches;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+mod pending_pools;
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod pipeline_creation;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod pipeline_records;
