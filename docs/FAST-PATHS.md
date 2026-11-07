@@ -181,7 +181,13 @@ recorded here.
 - **Idle dma-buf imports are released.** RADV lists every imported memory in every kernel
   submission, so a no-copy buffer's dma-buf import that only blits have read is released after its
   idle window (2 s, doubled at each import again up to 64 s). The encoding thread pays its import
-  again at the first blit after the window (HOWTO.md section 6).
+  again at the first blit after the window (HOWTO.md section 6). For the same reason a guest RAM
+  there (`Device::use_host_ram`, with a source of dma-bufs) is imported in a few long chunks
+  (`HostRam::with_largest_dma_buf`, within the device's allocation, buffer and storage-range
+  limits), none ahead of the objects, and a chunk no buffer nor pending command buffer holds is
+  released after the same window (`WorkCounts::host_ram_chunks_released`): the first object over
+  a chunk not imported, and every object over it meanwhile, waits for its import, which pins
+  every page of the chunk.
 - **A pass in color groups runs once per group** (the `ColorAttachmentGroups` row above), the later
   groups' draws again over a twin of the depth and stencil, made for the pass and loaded by a copy
   or a clear (`render/color_groups.rs`). On lavapipe restricted to four colors

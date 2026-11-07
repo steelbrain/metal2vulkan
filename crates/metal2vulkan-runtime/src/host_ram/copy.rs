@@ -607,7 +607,7 @@ mod tests {
 
     #[test]
     fn runs_are_cut_where_a_chunk_ends_and_refused_outside_the_ram() {
-        let spans = super::super::chunk_spans(&one(0..150 * MIB));
+        let spans = super::super::chunk_spans(&one(0..150 * MIB), super::super::CHUNK_BYTES);
         let runs = [64 * MIB - PAGE..64 * MIB + PAGE, 3 * PAGE..4 * PAGE];
         let (cut, total) = pieces(&runs, &spans).unwrap();
         assert_eq!(total, 3 * PAGE);

@@ -20,6 +20,13 @@
 //!   a dma-buf of its own pages, which the source is asked for at the RAM's addresses (never the
 //!   view's: `Placement::dma_buf_address`), or it is a shadow, which reads them too.
 //! - **The use.** Once the use and the objects go, the RAM's keep-alive goes.
+//! - **Few listed imports.** Where each listed import costs every submission (the import tax
+//!   held, dma-bufs imported: RADV), a RAM whose source's dma-bufs may be as long as it is one
+//!   chunk ([`HostRam::with_largest_dma_buf`]), the source asked once for all of it; no chunk is
+//!   imported ahead nor any run alone; the chunk is kept while an object over it lives, and
+//!   released by the device's thread once none did for its idle window
+//!   (`WorkCounts::host_ram_chunks_released`), the next object over it importing it again.
+//!   Elsewhere the RAM keeps its 64 MiB chunks.
 //!
 //! Each run prints the device's verdict and the route its chunk took: the evidence of which path
 //! ran. Where `/dev/udmabuf` cannot be opened, or the device imports no host memory, the test says
@@ -42,6 +49,8 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 const WAIT: Duration = Duration::from_secs(60);
+/// Past a guest RAM chunk's first idle window (2 s) and a tick of the device's thread.
+const IDLE_WAIT: Duration = Duration::from_secs(3);
 const MIB: u64 = 1 << 20;
 /// The RAM's bytes: two whole chunks.
 const RAM_BYTES: u64 = 128 * MIB;
@@ -502,4 +511,135 @@ fn without_a_source_a_refused_pointer_refuses_the_object() {
         (failed, made) => panic!("{failed} pointer imports failed, and the object: {made:?}"),
     }
     drop(used);
+}
+
+/// The most bytes one udmabuf of this host holds: its `size_limit_mb` (64 MiB, the default, where
+/// unread).
+fn udmabuf_size_limit() -> u64 {
+    std::fs::read_to_string("/sys/module/udmabuf/parameters/size_limit_mb")
+        .ok()
+        .and_then(|limit| limit.trim().parse::<u64>().ok())
+        .unwrap_or(64)
+        .saturating_mul(MIB)
+}
+
+/// Where each listed import costs every submission, a RAM whose dma-bufs may be as long as the
+/// host's udmabuf limit allows is imported in chunks that long (the whole RAM where the limit
+/// takes it, else two of 64 MiB), none ahead, and released once idle (the module docs); elsewhere
+/// it keeps its 64 MiB chunks. The device's thread runs (no hold), so the release is its.
+#[test]
+fn where_each_listed_import_costs_a_submission_the_ram_is_long_chunks_released_once_idle() {
+    let scratch = Scratch::new();
+    if !udmabuf_openable() {
+        return;
+    }
+    let device = device(&scratch.0);
+    if device.shared().host_import.is_err() {
+        eprintln!("HOST-RAM-LISTED: the device imports no host memory here; nothing to test");
+        return;
+    }
+    let listed = device.pointer_imports_tax_submissions() && imports_dma_bufs(&device);
+    let largest = udmabuf_size_limit();
+    let (ram, start, view, asked, dropped) = ram(true);
+    let ram = Arc::into_inner(ram).expect("the test's RAM");
+    let ram = Arc::new(ram.with_largest_dma_buf(largest));
+    fill_pattern(view, RAM_BYTES);
+    let used = device.use_host_ram(&ram).unwrap();
+    let chunks = device.host_ram_chunks();
+    println!(
+        "HOST-RAM-LISTED {}: each listed import costs a submission: {listed}; the udmabuf limit \
+         {} MiB; chunks {chunks:?}",
+        device.name(),
+        largest >> 20,
+    );
+    let halves = vec![start..start + 64 * MIB, start + 64 * MIB..start + RAM_BYTES];
+    if !listed {
+        assert_eq!(chunks, [(false, halves)]);
+        drop((used, ram));
+        return;
+    }
+    let spans = match largest >= RAM_BYTES {
+        true => vec![start..start + RAM_BYTES],
+        false => halves,
+    };
+    assert_eq!(chunks, [(true, spans.clone())]);
+    let count = spans.len() as u64;
+    let before = device.work_counts();
+    let first = buffer(&device, view, start, AT, LENGTH);
+    let second = buffer(&device, view, start, 64 * MIB + AT, LENGTH);
+    let made = device.work_counts();
+    let delta = |field: fn(&crate::WorkCounts) -> u64| field(&made) - field(&before);
+    assert_eq!(delta(|counts| counts.host_ram_chunks_imported), count);
+    assert_eq!(delta(|counts| counts.host_ram_dma_buf_imports), count);
+    assert_eq!(delta(|counts| counts.host_ram_chunk_bytes), RAM_BYTES);
+    assert_eq!(delta(|counts| counts.host_ram_chunks_imported_ahead), 0);
+    assert_eq!(delta(|counts| counts.run_bound_buffers_made), 0);
+    assert_eq!(delta(|counts| counts.chunk_bound_buffers_made), 2);
+    let asked_for: Vec<(u64, u64, u64)> = (spans.iter())
+        .map(|span| (span.start, span.end - span.start, span.end - span.start))
+        .collect();
+    assert_eq!(asked.lock().unwrap().requests, asked_for);
+    // The GPU's fill through the second buffer, past the first 64 MiB, reaches the file's pages.
+    blit(&device, |encoder| {
+        encoder.fill_buffer(&second, 0..LENGTH, 0x3c).unwrap()
+    });
+    let filled = 64 * MIB + AT;
+    assert!(
+        bytes(start, filled..filled + LENGTH)
+            .iter()
+            .all(|&b| b == 0x3c),
+        "the GPU's fill"
+    );
+    // Held past the idle window by the buffers: kept.
+    std::thread::sleep(IDLE_WAIT);
+    let held = device.work_counts();
+    assert_eq!(
+        held.host_ram_chunks_released,
+        before.host_ram_chunks_released
+    );
+    assert_eq!(held.host_ram_chunks_live, made.host_ram_chunks_live);
+    // Once they went, released by the device's thread after its window.
+    drop((first, second));
+    let gone = Instant::now();
+    let released = loop {
+        let counts = device.work_counts();
+        if counts.host_ram_chunks_released - before.host_ram_chunks_released == count {
+            break counts;
+        }
+        assert!(gone.elapsed() < WAIT, "the idle chunks were never released");
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    println!(
+        "HOST-RAM-LISTED {}: {count} released {:.1} s after the last buffer went; {} chunk(s) live",
+        device.name(),
+        gone.elapsed().as_secs_f64(),
+        released.host_ram_chunks_live,
+    );
+    assert_eq!(
+        released.host_ram_chunks_live + count,
+        made.host_ram_chunks_live
+    );
+    // The next object over one imports it again, and reads the GPU's bytes.
+    let again = buffer(&device, view, start, 64 * MIB + AT, LENGTH);
+    let after = device.work_counts();
+    assert_eq!(
+        after.host_ram_chunks_imported - released.host_ram_chunks_imported,
+        1
+    );
+    let read = read_back(&device, LENGTH, |encoder, own| {
+        (encoder.copy_from_buffer_to_buffer(&again, 0, own, 0, LENGTH)).unwrap();
+    });
+    assert!(
+        read.iter().all(|&b| b == 0x3c),
+        "the GPU's read after the release"
+    );
+    drop((again, used, ram));
+    let began = Instant::now();
+    while !dropped.load(Ordering::SeqCst) {
+        assert!(
+            began.elapsed() < WAIT,
+            "the RAM's keep-alive was never dropped"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
 }

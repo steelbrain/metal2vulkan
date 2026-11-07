@@ -542,11 +542,27 @@ submission, can give the device the guest's RAM once instead:
   is 64, a chunk's size). A texture over an object bound in such a chunk is an image over a dma-buf
   of its own pages, as over an object's own dma-buf imports, asked of the same source. A source that
   fails leaves the chunk to its pointer.
+- `HostRam::with_largest_dma_buf(bytes)` says how long one dma-buf of the source may be (for
+  `udmabuf`, its `size_limit_mb` parameter, read from `/sys/module/udmabuf/parameters/`). On a
+  device whose held imports add to the cost of every submission, with a source, each listed
+  import costs every submission: an 8 GiB RAM held as 128 dma-bufs of 64 MiB raised a
+  submission's median from 14 us to 60 to 88 us on the Radeon 780M (Mesa 26.2.6, Linux 7.3.1;
+  `runtime_lane::submit_per_import::submit_per_ram_dma_buf`), as 3 of 2730 MiB to 16 us. There
+  each chunk is as long as that, the device's `maxMemoryAllocationSize`, `maxBufferSize` and
+  `maxStorageBufferRange` all take, in whole 64 MiB (RADV's allocation limit is just under 4 GiB:
+  an 8 GiB RAM in three chunks); without the call, or where a kernel caps it at 64 MiB, the
+  chunks stay 64 MiB. On such a device no chunk is imported ahead and no run is imported alone:
+  the first object over a chunk imports it on its own thread, and the objects over it meanwhile
+  wait for that import, which pins every page of the chunk (all of it resident, where 64 MiB
+  chunks pinned only those the objects and the window reached). A chunk no buffer bound in it and no pending command buffer that used it
+  holds for its idle window (2 s, doubled at each release of the chunk up to 64 s) is released by
+  a thread of the device's (`host_ram_chunks_released`), and the next object over it imports it
+  again.
 - Any other answer (several runs, one run crossing a chunk's end, `None`) takes the paths above:
   the gate, then the import or the copy. The runs are kept with the object.
-- The chunks are never released while idle. Once the use is dropped, each is freed when nothing
-  holds it (no buffer bound in it, no command buffer that used one), and the RAM's keep-alive is
-  dropped after the last.
+- Elsewhere the chunks are never released while idle. Once the use is dropped, each is freed when
+  nothing holds it (no buffer bound in it, no command buffer that used one), and the RAM's
+  keep-alive is dropped after the last.
 - `HostRam::with_dirty_pages` takes one `DirtyPages` log for the whole RAM, its offsets host
   addresses. A write the runtime reports over an object whose pages are many runs of the RAM
   comes to the log as one call (`DirtyPages::wrote_runs`, or `wrote_runs_as` for a copy's own

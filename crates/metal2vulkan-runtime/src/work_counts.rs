@@ -345,6 +345,7 @@ pub(crate) struct Counters {
     host_ram_pointer_imports_failed: AtomicU64,
     host_ram_chunks_imported_ahead: AtomicU64,
     host_ram_chunks_given_back: AtomicU64,
+    host_ram_chunks_released: AtomicU64,
     host_ram_chunk_bytes: AtomicU64,
     host_ram_chunks_live: AtomicU64,
     chunk_bound_buffers_made: AtomicU64,
@@ -2752,6 +2753,12 @@ impl Counters {
     /// its allocations near the device's limit (`host_ram.rs`, `allocations.rs`).
     pub(crate) fn host_ram_chunk_given_back(&self) {
         (self.host_ram_chunks_given_back).fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// The device's thread released a chunk of a guest RAM no object held for its window, on a
+    /// device whose held imports add to the cost of every submission (`host_ram.rs`).
+    pub(crate) fn host_ram_chunk_released(&self) {
+        (self.host_ram_chunks_released).fetch_add(1, Ordering::Relaxed);
     }
 
     /// The device freed a chunk of a guest RAM (`host_ram.rs`).
@@ -5723,6 +5730,13 @@ pub struct WorkCounts {
     /// what an allocation is refused for (`memory_allocations_refused_at_limit`). An object over
     /// one later imports it as it is made.
     pub host_ram_chunks_given_back: u64,
+    /// Of `host_ram_chunks_imported`, those freed while the device's use of their RAM lasted,
+    /// as no buffer bound in one and no pending command buffer that used one held it for its
+    /// idle window, on a device whose held imports add to the cost of every submission (its
+    /// submission checks' import tax; HOWTO.md, section 6): there each listed import
+    /// costs every submission, so an idle chunk is let go of, and the next object over it imports
+    /// it again. The window starts at 2 seconds and doubles at each release of the chunk, up to 64.
+    pub host_ram_chunks_released: u64,
     /// Their bytes.
     pub host_ram_chunk_bytes: u64,
     /// The chunks of guest RAM imported and not yet freed (a gauge): a chunk is freed once the
@@ -7026,6 +7040,7 @@ impl Device {
                 .host_ram_chunks_imported_ahead
                 .load(Ordering::Relaxed),
             host_ram_chunks_given_back: counters.host_ram_chunks_given_back.load(Ordering::Relaxed),
+            host_ram_chunks_released: counters.host_ram_chunks_released.load(Ordering::Relaxed),
             memory_allocations_refused_at_limit: u64::from(
                 self.shared().allocations.allocations.refused(),
             ),

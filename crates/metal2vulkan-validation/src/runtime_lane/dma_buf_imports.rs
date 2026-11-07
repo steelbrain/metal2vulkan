@@ -97,6 +97,11 @@ struct Limits {
     bytes: u64,
 }
 
+/// The most bytes one udmabuf of this host holds: its `size_limit_mb` (64 MiB where unread).
+pub(super) fn udmabuf_size_limit() -> u64 {
+    Limits::of_host().bytes
+}
+
 impl Limits {
     fn of_host() -> Limits {
         let read = |name: &str| -> Option<u64> {
