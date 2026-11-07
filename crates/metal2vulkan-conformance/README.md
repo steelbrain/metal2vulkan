@@ -118,9 +118,11 @@ the case needs is not a gap of ours at all — that is its own verdict, per site
 A row may also name the **venue** it is expected on, because a gap can be one venue's and not
 another's: a pipeline the runtime refuses on MoltenVK for a structural reason can translate on
 lavapipe, and a global row would then fail the lavapipe run for existing. The field is held, without
-case, against the venue's own description — its device name, driver and API version — so a row can
-name one device (`Apple M3 Max`), one implementation (`llvmpipe`) or a family of them, and a venue
-that joins later needs no new vocabulary. `*` means every venue, and it is the
+case, against the venue's own description — its device name, for a CPU implementation the host's
+widest vector instruction set (`llvmpipe (LLVM 23.1.4, 256 bits) on x86-64 AVX-512`, which its
+compiler targets and its answers follow), then its driver and API version — so a row can name one
+device (`Apple M3 Max`), one implementation (`llvmpipe`), one host's (`on x86-64 AVX2`) or a family
+of them, and a venue that joins later needs no new vocabulary. `*` means every venue, and it is the
 **stronger** claim rather than the looser one: the row is then held on every venue the run selected
 its case on, so widening a row's scope makes it harder to satisfy. That is what stops a
 venue-scoped row from becoming a way to silence a venue. A venue pattern that matches nothing holds

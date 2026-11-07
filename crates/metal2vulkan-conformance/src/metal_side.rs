@@ -2240,6 +2240,7 @@ impl Side for MetalSide {
             // An Apple GPU keeps textures losslessly compressed; a Mac's Intel or AMD GPU, which
             // supports no Apple family, keeps none (the consumer's AMD 5300M and Intel 630).
             lossless_compression: self.device.supportsFamily(MTLGPUFamily::Apple1),
+            host: None,
         }
     }
 

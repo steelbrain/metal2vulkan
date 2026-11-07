@@ -137,9 +137,10 @@ impl KnownGap {
     /// Whether the row is expected on `venue`.
     ///
     /// [`EVERY_VENUE`] covers all of them. Otherwise the field is held, without case, against the
-    /// venue's whole description — its device name, driver and API version — so a row can name one
-    /// device (`Apple M3 Max`), one implementation (`llvmpipe`) or a family of them, and a venue
-    /// that joins later needs no new vocabulary. A pattern that matches nothing holds
+    /// venue's whole description — its device name, a CPU implementation's host vector instruction
+    /// set ([`Venue::host`]), its driver and API version — so a row can name one device
+    /// (`Apple M3 Max`), one implementation (`llvmpipe`), one host's (`on x86-64 AVX2`) or a family
+    /// of them, and a venue that joins later needs no new vocabulary. A pattern that matches nothing holds
     /// the row nowhere, so the gap it stands for reads as unlisted and fails the run: a typo is
     /// loud rather than silent.
     pub fn covers_venue(&self, venue: &Venue) -> bool {

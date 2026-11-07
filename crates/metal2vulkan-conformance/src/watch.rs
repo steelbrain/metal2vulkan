@@ -1065,6 +1065,7 @@ mod tests {
                 driver: "stub".to_owned(),
                 api: "stub".to_owned(),
                 lossless_compression: true,
+                host: None,
             }
         }
 
@@ -1217,6 +1218,7 @@ mod tests {
                     driver: "slow".to_owned(),
                     api: "slow".to_owned(),
                     lossless_compression: true,
+                    host: None,
                 }
             }
             fn library(&mut self, _source: &ShaderSource<'_>) -> Answer<Handle> {

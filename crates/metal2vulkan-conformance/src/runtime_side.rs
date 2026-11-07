@@ -104,11 +104,11 @@ use metal2vulkan::pipeline::{
 use metal2vulkan_runtime::{
     ArgumentEncoder, BinaryArchive, BinaryArchiveDescriptor, BlitOption, Buffer, ClearColor,
     CommandBuffer, CommandBufferStatus, CommandQueue, ComputePipelineState, Coordinate2D,
-    DepthStencilState, Device, DrawPrimitiveType, DynamicLibrary, Fence, Heap, HeapDescriptor,
-    HeapType, HostMemory, IndirectCommand, IndirectCommandBuffer, IndirectCommandBufferDescriptor,
-    IndirectDraw, IoSurfacePlane, IoSurfaceYCbCr, Library, LoadAction,
-    MultisampleDepthResolveFilter, MultisampleStencilResolveFilter, Origin, PipelineOption,
-    PipelineOptions, PurgeableState, RasterizationRateMap, Region,
+    DepthStencilState, Device, DeviceKind, DrawPrimitiveType, DynamicLibrary, Fence, Heap,
+    HeapDescriptor, HeapType, HostMemory, IndirectCommand, IndirectCommandBuffer,
+    IndirectCommandBufferDescriptor, IndirectDraw, IoSurfacePlane, IoSurfaceYCbCr, Library,
+    LoadAction, MultisampleDepthResolveFilter, MultisampleStencilResolveFilter, Origin,
+    PipelineOption, PipelineOptions, PurgeableState, RasterizationRateMap, Region,
     RenderPassColorAttachmentDescriptor, RenderPassDepthAttachmentDescriptor, RenderPassDescriptor,
     RenderPassStencilAttachmentDescriptor, RenderPipelineFunctionsDescriptor, RenderPipelineState,
     ResourceOptions, ResourceRef, ResourceStateCommandEncoder, SamplePosition, SamplerState,
@@ -1879,6 +1879,7 @@ impl Side for RuntimeSide<'_> {
                 properties.api_version.major, properties.api_version.minor
             ),
             lossless_compression: properties.lossless_compression,
+            host: (properties.kind == DeviceKind::Cpu).then(crate::case::host_vector_isa),
         }
     }
 

@@ -626,6 +626,13 @@ pub struct Venue {
     /// (`DeviceProperties::lossless_compression`), as the Apple silicon Mac every recording was
     /// taken on does: what a venue's own answer (`Justification::WithoutCompression`) holds by.
     pub lossless_compression: bool,
+    /// For a CPU implementation (`DeviceKind::Cpu`), the host's widest vector instruction set
+    /// ([`host_vector_isa`]), which its shader compiler targets; `None` for a GPU. The device's
+    /// name and driver do not carry it, and its answers follow it: one llvmpipe build (Mesa 26.2.6,
+    /// LLVM 23.1.4) stored a code from Metal's at 6,496 texels of `fetch-ordered-rgba8unorm-srgb`'s
+    /// `x3` on a host with AVX-512 (a Ryzen 7 7840HS) and at 6,304 on one with AVX2 alone (an
+    /// i9-13900H).
+    pub host: Option<String>,
 }
 
 impl Venue {
@@ -637,7 +644,51 @@ impl Venue {
 
 impl std::fmt::Display for Venue {
     fn fmt(&self, out: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(out, "{} ({}, API {})", self.device, self.driver, self.api)
+        write!(out, "{}", self.device)?;
+        if let Some(host) = &self.host {
+            write!(out, " on {host}")?;
+        }
+        write!(out, " ({}, API {})", self.driver, self.api)
+    }
+}
+
+/// The host's widest vector instruction set, as a CPU implementation's shader compiler takes it:
+/// `x86-64 AVX-512` (with its `F`, `BW`, `DQ` and `VL` subsets), `x86-64 AVX2` (with `FMA`),
+/// `x86-64 AVX`, `x86-64 SSE4.1` or `x86-64 SSE2`; `AArch64 SVE` or `AArch64 NEON`; else the
+/// architecture's name. llvmpipe's compiler takes the host's own features (Mesa's
+/// `util_get_cpu_caps`), so a venue is a device on such a host ([`Venue::host`]).
+pub fn host_vector_isa() -> String {
+    #[cfg(target_arch = "x86_64")]
+    {
+        let avx512 = std::arch::is_x86_feature_detected!("avx512f")
+            && std::arch::is_x86_feature_detected!("avx512bw")
+            && std::arch::is_x86_feature_detected!("avx512dq")
+            && std::arch::is_x86_feature_detected!("avx512vl");
+        let tier = if avx512 {
+            "AVX-512"
+        } else if std::arch::is_x86_feature_detected!("avx2")
+            && std::arch::is_x86_feature_detected!("fma")
+        {
+            "AVX2"
+        } else if std::arch::is_x86_feature_detected!("avx") {
+            "AVX"
+        } else if std::arch::is_x86_feature_detected!("sse4.1") {
+            "SSE4.1"
+        } else {
+            "SSE2"
+        };
+        format!("x86-64 {tier}")
+    }
+    #[cfg(target_arch = "aarch64")]
+    {
+        match std::arch::is_aarch64_feature_detected!("sve") {
+            true => "AArch64 SVE".to_owned(),
+            false => "AArch64 NEON".to_owned(),
+        }
+    }
+    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+    {
+        std::env::consts::ARCH.to_owned()
     }
 }
 

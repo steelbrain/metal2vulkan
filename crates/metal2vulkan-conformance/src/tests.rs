@@ -3236,6 +3236,7 @@ fn the_known_gaps_ledger_parses_and_names_real_cases() {
         driver: "vendor 0x10005 device 0x0000".to_owned(),
         api: "1.2".to_owned(),
         lossless_compression: true,
+        host: None,
     };
     let measured = lavapipe("llvmpipe (LLVM 21.1.8, 128 bits)");
     let other = lavapipe("llvmpipe (LLVM 23.1.1, 256 bits)");
@@ -3375,7 +3376,70 @@ fn venue_named(device: &str) -> Venue {
         driver: "stub".to_owned(),
         api: "none".to_owned(),
         lossless_compression: true,
+        host: None,
     }
+}
+
+/// A CPU implementation's venue names its host's widest vector instruction set (`Venue::host`),
+/// which llvmpipe's compiler targets: one Mesa 26.2.6 build (LLVM 23.1.4) stores the `x3` sites of
+/// `fetch-ordered-*-srgb` and the `one-one-subtract` site of `blend-interaction-format-srgb8` a code
+/// from Metal's at other texels on a host with AVX-512 than on one with AVX2 alone, which its device
+/// name and driver do not tell apart. Each such site holds exactly one row on each of those hosts,
+/// and a GPU's description carries no host.
+#[test]
+fn a_cpu_venue_is_told_apart_by_its_hosts_vector_set() {
+    let venue = |host: Option<&str>| crate::case::Venue {
+        device: "llvmpipe (LLVM 23.1.4, 256 bits)".to_owned(),
+        driver: "vendor 0x10005 device 0x0000".to_owned(),
+        api: "1.4".to_owned(),
+        lossless_compression: false,
+        host: host.map(str::to_owned),
+    };
+    let avx2 = venue(Some("x86-64 AVX2"));
+    let avx512 = venue(Some("x86-64 AVX-512"));
+    assert_eq!(
+        avx2.to_string(),
+        "llvmpipe (LLVM 23.1.4, 256 bits) on x86-64 AVX2 (vendor 0x10005 device 0x0000, API 1.4)"
+    );
+    assert_eq!(
+        venue(None).to_string(),
+        "llvmpipe (LLVM 23.1.4, 256 bits) (vendor 0x10005 device 0x0000, API 1.4)"
+    );
+    let ledger = crate::known_gaps::ledger().expect("the ledger parses");
+    let sites = [
+        ("fetch-ordered-rgba8unorm-srgb", "case/x3"),
+        ("fetch-ordered-rgba8unorm-srgb", "case/x3-depth"),
+        ("fetch-ordered-bgra8unorm-srgb", "case/x3"),
+        ("fetch-ordered-bgra8unorm-srgb", "case/x3-depth"),
+        (
+            "blend-interaction-format-srgb8",
+            "case/blended/one-one-subtract",
+        ),
+    ];
+    for (case, site) in sites {
+        let answers = |on: &crate::case::Venue| -> Vec<&str> {
+            ledger
+                .iter()
+                .filter(|known| known.case == case && known.site == site && known.covers_venue(on))
+                .map(|known| known.answer.as_str())
+                .collect()
+        };
+        let (two, five) = (answers(&avx2), answers(&avx512));
+        assert_eq!(
+            (two.len(), five.len()),
+            (1, 1),
+            "{case} {site}: {two:?} {five:?}"
+        );
+        assert_ne!(two, five, "{case} {site}");
+    }
+    // This host's, which names its architecture.
+    let host = crate::case::host_vector_isa();
+    let arch = match std::env::consts::ARCH {
+        "x86_64" => "x86-64 ",
+        "aarch64" => "AArch64 ",
+        other => other,
+    };
+    assert!(host.starts_with(arch), "{host}");
 }
 
 /// The ledger is an expectation held in both directions, and it changes no verdict.
