@@ -15,8 +15,8 @@ use crate::budget::Meter;
 use crate::error::Error;
 use crate::intrinsics::{Elem, LlvmIntrinsic};
 use crate::ir::{
-    AddrSpace, Align, Block, Body, Call, Callee, Const, Constant, FastMath, FuncId, Inst, InstId,
-    InstKind, ModuleParts, TailKind, Type, TypeId, TypeLayouts, Value,
+    AddrSpace, Align, Block, Body, Call, Callee, Const, Constant, FastMath, FuncId, Idx, Inst,
+    InstId, InstKind, ModuleParts, TailKind, Type, TypeId, TypeLayouts, Value,
 };
 
 use super::devirt::declare;
