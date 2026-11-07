@@ -13,7 +13,8 @@
 //!   `ob3_vertex_input`, `vertex_strides.rs`): at the layout's own stride, and under
 //!   `MTLBufferLayoutStrideDynamic` at stride 0 after the plain setter and at the stride form's
 //!   stride, as plain Metal reads them; at `MTLAttributeStrideStatic`, `2^32 - 1`, vertex 0 reads
-//!   the first element and every vertex past it zero, as an M4 read them.
+//!   the first element and every vertex past it zero, as plain Metal on an M3 Max reads them
+//!   (`metal2vulkan-conformance`'s `attribute-stride-vertex-bytes`).
 //! - A fragment function reads them through a `const device` pointer and a `constant`
 //!   reference (`cfb_ts_read_bytes` of the owned fixture `cfb_tile_shadows`).
 //!

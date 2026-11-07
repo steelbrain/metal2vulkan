@@ -143,7 +143,8 @@ impl RenderCommandEncoder {
     /// `setVertexBytes:length:attributeStride:atIndex:`: as
     /// [`set_vertex_bytes`](Self::set_vertex_bytes), the bytes read at `stride`, its low 32 bits,
     /// by a layout of `MTLBufferLayoutStrideDynamic`; at `MTLAttributeStrideStatic` (`u64::MAX`),
-    /// `2^32 - 1`, it reads element 0 of the bytes and zeros past it, as an M4 read them. Refused
+    /// `2^32 - 1`, it reads element 0 of the bytes and zeros past it, as plain Metal on an M3 Max
+    /// reads them (`metal2vulkan-conformance`'s `attribute-stride-vertex-bytes`). Refused
     /// as `set_vertex_bytes` is.
     pub fn set_vertex_bytes_with_stride(
         &mut self,
