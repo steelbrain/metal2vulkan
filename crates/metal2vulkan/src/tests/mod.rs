@@ -81,6 +81,7 @@ mod engine_kernel_stage_in;
 mod engine_lazy_operands;
 mod engine_line_band;
 mod engine_link;
+mod engine_linked_signatures;
 mod engine_linking;
 mod engine_matmul2d;
 mod engine_mesh;

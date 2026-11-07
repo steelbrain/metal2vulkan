@@ -1,7 +1,8 @@
 //! External-tool helpers for metal2vulkan's own tests and its validation tools: the fixture
 //! assemblers (`llvm-as`, `xcrun metal-as`, `spirv-as`), the committed fixture directories, a
 //! synthetic metallib writer ([`metallib`]), a writer of the modules Metal's stitcher makes
-//! ([`stitched`]), a tool's identity, the MoltenVK toolchain the MSL
+//! ([`stitched`]), the cases of the linked-signature fixtures and Metal's answers to them
+//! ([`linked_signatures`]), a tool's identity, the MoltenVK toolchain the MSL
 //! checks reproduce, and the generated-program fuzzers ([`fuzz`]) the product's CPU-interpreter
 //! tests and validation's device tests both run, the extended-range bicubic table both check
 //! ([`xr_bicubic`]), and the store-buffering litmus kernel both compile
@@ -25,6 +26,7 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
 pub mod fuzz;
+pub mod linked_signatures;
 pub mod litmus;
 pub mod metallib;
 pub mod scratch;
