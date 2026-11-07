@@ -44,7 +44,7 @@ Its limits, measured rather than asserted:
 | committed recordings | 1229 |
 | distinct SDK items the Metal leg reaches, of any status | 820 |
 | of those, reached only where this cannot name the family | 3 |
-| ledger rows (a case whose gap is recorded) | 2616 |
+| ledger rows (a case whose gap is recorded) | 2620 |
 | declared crossings of the option space (pairs put to Metal at once) | 26 |
 | declared crossings that are no pair of it (a boolean or numeric field, or one type in two slots) | 30 |
 
@@ -4850,4 +4850,8 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `ycbcr-minify-band-x` | The site is the first and last 256 samples of the band: a 4K `x420` (`YCBCR10_420_2P`) surface minified along x through a linear sampler, at the 2,048 places al… |
 | `ycbcr-minify-band-y` | The site is the whole band's 34,816 samples, held by their digest alone: a 4K `x420` (`YCBCR10_420_2P`) surface minified along y through a linear sampler, at th… |
 | `ycbcr-minify-band-y` | The site is the first and last 256 samples of the band: a 4K `x420` (`YCBCR10_420_2P`) surface minified along y through a linear sampler, at the 2,048 places al… |
+| `read-write-tier-round-trip-float` | A read of the round-tripped 8-bit sRGB texels through the texture's sRGB view: the device decodes each 8-bit code by its own sRGB transfer function, where Metal… |
+| `read-write-tier-round-trip-float` | A read of the round-tripped 8-bit sRGB texels through the texture's sRGB view: the device decodes each 8-bit code by its own sRGB transfer function, where Metal… |
+| `read-write-tier-held` | A read of an 8-bit sRGB texel of a texture held in an argument buffer: the device stores no sRGB format (RADV's optimal tiling of `B8G8R8A8_SRGB` and `R8G8B8A8_… |
+| `read-write-tier-held` | A read of an 8-bit sRGB texel of a texture held in an argument buffer: the device stores no sRGB format (RADV's optimal tiling of `B8G8R8A8_SRGB` and `R8G8B8A8_… |
 
