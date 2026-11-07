@@ -289,6 +289,7 @@ pub(crate) struct Counters {
     linear_merges_recorded: AtomicU64,
     linear_merges_taken_over: AtomicU64,
     kept_bytes_passes: AtomicU64,
+    kept_texels_passes: AtomicU64,
     color_group_passes: AtomicU64,
     color_group_twins: AtomicU64,
     color_group_draws_skipped: AtomicU64,
@@ -2495,6 +2496,12 @@ impl Counters {
     /// keeps (`kept_bytes.rs`).
     pub(crate) fn kept_bytes_pass(&self) {
         self.kept_bytes_passes.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A pass rendered a texture's own image it stores `DontCare` through a backing its queue
+    /// keeps (`kept_bytes.rs`).
+    pub(crate) fn kept_texels_pass(&self) {
+        self.kept_texels_passes.fetch_add(1, Ordering::Relaxed);
     }
 
     /// A render encoder drew one of its pass's later color groups (`render/color_groups.rs`).
@@ -5280,6 +5287,10 @@ pub struct WorkCounts {
     /// (`DontCare`, `MultisampleResolve`), through the image its texture keeps, so that the buffer
     /// keeps its bytes (`kept_bytes.rs`).
     pub kept_bytes_passes: u64,
+    /// Passes that rendered a color attachment of a texture's own image, which they store
+    /// `DontCare`, through a backing their queue keeps, so that the texture keeps its earlier
+    /// texels (`kept_bytes.rs`).
+    pub kept_texels_passes: u64,
     /// Passes a render encoder drew past its first for a pass of more color attachments than the
     /// device draws at once, one per later color group, each of that group's colors over a twin
     /// of the depth and stencil (`render/color_groups.rs`).
@@ -6880,6 +6891,7 @@ impl Device {
             linear_merges_recorded: counters.linear_merges_recorded.load(Ordering::Relaxed),
             linear_merges_taken_over: counters.linear_merges_taken_over.load(Ordering::Relaxed),
             kept_bytes_passes: counters.kept_bytes_passes.load(Ordering::Relaxed),
+            kept_texels_passes: counters.kept_texels_passes.load(Ordering::Relaxed),
             color_group_passes: counters.color_group_passes.load(Ordering::Relaxed),
             color_group_twins: counters.color_group_twins.load(Ordering::Relaxed),
             color_group_draws_skipped: counters.color_group_draws_skipped.load(Ordering::Relaxed),

@@ -149,8 +149,9 @@ struct QueueShared {
     /// so far, which the completion turns place in its order (`gpu_time.rs`). A leaf lock:
     /// taken under a command buffer's, never held while another is taken.
     latest_gpu_end: Mutex<u64>,
-    /// The backings of memoryless attachments its passes render into images of their own
-    /// (`attachment_stand_in::pooled_backing`). A leaf lock: never held while another is taken.
+    /// The backings of memoryless attachments its passes render into images of their own, and of
+    /// colors they store `DontCare` that render so (`attachment_stand_in::pooled_backing`). A leaf
+    /// lock: never held while another is taken.
     memoryless_backings: Mutex<BackingPool>,
     /// The kept images its merges' keeps made, kept for its later keeps
     /// (`texture/kept_image.rs`).
@@ -623,8 +624,8 @@ impl CommandQueue {
         (self.vk_queue(), long)
     }
 
-    /// The backings of memoryless attachments the queue keeps for its passes
-    /// (`attachment_stand_in::pooled_backing`).
+    /// The backings of memoryless attachments, and of colors stored `DontCare`, the queue keeps
+    /// for its passes (`attachment_stand_in::pooled_backing`).
     pub(super) fn memoryless_backings(&self) -> &Mutex<BackingPool> {
         &self.0.memoryless_backings
     }

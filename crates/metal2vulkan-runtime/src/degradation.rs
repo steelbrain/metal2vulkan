@@ -803,7 +803,9 @@ degradations! {
         /// device stores it (`STORE`), Metal's answer where its tiler overflows
         /// (`render_target.rs`). Not a texture over a buffer the pass renders through an image it
         /// copies nothing back from (a shadow, a stand-in: `kept_bytes.rs`), which keeps the
-        /// buffer's bytes, Metal's answer; only one whose image the pass renders in place.
+        /// buffer's bytes, Metal's answer, nor a texture's own image stored `DontCare` that the
+        /// pass renders through a backing its queue keeps (`kept_bytes.rs`), which keeps its
+        /// earlier texels, Metal's answer; only one whose image the pass renders in place.
         DontCareStore = "dont-care-store", Precision,
             "the attachment's texels after the pass are each its earlier texel or the one the \
              pass rendered, both Metal's answers, but not always the one Metal's tiler keeps";
@@ -4453,11 +4455,13 @@ impl Device {
         // call renders into a backing of its own, which copies nothing back: its texture keeps
         // its texels, as Metal's keeps them there (`render.rs`). So does one whose samples a
         // resolve after the pass reads, rendered through the image its texture keeps, from which
-        // the pass copies nothing back either (`resolve::keep_samples`).
+        // the pass copies nothing back either (`resolve::keep_samples`), and a texture's own image
+        // stored `DontCare` through a backing its queue keeps (`kept_bytes.rs`).
         let kept = |color: &ColorTarget| {
             (color.clears_and_resolves_across_formats()
                 && color.stand_in.as_ref().is_some_and(|s| !s.copies()))
-                || (color.stand_in.as_ref()).is_some_and(|s| s.cause == Cause::KeptSamples)
+                || (color.stand_in.as_ref())
+                    .is_some_and(|s| matches!(s.cause, Cause::KeptSamples | Cause::KeptTexels))
         };
         // A texture over a buffer rendered through an image the pass copies nothing back from
         // where it does not store it (a shadow, `render/shadows.rs`; a stand-in, which copies
@@ -4957,11 +4961,12 @@ impl Device {
                 });
             } else if matches!(
                 stand_in.cause,
-                Cause::Linear | Cause::KeptBytes | Cause::KeptSamples
+                Cause::Linear | Cause::KeptBytes | Cause::KeptSamples | Cause::KeptTexels
             ) {
                 // Announced where `linear_attachment.rs` or `kept_bytes.rs` chose the kept image.
                 // An image that keeps an attachment's samples for a resolve after the pass makes
-                // the pass Metal's, which no notice names (`resolve::keep_samples`).
+                // the pass Metal's, which no notice names (`resolve::keep_samples`), as does a
+                // backing that keeps a texture's texels (`kept_bytes.rs`).
             } else if memoryless
                 && (index.is_some_and(fetched) || (index.is_none() && shadow) || !chosen)
             {

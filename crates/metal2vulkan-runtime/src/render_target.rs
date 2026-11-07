@@ -105,7 +105,9 @@
 //!   hands it so ([`handed_dont_care`], `DriverFact::DontCareStoreIsMetals`). A texture over a
 //!   buffer, which Metal leaves holding the buffer's bytes, renders through an image the pass
 //!   copies nothing back from (its shadow, or the image it keeps: `kept_bytes.rs`): the buffer's
-//!   bytes, exactly. A resolve attachment is written whole over the render area (`DONT_CARE` then
+//!   bytes, exactly. So does a texture's own image a pass stores `DontCare` and does not hand to
+//!   Metal's own, through a backing its queue keeps (`kept_bytes.rs`): its earlier texels,
+//!   exactly. The operations below are those of an attachment such a pass renders in place. A resolve attachment is written whole over the render area (`DONT_CARE` then
 //!   `STORE`), but an aspect of a depth/stencil resolve that does not resolve keeps its texels.
 //!   An aspect of the attached texture's Metal format that no attachment names keeps its texels
 //!   (loaded and stored); an aspect only the Vulkan format has (the depth of a `Stencil8` texture
@@ -1263,10 +1265,10 @@ pub(super) fn final_pass(
 }
 
 /// The operations of color attachment `color` of the draws' subpass in an instance at `at`, its
-/// `DontCare` `dont_care`'s, but the image a texture over a buffer keeps for
-/// a pass that does not store it, which nothing reads after the pass (`kept_bytes.rs`). An
-/// attachment the exact resolve reads after the pass keeps its samples for it, and one whose
-/// texels are copied as its resolve its texels.
+/// `DontCare` `dont_care`'s, but the image a texture over a buffer keeps for a pass that does not
+/// store it, and the backing of a texture's own image a pass stores `DontCare`, which nothing
+/// reads after the pass (`kept_bytes.rs`). An attachment the exact resolve reads after the pass
+/// keeps its samples for it, and one whose texels are copied as its resolve its texels.
 fn color_ops(color: &ColorTarget, at: Position, dont_care: DontCare) -> Ops {
     let exact = color.resolve.as_ref().is_some_and(|r| r.shader.is_some())
         || color.copied_resolve.is_some();
@@ -1274,7 +1276,7 @@ fn color_ops(color: &ColorTarget, at: Position, dont_care: DontCare) -> Ops {
         || color
             .stand_in
             .as_ref()
-            .is_some_and(|s| s.cause == Cause::KeptBytes);
+            .is_some_and(|s| matches!(s.cause, Cause::KeptBytes | Cause::KeptTexels));
     Ops {
         load: load_at(color.load, at),
         store: match exact {

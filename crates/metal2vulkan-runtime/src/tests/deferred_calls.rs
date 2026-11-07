@@ -808,8 +808,11 @@ fn an_end_returns_before_its_lowering() {
 
 /// A kind the device refuses while lowering, met as the end is lowered after its call, refuses
 /// the end: `CallRefused` names `endEncoding` and its index, the notice its error, and the pass
-/// runs nothing. Where the device announces no such kind at the pass's end under `AtCall` (its
-/// `DONT_CARE` keeps one of Metal's answers), there is nothing to refuse.
+/// runs nothing. The kind is `dont-care-store`, met where a pass resolves its single-sampled
+/// attachment and stores nothing of it (`MultisampleResolve`), which renders in place (a
+/// `DontCare` store alone renders through a backing that keeps the texture's texels,
+/// `kept_bytes.rs`, and announces nothing). Where the device announces no such kind at the
+/// pass's end under `AtCall` (it hands the store to Metal's own), there is nothing to refuse.
 #[test]
 fn a_kind_refused_as_the_end_is_lowered_refuses_the_end() {
     let scratch = Scratch::new("deferred-end-refused");
@@ -822,7 +825,8 @@ fn a_kind_refused_as_the_end_is_lowered_refuses_the_end() {
         let command_buffer = queue.command_buffer().unwrap();
         let target = target(&device);
         let mut descriptor = pass(&target);
-        descriptor.color_attachments[0].store_action = StoreAction::DontCare;
+        descriptor.color_attachments[0].store_action = StoreAction::MultisampleResolve;
+        descriptor.color_attachments[0].resolve_texture = Some(self::target(&device));
         let mut encoder = command_buffer.render_command_encoder(&descriptor).unwrap();
         rectangle(&state, &mut encoder);
         encoder

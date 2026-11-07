@@ -6593,6 +6593,7 @@ impl RenderLowering {
                             maker,
                             own,
                             &standing_images(&self.layout, &standing),
+                            false,
                         )?,
                         true => attachment_stand_in::stand_in(maker, own, copies)?,
                     };
@@ -6700,7 +6701,7 @@ impl RenderLowering {
                     .any(|s| matches!(s, Standing::Color(i, ..) if *i == index));
                 if color.stand_in.is_none() && !stood && memoryless(own) {
                     let taken = standing_images(&self.layout, &standing);
-                    let target = attachment_stand_in::pooled_backing(maker, own, &taken)?;
+                    let target = attachment_stand_in::pooled_backing(maker, own, &taken, false)?;
                     let stand_in = StandIn {
                         own: own.clone(),
                         cause: Cause::Backing,

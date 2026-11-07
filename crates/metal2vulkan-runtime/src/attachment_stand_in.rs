@@ -155,6 +155,12 @@ pub(super) enum Cause {
     /// copied into where the pass loads it and never back, so the texture keeps the samples it
     /// held before the pass, as Metal's does.
     KeptSamples,
+    /// The image a pass renders a texture's own image through where it stores it `DontCare` and
+    /// the device's own `DONT_CARE` would not leave the texture's earlier texels, which Metal
+    /// leaves (`kept_bytes.rs`): one its queue keeps for its passes of the attachment's shape
+    /// ([`pooled_backing`]), copied into where the pass loads it and never back. No notice names
+    /// it: the texture keeps its texels, Metal's answer.
+    KeptTexels,
 }
 
 impl StandIn {
@@ -245,7 +251,7 @@ pub(super) fn kept_backing(
     Ok(made)
 }
 
-/// The most memoryless color backings a queue keeps ([`pooled_backing`]), and the most bytes of
+/// The most color backings a queue keeps ([`pooled_backing`]), and the most bytes of
 /// device memory their images take together: past either, the backing passes took least recently
 /// goes (but the one just made, which alone may take more). The count is above the shapes a
 /// frame cycles through: a compositor's frames on the consumer's macOS guest render 11 to 14
@@ -255,24 +261,27 @@ pub(super) fn kept_backing(
 const MOST_POOLED_BACKINGS: usize = 32;
 const MOST_POOLED_BYTES: u64 = 256 << 20;
 
-/// A memoryless color attachment's backing its queue keeps ([`pooled_backing`]): the shape it
-/// backs (the attachment's pixel format, the format its pass renders it in, its samples, layers
-/// and extent), the bytes its image takes, and the pool's count of takes at its last take.
+/// A color attachment's backing its queue keeps ([`pooled_backing`]): the shape it backs (the
+/// attachment's pixel format, the format its pass renders it in, its samples, layers and extent),
+/// whether it was made for copies from its attachment (`stand_in`'s `copies`), the bytes its image
+/// takes, and the pool's count of takes at its last take.
 struct PooledBacking {
     pixel_format: PixelFormat,
     format: metal2vulkan::vk::Format,
     samples: u32,
     layers: u32,
     extent: [u32; 2],
+    copies: bool,
     bytes: u64,
     taken: u64,
     backing: Target,
 }
 
 impl PooledBacking {
-    /// Whether it backs an attachment of `own`'s shape.
-    fn backs(&self, own: &Target) -> bool {
-        self.pixel_format == own.texture.pixel_format()
+    /// Whether it backs an attachment of `own`'s shape, copied from it where `copies`.
+    fn backs(&self, own: &Target, copies: bool) -> bool {
+        (self.copies || !copies)
+            && self.pixel_format == own.texture.pixel_format()
             && self.format == own.format
             && self.samples == own.samples
             && self.layers == own.layers
@@ -280,7 +289,7 @@ impl PooledBacking {
     }
 }
 
-/// The memoryless color backings one command queue keeps for its passes ([`pooled_backing`]): at
+/// The color backings one command queue keeps for its passes ([`pooled_backing`]): at
 /// most [`MOST_POOLED_BACKINGS`], over at most [`MOST_POOLED_BYTES`] but for the one just made.
 /// They go with the queue; each command buffer that rendered into one holds it until it
 /// completes.
@@ -314,23 +323,28 @@ impl BackingPool {
 
 /// The backing of `own`, a memoryless color attachment of a pass of `maker`'s queue that renders
 /// into an image of its own (a framebuffer fetch through the pixel interlock reads it, or the pass
-/// splits): one the queue keeps of `own`'s pixel format, format, samples, layers and extent that
-/// is none of `taken` (the images the pass renders its other attachments into), else one made now
-/// and kept ([`BackingPool`]). Metal neither loads nor stores a memoryless texture
-/// (`render_pass::check_memoryless`), and a pass gives a memoryless color's every texel a draw can
-/// read a value before its draws: its `Clear` load, or the zero its `DontCare` load clears to in a
-/// pass that draws (`clear_reach::dont_care_loads`), before the pass where the pass leaves it out
-/// of its subpass (`render.rs`). A fresh image's texels were undefined there as well. So no pass
-/// reads what another left in the backing, and the passes of one queue that take it are ordered by
-/// their uses of it, as by any texture's: one image serves every pass of the shape, across
-/// command buffers and frames (`WorkCounts::pooled_backings_made`).
+/// splits), or a color a pass stores `DontCare` that renders through one so that its texture
+/// keeps its texels (`kept_bytes.rs`), made for the copy into it where `copies` (the pass loads
+/// it): one the queue keeps of `own`'s pixel format, format, samples, layers and extent (made for
+/// copies where `copies`) that is none of `taken` (the images the pass renders its other
+/// attachments into), else one made now and kept ([`BackingPool`]). Metal neither loads nor stores
+/// a memoryless texture (`render_pass::check_memoryless`), and a pass gives a memoryless color's
+/// every texel a draw can read a value before its draws: its `Clear` load, or the zero its
+/// `DontCare` load clears to in a pass that draws (`clear_reach::dont_care_loads`), before the pass
+/// where the pass leaves it out of its subpass (`render.rs`); a `DontCare` store's backing is
+/// given the same before its pass, or the texture's texels over the render area where the pass
+/// loads it, and nothing reads what its pass leaves in it. A fresh image's texels were undefined
+/// there as well. So no pass reads what another left in the backing, and the passes of one queue
+/// that take it are ordered by their uses of it, as by any texture's: one image serves every pass
+/// of the shape, across command buffers and frames (`WorkCounts::pooled_backings_made`).
 pub(super) fn pooled_backing(
     maker: &CommandBuffer,
     own: &Target,
     taken: &[Texture],
+    copies: bool,
 ) -> Result<Target, Error> {
     let queue = maker.command_queue();
-    let free = |k: &PooledBacking| k.backs(own) && !taken.contains(&k.backing.texture);
+    let free = |k: &PooledBacking| k.backs(own, copies) && !taken.contains(&k.backing.texture);
     {
         let mut pool = lock(queue.memoryless_backings());
         pool.takes += 1;
@@ -346,7 +360,7 @@ pub(super) fn pooled_backing(
         }
     }
     // Made with no lock held; the pool may keep one another thread made meanwhile beside it.
-    let made = stand_in(maker, own, false)?;
+    let made = stand_in(maker, own, copies)?;
     maker.device().shared().counts.pooled_backing_made();
     let mut pool = lock(queue.memoryless_backings());
     pool.takes += 1;
@@ -357,6 +371,7 @@ pub(super) fn pooled_backing(
         samples: own.samples,
         layers: own.layers,
         extent: own.extent,
+        copies,
         bytes: made.texture.placed_bytes().unwrap_or(0),
         taken: takes,
         backing: made.clone(),

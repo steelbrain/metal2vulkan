@@ -1767,6 +1767,7 @@ impl Gpu for Runtime {
                 c.linear_passes_through_copies,
             ),
             ("kept_bytes_passes", c.kept_bytes_passes),
+            ("kept_texels_passes", c.kept_texels_passes),
             ("color_group_passes", c.color_group_passes),
             ("color_group_twins", c.color_group_twins),
             ("color_group_draws_skipped", c.color_group_draws_skipped),
