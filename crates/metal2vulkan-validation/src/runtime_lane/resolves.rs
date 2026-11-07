@@ -2143,10 +2143,11 @@ enum Split {
 /// keeping its texels, which Metal's debug layer stops and plain Metal runs; two slices of one
 /// array likewise, a Metal probe on the M3 Max and an M4). The samples are those of a Metal probe
 /// on an M4 (depths 0.5, 0.1, 0.9 and 0.3, stencils 20 to 23); each resolve texture holds depth
-/// 0.75 and stencil 7 before the pass. A stencil drawn after the pass (`DepthResolvedSample` after
-/// `Min` or `Max`, or a depth the device has no mode for) is `NotImplemented(DepthStencilResolve)`
-/// in a split resolve, as is a pair of modes the device lacks; a device that refuses the separate
-/// textures' sample copies prints its refusal.
+/// 0.75 and stencil 7 before the pass. An aspect drawn after the pass (a stencil by
+/// `DepthResolvedSample` after `Min` or `Max`, or a depth the device has no mode for) is drawn
+/// into its own resolve texture, printed as a "drawn:" line; both aspects drawn is
+/// `NotImplemented(DepthStencilResolve)` in a split resolve, as is a pair of modes the device
+/// lacks; a device that refuses the separate textures' sample copies prints its refusal.
 #[test]
 fn split_depth_and_stencil_resolves_are_metals() {
     use MultisampleDepthResolveFilter as D;
@@ -2290,7 +2291,29 @@ fn split_depth_and_stencil_resolves_are_metals() {
             Split::Separate => (PixelFormat::Depth32Float, PixelFormat::Stencil8),
             Split::TwoTextures | Split::TwoSlices => (combined, combined),
         };
-        let depth_msaa = lane.msaa(depth_pf);
+        // A drawn aspect: a depth picked where the device has no mode for it, or a stencil
+        // picked by depth after `Min` or `Max`, each drawn from the samples, read through
+        // sampled views (separate textures' through the image they render through, which the
+        // runtime makes sampled).
+        let depth_mode = depth.map(|_| match depth_filter {
+            D::Sample0 => Mode::SAMPLE_ZERO,
+            D::Min => Mode::MIN,
+            D::Max => Mode::MAX,
+            other => panic!("{name}: a filter the cases do not name: {other:?}"),
+        });
+        let depth_drawn = depth_mode.is_some_and(&drawn);
+        let stencil_drawn = stencil.is_some()
+            && stencil_filter == S::DepthResolvedSample
+            && depth_filter != D::Sample0;
+        let depth_msaa = match split {
+            Split::Separate => lane.msaa(depth_pf),
+            _ if depth_drawn || stencil_drawn => lane.texture(
+                depth_pf,
+                MSAA,
+                TextureUsage::RENDER_TARGET | TextureUsage::SHADER_READ,
+            ),
+            _ => lane.msaa(depth_pf),
+        };
         let stencil_msaa = match split {
             Split::Separate => lane.msaa(stencil_pf),
             Split::TwoTextures | Split::TwoSlices => depth_msaa.clone(),
@@ -2357,22 +2380,18 @@ fn split_depth_and_stencil_resolves_are_metals() {
                 h.push(mask);
             }
         });
-        // Each resolved aspect in a subpass of its own; a drawn one is not built here.
-        let depth_mode = depth.map(|_| match depth_filter {
-            D::Sample0 => Mode::SAMPLE_ZERO,
-            D::Min => Mode::MIN,
-            D::Max => Mode::MAX,
-            other => panic!("{name}: a filter the cases do not name: {other:?}"),
-        });
-        let picked = (depth_mode.is_some_and(&drawn))
-            || (stencil.is_some()
-                && stencil_filter == S::DepthResolvedSample
-                && depth.is_some()
-                && depth_filter != D::Sample0);
-        let stencil_mode = stencil.map(|_| Mode::SAMPLE_ZERO);
-        let built = !picked
-            && device_resolves(depth_mode, None, true)
-            && device_resolves(None, stencil_mode, true);
+        // Each aspect a subpass resolves in a subpass of its own, and one drawn into its own
+        // texture after the pass; both drawn is not built here.
+        let subpass_depth = depth_mode.filter(|_| !depth_drawn);
+        let subpass_stencil = stencil
+            .map(|_| Mode::SAMPLE_ZERO)
+            .filter(|_| !stencil_drawn);
+        let built = !(depth_drawn && stencil_drawn)
+            && device_resolves(subpass_depth, None, true)
+            && device_resolves(None, subpass_stencil, true);
+        if built && (depth_drawn || stencil_drawn) {
+            eprintln!("drawn: {name}: the depth {depth_drawn}, the stencil {stencil_drawn}");
+        }
         // The separate textures' scratch image, and its copies, are made before the resolve.
         match (built, ran) {
             (_, Err(Error::Unsupported(u))) if split == Split::Separate => {

@@ -52,6 +52,10 @@
 //!   its layers, each texture's from its slice, and the copies move every layer; the copies' draws,
 //!   each of one layer, run once per layer.
 //!
+//! - **A resolve drawn after the pass** (`depth_stencil_resolve.rs`: a `Min` or `Max` depth on a
+//!   device without the mode) reads the scratch image's samples, so the image is sampled where
+//!   such a resolve may run and the device samples its format (`resolve::may_draw`).
+//!
 //! Refused: a device without the combined format as a depth/stencil attachment that copies both
 //! ways (and, where the scratch image is read back by draws, is sampled), or, for multisampled
 //! aspects copied through colour images, without a matching colour format it renders to and
@@ -296,12 +300,14 @@ fn by_draws(device: &Device, samples: u32, aspect: ImageAspectFlags) -> bool {
 }
 
 /// The scratch image `separate`'s pass renders into, as its depth/stencil target, whose depth and
-/// stencil aspects load with `loads` and store with `stores`. Refused as the module docs say.
+/// stencil aspects load with `loads` and store with `stores`, and whose samples a resolve drawn
+/// after the pass may read where `drawn` (`resolve::may_draw`). Refused as the module docs say.
 pub(super) fn scratch(
     maker: &CommandBuffer,
     separate: &Separate,
     loads: [LoadAction; 2],
     stores: [StoreAction; 2],
+    drawn: bool,
 ) -> Result<Target, Error> {
     let device = maker.device();
     // The first texture: both have the pass's samples and layers, and the scratch image the
@@ -415,6 +421,14 @@ pub(super) fn scratch(
             FormatUsage::SampledImage,
         )?;
     }
+    // A resolve drawn after the pass reads the samples too, where the device samples the format;
+    // elsewhere that resolve is refused (`depth_stencil_resolve::draws_run`).
+    let sampled = read_scratch
+        || (drawn
+            && multisampled
+            && facts
+                .optimal(format)
+                .contains(FormatFeatureFlags2::SAMPLED_IMAGE));
     let samples = samples_flag;
     let [width, height] = extent;
     // The descriptor states the image's size and samples; its pixel format is the depth
@@ -454,7 +468,7 @@ pub(super) fn scratch(
         usage: ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT
             | ImageUsageFlags::TRANSFER_SRC
             | ImageUsageFlags::TRANSFER_DST
-            | if read_scratch {
+            | if sampled {
                 ImageUsageFlags::SAMPLED
             } else {
                 ImageUsageFlags::empty()

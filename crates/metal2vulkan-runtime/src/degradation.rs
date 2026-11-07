@@ -4170,7 +4170,7 @@ impl Device {
                 let reason = if resolve.split {
                     format!(
                         "its depth ({}) and its stencil ({}) resolve into different textures, \
-                         each through a scratch image of its own",
+                         each a subpass resolves through a scratch image of its own",
                         resolve_mode(resolve.depth_mode),
                         resolve_mode(resolve.stencil_mode)
                     )

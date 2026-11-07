@@ -2194,11 +2194,13 @@ fn depth_stencil(
                 depth: None,
                 stencil: t.clone(),
             };
+            // No depth, so no resolve drawn after the pass (`resolve::may_draw`).
             let scratch = depth_stencil_scratch::scratch(
                 maker,
                 &separate,
                 [depth_load, s.load_action],
                 [d.store_action, s.store_action],
+                false,
             )?;
             (scratch, Some(separate))
         }
@@ -2220,11 +2222,21 @@ fn depth_stencil(
                 depth: Some(a.clone()),
                 stencil: b.clone(),
             };
+            // A resolve drawn after the pass reads the scratch image's samples.
+            let drawn = resolve::may_draw(
+                device,
+                a.format,
+                Wanted::of(true, &d.resolve_texture, (0, 0, 0), d.store_action).as_ref(),
+                Wanted::of(true, &s.resolve_texture, (0, 0, 0), s.store_action).as_ref(),
+                d.depth_resolve_filter,
+                s.stencil_resolve_filter,
+            );
             let scratch = depth_stencil_scratch::scratch(
                 maker,
                 &separate,
                 [depth_load, s.load_action],
                 [d.store_action, s.store_action],
+                drawn,
             )?;
             (scratch, Some(separate))
         }

@@ -44,7 +44,7 @@ Its limits, measured rather than asserted:
 | committed recordings | 1229 |
 | distinct SDK items the Metal leg reaches, of any status | 820 |
 | of those, reached only where this cannot name the family | 3 |
-| ledger rows (a case whose gap is recorded) | 2600 |
+| ledger rows (a case whose gap is recorded) | 2598 |
 | declared crossings of the option space (pairs put to Metal at once) | 26 |
 | declared crossings that are no pair of it (a boolean or numeric field, or one type in two slots) | 30 |
 
@@ -2614,8 +2614,6 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `pixel-samplers-rgba8-nearest-border` | Metal's 800 sampled results of this case's `norm` source digest to one value and ours to another; the row holds both. `norm` is the case's control: a normalized… |
 | `pixel-samplers-rgba8-nearest-edge` | Metal's 800 sampled results of this case's `norm` source digest to one value and ours to another; the row holds both. `norm` is the case's control: a normalized… |
 | `pixel-samplers-rgba8-nearest-zero` | Metal's 800 sampled results of this case's `norm` source digest to one value and ours to another; the row holds both. `norm` is the case's control: a normalized… |
-| `resolve-stencil-under-depth-filters` | Metal resolves a multisampled depth/stencil attachment with the stencil filter `MTLMultisampleStencilResolveFilterSample0` under the depth filter `Min` or `Max`… |
-| `resolve-stencil-under-depth-filters` | Metal resolves a multisampled depth/stencil attachment with the stencil filter `MTLMultisampleStencilResolveFilterSample0` under the depth filter `Min` or `Max`… |
 | `sparse-mapping-a-slice-past-the-textures` | Plain Metal TAKES a sparse mapping update whose slice is past the texture's own slices (its own API validation layer refuses the call) and binds the page it cha… |
 | `argb8-targets-unblended` | An unblended colour write into an 8-bit unorm attachment (`RGBA8Unorm`, and `ARGB8Unorm` through its byte rotation, which moves by the same count): Metal's stor… |
 | `argb8-targets-unblended` | An unblended colour write into an 8-bit unorm attachment (`RGBA8Unorm`, and `ARGB8Unorm` through its byte rotation, which moves by the same count): Metal's stor… |
