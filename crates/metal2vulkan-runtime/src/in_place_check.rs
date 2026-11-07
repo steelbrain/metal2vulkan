@@ -31,6 +31,19 @@
 //!   (the Memory Model); the load, store and resolve operations and the layout transitions are
 //!   what Vulkan lets touch the rest of the subresource, and the program's resolves into such a
 //!   texture are not among the rounds.
+//! - **An image a shader writes** ([`Access::Writes`]) is checked apart too: a texture of
+//!   `ShaderWrite` usage over the pattern, whose every texel a kernel stores (the crate-owned
+//!   copy-in kernel, through an unsigned-integer view of the image, `Texture::store_in_place`)
+//!   from a buffer of the device's, by a submission that makes the image's first move first, while
+//!   the writer writes the bytes between rows and after the image alone, until it completed.
+//!   Every texel must then read the kernel's bytes (the pattern's, changed in four bits of each,
+//!   so they differ from the pattern and its complement), and every other byte as above. Each
+//!   class runs every shape of [`STORE_SHAPES`] (texels of 4, 8 and 16 bytes, the widths the
+//!   kernel's views store, rows apart, some of a width no multiple of 4 and an odd height, so that
+//!   a driver's write of a block wider than a texel past a row's or the image's end shows, or one
+//!   after another, and 1920x1080 at 4 bytes) [`ROUNDS`] times. Its rounds are stores: a program's
+//!   atomics on such a texture are kernels' storage writes of its texels too, but none is among
+//!   the rounds.
 //! - **Its buffers' addresses** lie outside the Metal address space (`AddressPlacement::Outside`,
 //!   `address.rs`), each made as the product makes its class's otherwise: the check runs while
 //!   the program makes its resources, so a range of the space it took would refuse a pin of the
@@ -88,6 +101,7 @@ use crate::{
     AddressPlacement, Buffer, BufferContents, BufferDescriptor, ClearColor, CommandQueue, Device,
     LoadAction, RenderPassDescriptor, StoreAction, Texture, TextureDescriptor,
 };
+use metal2vulkan::bind::ShadowTexelView;
 use metal2vulkan::device::HostPageTexturePolicy;
 use metal2vulkan::metal::{PixelFormat, TextureUsage};
 use std::ptr::NonNull;
@@ -131,6 +145,53 @@ pub(crate) const SHAPES: [Shape; 11] = [
     shape(PixelFormat::RGBA16Float, 8, 33, 17, 512),
     shape(PixelFormat::RGBA32Float, 16, 20, 9, 512),
     shape(PixelFormat::BGRA8Unorm, 4, 3840, 2160, 15360),
+];
+
+/// The shapes the check of storage writes writes ([`Access::Writes`]), each with the view its
+/// kernel stores through: texels of 4, 8 and 16 bytes (`in_place::STORED_TEXEL_BYTES`, the
+/// crate-owned copy-in kernel's views), with rows one after another and with bytes between them
+/// (of widths no multiple of 4 and heights no multiple of 2 among them, so that a driver's write
+/// of a block wider than a texel past a row's or the image's end shows), at a 512-byte pitch and
+/// at the 16-byte pitch a driver that lays rows tight lays them at, and one 1920x1080 surface of
+/// 4-byte texels, last. A shape the device makes no image of in place, or no dispatch over, is
+/// skipped.
+pub(crate) const STORE_SHAPES: [(Shape, ShadowTexelView); 9] = [
+    (
+        shape(PixelFormat::RGBA8Uint, 4, 64, 16, 256),
+        ShadowTexelView::R8G8B8A8Uint,
+    ),
+    (
+        shape(PixelFormat::RG32Uint, 8, 32, 16, 256),
+        ShadowTexelView::R32G32Uint,
+    ),
+    (
+        shape(PixelFormat::RGBA32Uint, 16, 16, 16, 256),
+        ShadowTexelView::R32G32B32A32Uint,
+    ),
+    (
+        shape(PixelFormat::RGBA8Uint, 4, 101, 51, 512),
+        ShadowTexelView::R8G8B8A8Uint,
+    ),
+    (
+        shape(PixelFormat::RG32Uint, 8, 33, 17, 512),
+        ShadowTexelView::R32G32Uint,
+    ),
+    (
+        shape(PixelFormat::RGBA32Uint, 16, 21, 9, 512),
+        ShadowTexelView::R32G32B32A32Uint,
+    ),
+    (
+        shape(PixelFormat::RGBA8Uint, 4, 101, 51, 416),
+        ShadowTexelView::R8G8B8A8Uint,
+    ),
+    (
+        shape(PixelFormat::RG32Uint, 8, 33, 17, 272),
+        ShadowTexelView::R32G32Uint,
+    ),
+    (
+        shape(PixelFormat::RGBA8Uint, 4, 1920, 1080, 7680),
+        ShadowTexelView::R8G8B8A8Uint,
+    ),
 ];
 
 const fn shape(format: PixelFormat, texel: u64, width: u64, height: u64, bpr: u64) -> Shape {
@@ -265,7 +326,7 @@ fn check_class(device: &Device, class: PagesClass, access: Access) -> Option<Ver
     };
     // The command queue an image that renders takes its passes on: the check's own.
     let queue = match access {
-        Access::Reads => None,
+        Access::Reads | Access::Writes => None,
         Access::Renders => {
             let made = exit_guard::enter().map(|_busy| device.new_command_queue());
             match made? {
@@ -274,8 +335,15 @@ fn check_class(device: &Device, class: PagesClass, access: Access) -> Option<Ver
             }
         }
     };
+    // An image a shader writes takes the shapes its kernel stores, each with its view.
+    let shapes: Vec<(Shape, Option<ShadowTexelView>)> = match access {
+        Access::Writes => STORE_SHAPES
+            .map(|(shape, texel)| (shape, Some(texel)))
+            .to_vec(),
+        Access::Reads | Access::Renders => SHAPES.map(|shape| (shape, None)).to_vec(),
+    };
     let mut made = 0;
-    for shape in SHAPES {
+    for (shape, texel) in shapes {
         if shape.window(page) > BUFFER_BYTES {
             continue;
         }
@@ -288,7 +356,10 @@ fn check_class(device: &Device, class: PagesClass, access: Access) -> Option<Ver
             }
             let outcome = {
                 let _busy = exit_guard::enter()?;
-                check_round(&pages, shape, round, page, queue.as_ref())
+                match texel {
+                    Some(texel) => store_round(device, &pages, (shape, texel), round, page),
+                    None => check_round(&pages, shape, round, page, queue.as_ref()),
+                }
             };
             match outcome {
                 Round::Kept => made += 1,
@@ -305,6 +376,7 @@ fn check_class(device: &Device, class: PagesClass, access: Access) -> Option<Ver
                         Access::Renders => {
                             "the first move, feedback loop moves or a pass's clear and store"
                         }
+                        Access::Writes => "the first move or a kernel's storage writes",
                     };
                     device.shared().in_place.note(format!(
                         "{class:?}: {operations} of a {:?} image of {}x{} with rows {} bytes \
@@ -358,7 +430,7 @@ fn check_round(
         None => TextureUsage::SHADER_READ,
         Some(_) => TextureUsage::RENDER_TARGET | TextureUsage::SHADER_READ,
     };
-    // An image that renders: the writer writes beside its texels alone, which its pass writes.
+    // An image that renders: the writer writes beside its texels alone, which its pass clears.
     let texels = queue.map(|_| shape);
     // The runtime's own texture: it takes no resource ID, so the program's IDs are Metal's
     // whether or when the check runs.
@@ -394,10 +466,102 @@ fn check_round(
         return Round::NotMade;
     };
     drop(texture);
+    let texels = texels.map(|shape| (shape, Due::Zero));
     match bytes.compare(&pattern, texels, written.load(Ordering::Acquire)) {
         None => Round::Kept,
         Some(changed) => Round::Changed(changed),
     }
+}
+
+/// One round of storage writes of `shape` over `pages`, through `texel`'s view, inside the
+/// caller's section: the pattern; a texture of shader write usage over it; the bytes of a buffer
+/// of `device`'s stored into its texels by a kernel, while the CPU writes the bytes beside them
+/// (between rows and after the image) and the image takes its first move; and the bytes
+/// compared: each texel's the kernel's, each other byte the CPU's or the pattern.
+fn store_round(
+    device: &Device,
+    pages: &ClassPages,
+    (shape, texel): (Shape, ShadowTexelView),
+    round: usize,
+    page: u64,
+) -> Round {
+    let window = shape.window(page);
+    let bytes = Bytes {
+        start: pages.start,
+        length: window,
+    };
+    let pattern = Pattern::new(round as u64 + 101);
+    bytes.fill(&pattern);
+    let mut descriptor =
+        TextureDescriptor::texture_2d(shape.format, shape.width, shape.height, false);
+    descriptor.usage = TextureUsage::SHADER_READ | TextureUsage::SHADER_WRITE;
+    let Ok(texture) = pages
+        .buffer
+        .new_runtime_texture(&descriptor, 0, shape.bytes_per_row)
+    else {
+        return Round::NotMade;
+    };
+    // The bytes the kernel stores, row after row, and the part it keeps them in too: buffers
+    // outside the Metal address space, as the check's are (the module docs).
+    let row = shape.width * shape.texel;
+    let length = row * shape.height;
+    let buffer =
+        || device.new_buffer_placed(length, ResourceOptions::shared(), AddressPlacement::Outside);
+    let (Ok(source), Ok(kept)) = (buffer(), buffer()) else {
+        return Round::NotMade;
+    };
+    let Some(words) = source.contents() else {
+        return Round::NotMade;
+    };
+    for y in 0..shape.height {
+        let mut to = (y * row) as usize;
+        for (from, count) in pattern.spans(y * shape.bytes_per_row, row as usize) {
+            // SAFETY: the source's bytes `to..to + count`, mapped and writable, which nothing else
+            // uses yet; the pattern's bytes are apart from them.
+            unsafe {
+                std::ptr::copy_nonoverlapping(
+                    pattern.stored[from..].as_ptr(),
+                    words.as_ptr().add(to),
+                    count,
+                )
+            };
+            to += count;
+        }
+    }
+    let stop = AtomicBool::new(false);
+    let started = Barrier::new(2);
+    let written = AtomicU64::new(0);
+    let extent = (shape.width as u32, shape.height as u32);
+    let done = std::thread::scope(|scope| {
+        let builder = std::thread::Builder::new().name("m2v-in-place-writes".to_owned());
+        let writer = exit_guard::spawn_scoped(scope, builder, || {
+            bytes.write_until(&pattern, Some(shape), (&stop, &started, &written));
+        });
+        if writer.is_err() {
+            return None;
+        }
+        started.wait();
+        let done = texture.store_in_place((&source, &kept), texel, extent);
+        stop.store(true, Ordering::Release);
+        done
+    });
+    let Some(Ok(())) = done else {
+        return Round::NotMade;
+    };
+    drop(texture);
+    let texels = Some((shape, Due::Stored));
+    match bytes.compare(&pattern, texels, written.load(Ordering::Acquire)) {
+        None => Round::Kept,
+        Some(changed) => Round::Changed(changed),
+    }
+}
+
+/// What a round's texels must read once it ended, where the writer passed them over: zero (a
+/// pass cleared them) or the bytes a kernel stored (`Pattern::stored`).
+#[derive(Clone, Copy)]
+enum Due {
+    Zero,
+    Stored,
 }
 
 /// An image that renders, after its first move: its moves into the feedback loop layout and back
@@ -606,6 +770,9 @@ const PERIOD: usize = 4099;
 /// window. A byte the writer wrote holds its complement, which differs from it in every bit.
 struct Pattern {
     bytes: Vec<u8>,
+    /// The bytes a kernel of a round of storage writes stores, by their place in the period: the
+    /// pattern's, changed in four bits, so that each differs from the pattern and its complement.
+    stored: Vec<u8>,
 }
 
 impl Pattern {
@@ -616,13 +783,30 @@ impl Pattern {
                 let mixed = (offset ^ salt.rotate_left(17)).wrapping_mul(0x9E37_79B9_7F4A_7C15);
                 (mixed >> 56) as u8
             })
-            .collect();
-        Pattern { bytes }
+            .collect::<Vec<u8>>();
+        let stored = bytes.iter().map(|byte| byte ^ 0x5a).collect();
+        Pattern { bytes, stored }
     }
 
     /// Its byte at `offset` of the window.
     fn at(&self, offset: u64) -> u8 {
         self.bytes[(offset % PERIOD as u64) as usize]
+    }
+
+    /// The window's bytes `offset..offset + length` as runs within one period, in order: each
+    /// run's first place in the period and its length.
+    fn spans(&self, offset: u64, length: usize) -> impl Iterator<Item = (usize, usize)> {
+        let mut from = (offset % PERIOD as u64) as usize;
+        let mut left = length;
+        std::iter::from_fn(move || {
+            (left > 0).then(|| {
+                let count = (PERIOD - from).min(left);
+                let span = (from, count);
+                left -= count;
+                from = 0;
+                span
+            })
+        })
     }
 }
 
@@ -704,18 +888,18 @@ impl Bytes {
     /// `written` of the stride's bytes were reached: its offset, what was due and what was read;
     /// `None` where every byte reads right. Each written byte must read its complement, and is set
     /// back to the pattern as it is read; then every byte must read the pattern, compared a
-    /// period at a time, but, where `texels` names the shape a pass cleared, its texels, which
-    /// must read zero.
+    /// period at a time, but, where `texels` names the shape a pass cleared or a kernel stored,
+    /// its texels, which must read what is due of them.
     fn compare(
         &self,
         pattern: &Pattern,
-        texels: Option<Shape>,
+        texels: Option<(Shape, Due)>,
         written: u64,
     ) -> Option<(u64, u8, u8)> {
         let stride = self.stride();
         for n in 0..written {
             let offset = self.nth(n, stride);
-            if texels.is_some_and(|shape| shape.is_texel(offset)) {
+            if texels.is_some_and(|(shape, _)| shape.is_texel(offset)) {
                 continue;
             }
             let due = !pattern.at(offset);
@@ -727,36 +911,50 @@ impl Bytes {
             // SAFETY: as above.
             unsafe { self.byte(offset).write_volatile(pattern.at(offset)) };
         }
-        let Some(shape) = texels else {
-            return self.matches(pattern, 0, self.length);
+        let Some((shape, due)) = texels else {
+            return self.matches(&pattern.bytes, 0, self.length);
         };
-        // Each row's texels read zero, and the bytes after them to the next row the pattern.
+        // Each row's texels read what is due, and the bytes after them to the next row the
+        // pattern.
         let row_bytes = shape.width * shape.texel;
         for row in 0..shape.height {
             let start = row * shape.bytes_per_row;
-            // SAFETY: as above; the row's texels lie in the window.
-            let read = unsafe { std::slice::from_raw_parts(self.byte(start), row_bytes as usize) };
-            if let Some(at) = read.iter().position(|&read| read != 0) {
-                return Some((start + at as u64, 0, read[at]));
+            let changed = match due {
+                Due::Zero => {
+                    // SAFETY: as above; the row's texels lie in the window.
+                    let read =
+                        unsafe { std::slice::from_raw_parts(self.byte(start), row_bytes as usize) };
+                    let at = read.iter().position(|&read| read != 0);
+                    at.map(|at| (start + at as u64, 0, read[at]))
+                }
+                Due::Stored => self.matches(&pattern.stored, start, start + row_bytes),
+            };
+            if changed.is_some() {
+                return changed;
             }
             let next = start + shape.bytes_per_row;
-            if let Some(changed) = self.matches(pattern, start + row_bytes, next) {
+            if let Some(changed) = self.matches(&pattern.bytes, start + row_bytes, next) {
                 return Some(changed);
             }
         }
-        self.matches(pattern, shape.bytes_per_row * shape.height, self.length)
+        self.matches(
+            &pattern.bytes,
+            shape.bytes_per_row * shape.height,
+            self.length,
+        )
     }
 
-    /// The first byte from `from` to `to` that does not read the pattern: its offset, what was due
-    /// and what was read; `None` where every one does. Compared a period at a time.
-    fn matches(&self, pattern: &Pattern, from: u64, to: u64) -> Option<(u64, u8, u8)> {
+    /// The first byte from `from` to `to` that does not read `period` (a period's bytes, by their
+    /// place in it): its offset, what was due and what was read; `None` where every one does.
+    /// Compared a period at a time.
+    fn matches(&self, period: &[u8], from: u64, to: u64) -> Option<(u64, u8, u8)> {
         let mut offset = from;
         while offset < to {
             let phase = (offset % PERIOD as u64) as usize;
             let count = (to - offset).min((PERIOD - phase) as u64) as usize;
             // SAFETY: as in `compare`; nothing writes the bytes while the slice is read.
             let read = unsafe { std::slice::from_raw_parts(self.byte(offset), count) };
-            let due = &pattern.bytes[phase..phase + count];
+            let due = &period[phase..phase + count];
             if let Some(at) = read.iter().zip(due).position(|(read, due)| read != due) {
                 return Some((offset + at as u64, due[at], read[at]));
             }

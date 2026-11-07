@@ -290,25 +290,26 @@ pub enum RenderLoweringPolicy {
     AtCall,
 }
 
-/// What holds a texture over host pages whose declared usage samples, reads or renders into it
-/// and does not write it through a shader (no `ShaderWrite` or `ShaderAtomic`): over a no-copy
-/// buffer's pages (imported by their pointer or as dma-bufs) or over a buffer the runtime placed
-/// in fresh host pages it imported. Vulkan makes an image bound to imported memory start
-/// `UNDEFINED` (`VUID-VkImageCreateInfo-pNext-01443`), and lets its layout transitions, the first
-/// among them, and a render pass's load and store operations read and write every byte bound to
-/// it, where Metal keeps every CPU write to the bytes no command writes. The runtime's choice
-/// alone: no emitted code changes.
+/// What holds a texture over host pages: over a no-copy buffer's pages (imported by their pointer
+/// or as dma-bufs) or over a buffer the runtime placed in fresh host pages it imported. Vulkan
+/// makes an image bound to imported memory start `UNDEFINED`
+/// (`VUID-VkImageCreateInfo-pNext-01443`), and lets its layout transitions, the first among them,
+/// and a render pass's load and store operations read and write every byte bound to it, and a
+/// linear image's storage writes may reach more than their texels, where Metal keeps every CPU
+/// write to the bytes no command writes. The runtime's choice alone: no emitted code changes.
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum HostPageTexturePolicy {
     /// A linear image aliasing the pages (the default), on a device whose own check, run once per
     /// driver and release, shows that the first move of such an image leaves every byte alone
-    /// while the CPU writes beside it, and for a texture that renders, its render passes' load
-    /// and store operations and its moves into the feedback loop layout and back too; and where
-    /// the device makes the image (its format and usage linear) and lays it out at the buffer's
-    /// row pitch. Elsewhere, and for a texture that writes through a shader, the shadow below. A
-    /// texture made before the check's verdict is known is a shadow too.
+    /// while the CPU writes beside it, for a texture that renders, its render passes' load and
+    /// store operations and its moves into the feedback loop layout and back too, and for one a
+    /// shader writes (`ShaderWrite` or `ShaderAtomic`, of texels of 4, 8 or 16 bytes), a kernel's
+    /// storage writes of its texels; and where the device makes the image (its format and usage
+    /// linear) and lays it out at the buffer's row pitch. Elsewhere, and for a texture a shader
+    /// writes of 1- or 2-byte texels, the shadow below. A texture made before the check's verdict
+    /// is known is a shadow too.
     #[default]
     InPlace,
     /// A shadow on every device: an image of the runtime's own memory the encoders copy the

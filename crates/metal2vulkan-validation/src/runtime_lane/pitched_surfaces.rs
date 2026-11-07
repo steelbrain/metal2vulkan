@@ -10,9 +10,9 @@
 //!
 //! Each texture is a shadow (no image over the pages: `vk_image` answers none) on the lane's
 //! devices, which take the exact answers (`HostPageTexturePolicy::Shadow`); the tests named
-//! `_in_place` run on a device of `HostPageTexturePolicy::InPlace`, where a texture that reads or
-//! renders and does not write through a shader is an image aliasing the pages if the device's check
-//! passed for its access and its pitch is taken. Every step
+//! `_in_place` run on a device of `HostPageTexturePolicy::InPlace`, where a texture is an image
+//! aliasing the pages if the device's check passed for each of its accesses (one that reads,
+//! renders, or a shader writes of texels of 4, 8 or 16 bytes) and its pitch is taken. Every step
 //! reads and writes Metal's bytes at Metal's places, and no write reaches the bytes between the
 //! rows or past the last. The steps:
 //!
@@ -461,8 +461,8 @@ pub(super) fn sampler(device: &Device, filter: SamplerMinMagFilter) -> SamplerSt
 /// `usage`: the pages hold a pattern of their own, the texels `texels_of(.., 1)` laid at the rows;
 /// with the buffer, the mapping and the pages as written. `None` where the device imports no host
 /// memory. It is a shadow, whatever its usage: counted so, and `vk_image` answers no image; on a
-/// device that takes such textures in place ([`in_place_form`]) one that does not write through a
-/// shader may be in place instead, counted so, and `vk_image` answers its image.
+/// device that takes such textures in place ([`in_place_form`]) it may be in place instead (but
+/// one a shader writes of texels no check stores), counted so, and `vk_image` answers its image.
 fn surface(device: &Device, layout: &Layout, usage: TextureUsage) -> Option<Surface> {
     let len = layout.len().next_multiple_of(GUEST_PAGE);
     let mapping = Mapping::anonymous(len);
@@ -501,7 +501,8 @@ fn surface(device: &Device, layout: &Layout, usage: TextureUsage) -> Option<Surf
         .new_texture_with_iosurface_plane(&d, IoSurfacePlane::new(0, layout.bpr, false))
         .unwrap();
     let what = format!("{} ({}, {usage:?})", layout.name, layout.pf.name());
-    let (shadowed, aliased) = in_place_form(device, &before, &texture, usage, &what);
+    let form = (usage, layout.texel);
+    let (shadowed, aliased) = in_place_form(device, &before, &texture, form, &what);
     Some(Surface {
         texture,
         buffer,
@@ -514,24 +515,26 @@ fn surface(device: &Device, layout: &Layout, usage: TextureUsage) -> Option<Surf
     })
 }
 
-/// The form a texture over host pages of `usage` took, its making counted from `before`: the
-/// shadows counted, and whether it is in place. A shadow, `vk_image` answering none, on a device
-/// of `HostPageTexturePolicy::Shadow` and for any usage that writes through a shader; else one
-/// that reads or renders may be in place, counted so (`host_textures_in_place`), and `vk_image`
-/// answers its image.
+/// The form a texture over host pages of `usage` and texels of `texel` bytes took, its making
+/// counted from `before`: the shadows counted, and whether it is in place. A shadow, `vk_image`
+/// answering none, on a device of `HostPageTexturePolicy::Shadow`, and for a usage that writes
+/// through a shader where its texels are of a width the device's check stores none of (1 or 2
+/// bytes); else it may be in place, counted so (`host_textures_in_place`), and `vk_image` answers
+/// its image.
 fn in_place_form(
     device: &Device,
     before: &WorkCounts,
     texture: &Texture,
-    usage: TextureUsage,
+    (usage, texel): (TextureUsage, u64),
     what: &str,
 ) -> (u64, bool) {
     let counts = device.work_counts();
     let shadowed = counts.shadowed_textures - before.shadowed_textures;
     let in_place = counts.host_textures_in_place - before.host_textures_in_place;
     let policy = device.compile_device().policy().host_page_textures;
-    let may_alias = policy == HostPageTexturePolicy::InPlace
-        && !usage.intersects(TextureUsage::SHADER_WRITE | TextureUsage::SHADER_ATOMIC);
+    let writes = usage.intersects(TextureUsage::SHADER_WRITE | TextureUsage::SHADER_ATOMIC);
+    let may_alias =
+        policy == HostPageTexturePolicy::InPlace && (!writes || [4, 8, 16].contains(&texel));
     // SAFETY: the handle is only compared, while the texture lives.
     let aliased = unsafe { texture.vk_image() }.is_some();
     assert!(
@@ -890,7 +893,7 @@ fn first_use_over_read_only_pages(
             "after the buffer"
         }
     );
-    let (_, aliased) = in_place_form(device, &before, &texture, d.usage, &what);
+    let (_, aliased) = in_place_form(device, &before, &texture, (d.usage, layout.texel), &what);
     let read = drawn(&queue, &layout, &reads, &texture, None);
     let (count, first) = differing(&read, &rows(&layout, &pages), layout.texel);
     eprintln!(

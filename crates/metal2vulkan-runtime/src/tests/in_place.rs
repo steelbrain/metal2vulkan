@@ -2,12 +2,13 @@
 //! and why one is a shadow, and the record that keeps the device's check's verdicts.
 //!
 //! - **The decision.** Under `HostPageTexturePolicy::Shadow` every texture is a shadow, the check
-//!   never asked; under `InPlace` a texture whose usage writes it through a shader
-//!   (`ShaderWrite`, `ShaderAtomic`, `Unknown`, whatever else it holds) is one counted as a shader
-//!   write, the check never asked; and a texture that samples, reads or renders is tried in place
-//!   exactly where its class's check passed for its access (one that renders, `RenderTarget`, its
-//!   render check; else its read check), else a shadow naming the check's answer (pending,
-//!   failed, unchecked) and the access.
+//!   never asked; under `InPlace` a texture a shader writes (`ShaderWrite`, `ShaderAtomic`,
+//!   `Unknown`, whatever else it holds) of texels the check's kernel stores none of (1 or 2
+//!   bytes) is one counted by its width, the check never asked; and every other texture is tried
+//!   in place exactly where its class's check passed for each access it takes (one that renders,
+//!   `RenderTarget`, its render check; one a shader writes, its storage check; one that does
+//!   neither, its read check), asked in that order until one did not pass, else a shadow naming
+//!   that check's answer (pending, failed, unchecked) and its access.
 //! - **The record.** Its verdicts read back for the identity it was written for, and nothing else
 //!   reads: a record cut short or grown, of another check version, of another identity, with a
 //!   byte changed (its checksum), or holding a pending or unknown verdict.
@@ -17,7 +18,7 @@
 
 use crate::in_place::{
     decode, encode, in_place, record_name, verdict_index, Access, DriverIdentity, InPlaceChecks,
-    PagesClass, ShadowCause, Verdict, CHECK_VERSION, VERDICTS,
+    PagesClass, ShadowCause, Verdict, CHECK_VERSION, STORED_TEXEL_BYTES, VERDICTS,
 };
 use metal2vulkan::device::HostPageTexturePolicy;
 use metal2vulkan::metal::TextureUsage;
@@ -42,25 +43,38 @@ fn each_usage() -> Vec<TextureUsage> {
     ]
 }
 
-/// The shadow `usage` takes whatever the check answers: a shader write's where it writes the
-/// texture through a shader, whatever else it holds; `None` where it samples, reads or renders.
-fn written(usage: TextureUsage) -> Option<ShadowCause> {
-    match usage.intersects(TextureUsage::SHADER_WRITE | TextureUsage::SHADER_ATOMIC) {
-        true => Some(ShadowCause::ShaderWrite),
+/// The shadow a texture of `usage` and texels of `texel` bytes takes whatever the check answers:
+/// its width's where a shader writes it and the check's kernel stores no texel of that width;
+/// `None` elsewhere.
+fn unchecked_width(usage: TextureUsage, texel: u64) -> Option<ShadowCause> {
+    let writes = usage.intersects(TextureUsage::SHADER_WRITE | TextureUsage::SHADER_ATOMIC);
+    match writes && !STORED_TEXEL_BYTES.contains(&texel) {
+        true => Some(ShadowCause::StoreWidth(texel)),
         false => None,
     }
 }
 
-/// The access whose check `usage` asks: an image that renders where it holds `RenderTarget`.
-fn access_of(usage: TextureUsage) -> Access {
-    match usage.contains(TextureUsage::RENDER_TARGET) {
-        true => Access::Renders,
-        false => Access::Reads,
+/// The accesses whose checks `usage` asks, in their order: renders where it holds
+/// `RenderTarget`, writes where it holds `ShaderWrite` or `ShaderAtomic`, reads where it holds
+/// neither.
+fn accesses_of(usage: TextureUsage) -> Vec<Access> {
+    let renders = usage.contains(TextureUsage::RENDER_TARGET);
+    let writes = usage.intersects(TextureUsage::SHADER_WRITE | TextureUsage::SHADER_ATOMIC);
+    let mut accesses = Vec::new();
+    if !renders && !writes {
+        accesses.push(Access::Reads);
     }
+    if renders {
+        accesses.push(Access::Renders);
+    }
+    if writes {
+        accesses.push(Access::Writes);
+    }
+    accesses
 }
 
 #[test]
-fn the_decision_takes_a_texture_that_does_not_write_whose_class_passed_its_access() {
+fn the_decision_takes_a_texture_whose_class_passed_each_of_its_accesses() {
     let mut usages = each_usage();
     usages.push(TextureUsage::SHADER_READ | TextureUsage::PIXEL_FORMAT_VIEW);
     usages.push(TextureUsage::SHADER_READ | TextureUsage::RENDER_TARGET);
@@ -77,38 +91,63 @@ fn the_decision_takes_a_texture_that_does_not_write_whose_class_passed_its_acces
             | TextureUsage::SHADER_ATOMIC,
     );
     usages.push(TextureUsage::empty());
+    // Each access's verdict, every one of them with every other.
+    let mut answers = Vec::new();
+    for reads in ANSWERS {
+        for renders in ANSWERS {
+            for writes in ANSWERS {
+                answers.push([reads, renders, writes]);
+            }
+        }
+    }
     for class in PagesClass::ALL {
         for &usage in &usages {
-            for verdict in ANSWERS {
-                // Shadow: always the exact form, the check never asked.
-                let asked = std::cell::Cell::new(false);
-                let decided = in_place(HostPageTexturePolicy::Shadow, usage, class, |_, _| {
-                    asked.set(true);
-                    verdict
-                });
-                assert_eq!(decided, Err(ShadowCause::Exact));
-                assert!(!asked.get(), "the exact form asks no check");
-                // In place: written textures never asked; the rest follow the verdict of their
-                // access.
-                let asked = std::cell::Cell::new(false);
-                let access = access_of(usage);
-                let decided = in_place(HostPageTexturePolicy::InPlace, usage, class, |of, by| {
-                    assert_eq!((of, by), (class, access));
-                    asked.set(true);
-                    verdict
-                });
-                let expected = if let Some(cause) = written(usage) {
-                    Err(cause)
-                } else {
-                    match verdict {
-                        Verdict::Passed => Ok(()),
-                        Verdict::Pending => Err(ShadowCause::CheckPending(class, access)),
-                        Verdict::Failed => Err(ShadowCause::CheckFailed(class, access)),
-                        Verdict::Unchecked => Err(ShadowCause::Unchecked(class, access)),
-                    }
-                };
-                assert_eq!(decided, expected, "{class:?} {usage:?} {verdict:?}");
-                assert_eq!(asked.get(), written(usage).is_none(), "{class:?} {usage:?}");
+            for texel in [1u64, 2, 4, 8, 16] {
+                for answer in &answers {
+                    let of = |access: Access| answer[access.index()];
+                    // Shadow: always the exact form, the check never asked.
+                    let asked = std::cell::RefCell::new(Vec::new());
+                    let pages = (class, texel);
+                    let policy = HostPageTexturePolicy::Shadow;
+                    let decided = in_place(policy, usage, pages, |_, access| {
+                        asked.borrow_mut().push(access);
+                        of(access)
+                    });
+                    assert_eq!(decided, Err(ShadowCause::Exact));
+                    assert!(asked.borrow().is_empty(), "the exact form asks no check");
+                    // In place: a written texture of a width no check stores never asked; the
+                    // rest follow the verdicts of their accesses, asked in order until one did
+                    // not pass.
+                    let asked = std::cell::RefCell::new(Vec::new());
+                    let policy = HostPageTexturePolicy::InPlace;
+                    let decided = in_place(policy, usage, pages, |of_class, access| {
+                        assert_eq!(of_class, class);
+                        asked.borrow_mut().push(access);
+                        of(access)
+                    });
+                    let (expected, due) = match unchecked_width(usage, texel) {
+                        Some(cause) => (Err(cause), Vec::new()),
+                        None => {
+                            let accesses = accesses_of(usage);
+                            let first = accesses.iter().position(|&a| of(a) != Verdict::Passed);
+                            match first {
+                                None => (Ok(()), accesses),
+                                Some(at) => {
+                                    let access = accesses[at];
+                                    let cause = match of(access) {
+                                        Verdict::Pending => ShadowCause::CheckPending,
+                                        Verdict::Failed => ShadowCause::CheckFailed,
+                                        _ => ShadowCause::Unchecked,
+                                    };
+                                    (Err(cause(class, access)), accesses[..=at].to_vec())
+                                }
+                            }
+                        }
+                    };
+                    let case = format!("{class:?} {usage:?} {texel} {answer:?}");
+                    assert_eq!(decided, expected, "{case}");
+                    assert_eq!(*asked.borrow(), due, "{case}");
+                }
             }
         }
     }
@@ -118,13 +157,17 @@ fn the_decision_takes_a_texture_that_does_not_write_whose_class_passed_its_acces
 fn every_shadow_cause_names_itself() {
     let causes = [
         ShadowCause::Exact,
-        ShadowCause::ShaderWrite,
+        ShadowCause::StoreWidth(2),
         ShadowCause::CheckPending(PagesClass::Pointer, Access::Reads),
         ShadowCause::CheckPending(PagesClass::Pointer, Access::Renders),
         ShadowCause::CheckFailed(PagesClass::DmaBuf, Access::Reads),
         ShadowCause::CheckFailed(PagesClass::DmaBuf, Access::Renders),
         ShadowCause::Unchecked(PagesClass::Fresh, Access::Reads),
         ShadowCause::Unchecked(PagesClass::Fresh, Access::Renders),
+        ShadowCause::CheckPending(PagesClass::Pointer, Access::Writes),
+        ShadowCause::CheckFailed(PagesClass::DmaBuf, Access::Writes),
+        ShadowCause::Unchecked(PagesClass::Fresh, Access::Writes),
+        ShadowCause::StoreWidth(1),
     ];
     let words: Vec<String> = causes.iter().map(ShadowCause::words).collect();
     for (at, word) in words.iter().enumerate() {
@@ -135,10 +178,11 @@ fn every_shadow_cause_names_itself() {
         );
     }
     assert!(words[0].contains("HostPageTexturePolicy::Shadow"));
-    assert!(words[1].contains("ShaderWrite"));
+    assert!(words[1].contains("ShaderWrite") && words[1].contains("not of 2"));
     assert!(words[2].contains("not answered") && words[3].contains("not answered"));
     assert!(words[3].contains("render pass"));
     assert!(words[4].contains("dma-bufs"));
+    assert!(words[8].contains("not answered") && words[8].contains("storage writes"));
 }
 
 /// A driver identity, every field set.
@@ -172,6 +216,9 @@ fn a_record_reads_back_for_its_identity_alone() {
         Verdict::Passed,
         Verdict::Failed,
         Verdict::Unchecked,
+        Verdict::Unchecked,
+        Verdict::Passed,
+        Verdict::Failed,
     ];
     let bytes = encode(&identity, verdicts);
     assert_eq!(decode(&identity, &bytes), Some(verdicts));

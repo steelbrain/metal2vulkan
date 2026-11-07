@@ -1,9 +1,9 @@
 //! Device tests of 2D textures (and 2D arrays) over no-copy buffers on the device the cfg selects.
 //! A texture over the caller's host pages is a shadow image the encoders copy the texels into and
-//! back (`shadowed-texture`), or under `HostPageTexturePolicy::InPlace` one that reads or renders
-//! and does not write through a shader is an image aliasing the pages where the device's check
-//! passed for its access: either reads and writes the caller's bytes as Metal's texture over the
-//! buffer does.
+//! back (`shadowed-texture`), or under `HostPageTexturePolicy::InPlace` an image aliasing the
+//! pages where the device's check passed for each of its accesses (one that reads, renders, or a
+//! shader writes of texels of 4, 8 or 16 bytes): either reads and writes the caller's bytes as
+//! Metal's texture over the buffer does.
 //!
 //! - [`textures_over_no_copy_buffers_read_and_write_the_caller_s_pages`], under the validation
 //!   layer: the consumer's surface formats (and `BGR10_XR`, an extended-range format held in an
@@ -21,10 +21,10 @@
 //!   (`WorkCounts::shadowed_textures`) and made without zeroing its image (`shadows_zeroed`,
 //!   `images_started_on_the_host`: its copy in writes every texel first), and making it, and
 //!   making it again, asks the driver no format's modifier features (`modifier_feature_queries`);
-//!   under `InPlace`, once the device's check answered, one without `ShaderWrite` usage (the
-//!   `ShaderRead` one, and the render target) is in place (`vk_image` answers its image,
-//!   `host_textures_in_place`) or a shadow counted by why, and every other a shadow. The second
-//!   making takes the same form. Each texture's form is printed (`NOCOPY-TEXTURE`).
+//!   under `InPlace`, once the device's check answered, each is in place (`vk_image` answers its
+//!   image, `host_textures_in_place`) or a shadow counted by why, but one with `ShaderWrite` usage
+//!   of 1- or 2-byte texels, which no check covers, a shadow. The second making takes the same
+//!   form. Each texture's form is printed (`NOCOPY-TEXTURE`).
 //! - [`two_slice_arrays_over_no_copy_buffers_read_and_write_the_caller_s_pages`], under the
 //!   validation layer: two-slice `RGBA8Unorm` 2D arrays made by the linear call, a 4x4 sampled one
 //!   and an 8x8 render target, read and written a slice at a time at Metal's slice places
@@ -359,10 +359,12 @@ fn read_and_write_the_caller_s_pages_under(
             );
             let shadowed = counted.shadowed_textures - before.shadowed_textures;
             let in_place = counted.host_textures_in_place - before.host_textures_in_place;
-            // Under `Shadow`, and for a texture that writes through a shader, a shadow; under
-            // `InPlace` one that reads or renders may be in place, counted so.
+            // Under `Shadow`, and for a texture that writes through a shader whose texels are of
+            // a width the device's check stores none of (1 or 2 bytes), a shadow; under `InPlace`
+            // every other may be in place, counted so.
+            let writes = usage.contains(TextureUsage::SHADER_WRITE);
             let may_alias = policy == HostPageTexturePolicy::InPlace
-                && !usage.contains(TextureUsage::SHADER_WRITE);
+                && (!writes || [4, 8, 16].contains(&texel));
             assert!(
                 !made || may_alias,
                 "{what}: a texture over host pages aliased"

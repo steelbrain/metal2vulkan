@@ -332,14 +332,15 @@ the record the pass is making.
 - **Textures over buffers** share the buffer's bytes. Over a no-copy buffer's host pages or such
   a long buffer's fresh pages, an image bound to them would start `UNDEFINED`, and Vulkan lets its
   first move, and a render pass's load and store, rewrite any byte bound to it: by default
-  (`HostPageTexturePolicy::InPlace`) a texture there that samples, reads or renders into it and
-  does not write it through a shader is an image in place wherever the device makes it and its own
-  check showed those operations keeping every byte for that kind of pages (run once per driver and
-  release on a thread of its own, kept in the shader cache). The runtime keeps a copy and
-  announces it (`shadowed-texture`, naming why) for every other texture there (under
-  `HostPageTexturePolicy::Shadow`, one that writes through a shader, one made before the check
-  answered or whose check did not pass), where the device's linear images cannot hold Metal's
-  layout, and where the rows lie with bytes between them. On a discrete GPU, a `Managed` texture
+  (`HostPageTexturePolicy::InPlace`) a texture there that samples, reads, renders into it or is
+  written through a shader (of texels of 4, 8 or 16 bytes) is an image in place wherever the
+  device makes it and its own check showed those operations keeping every byte for that kind of
+  pages, on a discrete GPU as on any other (run once per driver and release on a thread of its
+  own, kept in the shader cache). The runtime keeps a copy and announces it (`shadowed-texture`,
+  naming why) for every other texture there (under `HostPageTexturePolicy::Shadow`, one a shader
+  writes of 1- or 2-byte texels, one made before the check answered or whose check did not
+  pass), where the device's linear images cannot hold Metal's layout, and where the rows lie with
+  bytes between them. On a discrete GPU, a `Managed` texture
   over a no-copy buffer's bytes (not an IOSurface plane's) that only samples or reads, whose
   policy takes the image in place, over memory that carries a log of its writes
   (`HostMemory::with_dirty_pages`), tracked and laid out as one copy, is instead such a copy in

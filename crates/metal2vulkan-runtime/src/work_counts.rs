@@ -361,6 +361,7 @@ pub(crate) struct Counters {
     shadows_zeroed: AtomicU64,
     shadows_over_fresh_pages: AtomicU64,
     host_textures_in_place: AtomicU64,
+    host_textures_in_place_written: AtomicU64,
     device_copy_textures: AtomicU64,
     dma_buf_textures_in_place: AtomicU64,
     fresh_page_textures_in_place: AtomicU64,
@@ -368,6 +369,7 @@ pub(crate) struct Counters {
     host_texture_shadows_exact: AtomicU64,
     host_texture_shadows_render_target: AtomicU64,
     host_texture_shadows_shader_write: AtomicU64,
+    host_texture_shadows_store_width: AtomicU64,
     host_texture_shadows_check_pending: AtomicU64,
     host_texture_shadows_check_failed: AtomicU64,
     host_texture_shadows_unchecked: AtomicU64,
@@ -2929,9 +2931,17 @@ impl Counters {
     /// A texture over host pages of `class` was made an image in place over them (`in_place.rs`),
     /// its rows at Metal's pitch in a `DRM_FORMAT_MOD_LINEAR` image made for host allocations
     /// where `pitched`.
-    pub(crate) fn host_texture_in_place(&self, class: crate::in_place::PagesClass, pitched: bool) {
+    pub(crate) fn host_texture_in_place(
+        &self,
+        class: crate::in_place::PagesClass,
+        pitched: bool,
+        written: bool,
+    ) {
         use crate::in_place::PagesClass as P;
         self.host_textures_in_place.fetch_add(1, Ordering::Relaxed);
+        if written {
+            (self.host_textures_in_place_written).fetch_add(1, Ordering::Relaxed);
+        }
         match class {
             P::Pointer => {}
             P::DmaBuf => {
@@ -2948,16 +2958,16 @@ impl Counters {
     }
 
     /// A texture over host pages was made a shadow of them for `cause` (`in_place.rs`), one whose
-    /// usage renders into it where `renders`.
+    /// usage renders into it where `renders`, one a shader writes where `written`.
     pub(crate) fn host_texture_shadowed(
         &self,
         cause: &crate::in_place::ShadowCause,
-        renders: bool,
+        (renders, written): (bool, bool),
     ) {
         use crate::in_place::ShadowCause as C;
         let counter = match cause {
             C::Exact => &self.host_texture_shadows_exact,
-            C::ShaderWrite => &self.host_texture_shadows_shader_write,
+            C::StoreWidth(_) => &self.host_texture_shadows_store_width,
             C::CheckPending(..) => &self.host_texture_shadows_check_pending,
             C::CheckFailed(..) => &self.host_texture_shadows_check_failed,
             C::Unchecked(..) => &self.host_texture_shadows_unchecked,
@@ -2966,6 +2976,9 @@ impl Counters {
         counter.fetch_add(1, Ordering::Relaxed);
         if renders {
             (self.host_texture_shadows_render_target).fetch_add(1, Ordering::Relaxed);
+        }
+        if written {
+            (self.host_texture_shadows_shader_write).fetch_add(1, Ordering::Relaxed);
         }
     }
 
@@ -5860,11 +5873,15 @@ pub struct WorkCounts {
     /// first move may write any byte bound to it.
     pub shadows_over_fresh_pages: u64,
     /// Textures over host pages (a no-copy buffer's, a no-copy heap's buffer's, or a buffer in
-    /// fresh pages it imported) that sample, read or render, made an image aliasing the pages in
-    /// place, where the device's check passed for their class and access
-    /// (`HostPageTexturePolicy::InPlace`): no shadow, and no copy in or back. One that renders
-    /// whose image took feedback loop usage is also counted in `feedback_loop_alias_images`.
+    /// fresh pages it imported) that sample, read, render or are written through a shader, made
+    /// an image aliasing the pages in place, where the device's check passed for their class and
+    /// each of their accesses (`HostPageTexturePolicy::InPlace`): no shadow, and no copy in or
+    /// back. One that renders whose image took feedback loop usage is also counted in
+    /// `feedback_loop_alias_images`.
     pub host_textures_in_place: u64,
+    /// Of `host_textures_in_place`, those whose usage writes them through a shader
+    /// (`ShaderWrite` or `ShaderAtomic`): their kernels' writes reach the pages in place.
+    pub host_textures_in_place_written: u64,
     /// `Managed` textures over a buffer's host pages (not an IOSurface's) that only sample or
     /// read, which `host_textures_in_place` would count (or a shadow made before the check
     /// answered or where it failed), made instead a copy in the device's memory on a discrete
@@ -5891,12 +5908,17 @@ pub struct WorkCounts {
     /// `Unknown` usage among them): the render targets a pass renders through a shadow, its
     /// copies in and merges back.
     pub host_texture_shadows_render_target: u64,
-    /// Textures over host pages made shadows because their usage writes them through a shader
-    /// (`ShaderWrite` or `ShaderAtomic`, whatever else it holds).
+    /// Of the textures over host pages made shadows, counted by why in the counts beside this
+    /// one, those whose usage writes them through a shader (`ShaderWrite` or `ShaderAtomic`,
+    /// whatever else it holds; an `Unknown` usage among them).
     pub host_texture_shadows_shader_write: u64,
-    /// Textures over host pages made shadows because the device's check of their class and
-    /// access (one that renders, or one that reads) had not answered yet (a first session's,
-    /// before the verdicts are kept).
+    /// Textures over host pages made shadows because their usage writes them through a shader
+    /// and their texels are of a width the device's check of storage writes stores none of
+    /// (texels of 1 or 2 bytes: it stores those of 4, 8 and 16).
+    pub host_texture_shadows_store_width: u64,
+    /// Textures over host pages made shadows because the device's check of their class and an
+    /// access of theirs (one that reads, renders or a shader writes) had not answered yet (a
+    /// first session's, before the verdicts are kept).
     pub host_texture_shadows_check_pending: u64,
     /// Textures over host pages made shadows because the device's check of their class and
     /// access found a byte changed.
@@ -5930,12 +5952,13 @@ pub struct WorkCounts {
     /// modifier's features or limits, the image's memory past the pages, or the driver's import.
     pub host_texture_shadows_refused_dma_buf: u64,
     /// Classes of host pages (pointer, dma-buf, fresh), each with each access (an image that
-    /// reads, an image that renders), the device's check ran for in this process:
+    /// reads, one that renders, one a shader writes), the device's check ran for in this process:
     /// `in_place_checks_passed`, `in_place_checks_failed` and `in_place_checks_unchecked`
     /// together.
     pub in_place_checks_run: u64,
     /// Of `in_place_checks_run`, those whose every image left every byte alone: its first move,
-    /// and for one that renders its pass's load and store and its feedback loop moves.
+    /// for one that renders its pass's load and store and its feedback loop moves, and for one a
+    /// shader writes a kernel's storage writes (each byte but the texels it wrote).
     pub in_place_checks_passed: u64,
     /// Of `in_place_checks_run`, those that found a byte changed (or were made to fail).
     pub in_place_checks_failed: u64,
@@ -7129,6 +7152,9 @@ impl Device {
             shadowed_textures: counters.shadowed_textures.load(Ordering::Relaxed),
             shadows_over_fresh_pages: counters.shadows_over_fresh_pages.load(Ordering::Relaxed),
             host_textures_in_place: counters.host_textures_in_place.load(Ordering::Relaxed),
+            host_textures_in_place_written: counters
+                .host_textures_in_place_written
+                .load(Ordering::Relaxed),
             device_copy_textures: counters.device_copy_textures.load(Ordering::Relaxed),
             dma_buf_textures_in_place: counters.dma_buf_textures_in_place.load(Ordering::Relaxed),
             fresh_page_textures_in_place: counters
@@ -7141,6 +7167,9 @@ impl Device {
                 .load(Ordering::Relaxed),
             host_texture_shadows_shader_write: counters
                 .host_texture_shadows_shader_write
+                .load(Ordering::Relaxed),
+            host_texture_shadows_store_width: counters
+                .host_texture_shadows_store_width
                 .load(Ordering::Relaxed),
             host_texture_shadows_check_pending: counters
                 .host_texture_shadows_check_pending

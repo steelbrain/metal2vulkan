@@ -21,10 +21,12 @@
 //!   holds a texel twice. The image's memory may run past the buffer's bytes into the rest of its
 //!   placement (its last page's bytes past the buffer), as Vulkan binds it within the memory: its
 //!   texels never reach them, and the check's bytes after its image are such bytes.
-//! - **Its usage** is the texture's declared plan's: a write beyond it binds the texture's usage
-//!   shadow (`texture/usage_shadow.rs`), and a render pass into one made without `RenderTarget`
-//!   renders through an attachment stand-in (`attachment_stand_in.rs`), since the image has
-//!   neither storage nor attachment usage; their copies into it touch its texels alone. One that
+//! - **Its usage** is the texture's declared plan's: one a shader writes (`ShaderWrite` or
+//!   `ShaderAtomic`) has storage usage, through which its kernels write its texels in place, as
+//!   the device's check of storage writes covers ([`Texture::store_in_place`]); a write beyond it
+//!   binds the texture's usage shadow (`texture/usage_shadow.rs`), and a render pass into one made
+//!   without `RenderTarget` renders through an attachment stand-in (`attachment_stand_in.rs`),
+//!   since the image has no attachment usage; their copies into it touch its texels alone. One that
 //!   renders also takes the feedback loop usage a draw takes that reads the texture its own pass
 //!   renders through a snapshot (`texture::feedback_candidate`, `render/snapshot.rs`) where the
 //!   device makes the image with it, as an aliasing image over a buffer of the runtime's does:
@@ -39,16 +41,20 @@ use super::{
     first_color_subresource, pages_hold, FirstMove, Image, ImageObjects, ImageSwap, KeptResolves,
     KeyMap, LinearMade, LinearRefusal, ObjectsToken, Owner, Raw, Remade, Storage, Texture,
 };
-use crate::buffer::InPlaceWatch;
+use crate::binding_view::VkView;
+use crate::buffer::{Buffer, InPlaceWatch, ReadApart};
 use crate::buffer_texture::Texels;
 use crate::device::lock;
 use crate::error::{vulkan, Error, RuntimeGap};
 use crate::image_plan::{ImageFacts, ImagePlan};
 use crate::in_place::{Access, PagesClass, Refusal};
 use crate::linear_plan::{check_linear_limits, linear_lack, BufferLayout, LinearLack};
+use crate::shadow_copy_back::WordView;
+use crate::shadow_copy_in::CopyIn;
 use crate::texture_descriptor::TextureDescriptor;
 use crate::{release, Device};
 use ash::vk;
+use metal2vulkan::bind::ShadowTexelView;
 use metal2vulkan::error::LinearNeed;
 use std::any::Any;
 use std::sync::atomic::AtomicBool;
@@ -103,6 +109,97 @@ impl Texture {
             unsafe {
                 crate::render_target::feedback_moves(commands, command_buffer, raw, range, family)
             };
+        }))
+    }
+
+    /// For the device's check of storage writes (`in_place_check.rs`): where the texture is an
+    /// image in place of storage usage, a kernel's storage writes of its `width` by `height`
+    /// texels, each `texel`'s words, from the words of `source` laid row after row (one dispatch
+    /// of the crate-owned copy-in kernel, `shadow_copy_in.rs`, which stores them in `kept` too),
+    /// by an internal submission the call waits for, which makes the image's first move first and
+    /// then makes the writes visible to the host. `None` where the texture is no such image, or
+    /// the device makes no such dispatch.
+    pub(crate) fn store_in_place(
+        &self,
+        (source, kept): (&Buffer, &Buffer),
+        texel: ShadowTexelView,
+        (width, height): (u32, u32),
+    ) -> Option<Result<(), Error>> {
+        let Storage::Alias { image, .. } = &self.0.storage else {
+            return None;
+        };
+        use metal2vulkan::vk::{
+            ComponentMapping, ImageAspectFlags, ImageUsageFlags, ImageViewType,
+        };
+        let plan = image.plan();
+        if !plan.usage.contains(ImageUsageFlags::STORAGE) {
+            return None;
+        }
+        let view = VkView {
+            view_type: ImageViewType::TYPE_2D,
+            format: plan.format,
+            components: ComponentMapping::IDENTITY,
+            aspect: ImageAspectFlags::COLOR,
+            base_level: 0,
+            level_count: 1,
+            base_layer: 0,
+            layer_count: 1,
+            usage: ImageUsageFlags::STORAGE,
+        };
+        let view = match image.view(&view) {
+            Ok(view) => view,
+            Err(error) => return Some(Err(error)),
+        };
+        let words = WordView {
+            view,
+            texel,
+            stores: true,
+        };
+        let (buffer, at) = source.at_for(0, ReadApart::Binding);
+        let region = vk::BufferImageCopy {
+            buffer_offset: at,
+            buffer_row_length: width,
+            buffer_image_height: height,
+            image_subresource: vk::ImageSubresourceLayers {
+                aspect_mask: vk::ImageAspectFlags::COLOR,
+                mip_level: 0,
+                base_array_layer: 0,
+                layer_count: 1,
+            },
+            image_offset: vk::Offset3D::default(),
+            image_extent: vk::Extent3D {
+                width,
+                height,
+                depth: 1,
+            },
+        };
+        let copy = CopyIn::new(
+            &image.device,
+            words,
+            buffer,
+            &region,
+            kept.at_for(0, ReadApart::Binding),
+        )?;
+        Some(image.submit_copy(|commands, command_buffer| {
+            let to_host = vk::MemoryBarrier::default()
+                .src_access_mask(vk::AccessFlags::SHADER_WRITE)
+                .dst_access_mask(vk::AccessFlags::HOST_READ);
+            // SAFETY: the internal command buffer of the device's first `VkQueue` is recording,
+            // outside a render pass, after the image's first move to `GENERAL`, which the
+            // submission makes first; the image, its view and both buffers are live until the
+            // submission, waited for, completed.
+            unsafe {
+                copy.record(commands, command_buffer);
+                commands.cmd_pipeline_barrier(
+                    command_buffer,
+                    vk::PipelineStageFlags::COMPUTE_SHADER,
+                    vk::PipelineStageFlags::HOST,
+                    vk::DependencyFlags::empty(),
+                    &[to_host],
+                    &[],
+                    &[],
+                );
+            }
         }))
     }
 }
@@ -655,18 +752,26 @@ impl Device {
         let refused = || Error::NotImplemented(RuntimeGap::RebindTextures);
         // A copy in fresh pages the runtime imported takes the image an import of the caller's
         // pages takes, made for host allocations (`in_place_unbound`), where the device's check
-        // passed for fresh pages and the image's access (an image of attachment usage renders);
-        // one in memory the device allocates, a linear image of its own.
+        // passed for fresh pages and each of the image's accesses (an image of attachment usage
+        // renders, one of storage usage is written; one of neither reads); one in memory the
+        // device allocates, a linear image of its own.
         let made = match pages.over_own_pages() {
             true => {
-                let attachment = metal2vulkan::vk::ImageUsageFlags::COLOR_ATTACHMENT;
-                let access = match image.plan().usage.contains(attachment) {
-                    true => Access::Renders,
-                    false => Access::Reads,
-                };
-                if self.in_place_verdict(PagesClass::Fresh, access)
-                    != crate::in_place::Verdict::Passed
-                {
+                use metal2vulkan::vk::ImageUsageFlags;
+                let usage = image.plan().usage;
+                let renders = usage.contains(ImageUsageFlags::COLOR_ATTACHMENT);
+                let writes = usage.contains(ImageUsageFlags::STORAGE);
+                let accesses = [
+                    (Access::Reads, !renders && !writes),
+                    (Access::Renders, renders),
+                    (Access::Writes, writes),
+                ];
+                let passed = accesses.into_iter().all(|(access, takes)| {
+                    !takes
+                        || self.in_place_verdict(PagesClass::Fresh, access)
+                            == crate::in_place::Verdict::Passed
+                });
+                if !passed {
                     return Err(refused());
                 }
                 let facts = self

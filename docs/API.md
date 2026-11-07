@@ -324,19 +324,23 @@ An image bound to imported memory starts in `VK_IMAGE_LAYOUT_UNDEFINED`
 and write every byte bound to it, where Metal keeps every CPU write to bytes a command buffer does
 not write; a render pass's load and store operations may too, for an image it renders. Under the
 default `HostPageTexturePolicy::InPlace` the runtime relies on the driver there, checked: a texture
-over host pages whose declared usage samples, reads or renders into it and does not write it
-through a shader (neither `ShaderWrite` nor `ShaderAtomic`) is a linear image aliasing the pages
-(one over dma-buf pages a `DRM_FORMAT_MOD_LINEAR` image over a dma-buf of its own pages, acquired
+over host pages whose declared usage samples, reads, renders into it or writes it through a shader
+(`ShaderWrite` or `ShaderAtomic`, of texels of 4, 8 or 16 bytes) is a linear image aliasing the
+pages (one over dma-buf pages a `DRM_FORMAT_MOD_LINEAR` image over a dma-buf of its own pages, acquired
 from `VK_QUEUE_FAMILY_FOREIGN_EXT`) wherever the device makes such an image and its own check
-passed for that kind of pages and that access (`WorkCounts::host_textures_in_place`,
-`dma_buf_textures_in_place`, `fresh_page_textures_in_place`). A texture that renders takes the
+passed for that kind of pages and each of its accesses (`WorkCounts::host_textures_in_place`,
+`dma_buf_textures_in_place`, `fresh_page_textures_in_place`, and `host_textures_in_place_written`
+for one a shader writes), on a discrete GPU as on any other. A texture that renders takes the
 feedback loop usage where the device makes the image with it, so a draw that reads it after a
 render-target barrier reads it through a snapshot (`WorkCounts::feedback_loop_alias_images`). The
 check makes such images of every texel size, small and 3840x2160, over each kind of pages while a
 CPU thread writes beside their texels, and passes a kind only where every first move kept every
 byte; for a texture that renders it checks images made with `RenderTarget` usage apart, through
 their first move, their moves into the feedback loop layout and back, and a render pass that
-clears and stores them, while the CPU writes the bytes between their rows and after them. It runs
+clears and stores them, while the CPU writes the bytes between their rows and after them; and for
+one a shader writes, images made with `ShaderWrite` usage, whose every texel a kernel stores
+through an unsigned-integer view of 4, 8 or 16-byte texels while the CPU writes the bytes beside
+them (a program's atomics are among no round). It runs
 on a thread of its own, which the first such texture starts and waits for, up to 5 seconds, for
 its kind of pages and access (`WorkCounts::in_place_verdicts_waited`; past it the texture is a
 shadow), once per driver and driver version: its verdicts are kept in the shader cache's
@@ -347,13 +351,13 @@ texture's commands read and write the texels in the memory the buffer's commands
 write reaches them as it reaches the buffer's.
 
 Every other texture over host pages is a shadow (`shadowed-texture`, the notice naming why): under
-`HostPageTexturePolicy::Shadow` (`DevicePolicy::exact_answers`); one whose usage writes it
-through a shader; one made before the check for its access answered, or where it failed or made no
-image; and one no image in place serves (its format or usage the device makes no linear image of,
-the bytes' pitch, placement or memory, or over dma-buf pages no dma-buf of the texture's own
-pages). `WorkCounts::host_texture_shadows_*` counts each reason apart (one that writes it through
-a shader, `_shader_write`), and of them all those whose usage renders into them
-(`_render_target`). A shadow
+`HostPageTexturePolicy::Shadow` (`DevicePolicy::exact_answers`); one a shader writes of texels of
+1 or 2 bytes, which the check's kernel stores none of; one made before the check for an access of
+its answered, or where it failed or made no image; and one no image in place serves (its format or
+usage the device makes no linear image of, the bytes' pitch, placement or memory, or over dma-buf
+pages no dma-buf of the texture's own pages). `WorkCounts::host_texture_shadows_*` counts each
+reason apart (the texel width, `_store_width`), and of them all those whose usage renders into
+them (`_render_target`) and those a shader writes (`_shader_write`). A shadow
 is an optimal image of the runtime's own memory, whose texels the encoders copy in from the pages
 before a use and back (merged back: only the bytes the commands changed) after a write; no image
 is bound to the pages, and `Texture::vk_image` gives `None` for it. A texture in place renders and
@@ -1497,8 +1501,9 @@ bound.
   32 MiB lies in), where an image bound to them would start `UNDEFINED` and Vulkan lets its layout
   transitions (its first move among them) read and write any byte bound to it, where Metal keeps
   every CPU write, and the device takes no image in place there: the policy keeps the exact form
-  (`HostPageTexturePolicy::Shadow`), the texture's usage renders into it or writes it
-  (`RenderTarget`, `ShaderWrite`, `ShaderAtomic`), the device's check that the move keeps every
+  (`HostPageTexturePolicy::Shadow`), a shader writes the texture's texels of 1 or 2 bytes, which
+  the device's check stores none of, the device's check that the operations of an access of the
+  texture (the first move; a render pass's load and store; a kernel's storage writes) keep every
   byte over that kind of pages has not answered yet, found a byte changed or made no image, or no
   image in place serves the texels (its rows share bytes, the device lays no linear image's rows at
   the buffer's pitch, the image's placement or memory misses the pages, the bytes were detached, or

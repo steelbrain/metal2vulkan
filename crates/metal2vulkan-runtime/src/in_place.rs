@@ -1,7 +1,7 @@
-//! Textures over host pages, in place: a 2D texture (or array) whose declared usage samples,
-//! reads or renders into it, over a no-copy buffer's host pages or over a buffer the runtime placed
-//! in fresh host pages, is a linear image aliasing those pages, where the device's own check shows
-//! that the operations Vulkan lets touch bytes beside the texels leave every byte alone.
+//! Textures over host pages, in place: a 2D texture (or array) whose declared usage samples, reads,
+//! renders into or writes it, over a no-copy buffer's host pages or over a buffer the runtime
+//! placed in fresh host pages, is a linear image aliasing those pages, where the device's own check
+//! shows that the operations that may touch bytes beside the texels leave every byte alone.
 //!
 //! - **What Vulkan says.** An image bound to imported memory starts `UNDEFINED`
 //!   (`VUID-VkImageCreateInfo-pNext-01443`: "If the pNext chain includes a
@@ -22,22 +22,30 @@
 //!   subresource bound for that attachment", and a store alike; and, for an image with feedback
 //!   loop usage, its moves into `ATTACHMENT_FEEDBACK_LOOP_OPTIMAL_EXT` and back around a pass
 //!   whose draws read it through a snapshot (`render_target::moved_barriers`), layout transitions
-//!   as the first move is. Nothing writes it through a shader (below).
+//!   as the first move is. A shader's storage write of a texel is a memory operation on that
+//!   texel's locations, but of an image whose tiling is linear a driver may write more than the
+//!   texel (a block of them, past a row's last texel), which Vulkan's text does not rule out for
+//!   the bytes beside it: an image a shader writes ([`Access::Writes`]) is checked for its storage
+//!   writes.
 //! - **Relying on the driver, checked.** The owner's ruling of 2026-10-26 ("In place, trusting the
 //!   driver") takes the image where the device's own check shows the move leaving every byte
 //!   alone: a deliberate, scoped exception to never relying on undocumented Vulkan behaviour,
 //!   recorded in `docs/FAST-PATHS.md`. The owner's rulings of 2026-10-27 and 2026-11-07 widen it to
 //!   textures that render, where the check shows a pass's load and store and the feedback loop
 //!   moves leaving every byte alone too, whatever a linear image costs the GPU: a texture over the
-//!   caller's pages is the GPU's to work on there, as a Mac's GPU works on them. The check
+//!   caller's pages is the GPU's to work on there, as a Mac's GPU works on them, and so are
+//!   textures a shader writes, where the check shows a kernel's storage writes of the texels
+//!   leaving every other byte alone, on a discrete GPU as on any other (a discrete Mac's GPU
+//!   writes a `Shared` texture across its bus). The check
 //!   (`in_place_check.rs`) runs once per driver and its version, per memory class
 //!   ([`PagesClass`]) and access ([`Access`]), and its verdicts are kept in the shader cache's
 //!   content records ([`record_name`]); a class and access it did not pass keep the shadow.
-//! - **Which textures** ([`in_place`]): those whose declared usage (as Metal reports it, an
-//!   `Unknown` one every usage) has neither `ShaderWrite` nor `ShaderAtomic`, under
-//!   `HostPageTexturePolicy::InPlace`, over a class whose check passed for the texture's access
-//!   (one that renders, `RenderTarget` among its usage, its render check). Plain Metal also writes
-//!   through a texture beyond its declared usage, and renders into one made without
+//! - **Which textures** ([`in_place`]): under `HostPageTexturePolicy::InPlace`, those over a class
+//!   whose check passed for each access the texture's declared usage (as Metal reports it, an
+//!   `Unknown` one every usage) takes ([`Access::takes`]): it renders (`RenderTarget`), a shader
+//!   writes it (`ShaderWrite` or `ShaderAtomic`, of texels of 4, 8 or 16 bytes, the widths the
+//!   check's kernel stores: [`STORED_TEXEL_BYTES`]), or it is sampled or read alone. Plain Metal
+//!   also writes through a texture beyond its declared usage, and renders into one made without
 //!   `RenderTarget`: such a write binds the texture's usage shadow (`texture/usage_shadow.rs`), and
 //!   such a pass renders through an attachment stand-in (`attachment_stand_in.rs`), since the
 //!   image has neither storage nor attachment usage; the copies of both touch texels alone.
@@ -114,7 +122,7 @@ impl PagesClass {
 }
 
 /// What a texture over host pages does with its image in place, each checked apart: the
-/// operations Vulkan lets touch bytes bound to the image beside its texels differ.
+/// operations that may touch bytes bound to the image beside its texels differ.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum Access {
     /// Its usage samples or reads it alone: its image takes its first move, and no other
@@ -124,17 +132,29 @@ pub(crate) enum Access {
     /// first move, render passes' load and store operations, and, made with feedback loop usage,
     /// the moves into `ATTACHMENT_FEEDBACK_LOOP_OPTIMAL_EXT` and back.
     Renders,
+    /// Its usage writes it through a shader (`ShaderWrite` or `ShaderAtomic`, whatever else it
+    /// holds): its image takes its first move and kernels' storage writes of its texels.
+    Writes,
 }
+
+/// The bytes of the texels a texture a shader writes may have to be in place: those the check's
+/// kernel stores ([`Access::Writes`]; the crate-owned copy-in kernel's unsigned-integer views).
+pub(crate) const STORED_TEXEL_BYTES: [u64; 3] = [4, 8, 16];
 
 impl Access {
     /// Every access, in the order the check runs them and the record holds their verdicts.
-    pub(crate) const ALL: [Access; 2] = [Access::Reads, Access::Renders];
+    pub(crate) const ALL: [Access; 3] = [Access::Reads, Access::Renders, Access::Writes];
 
-    /// The access of a texture of Metal `usage` (as Metal reports it).
-    pub(crate) fn of(usage: TextureUsage) -> Access {
-        match usage.contains(TextureUsage::RENDER_TARGET) {
-            true => Access::Renders,
-            false => Access::Reads,
+    /// Whether a texture of Metal `usage` (as Metal reports it) takes this access: one that
+    /// renders, one a shader writes (both, where it does both), or one that only samples or
+    /// reads. Each of its accesses' checks covers its first move.
+    pub(crate) fn takes(self, usage: TextureUsage) -> bool {
+        let renders = usage.contains(TextureUsage::RENDER_TARGET);
+        let writes = usage.intersects(TextureUsage::SHADER_WRITE | TextureUsage::SHADER_ATOMIC);
+        match self {
+            Access::Reads => !renders && !writes,
+            Access::Renders => renders,
+            Access::Writes => writes,
         }
     }
 
@@ -143,6 +163,7 @@ impl Access {
         match self {
             Access::Reads => 0,
             Access::Renders => 1,
+            Access::Writes => 2,
         }
     }
 
@@ -153,6 +174,10 @@ impl Access {
             Access::Renders => {
                 "the first move, a render pass's load and store and the feedback loop moves of an \
                  image that renders"
+            }
+            Access::Writes => {
+                "the first move and a kernel's storage writes of the texels of an image a shader \
+                 writes"
             }
         }
     }
@@ -167,16 +192,18 @@ pub(crate) fn verdict_index(class: PagesClass, access: Access) -> usize {
     class.index() * Access::ALL.len() + access.index()
 }
 
-/// What the device's check answered for a class.
+/// What the device's check answered for a class and access.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Verdict {
     /// Not known yet: no record held it, and the check has not answered.
     Pending,
-    /// The first move of every image the check made left every byte alone.
+    /// The access's operations on every image the check made left every byte alone (but the
+    /// texels they wrote).
     Passed,
-    /// The first move of an image the check made changed a byte.
+    /// The access's operations on an image the check made changed a byte.
     Failed,
-    /// The check made no image of the class: the device makes no such import or image.
+    /// The check made no image of the class for the access: the device makes no such import,
+    /// image or operation.
     Unchecked,
 }
 
@@ -206,9 +233,9 @@ impl Verdict {
 pub(crate) enum ShadowCause {
     /// The device's policy asks the shadow (`HostPageTexturePolicy::Shadow`).
     Exact,
-    /// Its usage writes it through a shader (`ShaderWrite` or `ShaderAtomic`, whatever else it
-    /// holds; an `Unknown` usage, every usage, among them).
-    ShaderWrite,
+    /// Its usage writes it through a shader, and its texels are of a width (the bytes given) the
+    /// check's kernel stores none of ([`STORED_TEXEL_BYTES`]): no check covers its writes.
+    StoreWidth(u64),
     /// Its class's check for its access has not answered yet.
     CheckPending(PagesClass, Access),
     /// Its class's check for its access found a byte changed.
@@ -281,12 +308,11 @@ impl ShadowCause {
             ShadowCause::Exact => "the device's policy asks a shadow of every texture over host \
                                    pages (HostPageTexturePolicy::Shadow)"
                 .to_owned(),
-            ShadowCause::ShaderWrite => "its usage writes it through a shader (ShaderWrite or \
-                                          ShaderAtomic), and an image bound to host pages starts \
-                                          UNDEFINED (VUID-VkImageCreateInfo-pNext-01443), its \
-                                          layout transitions free to read and write every byte \
-                                          bound to it, which no check covers for such an image"
-                .to_owned(),
+            ShadowCause::StoreWidth(bytes) => format!(
+                "its usage writes it through a shader (ShaderWrite or ShaderAtomic), and the \
+                 device's check of storage writes stores texels of 4, 8 and 16 bytes, not of \
+                 {bytes}: no check covers a driver's writes of such texels beside them"
+            ),
             ShadowCause::CheckPending(class, access) => format!(
                 "the device's check of {} over {} has not answered yet",
                 access.words(),
@@ -307,30 +333,32 @@ impl ShadowCause {
     }
 }
 
-/// Whether a texture over host pages of `class`, of Metal `usage` (as Metal reports it), on a
-/// device of `policy`, is tried as an image in place; else why it is a shadow (the module docs).
-/// `verdict` answers the device's check for the class and the texture's access
-/// ([`Access::of`]), asked only of a texture the policy and usage let through (a pending one
-/// starts the check).
+/// Whether a texture over host pages of `class`, of Metal `usage` (as Metal reports it) and texels
+/// of `texel` bytes, on a device of `policy`, is tried as an image in place; else why it is a
+/// shadow (the module docs). `verdict` answers the device's check for the class and each access
+/// the texture takes ([`Access::takes`]), in [`Access::ALL`]'s order, asked only of a texture the
+/// policy and texel width let through (a pending one starts the check), until one did not pass.
 pub(crate) fn in_place(
     policy: HostPageTexturePolicy,
     usage: TextureUsage,
-    class: PagesClass,
-    verdict: impl FnOnce(PagesClass, Access) -> Verdict,
+    (class, texel): (PagesClass, u64),
+    mut verdict: impl FnMut(PagesClass, Access) -> Verdict,
 ) -> Result<(), ShadowCause> {
     if policy == HostPageTexturePolicy::Shadow {
         return Err(ShadowCause::Exact);
     }
-    if usage.intersects(TextureUsage::SHADER_WRITE | TextureUsage::SHADER_ATOMIC) {
-        return Err(ShadowCause::ShaderWrite);
+    if Access::Writes.takes(usage) && !STORED_TEXEL_BYTES.contains(&texel) {
+        return Err(ShadowCause::StoreWidth(texel));
     }
-    let access = Access::of(usage);
-    match verdict(class, access) {
-        Verdict::Passed => Ok(()),
-        Verdict::Pending => Err(ShadowCause::CheckPending(class, access)),
-        Verdict::Failed => Err(ShadowCause::CheckFailed(class, access)),
-        Verdict::Unchecked => Err(ShadowCause::Unchecked(class, access)),
+    for access in Access::ALL.into_iter().filter(|access| access.takes(usage)) {
+        match verdict(class, access) {
+            Verdict::Passed => {}
+            Verdict::Pending => return Err(ShadowCause::CheckPending(class, access)),
+            Verdict::Failed => return Err(ShadowCause::CheckFailed(class, access)),
+            Verdict::Unchecked => return Err(ShadowCause::Unchecked(class, access)),
+        }
     }
+    Ok(())
 }
 
 /// The longest a texture over host pages waits as it is made for its class's verdict for its
@@ -467,7 +495,7 @@ impl InPlaceChecks {
 /// differs, and so does the version it holds). The runtime's own version is not in the record: a
 /// release that changes none of these keeps the verdicts the driver gave, so a device made after
 /// it reads them again rather than checking anew.
-pub(crate) const CHECK_VERSION: u32 = 2;
+pub(crate) const CHECK_VERSION: u32 = 3;
 
 /// A record's first bytes.
 const MAGIC: [u8; 8] = *b"M2VINPL\0";
@@ -475,9 +503,10 @@ const MAGIC: [u8; 8] = *b"M2VINPL\0";
 /// The domain tag of a record's name.
 const NAME_TAG: &[u8] = b"metal2vulkan in-place check record\0";
 
-/// What the check checks, in a record's name: the first move of an image over host pages, and of
-/// one that renders its render passes' operations and feedback loop moves. A check of another
-/// operation keeps its own record beside this one's, which it leaves valid.
+/// What the check checks, in a record's name: the first move of an image over host pages, of one
+/// that renders its render passes' operations and feedback loop moves, and of one a shader writes
+/// its kernels' storage writes. A check of another operation keeps its own record beside this
+/// one's, which it leaves valid.
 const CHECK_KIND: &[u8] = b"first move\0";
 
 /// The driver identity a verdict holds for: `VkPhysicalDeviceProperties`' vendor, device and
@@ -543,7 +572,7 @@ pub(crate) fn record_name(identity: &DriverIdentity) -> String {
 /// magic          8 bytes   "M2VINPL\0"
 /// version        u32       CHECK_VERSION
 /// identity       32 bytes  DriverIdentity::digest
-/// verdicts       6 bytes   one per class and access, VERDICTS' order (verdict_index)
+/// verdicts       9 bytes   one per class and access, VERDICTS' order (verdict_index)
 /// checksum       32 bytes  SHA-256 of every byte before it
 /// ```
 ///
@@ -699,8 +728,8 @@ impl Device {
 
     /// The device's check's verdicts now, one line per class for a texture that reads
     /// (`Pointer: Passed`), then one per class for one that renders (`Pointer renders: Passed`),
-    /// and what it found changed where one failed. A runtime extension for the lanes that report
-    /// it.
+    /// then one per class for one a shader writes (`Pointer writes: Passed`), and what it found
+    /// changed where one failed. A runtime extension for the lanes that report it.
     #[doc(hidden)]
     pub fn in_place_check_report(&self) -> Vec<String> {
         let checks = &self.shared().in_place;
@@ -709,6 +738,7 @@ impl Device {
             match access {
                 Access::Reads => format!("{class:?}: {verdict:?}"),
                 Access::Renders => format!("{class:?} renders: {verdict:?}"),
+                Access::Writes => format!("{class:?} writes: {verdict:?}"),
             }
         };
         let verdicts = Access::ALL

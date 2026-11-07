@@ -2249,8 +2249,9 @@ impl Device {
         let device_copy = match class {
             Some(class) if !past && !in_place::checking() && !texels.buffer.detached() => {
                 let policy = self.compile_device().policy().host_page_textures;
-                in_place::Access::of(usage) == in_place::Access::Reads
-                    && in_place::in_place(policy, usage, class, |_, _| Verdict::Passed).is_ok()
+                let pages = (class, texels.texel_bytes());
+                in_place::Access::Reads.takes(usage)
+                    && in_place::in_place(policy, usage, pages, |_, _| Verdict::Passed).is_ok()
                     && texels.device_copy(self)
             }
             _ => false,
@@ -2292,13 +2293,15 @@ impl Device {
                         true => Verdict::Passed,
                         false => self.in_place_verdict(class, access),
                     };
-                    match in_place::in_place(policy, usage, class, verdict) {
+                    let pages = (class, texels.texel_bytes());
+                    match in_place::in_place(policy, usage, pages, verdict) {
                         Ok(()) => {
                             match self.in_place_image(&plan, descriptor, &texels, class, &facts)? {
                                 Ok((image, pitched)) => {
                                     if !checking {
                                         let counts = &self.shared().counts;
-                                        counts.host_texture_in_place(class, pitched);
+                                        let written = in_place::Access::Writes.takes(usage);
+                                        counts.host_texture_in_place(class, pitched, written);
                                         let usage = image.plan().usage;
                                         if usage
                                             .contains(ImageUsageFlags::ATTACHMENT_FEEDBACK_LOOP_EXT)
@@ -2319,8 +2322,9 @@ impl Device {
                         "the in-place check's texture takes no image in place",
                     ));
                 }
-                let renders = in_place::Access::of(usage) == in_place::Access::Renders;
-                self.shared().counts.host_texture_shadowed(&cause, renders);
+                let renders = in_place::Access::Renders.takes(usage);
+                let accesses = (renders, in_place::Access::Writes.takes(usage));
+                self.shared().counts.host_texture_shadowed(&cause, accesses);
                 if class == PagesClass::Fresh {
                     self.shared().counts.shadow_over_fresh_pages();
                 }

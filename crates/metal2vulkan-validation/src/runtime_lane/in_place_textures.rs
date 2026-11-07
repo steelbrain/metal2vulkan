@@ -1,7 +1,8 @@
 //! Device tests of textures over host pages in place (`HostPageTexturePolicy::InPlace`) on the
-//! device the cfg selects: a texture that only samples or reads, over a no-copy buffer's pages or
-//! a buffer in fresh pages, is an image aliasing the pages where the device's check of the first
-//! move passed for their class, and a shadow elsewhere, counted by why.
+//! device the cfg selects: a texture over a no-copy buffer's pages or a buffer in fresh pages is an
+//! image aliasing the pages where the device's check passed for their class and each of the
+//! texture's accesses (one that reads, one that renders, one a shader writes), and a shadow
+//! elsewhere, counted by why.
 //!
 //! - [`sampled_textures_over_host_pages_take_the_path_their_check_answered`], under the
 //!   validation layer: once the device's check answered (printed, `IN-PLACE-CHECK`, with its
@@ -16,6 +17,18 @@
 //!   commit and before it runs (held by an event the CPU signals once it wrote) is what the blit
 //!   reads: the image follows the buffer's rule (Host Write Ordering Guarantees). Printed
 //!   (`IN-PLACE`): each texture's path.
+//! - [`written_textures_over_host_pages_take_the_path_their_checks_answered`], under the
+//!   validation layer: once the device's check answered, a 64x64 `RGBA16Float` texture of
+//!   `ShaderRead` and `ShaderWrite` usage over a no-copy buffer of anonymous pages, with padded
+//!   rows, with packed ones, and a 61x64 one at a 496-byte pitch (the pitch a driver that lays rows
+//!   tight lays them at), every byte beside the texels a signaling NaN's half: where the check
+//!   passed for an image a shader writes over the class (`Pointer writes: Passed`), each is in
+//!   place (`vk_image` answers one; `host_textures_in_place`, `host_textures_in_place_written`) or
+//!   a shadow its refusal counts; where it did not, a shadow counted by the check's answer, on a
+//!   discrete GPU as on any other. A kernel then writes every texel, with no usage shadow
+//!   (`undeclared-usage-shadow`): every texel of the pages holds the value, and the bytes between
+//!   the rows and past the last hold the pattern. Printed (`IN-PLACE-WRITTEN`): each texture's
+//!   path.
 //! - [`writes_and_passes_beyond_the_usage_take_their_shadows`], under the validation layer: an
 //!   in-place 64x64 `RGBA16Float` texture of `ShaderRead` usage alone, with padded rows and with
 //!   packed ones (where the device takes either in place), written by a kernel (no `ShaderWrite`)
@@ -23,16 +36,16 @@
 //!   shadow (`undeclared-usage-shadow`), never the aliasing image,
 //!   which stays the texture's (`vk_image` the same handle); every texel of the pages then holds the
 //!   value, and the bytes between the rows hold the pattern.
-//! - [`textures_that_render_or_write_count_their_shadows_apart`], under the validation layer: a
-//!   64x64 `R32Uint` texture over a no-copy buffer of anonymous pages, of each usage that renders
-//!   or writes, once the device's check answered: one that writes it through a shader
-//!   (`ShaderWrite`, `ShaderAtomic`, whatever else it holds) is a shadow counted as a shader
-//!   write's (`host_texture_shadows_shader_write`); one that renders into it and does not write it
-//!   is in place where the check passed for an image that renders over the class
-//!   (`Pointer renders: Passed`; `vk_image` answers one, `host_textures_in_place`), else a shadow
-//!   counted by the check's answer or the device's refusal; under `HostPageTexturePolicy::Shadow`
-//!   every one is the exact form's (`host_texture_shadows_exact`). Each shadow that renders also
-//!   counts in `host_texture_shadows_render_target`.
+//! - [`textures_that_render_or_write_take_the_path_their_checks_answered`], under the validation
+//!   layer: a 64x64 `R32Uint` texture over a no-copy buffer of anonymous pages, of each usage that
+//!   renders or writes, once the device's check answered: each is in place where the check passed
+//!   over the class for each of its accesses (`Pointer renders: Passed` for one that renders,
+//!   `Pointer writes: Passed` for one a shader writes, `ShaderWrite` or `ShaderAtomic`; `vk_image`
+//!   answers one, `host_textures_in_place`, and `host_textures_in_place_written` for one a shader
+//!   writes), else a shadow counted by the check's answer or the device's refusal; under
+//!   `HostPageTexturePolicy::Shadow` every one is the exact form's (`host_texture_shadows_exact`).
+//!   Each shadow that renders also counts in `host_texture_shadows_render_target`, and each one a
+//!   shader writes in `host_texture_shadows_shader_write`.
 //! - [`a_failed_check_keeps_the_shadow_and_no_record`], under the validation layer: a device made
 //!   to fail its check (`DeviceOptions::fail_in_place_check`) answers failed or unchecked for every
 //!   class and makes such a texture a shadow counted as the failed check's, never in place, and
@@ -58,9 +71,10 @@ use crate::gpu::TEST_DEVICE;
 use metal2vulkan::device::HostPageTexturePolicy;
 use metal2vulkan::metal::{PixelFormat, PrimitiveType, TextureUsage};
 use metal2vulkan_runtime::{
-    BlitOption, Buffer, ClearColor, CommandQueue, Degradation, Device, DeviceOptions, EventRef,
-    LoadAction, Origin, RenderPassDescriptor, RenderPipelineState, ResourceOptions, ScissorRect,
-    SharedEvent, Size, StoreAction, Texture, TextureDescriptor, WorkCounts,
+    BlitOption, Buffer, ClearColor, CommandBuffer, CommandQueue, ComputePipelineState, Degradation,
+    Device, DeviceOptions, EventRef, LoadAction, Origin, RenderPassDescriptor, RenderPipelineState,
+    ResourceOptions, ScissorRect, SharedEvent, Size, StoreAction, Texture, TextureDescriptor,
+    WorkCounts,
 };
 
 /// The bytes of a buffer of the runtime's own that lies in fresh pages (past half a pooled block).
@@ -147,6 +161,33 @@ pub(super) fn sampled(
     d.usage = TextureUsage::SHADER_READ;
     d.resource_options = buffer.resource_options();
     buffer.new_texture(&d, 0, bpr).unwrap()
+}
+
+/// A texture of `format`, `w` by `h`, of `ShaderRead` and `ShaderWrite` usage, over `buffer` with
+/// rows `bpr` apart.
+fn written(buffer: &Buffer, format: PixelFormat, (w, h, bpr): (u64, u64, u64)) -> Texture {
+    let mut d = TextureDescriptor::texture_2d(format, w, h, false);
+    d.usage = TextureUsage::SHADER_READ | TextureUsage::SHADER_WRITE;
+    d.resource_options = buffer.resource_options();
+    buffer.new_texture(&d, 0, bpr).unwrap()
+}
+
+/// Encodes `kernel` (`write_at_level` of the level-writes lane) writing every texel of `texture`'s
+/// level 0, `w` by `h`, in threadgroups of 8 by 8 (the last ones of the grid cut to it).
+fn encode_writes(
+    command_buffer: &CommandBuffer,
+    kernel: &ComputePipelineState,
+    texture: &Texture,
+    (w, h): (u64, u64),
+) {
+    let mut encoder = command_buffer.compute_command_encoder().unwrap();
+    encoder.set_compute_pipeline_state(kernel).unwrap();
+    encoder.set_texture(Some(texture), 0).unwrap();
+    encoder.set_bytes(&0u16.to_le_bytes(), 0).unwrap();
+    encoder
+        .dispatch_threads(Size::new(w, h, 1), Size::new(8, 8, 1))
+        .unwrap();
+    encoder.end_encoding().unwrap();
 }
 
 /// The texels of `texture` (`w` by `h`, `texel` bytes each) as a blit reads them into tight rows,
@@ -342,6 +383,133 @@ fn sampled_textures_over_host_pages_take_the_path_their_check_answered() {
 const VALUE: [u8; 8] = [0x00, 0x34, 0x00, 0x38, 0x00, 0x3a, 0x00, 0x3c];
 
 #[test]
+fn written_textures_over_host_pages_take_the_path_their_checks_answered() {
+    let cache = ScratchCache::new().unwrap();
+    let messages = Messages::default();
+    let mut lapses = Vec::new();
+    {
+        // Each texture would announce a usage shadow, not only the device's first.
+        let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), |options| {
+            in_place(options);
+            options
+                .announce_each
+                .insert(Degradation::UndeclaredUsageShadow);
+        })
+        .unwrap();
+        settled(&device);
+        let checked = passed(&device, "Pointer writes");
+        let queue = device.new_command_queue().unwrap();
+        let kernel = super::level_writes_by_usage::kernel(&device, "write_at_level");
+        let h = 64u64;
+        // Padded rows, packed ones, and rows of a width no multiple of 4 at the 16-byte pitch a
+        // driver that lays rows tight lays them at: a device whose linear images take no explicit
+        // pitch takes the last two.
+        for (w, bpr) in [(64u64, 1024u64), (64, 512), (61, 496)] {
+            // A page past the image, whose bytes no write reaches.
+            let len = ((bpr * h) as usize + GUEST_PAGE).next_multiple_of(GUEST_PAGE);
+            let mapping = Mapping::anonymous(len);
+            // Every byte that is no texel a signaling NaN's half (`0x7d01`), whose bits a driver
+            // that read and wrote it back as a float would quiet.
+            let mut pattern = counting(len, 13);
+            for (offset, byte) in pattern.iter_mut().enumerate() {
+                let offset = offset as u64;
+                if offset >= h * bpr || offset % bpr >= w * 8 {
+                    *byte = [0x01, 0x7d][(offset % 2) as usize];
+                }
+            }
+            mapping.write(0, &pattern);
+            // SAFETY: the mapping outlives the buffer and the texture (dropped first).
+            let buffer = match unsafe {
+                no_copy(
+                    &device,
+                    mapping.pointer(),
+                    len,
+                    ResourceOptions::default(),
+                    None,
+                )
+            } {
+                Ok(buffer) => buffer,
+                Err(error) if not_importable(&error) => {
+                    eprintln!("IN-PLACE-WRITTEN: the device imports no host memory: {error:?}");
+                    return;
+                }
+                Err(error) => panic!("new_buffer_with_bytes_no_copy: {error:?}"),
+            };
+            let before = device.work_counts();
+            let texture = written(&buffer, PixelFormat::RGBA16Float, (w, h, bpr));
+            let after = device.work_counts();
+            let aliased = after.host_textures_in_place - before.host_textures_in_place;
+            let writes =
+                after.host_textures_in_place_written - before.host_textures_in_place_written;
+            let by_check = |counts: &WorkCounts| {
+                counts.host_texture_shadows_check_pending
+                    + counts.host_texture_shadows_check_failed
+                    + counts.host_texture_shadows_unchecked
+            };
+            let unchecked = by_check(&after) - by_check(&before);
+            let refused = refused(&before, &after);
+            // SAFETY: the handle is only compared, while the texture lives.
+            let image = unsafe { texture.vk_image() };
+            let what = format!("RGBA16Float {w}x{h}/{bpr}");
+            let path = match (image.is_some(), aliased, writes, refused, unchecked) {
+                (true, 1, 1, 0, 0) => "in place",
+                (false, 0, 0, 1, 0) => "refused",
+                (false, 0, 0, 0, 1) => "shadow",
+                _ => "inconsistent",
+            };
+            eprintln!(
+                "IN-PLACE-WRITTEN on {} ({:?}): {what}: {path} (in place {aliased}, written \
+                 {writes}, refused {refused}, by the check {unchecked})",
+                device.name(),
+                device.properties().kind
+            );
+            let right = matches!(
+                (checked, path),
+                (true, "in place") | (true, "refused") | (false, "shadow")
+            );
+            if !right {
+                lapses.push(format!("{what}: {path}, the check passed: {checked}"));
+            }
+            messages.take_notices();
+            let command_buffer = queue.command_buffer().unwrap();
+            encode_writes(&command_buffer, &kernel, &texture, (w, h));
+            command_buffer.commit().unwrap();
+            command_buffer.wait_until_completed_for(WAIT).unwrap();
+            assert_eq!(command_buffer.error(), None, "{what}");
+            let notices = counts(&messages.take_notices());
+            if notices.contains_key(&Degradation::UndeclaredUsageShadow) {
+                lapses.push(format!("{what}: a usage shadow for a declared write"));
+            }
+            // SAFETY: as above.
+            if unsafe { texture.vk_image() } != image {
+                lapses.push(format!("{what}: the image changed"));
+            }
+            let now = mapping.read(0..len);
+            for y in 0..h {
+                for x in 0..w {
+                    let at = (y * bpr + x * 8) as usize;
+                    if now[at..at + 8] != VALUE {
+                        lapses.push(format!("{what}: texel {x},{y}"));
+                    }
+                }
+                let between = (y * bpr + w * 8) as usize..((y + 1) * bpr) as usize;
+                if now[between.clone()] != pattern[between] {
+                    lapses.push(format!("{what}: row {y}'s padding"));
+                }
+            }
+            let past = (h * bpr) as usize..len;
+            if now[past.clone()] != pattern[past] {
+                lapses.push(format!("{what}: the bytes past the last row"));
+            }
+            drop((texture, buffer));
+            drop(mapping);
+        }
+    }
+    layer_reported_nothing_at_all(&messages);
+    assert!(lapses.is_empty(), "{}", lapses.join("\n"));
+}
+
+#[test]
 fn writes_and_passes_beyond_the_usage_take_their_shadows() {
     let cache = ScratchCache::new().unwrap();
     let messages = Messages::default();
@@ -458,17 +626,16 @@ fn writes_and_passes_beyond_the_usage_take_their_shadows() {
 }
 
 #[test]
-fn textures_that_render_or_write_count_their_shadows_apart() {
+fn textures_that_render_or_write_take_the_path_their_checks_answered() {
     use TextureUsage as U;
-    // Each usage, and whether it renders.
     let usages = [
-        (U::SHADER_READ | U::RENDER_TARGET, true),
-        (U::SHADER_READ | U::SHADER_WRITE, false),
-        (U::SHADER_READ | U::SHADER_ATOMIC, false),
-        (U::SHADER_WRITE | U::SHADER_ATOMIC, false),
-        (U::SHADER_WRITE | U::RENDER_TARGET, true),
-        (U::SHADER_ATOMIC | U::RENDER_TARGET, true),
-        (U::UNKNOWN, true),
+        U::SHADER_READ | U::RENDER_TARGET,
+        U::SHADER_READ | U::SHADER_WRITE,
+        U::SHADER_READ | U::SHADER_ATOMIC,
+        U::SHADER_WRITE | U::SHADER_ATOMIC,
+        U::SHADER_WRITE | U::RENDER_TARGET,
+        U::SHADER_ATOMIC | U::RENDER_TARGET,
+        U::UNKNOWN,
     ];
     let cache = ScratchCache::new().unwrap();
     let messages = Messages::default();
@@ -484,6 +651,7 @@ fn textures_that_render_or_write_count_their_shadows_apart() {
             settled(&device);
         }
         let renders_in_place = passed(&device, "Pointer renders");
+        let writes_in_place = passed(&device, "Pointer writes");
         let (w, h, bpr) = (64u64, 64u64, 256u64);
         let len = ((bpr * h) as usize).next_multiple_of(GUEST_PAGE);
         let mapping = Mapping::anonymous(len);
@@ -504,7 +672,7 @@ fn textures_that_render_or_write_count_their_shadows_apart() {
             }
             Err(error) => panic!("new_buffer_with_bytes_no_copy: {error:?}"),
         };
-        for (usage, renders) in usages {
+        for usage in usages {
             let mut d = TextureDescriptor::texture_2d(PixelFormat::R32Uint, w, h, false);
             d.usage = usage;
             d.resource_options = buffer.resource_options();
@@ -528,8 +696,9 @@ fn textures_that_render_or_write_count_their_shadows_apart() {
                 delta(|c| c.host_texture_shadows_exact),
             );
             // An `Unknown` usage is every usage, as Metal reports it.
-            let writes =
-                usage == U::UNKNOWN || usage.intersects(U::SHADER_WRITE | U::SHADER_ATOMIC);
+            let unknown = usage == U::UNKNOWN;
+            let renders = unknown || usage.contains(U::RENDER_TARGET);
+            let writes = unknown || usage.intersects(U::SHADER_WRITE | U::SHADER_ATOMIC);
             // SAFETY: the handle is only read, while the texture lives.
             let aliased = unsafe { texture.vk_image() }.is_some();
             eprintln!(
@@ -537,25 +706,26 @@ fn textures_that_render_or_write_count_their_shadows_apart() {
                  exact) {counted:?}, in place {aliased}",
                 device.name()
             );
-            let shadow = u64::from(renders);
-            match (policy, writes) {
-                (HostPageTexturePolicy::Shadow, _) => {
-                    assert_eq!(counted, (shadow, 0, 1), "{policy:?} {usage:?}");
+            let shadow = (u64::from(renders), u64::from(writes));
+            match policy {
+                HostPageTexturePolicy::Shadow => {
+                    assert_eq!(counted, (shadow.0, shadow.1, 1), "{policy:?} {usage:?}");
                     assert!(!aliased, "{usage:?}");
                 }
-                (_, true) => {
-                    assert_eq!(counted, (shadow, 1, 0), "{policy:?} {usage:?}");
-                    assert!(!aliased, "{usage:?}");
-                }
-                // A texture that renders and does not write: in place where its check passed,
-                // else a shadow counted by the check's answer or the device's refusal.
-                (_, false) => {
+                // In place where the check passed for each of its accesses, else a shadow
+                // counted by the check's answer or the device's refusal.
+                _ => {
                     let in_place = delta(|c| c.host_textures_in_place);
+                    let written = delta(|c| c.host_textures_in_place_written);
                     if aliased {
-                        assert!(renders_in_place, "{usage:?} in place without its check");
-                        assert_eq!((counted, in_place), ((0, 0, 0), 1), "{usage:?}");
+                        let checked =
+                            (!renders || renders_in_place) && (!writes || writes_in_place);
+                        assert!(checked, "{usage:?} in place without its checks");
+                        let due = ((0, 0, 0), 1, u64::from(writes));
+                        assert_eq!((counted, in_place, written), due, "{usage:?}");
                     } else {
-                        assert_eq!((counted, in_place), ((1, 0, 0), 0), "{usage:?}");
+                        let due = ((shadow.0, shadow.1, 0), 0, 0);
+                        assert_eq!((counted, in_place, written), due, "{usage:?}");
                     }
                 }
             }
@@ -581,7 +751,7 @@ fn a_failed_check_keeps_the_shadow_and_no_record() {
         settled(&device);
         let report = device.in_place_check_report();
         assert!(
-            report.iter().take(6).all(|line| !line.ends_with("Passed")),
+            report.iter().take(9).all(|line| !line.ends_with("Passed")),
             "{report:?}"
         );
         let len = (7680 * 1080usize).next_multiple_of(GUEST_PAGE);
@@ -626,8 +796,9 @@ fn a_failed_check_keeps_the_shadow_and_no_record() {
     {
         let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), in_place).unwrap();
         let counts = device.work_counts();
-        // Each class's verdicts, for a texture that reads and one that renders.
-        assert_eq!(counts.in_place_checks_recalled, 6);
+        // Each class's verdicts, for a texture that reads, one that renders and one a shader
+        // writes.
+        assert_eq!(counts.in_place_checks_recalled, 9);
         assert_eq!(counts.in_place_checks_run, 0);
         assert!(device.settle_in_place_checks(std::time::Duration::ZERO));
         assert_eq!(device.in_place_check_took(), None);
