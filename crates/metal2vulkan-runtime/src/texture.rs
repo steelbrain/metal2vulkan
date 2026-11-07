@@ -395,6 +395,13 @@ pub struct Texture(Arc<TextureShared>);
 
 pub(super) struct TextureShared {
     storage: Storage,
+    /// The storage a shadow over host pages made before its pages' in-place verdict moved to
+    /// once the verdict passed (`texture/storage_form.rs`): an image in place over its texels,
+    /// which the texture presents from then on instead of `storage` ([`Texture::storage`]).
+    moved: OnceLock<Storage>,
+    /// What such a shadow needs to move in place (`in_place::PendingMove`), while it may: `None`
+    /// for every other texture, and once it moved or its verdicts kept it a shadow.
+    pending_move: Mutex<Option<in_place::PendingMove>>,
     /// What this texture presents of its image.
     record: ViewRecord,
     /// The texture a view was made from (`parentTexture`).
@@ -465,7 +472,13 @@ impl Drop for TextureShared {
                     Storage::Image(image)
                     | Storage::Alias { image, .. }
                     | Storage::Shadow { image, .. } => {
-                        (&image.device, Some(Box::new(Arc::clone(image))))
+                        // A shadow that moved in place keeps its image in place too, which the
+                        // command buffers since read through its ID (`texture/storage_form.rs`).
+                        let moved = match self.moved.get() {
+                            Some(Storage::Alias { image, .. }) => Some(Arc::clone(image)),
+                            _ => None,
+                        };
+                        (&image.device, Some(Box::new((Arc::clone(image), moved))))
                     }
                     Storage::Texels(texels) => (texels.buffer.device(), None),
                 };
@@ -2215,18 +2228,26 @@ impl Device {
         id_use: IdUse,
     ) -> Result<Texture, Error> {
         let record = ViewRecord::of_descriptor(layout, descriptor);
-        let storage = self.storage_over_buffer(call, Arc::new(texels), descriptor, layout)?;
-        Ok(Texture::made(self, storage, record, None, id_use))
+        let mut pending = None;
+        let over = (Arc::new(texels), &mut pending);
+        let storage = self.storage_over_buffer(call, over, descriptor, layout)?;
+        let texture = Texture::made(self, storage, record, None, id_use);
+        // A shadow made before its pages' in-place verdict moves in place once it passes.
+        if let Some(pending) = pending {
+            texture.wait_to_move_in_place(pending);
+        }
+        Ok(texture)
     }
 
     /// The storage of a texture of `descriptor` (checked as `layout`) over `texels`, as
     /// [`new_texture_over_buffer`](Self::new_texture_over_buffer) makes it: an aliasing image (one
     /// in place over host pages), else a shadow (announced once, counted by why over host pages).
-    /// Refused as it is.
+    /// A shadow over host pages made before their class's verdict for its access sets `pending`
+    /// to what it needs to move in place once the verdict passes. Refused as it is.
     fn storage_over_buffer(
         &self,
         call: &'static str,
-        texels: Arc<Texels>,
+        (texels, pending): (Arc<Texels>, &mut Option<in_place::PendingMove>),
         descriptor: &TextureDescriptor,
         layout: &TextureLayout,
     ) -> Result<Storage, Error> {
@@ -2352,6 +2373,14 @@ impl Device {
                     return Err(internal(
                         "the in-place check's texture takes no image in place",
                     ));
+                }
+                if let ShadowCause::CheckPending(..) = cause {
+                    *pending = Some(in_place::PendingMove {
+                        class,
+                        usage,
+                        plan: plan.clone(),
+                        descriptor: *descriptor,
+                    });
                 }
                 let renders = in_place::Access::Renders.takes(usage);
                 let accesses = (renders, in_place::Access::Writes.takes(usage));
@@ -4242,6 +4271,8 @@ impl Texture {
         };
         let texture = Texture(Arc::new(TextureShared {
             storage,
+            moved: OnceLock::new(),
+            pending_move: Mutex::new(None),
             record,
             parent,
             id,
@@ -4257,7 +4288,7 @@ impl Texture {
             facts: OnceLock::new(),
             planes_in_place,
         }));
-        if let Some(objects) = texture.0.storage.objects() {
+        if let Some(objects) = texture.storage().objects() {
             objects.object_made();
         }
         // A texture over host pages' bytes, or in a heap over them (a view of one too): a
@@ -4299,13 +4330,19 @@ impl Texture {
         if self.0.parent.is_some() {
             return Err(internal("a range token for a texture view"));
         }
-        match self.0.storage.objects() {
+        match self.storage().objects() {
             Some(objects) => objects.keep(token),
             None => Err(internal("a range token for a texture over a buffer")),
         }
     }
 
     /// The texture object `shared` names, while it lives (a slot's holder, `resource_ids.rs`).
+    /// The texture's storage: the one it was made with, or the image in place a shadow made
+    /// before its pages' in-place verdict moved to (`TextureShared::moved`).
+    fn storage(&self) -> &Storage {
+        self.0.moved.get().unwrap_or(&self.0.storage)
+    }
+
     pub(super) fn upgrade(shared: &Weak<TextureShared>) -> Option<Texture> {
         shared.upgrade().map(Texture)
     }
@@ -4352,7 +4389,7 @@ impl Texture {
     /// The texture's image. Refused for a texture buffer, which has none (`NotImplemented`): a
     /// call that needs one is not built on texture buffers.
     fn image(&self) -> Result<&Arc<Image>, Error> {
-        match &self.0.storage {
+        match self.storage() {
             Storage::Image(image)
             | Storage::Alias { image, .. }
             | Storage::Shadow { image, .. } => Ok(image),
@@ -4362,7 +4399,7 @@ impl Texture {
 
     /// The buffer's bytes a texture buffer is, or `None` for a texture with an image.
     pub(super) fn texels(&self) -> Option<&Texels> {
-        match &self.0.storage {
+        match self.storage() {
             Storage::Image(_) | Storage::Alias { .. } | Storage::Shadow { .. } => None,
             Storage::Texels(texels) => Some(texels),
         }
@@ -4372,7 +4409,7 @@ impl Texture {
     /// texture or array with an aliasing or a shadow image), or `None` for a texture of an image
     /// alone.
     pub(super) fn buffer_texels(&self) -> Option<&Texels> {
-        match &self.0.storage {
+        match self.storage() {
             Storage::Image(_) => None,
             Storage::Texels(texels)
             | Storage::Alias { texels, .. }
@@ -4384,21 +4421,21 @@ impl Texture {
     /// image (not a shadow, not a texture buffer), not presenting a stand-in while its bytes are
     /// detached (`detach.rs`), so a write of those bytes is a write of its texels.
     pub(super) fn aliases_buffer(&self) -> bool {
-        matches!(self.0.storage, Storage::Alias { .. }) && self.linear_image().unwrap_or(false)
+        matches!(self.storage(), Storage::Alias { .. }) && self.linear_image().unwrap_or(false)
     }
 
     /// Whether a pass that renders the texture renders its buffer's bytes: in place, its image
     /// lying over them now ([`image_over_buffer`](Self::image_over_buffer)), or through the
     /// shadow image the encoders copy them into and back (`shadow.rs`), which the pass renders.
     pub(crate) fn renders_bytes(&self) -> bool {
-        self.image_over_buffer() || matches!(self.0.storage, Storage::Shadow { .. })
+        self.image_over_buffer() || matches!(self.storage(), Storage::Shadow { .. })
     }
 
     /// Whether the texture's image lies over its buffer's bytes now: an aliasing image, not
     /// presenting a stand-in while its bytes are detached (`detach.rs`), so a pass that renders it
     /// writes those bytes.
     pub(super) fn image_over_buffer(&self) -> bool {
-        match &self.0.storage {
+        match self.storage() {
             Storage::Alias { image, .. } => lock(&image.detached).is_none(),
             _ => false,
         }
@@ -4406,14 +4443,14 @@ impl Texture {
 
     /// Whether the texture is a buffer's bytes: a texture buffer or a shadowed texture.
     pub(super) fn over_buffer(&self) -> bool {
-        !matches!(self.0.storage, Storage::Image(_))
+        !matches!(self.storage(), Storage::Image(_))
     }
 
     /// The copies of a shadowed texture, of a texture buffer viewed through a staging buffer
     /// (`Texels::into_texture_buffer`), or of a heap's depth or stencil texture held as a shadow of
     /// the heap's bytes (`texture/heap.rs`), or `None` for another texture.
     pub(super) fn shadow(&self) -> Option<&Arc<ShadowCopies>> {
-        match &self.0.storage {
+        match self.storage() {
             Storage::Shadow { copies, .. } => Some(copies),
             Storage::Texels(texels) => texels.staged(),
             Storage::Image(image) => match &image.owner {
@@ -4427,7 +4464,7 @@ impl Texture {
 
     /// Whether two textures (or views) hold their texels in one image or buffer.
     pub(super) fn same_storage(&self, other: &Texture) -> bool {
-        match (&self.0.storage, &other.0.storage) {
+        match (self.storage(), other.storage()) {
             (Storage::Image(a), Storage::Image(b)) => {
                 Arc::ptr_eq(view_shadow::truth(a), view_shadow::truth(b))
             }
@@ -4496,7 +4533,7 @@ impl Texture {
     /// texture's first byte in it; `None` for any other texture, a view and a two-plane texture
     /// of more levels or slices among them.
     pub(super) fn heap_planes(&self) -> Option<(&Heap, u64)> {
-        match &self.0.storage {
+        match self.storage() {
             Storage::Image(image) if self.0.parent.is_none() => match &image.owner {
                 Owner::HeapShadow(shadow) if shadow.copies.holds_blit_rows() => {
                     Some((self.0.heap.as_ref()?, shadow.place.offset))
@@ -4512,7 +4549,7 @@ impl Texture {
     /// the texture's first byte in it, and their layout; `None` for any other texture, a view
     /// among them.
     pub(super) fn heap_two_planes(&self) -> Option<(&Heap, u64, &TwoPlaneHeapLayout)> {
-        match &self.0.storage {
+        match self.storage() {
             Storage::Image(image) if self.0.parent.is_none() => match &image.owner {
                 Owner::HeapShadow(shadow) => {
                     let layout = shadow.copies.plane_layout()?;
@@ -4526,7 +4563,7 @@ impl Texture {
 
     /// The image whose bytes a blit of the texture addresses: a view shadow's texture's.
     fn kept_image(&self) -> Option<&Arc<Image>> {
-        match &self.0.storage {
+        match self.storage() {
             Storage::Image(image) => Some(view_shadow::truth(image)),
             Storage::Alias { image, .. } | Storage::Shadow { image, .. } => Some(image),
             Storage::Texels(_) => None,
@@ -4843,7 +4880,7 @@ impl Texture {
     /// A sparse texture's image beyond the `VkImage` (`sparse/texture.rs`); `None` for a texture
     /// that is not sparse.
     pub(super) fn sparse_image(&self) -> Option<&SparseImage> {
-        match &self.0.storage {
+        match self.storage() {
             Storage::Image(image) => match &image.owner {
                 Owner::Sparse(sparse) => Some(sparse),
                 _ => None,
@@ -4857,7 +4894,7 @@ impl Texture {
     /// may be `Access::NONE`).
     pub(super) fn bound_use(&self, read: Access, write: Access) -> Use<ResourceKey> {
         let record = &self.0.record;
-        let image = match &self.0.storage {
+        let image = match self.storage() {
             Storage::Image(image) | Storage::Shadow { image, .. } => image,
             // An aliasing image's uses are uses of the buffer's bytes it lies in.
             Storage::Texels(texels) | Storage::Alias { texels, .. } => {
@@ -4889,7 +4926,7 @@ impl Texture {
         access: Access,
         write: bool,
     ) -> Result<Use<ResourceKey>, Error> {
-        if let Storage::Alias { texels, .. } = &self.0.storage {
+        if let Storage::Alias { texels, .. } = self.storage() {
             return Ok(if write {
                 texels.bound_use(Access::NONE, access)
             } else {
@@ -4920,7 +4957,7 @@ impl Texture {
 impl Texture {
     /// `device`.
     pub fn device(&self) -> &Device {
-        match &self.0.storage {
+        match self.storage() {
             Storage::Image(image)
             | Storage::Alias { image, .. }
             | Storage::Shadow { image, .. } => &image.device,
@@ -5018,7 +5055,7 @@ impl Texture {
     /// ([`hazard_tracking_mode`](Self::hazard_tracking_mode), `Identity::new`). Measured on an
     /// Apple M3 Max under macOS 27.0.1.
     pub fn resource_options(&self) -> ResourceOptions {
-        let options = match &self.0.storage {
+        let options = match self.storage() {
             Storage::Image(image) => image.options,
             Storage::Texels(texels)
             | Storage::Alias { texels, .. }
@@ -5043,7 +5080,7 @@ impl Texture {
 
     /// `hazardTrackingMode`: `Tracked` or `Untracked`, `Default` resolved as Metal resolves it.
     pub fn hazard_tracking_mode(&self) -> HazardTrackingMode {
-        let tracked = match &self.0.storage {
+        let tracked = match self.storage() {
             Storage::Image(image)
             | Storage::Alias { image, .. }
             | Storage::Shadow { image, .. } => image.identity.tracked,
@@ -5058,7 +5095,7 @@ impl Texture {
 
     /// `allowGPUOptimizedContents`.
     pub fn allow_gpu_optimized_contents(&self) -> bool {
-        match &self.0.storage {
+        match self.storage() {
             Storage::Image(image) => image.allow_gpu_optimized_contents,
             Storage::Texels(texels)
             | Storage::Alias { texels, .. }
@@ -5179,7 +5216,7 @@ impl Texture {
     /// for it (`texture/heap.rs`); `None` for any other texture, a texture over a buffer the
     /// program placed in a heap included.
     fn heap_texels(&self) -> Option<&Buffer> {
-        match &self.0.storage {
+        match self.storage() {
             Storage::Texels(texels) if texels.home == TexelsHome::Heap => Some(&texels.buffer),
             Storage::Image(_)
             | Storage::Texels(_)
@@ -5194,7 +5231,7 @@ impl Texture {
         if let Some(heap) = self.heap() {
             return TextureMemory::Heap(heap);
         }
-        match &self.0.storage {
+        match self.storage() {
             Storage::Texels(texels)
             | Storage::Alias { texels, .. }
             | Storage::Shadow { texels, .. } => TextureMemory::Buffer(&texels.buffer),
@@ -5247,7 +5284,7 @@ impl Texture {
     /// texture took as it was made, which the runtime does not keep.
     fn refuse_detached_texels(&self) -> Result<(), Error> {
         let root = self.root();
-        let detached = match &root.0.storage {
+        let detached = match root.storage() {
             Storage::Texels(texels)
             | Storage::Alias { texels, .. }
             | Storage::Shadow { texels, .. } => texels.buffer.detached(),
@@ -5268,13 +5305,13 @@ impl Texture {
     /// there); and whether a stand-in of zero bytes presents the image exactly (not one of
     /// texels its copies convert from the bytes, `stand_in.rs`).
     fn image_over_bytes(&self) -> Option<(&Buffer, &Arc<Image>, bool)> {
-        let (image, exact) = match &self.0.storage {
+        let (image, exact) = match self.storage() {
             Storage::Alias { image, .. } | Storage::Image(image) => (image, true),
             Storage::Shadow { image, copies, .. } => (image, !copies.converts()),
             Storage::Texels(_) => return None,
         };
         let root = self.root();
-        let bytes = match &root.0.storage {
+        let bytes = match root.storage() {
             Storage::Alias { texels, .. } | Storage::Shadow { texels, .. } => &texels.buffer,
             Storage::Image(_) => root.heap_place().and(root.0.heap.as_ref())?.bytes()?,
             Storage::Texels(_) => return None,
@@ -5284,7 +5321,7 @@ impl Texture {
 
     /// Where an automatic or placement heap's texture (or a view of one) lies.
     fn heap_place(&self) -> Option<&heap::HeapPlace> {
-        self.0.storage.heap_place()
+        self.storage().heap_place()
     }
 
     /// `parentTexture`: the texture a view was made from (a view of a view has that view).
@@ -5436,7 +5473,7 @@ impl Texture {
         // as `Depth32Float_Stencil8` over them in its GPU's own layout, no defined answer (an M4
         // under macOS 27.0.1), and stops every other format ("not castable"). Only its own format
         // views it.
-        let own_x32 = matches!(&self.0.storage,
+        let own_x32 = matches!(self.storage(),
             Storage::Image(image) if image.plan().pixel_format == PixelFormat::X32Stencil8);
         if own_x32 && record.pixel_format != PixelFormat::X32Stencil8 {
             use super::view_plan::ViewProblem;
@@ -5461,7 +5498,7 @@ impl Texture {
         // ETC2 or EAC format's sRGB form's codes are its linear form's). A view of an ASTC
         // texture in its other colour space reads the carrier's second twin, made now where it
         // has none (`texture/decoded_twin.rs`).
-        if let Storage::Image(image) = &self.0.storage {
+        if let Storage::Image(image) = self.storage() {
             let truth = view_shadow::truth(image);
             let pf = record.pixel_format;
             let astc = super::astc::decode_of(truth.plan()).map(|held| (held, AstcDecode::of(pf)));
@@ -5490,7 +5527,7 @@ impl Texture {
         // bits, which its bindings take as the image in its own format through a swizzle and a
         // pass renders through a shadow; a binding's own view is checked again where it is made. A texture buffer's view is a
         // texel buffer view of the same bytes, which takes any format of its class.
-        let apart = match &self.0.storage {
+        let apart = match self.storage() {
             Storage::Texels(_) => false,
             Storage::Image(image)
             | Storage::Alias { image, .. }
@@ -5506,7 +5543,7 @@ impl Texture {
             record.read_as = Some(read_as);
             storage
         } else if !apart {
-            self.0.storage.clone()
+            self.storage().clone()
         } else if let Some((image, read_as)) = self.read_through(&record) {
             self.device().shared().counts.view_through_swizzle_made();
             record.read_as = Some(read_as);
@@ -5640,7 +5677,7 @@ impl Texture {
             }
             None => bytes,
         };
-        let image = match &self.0.storage {
+        let image = match self.storage() {
             Storage::Image(image) => image,
             Storage::Texels(texels)
             | Storage::Alias { texels, .. }
@@ -5817,7 +5854,7 @@ impl Texture {
         // are the heap's bytes, which `read_region` reads (as `replace_region` writes them), and
         // a level it does not hold (a mipmapped texture's later one) lies in the image alone.
         let heap_shadow = matches!(
-            &self.0.storage,
+            self.storage(),
             Storage::Image(image) if matches!(
                 &image.owner,
                 Owner::HeapShadow(shadow) if shadow.holds(image.plan(), &image_region)
@@ -5878,7 +5915,7 @@ impl Texture {
     /// and no wait, as Metal's `getBytes` of such a texture waits for no GPU work; else through a
     /// staging buffer, by a submission waited for.
     fn read_color_words(&self, region: &ImageRegion, words: &mut [u8]) -> Result<(), Error> {
-        let Storage::Image(image) = &self.0.storage else {
+        let Storage::Image(image) = self.storage() else {
             return Err(internal("a two-plane texture's copy without its image"));
         };
         // A shadowed view's texels are its texture's (`texture/view_shadow.rs`).
@@ -5952,7 +5989,7 @@ impl Texture {
         host: &HostLayout,
         bytes: &mut [u8],
     ) -> Result<(), Error> {
-        let image = match &self.0.storage {
+        let image = match self.storage() {
             Storage::Image(image) => image,
             Storage::Texels(texels)
             | Storage::Alias { texels, .. }
@@ -6039,7 +6076,7 @@ impl Texture {
         // A memoryless texture buffer's CPU access faults in plain Metal's call (SIGSEGV, an M3
         // Max under macOS 27.0.1): refused. Another memoryless texture's moves nothing (below).
         let memoryless = self.is_memoryless();
-        if memoryless && !matches!(self.0.storage, Storage::Image(_)) {
+        if memoryless && !matches!(self.storage(), Storage::Image(_)) {
             return Err(invalid(call, Problem::StorageMode));
         }
         self.check_rotated_reach()?;
@@ -6047,7 +6084,7 @@ impl Texture {
         // a `Private` IOSurface plane's `getBytes` and `replaceRegion` read and write the
         // surface's bytes on plain Metal. A texture over a `Private` buffer takes
         // its storage mode, and is refused as a private texture is.
-        let reached = match &self.0.storage {
+        let reached = match self.storage() {
             Storage::Image(_) => false,
             Storage::Texels(texels)
             | Storage::Alias { texels, .. }
@@ -6060,7 +6097,7 @@ impl Texture {
             aspects(pf)
                 .is_some_and(|a| a.contains(ImageAspectFlags::DEPTH | ImageAspectFlags::STENCIL))
         };
-        let (unit, over_buffer) = match &self.0.storage {
+        let (unit, over_buffer) = match self.storage() {
             // A two-plane texture's CPU copies move plane 0's color words (`two_planes.rs`); a
             // heap's lies apart from the heap's bytes (`texture/heap.rs`).
             Storage::Image(_) if two_planes::holds_planes(record.pixel_format) => {
@@ -6121,7 +6158,7 @@ impl Texture {
         let pitch = cpu_order.map_or(bytes_per_row, |[across, _]| across * u64::from(unit.bytes));
         // Metal's answer for a two-plane texture is measured for rows and images a whole row
         // and image apart or more, by 4-byte multiples.
-        let planes = matches!(self.0.storage, Storage::Image(_))
+        let planes = matches!(self.storage(), Storage::Image(_))
             && two_planes::holds_planes(record.pixel_format);
         if planes {
             let s = super::copy_plan::shape(region.size, &unit);
@@ -6183,7 +6220,7 @@ impl Texture {
         }
         // A 2-bit PVRTC texture's carrier halves its regions' x (`pvrtc.rs`); an ASTC texture's
         // carrier holds each block in 4 x 4 of its texels (`astc.rs`).
-        let planned = match &self.0.storage {
+        let planned = match self.storage() {
             Storage::Image(image)
                 if holds_blocks(image.plan()) || super::astc::decode_of(image.plan()).is_some() =>
             {

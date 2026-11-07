@@ -306,9 +306,13 @@ kernel's storage writes, for one a shader writes) kept every byte. It runs on a 
 driver version; with a shader-cache directory its verdicts are kept there, named by the driver and
 the check's own version (not the runtime release), and recalled as the next device is made, else
 it runs once per process. A texture made before its verdict is a shadow, made without waiting for
-the check (`WorkCounts::host_texture_shadows_check_pending`): a program that makes such textures
-as it starts (a compositor's framebuffers) and wants them in place on a driver's first run starts
-the check earlier, for instance as it makes the device, with `Device::settle_in_place_checks` and a
+the check (`WorkCounts::host_texture_shadows_check_pending`), and moves in place once its kind's
+verdicts pass, with no copy (`WorkCounts::host_textures_moved_in_place`), at a quiet commit: one
+made while no other command buffer of the device is uncommitted, that waits for no event and binds
+no texture by its ID, while none that does is still running (a program that never commits so
+keeps them shadows). A program that makes such textures as it starts (a compositor's
+framebuffers) and wants them in place from their first use on a driver's first run starts the
+check earlier, for instance as it makes the device, with `Device::settle_in_place_checks` and a
 zero timeout, which waits for nothing. A texture a shader writes of 1- or 2-byte
 texels (`host_texture_shadows_store_width`), one the check failed or could not cover, and one
 no image in place serves (a pitch the device's linear images do not take --

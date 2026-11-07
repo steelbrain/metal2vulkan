@@ -461,7 +461,7 @@ impl Texture {
         call: &'static str,
         record: &ViewRecord,
     ) -> Option<Result<Storage, Error>> {
-        let Storage::Shadow { texels, copies, .. } = &self.0.storage else {
+        let Storage::Shadow { texels, copies, .. } = self.storage() else {
             return None;
         };
         let ShadowSource::Converted { conversion, .. } = &copies.source else {
@@ -535,7 +535,7 @@ impl Texture {
         call: &'static str,
         record: &ViewRecord,
     ) -> Option<Result<(Storage, (PixelFormat, TextureSwizzleChannels)), Error>> {
-        let Storage::Shadow { texels, copies, .. } = &self.0.storage else {
+        let Storage::Shadow { texels, copies, .. } = self.storage() else {
             return None;
         };
         let ShadowSource::Converted { conversion, .. } = &copies.source else {
@@ -601,7 +601,7 @@ impl Texture {
     /// Whether this two-plane YCbCr texture reads each code alone, over a surface of a P3 matrix
     /// (`ycbcr.rs`): a pass that loads it loads nothing measured.
     pub(crate) fn ycbcr_codes_alone(&self) -> bool {
-        let Storage::Shadow { copies, .. } = &self.0.storage else {
+        let Storage::Shadow { copies, .. } = self.storage() else {
             return false;
         };
         let ShadowSource::Converted { conversion, .. } = &copies.source else {
@@ -625,7 +625,7 @@ impl Texture {
         let pf = self.0.record.pixel_format;
         let gap =
             || Error::Unsupported(Unsupported::not_implemented(Feature::Format).naming_format(pf));
-        let Storage::Shadow { texels, copies, .. } = &self.0.storage else {
+        let Storage::Shadow { texels, copies, .. } = self.storage() else {
             return Err(gap());
         };
         let ShadowSource::Converted { conversion, .. } = &copies.source else {
@@ -736,7 +736,7 @@ impl Texture {
         let pf = self.0.record.pixel_format;
         let gap =
             || Error::Unsupported(Unsupported::not_implemented(Feature::Format).naming_format(pf));
-        let Storage::Shadow { texels, copies, .. } = &self.0.storage else {
+        let Storage::Shadow { texels, copies, .. } = self.storage() else {
             return Err(gap());
         };
         let ShadowSource::Converted { conversion, .. } = &copies.source else {

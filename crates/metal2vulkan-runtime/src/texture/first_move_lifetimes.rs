@@ -115,7 +115,7 @@ fn texels() -> Vec<u8> {
 
 /// The image `texture`'s storage holds, as an alias of a buffer's bytes or as its own.
 fn image_of(texture: &Texture) -> Option<&Arc<Image>> {
-    match &texture.0.storage {
+    match texture.storage() {
         Storage::Alias { image, .. } | Storage::Image(image) => Some(image),
         Storage::Texels(_) | Storage::Shadow { .. } => None,
     }

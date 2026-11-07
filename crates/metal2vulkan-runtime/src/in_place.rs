@@ -52,8 +52,11 @@
 //!   Elsewhere the texture is a shadow (`shadow.rs`), its notice naming why ([`ShadowCause`]) and
 //!   counted by cause (`WorkCounts::host_texture_shadows_*`, and those that render apart).
 //! - **Before the verdict.** A texture made before its class's verdict for its access is known
-//!   waits for nothing: it is a shadow for its life ([`ShadowCause::CheckPending`], counted apart),
-//!   and the first such texture starts the check on a thread of its own. Its making waits for no
+//!   waits for nothing: it is a shadow ([`ShadowCause::CheckPending`], counted apart), and the
+//!   first such texture starts the check on a thread of its own. Once its class's verdicts are
+//!   known, it moves in place where they pass, at the commit of the device's only uncommitted
+//!   command buffer (`texture/storage_form.rs`, `WorkCounts::host_textures_moved_in_place`), and
+//!   stays a shadow where they do not, as a texture made then would be. Its making waits for no
 //!   check: the check's rounds take seconds on some devices and builds (1.8 s for the first
 //!   texture, waited for, on a Radeon 780M in a debug build), past what a program's first texture
 //!   may take, a guest's message that makes one among them. A device whose record holds the
@@ -226,6 +229,17 @@ impl Verdict {
             _ => None,
         }
     }
+}
+
+/// What a shadow over host pages made before its class's verdict for its access
+/// ([`ShadowCause::CheckPending`]) needs to move in place once the verdicts pass
+/// (`texture/storage_form.rs`): its class and usage, its declared plan and its descriptor, which
+/// the image in place is made of as the texture's would have been.
+pub(crate) struct PendingMove {
+    pub(crate) class: PagesClass,
+    pub(crate) usage: TextureUsage,
+    pub(crate) plan: crate::image_plan::ImagePlan,
+    pub(crate) descriptor: crate::texture_descriptor::TextureDescriptor,
 }
 
 /// Why a texture over host pages is a shadow and not an image in place.

@@ -5,6 +5,32 @@
 //! a later commit gives it an image with `STORAGE`, its texels copied in once, and every later pass
 //! fetches it in place.
 //!
+//! The same switch moves a shadow over host pages in place: a texture made before its pages'
+//! in-place verdicts were known is a shadow (`ShadowCause::CheckPending`, `in_place.rs`), an
+//! unknown and not a lack, so it waits for them, and a later commit gives it the image in place
+//! over its texels that it would have had, had they been known as it was made.
+//!
+//! - **Moves in place.** Such a shadow waits in [`StorageForms::moves`] until its pages' class
+//!   knows every verdict (`Device::in_place_verdicts_given`, at each verdict the check gives,
+//!   from its thread, and at the texture's making, which take no handle of a program's texture).
+//!   Where its usage and those verdicts take an image in place (`in_place::in_place`), as they
+//!   would for a texture made then, it waits for a switch; else it stays a shadow, as such a
+//!   texture is. At the switch's commit the image in place is made as the texture's making makes
+//!   it (`Device::in_place_image`: the declared plan, with the feedback loop usage and the
+//!   storage usage where the device makes them so, noted for a rebind and for its first move);
+//!   where the device makes none (a refused pitch, its placement), or the buffer's bytes were
+//!   detached or copied meanwhile, or a binding or a pass took a usage or render shadow of it, it
+//!   stays a shadow for good. Where every encoder of the switch's command buffer ran, the texture
+//!   presents the image in place from then on (`TextureShared::moved`), counted as a texture in
+//!   place over its class is, and in `WorkCounts::host_textures_moved_in_place`; its slots'
+//!   elements are written again as a storage form's are. No copy moves texels: between encoders
+//!   the shadow holds nothing the buffer lacks (`shadow.rs`, "The buffer is the truth"), and the
+//!   image in place is the buffer's bytes, whose uses hazard tracking orders after the shadow's
+//!   copies back and merges of every command buffer committed before (both name the buffer's
+//!   bytes). A view made of the texture before the move keeps the shadow, which goes on copying
+//!   in and back as a shadow over the same bytes beside an image in place does. The shadow's
+//!   image stays with the texture until it goes.
+//!
 //! - **Which textures.** A texture's own image (not a view's), the runtime's in memory of its own
 //!   (not shareable, not a heap's, a buffer's or the caller's), `Private`, its hazards tracked,
 //!   whose plan [`storage_candidate`] gives `STORAGE`, and whose `VkImage`
@@ -83,12 +109,14 @@ use crate::framebuffer_fetch::storage_candidate;
 use crate::heap_sets;
 use crate::image_barrier::{image_barrier, ImageDst};
 use crate::image_plan::ImagePlan;
+use crate::in_place::{self, Access as InPlaceAccess, PagesClass, Verdict};
 use crate::memory::Placement;
 use crate::tracker::Access;
 use crate::values::StorageMode;
 use crate::work_counts::Counters;
 use crate::Device;
 use ash::vk;
+use metal2vulkan::metal::TextureUsage;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock, Weak};
 use std::time::{Duration, Instant};
@@ -113,10 +141,44 @@ pub(crate) struct StorageForms {
     changed: Condvar,
     /// The textures waiting, and the switch under way: the switch's lock.
     waiting: Mutex<Waiting>,
+    /// The shadows over host pages made before their pages' in-place verdicts, until their
+    /// class's verdicts are known (`Device::in_place_verdicts_given`): then those whose verdicts
+    /// pass wait in [`waiting`](Self::waiting) to move in place, and the others stay shadows.
+    moves: Mutex<Vec<MoveWait>>,
     /// Run by [`close`](Self::close) right after the flag dropped and the lock went, before
     /// the wake: where a thread that ends a switch may be held up (`tests/storage_forms.rs`).
     #[cfg(test)]
     pause: Option<Box<dyn Fn() + Send + Sync>>,
+}
+
+/// A shadow over host pages made before its pages' in-place verdicts, waiting for them
+/// ([`StorageForms::moves`]): what decides whether it moves once they are known, read with no
+/// handle of the texture taken, so the thread that gives a verdict never holds a program's
+/// texture (whose last handle would then go on that thread, its ID given back after the
+/// program's release).
+struct MoveWait {
+    texture: Weak<TextureShared>,
+    class: PagesClass,
+    usage: TextureUsage,
+    /// The bytes of one of its texels.
+    texel: u64,
+}
+
+impl MoveWait {
+    /// Whether it moves, once its class knows every verdict: `None` while one is pending; else
+    /// whether its usage and those verdicts take an image in place (`in_place::in_place`), as
+    /// they would for a texture made now.
+    fn moves(&self, device: &Device) -> Option<bool> {
+        let checks = &device.shared().in_place;
+        let verdict = |class, access| checks.verdict(class, access);
+        let pending = |access| verdict(self.class, access) == Verdict::Pending;
+        if InPlaceAccess::ALL.into_iter().any(pending) {
+            return None;
+        }
+        let policy = device.compile_device().policy().host_page_textures;
+        let pages = (self.class, self.texel);
+        Some(in_place::in_place(policy, self.usage, pages, verdict).is_ok())
+    }
 }
 
 /// What [`StorageForms`]'s lock guards.
@@ -188,11 +250,26 @@ impl Drop for Freed {
 }
 
 /// A texture's storage form, made and its copy recorded into the committing command buffer's
-/// last part, to swap in once the commit submitted it.
+/// last part, or a shadow's image in place, made, to swap in once the commit submitted it.
 pub(crate) struct Prepared {
     texture: Texture,
-    plan: ImagePlan,
-    swapped: Arc<Mutex<Swapped>>,
+    kind: Kind,
+}
+
+/// What a [`Prepared`] swaps in.
+enum Kind {
+    /// A fetched render target's storage form: its plan, and its image.
+    Form {
+        plan: ImagePlan,
+        swapped: Arc<Mutex<Swapped>>,
+    },
+    /// A shadow's move in place (the module docs): the aliasing image's storage, until it moves
+    /// in, and what its count takes (the pages' class, whether the image is pitched, whether a
+    /// shader writes the texture).
+    Move {
+        storage: Mutex<Option<Storage>>,
+        counted: (PagesClass, bool, bool),
+    },
 }
 
 /// A switch under way (the module docs): its flag is up, and the textures it took from the
@@ -282,7 +359,7 @@ impl Texture {
         if self.0.parent.is_some() {
             return;
         }
-        let Storage::Image(image) = &self.0.storage else {
+        let Storage::Image(image) = self.storage() else {
             return;
         };
         let form = &image.form;
@@ -333,8 +410,10 @@ impl Texture {
     /// buffer's last part); `None` where the device refuses it, or the texture may no longer
     /// take it.
     fn prepare_storage_form(&self, core: &mut EncoderCore) -> Option<Prepared> {
-        let Storage::Image(image) = &self.0.storage else {
-            return None;
+        let image = match self.storage() {
+            Storage::Image(image) => image,
+            Storage::Shadow { .. } => return self.prepare_move(),
+            _ => return None,
         };
         if image.form.taken.get().is_some() || image.form.exported.load(Ordering::Relaxed) {
             return None;
@@ -412,9 +491,90 @@ impl Texture {
         core.retain(Arc::clone(&swapped));
         Some(Prepared {
             texture: self.clone(),
-            plan,
-            swapped,
+            kind: Kind::Form { plan, swapped },
         })
+    }
+
+    /// The image in place over a shadow's texels that it moves to (the module docs), made as
+    /// the texture's would have been had its pages' verdicts been known as it was made; `None`
+    /// where it may move no more (it moved, its image was handed out, its verdicts or its bytes
+    /// keep it a shadow, or the device makes no such image), and it stops waiting then.
+    fn prepare_move(&self) -> Option<Prepared> {
+        let Storage::Shadow { image, texels, .. } = &self.0.storage else {
+            return None;
+        };
+        let mut pending = lock(&self.0.pending_move);
+        let made = pending.as_ref().and_then(|pending| {
+            if self.0.moved.get().is_some() || self.shadowed_again() {
+                return None;
+            }
+            let device = &image.device;
+            let checks = &device.shared().in_place;
+            let verdict = |class, access| checks.verdict(class, access);
+            let policy = device.compile_device().policy().host_page_textures;
+            let (class, usage) = (pending.class, pending.usage);
+            let pages = (class, texels.texel_bytes());
+            let bytes = &texels.buffer;
+            if bytes.detached() || bytes.copied() {
+                return None;
+            }
+            in_place::in_place(policy, usage, pages, verdict).ok()?;
+            // As the texture would have taken it as it was made (`Device::storage_over_buffer`).
+            let storable = InPlaceAccess::Renders.takes(usage)
+                && !InPlaceAccess::Writes.takes(usage)
+                && in_place::STORED_TEXEL_BYTES.contains(&pages.1)
+                && verdict(class, InPlaceAccess::Writes) == Verdict::Passed;
+            let facts = (device.shared().textures).facts(device.compile_device().profile());
+            let made = (&**texels, class, storable);
+            let descriptor = &pending.descriptor;
+            let (alias, pitched) = device
+                .in_place_image(&pending.plan, descriptor, made, &facts)
+                .ok()?
+                .ok()?;
+            let storage = Storage::Alias {
+                image: alias,
+                texels: Arc::clone(texels),
+            };
+            Some(Kind::Move {
+                storage: Mutex::new(Some(storage)),
+                counted: (class, pitched, InPlaceAccess::Writes.takes(usage)),
+            })
+        });
+        if made.is_none() {
+            *pending = None;
+        }
+        drop(pending);
+        Some(Prepared {
+            texture: self.clone(),
+            kind: made?,
+        })
+    }
+
+    /// Whether a binding or a pass took an image of the texture's other than its shadow, made
+    /// from it, which a move would leave behind: a usage shadow (`texture/usage_shadow.rs`) or a
+    /// render shadow (`texture/ycbcr_image.rs`).
+    fn shadowed_again(&self) -> bool {
+        self.0.usage_shadow.get().is_some() || lock(&self.0.render_shadow).is_some()
+    }
+
+    /// Wait, a shadow over host pages made before its pages' in-place verdicts, to move in
+    /// place once they pass (the module docs): `pending` what it moves with.
+    pub(crate) fn wait_to_move_in_place(&self, pending: in_place::PendingMove) {
+        let Storage::Shadow { texels, .. } = &self.0.storage else {
+            return;
+        };
+        let wait = MoveWait {
+            texture: self.downgrade(),
+            class: pending.class,
+            usage: pending.usage,
+            texel: texels.texel_bytes(),
+        };
+        *lock(&self.0.pending_move) = Some(pending);
+        let device = self.device();
+        let forms = &device.shared().textures.storage_forms;
+        lock(&forms.moves).push(wait);
+        // The verdicts may have come since it asked them.
+        device.in_place_verdicts_given();
     }
 }
 
@@ -450,7 +610,10 @@ impl Prepared {
     /// its storage form's, where it swapped in; `None` where the texture's image was handed out
     /// meanwhile, the made image then going with the command buffer.
     fn swap_in(&self) -> Option<(u64, u64)> {
-        let Storage::Image(image) = &self.texture.0.storage else {
+        let Kind::Form { plan, swapped } = &self.kind else {
+            return None;
+        };
+        let Storage::Image(image) = self.texture.storage() else {
             return None;
         };
         let Owner::Runtime { placement: old, .. } = &image.owner else {
@@ -460,13 +623,13 @@ impl Prepared {
         if image.form.exported.load(Ordering::Relaxed) || image.form.taken.get().is_some() {
             return None;
         }
-        let mut swapped = lock(&self.swapped);
+        let mut swapped = lock(swapped);
         let bytes = swapped.memory.placement.size();
         // The image frees its storage form's memory from now on (`Image::drop`); its first
         // memory goes with its first `VkImage`, as the command buffer completes.
         let made = std::mem::replace(&mut swapped.memory.placement, old.handed_over());
         let taken = Taken {
-            plan: self.plan.clone(),
+            plan: plan.clone(),
             placement: made,
         };
         if let Err(taken) = image.form.taken.set(taken) {
@@ -484,6 +647,25 @@ impl Prepared {
             .views
             .extend(views.drain().map(|(_, view)| view));
         Some((old.size(), bytes))
+    }
+
+    /// Move a shadow in place (the module docs): from now on the texture presents the image in
+    /// place over its texels (`TextureShared::moved`). Whether it moved: not where a binding or
+    /// a pass took another image of it meanwhile, the image made then going with the command
+    /// buffer.
+    fn move_in(&self) -> bool {
+        let Kind::Move { storage, .. } = &self.kind else {
+            return false;
+        };
+        let texture = &self.texture;
+        if texture.shadowed_again() {
+            return false;
+        }
+        let Some(storage) = lock(storage).take() else {
+            return false;
+        };
+        *lock(&texture.0.pending_move) = None;
+        texture.0.moved.set(storage).is_ok()
     }
 }
 
@@ -548,6 +730,41 @@ impl Device {
         drop(riding);
     }
 
+    /// The device's in-place check gave a verdict, or settled (`in_place_check.rs`): each shadow
+    /// made before its pages' verdicts whose class knows them all now stops waiting for them, to
+    /// wait for a switch that moves it in place where they pass, or to stay a shadow where they do
+    /// not (the module docs); those gone stop waiting. No texture's handle is taken: the caller
+    /// may be the check's thread. One lock where no shadow waits.
+    pub(crate) fn in_place_verdicts_given(&self) {
+        let forms = &self.shared().textures.storage_forms;
+        let mut ready = Vec::new();
+        {
+            let mut moves = lock(&forms.moves);
+            if moves.is_empty() {
+                return;
+            }
+            moves.retain(|wait| {
+                if wait.texture.strong_count() == 0 {
+                    return false;
+                }
+                match wait.moves(self) {
+                    None => true,
+                    Some(moves) => {
+                        if moves {
+                            ready.push(Weak::clone(&wait.texture));
+                        }
+                        false
+                    }
+                }
+            });
+        }
+        if !ready.is_empty() {
+            let mut waiting = lock(&forms.waiting);
+            waiting.textures.extend(ready);
+            forms.wanted.store(waiting.textures.len(), Ordering::SeqCst);
+        }
+    }
+
     /// Whether a texture waits for its storage form: one atomic read, each commit's gate.
     pub(crate) fn storage_forms_wanted(&self) -> bool {
         let forms = &self.shared().textures.storage_forms;
@@ -608,21 +825,36 @@ impl Device {
     ) {
         let shared = self.shared();
         let forms = &shared.textures.storage_forms;
-        let swapped: Vec<(&Prepared, (u64, u64))> = if ran && !waiting.given_up {
-            prepared
-                .iter()
-                .filter_map(|form| form.swap_in().map(|bytes| (form, bytes)))
-                .collect()
-        } else {
-            let again = prepared.iter().map(|form| form.texture.downgrade());
-            waiting.textures.extend(again);
-            Vec::new()
-        };
-        if !swapped.is_empty() {
+        let (swapped, moved): (Vec<(&Prepared, (u64, u64))>, Vec<&Prepared>) =
+            if ran && !waiting.given_up {
+                let swapped = prepared
+                    .iter()
+                    .filter_map(|form| form.swap_in().map(|bytes| (form, bytes)))
+                    .collect();
+                (swapped, prepared.iter().filter(|p| p.move_in()).collect())
+            } else {
+                let again = prepared.iter().map(|form| form.texture.downgrade());
+                waiting.textures.extend(again);
+                (Vec::new(), Vec::new())
+            };
+        if !swapped.is_empty() || !moved.is_empty() {
             // The texture slots' elements view the new images; no command buffer that may read
             // them is pending (the module docs).
             lock(&shared.resource_ids).renew_textures();
             heap_sets::renew(self);
+        }
+        // Each move is counted as a texture in place over its class is, before the flag drops.
+        for form in &moved {
+            if let Kind::Move { counted, .. } = &form.kind {
+                let (class, pitched, written) = *counted;
+                shared.counts.host_texture_in_place(class, pitched, written);
+                shared.counts.host_texture_moved_in_place();
+                let feedback = metal2vulkan::vk::ImageUsageFlags::ATTACHMENT_FEEDBACK_LOOP_EXT;
+                let plan = form.texture.image_plan();
+                if plan.is_ok_and(|plan| plan.usage.contains(feedback)) {
+                    shared.counts.feedback_loop_alias_image();
+                }
+            }
         }
         // The lock goes, then the announcements, which run the program's callback.
         forms.close(waiting, &shared.counts, swapped.len());

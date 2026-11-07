@@ -3190,7 +3190,7 @@ impl Device {
         let (textures, _) = heap.textures_from(0);
         let mut swaps: Vec<ImageSwap> = Vec::new();
         for texture in &textures {
-            let Storage::Image(image) = &texture.0.storage else {
+            let Storage::Image(image) = texture.storage() else {
                 continue;
             };
             let Owner::Heap(place) = &image.owner else {
@@ -3264,7 +3264,7 @@ impl Device {
             .facts(self.compile_device().profile());
         let (textures, _) = heap.textures_from(0);
         for texture in &textures {
-            let Storage::Image(image) = &texture.0.storage else {
+            let Storage::Image(image) = texture.storage() else {
                 continue;
             };
             let Owner::Heap(place) = &image.owner else {

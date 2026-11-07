@@ -285,7 +285,7 @@ impl Texture {
     /// texture's own first level and slice, so the binding's level 0 at a fragment's
     /// coordinate is the attachment's texel at that pixel.
     pub(crate) fn snapshot_color(&self, layout: &PassLayout) -> Option<usize> {
-        let image = match &self.0.storage {
+        let image = match self.storage() {
             Storage::Image(image) | Storage::Shadow { image, .. } => image,
             Storage::Alias { image, .. } if self.image_over_buffer() => image,
             _ => return None,

@@ -379,6 +379,7 @@ pub(crate) struct Counters {
     in_place_checks_failed: AtomicU64,
     in_place_checks_unchecked: AtomicU64,
     in_place_checks_recalled: AtomicU64,
+    host_textures_moved_in_place: AtomicU64,
     fresh_page_buffers_made: AtomicU64,
     fresh_page_bytes: AtomicU64,
     new_buffer_bytes_cleared: AtomicU64,
@@ -2997,6 +2998,12 @@ impl Counters {
     /// A class's verdict was read from the record of an earlier check (`in_place.rs`).
     pub(crate) fn in_place_check_recalled(&self) {
         (self.in_place_checks_recalled).fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A shadow over host pages made before its pages' in-place verdicts moved in place once
+    /// they passed (`texture/storage_form.rs`).
+    pub(crate) fn host_texture_moved_in_place(&self) {
+        (self.host_textures_moved_in_place).fetch_add(1, Ordering::Relaxed);
     }
 
     /// A buffer was made in `bytes` of fresh pages it imported, which read zero unwritten
@@ -5911,7 +5918,8 @@ pub struct WorkCounts {
     pub host_texture_shadows_store_width: u64,
     /// Textures over host pages made shadows because the device's check of their class and an
     /// access of theirs (one that reads, renders or a shader writes) had not answered yet (a
-    /// first session's, before the verdicts are kept).
+    /// first session's, before the verdicts are kept): each moves in place once they pass
+    /// (`host_textures_moved_in_place`).
     pub host_texture_shadows_check_pending: u64,
     /// Textures over host pages made shadows because the device's check of their class and
     /// access found a byte changed.
@@ -5960,6 +5968,11 @@ pub struct WorkCounts {
     /// Classes and accesses whose verdict was read from the record of an earlier check of the
     /// same driver, device and runtime: no check ran for them.
     pub in_place_checks_recalled: u64,
+    /// Textures over host pages made shadows before their pages' in-place verdicts (counted in
+    /// `host_texture_shadows_check_pending`) that moved in place once the verdicts passed, at
+    /// the commit of the device's only uncommitted command buffer (`texture/storage_form.rs`):
+    /// each is counted in `host_textures_in_place` too from then on.
+    pub host_textures_moved_in_place: u64,
     /// Buffers of the runtime's own made in fresh anonymous pages imported by their pointer
     /// (`VK_EXT_external_memory_host`), which read zero with nothing written: host-visible ones
     /// longer than half a pooled block, not of a heap, where the device takes such pages. A
@@ -7186,6 +7199,8 @@ impl Device {
             in_place_checks_failed: counters.in_place_checks_failed.load(Ordering::Relaxed),
             in_place_checks_unchecked: counters.in_place_checks_unchecked.load(Ordering::Relaxed),
             in_place_checks_recalled: counters.in_place_checks_recalled.load(Ordering::Relaxed),
+            host_textures_moved_in_place: (counters.host_textures_moved_in_place)
+                .load(Ordering::Relaxed),
             fresh_page_buffers_made: counters.fresh_page_buffers_made.load(Ordering::Relaxed),
             fresh_page_bytes: counters.fresh_page_bytes.load(Ordering::Relaxed),
             new_buffer_bytes_cleared: counters.new_buffer_bytes_cleared.load(Ordering::Relaxed),

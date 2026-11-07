@@ -88,7 +88,7 @@ impl Texture {
         if self.0.parent.is_some() {
             return None;
         }
-        match &self.0.storage {
+        match self.storage() {
             Storage::Image(image) => match &image.owner {
                 Owner::Runtime {
                     shareable,

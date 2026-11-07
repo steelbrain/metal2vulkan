@@ -165,7 +165,7 @@ impl Texture {
         call: &'static str,
         record: &ViewRecord,
     ) -> Result<Storage, Error> {
-        let Storage::Shadow { texels, .. } = &self.0.storage else {
+        let Storage::Shadow { texels, .. } = self.storage() else {
             return Err(internal("a rotated texture without its plane's rows"));
         };
         let rotation = record.presented.rotation;

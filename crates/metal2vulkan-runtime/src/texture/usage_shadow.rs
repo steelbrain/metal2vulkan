@@ -84,7 +84,7 @@ impl Texture {
             true => (ImageUsageFlags::STORAGE, TextureUsage::SHADER_WRITE),
             false => (ImageUsageFlags::SAMPLED, TextureUsage::SHADER_READ),
         };
-        match &self.0.storage {
+        match self.storage() {
             Storage::Image(image)
             | Storage::Alias { image, .. }
             | Storage::Shadow { image, .. } => {
@@ -251,7 +251,7 @@ impl Texture {
         if record.presented.rotation != 0 {
             return Err(Error::NotImplemented(RuntimeGap::RotatedTexture));
         }
-        let (image, copies, truth) = match &self.0.storage {
+        let (image, copies, truth) = match self.storage() {
             Storage::Image(image) => {
                 let base = match &image.owner {
                     Owner::ViewShadow(shadow) => &shadow.base,
@@ -302,7 +302,7 @@ impl Texture {
                     (None, None),
                 )?;
                 // The texture's own image lies in the bytes too where it aliases them.
-                if matches!(self.0.storage, Storage::Alias { .. }) {
+                if matches!(self.storage(), Storage::Alias { .. }) {
                     copies.backing = copies.backing.aliased();
                 }
                 (

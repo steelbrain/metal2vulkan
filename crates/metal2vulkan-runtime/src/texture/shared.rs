@@ -166,7 +166,7 @@ impl Device {
         }
         let record = &texture.0.record;
         self.check_texture_placement(CALL, placement, record.usage, record.texture_type)?;
-        let storage = match &texture.0.storage {
+        let storage = match texture.storage() {
             Storage::Image(image) => Storage::Image(Arc::clone(image)),
             Storage::Texels(texels) => Storage::Texels(Arc::clone(texels)),
             Storage::Alias { .. } | Storage::Shadow { .. } => {
@@ -188,7 +188,7 @@ impl Texture {
     /// never a view.
     pub fn is_shareable(&self) -> bool {
         self.0.parent.is_none()
-            && match &self.0.storage {
+            && match self.storage() {
                 Storage::Image(image) => {
                     matches!(
                         image.owner,

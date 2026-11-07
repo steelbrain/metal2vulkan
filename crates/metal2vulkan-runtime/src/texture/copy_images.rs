@@ -78,7 +78,7 @@ fn covers(have: &ImageKey, want: &ImageKey) -> bool {
 /// The bytes of memory of `texture`'s image, where the runtime placed it in memory of its own; 0
 /// for any other.
 fn image_bytes(texture: &Texture) -> u64 {
-    match &texture.0.storage {
+    match texture.storage() {
         Storage::Image(image) => match &image.owner {
             Owner::Runtime { placement, .. } => placement.size(),
             _ => 0,

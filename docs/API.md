@@ -346,7 +346,9 @@ through an unsigned-integer view of 4, 8 or 16-byte texels while the CPU writes 
 them (a program's atomics are among no round). It runs
 on a thread of its own, which the first such texture starts; a texture made before its kind of
 pages and access has its verdict is a shadow, made without waiting for the check
-(`WorkCounts::host_texture_shadows_check_pending`). It runs once per driver and driver version: its
+(`WorkCounts::host_texture_shadows_check_pending`), and moves in place, with no copy, at a quiet
+commit once its kind's verdicts pass (`WorkCounts::host_textures_moved_in_place`; docs/HOWTO.md
+says which commits). It runs once per driver and driver version: its
 verdicts are kept in the shader cache's
 directory, named by the driver and the check's own version, not the runtime's (a device without
 one checks once per process), and recalled as the next device is made

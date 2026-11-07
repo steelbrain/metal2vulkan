@@ -77,7 +77,7 @@ impl Texture {
     /// call waits for (`Image::settle`): the device's check's round (`in_place_check.rs`). `None`
     /// where the texture is no image aliasing its bytes.
     pub(crate) fn settle_in_place(&self) -> Option<Result<(), Error>> {
-        match &self.0.storage {
+        match self.storage() {
             Storage::Alias { image, .. } => Some(image.settle()),
             _ => None,
         }
@@ -90,7 +90,7 @@ impl Texture {
     /// `None` where the texture is no image aliasing its bytes, or its image has no feedback loop
     /// usage.
     pub(crate) fn settle_feedback_moves(&self) -> Option<Result<(), Error>> {
-        let Storage::Alias { image, .. } = &self.0.storage else {
+        let Storage::Alias { image, .. } = self.storage() else {
             return None;
         };
         let plan = image.plan();
@@ -131,7 +131,7 @@ impl Texture {
         texel: ShadowTexelView,
         (width, height): (u32, u32),
     ) -> Option<Result<(), Error>> {
-        let Storage::Alias { image, .. } = &self.0.storage else {
+        let Storage::Alias { image, .. } = self.storage() else {
             return None;
         };
         use metal2vulkan::vk::{

@@ -281,6 +281,8 @@ fn run(weak: crate::device::WeakDevice) {
             let checks = &device.shared().in_place;
             checks.set(class, access, verdict);
             device.shared().counts.in_place_check_ran(verdict);
+            // Shadows made before their verdicts that know them now may move in place.
+            device.in_place_verdicts_given();
         }
     }
     let Some(device) = weak.hold() else {
@@ -307,6 +309,7 @@ fn run(weak: crate::device::WeakDevice) {
             .write_record_soon(&record_name(&identity), bytes);
     }
     checks.settle(Some(started.elapsed()));
+    device.in_place_verdicts_given();
 }
 
 /// Whether the runtime found `device`'s loader word overwritten (`loader_word.rs`): the check then

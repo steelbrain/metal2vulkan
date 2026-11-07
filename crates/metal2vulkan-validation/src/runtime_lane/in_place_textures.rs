@@ -46,6 +46,20 @@
 //!   `HostPageTexturePolicy::Shadow` every one is the exact form's (`host_texture_shadows_exact`).
 //!   Each shadow that renders also counts in `host_texture_shadows_render_target`, and each one a
 //!   shader writes in `host_texture_shadows_shader_write`.
+//! - [`a_texture_made_before_its_verdict_moves_in_place_once_it_passes`], under the validation
+//!   layer: on a device whose check has not run, a 256x64 `BGRA8Unorm` texture of `ShaderRead` and
+//!   `RenderTarget` usage over a no-copy buffer of anonymous pages, of packed rows, is a shadow
+//!   made before its verdict (`host_texture_shadows_check_pending`; `vk_image` answers none), and a
+//!   blit reads the pages' bytes through it. Once the check answered, a texture of the same shape
+//!   over other pages takes the path its verdicts give, and by the end of the next command buffer
+//!   (a blit that reads the first texture, committed while no other is open) the first has moved
+//!   to it: where the second is in place, the first is in place, moved at that commit or at one
+//!   of the check's own passes, each committed while no other command buffer was open
+//!   (`host_textures_moved_in_place`, `host_textures_in_place`; `vk_image` answers one); a blit
+//!   then reads a CPU write made after
+//!   its commit and before it runs with no shadow copy (`shadow_copies`), and a pass that clears
+//!   and stores it writes the clear into the pages, every byte past its texels kept; else it stays
+//!   a shadow, no move counted. Printed (`IN-PLACE-MOVE`): each texture's path and the counts.
 //! - [`a_failed_check_keeps_the_shadow_and_no_record`], under the validation layer: a device made
 //!   to fail its check (`DeviceOptions::fail_in_place_check`) answers failed or unchecked for every
 //!   class and makes such a texture a shadow counted as the failed check's, never in place, and
@@ -159,6 +173,15 @@ pub(super) fn sampled(
 ) -> Texture {
     let mut d = TextureDescriptor::texture_2d(format, w, h, false);
     d.usage = TextureUsage::SHADER_READ;
+    d.resource_options = buffer.resource_options();
+    buffer.new_texture(&d, 0, bpr).unwrap()
+}
+
+/// A texture of `format`, `w` by `h`, of `ShaderRead` and `RenderTarget` usage, over `buffer`
+/// with rows `bpr` apart.
+fn rendered(buffer: &Buffer, format: PixelFormat, (w, h, bpr): (u64, u64, u64)) -> Texture {
+    let mut d = TextureDescriptor::texture_2d(format, w, h, false);
+    d.usage = TextureUsage::SHADER_READ | TextureUsage::RENDER_TARGET;
     d.resource_options = buffer.resource_options();
     buffer.new_texture(&d, 0, bpr).unwrap()
 }
@@ -373,6 +396,189 @@ fn sampled_textures_over_host_pages_take_the_path_their_check_answered() {
                 drop((texture, buffer));
                 drop(mapping);
             }
+        }
+    }
+    layer_reported_nothing_at_all(&messages);
+    assert!(lapses.is_empty(), "{}", lapses.join("\n"));
+}
+
+/// The path of a texture over host pages: its image in place (`vk_image` answers one) or a shadow.
+fn path_of(texture: &Texture) -> &'static str {
+    // SAFETY: the handle is only compared, while the texture lives.
+    match unsafe { texture.vk_image() } {
+        Some(_) => "in place",
+        None => "shadow",
+    }
+}
+
+#[test]
+fn a_texture_made_before_its_verdict_moves_in_place_once_it_passes() {
+    let cache = ScratchCache::new().unwrap();
+    let messages = Messages::default();
+    let mut lapses = Vec::new();
+    {
+        let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), in_place).unwrap();
+        let queue = device.new_command_queue().unwrap();
+        let hold = device.new_shared_event().unwrap();
+        let (format, texel, w, h) = (PixelFormat::BGRA8Unorm, 4u64, 256u64, 64u64);
+        let bpr = w * texel;
+        let shape = (w, h, texel);
+        let len = ((bpr * h) as usize + GUEST_PAGE).next_multiple_of(GUEST_PAGE);
+        let mappings = [Mapping::anonymous(len), Mapping::anonymous(len)];
+        let mut buffers = Vec::new();
+        for mapping in &mappings {
+            // SAFETY: the mappings outlive the buffers and the textures (dropped first).
+            match unsafe {
+                no_copy(
+                    &device,
+                    mapping.pointer(),
+                    len,
+                    ResourceOptions::default(),
+                    None,
+                )
+            } {
+                Ok(buffer) => buffers.push(buffer),
+                Err(error) if not_importable(&error) => {
+                    eprintln!("IN-PLACE-MOVE: the device imports no host memory: {error:?}");
+                    return;
+                }
+                Err(error) => panic!("new_buffer_with_bytes_no_copy: {error:?}"),
+            }
+        }
+        let write = |buffer: &Buffer, bytes: &[u8]| {
+            let contents = buffer.contents().unwrap();
+            // SAFETY: the buffer's first `len` bytes, which no command uses meanwhile (a blit
+            // that reads them waits for the event the CPU signals after this).
+            unsafe { std::ptr::copy_nonoverlapping(bytes.as_ptr(), contents.as_ptr(), bytes.len()) }
+        };
+        let pages = |buffer: &Buffer| -> Vec<u8> {
+            let contents = buffer.contents().unwrap();
+            // SAFETY: the buffer's first `len` bytes, which no command writes any longer.
+            unsafe { std::slice::from_raw_parts(contents.as_ptr(), len) }.to_vec()
+        };
+        // A blit's read of `texture`, its command buffer committed while no other is open.
+        let read = |texture: &Texture| -> Vec<u8> {
+            let out = device
+                .new_buffer(bpr * h, ResourceOptions::shared())
+                .unwrap();
+            let command_buffer = queue.command_buffer().unwrap();
+            let mut blit = command_buffer.blit_command_encoder().unwrap();
+            blit.copy_from_texture_to_buffer(
+                texture,
+                0,
+                0,
+                Origin::new(0, 0, 0),
+                Size::new(w, h, 1),
+                &out,
+                0,
+                bpr,
+                bpr * h,
+                BlitOption::None,
+            )
+            .unwrap();
+            blit.end_encoding().unwrap();
+            command_buffer.commit().unwrap();
+            command_buffer.wait_until_completed_for(WAIT).unwrap();
+            assert_eq!(command_buffer.error(), None);
+            let contents = out.contents().unwrap();
+            // SAFETY: the buffer's `bpr * h` bytes, which no command writes any longer.
+            unsafe { std::slice::from_raw_parts(contents.as_ptr(), (bpr * h) as usize) }.to_vec()
+        };
+        let first = counting(len, 7);
+        write(&buffers[0], &first);
+        let before = device.work_counts();
+        let early = rendered(&buffers[0], format, (w, h, bpr));
+        let made = device.work_counts();
+        let pending =
+            made.host_texture_shadows_check_pending - before.host_texture_shadows_check_pending;
+        let early_path = path_of(&early);
+        if (early_path, pending) != ("shadow", 1) {
+            lapses.push(format!(
+                "made before its verdict: {early_path}, counted pending {pending}"
+            ));
+        }
+        if read(&early) != texels_of(&first, shape, bpr) {
+            lapses.push("before the verdict: a blit read other than the pages".to_owned());
+        }
+        let before = device.work_counts();
+        settled(&device);
+        // A quiet commit after the verdicts moves the first texture where a texture made now is
+        // in place: the check's own (its passes are committed while no other command buffer is
+        // open) or the program's next.
+        let moved_by_the_check =
+            device.work_counts().host_textures_moved_in_place - before.host_textures_moved_in_place;
+        let late = rendered(&buffers[1], format, (w, h, bpr));
+        let late_path = path_of(&late);
+        let moved_read = read(&early);
+        let after = device.work_counts();
+        let moved = after.host_textures_moved_in_place - before.host_textures_moved_in_place;
+        // Counted in place as it moved, beside the second where that is in place.
+        let late_in_place = u64::from(late_path == "in place");
+        let in_place = after.host_textures_in_place - before.host_textures_in_place - late_in_place;
+        let path = path_of(&early);
+        eprintln!(
+            "IN-PLACE-MOVE on {}: made before its verdict: {early_path} (pending {pending}); one \
+             made after it: {late_path}; the first after the next commit: {path} (moved {moved}, \
+             {moved_by_the_check} of them at the check's commits, in place {in_place})",
+            device.name()
+        );
+        if moved_read != texels_of(&first, shape, bpr) {
+            lapses.push("at the move: a blit read other than the pages".to_owned());
+        }
+        let expected = match late_path {
+            "in place" => ("in place", 1, 1),
+            _ => ("shadow", 0, 0),
+        };
+        if (path, moved, in_place) != expected {
+            lapses.push(format!(
+                "after the next commit: {path} (moved {moved}, in place {in_place}), where one \
+                 made after the verdict is {late_path}"
+            ));
+        }
+        // A CPU write made after the commit and before the blit runs, read with no copy.
+        let later = counting(len, 101);
+        let before = device.work_counts();
+        let held = read_held(&queue, &early, shape, &hold, 1, || {
+            write(&buffers[0], &later)
+        });
+        let after = device.work_counts();
+        let copies = after.shadow_copies - before.shadow_copies;
+        if held != texels_of(&later, shape, bpr) {
+            lapses.push("after the move: a blit read other than the CPU wrote".to_owned());
+        }
+        eprintln!(
+            "IN-PLACE-MOVE on {}: a held read after it took {copies} shadow copies",
+            device.name()
+        );
+        if path == "in place" && copies != 0 {
+            lapses.push(format!("in place, a read took {copies} shadow copies"));
+        }
+        // A pass that clears and stores it: the clear in the pages, the bytes past them kept.
+        let mut pass = RenderPassDescriptor::new();
+        let color = &mut pass.color_attachments[0];
+        color.texture = Some(early.clone());
+        color.load_action = LoadAction::Clear;
+        color.store_action = StoreAction::Store;
+        color.clear_color = ClearColor::new(0.0, 1.0, 0.0, 1.0);
+        let command_buffer = queue.command_buffer().unwrap();
+        let encoder = command_buffer.render_command_encoder(&pass).unwrap();
+        encoder.end_encoding().unwrap();
+        command_buffer.commit().unwrap();
+        command_buffer.wait_until_completed_for(WAIT).unwrap();
+        assert_eq!(command_buffer.error(), None);
+        let cleared = pages(&buffers[0]);
+        let green = [0x00, 0xff, 0x00, 0xff];
+        let texels = (bpr * h) as usize;
+        if !cleared[..texels].chunks(4).all(|t| t == green) {
+            lapses.push("the pass's clear is not in the pages".to_owned());
+        }
+        if cleared[texels..] != later[texels..] {
+            lapses.push("the pass changed a byte past the texels".to_owned());
+        }
+        drop((early, late, buffers));
+        drop(mappings);
+        for notice in messages.take_notices() {
+            eprintln!("IN-PLACE-MOVE notice: {}", notice.text);
         }
     }
     layer_reported_nothing_at_all(&messages);
