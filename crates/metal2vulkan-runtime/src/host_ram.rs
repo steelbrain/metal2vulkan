@@ -26,15 +26,18 @@
 //!   source and the device's held imports add to the cost of every submission (RADV lists every
 //!   import in each submission: measured with a probe on the Radeon 780M, Mesa 26.2.6, Linux
 //!   7.3.1, an 8 GiB RAM held as 128 dma-bufs of 64 MiB raised a submission's median from 14 us
-//!   to 60 to 88 us, as 3 of 2730 MiB to 16 us), a chunk is as long as one dma-buf of the
-//!   source holds ([`HostRam::with_largest_dma_buf`]) and the device's
+//!   to 60 to 88 us, as 3 of 2730 MiB to 16 us), a chunk is as long as [`LONGEST_LISTED_CHUNK`]
+//!   (256 MiB), one dma-buf of the source ([`HostRam::with_largest_dma_buf`]) and the device's
 //!   `maxMemoryAllocationSize`, `maxBufferSize` and `maxStorageBufferRange` take, in whole
-//!   [`CHUNK_BYTES`] ([`listed_chunk_bytes`]): an 8 GiB RAM is three imports where RADV's
-//!   allocation limit is just under 4 GiB. There no thread imports ahead: a chunk is imported
-//!   once an object over it asks, by a thread of the device's ([`listed_chunks`]), off the
-//!   object's thread, as one long chunk's import pins all its pages (measured with a probe on the
-//!   Radeon 780M and the RX 7900 XTX, Mesa 26.2.6: 660 to 692 ms for 2.7 GiB, which a making
-//!   that waited for it took). Meanwhile each object over it is bound in an import of its own run
+//!   [`CHUNK_BYTES`] ([`listed_chunk_bytes`]): an 8 GiB RAM is 32 imports at most. The cap is
+//!   a bound on memory, not on speed: a chunk's import pins every page of it, udmabuf allocating
+//!   those the guest never touched (they stay allocated in the guest's file once the chunk is
+//!   freed), so each chunk an object lies in makes all its bytes resident (a 16 GiB guest on the
+//!   Radeon 780M, about 2.5 GiB chunks: 4.4 GiB more of QEMU's RAM resident than without the
+//!   source). There no thread imports ahead: a chunk is imported once an object over it asks, by
+//!   a thread of the device's ([`listed_chunks`]), off the object's thread, as a long chunk's
+//!   import pins all its pages (measured with a probe on the Radeon 780M and the RX 7900 XTX,
+//!   Mesa 26.2.6: 660 to 692 ms for 2.7 GiB, which a making that waited for it took). Meanwhile each object over it is bound in an import of its own run
 //!   alone, as below; those after it in the chunk's import. A buffer's run import is one more
 //!   listed import, released while idle as a no-copy buffer's own import is (`host_residency.rs`),
 //!   and the buffer is bound in the chunk at its next use; a heap's, or a buffer's whose address
@@ -574,12 +577,20 @@ impl Plan {
     };
 }
 
+/// The longest chunk of a RAM whose plan is [`Plan::listed`], whatever the source's and the
+/// device's limits take ([`listed_chunk_bytes`]). A chunk's import pins every page of it: udmabuf
+/// allocates each page of the file range it is asked for, those the guest never touched too, and
+/// they stay allocated in the guest's file after the import is freed. So a chunk's length bounds
+/// what one object over it makes resident of the RAM the guest left untouched, while each listed
+/// chunk costs every submission about half a microsecond (the module docs).
+pub(crate) const LONGEST_LISTED_CHUNK: u64 = 256 << 20;
+
 /// The bytes of each chunk of a RAM on a device whose held imports add to the cost of every
-/// submission ([`Plan::listed`]): as many whole [`CHUNK_BYTES`] as one dma-buf of the RAM's source
-/// holds (`largest_dma_buf`) and the device's `maxMemoryAllocationSize`, `maxBufferSize` (a chunk
-/// is one `VkBuffer`; 0 where the device states none) and `maxStorageBufferRange` (a copy binds a
-/// chunk's whole `VkBuffer` as a storage buffer, `host_ram/copy.rs`) all take; [`CHUNK_BYTES`]
-/// where any is shorter.
+/// submission ([`Plan::listed`]): as many whole [`CHUNK_BYTES`] as [`LONGEST_LISTED_CHUNK`], one
+/// dma-buf of the RAM's source (`largest_dma_buf`) and the device's `maxMemoryAllocationSize`,
+/// `maxBufferSize` (a chunk is one `VkBuffer`; 0 where the device states none) and
+/// `maxStorageBufferRange` (a copy binds a chunk's whole `VkBuffer` as a storage buffer,
+/// `host_ram/copy.rs`) all take; [`CHUNK_BYTES`] where any is shorter.
 pub(crate) fn listed_chunk_bytes(
     largest_dma_buf: u64,
     allocation: u64,
@@ -587,7 +598,10 @@ pub(crate) fn listed_chunk_bytes(
     storage: u64,
 ) -> u64 {
     let buffer = if buffer == 0 { u64::MAX } else { buffer };
-    let most = largest_dma_buf.min(allocation).min(buffer).min(storage);
+    let most = (LONGEST_LISTED_CHUNK.min(largest_dma_buf))
+        .min(allocation)
+        .min(buffer)
+        .min(storage);
     (most / CHUNK_BYTES).max(1) * CHUNK_BYTES
 }
 
@@ -1512,19 +1526,20 @@ impl Device {
     ///
     /// Where the device's held imports add to the cost of every submission and it imports the
     /// RAM's dma-bufs (RADV), each listed import costs every submission, so the RAM is imported
-    /// in a few long chunks instead: as long as one dma-buf of its source holds
+    /// in fewer, longer chunks instead: as long as one dma-buf of its source holds
     /// ([`HostRam::with_largest_dma_buf`]) and the device's `maxMemoryAllocationSize`,
-    /// `maxBufferSize` and `maxStorageBufferRange` take, in whole 64 MiB. There the thread
-    /// imports nothing ahead: the first object over a chunk not imported asks it for the chunk,
-    /// which it imports off the object's thread (a long chunk's import pins all its pages,
-    /// hundreds of milliseconds), and that object and those over the chunk meanwhile are bound in
-    /// imports of their own runs alone, as above; a buffer's is released while idle, the buffer
-    /// bound in the chunk at its next use, and a heap's, or a buffer's whose address was handed
-    /// out, stays while it lives. A chunk stays imported once imported, as the first submission
-    /// after a chunk's import waits while the kernel writes its page tables (hundreds of
-    /// milliseconds for a chunk of 4 GiB on a Radeon 780M), where the whole RAM fits in half the
-    /// device's memory heaps with unified memory, else in three quarters of those that are not
-    /// device-local. Where it does not, the thread releases a chunk no object nor pending command
+    /// `maxBufferSize` and `maxStorageBufferRange` take, in whole 64 MiB, and never past 256 MiB
+    /// (a chunk's import makes every page of it resident, those the guest never touched too).
+    /// There the thread imports nothing ahead: the first object over a chunk not imported asks it
+    /// for the chunk, which it imports off the object's thread (a chunk's import pins all its
+    /// pages: 660 to 692 ms for 2.7 GiB on a Radeon 780M), and that object and those over the
+    /// chunk meanwhile are bound in imports of their own runs alone, as above; a buffer's is
+    /// released while idle, the buffer bound in the chunk at its next use, and a heap's, or a
+    /// buffer's whose address was handed out, stays while it lives. A chunk stays imported once
+    /// imported, as the first submission after a chunk's import waits while the kernel writes its
+    /// page tables (hundreds of milliseconds for a chunk of 4 GiB in 4 KiB pages on a Radeon
+    /// 780M), where the whole RAM fits in half the device's memory heaps with unified memory, else
+    /// in three quarters of those that are not device-local. Where it does not, the thread releases a chunk no object nor pending command
     /// buffer held for 2 s, the window doubled at each release of the chunk up to 64 s
     /// (`WorkCounts::host_ram_chunks_released`); the next object over it asks for it again.
     ///
@@ -2084,12 +2099,24 @@ mod tests {
     #[test]
     fn listed_chunks_are_as_long_as_every_limit_takes_in_whole_64_mib() {
         const GIB: u64 = 1 << 30;
-        // RADV: an allocation just under 4 GiB, a buffer as long, storage to 4 GiB less one.
-        let radv = listed_chunk_bytes(u64::MAX, 4 * GIB - 4, 4 * GIB - 4, u64::from(u32::MAX));
-        assert_eq!(radv, 63 * CHUNK_BYTES);
+        // RADV: an allocation just under 4 GiB, a buffer as long, storage to 4 GiB less one; a
+        // source of 2.5 GiB dma-bufs. The cap is the shortest: a chunk pins all its pages.
+        let radv = listed_chunk_bytes(2560 * MIB, 4 * GIB - 4, 4 * GIB - 4, u64::from(u32::MAX));
+        assert_eq!(radv, LONGEST_LISTED_CHUNK);
+        assert_eq!(
+            listed_chunk_bytes(u64::MAX, u64::MAX, 0, u64::MAX),
+            LONGEST_LISTED_CHUNK
+        );
         // The source's dma-buf is the shortest; a maxBufferSize of 0 states none.
-        assert_eq!(listed_chunk_bytes(GIB, 4 * GIB, 0, 4 * GIB), GIB);
-        assert_eq!(listed_chunk_bytes(2 * GIB, 4 * GIB, GIB + 1, 4 * GIB), GIB);
+        let short = LONGEST_LISTED_CHUNK - CHUNK_BYTES;
+        assert_eq!(listed_chunk_bytes(short, 4 * GIB, 0, 4 * GIB), short);
+        assert_eq!(listed_chunk_bytes(short + MIB, 4 * GIB, 0, 4 * GIB), short);
+        // The device's buffer or storage range is the shortest.
+        assert_eq!(
+            listed_chunk_bytes(4 * GIB, 4 * GIB, short + 1, 4 * GIB),
+            short
+        );
+        assert_eq!(listed_chunk_bytes(4 * GIB, 4 * GIB, 0, short + 1), short);
         // A limit shorter than a chunk leaves the 64 MiB chunks.
         assert_eq!(
             listed_chunk_bytes(CHUNK_BYTES, 4 * GIB, 0, 4 * GIB),

@@ -1065,8 +1065,9 @@ fn ram_chunks(pages: Pages) {
     drop(used);
 }
 
-/// The chunk lengths `submit_per_ram_chunk_length` gives a listed RAM, in MiB.
-const CHUNK_LENGTHS_MIB: [u64; 5] = [64, 128, 256, 512, 1024];
+/// The chunk lengths `submit_per_ram_chunk_length` gives a listed RAM, in MiB: up to the 256 MiB
+/// a listed chunk stops at (`Device::use_host_ram`).
+const CHUNK_LENGTHS_MIB: [u64; 3] = [64, 128, 256];
 
 /// The bytes of the `len` bytes at `start` that are resident (`mincore`): a shared file's pages
 /// in its page cache, which a chunk's import pins.

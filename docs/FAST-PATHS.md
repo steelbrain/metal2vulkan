@@ -182,16 +182,21 @@ recorded here.
   submission, so a no-copy buffer's dma-buf import that only blits have read is released after its
   idle window (2 s, doubled at each import again up to 64 s). The encoding thread pays its import
   again at the first blit after the window (HOWTO.md section 6). For the same reason a guest RAM
-  there (`Device::use_host_ram`, with a source of dma-bufs) is imported in a few long chunks
-  (`HostRam::with_largest_dma_buf`, within the device's allocation, buffer and storage-range
-  limits), none ahead of the objects. A chunk, once imported, stays imported where the whole RAM
-  fits in half the device's memory heaps with unified memory, or in three quarters of those that
-  are not device-local without: the first kernel submission after a chunk's import waits while
-  the kernel writes its page tables, and every other submission of the device with it (231 to
-  462 ms for a 3.94 GiB chunk on the Radeon 780M: a gather after the idle window took 475 to
-  480 ms where its chunk was released and imported again, 2.6 to 2.8 ms where it was kept), where
-  each kept chunk costs every submission about half a microsecond (3 chunks for an 8 GiB RAM: 16 µs
-  a submission, 14 to 15 µs with none).
+  there (`Device::use_host_ram`, with a source of dma-bufs) is imported in chunks longer than
+  64 MiB, as long as one dma-buf of the source holds (`HostRam::with_largest_dma_buf`) within the
+  device's allocation, buffer and storage-range limits, none ahead of the objects. Each live chunk
+  costs every submission about half a microsecond (an 8 GiB RAM on the Radeon 780M: as 128 chunks
+  of 64 MiB, a submission's median went from 14 µs to 60 to 88 µs; as 3 of 2730 MiB, to 16 µs).
+  The chunks stop at 256 MiB, trading that speed for memory, not
+  accuracy (no switch): a chunk's import pins every page of it, udmabuf allocating the pages the
+  guest never touched, which stay allocated in the guest's file after the chunk is freed. A 16 GiB
+  guest in chunks of about 2.5 GiB had 4.4 GiB more of its RAM resident than without the source; a
+  16 GiB RAM in 256 MiB chunks lists 64 at most. A chunk, once imported, stays imported where the
+  whole RAM fits in half the device's memory heaps with unified memory, or in three quarters of
+  those that are not device-local without: the first kernel submission after a chunk's import
+  waits while the kernel writes its page tables, and every other submission of the device with it
+  (231 to 462 ms for a 3.94 GiB chunk on the Radeon 780M: a gather after the idle window took 475
+  to 480 ms where its chunk was released and imported again, 2.6 to 2.8 ms where it was kept).
   Where the RAM does not fit, a chunk no buffer nor pending command buffer holds is released
   after the same window (`WorkCounts::host_ram_chunks_released`), as RADV lists every import in
   every kernel submission, which fails once they pass the kernel's GTT. The first object over
