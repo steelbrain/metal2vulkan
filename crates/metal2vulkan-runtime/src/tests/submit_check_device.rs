@@ -5,8 +5,10 @@
 //! - **They answer.** A device made over a fresh shader cache runs its checks once
 //!   (`WorkCounts::submit_checks_run`), each verdict an answer (never pending once settled; the
 //!   follows check answered on Linux where the device imports host pointers), their calls counted
-//!   apart (`WorkCounts::submit_check_calls`); a second device over the same cache recalls them
-//!   (`submit_checks_recalled`), runs none, and holds the same verdicts.
+//!   apart (`WorkCounts::submit_check_calls`); a later device over the same cache recalls them
+//!   (`submit_checks_recalled`), runs none, and holds the verdicts of the last device that ran
+//!   them: the first's, or, where load split its tries and nothing was recorded, those of the
+//!   next device that ran them.
 //! - **The paths follow them.** Grouped batches where the merge holds
 //!   (`WorkCounts::grouped_submissions`), a long `Shared` buffer in fresh pages where a held
 //!   import adds nothing to a submission (`fresh_page_buffers_made`), a no-copy buffer's pointer
@@ -101,6 +103,9 @@ fn the_checks_answer_once_and_a_second_device_recalls_them() {
     // process's would be.
     let identity = first.driver_identity();
     drop(first);
+    // The verdicts of the last device that ran the checks, which its record holds where it wrote
+    // one (a device whose tries split writes none, and the next runs them again).
+    let mut ran = answered;
     let start = std::time::Instant::now();
     loop {
         let second = device(&scratch.0);
@@ -112,8 +117,12 @@ fn the_checks_answer_once_and_a_second_device_recalls_them() {
         if counts.submit_checks_recalled == 1 {
             assert_eq!(counts.submit_checks_run, 0);
             assert_eq!(counts.submit_check_calls, 0);
-            assert_eq!(verdicts(&second), answered);
+            assert_eq!(verdicts(&second), ran);
             break;
+        }
+        if counts.submit_checks_run == 1 {
+            println!("{} again: {}", second.name(), second.submit_check_report());
+            ran = verdicts(&second);
         }
         if start.elapsed() >= WAIT {
             let name = record_name(&second.driver_identity());

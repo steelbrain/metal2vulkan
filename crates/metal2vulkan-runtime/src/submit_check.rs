@@ -11,8 +11,8 @@
 //!   command buffers on the device's first `VkQueue`: one `vkQueueSubmit` of [`MERGED`]
 //!   `VkSubmitInfo`s, the last with a fence, against [`MERGED`] calls of one each, the last with
 //!   the fence; the time inside the calls. A driver whose one call's floor is at most
-//!   [`MERGE_RATIO`] of the calls' apart in every block of [`BLOCK`] rounds merges them (`Holds`),
-//!   and one whose floor passes it in every block does not (`Fails`): Mesa's common queue does
+//!   [`MERGE_RATIO`] of the calls' apart in both halves of the rounds merges them (`Holds`), and
+//!   one whose floor passes it in both does not (`Fails`): Mesa's common queue does
 //!   (`vulkan/runtime/vk_queue.c`, `vk_queue_submits_merge`: "Don't merge if there are signals in
 //!   between"), so its batches may wait and go in one call (`command_buffer/group.rs`); elsewhere
 //!   each batch takes its own. Measured with a probe of the same rounds (medians, 2026-11-07,
@@ -22,17 +22,17 @@
 //! - **Import tax.** One import of [`TAX_BYTES`] of anonymous pages the check maps and writes,
 //!   by their pointer, held through every other of [`TAX_PHASES`] phases of [`TAX_SUBMITS`]
 //!   submissions of one empty command buffer with a fence, none held through the rest; the time
-//!   inside each call. Where the floor of each phase with the import held passes that of each
-//!   phase without it beside it by more than [`TAX_FLOOR`] or an eighth of it, whichever is more,
-//!   a held import costs every submission (`Holds`), and where none passes, it does not
-//!   (`Fails`). Where it does, the runtime keeps its own long buffers out of fresh pages
-//!   (`fresh_pages.rs`): each would add that cost, and more for its length, to every submission
-//!   for its whole life, where its fresh pages save one clear of its bytes. RADV lists every
-//!   memory it imported in each kernel submission, and amdgpu gets every page of a pointer import
-//!   again in each (`amdgpu_cs_parser_bos`): the probe measured 10.3 us more a submission for one
-//!   import of 16 MiB on the Radeon 780M (24.1 for 64 MiB), 6.8 on the RX 7900 XTX (35.7), 45.8
-//!   on the RX 550 (191.3), against 0.2 on the Iris Xe (as much as a plain allocation of 64 MiB
-//!   costs there) and none on the M3 Max.
+//!   inside each call. Where, in both halves of the phases, the floor of the submissions with the
+//!   import held passes that of those without by more than [`TAX_FLOOR`] or an eighth of it,
+//!   whichever is more, a held import costs every submission (`Holds`), and where it passes in
+//!   neither, it does not (`Fails`). Where it does, the runtime keeps its own long buffers out of
+//!   fresh pages (`fresh_pages.rs`): each would add that cost, and more for its length, to every
+//!   submission for its whole life, where its fresh pages save one clear of its bytes. RADV lists
+//!   every memory it imported in each kernel submission, and amdgpu gets every page of a pointer
+//!   import again in each (`amdgpu_cs_parser_bos`): the probe measured 10.3 us more a submission
+//!   for one import of 16 MiB on the Radeon 780M (24.1 for 64 MiB), 6.8 on the RX 7900 XTX
+//!   (35.7), 45.8 on the RX 550 (191.3), against 0.2 on the Iris Xe (as much as a plain
+//!   allocation of 64 MiB costs there) and none on the M3 Max.
 //! - **Follows** (Linux alone). Two pages the check maps, the first written with a pattern, are
 //!   imported by their pointer and bound to a buffer; a copy of the first page into the second is
 //!   submitted, then new anonymous pages are mapped over the first (`mmap` with `MAP_FIXED`) and
@@ -49,15 +49,18 @@
 //!   throughout, so no submission meets a range without pages; only the first page of each pair
 //!   is replaced, and the GPU writes only the second.
 //! - **Load beside it.** Other work on the device or the host's CPU adds to a submission's time
-//!   and never takes from it, so each timed check reads floors, a form's least time in a block or
-//!   a phase, and answers only where every block or pair of phases agrees. A try whose blocks or
-//!   phases disagree is made again, at most [`TRIES`] times; where none agrees, the check answers
-//!   `Unchecked` for the device's life and the record is not written, so the next device measures
-//!   again. Seen on the Radeon 780M while the checks compared medians of single tries: a device
-//!   made while a test's thread made and released buffers in a loop (`tests/in_place_check.rs`)
-//!   placed its long buffers in fresh pages, which follows only from an answer that a held import
-//!   adds nothing, where the quiet devices of the same run answered that it adds about 6 us; its
-//!   record would have kept that answer for the kernel's release.
+//!   and never takes from it, so each timed check reads floors, a form's least time in each half of
+//!   its rounds or phases, and answers only where the two halves agree. Each half holds several
+//!   rounds or phases of each form, so one that load lengthened throughout moves no floor. A try
+//!   whose halves disagree is made again, at most [`TRIES`] times; where none agrees, the check
+//!   answers `Unchecked` for the device's life and the record is not written, so the next device
+//!   measures again. Seen on the Radeon 780M while the checks compared medians of single tries: a
+//!   device made while a test's thread made and released buffers in a loop
+//!   (`tests/in_place_check.rs`) placed its long buffers in fresh pages, which follows only from
+//!   an answer that a held import adds nothing, where the quiet devices of the same run answered
+//!   that it adds about 6 us; its record would have kept that answer for the kernel's release. And
+//!   on the M3 Max, under the load of the device tests beside it, a comparison of each phase alone
+//!   split three tries in a row where its floors over all the phases differed by 0.1 us.
 //! - **Its verdicts** are `Pending` until it answers, and the device takes the form a driver
 //!   without each answer takes: every batch its own call, its long buffers placed and cleared as
 //!   ever, every pointer import kept. `Unchecked` where a check could not run (no
@@ -67,7 +70,7 @@
 //!   [`TAX_SUBMITS`] submissions, each waited for, every command buffer empty; the import of
 //!   [`TAX_BYTES`] made and freed [`TAX_PHASES`] times over pages written once; and on Linux
 //!   three copies of 256 bytes; each timed check again, at most [`TRIES`] times in all, where its
-//!   blocks or phases disagree. The probe's rounds took 3 to 12 ms on those devices.
+//!   halves disagree. The probe's rounds took 3 to 12 ms on those devices.
 //! - **Kept.** Once every check answered, the verdicts are written as one record in the shader
 //!   cache's content directory (`shader_cache/store.rs`), named by the driver's identity, the
 //!   kernel's release (the import tax is the kernel's work on RADV), the check's version and the
@@ -113,10 +116,7 @@ pub(crate) const ROUNDS: usize = 16;
 /// The untimed rounds of each form first.
 const WARM: usize = 2;
 
-/// The merge's rounds in each block it compares: each form's floor in a block of this many.
-pub(crate) const BLOCK: usize = 4;
-
-/// The tries of a timed check (the merge, the import tax) whose blocks or phases disagree, before
+/// The tries of a timed check (the merge, the import tax) whose halves disagree, before
 /// it answers `Unchecked` for the device's life and nothing is recorded (the module docs).
 pub(crate) const TRIES: usize = 3;
 
@@ -129,7 +129,7 @@ pub(crate) const MERGE_RATIO: f64 = 0.6;
 pub(crate) const TAX_BYTES: u64 = 16 << 20;
 
 /// The tax check's phases, every other one with the import held (the first without).
-pub(crate) const TAX_PHASES: usize = 6;
+pub(crate) const TAX_PHASES: usize = 8;
 
 /// The submissions timed in each phase, after one untimed.
 pub(crate) const TAX_SUBMITS: usize = 8;
@@ -394,8 +394,8 @@ pub(crate) fn tax_verdict(held: i64, bare: i64) -> Verdict {
     }
 }
 
-/// What one try of a timed check answered: the verdict its blocks or phases agree on (`None`
-/// where they disagree), and its two forms' floors, in nanoseconds.
+/// What one try of a timed check answered: the verdict its two halves agree on (`None` where they
+/// disagree), and its two forms' floors over the whole try, in nanoseconds.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Timed {
     pub(crate) verdict: Option<Verdict>,
@@ -403,47 +403,41 @@ pub(crate) struct Timed {
 }
 
 /// One merge try's answer from its rounds' times, in nanoseconds, of one call of the infos and
-/// of the calls apart: each block of [`BLOCK`] rounds compares the two forms' floors
-/// ([`merge_verdict`]).
+/// of the calls apart: each half of the rounds compares the two forms' floors ([`merge_verdict`]).
 pub(crate) fn merge_try(merged: &[i64], apart: &[i64]) -> Timed {
-    let blocks = (merged.chunks(BLOCK).zip(apart.chunks(BLOCK)))
-        .map(|(merged, apart)| merge_verdict(floor(merged), floor(apart)));
+    let (merged_first, merged_second) = merged.split_at(merged.len() / 2);
+    let (apart_first, apart_second) = apart.split_at(apart.len() / 2);
     Timed {
-        verdict: agree(blocks),
+        verdict: agree(
+            merge_verdict(floor(merged_first), floor(apart_first)),
+            merge_verdict(floor(merged_second), floor(apart_second)),
+        ),
         floors: (floor(merged), floor(apart)),
     }
 }
 
 /// One import tax try's answer from its phases' submission times, in nanoseconds, the first
-/// phase without the import and every other one with it held: each held phase's floor against
-/// that of each phase without it beside it ([`tax_verdict`]).
+/// phase without the import and every other one with it held: in each half of the phases, the
+/// floor of those with it held against that of those without ([`tax_verdict`]).
 pub(crate) fn tax_try(phases: &[Vec<i64>]) -> Timed {
-    let floors: Vec<i64> = phases.iter().map(Vec::as_slice).map(floor).collect();
-    let pairs = (1..floors.len()).map(|at| match at % 2 {
-        1 => (floors[at], floors[at - 1]),
-        _ => (floors[at - 1], floors[at]),
-    });
-    let of = |holding: usize| {
-        let phases = floors.iter().skip(holding).step_by(2).copied();
-        phases.min().unwrap_or(0)
+    // The floor of the phases of `phases` with the import held (`held`) or without, by their
+    // place among all the phases.
+    let of = |phases: &[(usize, &Vec<i64>)], held: bool| {
+        let times = phases.iter().filter(|(at, _)| (at % 2 == 1) == held);
+        times.map(|(_, times)| floor(times)).min().unwrap_or(0)
     };
+    let placed: Vec<(usize, &Vec<i64>)> = phases.iter().enumerate().collect();
+    let (first, second) = placed.split_at(placed.len() / 2);
+    let verdict = |phases: &[(usize, &Vec<i64>)]| tax_verdict(of(phases, true), of(phases, false));
     Timed {
-        verdict: agree(pairs.map(|(held, bare)| tax_verdict(held, bare))),
-        floors: (of(1), of(0)),
+        verdict: agree(verdict(first), verdict(second)),
+        floors: (of(&placed, true), of(&placed, false)),
     }
 }
 
-/// The verdict every one of `verdicts` gives; `None` where they differ, or there are none.
-fn agree(verdicts: impl Iterator<Item = Verdict>) -> Option<Verdict> {
-    let mut agreed = None;
-    for verdict in verdicts {
-        match agreed {
-            None => agreed = Some(verdict),
-            Some(seen) if seen != verdict => return None,
-            Some(_) => {}
-        }
-    }
-    agreed
+/// The verdict both halves give; `None` where they differ.
+fn agree(first: Verdict, second: Verdict) -> Option<Verdict> {
+    (first == second).then_some(first)
 }
 
 /// The least of `times`, the time no load beside the check added to (it only adds); 0 for none.

@@ -4,8 +4,7 @@
 use crate::in_place::DriverIdentity;
 use crate::submit_check::{
     decode, encode, merge_try, merge_verdict, record_name, tax_try, tax_verdict, tried, Measured,
-    SubmitChecks, Timed, Verdict, BLOCK, MERGE_RATIO, ROUNDS, TAX_FLOOR, TAX_PHASES, TAX_SUBMITS,
-    TRIES,
+    SubmitChecks, Timed, Verdict, MERGE_RATIO, ROUNDS, TAX_FLOOR, TAX_PHASES, TAX_SUBMITS, TRIES,
 };
 
 /// The probe's medians (2026-11-07, Mesa 26.2.6 under Linux 7.3.1, MoltenVK 1.4.2 under macOS
@@ -84,6 +83,8 @@ fn a_taxed_device_under_load_answers_from_its_floors() {
         (14_200, 15_000),
         (8_500, 25_000),
         (14_400, 15_000),
+        (8_800, 25_000),
+        (14_500, 15_000),
     ]);
     let (held, bare): (Vec<_>, Vec<_>) =
         (loaded.iter().enumerate()).partition(|(at, _)| at % 2 == 1);
@@ -110,31 +111,45 @@ fn a_taxed_device_under_load_answers_from_its_floors() {
         (8_800, 9_000),
         (8_600, 9_200),
         (8_700, 9_000),
+        (8_500, 9_100),
+        (8_600, 9_000),
     ]);
     assert_eq!(tax_try(&quiet).verdict, Some(Verdict::Fails), "no tax");
 }
 
-/// Where load lengthened every submission of one phase or one block, its comparisons disagree
-/// with the others' and the try gives no verdict: one phase without the import whose floor
-/// passes the held phases', and one merge block whose one call's floor passes the ratio.
+/// One phase or one round that load lengthened throughout moves no floor (another of its form
+/// in the same half is quiet), and leaves the verdict as it was; load that lengthened every phase
+/// or round of a form in one half splits the halves, and the try gives no verdict.
 #[test]
-fn a_try_whose_phases_or_blocks_disagree_gives_no_verdict() {
-    let split = phases([
+fn a_try_answers_only_where_its_halves_agree() {
+    let one_slow = phases([
         (8_600, 9_000),
         (14_300, 15_000),
         (30_000, 31_000),
         (14_200, 15_000),
         (8_500, 9_000),
         (14_400, 15_000),
+        (8_700, 9_000),
+        (14_100, 15_000),
     ]);
-    assert_eq!(tax_try(&split).verdict, None);
+    assert_eq!(tax_try(&one_slow).verdict, Some(Verdict::Holds));
+    let half_slow = phases([
+        (8_600, 9_000),
+        (14_300, 15_000),
+        (8_700, 9_000),
+        (14_200, 15_000),
+        (30_000, 31_000),
+        (14_400, 15_000),
+        (29_000, 31_000),
+        (14_100, 15_000),
+    ]);
+    assert_eq!(tax_try(&half_slow).verdict, None);
     let apart = vec![35_000; ROUNDS];
     let mut merged = vec![13_000; ROUNDS];
     assert_eq!(merge_try(&merged, &apart).verdict, Some(Verdict::Holds));
-    // One round of a block at the floor keeps the block's answer.
-    merged[1..BLOCK].fill(34_000);
+    merged[1..ROUNDS / 2].fill(34_000);
     assert_eq!(merge_try(&merged, &apart).verdict, Some(Verdict::Holds));
-    merged[..BLOCK].fill(34_000);
+    merged[..ROUNDS / 2].fill(34_000);
     assert_eq!(merge_try(&merged, &apart).verdict, None);
 }
 
