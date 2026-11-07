@@ -33,10 +33,10 @@
 //! `float4` fill over the case's outputs under `Load`, and blits the texels out. Both read-backs are
 //! sites, so a divergence names the format whose bytes moved.
 //!
-//! The one case Metal answers and we refuse is kept apart ([`destination_alpha`]): a blend reading
-//! Metal's destination alpha in a *colour* factor, which no Vulkan factor gives on the rotated
-//! image. It records Metal running the draw against our typed `NotImplemented(Format)`, so the
-//! refusal is a row of the ledger rather than a tolerance.
+//! One case is kept apart ([`destination_alpha`]): a blend reading Metal's destination alpha in a
+//! *colour* factor, which no Vulkan factor gives on the rotated image. The fragment function then
+//! computes Metal's blend itself over the texel it reads, on a device that orders that read, so the
+//! case asks a different path of ours the same question.
 //!
 //! Nothing here can fault a GPU: single-sampled targets of the case's own extent, one full-screen
 //! triangle a pass, no loop, and every fetch inside its buffer.
@@ -50,6 +50,7 @@ use crate::render::{
 };
 use crate::transcript::{Node, Observed, Sites, Value};
 use metal2vulkan::metal::{BlendFactor, BlendOperation, ColorWriteMask, PixelFormat};
+use metal2vulkan_runtime::Degradation;
 
 use super::extended_range_targets::{
     fixture, fixture_inputs, not_read, program, shader_refs, shape, VERTEX,
@@ -179,6 +180,21 @@ struct State {
     label: &'static str,
     mask: ColorWriteMask,
     blend: Option<[(BlendFactor, BlendFactor, BlendOperation); 2]>,
+}
+
+impl State {
+    /// Whether a colour factor of the state's blend reads the destination alpha, which no Vulkan
+    /// factor reads from the rotated image ([`destination_alpha`]).
+    fn reads_destination_alpha_in_color(&self) -> bool {
+        self.blend.is_some_and(|[(source, destination, _), _]| {
+            [source, destination].iter().any(|f| {
+                matches!(
+                    f,
+                    BlendFactor::DestinationAlpha | BlendFactor::OneMinusDestinationAlpha
+                )
+            })
+        })
+    }
 }
 
 /// The thirteen states the lane sweeps: every write mask and blend it measured, in its order.
@@ -500,7 +516,19 @@ impl Case for RotatedTarget {
         // from it: a difference stays a mismatch for review". Loosening a texel here would be this
         // suite overruling that, so the blended states stay divergent on lavapipe and are a
         // per-venue divergence to carry, not a tolerance to write.
-        vec![crate::replay::shared_memory_notice()]
+        //
+        // The state whose colour factor reads the destination alpha ([`destination_alpha`]) has
+        // the fragment function read its texel. A venue that orders that read through the pixel
+        // interlock may render the pass into a scratch image (`fetch-through-scratch`, MoltenVK
+        // here), a performance notice that loosens the notices site alone, as `fetch_ordered`'s
+        // does.
+        let mut allowances = vec![crate::replay::shared_memory_notice()];
+        if self.state.reads_destination_alpha_in_color() {
+            allowances.push(crate::replay::notice_allowance(
+                Degradation::FetchThroughScratch.code(),
+            ));
+        }
+        allowances
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {
@@ -555,20 +583,21 @@ impl Case for RotatedTarget {
     }
 }
 
-// ---- The blend Metal answers and we refuse ------------------------------------------------------
+// ---- The blend no Vulkan factor gives ------------------------------------------------------------
 
 /// The case for a blend that reads Metal's **destination alpha in a colour factor** of an
 /// `ARGB8Unorm` target.
 ///
 /// Our runtime holds the format in an `R8G8B8A8_UNORM` image of the rotated bytes, so the image's
 /// alpha channel is Metal's blue. A colour factor that reads Metal's destination alpha would have
-/// to read the image's *red*, and no Vulkan blend factor does, so the pipeline is refused
-/// `NotImplemented(Format)`. Metal runs the draw.
+/// to read the image's *red*, and no Vulkan blend factor does. So the fragment function reads the
+/// texel itself (framebuffer fetch: through the pixel interlock, or a rasterization-order input
+/// attachment), rotates it into Metal's order and computes Metal's 8-bit unorm blend. A device that
+/// orders that read in neither form refuses the pipeline. Metal runs the draw.
 ///
-/// It is its own case so the refusal is one row of the known-refusals ledger at one site, rather
-/// than a tolerance folded into the thirteen states. Metal's leg records normally: the pipeline and
-/// the draw are public calls, and the case reads back what Metal stored, so if the gap is ever
-/// closed the recording is already there to compare against.
+/// It is its own case so its route, and anything that route does differently, is one case's rows
+/// of the ledger rather than folded into the thirteen states. Metal's leg records normally: the
+/// pipeline and the draw are public calls, and the case reads back what Metal stored.
 pub fn destination_alpha() -> RotatedTarget {
     RotatedTarget {
         state: State {
