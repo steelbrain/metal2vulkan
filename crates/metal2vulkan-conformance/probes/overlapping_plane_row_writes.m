@@ -16,6 +16,7 @@
 //   kern2.<n> the same kernel at a 32 x 1 threadgroup instead of 8 x 4
 //   rot.<n>   copyFromBuffer:toTexture: into a framebuffer-only rotated texture whose plane
 //             holds the quarter turn, the shape `blit_plan::RowsCopy` names
+//   cpu.<n>   replaceRegion: of the whole texture, the CPU's write
 //   none.<n>  no GPU work at all: the readback's sensitivity control
 //   facts     every configuration's surface and texture facts, no GPU work
 //
@@ -73,7 +74,8 @@
 // The byte every plane starts as, which no source byte takes.
 static const uint8_t kPad = 0xFF;
 
-// A configuration: the texture's format and extent, and the plane's pitch.
+// A configuration: the texture's format and extent, the plane's pitch, and the plane's width in
+// elements where it is narrower than the texture (0: the texture's own width).
 typedef struct {
     const char *name;
     MTLPixelFormat format;
@@ -81,6 +83,7 @@ typedef struct {
     size_t width;
     size_t height;
     size_t bytesPerRow;
+    size_t planeWidth;
 } Config;
 
 // Rows of 17 to 47 bytes sharing 1, 4, 8 and 15 bytes at each of the two pitches 16 and 32, one
@@ -108,6 +111,19 @@ static const Config kConfigs[] = {
     { "r8.41x4.bpr41", MTLPixelFormatR8Unorm, 1, 41, 4, 41 },
     { "r8.47x5.bpr47", MTLPixelFormatR8Unorm, 1, 47, 5, 47 },
     { "r8.20x12.bpr20", MTLPixelFormatR8Unorm, 1, 20, 12, 20 },
+    // A texture wider than its plane, over a plane whose pitch is a multiple of 16: its rows
+    // `bytesPerRow` apart on the GPU and the CPU alike, sharing 1 to 24 bytes, a byte of
+    // `r8.40x4.w16` shared by three rows and every byte of `r8.64x3.w32` past the first pitch by
+    // two.
+    { "r8.20x4.w16", MTLPixelFormatR8Unorm, 1, 20, 4, 16, 16 },
+    { "r8.24x4.w16", MTLPixelFormatR8Unorm, 1, 24, 4, 16, 16 },
+    { "r8.31x4.w16", MTLPixelFormatR8Unorm, 1, 31, 4, 16, 16 },
+    { "r8.20x8.w16", MTLPixelFormatR8Unorm, 1, 20, 8, 16, 16 },
+    { "r8.40x4.w16", MTLPixelFormatR8Unorm, 1, 40, 4, 16, 16 },
+    { "r8.33x4.w32", MTLPixelFormatR8Unorm, 1, 33, 4, 32, 32 },
+    { "r8.48x4.w32", MTLPixelFormatR8Unorm, 1, 48, 4, 32, 32 },
+    { "r8.64x3.w32", MTLPixelFormatR8Unorm, 1, 64, 3, 32, 32 },
+    { "rgba8.5x4.w4", MTLPixelFormatRGBA8Unorm, 4, 5, 4, 16, 4 },
 };
 static const size_t kConfigCount = sizeof(kConfigs) / sizeof(kConfigs[0]);
 
@@ -170,6 +186,9 @@ static id<MTLTexture> rotatedTexture(id<MTLDevice> device, IOSurfaceRef surface,
     [d setRotation:1];
     return [device newTextureWithDescriptor:d iosurface:surface plane:0];
 }
+
+// The plane's width in elements: the configuration's own, or the texture's.
+static size_t planeWidth(const Config *c) { return c->planeWidth ? c->planeWidth : c->width; }
 
 static id<MTLTexture> planeTexture(id<MTLDevice> device, IOSurfaceRef surface, const Config *c) {
     MTLTextureDescriptor *d =
@@ -262,7 +281,7 @@ int main(int argc, const char **argv) {
         if (strcmp(wanted, "facts") == 0) {
             for (size_t i = 0; i < kConfigCount; i += 1) {
                 const Config *c = &kConfigs[i];
-                IOSurfaceRef surface = makeSurface(c->width, c->height, c->texelBytes,
+                IOSurfaceRef surface = makeSurface(planeWidth(c), c->height, c->texelBytes,
                                                    c->bytesPerRow);
                 if (surface == NULL) { printf("FACTS %zu %s no surface\n", i, c->name); continue; }
                 id<MTLTexture> texture = planeTexture(device, surface, c);
@@ -289,7 +308,7 @@ int main(int argc, const char **argv) {
         char kind[16] = { 0 };
         size_t index = 0;
         if (sscanf(wanted, "%15[^.].%zu", kind, &index) != 2 || index >= kConfigCount) {
-            fprintf(stderr, "usage: %s facts | (in|t2t|kern|out|none).<0..%zu>\n", argv[0],
+            fprintf(stderr, "usage: %s facts | (in|t2t|kern|kern2|out|rot|cpu|none).<0..%zu>\n", argv[0],
                     kConfigCount - 1);
             return 2;
         }
@@ -297,7 +316,7 @@ int main(int argc, const char **argv) {
         const int turned = strcmp(kind, "rot") == 0;
         IOSurfaceRef surface = turned
             ? makeTurnedSurface(c->width, c->height, c->texelBytes, c->bytesPerRow)
-            : makeSurface(c->width, c->height, c->texelBytes, c->bytesPerRow);
+            : makeSurface(planeWidth(c), c->height, c->texelBytes, c->bytesPerRow);
         if (surface == NULL) { fprintf(stderr, "no surface\n"); return 2; }
         const size_t bpr = (size_t)IOSurfaceGetBytesPerRowOfPlane(surface, 0);
         const size_t pitch = (bpr / 16) * 16;
@@ -339,6 +358,15 @@ int main(int argc, const char **argv) {
             int bad = finish(commands, turned ? "ROT" : "IN");
             if (bad) { CFRelease(surface); return bad; }
             report(turned ? "ROT" : "IN", c, surface, pitch);
+            printf("DONE\n");
+            CFRelease(surface);
+            return 0;
+        }
+
+        if (strcmp(kind, "cpu") == 0) {
+            NSMutableData *src = sourceBytes(c);
+            [texture replaceRegion:whole mipmapLevel:0 withBytes:src.bytes bytesPerRow:row];
+            report("CPU", c, surface, pitch);
             printf("DONE\n");
             CFRelease(surface);
             return 0;
