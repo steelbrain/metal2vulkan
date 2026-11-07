@@ -339,8 +339,9 @@ pub(super) struct EncoderCore {
     /// The uses of the command [`note_reaching`](Self::note_reaching) notes, with those of the
     /// host memory beside them ([`aliased`](Self::aliased)): kept, so a draw makes no vector.
     aliased_uses: Vec<Use<ResourceKey>>,
-    /// The keys its commands' uses named that took no use of the host memory's, while nothing
-    /// joined, moved or went since (`host_aliases::Quiet`): a command over those looks nothing up.
+    /// The keys its commands' uses named, each with the uses of the host memory's it takes, while
+    /// nothing joined, moved or went since (`host_aliases::Quiet`): a command over those takes no
+    /// lock.
     aliases_quiet: Quiet,
     /// The open runs of the index gather pass ([`gather`](Self::gather)), which record before
     /// the encoder's next command, and before its `VkCommandBuffer` ends.

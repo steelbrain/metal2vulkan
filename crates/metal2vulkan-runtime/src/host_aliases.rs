@@ -68,8 +68,9 @@
 //!   bytes overlap, clipped to them ([`HostAliases::augment`]). So two keys over overlapping bytes
 //!   are ordered where they overlap, whatever made them, at a cost of one lookup a use while no two
 //!   ranges meet, and of one use added per range met otherwise. An encoder keeps the keys it
-//!   found to take no other use ([`Quiet`]): while no buffer joins a memory, is placed, moves or
-//!   goes, its commands whose uses of bytes name only those look nothing up and take no lock.
+//!   found, each with what a use of its bytes takes ([`Quiet`]): while no buffer joins a memory,
+//!   is placed, moves or goes, its commands whose uses of bytes name only those take no lock and
+//!   work the uses they take out from what it keeps.
 //!   Each range keeps the ranges that meet it, so a use reads them there rather than looking them
 //!   up by address, but where they outnumber the classes of length that lookup visits
 //!   ([`Placements::sharing`]). A remap reported keeps a placement: it orders more than the pages
@@ -145,16 +146,115 @@ pub(super) struct HostAliases<I = HostImport> {
     inner: Mutex<Inner<I>>,
 }
 
-/// The keys found to take no other use while the host aliases stood at `version`
-/// ([`HostAliases::augment_into`]): no buffer joined another's memory under them, and the range
-/// of bytes each lies over, if any, holds no other key and meets no other range
-/// ([`Placed::crowded`]). An encoder keeps them, so a command whose uses of bytes name only such
-/// keys looks nothing up and takes no lock while no buffer joins a memory, is placed, moves or
-/// goes; a change of the version forgets them.
+/// The keys found while the host aliases stood at `version` ([`HostAliases::augment_into`]), each
+/// with the uses a use of its bytes takes then ([`Takes`]): none for a key over which no buffer
+/// joined another's memory and whose range of bytes, if any, holds no other key and meets no
+/// other range ([`Placed::crowded`]); else its memory's key, its range's first key and the keys of
+/// the ranges its own meets, where its range keeps those ([`Placements::sharing`]). An encoder
+/// keeps them, so a command whose uses of bytes name only such keys takes no lock and reads
+/// nothing the device's other encoders write while no buffer joins a memory, is placed, moves or
+/// goes: each use takes the uses it took when its key was found, worked out from what the key
+/// keeps (a draw's uses of a buffer placed in a heap over host pages that another range meets,
+/// as the consumer's upload chunks lie in its guest RAM, the bytes moving draw after draw); a
+/// change of the version forgets them.
 #[derive(Default)]
 pub(super) struct Quiet {
     version: u64,
-    keys: KeyMap<ResourceKey, ()>,
+    keys: KeyMap<ResourceKey, Takes>,
+}
+
+/// What a use of a key's bytes takes while the host aliases stand ([`Quiet`]): a use of its
+/// memory's key, where it joined one, and those its range of bytes gives
+/// ([`Placements::sharing`]), as [`augmented`] adds them.
+struct Takes {
+    /// The key of the memory it joined.
+    joined: Option<ResourceKey>,
+    /// Its range's, where its range is crowded: none where it takes nothing of it.
+    range: Option<Kept>,
+}
+
+/// A crowded range of bytes a key lies over, as its uses read it ([`Placements::sharing`]): its
+/// first byte's host address and its length, the key its keys' uses share where it is another,
+/// and the ranges it keeps that meet it, each with its key.
+struct Kept {
+    at: (u64, u64),
+    first: Option<ResourceKey>,
+    meets: Vec<((u64, u64), ResourceKey)>,
+}
+
+impl Takes {
+    /// Whether a use takes nothing.
+    fn nothing(&self) -> bool {
+        self.joined.is_none() && self.range.as_ref().is_none_or(Kept::nothing)
+    }
+
+    /// Add to `add` the uses `used`, a use of `bytes` of the key, takes, in [`augmented`]'s order.
+    fn add_to(
+        &self,
+        used: &Use<ResourceKey>,
+        bytes: &std::ops::Range<u64>,
+        add: &mut impl FnMut(Use<ResourceKey>),
+    ) {
+        if let Some(key) = self.joined {
+            add(Use {
+                key,
+                ..used.clone()
+            });
+        }
+        if let Some(range) = &self.range {
+            range.share(bytes, |key, shared| {
+                // The memory's key carries the same bytes already.
+                if Some(key) != self.joined || shared != *bytes {
+                    add(Use {
+                        key,
+                        range: UseRange::Bytes(shared),
+                        ..used.clone()
+                    });
+                }
+            });
+        }
+    }
+}
+
+impl Kept {
+    /// Whether a use of its bytes takes nothing of it: its key is its first, and none meets it.
+    fn nothing(&self) -> bool {
+        self.first.is_none() && self.meets.is_empty()
+    }
+
+    /// For a use of `bytes` of a key over it, each other key those bytes share and the bytes of
+    /// it they are, to `each`, as [`Placements::sharing`] gives them from what a range keeps.
+    fn share(
+        &self,
+        bytes: &std::ops::Range<u64>,
+        mut each: impl FnMut(ResourceKey, std::ops::Range<u64>),
+    ) {
+        if let Some(first) = self.first {
+            each(first, bytes.clone());
+        }
+        share_met(self.at, &self.meets, bytes, each);
+    }
+}
+
+/// For a use of `bytes` (counted from the first byte of `at`, the range of host bytes its key lies
+/// over), the ranges of `meets` those bytes meet, each with its key and clipped to it (counted
+/// from its first byte), to `each`, in order.
+fn share_met(
+    at: (u64, u64),
+    meets: &[((u64, u64), ResourceKey)],
+    bytes: &std::ops::Range<u64>,
+    mut each: impl FnMut(ResourceKey, std::ops::Range<u64>),
+) {
+    // The host bytes the use covers, within the key's own.
+    let start = at.0.saturating_add(bytes.start.min(at.1));
+    let end = at.0.saturating_add(bytes.end.min(at.1));
+    for &(other, key) in meets {
+        let from = start.max(other.0);
+        let to = end.min(other.0.saturating_add(other.1));
+        if from < to {
+            each(key, from - other.0..to - other.0);
+        }
+    }
 }
 
 impl Quiet {
@@ -168,6 +268,12 @@ impl Quiet {
 
     /// Whether `used` takes no other use as it is: it is of no bytes, or of a key found quiet.
     fn holds(&self, used: &Use<ResourceKey>) -> bool {
+        !matches!(used.range, UseRange::Bytes(_))
+            || self.keys.get(&used.key).is_some_and(Takes::nothing)
+    }
+
+    /// Whether what `used` takes is known: it is of no bytes, or of a key found.
+    fn knows(&self, used: &Use<ResourceKey>) -> bool {
         !matches!(used.range, UseRange::Bytes(_)) || self.keys.contains_key(&used.key)
     }
 }
@@ -486,12 +592,21 @@ impl<I> HostAliases<I> {
             if uses.iter().all(|used| quiet.holds(used)) {
                 return false;
             }
+            // Every key found: the uses each took then, with no lock.
+            if uses.iter().all(|used| quiet.knows(used)) {
+                return augmented_known(quiet, uses, all);
+            }
         }
         self.lookups.fetch_add(1, Ordering::Relaxed);
         let inner = lock(&self.inner);
-        let aliases = joined.then_some(&*inner.aliases);
-        let placements = crowded.then_some(&inner.placements);
-        augmented((aliases, placements), uses, all, quiet)
+        // What lies under the lock now, not the flags read before it: a key found here holds
+        // while the version read before them stands, and a change since then forgets it.
+        augmented(
+            (Some(&inner.aliases), Some(&inner.placements)),
+            uses,
+            all,
+            quiet,
+        )
     }
 
     /// How many times [`augment_into`](Self::augment_into) looked uses up under the lock
@@ -518,8 +633,9 @@ fn release<I>(memories: &mut Memories<Memory<I>>, over: Over) {
 
 /// [`HostAliases::augment_into`] over, where given, `aliases` (the buffers that joined a memory)
 /// and `placements`, into `all`, empty: the uses added follow `uses`, which go in at the first.
-/// Whether any was added. The uses of keys `quiet` holds are passed over, and the keys of the
-/// others that take no use, whatever their bytes, join them.
+/// Whether any was added. The uses of keys `quiet` knows take what it keeps of them; the others'
+/// keys join it with what they take, where their ranges keep what meets them (a range met by more
+/// is looked up at each use).
 pub(super) fn augmented(
     (aliases, placements): (Option<&KeyMap<ResourceKey, Alias>>, Option<&Placements>),
     uses: &[Use<ResourceKey>],
@@ -537,37 +653,80 @@ pub(super) fn augmented(
         let UseRange::Bytes(bytes) = &used.range else {
             continue;
         };
-        if quiet.as_deref().is_some_and(|quiet| quiet.holds(used)) {
+        if let Some(takes) = quiet.as_deref().and_then(|quiet| quiet.keys.get(&used.key)) {
+            takes.add_to(used, bytes, &mut add);
             continue;
         }
         let joined = aliases
             .and_then(|aliases| aliases.get(&used.key))
             .map(|alias| alias.key);
-        if let Some(key) = joined {
-            add(Use {
-                key,
-                ..used.clone()
-            });
-        }
-        let shares = placements.is_some_and(|placements| {
-            placements.sharing(used.key, bytes, |key, range| {
-                // The memory's key carries the same bytes already.
-                if Some(key) != joined || range != *bytes {
-                    add(Use {
-                        key,
-                        range: UseRange::Bytes(range),
-                        ..used.clone()
+        let found = placements.map_or(Found::Alone, |placements| placements.found(used.key));
+        let range = match found {
+            Found::Alone => None,
+            Found::Kept(range) => Some(range),
+            // Met by more than its range keeps: looked up by address at each use.
+            Found::LookedUp => {
+                let takes = Takes {
+                    joined,
+                    range: None,
+                };
+                takes.add_to(used, bytes, &mut add);
+                if let Some(placements) = placements {
+                    placements.sharing(used.key, bytes, |key, range| {
+                        if Some(key) != joined || range != *bytes {
+                            add(Use {
+                                key,
+                                range: UseRange::Bytes(range),
+                                ..used.clone()
+                            });
+                        }
                     });
                 }
-            })
-        });
-        if joined.is_none() && !shares {
-            if let Some(quiet) = quiet.as_deref_mut() {
-                quiet.keys.insert(used.key, ());
+                continue;
             }
+        };
+        let takes = Takes { joined, range };
+        takes.add_to(used, bytes, &mut add);
+        if let Some(quiet) = quiet.as_deref_mut() {
+            quiet.keys.insert(used.key, takes);
         }
     }
     !all.is_empty()
+}
+
+/// [`augmented`] of `uses`, whose keys `quiet` knows every one of, into `all`, empty: whether any
+/// was added.
+fn augmented_known(
+    quiet: &Quiet,
+    uses: &[Use<ResourceKey>],
+    all: &mut Vec<Use<ResourceKey>>,
+) -> bool {
+    let mut add = |added: Use<ResourceKey>| {
+        if all.is_empty() {
+            all.reserve(2 * uses.len());
+            all.extend_from_slice(uses);
+        }
+        all.push(added);
+    };
+    for used in uses {
+        let UseRange::Bytes(bytes) = &used.range else {
+            continue;
+        };
+        if let Some(takes) = quiet.keys.get(&used.key) {
+            takes.add_to(used, bytes, &mut add);
+        }
+    }
+    !all.is_empty()
+}
+
+/// What a use of a key's bytes takes of its range ([`Placements::found`]).
+enum Found {
+    /// Nothing: it lies over no bytes, or over a range that is not crowded.
+    Alone,
+    /// What its crowded range keeps.
+    Kept(Kept),
+    /// Its range is met by more ranges than it keeps: its uses look those up by address.
+    LookedUp,
 }
 
 /// The bytes each buffer over host pages lies over now, by key, and the ranges of bytes some key
@@ -730,32 +889,50 @@ impl Placements {
         if own.meets.is_empty() {
             return true;
         }
-        // The host bytes the use covers, within the key's own.
-        let start = at.0.saturating_add(bytes.start.min(at.1));
-        let end = at.0.saturating_add(bytes.end.min(at.1));
-        let mut clipped = |other: (u64, u64), key: ResourceKey| {
-            let from = start.max(other.0);
-            let to = end.min(other.0.saturating_add(other.1));
-            if from < to {
-                each(key, from - other.0..to - other.0);
-            }
-        };
         if own.meets.len() <= self.ranges.held_classes() {
-            for &(other, key) in &own.meets {
-                clipped(other, key);
-            }
+            share_met(at, &own.meets, bytes, each);
             return true;
         }
         self.looked_up.set(self.looked_up.get() + 1);
+        // The host bytes the use covers, within the key's own.
+        let start = at.0.saturating_add(bytes.start.min(at.1));
+        let end = at.0.saturating_add(bytes.end.min(at.1));
         for other in self.ranges.overlapping(start, end) {
             if other == at {
                 continue;
             }
             if let Some(range) = self.ranges.get(other) {
-                clipped(other, range.key);
+                let from = start.max(other.0);
+                let to = end.min(other.0.saturating_add(other.1));
+                if from < to {
+                    each(range.key, from - other.0..to - other.0);
+                }
             }
         }
         true
+    }
+
+    /// What a use of `key`'s bytes takes of the range it lies over, whatever the bytes, as
+    /// [`sharing`](Self::sharing) gives it: nothing, what its range keeps, or a lookup by
+    /// address at each use.
+    fn found(&self, key: ResourceKey) -> Found {
+        let Some(&at) = self.at.get(&key) else {
+            return Found::Alone;
+        };
+        let Some(own) = self.ranges.get(at) else {
+            return Found::Alone;
+        };
+        if !own.crowded() {
+            return Found::Alone;
+        }
+        if own.meets.len() > self.ranges.held_classes() {
+            return Found::LookedUp;
+        }
+        Found::Kept(Kept {
+            at,
+            first: (own.key != key).then_some(own.key),
+            meets: own.meets.clone(),
+        })
     }
 }
 
