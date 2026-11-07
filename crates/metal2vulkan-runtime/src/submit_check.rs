@@ -601,6 +601,12 @@ impl Device {
         if !checks.start() {
             return;
         }
+        // Their command buffers, made here, as the device is made (`Made`).
+        let Some(made) = Made::make(self) else {
+            checks.settle_unchecked();
+            return;
+        };
+        let pool = made.pool;
         let parts = Parts::of(self);
         let builder = std::thread::Builder::new().name("m2v-submit-check".to_owned());
         checks.set_running(true);
@@ -608,10 +614,14 @@ impl Device {
             // Made first, so it goes last: the parts' shares go before the teardown that waits
             // for the thread's end goes on, however the run ends.
             let _ends = Ends(Arc::clone(&parts.checks));
+            #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+            crate::loader_word::on_a_check_s_thread();
             let parts = parts;
-            run(&parts);
+            run(&parts, made);
         });
         if spawned.is_err() {
+            // SAFETY: the pool is the checks' and nothing of it was used.
+            unsafe { release::object(self.shared().vk(), pool) };
             checks.set_running(false);
             checks.settle_unchecked();
         }
@@ -830,10 +840,10 @@ impl Drop for Ends {
 
 /// The checks' thread: each check's verdict given as it is known, then the record. Stopped by
 /// the device's teardown, it settles what it had not answered `Unchecked` and records nothing.
-fn run(parts: &Parts) {
+fn run(parts: &Parts, made: Made) {
     let checks = &*parts.checks;
     let started = Instant::now();
-    let Some(objects) = Objects::make(parts) else {
+    let Some(objects) = Objects::make(parts, made) else {
         checks.settle_unchecked();
         return;
     };
@@ -1284,8 +1294,47 @@ impl<'p> Import<'p> {
     }
 }
 
-/// The checks' Vulkan objects: a command pool of the first `VkQueue`'s family, [`MERGED`] empty
-/// command buffers and, on Linux, one for the follows check's copy, and a fence.
+/// The checks' command pool, of the first `VkQueue`'s family, and its command buffers
+/// ([`MERGED`] empty ones and, on Linux, one for the follows check's copy), made as the checks
+/// start, as the device is made, before the program holds it: their `vkAllocateCommandBuffers`
+/// is the one call of the checks' that the loader serves, which reads the device's loader word
+/// (`loader_word.rs`), so none of theirs reads it beside the program's work, whose messages
+/// MoltenVK writes it with. The checks' thread records them ([`Objects::make`]).
+struct Made {
+    pool: vk::CommandPool,
+    buffers: Vec<vk::CommandBuffer>,
+}
+
+impl Made {
+    /// `device`'s, on the thread that makes it; `None` where a call was refused (the pool then
+    /// released).
+    fn make(device: &Device) -> Option<Made> {
+        let shared = device.shared();
+        let raw = shared.vk();
+        let info = vk::CommandPoolCreateInfo::default()
+            .flags(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER)
+            .queue_family_index(shared.queues[0].family);
+        // SAFETY: the device is live.
+        let pool = unsafe { raw.create_command_pool(&info, None) }.ok()?;
+        exit_guard::called(Call::CreateCommandPool);
+        let allocate = vk::CommandBufferAllocateInfo::default()
+            .command_pool(pool)
+            .level(vk::CommandBufferLevel::PRIMARY)
+            .command_buffer_count(MERGED as u32 + u32::from(cfg!(target_os = "linux")));
+        // The loader serves it; the device's loader word is put back first.
+        match device.allocate_command_buffers(&allocate) {
+            Ok(buffers) => Some(Made { pool, buffers }),
+            Err(_) => {
+                // SAFETY: the pool is the checks', none of its command buffers made.
+                unsafe { release::object(raw, pool) };
+                None
+            }
+        }
+    }
+}
+
+/// The checks' Vulkan objects: their command pool and command buffers ([`Made`]), recorded, and a
+/// fence.
 struct Objects {
     pool: vk::CommandPool,
     empty: Vec<vk::CommandBuffer>,
@@ -1295,21 +1344,14 @@ struct Objects {
 }
 
 impl Objects {
-    /// The objects, the empty command buffers recorded; `None` where a call was refused (what was
-    /// made released) or the process is exiting.
-    fn make(parts: &Parts) -> Option<Objects> {
+    /// The objects of `made`, the empty command buffers recorded; `None` where a call was refused
+    /// (what was made released) or the process is exiting (`made` then left to its end).
+    fn make(parts: &Parts, made: Made) -> Option<Objects> {
         let _held = parts.step_held();
         let _busy = exit_guard::enter()?;
-        let raw = parts.vk();
-        let info = vk::CommandPoolCreateInfo::default()
-            .flags(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER)
-            .queue_family_index(parts.queues[0].family);
-        // SAFETY: the device is live, inside a section.
-        let pool = unsafe { raw.create_command_pool(&info, None) };
-        exit_guard::called(Call::CreateCommandPool);
         let mut objects = Objects {
-            pool: pool.ok()?,
-            empty: Vec::new(),
+            pool: made.pool,
+            empty: made.buffers,
             #[cfg(target_os = "linux")]
             copy: vk::CommandBuffer::null(),
             fence: vk::Fence::null(),
@@ -1322,22 +1364,9 @@ impl Objects {
         Some(objects)
     }
 
-    /// Make and record the command buffers and make the fence, inside the caller's section.
+    /// Record the command buffers and make the fence, inside the caller's section.
     fn fill(&mut self, parts: &Parts) -> Option<()> {
         let raw = parts.vk();
-        let allocate = vk::CommandBufferAllocateInfo::default()
-            .command_pool(self.pool)
-            .level(vk::CommandBufferLevel::PRIMARY)
-            .command_buffer_count(MERGED as u32 + u32::from(cfg!(target_os = "linux")));
-        // SAFETY: the pool is the check's, which this thread alone uses; the device's loader word
-        // is put back first (`loader_word.rs`).
-        let allocated = unsafe {
-            parts
-                .loader_word
-                .restored(|| raw.allocate_command_buffers(&allocate))
-        };
-        exit_guard::called(Call::AllocateCommandBuffers);
-        self.empty = allocated.ok()?;
         #[cfg(target_os = "linux")]
         {
             self.copy = self.empty.pop()?;

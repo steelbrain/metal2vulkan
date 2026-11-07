@@ -20,29 +20,33 @@
 //! goes between the other's write and the loader's read. That work is the device's checks: its
 //! submission checks (`submit_check.rs`), its queue-switch check (`queue_switch_check.rs`) and its
 //! in-place check's internal submissions (`in_place_check.rs`, through
-//! `Device::submit_internal_naming`). MoltenVK names the device from its own threads too, as a
-//! submission's Metal command buffer completes, and at other calls than submissions: on a device
-//! whose word was found overwritten, by a restore or as a step starts
-//! ([`DeviceWord::overwritten`], a fact of the device and never of its driver), the checks hold
-//! the lock across each whole step of theirs that makes no use of a queue (their objects' making
-//! and release) and from each submission through the wait for its completion and, where the
-//! queue's failures are relayed, for the relay's mark after it ([`DeviceWord::end_step`]: the
-//! use's last submission on the queue, whose Metal command buffer completes after the check's
-//! own), so the runtime's
-//! loader-served calls on other threads may wait for one step of theirs, once, while they run
-//! (the checks run once per driver and runtime, for milliseconds); elsewhere the word never
-//! changes and they hold it across their submission calls alone. A narrower hold, around the
-//! calls that read the word alone, cannot exclude the writer: MoltenVK writes from its own
-//! threads as each of the checks' Metal command buffers completes, at no call of the runtime's,
-//! so only keeping the checks' work out of flight while a loader-served call runs does. Seen on
-//! MoltenVK 1.4.2 with each activity logged at once, before the lock: the scheduler's
+//! `Device::submit_internal_naming`). Their threads make no call the loader serves: the submission
+//! checks' command buffers are made as the device is made, before the program holds it, and the
+//! queue-switch check's on the program's thread that starts it, so no read of the word on the
+//! checks' threads goes between a write of the program's work (its submissions on its own threads,
+//! their completions on MoltenVK's) and the loader's read. MoltenVK names the device from its own
+//! threads too, as a submission's Metal command buffer completes, and at other calls than
+//! submissions: on a device whose word was found overwritten, by a restore or as a step starts
+//! ([`DeviceWord::overwritten`], a fact of the device and never of its driver), the checks hold the
+//! lock across each whole step of theirs that makes no use of a queue (their objects' making and
+//! release) and from each submission through the wait for its completion and, where the queue's
+//! failures are relayed, for the relay's mark after it ([`DeviceWord::end_step`]: the use's last
+//! submission on the queue, whose Metal command buffer completes after the check's own), so the
+//! runtime's loader-served calls on other threads may wait for one step of theirs, once, while they
+//! run (the checks run once per driver and runtime, for milliseconds); elsewhere the word never
+//! changes and they hold it across their submission calls alone. A narrower hold, around the calls
+//! that read the word alone, cannot exclude the writer: MoltenVK writes from its own threads as
+//! each of the checks' Metal command buffers completes, at no call of the runtime's, so only
+//! keeping the checks' work out of flight while a loader-served call runs does. Seen on MoltenVK
+//! 1.4.2 with each activity logged at once, before the lock: the scheduler's
 //! `vkAllocateCommandBuffers` faulted reading the magic as its table while the submission checks
-//! submitted beside it (`runtime_lane::device_commands`, which passed before them), still with
-//! the lock across their submission calls alone, and still with it through the wait for a
-//! check's own fence alone, MoltenVK's message as the relay's mark completed coming after that
-//! wait. A driver thread that writes the word on its
-//! own for the program's work (a message from MoltenVK's completion handlers as one of the
-//! program's command buffers completes) is not held off.
+//! submitted beside it (`runtime_lane::device_commands`, which passed before them), still with the
+//! lock across their submission calls alone, and still with it through the wait for a check's own
+//! fence alone, MoltenVK's message as the relay's mark completed coming after that wait; and the
+//! submission checks' own `vkAllocateCommandBuffers` on their thread faulted while the program's
+//! `vkQueueSubmit` beside it logged. A driver thread that writes the word on its own for the
+//! program's work (a message from MoltenVK's completion handlers as one of the program's command
+//! buffers completes) is not held off.
 
 use crate::device::lock;
 use crate::device::relay::Mark;
@@ -50,6 +54,19 @@ use ash::vk::{self, Handle};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Condvar, Mutex, PoisonError};
 use std::thread::ThreadId;
+
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+thread_local! {
+    /// Whether this thread is one of the device's checks' ([`on_a_check_s_thread`]).
+    static CHECK_THREAD: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Mark this thread as one of the device's checks' (a thread of its own, for good), so the tests
+/// count the restores made on it ([`DeviceWord::check_thread_restores`]).
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+pub(crate) fn on_a_check_s_thread() {
+    CHECK_THREAD.with(|thread| thread.set(true));
+}
 
 /// The loader's word of one live device handle, as it stood when the device reached the runtime.
 pub(super) struct LoaderWord {
@@ -130,6 +147,10 @@ pub(super) struct DeviceWord {
     /// The relay's marks the held steps waited for ([`DeviceWord::end_step`]), for the tests.
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     marks_waited: std::sync::atomic::AtomicU64,
+    /// The restores made on a thread of the device's checks ([`on_a_check_s_thread`]), for the
+    /// tests: none, as their threads make no call the loader serves (the module docs).
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    check_thread_restores: std::sync::atomic::AtomicU64,
     /// The thread that holds the lock and how many holds it has.
     holder: Mutex<Option<(ThreadId, usize)>>,
     /// Signalled as the last hold goes.
@@ -167,6 +188,8 @@ impl DeviceWord {
             steps_held: std::sync::atomic::AtomicU64::new(0),
             #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
             marks_waited: std::sync::atomic::AtomicU64::new(0),
+            #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+            check_thread_restores: std::sync::atomic::AtomicU64::new(0),
             holder: Mutex::new(None),
             free: Condvar::new(),
         }
@@ -179,6 +202,10 @@ impl DeviceWord {
     ///
     /// The device is still live.
     pub(super) unsafe fn restored<R>(&self, call: impl FnOnce() -> R) -> R {
+        #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+        if CHECK_THREAD.with(std::cell::Cell::get) {
+            self.check_thread_restores.fetch_add(1, Ordering::Relaxed);
+        }
         let _held = self.held();
         // SAFETY: the caller's contract.
         if unsafe { self.word.restore() } {
@@ -235,6 +262,12 @@ impl DeviceWord {
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     pub(crate) fn marks_waited(&self) -> u64 {
         self.marks_waited.load(Ordering::Relaxed)
+    }
+
+    /// The restores made on a thread of the device's checks so far ([`on_a_check_s_thread`]).
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) fn check_thread_restores(&self) -> u64 {
+        self.check_thread_restores.load(Ordering::Relaxed)
     }
 
     /// The end of a step of the runtime's own work, `held` where it is held whole

@@ -102,12 +102,22 @@ pub(crate) fn timed(device: &Device) -> bool {
 /// [`Parts`], never a handle (the module docs).
 pub(crate) fn start(device: &Device) -> bool {
     let parts = Parts::of(device);
+    // Its command buffers, made here, on the thread that starts it (`Made`).
+    let made = parts
+        .pair
+        .map(|_| Made::make(device, parts.family, 4 * ROUNDS));
+    let pool = match &made {
+        Some(Ok(made)) => made.pool,
+        _ => vk::CommandPool::null(),
+    };
     let switch = Arc::clone(&parts.switch);
     switch.began();
     let builder = std::thread::Builder::new().name("m2v-queue-switch-check".to_owned());
     let spawned = exit_guard::spawn(builder, move || {
         let switch = Arc::clone(&parts.switch);
-        run(&parts);
+        #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+        crate::loader_word::on_a_check_s_thread();
+        run(&parts, made);
         // Its shares go before the teardown that waits for it goes on.
         #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
         let dropping = Instant::now();
@@ -117,9 +127,61 @@ pub(crate) fn start(device: &Device) -> bool {
         switch.ended();
     });
     if spawned.is_err() {
+        if pool != vk::CommandPool::null() {
+            // SAFETY: the pool is the check's and nothing of it was used.
+            unsafe { release::object(device.shared().vk(), pool) };
+        }
         switch.ended();
     }
     spawned.is_ok()
+}
+
+/// The check's command pool, of the primary family, and its command buffers, one per batch, made
+/// as it starts on the thread that starts it (the program's, making its first command queue of
+/// the round robin): their `vkAllocateCommandBuffers` is the one call of the check's that the
+/// loader serves, which reads the device's loader word (`loader_word.rs`), so the check's thread
+/// makes none beside the program's work, whose messages MoltenVK writes it with. The check's
+/// thread records them ([`Objects::make`]).
+struct Made {
+    pool: vk::CommandPool,
+    buffers: Vec<vk::CommandBuffer>,
+}
+
+impl Made {
+    /// `device`'s, for `batches` batches of family `family`; `Err` where a call was refused (the
+    /// pool then released).
+    fn make(device: &Device, family: u32, batches: usize) -> Result<Made, Error> {
+        let shared = device.shared();
+        let raw = shared.vk();
+        let pool_info = vk::CommandPoolCreateInfo::default()
+            .flags(vk::CommandPoolCreateFlags::TRANSIENT)
+            .queue_family_index(family);
+        // SAFETY: the device is live.
+        let pool = unsafe { raw.create_command_pool(&pool_info, None) }.map_err(vulkan)?;
+        exit_guard::called(Call::CreateCommandPool);
+        let allocate = vk::CommandBufferAllocateInfo::default()
+            .command_pool(pool)
+            .level(vk::CommandBufferLevel::PRIMARY)
+            .command_buffer_count(batches as u32);
+        // The loader serves it; the device's loader word is put back first.
+        match device.allocate_command_buffers(&allocate) {
+            Ok(buffers) => Ok(Made { pool, buffers }),
+            Err(error) => {
+                // SAFETY: the pool is the check's, none of its command buffers made.
+                unsafe { release::object(raw, pool) };
+                Err(error)
+            }
+        }
+    }
+
+    /// Let the pool go unused, inside a section (left to the process's end once it is exiting).
+    fn release(self, parts: &Parts) {
+        let Some(_busy) = exit_guard::enter() else {
+            return;
+        };
+        // SAFETY: the pool is the check's, none of its command buffers submitted.
+        unsafe { release::object(parts.vk(), self.pool) };
+    }
 }
 
 /// The parts of a device its check works with, none of which holds the device (the module docs):
@@ -200,13 +262,13 @@ impl Parts {
 
 /// The check's thread: the measurement, the verdict, the record. Stopped by the device's
 /// teardown, it settles `Unchecked` and records nothing.
-fn run(parts: &Parts) {
+fn run(parts: &Parts, made: Option<Result<Made, Error>>) {
     let started = Instant::now();
-    let Some(pair) = parts.pair else {
+    let (Some(pair), Some(made)) = (parts.pair, made) else {
         parts.settle(Verdict::Unchecked, 0, None);
         return;
     };
-    let measured = measure(parts, pair);
+    let measured = made.and_then(|made| measure(parts, pair, made));
     parts.counts.queue_switch_check_ran();
     let took = Some(started.elapsed());
     let Ok(Some((alternated, alone))) = measured else {
@@ -228,11 +290,12 @@ fn run(parts: &Parts) {
 /// The median gap, in nanoseconds, between batches on the two `VkQueue`s of `pair` and between
 /// batches on one: `Ok(None)` where too few rounds' timestamps were written, the process is
 /// exiting or the device's teardown stopped the check, `Err` where a Vulkan call refused.
-fn measure(parts: &Parts, pair: (usize, usize)) -> Result<Option<(i64, i64)>, Error> {
+fn measure(parts: &Parts, pair: (usize, usize), made: Made) -> Result<Option<(i64, i64)>, Error> {
     if parts.switch.stopping() {
+        made.release(parts);
         return Ok(None);
     }
-    let Some(mut objects) = Objects::make(parts, 4 * ROUNDS)? else {
+    let Some(mut objects) = Objects::make(parts, made)? else {
         return Ok(None);
     };
     let ran = objects.run(parts, pair);
@@ -249,9 +312,9 @@ fn measure(parts: &Parts, pair: (usize, usize)) -> Result<Option<(i64, i64)>, Er
     gaps
 }
 
-/// The check's Vulkan objects: a command pool of the primary family and its command buffers, one
-/// per batch, a timestamp pool of two queries per batch, and its timelines: the gate, and one per
-/// `VkQueue` its batches signal.
+/// The check's Vulkan objects: its command pool and command buffers ([`Made`]), a timestamp pool
+/// of two queries per batch, and its timelines: the gate, and one per `VkQueue` its batches
+/// signal.
 struct Objects {
     pool: vk::CommandPool,
     buffers: Vec<vk::CommandBuffer>,
@@ -264,32 +327,25 @@ struct Objects {
 }
 
 impl Objects {
-    /// The objects for `batches` batches, each command buffer recorded: its two queries reset,
+    /// The objects of `made`, one batch a command buffer, each recorded: its two queries reset,
     /// then a timestamp at the top of the pipe and one at the bottom. `Ok(None)` where the process
-    /// is exiting.
-    fn make(parts: &Parts, batches: usize) -> Result<Option<Objects>, Error> {
+    /// is exiting (`made` then left to its end).
+    fn make(parts: &Parts, made: Made) -> Result<Option<Objects>, Error> {
         let _held = parts.step_held();
         let Some(_busy) = exit_guard::enter() else {
             return Ok(None);
         };
-        let raw = parts.vk();
-        let pool_info = vk::CommandPoolCreateInfo::default()
-            .flags(vk::CommandPoolCreateFlags::TRANSIENT)
-            .queue_family_index(parts.family);
-        // SAFETY: the device is live, inside a section.
-        let pool = unsafe { raw.create_command_pool(&pool_info, None) }.map_err(vulkan)?;
-        exit_guard::called(Call::CreateCommandPool);
         let mut objects = Objects {
-            pool,
-            buffers: Vec::new(),
+            pool: made.pool,
+            buffers: made.buffers,
             queries: vk::QueryPool::null(),
             gate: vk::Semaphore::null(),
             done: [vk::Semaphore::null(); 2],
             settled: true,
         };
-        let made = objects.fill(parts, batches);
+        let filled = objects.fill(parts);
         drop(_busy);
-        match made {
+        match filled {
             Ok(()) => Ok(Some(objects)),
             Err(error) => {
                 objects.release(parts);
@@ -298,24 +354,11 @@ impl Objects {
         }
     }
 
-    /// Make the pool's command buffers, the query pool and the timelines, and record the command
-    /// buffers, inside the caller's section.
-    fn fill(&mut self, parts: &Parts, batches: usize) -> Result<(), Error> {
+    /// Make the query pool and the timelines, and record the command buffers, inside the
+    /// caller's section.
+    fn fill(&mut self, parts: &Parts) -> Result<(), Error> {
         let raw = parts.vk();
-        let allocate = vk::CommandBufferAllocateInfo::default()
-            .command_pool(self.pool)
-            .level(vk::CommandBufferLevel::PRIMARY)
-            .command_buffer_count(batches as u32);
-        // SAFETY: the device is live (its teardown waits for the check), and the pool is the
-        // check's, which this thread alone uses; its loader word is put back first
-        // (`loader_word.rs`).
-        let allocated = unsafe {
-            parts
-                .loader_word
-                .restored(|| raw.allocate_command_buffers(&allocate))
-        };
-        exit_guard::called(Call::AllocateCommandBuffers);
-        self.buffers = allocated.map_err(vulkan)?;
+        let batches = self.buffers.len();
         let info = vk::QueryPoolCreateInfo::default()
             .query_type(vk::QueryType::TIMESTAMP)
             .query_count(2 * batches as u32);

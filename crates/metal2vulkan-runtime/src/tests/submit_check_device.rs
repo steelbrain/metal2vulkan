@@ -235,8 +235,10 @@ fn immediate_tracking() -> Vec<LayerSetting> {
 /// MoltenVK names the device in each message, and holds every step after its word was found
 /// overwritten (its first steps among them, as the device's own calls found it so first), and,
 /// where its queue's failures are relayed, waits for the relay's marks after its submissions
-/// before it lets go (MoltenVK names the device as each mark completes too).
-/// Printed (`LOADER-WORD`): each device's steps held, the marks waited for and its checks' run.
+/// before it lets go (MoltenVK names the device as each mark completes too). The checks' threads
+/// make no call the loader serves (their command buffers are made as the device is made).
+/// Printed (`LOADER-WORD`): each device's steps held, the marks waited for, the restores on the
+/// checks' threads and its checks' run.
 #[test]
 fn the_checks_hold_the_loader_word_across_steps_only_where_it_was_overwritten() {
     for immediate in [false, true] {
@@ -271,12 +273,13 @@ fn the_checks_hold_the_loader_word_across_steps_only_where_it_was_overwritten() 
         let overwritten = unsafe { word.overwritten() };
         let held = word.steps_held();
         let marks = word.marks_waited();
+        let restores = word.check_thread_restores();
         let relayed = device.shared().flights(0).is_some();
         let counts = device.work_counts();
         println!(
             "LOADER-WORD on {}: MoltenVK {moltenvk}, activities logged at once {immediate}: \
              overwritten {overwritten}, steps held {held}, relay's marks waited {marks} \
-             (relayed {relayed}); checks run {}: {}",
+             (relayed {relayed}), restores on the checks' threads {restores}; checks run {}: {}",
             device.name(),
             counts.submit_checks_run,
             device.submit_check_report()
@@ -298,6 +301,10 @@ fn the_checks_hold_the_loader_word_across_steps_only_where_it_was_overwritten() 
                 "a step was held on a device whose word nothing wrote"
             ),
         }
+        assert_eq!(
+            restores, 0,
+            "a check's thread made a call the loader serves, which reads the word"
+        );
         assert_eq!(
             marks > 0,
             overwritten && relayed,
