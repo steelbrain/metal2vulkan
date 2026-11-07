@@ -26,7 +26,10 @@
 //! the buffer with: Metal reads a bound stride only for a layout of
 //! `MTLBufferLayoutStrideDynamic` (an M4 read a fixed 16 under a bound 8).
 //! Such a layout (`StageInputLayoutDescriptor::stride` `None`) reads the bound one from
-//! `PushField::StageInStride`, which the binder writes, as 0 for a buffer bound without one.
+//! `PushField::StageInStride`, which the binder writes, as 0 for a buffer bound without one; an
+//! element whose bytes lie past the first `2^32` bytes from the bind offset reads zero
+//! (`fetch::within_reach`), which is what `MTLAttributeStrideStatic`'s `2^32 - 1` gives every
+//! element past the first.
 //!
 //! **Formats** decode as a vertex format of the same raw value (`MTLAttributeFormat` and
 //! `MTLVertexFormat` list the same formats), and they meet the attribute's numeric class exactly

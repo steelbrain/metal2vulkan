@@ -1076,10 +1076,43 @@ fn expected_at(a1: usize, a2: usize, t: u32) -> [u32; 12] {
     ]
 }
 
+/// [`expected_at`] where layout 1's or layout 2's element lies past the first `2^32` bytes from its
+/// bind offset (`None`): that layout's attributes read zero bytes, and the float3's missing
+/// component 1.
+fn expected_reaching(a1: Option<usize>, a2: Option<usize>, t: u32) -> [u32; 12] {
+    let mut out = expected_at(a1.unwrap_or(0), a2.unwrap_or(0), t);
+    if a1.is_none() {
+        out[0..3].copy_from_slice(&[0; 3]);
+        out[9..11].copy_from_slice(&[0; 2]);
+    }
+    if a2.is_none() {
+        out[4..8].copy_from_slice(&[0; 4]);
+    }
+    out
+}
+
 /// Run the fetch kernel under `d` (layout 1 stepping by x, layout 2 by y, both at rate 1) with
 /// the source buffers bound at `strides`, on every device, and compare every thread's report
 /// with the bytes at `s1 · x` of layout 1 and `s2 · y` of layout 2.
 fn run_strided(bc: &[u8], d: &StageInputDescriptor, strides: &[(u32, u32)], s1: u32, s2: u32) {
+    run_reaching(
+        bc,
+        d,
+        strides,
+        |gx| Some((s1 * gx) as usize),
+        |gy| Some((s2 * gy) as usize),
+    );
+}
+
+/// [`run_strided`] where `at1(x)` and `at2(y)` name the byte each thread reads layout 1 and
+/// layout 2 at, `None` where its element lies past the first `2^32` bytes and reads zero.
+fn run_reaching(
+    bc: &[u8],
+    d: &StageInputDescriptor,
+    strides: &[(u32, u32)],
+    at1: impl Fn(u32) -> Option<usize>,
+    at2: impl Fn(u32) -> Option<usize>,
+) {
     let mut ran = 0;
     for (what, dev, _) in devices() {
         let Some(pipe) = compiled(&what, pipeline(&dev, bc, "stage_in_fetch", Some(d))) else {
@@ -1097,10 +1130,9 @@ fn run_strided(bc: &[u8], d: &StageInputDescriptor, strides: &[(u32, u32)], s1: 
             for gx in 0..W {
                 let t = gy * W + gx;
                 let at = (12 * t) as usize;
-                let (a1, a2) = ((s1 * gx) as usize, (s2 * gy) as usize);
                 assert_eq!(
                     out[at..at + 12],
-                    expected_at(a1, a2, t),
+                    expected_reaching(at1(gx), at2(gy), t),
                     "{what} {strides:?}: thread ({gx}, {gy})"
                 );
             }
@@ -1168,6 +1200,38 @@ fn a_dynamic_layout_reads_the_bound_stride() {
     // Bound without a stride: 0.
     run_strided(&bc, &d, &[(1, 24)], 24, 0);
     run_strided(&bc, &d, &[], 0, 0);
+}
+
+/// An element whose bytes lie past the first `2^32` bytes from the bind offset reads zero bytes,
+/// on every device: Metal places an element at `e · stride + offset` in 64 bits, past every buffer
+/// the runtime does not refuse the dispatch for, where the `u32` displacement wraps back into the
+/// buffer. A dynamic layout bound with `MTLAttributeStrideStatic` reads at its low 32 bits,
+/// `2^32 - 1`, so its first element is the one at the bind offset and every element past it reads
+/// zero, as plain Metal on an Apple M3 Max under macOS 27.0.1 answered each of the four stride
+/// forms (`metal2vulkan-conformance`'s `attribute-stride-*`). Without the reach check element 1 of
+/// layout 1 reads its float3 at byte `2^32 - 1 + 4`, which wraps to byte 3.
+#[test]
+fn an_element_past_four_gigabytes_reads_zero() {
+    let Some(bc) = fixture() else { return };
+    let mut d = fetch_descriptor(
+        (StepFunction::ThreadPositionInGridX, 1),
+        (StepFunction::ThreadPositionInGridY, 1),
+        IndexType::UInt16,
+    );
+    for layout in [1, 2] {
+        d.layouts.get_mut(&layout).expect("layout").stride = None;
+    }
+    let first = |e: u32| (e == 0).then_some(0);
+    // `MTLAttributeStrideStatic` on both layouts, and on one beside a stride of its own.
+    run_reaching(&bc, &d, &[(1, u32::MAX), (2, u32::MAX)], first, first);
+    run_reaching(&bc, &d, &[(1, u32::MAX), (2, 8)], first, |gy| {
+        Some((8 * gy) as usize)
+    });
+    // Element 1 of layout 1 ends 8 bytes past `2^32` (its float3's 12 bytes at 4 + `2^32 - 8`),
+    // and element 2's `2^33 - 16` wraps to `2^32 - 16` in 32 bits: both read zero.
+    run_reaching(&bc, &d, &[(1, u32::MAX - 7), (2, 8)], first, |gy| {
+        Some((8 * gy) as usize)
+    });
 }
 
 /// A source buffer's bind offset moves the fetch with it (the range and the residual), and without

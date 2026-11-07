@@ -1037,8 +1037,9 @@ pub enum PushField {
     /// (`BindState::line_band`).
     LineBand,
     /// The stride (`u32`) the compute encoder binds the kernel buffer at this Metal index with
-    /// (`setBuffer:offset:attributeStride:atIndex:` and its forms), 0 where it binds none, which
-    /// a `[[stage_in]]` layout of `MTLBufferLayoutStrideDynamic` fetches at
+    /// (`setBuffer:offset:attributeStride:atIndex:` and its forms, its low 32 bits,
+    /// `MTLAttributeStrideStatic`'s `2^32 - 1` included), 0 where it binds none, which a
+    /// `[[stage_in]]` layout of `MTLBufferLayoutStrideDynamic` fetches at
     /// (`RuntimeFact::StageInStride`).
     StageInStride(u32),
     /// The draw's viewport compensation for a vertex function compiled under

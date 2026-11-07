@@ -106,7 +106,7 @@ pub enum RuntimeFact {
     /// `layout` at the stride the encoder binds it with (`setBuffer:offset:attributeStride:
     /// atIndex:` and its forms), its stage-input layout being `MTLBufferLayoutStrideDynamic`: the
     /// binder writes the bound stride into `PushField::StageInStride`, or 0 for a buffer bound
-    /// without one, as Metal reads it. A layout of a fixed stride reads its own, compiled in,
+    /// without one, as Metal reads it (`MTLAttributeStrideStatic` is its low 32 bits). A layout of a fixed stride reads its own, compiled in,
     /// whatever the bind's, and records nothing.
     StageInStride { layout: u32 },
     /// A read-only slot that Profile F's per-stage storage-buffer fallback may read through a

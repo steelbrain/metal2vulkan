@@ -508,12 +508,14 @@ impl ComputeCommandEncoder {
     }
 
     /// `setBuffer:offset:attributeStride:atIndex:`: as [`set_buffer`](Self::set_buffer), the
-    /// buffer read at `stride` by a kernel's stage-in layout of `MTLBufferLayoutStrideDynamic`;
-    /// `MTLAttributeStrideStatic` (`u64::MAX`) sets no stride, as `set_buffer` does. Only such a
-    /// layout reads a stride, and one bound without a stride reads at stride 0; a layout of a
-    /// fixed stride reads its own whatever the bind's (as an M4 reads them). A stride past 32 bits
-    /// other than `MTLAttributeStrideStatic` is taken modulo `2^32`, as plain Metal reads it and
-    /// its validation takes it (an M4 and an M3 Max). Refused as `set_buffer` is.
+    /// buffer read at `stride` by a kernel's stage-in layout of `MTLBufferLayoutStrideDynamic`.
+    /// Only such a layout reads a stride, and one bound without a stride (`set_buffer`) reads at
+    /// stride 0; a layout of a fixed stride reads its own whatever the bind's (as an M4 reads
+    /// them). A stride past 32 bits is taken modulo `2^32`, as plain Metal reads it and its
+    /// validation takes it (an M4 and an M3 Max), and `MTLAttributeStrideStatic` (`u64::MAX`) with
+    /// it: such a layout reads the element at the bind offset for the first element and zero for
+    /// every element past it, which lies `2^32 - 1` bytes on, past the buffer, as plain Metal on an
+    /// M3 Max under macOS 27.0.1 answered it. Refused as `set_buffer` is.
     pub fn set_buffer_with_stride(
         &mut self,
         buffer: Option<&Buffer>,
@@ -567,8 +569,8 @@ impl ComputeCommandEncoder {
 
     /// `setBufferOffset:attributeStride:atIndex:`: as [`set_buffer_offset`](Self::set_buffer_offset),
     /// with the index's stride set as [`set_buffer_with_stride`](Self::set_buffer_with_stride)
-    /// sets it. `set_buffer_offset` clears the stride, as the stride form with
-    /// `MTLAttributeStrideStatic` does. Refused as both are.
+    /// sets it, `MTLAttributeStrideStatic` included. `set_buffer_offset` clears the stride.
+    /// Refused as both are.
     pub fn set_buffer_offset_with_stride(
         &mut self,
         offset: u64,
@@ -609,9 +611,9 @@ impl ComputeCommandEncoder {
 
     /// `setBytes:length:attributeStride:atIndex:`: as [`set_bytes`](Self::set_bytes), the
     /// bytes read at `stride`, its low 32 bits, by a kernel's stage-in layout of
-    /// `MTLBufferLayoutStrideDynamic`. At `MTLAttributeStrideStatic` (`u64::MAX`) such a layout is
-    /// refused at the dispatch (`NotImplemented(KernelStageIn)`): an M4 read element 0 of the
-    /// bytes and zeros past it there, which the fetch does not emulate. Refused as `set_bytes` is.
+    /// `MTLBufferLayoutStrideDynamic`, as [`set_buffer_with_stride`](Self::set_buffer_with_stride)
+    /// reads a buffer: at `MTLAttributeStrideStatic` (`u64::MAX`) such a layout reads element 0 of
+    /// the bytes and zero past it, as an M4 and an M3 Max read them. Refused as `set_bytes` is.
     pub fn set_bytes_with_stride(
         &mut self,
         bytes: &[u8],

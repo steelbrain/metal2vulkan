@@ -198,6 +198,17 @@ pub fn view_read(
     n: u32,
 ) -> BResult<SourceRead> {
     let off = fb.binary(BinOp::IAdd, residual, m)?;
+    view_read_at(fb, view, check, off, n)
+}
+
+/// [`view_read`] at the view's own byte offset `off`.
+fn view_read_at(
+    fb: &mut FunctionBuilder<'_>,
+    view: View,
+    check: Check,
+    off: SValue,
+    n: u32,
+) -> BResult<SourceRead> {
     let inb = match check {
         Check::None => None,
         Check::InShader => match views::storage_bytes(fb, view)? {
@@ -249,6 +260,80 @@ pub fn prepare(
     n: u32,
     check: Check,
 ) -> BResult<SourceRead> {
+    match source(cx, fb, buffer)? {
+        Source::View { view, residual } => view_read(fb, view, check, residual, m, n),
+        Source::Psb {
+            table,
+            start,
+            contained,
+        } => psb_read(fb, table, buffer, m, start, n, contained),
+    }
+}
+
+/// [`prepare`] of a read whose `u32` Metal displacement `m` is Metal's own only where `fits` (a
+/// bool) holds, the read's `n` bytes then lying in the first `2^32` bytes from the bind offset.
+/// Where it does not, and in a view where the bind residual plus `m` and its `n` bytes run past
+/// `2^32` (the view's own offset would wrap), the read lies past the first `2^32` bytes of the
+/// slot: outside every buffer a command that may read past them is not refused for (the
+/// runtime's `StageInFetchPast4GiB`), and outside every view's range. It then reads at the bind
+/// offset and yields zero bytes, Metal's answer for a fetch outside its buffer there, on every
+/// device, its robustness aside: a wrapped offset could land inside the buffer.
+pub fn prepare_within(
+    cx: &mut EmitCx<'_>,
+    fb: &mut FunctionBuilder<'_>,
+    buffer: u32,
+    m: SValue,
+    fits: SValue,
+    n: u32,
+    check: Check,
+) -> BResult<SourceRead> {
+    let (read, fits) = match source(cx, fb, buffer)? {
+        Source::View { view, residual } => {
+            // `residual + m + n <= 2^32`: the sum did not wrap, and its end fits.
+            let off = fb.binary(BinOp::IAdd, residual, m)?;
+            let kept = fb.binary(BinOp::UGreaterThanEqual, off, residual)?;
+            let room = k32(fb, u32::MAX - n.saturating_sub(1))?;
+            let ends = fb.binary(BinOp::ULessThanEqual, off, room)?;
+            let view_fits = fb.binary(BinOp::LogicalAnd, kept, ends)?;
+            let fits = fb.binary(BinOp::LogicalAnd, fits, view_fits)?;
+            let off = fb.select(fits, off, residual)?;
+            (view_read_at(fb, view, check, off, n)?, fits)
+        }
+        Source::Psb {
+            table,
+            start,
+            contained,
+        } => {
+            let zero = k32(fb, 0)?;
+            let m = fb.select(fits, m, zero)?;
+            (psb_read(fb, table, buffer, m, start, n, contained)?, fits)
+        }
+    };
+    let inb = match read.inb {
+        Some(inb) => fb.binary(BinOp::LogicalAnd, inb, fits)?,
+        None => fits,
+    };
+    Ok(SourceRead {
+        inb: Some(inb),
+        ..read
+    })
+}
+
+/// Where source buffer `buffer` is read, in the form [`super::finish_slots`] chose.
+enum Source {
+    /// Its storage view, at the bind residual.
+    View { view: View, residual: SValue },
+    /// Its device address, through the root table at `table`, in a slot whose window starts at
+    /// `start`, contained when `contained`.
+    Psb {
+        table: SValue,
+        start: i64,
+        contained: bool,
+    },
+}
+
+/// The form source buffer `buffer` is read in.
+fn source(cx: &mut EmitCx<'_>, fb: &mut FunctionBuilder<'_>, buffer: u32) -> BResult<Source> {
     let access = &cx.plan.families.access;
     let slot = fetch::slot(cx.plan.stage, buffer);
     let reach = access
@@ -273,12 +358,16 @@ pub fn prepare(
     match (lowering, view) {
         (Some(SlotLowering::View(ViewKind::Storage)), Some(view)) => {
             let residual = cx.push_field(fb, PushField::SlotBindOffset(slot))?;
-            view_read(fb, view, check, residual, m, n)
+            Ok(Source::View { view, residual })
         }
         (Some(SlotLowering::Psb { start }), _) => {
             let table = cx.push_field(fb, PushField::RootTableAddress)?;
             let contained = cx.plan.families.access.psb_contained;
-            psb_read(fb, table, buffer, m, start, n, contained)
+            Ok(Source::Psb {
+                table,
+                start,
+                contained,
+            })
         }
         _ => Err(cx.fail(format!(
             "source buffer {slot:?} is neither a declared storage view nor a device address"

@@ -938,23 +938,16 @@ fn instantiate(
             PushField::StageInRegion => stage_in_region_bytes(region.ok_or_else(|| {
                 internal("a stage-in region push field without the region's fact")
             })?),
-            // The stride the encoder bound the stage-in buffer with, 0 without one, as Metal
-            // reads a dynamic layout; inline bytes' alike, but at `MTLAttributeStrideStatic`, whose
-            // answer is not measured.
+            // The stride the encoder bound the stage-in buffer or inline bytes with, 0 without
+            // one, as Metal reads a dynamic layout: `MTLAttributeStrideStatic`'s is its low 32
+            // bits, whose elements past the first the fetch reads past the bind offset's 2^32
+            // bytes (`lower::stage_io::fetch`).
             PushField::StageInStride(index) => {
                 let stride = match state
                     .stages
                     .get(&Stage::Kernel)
                     .and_then(|k| k.buffers.get(&index))
                 {
-                    Some(&BoundBuffer::Bytes {
-                        attribute_stride: Some(u32::MAX),
-                        ..
-                    }) => {
-                        return Err(BindError::Unsupported(Unsupported::not_implemented(
-                            Feature::KernelStageIn,
-                        )))
-                    }
                     Some(
                         &BoundBuffer::Buffer {
                             attribute_stride: Some(s),

@@ -3,10 +3,10 @@
 //!
 //! - **What differs.** Metal fetches an attribute at the displacement `element · stride +
 //!   offset` from its buffer's bind offset in 64 bits. The compile layer fetches a vertex attribute
-//!   it pulls, and every kernel stage-in attribute, at that displacement in wrapping 32-bit
-//!   arithmetic, each byte at the displacement plus its place (`lower::stage_io::fetch`). So where
-//!   the buffer holds more than `2^32` bytes past its bind offset, a byte past `2^32` reads another
-//!   place of the buffer than Metal's, silently.
+//!   it pulls at that displacement in wrapping 32-bit arithmetic, each byte at the displacement
+//!   plus its place, and a kernel stage-in attribute whose bytes lie past `2^32` as zero bytes
+//!   (`lower::stage_io::fetch`). So where the buffer holds more than `2^32` bytes past its bind
+//!   offset, a byte past `2^32` reads another place of the buffer than Metal's, or zero, silently.
 //! - **The refusal.** Until the fetch takes 64-bit displacements, a fetch that may read past `2^32`
 //!   bytes of its buffer's bind offset, inside a buffer that runs past them, is refused, naming the
 //!   buffer index and the furthest byte it may read; one that may not runs as before, and so does
@@ -108,7 +108,7 @@ pub(crate) fn check_stage_in_reach(
             continue;
         }
         // A layout of `MTLBufferLayoutStrideDynamic` reads the bound stride, 0 for a buffer bound
-        // without one.
+        // without one (`MTLAttributeStrideStatic`'s is `2^32 - 1`).
         let stride = layout.stride.unwrap_or_else(|| {
             table
                 .attribute_strides

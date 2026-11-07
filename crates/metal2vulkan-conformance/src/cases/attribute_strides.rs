@@ -29,14 +29,12 @@
 //! | `2^33 + 4` | as `4`, by the truncation |
 //! | `2^63 + 8` | as `8`, by the truncation |
 //!
-//! **The constant's row is measured, not predicted, and it is not what the runtime's prose said.**
-//! A dynamic layout bound with `MTLAttributeStrideStatic` was expected to read at stride 0, the way
-//! a buffer bound by the plain setters does. Metal does something else: it fetches the element at
-//! the bind offset for the first thread and hands every later thread zeros. The runtime documents
-//! exactly that for the **inline-bytes** form (`set_bytes_with_stride`, measured on an M4) and
-//! stride 0 for the buffer forms; this oracle answers the inline-bytes behaviour for all four
-//! setters. The recordings are the claim, and a reader who trusted the buffer forms' note would
-//! have written the wrong expectation.
+//! **The constant's row is measured, not predicted.** A dynamic layout bound with
+//! `MTLAttributeStrideStatic` does not read at stride 0, the way a buffer bound by the plain
+//! setters does: it fetches the element at the bind offset for the first thread and hands every
+//! later thread zeros, in all four setters. That is a fetch at the constant's low 32 bits,
+//! `2^32 - 1`, by the same truncation as every other row: element 1 lies that many bytes on, past
+//! the buffer. The recordings are the claim.
 //!
 //! **Which values are indistinguishable by construction, and why.** Nine values gave **five**
 //! distinct answers, so four values duplicate another's and the groups are named rather than left
