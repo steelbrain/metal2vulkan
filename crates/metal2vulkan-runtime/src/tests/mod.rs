@@ -138,6 +138,8 @@ mod event_timeline;
 mod event_vk_signal;
 mod exactness;
 mod exit_guard;
+#[cfg(all(unix, any(m2v_gpu, m2v_cpu_icd)))]
+mod exported_memory;
 mod families;
 mod fences;
 mod fill_value;

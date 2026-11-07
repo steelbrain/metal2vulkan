@@ -770,6 +770,18 @@ pub(super) struct Block {
     view: Option<ReadOnlyView>,
     /// Its memory type.
     type_index: u32,
+    /// What it was allocated exportable as, where it was ([`allocate_exported`]).
+    exported: Option<Exported>,
+}
+
+/// What a block's memory was allocated exportable as (`VkExportMemoryAllocateInfo`), for the one
+/// buffer placed in it (`exported_memory.rs`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct Exported {
+    /// The handle type it exports.
+    pub(super) handle: vk::ExternalMemoryHandleTypeFlags,
+    /// It is the buffer's dedicated allocation (`VkMemoryDedicatedAllocateInfo`).
+    pub(super) dedicated: bool,
 }
 
 /// What the runtime mapped that a block's memory was imported from (`Block::pages`,
@@ -1920,6 +1932,14 @@ impl Memory {
             .map(|memory_type| memory_type.property_flags)
     }
 
+    /// What `placement`'s block was allocated exportable as ([`allocate_exported`]), with the
+    /// block's size, the bytes of its allocation; `None` for any other placement.
+    pub(super) fn exported(&self, placement: &Placement) -> Option<(Exported, u64)> {
+        let block =
+            (self.pool_ref(placement.holds, placement.type_index)).payload(placement.block?)?;
+        block.exported.map(|exported| (exported, block.size))
+    }
+
     /// Whether `placement` lies in device-local memory.
     pub(super) fn is_device_local(&self, placement: &Placement) -> bool {
         self.type_flags(placement.type_index)
@@ -2000,6 +2020,19 @@ impl BlockMaker {
         size: u64,
         addressed: Option<&Counters>,
     ) -> Result<Block, Error> {
+        self.make_as(device, type_index, size, addressed, None)
+    }
+
+    /// [`make`](Self::make), its memory allocated exportable as `export` says where given, for its
+    /// buffer, the dedicated allocation of that buffer where it says so ([`allocate_exported`]).
+    fn make_as(
+        &self,
+        device: &ash::Device,
+        type_index: u32,
+        size: u64,
+        addressed: Option<&Counters>,
+        export: Option<(vk::Buffer, Exported)>,
+    ) -> Result<Block, Error> {
         let addresses = if addressed.is_some() && self.device_address {
             Some(address_buffer(device, size, Sharing::new(&self.families))?)
         } else {
@@ -2019,7 +2052,22 @@ impl BlockMaker {
         if self.device_address {
             info = info.push_next(&mut flags);
         }
-        // SAFETY: `info` and its chain live for the call; the type index is the device's.
+        let handle = export.map_or(
+            vk::ExternalMemoryHandleTypeFlags::empty(),
+            |(_, exported)| exported.handle,
+        );
+        let mut exportable = vk::ExportMemoryAllocateInfo::default().handle_types(handle);
+        let dedicated_to = (export.filter(|(_, exported)| exported.dedicated))
+            .map_or(vk::Buffer::null(), |(buffer, _)| buffer);
+        let mut dedicated = vk::MemoryDedicatedAllocateInfo::default().buffer(dedicated_to);
+        if export.is_some() {
+            info = info.push_next(&mut exportable);
+        }
+        if dedicated_to != vk::Buffer::null() {
+            info = info.push_next(&mut dedicated);
+        }
+        // SAFETY: `info` and its chain live for the call; the type index is the device's; an
+        // export's handle type and dedicated buffer are the caller's ([`allocate_exported`]).
         let memory = match unsafe { crate::creation::allocate_memory(device, &info) } {
             Ok(memory) => memory,
             Err(error) => {
@@ -2071,6 +2119,7 @@ impl BlockMaker {
             pages: None,
             view: None,
             type_index,
+            exported: export.map(|(_, exported)| exported),
         })
     }
 }
@@ -2168,6 +2217,7 @@ pub(super) unsafe fn import_host(
         pages: None,
         view,
         type_index,
+        exported: None,
     };
     let host = pointer.as_ptr() as usize;
     let mut memory = lock(memory);
@@ -2201,6 +2251,7 @@ pub(super) fn import_own_pages(
         pages: Some(pages),
         view: None,
         type_index,
+        exported: None,
     };
     let mut memory = lock(memory);
     memory.say_block("imported fresh pages for a buffer", &block);
@@ -2346,6 +2397,59 @@ pub(super) fn allocate_addressed(
         Holds::Buffers,
         Fit::Pooled,
     )
+}
+
+/// Memory meeting `buffer`'s `requirements` of `class`, allocated exportable as `exported` says
+/// (`exported_memory.rs`), in a block of its own that holds `buffer` alone, and its placement at
+/// offset 0: the buffer's dedicated allocation where `exported.dedicated`, mapped whole where it
+/// is host-visible, with no buffer of addresses (a dedicated allocation binds its buffer alone;
+/// the buffer has the device-address usage of its own). The class's memory types are tried best
+/// first, then those it overflows into, as [`place`] tries them, and the block is made with
+/// `memory`'s lock released; refused with the failure of the last type tried.
+///
+/// `buffer` was made with `VkExternalMemoryBufferCreateInfo` naming `exported.handle`, which the
+/// device exports a buffer's memory as, and `requirements` are its own.
+pub(super) fn allocate_exported(
+    memory: &Mutex<Memory>,
+    device: &ash::Device,
+    requirements: &vk::MemoryRequirements,
+    class: MemoryClass,
+    (buffer, exported): (vk::Buffer, Exported),
+) -> Result<Placement, Error> {
+    let size = requirements.size.max(1);
+    let (candidates, overflow, maker) = {
+        let memory = lock(memory);
+        let bits = requirements.memory_type_bits;
+        (
+            candidates(&memory.types, bits, class, memory.unified),
+            overflow_candidates(&memory.types, bits, class),
+            memory.maker(),
+        )
+    };
+    let mut failure = Error::OutOfMemory(MemoryKind::Device);
+    let order = (candidates.iter().map(|&type_index| (type_index, false)))
+        .chain(overflow.iter().map(|&type_index| (type_index, true)));
+    for (type_index, overflowing) in order {
+        // As a new block of [`place`]'s, the frees posted of a heap it would fill complete first.
+        let before = lock(memory).frees_before(type_index, size);
+        if let Some(frees) = before {
+            frees.wait();
+        }
+        let export = Some((buffer, exported));
+        match maker.make_as(device, type_index, size, None, export) {
+            Ok(block) => {
+                let pool = (Holds::Buffers, type_index);
+                let mut memory = lock(memory);
+                let index = memory.add_block(pool, block, size, true, size);
+                let placement = memory.placement(pool, index, 0, size, false);
+                memory.say_placement("placed", &placement, Some(class));
+                return Ok(memory.mark_overflowed(placement, overflowing));
+            }
+            Err(error @ Error::OutOfMemory(_)) => failure = error,
+            Err(error) => return Err(error),
+        }
+    }
+    Err(failure)
 }
 
 /// [`allocate`], in a block with a buffer of addresses where `addressed` gives the counts of the

@@ -1212,6 +1212,15 @@ pub(crate) fn dma_buf_names(listed: &BTreeSet<CString>) -> Option<[&'static CStr
         .then_some(names)
 }
 
+/// The extension of buffers whose memory another API imports (`exported_memory.rs`) of a device
+/// listing `listed`: `VK_KHR_external_memory_fd`, where the device lists it. The runtime's own
+/// need, outside the vocabulary as the dma-buf route's are ([`dma_buf_names`], which enable it
+/// too).
+pub(crate) fn memory_fd_name(listed: &BTreeSet<CString>) -> Option<&'static CStr> {
+    let name = ash::khr::external_memory_fd::NAME;
+    listed.contains(name).then_some(name)
+}
+
 /// The extensions of the images of textures over the dma-buf route's pages (`dma_buf.rs`) of a
 /// device listing `listed`: `VK_EXT_image_drm_format_modifier` and `VK_EXT_queue_family_foreign`,
 /// where the device lists both and the route's two ([`dma_buf_names`]). Outside the vocabulary as
@@ -1611,6 +1620,8 @@ fn create_on(
     // The runtime's own needs, outside the vocabulary, where listed (`dma_buf.rs`).
     let dma_buf = dma_buf_names(&listed);
     let dma_buf_images = dma_buf_image_names(&listed);
+    // Wherever listed (`exported_memory.rs`); the dma-buf route's names enable it already.
+    let memory_fd = memory_fd_name(&listed);
     let extra: Vec<CString> = options
         .device_extensions
         .iter()
@@ -1618,6 +1629,7 @@ fn create_on(
         .chain(calibration.map(|extension| extension.name().to_owned()))
         .chain((creation_feedback && !feedback_asked).then(|| feedback_name.to_owned()))
         .chain(dma_buf.into_iter().flatten().map(CStr::to_owned))
+        .chain((memory_fd.filter(|_| dma_buf.is_none())).map(CStr::to_owned))
         .chain(dma_buf_images.into_iter().flatten().map(CStr::to_owned))
         .collect();
     let mut enables = Enables::of(&set, api, &listed, &extra)?;
@@ -1832,6 +1844,7 @@ fn create_on(
         creation_feedback: creation_feedback || feedback_asked,
         dma_buf: dma_buf.is_some(),
         dma_buf_images: dma_buf_images.is_some(),
+        memory_fd: memory_fd.is_some(),
         sparse_features,
         memory_reads,
         owned: true,

@@ -21,6 +21,9 @@
 //! - **The caller's buffers** (`wrapped_buffer.rs`): buffers over `VkBuffer`s the caller made and
 //!   bound to its own memory (an imported dma-buf, for example), `Shared` at a host address the
 //!   caller gives, or `Private`.
+//! - **Buffers whose memory another API imports** (`exported_memory.rs`,
+//!   [`Device::new_exportable_buffer`](super::Device::new_exportable_buffer)): an allocation of
+//!   its own, exported as an opaque file descriptor; the buffer outlives every import.
 //! - **The caller's binary semaphores** (`CommandBuffer::encode_wait_for_vk_semaphore` and
 //!   `encode_signal_vk_semaphore`): Vulkan has no query for a semaphore's type, so the runtime
 //!   refuses what it can tell is no binary semaphore of the device: a null handle, and its own

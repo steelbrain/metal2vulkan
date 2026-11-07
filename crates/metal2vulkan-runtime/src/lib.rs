@@ -105,6 +105,8 @@ pub use exit_guard::process_exiting;
 #[doc(hidden)]
 pub use exit_guard::{registrations as exit_registrations, Registrations as ExitRegistrations};
 mod executed_commands;
+#[cfg(unix)]
+mod exported_memory;
 mod fence;
 mod fetch_reach;
 mod fill_value;
@@ -300,6 +302,8 @@ pub use exactness::Exactness;
 pub use executed_commands::{
     ExecutedCommand, ExecutedCommands, ExecutedCommandsHandler, RecordsRead,
 };
+#[cfg(unix)]
+pub use exported_memory::ExportedMemory;
 pub use families::{
     FamilyRow, FeatureRow, FormatCapabilities, FormatCapability, FormatRow, Framework, GpuFamily,
     LimitRow, Refusal, RowAudit, RowState,

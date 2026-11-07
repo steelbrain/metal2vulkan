@@ -2933,6 +2933,17 @@ impl Buffer {
         }
     }
 
+    /// `f` of the placement the buffer's own pages lie in and of the buffer's first byte's offset
+    /// in it (`exported_memory.rs`); `None` for a heap's buffer, whose bytes are its heap's.
+    pub(super) fn own_placement<R>(&self, f: impl FnOnce(&Placement, u64) -> R) -> Option<R> {
+        match &self.0.bytes {
+            Bytes::Own(own) => Some(own.with(ReadApart::Binding, |pages| {
+                f(&pages.memory.placement, pages.offset)
+            })),
+            Bytes::Heap(_) => None,
+        }
+    }
+
     /// Whether the buffer's own pages, of the runtime's memory, lie in device-local memory; `None`
     /// for a heap's buffer, whose bytes are its heap's. A buffer's pages are its for good.
     pub(super) fn own_pages_device_local(&self) -> Option<bool> {
@@ -3012,7 +3023,7 @@ impl Buffer {
     /// buffer's host copy) at once, so `contents` reads zero before any submission, and bytes the
     /// host cannot write (`Private` storage, a `Managed` buffer's device copy) by the device's
     /// next submission, before any of its commands (`texture/first_move.rs`).
-    fn clear_first(&self) -> Result<(), Error> {
+    pub(super) fn clear_first(&self) -> Result<(), Error> {
         let size = self.padded_length();
         if let Some(contents) = self.contents() {
             // SAFETY: as in `clear`: the buffer's host-coherent bytes, which nothing else uses

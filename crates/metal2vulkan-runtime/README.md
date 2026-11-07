@@ -261,6 +261,15 @@ the record the pass is making.
   imported by their pointer in one allocation, so the consumer binds a buffer of its own usage
   (a video decode's bitstream source) to the same bytes; `None` for copied, dma-buf, read-only or
   detached pages.
+- `Device::new_exportable_buffer` makes a buffer whose memory another API imports (CUDA's
+  `cuImportExternalMemory`, another `VkDevice`), in an allocation of its own made exportable as
+  an opaque file descriptor; every other buffer stays in the device's pooled blocks.
+  `Buffer::export_memory_fd` answers a new descriptor each call, the consumer's to close, with the
+  allocation's size, the buffer's offset and length in it, whether it is a dedicated allocation
+  and its memory type. The buffer must outlive every import. On a device loss the memory's
+  contents are lost for the imports too, and a device made again exports new allocations. A
+  device without `VK_KHR_external_memory_fd`, or that exports no buffer's memory so, refuses it
+  (`RuntimeGap::ExportableMemory`).
 
 ## The memory model
 

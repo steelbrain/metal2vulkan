@@ -351,6 +351,11 @@ pub(super) struct DeviceShared {
     pub(crate) submit_checks: Arc<crate::submit_check::SubmitChecks>,
     /// How no-copy buffers import host memory, or why they are refused.
     pub(super) host_import: Result<Importer, metal2vulkan::error::Unsupported>,
+    /// How it exports an exportable buffer's memory as an opaque file descriptor; `None` where
+    /// it enables no `VK_KHR_external_memory_fd` or exports no buffer's memory so
+    /// (`exported_memory.rs`).
+    #[cfg(unix)]
+    pub(super) opaque_fd: Option<crate::exported_memory::OpaqueFdExport>,
     /// Whether the device imports a pointer to shared memory, once asked
     /// (`Device::imports_shared_host_pointers`).
     pub(super) shared_pointer_imports: OnceLock<bool>,
@@ -1334,6 +1339,9 @@ pub(super) struct Parts {
     pub(super) dma_buf: bool,
     /// It enables the route's image extensions (`create.rs`'s `dma_buf_image_names`), likewise.
     pub(super) dma_buf_images: bool,
+    /// It enables `VK_KHR_external_memory_fd` (`create.rs`'s `memory_fd_name`; `adopt.rs`, where
+    /// the consumer lists it), outside `enabled`'s vocabulary (`exported_memory.rs`).
+    pub(super) memory_fd: bool,
     /// The sparse members of the core features it enables, outside `enabled`'s vocabulary
     /// (`sparse/device.rs`).
     pub(super) sparse_features: vk::PhysicalDeviceFeatures,
@@ -1388,6 +1396,10 @@ impl Device {
             creation_feedback,
             dma_buf,
             dma_buf_images,
+            #[cfg(unix)]
+            memory_fd,
+            #[cfg(not(unix))]
+                memory_fd: _,
             sparse_features,
             memory_reads,
             owned,
@@ -1783,6 +1795,26 @@ impl Device {
                 dma_buf_images,
             )
         };
+        // How the device exports a buffer's memory as an opaque file descriptor, where it enables
+        // `VK_KHR_external_memory_fd` and exports a buffer's memory so (`exported_memory.rs`).
+        #[cfg(unix)]
+        let opaque_fd = {
+            // SAFETY: as above; the loader serves `vkGetDeviceProcAddr` once the word is put
+            // back, and the device enables the extension.
+            let functions = memory_fd.then(|| unsafe {
+                loader_word
+                    .restored(|| ash::khr::external_memory_fd::Device::new(&instance.raw, &raw))
+            });
+            // SAFETY: `physical` belongs to `instance`, created at Vulkan 1.2 or later.
+            unsafe {
+                crate::exported_memory::OpaqueFdExport::new(
+                    &instance.raw,
+                    physical,
+                    functions,
+                    super::buffer::usage(device_address),
+                )
+            }
+        };
         // The host image copy functions, where the device enabled `hostImageCopy` and copies to
         // and from `GENERAL` on the host: by their core names from Vulkan 1.4, else by the
         // extension's, which the device then enabled.
@@ -2015,6 +2047,8 @@ impl Device {
             in_place: crate::in_place::InPlaceChecks::new(fail_in_place_check),
             submit_checks: Arc::new(crate::submit_check::SubmitChecks::new()),
             host_import,
+            #[cfg(unix)]
+            opaque_fd,
             shared_pointer_imports: OnceLock::new(),
             extended_dynamic_state,
             sized_index_bind,

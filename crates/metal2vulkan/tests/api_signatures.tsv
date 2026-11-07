@@ -2124,6 +2124,12 @@ field	metal2vulkan-runtime::ExecutedCommands.commands	pub commands: Vec<Executed
 field	metal2vulkan-runtime::ExecutedCommands.read	pub read: RecordsRead
 field	metal2vulkan-runtime::ExecutedCommands.unread_states_can_encode	pub unread_states_can_encode: bool
 field	metal2vulkan-runtime::ExecutedCommands.writable	pub writable: Vec<IndirectCommandBuffer>
+field	metal2vulkan-runtime::ExportedMemory.allocation_size	pub allocation_size: u64
+field	metal2vulkan-runtime::ExportedMemory.dedicated	pub dedicated: bool
+field	metal2vulkan-runtime::ExportedMemory.fd	pub fd: OwnedFd
+field	metal2vulkan-runtime::ExportedMemory.length	pub length: u64
+field	metal2vulkan-runtime::ExportedMemory.memory_type_index	pub memory_type_index: u32
+field	metal2vulkan-runtime::ExportedMemory.offset	pub offset: u64
 field	metal2vulkan-runtime::ExtensionFeature.extension	pub extension: &'static str
 field	metal2vulkan-runtime::ExtensionFeature.feature	pub feature: &'static str
 field	metal2vulkan-runtime::ExtraQueue.family	pub family: u32
@@ -7745,6 +7751,7 @@ method	metal2vulkan-runtime::Buffer::cpu_cache_mode	pub fn cpu_cache_mode(&self)
 method	metal2vulkan-runtime::Buffer::detach_backing	pub fn detach_backing(&self) -> Result<bool, Error>
 method	metal2vulkan-runtime::Buffer::device	pub fn device(&self) -> &Device
 method	metal2vulkan-runtime::Buffer::did_modify_range	pub fn did_modify_range(&self, range: Range<u64>) -> Result<(), Error>
+method	metal2vulkan-runtime::Buffer::export_memory_fd	pub fn export_memory_fd(&self) -> Result<ExportedMemory, Error>
 method	metal2vulkan-runtime::Buffer::gpu_address	pub fn gpu_address(&self) -> GpuAddress
 method	metal2vulkan-runtime::Buffer::hazard_tracking_mode	pub fn hazard_tracking_mode(&self) -> HazardTrackingMode
 method	metal2vulkan-runtime::Buffer::heap	pub fn heap(&self) -> Option<&Heap>
@@ -7937,6 +7944,7 @@ method	metal2vulkan-runtime::Device::new_depth_stencil_state	pub fn new_depth_st
 method	metal2vulkan-runtime::Device::new_dynamic_library	pub fn new_dynamic_library(&self, library: &Library) -> Result<DynamicLibrary, Error>
 method	metal2vulkan-runtime::Device::new_dynamic_library_with_url	pub fn new_dynamic_library_with_url(&self, url: &Path) -> Result<DynamicLibrary, Error>
 method	metal2vulkan-runtime::Device::new_event	pub fn new_event(&self) -> Result<Event, Error>
+method	metal2vulkan-runtime::Device::new_exportable_buffer	pub fn new_exportable_buffer(&self, length: u64, options: ResourceOptions) -> Result<Buffer, Error>
 method	metal2vulkan-runtime::Device::new_fence	pub fn new_fence(&self) -> Fence
 method	metal2vulkan-runtime::Device::new_heap	pub fn new_heap(&self, descriptor: &HeapDescriptor) -> Result<Heap, Error>
 method	metal2vulkan-runtime::Device::new_heap_with_bytes_no_copy	pub unsafe fn new_heap_with_bytes_no_copy(&self, memory: HostMemory, descriptor: &HeapDescriptor, deallocator: Option<Deallocator>, keep_alive: Option<KeepAlive>) -> Result<Heap, Error>
@@ -9606,6 +9614,7 @@ struct	metal2vulkan-runtime::EndedEncoder	#[derive(Clone, Debug, PartialEq, Eq)]
 struct	metal2vulkan-runtime::Event	#[derive(Clone)] pub struct Event(Arc<EventShared>)
 struct	metal2vulkan-runtime::ExecutedCommand	#[derive(Clone, Copy, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct ExecutedCommand
 struct	metal2vulkan-runtime::ExecutedCommands	#[derive(Clone, Debug)] #[non_exhaustive] pub struct ExecutedCommands
+struct	metal2vulkan-runtime::ExportedMemory	#[derive(Debug)] #[non_exhaustive] pub struct ExportedMemory
 struct	metal2vulkan-runtime::ExtensionFeature	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct ExtensionFeature
 struct	metal2vulkan-runtime::ExtraQueue	#[derive(Clone, Copy, PartialEq, Eq)] #[non_exhaustive] pub struct ExtraQueue
 struct	metal2vulkan-runtime::FailedPipeline	#[derive(Clone, Debug)] #[non_exhaustive] pub struct FailedPipeline
@@ -12049,6 +12058,7 @@ variant	metal2vulkan-runtime::Problem::LongTextureBufferFillPattern	LongTextureB
 variant	metal2vulkan-runtime::Problem::MaxCommandBufferCount	MaxCommandBufferCount
 variant	metal2vulkan-runtime::Problem::Mipmap	Mipmap(MipmapProblem)
 variant	metal2vulkan-runtime::Problem::NoPipelineState	NoPipelineState
+variant	metal2vulkan-runtime::Problem::NotExportable	NotExportable
 variant	metal2vulkan-runtime::Problem::NotShareable	NotShareable
 variant	metal2vulkan-runtime::Problem::OffsetOutOfRange	OffsetOutOfRange { offset: u64, length: u64 }
 variant	metal2vulkan-runtime::Problem::OutsidePlacement	OutsidePlacement
@@ -12181,6 +12191,7 @@ variant	metal2vulkan-runtime::RuntimeGap::DeviceNotifications	DeviceNotification
 variant	metal2vulkan-runtime::RuntimeGap::EmptyFillPattern	EmptyFillPattern
 variant	metal2vulkan-runtime::RuntimeGap::ExecutionRangeOffFour	ExecutionRangeOffFour { offset: u64 }
 variant	metal2vulkan-runtime::RuntimeGap::ExecutionRangePastBuffer	ExecutionRangePastBuffer { offset: u64, length: u64 }
+variant	metal2vulkan-runtime::RuntimeGap::ExportableMemory	ExportableMemory
 variant	metal2vulkan-runtime::RuntimeGap::ExtensionEnable	ExtensionEnable(VkExtension)
 variant	metal2vulkan-runtime::RuntimeGap::FeatureEnable	FeatureEnable(VkFeature)
 variant	metal2vulkan-runtime::RuntimeGap::FunctionTablePastMaxBufferLength	FunctionTablePastMaxBufferLength { count: u64, max_buffer_length: u64 }

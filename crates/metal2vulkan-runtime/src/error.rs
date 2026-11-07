@@ -583,6 +583,12 @@ pub enum Problem {
     ///
     /// Basis: ours (a runtime extension: Metal has no binary semaphores).
     Semaphore(SemaphoreProblem),
+    /// The memory of a buffer not made exportable (`Buffer::export_memory_fd` of a buffer
+    /// `Device::new_exportable_buffer` did not make): it lies in the device's pooled blocks,
+    /// which no other API imports.
+    ///
+    /// Basis: ours (a runtime extension: Metal exports no buffer's memory).
+    NotExportable,
     /// No pipeline state is set (plain Metal faults at a compute dispatch without one).
     ///
     /// Basis: unknown (plain Metal is held to fault at a dispatch with no pipeline state, on no
@@ -1571,6 +1577,14 @@ pub enum RuntimeGap {
     /// such a sample at custom positions is not measured. The same draw at the device's own
     /// positions runs.
     InterpolateAtSampleWithPositions,
+    /// A buffer whose memory another API imports (`Device::new_exportable_buffer`, a runtime
+    /// extension: Metal has none) on a device that does not enable `VK_KHR_external_memory_fd`
+    /// (the runtime enables it wherever the device lists it; an adopted device's consumer
+    /// enables it or not), or that exports no buffer's memory as an opaque file descriptor
+    /// (`vkGetPhysicalDeviceExternalBufferProperties` answers
+    /// `VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT` not exportable for the runtime's buffer
+    /// usage). Every other buffer is made as before.
+    ExportableMemory,
     /// A shared event handle opened on a device other than its event's: another physical
     /// device's, or one made with other options or adopted (equal options make one device, as
     /// Metal's calls do). Vulkan semaphores do not cross devices unless exported, which the runtime
