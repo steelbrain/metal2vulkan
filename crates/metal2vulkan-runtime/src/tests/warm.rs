@@ -15,7 +15,9 @@
 //! Each assertion that a count stayed still is paired with one that the same structure moved
 //! elsewhere (the cold device translates, the program's creation takes an identifier, a creation
 //! that made its state hands the hook a record), so a pass or a hook that did nothing at all
-//! cannot pass it.
+//! cannot pass it. The driver's data is the exception where the driver's saves were refused
+//! (`driver_data_refused`): no record holds it, so its loads and bytes stay still on every device
+//! of such a test, and the tests assert that instead.
 //!
 //! Each test owns empty cache directories, removed when dropped. The cross-process test's
 //! recording half runs as a process of its own.
@@ -220,6 +222,15 @@ fn creations(device: &Device) -> (Duration, [u64; 6]) {
     )
 }
 
+/// Whether `device`'s driver's pipeline cache data was refused at a making's save
+/// (`ShaderCacheStatistics::driver_data_truncated`, `driver_data_mismatched`): the runtime keeps
+/// none of such a driver's data (lavapipe's, Mesa 26.2.6, is 20 bytes that state a 32-byte
+/// header), so no record holds any, and no making loads or adds any.
+fn driver_data_refused(device: &Device) -> bool {
+    let s = device.shader_cache_statistics();
+    s.driver_data_truncated + s.driver_data_mismatched > 0
+}
+
 /// Each creation that made its state hands the hook one record, in the order made, and counts
 /// it; a creation that fails and a binary archive's add hand it nothing; the same descriptor
 /// created again makes the same record; a record carried through its bytes is the same record;
@@ -290,8 +301,9 @@ fn each_creation_hands_the_hook_one_record() {
 /// One process records, and a later one warms its records, then makes the same states: the
 /// warmed device's creations decode no stage, translate nothing, look nothing up in the
 /// directory and load no driver pipeline cache, where an unwarmed device over the same directory
-/// looks its translations up and loads its driver data in its creations, and a cold device
-/// translates every function. The creations' times on the three devices are printed.
+/// looks its translations up and loads its driver data in its creations (none where the driver's
+/// data is refused at its saves, [`driver_data_refused`]), and a cold device translates every
+/// function. The creations' times on the three devices are printed.
 #[test]
 fn a_later_process_warms_what_an_earlier_one_recorded() {
     let scratch = Scratch::new("warm-processes");
@@ -316,6 +328,7 @@ fn a_later_process_warms_what_an_earlier_one_recorded() {
     // The same directory without a warm pass: what the program's creations pay there.
     let unwarmed = device(&cache, None, None);
     let (unwarmed_took, unwarmed_made) = creations(&unwarmed);
+    let refused = driver_data_refused(&unwarmed);
     drop(unwarmed);
 
     let warm = device(&cache, None, None);
@@ -335,9 +348,10 @@ fn a_later_process_warms_what_an_earlier_one_recorded() {
         "the warmed device's creations decode, translate, look up and load nothing: the pass did"
     );
     assert!(
-        unwarmed_made[2] > 0 && unwarmed_made[3] > 0,
-        "an unwarmed device's creations look their translations up and load their driver data, \
-         or the warmed leg's zeros above are vacuous: {unwarmed_made:?}"
+        unwarmed_made[2] > 0 && (unwarmed_made[3] > 0) != refused,
+        "an unwarmed device's creations look their translations up and load their driver data \
+         (none where its saves refused it: {refused}), or the warmed leg's zeros above are \
+         vacuous: {unwarmed_made:?}"
     );
 
     let cold_scratch = Scratch::new("warm-processes-cold");
@@ -488,7 +502,9 @@ fn a_warm_pass_takes_nothing_the_program_sees() {
 /// budget: none is made under a budget of 0 bytes, and only the first under a budget of 1 byte.
 /// The 1-byte pass runs over a directory of its own, which holds none of the records' driver
 /// data, so the first record's makings write their records' data (`driver_saves`) and add what
-/// they wrote: a pass that wrote data and counted none fails here, on every device.
+/// they wrote: a pass that wrote data and counted none fails here, on every device whose driver's
+/// data is kept. Where it is refused at its saves ([`driver_data_refused`]), the makings write and
+/// add nothing, so the budget is never reached and the pass runs every record.
 #[test]
 fn a_byte_budget_stops_the_pass() {
     let recording = Scratch::new("warm-budget-recording");
@@ -507,11 +523,21 @@ fn a_byte_budget_stops_the_pass() {
     device_one.warm(records, 1);
     let s = warmed(&device_one, STATES);
     let saves = device_one.shader_cache_statistics().driver_saves;
+    let refused = driver_data_refused(&device_one);
     println!(
         "the 1-byte pass over a fresh directory: {} driver bytes added, {saves} records' data \
-         written",
+         written, the driver's data refused at its saves: {refused}",
         s.pipeline_bytes
     );
+    if refused {
+        assert_eq!(
+            (saves, s.pipeline_bytes, s.records_warmed, s.records_not_run),
+            (0, 0, STATES, 0),
+            "a pass whose driver's data is refused writes and adds nothing, and runs every \
+             record: {s:?}"
+        );
+        return;
+    }
     assert!(
         saves > 0 && s.pipeline_bytes > 0,
         "a pass over a directory that holds none of its records' data writes and counts what its \
