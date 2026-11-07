@@ -181,6 +181,16 @@ pub(super) fn select_param(cx: &mut SelectCx<'_>, b: &ParamBinding) -> Result<Co
     if !frag.rasterization_order_color_access {
         return Err(unordered(cx, color));
     }
+    // The input attachment of an image holding Metal's channels rotated (`ARGB8Unorm` in
+    // `R8G8B8A8_UNORM`) reads them in the image's order: a color input of one is not modelled.
+    // The function's own blend over it rotates the texel it reads (`input_blend::rotated_texel`),
+    // and link admits the attachment's input attachment for that blend alone. One holding Metal's
+    // alpha in red is read as Metal's alpha (`ColorInput::alpha_red`).
+    if cx.inputs.rotated_colors.contains(&color) && !cx.inputs.alpha_in_red_colors.contains(&color)
+    {
+        let refused = Unsupported::not_implemented(Feature::Format);
+        return Err(refused.at_attachment(Attachment::Color(color)).into());
+    }
     // Two reads of one attachment must agree on its numeric class (one image declaration).
     let known = &cx.families.fragment.colors;
     if known

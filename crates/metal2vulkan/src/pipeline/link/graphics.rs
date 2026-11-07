@@ -198,6 +198,7 @@ use crate::metal::state::{
 use crate::metal::PrimitiveTopologyClass;
 use crate::pipeline::artifact::PrecisionNote;
 use crate::pipeline::color_writes;
+use crate::pipeline::facts::RuntimeFact;
 use crate::pipeline::graphics::{
     ColorAttachmentState, GraphicsState, InputAttachmentUse, TessellationState,
 };
@@ -591,13 +592,22 @@ pub fn graphics_state(
                 .ok_or(Error::InvalidDescriptor(DescriptorError::ColorAttachment {
                     index: color,
                 }))?;
-            // An input attachment of an image holding Metal's channels rotated would read them
-            // so: not modelled. (One holding Metal's alpha in red is read as Metal's alpha by a
-            // stage compiled for it, `StageIo::alpha_in_red_colors`, which
-            // `color_writes::check` holds to the pipeline's.)
+            // An input attachment of an image holding Metal's channels rotated reads them so: a
+            // color input of one is not modelled, which a stage compiled for the attachment refuses
+            // (`lower::fragment::color`), so the one input attachment such a stage reads of it is
+            // the one its own blend there rotates into Metal's order
+            // (`RuntimeFact::RotatedInputBlend`, which `fetch::input_blends` held to the pipeline's
+            // state above); any other is a stage's compiled for another pipeline. (One holding
+            // Metal's alpha in red is read as Metal's alpha by a stage compiled for it,
+            // `StageIo::alpha_in_red_colors`, which `color_writes::check` holds to the pipeline's.)
             // Nor is a two-plane YCbCr attachment's, whose texels Metal holds as halves and the
             // attachment as the function's floats.
-            if metal::format::rotated_channels(attachment.pixel_format)
+            let rotated_blend = fs.is_some_and(|f| {
+                f.facts.iter().any(|fact| {
+                    matches!(*fact, RuntimeFact::RotatedInputBlend { color: c, .. } if c == color)
+                })
+            });
+            if (metal::format::rotated_channels(attachment.pixel_format) && !rotated_blend)
                 || metal::format::ycbcr_renders(attachment.pixel_format)
                 || metal::format::ycbcr_pass_refused(attachment.pixel_format)
             {

@@ -21,7 +21,10 @@
 //! blend, each was refused `NotImplemented(FramebufferFetch)` at color 0. Other blends (the blend
 //! color's among them) and write masks that keep channels compile the same way; a blend that reads
 //! the second source of a function that writes none is refused as Metal refuses its pipeline
-//! (`InvalidDescriptor(ColorAttachment)`). No GPU is used.
+//! (`InvalidDescriptor(ColorAttachment)`). On a profile that orders fetch through
+//! rasterization-order input attachments, a color input of an `ARGB8Unorm` attachment, whose input
+//! attachment would read its image's rotated channels, is refused `NotImplemented(Format)` at
+//! color 0. No GPU is used.
 //!
 //! `llvm-as` assembles the fixtures; a missing tool skips visibly.
 
@@ -29,7 +32,7 @@ use std::path::Path;
 
 use crate::budget::Budget;
 use crate::device::{Device, DeviceDescription, DevicePolicy, DeviceProfile};
-use crate::error::{DescriptorError, Error, Needs};
+use crate::error::{Attachment, DescriptorError, Error, Feature, Needs};
 use crate::library::{FunctionArtifact, Library};
 use crate::metal::{BlendFactor, BlendOperation, ColorWriteMask, PixelFormat};
 use crate::pipeline::artifact::PrecisionNote;
@@ -499,4 +502,40 @@ fn a_second_source_blend_without_its_output_is_refused_as_metal_refuses_it() {
         }
     }
     assert!(checked > 0, "no interlock profile refused");
+}
+
+/// A color input of an `ARGB8Unorm` attachment, whose image holds Metal's channels rotated, on
+/// every committed profile that orders fetch through rasterization-order input attachments: the
+/// input attachment would read the image's order, so the function's lowering refuses it
+/// `NotImplemented(Format)` at the attachment (link admits such an attachment's input attachment
+/// only for the function's own blend over it, `RuntimeFact::RotatedInputBlend`).
+#[test]
+fn a_color_input_of_a_rotated_attachment_is_refused_over_its_input_attachment() {
+    let Some(fast) = assembled("fbl_fetch_blend8") else {
+        return;
+    };
+    let mut checked = 0;
+    for (stem, p) in committed_profiles().expect("profiles") {
+        if !crate::lower::fragment::inputs_order(&p) {
+            continue;
+        }
+        let inputs = state(&p, PixelFormat::ARGB8Unorm, OVER, ColorWriteMask::ALL);
+        match compile_with(&fast, "fbl8_over_loaded", &p, &inputs) {
+            Err(Error::Unsupported(u)) => {
+                assert_eq!(
+                    (u.feature, u.needs),
+                    (Feature::Format, Needs::NotImplemented),
+                    "{stem}"
+                );
+                let at = u.location.as_ref().and_then(|l| l.attachment());
+                assert_eq!(at, Some(Attachment::Color(0)), "{stem}");
+            }
+            other => panic!("{stem}: {:?}", other.map(|_| ())),
+        }
+        checked += 1;
+    }
+    assert!(
+        checked > 0,
+        "no profile orders fetch through input attachments"
+    );
 }
