@@ -24,36 +24,38 @@
 //!   of them (`Placement::dma_buf_address`). Counted: `WorkCounts::host_ram_dma_buf_imports`.
 //! - **Few listed imports** ([`Plan::listed`]). Where the device imports dma-bufs, the RAM has a
 //!   source and the device's held imports add to the cost of every submission (RADV lists every
-//!   import in each submission: measured with a probe on the Radeon 780M, Mesa 26.2.6, Linux
-//!   7.3.1, an 8 GiB RAM held as 128 dma-bufs of 64 MiB raised a submission's median from 14 us
-//!   to 60 to 88 us, as 3 of 2730 MiB to 16 us), a chunk is as long as [`LONGEST_LISTED_CHUNK`]
-//!   (256 MiB), one dma-buf of the source ([`HostRam::with_largest_dma_buf`]) and the device's
-//!   `maxMemoryAllocationSize`, `maxBufferSize` and `maxStorageBufferRange` take, in whole
-//!   [`CHUNK_BYTES`] ([`listed_chunk_bytes`]): an 8 GiB RAM is 32 imports at most. The cap is
-//!   a bound on memory, not on speed: a chunk's import pins every page of it, udmabuf allocating
-//!   those the guest never touched (they stay allocated in the guest's file once the chunk is
-//!   freed), so each chunk an object lies in makes all its bytes resident (a 16 GiB guest on the
-//!   Radeon 780M, about 2.5 GiB chunks: 4.4 GiB more of QEMU's RAM resident than without the
-//!   source). There no thread imports ahead: a chunk is imported once an object over it asks, by
-//!   a thread of the device's ([`listed_chunks`]), off the object's thread, as a long chunk's
-//!   import pins all its pages (measured with a probe on the Radeon 780M and the RX 7900 XTX,
-//!   Mesa 26.2.6: 660 to 692 ms for 2.7 GiB, which a making that waited for it took). Meanwhile each object over it is bound in an import of its own run
-//!   alone, as below; those after it in the chunk's import. A buffer's run import is one more
-//!   listed import, released while idle as a no-copy buffer's own import is (`host_residency.rs`),
-//!   and the buffer is bound in the chunk at its next use; a heap's, or a buffer's whose address
-//!   was handed out, stays while it lives. The first kernel submission that lists a chunk just
-//!   imported waits while the kernel writes the chunk's page tables, an entry a host page, and
-//!   every other submission of the device waits for it, as it holds the lock of the device's
-//!   page tables (measured with the kernel stacks of the waiting threads on the Radeon 780M,
-//!   Mesa 26.2.6, Linux 7.3.1: 231 to 275 ms of a gather's submission for a chunk of 3.94 GiB
-//!   imported again). So a chunk, once imported, stays imported while the device uses the RAM,
-//!   where the whole RAM fits in the share of the memory the device's imports count against
-//!   that [`releases_idle_chunks`] keeps it in: RADV lists every import in every kernel
-//!   submission, which fails once they pass the kernel's GTT. Where it does not fit, a chunk
+//!   import in each submission: measured with a probe on the Radeon 780M, Mesa 26.2.6, Linux 7.3.1,
+//!   an 8 GiB RAM held as 128 dma-bufs of 64 MiB raised a submission's median from 14 us to 60 to
+//!   88 us, as 32 of 256 MiB to 32 to 33 us, as 3 of 2730 MiB to 16 us), a chunk is as long as
+//!   [`LONGEST_LISTED_CHUNK`] (256 MiB), one dma-buf of the source
+//!   ([`HostRam::with_largest_dma_buf`]) and the device's `maxMemoryAllocationSize`,
+//!   `maxBufferSize` and `maxStorageBufferRange` take, in whole [`CHUNK_BYTES`]
+//!   ([`listed_chunk_bytes`]): an 8 GiB RAM is 32 imports at most. The cap is a bound on memory,
+//!   not on speed: a chunk's import pins every page of it, udmabuf allocating those the guest never
+//!   touched (they stay allocated in the guest's file once the chunk is freed), so each chunk an
+//!   object lies in makes all its bytes resident (a probe's 8 GiB RAM with one 2 MiB object in each
+//!   chunk was all resident at every length from 64 MiB to 1 GiB; a 16 GiB guest on the Radeon 780M
+//!   in about 2.5 GiB chunks had 4.4 GiB more of QEMU's RAM resident than without the source).
+//!   There no thread imports ahead: a chunk is imported once an object over it asks, by a thread of
+//!   the device's ([`listed_chunks`]), off the object's thread, as a long chunk's import pins all
+//!   its pages (measured with a probe on the Radeon 780M and the RX 7900 XTX, Mesa 26.2.6: 660 to
+//!   692 ms for 2.7 GiB, which a making that waited for it took). Meanwhile each object over it is
+//!   bound in an import of its own run alone, as below; those after it in the chunk's import. A
+//!   buffer's run import is one more listed import, released while idle as a no-copy buffer's own
+//!   import is (`host_residency.rs`), and the buffer is bound in the chunk at its next use; a
+//!   heap's, or a buffer's whose address was handed out, stays while it lives. The first kernel
+//!   submission that lists a chunk just imported waits while the kernel writes the chunk's page
+//!   tables, an entry a host page, and every other submission of the device waits for it, as it
+//!   holds the lock of the device's page tables (measured with the kernel stacks of the waiting
+//!   threads on the Radeon 780M, Mesa 26.2.6, Linux 7.3.1: 231 to 275 ms of a gather's submission
+//!   for a chunk of 3.94 GiB imported again). So a chunk, once imported, stays imported while the
+//!   device uses the RAM, where the whole RAM fits in the share of the memory the device's imports
+//!   count against that [`releases_idle_chunks`] keeps it in: RADV lists every import in every
+//!   kernel submission, which fails once they pass the kernel's GTT. Where it does not fit, a chunk
 //!   only its slot holds (no buffer bound in it, no pending command buffer that used one) is
-//!   released once it stayed so for its window, as a no-copy buffer's idle import is (2 s,
-//!   doubled at each release of the chunk up to 64 s), by the same thread; the next object over
-//!   it asks for it again, and the first submission after its import waits again. Counted:
+//!   released once it stayed so for its window, as a no-copy buffer's idle import is (2 s, doubled
+//!   at each release of the chunk up to 64 s), by the same thread; the next object over it asks for
+//!   it again, and the first submission after its import waits again. Counted:
 //!   `WorkCounts::host_ram_chunks_released`.
 //! - **A window ahead of the objects.** From [`Device::use_host_ram`] on, a thread of the
 //!   device's ([`import_ahead`]) keeps imported the chunk an object last took and a window of
@@ -1524,23 +1526,23 @@ impl Device {
     /// is dropped; a device may use several RAMs at once whose ranges are apart, and a new RAM
     /// once an earlier use of the same ranges ended (a VMM's next guest).
     ///
-    /// Where the device's held imports add to the cost of every submission and it imports the
-    /// RAM's dma-bufs (RADV), each listed import costs every submission, so the RAM is imported
-    /// in fewer, longer chunks instead: as long as one dma-buf of its source holds
+    /// Where the device's held imports add to the cost of every submission and it imports the RAM's
+    /// dma-bufs (RADV), each listed import costs every submission, so the RAM is imported in fewer,
+    /// longer chunks instead: as long as one dma-buf of its source holds
     /// ([`HostRam::with_largest_dma_buf`]) and the device's `maxMemoryAllocationSize`,
-    /// `maxBufferSize` and `maxStorageBufferRange` take, in whole 64 MiB, and never past 256 MiB
-    /// (a chunk's import makes every page of it resident, those the guest never touched too).
-    /// There the thread imports nothing ahead: the first object over a chunk not imported asks it
-    /// for the chunk, which it imports off the object's thread (a chunk's import pins all its
-    /// pages: 660 to 692 ms for 2.7 GiB on a Radeon 780M), and that object and those over the
-    /// chunk meanwhile are bound in imports of their own runs alone, as above; a buffer's is
-    /// released while idle, the buffer bound in the chunk at its next use, and a heap's, or a
-    /// buffer's whose address was handed out, stays while it lives. A chunk stays imported once
-    /// imported, as the first submission after a chunk's import waits while the kernel writes its
-    /// page tables (hundreds of milliseconds for a chunk of 4 GiB in 4 KiB pages on a Radeon
-    /// 780M), where the whole RAM fits in half the device's memory heaps with unified memory, else
-    /// in three quarters of those that are not device-local. Where it does not, the thread releases a chunk no object nor pending command
-    /// buffer held for 2 s, the window doubled at each release of the chunk up to 64 s
+    /// `maxBufferSize` and `maxStorageBufferRange` take, in whole 64 MiB, and never past 256 MiB (a
+    /// chunk's import makes every page of it resident, those the guest never touched too). There
+    /// the thread imports nothing ahead: the first object over a chunk not imported asks it for the
+    /// chunk, which it imports off the object's thread (a chunk's import pins all its pages: 660 to
+    /// 692 ms for 2.7 GiB on a Radeon 780M), and that object and those over the chunk meanwhile are
+    /// bound in imports of their own runs alone, as above; a buffer's is released while idle, the
+    /// buffer bound in the chunk at its next use, and a heap's, or a buffer's whose address was
+    /// handed out, stays while it lives. A chunk stays imported once imported, as the first
+    /// submission after a chunk's import waits while the kernel writes its page tables (hundreds of
+    /// milliseconds for a chunk of 4 GiB in 4 KiB pages on a Radeon 780M), where the whole RAM fits
+    /// in half the device's memory heaps with unified memory, else in three quarters of those that
+    /// are not device-local. Where it does not, the thread releases a chunk no object nor pending
+    /// command buffer held for 2 s, the window doubled at each release of the chunk up to 64 s
     /// (`WorkCounts::host_ram_chunks_released`); the next object over it asks for it again.
     ///
     /// A RAM with a source of dma-bufs ([`HostRam::with_dma_buf`]) has its chunks imported as
