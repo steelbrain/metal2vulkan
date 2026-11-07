@@ -275,12 +275,22 @@ impl Slopes {
 /// offset on a grid of sixteenths (half a step each way: an eighth of the slope, doubled), and a
 /// `half` result's own rounding.
 ///
-/// The device's interpolation weighs the vertices' values, so an error in its weights moves the
-/// value by up to that error times the sum of the vertices' magnitudes, `range` ([`range_of`]),
-/// whatever the value's own: lane 3 of [`VALUES`], `(3, -2, 0.5)`, sums 5.5 where lanes 0 to 2
-/// sum 1. Lanes 0 to 2 are the weights themselves, so lane 3 lies within `range` times their
-/// bound exactly where its error is the weights' that lanes 0 to 2 are held to. Held at `1e-3` of
-/// `range`, of the value's magnitude, or 1. Measured: about `1.5e-4` of it, `3e-4` on lavapipe
+/// In full, for lane `c` of a value read at `read` with `n` samples, Metal's value `m`:
+///
+/// ```text
+/// |ours - m| <= 1e-3 * max(sum_i |VALUES[i][c]|, |m|, 1)
+///             + (2 * slope    for a centroid at n > 1)
+///             + (slope / 8    for an offset)
+///             + (|m| * 2^-10 + 2^-14    for a `half` result)
+/// ```
+///
+/// The first term is the device's interpolation, propagated through the lane's values. A value
+/// is `sum_i w_i * VALUES[i][c]`, the `w_i` the device's weights of the three vertices, so weights
+/// off by at most `e` each move it by at most `e * sum_i |VALUES[i][c]|`, `range` ([`range_of`]),
+/// whatever the value's own magnitude: lane 3 of [`VALUES`], `(3, -2, 0.5)`, sums 5.5 where lanes
+/// 0 to 2 sum 1. Lanes 0 to 2 hand `(1, 0, 0)`, `(0, 1, 0)` and `(0, 0, 1)`, so their values are
+/// the weights themselves, held to `e = 1e-3`; lane 3 lies within its bound exactly where its
+/// error is those weights'. Measured: about `1.5e-4` of it, `3e-4` on lavapipe
 /// (LLVM 23.1.1); llvmpipe (LLVM 23.1.4, Mesa 26.2.6) up to `4.6e-3` apart in lane 3, `8.4e-4` of
 /// its range, and lanes 0 to 2 within `1e-3`.
 fn device_bound(metal: f32, range: f32, read: Read, lanes: Lanes, slope: f32, n: u32) -> f32 {
