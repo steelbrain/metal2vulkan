@@ -1293,7 +1293,9 @@ fn interlocked(modes: &[u32]) -> bool {
 /// the shadow in place of the codes (as many image reads as the pipeline unshadowed) and writes it
 /// (one write more), declares the interlock the pipeline did not and early fragment tests, passes
 /// L3 and plans the same variant against itself. `rt6_resolve_white`, writing a `BGRA10_XR` color 0
-/// unblended through an ordinary output, writes the shadow and reads nothing; in four samples (on
+/// unblended through an ordinary output, writes the shadow and reads nothing; `rt6_samples`' blend
+/// under a mask of red, green and blue reads the kept alpha from the shadow (and its code from the
+/// input attachment, for the codes); in four samples (on
 /// a profile that renders the raw format at four) its shadow is refused (the function would run
 /// per sample), where `rt6_samples`' four-sample blend holds a multisampled shadow. A profile
 /// without the interlock refuses the shadowed variant by what it lacks. Before, the runtime kept
@@ -1490,7 +1492,8 @@ fn a_shadowed_extended_range_attachment_over_its_input_attachment_holds_its_half
         );
         assert!(interlocked(&execution_modes(&words)), "{stem}: unblended");
         valid(&stem, "unblended", &variant, &dev);
-        // A blend under a mask of the color channels keeps alpha as the shadow held it.
+        // A blend under a mask of the color channels keeps alpha as the shadow held it, and the
+        // codes keep their own alpha code.
         let mut d = sampled();
         d.raster_sample_count = 1;
         let mut masked = over(PixelFormat::BGRA10XR);
@@ -1514,8 +1517,9 @@ fn a_shadowed_extended_range_attachment_over_its_input_attachment_holds_its_half
         );
         assert_eq!(
             image_accesses(&fragment_words(&variant)),
-            (reads + 1, writes + 1),
-            "{stem}: masked: the blend's destination and the kept alpha read from the shadow"
+            (reads + 2, writes + 1),
+            "{stem}: masked: the blend's destination and the kept alpha read from the shadow, \
+             the kept code still from the input attachment"
         );
         valid(&stem, "masked", &variant, &dev);
         // In four samples, where the profile renders the raw format at four (a profile captured
