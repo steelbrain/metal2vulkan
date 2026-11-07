@@ -4480,6 +4480,7 @@ field	metal2vulkan::pipeline::PrivateRenderState.fragment_depth_compare_clamp_ma
 field	metal2vulkan::pipeline::PrivateRenderState.logic_operation	pub logic_operation: u64
 field	metal2vulkan::pipeline::PrivateRenderState.logic_operation_enabled	pub logic_operation_enabled: bool
 field	metal2vulkan::pipeline::PrivateRenderState.needs_custom_border_color_samplers	pub needs_custom_border_color_samplers: bool
+field	metal2vulkan::pipeline::PrivateRenderState.open_gl_mode_enabled	pub open_gl_mode_enabled: bool
 field	metal2vulkan::pipeline::PrivateRenderState.point_coord_lower_left	pub point_coord_lower_left: bool
 field	metal2vulkan::pipeline::PrivateRenderState.point_size_output_vs	pub point_size_output_vs: bool
 field	metal2vulkan::pipeline::PrivateRenderState.point_smooth_enabled	pub point_smooth_enabled: bool
@@ -12046,6 +12047,7 @@ variant	metal2vulkan-runtime::Problem::PointSizeTopology	PointSizeTopology
 variant	metal2vulkan-runtime::Problem::ProtectedEncoder	ProtectedEncoder { options: u64 }
 variant	metal2vulkan-runtime::Problem::RangeOutOfBounds	RangeOutOfBounds { offset: u64, size: u64, length: u64 }
 variant	metal2vulkan-runtime::Problem::RasterSampleCount	RasterSampleCount { count: u32 }
+variant	metal2vulkan-runtime::Problem::RasterizedVoidVertex	RasterizedVoidVertex
 variant	metal2vulkan-runtime::Problem::RateMap	RateMap(RateMapProblem)
 variant	metal2vulkan-runtime::Problem::Rebind	Rebind(RebindProblem)
 variant	metal2vulkan-runtime::Problem::RenderPass	RenderPass(RenderPassProblem)

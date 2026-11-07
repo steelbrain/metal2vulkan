@@ -34,7 +34,7 @@ Columns:
 | Translation caps | 14 | 14 | 0 | 0 | 7 | 7 | 0 |
 | Rate maps the compile layer does not compile | 5 | 5 | 0 | 0 | 4 | 1 | 0 |
 | The translation deadline | 1 | 1 | 0 | 0 | 0 | 1 | 0 |
-| What a call did wrong | 65 | 65 | 0 | 0 | 0 | 0 | 0 |
+| What a call did wrong | 66 | 66 | 0 | 0 | 0 | 0 | 0 |
 | What a call did wrong, in detail | 167 | 150 | 0 | 0 | 0 | 0 | 0 |
 
 ## Totals by basis
@@ -48,7 +48,7 @@ Columns:
 | Translation caps | 0 | 0 | 0 | 0 | 14 | 0 | 0 | 0 |
 | Rate maps the compile layer does not compile | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 5 |
 | The translation deadline | 0 | 0 | 0 | 0 | 1 | 0 | 0 | 0 |
-| What a call did wrong | 21 | 3 | 5 | 0 | 11 | 8 | 17 | 0 |
+| What a call did wrong | 22 | 3 | 5 | 0 | 11 | 8 | 17 | 0 |
 | What a call did wrong, in detail | 59 | 26 | 23 | 0 | 33 | 26 | 0 | 0 |
 
 ## 1. Translator and front-end refusals (`Unsupported`: a `Feature` and its `Needs`)
@@ -381,10 +381,11 @@ Columns:
 | `DynamicLibraryFunction` | A function made by name from a dynamic library (`newFunctionWithName:` and its forms) | every device (a public call's own check of its arguments) | `metal-measured`: an M3 Max and an M4, plain and under API validation: Metal asserts "type is not a valid MTLFunctionType" | 1: `crates/metal2vulkan-runtime/src/library.rs (function)` | `-` |
 | `Rebind` | `rebind_bytes_no_copy` of a buffer or heap the runtime cannot rebind as asked (a runtime extension; `rebind.rs`) | every device (a public call's own check of its arguments) | `ours`: a runtime extension: Metal rebinds no bytes under a buffer | 5: `crates/metal2vulkan-runtime/src/buffer_descriptor.rs (rebind_host_pages)`, `crates/metal2vulkan-runtime/src/detach.rs (detach_backing, 2 sites)` (+1) | `-` |
 | `IndirectCommandsDirectArgument` | `new_render_pipeline_state`, `new_mesh_render_pipeline_state` or `new_compute_pipeline_state` of a descriptor with `supportIndirectCommandBuffers`... | every device (a public call's own check of its arguments) | `metal-measured`: an M3 Max under macOS 26.7 and an M4 under 27.0.1: plain Metal answers nil with an NSError | 1: `crates/metal2vulkan-runtime/src/pipeline/indirect_arguments.rs (refusal)` | `-` |
-| `UnrasterizedVertexReturn` | `new_render_pipeline_state` of a descriptor with rasterization disabled whose vertex function's return type is not `void` | every device (a public call's own check of its arguments) | `metal-measured`: an M4, macOS 27.0.1: plain Metal answers nil with an NSError | 1: `crates/metal2vulkan-runtime/src/pipeline/unrasterized.rs (check)` | `-` |
+| `UnrasterizedVertexReturn` | `new_render_pipeline_state` of a descriptor with rasterization disabled whose vertex function's return type is not `void` | every device (a public call's own check of its arguments) | `metal-measured`: an M4, macOS 27.0.1: plain Metal answers nil with an NSError | 1: `crates/metal2vulkan-runtime/src/pipeline/unrasterized.rs (rasterizes)` | `-` |
+| `RasterizedVoidVertex` | `new_render_pipeline_state` of a descriptor with rasterization enabled whose vertex function's return type is `void`, with or without a fragment... | every device (a public call's own check of its arguments) | `metal-measured`: an M3 Max, macOS 27.0.1: plain Metal answers nil with an NSError | 1: `crates/metal2vulkan-runtime/src/pipeline/unrasterized.rs (rasterizes)` | `-` |
 | `IndirectCommandsDirectArgumentUnproven` | `new_render_pipeline_state` (a render or mesh state) of a descriptor with `supportIndirectCommandBuffers` whose function of `stage`, the first in... | every device (a public call's own check of its arguments) | `unknown`: Metal's answer for a use only this rule keeps is unmeasured, so the state is refused as unproven | 1: `crates/metal2vulkan-runtime/src/pipeline/indirect_arguments.rs (check_render)` | `-` |
 | `IndirectCommandsDirectArgumentUndecided` | `new_render_pipeline_state`, `new_mesh_render_pipeline_state` or `new_compute_pipeline_state` of a descriptor with `supportIndirectCommandBuffers`... | every device (a public call's own check of its arguments) | `ours`: the compile layer will not say whether the functions use one, so no state is made | 1: `crates/metal2vulkan-runtime/src/pipeline/indirect_arguments.rs (undecided)` | `-` |
-| `DepthWrittenWithoutAttachment` | `new_render_pipeline_state` of a descriptor without a depth attachment whose fragment function writes depth (a `[[depth(...)]]` output) | every device (a public call's own check of its arguments) | `metal-measured`: an M4, macOS 27.0.1: plain Metal answers nil with an NSError | 1: `crates/metal2vulkan-runtime/src/pipeline/linked_fragment.rs (check_depth)` | `-` |
+| `DepthWrittenWithoutAttachment` | `new_render_pipeline_state` of a descriptor without a depth attachment whose fragment function writes depth (a `[[depth(...)]]` output), outside... | every device (a public call's own check of its arguments) | `metal-measured`: an M4, macOS 27.0.1: plain Metal answers nil with an NSError | 1: `crates/metal2vulkan-runtime/src/pipeline/linked_fragment.rs (check_depth)` | `-` |
 | `UnwrittenFragmentInputs` | `new_render_pipeline_state` of a descriptor whose fragment function's stage inputs `inputs` (their MSL member names, in declaration order), which... | every device (a public call's own check of its arguments) | `metal-measured`: an M4, macOS 27.0.1: plain Metal answers nil with an NSError | 1: `crates/metal2vulkan-runtime/src/pipeline/linked_fragment.rs (check_inputs)` | `-` |
 | `UnwrittenFragmentInputsUnproven` | [`Problem::UnwrittenFragmentInputs`] where only a rule kept beyond Metal keeps such an input (`reason`) | every device (a public call's own check of its arguments) | `unknown`: Metal may make the state; the input is kept by a rule beyond Metal | 1: `crates/metal2vulkan-runtime/src/pipeline/linked_fragment.rs (check_inputs)` | `-` |
 | `AttachmentNotAFormat` | `new_render_pipeline_state` or `new_mesh_render_pipeline_state` of a descriptor whose `attachment` is in a pixel format (`format`) Metal describes... | every device (a public call's own check of its arguments) | `metal-measured`: an Apple M4 under macOS 27.0.1, and the consumer's run on an M3 Max under 26.7: Metal's descriptor validation stops it | 1: `crates/metal2vulkan-runtime/src/pipeline/attachment_formats.rs (check)` | `-` |
@@ -857,7 +858,8 @@ Each refusal's sites, with the function that builds it.
 - `invalid::DynamicLibraryFunction`: `crates/metal2vulkan-runtime/src/library.rs (function)`
 - `invalid::Rebind`: `crates/metal2vulkan-runtime/src/buffer_descriptor.rs (rebind_host_pages)`; `crates/metal2vulkan-runtime/src/detach.rs (detach_backing, 2 sites)`; `crates/metal2vulkan-runtime/src/rebind.rs (rebind_bytes_no_copy, 2 sites)`
 - `invalid::IndirectCommandsDirectArgument`: `crates/metal2vulkan-runtime/src/pipeline/indirect_arguments.rs (refusal)`
-- `invalid::UnrasterizedVertexReturn`: `crates/metal2vulkan-runtime/src/pipeline/unrasterized.rs (check)`
+- `invalid::UnrasterizedVertexReturn`: `crates/metal2vulkan-runtime/src/pipeline/unrasterized.rs (rasterizes)`
+- `invalid::RasterizedVoidVertex`: `crates/metal2vulkan-runtime/src/pipeline/unrasterized.rs (rasterizes)`
 - `invalid::IndirectCommandsDirectArgumentUnproven`: `crates/metal2vulkan-runtime/src/pipeline/indirect_arguments.rs (check_render)`
 - `invalid::IndirectCommandsDirectArgumentUndecided`: `crates/metal2vulkan-runtime/src/pipeline/indirect_arguments.rs (undecided)`
 - `invalid::DepthWrittenWithoutAttachment`: `crates/metal2vulkan-runtime/src/pipeline/linked_fragment.rs (check_depth)`
