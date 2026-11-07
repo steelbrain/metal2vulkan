@@ -2847,7 +2847,11 @@ impl CommandBuffer {
     /// on a thread of its own; the runtime's hands it to its scheduler thread, a wake and a pass
     /// away. Here, where no other submission pass is under way, this thread makes it: it submits
     /// the device's ready batches in commit order, this one's among them, each needing no host
-    /// step, no group and no switch of a storage form, up to the pass's bound. A batch held back
+    /// step and no switch of a storage form, up to the pass's bound. Under
+    /// `CompletionPolicy::Grouped`, on a driver whose batches may wait in a group for one kernel
+    /// submission, a batch goes alone where its `VkQueue` runs at most one earlier submission not
+    /// seen complete (the group would go at once), and is left to the scheduler's thread, which
+    /// holds it in the group, where two or more run. A batch held back
     /// (another queue's, for its checks, an event value or a host step) holds back only the later
     /// commits that wait behind it, as on the scheduler's thread: those of its own queue, and
     /// another queue's whose resources it uses. What it leaves goes to the scheduler's thread,

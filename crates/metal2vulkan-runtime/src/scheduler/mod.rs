@@ -21,8 +21,10 @@
 //!   `CommandBuffer::commit_and_submit`, a runtime extension). Its commit is posted with no wake,
 //!   and where no passer is counted it makes one pass as a thread about to block does: it takes
 //!   in what the inbox holds and submits, in commit order, the line heads that are ready and need
-//!   nothing of this thread (no host step, no group, no switch of a storage form, no rebind's
-//!   encoding) and wait behind no earlier commit, as this thread's own pass picks them
+//!   nothing of this thread (no host step, no switch of a storage form, no rebind's encoding; a
+//!   batch that may wait in a group goes alone where its `VkQueue` runs at most one earlier
+//!   submission not seen complete, as the group would go at once, and is left to this thread to
+//!   hold where two or more run) and wait behind no earlier commit, as this thread's own pass picks them
 //!   ([`Order::next`], [`is_behind`]), up to [`PASS_SUBMISSIONS`]; their submission handlers then
 //!   run on it, in their turn ([`Turns`]), and their transitions to `Scheduled` run on it where
 //!   plain, else go to their queues' contexts. The first head in commit order ready but for its
@@ -1625,7 +1627,7 @@ fn submit_ready(
         };
         let submitted = held
             .buffer
-            .submit_batch(held.index, held.last, &waits, state);
+            .submit_batch(held.index, held.last, &waits, false, state);
         // Its waits for values found reached go: it waits for none of them.
         if matches!(
             submitted,
@@ -1833,7 +1835,7 @@ fn submit_plain_ready(
         };
         let answer = held
             .buffer
-            .submit_batch(held.index, held.last, &waits, state);
+            .submit_batch(held.index, held.last, &waits, true, state);
         // Its waits for values found reached go: it waits for none of them.
         if matches!(answer, Ok(Submitting::Submitted(_))) {
             held.hold_ended();
@@ -1877,10 +1879,9 @@ fn submit_plain_ready(
                 state.order.put_back(queue, sequence, held);
                 return submitted;
             }
-            // Unreachable: `groups` stops holding for a queue but never starts (its `flights` are
-            // set once, `device/relay.rs`), so a batch [`plain_ready`] found ungrouped has
-            // `joins` false and submits alone (`command_buffer/group.rs`), and this pass runs
-            // only while the group holds no batch, so `admits` holds for it. Held as the thread's
+            // Unreachable: this pass submits each batch alone (`joins` false,
+            // `command_buffer/group.rs`), and runs only while the group holds no batch, so
+            // `admits` holds for it. Held as the thread's
             // own pass holds one all the same, and this pass ends there: the thread, which the
             // caller wakes, sends the group at once, as it does for any group one of whose
             // command buffers a thread waits for (`Group::keeps`).
@@ -2000,11 +2001,15 @@ fn plain(
     if untracked_decodes > 0 || (!decodes.is_empty() && reads_decoding(held, decodes)) {
         return false;
     }
-    let quiet = match passer {
-        Passer::Waiting => held.buffer.submits_without_the_program(),
-        Passer::Committing => held.buffer.submits_at_commit(),
-    };
-    quiet && !held.buffer.groups()
+    // A batch that may wait in the group is the scheduler thread's to hold, but for a committing
+    // thread's where its `VkQueue` would see the group go at once (`goes_alone_at_commit`).
+    match passer {
+        Passer::Waiting => held.buffer.submits_without_the_program() && !held.buffer.groups(),
+        Passer::Committing => {
+            held.buffer.submits_at_commit()
+                && (!held.buffer.groups() || held.buffer.goes_alone_at_commit())
+        }
+    }
 }
 
 /// The checks of the first line head in commit order whose checks a committing thread may run

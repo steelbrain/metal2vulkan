@@ -120,6 +120,18 @@ impl CommandBufferShared {
         groups(&self.device, self.queue.vk_queue())
     }
 
+    /// Whether a committing thread submits a batch of it that may wait in a group
+    /// ([`groups`]) alone, rather than leave it to the scheduler's thread
+    /// (`scheduler::plain`, `CommandBuffer::commit_and_submit`): where its `VkQueue` runs at most
+    /// one earlier submission not seen complete, the pass that held it would send the group at its
+    /// end ([`Group::keeps`]), so it reaches the GPU no later, and the commit saves the scheduler's
+    /// wake and pass. Where two or more run, the scheduler's thread holds it in the group, with
+    /// the commits that join it. Read without the queue's lock, as `keeps` reads it: a submission
+    /// seen complete meanwhile only lowers the count.
+    pub(crate) fn goes_alone_at_commit(&self) -> bool {
+        (self.device.shared().queues[self.queue.vk_queue()].pending_beyond_one()).is_none()
+    }
+
     /// A batch of it was held in the scheduler's group.
     pub(crate) fn held_in_group(&self) {
         self.group_hold.fetch_or(IN_GROUP, Ordering::SeqCst);

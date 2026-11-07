@@ -412,12 +412,14 @@ impl CommandBufferShared {
     /// encoders of it a rebind encodes again (`reencode.rs`, [`Submitting::Later`]), or while the
     /// group held must go first ([`Submitting::AfterGroup`]): the caller holds the batch back at its
     /// place. Where the group went in this batch's submission, its outcome is the group's
-    /// (`Group::take_outcome`).
+    /// (`Group::take_outcome`). With `alone`, it never waits in the group: a thread other than
+    /// the scheduler's submits it (`scheduler::submit_plain_ready`).
     pub(crate) fn submit_batch(
         self: &Arc<Self>,
         index: usize,
         last: bool,
         event_waits: &[(vk::Semaphore, u64)],
+        alone: bool,
         scheduler: &mut scheduler::State,
     ) -> Result<Submitting, CommandBufferError> {
         let device = &self.device;
@@ -436,7 +438,8 @@ impl CommandBufferShared {
         let met = (event_waits.iter()).any(|&wait| scheduler.group.meets(wait));
         let joins = {
             let sync = &state.batches.all()[index];
-            group::groups(device, queue)
+            !alone
+                && group::groups(device, queue)
                 && !(last && super::fences::ends_at_fence(device, queue))
                 && !met
                 && sync.binary_waits.is_empty()

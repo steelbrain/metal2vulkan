@@ -402,7 +402,9 @@ Calls Metal does not have, for a consumer that emulates a Metal device:
 - `CommandBuffer::commit_and_submit` commits as `commit` does, then submits on the calling thread
   where no other submission pass is under way: the ready command buffers in commit order, this
   one among them, each needing no host step and no switch of a storage form, up to the pass's
-  bound (one held back, another queue's waiting for its check or an event, holds back only the
+  bound (under `CompletionPolicy::Grouped`, on a driver whose batches may wait in a group, one
+  goes alone where its `VkQueue` runs at most one earlier submission not seen complete, and is
+  left to the scheduler's thread to group where two or more run; one held back, another queue's waiting for its check or an event, holds back only the
   later commits that wait behind it, as on the scheduler's thread), their submission checks run
   inside the call just before each submission (unless one waits for a shared event's GPU signal
   to land, which the scheduler's thread waits for; a plain event's wait goes to the `VkQueue`, as
