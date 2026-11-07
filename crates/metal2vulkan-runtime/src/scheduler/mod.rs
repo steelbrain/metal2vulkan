@@ -687,9 +687,8 @@ struct Held {
     gate: Option<Vec<u64>>,
     /// Its command buffer has a submission check, so it may wait for checks to run.
     checked: bool,
-    /// Its checks were taken to run, once: left to the scheduler's thread ([`check_heads`]), or
-    /// run by a committing thread before it submits it ([`claim_check`]).
-    checks_taken: bool,
+    /// Who took its checks to run, once.
+    checks_taken: Option<Taken>,
     /// The makings of the pipelines its host step records were raised to a queue's first held
     /// batch's ([`hasten_heads`]).
     hastened: bool,
@@ -1442,7 +1441,7 @@ fn take_in(state: &mut State, commits: &mut Vec<Committed>, spent: &mut Spent) -
             segments: batch.segments,
             gate: None,
             checked: batch.checked,
-            checks_taken: false,
+            checks_taken: None,
             hastened: false,
             counted_held: false,
             held_since: None,
@@ -1927,6 +1926,16 @@ fn submit_plain_ready(
     submitted
 }
 
+/// Who took a held batch's submission checks to run.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Taken {
+    /// Left to the scheduler's thread ([`check_heads`]), which runs its checks in the order it
+    /// took them.
+    Left,
+    /// A committing thread, which runs them before it submits the batch ([`claim_check`]).
+    AtCommit,
+}
+
 /// Which thread other than the scheduler's makes a pass for itself.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Passer {
@@ -2034,7 +2043,7 @@ fn claim_check(state: &mut State) -> Option<Work> {
     let passer = Passer::Committing;
     let mut claimable = order.heads_where(|held| {
         held.checked
-            && !held.checks_taken
+            && held.checks_taken.is_none()
             && held.buffer.needs_check(held.index)
             && plain(held, binary, decodes, *untracked_decodes, passer)
             && landing_waits(held).is_some_and(|waits| waits.is_empty())
@@ -2044,7 +2053,7 @@ fn claim_check(state: &mut State) -> Option<Work> {
     let sequence =
         (claimable.into_iter()).find(|&sequence| !is_behind(order, binary, &mut memo, sequence))?;
     let held = order.head_mut_at(sequence)?;
-    held.checks_taken = true;
+    held.checks_taken = Some(Taken::AtCommit);
     Some((held.buffer.hold(), held.index))
 }
 
@@ -2194,7 +2203,8 @@ type Work = (Hold<CommandBufferShared>, usize);
 ///
 /// Where the line's batches may go in one kernel submission (`command_buffer/group.rs`), the
 /// batches right behind a head that goes (its checks in `left` or none due, otherwise ready, its
-/// events' values reached on the device or by the host) are looked at too, at most
+/// events' values reached on the device or by the host; not one whose checks a committing thread
+/// runs, as those behind it would run on this thread meanwhile) are looked at too, at most
 /// [`GROUP_BATCHES`] less one and none committed after another line's batch
 /// ([`Order::leading_mut`]), each that goes taking its checks to `left` likewise: so the next pass
 /// finds them ready together. Each check still runs in commit order before its own batch's
@@ -2206,7 +2216,11 @@ fn check_heads(state: &mut State, behind: &[u64], left: &mut Left<Work>, awaits:
     order.leading_mut(behind, GROUP_BATCHES - 1, |held, head| {
         let otherwise_ready = binary.ready(&held.binary_needs)
             && !(held.segments && held.buffer.needs_host_step(held.index));
-        let due = held.checked && !held.checks_taken && held.buffer.needs_check(held.index);
+        let due =
+            held.checked && held.checks_taken.is_none() && held.buffer.needs_check(held.index);
+        // A committing thread runs its checks ([`claim_check`]), so no check behind it may start.
+        let elsewhere =
+            held.checks_taken == Some(Taken::AtCommit) && held.buffer.needs_check(held.index);
         // Whether it goes as far as its checks know: the batches after it may be checked now.
         let goes = |held: &Held| {
             otherwise_ready
@@ -2218,14 +2232,14 @@ fn check_heads(state: &mut State, behind: &[u64], left: &mut Left<Work>, awaits:
                 return false;
             }
             if due {
-                held.checks_taken = true;
+                held.checks_taken = Some(Taken::Left);
                 left.push(Kind::Check, (held.buffer.hold(), held.index));
             }
             return true;
         }
         count_waits_held(held);
         if !held.checked || !otherwise_ready || !due {
-            return !due && goes(held);
+            return !due && !elsewhere && goes(held);
         }
         match landing_waits(held) {
             None => return false,
@@ -2240,7 +2254,7 @@ fn check_heads(state: &mut State, behind: &[u64], left: &mut Left<Work>, awaits:
             }
             Some(_) => {}
         }
-        held.checks_taken = true;
+        held.checks_taken = Some(Taken::Left);
         left.push(Kind::Check, (held.buffer.hold(), held.index));
         goes(held)
     });
