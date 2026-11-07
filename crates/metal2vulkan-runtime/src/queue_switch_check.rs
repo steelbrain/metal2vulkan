@@ -533,14 +533,14 @@ impl Objects {
                 .push_next(&mut values);
             // SAFETY: the queue is used under its lock, inside a section; the command buffer is
             // recorded, ended and in no other submission; each timeline's signals rise in the order
-            // they run (each lane's batches run in its queue's order); the gate's wait is
-            // signalled below; the fence, where there is one, is unsignaled (made so, or reset once
-            // the round before signalled it) and in no pending submission. The device's loader word is held across the call and the relay's
-            // mark after it (MoltenVK names the device as it logs each, `loader_word.rs`), taken
-            // inside the queue's lock. None of the round's batches runs before the gate's signal,
-            // which the caller makes under the word where it was found overwritten, so none
-            // completes while the word is let go between them, nor does the mark after it, which
-            // is kept, for the round to wait for.
+            // they run (each lane's batches run in its queue's order); the gate's wait is signalled
+            // below; the fence, where there is one, is unsignaled (made so, or reset once the round
+            // before signalled it) and in no pending submission. The device's loader word is held
+            // across the call and the relay's mark after it (MoltenVK names the device as it logs
+            // each, `loader_word.rs`), taken inside the queue's lock. None of the round's batches
+            // runs before the gate's signal, which the caller makes under the word where it was
+            // found overwritten, so none completes while the word is let go between them, nor does
+            // the mark after it, which is kept, for the round to wait for.
             let ((held, made), mark) = uses.use_queue_kept(
                 batch.queue,
                 By::Runtime,
