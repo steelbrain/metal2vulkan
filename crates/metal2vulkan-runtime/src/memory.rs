@@ -776,12 +776,21 @@ pub(super) struct Block {
 
 /// What a block's memory was allocated exportable as (`VkExportMemoryAllocateInfo`), for the one
 /// buffer placed in it (`exported_memory.rs`).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) struct Exported {
     /// The handle type it exports.
     pub(super) handle: vk::ExternalMemoryHandleTypeFlags,
     /// It is the buffer's dedicated allocation (`VkMemoryDedicatedAllocateInfo`).
     pub(super) dedicated: bool,
+}
+
+impl std::fmt::Debug for Exported {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Exported")
+            .field("handle", &self.handle.as_raw())
+            .field("dedicated", &self.dedicated)
+            .finish()
+    }
 }
 
 /// What the runtime mapped that a block's memory was imported from (`Block::pages`,
