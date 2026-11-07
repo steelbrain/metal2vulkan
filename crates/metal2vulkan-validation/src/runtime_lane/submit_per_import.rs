@@ -49,6 +49,17 @@
 //! Printed as `IMPORT-RELEASE-COST` lines: the release's 50th and 90th percentiles and its time a
 //! frame, a frame's wall time, and the releases posted.
 //!
+//! A fourth holds buffers of the runtime's own (`submit_per_fresh_page_buffer`): for each phase
+//! of [`FRESH_PHASES`], that many `Device::new_buffer`s of that length and storage, longer than half
+//! a pooled block, which lie in fresh pages imported by their pointer where the device takes them
+//! (`fresh_pages.rs` of the runtime), then a `Private` control of the same lengths. It commits
+//! [`COMMITS`] command buffers of one 4-KiB fill one at a time, each waited for, and
+//! [`GUEST_FRAMES`] frames of [`GUEST_PER_FRAME`] fills. Printed as `SUBMIT-FRESH-PAGES` lines: the
+//! fresh-page buffers the device made (`WorkCounts::fresh_page_buffers_made`, `fresh_page_bytes`),
+//! its host imports and pooled blocks live, a command buffer's time from its kernelStartTime to its
+//! kernelEndTime (50th percentile), a frame's wall time and the scheduler thread's CPU time a
+//! commit and a frame.
+//!
 //! Ignored by default: measurements, not checks. Run them by name with `--run-ignored all`; on a
 //! host without `/dev/udmabuf` access the dma-buf rows say so and are skipped.
 
@@ -91,6 +102,18 @@ const GUEST_FRAMES: usize = 120;
 const GUEST_WARM: usize = 10;
 /// The frame period while the device's residency thread releases the idle imports.
 const GUEST_PERIOD: Duration = Duration::from_micros(16_667);
+
+/// The phases of `submit_per_fresh_page_buffer`: a name, how many buffers, their length and their
+/// storage.
+const FRESH_PHASES: [(&str, usize, usize, bool); 7] = [
+    ("none", 0, 0, true),
+    ("1 Shared of 64 MiB", 1, 64 << 20, true),
+    ("4 Shared of 64 MiB", 4, 64 << 20, true),
+    ("1 Shared of 256 MiB", 1, 256 << 20, true),
+    ("4 Shared of 256 MiB", 4, 256 << 20, true),
+    ("4 Private of 256 MiB", 4, 256 << 20, false),
+    ("none again", 0, 0, true),
+];
 
 /// The kind of import a phase holds.
 #[derive(Clone, Copy, Debug)]
@@ -519,5 +542,67 @@ fn submit_per_import_release_cost() {
             after.host_import_releases_posted - before.host_import_releases_posted,
         );
         drop(buffers);
+    }
+}
+
+/// Buffers of the runtime's own, held as each phase of [`FRESH_PHASES`] says, and what one commit
+/// and one frame of fills cost beside them, printed (the module docs).
+#[test]
+#[ignore = "a measurement, not a check: run by name with --run-ignored all"]
+fn submit_per_fresh_page_buffer() {
+    let cache = ScratchCache::new().unwrap();
+    let messages = Messages::default();
+    let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), |options| {
+        options.layers.clear();
+        // A consumer's device keeps no execution record.
+        options.record_executions = false;
+    })
+    .unwrap();
+    let queue = device.new_command_queue().unwrap();
+    let target = device.new_buffer(4096, ResourceOptions::shared()).unwrap();
+    for (name, count, length, shared) in FRESH_PHASES {
+        let options = match shared {
+            true => ResourceOptions::shared(),
+            false => ResourceOptions::private(),
+        };
+        let before = device.work_counts();
+        let held: Vec<Buffer> = (0..count)
+            .map(|_| device.new_buffer(length as u64, options).unwrap())
+            .collect();
+        for value in 0..WARM {
+            submitted(fill(&queue, &target, value as u8));
+        }
+        let scheduler = named_cpu_us(SCHEDULER);
+        let times: Vec<f64> = (0..COMMITS)
+            .map(|value| submitted(fill(&queue, &target, value as u8)) * 1e6)
+            .collect();
+        let per_commit = (named_cpu_us(SCHEDULER) - scheduler) / COMMITS as f64;
+        let [_, c50, c90] = percentiles(times);
+        for _ in 0..GUEST_WARM {
+            guest_frame(&queue, &target, &[]);
+        }
+        let scheduler = named_cpu_us(SCHEDULER);
+        let frames: Vec<f64> = (0..GUEST_FRAMES)
+            .map(|_| {
+                let start = Instant::now();
+                guest_frame(&queue, &target, &[]);
+                start.elapsed().as_secs_f64() * 1e6
+            })
+            .collect();
+        let per_frame = (named_cpu_us(SCHEDULER) - scheduler) / GUEST_FRAMES as f64;
+        let [_, f50, f90] = percentiles(frames);
+        let after = device.work_counts();
+        eprintln!(
+            "SUBMIT-FRESH-PAGES {}: {name}: {} fresh-page buffers made ({} MiB), {} host imports \
+             live, {} pooled blocks live; commit p50 {c50:.1} us (p90 {c90:.1}), scheduler thread \
+             {per_commit:.1} us a commit; frame of {GUEST_PER_FRAME} p50 {f50:.0} us (p90 \
+             {f90:.0}), scheduler thread {per_frame:.0} us a frame",
+            device.name(),
+            after.fresh_page_buffers_made - before.fresh_page_buffers_made,
+            (after.fresh_page_bytes - before.fresh_page_bytes) >> 20,
+            after.host_imports_live,
+            after.memory_blocks_live,
+        );
+        drop(held);
     }
 }
