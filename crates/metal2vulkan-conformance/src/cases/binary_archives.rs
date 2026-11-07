@@ -563,8 +563,11 @@ const SERIALIZING: &[(&str, Step)] = &[
 ///
 /// Five sources, which are the five answers a reader would want of the call: a file that is not an
 /// archive, an empty file, a path with nothing at it, a directory, and a **metallib**. The last is
-/// not a mistake: Metal accepted one as an archive on the oracle, which our side's container
-/// reader refuses, and the row is here because that is a refusal of something plain Metal does.
+/// not a mistake: Metal accepted one as an archive on the oracle. The two creations after it ask
+/// what that archive holds: the metallib is the compute library's own, so the kernel the family
+/// adds is in the file, and a creation of it listing the archive with
+/// `MTLPipelineOptionFailOnBinaryArchiveMiss` set is created only if the archive holds the
+/// pipeline; without the bit it is created either way.
 const SOURCES: &[(&str, Step)] = &[
     (
         "write-text",
@@ -619,6 +622,13 @@ const SOURCES: &[(&str, Step)] = &[
             from: Some(Source::File(ScratchFile::At("library.metallib"))),
         },
     ),
+    // The archive from the metallib is the program's fifth (index 4): every `NewArchive` step
+    // appends one, made or refused.
+    (
+        "from-a-metallib-held-kernel",
+        compute(&[4], FAIL_ON_MISS, HELD),
+    ),
+    ("from-a-metallib-without-the-bit", compute(&[4], 0, HELD)),
 ];
 
 /// A compute creation step, which the four-cell table writes many of.
