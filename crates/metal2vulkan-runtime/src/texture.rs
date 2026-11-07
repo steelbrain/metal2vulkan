@@ -1637,7 +1637,8 @@ impl Device {
                 descriptor.texture_type,
             )?;
         }
-        let texture = self.texture_as(CALL, descriptor, IdUse::Program(descriptor.placement))?;
+        let id_use = IdUse::Program(descriptor.placement);
+        let texture = self.texture_as(CALL, descriptor, (id_use, Fresh::AsMetal))?;
         self.take_device_sampler();
         Ok(texture)
     }
@@ -2088,11 +2089,30 @@ impl Device {
         })
     }
 
-    fn texture_as(
+    /// The texture of `descriptor` over an IOSurface plane whose texels Metal lays out in no one
+    /// place, in memory of its own (`Buffer::new_texture_with_iosurface_plane`,
+    /// `linear_plan::apart_from_plane`): made as [`Device::new_texture`] makes one, its ID
+    /// `id_use`'s, taking no sampler ID (the plane's call takes it), but zero in every texel in
+    /// every storage mode, a `Private` one's too. A framebuffer-only one, which only a surface's
+    /// plane takes, is made as one that is not.
+    pub(super) fn surface_texture_apart(
         &self,
         call: &'static str,
         descriptor: &TextureDescriptor,
         id_use: IdUse,
+    ) -> Result<Texture, Error> {
+        let descriptor = TextureDescriptor {
+            framebuffer_only: false,
+            ..*descriptor
+        };
+        self.texture_as(call, &descriptor, (id_use, Fresh::Zero))
+    }
+
+    fn texture_as(
+        &self,
+        call: &'static str,
+        descriptor: &TextureDescriptor,
+        (id_use, fresh): (IdUse, Fresh),
     ) -> Result<Texture, Error> {
         let options = descriptor.resource_options;
         let storage = options.storage_mode()?;
@@ -2142,7 +2162,7 @@ impl Device {
             false => self.with_undeclared_usage(plan, &layout, usage, &facts)?,
         };
         let plan = self.with_free_usage(plan, layout.texture_type)?;
-        let image = self.new_texture_image(plan, &layout, descriptor, hazard)?;
+        let image = self.new_texture_image(plan, &layout, descriptor, (hazard, fresh))?;
         // A multisampled depth the device renders faster out of `GENERAL` rests in the attachment
         // layout between the passes that hold it (`texture/held_depth.rs`).
         let private = storage == StorageMode::Private;
@@ -2946,7 +2966,8 @@ impl Device {
     /// GPU's does (counted, `WorkCounts::private_textures_unfilled`), except on an Apple GPU,
     /// whose own image of such a texture is compressed and would read Apple's pattern: there it
     /// reads zero, what such a Mac's reads where its memory held nothing (counted,
-    /// `WorkCounts::private_textures_zero_filled`). The runtime's own images keep
+    /// `WorkCounts::private_textures_zero_filled`). [`Fresh::Zero`] starts every one but a
+    /// `Memoryless` one at zero in every texel instead, uncounted. The runtime's own images keep
     /// [`new_image`](Self::new_image)'s start: an image its first command writes in full need
     /// not be zeroed first.
     fn new_texture_image(
@@ -2954,15 +2975,26 @@ impl Device {
         plan: ImagePlan,
         layout: &TextureLayout,
         descriptor: &TextureDescriptor,
-        hazard: HazardTrackingMode,
+        (hazard, fresh): (HazardTrackingMode, Fresh),
     ) -> Result<Image, Error> {
         let identity = Identity::new(hazard, false);
         let storage = descriptor.resource_options.storage_mode()?;
+        let memoryless = storage == StorageMode::Memoryless;
+        if fresh == Fresh::Zero && !memoryless {
+            return self.new_image_starting(
+                plan,
+                layout,
+                descriptor,
+                identity,
+                Start::ZeroUnpatterned,
+                Device::runtime_owner,
+            );
+        }
         let uncompressed = storage == StorageMode::Private && !self.metal_compresses_textures();
         let apple_gpu = crate::MacClass::of_vendor(self.properties().vendor_id)
             == crate::MacClass::AppleSilicon;
         let unfilled = uncompressed && !apple_gpu;
-        let held = storage == StorageMode::Memoryless || unfilled;
+        let held = memoryless || unfilled;
         let image = self.new_image_starting(
             plan,
             layout,
@@ -3331,7 +3363,8 @@ impl Device {
         // compressed (the runtime's own images are held; one that presents a Mac keeping none
         // reads zero, `new_texture_image`). Dropping `image` on failure releases everything
         // above.
-        let patterned = match private && !held && self.metal_compresses_textures() {
+        let unpatterned = matches!(start, Start::Held | Start::ZeroUnpatterned);
+        let patterned = match private && !unpatterned && self.metal_compresses_textures() {
             true => {
                 let key = image.identity.key;
                 self.fresh_patterned(&image.plan, layout, descriptor, clear, key)?
@@ -3878,13 +3911,27 @@ pub(super) fn copy_units(
     units
 }
 
+/// How a new texture of the program's starts ([`Device::new_texture_image`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Fresh {
+    /// As Metal's new texture of its storage mode starts on the Mac the device presents.
+    AsMetal,
+    /// Zero in every texel, in every storage mode but `Memoryless`: a texture over an IOSurface
+    /// plane whose texels Metal lays out in no one place (`Device::surface_texture_apart`).
+    Zero,
+}
+
 /// How a new image starts ([`Device::new_image_starting`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Start {
     /// Holding what its memory held.
     Held,
-    /// Zero in every texel.
+    /// Zero in every texel; a `Private` image on a device that presents a Mac keeping textures
+    /// compressed, Metal's fresh pattern instead (`Device::fresh_patterned`).
     Zero,
+    /// Zero in every texel, a `Private` texture's too: a texture of the runtime's that stands
+    /// for texels Metal lays out in no one place (`Device::surface_texture_apart`).
+    ZeroUnpatterned,
     /// Moved to `GENERAL` alone, its texels written after (a decoded twin's, by the decode its
     /// image stages, `texture/decoded_twin.rs`): on the host or the staging queue where it takes
     /// their copies, as it is made; else by the next submission, as a held image's.

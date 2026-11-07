@@ -471,6 +471,259 @@ fn a_plane_past_its_surface_keeps_those_texels_in_its_tail() {
     assert_eq!(tails, 1, "announced once");
 }
 
+/// A colour 2D texture of two levels, a 3D texture and a 2D multisample one over a plane of an
+/// IOSurface with planes (`linear_plan.rs`'s **Beyond the plane's rows**): Metal makes each and
+/// lays its texels out in no one place there, its first level's and slice's among them (an Apple
+/// M3 Max under macOS 27.0.1, `metal2vulkan-conformance/probes/surface_texture_envelope.m`'s
+/// `bgra1x2.mips2`, `bgra1x2.3d.d2` and `bgra1x2.2dms4.private`: its GPU reads them from other
+/// bytes than its writes and its CPU put them), where the runtime makes each in memory of its
+/// own, zero when made, announced once as `surface-texels-apart`: its first level reads zero
+/// where the plane holds other bytes, what the CPU writes into a level or a slice the CPU and a
+/// blit read back, and no byte of the surface changes.
+#[test]
+fn a_plane_s_texture_metal_lays_in_no_one_place_lies_apart() {
+    let scratch = Scratch::new("buffer-tail-apart");
+    let heard = Heard::default();
+    let device = hearing_device(&scratch.0, &[], &heard);
+    const LENGTH: u64 = 32768;
+    let surface = device
+        .new_buffer(LENGTH, ResourceOptions::shared())
+        .unwrap();
+    let bytes: Vec<u8> = (0..LENGTH).map(pattern).collect();
+    // SAFETY: the buffer's `LENGTH` mapped bytes, which no command uses yet.
+    unsafe {
+        std::ptr::copy_nonoverlapping(
+            bytes.as_ptr(),
+            surface.contents().unwrap().as_ptr(),
+            bytes.len(),
+        )
+    };
+    let plane = IoSurfacePlane::new(0, ROW, true);
+    let queue = device.new_command_queue().unwrap();
+    // A blit of `texture`'s first `width`-texel row of `level` and `slice` into a buffer.
+    let blit_row = |texture: &Texture, level: u64, slice: u64, origin: Origin, width: u64| {
+        let read = device
+            .new_buffer(width * 4, ResourceOptions::shared())
+            .unwrap();
+        let command_buffer = queue.command_buffer().unwrap();
+        let mut blit = command_buffer.blit_command_encoder().unwrap();
+        let copy = blit.copy_from_texture_to_buffer(
+            texture,
+            slice,
+            level,
+            origin,
+            Size::new(width, 1, 1),
+            &read,
+            0,
+            width * 4,
+            width * 4,
+            BlitOption::None,
+        );
+        copy.unwrap();
+        blit.end_encoding().unwrap();
+        command_buffer.commit().unwrap();
+        command_buffer.wait_until_completed_for(WAIT).unwrap();
+        // SAFETY: the read buffer's mapped bytes, which no command uses now.
+        let all = unsafe {
+            std::slice::from_raw_parts(read.contents().unwrap().as_ptr(), (width * 4) as usize)
+        };
+        all.to_vec()
+    };
+    let usage = TextureUsage::SHADER_READ | TextureUsage::SHADER_WRITE;
+    let mut levels = TextureDescriptor::texture_2d(PixelFormat::RGBA8Unorm, WIDTH, 64, false);
+    levels.mipmap_level_count = 2;
+    levels.usage = usage;
+    levels.resource_options = ResourceOptions::shared();
+    let mips = (surface.new_texture_with_iosurface_plane(&levels, plane)).unwrap();
+    let mut first = vec![0xEE; ROW as usize];
+    let region = Region::new_2d(0, 0, WIDTH, 1);
+    (mips.get_bytes(&mut first, ROW, 0, region, 0, 0)).unwrap();
+    assert_eq!(
+        first,
+        vec![0; ROW as usize],
+        "level 0 made zero, not the plane's"
+    );
+    let half = row(|x, c| (x * 7 + c) as u8 | 0x80)[..ROW as usize / 2].to_vec();
+    let level_one = Region::new_2d(0, 0, WIDTH / 2, 1);
+    (mips.replace_region(level_one, 1, 0, &half, ROW / 2, 0)).unwrap();
+    let mut back = vec![0; ROW as usize / 2];
+    (mips.get_bytes(&mut back, ROW / 2, 0, level_one, 1, 0)).unwrap();
+    assert_eq!(back, half, "level 1 by the CPU");
+    assert_eq!(
+        blit_row(&mips, 1, 0, Origin::new(0, 0, 0), WIDTH / 2),
+        half,
+        "level 1 by a blit"
+    );
+    let mut deep = TextureDescriptor::texture_2d(PixelFormat::RGBA8Unorm, WIDTH, 32, false);
+    deep.texture_type = metal2vulkan::metal::TextureType::Type3D;
+    deep.depth = 2;
+    deep.usage = usage;
+    deep.resource_options = ResourceOptions::shared();
+    let volume = (surface.new_texture_with_iosurface_plane(&deep, plane)).unwrap();
+    let by_cpu = row(|x, c| (x * 3 + c * 5) as u8 | 0x40);
+    let second = Region::new_3d(0, 0, 1, WIDTH, 1, 1);
+    (volume.replace_region(second, 0, 0, &by_cpu, ROW, ROW)).unwrap();
+    assert_eq!(
+        blit_row(&volume, 0, 0, Origin::new(0, 0, 1), WIDTH),
+        by_cpu,
+        "slice 1 of the 3D texture by a blit"
+    );
+    let mut samples = TextureDescriptor::texture_2d(PixelFormat::RGBA8Unorm, WIDTH, 64, false);
+    samples.texture_type = metal2vulkan::metal::TextureType::Type2DMultisample;
+    samples.sample_count = 4;
+    samples.usage = TextureUsage::RENDER_TARGET | TextureUsage::SHADER_READ;
+    samples.resource_options = ResourceOptions::private();
+    (surface.new_texture_with_iosurface_plane(&samples, plane)).unwrap();
+    // SAFETY: the surface's `LENGTH` mapped bytes, which no command uses now.
+    let now = unsafe {
+        std::slice::from_raw_parts(surface.contents().unwrap().as_ptr(), LENGTH as usize)
+    };
+    assert_eq!(now, &bytes[..], "no byte of the surface changes");
+    let notices = heard.lock().unwrap();
+    let apart = notices
+        .iter()
+        .filter(|notice| notice.degradation == Degradation::SurfaceTexelsApart)
+        .count();
+    assert_eq!(apart, 1, "announced once");
+}
+
+/// A 2D array of two slices over a plane of an IOSurface with planes (`linear_plan.rs`'s
+/// **Beyond the plane's rows**, 64 by 32 `RGBA8Unorm` at rows of 256 over a 32768-byte surface,
+/// as the probe's `bgra1x2.2darray.a2`): Metal keeps its first slice over the plane on every path
+/// and lays its second in no one place (an Apple M3 Max under macOS 27.0.1,
+/// `metal2vulkan-conformance/probes/surface_texture_envelope.m`), where the runtime keeps the
+/// second in the texture's tail, zero when made, announced once as `surface-texels-tail`. Slice 0
+/// reads the plane's bytes on every path and what a kernel writes there reaches them; slice 1
+/// reads zero as made, and what the CPU, a blit and a kernel write there every path reads back,
+/// while no byte of the surface past slice 0 changes and no other buffer's does.
+#[test]
+fn an_array_over_a_plane_keeps_its_second_slice_in_its_tail() {
+    let scratch = Scratch::new("buffer-tail-plane-array");
+    let heard = Heard::default();
+    let device = hearing_device(&scratch.0, &[], &heard);
+    const HEIGHT: u64 = 32;
+    const IMAGE: u64 = ROW * HEIGHT;
+    // A world of a 64 by 32 2D texture over the plane, whose buffer the array shares.
+    let tail = Tail::over_plane(&device, 32768, 0, HEIGHT);
+    let plane = IoSurfacePlane::new(0, ROW, true);
+    let mut slices = TextureDescriptor::texture_2d(PixelFormat::RGBA8Unorm, WIDTH, HEIGHT, false);
+    slices.texture_type = metal2vulkan::metal::TextureType::Type2DArray;
+    slices.array_length = 2;
+    slices.usage = TextureUsage::SHADER_READ | TextureUsage::SHADER_WRITE;
+    slices.resource_options = ResourceOptions::shared();
+    let array = (tail.buffer.new_texture_with_iosurface_plane(&slices, plane)).unwrap();
+    // Each slice as a 2D texture, which the kernel reads and writes.
+    let view = |slice: u64| {
+        let ty = metal2vulkan::metal::TextureType::Type2D;
+        (array.new_texture_view_with_levels_slices(
+            PixelFormat::RGBA8Unorm,
+            ty,
+            0..1,
+            slice..slice + 1,
+        ))
+        .unwrap()
+    };
+    let views = [view(0), view(1)];
+    let cpu_row = |slice: u64, y: u64| {
+        let mut bytes = vec![0xEE; ROW as usize];
+        let region = Region::new_2d(0, y, WIDTH, 1);
+        (array.get_bytes(&mut bytes, ROW, 0, region, 0, slice)).unwrap();
+        bytes
+    };
+    let blit_row = |slice: u64, y: u64| {
+        let read = device.new_buffer(ROW, ResourceOptions::shared()).unwrap();
+        let command_buffer = tail.queue.command_buffer().unwrap();
+        let mut blit = command_buffer.blit_command_encoder().unwrap();
+        let (origin, size) = (Origin::new(0, y, 0), Size::new(WIDTH, 1, 1));
+        let copy = blit.copy_from_texture_to_buffer(
+            &array,
+            slice,
+            0,
+            origin,
+            size,
+            &read,
+            0,
+            ROW,
+            ROW,
+            BlitOption::None,
+        );
+        copy.unwrap();
+        blit.end_encoding().unwrap();
+        command_buffer.commit().unwrap();
+        command_buffer.wait_until_completed_for(WAIT).unwrap();
+        // SAFETY: the read buffer's `ROW` mapped bytes, which no command uses now.
+        unsafe { std::slice::from_raw_parts(read.contents().unwrap().as_ptr(), ROW as usize) }
+            .to_vec()
+    };
+    let kernel_row = |slice: u64, y: u64| {
+        tail.invert(&views[slice as usize], &tail.plain);
+        inverted(&tail.cpu_row(&tail.plain, y))
+    };
+    // As made: slice 0 the plane's bytes, slice 1 zero, on every path.
+    for y in [0, 31] {
+        let want = tail.made_row(y);
+        assert_eq!(cpu_row(0, y), want, "slice 0 get_bytes {y}");
+        assert_eq!(blit_row(0, y), want, "slice 0 blit {y}");
+        assert_eq!(kernel_row(0, y), want, "slice 0 kernel {y}");
+        let zero = vec![0; ROW as usize];
+        assert_eq!(cpu_row(1, y), zero, "slice 1 get_bytes {y}");
+        assert_eq!(blit_row(1, y), zero, "slice 1 blit {y}");
+        assert_eq!(kernel_row(1, y), zero, "slice 1 kernel {y}");
+    }
+    // The kernel writes every row of each slice: slice 0's reach the plane's bytes, slice 1's
+    // the tail, read back by every path.
+    for (slice, mark) in [(0u64, 0x80u8), (1, 0x40)] {
+        let written: Vec<Vec<u8>> = (0..HEIGHT)
+            .map(|y| row(|x, c| (y * 13 + x * 3 + c * 7 + slice) as u8 | mark))
+            .collect();
+        for (y, bytes) in written.iter().enumerate() {
+            let region = Region::new_2d(0, y as u64, WIDTH, 1);
+            (tail
+                .plain
+                .replace_region(region, 0, 0, &inverted(bytes), ROW, 0))
+            .unwrap();
+        }
+        tail.invert(&tail.plain, &views[slice as usize]);
+        for y in [0, 17, 31] {
+            let want = &written[y as usize];
+            assert_eq!(&cpu_row(slice, y), want, "slice {slice} get_bytes {y}");
+            assert_eq!(&blit_row(slice, y), want, "slice {slice} blit {y}");
+            assert_eq!(&kernel_row(slice, y), want, "slice {slice} kernel {y}");
+        }
+        if slice == 0 {
+            assert_eq!(
+                tail.buffer_bytes(17 * ROW..18 * ROW),
+                written[17],
+                "slice 0 in place"
+            );
+        }
+    }
+    // The CPU writes a row of slice 1: every path reads it, the plane's bytes past slice 0 as
+    // they were made.
+    let by_cpu = row(|x, c| (x * 5 + c) as u8 | 0x20);
+    let region = Region::new_2d(0, 9, WIDTH, 1);
+    (array.replace_region(region, 0, 1, &by_cpu, ROW, 0)).unwrap();
+    assert_eq!(blit_row(1, 9), by_cpu, "slice 1 blit after replace_region");
+    assert_eq!(
+        kernel_row(1, 9),
+        by_cpu,
+        "slice 1 kernel after replace_region"
+    );
+    let past: Vec<u8> = (IMAGE..2 * IMAGE).map(pattern).collect();
+    assert_eq!(
+        tail.buffer_bytes(IMAGE..2 * IMAGE),
+        past,
+        "the plane past slice 0"
+    );
+    assert!(tail.around_kept(), "no write reaches another buffer");
+    let notices = heard.lock().unwrap();
+    let tails = notices
+        .iter()
+        .filter(|notice| notice.degradation == Degradation::SurfaceTexelsTail)
+        .count();
+    assert_eq!(tails, 1, "announced once");
+}
+
 /// Over a `Private` buffer, whose shadow copies back rather than merging, a blit's write past the
 /// length reads back through the kernel, and the kernel's through a blit.
 #[test]

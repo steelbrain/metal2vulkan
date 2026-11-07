@@ -58,8 +58,8 @@ use super::error::{internal, invalid, nil, vulkan, Error, Problem, RuntimeGap};
 use super::exit_guard;
 use super::key_hash::KeyMap;
 use super::linear_plan::{
-    is_linear, plan_buffer_texture, plane_rows_share_bytes, BufferFacts, BufferLayout,
-    BufferRefusal, BufferTexture, BufferTextureCall, BufferTextureProblem, Placed,
+    apart_from_plane, is_linear, plan_buffer_texture, plane_rows_share_bytes, BufferFacts,
+    BufferLayout, BufferRefusal, BufferTexture, BufferTextureCall, BufferTextureProblem, Placed,
     LINEAR_ALIGNMENT,
 };
 use super::resource::{Identity, ResourceKey};
@@ -149,10 +149,16 @@ pub(super) struct Texels {
     /// CPU's, a blit's rows) takes the bytes inside the length from the buffer and those past it
     /// from here ([`Texels::past`]). `None` for texels inside their buffer.
     tail: Option<Buffer>,
+    /// Where the texels' bytes in place end: the buffer's length, but for a 2D array of more than
+    /// one slice over an IOSurface plane, whose slices past the first lie in the tail from their
+    /// first byte on (`linear_plan::Placed::kept`). The tail holds the texels' bytes from here.
+    kept: u64,
 }
 
 /// Where a texture's texels past its buffer's length lie ([`Texels::past`]): the buffer's bytes
 /// from `length` on are the tail's, byte `v` of the buffer's space at `v - rebase` of the tail.
+/// `length` is the buffer's own, but a 2D array's over an IOSurface plane whose slices past the
+/// first lie in the tail ([`Texels::kept`]), where it is the second slice's first byte.
 #[derive(Clone, Copy)]
 pub(super) struct Past<'a> {
     pub(super) tail: &'a Buffer,
@@ -492,7 +498,8 @@ impl Buffer {
     /// pitch or offset, or rows that end past it, which plain Metal asserts on); what Metal makes
     /// over a plane of a surface with planes and lays out no one way across the GPUs measured
     /// (`NotImplemented(SurfacePlaneShape)`, which carries the measurements: rows wider than the
-    /// plane's, more than one level, another type, a 2D array of slices, a BC texture at an
+    /// plane's, more than one level, a 3D or multisample texture of a format but a colour one, a
+    /// 2D array of slices of such a format or off 16 bytes, another type, a BC texture at an
     /// offset or pitch off 16 bytes; a cube or cube array there plain Metal asserts on,
     /// `Invalid`); `Memoryless` storage, which plain Metal makes and serves on the CPU while its
     /// GPU uses fail the command buffer
@@ -512,6 +519,23 @@ impl Buffer {
     /// 27.0.1). The runtime keeps them in a tail of the texture's own, zero when made, which every
     /// path reads and writes alike, and its texels inside the surface are the buffer's bytes
     /// (the module's **Tails**). Announced once by [`Degradation::SurfaceTexelsTail`].
+    ///
+    /// A colour 2D texture of more than one level, a 3D texture and a 2D multisample one over a
+    /// plane of a surface with planes are made in memory of their own, zero when made in every
+    /// storage mode, as [`Device::new_texture`](crate::Device::new_texture) makes one otherwise:
+    /// Metal makes each and lays out its texels in no one place there, its first level's and
+    /// slice's among them (an Apple M3 Max under macOS 27.0.1, whose GPU reads them from other
+    /// bytes than its writes and its CPU put them; the x86 Macs keep the first level and slice
+    /// over the plane). Announced once by [`Degradation::SurfaceTexelsApart`].
+    ///
+    /// A colour 2D array of more than one slice over a plane of a surface with planes whose
+    /// offset and `bytesPerRow` are multiples of 16 is made with its first slice over the plane,
+    /// the buffer's bytes as a 2D texture's there, and its slices past the first in a tail of the
+    /// texture's own, zero when made, which every path reads and writes alike: Metal keeps the
+    /// first slice over the plane on every path and lays the others out in no one place (the M3
+    /// Max's blits and `getBytes` read the second at the plane's offset, its kernels one image
+    /// on, and its writes land at the plane's offset). Announced once by
+    /// [`Degradation::SurfaceTexelsTail`].
     ///
     /// A depth or stencil texture (`Depth16Unorm`, `Depth32Float`, `Depth32Float_Stencil8`,
     /// `Stencil8`, `X32_Stencil8`) over a plane of a surface with planes is made as Metal makes
@@ -818,6 +842,19 @@ impl Buffer {
                 id_use,
             );
         }
+        // A texture over a plane whose texels Metal lays out in no one place, its first level's
+        // and slice's among them, lies in memory of its own (`linear_plan.rs`'s **Beyond the
+        // plane's rows**).
+        if apart_from_plane(&texture) {
+            if storage == StorageMode::Memoryless {
+                return Err(Error::NotImplemented(RuntimeGap::MemorylessSurfacePlane));
+            }
+            let made = self
+                .device()
+                .surface_texture_apart(call, descriptor, id_use)?;
+            self.degrade_apart(&layout, offset, bytes_per_row);
+            return Ok(made);
+        }
         let placed = plan_buffer_texture(&texture, &buffer)
             .map_err(|refusal| refusal_error(call, refusal))?;
         if self.device().is_lost() {
@@ -992,22 +1029,53 @@ impl Buffer {
         });
     }
 
+    /// Announce `SurfaceTexelsApart` for a texture of `layout` over the IOSurface plane at `offset`,
+    /// `bytes_per_row` a row, made in memory of its own (`linear_plan.rs`'s **Beyond the plane's
+    /// rows**).
+    fn degrade_apart(&self, layout: &TextureLayout, offset: u64, bytes_per_row: u64) {
+        self.device().degrade(Degradation::SurfaceTexelsApart, || {
+            let [width, height, depth] = layout.extent;
+            let object = format!(
+                "{width}x{height}x{depth} {:?} {:?} texture of {} levels and {} samples over an \
+                 IOSurface plane at offset {offset}, {bytes_per_row} bytes a row",
+                layout.texture_type, layout.pixel_format, layout.levels, layout.samples
+            );
+            let reason = "Metal lays such a texture's texels over a plane in no one place, its \
+                          first level's and slice's among them: its GPU reads them from other \
+                          bytes than its writes and its CPU put them"
+                .to_owned();
+            (object, reason)
+        });
+    }
+
     /// Announce `SurfaceTexelsTail` for an IOSurface plane of `layout` placed as `placed`, whose
-    /// texels run past the buffer standing for its surface into the texture's tail, once it is
-    /// made (`linear_plan.rs`'s **Beyond the plane's rows**).
+    /// texels run past the buffer standing for its surface, or a 2D array's slices past its
+    /// first, into the texture's tail, once it is made (`linear_plan.rs`'s **Beyond the plane's
+    /// rows**).
     fn degrade_surface_tail(&self, layout: &TextureLayout, placed: &Placed) {
         self.device().degrade(Degradation::SurfaceTexelsTail, || {
             let [width, height, _] = layout.extent;
+            let slices = match layout.layers {
+                1 => String::new(),
+                layers => format!(" of {layers} slices"),
+            };
             let object = format!(
-                "{width}x{height} {:?} texture of an IOSurface plane at offset {}, {} bytes a row",
+                "{width}x{height} {:?} texture{slices} of an IOSurface plane at offset {}, {} \
+                 bytes a row",
                 layout.pixel_format, placed.cpu.offset, placed.cpu.row_pitch
             );
-            let reason = format!(
-                "its texels run to byte {} of the {} bytes standing for its surface, and Metal \
-                 lays those past the surface in no one place",
-                placed.gpu.end().max(placed.cpu.end()),
-                self.length()
-            );
+            let end = placed.gpu.end().max(placed.cpu.end());
+            let reason = match placed.kept {
+                Some(kept) => format!(
+                    "Metal lays its slices past the first in no one place: they lie from byte \
+                     {kept} of the buffer's space on, in the tail"
+                ),
+                None => format!(
+                    "its texels run to byte {end} of the {} bytes standing for its surface, and \
+                     Metal lays those past the surface in no one place",
+                    self.length()
+                ),
+            };
             (object, reason)
         });
     }
@@ -1198,6 +1266,9 @@ impl Texels {
     ) -> Texels {
         let mut texels = Texels::new(buffer, placed.gpu, texel_bytes, descriptor);
         texels.cpu = placed.cpu;
+        if let Some(kept) = placed.kept {
+            texels.kept = kept.min(texels.kept);
+        }
         texels
     }
 
@@ -1412,16 +1483,17 @@ impl Texels {
             objects: ObjectsToken::default(),
             surface: false,
             tail: None,
+            kept: buffer.length(),
             buffer,
         }
     }
 
-    /// These texels with their tail where they run past the buffer's length, made as
+    /// These texels with their tail where they run past the bytes they keep in place (the
+    /// buffer's length, or a 2D array's second slice, [`Texels::kept`]), made as
     /// [`Device::own_buffer`] makes a buffer: all zero.
     fn with_tail(self) -> Result<Texels, Error> {
-        let length = self.buffer.length();
         let end = self.layout.end().max(self.cpu.end()).max(self.shader.end());
-        if end <= length {
+        if end <= self.kept {
             return Ok(self);
         }
         let hazard = self.options.hazard_tracking_mode()?;
@@ -1435,11 +1507,12 @@ impl Texels {
     }
 
     /// Where the texels' bytes past the buffer's length lie, where they run past it: from the
-    /// buffer's length on, each byte `v` of the buffer's space at `v - rebase` of the tail.
+    /// buffer's length on (a 2D array's second slice on, [`Texels::kept`]), each byte `v` of the
+    /// buffer's space at `v - rebase` of the tail.
     pub(super) fn past(&self) -> Option<Past<'_>> {
         self.tail.as_ref().map(|tail| Past {
             tail,
-            length: self.buffer.length(),
+            length: self.kept,
             rebase: self.tail_base(),
         })
     }
@@ -1703,7 +1776,7 @@ impl Texels {
         };
         let (_, start) = buffer.at(0);
         let inside = match self.tail {
-            Some(_) => self.buffer.length().saturating_sub(layout.offset).min(span),
+            Some(_) => self.kept.saturating_sub(layout.offset).min(span),
             None => span,
         };
         let back = inside_rows(staged_rows_back(layout, start, at), at, inside);

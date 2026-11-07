@@ -1240,6 +1240,66 @@ fn a_plane_past_its_surface_is_made_and_announced() {
     layer_reported_nothing_at_all(&messages);
 }
 
+/// The kind [`a_mipmapped_plane_lies_apart_and_is_announced`] takes: a texture over a plane of an
+/// IOSurface with planes whose texels Metal lays out in no one place, its first level's among
+/// them, in memory of its own.
+pub(super) const SURFACE_APART: [Degradation; 1] = [Degradation::SurfaceTexelsApart];
+
+/// A 64x64 `RGBA8Unorm` 2D texture of two levels over a plane of a planar surface at 256 bytes a
+/// row over the 16-KiB ordinary buffer standing for the surface is made, which plain Metal makes
+/// too and lays out in no one place, its first level among them (an Apple M3 Max under macOS
+/// 27.0.1, `metal2vulkan-conformance/probes/surface_texture_envelope.m`'s `bgra1x2.mips2`). The
+/// device announces [`SURFACE_APART`] once for it, with the `Shared` buffer's system memory where
+/// the device forces it. The texture lies in memory of its own: its first level reads zero as
+/// made where the buffer holds the probe's pattern, what the CPU writes into either level reads
+/// back, and no byte of the buffer changes. `tests::buffer_tail_device` in the runtime holds a 3D
+/// and a multisample one too.
+#[test]
+fn a_mipmapped_plane_lies_apart_and_is_announced() {
+    let messages = Messages::default();
+    let cache = ScratchCache::new().unwrap();
+    {
+        let device = validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
+        eprintln!("device {}", device.name());
+        // What the device announced as it was made.
+        messages.take_notices();
+        let held = Held::new(&device, Kind::Ordinary).expect("an ordinary buffer");
+        let (w, row) = (64u64, 256u64);
+        let h = LEN as u64 / row;
+        let mut d = TextureDescriptor::texture_2d(PixelFormat::RGBA8Unorm, w, h, false);
+        d.mipmap_level_count = 2;
+        d.usage = TextureUsage::SHADER_READ.union(TextureUsage::SHADER_WRITE);
+        d.resource_options = held.buffer.resource_options();
+        let plane = IoSurfacePlane::new(0, row, true);
+        let texture = (held.buffer.new_texture_with_iosurface_plane(&d, plane))
+            .unwrap_or_else(|e| panic!("a mipmapped plane: {e}"));
+        let first = forced(&[(
+            Degradation::SharedInSystemMemory,
+            shared_in_system_memory(&device),
+        )]);
+        assert_made_once(&messages, &SURFACE_APART, &first);
+        let get = |level: u64, y: u64| {
+            let bytes_per_row = (w >> level) * 4;
+            let mut bytes = vec![0xEE; bytes_per_row as usize];
+            let region = Region::new_2d(0, y, w >> level, 1);
+            (texture.get_bytes(&mut bytes, bytes_per_row, 0, region, level, 0)).unwrap();
+            bytes
+        };
+        assert_eq!(get(0, 5), vec![0; row as usize], "level 0 as made");
+        let written: Vec<u8> = (0..row as usize).map(|i| (i * 5 + 1) as u8).collect();
+        let region = Region::new_2d(0, 5, w, 1);
+        (texture.replace_region(region, 0, 0, &written, row, 0)).unwrap();
+        assert_eq!(get(0, 5), written, "level 0 as written");
+        let half = &written[..row as usize / 2];
+        let region = Region::new_2d(0, 3, w / 2, 1);
+        (texture.replace_region(region, 1, 0, half, row / 2, 0)).unwrap();
+        assert_eq!(get(1, 3), half, "level 1 as written");
+        assert_eq!(held.bytes(), held.model, "the buffer's bytes");
+        assert_made_once(&messages, &[], &forced(&[]));
+    }
+    layer_reported_nothing_at_all(&messages);
+}
+
 /// A texture of a `w` x `h` `RGBA8Unorm` plane of a planar surface at offset 0 of `held`'s buffer,
 /// `bpr` bytes a row, of `usage` and the buffer's own resource options.
 fn surface_plane(

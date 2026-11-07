@@ -2246,14 +2246,23 @@ bound.
   refused. Cost: where two of the plane's rows write the bytes they share the earlier row's stand,
   one of the rows a kernel of Metal's leaves there, whose winner moves with the threadgroup shape;
   reads, CPU access and every other byte are Metal's.
+- `metal2vulkan-degrade-surface-texels-apart` (precision). `SurfaceTexelsApart`: A texture over a
+  plane of an IOSurface with planes whose texels Metal lays out in no one place, its first level's
+  and slice's among them: a 2D texture of more than one level, a 3D texture and a 2D multisample
+  one. Metal makes it, and on an Apple M3 Max under macOS 27.0.1 its GPU reads those texels from
+  other bytes than its writes and its CPU put them; the x86 Macs under macOS 26.7.1 keep its first
+  level and slice over the plane. Cost: its texels lie in memory of its own, zero when made, which
+  every path reads and writes alike, and no byte of the surface's; Metal's GPU and CPU reach the
+  surface's bytes in no one place.
 - `metal2vulkan-degrade-surface-texels-tail` (precision). `SurfaceTexelsTail`: A texture of a
-  plane of an IOSurface with planes whose texels run past the buffer standing for its surface,
-  which Metal makes and lays out in no one place there (an Apple M3 Max under macOS 27.0.1): its
-  blits read zeros past the surface, its kernels zeros and, 32 KiB past the plane, the plane's
-  rows again, its `getBytes` zeros and other memory, and its writes there change no byte of the
-  surface. Cost: its texels past the surface lie in a tail of the texture's own, zero when made,
-  which every path reads and writes alike, where Metal's blits read zeros there and its writes
-  keep to the surface; its texels inside the surface are Metal's.
+  plane of an IOSurface with planes, which Metal makes, some of whose texels it lays out in no one
+  place (an Apple M3 Max under macOS 27.0.1): its texels past the buffer standing for its surface,
+  where its blits read zeros, its kernels zeros and, 32 KiB past the plane, the plane's rows
+  again, its `getBytes` zeros and other memory, and its writes change no byte of the surface; and
+  a 2D array's slices past its first, which its blits and `getBytes` read at the plane's offset,
+  over the first slice, its kernels one image on, and its writes put at the plane's offset. Cost:
+  those texels lie in a tail of the texture's own, zero when made, which every path reads and
+  writes alike and which reaches no byte of the surface; its texels in place are Metal's.
 - `metal2vulkan-degrade-absent-argument-read` (precision). `AbsentArgumentRead`: A pipeline state's
   function may read an argument its function constants removed (a texture's read, sample, gather,
   query or atomic, or a sample through a removed sampler; `RuntimeFact::AbsentArgumentRead`), which
@@ -4376,6 +4385,30 @@ each item named states the rule in full.
   (`metal2vulkan-degrade-surface-texels-tail`), where Metal lays them in no one place; the plane
   shapes that keep no tail (a two-plane YCbCr, two-plane extended-range, 4:2:2, depth, stencil,
   BC or rotated texture) stay `NotImplemented(TexelsPastBufferLength)` there.
+- **A 2D array of several slices over an IOSurface plane keeps its slices past the first in a
+  tail of its own.** Over a plane of a surface with planes Metal makes a 2D array of any slices.
+  On an Apple M3 Max under macOS 27.0.1 (`probes/surface_texture_envelope.m`) its first slice
+  lies over the plane on every path, and its second in no one place: its blits and `getBytes`
+  read it at the plane's offset, over the first slice, its kernels one image on, and its blits'
+  and `replaceRegion`'s writes of it land at the plane's offset, over the first. The runtime's
+  first slice is the plane's bytes, as Metal's is; its slices past the first lie in the
+  texture's tail, zero when made, read and written alike by every path, and reach no byte of the
+  surface, announced (`metal2vulkan-degrade-surface-texels-tail`). A colour array over a plane
+  whose offset and `bytesPerRow` are multiples of 16 is made so; one off 16, or of another
+  format, stays `NotImplemented(SurfacePlaneShape)`.
+- **A mipmapped, 3D or multisample texture over an IOSurface plane lies in memory of its own.**
+  Over a plane of a surface with planes Metal makes a 2D texture of several levels, a 3D texture
+  and a 2D multisample one. On an Apple M3 Max under macOS 27.0.1
+  (`probes/surface_texture_envelope.m`) it lays their texels out in no one place, their first
+  level and slice among them: its blits and kernels read other bytes than its blits,
+  `replaceRegion` and `getBytes` write and read there. The runtime's such texture of a colour
+  format lies in memory of its own, zero when made in every storage mode, read and written alike
+  by every path, and reaches no byte of the surface, announced
+  (`metal2vulkan-degrade-surface-texels-apart`): no level or slice of it is the plane's, as the
+  M3 Max's are not. The x86 Macs under macOS 26.7.1 (an AMD Radeon Pro 5300M and an Intel UHD
+  630) keep the first level and slice over the plane, and the runtime does not. Such a texture
+  of another format stays `NotImplemented(SurfacePlaneShape)`, and a `Memoryless` one
+  `NotImplemented(MemorylessSurfacePlane)`.
 
 **Function constants**
 

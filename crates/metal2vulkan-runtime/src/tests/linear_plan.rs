@@ -5,8 +5,8 @@
 use super::super::buffer_texture::{plane_copy_regions, staged_rows_back, Blocks};
 use super::super::image_plan::plan_image;
 use super::super::linear_plan::{
-    aliases, check_linear_limits, holding, is_linear, linear_alignment, linear_lack,
-    plan_buffer_texture, BufferFacts, BufferLayout, BufferRefusal, BufferTexture,
+    aliases, apart_from_plane, check_linear_limits, holding, is_linear, linear_alignment,
+    linear_lack, plan_buffer_texture, BufferFacts, BufferLayout, BufferRefusal, BufferTexture,
     BufferTextureCall, BufferTextureProblem, LinearImage, LinearLack, Placed, LINEAR_ALIGNMENT,
 };
 use super::super::texture_descriptor::{effective_usage, no_texture_alone, TextureDescriptor};
@@ -308,6 +308,21 @@ fn plan(case: Case) -> Result<BufferLayout, BufferRefusal> {
 
 /// Where `case` lies for the GPU and the CPU.
 fn placed(case: Case) -> Result<Placed, BufferRefusal> {
+    plan_buffer_texture(
+        &buffer_texture(case),
+        &BufferFacts {
+            length: case.length,
+        },
+    )
+}
+
+/// Whether the texture of `case` lies in memory of its own rather than over its plane.
+fn apart(case: Case) -> bool {
+    apart_from_plane(&buffer_texture(case))
+}
+
+/// The texture `case` asks for.
+fn buffer_texture(case: Case) -> BufferTexture {
     let layout = TextureDescriptor {
         texture_type: case.texture_type,
         pixel_format: case.pixel_format,
@@ -332,20 +347,15 @@ fn placed(case: Case) -> Result<Placed, BufferRefusal> {
     let texel_bytes = direct_format(case.pixel_format)
         .and_then(|f| f.block())
         .map_or(0, |block| u64::from(block.size));
-    plan_buffer_texture(
-        &BufferTexture {
-            layout,
-            texel_bytes,
-            storage: case.storage,
-            offset: case.offset,
-            bytes_per_row: case.bytes_per_row,
-            call: case.call,
-            usage: case.usage,
-        },
-        &BufferFacts {
-            length: case.length,
-        },
-    )
+    BufferTexture {
+        layout,
+        texel_bytes,
+        storage: case.storage,
+        offset: case.offset,
+        bytes_per_row: case.bytes_per_row,
+        call: case.call,
+        usage: case.usage,
+    }
 }
 
 fn refused(problem: BufferTextureProblem) -> Result<BufferLayout, BufferRefusal> {
@@ -1358,6 +1368,7 @@ fn iosurface_planes_lie_where_metal_puts_them() {
                 gpu: at(gpu_offset, gpu_pitch, w * texel, h),
                 cpu: at(offset, bpr, w * texel, h),
                 narrow: bpr < 16,
+                kept: None,
             }),
             "{case:?}"
         );
@@ -1386,6 +1397,7 @@ fn iosurface_planes_lie_where_metal_puts_them() {
                 gpu: at(0, 16, 4, 4),
                 cpu: at(0, 16, 4, 4),
                 narrow: false,
+                kept: None,
             }),
         ),
         // Rows that overlap on the GPU lie at the pitch itself, which the texture's shadow holds
@@ -1398,6 +1410,7 @@ fn iosurface_planes_lie_where_metal_puts_them() {
                 gpu: at(0, 16, 20, 4),
                 cpu: at(0, 20, 20, 4),
                 narrow: false,
+                kept: None,
             }),
         ),
         (
@@ -1406,6 +1419,7 @@ fn iosurface_planes_lie_where_metal_puts_them() {
                 gpu: at(0, 16, 20, 4),
                 cpu: at(0, 28, 20, 4),
                 narrow: false,
+                kept: None,
             }),
         ),
         (
@@ -1414,6 +1428,7 @@ fn iosurface_planes_lie_where_metal_puts_them() {
                 gpu: at(0, 16, 17, 4),
                 cpu: at(0, 31, 17, 4),
                 narrow: false,
+                kept: None,
             }),
         ),
         (
@@ -1422,6 +1437,7 @@ fn iosurface_planes_lie_where_metal_puts_them() {
                 gpu: at(0, 16, 24, 4),
                 cpu: at(0, 24, 24, 4),
                 narrow: false,
+                kept: None,
             }),
         ),
         // A plane a render pass stores into is refused there: what Metal leaves of the bytes two
@@ -1442,6 +1458,7 @@ fn iosurface_planes_lie_where_metal_puts_them() {
                 gpu: at(0, 16, 16, 4),
                 cpu: at(0, 20, 16, 4),
                 narrow: false,
+                kept: None,
             }),
         ),
         // One such row overlaps nothing; nor does one row under 16 bytes read past itself.
@@ -1451,6 +1468,7 @@ fn iosurface_planes_lie_where_metal_puts_them() {
                 gpu: at(0, 32, 20, 1),
                 cpu: at(0, 20, 20, 1),
                 narrow: false,
+                kept: None,
             }),
         ),
         (
@@ -1459,6 +1477,7 @@ fn iosurface_planes_lie_where_metal_puts_them() {
                 gpu: at(0, 16, 4, 1),
                 cpu: at(4, 4, 4, 1),
                 narrow: false,
+                kept: None,
             }),
         ),
         // A plane below its row, which Metal makes over a surface with planes (`oracle_surftex`
@@ -1481,6 +1500,7 @@ fn iosurface_planes_lie_where_metal_puts_them() {
                 gpu: at(0, 16, 4, 4),
                 cpu: at(0, 4, 4, 4),
                 narrow: true,
+                kept: None,
             }),
         ),
         (
@@ -1496,6 +1516,7 @@ fn iosurface_planes_lie_where_metal_puts_them() {
                 gpu: at(0, 16, 4, 4),
                 cpu: at(0, 4, 4, 4),
                 narrow: true,
+                kept: None,
             }),
         ),
         (
@@ -1504,6 +1525,7 @@ fn iosurface_planes_lie_where_metal_puts_them() {
                 gpu: at(0, 16, 4, 8),
                 cpu: at(0, 16, 4, 8),
                 narrow: false,
+                kept: None,
             }),
         ),
         // The shapes whose texels another form holds than a shadow's copies of the rows keep no
@@ -1526,12 +1548,15 @@ fn iosurface_planes_lie_where_metal_puts_them() {
             Err(BufferRefusal::TexelsPastLength),
         ),
         // Slices or levels over such a plane, which Metal makes and lays out alike on no two
-        // GPUs (`oracle_surftex` 118, 123): the runtime's gap.
+        // GPUs (`oracle_surftex` 118, 123): the runtime's gap for slices over a plane off 16
+        // (a colour array's at multiples of 16 keep their first slice in place,
+        // `a_surface_plane_s_other_shapes_follow_the_probe`), and for levels here (a colour 2D
+        // texture's lie apart before any plan is asked).
         (
             Case {
                 texture_type: TextureType::Type2DArray,
                 slices: 2,
-                ..plane(r8, (4, 4), (0, 16), true, 16384)
+                ..plane(r8, (4, 4), (8, 16), true, 16384)
             },
             Err(BufferRefusal::PlaneShape),
         ),
@@ -1727,6 +1752,37 @@ fn a_surface_plane_s_other_shapes_follow_the_probe() {
         );
         assert_eq!(placed.gpu.offset, gpu_offset, "{case:?}");
     }
+    // 118 bgra1.type2darray.a2 and the M3 Max's `bgra1x2.2darray.a2` and
+    // `bgra1x2.2darray.a2.64x64`: a colour 2D array of slices over a plane at multiples of 16
+    // lies one image a slice from the plane's offset, its bytes in place ending at its second
+    // slice's first byte (its others in its tail, `buffer_texture.rs`), or at the buffer's length
+    // where that comes first (its first slice's rows past it in the tail too).
+    let sliced = |(width, height), (offset, bpr), slices, length| Case {
+        slices,
+        ..plane(a, bgra, (width, height), (offset, bpr), true, length)
+    };
+    for (case, kept) in [
+        (sliced((64, 32), (0, 256), 2, 32768), 8192),
+        (sliced((64, 64), (0, 256), 2, 32768), 16384),
+        (sliced((64, 16), (512, 256), 3, 32768), 512 + 4096),
+        (sliced((64, 32), (0, 256), 2, 4096), 4096),
+        (sliced((32, 32), (0, 256), 2, 32768), 8192),
+    ] {
+        let placed = placed(case).unwrap_or_else(|refusal| panic!("{case:?}: {refusal:?}"));
+        let at = BufferLayout {
+            offset: case.offset,
+            row_pitch: case.bytes_per_row,
+            slice_pitch: case.bytes_per_row * case.height,
+            row_bytes: case.width * 4,
+            rows: case.height,
+            slices: case.slices,
+        };
+        assert_eq!((placed.cpu, placed.gpu), (at, at), "{case:?}");
+        assert_eq!(placed.kept, Some(kept), "{case:?}");
+    }
+    // Every other texture keeps its bytes in place up to the buffer's length.
+    let one = plane(a, bgra, (64, 64), (0, 256), true, 16384);
+    assert_eq!(placed(one).map(|placed| placed.kept), Ok(None));
     let gap = Err(BufferRefusal::PlaneShape);
     let stopped = |problem| Err(BufferRefusal::Metal(problem));
     let refused = [
@@ -1751,17 +1807,32 @@ fn a_surface_plane_s_other_shapes_follow_the_probe() {
             },
             gap,
         ),
-        // 118 bgra1.type2darray.a2, 120 bgra1.type3d.d2, 119 bgra1.typecube and 122
-        // bgra1.type2dms.private.
+        // 120 bgra1.type3d.d2, 119 bgra1.typecube and 122 bgra1.type2dms.private.
+        (
+            plane(TextureType::Type3D, bgra, (64, 32), (0, 256), true, 32768),
+            gap,
+        ),
+        // A 2D array of slices over a plane off 16, which no probe measured, and one of a format
+        // but a colour one.
         (
             Case {
                 slices: 2,
-                ..plane(a, bgra, (64, 32), (0, 256), true, 32768)
+                ..plane(a, bgra, (64, 32), (8, 256), true, 32768)
             },
             gap,
         ),
         (
-            plane(TextureType::Type3D, bgra, (64, 32), (0, 256), true, 32768),
+            Case {
+                slices: 2,
+                ..plane(a, bgra, (64, 32), (0, 264), true, 32768)
+            },
+            gap,
+        ),
+        (
+            Case {
+                slices: 2,
+                ..plane(a, P::Depth32Float, (64, 32), (0, 256), true, 32768)
+            },
             gap,
         ),
         // A cube and a cube array, at which plain Metal asserts over a plane on the M3 Max
@@ -1830,6 +1901,57 @@ fn a_surface_plane_s_other_shapes_follow_the_probe() {
             stopped(Pr::MipmapLevelCount { count: 2 }),
         ),
     ];
+    // A colour 2D texture of several levels, a 3D and a 2D multisample one over a plane lie in
+    // no one place on the M3 Max, their first level and slice among them (`bgra1x2.mips2`,
+    // `bgra1x2.mips7`, `420v.p0.mips2`, `bgra1x2.3d.d2`, `420v.p0.3d.d2`,
+    // `bgra1x2.2dms4.private`): made in memory of their own before any plan is asked.
+    let mips = |levels, pf, (offset, bpr), length| Case {
+        levels,
+        ..plane(d2, pf, (64, 64), (offset, bpr), true, length)
+    };
+    let own = [
+        mips(2, bgra, (0, 256), 32768),
+        mips(7, bgra, (0, 256), 32768),
+        mips(2, r8, (32, 64), 6432),
+        plane(TextureType::Type3D, bgra, (64, 32), (0, 256), true, 32768),
+        plane(TextureType::Type3D, r8, (64, 32), (32, 64), true, 6432),
+        plane(
+            TextureType::Type2DMultisample,
+            bgra,
+            (64, 64),
+            (0, 256),
+            true,
+            32768,
+        ),
+    ];
+    for case in own {
+        assert!(apart(case), "{case:?}");
+    }
+    // Not those: a 2D array of slices, a cube, a mipmapped texture of another type or format, a
+    // single-level 2D texture, and any shape over a surface without planes.
+    let kept = [
+        Case {
+            slices: 2,
+            ..plane(a, bgra, (64, 32), (0, 256), true, 32768)
+        },
+        plane(TextureType::Cube, bgra, (64, 64), (0, 256), true, 32768),
+        Case {
+            levels: 2,
+            ..plane(a, bgra, (64, 64), (0, 256), true, 32768)
+        },
+        Case {
+            levels: 2,
+            ..plane(d2, P::Depth32Float, (64, 64), (0, 256), true, 32768)
+        },
+        plane(d2, bgra, (64, 64), (0, 256), true, 32768),
+        Case {
+            call: BufferTextureCall::IoSurfacePlane { planar: false },
+            ..mips(2, bgra, (0, 256), 32768)
+        },
+    ];
+    for case in kept {
+        assert!(!apart(case), "{case:?}");
+    }
     for (case, expected) in refused {
         assert_eq!(placed(case).map(|_| ()), expected, "{case:?}");
     }

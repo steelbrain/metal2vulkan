@@ -1454,12 +1454,19 @@ pub enum RuntimeGap {
     /// options whatever its descriptor names, and a plane its descriptor's other modes.
     MemorylessSurfacePlane,
     /// A texture over a plane of an IOSurface with planes (`Buffer::new_texture_with_iosurface_plane`,
-    /// the stand-in for `newTextureWithDescriptor:iosurface:plane:`) that Metal makes and whose
-    /// texels it lays out no one way: rows wider than the plane's `bytesPerRow`, more than one mip
-    /// level, a 2D array of more than one slice, a 3D or multisample texture or any other type but
-    /// 2D, a texture buffer, 1D or a 2D array of one slice, a 1D texture wider than the plane's
-    /// row, a BC texture of another type than 2D or wider than the plane's rows, and a BC texture
-    /// over a plane at an offset or `bytesPerRow` off 16 bytes. A cube or cube array there is
+    /// the stand-in for `newTextureWithDescriptor:iosurface:plane:`) that Metal makes, whose
+    /// texels it lays out no one way, and that the runtime holds in no form: rows wider than the
+    /// plane's `bytesPerRow`; a 2D texture of more than one mip level, a 3D or a 2D multisample
+    /// texture of a format but a colour one; a 2D array of more than one slice of a format but a
+    /// colour one, or over a plane at an offset or `bytesPerRow` off 16 bytes; any other type but
+    /// 2D, 3D, 2D multisample, 2D array, texture buffer and 1D; a 1D texture wider than the
+    /// plane's row; and a BC texture of another type than 2D, wider than the plane's rows, or over
+    /// a plane at an offset or `bytesPerRow` off 16 bytes. A colour 2D texture of several levels,
+    /// a 3D and a 2D multisample one are made in memory of their own, their texels in no one
+    /// place on the M3 Max, their first level and slice among them (announced as
+    /// `Degradation::SurfaceTexelsApart`); and a colour 2D array of more than one slice keeps its
+    /// first slice over the plane and its others in a tail of its own (announced as
+    /// `Degradation::SurfaceTexelsTail`). A cube or cube array there is
     /// Metal's own refusal (`Invalid`: plain Metal asserts "carriesComplexTexture || numFaces ==
     /// 1", the API validation layer off), and a texture buffer at an offset or `bytesPerRow` off
     /// 16 is made, its functions reading from the offset rounded down to 16 and its CPU calls

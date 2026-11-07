@@ -1104,17 +1104,31 @@ degradations! {
             "where two of the plane's rows write the bytes they share the earlier row's stand, \
              one of the rows a kernel of Metal's leaves there, whose winner moves with the \
              threadgroup shape; reads, CPU access and every other byte are Metal's";
-        /// A texture of an IOSurface plane of a surface with planes whose texels run past the
-        /// buffer standing for its surface (`Buffer::new_texture_with_iosurface_plane`,
-        /// `linear_plan.rs`'s **Beyond the plane's rows**), which Metal makes and lays out in no
-        /// one place there (an Apple M3 Max under macOS 27.0.1,
-        /// `probes/surface_texture_envelope.m`): its blits read zeros past the surface, its
-        /// kernels zeros and, 32 KiB past the plane, the plane's rows again, its `getBytes` zeros
-        /// and other memory, and its writes there change no byte of the surface.
+        /// A texture of an IOSurface plane of a surface with planes, which Metal makes, some of
+        /// whose texels it lays out in no one place (`Buffer::new_texture_with_iosurface_plane`,
+        /// `linear_plan.rs`'s **Beyond the plane's rows**; an Apple M3 Max under macOS 27.0.1,
+        /// `probes/surface_texture_envelope.m`): its texels past the buffer standing for its
+        /// surface, where its blits read zeros, its kernels zeros and, 32 KiB past the plane, the
+        /// plane's rows again, its `getBytes` zeros and other memory, and its writes change no
+        /// byte of the surface; and a 2D array's slices past its first, which its blits and
+        /// `getBytes` read at the plane's offset, over the first slice, its kernels one image on,
+        /// and its writes put at the plane's offset.
         SurfaceTexelsTail = "surface-texels-tail", Precision,
-            "its texels past the surface lie in a tail of the texture's own, zero when made, \
-             which every path reads and writes alike, where Metal's blits read zeros there and \
-             its writes keep to the surface; its texels inside the surface are Metal's";
+            "those texels lie in a tail of the texture's own, zero when made, which every path \
+             reads and writes alike and which reaches no byte of the surface; its texels in place \
+             are Metal's";
+        /// A texture over a plane of an IOSurface with planes whose texels Metal lays out in no
+        /// one place, its first level's and slice's among them
+        /// (`Buffer::new_texture_with_iosurface_plane`, `linear_plan.rs`'s **Beyond the plane's
+        /// rows**): a 2D texture of more than one level, a 3D texture and a 2D multisample one.
+        /// Metal makes it, and on an Apple M3 Max under macOS 27.0.1
+        /// (`probes/surface_texture_envelope.m`) its GPU reads those texels from other bytes than
+        /// its writes and its CPU put them; the x86 Macs under macOS 26.7.1 keep its first level
+        /// and slice over the plane.
+        SurfaceTexelsApart = "surface-texels-apart", Precision,
+            "its texels lie in memory of its own, zero when made, which every path reads and \
+             writes alike, and no byte of the surface's; Metal's GPU and CPU reach the surface's \
+             bytes in no one place";
         /// A pipeline state's function may read an argument its function constants removed (a
         /// texture's read, sample, gather, query or atomic, or a sample through a removed
         /// sampler; `RuntimeFact::AbsentArgumentRead`), which Metal gives no value: its compiler

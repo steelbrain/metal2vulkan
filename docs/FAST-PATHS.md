@@ -1063,17 +1063,23 @@ else.
   read settles nothing. A rotated plane never reaches any of this: its
   `bytesPerRow` must be a multiple of 16, so its GPU rows lie at the pitch itself and share no
   byte.
-- **Textures over an IOSurface plane past one 2D image of its rows are refused.** Over a plane of
-  a surface with planes Metal makes a texture of any type, extent and levels, but its GPUs lay out
-  alike only a texture buffer (at any offset and pitch, its functions from the offset rounded
-  down to 16), a 1D texture whose row fits and a 2D array of one slice
+- **Some textures over an IOSurface plane past one 2D image of its rows are refused.** Over a
+  plane of a surface with planes Metal makes a texture of any type, extent and levels, but its
+  GPUs lay out alike only a texture buffer (at any offset and pitch, its functions from the offset
+  rounded down to 16), a 1D texture whose row fits and a 2D array of one slice
   (`probes/surface_texture_envelope.m`, an AMD Radeon Pro 5300M, an Intel UHD 630 and an Apple M3
-  Max); rows wider than the plane's, more levels, slices, a 3D or multisample texture, and a BC
-  texture at an offset or pitch off 16 are `NotImplemented(SurfacePlaneShape)`. A cube or cube
-  array over a plane is `Invalid`, as plain Metal asserts on it on the M3 Max. Texels past the surface's end, which Metal lays out in no
-  one place, lie in a tail of the texture's own (announced `surface-texels-tail`), but a two-plane
-  YCbCr, two-plane extended-range, 4:2:2, depth, stencil, BC or rotated texture's, which are
-  `NotImplemented(TexelsPastBufferLength)`. A texture taller than its plane, inside the surface,
+  Max). Of the rest, a colour 2D texture of several levels, a 3D and a 2D multisample one lie in
+  memory of their own (announced `surface-texels-apart`): the M3 Max lays them out in no one
+  place, their first level and slice among them, where the x86 Macs keep those over the plane. A
+  colour 2D array of several slices over a plane at an offset and pitch that are multiples of 16
+  keeps its first slice in place and its others in a tail of its own (announced
+  `surface-texels-tail`), as the M3 Max lays those in no one place. Rows wider than the plane's,
+  those shapes of another format, an array off 16, and a BC texture at an offset or pitch off 16
+  are `NotImplemented(SurfacePlaneShape)`. A cube or cube array over a plane is `Invalid`, as
+  plain Metal asserts on it on the M3 Max. Texels past the surface's end, which Metal lays out in
+  no one place, lie in a tail of the texture's own (announced `surface-texels-tail`), but a
+  two-plane YCbCr, two-plane extended-range, 4:2:2, depth, stencil, BC or rotated texture's, which
+  are `NotImplemented(TexelsPastBufferLength)`. A texture taller than its plane, inside the surface,
   is held as the M3 Max lays it out (its rows on at the plane's pitch); the x86 Macs' GPUs keep it
   to the plane, which the runtime cannot, as `IoSurfacePlane` gives no plane height.
 - **A shadow's merge back to host pages stores each changed word alone after a command that

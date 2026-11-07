@@ -205,8 +205,21 @@
 //!   `replaceRegion` from the offset, as a buffer's texture buffer is: the runtime makes it so.
 //!   Plain Metal asserts on a cube and a cube array over a plane on the M3 Max
 //!   ("carriesComplexTexture || numFaces == 1", the API validation layer off), which the runtime
-//!   refuses as Metal's own ([`BufferTextureProblem::TextureType`]). Every other shape lies
-//!   differently on each, or was not measured: [`BufferRefusal::PlaneShape`]
+//!   refuses as Metal's own ([`BufferTextureProblem::TextureType`]). A 2D texture of more than
+//!   one level, a 3D texture and a 2D multisample one lie in no one place on the M3 Max, their
+//!   first level and slice among them (`bgra1x2.mips2`, `bgra1x2.mips7`, `420v.p0.mips2`,
+//!   `bgra1x2.3d.d2`, `420v.p0.3d.d2`, `bgra1x2.2dms4.private`: its blits and kernels read other
+//!   bytes than its blits, `replaceRegion` and `getBytes` put there), where the x86 Macs keep the
+//!   first level and slice over the plane: the runtime makes each of a colour format in memory of
+//!   its own, zero when made, announced (`Degradation::SurfaceTexelsApart`,
+//!   [`apart_from_plane`]). A 2D array of more than one slice keeps its first slice over the plane
+//!   on every path of the M3 Max's and lays its second in no one place (`bgra1x2.2darray.a2`,
+//!   `bgra1x2.2darray.a2.64x64`: its blits and `getBytes` read it at the plane's offset, over the
+//!   first, its kernels one image on, and its writes land at the plane's offset): the runtime
+//!   keeps the first slice in place and the others in a tail of the texture's own
+//!   ([`slices_apart`], [`Placed::kept`]), announced (`Degradation::SurfaceTexelsTail`), for a
+//!   colour format at an offset and `bytesPerRow` that are multiples of 16. Every other shape
+//!   lies differently on each, or was not measured: [`BufferRefusal::PlaneShape`]
 //!   ([`RuntimeGap::SurfacePlaneShape`](crate::RuntimeGap::SurfacePlaneShape), which carries the
 //!   measurements). A texture taller than its plane is held as the M3 Max's GPU and CPU lay it
 //!   out, its rows past the plane at the plane's pitch, inside the surface; the x86 Macs' GPUs
@@ -505,6 +518,12 @@ pub(super) struct Placed {
     /// Metal's GPU reads as memory-dependent bytes: the runtime's reads them where its writes put
     /// them (the module's rules).
     pub(super) narrow: bool,
+    /// Where the texels' bytes in place end, for a 2D array of more than one slice over a plane
+    /// of a surface with planes ([`slices_apart`]): its second slice's first byte, or the
+    /// buffer's length where that comes first. Its bytes from here on, its slices past the first,
+    /// lie in a tail of the texture's own (`buffer_texture.rs`'s **Tails**). `None` for every
+    /// other texture, whose texels lie in place up to the buffer's length.
+    pub(super) kept: Option<u64>,
 }
 
 impl Placed {
@@ -515,6 +534,7 @@ impl Placed {
             gpu: layout,
             cpu: layout,
             narrow: false,
+            kept: None,
         }
     }
 }
@@ -587,8 +607,8 @@ fn overlap_held(texture: &BufferTexture) -> bool {
 /// buffer standing for its surface in a tail of the texture's own, zero when made (the module's
 /// **Beyond the plane's rows**), or refuses them ([`BufferRefusal::TexelsPastLength`]).
 ///
-/// A colour plane's are kept, a 2D texture's, a 1D texture's, a one-slice array's and a texture
-/// buffer's: the shadow's copies, its blits and its CPU calls reach the tail as they reach a
+/// A colour plane's are kept, a 2D texture's, a 1D texture's, an array's and a texture buffer's:
+/// the shadow's copies, its blits and its CPU calls reach the tail as they reach a
 /// buffer's texture's (`buffer_texture.rs`'s **Tails**). Refused are the shapes whose texels
 /// another form holds than those copies of their rows: a two-plane YCbCr texture's codes, which
 /// a conversion reads (`ycbcr.rs`); a two-plane extended-range one's, its alpha in the surface's
@@ -603,6 +623,58 @@ fn tail_held(texture: &BufferTexture) -> bool {
         && !is_four_two_two(pf)
         && !is_depth_stencil(pf)
         && !surface_blocks(pf)
+}
+
+/// Whether the runtime makes the texture of an IOSurface plane of `texture` in memory of its own,
+/// zero when made, rather than over the plane (the module's **Beyond the plane's rows**): a colour
+/// 2D texture of more than one level, a 3D texture or a 2D multisample one over a plane of a
+/// surface with planes. Metal makes each and lays its texels out in no one place, its first
+/// level's and slice's among them (an Apple M3 Max under macOS 27.0.1,
+/// `probes/surface_texture_envelope.m`'s `bgra1x2.mips2`, `bgra1x2.mips7`, `420v.p0.mips2`,
+/// `bgra1x2.3d.d2`, `420v.p0.3d.d2` and `bgra1x2.2dms4.private`): its GPU reads them from other
+/// bytes than its writes and its CPU put them. A colour format is one a buffer backs
+/// ([`is_linear`]) and that keeps a tail past a surface ([`tail_held`]); every other format's
+/// such texture is planned, and refused, as before.
+pub(super) fn apart_from_plane(texture: &BufferTexture) -> bool {
+    use TextureType as T;
+    let planar = matches!(
+        texture.call,
+        BufferTextureCall::IoSurfacePlane { planar: true }
+    );
+    let layout = &texture.layout;
+    let shape = match layout.texture_type {
+        T::Type2D => layout.levels > 1,
+        T::Type3D | T::Type2DMultisample => true,
+        _ => false,
+    };
+    planar && shape && is_linear(layout.pixel_format) && tail_held(texture)
+}
+
+/// Whether `texture` is a 2D array of more than one slice over a plane of a surface with planes
+/// that the runtime makes with its first slice over the plane and its others in a tail of the
+/// texture's own, zero when made (the module's **Beyond the plane's rows**, [`Placed::kept`]):
+/// one of a colour format ([`is_linear`], [`tail_held`]) over a plane whose offset and
+/// `bytesPerRow` are multiples of 16, where the GPU's and the CPU's rows lie alike. Metal makes
+/// such an array and lays its first slice over the plane on every path, and its second in no one
+/// place: its blits and `getBytes` read the second at the plane's offset, over the first, and its
+/// kernels one image on, and its blits' and `replaceRegion`'s writes of it land at the plane's
+/// offset (an Apple M3 Max under macOS 27.0.1, `probes/surface_texture_envelope.m`'s
+/// `bgra1x2.2darray.a2` and `bgra1x2.2darray.a2.64x64`). An array over a plane off 16 is not
+/// measured, and every other format's array is planned, and refused, as before.
+pub(super) fn slices_apart(texture: &BufferTexture) -> bool {
+    let layout = &texture.layout;
+    let planar = matches!(
+        texture.call,
+        BufferTextureCall::IoSurfacePlane { planar: true }
+    );
+    let aligned = texture.offset.is_multiple_of(LINEAR_ALIGNMENT)
+        && texture.bytes_per_row.is_multiple_of(LINEAR_ALIGNMENT);
+    planar
+        && layout.texture_type == TextureType::Type2DArray
+        && layout.layers > 1
+        && aligned
+        && is_linear(layout.pixel_format)
+        && tail_held(texture)
 }
 
 /// Why a texture over a buffer is not made.
@@ -631,11 +703,13 @@ pub(super) enum BufferRefusal {
     MemorylessPlane,
     /// A texture over a plane of a surface with planes that Metal makes and lays out no one way
     /// across its GPUs and its CPU calls (`NotImplemented`; the module's **Beyond the plane's
-    /// rows**): rows wider than the plane's `bytesPerRow`, more than one level, a type but 2D, a
-    /// texture buffer, a 1D texture, a 2D array of one slice, a cube and a cube array (which
-    /// plain Metal asserts on: [`BufferTextureProblem::TextureType`]), a 1D texture wider than
-    /// the plane's row; and a block-compressed texture over a plane whose offset or
-    /// `bytesPerRow` is off 16 bytes.
+    /// rows**), and that the runtime holds neither in memory of its own ([`apart_from_plane`],
+    /// which takes a colour 2D texture of several levels, a 3D and a multisample one before any
+    /// plan is asked) nor with slices in a tail ([`slices_apart`]): rows wider than the plane's
+    /// `bytesPerRow`, more than one level, a type but 2D, a texture buffer, a 1D texture and a
+    /// 2D array (a cube and a cube array, which plain Metal asserts on, are
+    /// [`BufferTextureProblem::TextureType`]), a 1D texture wider than the plane's row; and a
+    /// block-compressed texture over a plane whose offset or `bytesPerRow` is off 16 bytes.
     PlaneShape,
 }
 
@@ -675,6 +749,9 @@ pub(super) fn plan_buffer_texture(
     // **Beyond the plane's rows**): the runtime holds the ones its texels lie as a 2D texture's
     // in.
     let one_slice = texture_type == T::Type2DArray && layout.layers == 1;
+    // A 2D array of more than one slice over a plane keeps its first slice in place and its
+    // others in its tail (the module's **Beyond the plane's rows**, [`slices_apart`]).
+    let sliced = slices_apart(texture);
     let made = match texture.call {
         BufferTextureCall::Texture => matches!(texture_type, T::Type2D | T::TextureBuffer),
         BufferTextureCall::Linear => {
@@ -684,7 +761,7 @@ pub(super) fn plan_buffer_texture(
             matches!(texture_type, T::Type2D | T::TextureBuffer)
         }
         BufferTextureCall::IoSurfacePlane { planar: true } => {
-            matches!(texture_type, T::Type2D | T::TextureBuffer | T::Type1D) || one_slice
+            matches!(texture_type, T::Type2D | T::TextureBuffer | T::Type1D) || one_slice || sliced
         }
     };
     // Over a plane of a surface with planes plain Metal asserts on a texture of more than one
@@ -758,7 +835,10 @@ pub(super) fn plan_buffer_texture(
             slice_pitch: bytes_per_row.saturating_mul(down),
             row_bytes,
             rows: down,
-            slices: 1,
+            slices: match sliced {
+                true => u64::from(layout.layers),
+                false => 1,
+            },
         };
         // Over a surface without planes Metal holds a BC texture's rows of texels, not of
         // blocks, to the surface's ("Descriptor height*arrayLength > IOSurface height").
@@ -776,7 +856,11 @@ pub(super) fn plan_buffer_texture(
             }
         }
         let held = (overlap_held(texture), tail_held(texture));
-        return plan_iosurface_plane(cpu, planar, buffer.length, held);
+        let placed = plan_iosurface_plane(cpu, planar, buffer.length, held)?;
+        // A 2D array's slices past its first lie in its tail, from its second slice's first
+        // byte on (one image on from the plane's offset, where Metal's kernels read it).
+        let kept = sliced.then(|| (cpu.offset.saturating_add(cpu.slice_pitch)).min(buffer.length));
+        return Ok(Placed { kept, ..placed });
     }
     let array = texture_type == T::Type2DArray;
     let alignment = if array {
@@ -888,6 +972,7 @@ fn plan_iosurface_plane(
         gpu,
         cpu,
         narrow: cpu.rows > 1 && cpu.row_pitch < alignment,
+        kept: None,
     })
 }
 
