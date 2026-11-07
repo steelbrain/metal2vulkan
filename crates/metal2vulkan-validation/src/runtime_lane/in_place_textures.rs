@@ -73,7 +73,7 @@ pub(super) fn in_place(options: &mut DeviceOptions) {
 }
 
 /// Whether the device's check passed for `class` (`Pointer`, `Fresh`, `DmaBuf`).
-fn passed(device: &Device, class: &str) -> bool {
+pub(super) fn passed(device: &Device, class: &str) -> bool {
     device
         .in_place_check_report()
         .iter()

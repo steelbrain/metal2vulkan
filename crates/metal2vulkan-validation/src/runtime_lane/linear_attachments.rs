@@ -1,8 +1,9 @@
 //! Device tests of render passes over linear images on the device the cfg selects, under the
 //! validation layer. A render target over a `Shared` buffer of the runtime's memory is its own
 //! linear image where the device renders one there ([`surface`]), as on every device that renders
-//! one only by the rule below; one over a no-copy buffer's host pages is a shadow on every device
-//! (`shadowed-texture`), which the detach, rebind and shadow tests take ([`host_surface`]). On a
+//! one only by the rule below; one over a no-copy buffer's host pages is an image in place where
+//! the device's check passed for render targets over such pages, else a shadow
+//! (`shadowed-texture`), which the detach, rebind and host-page tests take ([`host_surface`]). On a
 //! device that renders a linear image only by `VK_NV_linear_color_attachment` (NVIDIA's, whose
 //! linear tiling has the extension's bit and not the color attachment feature: [`by_the_rule`]),
 //! the runtime enables the extension and renders it in place, but only where every color attachment
@@ -96,7 +97,9 @@
 //! Each prints the texture's form (`LINEAR-ATTACHMENT`).
 
 use super::degrade_notices::{counts, on_device};
+use super::first_use_writes::CHECK_WAIT;
 use super::host_memory::{counting, no_copy, not_importable, Mapping, Seen, GUEST_PAGE};
+use super::in_place_textures::passed;
 use super::no_copy_heaps::{no_copy_heap, shared, HEAP};
 use super::no_copy_textures::{blending, floats, rects_beside, staged};
 use super::rebinds::rebind;
@@ -217,8 +220,9 @@ fn surface_of(
 }
 
 /// A no-copy buffer over a new mapping of the texture's bytes, which hold `counting` from
-/// `start`, and a `BGRA8Unorm` render target over it, a shadow; `None`, printed, where the device
-/// imports no host memory.
+/// `start`, and a `BGRA8Unorm` render target over it, in place where the device's check passed
+/// for it ([`renders_in_place`]), else a shadow; `None`, printed, where the device imports no host
+/// memory.
 fn host_surface(device: &Device, start: usize) -> Option<(Mapping, Buffer, Texture)> {
     host_surface_of(device, start, W, H)
 }
@@ -257,6 +261,22 @@ fn host_surface_of(
     d.resource_options = buffer.resource_options();
     let texture = buffer.new_texture(&d, 0, width * TEXEL).unwrap();
     Some((mapping, buffer, texture))
+}
+
+/// Whether `device`'s check passed for render targets over pointer pages, once it answered: a
+/// texture over host pages starts it, and one made after it answered takes its verdict.
+fn renders_in_place(device: &Device) -> bool {
+    if let Some((mapping, buffer, texture)) = host_surface_of(device, 0, 16, 16) {
+        drop((texture, buffer));
+        drop(mapping);
+    }
+    let settled = device.settle_in_place_checks(CHECK_WAIT);
+    println!(
+        "LINEAR-ATTACHMENT on {}: the in-place check settled {settled}: {:?}",
+        device.name(),
+        device.in_place_check_report()
+    );
+    passed(device, "Pointer renders")
 }
 
 /// Whether `texture`'s texels are its own image's: aliased, not a shadow.
@@ -1499,25 +1519,30 @@ fn a_cleared_render_target_over_a_shared_buffer_renders_through_copies() {
     });
 }
 
-/// A render target over host pages is a shadow on every device, never an image bound to the
-/// pages: a pass of it alone that loads it and one that clears it each leave the pages holding
-/// what it stored, and neither announces a linear attachment's copies.
+/// A render target over host pages is an image bound to them exactly where the device's check
+/// passed for render targets over pointer pages, else a shadow: a pass of it alone that loads it
+/// and one that clears it each leave the pages holding what it stored; a shadow's passes announce
+/// no linear attachment's copies, and an image in place announces the clear's copies once where
+/// the device renders it by the rule, as one over a `Shared` buffer does.
 #[test]
-fn a_render_target_over_host_pages_is_a_shadow() {
+fn a_render_target_over_host_pages_is_in_place_where_the_check_passed() {
     on_device(|device, messages| {
+        let in_place = renders_in_place(device);
         messages.take_notices();
         let Some((mapping, buffer, texture)) = host_surface(device, 3) else {
             return;
         };
+        let rule = by_the_rule(device);
         println!(
-            "LINEAR-ATTACHMENT on {}: by the rule {}, aliased {}",
+            "LINEAR-ATTACHMENT on {}: by the rule {rule}, aliased {}, the check passed for render \
+             targets {in_place}",
             device.name(),
-            by_the_rule(device),
             aliased(&texture)
         );
-        assert!(
-            !aliased(&texture),
-            "a render target over host pages is an image bound to them"
+        assert_eq!(
+            aliased(&texture),
+            in_place,
+            "an image bound to the pages exactly where the check passed for them"
         );
         let queue = device.new_command_queue().unwrap();
         let n = (W * H * TEXEL) as usize;
@@ -1538,8 +1563,8 @@ fn a_render_target_over_host_pages_is_a_shadow() {
                 count(Degradation::LinearAttachmentCopies),
                 count(Degradation::LinearAttachmentClearCopies)
             ),
-            (0, 0),
-            "a shadow's passes"
+            (0, usize::from(in_place && rule)),
+            "a pass of the texture alone, and one that clears it"
         );
         drop((texture, buffer));
         drop(mapping);
