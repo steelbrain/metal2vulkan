@@ -57,8 +57,8 @@
 use super::blit::{reads, reads_by, writes, writes_by, BlitCommandEncoder, TRANSFER};
 use super::blit_plan::{
     plan_block_order_copy, plan_buffer_copy, plan_levels_copy, plan_region_copy, plan_rows_copy,
-    plan_texels_rows_copy, plan_whole_copy, texel_layout, BufferCopyPlan, BufferImageRegion,
-    BufferLayout, BufferRange, CopyPair, ImageCopyRegion, RowsCopy,
+    plan_texels_rows_copy, plan_whole_copy, rows_below_row, texel_layout, BufferCopyPlan,
+    BufferImageRegion, BufferLayout, BufferRange, CopyPair, ImageCopyRegion, RowsCopy,
 };
 use super::buffer_texture::Past;
 use super::compressed_blit::{self, degrade_compressed_blit, Writer};
@@ -896,6 +896,11 @@ impl BlitCommandEncoder {
         // Metal's checks of the buffer's layout, its range among them, as of a 4-byte format.
         plan_copy(call, texture, region, &unit, layout, buffer, into_texture)?;
         let s = shape(region.size, &unit);
+        let width = level_extent(texture.record(), region.level)[0];
+        let flat = texture.texture_type() != TextureType::Type3D;
+        if rows_below_row(layout, &s, &unit) && width.is_multiple_of(4) && flat {
+            return self.plane_short_rows_copy(buffer, texture, &image, layout, into_texture);
+        }
         if !two_planes::measured_layout(
             s.row_bytes,
             s.rows,
@@ -912,7 +917,6 @@ impl BlitCommandEncoder {
         // where they lie, moving texels between rows: at those rows for a 2D texture or array of
         // one level (`two_planes/buffer_rows.rs`); for another (more levels, a view, 1D, 3D, a
         // surface's), announced, the texels moved as `getBytes` and `replaceRegion` move them.
-        let width = level_extent(texture.record(), region.level)[0];
         if !width.is_multiple_of(4) && two_planes::rows_held(texture) {
             return self.plane_rows_copy(buffer, texture, &image, layout, into_texture);
         }
@@ -953,6 +957,49 @@ impl BlitCommandEncoder {
             return self.plane_words_copy(buffer, texture, &first, &layout, true);
         }
         self.plane_words_copy(buffer, texture, &image, layout, into_texture)
+    }
+
+    /// A blit between `buffer`, laid out as `layout` at a `bytesPerRow` below the region's row
+    /// alone (`blit_plan::rows_below_row`), and `region` of a two-plane extended-range `texture`
+    /// whose level is a multiple of 4 texels wide and not 3D, as plain Metal's blit moves it
+    /// (an Apple M3 Max under macOS 27.0.1, `probes/short_row_kinds.m`: a 32 x 8
+    /// `RGB10A8_2P_XR10` texture at half its row, half plus a word and the row less 16): each
+    /// row's color words at `y x bytesPerRow`. Into the texture each row reads its words whole
+    /// from there, the rows overlapping in the buffer, which the module reads as any other
+    /// layout's ([`plane_words_copy`](Self::plane_words_copy)). Out of it Metal writes them in
+    /// no one order; the rows go in turn, the later row's words standing: the words of every
+    /// row that no later row writes (its first `bytesPerRow` bytes), then the last row's rest,
+    /// two copies whose words in the buffer are disjoint.
+    fn plane_short_rows_copy(
+        &mut self,
+        buffer: &Buffer,
+        texture: &Texture,
+        region: &ImageRegion,
+        layout: &BufferLayout,
+        into_texture: bool,
+    ) -> Result<(), Error> {
+        if into_texture {
+            return self.plane_words_copy(buffer, texture, region, layout, true);
+        }
+        let [x, y, z] = region.origin;
+        let [width, height, _] = region.size;
+        // A row's words no later row writes: the pitch's, below the region's row.
+        let pitch = (layout.bytes_per_row / u64::from(two_planes::UNIT.bytes)) as u32;
+        let heads = ImageRegion {
+            size: [pitch, height, 1],
+            ..*region
+        };
+        self.plane_words_copy(buffer, texture, &heads, layout, false)?;
+        let rest = ImageRegion {
+            origin: [x + pitch, y + height - 1, z],
+            size: [width - pitch, 1, 1],
+            ..*region
+        };
+        let after = BufferLayout {
+            offset: layout.offset + u64::from(height) * layout.bytes_per_row,
+            ..*layout
+        };
+        self.plane_words_copy(buffer, texture, &rest, &after, false)
     }
 
     /// Record a checked copy between `buffer` and `texture` (`into_texture`: from the buffer

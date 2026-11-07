@@ -203,9 +203,30 @@ fn placed_rows(
 
 /// Whether a layout off Metal's rules copies `pf` where plain Metal places its rows
 /// ([`placed_rows`]): a colour format or `Depth32Float` (other depth and stencil formats are not
-/// measured, and keep Metal's validation's refusal).
+/// measured, and keep Metal's validation's refusal, but for [`rows_below_row`]).
 fn placed(pf: PixelFormat) -> bool {
     !is_depth_stencil(pf) || pf == PixelFormat::Depth32Float
+}
+
+/// Whether `layout` is off Metal's rules for a region of shape `s` in `unit`s by a `bytesPerRow`
+/// below the region's row alone: rows of more than one, of one image, from an offset on the copy
+/// unit, at a nonzero pitch on the copy unit below the row. Plain Metal's blit copies such a
+/// layout of every kind of texture its copies take, each row whole at `y x bytesPerRow`: read so
+/// into a texture, and written so out of one, in no one order where the rows overlap (an Apple
+/// M3 Max under macOS 27.0.1, `probes/short_row_kinds.m`: `Depth16Unorm`, `Stencil8`, both
+/// aspects of `Depth32Float_Stencil8`, an `RGBA8Unorm` texture over a buffer and
+/// `RGB10A8_2P_XR10`, 32 x 8, at half the row, half plus a unit and the row less 16, both ways,
+/// twice), so a depth or stencil format copies it where [`placed_rows`] places it, and a texture
+/// over a buffer as [`plan_rows_copy`] does.
+pub(super) fn rows_below_row(layout: &BufferLayout, s: &Shape, unit: &CopyUnit) -> bool {
+    let bytes = u64::from(unit.bytes);
+    let bpr = layout.bytes_per_row;
+    s.rows > 1
+        && s.images == 1
+        && bpr > 0
+        && bpr < s.row_bytes
+        && bpr.is_multiple_of(bytes)
+        && layout.offset.is_multiple_of(bytes)
 }
 
 /// The rows of a region of shape `s` laid out as `layout`, image by image and row by row, each
@@ -252,7 +273,8 @@ pub(super) fn plan_buffer_copy(
 ) -> Result<BufferCopyPlan, CopyProblem> {
     let image = check_region(record, region, unit)?;
     let s = shape(region.size, unit);
-    if placed(record.pixel_format) && off_rules(layout, &s, unit) {
+    let placed = placed(record.pixel_format) || rows_below_row(layout, &s, unit);
+    if placed && off_rules(layout, &s, unit) {
         return plan_placed_copy(layout, &s, unit, image, buffer_length, base, into_texture);
     }
     // Every row ends within the buffer (`check_layout`), so no offset below passes `u64::MAX`.
@@ -1043,7 +1065,11 @@ pub(super) fn texel_layout(
 /// A copy between a buffer of `buffer_length` bytes laid out as `layout` and `region` of a
 /// texture over a buffer presenting `record`, whose texels lie at `texels`, in `unit`s of one
 /// texel: Metal's checks of both sides (as [`plan_buffer_copy`] makes them), then the rows, from
-/// the buffer to the texture (the caller swaps them for a copy out of the texture).
+/// the buffer to the texture (the caller swaps them for a copy out of the texture). A
+/// `bytesPerRow` below the row alone ([`rows_below_row`]) is taken as plain Metal takes it, each
+/// row at `y x bytesPerRow`: rows that overlap as the source are each read whole, and as the
+/// destination are written in turn, the later row's bytes standing ([`RowsCopy::new`]), one of
+/// the orders plain Metal's blit leaves.
 pub(super) fn plan_rows_copy(
     record: &ViewRecord,
     region: &TextureRegion,
@@ -1053,8 +1079,17 @@ pub(super) fn plan_rows_copy(
     texels: &TexelsLayout,
 ) -> Result<(Vec<Range<u64>>, Vec<Range<u64>>), CopyProblem> {
     let image = check_region(record, region, unit)?;
-    check_layout(layout, region.size, unit, buffer_length)?;
     let s = shape(region.size, unit);
+    match rows_below_row(layout, &s, unit) {
+        // The last row ends furthest: rows lie in order.
+        true => match layout.end(&s) {
+            Some(end) if end <= buffer_length => {}
+            _ => return Err(CopyProblem::BufferRange),
+        },
+        false => {
+            check_layout(layout, region.size, unit, buffer_length)?;
+        }
+    }
     Ok((
         layout_rows(layout, &s).ok_or(CopyProblem::BufferRange)?,
         texel_rows(texels, unit, &image),
