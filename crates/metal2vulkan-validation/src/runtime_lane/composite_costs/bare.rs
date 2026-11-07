@@ -7,6 +7,8 @@
 use super::super::frame_costs::{instructions, step, thread_cpu, TEXTURES};
 use super::{summarize, Composite, Frame, Measured, CHUNK, COUNTED, DRAWS, PASSES, RESET, SLOT};
 use super::{TARGET_SIDE, TIMED, WARM};
+use crate::gpu::wait::{self, SubmissionBackend};
+use crate::gpu::TEST_DEVICE;
 use ash::vk;
 use metal2vulkan_devtools::{fixtures_dir, spirv_assemble};
 use std::ffi::c_void;
@@ -491,7 +493,9 @@ impl<'a> Bare<'a> {
         }
     }
 
-    /// Submit the command buffer to the queue's `VkQueue` and wait for it.
+    /// Submit the command buffer to the queue's `VkQueue` and wait for it, bounded as every wait
+    /// of the crate's (`gpu/wait.rs`): a hung device ends the process with a hang record. The
+    /// frames call it after their times are taken.
     ///
     /// # Safety
     ///
@@ -506,11 +510,12 @@ impl<'a> Bare<'a> {
             self.composite.queue.with_vk_queue(|queue, _| {
                 device.queue_submit(queue, &submit, self.fence).unwrap();
             });
-            device
-                .wait_for_fences(&[self.fence], true, u64::MAX)
-                .unwrap();
-            device.reset_fences(&[self.fence]).unwrap();
         }
+        let backend = SubmissionBackend::vulkan(TEST_DEVICE);
+        wait::vulkan::wait_for_fence(device, self.fence, backend, "the bare composite frame")
+            .unwrap();
+        // SAFETY: the fence is signaled and its submission completed.
+        unsafe { device.reset_fences(&[self.fence]) }.unwrap();
     }
 
     /// One pass's binds and draws, the frame's draws so far `n`: the Vulkan commands recorded.
