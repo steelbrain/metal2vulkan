@@ -108,7 +108,11 @@ fn device() -> Option<Device> {
     Some(device)
 }
 
-/// A device of the cfg's kind, as the product makes it; `None` where it imports no host memory.
+/// A device of the cfg's kind, as the product makes it, of this call's own: a pipeline-records
+/// hook of its own, which keeps nothing, makes its options unequal to every other call's, so tests
+/// run as threads of one process do not share a device, nor its counts
+/// (`Device::system_default_with` answers the live device of equal options, a hook compared by
+/// identity). `None` where it imports no host memory.
 fn ahead_device() -> Option<Device> {
     let options = DeviceOptions {
         kinds: match cfg!(m2v_cpu_icd) {
@@ -119,6 +123,7 @@ fn ahead_device() -> Option<Device> {
                 DeviceKind::Virtual,
             ],
         },
+        pipeline_records: Some(Arc::new(|_: crate::PipelineRecord| ())),
         ..DeviceOptions::default()
     };
     let device = Device::system_default_with(&options).unwrap();
