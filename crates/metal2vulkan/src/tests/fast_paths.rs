@@ -450,7 +450,7 @@ fn the_runtime_s_render_lowering_choice_keys_no_profile() {
     }
 }
 
-/// The runtime's choice of what holds a sampled texture over host pages (`host_page_textures`)
+/// The runtime's choice of what holds a texture over host pages (`host_page_textures`)
 /// moves no committed profile's fingerprint: no profile carries it, so no translation follows it.
 #[test]
 fn the_runtime_s_host_page_textures_choice_keys_no_profile() {

@@ -53,11 +53,14 @@
 //! readers, the baseline. Printed per case (`SELF-READ-COST`): the GPU time per frame, and per
 //! frame the splits, snapshots, render pass instances begun, shadow copies, texels copied in
 //! (and of them those of a surface's shadow copied in again), keeps and their texels, merges, the
-//! shadows made of render targets over host pages, and the images made with feedback loop usage.
+//! shadows made of render targets over host pages and the textures in place over them (once the
+//! device's in-place check answered, each line printed, `SELF-READ-CHECK`), and the images made
+//! with feedback loop usage.
 //!
 //! Ignored by default: measurements, not checks. Run them by name with `--run-ignored all`.
 
 use super::attachment_reads::{floats, function};
+use super::first_use_writes::CHECK_WAIT;
 use super::host_memory::{no_copy, Mapping, GUEST_PAGE};
 use super::{open_device, WAIT};
 use crate::gpu::TEST_DEVICE;
@@ -913,6 +916,16 @@ fn self_reads() {
 
 /// [`self_reads`] on `device`, of `policy`: its surface, and under `InPlace` the private target.
 fn self_reads_on(device: &Device, policy: HostPageTexturePolicy) {
+    // The surface takes the path the device's check answers, not a shadow made before it did.
+    if policy == HostPageTexturePolicy::InPlace {
+        let settled = device.settle_in_place_checks(CHECK_WAIT);
+        for line in device.in_place_check_report() {
+            println!(
+                "SELF-READ-CHECK {}: settled {settled}: {line}",
+                device.name()
+            );
+        }
+    }
     let bgra = PixelFormat::BGRA8Unorm;
     let draws = (
         state(device, "tob_solid", "tob_renders.ll", bgra),
@@ -978,8 +991,8 @@ fn self_reads_on(device: &Device, policy: HostPageTexturePolicy) {
                  {}x{}: GPU {:.3} ms/frame (median); per frame: splits {:.2}, snapshotted \
                  {:.2}, instances {:.2}, shadow copies {:.2}, bounded {:.2}, texels copied in \
                  {:.0}, of a surface again {:.0}, keeps {:.2}, texels kept {:.0}, merges {:.2}; \
-                 render-target shadows over host pages {}, images made with feedback loop \
-                 usage: shadows {}, aliases {}",
+                 render-target shadows over host pages {}, textures in place over host pages \
+                 {}, images made with feedback loop usage: shadows {}, aliases {}",
                 SELF_PAIRS,
                 if baseline { "baseline" } else { "self-read" },
                 SELF_RECT[0],
@@ -1008,6 +1021,7 @@ fn self_reads_on(device: &Device, policy: HostPageTexturePolicy) {
                 per(kept(&before), kept(&after)),
                 per(before.shadow_merges_fetched, after.shadow_merges_fetched),
                 after.host_texture_shadows_render_target,
+                after.host_textures_in_place,
                 after.feedback_loop_shadow_images,
                 after.feedback_loop_alias_images,
             );

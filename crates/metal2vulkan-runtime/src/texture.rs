@@ -81,7 +81,7 @@ use super::host_bytes::HostBytes;
 use super::image_plan::{
     check_image_limits, plan_image, DepthImageFacts, ImageFacts, ImagePlan, ImageRefusal,
 };
-use super::in_place::{self, PagesClass, Refusal, ShadowCause, Verdict};
+use super::in_place::{self, Access, PagesClass, Refusal, ShadowCause, Verdict};
 use super::key_hash::KeyMap;
 use super::linear_plan::{
     aliases, check_linear_limits, holding, linear_lack, LinearImage, LinearLack,
@@ -2221,11 +2221,13 @@ impl Device {
             .map_err(|refusal| image_error(call, refusal))?;
         // Over host pages (a no-copy buffer's, or a no-copy heap's buffer's, imported by their
         // pointer or as dma-bufs; or fresh pages the runtime imported for a long buffer of its
-        // own, `fresh_pages.rs`), the image in place, with the texture's declared plan alone,
+        // own, `fresh_pages.rs`), the image in place, with the texture's declared plan (and the
+        // feedback loop usage, for one that renders, where the device makes the image with it),
         // where the device's policy, the texture's usage and the device's check of the pages'
-        // class take it (`in_place.rs`); else the shadow, its notice naming why. The device's
-        // check's own textures take it whatever the verdict, and are neither counted nor
-        // announced.
+        // class for its access take it (`in_place.rs`); else the shadow, its notice naming why.
+        // A texture that renders whose image took the feedback loop usage is counted so, as an
+        // aliasing image over a buffer of the runtime's is. The device's check's own textures
+        // take it whatever the verdict, and are neither counted nor announced.
         let class = match texels.buffer.caller_memory() {
             Some(CallerMemory::HostPages) if texels.buffer.over_dma_buf() => {
                 Some(PagesClass::DmaBuf)
@@ -2234,18 +2236,20 @@ impl Device {
             None if texels.buffer.in_fresh_pages() => Some(PagesClass::Fresh),
             _ => None,
         };
-        // On a discrete GPU, a texture whose policy and usage take the image in place, over pages
-        // whose memory carries a log, is a device copy instead: a shadow whose copies in take
-        // only the rows the log reports changed (`dirty_pages.rs`), so the GPU reads the texels
-        // from its own memory, where in place it reads the pages across the bus at every sample.
-        // It binds no image to the pages, so the in-place check's verdict is not asked.
+        // On a discrete GPU, a texture that only samples or reads whose policy takes the image in
+        // place, over pages whose memory carries a log, is a device copy instead: a shadow whose
+        // copies in take only the rows the log reports changed (`dirty_pages.rs`), so the GPU
+        // reads the texels from its own memory, where in place it reads the pages across the bus
+        // at every sample. It binds no image to the pages, so the in-place check's verdict is not
+        // asked. One that renders works on the pages in place, as a discrete Mac's GPU does.
         // Texels past the buffer's length lie in no image over its memory: the shadow's copies go
         // through the texture's tail (`buffer_texture.rs`).
         let past = texels.past().is_some();
         let device_copy = match class {
             Some(class) if !past && !in_place::checking() && !texels.buffer.detached() => {
                 let policy = self.compile_device().policy().host_page_textures;
-                in_place::in_place(policy, usage, class, |_| Verdict::Passed).is_ok()
+                Access::of(usage) == Access::Reads
+                    && in_place::in_place(policy, usage, class, |_, _| Verdict::Passed).is_ok()
                     && texels.device_copy(self)
             }
             _ => false,
@@ -2283,16 +2287,23 @@ impl Device {
                         true => HostPageTexturePolicy::InPlace,
                         false => self.compile_device().policy().host_page_textures,
                     };
-                    let verdict = |class| match checking {
+                    let verdict = |class, access| match checking {
                         true => Verdict::Passed,
-                        false => self.in_place_verdict(class),
+                        false => self.in_place_verdict(class, access),
                     };
                     match in_place::in_place(policy, usage, class, verdict) {
                         Ok(()) => {
                             match self.in_place_image(&plan, descriptor, &texels, class, &facts)? {
                                 Ok((image, pitched)) => {
                                     if !checking {
-                                        self.shared().counts.host_texture_in_place(class, pitched);
+                                        let counts = &self.shared().counts;
+                                        counts.host_texture_in_place(class, pitched);
+                                        let usage = image.plan().usage;
+                                        if usage
+                                            .contains(ImageUsageFlags::ATTACHMENT_FEEDBACK_LOOP_EXT)
+                                        {
+                                            counts.feedback_loop_alias_image();
+                                        }
                                     }
                                     return Ok(Storage::Alias { image, texels });
                                 }
@@ -2307,7 +2318,8 @@ impl Device {
                         "the in-place check's texture takes no image in place",
                     ));
                 }
-                self.shared().counts.host_texture_shadowed(&cause);
+                let renders = Access::of(usage) == Access::Renders;
+                self.shared().counts.host_texture_shadowed(&cause, renders);
                 if class == PagesClass::Fresh {
                     self.shared().counts.shadow_over_fresh_pages();
                 }

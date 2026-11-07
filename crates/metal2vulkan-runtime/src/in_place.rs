@@ -1,7 +1,7 @@
-//! Textures over host pages, in place: a 2D texture (or array) whose declared usage only samples
-//! or reads it, over a no-copy buffer's host pages or over a buffer the runtime placed in fresh
-//! host pages, is a linear image aliasing those pages, where the device's own check shows that the
-//! one operation Vulkan lets touch bytes beside the texels leaves every byte alone.
+//! Textures over host pages, in place: a 2D texture (or array) whose declared usage samples,
+//! reads or renders into it, over a no-copy buffer's host pages or over a buffer the runtime placed
+//! in fresh host pages, is a linear image aliasing those pages, where the device's own check shows
+//! that the operations Vulkan lets touch bytes beside the texels leave every byte alone.
 //!
 //! - **What Vulkan says.** An image bound to imported memory starts `UNDEFINED`
 //!   (`VUID-VkImageCreateInfo-pNext-01443`: "If the pNext chain includes a
@@ -12,30 +12,41 @@
 //!   Synchronization chapter says "Image layout transitions may perform read and write accesses on
 //!   all memory bound to the image subresource range", and "If the old layout is
 //!   VK_IMAGE_LAYOUT_UNDEFINED, the contents of that range may be discarded". Metal keeps every
-//!   CPU write to bytes no command writes, at every moment. No later operation of such an image
-//!   touches a byte beside its texels: a shader's read touches its texels alone (the Memory Model:
-//!   "A memory operation must not affect memory at a memory location not within its set of memory
-//!   locations"), every command uses it in `GENERAL` with memory barriers, which move no layout
-//!   (`tracker.rs`), and nothing renders into it or writes it through a shader (below).
+//!   CPU write to bytes no command writes, at every moment. A shader's read touches the texels
+//!   alone (the Memory Model: "A memory operation must not affect memory at a memory location not
+//!   within its set of memory locations"), and every command uses the image in `GENERAL` with
+//!   memory barriers, which move no layout (`tracker.rs`), but for two operations of an image that
+//!   renders ([`Access::Renders`]): a render pass's load and store operations, of which the Render
+//!   Pass chapter says "any writes performed by a load operation (as defined by its access masks)
+//!   to a given attachment may read and write back any memory locations within the image
+//!   subresource bound for that attachment", and a store alike; and, for an image with feedback
+//!   loop usage, its moves into `ATTACHMENT_FEEDBACK_LOOP_OPTIMAL_EXT` and back around a pass
+//!   whose draws read it through a snapshot (`render_target::moved_barriers`), layout transitions
+//!   as the first move is. Nothing writes it through a shader (below).
 //! - **Relying on the driver, checked.** The owner's ruling of 2026-10-26 ("In place, trusting the
 //!   driver") takes the image where the device's own check shows the move leaving every byte
 //!   alone: a deliberate, scoped exception to never relying on undocumented Vulkan behaviour,
-//!   recorded in `docs/FAST-PATHS.md`. The check (`in_place_check.rs`) runs once per driver and
-//!   release, per memory class ([`PagesClass`]), and its verdict is kept in the shader cache's
-//!   content records ([`record_name`]); a class it did not pass keeps the shadow.
+//!   recorded in `docs/FAST-PATHS.md`. The owner's rulings of 2026-10-27 and 2026-11-07 widen it to
+//!   textures that render, where the check shows a pass's load and store and the feedback loop
+//!   moves leaving every byte alone too, whatever a linear image costs the GPU: a texture over the
+//!   caller's pages is the GPU's to work on there, as a Mac's GPU works on them. The check
+//!   (`in_place_check.rs`) runs once per driver and release, per memory class ([`PagesClass`]) and
+//!   access ([`Access`]), and its verdicts are kept in the shader cache's content records
+//!   ([`record_name`]); a class and access it did not pass keep the shadow.
 //! - **Which textures** ([`in_place`]): those whose declared usage (as Metal reports it, an
-//!   `Unknown` one every usage) has none of `RenderTarget`, `ShaderWrite` and `ShaderAtomic`, under
-//!   `HostPageTexturePolicy::InPlace`, over a class whose check passed. Plain Metal also writes
+//!   `Unknown` one every usage) has neither `ShaderWrite` nor `ShaderAtomic`, under
+//!   `HostPageTexturePolicy::InPlace`, over a class whose check passed for the texture's access
+//!   (one that renders, `RenderTarget` among its usage, its render check). Plain Metal also writes
 //!   through a texture beyond its declared usage, and renders into one made without
 //!   `RenderTarget`: such a write binds the texture's usage shadow (`texture/usage_shadow.rs`), and
 //!   such a pass renders through an attachment stand-in (`attachment_stand_in.rs`), since the
 //!   image has neither storage nor attachment usage; the copies of both touch texels alone.
 //!   Elsewhere the texture is a shadow (`shadow.rs`), its notice naming why ([`ShadowCause`]) and
-//!   counted by cause (`WorkCounts::host_texture_shadows_*`).
-//! - **Before the verdict.** A texture made before its class's verdict is known waits for nothing:
-//!   it is a shadow ([`ShadowCause::CheckPending`], counted apart). The first such texture starts
-//!   the check on a thread of its own; a device whose record holds the verdict knows it as it is
-//!   made, and starts none.
+//!   counted by cause (`WorkCounts::host_texture_shadows_*`, and those that render apart).
+//! - **Before the verdict.** A texture made before its class's verdict for its access is known
+//!   waits for nothing: it is a shadow ([`ShadowCause::CheckPending`], counted apart). The first
+//!   such texture starts the check on a thread of its own; a device whose record holds the
+//!   verdicts knows them as it is made, and starts none.
 //! - **Visibility.** A command reads the image's texels in the memory a buffer over the same pages
 //!   reads: the pages' host-visible, host-coherent import (a dma-buf's own import is of the same
 //!   memory type). So a CPU write reaches a command through the image as it reaches the buffer's
@@ -97,6 +108,60 @@ impl PagesClass {
     }
 }
 
+/// What a texture over host pages does with its image in place, each checked apart: the
+/// operations Vulkan lets touch bytes bound to the image beside its texels differ.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum Access {
+    /// Its usage samples or reads it alone: its image takes its first move, and no other
+    /// operation that may touch those bytes.
+    Reads,
+    /// Its usage renders into it (`RenderTarget`, whatever else it holds): its image takes its
+    /// first move, render passes' load and store operations, and, made with feedback loop usage,
+    /// the moves into `ATTACHMENT_FEEDBACK_LOOP_OPTIMAL_EXT` and back.
+    Renders,
+}
+
+impl Access {
+    /// Every access, in the order the check runs them and the record holds their verdicts.
+    pub(crate) const ALL: [Access; 2] = [Access::Reads, Access::Renders];
+
+    /// The access of a texture of Metal `usage` (as Metal reports it).
+    pub(crate) fn of(usage: TextureUsage) -> Access {
+        match usage.contains(TextureUsage::RENDER_TARGET) {
+            true => Access::Renders,
+            false => Access::Reads,
+        }
+    }
+
+    /// Its place in [`ALL`](Self::ALL).
+    pub(crate) fn index(self) -> usize {
+        match self {
+            Access::Reads => 0,
+            Access::Renders => 1,
+        }
+    }
+
+    /// The operations its check covers, in words, for a notice.
+    pub(crate) fn words(self) -> &'static str {
+        match self {
+            Access::Reads => "the first move of an image",
+            Access::Renders => {
+                "the first move, a render pass's load and store and the feedback loop moves of an \
+                 image that renders"
+            }
+        }
+    }
+}
+
+/// The verdicts a device's check gives: one for each class and access, class by class
+/// ([`PagesClass::ALL`]), each class's accesses in [`Access::ALL`]'s order.
+pub(crate) const VERDICTS: usize = PagesClass::ALL.len() * Access::ALL.len();
+
+/// The place of `class`'s verdict for `access` among the [`VERDICTS`].
+pub(crate) fn verdict_index(class: PagesClass, access: Access) -> usize {
+    class.index() * Access::ALL.len() + access.index()
+}
+
 /// What the device's check answered for a class.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Verdict {
@@ -136,18 +201,15 @@ impl Verdict {
 pub(crate) enum ShadowCause {
     /// The device's policy asks the shadow (`HostPageTexturePolicy::Shadow`).
     Exact,
-    /// Its usage renders into it (`RenderTarget`, whatever else it holds; an `Unknown` usage,
-    /// every usage, among them).
-    RenderTarget,
-    /// Its usage writes it through a shader (`ShaderWrite` or `ShaderAtomic`) and does not render
-    /// into it.
+    /// Its usage writes it through a shader (`ShaderWrite` or `ShaderAtomic`, whatever else it
+    /// holds; an `Unknown` usage, every usage, among them).
     ShaderWrite,
-    /// Its class's check has not answered yet.
-    CheckPending(PagesClass),
-    /// Its class's check found a byte changed.
-    CheckFailed(PagesClass),
-    /// Its class's check made no image.
-    Unchecked(PagesClass),
+    /// Its class's check for its access has not answered yet.
+    CheckPending(PagesClass, Access),
+    /// Its class's check for its access found a byte changed.
+    CheckFailed(PagesClass, Access),
+    /// Its class's check for its access made no image.
+    Unchecked(PagesClass, Access),
     /// The device makes no image over its texels as Metal lays them out: why, and the words.
     Refused(Refusal, String),
 }
@@ -214,25 +276,27 @@ impl ShadowCause {
             ShadowCause::Exact => "the device's policy asks a shadow of every texture over host \
                                    pages (HostPageTexturePolicy::Shadow)"
                 .to_owned(),
-            ShadowCause::RenderTarget | ShadowCause::ShaderWrite => "its usage renders into it or \
-                                     writes it (RenderTarget, ShaderWrite or ShaderAtomic), and \
-                                     an image bound to host pages starts UNDEFINED \
-                                     (VUID-VkImageCreateInfo-pNext-01443), its layout \
-                                     transitions and a render pass's load and store operations \
-                                     free to read and write every byte bound to it"
+            ShadowCause::ShaderWrite => "its usage writes it through a shader (ShaderWrite or \
+                                          ShaderAtomic), and an image bound to host pages starts \
+                                          UNDEFINED (VUID-VkImageCreateInfo-pNext-01443), its \
+                                          layout transitions free to read and write every byte \
+                                          bound to it, which no check covers for such an image"
                 .to_owned(),
-            ShadowCause::CheckPending(class) => format!(
-                "the device's check of the first move of an image over {} has not answered yet",
+            ShadowCause::CheckPending(class, access) => format!(
+                "the device's check of {} over {} has not answered yet",
+                access.words(),
                 class.words()
             ),
-            ShadowCause::CheckFailed(class) => format!(
-                "the device's check found the first move of an image over {} changing a byte \
-                 the CPU wrote beside it",
+            ShadowCause::CheckFailed(class, access) => format!(
+                "the device's check found {} over {} changing a byte the CPU wrote beside it",
+                access.words(),
                 class.words()
             ),
-            ShadowCause::Unchecked(class) => {
-                format!("the device's check made no image over {}", class.words())
-            }
+            ShadowCause::Unchecked(class, access) => format!(
+                "the device's check made no image over {} for {}",
+                class.words(),
+                access.words()
+            ),
             ShadowCause::Refused(_, why) => why.clone(),
         }
     }
@@ -240,35 +304,34 @@ impl ShadowCause {
 
 /// Whether a texture over host pages of `class`, of Metal `usage` (as Metal reports it), on a
 /// device of `policy`, is tried as an image in place; else why it is a shadow (the module docs).
-/// `verdict` answers the device's check for the class, asked only of a texture the policy and
-/// usage let through (a pending one starts the check).
+/// `verdict` answers the device's check for the class and the texture's access
+/// ([`Access::of`]), asked only of a texture the policy and usage let through (a pending one
+/// starts the check).
 pub(crate) fn in_place(
     policy: HostPageTexturePolicy,
     usage: TextureUsage,
     class: PagesClass,
-    verdict: impl FnOnce(PagesClass) -> Verdict,
+    verdict: impl FnOnce(PagesClass, Access) -> Verdict,
 ) -> Result<(), ShadowCause> {
     if policy == HostPageTexturePolicy::Shadow {
         return Err(ShadowCause::Exact);
     }
-    if usage.contains(TextureUsage::RENDER_TARGET) {
-        return Err(ShadowCause::RenderTarget);
-    }
     if usage.intersects(TextureUsage::SHADER_WRITE | TextureUsage::SHADER_ATOMIC) {
         return Err(ShadowCause::ShaderWrite);
     }
-    match verdict(class) {
+    let access = Access::of(usage);
+    match verdict(class, access) {
         Verdict::Passed => Ok(()),
-        Verdict::Pending => Err(ShadowCause::CheckPending(class)),
-        Verdict::Failed => Err(ShadowCause::CheckFailed(class)),
-        Verdict::Unchecked => Err(ShadowCause::Unchecked(class)),
+        Verdict::Pending => Err(ShadowCause::CheckPending(class, access)),
+        Verdict::Failed => Err(ShadowCause::CheckFailed(class, access)),
+        Verdict::Unchecked => Err(ShadowCause::Unchecked(class, access)),
     }
 }
 
-/// A device's check verdicts (`DeviceShared::in_place`): one per class, and whether its check
-/// started and settled.
+/// A device's check verdicts (`DeviceShared::in_place`): one per class and access
+/// ([`VERDICTS`]), and whether its check started and settled.
 pub(crate) struct InPlaceChecks {
-    verdicts: [AtomicU8; 3],
+    verdicts: [AtomicU8; VERDICTS],
     /// The check was started on its thread (at most once per device).
     started: AtomicBool,
     /// Every class's verdict is known: from the record, or the check ended.
@@ -287,7 +350,7 @@ impl InPlaceChecks {
     /// No verdict yet; `fail` as [`InPlaceChecks::fail`] says.
     pub(crate) fn new(fail: bool) -> InPlaceChecks {
         InPlaceChecks {
-            verdicts: [0, 0, 0].map(AtomicU8::new),
+            verdicts: [0; VERDICTS].map(AtomicU8::new),
             started: AtomicBool::new(false),
             settled: Mutex::new(false),
             wake: Condvar::new(),
@@ -302,20 +365,23 @@ impl InPlaceChecks {
         lock(&self.notes).push(line);
     }
 
-    /// `class`'s verdict now.
-    pub(crate) fn verdict(&self, class: PagesClass) -> Verdict {
-        let byte = self.verdicts[class.index()].load(Ordering::Acquire);
+    /// `class`'s verdict for `access` now.
+    pub(crate) fn verdict(&self, class: PagesClass, access: Access) -> Verdict {
+        let byte = self.verdicts[verdict_index(class, access)].load(Ordering::Acquire);
         Verdict::of_byte(byte).unwrap_or(Verdict::Pending)
     }
 
-    /// Every class's verdict now.
-    pub(crate) fn verdicts(&self) -> [Verdict; 3] {
-        PagesClass::ALL.map(|class| self.verdict(class))
+    /// Every verdict now, in [`VERDICTS`]' order.
+    pub(crate) fn verdicts(&self) -> [Verdict; VERDICTS] {
+        std::array::from_fn(|at| {
+            let byte = self.verdicts[at].load(Ordering::Acquire);
+            Verdict::of_byte(byte).unwrap_or(Verdict::Pending)
+        })
     }
 
-    /// Give `class` its verdict.
-    pub(crate) fn set(&self, class: PagesClass, verdict: Verdict) {
-        self.verdicts[class.index()].store(verdict.byte(), Ordering::Release);
+    /// Give `class` its verdict for `access`.
+    pub(crate) fn set(&self, class: PagesClass, access: Access, verdict: Verdict) {
+        self.verdicts[verdict_index(class, access)].store(verdict.byte(), Ordering::Release);
     }
 
     /// Whether the check is to fail whatever the moves did.
@@ -367,7 +433,7 @@ impl InPlaceChecks {
 /// The version of what the check does and of how a record of it is named and framed: a change to
 /// either bumps it, and a record of another version is never read (its name differs, and so does
 /// the version it holds).
-pub(crate) const CHECK_VERSION: u32 = 1;
+pub(crate) const CHECK_VERSION: u32 = 2;
 
 /// A record's first bytes.
 const MAGIC: [u8; 8] = *b"M2VINPL\0";
@@ -375,8 +441,9 @@ const MAGIC: [u8; 8] = *b"M2VINPL\0";
 /// The domain tag of a record's name.
 const NAME_TAG: &[u8] = b"metal2vulkan in-place check record\0";
 
-/// What the check checks, in a record's name: the first move of an image over host pages. A check
-/// of another operation keeps its own record beside this one's, which it leaves valid.
+/// What the check checks, in a record's name: the first move of an image over host pages, and of
+/// one that renders its render passes' operations and feedback loop moves. A check of another
+/// operation keeps its own record beside this one's, which it leaves valid.
 const CHECK_KIND: &[u8] = b"first move\0";
 
 /// The driver identity a verdict holds for: `VkPhysicalDeviceProperties`' vendor, device and
@@ -434,12 +501,12 @@ pub(crate) fn record_name(identity: &DriverIdentity) -> String {
 /// version        u32       CHECK_VERSION
 /// runtime        u32       RUNTIME_VERSION
 /// identity       32 bytes  DriverIdentity::digest
-/// verdicts       3 bytes   one per class, in PagesClass::ALL's order
+/// verdicts       6 bytes   one per class and access, VERDICTS' order (verdict_index)
 /// checksum       32 bytes  SHA-256 of every byte before it
 /// ```
 ///
 /// Integers are little-endian.
-pub(crate) fn encode(identity: &DriverIdentity, verdicts: [Verdict; 3]) -> Vec<u8> {
+pub(crate) fn encode(identity: &DriverIdentity, verdicts: [Verdict; VERDICTS]) -> Vec<u8> {
     let mut bytes = Vec::with_capacity(RECORD_BYTES);
     bytes.extend_from_slice(&MAGIC);
     bytes.extend_from_slice(&CHECK_VERSION.to_le_bytes());
@@ -452,12 +519,12 @@ pub(crate) fn encode(identity: &DriverIdentity, verdicts: [Verdict; 3]) -> Vec<u
 }
 
 /// A record's length.
-const RECORD_BYTES: usize = 8 + 4 + 4 + 32 + 3 + 32;
+const RECORD_BYTES: usize = 8 + 4 + 4 + 32 + VERDICTS + 32;
 
 /// The verdicts `bytes` record for `identity`: `None` for anything but a whole record of this
 /// version and runtime, for this identity, whose checksum holds and whose every verdict is an
 /// answer (a pending one is never written).
-pub(crate) fn decode(identity: &DriverIdentity, bytes: &[u8]) -> Option<[Verdict; 3]> {
+pub(crate) fn decode(identity: &DriverIdentity, bytes: &[u8]) -> Option<[Verdict; VERDICTS]> {
     if bytes.len() != RECORD_BYTES {
         return None;
     }
@@ -478,11 +545,11 @@ pub(crate) fn decode(identity: &DriverIdentity, bytes: &[u8]) -> Option<[Verdict
     {
         return None;
     }
-    let verdicts = [rest[0], rest[1], rest[2]].map(Verdict::of_byte);
-    match verdicts {
-        [Some(a), Some(b), Some(c)] if ![a, b, c].contains(&Verdict::Pending) => Some([a, b, c]),
-        _ => None,
+    let mut verdicts = [Verdict::Pending; VERDICTS];
+    for (verdict, &byte) in verdicts.iter_mut().zip(rest) {
+        *verdict = Verdict::of_byte(byte).filter(|&known| known != Verdict::Pending)?;
     }
+    Some(verdicts)
 }
 
 impl Device {
@@ -542,18 +609,21 @@ impl Device {
             .content_store()
             .load_content(&name, |bytes| decode(&identity, &bytes));
         if let Lookup::Hit(verdicts) = looked {
-            for (class, verdict) in PagesClass::ALL.into_iter().zip(verdicts) {
-                shared.in_place.set(class, verdict);
-                shared.counts.in_place_check_recalled();
+            for class in PagesClass::ALL {
+                for access in Access::ALL {
+                    let verdict = verdicts[verdict_index(class, access)];
+                    shared.in_place.set(class, access, verdict);
+                    shared.counts.in_place_check_recalled();
+                }
             }
             shared.in_place.settle(None);
         }
     }
 
-    /// `class`'s verdict for a texture asking it now: a pending one starts the check, unless it
-    /// started already. Never waits.
-    pub(crate) fn in_place_verdict(&self, class: PagesClass) -> Verdict {
-        let verdict = self.shared().in_place.verdict(class);
+    /// `class`'s verdict for `access` for a texture asking it now: a pending one starts the
+    /// check, unless it started already. Never waits.
+    pub(crate) fn in_place_verdict(&self, class: PagesClass, access: Access) -> Verdict {
+        let verdict = self.shared().in_place.verdict(class, access);
         if verdict == Verdict::Pending {
             self.start_in_place_checks();
         }
@@ -584,14 +654,23 @@ impl Device {
         self.shared().in_place.took()
     }
 
-    /// The device's check's verdicts now, one line per class, and what it found changed where a
-    /// class failed. A runtime extension for the lanes that report it.
+    /// The device's check's verdicts now, one line per class for a texture that reads
+    /// (`Pointer: Passed`), then one per class for one that renders (`Pointer renders: Passed`),
+    /// and what it found changed where one failed. A runtime extension for the lanes that report
+    /// it.
     #[doc(hidden)]
     pub fn in_place_check_report(&self) -> Vec<String> {
         let checks = &self.shared().in_place;
-        let verdicts = PagesClass::ALL
+        let line = |class: PagesClass, access: Access| {
+            let verdict = checks.verdict(class, access);
+            match access {
+                Access::Reads => format!("{class:?}: {verdict:?}"),
+                Access::Renders => format!("{class:?} renders: {verdict:?}"),
+            }
+        };
+        let verdicts = Access::ALL
             .into_iter()
-            .map(|class| format!("{class:?}: {:?}", checks.verdict(class)));
+            .flat_map(|access| PagesClass::ALL.map(|class| line(class, access)));
         verdicts
             .chain(lock(&checks.notes).iter().cloned())
             .collect()

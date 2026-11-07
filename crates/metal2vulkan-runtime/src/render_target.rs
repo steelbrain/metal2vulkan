@@ -1061,6 +1061,37 @@ pub(super) unsafe fn moved_barriers(
     }
 }
 
+/// The moves of a color image's `range` from `GENERAL` into `ATTACHMENT_FEEDBACK_LOOP_OPTIMAL_EXT`
+/// and back, one after the other, as [`moved_barriers`] records them around an instance whose
+/// draws read the image through a snapshot: the device's check of an image in place over host
+/// pages that renders (`in_place_check.rs`), which checks that those moves leave every byte bound
+/// to it beside its texels alone.
+///
+/// # Safety
+///
+/// As [`moved_barriers`]': `command_buffer` is recording outside a render pass, only the caller
+/// records it, the image is live until it completes, made with feedback loop usage, and its
+/// `range` rests in `GENERAL`.
+pub(crate) unsafe fn feedback_moves(
+    raw: &ash::Device,
+    command_buffer: vk::CommandBuffer,
+    image: vk::Image,
+    range: vk::ImageSubresourceRange,
+    family: vk::QueueFlags,
+) {
+    let moved = [MovedImage {
+        image,
+        range,
+        layout: vk::ImageLayout::ATTACHMENT_FEEDBACK_LOOP_OPTIMAL_EXT,
+    }];
+    // SAFETY: the caller's contract; the first moves the range out of `GENERAL`, where it rests,
+    // and the second back from the layout the first left.
+    unsafe {
+        moved_barriers(raw, command_buffer, &moved, true, family);
+        moved_barriers(raw, command_buffer, &moved, false, family);
+    }
+}
+
 /// The pass of `shape` with every operation `LOAD` and `STORE`: compatible with every pass of
 /// that shape, kept by its device ([`create`]). A shape without attachments takes its device's
 /// kept pass (`attachmentless.rs`).

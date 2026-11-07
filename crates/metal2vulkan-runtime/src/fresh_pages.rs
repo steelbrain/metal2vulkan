@@ -41,10 +41,10 @@
 //!   Only a buffer made here reads zero unwritten.
 //! - **Textures over it.** An image bound to imported memory starts `UNDEFINED`
 //!   (`VUID-VkImageCreateInfo-pNext-01443`), and its first move may write any byte bound to it. A
-//!   texture over it that only samples or reads is a linear image in place where the device's
-//!   check passed for fresh pages (`in_place.rs`; counted: `WorkCounts::fresh_page_textures_in_place`),
-//!   and every other one takes the shadow (`shadow.rs`; counted:
-//!   `WorkCounts::shadows_over_fresh_pages`).
+//!   texture over it that samples, reads or renders and does not write through a shader is a
+//!   linear image in place where the device's check passed for fresh pages and its access
+//!   (`in_place.rs`; counted: `WorkCounts::fresh_page_textures_in_place`), and every other one
+//!   takes the shadow (`shadow.rs`; counted: `WorkCounts::shadows_over_fresh_pages`).
 //! - **Freed.** The pages are unmapped once the memory imported from them is freed, since the
 //!   import requires them mapped for its whole life. That happens with the buffer's block, or
 //!   after it where freed memory waits for the batches in flight (`freed_memory.rs`).

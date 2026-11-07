@@ -322,37 +322,45 @@ buffer reads zero either way, which is all a program sees.
 An image bound to imported memory starts in `VK_IMAGE_LAYOUT_UNDEFINED`
 (`VUID-VkImageCreateInfo-pNext-01443`), and its first move, like any layout transition, may read
 and write every byte bound to it, where Metal keeps every CPU write to bytes a command buffer does
-not write. Under the default `HostPageTexturePolicy::InPlace` the runtime relies on the driver
-there, checked: a texture over host pages whose declared usage only samples or reads it (none of
-`RenderTarget`, `ShaderWrite` and `ShaderAtomic`) is a linear image aliasing the pages (one over
-dma-buf pages a `DRM_FORMAT_MOD_LINEAR` image over a dma-buf of its own pages, acquired from
-`VK_QUEUE_FAMILY_FOREIGN_EXT`) wherever the device's own check passed for that kind of pages
-(`WorkCounts::host_textures_in_place`, `dma_buf_textures_in_place`,
-`fresh_page_textures_in_place`). The check makes such images of every texel size, small and
-3840x2160, over each kind of pages while a CPU thread writes beside their texels, and passes a kind
-only where every first move kept every byte. It runs on a thread of its own, which the first such
-texture starts, once per driver, driver version and runtime release: its verdict is kept in the
-shader cache's directory (a device without one checks once per process) and recalled as the next
-device is made (`WorkCounts::in_place_checks_run`, `_passed`, `_failed`, `_unchecked`,
-`_recalled`). Such a texture's commands read the texels in the memory the buffer's commands read,
-so a CPU write reaches them as it reaches the buffer's.
+not write; a render pass's load and store operations may too, for an image it renders. Under the
+default `HostPageTexturePolicy::InPlace` the runtime relies on the driver there, checked: a texture
+over host pages whose declared usage samples, reads or renders into it and does not write it
+through a shader (neither `ShaderWrite` nor `ShaderAtomic`) is a linear image aliasing the pages
+(one over dma-buf pages a `DRM_FORMAT_MOD_LINEAR` image over a dma-buf of its own pages, acquired
+from `VK_QUEUE_FAMILY_FOREIGN_EXT`) wherever the device makes such an image and its own check
+passed for that kind of pages and that access (`WorkCounts::host_textures_in_place`,
+`dma_buf_textures_in_place`, `fresh_page_textures_in_place`). A texture that renders takes the
+feedback loop usage where the device makes the image with it, so a draw that reads it after a
+render-target barrier reads it through a snapshot (`WorkCounts::feedback_loop_alias_images`). The
+check makes such images of every texel size, small and 3840x2160, over each kind of pages while a
+CPU thread writes beside their texels, and passes a kind only where every first move kept every
+byte; for a texture that renders it checks images made with `RenderTarget` usage apart, through
+their first move, their moves into the feedback loop layout and back, and a render pass that
+clears and stores them, while the CPU writes the bytes between their rows and after them. It runs
+on a thread of its own, which the first such texture starts, once per driver, driver version and
+runtime release: its verdicts are kept in the shader cache's directory (a device without one
+checks once per process) and recalled as the next device is made
+(`WorkCounts::in_place_checks_run`, `_passed`, `_failed`, `_unchecked`, `_recalled`). Such a
+texture's commands read and write the texels in the memory the buffer's commands read, so a CPU
+write reaches them as it reaches the buffer's.
 
 Every other texture over host pages is a shadow (`shadowed-texture`, the notice naming why): under
-`HostPageTexturePolicy::Shadow` (`DevicePolicy::exact_answers`); one whose usage renders into it or
-writes it; one made before the check answered, or where it failed or made no image; and one no
-image in place serves (the bytes' pitch, placement or memory, or over dma-buf pages no dma-buf of
-the texture's own pages). `WorkCounts::host_texture_shadows_*` counts each reason apart (one
-whose usage renders into it, `_render_target`, apart from one that writes it through a shader
-alone, `_shader_write`). A shadow
+`HostPageTexturePolicy::Shadow` (`DevicePolicy::exact_answers`); one whose usage writes it
+through a shader; one made before the check for its access answered, or where it failed or made no
+image; and one no image in place serves (its format or usage the device makes no linear image of,
+the bytes' pitch, placement or memory, or over dma-buf pages no dma-buf of the texture's own
+pages). `WorkCounts::host_texture_shadows_*` counts each reason apart (one that writes it through
+a shader, `_shader_write`), and of them all those whose usage renders into them
+(`_render_target`). A shadow
 is an optimal image of the runtime's own memory, whose texels the encoders copy in from the pages
 before a use and back (merged back: only the bytes the commands changed) after a write; no image
 is bound to the pages, and `Texture::vk_image` gives `None` for it. A texture in place renders and
 is written beyond its declared usage, as plain Metal allows, through its usage shadow and an
 attachment stand-in, whose copies touch its texels alone.
-On a discrete GPU, a texture whose policy and usage take the image in place, over a no-copy
-buffer whose memory carries a log of its writes (`HostMemory::with_dirty_pages`), tracked, one
-slice laid out as one copy, is instead a device copy (`WorkCounts::device_copy_textures`, whatever
-the check answered): a shadow whose copies in take only the bands of rows the log reports changed
+On a discrete GPU, a texture that only samples or reads whose policy takes the image in place, over
+a no-copy buffer whose memory carries a log of its writes (`HostMemory::with_dirty_pages`),
+tracked, one slice laid out as one copy, is instead a device copy (`WorkCounts::device_copy_textures`,
+whatever the check answered): a shadow whose copies in take only the bands of rows the log reports changed
 (`dirty_copies_in_gated` and kin). Its notice is not announced: it holds the bytes wherever a
 command reads it.
 A texture placed in a heap over dma-buf pages is an image over a dma-buf of its own pages, which its

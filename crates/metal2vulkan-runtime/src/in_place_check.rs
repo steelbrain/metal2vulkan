@@ -1,6 +1,7 @@
-//! The device's check of the first move of an image in place over host pages (`in_place.rs`):
-//! whether that move leaves every byte alone while the CPU writes beside it, per class of pages
-//! ([`PagesClass`]), on a thread of its own.
+//! The device's check of an image in place over host pages (`in_place.rs`): whether the
+//! operations Vulkan lets touch the bytes bound to it beside its texels leave every byte alone
+//! while the CPU writes beside it, per class of pages ([`PagesClass`]) and access ([`Access`]), on
+//! a thread of its own.
 //!
 //! - **What it does.** For each class it makes a buffer as the product makes one there (a no-copy
 //!   buffer over anonymous pages it maps, imported by their pointer; a buffer of the runtime's own
@@ -18,6 +19,18 @@
 //!   must then read the CPU's write where the CPU wrote it, and the pattern elsewhere. Each class
 //!   runs every shape of [`SHAPES`] (texels of 1, 2, 4, 8 and 16 bytes, rows apart or one after
 //!   another, and 3840x2160 at 4 bytes) [`ROUNDS`] times.
+//! - **An image that renders** ([`Access::Renders`]) is checked apart, in rounds of their own: the
+//!   texture is made with `RenderTarget` usage as well, as the program's render targets are, so
+//!   its image takes the feedback loop usage where the product's does; the writer writes the bytes
+//!   between rows and after the image alone, through the image's first move, its moves into
+//!   `ATTACHMENT_FEEDBACK_LOOP_OPTIMAL_EXT` and back where it has the usage
+//!   (`Texture::settle_feedback_moves`, as `render_target::moved_barriers` records them), and a
+//!   render pass of a command queue of the check's own that clears it to zero at its load and
+//!   stores it, waited for (each by a submission the round waits for). Every texel must then read
+//!   zero, and every other byte as above. A draw's color writes reach its fragments' texels alone
+//!   (the Memory Model); the load, store and resolve operations and the layout transitions are
+//!   what Vulkan lets touch the rest of the subresource, and the program's resolves into such a
+//!   texture are not among the rounds.
 //! - **Its buffers' addresses** lie outside the Metal address space (`AddressPlacement::Outside`,
 //!   `address.rs`), each made as the product makes its class's otherwise: the check runs while
 //!   the program makes its resources, so a range of the space it took would refuse a pin of the
@@ -67,20 +80,25 @@
 use crate::device::holds::Holder;
 use crate::exit_guard;
 use crate::host_memory::HostMemory;
-use crate::in_place::{encode, mark_checking, record_name, PagesClass, Verdict};
+use crate::in_place::{encode, mark_checking, record_name, Access, PagesClass, Verdict};
 use crate::values::ResourceOptions;
 use crate::{
-    AddressPlacement, Buffer, BufferContents, BufferDescriptor, Device, TextureDescriptor,
+    AddressPlacement, Buffer, BufferContents, BufferDescriptor, ClearColor, CommandQueue, Device,
+    LoadAction, RenderPassDescriptor, StoreAction, Texture, TextureDescriptor,
 };
 use metal2vulkan::device::HostPageTexturePolicy;
 use metal2vulkan::metal::{PixelFormat, TextureUsage};
 use std::ptr::NonNull;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Barrier;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 /// How many times each shape is checked in each class.
 pub(crate) const ROUNDS: usize = 3;
+
+/// The longest a render round waits for its pass's command buffer: a pass that clears a 3840x2160
+/// surface and stores it.
+const PASS_WAIT: Duration = Duration::from_secs(20);
 
 /// A shape the check makes a texture of: its format, the bytes of one texel, its width and height,
 /// and its rows' pitch.
@@ -124,6 +142,12 @@ const fn shape(format: PixelFormat, texel: u64, width: u64, height: u64, bpr: u6
 }
 
 impl Shape {
+    /// Whether the window's byte at `offset` is one of the texture's texels.
+    fn is_texel(&self, offset: u64) -> bool {
+        offset < self.bytes_per_row * self.height
+            && offset % self.bytes_per_row < self.width * self.texel
+    }
+
     /// The bytes of the window the check fills and writes: the texture's rows, then the bytes
     /// after them to two pages past the page their last byte is in.
     fn window(&self, page: u64) -> u64 {
@@ -153,8 +177,10 @@ impl Device {
         let started = exit_guard::spawn(builder, move || run(weak));
         if started.is_err() {
             for class in PagesClass::ALL {
-                if checks.verdict(class) == Verdict::Pending {
-                    checks.set(class, Verdict::Unchecked);
+                for access in Access::ALL {
+                    if checks.verdict(class, access) == Verdict::Pending {
+                        checks.set(class, access, Verdict::Unchecked);
+                    }
                 }
             }
             checks.settle(None);
@@ -162,30 +188,36 @@ impl Device {
     }
 }
 
-/// The check's thread: each class in turn, its verdict given as it is known, then the record.
+/// The check's thread: each class in turn, each of its accesses, each verdict given as it is
+/// known, then the record.
 fn run(weak: crate::device::WeakDevice) {
     mark_checking();
     let started = Instant::now();
     let mut stopped = false;
     for class in PagesClass::ALL {
-        let Some(device) = weak.hold() else {
-            return;
-        };
-        if device.shared().in_place.verdict(class) != Verdict::Pending {
-            continue;
+        for access in Access::ALL {
+            let Some(device) = weak.hold() else {
+                return;
+            };
+            if device.shared().in_place.verdict(class, access) != Verdict::Pending {
+                continue;
+            }
+            if stopped || word_overwritten(&device) {
+                stopped = true;
+                device
+                    .shared()
+                    .in_place
+                    .set(class, access, Verdict::Unchecked);
+                continue;
+            }
+            let Some(verdict) = check_class(&device, class, access) else {
+                // The process is exiting, or the program let the device go: nothing is kept.
+                return;
+            };
+            let checks = &device.shared().in_place;
+            checks.set(class, access, verdict);
+            device.shared().counts.in_place_check_ran(verdict);
         }
-        if stopped || word_overwritten(&device) {
-            stopped = true;
-            device.shared().in_place.set(class, Verdict::Unchecked);
-            continue;
-        }
-        let Some(verdict) = check_class(&device, class) else {
-            // The process is exiting, or the program let the device go: nothing is kept.
-            return;
-        };
-        let checks = &device.shared().in_place;
-        checks.set(class, verdict);
-        device.shared().counts.in_place_check_ran(verdict);
     }
     let Some(device) = weak.hold() else {
         return;
@@ -220,14 +252,25 @@ fn word_overwritten(device: &Device) -> bool {
     unsafe { device.shared().loader_word.overwritten() }
 }
 
-/// The verdict of `class` on `device`: every shape's rounds, until one fails, or until the
-/// device's loader word is found overwritten (unchecked then where no round ran). `None` where
-/// the process is exiting, or the program's last drop stopped the device's holds before a round
-/// (`device/holds.rs`).
-fn check_class(device: &Device, class: PagesClass) -> Option<Verdict> {
+/// The verdict of `class` for `access` on `device`: every shape's rounds, until one fails, or
+/// until the device's loader word is found overwritten (unchecked then where no round ran).
+/// `None` where the process is exiting, or the program's last drop stopped the device's holds
+/// before a round (`device/holds.rs`).
+fn check_class(device: &Device, class: PagesClass, access: Access) -> Option<Verdict> {
     let page = host_page();
     let Some(pages) = ClassPages::make(device, class, BUFFER_BYTES) else {
         return Some(Verdict::Unchecked);
+    };
+    // The command queue an image that renders takes its passes on: the check's own.
+    let queue = match access {
+        Access::Reads => None,
+        Access::Renders => {
+            let made = exit_guard::enter().map(|_busy| device.new_command_queue());
+            match made? {
+                Ok(queue) => Some(queue),
+                Err(_) => return Some(Verdict::Unchecked),
+            }
+        }
     };
     let mut made = 0;
     for shape in SHAPES {
@@ -243,7 +286,7 @@ fn check_class(device: &Device, class: PagesClass) -> Option<Verdict> {
             }
             let outcome = {
                 let _busy = exit_guard::enter()?;
-                check_round(&pages, shape, round, page)
+                check_round(&pages, shape, round, page, queue.as_ref())
             };
             match outcome {
                 Round::Kept => made += 1,
@@ -255,8 +298,14 @@ fn check_class(device: &Device, class: PagesClass) -> Option<Verdict> {
                         Some(column) if column >= shape.width * shape.texel => "between two rows",
                         _ => "a texel",
                     };
+                    let operations = match access {
+                        Access::Reads => "the first move",
+                        Access::Renders => {
+                            "the first move, feedback loop moves or a pass's clear and store"
+                        }
+                    };
                     device.shared().in_place.note(format!(
-                        "{class:?}: the first move of a {:?} image of {}x{} with rows {} bytes \
+                        "{class:?}: {operations} of a {:?} image of {}x{} with rows {} bytes \
                          apart changed byte {offset} ({place}) from {due:#04x} to {read:#04x} in \
                          round {round}",
                         shape.format, shape.width, shape.height, shape.bytes_per_row
@@ -285,8 +334,15 @@ enum Round {
 }
 
 /// One round of `shape` over `pages`, inside the caller's section: the pattern, the texture, the
-/// writes beside its image's first move, and the bytes compared.
-fn check_round(pages: &ClassPages, shape: Shape, round: usize, page: u64) -> Round {
+/// writes beside its image's first move (and, for an image that renders, `queue` its queue, beside
+/// its feedback loop moves and a pass that clears and stores it), and the bytes compared.
+fn check_round(
+    pages: &ClassPages,
+    shape: Shape,
+    round: usize,
+    page: u64,
+    queue: Option<&CommandQueue>,
+) -> Round {
     let window = shape.window(page);
     let bytes = Bytes {
         start: pages.start,
@@ -296,7 +352,12 @@ fn check_round(pages: &ClassPages, shape: Shape, round: usize, page: u64) -> Rou
     bytes.fill(&pattern);
     let mut descriptor =
         TextureDescriptor::texture_2d(shape.format, shape.width, shape.height, false);
-    descriptor.usage = TextureUsage::SHADER_READ;
+    descriptor.usage = match queue {
+        None => TextureUsage::SHADER_READ,
+        Some(_) => TextureUsage::RENDER_TARGET | TextureUsage::SHADER_READ,
+    };
+    // An image that renders: the writer writes beside its texels alone, which its pass writes.
+    let texels = queue.map(|_| shape);
     // The runtime's own texture: it takes no resource ID, so the program's IDs are Metal's
     // whether or when the check runs.
     let Ok(texture) = pages
@@ -311,13 +372,19 @@ fn check_round(pages: &ClassPages, shape: Shape, round: usize, page: u64) -> Rou
     let settled = std::thread::scope(|scope| {
         let builder = std::thread::Builder::new().name("m2v-in-place-writes".to_owned());
         let writer = exit_guard::spawn_scoped(scope, builder, || {
-            bytes.write_until(&pattern, &stop, &started, &written);
+            bytes.write_until(&pattern, texels, (&stop, &started, &written));
         });
         if writer.is_err() {
             return None;
         }
         started.wait();
-        let settled = texture.settle_in_place();
+        let settled = match texture.settle_in_place() {
+            Some(Ok(())) => match queue {
+                None => Some(Ok(())),
+                Some(queue) => Some(render(queue, &texture)),
+            },
+            other => other,
+        };
         stop.store(true, Ordering::Release);
         settled
     });
@@ -325,9 +392,38 @@ fn check_round(pages: &ClassPages, shape: Shape, round: usize, page: u64) -> Rou
         return Round::NotMade;
     };
     drop(texture);
-    match bytes.compare(&pattern, written.load(Ordering::Acquire)) {
+    match bytes.compare(&pattern, texels, written.load(Ordering::Acquire)) {
         None => Round::Kept,
         Some(changed) => Round::Changed(changed),
+    }
+}
+
+/// An image that renders, after its first move: its moves into the feedback loop layout and back
+/// where it has the usage, then a pass of `queue` that clears it to zero at its load and stores
+/// it, each waited for. An error where either was not made, or the pass's command buffer failed or
+/// did not complete within [`PASS_WAIT`].
+fn render(queue: &CommandQueue, texture: &Texture) -> Result<(), crate::Error> {
+    if let Some(moved) = texture.settle_feedback_moves() {
+        moved?;
+    }
+    let mut pass = RenderPassDescriptor::new();
+    let color = &mut pass.color_attachments[0];
+    color.texture = Some(texture.clone());
+    color.load_action = LoadAction::Clear;
+    color.clear_color = ClearColor::new(0.0, 0.0, 0.0, 0.0);
+    color.store_action = StoreAction::Store;
+    let command_buffer = queue.command_buffer()?;
+    command_buffer
+        .render_command_encoder(&pass)?
+        .end_encoding()?;
+    command_buffer.commit()?;
+    let failed = || crate::error::internal("the in-place check's pass did not complete");
+    command_buffer
+        .wait_until_completed_for(PASS_WAIT)
+        .map_err(|_| failed())?;
+    match command_buffer.error() {
+        None => Ok(()),
+        Some(_) => Err(failed()),
     }
 }
 
@@ -571,39 +667,55 @@ impl Bytes {
     }
 
     /// Write each byte once, the pattern's complement, at the stride, until `stop` or every byte
-    /// is written; `started` once the first is. How many were written goes in `written`.
+    /// is written; `started` once the first is. Where `texels` names the texture's shape, its
+    /// texels are passed over (its pass writes them), and only the bytes beside them written. How
+    /// many of the stride's bytes were reached goes in `written`.
     fn write_until(
         &self,
         pattern: &Pattern,
-        stop: &AtomicBool,
-        started: &Barrier,
-        written: &AtomicU64,
+        texels: Option<Shape>,
+        (stop, started, written): (&AtomicBool, &Barrier, &AtomicU64),
     ) {
         let stride = self.stride();
         let mut n = 0;
-        while n < self.length && (n == 0 || !stop.load(Ordering::Acquire)) {
+        let mut first = true;
+        while n < self.length && (first || !stop.load(Ordering::Acquire)) {
             let offset = self.nth(n, stride);
+            n += 1;
+            if texels.is_some_and(|shape| shape.is_texel(offset)) {
+                continue;
+            }
             // SAFETY: as in `fill`; the round's thread does not touch the bytes meanwhile.
             unsafe { self.byte(offset).write_volatile(!pattern.at(offset)) };
-            n += 1;
-            if n == 1 {
+            if first {
+                first = false;
                 started.wait();
             }
         }
-        if n == 0 {
+        if first {
             started.wait();
         }
         written.store(n, Ordering::Release);
     }
 
-    /// The first byte that reads other than the writer left it, where the first `written` were
-    /// written: its offset, what was due and what was read; `None` where every byte reads right.
-    /// Each written byte must read its complement, and is set back to the pattern as it is read;
-    /// then every byte must read the pattern, compared a period at a time.
-    fn compare(&self, pattern: &Pattern, written: u64) -> Option<(u64, u8, u8)> {
+    /// The first byte that reads other than the writer and the round left it, where the first
+    /// `written` of the stride's bytes were reached: its offset, what was due and what was read;
+    /// `None` where every byte reads right. Each written byte must read its complement, and is set
+    /// back to the pattern as it is read; then every byte must read the pattern, compared a
+    /// period at a time, but, where `texels` names the shape a pass cleared, its texels, which
+    /// must read zero.
+    fn compare(
+        &self,
+        pattern: &Pattern,
+        texels: Option<Shape>,
+        written: u64,
+    ) -> Option<(u64, u8, u8)> {
         let stride = self.stride();
         for n in 0..written {
             let offset = self.nth(n, stride);
+            if texels.is_some_and(|shape| shape.is_texel(offset)) {
+                continue;
+            }
             let due = !pattern.at(offset);
             // SAFETY: as in `fill`; the writer was joined.
             let read = unsafe { self.byte(offset).read_volatile() };
@@ -613,12 +725,36 @@ impl Bytes {
             // SAFETY: as above.
             unsafe { self.byte(offset).write_volatile(pattern.at(offset)) };
         }
-        let mut offset = 0;
-        while offset < self.length {
-            let count = (self.length - offset).min(PERIOD as u64) as usize;
-            // SAFETY: as above; nothing writes the bytes while the slice is read.
+        let Some(shape) = texels else {
+            return self.matches(pattern, 0, self.length);
+        };
+        // Each row's texels read zero, and the bytes after them to the next row the pattern.
+        let row_bytes = shape.width * shape.texel;
+        for row in 0..shape.height {
+            let start = row * shape.bytes_per_row;
+            // SAFETY: as above; the row's texels lie in the window.
+            let read = unsafe { std::slice::from_raw_parts(self.byte(start), row_bytes as usize) };
+            if let Some(at) = read.iter().position(|&read| read != 0) {
+                return Some((start + at as u64, 0, read[at]));
+            }
+            let next = start + shape.bytes_per_row;
+            if let Some(changed) = self.matches(pattern, start + row_bytes, next) {
+                return Some(changed);
+            }
+        }
+        self.matches(pattern, shape.bytes_per_row * shape.height, self.length)
+    }
+
+    /// The first byte from `from` to `to` that does not read the pattern: its offset, what was due
+    /// and what was read; `None` where every one does. Compared a period at a time.
+    fn matches(&self, pattern: &Pattern, from: u64, to: u64) -> Option<(u64, u8, u8)> {
+        let mut offset = from;
+        while offset < to {
+            let phase = (offset % PERIOD as u64) as usize;
+            let count = (to - offset).min((PERIOD - phase) as u64) as usize;
+            // SAFETY: as in `compare`; nothing writes the bytes while the slice is read.
             let read = unsafe { std::slice::from_raw_parts(self.byte(offset), count) };
-            let due = &pattern.bytes[..count];
+            let due = &pattern.bytes[phase..phase + count];
             if let Some(at) = read.iter().zip(due).position(|(read, due)| read != due) {
                 return Some((offset + at as u64, due[at], read[at]));
             }

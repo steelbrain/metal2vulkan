@@ -2944,23 +2944,30 @@ impl Counters {
         }
     }
 
-    /// A texture over host pages was made a shadow of them for `cause` (`in_place.rs`).
-    pub(crate) fn host_texture_shadowed(&self, cause: &crate::in_place::ShadowCause) {
+    /// A texture over host pages was made a shadow of them for `cause` (`in_place.rs`), one whose
+    /// usage renders into it where `renders`.
+    pub(crate) fn host_texture_shadowed(
+        &self,
+        cause: &crate::in_place::ShadowCause,
+        renders: bool,
+    ) {
         use crate::in_place::ShadowCause as C;
         let counter = match cause {
             C::Exact => &self.host_texture_shadows_exact,
-            C::RenderTarget => &self.host_texture_shadows_render_target,
             C::ShaderWrite => &self.host_texture_shadows_shader_write,
-            C::CheckPending(_) => &self.host_texture_shadows_check_pending,
-            C::CheckFailed(_) => &self.host_texture_shadows_check_failed,
-            C::Unchecked(_) => &self.host_texture_shadows_unchecked,
+            C::CheckPending(..) => &self.host_texture_shadows_check_pending,
+            C::CheckFailed(..) => &self.host_texture_shadows_check_failed,
+            C::Unchecked(..) => &self.host_texture_shadows_unchecked,
             C::Refused(refusal, _) => &self.host_texture_shadows_refused[refusal.index()],
         };
         counter.fetch_add(1, Ordering::Relaxed);
+        if renders {
+            (self.host_texture_shadows_render_target).fetch_add(1, Ordering::Relaxed);
+        }
     }
 
-    /// The device's check of the first move over host pages answered `verdict` for a class it
-    /// ran (`in_place_check.rs`).
+    /// The device's check over host pages answered `verdict` for a class and access it ran
+    /// (`in_place_check.rs`).
     pub(crate) fn in_place_check_ran(&self, verdict: crate::in_place::Verdict) {
         use crate::in_place::Verdict as V;
         self.in_place_checks_run.fetch_add(1, Ordering::Relaxed);
@@ -5837,9 +5844,10 @@ pub struct WorkCounts {
     /// first move may write any byte bound to it.
     pub shadows_over_fresh_pages: u64,
     /// Textures over host pages (a no-copy buffer's, a no-copy heap's buffer's, or a buffer in
-    /// fresh pages it imported) that only sample or read, made an image aliasing the pages in
-    /// place, where the device's check passed for their class (`HostPageTexturePolicy::InPlace`):
-    /// no shadow, and no copy in or back.
+    /// fresh pages it imported) that sample, read or render, made an image aliasing the pages in
+    /// place, where the device's check passed for their class and access
+    /// (`HostPageTexturePolicy::InPlace`): no shadow, and no copy in or back. One that renders
+    /// whose image took feedback loop usage is also counted in `feedback_loop_alias_images`.
     pub host_textures_in_place: u64,
     /// Textures over host pages that `host_textures_in_place` would count (or a shadow made
     /// before the check answered or where it failed), made instead a copy in the device's memory
@@ -5860,20 +5868,23 @@ pub struct WorkCounts {
     /// Textures over host pages made shadows because the device's policy asks it
     /// (`HostPageTexturePolicy::Shadow`).
     pub host_texture_shadows_exact: u64,
-    /// Textures over host pages made shadows because their usage renders into them
-    /// (`RenderTarget`, whatever else it holds; an `Unknown` usage among them).
+    /// Of the textures over host pages made shadows, counted by why in the counts beside this
+    /// one, those whose usage renders into them (`RenderTarget`, whatever else it holds; an
+    /// `Unknown` usage among them): the render targets a pass renders through a shadow, its
+    /// copies in and merges back.
     pub host_texture_shadows_render_target: u64,
     /// Textures over host pages made shadows because their usage writes them through a shader
-    /// (`ShaderWrite` or `ShaderAtomic`) and does not render into them.
+    /// (`ShaderWrite` or `ShaderAtomic`, whatever else it holds).
     pub host_texture_shadows_shader_write: u64,
-    /// Textures over host pages made shadows because the device's check of their class had not
-    /// answered yet (a first session's, before the verdict is kept).
+    /// Textures over host pages made shadows because the device's check of their class and
+    /// access (one that renders, or one that reads) had not answered yet (a first session's,
+    /// before the verdicts are kept).
     pub host_texture_shadows_check_pending: u64,
-    /// Textures over host pages made shadows because the device's check of their class found a
-    /// byte changed.
+    /// Textures over host pages made shadows because the device's check of their class and
+    /// access found a byte changed.
     pub host_texture_shadows_check_failed: u64,
     /// Textures over host pages made shadows because the device's check made no image of their
-    /// class.
+    /// class for their access.
     pub host_texture_shadows_unchecked: u64,
     /// Textures over host pages made shadows because their rows share bytes (an IOSurface
     /// plane's GPU rows).
@@ -5900,18 +5911,20 @@ pub struct WorkCounts {
     /// reason than the source or the pitch (counted in `host_texture_shadows_refused_pitch`): the
     /// modifier's features or limits, the image's memory past the pages, or the driver's import.
     pub host_texture_shadows_refused_dma_buf: u64,
-    /// Classes of host pages (pointer, dma-buf, fresh) the device's check of the first move ran
-    /// for in this process: `in_place_checks_passed`, `in_place_checks_failed` and
-    /// `in_place_checks_unchecked` together.
+    /// Classes of host pages (pointer, dma-buf, fresh), each with each access (an image that
+    /// reads, an image that renders), the device's check ran for in this process:
+    /// `in_place_checks_passed`, `in_place_checks_failed` and `in_place_checks_unchecked`
+    /// together.
     pub in_place_checks_run: u64,
-    /// Of `in_place_checks_run`, those whose every image's first move left every byte alone.
+    /// Of `in_place_checks_run`, those whose every image left every byte alone: its first move,
+    /// and for one that renders its pass's load and store and its feedback loop moves.
     pub in_place_checks_passed: u64,
     /// Of `in_place_checks_run`, those that found a byte changed (or were made to fail).
     pub in_place_checks_failed: u64,
-    /// Of `in_place_checks_run`, those that made no image of the class.
+    /// Of `in_place_checks_run`, those that made no image of the class for the access.
     pub in_place_checks_unchecked: u64,
-    /// Classes whose verdict was read from the record of an earlier check of the same driver,
-    /// device and runtime: no check ran for them.
+    /// Classes and accesses whose verdict was read from the record of an earlier check of the
+    /// same driver, device and runtime: no check ran for them.
     pub in_place_checks_recalled: u64,
     /// Buffers of the runtime's own made in fresh anonymous pages imported by their pointer
     /// (`VK_EXT_external_memory_host`), which read zero with nothing written: host-visible ones

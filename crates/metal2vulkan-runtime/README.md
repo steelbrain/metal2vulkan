@@ -331,20 +331,22 @@ the record the pass is making.
   program; no order of either changes a result.
 - **Textures over buffers** share the buffer's bytes. Over a no-copy buffer's host pages or such
   a long buffer's fresh pages, an image bound to them would start `UNDEFINED`, and Vulkan lets its
-  first move rewrite any byte bound to it: by default (`HostPageTexturePolicy::InPlace`) a texture
-  there that only samples or reads is an image in place wherever the device's own check showed
-  that move keeping every byte for that kind of pages (run once per driver and release on a
-  thread of its own, kept in the shader cache). The runtime keeps a copy and announces it
-  (`shadowed-texture`, naming why) for every other texture there (under
-  `HostPageTexturePolicy::Shadow`, one that renders or writes, one made before the check answered
-  or whose check did not pass), where the device's linear images cannot hold Metal's layout, and
-  where the rows lie with bytes between them. On a discrete GPU, a texture whose policy and usage
-  take the image in place, over a no-copy buffer whose memory carries a log of its writes
-  (`HostMemory::with_dirty_pages`), tracked and laid out as one copy, is instead such a copy in
-  the device's memory, announced nowhere, whatever the check answered: its copies in take only the
-  rows the log reports changed, so the GPU reads the surface from its own memory, where in place it
-  reads the pages across the bus at every sample (`WorkCounts::device_copy_textures`). Exact either
-  way; integrated GPUs, CPU devices and memory without a log keep the image in place.
+  first move, and a render pass's load and store, rewrite any byte bound to it: by default
+  (`HostPageTexturePolicy::InPlace`) a texture there that samples, reads or renders into it and
+  does not write it through a shader is an image in place wherever the device makes it and its own
+  check showed those operations keeping every byte for that kind of pages (run once per driver and
+  release on a thread of its own, kept in the shader cache). The runtime keeps a copy and
+  announces it (`shadowed-texture`, naming why) for every other texture there (under
+  `HostPageTexturePolicy::Shadow`, one that writes through a shader, one made before the check
+  answered or whose check did not pass), where the device's linear images cannot hold Metal's
+  layout, and where the rows lie with bytes between them. On a discrete GPU, a texture that only
+  samples or reads whose policy takes the image in place, over a no-copy buffer whose memory
+  carries a log of its writes (`HostMemory::with_dirty_pages`), tracked and laid out as one copy,
+  is instead such a copy in the device's memory, announced nowhere, whatever the check answered:
+  its copies in take only the rows the log reports changed, so the GPU reads the surface from its
+  own memory, where in place it reads the pages across the bus at every sample
+  (`WorkCounts::device_copy_textures`). Exact either way; integrated GPUs, CPU devices and memory
+  without a log keep the image in place.
 - **Two-plane YCbCr textures** (`YCBCR8_420_2P` and its kin over a surface's planes) hold an
   image of the texels Metal reads, converted from the planes before a command buffer's first use
   where they changed. Where `has_unified_memory`, a function that only samples or gathers a

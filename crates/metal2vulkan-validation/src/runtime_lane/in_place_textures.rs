@@ -25,11 +25,14 @@
 //!   value, and the bytes between the rows hold the pattern.
 //! - [`textures_that_render_or_write_count_their_shadows_apart`], under the validation layer: a
 //!   64x64 `R32Uint` texture over a no-copy buffer of anonymous pages, of each usage that renders
-//!   or writes, is a shadow counted by why: one that renders into it (`RenderTarget`, whatever else
-//!   it holds) as a render target's (`host_texture_shadows_render_target`), one that writes it
-//!   through a shader alone (`ShaderWrite`, `ShaderAtomic`) as a shader write's
-//!   (`host_texture_shadows_shader_write`), and under `HostPageTexturePolicy::Shadow` every one as
-//!   the exact form's (`host_texture_shadows_exact`).
+//!   or writes, once the device's check answered: one that writes it through a shader
+//!   (`ShaderWrite`, `ShaderAtomic`, whatever else it holds) is a shadow counted as a shader
+//!   write's (`host_texture_shadows_shader_write`); one that renders into it and does not write it
+//!   is in place where the check passed for an image that renders over the class
+//!   (`Pointer renders: Passed`; `vk_image` answers one, `host_textures_in_place`), else a shadow
+//!   counted by the check's answer or the device's refusal; under `HostPageTexturePolicy::Shadow`
+//!   every one is the exact form's (`host_texture_shadows_exact`). Each shadow that renders also
+//!   counts in `host_texture_shadows_render_target`.
 //! - [`a_failed_check_keeps_the_shadow_and_no_record`], under the validation layer: a device made
 //!   to fail its check (`DeviceOptions::fail_in_place_check`) answers failed or unchecked for every
 //!   class and makes such a texture a shadow counted as the failed check's, never in place, and
@@ -457,7 +460,7 @@ fn writes_and_passes_beyond_the_usage_take_their_shadows() {
 #[test]
 fn textures_that_render_or_write_count_their_shadows_apart() {
     use TextureUsage as U;
-    // Each usage, and whether it counts as a render target's shadow (else a shader write's).
+    // Each usage, and whether it renders.
     let usages = [
         (U::SHADER_READ | U::RENDER_TARGET, true),
         (U::SHADER_READ | U::SHADER_WRITE, false),
@@ -477,6 +480,10 @@ fn textures_that_render_or_write_count_their_shadows_apart() {
             options.policy.host_page_textures = policy;
         })
         .unwrap();
+        if policy == HostPageTexturePolicy::InPlace {
+            settled(&device);
+        }
+        let renders_in_place = passed(&device, "Pointer renders");
         let (w, h, bpr) = (64u64, 64u64, 256u64);
         let len = ((bpr * h) as usize).next_multiple_of(GUEST_PAGE);
         let mapping = Mapping::anonymous(len);
@@ -520,19 +527,36 @@ fn textures_that_render_or_write_count_their_shadows_apart() {
                 delta(|c| c.host_texture_shadows_shader_write),
                 delta(|c| c.host_texture_shadows_exact),
             );
-            let due = match (policy, renders) {
-                (HostPageTexturePolicy::Shadow, _) => (0, 0, 1),
-                (_, true) => (1, 0, 0),
-                (_, false) => (0, 1, 0),
-            };
+            let writes = usage.intersects(U::SHADER_WRITE | U::SHADER_ATOMIC);
+            // SAFETY: the handle is only read, while the texture lives.
+            let aliased = unsafe { texture.vk_image() }.is_some();
             eprintln!(
                 "IN-PLACE-SHADOWS on {}: {policy:?} {usage:?}: (render target, shader write, \
-                 exact) {counted:?}",
+                 exact) {counted:?}, in place {aliased}",
                 device.name()
             );
-            assert_eq!(counted, due, "{policy:?} {usage:?}");
-            // SAFETY: the handle is only read, while the texture lives.
-            assert!(unsafe { texture.vk_image() }.is_none(), "{usage:?}");
+            let shadow = u64::from(renders);
+            match (policy, writes) {
+                (HostPageTexturePolicy::Shadow, _) => {
+                    assert_eq!(counted, (shadow, 0, 1), "{policy:?} {usage:?}");
+                    assert!(!aliased, "{usage:?}");
+                }
+                (_, true) => {
+                    assert_eq!(counted, (shadow, 1, 0), "{policy:?} {usage:?}");
+                    assert!(!aliased, "{usage:?}");
+                }
+                // A texture that renders and does not write: in place where its check passed,
+                // else a shadow counted by the check's answer or the device's refusal.
+                (_, false) => {
+                    let in_place = delta(|c| c.host_textures_in_place);
+                    if aliased {
+                        assert!(renders_in_place, "{usage:?} in place without its check");
+                        assert_eq!((counted, in_place), ((0, 0, 0), 1), "{usage:?}");
+                    } else {
+                        assert_eq!((counted, in_place), ((1, 0, 0), 0), "{usage:?}");
+                    }
+                }
+            }
             drop(texture);
         }
         messages.take_notices();
@@ -555,7 +579,7 @@ fn a_failed_check_keeps_the_shadow_and_no_record() {
         settled(&device);
         let report = device.in_place_check_report();
         assert!(
-            report.iter().take(3).all(|line| !line.ends_with("Passed")),
+            report.iter().take(6).all(|line| !line.ends_with("Passed")),
             "{report:?}"
         );
         let len = (7680 * 1080usize).next_multiple_of(GUEST_PAGE);
@@ -600,7 +624,8 @@ fn a_failed_check_keeps_the_shadow_and_no_record() {
     {
         let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), in_place).unwrap();
         let counts = device.work_counts();
-        assert_eq!(counts.in_place_checks_recalled, 3);
+        // Each class's verdicts, for a texture that reads and one that renders.
+        assert_eq!(counts.in_place_checks_recalled, 6);
         assert_eq!(counts.in_place_checks_run, 0);
         assert!(device.settle_in_place_checks(std::time::Duration::ZERO));
         assert_eq!(device.in_place_check_took(), None);

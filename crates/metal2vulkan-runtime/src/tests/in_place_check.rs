@@ -83,7 +83,12 @@ fn pins(odd: bool) -> impl Iterator<Item = u64> {
 #[test]
 fn the_in_place_check_takes_no_range_of_the_metal_space() {
     let verdicts = |device: &Device| -> Vec<String> {
-        device.in_place_check_report().into_iter().take(3).collect()
+        let lines = crate::in_place::VERDICTS;
+        device
+            .in_place_check_report()
+            .into_iter()
+            .take(lines)
+            .collect()
     };
     let reference = {
         let scratch = Scratch::new("in-place-check-reference");

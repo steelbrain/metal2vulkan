@@ -1,8 +1,9 @@
 //! Device tests of 2D textures (and 2D arrays) over no-copy buffers on the device the cfg selects.
 //! A texture over the caller's host pages is a shadow image the encoders copy the texels into and
-//! back (`shadowed-texture`), or under `HostPageTexturePolicy::InPlace` one that only reads is an
-//! image aliasing the pages where the device's check passed: either reads and writes the caller's
-//! bytes as Metal's texture over the buffer does.
+//! back (`shadowed-texture`), or under `HostPageTexturePolicy::InPlace` one that reads or renders
+//! and does not write through a shader is an image aliasing the pages where the device's check
+//! passed for its access: either reads and writes the caller's bytes as Metal's texture over the
+//! buffer does.
 //!
 //! - [`textures_over_no_copy_buffers_read_and_write_the_caller_s_pages`], under the validation
 //!   layer: the consumer's surface formats (and `BGR10_XR`, an extended-range format held in an
@@ -20,10 +21,10 @@
 //!   (`WorkCounts::shadowed_textures`) and made without zeroing its image (`shadows_zeroed`,
 //!   `images_started_on_the_host`: its copy in writes every texel first), and making it, and
 //!   making it again, asks the driver no format's modifier features (`modifier_feature_queries`);
-//!   under `InPlace`, once the device's check answered, one of `ShaderRead` usage alone is in place
-//!   (`vk_image` answers its image, `host_textures_in_place`) or a shadow counted by why, and every
-//!   other a shadow. The second making takes the same form. Each texture's form is printed
-//!   (`NOCOPY-TEXTURE`).
+//!   under `InPlace`, once the device's check answered, one without `ShaderWrite` usage (the
+//!   `ShaderRead` one, and the render target) is in place (`vk_image` answers its image,
+//!   `host_textures_in_place`) or a shadow counted by why, and every other a shadow. The second
+//!   making takes the same form. Each texture's form is printed (`NOCOPY-TEXTURE`).
 //! - [`two_slice_arrays_over_no_copy_buffers_read_and_write_the_caller_s_pages`], under the
 //!   validation layer: two-slice `RGBA8Unorm` 2D arrays made by the linear call, a 4x4 sampled one
 //!   and an 8x8 render target, read and written a slice at a time at Metal's slice places
@@ -358,10 +359,10 @@ fn read_and_write_the_caller_s_pages_under(
             );
             let shadowed = counted.shadowed_textures - before.shadowed_textures;
             let in_place = counted.host_textures_in_place - before.host_textures_in_place;
-            // Under `Shadow`, and for a texture that renders or writes, a shadow; under `InPlace`
-            // one that only reads may be in place, counted so.
-            let may_alias =
-                policy == HostPageTexturePolicy::InPlace && usage == TextureUsage::SHADER_READ;
+            // Under `Shadow`, and for a texture that writes through a shader, a shadow; under
+            // `InPlace` one that reads or renders may be in place, counted so.
+            let may_alias = policy == HostPageTexturePolicy::InPlace
+                && !usage.contains(TextureUsage::SHADER_WRITE);
             assert!(
                 !made || may_alias,
                 "{what}: a texture over host pages aliased"
@@ -914,13 +915,36 @@ fn differing(a: &[u8], b: &[u8], texel: u64) -> (usize, Option<usize>) {
 /// blends over the left half, read through the texture and through the buffer in the same command
 /// buffer; a blit's write of the buffer, then a pass that loads it and blends over the right half,
 /// in one command buffer; and a pass that clears and blends over the left half. The pages hold the
-/// reference's texels after each, and the bytes between the rows stay the caller's. The form is
-/// printed (`NOCOPY-BLEND`). One test a format and pitch, each its own process.
+/// reference's texels after each, and the bytes between the rows stay the caller's. Under each
+/// setting of `host_page_textures`: under `InPlace`, once the device's check answered, the render
+/// target is in place where its check passed for an image that renders. The form is printed
+/// (`NOCOPY-BLEND`). One test a format and pitch, each its own process.
 fn passes_blend_load_and_store_as_private_textures(pf: PixelFormat, texel: u64, pad: u64) {
+    for policy in [
+        HostPageTexturePolicy::Shadow,
+        HostPageTexturePolicy::InPlace,
+    ] {
+        passes_blend_load_and_store_under(pf, texel, pad, policy);
+    }
+}
+
+/// [`passes_blend_load_and_store_as_private_textures`] on a device of `policy`.
+fn passes_blend_load_and_store_under(
+    pf: PixelFormat,
+    texel: u64,
+    pad: u64,
+    policy: HostPageTexturePolicy,
+) {
     let cache = ScratchCache::new().unwrap();
     let messages = Messages::default();
     {
-        let device = validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
+        let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), |options| {
+            options.policy.host_page_textures = policy;
+        })
+        .unwrap();
+        if policy == HostPageTexturePolicy::InPlace {
+            assert!(device.settle_in_place_checks(CHECK_WAIT));
+        }
         let queue = device.new_command_queue().unwrap();
         let pipeline = blending(&device, pf);
         let row = W * texel;
@@ -940,9 +964,13 @@ fn passes_blend_load_and_store_as_private_textures(pf: PixelFormat, texel: u64, 
         d.resource_options = ResourceOptions::private();
         let private = device.new_texture(&d).unwrap();
         let what = format!(
-            "{} {W}x{H}, rows of {bpr} bytes ({})",
+            "{policy:?}, {} {W}x{H}, rows of {bpr} bytes ({})",
             pf.name(),
             form(aliased(&texture))
+        );
+        assert!(
+            policy == HostPageTexturePolicy::InPlace || !aliased(&texture),
+            "{what}: aliased under the shadow's setting"
         );
         let check = |round: &str, ours: &[u8], reference: &[u8]| {
             let (ours, reference) = (texel_rows(ours, bpr, row), texel_rows(reference, bpr, row));

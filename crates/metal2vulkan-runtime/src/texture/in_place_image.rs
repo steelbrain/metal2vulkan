@@ -21,15 +21,20 @@
 //!   holds a texel twice. The image's memory may run past the buffer's bytes into the rest of its
 //!   placement (its last page's bytes past the buffer), as Vulkan binds it within the memory: its
 //!   texels never reach them, and the check's bytes after its image are such bytes.
-//! - **Its usage** is the texture's declared plan's, nothing wider: a write beyond it binds the
-//!   texture's usage shadow (`texture/usage_shadow.rs`), and a render pass into it renders through
-//!   an attachment stand-in (`attachment_stand_in.rs`), since the image has neither storage nor
-//!   attachment usage. Their copies into it touch its texels alone.
+//! - **Its usage** is the texture's declared plan's: a write beyond it binds the texture's usage
+//!   shadow (`texture/usage_shadow.rs`), and a render pass into one made without `RenderTarget`
+//!   renders through an attachment stand-in (`attachment_stand_in.rs`), since the image has
+//!   neither storage nor attachment usage; their copies into it touch its texels alone. One that
+//!   renders also takes the feedback loop usage a draw takes that reads the texture its own pass
+//!   renders through a snapshot (`texture::feedback_candidate`, `render/snapshot.rs`) where the
+//!   device makes the image with it, as an aliasing image over a buffer of the runtime's does:
+//!   else the declared plan's image.
 //! - **A rebind** (`rebind.rs`) makes it again over the new pages, its texels as far from their
 //!   first byte as from the old pages', as a no-copy heap's images are
 //!   ([`Device::rebound_in_place_images`]); a detach makes it present a stand-in, as it does every
 //!   image bound to the pages (`detach.rs`).
 
+use super::attached_reads::feedback_candidate;
 use super::{
     first_color_subresource, pages_hold, FirstMove, Image, ImageObjects, ImageSwap, KeptResolves,
     KeyMap, LinearMade, LinearRefusal, ObjectsToken, Owner, Raw, Remade, Storage, Texture,
@@ -39,7 +44,7 @@ use crate::buffer_texture::Texels;
 use crate::device::lock;
 use crate::error::{vulkan, Error, RuntimeGap};
 use crate::image_plan::{ImageFacts, ImagePlan};
-use crate::in_place::{PagesClass, Refusal};
+use crate::in_place::{Access, PagesClass, Refusal};
 use crate::linear_plan::{check_linear_limits, linear_lack, BufferLayout, LinearLack};
 use crate::texture_descriptor::TextureDescriptor;
 use crate::{release, Device};
@@ -65,15 +70,50 @@ impl Texture {
             _ => None,
         }
     }
+
+    /// Move the texture's image in place from `GENERAL` into `ATTACHMENT_FEEDBACK_LOOP_OPTIMAL_EXT`
+    /// and back, as a render pass instance whose draws read it through a snapshot holds it
+    /// (`render_target::moved_barriers`), by an internal submission the call waits for, after its
+    /// first move: the device's check's round of an image that renders (`in_place_check.rs`).
+    /// `None` where the texture is no image aliasing its bytes, or its image has no feedback loop
+    /// usage.
+    pub(crate) fn settle_feedback_moves(&self) -> Option<Result<(), Error>> {
+        let Storage::Alias { image, .. } = &self.0.storage else {
+            return None;
+        };
+        let plan = image.plan();
+        if !(plan.usage).contains(vk::ImageUsageFlags::ATTACHMENT_FEEDBACK_LOOP_EXT) {
+            return None;
+        }
+        let range = vk::ImageSubresourceRange {
+            aspect_mask: vk::ImageAspectFlags::COLOR,
+            base_mip_level: 0,
+            level_count: plan.levels,
+            base_array_layer: 0,
+            layer_count: plan.layers,
+        };
+        let family = image.device.shared().queue_flags_of(0);
+        let raw = image.raw.get();
+        Some(image.submit_copy(|commands, command_buffer| {
+            // SAFETY: the internal command buffer of the device's first `VkQueue` is recording,
+            // outside a render pass; the image is live until the submission, waited for,
+            // completed, made with feedback loop usage, and rests in `GENERAL` after its first
+            // move, which the submission makes first.
+            unsafe {
+                crate::render_target::feedback_moves(commands, command_buffer, raw, range, family)
+            };
+        }))
+    }
 }
 
 impl Device {
-    /// The image in place of a texture of `plan` (its declared usage's, the module docs) made with
-    /// `descriptor` over `texels`, host pages of `class`, with whether it is a
-    /// `DRM_FORMAT_MOD_LINEAR` image at Metal's pitch made for host allocations; why not where the
-    /// device makes none (the module docs). Over a no-copy buffer's pages (or a no-copy heap's) it
-    /// is noted for a rebind to make again. Its first move is noted, for the device's next
-    /// submission that takes it (`texture/first_move.rs`).
+    /// The image in place of a texture of `plan` (its declared usage's, with the feedback loop
+    /// usage where the device makes it so: the module docs) made with `descriptor` over `texels`,
+    /// host pages of `class`, with whether it is a `DRM_FORMAT_MOD_LINEAR` image at Metal's pitch
+    /// made for host allocations; why not where the device makes none, the declared plan's
+    /// refusal (the module docs). Over a no-copy buffer's pages (or a no-copy heap's) it is noted
+    /// for a rebind to make again. Its first move is noted, for the device's next submission that
+    /// takes it (`texture/first_move.rs`).
     pub(super) fn in_place_image(
         &self,
         plan: &ImagePlan,
@@ -94,15 +134,22 @@ impl Device {
                 ),
             )));
         }
-        let made = match class {
-            PagesClass::DmaBuf => self.dma_buf_in_place(plan, descriptor, texels, facts)?,
+        let make = |plan: &ImagePlan| match class {
+            PagesClass::DmaBuf => self.dma_buf_in_place(plan, descriptor, texels, facts),
             PagesClass::Pointer | PagesClass::Fresh => {
-                self.host_in_place(plan, descriptor, texels, class, facts)?
+                self.host_in_place(plan, descriptor, texels, class, facts)
             }
         };
-        let (image, pitched) = match made {
-            Ok(made) => made,
-            Err(refused) => return Ok(Err(refused)),
+        let with_feedback = match feedback_candidate(plan, self) {
+            Some(candidate) => make(&candidate)?.ok(),
+            None => None,
+        };
+        let (image, pitched) = match with_feedback {
+            Some(made) => made,
+            None => match make(plan)? {
+                Ok(made) => made,
+                Err(refused) => return Ok(Err(refused)),
+            },
         };
         // Over a no-copy buffer's pages, noted for a rebind.
         if class != PagesClass::Fresh {
@@ -607,10 +654,18 @@ impl Device {
         let refused = || Error::NotImplemented(RuntimeGap::RebindTextures);
         // A copy in fresh pages the runtime imported takes the image an import of the caller's
         // pages takes, made for host allocations (`in_place_unbound`), where the device's check
-        // passed for fresh pages; one in memory the device allocates, a linear image of its own.
+        // passed for fresh pages and the image's access (an image of attachment usage renders);
+        // one in memory the device allocates, a linear image of its own.
         let made = match pages.over_own_pages() {
             true => {
-                if self.in_place_verdict(PagesClass::Fresh) != crate::in_place::Verdict::Passed {
+                let access =
+                    match (image.plan().usage).contains(vk::ImageUsageFlags::COLOR_ATTACHMENT) {
+                        true => Access::Renders,
+                        false => Access::Reads,
+                    };
+                if self.in_place_verdict(PagesClass::Fresh, access)
+                    != crate::in_place::Verdict::Passed
+                {
                     return Err(refused());
                 }
                 let facts = self
