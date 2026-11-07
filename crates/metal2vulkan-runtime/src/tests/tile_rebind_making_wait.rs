@@ -38,11 +38,14 @@
 //! pages the dispatch was encoded over stay untouched.
 //!
 //! A device test: compiled only under the validation crate's GPU safety cfgs (`m2v_gpu`,
-//! `m2v_cpu_icd`), on the kind of device the cfg selects. The tile function is the owned fixture
-//! `validation/fixtures/public/engine/k10ts_tile_grid.ll`, as `tile_pending.rs` runs it, over one
-//! 16x16 tile so that its records fit in one page ([`Page`]).
+//! `m2v_cpu_icd`), on the kind of device the cfg selects, whose recordings wait for a making until
+//! it is made (`PipelineWaitPolicy::Exact`, `blit_holds::exact_waits_device`): under the default
+//! bound, a pass whose making is still held 4.5 s after its commit runs nothing and its command
+//! buffer completes, which a loaded host reaches while a leg holds the making. The tile function is
+//! the owned fixture `validation/fixtures/public/engine/k10ts_tile_grid.ll`, as `tile_pending.rs`
+//! runs it, over one 16x16 tile so that its records fit in one page ([`Page`]).
 
-use super::blit_holds::{device, over_host, Host, Scratch, WAIT};
+use super::blit_holds::{exact_waits_device, over_host, Host, Scratch, WAIT};
 use super::layer_claim::Watched;
 use super::pending_rebind::device as watched_device;
 use super::rebind_behind_a_wait::{Page, BYTES};
@@ -227,7 +230,7 @@ fn leg(memo: Memo) {
         Memo::LetGo => "tile-rebind-memo-let-go",
         Memo::InFlight => "tile-rebind-memo-in-flight",
     });
-    let device: Device = device(&scratch.0);
+    let device: Device = exact_waits_device(&scratch.0);
     let state = tile_state(&device);
     let colors = attachments(&device);
     let crowd_colors = attachments(&device);

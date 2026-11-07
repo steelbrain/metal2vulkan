@@ -28,11 +28,15 @@
 //! over its four keep-alive configurations.
 //!
 //! A device test: compiled only under the validation crate's GPU safety cfgs (`m2v_gpu`,
-//! `m2v_cpu_icd`), on the kind of device the cfg selects. The kernel is `scale_and_offset` of the
-//! owned fixture `validation/fixtures/public/examples/runtime_examples.ll`
-//! (`output[i] = input[i] * scale + i`), as `rebind_behind_a_wait.rs` runs it.
+//! `m2v_cpu_icd`), on the kind of device the cfg selects, whose recordings wait for a making until
+//! it is made (`PipelineWaitPolicy::Exact`, `blit_holds::exact_waits_device`): under the default
+//! bound, a pass whose making is still held 4.5 s after its commit runs nothing and its command
+//! buffer completes, which a loaded host reaches while a leg holds the making. The kernel is
+//! `scale_and_offset` of the owned fixture
+//! `validation/fixtures/public/examples/runtime_examples.ll` (`output[i] = input[i] * scale + i`),
+//! as `rebind_behind_a_wait.rs` runs it.
 
-use super::blit_holds::{device, Scratch, WAIT};
+use super::blit_holds::{exact_waits_device, Scratch, WAIT};
 use super::dispatch_pending::state;
 use super::rebind_behind_a_wait::{dispatch, Page, BYTES, COUNT, SCALE};
 use crate::pipeline::pool::held;
@@ -65,7 +69,7 @@ fn leg(warm: Warm) {
         Warm::Made => "rebind-making-wait-made",
         Warm::Making => "rebind-making-wait-making",
     });
-    let device: Device = device(&scratch.0);
+    let device: Device = exact_waits_device(&scratch.0);
     let state = state(&device);
     let queue = device.new_command_queue().unwrap();
     let bytes: Vec<u8> = (0..COUNT).flat_map(|i| (i as f32).to_le_bytes()).collect();
@@ -224,7 +228,7 @@ fn a_dispatch_the_encoding_again_left_as_a_segment_records_once_its_making_lands
     // Declared before the device, so dropped after it.
     let pages = [Page::new(), Page::new()];
     let scratch = Scratch::new("rebind-making-segment");
-    let device: Device = device(&scratch.0);
+    let device: Device = exact_waits_device(&scratch.0);
     let state = state(&device);
     let queue = device.new_command_queue().unwrap();
     let bytes: Vec<u8> = (0..COUNT).flat_map(|i| (i as f32).to_le_bytes()).collect();

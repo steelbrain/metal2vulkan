@@ -23,6 +23,7 @@ use crate::{
     Device, DeviceKind, DeviceOptions, Error, HostMemory, Origin, PurgeableState, ResourceOptions,
     ShaderCacheOptions, Size, Texture, TextureDescriptor,
 };
+use metal2vulkan::device::PipelineWaitPolicy;
 use metal2vulkan::metal::{PixelFormat, TextureType, TextureUsage};
 use std::alloc::Layout;
 use std::path::{Path, PathBuf};
@@ -133,7 +134,24 @@ impl Drop for Host {
 /// The device the cfg selects: a CPU device under `m2v_cpu_icd`, else a GPU, its shader cache
 /// in `cache`.
 pub(super) fn device(cache: &Path) -> Device {
-    let options = DeviceOptions {
+    Device::system_default_with(&options(cache)).unwrap()
+}
+
+/// As [`device`], its recordings waiting for a pipeline still being made until it is made
+/// (`PipelineWaitPolicy::Exact`): for a test that holds a making in the device's pool and watches
+/// the command buffer that awaits it not complete. Under the default `Bounded` wait, a recording
+/// whose bound passed (its command buffer's commit plus `pipeline_commit_wait`, 4.5 s) drops the
+/// draw or dispatch (`render/pending.rs`, `pending_dispatch.rs`) and its command buffer completes,
+/// which a loaded host reaches while such a test still holds the making.
+pub(super) fn exact_waits_device(cache: &Path) -> Device {
+    let mut options = options(cache);
+    options.policy.pipeline_waits = PipelineWaitPolicy::Exact;
+    Device::system_default_with(&options).unwrap()
+}
+
+/// The options of [`device`].
+fn options(cache: &Path) -> DeviceOptions {
+    DeviceOptions {
         kinds: match cfg!(m2v_cpu_icd) {
             true => vec![DeviceKind::Cpu],
             false => vec![
@@ -147,8 +165,7 @@ pub(super) fn device(cache: &Path) -> Device {
             ..ShaderCacheOptions::default()
         },
         ..DeviceOptions::default()
-    };
-    Device::system_default_with(&options).unwrap()
+    }
 }
 
 /// A no-copy buffer over `host`, whose deallocator counts its runs in `runs`; `None`, printed,
