@@ -1256,7 +1256,8 @@ impl Device {
     /// that first where the device's held pointer imports add to the cost of every submission
     /// (its submission checks' import tax, `submit_check.rs`), the pointer where that fails; the
     /// pointer first elsewhere, the dma-buf where the pointer is refused. Counted:
-    /// `WorkCounts::host_ram_dma_buf_imports` (each import of a dma-buf).
+    /// `WorkCounts::host_ram_dma_buf_imports` (each import of a dma-buf) and
+    /// `host_ram_pointer_imports_failed` (each pointer import that failed).
     ///
     /// # Safety
     ///
@@ -1269,9 +1270,16 @@ impl Device {
         span: Range<u64>,
         of: Imported,
     ) -> Result<RamChunk, Error> {
-        let Some(source) = ram.dma_buf.as_ref() else {
+        let by_pointer = |span: Range<u64>| {
             // SAFETY: the caller's.
-            return unsafe { self.import_chunk_by_pointer(importer, ram, span, of) };
+            let imported = unsafe { self.import_chunk_by_pointer(importer, ram, span, of) };
+            if imported.is_err() {
+                self.shared().counts.host_ram_pointer_import_failed();
+            }
+            imported
+        };
+        let Some(source) = ram.dma_buf.as_ref() else {
+            return by_pointer(span);
         };
         let as_dma_buf = |span: Range<u64>| {
             // SAFETY: the caller's.
@@ -1281,13 +1289,8 @@ impl Device {
             Ok(self.ram_chunk(ram, span, of, raw, placement))
         };
         match self.pointer_imports_tax_submissions() {
-            true => as_dma_buf(span.clone()).or_else(|_: Error| {
-                // SAFETY: the caller's.
-                unsafe { self.import_chunk_by_pointer(importer, ram, span, of) }
-            }),
-            // SAFETY: the caller's.
-            false => match unsafe { self.import_chunk_by_pointer(importer, ram, span.clone(), of) }
-            {
+            true => as_dma_buf(span.clone()).or_else(|_: Error| by_pointer(span)),
+            false => match by_pointer(span.clone()) {
                 Ok(chunk) => Ok(chunk),
                 Err(refused) => as_dma_buf(span).map_err(|_: Error| refused),
             },

@@ -238,6 +238,13 @@ impl SubmitChecks {
         }
     }
 
+    /// Give `check` the verdict `verdict` for a test that holds the device to the path it
+    /// chooses, whatever the device measured.
+    #[cfg(test)]
+    pub(crate) fn force(&self, check: Check, verdict: Verdict) {
+        self.set(check, verdict);
+    }
+
     fn set_measured(&self, measured: Measured) {
         let values = [
             measured.merged,

@@ -340,6 +340,7 @@ pub(crate) struct Counters {
     host_ram_copy_dispatches: AtomicU64,
     host_ram_chunks_imported: AtomicU64,
     host_ram_dma_buf_imports: AtomicU64,
+    host_ram_pointer_imports_failed: AtomicU64,
     host_ram_chunks_imported_ahead: AtomicU64,
     host_ram_chunks_given_back: AtomicU64,
     host_ram_chunk_bytes: AtomicU64,
@@ -2723,6 +2724,12 @@ impl Counters {
     /// of the RAM's source (`host_ram.rs`), besides counting it as a chunk or a run.
     pub(crate) fn host_ram_dma_buf_imported(&self) {
         (self.host_ram_dma_buf_imports).fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// An import of a chunk of a guest RAM, or of an object's run inside one, by its pointer
+    /// failed (`host_ram.rs`).
+    pub(crate) fn host_ram_pointer_import_failed(&self) {
+        (self.host_ram_pointer_imports_failed).fetch_add(1, Ordering::Relaxed);
     }
 
     /// The device's thread imported a chunk of a guest RAM ahead of every object over it
@@ -5678,6 +5685,12 @@ pub struct WorkCounts {
     /// RAM's source (`HostRam::with_dma_buf`), not by their pointer: where the device's held
     /// pointer imports add to every submission's cost, or it refused the pointer.
     pub host_ram_dma_buf_imports: u64,
+    /// The imports of guest RAM, chunks and objects' runs alike, by their pointer that failed:
+    /// the driver or the runtime refused the pages (RADV refuses any shared mapping's), or memory
+    /// ran out. For a RAM with a source of dma-bufs each was then tried as one dma-buf where the
+    /// pointer went first (`host_ram_dma_buf_imports`); without one the object over it takes its
+    /// own import.
+    pub host_ram_pointer_imports_failed: u64,
     /// Of `host_ram_chunks_imported`, those the device's own thread imported ahead of every
     /// object over them, so that no making waited for their import: the few chunks past the one
     /// an object last took. The thread imports while the device's allocations leave a quarter of
@@ -6982,6 +6995,9 @@ impl Device {
             host_ram_copy_dispatches: counters.host_ram_copy_dispatches.load(Ordering::Relaxed),
             host_ram_chunks_imported: counters.host_ram_chunks_imported.load(Ordering::Relaxed),
             host_ram_dma_buf_imports: counters.host_ram_dma_buf_imports.load(Ordering::Relaxed),
+            host_ram_pointer_imports_failed: counters
+                .host_ram_pointer_imports_failed
+                .load(Ordering::Relaxed),
             host_ram_chunks_imported_ahead: counters
                 .host_ram_chunks_imported_ahead
                 .load(Ordering::Relaxed),

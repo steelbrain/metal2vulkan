@@ -95,7 +95,12 @@ fn the_checks_answer_once_and_a_second_device_recalls_them() {
         counts.submit_check_calls > 0,
         "the checks' calls were not counted"
     );
-    // The record is written soon, not at once: wait for it, as a later process would find it.
+    // A live device with equal options is what `system_default_with` returns again: the first
+    // goes before the second is made, its cache thread writing what it queued (the record among
+    // it) as it goes, so the second is a new device over the same directory, as a later
+    // process's would be.
+    let identity = first.driver_identity();
+    drop(first);
     let start = std::time::Instant::now();
     loop {
         let second = device(&scratch.0);
@@ -119,7 +124,7 @@ fn the_checks_answer_once_and_a_second_device_recalls_them() {
                  cache rejected {} and failed {} reads; identities {:?} and {:?}",
                 statistics.rejected,
                 statistics.read_failures,
-                first.driver_identity(),
+                identity,
                 second.driver_identity(),
             );
         }

@@ -28,9 +28,11 @@
 //! A device test: compiled only under the GPU safety cfgs (`m2v_gpu`, `m2v_cpu_icd`), on Linux.
 
 use super::host_residency::{device, udmabuf, Scratch};
+use crate::submit_check::{Check, Verdict};
 use crate::{
-    Buffer, CommandBufferStatus, Device, DmaBufChunk, DmaBufRequest, DmaBufSource, HostBacking,
-    HostMemory, HostRam, KeepAlive, Origin, ResourceOptions, RunResolver, Size, TextureDescriptor,
+    Buffer, CommandBufferStatus, Device, DmaBufChunk, DmaBufRequest, DmaBufSource, Error,
+    HostBacking, HostMemory, HostRam, KeepAlive, Origin, ResourceOptions, RunResolver, Size,
+    TextureDescriptor,
 };
 use metal2vulkan::metal::{PixelFormat, TextureUsage};
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
@@ -76,9 +78,9 @@ struct Asked {
     outside: Vec<(u64, u64)>,
 }
 
-/// The RAM over a new sealed `memfd`, with a source of dma-bufs of it; the RAM's first byte, the
-/// view's, what the source was asked, and whether the keep-alive was dropped.
-fn ram() -> (Arc<HostRam>, u64, u64, Arc<Mutex<Asked>>, Arc<AtomicBool>) {
+/// The RAM over a new sealed `memfd`, with a source of dma-bufs of it where `sourced`; the RAM's
+/// first byte, the view's, what the source was asked, and whether the keep-alive was dropped.
+fn ram(sourced: bool) -> (Arc<HostRam>, u64, u64, Arc<Mutex<Asked>>, Arc<AtomicBool>) {
     // SAFETY: a new anonymous file, owned at once, then sized and sealed.
     let fd = unsafe {
         let fd = libc::memfd_create(
@@ -140,9 +142,11 @@ fn ram() -> (Arc<HostRam>, u64, u64, Arc<Mutex<Asked>>, Arc<AtomicBool>) {
     };
     let at = NonNull::new(start as *mut u8).unwrap();
     // SAFETY: the mapping is readable and writable until the keep-alive unmaps it.
-    let ram = unsafe { HostRam::new(&[(at, RAM_BYTES)], Some(keep)) }
-        .unwrap()
-        .with_dma_buf(source);
+    let ram = unsafe { HostRam::new(&[(at, RAM_BYTES)], Some(keep)) }.unwrap();
+    let ram = match sourced {
+        true => ram.with_dma_buf(source),
+        false => ram,
+    };
     (Arc::new(ram), start, view, asked, dropped)
 }
 
@@ -167,6 +171,17 @@ fn bytes(start: u64, range: std::ops::Range<u64>) -> Vec<u8> {
 /// A no-copy buffer of `length` bytes at `offset` in the view, resolved to the same offset in
 /// the RAM.
 fn buffer(device: &Device, view: u64, start: u64, offset: u64, length: u64) -> Buffer {
+    try_buffer(device, view, start, offset, length).unwrap()
+}
+
+/// [`buffer`], or why it is refused.
+fn try_buffer(
+    device: &Device,
+    view: u64,
+    start: u64,
+    offset: u64,
+    length: u64,
+) -> Result<Buffer, Error> {
     let runs: RunResolver = Arc::new(move |at, length| {
         let ram = at - view + start;
         Some(vec![ram..ram + length])
@@ -178,7 +193,37 @@ fn buffer(device: &Device, view: u64, start: u64, offset: u64, length: u64) -> B
     unsafe {
         device.new_buffer_with_bytes_no_copy(memory, length, ResourceOptions::default(), None)
     }
-    .unwrap()
+}
+
+/// Write the pattern over the view's bytes before `end`, while no command buffer uses them.
+fn fill_pattern(view: u64, end: u64) {
+    // SAFETY: the view's bytes, which no command buffer uses now.
+    unsafe {
+        for offset in 0..end {
+            *((view + offset) as *mut u8) = pattern(offset);
+        }
+    }
+}
+
+/// A device of the cfg's kind, its checks answered, whose uses of a RAM import each chunk at
+/// the first object over it (`Device::hold_host_ram_imports`), as one the device's thread has
+/// not reached is; `None` where `/dev/udmabuf` cannot be opened or it imports no host memory.
+fn held_device(scratch: &Scratch) -> Option<Device> {
+    if !udmabuf_openable() {
+        return None;
+    }
+    let device = device(&scratch.0);
+    if device.shared().host_import.is_err() {
+        eprintln!("HOST-RAM-DMA-BUF: the device imports no host memory here; nothing to test");
+        return None;
+    }
+    device.hold_host_ram_imports();
+    Some(device)
+}
+
+/// Whether the device imports dma-bufs.
+fn imports_dma_bufs(device: &Device) -> bool {
+    (device.shared().host_import.as_ref()).is_ok_and(|importer| importer.imports_dma_bufs())
 }
 
 /// Commit one command buffer whose blit encoder `encode` fills, and wait for it.
@@ -221,28 +266,14 @@ fn udmabuf_openable() -> bool {
 
 #[test]
 fn a_ram_with_a_source_takes_the_route_its_device_s_checks_choose() {
-    if !udmabuf_openable() {
-        return;
-    }
     let scratch = Scratch::new();
-    let device = device(&scratch.0);
-    if device.shared().host_import.is_err() {
-        eprintln!("HOST-RAM-DMA-BUF: the device imports no host memory here; nothing to test");
+    let Some(device) = held_device(&scratch) else {
         return;
-    }
-    // Each chunk imported by the first object over it, as one the device's thread has not
-    // reached is.
-    device.hold_host_ram_imports();
+    };
     let taxed = device.pointer_imports_tax_submissions();
-    let imports_dma_bufs =
-        (device.shared().host_import.as_ref()).is_ok_and(|importer| importer.imports_dma_bufs());
-    let (ram, start, view, asked, dropped) = ram();
-    // SAFETY: the view's bytes, which no command buffer uses yet.
-    unsafe {
-        for offset in 0..AT + 4 * LENGTH {
-            *((view + offset) as *mut u8) = pattern(offset);
-        }
-    }
+    let imports_dma_bufs = imports_dma_bufs(&device);
+    let (ram, start, view, asked, dropped) = ram(true);
+    fill_pattern(view, AT + 4 * LENGTH);
     let used = device.use_host_ram(&ram).unwrap();
     let before = device.work_counts();
     let first = buffer(&device, view, start, AT, LENGTH);
@@ -374,4 +405,101 @@ fn a_ram_with_a_source_takes_the_route_its_device_s_checks_choose() {
         );
         std::thread::sleep(Duration::from_millis(5));
     }
+}
+
+/// Where the pointer goes first (the import tax not held, forced so on the device), a chunk whose
+/// pointer the device refuses is imported as a dma-buf of the RAM's source: the refusal counted
+/// (`WorkCounts::host_ram_pointer_imports_failed`), then the dma-buf (`host_ram_dma_buf_imports`).
+/// A device that takes the pointer never asks the source.
+#[test]
+fn where_the_pointer_goes_first_a_refused_one_takes_the_dma_buf() {
+    let scratch = Scratch::new();
+    let Some(device) = held_device(&scratch) else {
+        return;
+    };
+    (device.shared().submit_checks).force(Check::ImportTax, Verdict::Fails);
+    let (ram, start, view, asked, _dropped) = ram(true);
+    fill_pattern(view, AT + LENGTH);
+    let used = device.use_host_ram(&ram).unwrap();
+    let before = device.work_counts();
+    let buffer = buffer(&device, view, start, AT, LENGTH);
+    let after = device.work_counts();
+    let failed = after.host_ram_pointer_imports_failed - before.host_ram_pointer_imports_failed;
+    let dma_bufs = after.host_ram_dma_buf_imports - before.host_ram_dma_buf_imports;
+    let requests = asked.lock().unwrap().requests.clone();
+    println!(
+        "HOST-RAM-DMA-BUF {}: the pointer first: {failed} pointer import(s) failed, then {dma_bufs} \
+         dma-buf import(s), the source asked {requests:?}",
+        device.name(),
+    );
+    assert_eq!(buffer.host_backing(), Some(HostBacking::InHostRam));
+    match failed {
+        0 => {
+            assert_eq!(dma_bufs, 0);
+            assert!(requests.is_empty(), "{requests:?}");
+        }
+        _ => {
+            assert_eq!(failed, 1);
+            assert!(
+                imports_dma_bufs(&device),
+                "a refused pointer with no dma-buf import"
+            );
+            assert_eq!(dma_bufs, 1);
+            assert_eq!(requests, [(start, 64 * MIB, 64 * MIB)]);
+        }
+    }
+    let read = read_back(&device, LENGTH, |encoder, own| {
+        (encoder.copy_from_buffer_to_buffer(&buffer, 0, own, 0, LENGTH)).unwrap();
+    });
+    let expected: Vec<u8> = (AT..AT + LENGTH).map(pattern).collect();
+    assert!(read == expected, "the GPU's read");
+    drop((buffer, used));
+}
+
+/// With no source, a chunk whose pointer the device refuses is not imported, and the object over
+/// it takes its own import, refused as its pointer is (`Unsupported`, `HostMemory`), nothing
+/// taken as a dma-buf; a device that takes the pointer binds the object in the chunk.
+#[test]
+fn without_a_source_a_refused_pointer_refuses_the_object() {
+    let scratch = Scratch::new();
+    let Some(device) = held_device(&scratch) else {
+        return;
+    };
+    let (ram, start, view, asked, _dropped) = ram(false);
+    let used = device.use_host_ram(&ram).unwrap();
+    let before = device.work_counts();
+    let made = try_buffer(&device, view, start, AT, LENGTH);
+    let after = device.work_counts();
+    let failed = after.host_ram_pointer_imports_failed - before.host_ram_pointer_imports_failed;
+    println!(
+        "HOST-RAM-DMA-BUF {}: no source: {failed} pointer import(s) failed; the object {}",
+        device.name(),
+        match &made {
+            Ok(_) => "made".to_owned(),
+            Err(error) => format!("refused: {error}"),
+        },
+    );
+    assert_eq!(
+        after.host_ram_dma_buf_imports,
+        before.host_ram_dma_buf_imports
+    );
+    assert!(asked.lock().unwrap().requests.is_empty());
+    match (failed, made) {
+        (0, Ok(buffer)) => {
+            assert_eq!(buffer.host_backing(), Some(HostBacking::InHostRam));
+            assert_eq!(
+                after.host_ram_chunks_imported - before.host_ram_chunks_imported,
+                1
+            );
+        }
+        (_, Err(Error::Unsupported(refusal))) => {
+            assert_eq!(refusal.feature, metal2vulkan::error::Feature::HostMemory);
+            assert_eq!(
+                after.host_ram_chunks_imported,
+                before.host_ram_chunks_imported
+            );
+        }
+        (failed, made) => panic!("{failed} pointer imports failed, and the object: {made:?}"),
+    }
+    drop(used);
 }
