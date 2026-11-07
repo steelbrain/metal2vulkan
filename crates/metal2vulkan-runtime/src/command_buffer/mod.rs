@@ -2854,9 +2854,9 @@ impl CommandBuffer {
     /// holds it in the group, where two or more run. A batch held back
     /// (another queue's, for its checks, an event value or a host step) holds back only the later
     /// commits that wait behind it, as on the scheduler's thread: those of its own queue, and
-    /// another queue's whose resources it uses. What it leaves goes to the scheduler's thread,
-    /// which it wakes; where a pass is under way, that pass takes this commit in, as for
-    /// `commit`.
+    /// another queue's whose resources it uses. Then it wakes the scheduler's thread, as `commit`
+    /// does, after its submissions, and what it left goes to that thread; where a pass is under
+    /// way, that pass takes this commit in, as for `commit`.
     ///
     /// - **Its submission checks run here**, inside this call, for the batches it submits
     ///   ([`set_submission_check`](Self::set_submission_check)): each just before its batch's

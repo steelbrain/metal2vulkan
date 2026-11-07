@@ -4653,7 +4653,8 @@ pub struct WorkCounts {
     /// was woken or [`scheduler_sleep_slices`](Self::scheduler_sleep_slices) says it timed out.
     pub scheduler_sleeps: u64,
     /// Times a commit woke the scheduler's thread, which slept: it left its batches to the
-    /// thread. Each waking here is a notify of its condition variable, or a signal of its nudge
+    /// thread, or its committing thread's own pass submitted them and then woke the thread, as a
+    /// commit does (`CommandBuffer::commit_and_submit`). Each waking here is a notify of its condition variable, or a signal of its nudge
     /// where it slept on the GPU, made only where it slept, and once a sleep: a later waker
     /// before the thread ran makes none. With the completion and host wakings, at most one a
     /// sleep (`scheduler_sleeps`).
@@ -4664,7 +4665,7 @@ pub struct WorkCounts {
     pub scheduler_wakes_completion: u64,
     /// Times a host signal woke it: an event's value set by the host, a pipeline a host step waits
     /// for made, a texture decode finished, a command buffer encoded again after a rebind, the
-    /// rest of a pass a thread about to block left it, a lost device.
+    /// rest of a pass a thread about to block or a committing thread left it, a lost device.
     pub scheduler_wakes_host: u64,
     /// Sleeps that ended at the thread's longest wait with nothing having woken it.
     pub scheduler_sleep_slices: u64,

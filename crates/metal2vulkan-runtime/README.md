@@ -409,9 +409,9 @@ Calls Metal does not have, for a consumer that emulates a Metal device:
   inside the call just before each submission (unless one waits for a shared event's GPU signal
   to land, which the scheduler's thread waits for; a plain event's wait goes to the `VkQueue`, as
   Metal submits an `MTLEvent` wait at once) and their submission handlers after it, in submission
-  order with every other command buffer's. What it leaves goes
-  to the scheduler's thread. One wake and one thread hop fewer per command buffer than `commit`,
-  whose submission is the scheduler thread's, as Metal's is its own thread's
+  order with every other command buffer's. Then it wakes the scheduler's thread, as `commit`
+  does, and what it left goes to that thread. No wake and no thread hop lies on its way to the
+  `VkQueue`, where `commit`'s submission is the scheduler thread's, as Metal's is its own thread's
   (`WorkCounts::scheduler_passes_at_commit`, `batches_submitted_at_commit`,
   `batches_checked_at_commit`). Under `RenderLoweringPolicy::Worker`, one whose last render
   encoder's end the lowering thread has not lowered returns as `commit` does, and the thread that

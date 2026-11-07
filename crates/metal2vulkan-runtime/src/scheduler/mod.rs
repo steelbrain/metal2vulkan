@@ -32,9 +32,14 @@
 //!   no earlier commit, has its checks run there too, without the lock, the head marked so this
 //!   thread leaves them ([`claim_check`]), and is submitted by a pass of the committing thread's
 //!   right after. A head another queue holds back (its checks waiting for a signal to land, or run
-//!   by this thread) so holds back no later commit that does not wait behind it. What it leaves
-//!   goes to this thread, which it wakes, and a pass under way takes the commit in instead. One wake and one thread hop fewer per command
-//!   buffer, its submission's cost on the committing thread.
+//!   by this thread) so holds back no later commit that does not wait behind it. Its pass ends
+//!   by waking this thread, as the commit would have, after its submissions: for what it left,
+//!   else for the commit itself; a pass under way takes the commit in instead. So no wake and no
+//!   thread hop lies on a command buffer's way to its `VkQueue`, its submission's cost on the
+//!   committing thread, and this thread still wakes once for each commit that finds it asleep,
+//!   whichever thread submits: a thread left asleep across the commits sleeps longer, and where
+//!   the host's cores idle deeper the longer they sleep, its next wake and pass, for a `commit`,
+//!   take several times longer (`tests::completion_latency`, RADV).
 //! - **Submission handlers run in submission order, whichever thread runs them** ([`Turns`]).
 //!   Each pass that took batches with submission handlers takes a ticket under the lock, in the
 //!   order the passes ran; the handlers of a ticket run once those of every earlier one ran, on
@@ -316,7 +321,8 @@ struct GpuWait {
 /// [`Scheduler::sleeps_and_wakings`] gives them.
 #[derive(Clone, Copy)]
 enum Woken {
-    /// A commit left its batches to the thread.
+    /// A commit left its batches to the thread, or a committing thread's pass took them
+    /// ([`Scheduler::submit_at_commit`]).
     Commit,
     /// A completion turn: what a head waited for from the GPU was met, or the device was lost.
     Completion,
@@ -939,10 +945,11 @@ impl Scheduler {
     /// only for its submission checks and this thread may run them ([`claim_check`]), it runs them
     /// then, as the scheduler's thread does (`CommandBufferShared::run_checks`), and passes again
     /// under the lock ([`Inbox::pass_again`]), which submits that head; and so on, up to
-    /// [`PASS_SUBMISSIONS`] batches in all. What it leaves, and anything committed or nudged
-    /// meanwhile, goes to the thread, which it wakes. Where a passer is counted, that pass takes
-    /// the commit in. Then it makes the completion turn a command buffer that needs no GPU work
-    /// left it (`Completion::turn_owed`).
+    /// [`PASS_SUBMISSIONS`] batches in all. Then it wakes the thread, as the commit would have
+    /// (the module docs): for what it left and anything committed or nudged meanwhile
+    /// ([`Woken::Host`]), else for the commit ([`Woken::Commit`]). Where a passer is counted, that
+    /// pass takes the commit in. Then it makes the completion turn a command buffer that needs no
+    /// GPU work left it (`Completion::turn_owed`).
     ///
     /// It runs the program's code only in the submission checks of the heads it checks and the
     /// submission handlers of the batches it submitted: a scheduled handler is run on its queue's
@@ -980,9 +987,11 @@ impl Scheduler {
             return;
         };
         device.shared().counts.committer_passed(submitted, checked);
-        if left_over || shared.inbox.passed_over() {
-            self.wake_for(Woken::Host);
-        }
+        // After the submissions, so none waits for the wake.
+        self.wake_for(match left_over || shared.inbox.passed_over() {
+            true => Woken::Host,
+            false => Woken::Commit,
+        });
         device.shared().completion.turn_owed();
     }
 
