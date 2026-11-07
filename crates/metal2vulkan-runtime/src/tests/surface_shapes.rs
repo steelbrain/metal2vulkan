@@ -6,9 +6,12 @@
 //! than its plane's rows the bytes the M3 Max's does (`surface_texture_envelope`; each shape
 //! names the `oracle_surftex` case or the probe's shape it stands for): a kernel's reads, the
 //! blits, `getBytes` and `replaceRegion` take those bytes, a kernel after a blit or a CPU write
-//! reads what they wrote, and no other byte of the surface changes. A blit into a 2D texture
-//! whose rows overlap is refused (`NotImplemented(OverlappingSurfaceRows)`, `linear_plan.rs`'s
-//! **Rows that overlap**) and changes no byte.
+//! reads what they wrote, and no other byte of the surface changes. A BC texture of 8-byte blocks
+//! at a plane offset off 16 takes the bytes the x86 Macs' blits and samples and the 5300M's
+//! `getBytes` take, at the plane's offset, on every path (the UHD 630's CPU calls take the plane
+//! from byte 0). A blit into a 2D texture whose rows overlap is refused
+//! (`NotImplemented(OverlappingSurfaceRows)`, `linear_plan.rs`'s **Rows that overlap**) and
+//! changes no byte.
 //!
 //! A device test: compiled only under the validation crate's GPU safety cfgs (`m2v_gpu`,
 //! `m2v_cpu_icd`), on the kind of device the cfg selects. Each surface is a buffer standing for
@@ -371,6 +374,17 @@ fn shapes() -> Vec<Shape> {
         shape("125 bgra1.fmt.bc1", P::BC1RGBA, T::Type2D, [64, 64], BGRA1),
         shape("420v.p0.bc1.16x64", P::BC1RGBA, T::Type2D, [16, 64], P0),
         shape("420v.p1.bc1.16x32", P::BC1RGBA, T::Type2D, [16, 32], P1),
+        // 8-byte blocks over a plane at an offset or pitch off 16 (the x86 Macs' `bgraat8.bc1`
+        // and `bgrarow264.bc1`): at the plane's own offset and pitch, unrounded.
+        shape("bgraat8.bc1", P::BC1RGBA, T::Type2D, [64, 64], BGRA_AT8),
+        shape(
+            "bgrarow264.bc1",
+            P::BC1RGBA,
+            T::Type2D,
+            [64, 64],
+            BGRA_ROW264,
+        ),
+        shape("bgraat8.bc4", P::BC4RUnorm, T::Type2D, [64, 64], BGRA_AT8),
         shape(
             "121 bgra1.typebuffer",
             P::BGRA8Unorm,

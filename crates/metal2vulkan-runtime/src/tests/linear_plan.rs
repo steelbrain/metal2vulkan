@@ -1998,8 +1998,9 @@ fn a_surface_plane_s_other_shapes_follow_the_probe() {
 /// A BC texture over a surface's rows, which the x86 Macs make (`oracle_surftex` 66, 67, 125,
 /// 131, 147, 148) and lay out a row of blocks to the surface's `bytesPerRow`
 /// (`surface_texture_envelope`): its rows are rows of blocks, each block its format's bytes, the
-/// last of a row the texture's last texels alone; over a surface without planes Metal stops rows
-/// of blocks wider than the surface's and rows of texels past them (132 to 135). Every other
+/// last of a row the texture's last texels alone, at the plane's own offset and pitch for the
+/// GPU and the CPU alike, an 8-byte block's off 16 too; over a surface without planes Metal stops
+/// rows of blocks wider than the surface's and rows of texels past them (132 to 135). Every other
 /// compressed format over a surface stays no buffer's.
 #[test]
 fn a_bc_texture_over_a_surface_lies_a_row_of_blocks_a_row() {
@@ -2057,6 +2058,24 @@ fn a_bc_texture_over_a_surface_lies_a_row_of_blocks_a_row() {
             bc(P::BC1RGBA, (16, 32), (4128, 64), true, 6432),
             blocks(4128, 64, 32, 8),
         ),
+        // Of 8-byte blocks over a plane at an offset or pitch off 16 that its block divides,
+        // unrounded (the x86 Macs' `bgraat8.bc1` and `bgrarow264.bc1`), BC4 as BC1.
+        (
+            bc(P::BC1RGBA, (64, 64), (8, 256), true, 32768),
+            blocks(8, 256, 128, 16),
+        ),
+        (
+            bc(P::BC1RGBA, (64, 64), (0, 264), true, 32768),
+            blocks(0, 264, 128, 16),
+        ),
+        (
+            bc(P::BC4RUnorm, (64, 64), (8, 264), true, 32768),
+            blocks(8, 264, 128, 16),
+        ),
+        (
+            bc(P::BC1RGBA, (16, 16), (40, 64), true, 6432),
+            blocks(40, 64, 32, 4),
+        ),
         // The rest of the family, of 8- and 16-byte blocks.
         (
             bc(P::BC4RSnorm, (64, 64), (0, 256), false, 16384),
@@ -2106,7 +2125,9 @@ fn a_bc_texture_over_a_surface_lies_a_row_of_blocks_a_row() {
                 length: 16384,
             }),
         ),
-        // Over a plane: rows of blocks wider than its rows, another type, an offset off 16.
+        // Over a plane: rows of blocks wider than its rows, another type; 16-byte blocks off 16,
+        // which no GPU measured; 8-byte blocks at an offset or pitch their block does not
+        // divide, or under 16 bytes a row.
         (
             bc(P::BC1RGBA, (132, 64), (0, 256), true, 32768),
             Err(BufferRefusal::PlaneShape),
@@ -2119,7 +2140,27 @@ fn a_bc_texture_over_a_surface_lies_a_row_of_blocks_a_row() {
             Err(BufferRefusal::PlaneShape),
         ),
         (
-            bc(P::BC1RGBA, (16, 16), (40, 64), true, 6432),
+            bc(P::BC3RGBA, (64, 64), (8, 256), true, 32768),
+            Err(BufferRefusal::PlaneShape),
+        ),
+        (
+            bc(P::BC7RGBAUnorm, (64, 64), (0, 264), true, 32768),
+            Err(BufferRefusal::PlaneShape),
+        ),
+        (
+            bc(P::BC5RGUnorm, (64, 64), (24, 256), true, 32768),
+            Err(BufferRefusal::PlaneShape),
+        ),
+        (
+            bc(P::BC1RGBA, (64, 64), (4, 256), true, 32768),
+            Err(BufferRefusal::PlaneShape),
+        ),
+        (
+            bc(P::BC1RGBA, (64, 64), (0, 260), true, 32768),
+            Err(BufferRefusal::PlaneShape),
+        ),
+        (
+            bc(P::BC4RUnorm, (4, 8), (8, 8), true, 4096),
             Err(BufferRefusal::PlaneShape),
         ),
         // Past the buffer standing for a planar surface.

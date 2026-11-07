@@ -1462,7 +1462,11 @@ pub enum RuntimeGap {
     /// colour one; a 2D array of more than one slice of a format but a colour one, or over a
     /// plane at an offset or `bytesPerRow` off 16 bytes; any other type but 2D, 3D, 2D
     /// multisample, 2D array, texture buffer and 1D; and a BC texture of another type than 2D,
-    /// wider than the plane's rows, or over a plane at an offset or `bytesPerRow` off 16 bytes. A
+    /// wider than the plane's rows, of 16-byte blocks (BC2, BC3, BC5, BC6H, BC7) over a plane at
+    /// an offset or `bytesPerRow` off 16 bytes, or of 8-byte blocks (BC1, BC4) at an offset or
+    /// `bytesPerRow` off 8 bytes or under 16 bytes a row. A BC1 or BC4 texture at an offset or
+    /// `bytesPerRow` off 16 that 8 divides is made at the plane's own offset and pitch on every
+    /// path, as the x86 Macs' blits and samples take it (the M3 Max answers nil). A
     /// colour 2D texture whose rows are wider than the plane's `bytesPerRow` and a colour 1D
     /// texture wider than the row, over a plane at multiples of 16, are made with their rows
     /// `bytesPerRow` apart on every path, as the M3 Max lays them out, a 2D texture's rows
@@ -1493,7 +1497,8 @@ pub enum RuntimeGap {
     /// and in zeros or one image on for their kernels. A 1D texture wider than the row: the 5300M's blit writes its first row's
     /// worth alone, and the UHD 630's writes the rest 8 KiB on. A multisample one reaches past
     /// the plane's bytes and is not measured on the x86 GPUs. The offsets off 16 are not measured
-    /// for those formats.
+    /// for those formats, nor for a BC texture of 16-byte blocks: only BC1 was, at offset 8 and at
+    /// 264 bytes a row (`bgraat8.bc1`, `bgrarow264.bc1`).
     SurfacePlaneShape,
     /// A command of an indirect command buffer at or past its size
     /// (`indirectComputeCommandAtIndex:`, `indirectRenderCommandAtIndex:`). Plain Metal checks no

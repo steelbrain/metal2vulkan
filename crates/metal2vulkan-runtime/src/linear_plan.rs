@@ -202,11 +202,18 @@
 //!   shadow copies them as the texels they hold (`plane_copy_regions`), and its blits and CPU calls
 //!   count a region in blocks (`blit_plan::texel_rows`, `Texels::region_layout`). Over a plane of
 //!   a surface with planes it holds a 2D one at an offset and `bytesPerRow` that are multiples of
-//!   16, the planes measured; any other is the runtime's gap ([`BufferRefusal::PlaneShape`]). Two
-//!   answers of the 5300M's are not reproduced: its `replaceRegion` wrote other bytes than the
-//!   texture's past the first row of blocks, and some of its blits into a BC texture over a
-//!   surface, and of its `replaceRegion` calls, ended the process. Every other compressed format
-//!   over a surface is no buffer's (`NotLinear`).
+//!   16, and one of 8-byte blocks (BC1, BC4) at an offset or `bytesPerRow` off 16 that its block's
+//!   bytes divide, at least 16 bytes a row ([`blocks_off_sixteen`]): there both GPUs' blits and
+//!   samples take block row `j` at the plane's offset + `j` × `bytesPerRow`, unrounded
+//!   (`bgraat8.bc1` at offset 8, `bgrarow264.bc1` at 264 bytes a row; BC4 was not measured
+//!   there), and so do the runtime's GPU commands and its CPU calls, as the 5300M's `getBytes`
+//!   does, where the UHD 630's `getBytes` and `replaceRegion` take the plane at offset 8 from
+//!   byte 0. Any other is the runtime's gap ([`BufferRefusal::PlaneShape`]): a BC texture of
+//!   16-byte blocks off 16, and one of 8-byte blocks off them or under 16 bytes a row, which no
+//!   GPU measured. Two answers of the 5300M's are not reproduced: its `replaceRegion` wrote other
+//!   bytes than the texture's past the first row of blocks, and some of its blits into a BC
+//!   texture over a surface, and of its `replaceRegion` calls, ended the process. Every other
+//!   compressed format over a surface is no buffer's (`NotLinear`).
 //! - **Beyond the plane's rows** (the same probe, on those two and the M3 Max under macOS
 //!   27.0.1). Over a plane of a surface with planes Metal makes a texture of any type, extent and
 //!   levels (`oracle_surftex` 17, 21, 42, 116 to 123, 127, 129), but the three GPUs and their CPU
@@ -661,6 +668,29 @@ fn wide_rows(texture: &BufferTexture) -> bool {
         && !two_planes::holds_planes(pf)
 }
 
+/// Whether `texture` is a BC texture of 8-byte blocks (BC1, BC4) over a plane of a surface with
+/// planes at an offset or `bytesPerRow` off 16 that the runtime makes, at the plane's own offset
+/// and `bytesPerRow` for the GPU and the CPU alike (the module's **Block-compressed surfaces**):
+/// one whose block's bytes divide both, its rows at least 16 bytes apart. The x86 Macs make
+/// such a texture, their blits and samples taking block row `j` at the plane's offset plus `j`
+/// times `bytesPerRow`, unrounded (an AMD Radeon Pro 5300M and an Intel UHD 630 under macOS
+/// 26.7.1, `probes/surface_texture_envelope.m`'s `bgraat8.bc1` and `bgrarow264.bc1`; the M3 Max
+/// answers nil for every BC texture). A BC texture of 16-byte blocks off 16, and one under 16
+/// bytes a row, are not measured.
+fn blocks_off_sixteen(texture: &BufferTexture) -> bool {
+    let planar = matches!(
+        texture.call,
+        BufferTextureCall::IoSurfacePlane { planar: true }
+    );
+    let block = texture.texel_bytes;
+    planar
+        && surface_blocks(texture.layout.pixel_format)
+        && block == 8
+        && texture.offset.is_multiple_of(block)
+        && texture.bytes_per_row.is_multiple_of(block)
+        && texture.bytes_per_row >= LINEAR_ALIGNMENT
+}
+
 /// Whether the runtime keeps the texels of an IOSurface plane of `texture` that lie past the
 /// buffer standing for its surface in a tail of the texture's own, zero when made (the module's
 /// **Beyond the plane's rows**), or refuses them ([`BufferRefusal::TexelsPastLength`]).
@@ -768,7 +798,8 @@ pub(super) enum BufferRefusal {
     /// plane's row, of a format but a colour one or over a plane off 16 bytes; more than one
     /// level, a type but 2D, a texture buffer, a 1D texture and a 2D array (a cube and a cube
     /// array, which plain Metal asserts on, are [`BufferTextureProblem::TextureType`]); and a
-    /// block-compressed texture over a plane whose offset or `bytesPerRow` is off 16 bytes.
+    /// block-compressed texture over a plane whose offset or `bytesPerRow` is off 16 bytes but
+    /// the 8-byte blocks [`blocks_off_sixteen`] takes.
     PlaneShape,
 }
 
@@ -879,14 +910,15 @@ pub(super) fn plan_buffer_texture(
         });
     }
     if let BufferTextureCall::IoSurfacePlane { planar } = texture.call {
-        // A BC texture's GPU and CPU bytes are measured over a plane whose offset and
-        // `bytesPerRow` are multiples of 16 alone, where they lie alike. A texture buffer's
-        // functions read a plane from its offset rounded down to 16 and its CPU calls from the
-        // offset, as a buffer's texture buffer's, at any pitch (the module's **Beyond the
-        // plane's rows**).
+        // A BC texture lies at the plane's own offset and `bytesPerRow` on the GPU and the CPU
+        // alike: over a plane at multiples of 16, and one of 8-byte blocks at multiples of its
+        // block off 16 ([`blocks_off_sixteen`]; the module's **Block-compressed surfaces**). A
+        // texture buffer's functions read a plane from its offset rounded down to 16 and its CPU
+        // calls from the offset, as a buffer's texture buffer's, at any pitch (the module's
+        // **Beyond the plane's rows**).
         let aligned = offset.is_multiple_of(LINEAR_ALIGNMENT)
             && bytes_per_row.is_multiple_of(LINEAR_ALIGNMENT);
-        if planar && blocks && !aligned {
+        if planar && blocks && !aligned && !blocks_off_sixteen(texture) {
             return Err(BufferRefusal::PlaneShape);
         }
         let cpu = BufferLayout {
@@ -916,7 +948,7 @@ pub(super) fn plan_buffer_texture(
             }
         }
         let held = (overlap_held(texture), tail_held(texture));
-        let placed = plan_iosurface_plane(cpu, planar, buffer.length, held)?;
+        let placed = plan_iosurface_plane(cpu, (planar, blocks), buffer.length, held)?;
         // A 2D array's slices past its first lie in its tail, from its second slice's first
         // byte on (one image on from the plane's offset, where Metal's kernels read it).
         let kept = sliced.then(|| (cpu.offset.saturating_add(cpu.slice_pitch)).min(buffer.length));
@@ -984,12 +1016,14 @@ fn units(pf: PixelFormat, [width, height]: [u64; 2]) -> [u64; 2] {
 
 /// An IOSurface plane laid out as `cpu` in a buffer of `length` bytes, of a planar surface or
 /// not (`planar`), by the module's rules; its type, levels, options and row were checked as
-/// every texture over a buffer's are. `held` says whether the runtime holds the plane where its
+/// every texture over a buffer's are. `blocks` says whether it is a BC texture's rows of blocks,
+/// which the GPU takes where the CPU does (the module's **Block-compressed surfaces**), rather
+/// than at [`iosurface_gpu_layout`]. `held` says whether the runtime holds the plane where its
 /// GPU rows overlap ([`overlap_held`]), or refuses it there; `tail` whether it keeps the plane's
 /// texels past the buffer in a tail of the texture's own ([`tail_held`]), or refuses them.
 fn plan_iosurface_plane(
     cpu: BufferLayout,
-    planar: bool,
+    (planar, blocks): (bool, bool),
     length: u64,
     (held, tail): (bool, bool),
 ) -> Result<Placed, BufferRefusal> {
@@ -1018,7 +1052,10 @@ fn plan_iosurface_plane(
         }
         .into());
     }
-    let gpu = iosurface_gpu_layout(&cpu);
+    let gpu = match blocks {
+        true => cpu,
+        false => iosurface_gpu_layout(&cpu),
+    };
     if gpu.shared_bytes() != 0 && !held {
         return Err(BufferRefusal::OverlappingRows);
     }
@@ -1031,7 +1068,7 @@ fn plan_iosurface_plane(
     Ok(Placed {
         gpu,
         cpu,
-        narrow: cpu.rows > 1 && cpu.row_pitch < alignment,
+        narrow: !blocks && cpu.rows > 1 && cpu.row_pitch < alignment,
         kept: None,
     })
 }

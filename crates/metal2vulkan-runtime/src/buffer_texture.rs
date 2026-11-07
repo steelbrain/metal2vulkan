@@ -507,8 +507,9 @@ impl Buffer {
     /// (`NotImplemented(SurfacePlaneShape)`, which carries the measurements: rows wider than the
     /// plane's of a format but a colour one or off 16 bytes, more than one level, a 3D or
     /// multisample texture of a format but a colour one, a 2D array of slices of such a format
-    /// or off 16 bytes, another type, a BC texture at an offset or pitch off 16 bytes; a cube or
-    /// cube array there plain Metal asserts on, `Invalid`); `Memoryless` storage, which plain
+    /// or off 16 bytes, another type, a BC texture of 16-byte blocks at an offset or pitch off
+    /// 16 bytes and one of 8-byte blocks off them or under 16 bytes a row; a cube or cube array
+    /// there plain Metal asserts on, `Invalid`); `Memoryless` storage, which plain
     /// Metal makes and serves on the CPU while its GPU uses fail the command buffer
     /// (`NotImplemented(MemorylessSurfacePlane)`, which carries the measurement); rows that
     /// overlap on Metal's GPU where no shadow of the runtime's holds them
@@ -556,9 +557,12 @@ impl Buffer {
     /// `BufferTextureProblem::NotLinear`).
     ///
     /// A BC1 to BC7 texture over a surface's rows (2D, over a plane of a surface with planes at an
-    /// offset and pitch that are multiples of 16) is made as the x86 Macs make it, where the M3
-    /// Max answers nil: row `j` of its blocks at the plane's offset + `j` x `bytes_per_row`, which
-    /// its samples, blits and CPU calls take (`linear_plan.rs`'s **Block-compressed surfaces**).
+    /// offset and pitch that are multiples of 16, or for BC1 and BC4, whose blocks are 8 bytes,
+    /// at an offset and pitch the block divides, at least 16 a row) is made as the x86 Macs make
+    /// it, where the M3 Max answers nil: row `j` of its blocks at the plane's offset + `j` x
+    /// `bytes_per_row`, unrounded, which its samples, blits and CPU calls take (`linear_plan.rs`'s
+    /// **Block-compressed surfaces**; at an offset off 16 the UHD 630's CPU calls take the plane
+    /// from byte 0).
     /// Over a surface without planes Metal stops a row of blocks wider than the surface's
     /// (`RowPitch`) and rows of texels past it (`PastBuffer`). Every other compressed format is
     /// stopped as over a buffer (`NotLinear`).

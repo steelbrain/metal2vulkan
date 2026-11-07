@@ -1078,9 +1078,12 @@ else.
   `surface-texels-tail`), as the M3 Max lays those in no one place. A colour 2D texture whose rows
   are wider than the plane's `bytesPerRow`, and a colour 1D texture wider than one, over a plane at
   multiples of 16 lie as the M3 Max lays them out, rows `bytesPerRow` apart on every path, a 2D
-  texture's overlapping (announced `colliding-surface-row-writes`). Wider rows of another format
-  or off 16, those other shapes of another format, an array off 16, and a BC texture at an offset
-  or pitch off 16 are `NotImplemented(SurfacePlaneShape)`. A cube or cube array over a plane is `Invalid`, as
+  texture's overlapping (announced `colliding-surface-row-writes`). A BC1 or BC4 texture (8-byte
+  blocks) at an offset or pitch off 16 that 8 divides lies at the plane's own offset and pitch on
+  every path, as the x86 Macs' blits and samples take it. Wider rows of another format or off 16,
+  those other shapes of another format, an array off 16, a BC texture of 16-byte blocks at an
+  offset or pitch off 16, and one of 8-byte blocks off 8 or under 16 bytes a row are
+  `NotImplemented(SurfacePlaneShape)`. A cube or cube array over a plane is `Invalid`, as
   plain Metal asserts on it on the M3 Max. Texels past the surface's end, which Metal lays out in
   no one place, lie in a tail of the texture's own (announced `surface-texels-tail`), but a
   two-plane YCbCr, two-plane extended-range, 4:2:2, depth, stencil, BC or rotated texture's, which

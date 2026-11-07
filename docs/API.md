@@ -4412,6 +4412,18 @@ each item named states the rule in full.
   630) keep the first level and slice over the plane, and the runtime does not. Such a texture
   of another format stays `NotImplemented(SurfacePlaneShape)`, and a `Memoryless` one
   `NotImplemented(MemorylessSurfacePlane)`.
+- **A BC1 or BC4 texture over an IOSurface plane at an offset off 16 reads and writes the plane from
+  its offset on the CPU too.** The Apple M3 Max answers nil for a BC texture over a surface, so the
+  x86 Macs' Metal under macOS 26.7.1 is the reference (`probes/surface_texture_envelope.m`,
+  `bgraat8.bc1` and `bgrarow264.bc1`). Over a plane at offset 8 or at 264 bytes a row, an AMD Radeon
+  Pro 5300M's and an Intel UHD 630's blits and samples take block row `j` at the plane's offset +
+  `j` × `bytesPerRow`, unrounded, and so do the 5300M's `getBytes` at both and the UHD 630's
+  `getBytes` and `replaceRegion` at 264 bytes a row; at offset 8 the UHD 630's `getBytes` and
+  `replaceRegion` take the plane from byte 0, and the 5300M's `replaceRegion` writes other bytes
+  than the texture's past its first row of blocks at both. The runtime's BC1 or BC4 texture there
+  lies at the plane's own offset and pitch on every path, its CPU calls among them. BC4 was not
+  measured off 16; it takes BC1's 8-byte block rows. A BC texture of 16-byte blocks off 16 stays
+  `NotImplemented(SurfacePlaneShape)`.
 
 **Function constants**
 
