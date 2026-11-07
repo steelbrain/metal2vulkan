@@ -2238,14 +2238,17 @@ bound.
 - `metal2vulkan-degrade-colliding-surface-row-writes` (precision). `CollidingSurfaceRowWrites`: A
   texture of an IOSurface plane whose rows share bytes on Metal's GPU: more than one row of over 16
   bytes whose `bytesPerRow` rounded down to 16 is below the row, so consecutive rows share 1 to 15
-  bytes, a whole number of texels. Metal's reads see the sharing and so do the runtime's, through a
-  shadow whose two copy regions each way hold it; but where two rows' writes meet the shared bytes
-  take whichever of the two rows Metal's command wrote last, and that order is no one order: it
-  follows the command, the GPU pitch and the row count, a kernel's winner moving with the
-  threadgroup shape. A kernel is the only writer such a plane takes, every blit into one being
-  refused. Cost: where two of the plane's rows write the bytes they share the earlier row's stand,
-  one of the rows a kernel of Metal's leaves there, whose winner moves with the threadgroup shape;
-  reads, CPU access and every other byte are Metal's.
+  bytes, a whole number of texels; or, over a plane whose offset and `bytesPerRow` are multiples of
+  16, rows wider than `bytesPerRow`, which share bytes on the CPU too, any whole number of texels, a
+  byte shared by as many rows as reach it. Metal's reads see the sharing and so do the runtime's,
+  through a shadow whose copy regions hold it; but where rows' writes meet the shared bytes take
+  whichever row Metal's command wrote last, and that order is no one order: it follows the command,
+  the GPU pitch and the row count, a kernel's winner moving with the threadgroup shape. A kernel is
+  the only GPU writer such a plane takes, every blit into one being refused. The CPU's writes of
+  rows wider than the pitch leave the latest row's, as Metal's `replaceRegion` does. Cost: where the
+  plane's rows write the bytes they share the earliest row's stand, one of the rows a kernel of
+  Metal's leaves there, whose winner moves with the threadgroup shape; reads, CPU access and every
+  other byte are Metal's.
 - `metal2vulkan-degrade-surface-texels-apart` (precision). `SurfaceTexelsApart`: A texture over a
   plane of an IOSurface with planes whose texels Metal lays out in no one place, its first level's
   and slice's among them: a 2D texture of more than one level, a 3D texture and a 2D multisample

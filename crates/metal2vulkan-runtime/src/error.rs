@@ -1455,17 +1455,22 @@ pub enum RuntimeGap {
     MemorylessSurfacePlane,
     /// A texture over a plane of an IOSurface with planes (`Buffer::new_texture_with_iosurface_plane`,
     /// the stand-in for `newTextureWithDescriptor:iosurface:plane:`) that Metal makes, whose
-    /// texels it lays out no one way, and that the runtime holds in no form: rows wider than the
-    /// plane's `bytesPerRow`; a 2D texture of more than one mip level, a 3D or a 2D multisample
-    /// texture of a format but a colour one; a 2D array of more than one slice of a format but a
-    /// colour one, or over a plane at an offset or `bytesPerRow` off 16 bytes; any other type but
-    /// 2D, 3D, 2D multisample, 2D array, texture buffer and 1D; a 1D texture wider than the
-    /// plane's row; and a BC texture of another type than 2D, wider than the plane's rows, or over
-    /// a plane at an offset or `bytesPerRow` off 16 bytes. A colour 2D texture of several levels,
-    /// a 3D and a 2D multisample one are made in memory of their own, their texels in no one
-    /// place on the M3 Max, their first level and slice among them (announced as
-    /// `Degradation::SurfaceTexelsApart`); and a colour 2D array of more than one slice keeps its
-    /// first slice over the plane and its others in a tail of its own (announced as
+    /// texels it lays out no one way, and that the runtime holds in no form: a 2D texture whose
+    /// rows are wider than the plane's `bytesPerRow`, or a 1D texture wider than the row, of a
+    /// format but a colour one or over a plane at an offset or `bytesPerRow` off 16 bytes; a 2D
+    /// texture of more than one mip level, a 3D or a 2D multisample texture of a format but a
+    /// colour one; a 2D array of more than one slice of a format but a colour one, or over a
+    /// plane at an offset or `bytesPerRow` off 16 bytes; any other type but 2D, 3D, 2D
+    /// multisample, 2D array, texture buffer and 1D; and a BC texture of another type than 2D,
+    /// wider than the plane's rows, or over a plane at an offset or `bytesPerRow` off 16 bytes. A
+    /// colour 2D texture whose rows are wider than the plane's `bytesPerRow` and a colour 1D
+    /// texture wider than the row, over a plane at multiples of 16, are made with their rows
+    /// `bytesPerRow` apart on every path, as the M3 Max lays them out, a 2D texture's rows
+    /// overlapping (announced as `Degradation::CollidingSurfaceRowWrites`). A colour 2D texture
+    /// of several levels, a 3D and a 2D multisample one are made in memory of their own, their
+    /// texels in no one place on the M3 Max, their first level and slice among them (announced
+    /// as `Degradation::SurfaceTexelsApart`); and a colour 2D array of more than one slice keeps
+    /// its first slice over the plane and its others in a tail of its own (announced as
     /// `Degradation::SurfaceTexelsTail`). A cube or cube array there is
     /// Metal's own refusal (`Invalid`: plain Metal asserts "carriesComplexTexture || numFaces ==
     /// 1", the API validation layer off), and a texture buffer at an offset or `bytesPerRow` off
@@ -1477,15 +1482,15 @@ pub enum RuntimeGap {
     /// AMD Radeon Pro 5300M and an Intel UHD 630 under macOS 26.7.1 and an Apple M3 Max under
     /// 27.0.1; every one of these made on all three, but the M3's cube and cube array, at which
     /// its own assertion ends the process, and its BC textures, for which it answers nil): no
-    /// layout holds them. Rows wider than the pitch overlap the next row on
-    /// the M3's GPU and CPU alike, while the UHD 630's GPU keeps no texel past the pitch and the
-    /// 5300M's blit into the texture changes no byte of the surface and its kernels read the rows
-    /// at another pitch. Levels past 0 lie at the plane's base on the M3's CPU and elsewhere on its
-    /// GPU, and in no byte of the surface on the two x86 GPUs (zeros, or other memory), while
-    /// their CPU lays them after level 0 or reads zeros. A second slice of a 2D array or 3D
-    /// texture lies one image on for the UHD 630 inside the plane and nowhere past it, at the
-    /// plane's base for the 5300M's and the M3's blits and CPU, and in zeros or one image on for
-    /// their kernels. A 1D texture wider than the row: the 5300M's blit writes its first row's
+    /// layout holds them. Rows wider than the pitch overlap the next row on the M3's GPU and CPU
+    /// alike (the runtime's layout, over a plane at multiples of 16), while the UHD 630's GPU
+    /// keeps no texel past the pitch and the 5300M's blit into the texture changes no byte of the
+    /// surface and its kernels read the rows at another pitch. Levels past 0 lie at the plane's
+    /// base on the M3's CPU and elsewhere on its GPU, and in no byte of the surface on the two
+    /// x86 GPUs (zeros, or other memory), while their CPU lays them after level 0 or reads zeros.
+    /// A second slice of a 2D array or 3D texture lies one image on for the UHD 630 inside the
+    /// plane and nowhere past it, at the plane's base for the 5300M's and the M3's blits and CPU,
+    /// and in zeros or one image on for their kernels. A 1D texture wider than the row: the 5300M's blit writes its first row's
     /// worth alone, and the UHD 630's writes the rest 8 KiB on. A multisample one reaches past
     /// the plane's bytes and is not measured on the x86 GPUs. The offsets off 16 are not measured
     /// for those formats.

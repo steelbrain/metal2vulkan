@@ -128,24 +128,26 @@ fn no_rotated_plane_s_gpu_rows_share_bytes() {
 }
 
 /// The only rows of a texture over a buffer that share bytes are an IOSurface plane's on Metal's
-/// GPU, whose own rows lie a row apart or further
-/// (`Texels::plane_rows_overlap`, `linear_plan::plane_rows_share_bytes`): no plan makes a texture
-/// whose CPU rows share bytes as well, so a copy that addresses a texture's rows as bytes meets
-/// that one sharing and no other.
+/// GPU (`Texels::plane_rows_overlap`, `linear_plan::plane_rows_share_bytes`): a plane's at its
+/// pitch rounded down to 16, whose own rows lie a row apart or further, and a plane's whose rows
+/// are wider than its pitch, which every path takes that far apart. So the only plan whose CPU
+/// rows share bytes is the second, its CPU layout its GPU one, and a copy that addresses a
+/// texture's rows as bytes meets the GPU's sharing and no other.
 ///
 /// The sweep holds `plan_buffer_texture` to it over every call, a plain format and a two-plane
-/// YCbCr one (whose rows of codes are the only ones Metal lets fall below the row), pitches from
-/// well below the row to well past it, and offsets on and off 16; and `turned_plane` with
-/// `rotated_rows` over every rotation, whose one layout serves the GPU and the CPU alike.
+/// YCbCr one (whose rows of codes Metal lets fall below the row, and which the runtime refuses
+/// there), pitches from well below the row to well past it, and offsets on and off 16; and
+/// `turned_plane` with `rotated_rows` over every rotation, whose one layout serves the GPU and
+/// the CPU alike.
 #[test]
-fn no_texture_over_a_buffer_has_cpu_rows_that_share_bytes() {
+fn only_a_wide_plane_has_cpu_rows_that_share_bytes() {
     let calls = [
         BufferTextureCall::Texture,
         BufferTextureCall::Linear,
         BufferTextureCall::IoSurfacePlane { planar: false },
         BufferTextureCall::IoSurfacePlane { planar: true },
     ];
-    let (mut made, mut sharing) = (0, 0);
+    let (mut made, mut sharing, mut wide) = (0, 0, 0);
     for call in calls {
         for (pf, texel_bytes) in [(PixelFormat::BGRA8Unorm, 4), (PixelFormat::YCBCR84221P, 1)] {
             for width in [1u32, 5, 8, 17] {
@@ -173,15 +175,24 @@ fn no_texture_over_a_buffer_has_cpu_rows_that_share_bytes() {
                                 continue;
                             };
                             made += 1;
-                            assert_eq!(
-                                placed.cpu.shared_bytes(),
-                                0,
-                                "{call:?} {pf:?} {width}x{height} at {bytes_per_row}, offset                                  {offset}"
+                            let at = format!(
+                                "{call:?} {pf:?} {width}x{height} at {bytes_per_row}, offset \
+                                 {offset}"
                             );
+                            if placed.cpu.shared_bytes() != 0 {
+                                wide += 1;
+                                assert_eq!(
+                                    call,
+                                    BufferTextureCall::IoSurfacePlane { planar: true },
+                                    "{at}"
+                                );
+                                assert!(bytes_per_row < u64::from(width) * texel_bytes, "{at}");
+                                assert_eq!(placed.cpu, placed.gpu, "{at}");
+                            }
                             assert_eq!(
-                                plane_rows_share_bytes(&placed.gpu, &placed.cpu),
+                                plane_rows_share_bytes(&placed.gpu),
                                 placed.gpu.shared_bytes() > 0,
-                                "{call:?} {pf:?} {width}x{height} at {bytes_per_row}, offset                                  {offset}"
+                                "{at}"
                             );
                             sharing += u64::from(placed.gpu.shared_bytes() > 0);
                         }
@@ -190,10 +201,11 @@ fn no_texture_over_a_buffer_has_cpu_rows_that_share_bytes() {
             }
         }
     }
-    // The sweep reached both answers: planes whose GPU rows share bytes, and textures with none.
+    // The sweep reached every answer: planes whose GPU rows alone share bytes, wide planes whose
+    // CPU rows do too, and textures with none.
     assert!(
-        sharing > 0 && made > sharing,
-        "{made} made, {sharing} sharing"
+        wide > 0 && sharing > wide && made > sharing,
+        "{made} made, {sharing} sharing, {wide} wide"
     );
     // A rotated plane: one layout for the GPU and the CPU, whose rows share no byte.
     let (mut turned_ok, mut turned_refused) = (0, 0);
@@ -213,7 +225,7 @@ fn no_texture_over_a_buffer_has_cpu_rows_that_share_bytes() {
                                 "rotation {rotation}, {width}x{height} at {bytes_per_row}"
                             );
                             assert!(
-                                !plane_rows_share_bytes(&rows, &rows),
+                                !plane_rows_share_bytes(&rows),
                                 "rotation {rotation}, {width}x{height} at {bytes_per_row}"
                             );
                         }

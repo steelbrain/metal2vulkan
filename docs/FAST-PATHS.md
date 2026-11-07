@@ -1041,7 +1041,9 @@ else.
   row is made: its rows share 1 to 15 bytes, a whole number of texels, between consecutive rows
   alone, and its shadow's copies hold the sharing with two regions a slice each way, which
   announces `colliding-surface-row-writes` (`linear_plan.rs`,
-  `buffer_texture::plane_copy_regions`). Still refused
+  `buffer_texture::plane_copy_regions`). So is a colour plane whose rows are wider than its
+  `bytesPerRow`, at multiples of 16, its rows sharing any whole number of texels on the GPU and the
+  CPU alike. Still refused
   `NotImplemented(OverlappingSurfaceRows)`: a plane a render pass stores into, where what Metal
   leaves of the shared bytes is unmeasured; a two-plane YCbCr texture's rows of codes, which no row
   rule holds and which overlap by any amount across any number of rows, and the other formats whose
@@ -1073,9 +1075,12 @@ else.
   place, their first level and slice among them, where the x86 Macs keep those over the plane. A
   colour 2D array of several slices over a plane at an offset and pitch that are multiples of 16
   keeps its first slice in place and its others in a tail of its own (announced
-  `surface-texels-tail`), as the M3 Max lays those in no one place. Rows wider than the plane's,
-  those shapes of another format, an array off 16, and a BC texture at an offset or pitch off 16
-  are `NotImplemented(SurfacePlaneShape)`. A cube or cube array over a plane is `Invalid`, as
+  `surface-texels-tail`), as the M3 Max lays those in no one place. A colour 2D texture whose rows
+  are wider than the plane's `bytesPerRow`, and a colour 1D texture wider than one, over a plane at
+  multiples of 16 lie as the M3 Max lays them out, rows `bytesPerRow` apart on every path, a 2D
+  texture's overlapping (announced `colliding-surface-row-writes`). Wider rows of another format
+  or off 16, those other shapes of another format, an array off 16, and a BC texture at an offset
+  or pitch off 16 are `NotImplemented(SurfacePlaneShape)`. A cube or cube array over a plane is `Invalid`, as
   plain Metal asserts on it on the M3 Max. Texels past the surface's end, which Metal lays out in
   no one place, lie in a tail of the texture's own (announced `surface-texels-tail`), but a
   two-plane YCbCr, two-plane extended-range, 4:2:2, depth, stencil, BC or rotated texture's, which

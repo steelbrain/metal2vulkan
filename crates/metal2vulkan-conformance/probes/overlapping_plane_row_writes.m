@@ -52,10 +52,29 @@
 //   plane does: e l e at a pitch of 16 over 4 rows, e e e at 32. It does not keep the later row's
 //   bytes.
 //
-// Controls: with the blit left out every shared byte reads the pad (6 processes); at a pitch of 32
-// over a 20-byte row nothing is shared and the rows land at the pitch; copyFromTexture:toBuffer:
-// reads row y from plane byte pitch * y, so the sharing is real; and no run dirtied a byte past
-// the written span.
+//   A texture wider than its plane, over a plane whose pitch is a multiple of 16 (configurations
+//   20 to 28, three processes a case and kind, beside their twins of the same GPU pitch and row
+//   at a pitch off 16, 1, 2, 3, 12 and 6): Metal makes it, and copyFromTexture:toBuffer: reads
+//   row y whole from plane byte pitch * y. Its GPU writes give the shared bytes the answers the
+//   twins give: copyFromBuffer:toTexture: and copyFromTexture:toTexture: e l e ... at a pitch of
+//   16 over 4 and 8 rows, R8Unorm and RGBA8Unorm alike; the kernel at 8 x 4 the earlier row's
+//   within the first threadgroup's rows and the later row's past them, and at 32 x 1 another
+//   set, alike in every case but one of three 32 x 1 runs over 20x8, which kept l l l e l e l
+//   where its twin and the other two runs kept l e l e l e l. Past the twins' reach, at a pitch
+//   of 32 copyFromBuffer:toTexture: keeps the earlier row's over 33x4, whose rows share 1 byte,
+//   and the later row's over 48x4 and 64x3, whose rows share 16 and 32, so how far wider rows
+//   overlap does change the order; copyFromTexture:toTexture: answers as it does there but over
+//   33x4, where three processes gave three answers (l l l, l e e, e e e). Where
+//   three rows share a byte (40x4 at a pitch of 16) the kernel at 8 x 4 keeps the earliest row's
+//   everywhere, at 32 x 1 the latest row's everywhere, and the blits mix all three rows.
+//   replaceRegion writes the rows in order: the latest row's bytes stand wherever rows meet, in
+//   all nine configurations and every process (the twins' CPU rows lie a row apart and share
+//   nothing).
+//
+// Controls: with the blit left out every shared byte reads the pad (6 processes, and one for each
+// wider configuration); at a pitch of 32 over a 20-byte row nothing is shared and the rows land
+// at the pitch; copyFromTexture:toBuffer: reads row y from plane byte pitch * y, so the sharing is
+// real; and no run dirtied a byte past the written span.
 //
 // clang -fobjc-arc -framework Metal -framework Foundation -framework IOSurface \
 //     -o overlapping_plane_row_writes overlapping_plane_row_writes.m

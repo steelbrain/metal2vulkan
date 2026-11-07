@@ -1091,19 +1091,22 @@ degradations! {
         /// A texture of an IOSurface plane whose rows share bytes on Metal's GPU
         /// (`Buffer::new_texture_with_iosurface_plane`, `linear_plan.rs`): more than one row of
         /// over 16 bytes whose `bytesPerRow` rounded down to 16 is below the row, so consecutive
-        /// rows share 1 to 15 bytes, a whole number of texels. Metal's reads see the sharing and
-        /// so do the runtime's, through a shadow whose two copy regions each way hold it; but
-        /// where two rows' writes meet the shared bytes take whichever of the two rows Metal's
-        /// command wrote last, and that order is no one order (an Apple M3 Max under macOS
-        /// 27.0.1, one case a process, `probes/overlapping_plane_row_writes.m`): it follows the
-        /// command, the GPU pitch and the row count, a kernel's winner moving with the
-        /// threadgroup shape. A kernel is the only writer such a plane takes here, every blit
-        /// into one being refused (`linear_plan.rs`'s **Rows that overlap**), so the earlier
-        /// row's bytes are one of the rows a kernel of Metal's leaves there.
+        /// rows share 1 to 15 bytes, a whole number of texels; or, over a plane whose offset and
+        /// `bytesPerRow` are multiples of 16, rows wider than `bytesPerRow`, which share bytes on
+        /// the CPU too, any whole number of texels, a byte shared by as many rows as reach it.
+        /// Metal's reads see the sharing and so do the runtime's, through a shadow whose copy
+        /// regions hold it; but where rows' writes meet the shared bytes take whichever row
+        /// Metal's command wrote last, and that order is no one order (an Apple M3 Max under
+        /// macOS 27.0.1, one case a process, `probes/overlapping_plane_row_writes.m`): it follows
+        /// the command, the GPU pitch and the row count, a kernel's winner moving with the
+        /// threadgroup shape. A kernel is the only GPU writer such a plane takes here, every blit
+        /// into one being refused (`linear_plan.rs`'s **Rows that overlap**), so the earliest
+        /// row's bytes are one of the rows a kernel of Metal's leaves there. The CPU's writes of
+        /// rows wider than the pitch leave the latest row's, as Metal's `replaceRegion` does.
         CollidingSurfaceRowWrites = "colliding-surface-row-writes", Precision,
-            "where two of the plane's rows write the bytes they share the earlier row's stand, \
-             one of the rows a kernel of Metal's leaves there, whose winner moves with the \
-             threadgroup shape; reads, CPU access and every other byte are Metal's";
+            "where the plane's rows write the bytes they share the earliest row's stand, one of \
+             the rows a kernel of Metal's leaves there, whose winner moves with the threadgroup \
+             shape; reads, CPU access and every other byte are Metal's";
         /// A texture of an IOSurface plane of a surface with planes, which Metal makes, some of
         /// whose texels it lays out in no one place (`Buffer::new_texture_with_iosurface_plane`,
         /// `linear_plan.rs`'s **Beyond the plane's rows**; an Apple M3 Max under macOS 27.0.1,

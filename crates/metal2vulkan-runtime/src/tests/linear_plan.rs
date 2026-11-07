@@ -1712,6 +1712,31 @@ fn a_surface_plane_s_other_shapes_follow_the_probe() {
             plane(d1, bgra, (64, 1), (0, 256), true, 16384),
             one_row(0, 256),
         ),
+        // The M3 Max's `bgra1x2.65x64`, `bgra1x2.128x32`, `420v.p0.65x64` and `420v.p1.33x32`:
+        // rows wider than the plane's, `bytesPerRow` apart on the GPU and the CPU alike,
+        // overlapping.
+        (
+            plane(d2, bgra, (65, 64), (0, 256), true, 32768),
+            rows(0, 256, 260, 64),
+        ),
+        (
+            plane(d2, bgra, (128, 32), (0, 256), true, 32768),
+            rows(0, 256, 512, 32),
+        ),
+        (
+            plane(d2, r8, (65, 64), (512, 64), true, 6720),
+            rows(512, 64, 65, 64),
+        ),
+        (
+            plane(d2, P::RG8Unorm, (33, 32), (4608, 64), true, 6720),
+            rows(4608, 64, 66, 32),
+        ),
+        // A 1D texture wider than the plane's row (`bgra1x2.1d.128`): one row from the plane's
+        // offset.
+        (
+            plane(d1, bgra, (128, 1), (0, 256), true, 32768),
+            one_row(0, 512),
+        ),
         // 117 bgra1.type2darray and 127 420v.p0.type2darray, of one slice.
         (
             plane(a, bgra, (64, 64), (0, 256), true, 16384),
@@ -1786,11 +1811,26 @@ fn a_surface_plane_s_other_shapes_follow_the_probe() {
     let gap = Err(BufferRefusal::PlaneShape);
     let stopped = |problem| Err(BufferRefusal::Metal(problem));
     let refused = [
-        // 17 bgra1.65x64 and 21 420v.p1.33x32: rows wider than the plane's.
-        (plane(d2, bgra, (65, 64), (0, 256), true, 32768), gap),
+        // 17 bgra1.65x64 and 21 420v.p1.33x32: rows wider than the plane's, over a plane off 16,
+        // which no probe measured, or of a format but a colour one; one a render pass stores
+        // into, which the rows' sharing keeps from an image (the module's **Rows that overlap**).
+        (plane(d2, bgra, (65, 64), (8, 256), true, 32768), gap),
+        (plane(d2, bgra, (65, 64), (0, 248), true, 32768), gap),
+        (plane(d1, bgra, (128, 1), (8, 256), true, 32768), gap),
         (
-            plane(d2, P::RG8Unorm, (33, 32), (4128, 64), true, 6432),
+            plane(d2, P::RG8Unorm, (33, 32), (4120, 64), true, 6432),
             gap,
+        ),
+        (
+            plane(d2, P::Depth32Float, (65, 64), (0, 256), true, 32768),
+            gap,
+        ),
+        (
+            Case {
+                usage: TextureUsage::RENDER_TARGET,
+                ..plane(d2, bgra, (65, 64), (0, 256), true, 32768)
+            },
+            Err(BufferRefusal::OverlappingRows),
         ),
         // 123 bgra1.mips2 and 42 420v.p0.mips2.
         (
@@ -1867,8 +1907,6 @@ fn a_surface_plane_s_other_shapes_follow_the_probe() {
             ),
             gap,
         ),
-        // A 1D texture wider than the plane's row.
-        (plane(d1, bgra, (128, 1), (0, 256), true, 32768), gap),
         // Over a surface without planes Metal stops them: 136 bgra.typebuffer.65, 12 bgra.65x64,
         // 25 bgra.type1d, 27 bgra.type2darray and 38 bgra.mips2.
         (
@@ -2290,7 +2328,8 @@ fn every_backed_format_s_texel_divides_the_linear_alignment() {
 /// (`BufferTextureProblem::RowPitch`), so rounding it down to 16 takes under 16 bytes off: the
 /// rows overlap by 1 to 15 bytes, a whole number of texels (above), and between consecutive rows
 /// alone, since twice the GPU pitch is always past one row. A plane whose rows overlap further is
-/// a two-plane YCbCr texture's rows of codes, which no row rule holds (`ycbcr.rs`).
+/// a two-plane YCbCr texture's rows of codes, which no row rule holds (`ycbcr.rs`), or a plane's
+/// whose rows are wider than its pitch (the next test's).
 ///
 /// For every such plane the sweep takes the shadow's copy regions (`plane_copy_regions`) and the
 /// staged copy back (`staged_rows_back`) and holds them to what Vulkan allows and to Metal's
@@ -2410,10 +2449,22 @@ fn hold_the_copies(
     use std::collections::BTreeMap;
     let span = gpu.end() - gpu.offset;
     let width = gpu.row_bytes / texel;
-    assert_eq!((into.len(), back.len()), (2, 2), "{case}");
+    // The head in pieces of at most a pitch each going in, and the rest of every row.
+    let (head, pitch) = (gpu.shared_bytes() / texel, gpu.row_pitch / texel);
+    assert_eq!(
+        (into.len() as u64, back.len()),
+        (head.div_ceil(pitch) + 1, 2),
+        "{case}"
+    );
     for region in into.iter().chain(back) {
+        // A `bufferRowLength` of 0 is the region's own width (Vulkan's Buffer and Image
+        // Addressing).
+        let length = match region.buffer_row_length {
+            0 => region.image_extent.width,
+            length => length,
+        };
         assert!(
-            u64::from(region.buffer_row_length) >= u64::from(region.image_extent.width),
+            u64::from(length) >= u64::from(region.image_extent.width),
             "{case}: a row length of {} under a width of {}",
             region.buffer_row_length,
             region.image_extent.width
@@ -2472,7 +2523,10 @@ fn hold_the_copies(
 /// texel` and is image texel `(imageOffset.x + i, j)` (Vulkan's Buffer and Image Addressing).
 fn copied_bytes(region: &vk::BufferImageCopy, texel: u64) -> Vec<(u64, (u32, u32))> {
     let extent = region.image_extent;
-    let row = u64::from(region.buffer_row_length);
+    let row = u64::from(match region.buffer_row_length {
+        0 => extent.width,
+        length => length,
+    });
     let x0 = region.image_offset.x as u32;
     let mut bytes = Vec::new();
     for j in 0..extent.height {
@@ -2484,6 +2538,86 @@ fn copied_bytes(region: &vk::BufferImageCopy, texel: u64) -> Vec<(u64, (u32, u32
         }
     }
     bytes
+}
+
+/// A 2D texture over a plane whose rows are wider than the plane's `bytesPerRow`, at multiples of
+/// 16 (`linear_plan::wide_rows`): its rows lie `bytesPerRow` apart for the GPU and the CPU alike,
+/// sharing any whole number of texels, a byte shared by as many rows as reach it; and its
+/// shadow's copies tile it as an overlapping plane's do (the sweep above's rules,
+/// `hold_the_copies`), its shared head going in in pieces no wider than the pitch. A render
+/// target over it is refused, as over every plane whose rows overlap.
+#[test]
+fn a_plane_wider_than_its_rows_is_copied_through_regions_that_tile_it_once() {
+    let formats = [
+        (P::R8Unorm, 1),
+        (P::RG8Unorm, 2),
+        (P::RGBA8Unorm, 4),
+        (P::RGBA16Uint, 8),
+        (P::RGBA32Uint, 16),
+    ];
+    let (start, at) = (64, 48);
+    let (mut wide, mut past_a_pitch) = (0, 0);
+    for (pf, texel) in formats {
+        for bytes_per_row in [16, 32, 48, 64] {
+            for row_bytes in
+                (bytes_per_row + texel..=3 * bytes_per_row + 16).step_by(texel as usize)
+            {
+                let width = row_bytes / texel;
+                for height in 1..=4 {
+                    let case = Case {
+                        call: BufferTextureCall::IoSurfacePlane { planar: true },
+                        pixel_format: pf,
+                        width,
+                        height,
+                        bytes_per_row,
+                        ..texture(width, height, 0, bytes_per_row, 1 << 20)
+                    };
+                    let made = placed(case).unwrap_or_else(|e| panic!("{case:?}: {e:?}"));
+                    let cpu = BufferLayout {
+                        offset: 0,
+                        row_pitch: bytes_per_row,
+                        slice_pitch: bytes_per_row * height,
+                        row_bytes,
+                        rows: height,
+                        slices: 1,
+                    };
+                    assert_eq!(made.cpu, cpu, "{case:?}");
+                    let target = Case {
+                        usage: TextureUsage::RENDER_TARGET | TextureUsage::SHADER_READ,
+                        ..case
+                    };
+                    if height == 1 {
+                        // One row overlaps nothing, whatever its pitch.
+                        assert_eq!(made.gpu.shared_bytes(), 0, "{case:?}");
+                        assert!(placed(target).is_ok(), "{case:?}: a render target refused");
+                        continue;
+                    }
+                    assert_eq!(made.gpu, cpu, "{case:?}");
+                    assert_eq!(
+                        placed(target).err(),
+                        Some(BufferRefusal::OverlappingRows),
+                        "{case:?}: a render target over rows that overlap"
+                    );
+                    wide += 1;
+                    past_a_pitch += u64::from(row_bytes - bytes_per_row > bytes_per_row);
+                    let (into, back) = plane_copy_regions(
+                        &made.gpu,
+                        (texel, None),
+                        start,
+                        vk::ImageAspectFlags::COLOR,
+                    );
+                    hold_the_copies(
+                        &made.gpu,
+                        texel,
+                        (start, at),
+                        (&into, &back),
+                        &format!("{case:?}"),
+                    );
+                }
+            }
+        }
+    }
+    assert_eq!((wide, past_a_pitch), (2232, 1302), "the sweep's counts");
 }
 
 /// The texel of the earliest row of a plane laid out as `gpu` that holds the byte `offset` bytes

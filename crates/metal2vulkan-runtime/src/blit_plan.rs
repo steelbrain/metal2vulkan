@@ -988,7 +988,8 @@ fn in_units(unit: &CopyUnit, region: &ImageRegion) -> ([u64; 2], [u64; 2]) {
 /// (`linear_plan::Placed`).
 ///
 /// `Err(RuntimeGap::OverlappingSurfaceRows)` where either side's GPU rows share bytes (an
-/// IOSurface plane's at a pitch off 16, [`plane_rows_share_bytes`]). The shared bytes take
+/// IOSurface plane's at a pitch off 16 or wider than its pitch, [`plane_rows_share_bytes`]). The
+/// shared bytes take
 /// whichever of the two rows Metal's command wrote last, an order that follows the command, the
 /// GPU pitch and the row count and that one shape of `copyFromTexture:toTexture:` does not settle
 /// from run to run (`linear_plan.rs`'s **Rows that overlap**), so no order a row copy writes them
@@ -1002,8 +1003,8 @@ pub(super) fn plan_texels_rows_copy(
     unit: &CopyUnit,
     copies: &[ImageCopyRegion],
 ) -> Result<RowsCopy, RuntimeGap> {
-    for (gpu, cpu) in [from, to] {
-        if plane_rows_share_bytes(gpu, cpu) {
+    for (gpu, _) in [from, to] {
+        if plane_rows_share_bytes(gpu) {
             return Err(RuntimeGap::OverlappingSurfaceRows);
         }
     }

@@ -1,12 +1,14 @@
 //! Textures over an IOSurface plane beyond a 2D texture of one texel a block: a BC texture over a
-//! surface's rows, and a texture buffer, a 1D texture and a 2D array of one slice over a plane of
-//! a surface with planes (`linear_plan.rs`'s **Block-compressed surfaces** and **Beyond the
-//! plane's rows**). Each reads and writes the bytes the x86 Macs' Metal does, and a texture
-//! buffer at a plane offset off 16 the bytes the M3 Max's does
-//! (`surface_texture_envelope`; each shape names the `oracle_surftex` case or the probe's shape it
-//! stands for): a kernel's reads, the blits, `getBytes` and `replaceRegion` take those bytes, a
-//! kernel after a blit or a CPU write reads what they wrote, and no other byte of the surface
-//! changes.
+//! surface's rows, and a texture buffer, a 1D texture, a 2D array of one slice and a 2D texture
+//! wider than the plane's rows over a plane of a surface with planes (`linear_plan.rs`'s
+//! **Block-compressed surfaces** and **Beyond the plane's rows**). Each reads and writes the bytes
+//! the x86 Macs' Metal does, and a texture buffer at a plane offset off 16 and a texture wider
+//! than its plane's rows the bytes the M3 Max's does (`surface_texture_envelope`; each shape
+//! names the `oracle_surftex` case or the probe's shape it stands for): a kernel's reads, the
+//! blits, `getBytes` and `replaceRegion` take those bytes, a kernel after a blit or a CPU write
+//! reads what they wrote, and no other byte of the surface changes. A blit into a 2D texture
+//! whose rows overlap is refused (`NotImplemented(OverlappingSurfaceRows)`, `linear_plan.rs`'s
+//! **Rows that overlap**) and changes no byte.
 //!
 //! A device test: compiled only under the validation crate's GPU safety cfgs (`m2v_gpu`,
 //! `m2v_cpu_icd`), on the kind of device the cfg selects. Each surface is a buffer standing for
@@ -21,7 +23,7 @@ use super::layer_claim::Watched;
 use crate::{
     BlitCommandEncoder, BlitOption, Buffer, ComputePipelineState, Device, DeviceKind,
     DeviceOptions, Error, IoSurfacePlane, Origin, PipelineOptions, Region, ResourceOptions,
-    ShaderCacheOptions, Size, Texture, TextureDescriptor,
+    RuntimeGap, ShaderCacheOptions, Size, Texture, TextureDescriptor,
 };
 use metal2vulkan::metal::{PixelFormat, TextureType, TextureUsage};
 use std::path::Path;
@@ -214,6 +216,16 @@ const P1: Surface = Surface {
     length: 6432,
     plane: (4128, 64, true),
 };
+/// A 64 x 64 `420v` surface's luma plane on the M3 Max (the probe's `420v`).
+const M3_P0: Surface = Surface {
+    length: 6720,
+    plane: (512, 64, true),
+};
+/// Its chroma plane.
+const M3_P1: Surface = Surface {
+    length: 6720,
+    plane: (4608, 64, true),
+};
 
 /// One texture over a surface.
 #[derive(Clone, Copy, Debug)]
@@ -251,9 +263,16 @@ impl Shape {
             PixelFormat::BC1RGBA | PixelFormat::BC4RUnorm => (8, [4, 4]),
             PixelFormat::BC3RGBA | PixelFormat::BC7RGBAUnorm => (16, [4, 4]),
             PixelFormat::BGRA8Unorm => (4, [1, 1]),
+            PixelFormat::RG8Unorm => (2, [1, 1]),
             PixelFormat::R8Unorm => (1, [1, 1]),
             pf => panic!("{pf:?}"),
         }
+    }
+
+    /// Whether its rows share bytes: a 2D texture's rows wider than the plane's `bytesPerRow`.
+    fn rows_overlap(&self) -> bool {
+        let (_, row) = self.units();
+        self.texture_type == TextureType::Type2D && row > self.surface.plane.1
     }
 
     /// Its units across and down, and the bytes of a row of them.
@@ -289,7 +308,10 @@ impl Shape {
     fn read_checked(&self) -> bool {
         matches!(
             self.pf,
-            PixelFormat::BC1RGBA | PixelFormat::BGRA8Unorm | PixelFormat::R8Unorm
+            PixelFormat::BC1RGBA
+                | PixelFormat::BGRA8Unorm
+                | PixelFormat::RG8Unorm
+                | PixelFormat::R8Unorm
         )
     }
 
@@ -409,6 +431,25 @@ fn shapes() -> Vec<Shape> {
             [64, 64],
             P0,
         ),
+        // Wider than the plane's rows (the M3 Max's): a 2D texture's rows `bytesPerRow` apart,
+        // overlapping, and a 1D texture's one row from the plane's offset.
+        shape("bgra1x2.65x64", P::BGRA8Unorm, T::Type2D, [65, 64], BGRA1X2),
+        shape(
+            "bgra1x2.128x32",
+            P::BGRA8Unorm,
+            T::Type2D,
+            [128, 32],
+            BGRA1X2,
+        ),
+        shape("420v.p0.65x64", P::R8Unorm, T::Type2D, [65, 64], M3_P0),
+        shape("420v.p1.33x32", P::RG8Unorm, T::Type2D, [33, 32], M3_P1),
+        shape(
+            "bgra1x2.1d.128",
+            P::BGRA8Unorm,
+            T::Type1D,
+            [128, 1],
+            BGRA1X2,
+        ),
     ]
 }
 
@@ -498,6 +539,7 @@ fn expected(shape: &Shape, rows: &[u8], (x, y): (u64, u64)) -> [u32; 4] {
         PixelFormat::BGRA8Unorm => {
             [rows[at + 2], rows[at + 1], rows[at], rows[at + 3]].map(u32::from)
         }
+        PixelFormat::RG8Unorm => [u32::from(rows[at]), u32::from(rows[at + 1]), 0, 255],
         PixelFormat::R8Unorm => [u32::from(rows[at]), 0, 0, 255],
         pf => panic!("{pf:?}"),
     }
@@ -707,6 +749,33 @@ fn check(
         surface_holds("replaceRegion", &model, wrong);
         kernel("after replaceRegion", &model, wrong);
         blit_read("after replaceRegion", &model, wrong);
+    }
+    // A blit into rows that share bytes, refused: no order a row copy writes them in is Metal's.
+    if blits && shape.rows_overlap() {
+        let source = device.new_buffer(image, ResourceOptions::shared()).unwrap();
+        let mut gap = None;
+        blit(device, |blit| {
+            gap = blit
+                .copy_from_buffer_to_texture(
+                    &source,
+                    0,
+                    row,
+                    0,
+                    Size::new(w, h, 1),
+                    &texture,
+                    0,
+                    0,
+                    Origin::new(0, 0, 0),
+                    BlitOption::None,
+                )
+                .err();
+            Ok(())
+        });
+        if gap != Some(Error::NotImplemented(RuntimeGap::OverlappingSurfaceRows)) {
+            wrong.push(format!("blit write: {gap:?}, not OverlappingSurfaceRows"));
+        }
+        surface_holds("a refused blit write", &model, wrong);
+        return path;
     }
     // Every unit, from a blit.
     if blits {
