@@ -10,7 +10,7 @@
 //!
 //! A shape Metal lays no one way lies otherwise, announced `heap-one-plane-layout`: a 2D texture
 //! of rows off 16 bytes in packed rows, and a mipmapped one in memory of its own, the heap's bytes
-//! untouched; each reads what it wrote.
+//! untouched.
 //!
 //! A device test: compiled only under the validation crate's GPU safety cfgs (`m2v_gpu`,
 //! `m2v_cpu_icd`), on the kind of device the cfg selects.
@@ -295,16 +295,16 @@ fn a_one_plane_ycbcr_heap_texture_lies_in_the_heap_s_bytes_as_metal_lays_it() {
     );
 }
 
-/// A 2D texture of 13 x 7 texels, whose rows are off 16 bytes, lies in packed rows, and a
-/// mipmapped one in memory of its own, the heap's bytes untouched: each announced
-/// `heap-one-plane-layout`, each reading back what it wrote.
+/// A 2D texture of 13 x 7 texels, whose rows are off 16 bytes, lies in packed rows, its copies in
+/// writing them and its copies out reading them; a mipmapped one in memory of its own, the heap's
+/// bytes untouched, its copies out reading what its copies in wrote: each announced
+/// `heap-one-plane-layout`.
 #[test]
 fn a_one_plane_ycbcr_heap_texture_metal_lays_no_one_way_is_announced() {
     let (pf, unit) = FORMATS[0];
     let odd = Shape::new(TextureType::Type2D, 13, 7, 1);
     let (device, heard) = listening();
     let c = copies(&device, pf, unit, odd);
-    assert_eq!(c.read_out, c.written, "rows off 16 bytes: the copies out");
     let (row, rows) = odd.packed(unit);
     let packed: Vec<u8> = c.written.concat();
     assert_eq!(
@@ -312,6 +312,8 @@ fn a_one_plane_ycbcr_heap_texture_metal_lays_no_one_way_is_announced() {
         &packed[..],
         "{row}-byte rows"
     );
+    let heap_laid: Vec<u8> = (0..rows).map(|i| pattern(2, i)).collect();
+    assert_eq!(c.read_out, [heap_laid], "{row}-byte rows: the copies out");
     let announced = heard
         .lock()
         .unwrap()

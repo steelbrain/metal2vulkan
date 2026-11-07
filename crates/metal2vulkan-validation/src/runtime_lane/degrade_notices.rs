@@ -179,6 +179,7 @@ use super::fresh_contents::FRESH_PATTERNS;
 use super::grouped_submissions::GROUPED;
 use super::heap_layouts::HEAP_LAYOUTS;
 use super::heap_metal_sizes::{PAST_METAL_SIZES, UNMODELLED_SIZES};
+use super::heap_one_plane::ONE_PLANE_LAYOUTS;
 use super::heap_textures::{ALIASES, APART, COMPRESSED, OPTIMIZED};
 use super::host_memory::{not_importable, Mapping, GUEST_PAGE};
 use super::index_fetches::INDEX_FETCHES;
@@ -545,6 +546,7 @@ fn every_kind_has_a_site_a_lane_test_takes() {
         &DRAWN_DEPTH,
         &USAGE_SHADOWS,
         &HEAP_PLANES,
+        &ONE_PLANE_LAYOUTS,
         &TWO_PLANE_COPIES,
         &EXTENDED_RANGE_BITS,
         &SNORM_MINIMUM,

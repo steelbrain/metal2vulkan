@@ -509,6 +509,8 @@ mod heap_layouts;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod heap_metal_sizes;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+mod heap_one_plane;
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod heap_sample_moves;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod heap_textures;
