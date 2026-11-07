@@ -267,6 +267,11 @@ fn numeric_types_and_packed_layouts_agree() {
         let Repr::Candidates(aspects, candidates) = make_repr(pf) else {
             continue;
         };
+        // A format held for copies alone has no sampled type: no function reads it.
+        if candidates[0].emulation == FormatEmulation::CopiesOnly {
+            assert_eq!(sampled_type(pf), None, "{pf:?}");
+            continue;
+        }
         let ty = sampled_type(pf).unwrap();
         if aspects != vk::ImageAspectFlags::COLOR {
             continue;
