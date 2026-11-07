@@ -965,18 +965,18 @@ fn submit_per_ram_chunk() {
         let encoded = began.elapsed();
         blit.end_encoding().unwrap();
         let committed = Instant::now();
-        let gpu = submitted(command_buffer);
+        let submitting = submitted(command_buffer);
         let counts = device.work_counts();
         eprintln!(
             "SUBMIT-PER-RAM-CHUNK {}: {what}: a gather of {} runs of {} KiB encoded in {:.3} ms, \
-             committed to completed in {:.3} ms ({:.3} ms on the GPU); {} dma-buf imports made, \
-             {} chunks imported by then",
+             committed to completed in {:.3} ms ({:.3} ms of it submitting); {} dma-buf imports \
+             made, {} chunks imported by then",
             device.name(),
             runs.len(),
             runs[0].end.saturating_sub(runs[0].start) >> 10,
             ms(encoded),
             ms(committed.elapsed()),
-            gpu * 1e3,
+            submitting * 1e3,
             counts.host_ram_dma_buf_imports - before.host_ram_dma_buf_imports,
             counts.host_ram_chunks_imported - before.host_ram_chunks_imported,
         );
