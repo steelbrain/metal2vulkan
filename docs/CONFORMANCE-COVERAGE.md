@@ -2237,7 +2237,6 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `discard-quad-sum-placement` | Metal counts the quads the discard drops whole in a simdgroup sum that sits ahead of the discard for a measured reason -- the discard's condition reads the sum … |
 | `discard-quad-sum-placement` | Metal counts the quads the discard drops whole in a simdgroup sum that sits ahead of the discard for a measured reason -- the discard's condition reads the sum … |
 | `discard-quad-sum-placement` | Metal counts the quads the discard drops whole in a simdgroup sum that sits ahead of the discard for a measured reason -- the discard's condition reads the sum … |
-| `argb8-targets-destination-alpha` | Plain Metal on this M3 Max makes and runs a render pipeline whose ARGB8Unorm colour attachment blends with DestinationAlpha and OneMinusDestinationAlpha in the … |
 | `format-footprints-padded-wide-channels` | Plain Metal's `replaceRegion:` and `getBytes:` of this format's 16 by 16 `Shared` `ShaderRead` texture move nothing: `getBytes:` leaves every byte of its destin… |
 | `format-footprints-padded-wide-channels` | Plain Metal's `replaceRegion:` and `getBytes:` of this format's 16 by 16 `Shared` `ShaderRead` texture move nothing: `getBytes:` leaves every byte of its destin… |
 | `format-footprints-padded-wide-channels` | Plain Metal's `replaceRegion:` and `getBytes:` of this format's 16 by 16 `Shared` `ShaderRead` texture move nothing: `getBytes:` leaves every byte of its destin… |
@@ -2275,8 +2274,9 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `argb8-targets-blend-alpha` | Metal's stored 8-bit blend code and ours differ at this site over the case's 8,192 texels, and the row's count and bound are this run's. The two formats of the … |
 | `argb8-targets-blend-alpha` | Metal's stored 8-bit blend code and ours differ at this site over the case's 8,192 texels, and the row's count and bound are this run's. The two formats of the … |
 | `argb8-targets-blend-alpha` | Metal's stored 8-bit blend code and ours differ at this site over the case's 8,192 texels, and the row's count and bound are this run's. The two formats of the … |
-| `argb8-targets-destination-alpha` | Metal's stored 8-bit blend code and ours differ at this site over the case's 8,192 texels, and the row's count and bound are this run's. The case's `ARGB8Unorm`… |
-| `argb8-targets-destination-alpha` | Metal's stored 8-bit blend code and ours differ at this site over the case's 8,192 texels, and the row's count and bound are this run's. The case's `ARGB8Unorm`… |
+| `argb8-targets-destination-alpha` | Metal's stored 8-bit blend code and ours differ at this site over the case's 8,192 texels, and the row's count and bound are this run's. No Vulkan factor gives … |
+| `argb8-targets-destination-alpha` | Metal's stored 8-bit blend code and ours differ at this site over the case's 8,192 texels, and the row's count and bound are this run's. This is the `RGBA8Unorm… |
+| `argb8-targets-destination-alpha` | Metal's stored 8-bit blend code and ours differ at this site over the case's 8,192 texels, and the row's count and bound are this run's. This is the `RGBA8Unorm… |
 | `argb8-targets-max` | Metal's stored 8-bit blend code and ours differ at this site over the case's 8,192 texels, and the row's count and bound are this run's. The two formats of the … |
 | `argb8-targets-max` | Metal's stored 8-bit blend code and ours differ at this site over the case's 8,192 texels, and the row's count and bound are this run's. The two formats of the … |
 | `argb8-targets-max` | Metal's stored 8-bit blend code and ours differ at this site over the case's 8,192 texels, and the row's count and bound are this run's. The two formats of the … |
@@ -5252,7 +5252,7 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `argb8-targets-additive-alpha` | Metal's stored 8-bit blend code and ours differ at this site over the case's 8,192 texels, and the row's count and bound are this run's. The two formats of the … |
 | `argb8-targets-blend-alpha` | Metal's stored 8-bit blend code and ours differ at this site over the case's 8,192 texels, and the row's count and bound are this run's. The two formats of the … |
 | `argb8-targets-blend-alpha` | Metal's stored 8-bit blend code and ours differ at this site over the case's 8,192 texels, and the row's count and bound are this run's. The two formats of the … |
-| `argb8-targets-destination-alpha` | Metal's stored 8-bit blend code and ours differ at this site over the case's 8,192 texels, and the row's count and bound are this run's. The case's `ARGB8Unorm`… |
+| `argb8-targets-destination-alpha` | Metal's stored 8-bit blend code and ours differ at this site over the case's 8,192 texels, and the row's count and bound are this run's. This is the `RGBA8Unorm… |
 | `argb8-targets-max` | Metal's stored 8-bit blend code and ours differ at this site over the case's 8,192 texels, and the row's count and bound are this run's. The two formats of the … |
 | `argb8-targets-max` | Metal's stored 8-bit blend code and ours differ at this site over the case's 8,192 texels, and the row's count and bound are this run's. The two formats of the … |
 | `argb8-targets-multiply` | Metal's stored 8-bit blend code and ours differ at this site over the case's 8,192 texels, and the row's count and bound are this run's. The two formats of the … |
