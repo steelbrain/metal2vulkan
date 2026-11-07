@@ -1452,7 +1452,9 @@ impl Device {
 
     /// Plan the RAMs used from now on as though the device's imports counted against `bytes` of
     /// memory, in place of its heaps' ([`releases_idle_chunks`]): the tests' way to see a listed
-    /// RAM's idle chunks released, or kept, whatever the device's heaps.
+    /// RAM's idle chunks released, or kept, whatever the device's heaps (read by the dma-buf
+    /// tests, Linux's).
+    #[cfg(target_os = "linux")]
     pub(crate) fn count_host_ram_imports_against(&self, bytes: u64) {
         (self.shared().host_ram.import_heaps).store(bytes, Ordering::Relaxed);
     }
