@@ -700,18 +700,23 @@ fn where_each_listed_import_costs_a_submission_the_ram_is_long_chunks_released_o
     // the release with the chunk still live: the wait is for both.
     drop((first, second, holders));
     let gone = Instant::now();
+    let before_freed = std::cell::Cell::new(0);
     let released = until(
         &|counts| {
-            delta(counts, |counts| counts.host_ram_chunks_released) == count
-                && counts.host_ram_chunks_live + count == held.host_ram_chunks_live
+            let released = delta(counts, |counts| counts.host_ram_chunks_released) == count;
+            let freed = counts.host_ram_chunks_live + count == held.host_ram_chunks_live;
+            before_freed.set(before_freed.get() + u32::from(released && !freed));
+            released && freed
         },
         "the idle chunks were never released and freed",
     );
     println!(
-        "HOST-RAM-LISTED {}: {count} released {:.1} s after the last buffer went; {} chunk(s) live",
+        "HOST-RAM-LISTED {}: {count} released {:.1} s after the last buffer went; {} chunk(s) \
+         live; {} read(s) of the counts saw the release before the free",
         device.name(),
         gone.elapsed().as_secs_f64(),
         released.host_ram_chunks_live,
+        before_freed.get(),
     );
     // A copy over a released chunk: its run imported alone for it, the chunk asked for again.
     let run = start + filled..start + filled + LENGTH;
