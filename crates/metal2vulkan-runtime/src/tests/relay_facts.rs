@@ -3,7 +3,7 @@
 //! (`DriverFact::QueueFailuresReportedByMessenger`) and its instance has the relay's messenger,
 //! and a use of a `VkQueue` outside a batch makes the relay's mark of no work exactly then:
 //! counted among the device's submissions for the runtime's use, among the submission checks'
-//! calls for theirs (`By::Checks`).
+//! calls for theirs (`By::Checks`), and kept for the use's caller where it asks (`Mark`).
 //!
 //! `tests::batches::only_drivers_that_report_their_failures_by_messenger_relay_them` reads the
 //! committed profiles, whose identities are the releases the lanes measured. A host running a
@@ -195,5 +195,74 @@ fn a_mark_whose_call_has_not_returned_is_never_taken() {
     // SAFETY: the fence is out of the log, in no submission.
     unsafe { crate::release::object(raw, fence) };
     drop(_busy);
+    drop(device);
+}
+
+/// A mark kept for its use's caller (`Mark`) is taken by no other use, and handed out by no
+/// batch's settling, until the caller lets go of it, though its fence is signaled: the caller may
+/// wait for the fence (a check that holds the device's loader word through its use's completion,
+/// `loader_word.rs`), and nothing resets it meanwhile. Then the next use takes it.
+#[test]
+fn a_kept_mark_is_taken_by_no_other_use_until_its_caller_lets_go() {
+    let scratch = Scratch::new();
+    let device = device(&scratch.0);
+    assert!(
+        device.settle_submit_checks(SETTLE),
+        "the submission checks answered"
+    );
+    assert!(
+        device.settle_queue_switch_check(SETTLE),
+        "the queue-switch check answered"
+    );
+    let shared = device.shared();
+    let Some(flights) = shared.flights(0) else {
+        println!(
+            "RELAY-KEPT on {}: the device relays no failures",
+            device.name()
+        );
+        return;
+    };
+    let raw = shared.vk();
+    let release = |fences: Vec<vk::Fence>| {
+        for fence in fences {
+            // SAFETY: the fence is signaled and out of the log, its submission completed.
+            unsafe { crate::release::object(raw, fence) };
+        }
+    };
+    let uses = shared.queue_uses();
+    let ((), mark) = uses.use_queue_kept(0, By::Checks, Uses::Unknown, true, |_| ());
+    let mark = mark.expect("a use of a relayed queue makes a mark");
+    let fence = mark.fence();
+    assert!(mark.wait(), "the kept mark never completed");
+    // The log's reads are the device's, inside a section of the exit guard.
+    let busy = crate::exit_guard::enter().unwrap();
+    let taken = flights.done_marks();
+    assert!(!taken.contains(&fence), "a use took a kept mark");
+    release(taken);
+    let info = vk::FenceCreateInfo::default().flags(vk::FenceCreateFlags::SIGNALED);
+    // SAFETY: the device is live.
+    let batch = unsafe { raw.create_fence(&info, None) }.unwrap();
+    flights.push(batch, By::Batch(Default::default()));
+    flights.made(batch);
+    let mut marks = Vec::new();
+    flights.settled(&[batch], &mut marks);
+    assert!(
+        !marks.contains(&fence),
+        "a batch's settling handed out a kept mark"
+    );
+    assert!(flights.in_flight() >= 1, "the kept mark left the log");
+    release(marks);
+    release(vec![batch]);
+    drop(busy);
+    drop(mark);
+    let busy = crate::exit_guard::enter().unwrap();
+    let taken = flights.done_marks();
+    assert!(
+        taken.contains(&fence),
+        "the next use did not take the mark let go of"
+    );
+    release(taken);
+    drop(busy);
+    println!("RELAY-KEPT on {}: kept, then taken", device.name());
     drop(device);
 }

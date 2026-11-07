@@ -268,10 +268,12 @@ impl Device {
         // On the device's in-place check's thread, which runs beside the program's
         // (`in_place_check.rs`), the device's loader word is held across the call and the relay's
         // mark after it, taken inside the queue's lock, and, where the word was found
-        // overwritten, through the wait for the submission (MoltenVK names the device as it logs
-        // each and as the work completes, `loader_word.rs`), as the device's other checks hold it.
+        // overwritten, through the wait for the submission and for the mark, kept for it
+        // (MoltenVK names the device as it logs each and as the work completes, `loader_word.rs`),
+        // as the device's other checks hold it.
         let checking = crate::in_place::checking();
-        let (word, made) = shared.use_queue(0, By::Runtime, Uses::OneSignalling, |queue| unsafe {
+        let uses = shared.queue_uses();
+        let use_queue = |queue: vk::Queue| unsafe {
             let word = checking.then(|| shared.loader_word.held());
             // No buffer of addresses goes while it encodes (`freed_memory.rs`).
             let _gate = (shared.parking.get()).map(|parking| parking.submitting());
@@ -280,12 +282,15 @@ impl Device {
                 .map(|info| info.command_buffer_count as usize);
             shared.counts.queue_submitted(submits.len(), buffers.sum());
             (word, raw.queue_submit(queue, &submits, objects.fence))
-        });
+        };
+        let ((word, made), mark) =
+            uses.use_queue_kept(0, By::Runtime, Uses::OneSignalling, checking, use_queue);
         // SAFETY: the device is live while `self` is.
-        let _word = word.and_then(|held| unsafe { shared.loader_word.step_hold(Some(held)) });
+        let word = word.and_then(|held| unsafe { shared.loader_word.step_hold(Some(held)) });
         // A `vkQueueSubmit` that fails leaves what its submissions reference as it was, or loses
         // the device: the work goes back as `taken` drops.
         if let Err(error) = made {
+            shared.loader_word.end_step(word, mark);
             return Err(self.failed(error));
         }
         objects.signalled = value;
@@ -300,6 +305,7 @@ impl Device {
                 Ok(()) => {
                     firsts.internal_completed(value);
                     shared.internal_done.reached(value);
+                    shared.loader_word.end_step(word, mark);
                     return Ok(());
                 }
                 Err(vk::Result::TIMEOUT) => continue,

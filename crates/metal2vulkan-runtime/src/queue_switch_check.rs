@@ -52,7 +52,7 @@
 
 use crate::command_buffer::fences::Fences;
 use crate::device::functions::{Functions, Vk};
-use crate::device::relay::{By, QueueUses};
+use crate::device::relay::{By, Mark, QueueUses};
 use crate::device::submit_stalls::Uses;
 use crate::device::{Device, QueueSlot};
 use crate::error::{vulkan, Error};
@@ -402,10 +402,11 @@ impl Objects {
     ) -> Result<bool, Error> {
         self.settled = false;
         // Where the device's loader word was found overwritten, held from the gate's signal
-        // through the wait for the batches (`loader_word.rs`): MoltenVK names the device as each
-        // completes. Taken with no queue's lock held: each batch's submission takes its queue's
-        // lock and then the word, and lets both go.
-        let (submitted, refused, step) = match self.submit(parts, batches, gate) {
+        // through the wait for the batches and the relay's marks after them (`loader_word.rs`):
+        // MoltenVK names the device as each completes, after the timelines are signalled. Taken
+        // with no queue's lock held: each batch's submission takes its queue's lock and then the
+        // word, and lets both go.
+        let (submitted, refused, step, marks) = match self.submit(parts, batches, gate) {
             Some(answer) => answer,
             None => return Ok(false),
         };
@@ -415,7 +416,7 @@ impl Objects {
             reached[lane] = reached[lane].min(batch.signal.1 - 1);
         }
         let waited = self.wait(parts, reached)?;
-        drop(step);
+        parts.loader_word.end_step(step, marks);
         if !waited {
             return Ok(false);
         }
@@ -428,19 +429,16 @@ impl Objects {
 
     /// Submit `batches`, each alone on its `VkQueue`, in order until one is refused, then signal
     /// the gate to `gate` from the host, inside one section: how many were submitted, the
-    /// refusal, and the hold of the device's loader word the signal was made under where the
-    /// word was found overwritten; `None` where the process is exiting.
-    fn submit<'p>(
-        &self,
-        parts: &'p Parts,
-        batches: &[Batch],
-        gate: u64,
-    ) -> Option<(usize, Option<vk::Result>, Option<Held<'p>>)> {
+    /// refusal, the hold of the device's loader word the signal was made under where the word was
+    /// found overwritten, and the relay's marks after the batches, kept; `None` where the process
+    /// is exiting.
+    fn submit<'p>(&self, parts: &'p Parts, batches: &[Batch], gate: u64) -> Option<Submitted<'p>> {
         let _busy = exit_guard::enter()?;
         let raw = parts.vk();
         let uses = parts.queue_uses();
         let mut submitted = 0;
         let mut refused = None;
+        let mut marks = Vec::new();
         for batch in batches {
             let buffers = [batch.buffer];
             let waits = [batch.wait.0];
@@ -464,11 +462,13 @@ impl Objects {
             // mark after it (MoltenVK names the device as it logs each, `loader_word.rs`), taken
             // inside the queue's lock. None of the round's batches runs before the gate's signal,
             // which the caller makes under the word where it was found overwritten, so none
-            // completes while the word is let go between them.
-            let (held, made) = uses.use_queue(
+            // completes while the word is let go between them, nor does the mark after it, which
+            // is kept, for the round to wait for.
+            let ((held, made), mark) = uses.use_queue_kept(
                 batch.queue,
                 By::Runtime,
                 Uses::OneSignalling,
+                true,
                 |queue| unsafe {
                     let held = parts.loader_word.held();
                     parts.counts.queue_submitted(1, 1);
@@ -476,6 +476,7 @@ impl Objects {
                 },
             );
             drop(held);
+            marks.extend(mark);
             exit_guard::called(Call::QueueSubmit);
             if let Err(error) = made {
                 refused = Some(error);
@@ -490,7 +491,7 @@ impl Objects {
         // SAFETY: the gate's value rises with each signal, its only signaller the host.
         let signalled = unsafe { raw.signal_semaphore(&signal) };
         exit_guard::called(Call::SignalSemaphore);
-        Some((submitted, refused.or(signalled.err()), step))
+        Some((submitted, refused.or(signalled.err()), step, marks))
     }
 
     /// Wait for each `VkQueue`'s timeline to reach its value of `done`, a slice at a time, each a
@@ -627,6 +628,11 @@ struct Batch {
     wait: (vk::Semaphore, u64),
     signal: (vk::Semaphore, u64),
 }
+
+/// What a round's submission answers ([`Objects::submit`]): how many batches were submitted, the
+/// refusal, the hold of the device's loader word where it was found overwritten, and the relay's
+/// marks after the batches, kept.
+type Submitted<'p> = (usize, Option<vk::Result>, Option<Held<'p>>, Vec<Mark<'p>>);
 
 /// The median of `values` (sorted here).
 fn median(values: &mut [i64]) -> i64 {

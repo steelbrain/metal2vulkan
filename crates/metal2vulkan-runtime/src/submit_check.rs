@@ -1373,7 +1373,7 @@ impl Objects {
             true => 1,
             false => buffers.len(),
         };
-        let nanos = {
+        let (submitted, step, mark) = {
             let _busy = exit_guard::enter()?;
             let raw = parts.vk();
             let infos: Vec<vk::SubmitInfo<'_>> = (buffers.iter())
@@ -1386,9 +1386,9 @@ impl Objects {
             // fence is unsignaled and in no pending submission. The device's word is held across
             // the calls and the relay's mark after them (MoltenVK names the device as it logs
             // each, `loader_word.rs`), taken inside the queue's lock, and let go before the wait
-            // unless the word was found overwritten.
+            // unless the word was found overwritten. The mark is kept, for the step to wait for.
             let uses = parts.queue_uses();
-            let (held, submitted) = uses.use_queue(0, By::Checks, Uses::Unknown, |queue| unsafe {
+            let use_queue = |queue: vk::Queue| unsafe {
                 let held = parts.loader_word.held();
                 let mut spent = Duration::ZERO;
                 let last = infos.len() - 1;
@@ -1415,26 +1415,31 @@ impl Objects {
                     }
                 }
                 (held, submitted.map(|()| spent))
-            });
+            };
+            let ((held, submitted), mark) =
+                uses.use_queue_kept(0, By::Checks, Uses::Unknown, true, use_queue);
             // Kept through the wait where the device's word was found overwritten: MoltenVK
-            // names the device as each Metal command buffer completes.
+            // names the device as each Metal command buffer completes, the relay's mark's last.
             // SAFETY: the device is live while its checks run.
             let step = unsafe { parts.loader_word.step_hold(Some(held)) };
             exit_guard::called(Call::QueueSubmit);
             parts.counts.submit_check_called(calls);
-            match submitted {
-                Ok(spent) => Some((spent, step)),
-                Err(_) if calls > 1 => None,
-                Err(_) => return Some(None),
+            (submitted, step, mark)
+        };
+        let nanos = match submitted {
+            Ok(spent) => spent,
+            Err(_) => {
+                parts.loader_word.end_step(step, mark);
+                // A refused call among several: those before it, and so the fence, were not all
+                // submitted, so the device waits for its queue rather than the fence.
+                return match calls > 1 {
+                    true => self.idle(parts).map(|_| None),
+                    false => Some(None),
+                };
             }
         };
-        // A refused call among several: those before it, and so the fence, were not all
-        // submitted, so the device waits for its queue rather than the fence.
-        let Some((nanos, step)) = nanos else {
-            return self.idle(parts).map(|_| None);
-        };
         let waited = self.wait(parts)?;
-        drop(step);
+        parts.loader_word.end_step(step, mark);
         if !waited {
             return Some(None);
         }
@@ -1523,15 +1528,27 @@ impl Objects {
     /// Wait until the first `VkQueue` is idle and reset the fence, after a refused call: `None`
     /// where the process is exiting.
     fn idle(&self, parts: &Parts) -> Option<()> {
+        let (step, mark) = {
+            let _busy = exit_guard::enter()?;
+            let raw = parts.vk();
+            // SAFETY: the queue is used under its lock, inside a section. The device's word is
+            // held from the wait's return across the relay's mark after it, taken inside the
+            // queue's lock, and where it was found overwritten through the wait for the mark, as
+            // a submission's is (`loader_word.rs`).
+            let use_queue = |queue: vk::Queue| unsafe {
+                let _ = raw.queue_wait_idle(queue);
+                parts.loader_word.held()
+            };
+            let (held, mark) =
+                (parts.queue_uses()).use_queue_kept(0, By::Checks, Uses::Unknown, true, use_queue);
+            exit_guard::called(Call::QueueWaitIdle);
+            // SAFETY: the device is live while its checks run.
+            (unsafe { parts.loader_word.step_hold(Some(held)) }, mark)
+        };
+        parts.loader_word.end_step(step, mark);
         let _busy = exit_guard::enter()?;
-        let raw = parts.vk();
-        // SAFETY: the queue is used under its lock, inside a section.
-        let _ = (parts.queue_uses()).use_queue(0, By::Checks, Uses::Unknown, |queue| unsafe {
-            raw.queue_wait_idle(queue)
-        });
-        exit_guard::called(Call::QueueWaitIdle);
         // SAFETY: no submission of the fence is pending once the queue is idle.
-        let _ = unsafe { raw.reset_fences(&[self.fence]) };
+        let _ = unsafe { parts.vk().reset_fences(&[self.fence]) };
         exit_guard::called(Call::ResetFences);
         Some(())
     }

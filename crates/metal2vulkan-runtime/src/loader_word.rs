@@ -25,7 +25,10 @@
 //! whose word was found overwritten, by a restore or as a step starts
 //! ([`DeviceWord::overwritten`], a fact of the device and never of its driver), the checks hold
 //! the lock across each whole step of theirs that makes no use of a queue (their objects' making
-//! and release) and from each submission through the wait for its completion, so the runtime's
+//! and release) and from each submission through the wait for its completion and, where the
+//! queue's failures are relayed, for the relay's mark after it ([`DeviceWord::end_step`]: the
+//! use's last submission on the queue, whose Metal command buffer completes after the check's
+//! own), so the runtime's
 //! loader-served calls on other threads may wait for one step of theirs, once, while they run
 //! (the checks run once per driver and runtime, for milliseconds); elsewhere the word never
 //! changes and they hold it across their submission calls alone. A narrower hold, around the
@@ -34,12 +37,15 @@
 //! so only keeping the checks' work out of flight while a loader-served call runs does. Seen on
 //! MoltenVK 1.4.2 with each activity logged at once, before the lock: the scheduler's
 //! `vkAllocateCommandBuffers` faulted reading the magic as its table while the submission checks
-//! submitted beside it (`runtime_lane::device_commands`, which passed before them), and still
-//! with the lock across their submission calls alone. A driver thread that writes the word on its
+//! submitted beside it (`runtime_lane::device_commands`, which passed before them), still with
+//! the lock across their submission calls alone, and still with it through the wait for a
+//! check's own fence alone, MoltenVK's message as the relay's mark completed coming after that
+//! wait. A driver thread that writes the word on its
 //! own for the program's work (a message from MoltenVK's completion handlers as one of the
 //! program's command buffers completes) is not held off.
 
 use crate::device::lock;
+use crate::device::relay::Mark;
 use ash::vk::{self, Handle};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Condvar, Mutex, PoisonError};
@@ -121,6 +127,9 @@ pub(super) struct DeviceWord {
     /// The steps of the runtime's own work held whole ([`DeviceWord::step_hold`]), for the tests.
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     steps_held: std::sync::atomic::AtomicU64,
+    /// The relay's marks the held steps waited for ([`DeviceWord::end_step`]), for the tests.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    marks_waited: std::sync::atomic::AtomicU64,
     /// The thread that holds the lock and how many holds it has.
     holder: Mutex<Option<(ThreadId, usize)>>,
     /// Signalled as the last hold goes.
@@ -156,6 +165,8 @@ impl DeviceWord {
             overwritten: AtomicBool::new(false),
             #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
             steps_held: std::sync::atomic::AtomicU64::new(0),
+            #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+            marks_waited: std::sync::atomic::AtomicU64::new(0),
             holder: Mutex::new(None),
             free: Condvar::new(),
         }
@@ -218,6 +229,36 @@ impl DeviceWord {
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     pub(crate) fn steps_held(&self) -> u64 {
         self.steps_held.load(Ordering::Relaxed)
+    }
+
+    /// The relay's marks the held steps waited for so far ([`DeviceWord::end_step`]).
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) fn marks_waited(&self) -> u64 {
+        self.marks_waited.load(Ordering::Relaxed)
+    }
+
+    /// The end of a step of the runtime's own work, `held` where it is held whole
+    /// ([`DeviceWord::step_hold`]), once the step's own waits for its submissions returned: a
+    /// held step first waits for `marks`, the relay's marks after its uses of a queue
+    /// (`device/relay.rs`), each the last submission of its use, so the lock goes only once
+    /// their Metal command buffers completed and MoltenVK named the device for them (the module
+    /// docs). The marks are let go either way; a wait that ends (the process exiting, a failed
+    /// wait) waits for no other.
+    pub(super) fn end_step<'m>(
+        &self,
+        held: Option<Held<'_>>,
+        marks: impl IntoIterator<Item = Mark<'m>>,
+    ) {
+        if held.is_some() {
+            for mark in marks {
+                #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+                self.marks_waited.fetch_add(1, Ordering::Relaxed);
+                if !mark.wait() {
+                    break;
+                }
+            }
+        }
+        drop(held);
     }
 
     /// A hold of the word's lock, for work of the runtime's own that makes the driver name the

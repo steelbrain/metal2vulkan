@@ -58,6 +58,10 @@ use std::collections::VecDeque;
 use std::ffi::{c_void, CStr};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
+/// The longest wait for a kept mark's fence inside one section of the exit guard.
+const WAIT_SLICE: Duration = Duration::from_millis(100);
 
 /// MoltenVK's setting that keeps a device after a command buffer fails (`MVKConfigMembers.def`:
 /// `resumeLostDevice`, a `VkBool32`).
@@ -221,7 +225,8 @@ pub(crate) enum By {
     Checks,
 }
 
-/// A submission in flight: the fence it signals, whose it is, and whether its call returned.
+/// A submission in flight: the fence it signals, whose it is, whether its call returned, and
+/// whether its use's caller keeps it.
 struct Flight {
     fence: vk::Fence,
     by: By,
@@ -229,6 +234,9 @@ struct Flight {
     /// submitting thread's (a submission's fence is externally synchronized, and a driver may
     /// signal it before the call returns), so no other thread reads, resets or gives it back.
     made: bool,
+    /// Whether the mark is kept for the caller of its use, which may wait for its fence
+    /// ([`Mark`]): until it lets go, no other thread resets or gives the fence back.
+    kept: bool,
 }
 
 /// One `VkQueue`'s submissions in flight, in submission order (the module docs).
@@ -272,7 +280,26 @@ impl Flights {
             fence,
             by,
             made: false,
+            kept: false,
         });
+    }
+
+    /// The mark of `fence` pushed last was [`made`](Self::made), and is kept for its use's
+    /// caller ([`Mark`]) from the same moment, so no other use takes it in between.
+    fn made_kept(&self, fence: vk::Fence) {
+        let mut log = lock(&self.log);
+        if let Some(flight) = log.iter_mut().rev().find(|flight| flight.fence == fence) {
+            flight.made = true;
+            flight.kept = true;
+        }
+    }
+
+    /// The caller of the kept mark of `fence` lets go of it: the next use takes it once done.
+    fn let_go_of_kept(&self, fence: vk::Fence) {
+        let mut log = lock(&self.log);
+        if let Some(flight) = log.iter_mut().find(|flight| flight.fence == fence) {
+            flight.kept = false;
+        }
     }
 
     /// The submission of `fence` pushed last was made: its call returned, and its fence may be
@@ -293,9 +320,10 @@ impl Flights {
     }
 
     /// The submissions through the one of the last of `fences` completed (their fences are
-    /// signaled, and every earlier submission's): they leave the log. The fences of the ones not
-    /// of a batch go onto `marks`, for the caller to reset and give back (a batch's goes back with
-    /// it).
+    /// signaled, and every earlier submission's): they leave the log, but for the marks kept for
+    /// their uses' callers ([`Mark`]), which stay at its front, signaled, until let go. The fences
+    /// of the others not of a batch go onto `marks`, for the caller to reset and give back (a
+    /// batch's goes back with it).
     pub(crate) fn settled(&self, fences: &[vk::Fence], marks: &mut Vec<vk::Fence>) {
         let mut log = lock(&self.log);
         let Some(through) = log
@@ -304,11 +332,17 @@ impl Flights {
         else {
             return;
         };
-        marks.extend(
-            log.drain(..=through)
-                .filter(|flight| !matches!(flight.by, By::Batch(_)))
-                .map(|flight| flight.fence),
-        );
+        let mut kept = Vec::new();
+        for flight in log.drain(..=through) {
+            match (&flight.by, flight.kept) {
+                (_, true) => kept.push(flight),
+                (By::Batch(_), false) => {}
+                (_, false) => marks.push(flight.fence),
+            }
+        }
+        for flight in kept.into_iter().rev() {
+            log.push_front(flight);
+        }
     }
 
     /// How many of the queue's submissions are in the log: made, and not yet seen complete.
@@ -322,14 +356,18 @@ impl Flights {
         lock(&self.log).retain(|flight| flight.fence != fence);
     }
 
-    /// The first submissions not of a batch whose calls returned and whose fences are signaled,
-    /// each before any other in the log: they leave it, and their fences are for the caller to
-    /// reset and give back. Inside a section of the exit guard.
+    /// The first submissions not of a batch whose calls returned, which no use's caller keeps and
+    /// whose fences are signaled, each before any other in the log: they leave it, and their
+    /// fences are for the caller to reset and give back. Inside a section of the exit guard.
     pub(crate) fn done_marks(&self) -> Vec<vk::Fence> {
         let mut log = lock(&self.log);
         let mut done = Vec::new();
         while let Some(front) = log.front() {
-            if matches!(front.by, By::Batch(_)) || !front.made || !self.signaled(front.fence) {
+            if matches!(front.by, By::Batch(_))
+                || !front.made
+                || front.kept
+                || !self.signaled(front.fence)
+            {
                 break;
             }
             done.extend(log.pop_front().map(|flight| flight.fence));
@@ -505,7 +543,7 @@ pub(crate) struct QueueUses<'a> {
     pub(crate) functions: &'a Functions,
 }
 
-impl QueueUses<'_> {
+impl<'a> QueueUses<'a> {
     /// [`DeviceShared::use_queue`](super::DeviceShared::use_queue), over what it reaches.
     pub(crate) fn use_queue<R>(
         &self,
@@ -514,12 +552,28 @@ impl QueueUses<'_> {
         uses: Uses,
         f: impl FnOnce(vk::Queue) -> R,
     ) -> R {
-        let slot = &self.queues[queue];
+        self.use_queue_kept(queue, by, uses, false, f).0
+    }
+
+    /// [`use_queue`](Self::use_queue), its mark, where `keep` asks and one was made, kept for
+    /// the caller until the [`Mark`] drops: a caller that holds the device's loader word through
+    /// its use's completion waits for the mark too (`loader_word.rs`), the use's last submission
+    /// on the queue, whose Metal command buffer MoltenVK names the device for as it completes.
+    pub(crate) fn use_queue_kept<R>(
+        &self,
+        queue: usize,
+        by: By,
+        uses: Uses,
+        keep: bool,
+        f: impl FnOnce(vk::Queue) -> R,
+    ) -> (R, Option<Mark<'a>>) {
+        let queues: &'a [super::QueueSlot] = self.queues;
+        let slot = &queues[queue];
         let flights = slot.flights.get();
         let parking = self.parking.filter(|_| matches!(by, By::Program));
         let checks = matches!(by, By::Checks);
         if flights.is_none() && parking.is_none() {
-            return match uses {
+            let used = match uses {
                 Uses::Unknown => slot.with(f),
                 Uses::OneSignalling => {
                     let (used, behind) = slot.with_counted(Caller::Work, |vk_queue, period| {
@@ -537,6 +591,7 @@ impl QueueUses<'_> {
                     used
                 }
             };
+            return (used, None);
         }
         let fence = flights.and_then(|flights| {
             exit_guard::enter().and_then(|_busy| {
@@ -567,7 +622,7 @@ impl QueueUses<'_> {
             });
             let used = f(vk_queue);
             let Some(_busy) = exit_guard::enter() else {
-                return used;
+                return (used, None);
             };
             let raw = self.functions.get();
             let logged = fence.zip(flights);
@@ -599,6 +654,10 @@ impl QueueUses<'_> {
                     unsafe { raw.queue_submit(vk_queue, submits, fence.unwrap_or_default()) };
                 exit_guard::called(Call::QueueSubmit);
                 if let (Ok(()), Some((fence, flights))) = (&submitted, logged) {
+                    if keep {
+                        flights.made_kept(fence);
+                        return (used, Some(Mark { flights, fence }));
+                    }
                     flights.made(fence);
                 }
                 if submitted.is_err() {
@@ -618,8 +677,56 @@ impl QueueUses<'_> {
                     }
                 }
             }
-            used
+            (used, None)
         })
+    }
+}
+
+/// The relay's mark after a use of a queue, kept for the use's caller
+/// ([`QueueUses::use_queue_kept`]): while it lives, no other use takes it from the log or resets
+/// its fence, so the caller may wait for it. Let go as it drops, for the next use to take.
+pub(crate) struct Mark<'a> {
+    flights: &'a Flights,
+    fence: vk::Fence,
+}
+
+impl Mark<'_> {
+    /// The mark's fence, for the tests.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) fn fence(&self) -> vk::Fence {
+        self.fence
+    }
+
+    /// Wait for the mark's submission to complete, a slice of [`WAIT_SLICE`] at a time, each
+    /// inside a section of the exit guard: whether it did (`false` once the process is exiting,
+    /// or where the wait failed).
+    pub(crate) fn wait(&self) -> bool {
+        loop {
+            let Some(_busy) = exit_guard::enter() else {
+                return false;
+            };
+            // SAFETY: the fence is the device's, in the log, its call made and the mark kept, so
+            // no thread resets or releases it.
+            let waited = unsafe {
+                (self.flights.functions.get()).wait_for_fences(
+                    &[self.fence],
+                    true,
+                    WAIT_SLICE.as_nanos() as u64,
+                )
+            };
+            exit_guard::called(Call::WaitForFences);
+            match waited {
+                Ok(()) => return true,
+                Err(vk::Result::TIMEOUT) => continue,
+                Err(_) => return false,
+            }
+        }
+    }
+}
+
+impl Drop for Mark<'_> {
+    fn drop(&mut self) {
+        self.flights.let_go_of_kept(self.fence);
     }
 }
 

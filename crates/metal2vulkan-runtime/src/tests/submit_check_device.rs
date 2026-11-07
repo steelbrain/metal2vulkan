@@ -233,8 +233,10 @@ fn immediate_tracking() -> Vec<LayerSetting> {
 /// its own, so neither recalls them): one made as ever, whose word nothing overwrites on any
 /// driver, which holds no step; and one made with MoltenVK's activities logged at once, which on
 /// MoltenVK names the device in each message, and holds every step after its word was found
-/// overwritten (its first steps among them, as the device's own calls found it so first).
-/// Printed (`LOADER-WORD`): each device's steps held and its checks' run.
+/// overwritten (its first steps among them, as the device's own calls found it so first), and,
+/// where its queue's failures are relayed, waits for the relay's marks after its submissions
+/// before it lets go (MoltenVK names the device as each mark completes too).
+/// Printed (`LOADER-WORD`): each device's steps held, the marks waited for and its checks' run.
 #[test]
 fn the_checks_hold_the_loader_word_across_steps_only_where_it_was_overwritten() {
     for immediate in [false, true] {
@@ -268,10 +270,13 @@ fn the_checks_hold_the_loader_word_across_steps_only_where_it_was_overwritten() 
         // SAFETY: the device is live.
         let overwritten = unsafe { word.overwritten() };
         let held = word.steps_held();
+        let marks = word.marks_waited();
+        let relayed = device.shared().flights(0).is_some();
         let counts = device.work_counts();
         println!(
             "LOADER-WORD on {}: MoltenVK {moltenvk}, activities logged at once {immediate}: \
-             overwritten {overwritten}, steps held {held}; checks run {}: {}",
+             overwritten {overwritten}, steps held {held}, relay's marks waited {marks} \
+             (relayed {relayed}); checks run {}: {}",
             device.name(),
             counts.submit_checks_run,
             device.submit_check_report()
@@ -293,5 +298,11 @@ fn the_checks_hold_the_loader_word_across_steps_only_where_it_was_overwritten() 
                 "a step was held on a device whose word nothing wrote"
             ),
         }
+        assert_eq!(
+            marks > 0,
+            overwritten && relayed,
+            "the held steps waited for the relay's marks elsewhere than where the word was \
+             overwritten and the queue relayed"
+        );
     }
 }
