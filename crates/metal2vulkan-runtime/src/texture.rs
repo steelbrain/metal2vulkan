@@ -132,7 +132,7 @@ use metal2vulkan::error::{
     Capability, Feature, LinearNeed, RuntimeDriverDefect, SparseNeed, Unsupported,
 };
 use metal2vulkan::metal::format::{
-    aspects, is_depth_stencil, ycbcr_format, ClearRoute, ExtendedRange,
+    aspects, is_depth_stencil, ycbcr_format, ClearRoute, ExtendedRange, FormatEmulation,
 };
 use metal2vulkan::metal::{PixelFormat, TextureType, TextureUsage};
 use metal2vulkan::vk::{
@@ -1727,6 +1727,13 @@ impl Device {
             || super::chroma_pairs::decode_of(&plan).is_some()
         {
             return Err(Error::NotImplemented(RuntimeGap::DecodedHeapTexture));
+        }
+        // A format held for copies alone (`metal::format::copies_only`): Metal's sparse tiles of
+        // one are not measured.
+        if plan.mapping.emulation == FormatEmulation::CopiesOnly {
+            return Err(Error::Unsupported(
+                Unsupported::not_implemented(Feature::Format).naming_format(pixel_format),
+            ));
         }
         let mask: vk::ImageAspectFlags = image_aspects(plan.format).into();
         let [width, height, depth] = layout.extent;

@@ -1,11 +1,12 @@
 //! What `heapTextureSizeAndAlignWithDescriptor:` counts, for the formats this crate holds no
-//! image of.
+//! image of, or holds for copies alone.
 //!
 //! The heap size query is **arithmetic over a descriptor**: how many bytes Metal's own layout
 //! takes for a texture of that shape, and at what alignment. It makes nothing and reads nothing.
 //! So a format can have a footprint this crate answers exactly while having no image this crate
-//! can make a texture, a view or a copy in: the two are different questions, and
-//! `repr`'s `NotImplemented` answers only the second.
+//! can make a texture, a view or a copy in, or an image of its bytes for copies alone
+//! ([`copies_only`](super::copies_only)) laid out otherwise than Metal's: the two are different
+//! questions, and `repr` answers only the second.
 //!
 //! [`footprint`] is the first question for the formats whose answer the format's own structure
 //! decides — its block's bytes and texel extent, and how many planes Metal lays its bytes in —
@@ -74,12 +75,13 @@ pub enum Footprint {
 
 /// Metal's footprint layout of `pf`, where the format's own structure decides it and no image of
 /// this crate does: the 26 formats Metal answers `heapTextureSizeAndAlignWithDescriptor:` for
-/// that `repr` holds no Vulkan candidate of (`formats_named_not_held!`). `None` for every other
-/// format, whose footprint its image decides.
+/// that `repr` holds no Vulkan candidate of (`formats_named_not_held!`) or holds for copies alone
+/// ([`copies_only`](super::copies_only)). `None` for every other format, whose footprint its
+/// image decides.
 ///
-/// This is **not** support for the format. A texture, a view, a copy, a read and a write of one
-/// stay refused `NotImplemented(Format)`, because this crate holds no image of it; a footprint is
-/// counted bytes, which needs none.
+/// This is **not** support for the format. A view, a read and a write of one stay refused
+/// `NotImplemented(Format)`, and a texture and a copy are refused too where this crate holds no
+/// image of it; a footprint is counted bytes, which needs none.
 pub fn footprint(pf: PixelFormat) -> Option<Footprint> {
     use PixelFormat as P;
     let tiled = |bytes| {

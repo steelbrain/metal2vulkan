@@ -269,9 +269,14 @@ pub(super) fn decode_of(plan: &ImagePlan) -> Option<PvrtcDecode> {
 
 /// The carrier's format of `texture`, whose bytes a carrier holds for copies alone: a PVRTC,
 /// ETC2 or EAC texture's blocks, or a 4:2:2 texture's texels (`chroma_pairs.rs`), without a
-/// decoded twin (the module docs, `etc.rs`); `None` for any other texture.
+/// decoded twin (the module docs, `etc.rs`), or the texels of a format the translator holds for
+/// copies alone (`metal::format::copies_only`), which nothing decodes; `None` for any other
+/// texture.
 pub(super) fn held_for_copies(texture: &Texture) -> Option<Format> {
     let plan = texture.image_plan().ok()?;
+    if plan.mapping.emulation == FormatEmulation::CopiesOnly {
+        return Some(plan.format);
+    }
     let carried = holds_blocks(plan)
         || super::etc::decode_of(plan).is_some()
         || super::chroma_pairs::holds_pairs(plan);

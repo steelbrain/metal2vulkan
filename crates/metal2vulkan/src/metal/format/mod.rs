@@ -212,6 +212,13 @@ pub enum FormatEmulation {
     /// Admitted for sampling only: Metal's functions do not write a compressed texture, and no
     /// pass renders into one.
     Decoded,
+    /// A format whose texture Metal makes and whose host copies and blits move its texels' bytes,
+    /// but whose reads, writes and renders this crate does not model ([`copies_only`]): each
+    /// texel's bytes held in the unsigned integer format of their size (`R16_UINT` or
+    /// `R32_UINT`), which copies move unchanged. Admitted for no usage, so a function's read,
+    /// write or render of such a texture, a view of it and a texel buffer of it stay refused
+    /// `NotImplemented(Format)`, and its image is made for copies alone.
+    CopiesOnly,
 }
 
 impl FormatEmulation {
@@ -271,6 +278,7 @@ impl FormatEmulation {
                 usage,
                 U::SampledImage | U::SampledImageFilterLinear | U::SampledImageFilterMinmax
             ),
+            FormatEmulation::CopiesOnly => false,
             FormatEmulation::StencilInCombined
             | FormatEmulation::DepthInCombined
             | FormatEmulation::DepthWidened => matches!(
@@ -1095,7 +1103,7 @@ fn decoded(block: vk::Format, twin: vk::Format) -> Repr {
 
 /// The pattern of the formats Metal names that this crate holds no texture of yet (`repr`'s
 /// `NotImplemented`): every raw value from 0 to 1100 a texture descriptor's description names on
-/// an Apple M4 under macOS 27.0.1 that no format above takes. Every Vulkan format of each is
+/// an Apple M4 under macOS 27.0.1 that no format above takes, nor [`copies_only`]. Every Vulkan format of each is
 /// refused `NotImplemented(Format)`, so the runtime refuses a texture of one, a view in one and a
 /// heap's size query for one where it plans the image, after the descriptor rules Metal stops for
 /// every format. Their reads, writes and samples are measured one family at a time before any is
@@ -1106,16 +1114,6 @@ macro_rules! formats_named_not_held {
             | PixelFormat::RGB8Snorm
             | PixelFormat::RGB8Uint
             | PixelFormat::RGB8Sint
-            // Its bytes are `ARGB8Unorm`'s, which this crate holds, but no Vulkan format
-            // applies the sRGB transfer function to the three channels Metal's does: every
-            // Vulkan `_SRGB` format encodes the three channels in the word's low bytes and
-            // leaves the fourth linear, and Metal's alpha is the low byte here. A view's
-            // component mapping cannot move the function, which format conversion applies
-            // before the swizzle, so an image of it would read Metal's alpha decoded and
-            // Metal's blue linear: two channels of four wrong, not a near-equivalent. Holding
-            // it needs an sRGB decode of the codes in the shader as the only read of it, which
-            // no view gives.
-            | PixelFormat::ARGB8UnormSRGB
             | PixelFormat::RGB16Unorm
             | PixelFormat::RGB16Snorm
             | PixelFormat::RGB16Uint
@@ -1125,31 +1123,12 @@ macro_rules! formats_named_not_held {
             | PixelFormat::RGB32Uint
             | PixelFormat::RGB32Sint
             | PixelFormat::RGB32Float
-            | PixelFormat::YCBCR84221P
-            | PixelFormat::YCBCR104441P
-            | PixelFormat::YCBCR84221PSRGB
-            | PixelFormat::YCBCR104441PSRGB
-            | PixelFormat::YCBCRA84441P
-            | PixelFormat::YCBCR84221PREV
-            | PixelFormat::YCBCR104441PPQ
-            | PixelFormat::RGB10A2UnormPQ
             | PixelFormat::R10UnormPACKED
             | PixelFormat::RG10UnormPACKED
-            | PixelFormat::YCBCR104441PXR
-            | PixelFormat::R12UnormX4
-            | PixelFormat::R12UnormX4PQ
-            | PixelFormat::RG12UnormX8
-            | PixelFormat::R10UnormX6PQ
-            | PixelFormat::YCBCR104441PHLG
-            | PixelFormat::R10UnormX6HLG
-            | PixelFormat::R12UnormX4HLG
-            | PixelFormat::RGB10A2UnormHLG
             | PixelFormat::RGB10A82P
             | PixelFormat::RGB10A82PSRGB
             | PixelFormat::RGB10A82PPQ
             | PixelFormat::RGB10A82PHLG
-            | PixelFormat::BGR10A2UnormSRGB
-            | PixelFormat::BGR10A2UnormPQ
             | PixelFormat::BGRA10UintPACKED
             | PixelFormat::BGRA10XRPACKED
             | PixelFormat::BGRA10XRPACKEDSRGB
@@ -1172,6 +1151,73 @@ macro_rules! formats_named_not_held {
             | PixelFormat::RG12UintPACKED
             | PixelFormat::RGB10A8Uint2P
     };
+}
+
+/// The pattern of the formats this crate holds for copies alone ([`FormatEmulation::CopiesOnly`],
+/// [`copies_only`]).
+macro_rules! formats_held_for_copies {
+    () => {
+        PixelFormat::ARGB8UnormSRGB
+            | PixelFormat::YCBCR84221P
+            | PixelFormat::YCBCR104441P
+            | PixelFormat::YCBCR84221PSRGB
+            | PixelFormat::YCBCR104441PSRGB
+            | PixelFormat::YCBCRA84441P
+            | PixelFormat::YCBCR84221PREV
+            | PixelFormat::YCBCR104441PPQ
+            | PixelFormat::YCBCR104441PXR
+            | PixelFormat::YCBCR104441PHLG
+            | PixelFormat::RGB10A2UnormPQ
+            | PixelFormat::RGB10A2UnormHLG
+            | PixelFormat::BGR10A2UnormSRGB
+            | PixelFormat::BGR10A2UnormPQ
+            | PixelFormat::R12UnormX4
+            | PixelFormat::R12UnormX4PQ
+            | PixelFormat::R12UnormX4HLG
+            | PixelFormat::RG12UnormX8
+            | PixelFormat::R10UnormX6PQ
+            | PixelFormat::R10UnormX6HLG
+    };
+}
+
+/// Whether this crate holds a texture of `pf` for copies alone ([`FormatEmulation::CopiesOnly`]):
+/// Apple's one-plane YCbCr formats (4:2:2 and 4:4:4, their `_sRGB`, reversed, PQ, HLG and
+/// extended-range forms), the padded 10- and 12-bit display formats not held otherwise
+/// (`R12Unorm_X4`, `RG12Unorm_X8` and the PQ and HLG forms of `R10Unorm_X6` and `R12Unorm_X4`),
+/// the transfer-function twins of `RGB10A2Unorm` and `BGR10A2Unorm` (`_PQ`, `_HLG`, `_sRGB`), and
+/// `ARGB8Unorm_sRGB`.
+///
+/// Measured on an Apple M3 Max under macOS 27.0.1, plain Metal (the `format-footprints-*`
+/// conformance recordings): `newTextureWithDescriptor:` makes a texture of each in every texture
+/// type its type rules take (`metal2vulkan-runtime`'s `texture_descriptor.rs`: no cube of a
+/// one-plane YCbCr format), in `Shared` and `Private` storage, and `replaceRegion:` and
+/// `getBytes:` move each texel's bytes unchanged, 2 or 4 a texel ([`footprint`]'s element), a
+/// fresh texture's reading zero; where Metal keeps the texture compressed (seven of the padded
+/// formats, 16 by 16 under `ShaderRead`) both host copies leave their destinations as they were,
+/// which the runtime does not follow (`docs/API.md`, accepted differences). What a function
+/// reads from one, which transfer function or chroma reconstruction it applies, is unmeasured:
+/// for `ARGB8Unorm_sRGB`, no Vulkan format applies the sRGB transfer to the three channels Metal's
+/// does (every `_SRGB` format encodes the word's low three and leaves the fourth linear, and
+/// Metal's alpha is the low byte here, which a view's swizzle cannot move: conversion runs before
+/// it), so its reads need a decode of the codes in the shader; the others' reads are not measured
+/// at all. So every use but a copy stays refused `NotImplemented(Format)`.
+pub fn copies_only(pf: PixelFormat) -> bool {
+    matches!(pf, formats_held_for_copies!())
+}
+
+/// [`copies_only`]'s candidate for `pf`: the unsigned integer format of its texel's bytes, the
+/// element [`footprint`] counts.
+fn copies_only_repr(pf: PixelFormat) -> Repr {
+    let bytes = match footprint(pf) {
+        Some(Footprint::Tiled { bytes, .. } | Footprint::OnePlane { bytes, .. }) => bytes,
+        _ => return Repr::NotImplemented,
+    };
+    let format = match bytes {
+        2 => vk::Format::R16_UINT,
+        4 => vk::Format::R32_UINT,
+        _ => return Repr::NotImplemented,
+    };
+    color(vec![combined(format, FormatEmulation::CopiesOnly)])
 }
 
 /// Whether a render pipeline on `profile` blends into a color attachment of `pf`, one of Apple's
@@ -1706,6 +1752,7 @@ fn make_repr(pf: PixelFormat) -> Repr {
             FormatEmulation::Decoded,
         )]),
         formats_named_not_held!() => Repr::NotImplemented,
+        formats_held_for_copies!() => copies_only_repr(pf),
         P::Depth16Unorm => Repr::Candidates(depth, vec![direct(F::D16_UNORM)]),
         P::Depth32Float => Repr::Candidates(
             depth,
@@ -2239,6 +2286,10 @@ pub fn sampled_type(pf: PixelFormat) -> Option<SampledType> {
     ) {
         return Some(SampledType::Float);
     }
+    // Nothing reads a texture held for copies alone ([`copies_only`]).
+    if candidates[0].emulation == FormatEmulation::CopiesOnly {
+        return None;
+    }
     numeric_type(candidates[0].format)
 }
 
@@ -2450,6 +2501,8 @@ pub(crate) fn out_of_bounds_alpha_one(pf: PixelFormat) -> Option<bool> {
         // Formats of which this crate holds no texture (`repr`'s `NotImplemented`).
         P::RGBA16FloatXR | P::AnyDepth | P::AnyStencil => return None,
         formats_named_not_held!() => return None,
+        // Nothing reads one (`copies_only`).
+        formats_held_for_copies!() => return None,
         // No alpha: a missing alpha reads 1.
         P::R10UnormX6 | P::RG10UnormX12 | P::R10UnormX6SRGB | P::RG10UnormX12SRGB => true,
         // The bfloat formats, by their channels.
@@ -2916,7 +2969,11 @@ fn held_storage_choice(
     // ([`writes_dropped`]), and a write-only slot of a format whose writes Metal stores into both
     // planes ([`ycbcr_writes_stored`]) writes the texture's write shadow (`bind::plan`); the other
     // 4:4:4 formats' writes, and a slot that reads and writes any of them, are not modelled.
-    if candidates[0].emulation == FormatEmulation::YCbCr {
+    // Nor does a function write a texture held for copies alone ([`copies_only`]).
+    if matches!(
+        candidates[0].emulation,
+        FormatEmulation::YCbCr | FormatEmulation::CopiesOnly
+    ) {
         return Err(Unsupported::not_implemented(Feature::Format).into());
     }
     // The first candidate is direct for every format but `ARGB8Unorm`'s, whose bytes the shader
