@@ -98,7 +98,7 @@ use crate::exit_guard::{self, Call};
 use crate::freed_memory::Parking;
 use crate::host_memory::Importer;
 use crate::in_place::DriverIdentity;
-use crate::loader_word::DeviceWord;
+use crate::loader_word::{DeviceWord, Held};
 use crate::recorder::{self, Command};
 use crate::release;
 use crate::shader_cache::store::{hex, Lookup, Store};
@@ -804,6 +804,12 @@ impl Parts {
         }
     }
 
+    /// A hold of the device's loader word across a step, where a restore found the word
+    /// overwritten (`loader_word.rs`): none elsewhere.
+    fn step_held(&self) -> Option<Held<'_>> {
+        (self.loader_word.overwritten()).then(|| self.loader_word.held())
+    }
+
     /// Whether the checks go on to their next step (the device's teardown stops them).
     fn goes_on(&self) -> bool {
         #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
@@ -1170,6 +1176,7 @@ impl<'p> Import<'p> {
         let Some(importer) = &parts.importer else {
             return Some(None);
         };
+        let _held = parts.step_held();
         let _busy = exit_guard::enter()?;
         let raw = parts.vk();
         // SAFETY: the pages are this process's, at a host page, whose size the import alignment
@@ -1261,6 +1268,7 @@ impl<'p> Import<'p> {
     /// Free it, inside a section: `None` where the process is exiting, the import then left to
     /// its end with its pages mapped.
     fn release(self, parts: &Parts) -> Option<()> {
+        let _held = parts.step_held();
         let _busy = exit_guard::enter()?;
         let raw = parts.vk();
         // SAFETY: no submission that names them is pending (each was waited for).
@@ -1289,6 +1297,7 @@ impl Objects {
     /// The objects, the empty command buffers recorded; `None` where a call was refused (what was
     /// made released) or the process is exiting.
     fn make(parts: &Parts) -> Option<Objects> {
+        let _held = parts.step_held();
         let _busy = exit_guard::enter()?;
         let raw = parts.vk();
         let info = vk::CommandPoolCreateInfo::default()
@@ -1375,7 +1384,8 @@ impl Objects {
             // recorded, ended and in no pending submission (each round waits for the last); the
             // fence is unsignaled and in no pending submission. The device's word is held across
             // the calls and the relay's mark after them (MoltenVK names the device as it logs
-            // each, `loader_word.rs`), taken inside the queue's lock, and let go before the wait.
+            // each, `loader_word.rs`), taken inside the queue's lock, and let go before the wait
+            // unless the word was found overwritten.
             let uses = parts.queue_uses();
             let (held, submitted) = uses.use_queue(0, By::Checks, Uses::Unknown, |queue| unsafe {
                 let held = parts.loader_word.held();
@@ -1405,21 +1415,25 @@ impl Objects {
                 }
                 (held, submitted.map(|()| spent))
             });
-            drop(held);
+            // Kept through the wait where the device's word was found overwritten: MoltenVK
+            // names the device as each Metal command buffer completes.
+            let step = parts.loader_word.overwritten().then_some(held);
             exit_guard::called(Call::QueueSubmit);
             parts.counts.submit_check_called(calls);
             match submitted {
-                Ok(spent) => Some(spent),
+                Ok(spent) => Some((spent, step)),
                 Err(_) if calls > 1 => None,
                 Err(_) => return Some(None),
             }
         };
         // A refused call among several: those before it, and so the fence, were not all
         // submitted, so the device waits for its queue rather than the fence.
-        let Some(nanos) = nanos else {
+        let Some((nanos, step)) = nanos else {
             return self.idle(parts).map(|_| None);
         };
-        if !self.wait(parts)? {
+        let waited = self.wait(parts)?;
+        drop(step);
+        if !waited {
             return Some(None);
         }
         Some(Some(i64::try_from(nanos.as_nanos()).unwrap_or(i64::MAX)))
@@ -1524,6 +1538,7 @@ impl Objects {
     /// exiting, the objects then left to its end). No submission naming them is pending: each
     /// was waited for.
     fn release(&self, parts: &Parts) -> bool {
+        let _held = parts.step_held();
         let Some(_busy) = exit_guard::enter() else {
             return false;
         };

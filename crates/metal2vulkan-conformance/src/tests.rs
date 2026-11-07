@@ -4423,6 +4423,13 @@ fn the_cost_half_reads_every_count_the_runtime_keeps() {
     assert!(crate::cost::excluded("row_copy_regions_most").is_some());
     assert!(crate::cost::excluded("batch_submit_nanos").is_some());
     assert!(crate::cost::excluded("queue_submissions").is_none());
+    for checks in [
+        "submit_check_calls",
+        "submit_checks_run",
+        "submit_checks_recalled",
+    ] {
+        assert!(crate::cost::excluded(checks).is_some(), "{checks}");
+    }
 }
 
 /// A field of the runtime's counts that is not a count fails the reading by name.

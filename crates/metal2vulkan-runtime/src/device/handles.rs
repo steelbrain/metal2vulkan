@@ -231,14 +231,17 @@ impl Device {
     /// command buffer read that object's own word: a queue's is put back by
     /// [`CommandQueue::with_vk_queue`](super::super::CommandQueue::with_vk_queue). `call` runs
     /// under the word's lock, which the runtime's own calls the loader serves take too, and its
-    /// submission checks' thread across its submissions (on MoltenVK, with each activity logged at
-    /// once, each names the device): none of them writes the word between this restore and the
-    /// loader's read. So `call` makes the loader's calls alone, and uses none of the runtime's
+    /// submission checks' thread across its submissions, and across each whole step of theirs on a
+    /// device whose word was found overwritten, the driver's completion of their submissions
+    /// included (on MoltenVK, with each activity logged at once, each names the device): none of
+    /// them writes the word between this restore and the loader's read, and `call` may wait for
+    /// one such step. So `call` makes the loader's calls alone, and uses none of the runtime's
     /// queues: a [`CommandQueue::with_vk_queue`](super::super::CommandQueue::with_vk_queue)
     /// inside it may wait for the checks' thread, which waits for `call`. A driver thread that
-    /// writes the word on its own between the restore and the loader's read (a message about the
-    /// device from MoltenVK's completion handlers) is not guarded against. On every other driver
-    /// the word never changes, and the restore writes nothing.
+    /// writes the word on its own between the restore and the loader's read for work other than
+    /// the checks' (a message about the device as one of the program's command buffers completes,
+    /// from MoltenVK's completion handlers) is not guarded against. On every other driver the
+    /// word never changes, and the restore writes nothing.
     pub fn with_loader_word<R>(&self, call: impl FnOnce() -> R) -> R {
         // SAFETY: the device is live while `self` is.
         unsafe { self.shared().loader_word.restored(call) }

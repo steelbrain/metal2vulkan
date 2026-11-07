@@ -74,9 +74,26 @@ const NOT_SUBTRACTABLE: [(&str, &str); 3] = [
     ("_nanos", "an accumulated time, which no count gate holds"),
 ];
 
+/// A prefix of the fields that count the device's own checks of its submissions (the runtime's
+/// `submit_check.rs`), with why the cost half does not read them. The checks run once per driver,
+/// release, kernel and runtime, on a thread of their own, as the first device of a run with no
+/// stored verdict is made, so inside whichever case met that device: seen on the M3 Max in a
+/// fresh workspace, `pass-bytes-srgb-decode-all-bytes` read 162 of their calls and their one run.
+/// Their work is counted apart from the device's, and none of it is a case's.
+const DEVICE_CHECKS: [(&str, &str); 1] = [(
+    "submit_check",
+    "the device's own submission checks' work, once per driver and release on a thread of its \
+     own, counted apart from the device's: never a case's",
+)];
+
 /// Whether `name` is a field the cost half reads, or why it is not.
 pub fn excluded(name: &str) -> Option<&'static str> {
     let head = name.split('.').next().unwrap_or(name);
+    for (prefix, why) in DEVICE_CHECKS {
+        if head.starts_with(prefix) {
+            return Some(why);
+        }
+    }
     for (suffix, why) in NOT_A_COUNT {
         if head.ends_with(suffix) {
             return Some(why);

@@ -15,9 +15,15 @@
 //!
 //! The device's word is a [`DeviceWord`]: each of the runtime's calls the loader serves puts it
 //! back and runs under its lock ([`DeviceWord::restored`]), and the runtime's own work that runs
-//! beside the program's and makes MoltenVK name the device (the submission checks' submissions,
-//! `submit_check.rs`) holds the lock across its calls ([`DeviceWord::held`]), so neither goes
-//! between the other's write and the loader's read. Seen on MoltenVK 1.4.2 with each activity
+//! beside the program's and makes MoltenVK name the device (the submission checks,
+//! `submit_check.rs`) holds the lock across its submission calls ([`DeviceWord::held`]), so
+//! neither goes between the other's write and the loader's read. MoltenVK names the device from
+//! its own threads too, as a submission's Metal command buffer completes, and at other calls than
+//! submissions: on a device whose word a restore found overwritten
+//! ([`DeviceWord::overwritten`]) the checks hold the lock across each whole step, the wait for
+//! their submissions' completion included, so the runtime's loader-served calls may wait for
+//! one step of theirs while they run; elsewhere the word never changes and they hold it across
+//! their submission calls alone. Seen on MoltenVK 1.4.2 with each activity
 //! logged at once, before the lock: the scheduler's `vkAllocateCommandBuffers` faulted reading
 //! the magic as its table while the checks submitted beside it (`runtime_lane::device_commands`,
 //! which passed before the checks). A driver thread that writes the word on its own (a message
@@ -25,6 +31,7 @@
 
 use crate::device::lock;
 use ash::vk::{self, Handle};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Condvar, Mutex, PoisonError};
 use std::thread::ThreadId;
 
@@ -67,17 +74,19 @@ impl LoaderWord {
         LoaderWord { entry, word }
     }
 
-    /// Put the recorded word back where the driver overwrote it.
+    /// Put the recorded word back where the driver overwrote it: whether it did.
     ///
     /// # Safety
     ///
     /// The handle is still live.
-    pub(super) unsafe fn restore(&self) {
+    pub(super) unsafe fn restore(&self) -> bool {
         // SAFETY: the caller's contract: the object is live, and its first entry is the loader's.
         unsafe {
-            if self.entry.read_volatile() != self.word {
+            let overwritten = self.entry.read_volatile() != self.word;
+            if overwritten {
                 self.entry.write_volatile(self.word);
             }
+            overwritten
         }
     }
 }
@@ -87,6 +96,8 @@ impl LoaderWord {
 /// `Device::device_proc_addr` inside its `Device::with_loader_word`).
 pub(super) struct DeviceWord {
     word: LoaderWord,
+    /// Whether a restore found the word overwritten: the driver names the device in its messages.
+    overwritten: AtomicBool,
     /// The thread that holds the lock and how many holds it has.
     holder: Mutex<Option<(ThreadId, usize)>>,
     /// Signalled as the last hold goes.
@@ -119,6 +130,7 @@ impl DeviceWord {
         DeviceWord {
             // SAFETY: the caller's.
             word: unsafe { LoaderWord::of_device(device) },
+            overwritten: AtomicBool::new(false),
             holder: Mutex::new(None),
             free: Condvar::new(),
         }
@@ -133,15 +145,25 @@ impl DeviceWord {
     pub(super) unsafe fn restored<R>(&self, call: impl FnOnce() -> R) -> R {
         let _held = self.held();
         // SAFETY: the caller's contract.
-        unsafe { self.word.restore() };
+        if unsafe { self.word.restore() } {
+            self.overwritten.store(true, Ordering::Relaxed);
+        }
         call()
+    }
+
+    /// Whether a restore found the word overwritten: on such a device the runtime's own work
+    /// beside the program's holds the lock across its whole steps, the driver's completion of its
+    /// submissions included (the module docs).
+    pub(super) fn overwritten(&self) -> bool {
+        self.overwritten.load(Ordering::Relaxed)
     }
 
     /// A hold of the word's lock, for work of the runtime's own that makes the driver name the
     /// device in a message and so write over the word, while it runs beside the program's: none
     /// of the runtime's calls the loader serves is between its restore and its read meanwhile.
-    /// Held across calls into the driver alone, never across a wait for the GPU; taken inside a
-    /// queue's lock, never before one (a program's use of the queue may call
+    /// Held across calls into the driver, and across a wait for the GPU only on a device whose
+    /// word was found [`overwritten`](DeviceWord::overwritten); taken inside a queue's lock or
+    /// with none held, never before taking one (a program's use of the queue may call
     /// [`DeviceWord::restored`] under it).
     pub(super) fn held(&self) -> Held<'_> {
         let me = std::thread::current().id();
