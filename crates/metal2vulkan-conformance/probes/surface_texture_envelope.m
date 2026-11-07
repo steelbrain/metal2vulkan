@@ -1,8 +1,9 @@
 // Which bytes of an IOSurface a texture over one of its planes reads and writes, for the textures
 // Metal makes there beyond a 2D texture of one level whose rows lie inside the plane: rows wider
 // than the plane's `bytesPerRow`, more rows than the plane has, more than one mip level, a type
-// other than 2D (1D, 2D array, 3D, cube, texture buffer, 2D multisample), Private storage, and
-// block-compressed formats (BC1, BC7) over a surface's rows.
+// other than 2D (1D, 2D array, 3D, cube, cube array, texture buffer, 2D multisample), Private
+// storage, block-compressed formats (BC1, BC7) over a surface's rows, and a texture buffer or BC1
+// over a plane at an offset of 8 or of 264 bytes a row (off 16).
 //
 // The reims-vgpu oracle (`oracle_surftex`, its Q20) records only that Metal makes these on an AMD
 // 5300M and an Intel UHD 630 under macOS 26.7.1, and all but the cube and the BC ones on an Apple
@@ -280,8 +281,9 @@ static void report_changes(const char *what, const uint8_t *surface, uint64_t le
 	}
 }
 
-enum Surface { kBGRA, kBGRAPad, kBGRA1, kBGRA1x2, k420v };
-static const char *const kSurfaceNames[] = {"bgra", "bgrapad", "bgra1", "bgra1x2", "420v"};
+enum Surface { kBGRA, kBGRAPad, kBGRA1, kBGRA1x2, k420v, kBGRAAt8, kBGRARow264 };
+static const char *const kSurfaceNames[] = {"bgra",    "bgrapad", "bgra1",     "bgra1x2",
+                                            "420v",    "bgraat8", "bgrarow264"};
 enum { kSize = 64, kDefault = -1 };
 
 struct Shape {
@@ -341,6 +343,7 @@ static const struct Shape kShapes[] = {
     ST("bgra1x2.3d.d2", kBGRA1x2, 0, BGRA8, MTLTextureType3D, 64, 32, 2, 1, 1, 1),
     ST("420v.p0.3d.d2", k420v, 0, R8, MTLTextureType3D, 64, 32, 2, 1, 1, 1),
     ST("bgra1x2.cube.16", kBGRA1x2, 0, BGRA8, MTLTextureTypeCube, 16, 16, 1, 1, 1, 1),
+    ST("bgra1x2.cubearray.16", kBGRA1x2, 0, BGRA8, MTLTextureTypeCubeArray, 16, 16, 1, 1, 1, 1),
     ST("bgra1x2.texbuf.64", kBGRA1x2, 0, BGRA8, MTLTextureTypeTextureBuffer, 64, 1, 1, 1, 1, 1),
     ST("bgra1x2.texbuf.128", kBGRA1x2, 0, BGRA8, MTLTextureTypeTextureBuffer, 128, 1, 1, 1, 1,
        1),
@@ -372,11 +375,27 @@ static const struct Shape kShapes[] = {
     S("bgra1x2.bc7", kBGRA1x2, 0, BC7, 64, 64),
     S("420v.p0.bc1.16x64", k420v, 0, BC1, 16, 64),
     S("420v.p1.bc1.16x32", k420v, 1, BC1, 16, 32),
+    // A plane of one plane dictionary at an offset off 16, and one of rows off 16: the 2D
+    // texture (a control the runtime makes at any offset and pitch), a texture buffer and BC1.
+    S("bgraat8.base", kBGRAAt8, 0, BGRA8, 64, 64),
+    ST("bgraat8.texbuf.64", kBGRAAt8, 0, BGRA8, MTLTextureTypeTextureBuffer, 64, 1, 1, 1, 1, 1),
+    ST("bgraat8.texbuf.128", kBGRAAt8, 0, BGRA8, MTLTextureTypeTextureBuffer, 128, 1, 1, 1, 1,
+       1),
+    S("bgraat8.bc1", kBGRAAt8, 0, BC1, 64, 64),
+    S("bgrarow264.base", kBGRARow264, 0, BGRA8, 64, 64),
+    ST("bgrarow264.texbuf.64", kBGRARow264, 0, BGRA8, MTLTextureTypeTextureBuffer, 64, 1, 1, 1,
+       1, 1),
+    ST("bgrarow264.texbuf.128", kBGRARow264, 0, BGRA8, MTLTextureTypeTextureBuffer, 128, 1, 1,
+       1, 1, 1),
+    S("bgrarow264.bc1", kBGRARow264, 0, BC1, 64, 64),
     // Past the surface's end (`--hazard` only, by the count above).
     S("bgra1.64x65", kBGRA1, 0, BGRA8, 64, 65),
     S("bgra1.64x128", kBGRA1, 0, BGRA8, 64, 128),
     ST("bgra1.mips2", kBGRA1, 0, BGRA8, T2D, 64, 64, 1, 1, 2, 1),
     S("420v.p1.32x512", k420v, 1, RG8, 32, 512),
+    // A texture buffer and a 1D texture past the surface's end.
+    ST("bgra1.texbuf.4160", kBGRA1, 0, BGRA8, MTLTextureTypeTextureBuffer, 4160, 1, 1, 1, 1, 1),
+    ST("bgra1.1d.4160", kBGRA1, 0, BGRA8, MTLTextureType1D, 4160, 1, 1, 1, 1, 1),
 };
 enum { kShapeCount = sizeof kShapes / sizeof kShapes[0] };
 
@@ -424,10 +443,10 @@ static IOSurfaceRef flat_surface(int bytes_per_row)
 	return IOSurfaceCreate((__bridge CFDictionaryRef)props);
 }
 
-// A 'BGRA' surface of one plane dictionary, 64 x 64 at 256 bytes a row, in `alloc` bytes.
-static IOSurfaceRef one_plane_surface(size_t alloc)
+// A 'BGRA' surface of one plane dictionary, 64 x 64 at `row` bytes a row from `offset`, in
+// `alloc` bytes.
+static IOSurfaceRef plane_surface_at(size_t alloc, size_t offset, size_t row)
 {
-	const size_t row = kSize * 4;
 	NSDictionary *props = @{
 		(id)kIOSurfaceWidth : @(kSize),
 		(id)kIOSurfaceHeight : @(kSize),
@@ -438,11 +457,17 @@ static IOSurfaceRef one_plane_surface(size_t alloc)
 			(id)kIOSurfacePlaneHeight : @(kSize),
 			(id)kIOSurfacePlaneBytesPerElement : @4,
 			(id)kIOSurfacePlaneBytesPerRow : @(row),
-			(id)kIOSurfacePlaneOffset : @0,
+			(id)kIOSurfacePlaneOffset : @(offset),
 			(id)kIOSurfacePlaneSize : @(row * kSize),
 		} ],
 	};
 	return IOSurfaceCreate((__bridge CFDictionaryRef)props);
+}
+
+// A 'BGRA' surface of one plane dictionary, 64 x 64 at 256 bytes a row, in `alloc` bytes.
+static IOSurfaceRef one_plane_surface(size_t alloc)
+{
+	return plane_surface_at(alloc, 0, kSize * 4);
 }
 
 static IOSurfaceRef make_surface(enum Surface surface, CVPixelBufferRef *keep)
@@ -456,6 +481,10 @@ static IOSurfaceRef make_surface(enum Surface surface, CVPixelBufferRef *keep)
 		return one_plane_surface(kSize * 4 * kSize);
 	case kBGRA1x2:
 		return one_plane_surface(2 * kSize * 4 * kSize);
+	case kBGRAAt8:
+		return plane_surface_at(2 * kSize * 4 * kSize, 8, kSize * 4);
+	case kBGRARow264:
+		return plane_surface_at(2 * kSize * 4 * kSize, 0, 264);
 	case k420v: {
 		NSDictionary *attrs = @{(id)kCVPixelBufferIOSurfacePropertiesKey : @{}};
 		if (CVPixelBufferCreate(kCFAllocatorDefault, kSize, kSize, '420v',
@@ -520,6 +549,9 @@ static struct Extent level_extent(const struct Shape *c, int level)
 	case MTLTextureTypeCube:
 		e.slices = 6;
 		break;
+	case MTLTextureTypeCubeArray:
+		e.slices = 6 * (uint64_t)c->array;
+		break;
 	case MTLTextureType3D:
 		e.slices = (uint64_t)c->depth >> level ? (uint64_t)c->depth >> level : 1;
 		break;
@@ -574,6 +606,10 @@ static NSString *const kSource =
     @"kernel void rcube(texturecube<float, access::read> t [[texture(0)]], device uchar4 *o "
     @"[[buffer(0)]], constant P &p [[buffer(1)]], uint2 g [[thread_position_in_grid]]) {\n"
     @"  if (g.x < p.w && g.y < p.h) o[g.y * p.w + g.x] = q(t.read(g, p.slice, p.level)); }\n"
+    @"kernel void rcubea(texturecube_array<float, access::read> t [[texture(0)]], device uchar4 "
+    @"*o [[buffer(0)]], constant P &p [[buffer(1)]], uint2 g [[thread_position_in_grid]]) {\n"
+    @"  if (g.x < p.w && g.y < p.h) o[g.y * p.w + g.x] = q(t.read(g, p.slice % 6, p.slice / 6, "
+    @"p.level)); }\n"
     @"kernel void r1d(texture1d<float, access::read> t [[texture(0)]], device uchar4 *o "
     @"[[buffer(0)]], constant P &p [[buffer(1)]], uint2 g [[thread_position_in_grid]]) {\n"
     @"  if (g.x < p.w && g.y == 0) o[g.x] = q(t.read(g.x)); }\n"
@@ -599,6 +635,8 @@ static const char *kernel_for(MTLTextureType type)
 		return "r3d";
 	case MTLTextureTypeCube:
 		return "rcube";
+	case MTLTextureTypeCubeArray:
+		return "rcubea";
 	case MTLTextureTypeTextureBuffer:
 		return "rbuf";
 	case MTLTextureType2DMultisample:
