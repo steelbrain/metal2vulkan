@@ -32,19 +32,19 @@ Its limits, measured rather than asserted:
 
 | | |
 |---|---|
-| implemented Metal items | 977 |
+| implemented Metal items | 978 |
 | of those, unreachable: `objc2-metal` binds no name for them | 3 |
-| so reachable by some case | 974 |
-| of the reachable, exercised by the suite's Metal leg | 812 |
+| so reachable by some case | 975 |
+| of the reachable, exercised by the suite's Metal leg | 813 |
 | of the reachable, not exercised | 162 |
 | share of the reachable exercised | 83% |
-| of those exercised, no case reaching it loosens anything | 571 |
+| of those exercised, no case reaching it loosens anything | 572 |
 | of those exercised, a case reaching it loosens some site | 241 |
 | case modules | 159 |
 | committed recordings | 1229 |
 | distinct SDK items the Metal leg reaches, of any status | 820 |
 | of those, reached only where this cannot name the family | 3 |
-| ledger rows (a case whose gap is recorded) | 2598 |
+| ledger rows (a case whose gap is recorded) | 2596 |
 | declared crossings of the option space (pairs put to Metal at once) | 26 |
 | declared crossings that are no pair of it (a boolean or numeric field, or one type in two slots) | 30 |
 
@@ -404,7 +404,7 @@ Every container with an implemented item, by how much of it the suite reaches. *
 | `MTLArrayType` | 9 | 0 | 9 | 0 | `fragment_imageblock_reflection`, `function_bindings`, `mesh_pipeline_reflection`, `pipeline_option_reflection`… |
 | `MTLAttribute` | 7 | 0 | 7 | 0 | `function_facts`, `library_facts` |
 | `MTLAttributeDescriptor` | 4 | 0 | 4 | 0 | `attribute_formats`, `attribute_strides`, `blit_indirect_commands`, `indirect_command_depth`… |
-| `MTLBinaryArchive` | 7 | 0 | 7 | 0 | `binary_archives` |
+| `MTLBinaryArchive` | 8 | 0 | 8 | 0 | `binary_archives` |
 | `MTLBinaryArchiveDescriptor` | 2 | 0 | 2 | 0 | `binary_archives` |
 | `MTLBinding` | 7 | 0 | 7 | 0 | `fragment_imageblock_reflection`, `function_bindings`, `mesh_pipeline_reflection`, `pipeline_option_reflection`… |
 | `MTLBlitCommandEncoder` | 22 | 0 | 22 | 0 | `blend_interactions`, `blend_sweeps`, `blit_encoder_commands`, `blit_indirect_commands`… |
@@ -490,7 +490,7 @@ A container is one Objective-C type; the SDK header it sits in is the family of 
 | `MTLSampler.h` | 19 | 18 | 1 |
 | `MTLAllocation.h` | 1 | 1 | 0 |
 | `MTLArgumentEncoder.h` | 23 | 23 | 0 |
-| `MTLBinaryArchive.h` | 9 | 9 | 0 |
+| `MTLBinaryArchive.h` | 10 | 10 | 0 |
 | `MTLBlitCommandEncoder.h` | 22 | 22 | 0 |
 | `MTLCommandBuffer.h` | 21 | 21 | 0 |
 | `MTLCommandEncoder.h` | 2 | 2 | 0 |
@@ -562,7 +562,7 @@ Each case module: the cases it holds, the `Side` methods it calls, and how many 
 | `astc_textures` | 42 | 42 | 1 tolerance(s): `Degradation` | 43 |
 | `attribute_formats` | 2 | 2 | every field | 48 |
 | `attribute_strides` | 4 | 4 | every field | 51 |
-| `binary_archives` | 6 | 6 | every field | 40 |
+| `binary_archives` | 6 | 6 | every field | 41 |
 | `blend_interactions` | 4 | 4 | every field | 125 |
 | `blend_sweeps` | 12 | 12 | every field | 125 |
 | `blit_encoder_commands` | 9 | 9 | every field | 64 |
@@ -859,6 +859,7 @@ One row per implemented item of the SDK, in the coverage map's order. *exercised
 | `addComputePipelineFunctionsWithDescriptor:error:` | yes | `binary_archives` | 6 |
 | `addRenderPipelineFunctionsWithDescriptor:error:` | yes | `binary_archives` | 6 |
 | `addTileRenderPipelineFunctionsWithDescriptor:error:` | yes | `binary_archives` | 6 |
+| `addMeshRenderPipelineFunctionsWithDescriptor:error:` | yes | `binary_archives` | 6 |
 | `serializeToURL:error:` | yes | `binary_archives` | 6 |
 
 ### `MTLBinaryArchiveDescriptor`
@@ -2190,7 +2191,6 @@ An item the suite's Metal leg calls whose coverage-map status is not implemented
 |---|---|---|---|
 | `MTL4ComputeCommandEncoder` `stages` | missing | Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) | `visible_tables` |
 | `MTL4LibraryDescriptor` `source` | missing | Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) | `binary_archives`, `blit_encoder_commands`, `buffer_blits`, `buffer_depth_samples`, `buffer_texture_blits`, `buffer_textures`, `chroma_pairs`, `compressed_blits`, `compressed_moves`, `compressed_views`, `dynamic_libraries`, `format_copies`, `fresh_contents`, `pvrtc_cpu_order`, `pvrtc_rows`, `texture_fills`, `two_plane_copies`, `two_plane_heap_blits` |
-| `MTLBinaryArchive` `addMeshRenderPipelineFunctionsWithDescriptor:error:` | missing | a mesh pipeline's functions in a binary archive | `binary_archives` |
 | `MTLDevice` `newLibraryWithURL:error:` | missing | a metallib read from a file URL | `alpha_coverage_pairs`, `argument_encoder_crossings`, `argument_encoders`, `astc_textures`, `attribute_formats`, `attribute_strides`, `binary_archives`, `blend_interactions`, `blend_sweeps`, `blit_encoder_commands`, `blit_indirect_commands`, `border_swizzles`, `buffer_blits`, `buffer_depth_samples`, `buffer_texture_blits`, `buffer_textures`, `chroma_pairs`, `color_write_masks`, `compressed_blits`, `compressed_decode`, `compressed_moves`, `compressed_views`, `compute_encoder_commands`, `compute_heap_residency`, `compute_pipeline_descriptors`, `compute_render_chains`, `compute_threadgroups`, `denormal_word_fetches`, `depth_resolve_pairs`, `depth_stencil_space`, `depth_texel_reads`, `discard_hoist`, `draw_state_changes`, `dynamic_libraries`, `etc_textures`, `extended_range_blends`, `extended_range_gamut`, `extended_range_gradients`, `extended_range_planes`, `extended_range_targets`, `extended_range_two_planes`, `extended_swizzles`, `fetch_ordered`, `format_copies`, `fragment_imageblock_reflection`, `frame_chains`, `fresh_contents`, `function_bindings`, `function_facts`, `half_output_blends`, `half_read_nans`, `half_storage_writes`, `half_texel_nans`, `half_write_nans`, `host_page_writes`, `indirect_command_depth`, `indirect_commands`, `int_attributes`, `layered_targets`, `level_sizes`, `library_facts`, `math_routines`, `mesh_barriers`, `mesh_commands`, `mesh_draws`, `mesh_partial_barriers`, `mesh_pipeline_descriptors`, `mesh_pipeline_reflection`, `nearest_positions`, `norm_storage_writes`, `pass_attachment_pairs`, `pass_bound_pairs`, `pass_bytes`, `pass_sequence_actions`, `pass_start_reads`, `pipeline_descriptors`, `pipeline_facts`, `pipeline_functions`, `pipeline_handlers`, `pipeline_limits`, `pipeline_option_reflection`, `pipeline_options`, `pixel_downscales`, `pixel_samplers`, `pvrtc_cpu_order`, `pvrtc_rows`, `read_write_tiers`, `render_chains`, `render_depth_stencil_state`, `render_draw_forms`, `render_residency`, `render_state`, `rgb10a2_srgb`, `rotated_planes`, `rotated_targets`, `sample_positions`, `sampler_crossings`, `sampler_filtering`, `shader_stencil`, `shared_exponent_storage`, `simdgroup_lockstep`, `snorm_tile_store`, `srgb_fetch`, `stage_in_regions`, `stage_in_unread`, `stencil_resolve_pairs`, `stencil_resolved_sample`, `swizzled_storage`, `tessellation_crossings`, `tessellation_sweeps`, `texel_swizzles`, `texture_accesses`, `texture_fills`, `tile_pipeline_descriptors`, `tile_pipeline_reflection`, `tile_threadgroups`, `topology_classes`, `two_plane_copies`, `two_plane_heap_blits`, `two_plane_samples`, `vertex_attribute_strides`, `vertex_formats`, `visibility`, `visible_tables`, `wide_int_attributes`, `wide_points`, `ycbcr_gathers`, `ycbcr_minify`, `ycbcr_textures` |
 | `MTLDevice` `newTextureWithDescriptor:iosurface:plane:` | out of scope | IOSurface is the consumer's; the runtime offers the plane over a no-copy buffer | `alpha_coverage_pairs`, `blend_interactions`, `blend_sweeps`, `buffer_target_clears`, `color_write_masks`, `compute_render_chains`, `depth_resolve_pairs`, `depth_stencil_space`, `discard_hoist`, `draw_state_changes`, `extended_range_blends`, `extended_range_gamut`, `extended_range_gradients`, `extended_range_targets`, `fetch_ordered`, `frame_chains`, `half_output_blends`, `host_page_writes`, `indirect_command_depth`, `indirect_commands`, `layered_targets`, `pass_attachment_pairs`, `pass_bound_pairs`, `pass_sequence_actions`, `pass_start_reads`, `primitive_type_crossings`, `render_chains`, `render_depth_stencil_state`, `render_draw_forms`, `render_residency`, `render_state`, `rotated_planes`, `rotated_targets`, `sample_positions`, `shader_stencil`, `snorm_tile_store`, `srgb_fetch`, `stencil_resolve_pairs`, `stencil_resolved_sample`, `topology_classes`, `visibility`, `wide_points`, `ycbcr_gathers`, `ycbcr_minify`, `ycbcr_textures` |
 
@@ -2238,8 +2238,6 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `discard-quad-sum-placement` | Metal counts the quads the discard drops whole in a simdgroup sum that sits ahead of the discard for a measured reason -- the discard's condition reads the sum … |
 | `discard-quad-sum-placement` | Metal counts the quads the discard drops whole in a simdgroup sum that sits ahead of the discard for a measured reason -- the discard's condition reads the sum … |
 | `argb8-targets-destination-alpha` | Plain Metal on this M3 Max makes and runs a render pipeline whose ARGB8Unorm colour attachment blends with DestinationAlpha and OneMinusDestinationAlpha in the … |
-| `binary-archive-mesh-adder` | `BinaryArchive` has three of Metal's four pipeline adders: `addMeshRenderPipelineFunctionsWithDescriptor:error:` has no counterpart at all. Metal takes the call… |
-| `binary-archive-sources` | Metal accepts a **metallib** as a binary archive and we refuse it. Measured on this M3 Max (macOS 27.0.1) from this case's own committed recording over three ru… |
 | `format-footprints-plain-stragglers` | Plain Metal makes a texture of `ARGB8Unorm_sRGB` in all eight non-multisample texture types and takes a host `replaceRegion:`/`getBytes:` round trip through eac… |
 | `format-footprints-one-plane-ycbcr` | The runtime answers Metal's heap footprint for Apple's nine one-plane YCbCr formats, which is arithmetic over a descriptor, but holds no image of any of them, s… |
 | `format-footprints-padded-wide-channels` | The runtime answers Metal's heap footprint for the ten padded 10- and 12-bit display formats, which is arithmetic over a descriptor, but holds no image of any o… |

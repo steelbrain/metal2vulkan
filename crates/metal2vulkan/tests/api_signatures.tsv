@@ -7676,6 +7676,7 @@ method	metal2vulkan-runtime::ArgumentEncoder::set_textures	pub fn set_textures(&
 method	metal2vulkan-runtime::ArgumentEncoder::set_visible_function_table	pub fn set_visible_function_table(&self, table: Option<&VisibleFunctionTable>, index: u32) -> Result<(), Error>
 method	metal2vulkan-runtime::ArgumentEncoder::set_visible_function_tables	pub fn set_visible_function_tables(&self, tables: &[Option<&VisibleFunctionTable>], first: u32) -> Result<(), Error>
 method	metal2vulkan-runtime::BinaryArchive::add_compute_pipeline_functions	pub fn add_compute_pipeline_functions(&self, descriptor: &ComputePipelineDescriptor) -> Result<(), Error>
+method	metal2vulkan-runtime::BinaryArchive::add_mesh_render_pipeline_functions	pub fn add_mesh_render_pipeline_functions(&self, descriptor: &MeshPipelineDescriptor) -> Result<(), Error>
 method	metal2vulkan-runtime::BinaryArchive::add_render_pipeline_functions	pub fn add_render_pipeline_functions(&self, descriptor: &RenderPipelineDescriptor) -> Result<(), Error>
 method	metal2vulkan-runtime::BinaryArchive::add_tile_render_pipeline_functions	pub fn add_tile_render_pipeline_functions(&self, descriptor: &TileRenderPipelineDescriptor) -> Result<(), Error>
 method	metal2vulkan-runtime::BinaryArchive::device	pub fn device(&self) -> &Device

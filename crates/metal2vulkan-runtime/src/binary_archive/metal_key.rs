@@ -50,6 +50,16 @@
 //!   combines two adds' stages; that creation announces `combined-archive-stages`, since Metal
 //!   misses it where the two fragments read different outputs. Where the key's answer makes the
 //!   runtime miss and Metal hit, the creation is refused.
+//! - **Mesh** (not measured: no probe has asked which of a mesh descriptor's fields Metal keys).
+//!   One key of every field the descriptor holds: the object, mesh and fragment stages, each as a
+//!   stage (its function, constants and linked functions), each color attachment with a pixel
+//!   format as the render fragment key holds it, the depth and stencil formats, the raster
+//!   sample count, rasterization, alpha to coverage and to one, the texture write rounding mode,
+//!   `support_indirect_command_buffers`, both threadgroup maxima, the mesh-grid maximum, both
+//!   multiple-of-execution-width flags, the payload length, the vertex amplification count and
+//!   both required threadgroup sizes. So a creation hits only an add of an equal descriptor,
+//!   where Metal's hits too, and one that differs from every add in a field Metal does not key
+//!   misses here where Metal's may hit.
 //! - **Dynamic libraries** (probes, an M3 Max and an M4). Neither a stage's preloaded libraries
 //!   (used or not, in any order, of any contents or install name) nor the contents of the libraries
 //!   its install names load are in its key: a dependency's file replaced hits, and the creation
@@ -74,10 +84,10 @@ use metal2vulkan::metal::{
     AttributeFormat, Mutability, PixelFormat, PrimitiveTopologyClass, VertexFormat,
 };
 use metal2vulkan::pipeline::{
-    ComputePipelineDescriptor, LinkedFunction, LinkedFunctions, RenderPipelineDescriptor,
-    StageInputAttributeDescriptor, StageInputDescriptor, StageInputLayoutDescriptor, StageSource,
-    TileRenderPipelineDescriptor, VertexAttributeDescriptor, VertexBufferLayoutDescriptor,
-    VertexDescriptor,
+    ColorAttachmentDescriptor, ComputePipelineDescriptor, LinkedFunction, LinkedFunctions,
+    MeshPipelineDescriptor, RenderPipelineDescriptor, StageInputAttributeDescriptor,
+    StageInputDescriptor, StageInputLayoutDescriptor, StageSource, TileRenderPipelineDescriptor,
+    VertexAttributeDescriptor, VertexBufferLayoutDescriptor, VertexDescriptor,
 };
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
@@ -189,31 +199,7 @@ pub(crate) fn render(profile: &Hash256, descriptor: &RenderPipelineDescriptor) -
         let mut key = Key::new(b"render fragment", profile);
         key.stage(fragment);
         vertex_descriptor(&mut key, descriptor.vertex_descriptor.as_ref());
-        for (index, attachment) in (0u32..).zip(&descriptor.color_attachments) {
-            let Some(attachment) = attachment else {
-                continue;
-            };
-            if attachment.pixel_format == PixelFormat::Invalid {
-                continue;
-            }
-            key.u32(index);
-            key.u32(attachment.pixel_format.as_raw());
-            key.u32(attachment.write_mask.as_raw());
-            key.flag(attachment.blending_enabled);
-            if attachment.blending_enabled {
-                for raw in [
-                    attachment.source_rgb_blend_factor.as_raw(),
-                    attachment.destination_rgb_blend_factor.as_raw(),
-                    attachment.rgb_blend_operation.as_raw(),
-                    attachment.source_alpha_blend_factor.as_raw(),
-                    attachment.destination_alpha_blend_factor.as_raw(),
-                    attachment.alpha_blend_operation.as_raw(),
-                ] {
-                    key.u32(raw);
-                }
-            }
-        }
-        key.u32(u32::MAX);
+        color_attachments(&mut key, &descriptor.color_attachments);
         key.u32(descriptor.raster_sample_count);
         key.flag(descriptor.alpha_to_coverage);
         key.flag(descriptor.alpha_to_one);
@@ -243,6 +229,81 @@ pub(crate) fn render(profile: &Hash256, descriptor: &RenderPipelineDescriptor) -
         fragment,
         vertex: key.variants(control_points),
     }
+}
+
+/// The archive key of the mesh pipeline `descriptor` on the device of profile `profile`: every
+/// field it holds (the module docs).
+pub(crate) fn mesh(profile: &Hash256, descriptor: &MeshPipelineDescriptor) -> Hash256 {
+    let mut key = Key::new(b"mesh", profile);
+    let stages = [
+        descriptor.object.as_ref(),
+        Some(&descriptor.mesh),
+        descriptor.fragment.as_ref(),
+    ];
+    for stage in stages {
+        match stage {
+            Some(stage) => {
+                key.flag(true);
+                key.stage(stage);
+            }
+            None => key.flag(false),
+        }
+    }
+    color_attachments(&mut key, &descriptor.color_attachments);
+    for format in [descriptor.depth_format, descriptor.stencil_format] {
+        key.u32(format.map_or(u32::MAX, PixelFormat::as_raw));
+    }
+    key.u32(descriptor.raster_sample_count);
+    key.flag(descriptor.rasterization_enabled);
+    key.flag(descriptor.alpha_to_coverage);
+    key.flag(descriptor.alpha_to_one);
+    // The mode by its name: the enum states no raw value of its own.
+    key.bytes(format!("{:?}", descriptor.texture_write_rounding_mode).as_bytes());
+    key.flag(descriptor.support_indirect_command_buffers);
+    for limit in [
+        descriptor.max_total_threads_per_object_threadgroup,
+        descriptor.max_total_threads_per_mesh_threadgroup,
+        descriptor.max_total_threadgroups_per_mesh_grid,
+        descriptor.payload_memory_length,
+    ] {
+        key.u32(limit.unwrap_or(0));
+    }
+    key.flag(descriptor.object_threadgroup_size_is_multiple_of_thread_execution_width);
+    key.flag(descriptor.mesh_threadgroup_size_is_multiple_of_thread_execution_width);
+    key.u32(descriptor.max_vertex_amplification_count);
+    key.required(descriptor.required_threads_per_object_threadgroup);
+    key.required(descriptor.required_threads_per_mesh_threadgroup);
+    key.finish()
+}
+
+/// Each color attachment of `attachments` with a pixel format: its index, format and write mask,
+/// whether it blends, and its blend factors and operations only when it blends.
+fn color_attachments(key: &mut Key, attachments: &[Option<ColorAttachmentDescriptor>]) {
+    for (index, attachment) in (0u32..).zip(attachments) {
+        let Some(attachment) = attachment else {
+            continue;
+        };
+        if attachment.pixel_format == PixelFormat::Invalid {
+            continue;
+        }
+        key.u32(index);
+        key.u32(attachment.pixel_format.as_raw());
+        key.u32(attachment.write_mask.as_raw());
+        key.flag(attachment.blending_enabled);
+        if attachment.blending_enabled {
+            for raw in [
+                attachment.source_rgb_blend_factor.as_raw(),
+                attachment.destination_rgb_blend_factor.as_raw(),
+                attachment.rgb_blend_operation.as_raw(),
+                attachment.source_alpha_blend_factor.as_raw(),
+                attachment.destination_alpha_blend_factor.as_raw(),
+                attachment.alpha_blend_operation.as_raw(),
+            ] {
+                key.u32(raw);
+            }
+        }
+    }
+    key.u32(u32::MAX);
 }
 
 /// The stage input descriptor `input`: each layout but Metal's unset one (stride 0, per vertex,

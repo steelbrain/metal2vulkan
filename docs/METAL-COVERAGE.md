@@ -10,12 +10,12 @@ Every public item of the macOS 27.0 SDK (Xcode 27.0, 27A266a)'s Metal headers, b
 
 | Status | Items | Of which deprecated |
 |---|---|---|
-| implemented | 978 | 36 |
-| missing | 808 | 27 |
+| implemented | 979 | 36 |
+| missing | 807 | 27 |
 | out of scope | 349 | 5 |
 | all | 2135 | 68 |
 
-Implemented by the runtime: 646; by the translator's values: 332. Missing by size: S 125, M 147, L 160, XL 376.
+Implemented by the runtime: 647; by the translator's values: 332. Missing by size: S 124, M 147, L 160, XL 376.
 
 ## Missing, in build order
 
@@ -33,7 +33,7 @@ Cheap items a plain app calls first, then medium pieces by how often a plain app
 | a pipeline state's reflection after creation | S | 2 | `MTLComputePipelineState.reflection`, `MTLRenderPipelineState.reflection` |
 | function handles by name, and a handle's type and ID | S | 4 | `MTLComputePipelineState.functionHandleWithName:`, `MTLFunctionHandle.functionType`, `MTLFunctionHandle.gpuResourceID`, ... |
 | a specialized function's name | S | 1 | `MTLFunctionDescriptor.specializedName` |
-| more binary archive entries | S | 4 | `MTLBinaryArchive.addMeshRenderPipelineFunctionsWithDescriptor:error:`, `MTLBinaryArchive.addLibraryWithDescriptor:error:`, `MTLBinaryArchive.addFunctionWithDescriptor:library:error:`, ... |
+| more binary archive entries | S | 3 | `MTLBinaryArchive.addLibraryWithDescriptor:error:`, `MTLBinaryArchive.addFunctionWithDescriptor:library:error:`, `MTLFunctionDescriptor.binaryArchives` |
 | the shared event listener | S | 1 | `MTLSharedEventListener.sharedListener` |
 | mesh pipeline descriptor fields | S | 3 | `MTLMeshRenderPipelineDescriptor.objectBuffers`, `MTLMeshRenderPipelineDescriptor.meshBuffers`, `MTLMeshRenderPipelineDescriptor.fragmentBuffers` |
 | placement sparse page sizes | S | 2 | `MTLHeapDescriptor.maxCompatiblePlacementSparsePageSize`, `MTLTextureDescriptor.placementSparsePageSize` |
@@ -1014,7 +1014,7 @@ Cheap items a plain app calls first, then medium pieces by how often a plain app
 | `MTLBinaryArchive.addComputePipelineFunctionsWithDescriptor:error:` | method | implemented | `BinaryArchive::add_compute_pipeline_functions` (runtime) |
 | `MTLBinaryArchive.addRenderPipelineFunctionsWithDescriptor:error:` | method | implemented | `BinaryArchive::add_render_pipeline_functions` (runtime) |
 | `MTLBinaryArchive.addTileRenderPipelineFunctionsWithDescriptor:error:` | method | implemented | `BinaryArchive::add_tile_render_pipeline_functions` (runtime) |
-| `MTLBinaryArchive.addMeshRenderPipelineFunctionsWithDescriptor:error:` | method | missing | S: a mesh pipeline's functions in a binary archive |
+| `MTLBinaryArchive.addMeshRenderPipelineFunctionsWithDescriptor:error:` | method | implemented | `BinaryArchive::add_mesh_render_pipeline_functions` (runtime) |
 | `MTLBinaryArchive.addLibraryWithDescriptor:error:` | method | missing | S: a library's functions in a binary archive (macOS 15) |
 | `MTLBinaryArchive.serializeToURL:error:` | method | implemented | `BinaryArchive::serialize_to_url` (runtime) |
 | `MTLBinaryArchive.addFunctionWithDescriptor:library:error:` | method | missing | S: one function in a binary archive |

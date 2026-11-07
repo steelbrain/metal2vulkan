@@ -14,12 +14,15 @@
 //!   archives hold the archive key of each of its stages (`metal_key`), as Metal's creation is,
 //!   naming the first stage's function they miss. Without archives, or without the option,
 //!   archives only make creation faster.
-//! - **Adding.** `add_compute_pipeline_functions`, `add_render_pipeline_functions` and
-//!   `add_tile_render_pipeline_functions` make the state their descriptor describes, as the
-//!   creation would, and answer that creation's error; then they keep what the creation used and
-//!   the archive keys of its stages. Adding twice keeps one copy.
+//! - **Adding.** `add_compute_pipeline_functions`, `add_render_pipeline_functions`,
+//!   `add_tile_render_pipeline_functions` and `add_mesh_render_pipeline_functions` make the state
+//!   their descriptor describes, as the creation would, and answer that creation's error; then
+//!   they keep what the creation used and the archive keys of its stages. Adding twice keeps one
+//!   copy. A mesh creation compiles its pipeline whole, looking in no archive, so a mesh add keeps
+//!   its key alone, which `FAIL_ON_BINARY_ARCHIVE_MISS` finds.
 //! - **Files.** An archive is read whole from its descriptor's file (`container.rs`) and written
-//!   through a temporary file and a rename. An archive of another profile or build loads, and
+//!   through a temporary file and a rename. A metallib, which Metal takes as an archive, loads as
+//!   an empty one. An archive of another profile or build loads, and
 //!   its entries miss, as Metal's archive of another device or OS does. Labels are not written,
 //!   as Metal's are not.
 //! - **Differences from Metal**, accepted (docs/API.md §10): the file is read whole at load, so an
@@ -42,8 +45,8 @@ use container::{Contents, Place};
 use metal2vulkan::cache::{Hash256, PipelineArtifact, PipelineKey};
 use metal2vulkan::library::{CompiledFunction, FunctionCompileKey};
 use metal2vulkan::pipeline::{
-    ComputePipeline, ComputePipelineDescriptor, RenderPipeline, RenderPipelineDescriptor,
-    StageSource, TileRenderPipelineDescriptor,
+    ComputePipeline, ComputePipelineDescriptor, MeshPipelineDescriptor, RenderPipeline,
+    RenderPipelineDescriptor, StageSource, TileRenderPipelineDescriptor,
 };
 use metal_key::VertexKind;
 use std::cell::RefCell;
@@ -97,9 +100,12 @@ pub(crate) type Used = RefCell<Vec<Artifact>>;
 
 impl Device {
     /// `newBinaryArchiveWithDescriptor:error:`: an empty archive, or the archive in the
-    /// descriptor's file. A file that is missing or not an archive is
+    /// descriptor's file. A file that is missing or neither an archive nor a metallib is
     /// `BinaryArchive(InvalidFile)`, as Metal answers for a missing, empty, garbage or text file
-    /// and for a directory (measured on an M3 Max and an M4).
+    /// and for a directory (measured on an M3 Max and an M4). A metallib, which Metal takes as an
+    /// archive (measured on an M3 Max), holds nothing of ours: it loads as an empty archive,
+    /// whose lookups miss and which serializes as one nothing was added to. What Metal's archive
+    /// of a metallib holds is not measured.
     pub fn new_binary_archive(
         &self,
         descriptor: &BinaryArchiveDescriptor,
@@ -207,6 +213,29 @@ impl BinaryArchive {
             used.into_inner(),
             &profile,
             [metal_key::tile(&profile, descriptor)],
+        );
+        Ok(())
+    }
+
+    /// `addMeshRenderPipelineFunctionsWithDescriptor:error:`: make the state `descriptor`
+    /// describes, as `new_mesh_render_pipeline_state` makes it with the default options,
+    /// answering its error; then keep the descriptor's archive key. A mesh creation compiles its
+    /// pipeline whole and looks in no archive, so the add keeps no compiled artifact and makes no
+    /// later creation faster. Which of the descriptor's fields Metal keys a mesh pipeline by is
+    /// not measured: the key holds every field (`metal_key`), so under
+    /// `FAIL_ON_BINARY_ARCHIVE_MISS` a mesh creation hits only an add of an equal descriptor, and
+    /// one that differs from every add in a field Metal does not key is `BinaryArchiveMiss` where
+    /// Metal's creation may hit.
+    pub fn add_mesh_render_pipeline_functions(
+        &self,
+        descriptor: &MeshPipelineDescriptor,
+    ) -> Result<(), Error> {
+        GraphicsState::create_mesh(self.device(), descriptor, &PipelineOptions::default())?;
+        let profile = self.profile();
+        self.keep(
+            Vec::new(),
+            &profile,
+            [metal_key::mesh(&profile, descriptor)],
         );
         Ok(())
     }
@@ -360,6 +389,13 @@ pub(crate) fn compute_missing<'a>(
     move |profile, held| {
         (!held(&metal_key::compute(profile, descriptor))).then_some(&descriptor.kernel)
     }
+}
+
+/// The mesh function of a mesh creation of `descriptor`, when no listed archive holds its key.
+pub(crate) fn mesh_missing<'a>(
+    descriptor: &'a MeshPipelineDescriptor,
+) -> impl FnOnce(&Hash256, &dyn Fn(&Hash256) -> bool) -> Option<&'a StageSource> + 'a {
+    move |profile, held| (!held(&metal_key::mesh(profile, descriptor))).then_some(&descriptor.mesh)
 }
 
 /// The tile function of a tile creation of `descriptor`, when no listed archive holds its key.

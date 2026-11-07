@@ -761,7 +761,7 @@ MTLBinaryArchive.h	MTLBinaryArchive	property	device		I	runtime	BinaryArchive::de
 MTLBinaryArchive.h	MTLBinaryArchive	method	addComputePipelineFunctionsWithDescriptor:error:		I	runtime	BinaryArchive::add_compute_pipeline_functions			
 MTLBinaryArchive.h	MTLBinaryArchive	method	addRenderPipelineFunctionsWithDescriptor:error:		I	runtime	BinaryArchive::add_render_pipeline_functions			
 MTLBinaryArchive.h	MTLBinaryArchive	method	addTileRenderPipelineFunctionsWithDescriptor:error:		I	runtime	BinaryArchive::add_tile_render_pipeline_functions			
-MTLBinaryArchive.h	MTLBinaryArchive	method	addMeshRenderPipelineFunctionsWithDescriptor:error:		M			a mesh pipeline's functions in a binary archive	S	archive
+MTLBinaryArchive.h	MTLBinaryArchive	method	addMeshRenderPipelineFunctionsWithDescriptor:error:		I	runtime	BinaryArchive::add_mesh_render_pipeline_functions			
 MTLBinaryArchive.h	MTLBinaryArchive	method	addLibraryWithDescriptor:error:		M			a library's functions in a binary archive (macOS 15)	S	archive
 MTLBinaryArchive.h	MTLBinaryArchive	method	serializeToURL:error:		I	runtime	BinaryArchive::serialize_to_url			
 MTLBinaryArchive.h	MTLBinaryArchive	method	addFunctionWithDescriptor:library:error:		M			one function in a binary archive	S	archive

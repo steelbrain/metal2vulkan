@@ -179,12 +179,18 @@ impl<'a> Reader<'a> {
     }
 }
 
-/// The archive in the file `path`.
+/// The archive in the file `path`: an archive of ours, or a metallib, which Metal takes as an
+/// archive (`newBinaryArchiveWithDescriptor:error:` answers one, measured on an M3 Max under
+/// macOS 27.0.1) and which holds nothing of ours, so it loads as an archive holding nothing.
 pub(crate) fn read(path: &Path) -> Result<Contents, Error> {
-    std::fs::read(path)
-        .ok()
-        .and_then(|bytes| decode(&bytes))
-        .ok_or_else(|| invalid_file(path))
+    let bytes = std::fs::read(path).map_err(|_| invalid_file(path))?;
+    if let Some(contents) = decode(&bytes) {
+        return Ok(contents);
+    }
+    match metal2vulkan::library::Library::from_metallib(&bytes) {
+        Ok(_) => Ok(Contents::default()),
+        Err(_) => Err(invalid_file(path)),
+    }
 }
 
 /// Write `bytes`, an archive's encoding, to the file `url`, replacing what is there.

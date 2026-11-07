@@ -8339,14 +8339,21 @@ fn runtime_step(
                         .add_tile_render_pipeline_functions(&descriptor)
                         .is_err()
                 }
-                // `addMeshRenderPipelineFunctionsWithDescriptor:error:` has no counterpart on this
-                // side: `BinaryArchive` has three adders and Metal has four. Answered as the
-                // refusal it is, so the case reads `Refused` with the call named, rather than as a
-                // bool that differed.
-                Added::Mesh { .. } => {
-                    return Err(Failure::unavailable(
-                        "addMeshRenderPipelineFunctionsWithDescriptor",
-                    ))
+                Added::Mesh {
+                    library,
+                    object,
+                    mesh,
+                    fragment,
+                } => {
+                    let mut descriptor =
+                        MeshPipelineDescriptor::new(runtime_stage(built, library, mesh)?);
+                    descriptor.object = Some(runtime_stage(built, library, object)?);
+                    descriptor.fragment = Some(runtime_stage(built, library, fragment)?);
+                    descriptor.color_attachments[0] =
+                        Some(ColorAttachmentDescriptor::new(program.attachment));
+                    archive
+                        .add_mesh_render_pipeline_functions(&descriptor)
+                        .is_err()
                 }
             };
             Ok(Observation::Made { refused })

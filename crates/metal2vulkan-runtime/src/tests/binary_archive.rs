@@ -1,6 +1,7 @@
 //! Binary archives (`binary_archive`): the file's encoding and what is not one, the file errors
 //! Metal answers, each render stage's archive key and the compute key against the fields measured
-//! on an M3 Max and an M4 as keyed or not, and how a lookup combines the stages. Each file test
+//! on an M3 Max and an M4 as keyed or not, the mesh key's every field, how a lookup combines the
+//! stages, and a metallib loaded as an archive holding nothing. Each file test
 //! owns an empty directory it removes ([`Scratch`]); the functions are the committed AIR of the
 //! owned `ob3_*` fixtures.
 
@@ -1027,4 +1028,120 @@ fn a_render_lookup_tells_one_adds_stages_from_two_adds() {
         .vertex
         .of(metal_key::VertexKind::Plain);
     assert!(!combines(&without, &[without_vertex]), "no fragment stage");
+}
+
+/// A metallib loads as an archive holding nothing, as Metal takes one as an archive (the
+/// conformance case `binary-archive-sources`, an M3 Max under macOS 27.0.1); bare AIR, which is
+/// no metallib, is still an invalid file.
+#[test]
+fn a_metallib_loads_as_an_archive_holding_nothing() {
+    use metal2vulkan_devtools::metallib::{metallib, wrap, MtlbFunction};
+    let scratch = Scratch::new();
+    let air = fs::read(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../metal2vulkan-validation/fixtures/public/engine/ob3_texture_array.air"),
+    )
+    .expect("the committed AIR");
+    let bytes = metallib(&[MtlbFunction {
+        name: "ob3_texture_array",
+        type_code: 2,
+        bitcode: wrap(&air),
+        constants: Vec::new(),
+        public: Vec::new(),
+        tags: Vec::new(),
+    }]);
+    assert!(Library::from_metallib(&bytes).is_ok(), "a metallib");
+    let path = scratch.path().join("library.metallib");
+    fs::write(&path, &bytes).unwrap();
+    assert_eq!(container::read(&path), Ok(Contents::default()));
+    let bare = scratch.path().join("bare.air");
+    fs::write(&bare, &air).unwrap();
+    assert_eq!(container::read(&bare), Err(invalid_file(&bare)));
+}
+
+/// The mesh key holds every field of the descriptor (Metal's is not measured, `metal_key`): an
+/// equal descriptor keeps it and each field changed changes it, and a mesh lookup names the mesh
+/// function.
+#[test]
+fn the_mesh_key_holds_every_field_and_a_lookup_names_the_mesh_function() {
+    use metal2vulkan::metal::TextureWriteRoundingMode;
+    use metal2vulkan::pipeline::MeshPipelineDescriptor;
+    let stage =
+        |name| StageSource::Function(FunctionDescriptor::new(function("ob3_texture_array", name)));
+    let mut base = MeshPipelineDescriptor::new(stage("ob3_texture_array"));
+    base.color_attachments[0] = Some(ColorAttachmentDescriptor::new(PixelFormat::RGBA8Unorm));
+    let key = metal_key::mesh(&PROFILE, &base);
+    assert_eq!(metal_key::mesh(&PROFILE, &base.clone()), key);
+    assert_ne!(metal_key::mesh(&[8; 32], &base), key, "the profile");
+    let with = |change: &dyn Fn(&mut MeshPipelineDescriptor)| {
+        let mut changed = base.clone();
+        change(&mut changed);
+        metal_key::mesh(&PROFILE, &changed)
+    };
+    let changes: Vec<(&str, &dyn Fn(&mut MeshPipelineDescriptor))> = vec![
+        ("object", &|d| d.object = Some(stage("ob3_texture_array"))),
+        ("fragment", &|d| {
+            d.fragment = Some(stage("ob3_texture_array"))
+        }),
+        ("color format", &|d| {
+            d.color_attachments[0] = Some(ColorAttachmentDescriptor::new(PixelFormat::BGRA8Unorm))
+        }),
+        ("second attachment", &|d| {
+            d.color_attachments[1] = Some(ColorAttachmentDescriptor::new(PixelFormat::RGBA8Unorm))
+        }),
+        ("write mask", &|d| {
+            if let Some(color) = d.color_attachments[0].as_mut() {
+                color.write_mask = ColorWriteMask::RED;
+            }
+        }),
+        ("depth format", &|d| {
+            d.depth_format = Some(PixelFormat::Depth32Float)
+        }),
+        ("stencil format", &|d| {
+            d.stencil_format = Some(PixelFormat::Stencil8)
+        }),
+        ("raster samples", &|d| d.raster_sample_count = 4),
+        ("rasterization", &|d| d.rasterization_enabled = false),
+        ("alpha to coverage", &|d| d.alpha_to_coverage = true),
+        ("alpha to one", &|d| d.alpha_to_one = true),
+        ("rounding", &|d| {
+            d.texture_write_rounding_mode = TextureWriteRoundingMode::NearestEven
+        }),
+        ("indirect", &|d| d.support_indirect_command_buffers = true),
+        ("object maximum", &|d| {
+            d.max_total_threads_per_object_threadgroup = Some(64)
+        }),
+        ("mesh maximum", &|d| {
+            d.max_total_threads_per_mesh_threadgroup = Some(64)
+        }),
+        ("grid maximum", &|d| {
+            d.max_total_threadgroups_per_mesh_grid = Some(8)
+        }),
+        ("object multiple", &|d| {
+            d.object_threadgroup_size_is_multiple_of_thread_execution_width = true
+        }),
+        ("mesh multiple", &|d| {
+            d.mesh_threadgroup_size_is_multiple_of_thread_execution_width = true
+        }),
+        ("payload", &|d| d.payload_memory_length = Some(64)),
+        ("amplification", &|d| d.max_vertex_amplification_count = 2),
+        ("object size", &|d| {
+            d.required_threads_per_object_threadgroup = Some([4, 1, 1])
+        }),
+        ("mesh size", &|d| {
+            d.required_threads_per_mesh_threadgroup = Some([4, 1, 1])
+        }),
+    ];
+    for (what, change) in changes {
+        assert_ne!(with(change), key, "{what}");
+    }
+    let missing = |keys: &[Hash256]| {
+        let held = |key: &Hash256| keys.contains(key);
+        binary_archive::mesh_missing(&base)(&PROFILE, &held).map(|stage| match stage {
+            StageSource::Function(descriptor) => descriptor.function.info().name.to_string(),
+            StageSource::Compiled(_) => "compiled".to_owned(),
+        })
+    };
+    assert_eq!(missing(&[key]), None);
+    assert_eq!(missing(&[]), Some("ob3_texture_array".to_owned()));
 }

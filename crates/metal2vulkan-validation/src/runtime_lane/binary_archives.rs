@@ -13,6 +13,8 @@
 //!   limit. Without the option, or with no archive listed, the same creations compile.
 //! - Metal's errors: an empty archive does not serialize, a missing file does not load, an add
 //!   answers its creation's error, and another device's archive is refused.
+//! - A mesh add is found by a creation of an equal descriptor and missed by one of another color
+//!   format; a metallib loads as an archive holding nothing.
 
 use super::degrade_notices::assert_once;
 use super::render_state::{library, Probe, PASS};
@@ -24,8 +26,11 @@ use crate::air_library::AirLibrary;
 use crate::gpu::TEST_DEVICE;
 use metal2vulkan::metal::{PixelFormat, PrimitiveTopologyClass, PrimitiveType};
 use metal2vulkan::pipeline::{
-    ColorAttachmentDescriptor, LinkedFunctions, RenderPipelineDescriptor, StageSource,
+    ColorAttachmentDescriptor, LinkedFunctions, MeshPipelineDescriptor, RenderPipelineDescriptor,
+    StageSource,
 };
+use metal2vulkan_devtools::metallib::{metallib as metallib_of, wrap, MtlbFunction};
+use metal2vulkan_devtools::{engine_dir, llvm_assemble};
 use metal2vulkan_runtime::{
     ArchivedPipeline, BinaryArchiveDescriptor, BinaryArchiveError, BinaryArchiveMiss, Degradation,
     Device, Error, Invalid, PipelineOption, PipelineOptions, Problem, RenderPipelineState,
@@ -258,5 +263,107 @@ fn an_archive_serves_a_fresh_device_and_fails_where_metal_misses() {
             )))
         );
     }
+    layer_reported_nothing_at_all(&messages);
+}
+
+/// A mesh pipeline added to an archive is found under `FAIL_ON_BINARY_ARCHIVE_MISS` where the
+/// creation's descriptor equals the add's, and refused naming its mesh function before the add
+/// and where a field differs (the color format here; Metal's mesh key is not measured, so every
+/// field is in ours, `metal_key`). The add answers its creation's error, takes the descriptor twice
+/// and serializes. A metallib loads as an empty archive, as Metal takes one (the conformance case
+/// `binary-archive-sources`, an M3 Max under macOS 27.0.1): its lookups miss and nothing in it
+/// serializes. A device that refuses the mesh pipeline prints its refusal.
+#[test]
+fn a_mesh_add_is_found_by_its_own_descriptor_and_a_metallib_loads_as_an_empty_archive() {
+    let files = ScratchCache::new().unwrap();
+    std::fs::create_dir_all(files.path()).unwrap();
+    let cache = ScratchCache::new().unwrap();
+    let messages = Messages::default();
+    let device = validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
+    let bitcode = llvm_assemble(&engine_dir().join("mesh_draws.ll")).unwrap();
+    let library = device.new_library_with_air(&bitcode).unwrap();
+    let function = |name| {
+        StageSource::Function(
+            library
+                .new_function_with_name(name)
+                .unwrap()
+                .function_descriptor(),
+        )
+    };
+    let mesh = |format| {
+        let mut descriptor = MeshPipelineDescriptor::new(function("mesh_draws_mesh"));
+        descriptor.object = Some(function("mesh_draws_object"));
+        descriptor.fragment = Some(function("mesh_draws_fragment"));
+        for attachment in &mut descriptor.color_attachments[..2] {
+            *attachment = Some(ColorAttachmentDescriptor::new(format));
+        }
+        descriptor
+    };
+    let added = mesh(PixelFormat::RGBA32Uint);
+    let other = mesh(PixelFormat::RGBA32Sint);
+    let archive = device
+        .new_binary_archive(&BinaryArchiveDescriptor::default())
+        .unwrap();
+    if let Err(error) = device.new_mesh_render_pipeline_state(&added, &PipelineOptions::default()) {
+        assert_eq!(
+            archive.add_mesh_render_pipeline_functions(&added),
+            Err(error.clone())
+        );
+        eprintln!("refused: the mesh pipeline: {error:?}");
+        layer_reported_nothing_at_all(&messages);
+        return;
+    }
+    let made = |descriptor, archives: &[metal2vulkan_runtime::BinaryArchive]| {
+        device
+            .new_mesh_render_pipeline_state(descriptor, &failing(archives))
+            .map(|_| ())
+    };
+    let miss = Err(Error::BinaryArchiveMiss(BinaryArchiveMiss::new(
+        "mesh_draws_mesh",
+        ArchivedPipeline::Render,
+    )));
+    assert_eq!(made(&added, std::slice::from_ref(&archive)), miss);
+    archive.add_mesh_render_pipeline_functions(&added).unwrap();
+    archive.add_mesh_render_pipeline_functions(&added).unwrap();
+    assert_eq!(made(&added, std::slice::from_ref(&archive)), Ok(()));
+    assert_eq!(made(&other, std::slice::from_ref(&archive)), miss);
+    // An add answers its creation's error: a mesh function as the fragment function.
+    let mut wrong = mesh(PixelFormat::RGBA32Uint);
+    wrong.fragment = Some(function("mesh_draws_mesh"));
+    assert_eq!(
+        archive.add_mesh_render_pipeline_functions(&wrong),
+        device
+            .new_mesh_render_pipeline_state(&wrong, &PipelineOptions::default())
+            .map(|_| ())
+    );
+    let file = files.path().join("mesh.metallib-archive");
+    archive.serialize_to_url(&file).unwrap();
+    let loaded = device
+        .new_binary_archive(&BinaryArchiveDescriptor::new(Some(file)))
+        .unwrap();
+    assert_eq!(made(&added, std::slice::from_ref(&loaded)), Ok(()));
+
+    // A metallib of a kernel (type 2): an archive holding nothing.
+    let case = public_case("threadgroup-word").unwrap();
+    let metallib = files.path().join("library.metallib");
+    let kernel = MtlbFunction {
+        name: &case.compute.entry,
+        type_code: 2,
+        bitcode: wrap(&case.bitcode),
+        constants: Vec::new(),
+        public: Vec::new(),
+        tags: Vec::new(),
+    };
+    let bytes = metallib_of(&[kernel]);
+    assert!(device.new_library_with_data(&bytes).is_ok(), "a metallib");
+    std::fs::write(&metallib, bytes).unwrap();
+    let from_metallib = device
+        .new_binary_archive(&BinaryArchiveDescriptor::new(Some(metallib)))
+        .unwrap();
+    assert_eq!(made(&added, std::slice::from_ref(&from_metallib)), miss);
+    assert_eq!(
+        from_metallib.serialize_to_url(&files.path().join("again.metallib-archive")),
+        Err(Error::BinaryArchive(BinaryArchiveError::NothingToSerialize))
+    );
     layer_reported_nothing_at_all(&messages);
 }

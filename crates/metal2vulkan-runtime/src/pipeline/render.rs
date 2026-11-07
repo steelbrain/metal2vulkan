@@ -657,14 +657,17 @@ impl Device {
     /// ([`RenderPipelineState::max_total_threads_per_object_threadgroup`] and the rest), and its
     /// draws are not held to them. What the compile refuses otherwise is
     /// `Compile` or `Unsupported`, as [`Device::new_render_pipeline_state`] says, and so is an
-    /// archive of another device; no binary archive holds a mesh render pipeline, so
-    /// `FAIL_ON_BINARY_ARCHIVE_MISS` with archives listed is `BinaryArchiveMiss`. Each stage's
+    /// archive of another device. `FAIL_ON_BINARY_ARCHIVE_MISS` with archives listed is
+    /// `BinaryArchiveMiss` unless one holds an add of an equal descriptor
+    /// ([`BinaryArchive::add_mesh_render_pipeline_functions`], whose key holds every field, as
+    /// Metal's mesh key is not measured). Each stage's
     /// imports come from its own dynamic libraries, as a render state's do. An object, mesh or
     /// fragment function made by `Library::new_function_with_name` whose function declares
     /// function constants is `Invalid(UnspecializedFunction)`, as plain Metal ends its process at
     /// its creation, before the device's mesh shading is asked.
     ///
     /// [`RenderCommandEncoder::draw_mesh_threadgroups`]: crate::RenderCommandEncoder::draw_mesh_threadgroups
+    /// [`BinaryArchive::add_mesh_render_pipeline_functions`]: crate::BinaryArchive::add_mesh_render_pipeline_functions
     pub fn new_mesh_render_pipeline_state(
         &self,
         descriptor: &MeshPipelineDescriptor,
@@ -1766,12 +1769,15 @@ impl GraphicsState {
             .as_ref()
             .map(crate::dynamic_library::stage_with_dependencies);
         let descriptor = &loaded;
-        // No binary archive holds a mesh render pipeline (`BinaryArchive` adds render, compute
-        // and tile pipelines): under `FAIL_ON_BINARY_ARCHIVE_MISS` every listed archive misses
-        // its mesh function.
-        binary_archive::check(device, options, CALL, ArchivedPipeline::Render, |_, _| {
-            Some(&descriptor.mesh)
-        })?;
+        // Under `FAIL_ON_BINARY_ARCHIVE_MISS`, refused naming the mesh function where no listed
+        // archive holds the descriptor's key (`BinaryArchive::add_mesh_render_pipeline_functions`).
+        binary_archive::check(
+            device,
+            options,
+            CALL,
+            ArchivedPipeline::Render,
+            binary_archive::mesh_missing(descriptor),
+        )?;
         // As a render state's, in Metal's order: a fragment function writing
         // depth without a depth attachment, the indirect command buffers' refusal, then the
         // fragment function's stage inputs the linking keeps that the mesh function does not
