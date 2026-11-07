@@ -1066,8 +1066,9 @@ fn a_metallib_loads_as_an_archive_holding_nothing() {
 fn the_mesh_key_holds_every_field_and_a_lookup_names_the_mesh_function() {
     use metal2vulkan::metal::TextureWriteRoundingMode;
     use metal2vulkan::pipeline::MeshPipelineDescriptor;
-    let stage =
-        |name| StageSource::Function(FunctionDescriptor::new(function("ob3_texture_array", name)));
+    fn stage(name: &str) -> StageSource {
+        StageSource::Function(FunctionDescriptor::new(function("ob3_texture_array", name)))
+    }
     let mut base = MeshPipelineDescriptor::new(stage("ob3_texture_array"));
     base.color_attachments[0] = Some(ColorAttachmentDescriptor::new(PixelFormat::RGBA8Unorm));
     let key = metal_key::mesh(&PROFILE, &base);
