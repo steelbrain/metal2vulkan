@@ -346,6 +346,9 @@ pub(super) struct DeviceShared {
     /// Its check of the first move of an image over host pages, per class of pages, and its
     /// verdicts (`in_place.rs`).
     pub(crate) in_place: crate::in_place::InPlaceChecks,
+    /// Its checks of what its submissions cost and whether its pointer imports follow their
+    /// address, and their verdicts (`submit_check.rs`).
+    pub(crate) submit_checks: crate::submit_check::SubmitChecks,
     /// How no-copy buffers import host memory, or why they are refused.
     pub(super) host_import: Result<Importer, metal2vulkan::error::Unsupported>,
     /// Whether the device imports a pointer to shared memory, once asked
@@ -1995,6 +1998,7 @@ impl Device {
             textures,
             shader_cache,
             in_place: crate::in_place::InPlaceChecks::new(fail_in_place_check),
+            submit_checks: crate::submit_check::SubmitChecks::new(),
             host_import,
             shared_pointer_imports: OnceLock::new(),
             extended_dynamic_state,
@@ -2112,6 +2116,9 @@ impl Device {
         // Its check's verdict of the GPU idling between `VkQueue`s, where none is to be measured
         // or a record holds it (`queue_share.rs`).
         device.recall_queue_switch_check();
+        // Its submission checks' verdicts, where a record holds them; else the checks start
+        // (`submit_check.rs`).
+        device.recall_submit_checks();
         device.degrade_argument_buffers_unread();
         device.degrade_float_tininess();
         Ok(device)

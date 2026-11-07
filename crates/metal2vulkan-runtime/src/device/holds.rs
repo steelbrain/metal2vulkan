@@ -1,6 +1,7 @@
-//! The runtime's own holds of a device: its check of textures in place (`in_place_check.rs`) and
-//! its warm pass (`warm/pass.rs`), each on a thread of its own, which hold the device while they
-//! make objects on it and let it go between their steps.
+//! The runtime's own holds of a device: its check of textures in place (`in_place_check.rs`), its
+//! submission checks (`submit_check.rs`) and its warm pass (`warm/pass.rs`), each on a thread of
+//! its own, which hold the device while they make objects on it and let it go between their steps
+//! (the submission checks, for their whole run, reading the stop between their steps).
 //!
 //! - **Two counts.** Every handle of the device is counted here, as the program's or as a
 //!   holder's. A handle a holder takes ([`WeakDevice::hold`]) is a holder's, and so is each handle
@@ -14,7 +15,8 @@
 //!   release of the program's last command buffer) it waits for nothing: those threads serve the
 //!   work the holds may wait for, and the program's work there ends where it ends already.
 //! - **The wait is a step.** A holder reads the stop between its steps
-//!   ([`Device::holds_go_on`]): the check between its rounds, the warm pass between its records.
+//!   ([`Device::holds_go_on`]): the in-place check between its rounds, the submission checks
+//!   between theirs, the warm pass between its records.
 //!   So the wait is at most the check's round in progress (and its release of its buffer), or the
 //!   record the pass is making. It happens only at teardown.
 //! - **Exact.** A holder's take and a holder's handle's clone and drop count under the registry's
@@ -43,6 +45,8 @@ pub(crate) enum Holder {
     InPlaceCheck,
     /// The warm pass, between its records.
     WarmPass,
+    /// The submission checks, between their rounds, phases and copies.
+    SubmitCheck,
 }
 
 /// A device's registry of its handles and the runtime's own holds (the module docs).
@@ -63,7 +67,7 @@ pub(crate) struct Holds {
     /// The crate's device tests' holds of each holder between its steps
     /// (`tests/teardown_threads.rs`).
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
-    held: [crate::freed_memory::held::Held; 2],
+    held: [crate::freed_memory::held::Held; 3],
 }
 
 /// The registry's count of the holders' handles, and its stop.

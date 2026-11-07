@@ -375,6 +375,9 @@ mod stage_entries_shared;
 mod staging_waits;
 mod stand_in;
 mod storage_form;
+mod submit_check;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod submit_check_device;
 mod submit_stalls;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod submit_stalls_idle;
@@ -431,3 +434,9 @@ mod ycbcr_device;
 mod ycbcr_in_place_loop;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod ycbcr_refresh;
+
+/// How long a device test waits for the device's submission checks to answer
+/// (`Device::settle_submit_checks`): their run takes milliseconds alone, longer beside the
+/// suite's other devices.
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
+pub(crate) const SETTLE: std::time::Duration = std::time::Duration::from_secs(60);

@@ -8,8 +8,8 @@
 //!
 //! Nor does it submit a batch of a queue whose batches wait in the scheduler's group
 //! (`command_buffer/group.rs`), which is the scheduler thread's to hold and to send: under the
-//! default `CompletionPolicy::Grouped`, on a driver measured to merge a submission that signals
-//! nothing into the next (`DriverFact::SubmissionsWithoutSignalsMerge`), that is every queue. So
+//! default `CompletionPolicy::Grouped`, on a device whose check found a submission that signals
+//! nothing merged into the next (`submit_check.rs`), that is every queue. So
 //! the waiter's own submissions are counted under `CompletionPolicy::Exact`, where no queue's
 //! batches group on any driver, and under the default each test checks that a waiting thread
 //! submits nothing where the device's batches group, and submits as under `Exact` elsewhere.
@@ -25,7 +25,7 @@
 //! Device tests: compiled only under the validation crate's GPU safety cfgs (`m2v_gpu`,
 //! `m2v_cpu_icd`), on the kind of device the cfg selects.
 
-use crate::command_buffer::merges_submissions;
+use crate::tests::SETTLE;
 use crate::{
     Buffer, CommandBuffer, CommandQueue, Device, DeviceKind, DeviceOptions, ResourceOptions,
     ShaderCacheOptions,
@@ -252,8 +252,8 @@ fn a_thread_about_to_block_submits_what_it_committed_unless_a_handler_must_run()
     });
 }
 
-/// Under the default `CompletionPolicy::Grouped`: where the device's batches group (its driver
-/// merges a submission that signals nothing into the next, `merges_submissions`), every batch of
+/// Under the default `CompletionPolicy::Grouped`: where the device's batches group (its check
+/// found a submission that signals nothing merged into the next), every batch of
 /// a queue is the scheduler thread's to hold in its group, so a thread waiting for its `wait`
 /// submits none of [`ROUNDS`] (`scheduler::plain_ready`) and the scheduler's thread submits them
 /// all; elsewhere, the scheduler's thread [`Held`], it submits each, as under `Exact`. `submitted` runs the plain rounds
@@ -267,7 +267,11 @@ fn under_the_default(
     let device = device(cache, CompletionPolicy::Grouped);
     let queue = device.new_command_queue().unwrap();
     let side = device.new_command_queue().unwrap();
-    let groups = merges_submissions(&device.properties().driver_facts);
+    assert!(
+        device.settle_submit_checks(SETTLE),
+        "the submission checks never answered"
+    );
+    let groups = device.submissions_merge();
     let batches = submitted(&device, &queue, (!groups).then_some(&side));
     println!(
         "under the default, batches grouping {groups}: submitted by waiters for the {wait}: \

@@ -21,12 +21,14 @@
 //!     pointer), where the device kept a descriptor of each dma-buf within the descriptors the
 //!     process's devices keep at most ([`kept_fds_limit`]); an import past them is made as any
 //!     other and stays imported;
-//!   - of its pages' pointer, on a driver whose pointer imports follow their address
-//!     (`DriverFact::PointerImportsFollowTheirAddress`: ANV on i915, RADV, lavapipe): there the
-//!     kept import reads, at each submission, the pages mapped at its pointer then, as an import
-//!     again at the same pointer does, so releasing it changes nothing a command reads. Elsewhere
-//!     a pointer import stays imported: the driver may keep the pages it was made over, as
-//!     Metal's buffer does, and an import again would read those a remap put there since.
+//!   - of its pages' pointer, on a device whose check found its pointer imports follow their
+//!     address (`submit_check.rs`, `Device::pointer_imports_follow_their_address`; ANV on i915,
+//!     RADV and lavapipe answered so): there the kept import reads, at each submission, the pages
+//!     mapped at its pointer then, as an import again at the same pointer does, so releasing it
+//!     changes nothing a command reads. Elsewhere, and in a buffer made before the check
+//!     answered, a pointer import stays imported: the driver may keep the pages it was made
+//!     over, as Metal's buffer does, and an import again would read those a remap put there
+//!     since.
 //! - **Blits alone.** It stays releasable while every read of its `VkBuffer` and memory was a
 //!   blit's (`Buffer::blit_at`: a copy or fill naming the buffer, a copy between it and a
 //!   texture, `synchronize_resource`), which holds what it read until its command buffer
@@ -87,7 +89,6 @@ use super::exit_guard;
 use super::host_memory::ImportWindow;
 use super::memory::MemoryClass;
 use super::Device;
-use metal2vulkan::device::DriverFact;
 use std::os::fd::OwnedFd;
 use std::ptr::NonNull;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -210,17 +211,16 @@ impl Again {
         })
     }
 
-    /// The pages imported at `pointer`, made again there: `None` where the device's driver may
-    /// keep the pages a pointer import was made over
-    /// (`DriverFact::PointerImportsFollowTheirAddress` not measured of it), so that the import
+    /// The pages imported at `pointer`, made again there: `None` where the device's pointer
+    /// imports may keep the pages they were made over (its check found they do, could not run,
+    /// or has not answered: `Device::pointer_imports_follow_their_address`), so that the import
     /// stays imported.
     pub(super) fn pointer(
         device: &Device,
         pointer: NonNull<u8>,
         (length, window, class): (u64, ImportWindow, MemoryClass),
     ) -> Option<Again> {
-        let follows = (device.properties().driver_facts)
-            .contains(&DriverFact::PointerImportsFollowTheirAddress);
+        let follows = device.pointer_imports_follow_their_address();
         follows.then(|| Again {
             device: device.clone(),
             from: AgainFrom::Pointer(ImportedAt(pointer)),

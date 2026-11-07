@@ -1,13 +1,15 @@
 //! Batches that go to the driver in one kernel submission (`CompletionPolicy::Grouped`).
 //!
-//! On a driver measured to merge each `vkQueueSubmit`'s `VkSubmitInfo`s that signal nothing into
-//! the next one's kernel submission ([`DriverFact::SubmissionsWithoutSignalsMerge`], whose
-//! documentation holds what was measured where), batches that signal nothing but their queue's
-//! timeline may wait and go in one call for the cost of one kernel submission. The question is
-//! the driver's, and the fact answers it, never the driver's name: a driver without the fact
-//! takes the ungrouped path, each batch its own `vkQueueSubmit`, which is what every batch took
-//! before grouping and is exact alike -- a group changes when a `vkQueueSubmit` is made and
-//! nothing it submits.
+//! On a device whose check found one `vkQueueSubmit` of `VkSubmitInfo`s that signal nothing to
+//! cost about one of its submissions (`submit_check.rs`, `Check::Merge`: Mesa's common queue
+//! merges each into the next one's kernel submission, `vulkan/runtime/vk_queue.c`), batches that
+//! signal nothing but their queue's timeline may wait and go in one call for the cost of one
+//! kernel submission. The question is the device's, and its check answers it, never the driver's
+//! name nor its GPU's: a device whose check found otherwise, or has not answered, takes the
+//! ungrouped path, each batch its own `vkQueueSubmit`, which is what every batch took before
+//! grouping and is exact alike -- a group changes when a `vkQueueSubmit` is made and nothing it
+//! submits. Each command buffer of a group is exact on every driver by Vulkan's own rules (the
+//! bullets below), so the check decides only where grouping pays.
 //!
 //! - **What waits.** A batch the scheduler submits waits here, submitted by nothing yet, where it
 //!   signals nothing but its queue's timeline and its events' semaphores: no binary semaphore,
@@ -88,8 +90,7 @@ use crate::exit_guard::{self, Call};
 use crate::gpu_time;
 use crate::Device;
 use ash::vk;
-use metal2vulkan::device::{CompletionPolicy, DriverFact};
-use std::collections::BTreeSet;
+use metal2vulkan::device::CompletionPolicy;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
@@ -105,12 +106,11 @@ const BATCH_INFOS: usize = 2;
 const MOST_INFOS: usize = GROUP_BATCHES * BATCH_INFOS + 1 + BATCH_INFOS;
 
 /// Whether `device`'s batches on `VkQueue` `queue` may wait in a group: its policy groups them,
-/// its driver is measured to merge a submission that signals nothing into the next (the module
-/// docs), and the queue's failures are not relayed (each relayed batch takes a fence,
-/// `device/relay.rs`).
+/// its check found a submission that signals nothing merged into the next (the module docs), and
+/// the queue's failures are not relayed (each relayed batch takes a fence, `device/relay.rs`).
 pub(crate) fn groups(device: &Device, queue: usize) -> bool {
     device.compile_device().policy().completion == CompletionPolicy::Grouped
-        && merges_submissions(&device.properties().driver_facts)
+        && device.submissions_merge()
         && device.shared().flights(queue).is_none()
 }
 
@@ -173,14 +173,6 @@ const IN_GROUP: u8 = 1;
 
 /// A command buffer's `group_hold` bit: a thread waits for its completion.
 const WAITED_FOR: u8 = 2;
-
-/// Whether the driver merges a `VkSubmitInfo` that signals nothing into the next one's kernel
-/// submission ([`DriverFact::SubmissionsWithoutSignalsMerge`]): the driver's facts alone answer
-/// it, and nothing of the driver's identity, so a test can hand it the facts of each committed
-/// profile (`tests::batches::only_drivers_measured_to_merge_their_submissions_group_their_batches`).
-pub(crate) fn merges_submissions(facts: &BTreeSet<DriverFact>) -> bool {
-    facts.contains(&DriverFact::SubmissionsWithoutSignalsMerge)
-}
 
 /// What sent a group held (`WorkCounts::group_ends_full` and kin).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -222,6 +222,7 @@ mod spares;
 mod sparse;
 mod stencil_copy;
 mod storage_placeholder;
+mod submit_check;
 mod tessellation;
 mod texture;
 mod texture_descriptor;

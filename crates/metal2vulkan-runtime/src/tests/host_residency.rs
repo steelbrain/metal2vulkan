@@ -132,7 +132,7 @@ impl Drop for Scratch {
 }
 
 /// The device the cfg selects: a CPU device under `m2v_cpu_icd`, else a GPU, its shader cache
-/// in `cache`.
+/// in `cache`, its submission checks answered.
 pub(super) fn device(cache: &Path) -> Device {
     let options = DeviceOptions {
         kinds: match cfg!(m2v_cpu_icd) {
@@ -149,7 +149,14 @@ pub(super) fn device(cache: &Path) -> Device {
         },
         ..DeviceOptions::default()
     };
-    Device::system_default_with(&options).unwrap()
+    let device = Device::system_default_with(&options).unwrap();
+    // A no-copy buffer's pointer import is releasable only where the device's check found its
+    // pointer imports follow their address as the buffer was made (`submit_check.rs`).
+    assert!(
+        device.settle_submit_checks(crate::tests::SETTLE),
+        "the submission checks never answered"
+    );
+    device
 }
 
 /// Run `test` on the device the cfg selects, where `/dev/udmabuf` opens.

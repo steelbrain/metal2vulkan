@@ -4,7 +4,7 @@
 use crate::device::driver_facts::{among, Measured, MEASURED, NVIDIA_RTX_3090};
 use crate::device::{DeviceDescription, DriverFact};
 use crate::vk::DriverId;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
 const APPLE: u32 = 0x106B;
@@ -403,14 +403,12 @@ const ONE_OF_METALS: DriverFact = DriverFact::DontCareStoreIsOneOfMetals;
 const COPY_BACK: DriverFact = DriverFact::ShadowCopyBackDispatchFaster;
 const COPY_IN: DriverFact = DriverFact::ShadowCopyInDispatchFaster;
 const ROWS: DriverFact = DriverFact::RowCopiesDispatchFaster;
-const MERGES: DriverFact = DriverFact::SubmissionsWithoutSignalsMerge;
 const MESSENGER: DriverFact = DriverFact::QueueFailuresReportedByMessenger;
 const STALL: DriverFact = DriverFact::SemaphoreOperationsStallSubmits;
 const STALL_1024: DriverFact = DriverFact::SignallingSubmitsStallEvery1024;
 const SAMPLED_HIZ: DriverFact = DriverFact::SampledDepthKeepsHiZ;
 const MSAA_DEPTH: DriverFact = DriverFact::MultisampledDepthFasterOutOfGeneral;
 const TILE_STORE: DriverFact = DriverFact::TileStoreIsMetals;
-const FOLLOWS: DriverFact = DriverFact::PointerImportsFollowTheirAddress;
 const INTERLOCK_ORDER: DriverFact = DriverFact::InterlockOrdersDraws;
 const BLENDLESS: DriverFact = DriverFact::BlendlessColorAttachmentsWarn;
 const HEAP_COLORS: DriverFact = DriverFact::ColorImagesLieAsMetalHeapTextures;
@@ -441,41 +439,21 @@ fn the_committed_profiles_drivers_have_their_facts() {
     let expected: BTreeMap<String, Vec<DriverFact>> = [
         (
             "amd-780m-hawkpoint-radv",
-            vec![
-                ZERO,
-                FETCH,
-                SPLIT,
-                COLOR_BLOCKS,
-                BC6H,
-                BC7,
-                ONE_OF_METALS,
-                MERGES,
-                FOLLOWS,
-            ],
+            vec![ZERO, FETCH, SPLIT, COLOR_BLOCKS, BC6H, BC7, ONE_OF_METALS],
         ),
         (
             "amd-780m-radv",
-            vec![
-                ZERO,
-                FETCH,
-                SPLIT,
-                COLOR_BLOCKS,
-                BC6H,
-                BC7,
-                ONE_OF_METALS,
-                MERGES,
-                FOLLOWS,
-            ],
+            vec![ZERO, FETCH, SPLIT, COLOR_BLOCKS, BC6H, BC7, ONE_OF_METALS],
         ),
         ("amd-rdna2-apu-radv", vec![ZERO]),
         ("amd-rdna3-radv", vec![ZERO]),
         (
             "gate-lavapipe",
-            vec![DENORMALS, FRAGDEPTH, DEPTH16, FETCH, BC6H, MERGES, FOLLOWS],
+            vec![DENORMALS, FRAGDEPTH, DEPTH16, FETCH, BC6H],
         ),
         (
             "gate-lavapipe-x86_64",
-            vec![DENORMALS, FRAGDEPTH, DEPTH16, FETCH, BC6H, MERGES, FOLLOWS],
+            vec![DENORMALS, FRAGDEPTH, DEPTH16, FETCH, BC6H],
         ),
         (
             "intel-arl-anv",
@@ -498,10 +476,8 @@ fn the_committed_profiles_drivers_have_their_facts() {
                 ONE_OF_METALS,
                 COPY_BACK,
                 ROWS,
-                MERGES,
                 SAMPLED_HIZ,
                 MSAA_DEPTH,
-                FOLLOWS,
                 INTERLOCK_ORDER,
             ],
         ),
@@ -518,13 +494,9 @@ fn the_committed_profiles_drivers_have_their_facts() {
                 COPY_BACK,
                 COPY_IN,
                 ROWS,
-                MERGES,
             ],
         ),
-        (
-            "lavapipe",
-            vec![DENORMALS, FRAGDEPTH, DEPTH16, FETCH, BC6H, MERGES, FOLLOWS],
-        ),
+        ("lavapipe", vec![DENORMALS, FRAGDEPTH, DEPTH16, FETCH, BC6H]),
         (
             "moltenvk-m3",
             vec![
@@ -713,23 +685,32 @@ fn nvidia_s_every_1024th_signalling_submit_stall_holds_on_the_gpu_measured() {
     );
 }
 
-/// RADV on the RX 7900 XTX takes the facts measured on it: its pointer imports follow their
-/// address and its submissions without signals merge, as the 780M's do, and it reads zero past a
-/// bound index range, RADV's on every GPU; no answer measured on the 780M alone (its block decodes,
-/// `DONT_CARE` stores, interlocked split, sampled fetch) is taken. Another release takes the same.
+/// RADV on a GPU no row names takes RADV's driver-wide fact alone: the Radeon 780M's own
+/// description presented under the RX 7900 XTX's `deviceID` (0x744c) and under one no table names
+/// (0x1114) reads zero past a bound index range, as RADV does on every GPU, and takes no answer
+/// measured on the 780M alone (its block decodes, `DONT_CARE` stores, interlocked split, sampled
+/// fetch), at another release too. Whether its submissions merge and whether its pointer imports
+/// follow their address are no facts of the table: the runtime's device checks answer them on
+/// each device (`submit_check.rs` in the runtime), so a GPU no row names takes those paths too.
 #[test]
-fn the_rx_7900_xtx_takes_the_facts_measured_on_it() {
-    use crate::device::driver_facts::AMD_RX_7900_XTX;
+fn a_radv_gpu_no_row_names_takes_radv_s_driver_wide_fact_alone() {
     let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../metal2vulkan-validation/profiles");
     let text = std::fs::read_to_string(dir.join("amd-780m-radv.json")).expect("amd-780m-radv");
-    let mut navi31 = DeviceDescription::from_khronos_json(&text, None).expect("profile parses");
-    navi31.device_id = AMD_RX_7900_XTX;
-    let measured =
-        std::collections::BTreeSet::from([FOLLOWS, MERGES, DriverFact::RobustIndexFetchReadsZero]);
-    assert_eq!(navi31.driver_facts(), measured);
-    let mut other = navi31.clone();
-    other.driver_version += 1;
-    assert_eq!(other.driver_facts(), measured);
+    let phoenix = DeviceDescription::from_khronos_json(&text, None).expect("profile parses");
+    let answers = BTreeSet::from([FETCH, SPLIT, COLOR_BLOCKS, BC6H, BC7, ONE_OF_METALS]);
+    let measured = BTreeSet::from([DriverFact::RobustIndexFetchReadsZero]);
+    assert_eq!(
+        phoenix.driver_facts(),
+        answers.union(&measured).copied().collect()
+    );
+    for device_id in [0x744c, 0x1114] {
+        let mut unlisted = phoenix.clone();
+        unlisted.device_id = device_id;
+        assert_eq!(unlisted.driver_facts(), measured, "{device_id:#x}");
+        let mut other = unlisted.clone();
+        other.driver_version += 1;
+        assert_eq!(other.driver_facts(), measured, "{device_id:#x}");
+    }
 }
 
 /// MoltenVK's warning of a pipeline whose restart may be disabled (`MVKPipeline.mm` lines 881-893

@@ -31,8 +31,8 @@
 //! A second measurement holds a guest's shape (`submit_per_import_guest_shape`): [`GUEST_IMPORTS`]
 //! pointer imports, of which each frame's blits read [`GUEST_USED`], in frames of
 //! [`GUEST_PER_FRAME`] command buffers. It measures frames at once, every import resident, then,
-//! where the driver's pointer imports follow their address
-//! (`DriverFact::PointerImportsFollowTheirAddress`), again once the device's residency thread
+//! where the device's check found its pointer imports follow their address (the runtime's
+//! `submit_check.rs`), again once the device's residency thread
 //! released the idle ones while paced frames kept the read ones in use. Printed as
 //! `SUBMIT-GUEST-SHAPE` lines: the imports (`WorkCounts::host_imports_live`,
 //! `host_imports_resident`, `host_imports_released`, `host_imports_reimported`), a frame's wall
@@ -70,7 +70,6 @@ use super::host_memory::{no_copy, Mapping};
 use super::submit_costs::Execbuffers;
 use super::{validated_device_with, Messages, ScratchCache, WAIT};
 use crate::gpu::TEST_DEVICE;
-use metal2vulkan::device::DriverFact;
 use metal2vulkan_runtime::{
     Buffer, CommandBuffer, CommandBufferStatus, CommandQueue, Device, ResourceOptions,
 };
@@ -174,6 +173,21 @@ fn hold(device: &Device, kind: Kind, n: usize) -> Held {
     }
 }
 
+/// Wait for `device`'s submission checks, whose verdicts choose its paths here (whether its
+/// batches group, its long buffers take fresh pages and its idle pointer imports are released),
+/// and print them.
+fn settled(device: &Device) {
+    assert!(
+        device.settle_submit_checks(WAIT),
+        "the submission checks never answered"
+    );
+    eprintln!(
+        "SUBMIT-CHECKS {}: {}",
+        device.name(),
+        device.submit_check_report()
+    );
+}
+
 /// A command buffer of `queue` filling `target`'s 4 KiB with `value`, not committed.
 fn fill(queue: &CommandQueue, target: &Buffer, value: u8) -> CommandBuffer {
     let command_buffer = queue.command_buffer().unwrap();
@@ -274,6 +288,7 @@ fn submit_per_import() {
         options.record_executions = false;
     })
     .unwrap();
+    settled(&device);
     let queue = device.new_command_queue().unwrap();
     let target = device.new_buffer(4096, ResourceOptions::shared()).unwrap();
     let dma_bufs = udmabuf_openable("submit per import");
@@ -375,6 +390,7 @@ fn submit_per_import_guest_shape() {
         options.record_executions = false;
     })
     .unwrap();
+    settled(&device);
     let queue = device.new_command_queue().unwrap();
     let target = device.new_buffer(4096, ResourceOptions::shared()).unwrap();
     let pages = Mapping::anonymous(GUEST_IMPORTS * IMPORT_BYTES);
@@ -390,11 +406,9 @@ fn submit_per_import_guest_shape() {
         .collect();
     let used = &buffers[..GUEST_USED];
     guest_measure(&device, &queue, &target, used, "at once");
-    let follows =
-        (device.properties().driver_facts).contains(&DriverFact::PointerImportsFollowTheirAddress);
-    if !follows {
+    if !device.pointer_imports_follow_their_address() {
         eprintln!(
-            "SUBMIT-GUEST-SHAPE {}: pointer imports kept (the driver is not measured to have them \
+            "SUBMIT-GUEST-SHAPE {}: pointer imports kept (the device's check did not find them \
              follow their address)",
             device.name()
         );
@@ -494,6 +508,7 @@ fn submit_per_import_release_cost() {
             options.record_executions = false;
         })
         .unwrap();
+        settled(&device);
         let queue = device.new_command_queue().unwrap();
         let target = device.new_buffer(4096, ResourceOptions::shared()).unwrap();
         let pages = Mapping::anonymous(GUEST_IMPORTS * IMPORT_BYTES);
@@ -558,6 +573,7 @@ fn submit_per_fresh_page_buffer() {
         options.record_executions = false;
     })
     .unwrap();
+    settled(&device);
     let queue = device.new_command_queue().unwrap();
     let target = device.new_buffer(4096, ResourceOptions::shared()).unwrap();
     for (name, count, length, shared) in FRESH_PHASES {

@@ -230,6 +230,9 @@ pub(crate) struct Counters {
     joins_withheld_from_unshared: AtomicU64,
     queue_switch_checks_run: AtomicU64,
     queue_switch_checks_recalled: AtomicU64,
+    submit_checks_run: AtomicU64,
+    submit_checks_recalled: AtomicU64,
+    submit_check_calls: AtomicU64,
     queue_sharing_untimed: AtomicU64,
     slot_wait_nanos: AtomicU64,
     completed_waits: AtomicU64,
@@ -2189,6 +2192,22 @@ impl Counters {
     /// That check's verdict was read from the record of an earlier one (`queue_share.rs`).
     pub(crate) fn queue_switch_check_recalled(&self) {
         (self.queue_switch_checks_recalled).fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// The device's submission checks ran in this process (`submit_check.rs`).
+    pub(crate) fn submit_checks_ran(&self) {
+        (self.submit_checks_run).fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Their verdicts were read from the record of an earlier run (`submit_check.rs`).
+    pub(crate) fn submit_checks_recalled(&self) {
+        (self.submit_checks_recalled).fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// The submission checks made `calls` `vkQueueSubmit` calls, which `queue_submissions` does
+    /// not count (`submit_check.rs`).
+    pub(crate) fn submit_check_called(&self, calls: usize) {
+        (self.submit_check_calls).fetch_add(calls as u64, Ordering::Relaxed);
     }
 
     /// A device that could share `VkQueue`s does not: its command buffers write no timestamps it
@@ -4756,6 +4775,15 @@ pub struct WorkCounts {
     /// Devices whose verdict of that check was read from the record of an earlier one of the same
     /// driver, device and runtime: no check ran for them.
     pub queue_switch_checks_recalled: u64,
+    /// Runs in this process of the device's submission checks (`submit_check.rs`: whether
+    /// `VkSubmitInfo`s that signal nothing merge, whether a held host-pointer import adds to every
+    /// submission's cost, whether a pointer import follows its address), whatever they answered.
+    pub submit_checks_run: u64,
+    /// Devices whose submission checks' verdicts were read from the record of an earlier run of
+    /// the same driver, device, kernel and runtime: no check ran for them.
+    pub submit_checks_recalled: u64,
+    /// The `vkQueueSubmit` calls the submission checks made, which `queue_submissions` leaves out.
+    pub submit_check_calls: u64,
     /// Devices of `QueueSharingPolicy::Adaptive` with two `VkQueue`s of one family to share that
     /// do not share, because their command buffers write no calibrated GPU timestamps the host
     /// reads (`gpu_times_from_host`, a driver whose timestamps wait for every queue's, or none):
@@ -6685,6 +6713,9 @@ impl Device {
             queue_switch_checks_recalled: counters
                 .queue_switch_checks_recalled
                 .load(Ordering::Relaxed),
+            submit_checks_run: counters.submit_checks_run.load(Ordering::Relaxed),
+            submit_checks_recalled: counters.submit_checks_recalled.load(Ordering::Relaxed),
+            submit_check_calls: counters.submit_check_calls.load(Ordering::Relaxed),
             queue_sharing_untimed: counters.queue_sharing_untimed.load(Ordering::Relaxed),
             completed_waits: counters.completed_waits.load(Ordering::Relaxed),
             event_waits_met: counters.event_waits_met.load(Ordering::Relaxed),

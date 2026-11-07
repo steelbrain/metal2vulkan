@@ -5,14 +5,15 @@
 //! mapped shared, imported by its pointer (`HostMemory::new`), as ANV, NVIDIA and lavapipe import
 //! it; on a device that refuses that pointer (RADV, which imports the `memfd`'s dma-bufs,
 //! `tests/host_residency.rs`), private anonymous pages, which RADV imports by their pointer. Where
-//! the driver's pointer imports follow their address
-//! (`DriverFact::PointerImportsFollowTheirAddress`: ANV on i915, RADV, lavapipe), the device
-//! releases such an import while idle and imports it again at the same pointer at its next blit.
+//! the device's check found its pointer imports follow their address (`submit_check.rs`,
+//! `Device::pointer_imports_follow_their_address`: ANV on i915, RADV and lavapipe answer so), the
+//! device releases such an import while idle and imports it again at the same pointer at its next
+//! blit.
 //! The tests release imports at once through the crate's hook (`Device::release_idle_host_imports`)
 //! and check:
-//! - that a kept import reads the pages a remap put at its address, which is the fact itself, on
-//!   a device with it; on any other the test prints the pages it read, a measurement of the
-//!   driver;
+//! - that a kept import reads the pages a remap put at its address, which is what the check
+//!   found, on a device where it found so, for the guest's shared pages too, which the check does
+//!   not map; on any other the test prints the pages it read, a measurement of the driver;
 //! - the counts that show the release and the import again ran (`WorkCounts::host_imports_released`,
 //!   `host_imports_reimported`, `host_imports_resident`, `host_imports_live`), and none of a
 //!   dma-buf's descriptors kept;
@@ -21,7 +22,7 @@
 //! - that a released import reads after a remap the pages the kept one would read;
 //! - that a buffer whose Metal address was handed out stays imported.
 //!
-//! A device whose driver is not measured with the fact keeps every pointer import: the hook
+//! A device whose check found otherwise keeps every pointer import: the hook
 //! releases none, and each test says so and passes. Where the device refuses the pointers of both
 //! kinds of pages each test says so and passes without running.
 //!
@@ -32,14 +33,17 @@ use super::host_residency::{
     counting, device, gpu_fill, gpu_read, host_page, read, release, residency, Ram, Scratch,
 };
 use crate::{Buffer, Device, Error, HostMemory, ResourceOptions};
-use metal2vulkan::device::DriverFact;
 use metal2vulkan::error::Feature;
 use std::ptr::NonNull;
 
-/// Whether `device`'s driver is measured to have its pointer imports follow their address, so
-/// that the device releases them while idle.
+/// Whether `device`'s check found its pointer imports follow their address, so that the device
+/// releases them while idle: once its checks answered.
 pub(super) fn follows(device: &Device) -> bool {
-    (device.properties().driver_facts).contains(&DriverFact::PointerImportsFollowTheirAddress)
+    assert!(
+        device.settle_submit_checks(crate::tests::SETTLE),
+        "the submission checks never answered"
+    );
+    device.pointer_imports_follow_their_address()
 }
 
 /// Run `test` on the device the cfg selects.

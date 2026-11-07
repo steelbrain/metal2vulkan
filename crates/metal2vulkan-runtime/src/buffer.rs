@@ -2211,9 +2211,12 @@ impl Device {
                 .usage(usage(false)),
         );
         // A heap's own buffer lies where its textures can too, and is never parked. A long
-        // host-visible one of the runtime's own lies in fresh pages where the device takes them.
-        let wants_fresh =
-            !of_heap && fresh_pages::takes_fresh_pages(size, class) && shared.host_import.is_ok();
+        // host-visible one of the runtime's own lies in fresh pages where the device takes them
+        // and its check found a held import adds nothing to its submissions (`fresh_pages.rs`).
+        let wants_fresh = !of_heap
+            && fresh_pages::takes_fresh_pages(size, class)
+            && shared.host_import.is_ok()
+            && self.fresh_pages_pay();
         let making = (!of_heap).then_some(BufferMaking {
             size,
             class,

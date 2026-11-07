@@ -4,8 +4,8 @@
 //! [`BATCHES`] command buffers committed on one queue, each filling a buffer of its own with a
 //! value of its own, the first after a wait for an event the host has not raised, all wait behind
 //! that wait; once the host raises it the scheduler finds them ready together. Under the default
-//! `CompletionPolicy::Grouped`, on a driver measured to merge a submission that signals nothing
-//! into the next one (`DriverFact::SubmissionsWithoutSignalsMerge`), they go in `vkQueueSubmit`
+//! `CompletionPolicy::Grouped`, on a device whose check found a submission that signals nothing
+//! merged into the next one (the runtime's `submit_check.rs`), they go in `vkQueueSubmit`
 //! calls of up to four batches each, only the last of each signalling
 //! (`WorkCounts::grouped_submissions`,
 //! `WorkCounts::batches_grouped`), announced once ([`GROUPED`]); under `CompletionPolicy::Exact`,
@@ -53,7 +53,7 @@ use super::{
     ScratchCache, WAIT,
 };
 use crate::gpu::TEST_DEVICE;
-use metal2vulkan::device::{CompletionPolicy, DeviceDescription, DriverFact};
+use metal2vulkan::device::CompletionPolicy;
 use metal2vulkan_runtime::{
     Buffer, CommandBuffer, CommandBufferStatus, Degradation, DeviceOptions, EventRef,
     ResourceOptions, ShaderCacheOptions, WorkCounts,
@@ -88,12 +88,17 @@ fn group_ends(before: &WorkCounts, after: &WorkCounts) -> [u64; 7] {
     std::array::from_fn(|at| after[at] - before[at])
 }
 
-/// Whether the device's driver merges a submission that signals nothing into the next: the
-/// driver's fact answers it, never its name, and the runtime reads the same fact
-/// (`DriverFact::SubmissionsWithoutSignalsMerge`, the runtime's `group.rs`), so a device whose
-/// identity no lane measured takes the ungrouped path and this lane expects it.
-fn merges(description: &DeviceDescription) -> bool {
-    (description.driver_facts()).contains(&DriverFact::SubmissionsWithoutSignalsMerge)
+/// Whether the device's submissions that signal nothing merge into the next, as its check found
+/// once it answered (the runtime's `submit_check.rs`, which its `group.rs` reads): the device's
+/// own measurement, never its name nor its GPU's, so a GPU no lane measured groups where its
+/// check finds the merge, and this lane expects what the check found.
+fn merges(device: &metal2vulkan_runtime::Device) -> bool {
+    assert!(
+        device.settle_submit_checks(WAIT),
+        "the submission checks never answered"
+    );
+    eprintln!("submission checks: {}", device.submit_check_report());
+    device.submissions_merge()
 }
 
 /// Wait until a pass has taken in every command buffer committed before the call, and ended:
@@ -136,7 +141,7 @@ fn run(completion: CompletionPolicy, checked: bool) -> (u64, u64, u64, usize, bo
             options.policy.completion = completion;
         })
         .unwrap();
-        let merging = merges(&device.properties().description);
+        let merging = merges(&device);
         let queue = device.new_command_queue().unwrap();
         let event = device.new_shared_event().unwrap();
         let buffers: Vec<Buffer> = (0..BATCHES)
@@ -393,7 +398,7 @@ fn event_scenario(completion: CompletionPolicy, steps: &[Step], last: u64) -> Sc
             options.policy.completion = completion;
         })
         .unwrap();
-        let merging = merges(&device.properties().description);
+        let merging = merges(&device);
         let queues = [
             device.new_command_queue().unwrap(),
             device.new_command_queue().unwrap(),
@@ -866,7 +871,7 @@ fn behind_running_work(completion: CompletionPolicy, stretch: usize, carried: Ca
             options.policy.completion = completion;
         })
         .unwrap();
-        let merging = merges(&device.properties().description);
+        let merging = merges(&device);
         let queue = device.new_command_queue().unwrap();
         let large = device
             .new_buffer(RUNNING_FILL, ResourceOptions::private())

@@ -8,9 +8,12 @@
 //!   refuses by their pointer, imported as dma-bufs), fills a window of it with a pattern, and
 //!   makes a texture over it as the program does (`Buffer::new_runtime_texture`): the texture takes
 //!   the image in place exactly as the product's would ([`checking`](crate::in_place::checking)
-//!   lets it whatever the verdict). A thread of its own then writes the pattern's complement into
-//!   the window, each byte once, at a stride that reaches texels, the bytes between rows and the
-//!   bytes after the image from its first writes, while the device makes the image's first move
+//!   lets it whatever the verdict); the fresh-pages class once the device's submission checks
+//!   answered whether its buffers take fresh pages (`submit_check.rs`), unchecked where they do
+//!   not, as the product then makes no such buffer. A thread of its own then writes the
+//!   pattern's complement into the window, each byte once, at a stride that reaches texels, the
+//!   bytes between rows and the bytes after the image from its first writes, while the device
+//!   makes the image's first move
 //!   (an internal submission naming the texture, waited for) and until it completed. Every byte
 //!   must then read the CPU's write where the CPU wrote it, and the pattern elsewhere. Each class
 //!   runs every shape of [`SHAPES`] (texels of 1, 2, 4, 8 and 16 bytes, rows apart or one after
@@ -118,6 +121,10 @@ impl Shape {
         rows.next_multiple_of(page) + 2 * page
     }
 }
+
+/// The longest the fresh-pages class waits for the device's submission checks, which answer
+/// whether its buffers take fresh pages (`submit_check.rs`): their run takes milliseconds.
+const SUBMIT_CHECKS_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
 
 /// The bytes of each class's buffer: past half a pooled block, so that a buffer of the runtime's
 /// own lies in fresh pages (`fresh_pages.rs`), and room for the largest shape's window.
@@ -303,6 +310,12 @@ impl ClassPages {
     /// A buffer of `length` bytes in pages of `class` on `device`, where the device makes one
     /// there; inside a section of its own.
     fn make(device: &Device, class: PagesClass, length: u64) -> Option<ClassPages> {
+        // Whether the device's buffers take fresh pages is its submission checks' answer
+        // (`submit_check.rs`): the class is checked once they gave it, as the product makes its
+        // buffers then.
+        if matches!(class, PagesClass::Fresh) {
+            device.settle_submit_checks(SUBMIT_CHECKS_WAIT);
+        }
         let _busy = exit_guard::enter()?;
         match class {
             PagesClass::Pointer => pointer_pages(device, length),

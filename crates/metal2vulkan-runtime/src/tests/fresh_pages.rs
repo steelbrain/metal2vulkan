@@ -2,8 +2,10 @@
 //!
 //! - **A long new buffer reads zero, nothing written.** A `Shared` buffer, a write-combined one
 //!   and a `Managed` one (with unified memory), each longer than half a pooled block: the `Shared`
-//!   one lies in fresh pages wherever the device imports host pointers
-//!   (`WorkCounts::fresh_page_buffers_made`), with the host setting none of its bytes to zero
+//!   one lies in fresh pages wherever the device imports host pointers and its check found a held
+//!   import adds nothing to a submission's cost (`submit_check.rs`; MoltenVK, ANV, lavapipe), and
+//!   never where it found it does (RADV) (`WorkCounts::fresh_page_buffers_made`), with the host
+//!   setting none of its bytes to zero
 //!   (`new_buffer_bytes_cleared` unchanged); a class whose best memory type for the buffer takes
 //!   no import lies where it would have, the host clearing every byte of it
 //!   (a discrete card's write-combined class, measured below). Either way the buffer reads zero
@@ -44,7 +46,7 @@ use std::path::Path;
 /// read too.
 const LONG: u64 = FRESH_PAGES_PAST + 4100;
 
-/// The device the cfg selects, its shader cache in `cache`.
+/// The device the cfg selects, its shader cache in `cache`, its submission checks answered.
 fn device(cache: &Path) -> Device {
     let options = DeviceOptions {
         kinds: match cfg!(m2v_cpu_icd) {
@@ -61,12 +63,18 @@ fn device(cache: &Path) -> Device {
         },
         ..DeviceOptions::default()
     };
-    Device::system_default_with(&options).unwrap()
+    let device = Device::system_default_with(&options).unwrap();
+    assert!(
+        device.settle_submit_checks(crate::tests::SETTLE),
+        "the submission checks never answered"
+    );
+    device
 }
 
-/// Whether the device takes fresh pages: it imports host pointers.
+/// Whether the device takes fresh pages: it imports host pointers, and its check found a held
+/// import adds nothing to a submission's cost.
 fn takes_fresh_pages(device: &Device) -> bool {
-    device.shared().host_import.is_ok()
+    device.shared().host_import.is_ok() && device.fresh_pages_pay()
 }
 
 /// Fill `buffer` with `value` on the GPU, waited for.

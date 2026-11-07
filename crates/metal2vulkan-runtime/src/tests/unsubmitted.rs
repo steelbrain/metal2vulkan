@@ -11,7 +11,7 @@
 //! Device tests: compiled only under the validation crate's GPU safety cfgs (`m2v_gpu`,
 //! `m2v_cpu_icd`), on the kind of device the cfg selects.
 
-use crate::command_buffer::merges_submissions;
+use crate::tests::SETTLE;
 use crate::{
     CommandBuffer, CommandBufferStatus, Device, DeviceKind, DeviceOptions, EventRef,
     ResourceOptions,
@@ -152,9 +152,9 @@ fn an_empty_command_buffer_completes_with_no_submission() {
 /// macOS 27.0.1: its GPU times 65 to 135 us after the fill's `GPUEndTime`).
 ///
 /// Under `CompletionPolicy::Exact`, so on every driver, the empty command buffer is taken with no
-/// submission in each round. Under the default, on a driver whose batches group
-/// (`DriverFact::SubmissionsWithoutSignalsMerge`: lavapipe), the scheduler may hold the fill in its
-/// group as it finds the empty one ready behind it, which then goes in the group's one
+/// submission in each round. Under the default, on a device whose batches group (its check found
+/// its submissions merge, `submit_check.rs`: lavapipe among them), the scheduler may hold the fill
+/// in its group as it finds the empty one ready behind it, which then goes in the group's one
 /// submission with the fill: either way it makes no submission of its own.
 #[test]
 fn an_empty_command_buffer_completes_behind_its_queue_s_earlier_work() {
@@ -166,8 +166,11 @@ fn an_empty_command_buffer_completes_behind_its_queue_s_earlier_work() {
 /// [`an_empty_command_buffer_completes_behind_its_queue_s_earlier_work`] under `completion`.
 fn completes_behind(completion: CompletionPolicy) {
     let device = device_with(completion);
-    let groups = completion == CompletionPolicy::Grouped
-        && merges_submissions(&device.properties().driver_facts);
+    assert!(
+        device.settle_submit_checks(SETTLE),
+        "the submission checks never answered"
+    );
+    let groups = completion == CompletionPolicy::Grouped && device.submissions_merge();
     let queue = device.new_command_queue().unwrap();
     let target = device.new_buffer(FILL, ResourceOptions::private()).unwrap();
     // Whether the fill was still running when the empty command buffer was committed, in some

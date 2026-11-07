@@ -13,7 +13,12 @@
 //! [`DeviceDescription::canonical_device_id`]. MoltenVK's `deviceID` on Apple's GPUs is the macOS
 //! release and the GPU family, so a row of one names every GPU of the family under that macOS.
 //! A driver or GPU no row names takes no fact: the reader takes the route each fact's docs name
-//! for a driver without it.
+//! for a driver without it. A question a device answers about itself in a few milliseconds is no
+//! row: the runtime's device checks measure it on each device, once per driver and release
+//! (whether its submissions that signal nothing merge, whether a held host-pointer import adds to
+//! each submission's cost, whether a pointer import follows its address: the runtime's
+//! `submit_check.rs`; textures in place over host pages, `in_place_check.rs`; the GPU's idling
+//! between `VkQueue`s, `queue_switch_check.rs`).
 
 use crate::device::description::APPLE_VENDOR_ID;
 use crate::device::profile::DriverWorkaround;
@@ -730,9 +735,6 @@ const AMD_VENDOR_ID: u32 = 0x1002;
 /// ([`DeviceDescription::canonical_device_id`]).
 pub(crate) const AMD_RADEON_780M: u32 = 0x15bf;
 
-/// The `deviceID` of the Radeon RX 7900 XTX (Navi 31) its rows were measured under.
-pub(crate) const AMD_RX_7900_XTX: u32 = 0x744c;
-
 /// The `deviceID` of the Intel UHD Graphics 770 of Raptor Lake-S (the committed capture
 /// `intel-uhd770-rpls-anv`).
 pub(crate) const INTEL_UHD_770_RPL_S: u32 = 0xa780;
@@ -1305,31 +1307,6 @@ pub enum DriverFact {
     /// with a 1 made a second `VkPipeline` there (Metal's specialization and pipeline compile,
     /// 5.6 to 24.5 ms).
     ConstantOffsetUniformReadsPreloaded,
-    /// A cost fact (the module docs): the driver's queue is Mesa's common one, where each
-    /// `vkQueueSubmit`'s `VkSubmitInfo`s that signal nothing merge into the next one's kernel
-    /// submission, so batches that signal nothing but their queue's timeline may wait and go in
-    /// one call for the cost of one kernel submission (Mesa 26.2.4, `vulkan/runtime/vk_queue.c`,
-    /// `vk_queue_submits_merge`: "Don't merge if there are signals in between"; ANV chains the
-    /// merged command buffers into one batch buffer,
-    /// `anv_queue_submit_cmd_buffers_locked`). Each kernel submission costs CPU time for every
-    /// `VkDeviceMemory` of the device there: ANV on i915 lists each in every execbuffer
-    /// (`i915/anv_batch_chain.c`, `setup_execbuf_for_cmd_buffers`), RADV each in every CS. On a
-    /// driver without it each batch takes its own `vkQueueSubmit`, which is the exact path and
-    /// the one every batch took before grouping: a group changes when a batch's `vkQueueSubmit`
-    /// is made and nothing it submits (`command_buffer/group.rs` in the runtime).
-    ///
-    /// Counted where the merge pays, on Mesa 26.2.4's ANV on the Intel UHD 770: 24 kernel
-    /// submissions a frame grouped against 30 ungrouped, at 67 command buffers a frame committed
-    /// 1 ms apart behind 1.3 ms of GPU work each, the GPU as idle either way (0.62 ms a frame).
-    ///
-    /// Measured without it, so not listed: MoltenVK, whose queue is its own and merges nothing
-    /// -- it commits a Metal command buffer for each `VkSubmitInfo` of a call and one for a call
-    /// of none with a fence (`MVKQueue::submit`), about 65 us of a thread of Metal's on an Apple
-    /// M3 Max whether or not the info holds work -- and NVIDIA's proprietary driver, which has
-    /// no Mesa queue. The Mesa drivers no lane measures (Turnip, V3DV, PanVK, NVK, Honeykrisp,
-    /// PowerVR) take no row: the merge is in the common queue they share, but no identity of
-    /// theirs was measured, so each takes the ungrouped exact path.
-    SubmissionsWithoutSignalsMerge,
     /// A defect fact (the module docs): the driver reports a command buffer's execution failure
     /// only to the instance's debug-utils messengers, naming the `VkQueue` and not the
     /// submission, and by default marks the whole `VkDevice` lost for it, where Metal fails the
@@ -1458,28 +1435,6 @@ pub enum DriverFact {
     /// Metal's by construction. On a driver with it the runtime announces no `snorm-minimum-kept`
     /// or `shared-exponent-kept`.
     TileStoreIsMetals,
-    /// A buffer bound to memory the driver imported from a host pointer
-    /// (`VK_EXT_external_memory_host`) reads and writes, at each submission, the pages mapped at
-    /// that pointer then: pages the process maps over the address after the import (`mmap` with
-    /// `MAP_FIXED`) take the place of those it was made over, for the GPU as for the CPU. Vulkan
-    /// states nothing of a remap under a live import, and Metal's no-copy buffer keeps the pages
-    /// wired when it was made. ANV on i915 imports a pointer as a userptr object, whose pages the
-    /// kernel gets again at the next execbuffer once a remap invalidated them (Linux 7.2.9's
-    /// `i915_gem_object_userptr_submit_init`, or at its first execbuffer, before which nothing was
-    /// pinned); RADV imports it as an amdgpu userptr object, whose pages the kernel gets again in
-    /// each command submission once a remap invalidated them (Linux 7.2.9's
-    /// `amdgpu_cs_parser_bos`, through `amdgpu_ttm_tt_get_user_pages`), and refuses a shared
-    /// `memfd`'s pointer where it imports private anonymous pages'; lavapipe reads the memory
-    /// through the pointer itself (`lvp_AllocateMemory`'s `LVP_DEVICE_MEMORY_TYPE_USER_PTR`). On a
-    /// driver with it a no-copy buffer's own pointer import is released while idle and imported
-    /// again at the same pointer at its next blit, which reads the pages the kept import would
-    /// read (`host_residency.rs` in the runtime): on ANV on i915 every execbuffer lists every
-    /// memory of the device, an import of a pointer costing about 0.16 us of the kernel's time in
-    /// each, and on RADV amdgpu gets every page of each live pointer import again in each
-    /// submission: about 0.5 us an import and 29 ns a 4 KiB page on the RX 7900 XTX under Linux
-    /// 7.0.0, about a quarter of that a page on the Radeon 780M under Linux 7.2.9. Elsewhere such
-    /// an import stays imported, as the driver may keep the pages it was made over.
-    PointerImportsFollowTheirAddress,
     /// Consecutive draws of a subpass whose fragment shaders read and write a storage image in
     /// the ordered pixel interlock, every access coherent, are ordered by the interlock alone, as
     /// Vulkan states: each fragment's interlocked operations happen before those of a later draw's
@@ -1940,26 +1895,6 @@ const DYNAMIC_RESTART_WARNING: DriverDiagnostic = DriverDiagnostic {
 /// left a third answer; RADV on the RX 7900 XTX, clean at dd718a7905 at Mesa 26.0.8 but not
 /// measured since; and every GPU not measured, which store with `STORE`.
 ///
-/// `PointerImportsFollowTheirAddress`: ANV, Mesa 26.2.4 on the Iris Xe of RPL-P under Linux 7.2.9's
-/// i915, measured with a probe outside the runtime (2026-10-17): a page of a `memfd` filled with
-/// `0xaa`, mapped shared at an address and imported by its pointer as a buffer's memory, read
-/// `0xaa` through a copy; another `memfd`'s page of `0xbb` mapped over the address with `MAP_FIXED`,
-/// the next copy read `0xbb`; a page of `0xa2` imported and replaced by one of `0xb2` before any
-/// submission, the first copy read `0xb2`. lavapipe (`MESA_LLVMPIPE`) from Mesa 26.0.8 through
-/// 26.2.4 by construction, read in both releases' `lvp_AllocateMemory`, which binds an import's
-/// buffers at the host pointer. RADV, Mesa 26.2.4 on the Radeon 780M under Linux 7.2.9's amdgpu,
-/// measured through the runtime (2026-10-17): a no-copy buffer over two fresh anonymous private
-/// pages, read by a blit; fresh anonymous pages mapped over the address with `MAP_FIXED` and
-/// `Device::host_range_remapped` told, the next blit read the new pages, and the newer ones after a
-/// second remap; remapped between the buffer's making and its first submission, the first blit
-/// read the new pages. RADV, Mesa 26.2.4 on the RX 7900 XTX under the same kernel, measured through
-/// the runtime (2026-10-22, `tests::pointer_residency` before its row): a no-copy buffer over two
-/// fresh anonymous private pages, read by a blit; fresh anonymous pages mapped over the address
-/// with `MAP_FIXED` and `Device::host_range_remapped` told, the next blit of the import kept all
-/// along read the new pages; Mesa 26.0.8 on both under Linux 7.0.0 answered the same.
-/// `tests::pointer_residency` in the runtime checks it on a device with it. Every other driver is
-/// unmeasured, and keeps its pointer imports.
-///
 /// `InterlockOrdersDraws`, measured with no barrier between such draws on any driver (a scratch
 /// build of the commit that adds it), by `runtime_lane::interlocked_draw_order` (passes of 84
 /// draws, fullscreen and held to bands, of two read-modify-writes of an `R32Uint` color that do
@@ -2326,32 +2261,6 @@ pub(crate) const MEASURED: &[Measured<DriverFact>] = &[
         device: None,
     },
     nvidia_on(DriverFact::RowCopiesDispatchFaster, NVIDIA_RTX_5080_LAPTOP),
-    Measured {
-        fact: DriverFact::SubmissionsWithoutSignalsMerge,
-        driver: DriverId::MESA_LLVMPIPE,
-        vendor: None,
-        device: None,
-    },
-    mesa_on(
-        DriverFact::SubmissionsWithoutSignalsMerge,
-        DriverId::MESA_RADV,
-        (AMD_VENDOR_ID, AMD_RADEON_780M),
-    ),
-    mesa_on(
-        DriverFact::SubmissionsWithoutSignalsMerge,
-        DriverId::MESA_RADV,
-        (AMD_VENDOR_ID, AMD_RX_7900_XTX),
-    ),
-    mesa_on(
-        DriverFact::SubmissionsWithoutSignalsMerge,
-        DriverId::INTEL_OPEN_SOURCE_MESA,
-        (INTEL_VENDOR_ID, INTEL_IRIS_XE_RPL_P),
-    ),
-    mesa_on(
-        DriverFact::SubmissionsWithoutSignalsMerge,
-        DriverId::INTEL_OPEN_SOURCE_MESA,
-        (INTEL_VENDOR_ID, INTEL_UHD_770_RPL_S),
-    ),
     mesa_on(
         DriverFact::SampledDepthKeepsHiZ,
         DriverId::INTEL_OPEN_SOURCE_MESA,
@@ -2363,27 +2272,6 @@ pub(crate) const MEASURED: &[Measured<DriverFact>] = &[
         (INTEL_VENDOR_ID, INTEL_IRIS_XE_RPL_P),
     ),
     moltenvk_on_apple(DriverFact::TileStoreIsMetals),
-    mesa_on(
-        DriverFact::PointerImportsFollowTheirAddress,
-        DriverId::INTEL_OPEN_SOURCE_MESA,
-        (INTEL_VENDOR_ID, INTEL_IRIS_XE_RPL_P),
-    ),
-    mesa_on(
-        DriverFact::PointerImportsFollowTheirAddress,
-        DriverId::MESA_RADV,
-        (AMD_VENDOR_ID, AMD_RADEON_780M),
-    ),
-    mesa_on(
-        DriverFact::PointerImportsFollowTheirAddress,
-        DriverId::MESA_RADV,
-        (AMD_VENDOR_ID, AMD_RX_7900_XTX),
-    ),
-    Measured {
-        fact: DriverFact::PointerImportsFollowTheirAddress,
-        driver: DriverId::MESA_LLVMPIPE,
-        vendor: None,
-        device: None,
-    },
     mesa_on(
         DriverFact::InterlockOrdersDraws,
         DriverId::INTEL_OPEN_SOURCE_MESA,
