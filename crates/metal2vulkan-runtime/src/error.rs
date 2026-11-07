@@ -446,7 +446,8 @@ impl Unproven {
 /// guest as Metal does makes the `NSError` of `domain`, `code` and a `userInfo` holding
 /// `NSLocalizedDescription` = `localized_description`, its only key where Metal's holds no
 /// other (every refusal the runtime answers so: [`Problem::IndirectCommandsDirectArgument`],
-/// [`Problem::UnrasterizedVertexReturn`], [`Problem::DepthWrittenWithoutAttachment`],
+/// [`Problem::UnrasterizedVertexReturn`], [`Problem::RasterizedVoidVertex`],
+/// [`Problem::DepthWrittenWithoutAttachment`],
 /// [`Problem::UnwrittenFragmentInputs`], [`Problem::RasterSampleCount`], and
 /// [`Problem::BinaryFunctions`] with [`BinaryFunctionProblem::NotPrecompiled`]).
 #[non_exhaustive]
@@ -970,6 +971,16 @@ pub enum Problem {
     ///
     /// Basis: metal-measured (an M4, macOS 27.0.1: plain Metal answers nil with an NSError).
     UnrasterizedVertexReturn,
+    /// `new_render_pipeline_state` of a descriptor with rasterization enabled whose vertex
+    /// function's return type is `void`, with or without a fragment function, outside OpenGL mode
+    /// (`PrivateRenderState::open_gl_mode_enabled`, with which Metal makes it, rasterizing
+    /// nothing): plain Metal answers nil with an `NSError` ([`Error::MetalError`]) (on an M3 Max
+    /// under macOS 27.0.1). Its error: code 3, `localizedDescription` "RasterizationEnabled is
+    /// true but the vertex shader's return type is void", `userInfo` holding that alone, and the
+    /// domain of Metal's GPU driver class, as [`Problem::IndirectCommandsDirectArgument`]'s.
+    ///
+    /// Basis: metal-measured (an M3 Max, macOS 27.0.1: plain Metal answers nil with an NSError).
+    RasterizedVoidVertex,
     /// `new_render_pipeline_state` (a render or mesh state) of a descriptor with
     /// `supportIndirectCommandBuffers` whose function of `stage`, the first in the order Metal
     /// names them that uses a direct texture or sampler once linked, uses one only by a rule the
@@ -1003,7 +1014,9 @@ pub enum Problem {
         refusal: Box<CompileError>,
     },
     /// `new_render_pipeline_state` of a descriptor without a depth attachment whose fragment
-    /// function writes depth (a `[[depth(...)]]` output): plain Metal answers nil with an
+    /// function writes depth (a `[[depth(...)]]` output), outside OpenGL mode
+    /// (`PrivateRenderState::open_gl_mode_enabled`, with which Metal makes it, the depth going
+    /// nowhere; on an M3 Max under macOS 27.0.1): plain Metal answers nil with an
     /// `NSError` ([`Error::MetalError`]) with or without rasterization, a color attachment or
     /// `supportIndirectCommandBuffers`, before the indirect command buffers' refusal (on an M4
     /// under macOS 27.0.1); `new_mesh_render_pipeline_state` alike, first. Its error: code 3,

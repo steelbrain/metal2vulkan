@@ -539,6 +539,12 @@ pub struct PrivateRenderState {
     /// pipeline amplifies (Metal there draws one copy's color and counts every copy's samples,
     /// a rule not built).
     pub explicit_visibility_group_id: u32,
+    /// `openGLModeEnabled` (default off): changes nothing Metal draws or reflects, and makes two
+    /// states Metal otherwise refuses (`pipeline::private_state`'s docs): a fragment function
+    /// writing depth without a depth attachment, its depth going nowhere, and a rasterizing state
+    /// whose vertex function returns `void`, which rasterizes nothing. The runtime answers both
+    /// (`metal2vulkan-runtime`'s `new_render_pipeline_state`); the compile reads it not.
+    pub open_gl_mode_enabled: bool,
 }
 
 impl PrivateRenderState {
@@ -563,11 +569,12 @@ impl PrivateRenderState {
             needs_custom_border_color_samplers: false,
             vertex_amplification_mode: 0,
             explicit_visibility_group_id: u32::MAX,
+            open_gl_mode_enabled: false,
         }
     }
 
     /// The fields as plain bits, the coverage by its `f32` bits: what equality compares.
-    fn bits(&self) -> (u64, u32, [bool; 9], [u64; 3], u8, [u32; 3]) {
+    fn bits(&self) -> (u64, u32, [bool; 10], [u64; 3], u8, [u32; 3]) {
         (
             self.sample_mask,
             self.sample_coverage.to_bits(),
@@ -581,6 +588,7 @@ impl PrivateRenderState {
                 self.two_side_enabled,
                 self.depth_stencil_write_disabled,
                 self.needs_custom_border_color_samplers,
+                self.open_gl_mode_enabled,
             ],
             [
                 self.alpha_test_function,

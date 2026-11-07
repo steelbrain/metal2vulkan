@@ -1419,7 +1419,9 @@ impl GraphicsState {
             ));
         }
         // Metal answers nil with an `NSError` for a state with rasterization disabled whose vertex
-        // function returns a value (`unrasterized.rs`), before it compiles anything.
+        // function returns a value, and for a rasterizing one whose vertex function returns none
+        // outside OpenGL mode, which makes it rasterizing nothing (`unrasterized.rs`), before it
+        // compiles anything.
         // Each answer below is the one a creation of a descriptor of the same key worked out, where
         // one kept it in memory or in the cache directory (`shader_cache/creation.rs`), else worked
         // out now; kept where this creation worked one out and every question has its answer.
@@ -1435,18 +1437,17 @@ impl GraphicsState {
         // earlier creation read reads its entries and its plain answers rather than decoding and
         // specializing them again (`pipeline/memo.rs`).
         let entries = cache.memo.stage_entries();
-        if !descriptor.rasterization_enabled {
-            let returns = match known.vertex_returns_value {
-                Some(returns) => Ok(returns),
-                None => {
-                    learned = true;
-                    device.shared().counts.linked_use_question_asked();
-                    descriptor.vertex_returns_value(&options.budget(), entries)
-                }
-            };
-            answers.vertex_returns_value = returns.as_ref().ok().copied();
-            super::unrasterized::check("new_render_pipeline_state", returns)?;
-        }
+        let returns = match known.vertex_returns_value {
+            Some(returns) => Ok(returns),
+            None => {
+                learned = true;
+                device.shared().counts.linked_use_question_asked();
+                descriptor.vertex_returns_value(&options.budget(), entries)
+            }
+        };
+        answers.vertex_returns_value = returns.as_ref().ok().copied();
+        let rasterizes =
+            super::unrasterized::rasterizes("new_render_pipeline_state", descriptor, returns)?;
         // Metal links the fragment function whether or not the pipeline rasterizes, and answers
         // nil with an `NSError`, in this order, for a fragment function writing depth without a
         // depth attachment, a function using a direct texture or sampler with indirect command
@@ -1462,7 +1463,10 @@ impl GraphicsState {
             }
         };
         answers.fragment_writes_depth_unattached = writes.as_ref().ok().copied();
-        super::linked_fragment::check_depth("new_render_pipeline_state", writes)?;
+        // OpenGL mode makes the first (`linked_fragment.rs`).
+        if !descriptor.private.open_gl_mode_enabled {
+            super::linked_fragment::check_depth("new_render_pipeline_state", writes)?;
+        }
         if descriptor.support_indirect_command_buffers {
             let uses = match known.stages_using_direct_arguments {
                 Some(uses) => Ok(uses),
@@ -1491,20 +1495,24 @@ impl GraphicsState {
         }
         let rasterized;
         // The descriptor the state is made from, and its key: the one the checks above asked
-        // their questions under, where it is the same descriptor. Dropping the fragment stage
-        // makes another descriptor, which the key reads as one (a stage no descriptor names is
-        // written apart from any stage), so that creation builds the one other key it needs.
-        let (descriptor, made_key) =
-            match descriptor.fragment.is_some() && !descriptor.rasterization_enabled {
-                true => {
-                    let mut unrasterized = descriptor.clone();
-                    unrasterized.fragment = None;
-                    rasterized = unrasterized;
-                    let key = render_descriptor_key(device, &rasterized);
-                    (&rasterized, key)
-                }
-                false => (descriptor, descriptor_key),
-            };
+        // their questions under, where it is the same descriptor. Dropping the fragment stage of a
+        // state that rasterizes nothing, and rasterization where the descriptor asks for it and
+        // the state rasterizes nothing (`unrasterized.rs`), makes another descriptor, which the key
+        // reads as one (a stage no descriptor names is written apart from any stage), so that
+        // creation builds the one other key it needs.
+        let (descriptor, made_key) = match !rasterizes
+            && (descriptor.fragment.is_some() || descriptor.rasterization_enabled)
+        {
+            true => {
+                let mut unrasterized = descriptor.clone();
+                unrasterized.fragment = None;
+                unrasterized.rasterization_enabled = false;
+                rasterized = unrasterized;
+                let key = render_descriptor_key(device, &rasterized);
+                (&rasterized, key)
+            }
+            false => (descriptor, descriptor_key),
+        };
         // The reflection of the descriptor the state is made from: kept, else worked out on a
         // thread of its own beside the rest of the creation, which it shares nothing with. Under
         // the key the compile and the state read, which the creation built once.
@@ -2576,14 +2584,14 @@ fn large_form(
 }
 
 /// Whether `answers` holds an answer to every linked-use question a creation of `descriptor`
-/// asks (`GraphicsState::create_adding`): whether its vertex function returns a value where it
-/// does not rasterize, the stages using a direct argument where it supports indirect command
-/// buffers, and always the fragment's depth write and the unwritten fragment inputs.
+/// asks (`GraphicsState::create_adding`): the stages using a direct argument where it supports
+/// indirect command buffers, and always whether its vertex function returns a value, the
+/// fragment's depth write and the unwritten fragment inputs.
 fn answers_every_question(
     answers: &LinkedUseAnswers,
     descriptor: &RenderPipelineDescriptor,
 ) -> bool {
-    (descriptor.rasterization_enabled || answers.vertex_returns_value.is_some())
+    answers.vertex_returns_value.is_some()
         && answers.fragment_writes_depth_unattached.is_some()
         && (!descriptor.support_indirect_command_buffers
             || answers.stages_using_direct_arguments.is_some())

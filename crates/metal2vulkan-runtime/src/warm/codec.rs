@@ -42,7 +42,7 @@ use std::collections::{BTreeMap, HashMap};
 pub(crate) const MAGIC: &[u8; 8] = b"M2VPREC\0";
 
 /// The record format: bumped whenever a record's bytes change meaning (the module docs).
-pub(crate) const RECORD_FORMAT: u32 = 5;
+pub(crate) const RECORD_FORMAT: u32 = 6;
 
 /// The length of a record's header (magic and format) and of its checksum.
 const HEADER: usize = 8 + 4;
@@ -434,6 +434,7 @@ impl Writer {
         self.bool(p.needs_custom_border_color_samplers);
         self.u64(p.vertex_amplification_mode);
         self.u32(p.explicit_visibility_group_id);
+        self.bool(p.open_gl_mode_enabled);
     }
 
     fn compute(&mut self, d: &ComputePipelineDescriptor) -> Result<(), Unwritable> {
@@ -836,6 +837,7 @@ impl<'a> Reader<'a> {
         p.needs_custom_border_color_samplers = self.bool()?;
         p.vertex_amplification_mode = self.u64()?;
         p.explicit_visibility_group_id = self.u32()?;
+        p.open_gl_mode_enabled = self.bool()?;
         Ok(p)
     }
 

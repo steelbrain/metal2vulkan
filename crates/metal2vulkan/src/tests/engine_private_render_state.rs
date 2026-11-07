@@ -127,6 +127,7 @@ fn defaults_and_properties_that_change_nothing_keep_the_pipeline() {
         s.two_side_enabled,
         s.depth_stencil_write_disabled,
         s.needs_custom_border_color_samplers,
+        s.open_gl_mode_enabled,
     ]
     .contains(&true));
     assert_eq!(
@@ -154,6 +155,7 @@ fn defaults_and_properties_that_change_nothing_keep_the_pipeline() {
             p.vertex_depth_compare_clamp_mask = u32::MAX;
             p.depth_stencil_write_disabled = true;
             p.needs_custom_border_color_samplers = true;
+            p.open_gl_mode_enabled = true;
             p.vertex_amplification_mode = 1;
             // A pipeline that does not amplify.
             p.explicit_visibility_group_id = 3;

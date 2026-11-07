@@ -690,6 +690,7 @@ pub(crate) fn render_descriptor_key(
         needs_custom_border_color_samplers,
         vertex_amplification_mode,
         explicit_visibility_group_id,
+        open_gl_mode_enabled,
     } = private;
     let mut h = KeyHasher::new(b"metal2vulkan/render-descriptor-key/v1");
     h.bytes(profile);
@@ -724,12 +725,16 @@ pub(crate) fn render_descriptor_key(
              {clip_distance_enable_mask} {point_smooth_enabled} {point_coord_lower_left} \
              {point_size_output_vs} {two_side_enabled} {vertex_depth_compare_clamp_mask} \
              {fragment_depth_compare_clamp_mask} {depth_stencil_write_disabled} \
-             {needs_custom_border_color_samplers}{}",
+             {needs_custom_border_color_samplers}{}{}",
             sample_coverage.to_bits(),
             // Appended only past Metal's defaults, so every other descriptor keeps its key.
             match (*vertex_amplification_mode, *explicit_visibility_group_id) {
                 (0, u32::MAX) => String::new(),
                 (mode, group) => format!(" {mode} {group}"),
+            },
+            match open_gl_mode_enabled {
+                true => " opengl",
+                false => "",
             }
         ),
     ];

@@ -11,7 +11,11 @@
 //!   a pipeline without a depth attachment is refused, with or without rasterization, a color
 //!   attachment or `supportIndirectCommandBuffers`, and before the indirect command buffers'
 //!   refusal: code 3, "depthAttachmentPixelFormat is not valid and shader writes to depth"
-//!   ([`Problem::DepthWrittenWithoutAttachment`]).
+//!   ([`Problem::DepthWrittenWithoutAttachment`]). With `openGLModeEnabled`
+//!   (`PrivateRenderState::open_gl_mode_enabled`) the state is made, and draws its colors as
+//!   without the output (on an M3 Max under macOS 27.0.1, probe
+//!   `conformance/probes/opengl_mode.m`): the runtime makes it so, Vulkan dropping the depth of a
+//!   pass without a depth attachment.
 //! - **Stage inputs the vertex function does not write.** A fragment function's stage inputs its
 //!   linking keeps (`RenderPipelineDescriptor::unwritten_fragment_inputs`: those a kept instruction
 //!   reads, the colors its attachments write kept) whose user key no vertex output writes are

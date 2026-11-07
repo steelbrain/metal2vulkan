@@ -82,6 +82,21 @@
 //!   (`LoweringInputs::sample_mask`), from the window pixel's coordinates. A value other than 1
 //!   at a sample count Metal was not measured at (8) is refused `NotImplemented`
 //!   ([`Feature::PrivateRenderState`]) naming it.
+//! - `openGLModeEnabled` changes nothing Metal draws or reflects (probe
+//!   `conformance/probes/opengl_mode.m` on an Apple M3 Max, macOS 27.0.1, each draw made with the
+//!   mode off and on and its records compared byte for byte: depth bands at clip z 0.25, -0.5 and
+//!   1.5, the window origin, facing under `twoSideEnabled` 0 and 1, the flat input of triangle and
+//!   line lists and strips, points of size 1 and 3 with their `[[point_coord]]` under
+//!   `pointCoordLowerLeft` and `pointSizeOutputVS` 0 and 1, lines, a clip distance under
+//!   `clipDistanceEnableMask` 0xff and 0, the sample positions at 4 samples, `sampleCoverage` 0.5
+//!   inverted and not, `sampleMask`, a logic operation, `depthStencilWriteDisabled` 0 and 1, and
+//!   the bindings a pipeline reflects): the properties above that change nothing change nothing
+//!   with it either. It makes two states Metal otherwise refuses, which the runtime answers: a
+//!   fragment function writing depth without a depth attachment, whose colors draw as without the
+//!   output, and a rasterizing state whose vertex function returns `void`, whose draws run the
+//!   vertex function and rasterize nothing. The other refusals tried stand: fragment inputs no
+//!   vertex output writes or of another type, a `float` output to an integer attachment, and
+//!   stage-in attributes without a vertex descriptor or missing from it. The compile reads it not.
 //! - `pointSmoothEnabled` changes what Metal draws; until the translation builds it, on is
 //!   refused `NotImplemented` naming it.
 //! - `textureWriteRoundingMode` 2 rounds a fragment function's texture writes to half-float and

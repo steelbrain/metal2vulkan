@@ -172,6 +172,7 @@ fn render() -> Pipeline {
     p.needs_custom_border_color_samplers = true;
     p.vertex_amplification_mode = 1;
     p.explicit_visibility_group_id = 4;
+    p.open_gl_mode_enabled = true;
     Pipeline::Render(d, [1, 3])
 }
 

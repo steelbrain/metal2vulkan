@@ -1249,7 +1249,7 @@ fn a_render_descriptor_key_covers_its_fields() {
         "the profile"
     );
     type Change = fn(&mut RenderPipelineDescriptor, &crate::library::Function);
-    let changes: [(&str, Change); 10] = [
+    let changes: [(&str, Change); 11] = [
         ("no fragment", |e, _| e.fragment = None),
         ("the fragment's function", |e, v| {
             e.fragment = Some(StageSource::Function(FunctionDescriptor::new(v.clone())));
@@ -1278,6 +1278,7 @@ fn a_render_descriptor_key_covers_its_fields() {
             e.private.sample_coverage = 0.0;
         }),
         ("a private flag", |e, _| e.private.two_side_enabled = true),
+        ("OpenGL mode", |e, _| e.private.open_gl_mode_enabled = true),
     ];
     let mut seen = vec![key];
     for (what, change) in changes {
