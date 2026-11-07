@@ -18,12 +18,14 @@
 //! the counts say which copies in moved nothing (`WorkCounts::shadow_copies_in_skipped_by_standing`).
 //! A standing that never held leaves the bytes right and the counts wrong; one that held over a
 //! write leaves the counts right and the bytes wrong. A shadowed render target over host pages a
-//! no-copy buffer imports, whose CPU writes no count sees, never stands.
+//! no-copy buffer imports, whose CPU writes no count sees, never stands (a shadow under
+//! `HostPageTexturePolicy::Shadow`, `blit_holds::shadow_device`: under the default policy the
+//! device's in-place check may put it in place, with no image to stand).
 //!
 //! Device tests: compiled only under the validation crate's GPU safety cfgs (`m2v_gpu`,
 //! `m2v_cpu_icd`), on the kind of device the cfg selects.
 
-use super::blit_holds::{device, over_host, Host, Scratch, WAIT};
+use super::blit_holds::{device, over_host, shadow_device, Host, Scratch, WAIT};
 use super::encoder_holds::{bytes_of, library};
 use crate::{
     Buffer, CommandQueue, ComputePipelineState, Device, IoSurfacePlane, LoadAction,
@@ -337,14 +339,14 @@ fn a_private_plane_copies_in_after_its_own_command_buffer_s_write_and_once_hande
     assert_eq!(counts.against, 0, "handed out, it never stands");
 }
 
-/// A shadowed render target over host pages a no-copy buffer imports never stands: no count sees
-/// the CPU's writes. A CPU write between two command buffers reaches the second one's read, and
-/// no copy in of either is decided against a standing.
+/// A shadowed render target over host pages a no-copy buffer imports (under the shadow policy)
+/// never stands: no count sees the CPU's writes. A CPU write between two command buffers reaches
+/// the second one's read, and no copy in of either is decided against a standing.
 #[test]
 fn a_render_target_over_host_pages_never_stands() {
     let host = Host::new();
     let scratch = Scratch::new("shadow-standing-host");
-    let device = device(&scratch.0);
+    let device = shadow_device(&scratch.0);
     let runs = Arc::new(AtomicUsize::new(0));
     let Some(buffer) = over_host(&device, &host, &runs) else {
         return;
