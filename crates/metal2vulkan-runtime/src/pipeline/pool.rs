@@ -681,8 +681,8 @@ pub(crate) mod held {
     /// A draw's making that took what its state kept for it (`render.rs`).
     static MID_MAKING: Stop = Stop::new();
 
-    /// A dispatch's making that its piece settled, before the piece gives back what it took
-    /// (`dispatch_making.rs`): inside the piece's trail (`trails.rs`).
+    /// A dispatch's or a draw's making that its piece settled, before the piece gives back what
+    /// it took (`dispatch_making.rs`, `render.rs`): inside the piece's trail (`trails.rs`).
     static SETTLED: Stop = Stop::new();
 
     /// Hold every draw's making from now, once it took what its state kept for it, until the
@@ -697,14 +697,15 @@ pub(crate) mod held {
         MID_MAKING.reach();
     }
 
-    /// Hold every dispatch's piece from now, once it settled its making and before it gives back
-    /// what it took, until the hold is dropped: the batches that waited for the making may run
-    /// and complete meanwhile.
+    /// Hold every dispatch's and draw's piece from now, once it settled its making and before it
+    /// gives back what it took, until the hold is dropped: the batches and the state creation that
+    /// waited for the making may go on meanwhile.
     pub(crate) fn settled_hold() -> Holding {
         SETTLED.hold()
     }
 
-    /// A dispatch's piece that settled its making: wait while a [`settled_hold`] lives.
+    /// A dispatch's or a draw's piece that settled its making: wait while a [`settled_hold`]
+    /// lives.
     pub(crate) fn settled() {
         SETTLED.reach();
     }

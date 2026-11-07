@@ -1,8 +1,8 @@
 //! Trails: a runtime thread's hold of what it held for a command buffer's work, past the moment
 //! the work could go on without it.
 //!
-//! Some of the runtime's threads make what a committed command buffer waits for, say so, and only
-//! then let go of what they held to make it:
+//! Some of the runtime's threads make what a committed command buffer or a render state's creation
+//! waits for, say so, and only then let go of what they held to make it:
 //! - a pool piece settles a pipeline's making and then gives back its variant, or a capture's
 //!   translation and then its device (`pipeline/dispatch_making.rs`, `pipeline/render.rs`);
 //! - the reaper lets go of what a released state's piece gave back (`pipeline/reaper.rs`);
@@ -21,11 +21,13 @@
 //!   after that is let go of.
 //! - **Numbered** in the order opened. A command buffer takes [`Trails::mark`] as it completes
 //!   (`CommandBufferShared::complete`): every trail of the work it waited for is numbered below.
-//! - **Waited for by a command buffer's waiters alone** ([`Trails::wait_below`]):
-//!   `wait_until_completed` and its timed form, once the command buffer's gate opened, wait until
-//!   no trail numbered below its mark is open, within the timed form's timeout. Nothing else
-//!   waits: the completion, its status, its handlers, its gate and its queue's later transitions
-//!   are as they were. An open trail is the time between a signal and a few drops, so a wait meets
+//! - **Waited for by a command buffer's waiters and a render state's creation**
+//!   ([`Trails::wait_below`]): `wait_until_completed` and its timed form, once the command
+//!   buffer's gate opened, wait until no trail numbered below its mark is open, within the timed
+//!   form's timeout; a render state's creation, once the makings it handed the pool settled,
+//!   until no trail opened before that is open, within its wait's bound
+//!   (`RenderVariant::make_at_creation`). Nothing else waits: the completion, its status, its
+//!   handlers, its gate and its queue's later transitions are as they were. An open trail is the time between a signal and a few drops, so a wait meets
 //!   one only where that thread lost its CPU in between.
 //! - **No deadlock.** A trail holds nothing of the device and takes no lock but this registry's;
 //!   the thread that holds it waits for nothing a waiter holds (it settles, gives back, drops), and

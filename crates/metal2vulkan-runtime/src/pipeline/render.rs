@@ -3072,7 +3072,8 @@ impl RenderVariant {
     /// before. Under `PipelineWaitPolicy::Bounded` (the default) each making is handed to the
     /// device's pool, kept by the state's piece holds as a draw's is ([`pooled`](Self::pooled)),
     /// and the creation waits for them the policy's `pipeline_creation_wait` (4.5 s by default) at
-    /// most, one deadline for all of them, as Metal compiles in its creation: a driver's cold
+    /// most, one deadline for all of them, and within it for each settled piece to give back what
+    /// it took (its trail, `trails.rs`), as Metal compiles in its creation: a driver's cold
     /// compile (seconds on MoltenVK with a cold Metal compiler service) holds the thread creating
     /// the state, which a host may create inside a command buffer's encoding, no longer; a draw
     /// that finds the making in flight takes it (`render/pending.rs`), its command buffer waiting a
@@ -3178,6 +3179,17 @@ impl RenderVariant {
             if making.wait_until(deadline).is_none() {
                 device.shared().counts.creation_left_making();
             }
+        }
+        // And, as a command buffer's waiter waits (`trails.rs`), until each piece that settled its
+        // making gave back what it took, within the same bound: the trail it opened before the
+        // settle closes once the state keeps what it gave back. So no pool thread holds the device
+        // for a making this creation waited for once it returns, and a program that then lets go
+        // of the state and the device tears the device down on its own thread, before its last
+        // drop returns, its shader cache's writes done.
+        if !handed.is_empty() {
+            let trails = &device.shared().trails;
+            // At the bound the piece goes on and gives back as a draw's does.
+            let _ = trails.wait_below(trails.mark(), Some(deadline));
         }
         // The full join: every key begun here is settled before the creation returns.
         if pieces.is_empty() {
@@ -3462,11 +3474,13 @@ impl RenderVariant {
                 counts.creation_pipeline_made(crate::work_counts::Predicted::Render);
             }
             // Its callers take it from the making: from the settle, the batches that wait
-            // for it may run and complete while this piece still holds the variant and the
-            // pass, and the device with them, until it gave them back. A trail spans that
-            // (`trails.rs`).
+            // for it, and the creation that waits for it, may go on while this piece still holds
+            // the variant and the pass, and the device with them, until it gave them back. A
+            // trail spans that (`trails.rs`).
             let trail = variant.objects.device.shared().trails.open();
             drop(ticket.settle(made));
+            #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+            super::pool::held::settled();
             lease.give_back(
                 PieceHeld::Drawn {
                     _variant: variant,

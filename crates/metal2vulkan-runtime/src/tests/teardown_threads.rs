@@ -17,7 +17,9 @@
 //!   before it gave back its variant (`pool::held::settled_hold`) lets the command buffer complete
 //!   and its completed handler run, but not its wait return, until the piece let go (its trail,
 //!   `trails.rs`): the program's drops after the wait tear the device down on its own thread,
-//!   before the last drop returns.
+//!   before the last drop returns. Nor a render state's creation return, whose predicted
+//!   pipeline's piece is held so: the program's drops of the state and the device right after it
+//!   tear the device down on its own thread too.
 //! - **The scheduler**: a committed command buffer held at its submission (its submission check
 //!   blocked on the scheduler's thread). The teardown ends on the scheduler, whose submitted
 //!   batch's hold goes after its lock, or on the queue's handler thread, which releases what the
@@ -357,6 +359,40 @@ fn a_device_dropped_after_a_wait_goes_on_the_program_s_thread_while_its_piece_tr
     assert!(
         releasing.join().unwrap(),
         "the wait met the piece's open trail"
+    );
+}
+
+/// A render state's creation whose making the pool settled, its piece held before it gives back
+/// the variant it took (`pool::held::settled_hold`): the creation returns only once its wait met
+/// the piece's trail and the piece let go (`trails.rs`), so the program's drops of the state and
+/// the device right after it tear the device down on its thread, before the last drop returns.
+/// Before, the creation returned at the settle while the piece held the variant, and the device
+/// went on the pool's or the reaper's thread after the program's last drop returned:
+/// `render_stage_digests`' second device over the same options revived the first, its memo warm,
+/// or met a directory its teardown had not finished writing, under a loaded host.
+#[test]
+fn a_device_dropped_after_a_creation_goes_on_the_program_s_thread_while_its_piece_trails() {
+    let scratch = Scratch::new("creation-trail");
+    let (device, ending) = watched(&scratch.0);
+    let settled = held::settled_hold();
+    let made = device.work_counts().creation_pipelines_made;
+    // Released once a wait met the piece's open trail.
+    let releasing = std::thread::spawn(move || {
+        let met = blocked::reached(1, WAIT);
+        drop(settled);
+        met
+    });
+    let state = state(&device);
+    assert!(
+        device.work_counts().creation_pipelines_made > made,
+        "the creation made its predicted pipeline"
+    );
+    drop(state);
+    drop(device);
+    ending.ended_here();
+    assert!(
+        releasing.join().unwrap(),
+        "the creation's wait met the piece's open trail"
     );
 }
 
