@@ -1989,6 +1989,14 @@ pub enum RenderStep {
         instances: u32,
         base_instance: u32,
     },
+    /// `setVertexBuffer:offset:attributeStride:atIndex:`: a vertex binding the draws after it read
+    /// at `stride` through a layout of `MTLBufferLayoutStrideDynamic`.
+    VertexBufferWithStride {
+        buffer: Handle,
+        offset: u64,
+        stride: u64,
+        index: u32,
+    },
 }
 
 impl RenderStep {
@@ -2098,6 +2106,7 @@ impl RenderStep {
             RenderStep::TessellationFactorScale { .. } => "setTessellationFactorScale",
             RenderStep::DrawPatches { .. } => "drawPatches",
             RenderStep::DrawIndexedPatches { .. } => "drawIndexedPatches",
+            RenderStep::VertexBufferWithStride { .. } => "setVertexBufferAttributeStride",
         }
     }
 
@@ -2420,6 +2429,16 @@ impl RenderStep {
                 bytes.extend(control_point_index_offset.to_le_bytes());
                 bytes.extend(instances.to_le_bytes());
                 bytes.extend(base_instance.to_le_bytes());
+            }
+            RenderStep::VertexBufferWithStride {
+                offset,
+                stride,
+                index,
+                ..
+            } => {
+                bytes.extend(offset.to_le_bytes());
+                bytes.extend(stride.to_le_bytes());
+                bytes.extend(index.to_le_bytes());
             }
         }
         bytes
@@ -3292,7 +3311,13 @@ mod tests {
                 instances: 1,
                 base_instance: 0,
             },
-            RenderStep::DrawIndexedPatches { .. } => return None,
+            RenderStep::DrawIndexedPatches { .. } => RenderStep::VertexBufferWithStride {
+                buffer: handle(),
+                offset: 0,
+                stride: 4,
+                index: 0,
+            },
+            RenderStep::VertexBufferWithStride { .. } => return None,
         })
     }
 

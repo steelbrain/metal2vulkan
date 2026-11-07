@@ -9364,6 +9364,25 @@ impl MetalSide {
                     );
                 }
             }
+            RenderStep::VertexBufferWithStride {
+                buffer,
+                offset,
+                stride,
+                index,
+            } => {
+                let held = self.held(*buffer)?;
+                // SAFETY: the buffer is this side's own and the encoder outlives the call; the
+                // stride is a number Metal reads, and what a draw fetches at it is the case's
+                // measurement.
+                unsafe {
+                    encoder.setVertexBuffer_offset_attributeStride_atIndex(
+                        Some(held),
+                        *offset as usize,
+                        *stride as usize,
+                        *index as usize,
+                    );
+                }
+            }
         }
         Ok(())
     }

@@ -192,6 +192,7 @@ pub mod topology_classes;
 pub mod two_plane_copies;
 pub mod two_plane_heap_blits;
 pub mod two_plane_samples;
+pub mod vertex_attribute_strides;
 pub mod vertex_formats;
 pub mod visibility;
 pub mod visible_tables;
@@ -507,6 +508,7 @@ pub fn all() -> Vec<Box<dyn Case>> {
     cases.extend(blit_encoder_commands::all());
     cases.extend(compute_encoder_commands::all());
     cases.extend(attribute_strides::all());
+    cases.extend(vertex_attribute_strides::all());
     cases.extend(stage_in_unread::all());
     cases.extend(blit_indirect_commands::all());
     cases.push(Box::new(compute_heap_residency::heap_residency()));

@@ -134,7 +134,7 @@ const DRAW_FIXTURE: &str = "tob_renders";
 /// The byte every output buffer is filled with before a row runs, so a word no command wrote
 /// reads as this rather than as zero — which is what lets a row say that a reset command, or a
 /// command outside the executed range, ran nothing.
-const UNWRITTEN: u8 = 0xee;
+pub(super) const UNWRITTEN: u8 = 0xee;
 
 /// The parameter pairs a row's commands bind, one pair a command, each at its own 16-byte offset
 /// so a command that bound the wrong offset writes another command's words.
@@ -214,7 +214,7 @@ fn first_refusal(
 
 /// The sites one `Side::render` program's answer emits: what each piece of the command buffer
 /// answered, the status, and the error.
-fn program_node(work: &[RenderWork], outcome: &crate::case::PassOutcome) -> Node {
+pub(super) fn program_node(work: &[RenderWork], outcome: &crate::case::PassOutcome) -> Node {
     let mut calls = Node::branch("calls", Vec::new());
     for (at, refused) in outcome.refused.iter().enumerate() {
         let name = work.get(at).map_or("call", RenderWork::call);
@@ -245,7 +245,7 @@ fn program_node(work: &[RenderWork], outcome: &crate::case::PassOutcome) -> Node
 }
 
 /// The first piece of a program that refused, as the site and the failure.
-fn first_refused_piece(
+pub(super) fn first_refused_piece(
     work: &[RenderWork],
     outcome: &crate::case::PassOutcome,
 ) -> Option<(String, Failure)> {
@@ -261,7 +261,7 @@ fn first_refused_piece(
 }
 
 /// Both committed texts of `fixture`, as a case's shader references.
-fn shaders_of(fixture: &'static str, entry: &str) -> Result<Vec<ShaderRef>, String> {
+pub(super) fn shaders_of(fixture: &'static str, entry: &str) -> Result<Vec<ShaderRef>, String> {
     let held = Fixture::new(fixture);
     [RUNTIME_TEXT, METAL_TEXT]
         .into_iter()
@@ -276,7 +276,7 @@ fn shaders_of(fixture: &'static str, entry: &str) -> Result<Vec<ShaderRef>, Stri
 }
 
 /// Both committed texts of `fixture`, as a case's inputs.
-fn fixture_inputs(fixture: &'static str) -> Result<Vec<Input>, String> {
+pub(super) fn fixture_inputs(fixture: &'static str) -> Result<Vec<Input>, String> {
     let held = Fixture::new(fixture);
     Ok(vec![
         Input {
