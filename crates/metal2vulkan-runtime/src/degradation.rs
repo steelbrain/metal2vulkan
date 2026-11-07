@@ -1039,8 +1039,8 @@ degradations! {
              placed one";
         /// A heap of the runtime's memory or an indirect command buffer made with
         /// `MTLResourceOptions` bit 24
-        /// ([`ResourceOptions::PRIVATE_BIT`](crate::ResourceOptions::PRIVATE_BIT)), or off macOS a
-        /// no-copy buffer or heap over the caller's bytes, which Metal makes and keeps the GPU's
+        /// ([`ResourceOptions::PRIVATE_BIT`](crate::ResourceOptions::PRIVATE_BIT)), which Metal
+        /// makes and keeps the GPU's
         /// writes from the memory of (the M3 Max under macOS 27.0.1, `read_only_view.rs`: what a
         /// shader or the blit engine writes reaches neither the CPU nor a later command buffer,
         /// which read the memory's bytes -- a blit's fill, a kernel's stores, a vertex- or
@@ -1050,9 +1050,10 @@ degradations! {
         /// machinery writes **faults** the command buffer -- a colour attachment over that memory,
         /// a resolve into it, a depth or stencil attachment in a heap of the bit, and a blit into a
         /// texture over or in it), is
-        /// made as without it, and reports its options without it, as Metal's does. On macOS a
-        /// no-copy buffer or heap with the bit drops the GPU's writes as Metal's does, its pages
-        /// imported through a read-only view of them (`read_only_view.rs`), announcing nothing.
+        /// made as without it, and reports its options without it, as Metal's does. A no-copy
+        /// buffer or heap with the bit drops the GPU's writes as Metal's does: on macOS its pages
+        /// imported through a read-only view of them (`read_only_view.rs`), announcing nothing;
+        /// elsewhere made over a copy of them that drops them (`copied-host-pages`).
         /// A buffer of the runtime's memory or a texture descriptor with the bit is refused, as
         /// Metal ends the process there; a buffer placed in a heap without the bit is made as
         /// without it, as Metal's is, announcing nothing.
@@ -1973,9 +1974,12 @@ degradations! {
         /// memory, or another Vulkan error, such as a driver out of the mappings the host kernel
         /// allows), or the runtime kept pages the kernel cannot pin from a driver whose failed
         /// import of them breaks it (`RuntimeDriverDefect::UnpinnablePagesBreakHostMemory`) and no
-        /// dma-buf of them served. A copy of pages the process maps read-only drops the GPU's
-        /// writes, as Metal drops them: never written to the pages
-        /// (`WorkCounts::copied_dropped_bytes`; the detail says so). A copy whose own allocation
+        /// dma-buf of them served; or, off macOS, the memory is of Metal's private option bit 24
+        /// (`ResourceOptions::PRIVATE_BIT`), which no import there keeps the GPU's writes from, and
+        /// which is copied without asking the gate (`WorkCounts::copied_read_only_memory`). A copy
+        /// of pages the process maps read-only, or of bit-24 memory, drops the GPU's writes, as
+        /// Metal drops them: never written to the pages (`WorkCounts::copied_dropped_bytes`; the
+        /// detail says so). A copy whose own allocation
         /// fails refuses the call (`OutOfMemory`).
         /// Announced once per device, by the call that makes it, or at each such call where
         /// `DeviceOptions::announce_each` asks. Counted: `WorkCounts::copied_host_buffers_made`.
@@ -3404,27 +3408,10 @@ impl Device {
         }
     }
 
-    /// `options` of `call`'s no-copy buffer or heap over the caller's bytes without
-    /// [`ResourceOptions::PRIVATE_BIT`], and whether its memory drops the GPU's writes, as Metal's
-    /// does where the options set the bit: on macOS, where the runtime imports the pages through
-    /// a read-only view of them (`read_only_view.rs`). Elsewhere the GPU's writes reach the
-    /// pages, announced once ([`Degradation::PrivateResourceOption`]).
-    pub(super) fn no_copy_options(
-        &self,
-        call: &'static str,
-        options: ResourceOptions,
-    ) -> (ResourceOptions, bool) {
-        if !crate::read_only_view::VIEWS_DROP_WRITES {
-            return (self.take_options(call, options), false);
-        }
-        options.without_private_bit()
-    }
-
     /// `options` as the runtime makes `call`'s resource of them where Metal makes it with
     /// [`ResourceOptions::PRIVATE_BIT`] and keeps the GPU's writes from its memory (a heap of
-    /// the runtime's memory; a no-copy buffer or heap off macOS, [`Device::no_copy_options`]; an
-    /// indirect command buffer, whose GPU-written records under it are not measured): without the
-    /// bit, announced once ([`Degradation::PrivateResourceOption`]).
+    /// the runtime's memory; an indirect command buffer, whose GPU-written records under it are
+    /// not measured): without the bit, announced once ([`Degradation::PrivateResourceOption`]).
     pub(super) fn take_options(
         &self,
         call: &'static str,

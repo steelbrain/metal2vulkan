@@ -54,8 +54,10 @@
 //!   `WorkCounts::copied_copy_in_bytes_skipped`.
 //! - **Pages the process cannot write** (read-only pages, as a consumer's alias of a read-only
 //!   replace, `replaceBackingWithRanges:readOnly:`, maps them), asked of the system as the copy is
-//!   made ([`mapped_writable`]): the GPU's writes to the copy are dropped, as Metal drops the GPU's
-//!   writes to read-only memory (`read_only_view.rs`). At each batch's completion every byte the
+//!   made ([`mapped_writable`]), and memory of Metal's private option bit 24 where the system maps
+//!   no read-only view of the pages (`read_only_view.rs`, copied whatever the gate would answer):
+//!   the GPU's writes to the copy are dropped, as Metal drops the GPU's writes to read-only
+//!   memory. At each batch's completion every byte the
 //!   GPU changed in the copy takes back the byte the pages and the copy last agreed on
 //!   ([`CopiedBuffers::merge_back`]), and nothing is written to the pages: later commands of the
 //!   same batch read the write back, and a later command buffer the pages' bytes. The CPU's writes
@@ -98,8 +100,9 @@
 //!   textures bound to its bytes and the images in place over the buffer are made again over the
 //!   copy: in fresh pages the runtime imported where an image in place rides on it, made as over
 //!   the caller's pages; else linear images of its memory that start `PREINITIALIZED`.
-//! - **What is not copied.** Memory whose GPU writes Metal's private option bit 24 drops imports as
-//!   before. A texture made over a copied buffer is a shadow of its bytes (`shadowed-texture`).
+//! - **What is not copied.** On macOS, memory whose GPU writes Metal's private option bit 24 drops
+//!   imports a read-only view of its pages (`read_only_view.rs`). A texture made over a copied
+//!   buffer is a shadow of its bytes (`shadowed-texture`).
 
 use crate::device::lock;
 use crate::dirty_pages::{new_writer, DirtySource, DirtyTally, PagesLog};
@@ -338,10 +341,10 @@ impl CopiedBuffers {
 
     /// Register the copy at `copy` of the `length` bytes at `pages`, its bytes read from the pages
     /// now ([`read_caller`]: through the kernel, or where it fails, with plain loads of pages
-    /// mapped readable). Where the process cannot write every page ([`mapped_writable`]), the
-    /// GPU's writes to the copy are dropped (the module docs). Refused, registering nothing, where
-    /// the process cannot read every page, or the host has no memory for the bytes the copy and
-    /// the pages last agreed on.
+    /// mapped readable). Where the process cannot write every page ([`mapped_writable`]), or
+    /// `read_only` (memory of Metal's private option bit 24), the GPU's writes to the copy are
+    /// dropped (the module docs). Refused, registering nothing, where the process cannot read
+    /// every page, or the host has no memory for the bytes the copy and the pages last agreed on.
     ///
     /// # Safety
     ///
@@ -354,6 +357,7 @@ impl CopiedBuffers {
         pages: NonNull<u8>,
         copy: NonNull<u8>,
         length: usize,
+        read_only: bool,
     ) -> Result<Copied, NotCopied> {
         let read = |pages: NonNull<u8>, into: &mut [u8]| {
             // SAFETY: the caller's bytes, read with plain loads only where the process maps them
@@ -361,7 +365,8 @@ impl CopiedBuffers {
             unsafe { read_caller(pages, into, read_pages, mapped_readable) }
         };
         let start = pages.as_ptr() as u64;
-        let drops_writes = !mapped_writable(start, start.saturating_add(length as u64));
+        let drops_writes =
+            read_only || !mapped_writable(start, start.saturating_add(length as u64));
         // SAFETY: the caller's.
         unsafe { self.add_reading(pages, copy, length, read, drops_writes) }
     }

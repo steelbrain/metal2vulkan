@@ -297,6 +297,7 @@ impl Device {
             owner: Owner::Vulkan,
             release: None,
             of_heap: false,
+            drops_writes: false,
             mirror: None,
             #[cfg(unix)]
             again: None,

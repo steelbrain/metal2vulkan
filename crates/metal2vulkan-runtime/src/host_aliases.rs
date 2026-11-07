@@ -49,8 +49,8 @@
 //!   the shadow copy in again, as a write through its own buffer does.
 //! - **Not joined.** Buffers over memory that overlaps without being the same range, a heap's
 //!   bytes (a heap's own copy too), and the memory a rebound buffer takes, keep their own keys,
-//!   and a buffer whose GPU writes are dropped imports a read-only view of its own (a copy shared
-//!   with it would take its writes): Metal orders no two
+//!   and a buffer whose GPU writes are dropped imports a read-only view of its own, or is a copy
+//!   of its own (a copy shared with it would take its writes): Metal orders no two
 //!   no-copy buffers over one allocation (the same probe's `host` cases read stale or mixed
 //!   texels), so the runtime's joining of the same range is the IOSurface's ordering, which a
 //!   race over plain no-copy buffers may also give. A rebound buffer leaves the memory it was

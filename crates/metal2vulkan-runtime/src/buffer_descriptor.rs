@@ -230,7 +230,7 @@ impl Device {
             (None, None) => Place::At(placement),
         };
         let (resource_options, drops_writes) = match contents {
-            BufferContents::NoCopy { .. } => self.no_copy_options(CALL, resource_options),
+            BufferContents::NoCopy { .. } => no_copy_options(resource_options),
             _ => (self.own_memory_options(CALL, resource_options)?, false),
         };
         let buffer = match contents {
@@ -306,7 +306,10 @@ impl Device {
     /// the pages are imported instead. With Metal's private option bit 24
     /// ([`ResourceOptions::PRIVATE_BIT`]), the GPU's writes to the pages are dropped, as Metal's
     /// are: on macOS the pages are imported through a read-only view of them, by their pointer
-    /// alone; elsewhere the GPU's writes reach them, announced (`private-resource-option`).
+    /// alone; elsewhere the buffer is made over a copy of them whose GPU writes are dropped,
+    /// announced (`copied-host-pages`): each commit copies in the bytes the CPU changed, the
+    /// command buffers already submitted read what the GPU wrote, and each batch's completion
+    /// puts the copy back to the caller's bytes, which the GPU never writes.
     ///
     /// Where the caller's gate refuses the import ([`HostMemory::with_import_gate`]), or the import
     /// the device and the gate admitted fails (out of memory, another Vulkan error), of the pointer
@@ -340,7 +343,7 @@ impl Device {
         deallocator: Option<Deallocator>,
     ) -> Result<Buffer, Error> {
         const CALL: &str = "new_buffer_with_bytes_no_copy";
-        let (options, drops_writes) = self.no_copy_options(CALL, options);
+        let (options, drops_writes) = no_copy_options(options);
         // SAFETY: the caller's contract.
         let buffer = unsafe {
             self.buffer_over_host_memory(
@@ -448,9 +451,11 @@ impl Device {
     /// must start at a multiple of the import's unit, the larger of the host page and the
     /// device's `minImportedHostPointerAlignment`, so that the heap's offsets are its memory's
     /// (`Invalid`, `HeapProblem::HostMemoryAlignment`, elsewhere). Where `drops_writes` (Metal's
-    /// private option bit 24, [`Device::no_copy_options`]), the pages are imported through a
-    /// read-only view of them, which drops the GPU's writes (`read_only_view.rs`): an import of
-    /// its own, which no other buffer lies in or joins, and which the device keeps imported.
+    /// private option bit 24, [`no_copy_options`]), the pages are imported through a read-only
+    /// view of them, which drops the GPU's writes (`read_only_view.rs`): an import of its own,
+    /// which no other buffer lies in or joins, and which the device keeps imported. Where the
+    /// system maps no such view, the buffer is a copy of the pages whose GPU writes are dropped
+    /// instead (`copied.rs`), placed but joined by no other buffer.
     ///
     /// # Safety
     ///
@@ -505,7 +510,8 @@ impl Device {
         // buffer and no import of the class lives (`host_aliases.rs`, `copied.rs`): one
         // `VkBuffer`, one snapshot and one key, its dma-buf source dropped uncalled and the gate
         // unasked, as no page is mapped for it. A heap's own buffer imports or copies its own, as
-        // does one whose GPU writes are dropped (its import is a read-only view of the pages).
+        // does one whose GPU writes are dropped (its import is a read-only view of the pages, or
+        // its copy drops them).
         let made_over = (pointer.as_ptr() as u64, length);
         let release = release.of(pointer, length);
         let shares = (!of_heap && !drops_writes)
@@ -554,7 +560,8 @@ impl Device {
         // once, here, holding no lock of the runtime's, before the gate. One run inside one chunk
         // is bound in the chunk's import, with no import of its own: no pin, no kernel mapping,
         // no gate. Others take the paths below, the runs kept with the buffer. A buffer whose GPU
-        // writes are dropped is never routed: it imports a read-only view of its pages.
+        // writes are dropped is never routed: it imports a read-only view of its pages, or is a
+        // copy of them.
         let routed = match (&runs, drops_writes) {
             (Some(resolver), false) => self.route_runs(call, importer, resolver, &window)?,
             _ => None,
@@ -582,6 +589,21 @@ impl Device {
                 // drops the GPU's writes to pages the process cannot write); or where the import it
                 // admitted fails, of the pointer or of the caller's dma-bufs.
                 let copyable = !drops_writes;
+                let copy = (call, pointer, length, modes, placement, of_heap);
+                // Memory whose GPU writes Metal's private option bit 24 drops, where the system
+                // maps no read-only view of the pages (`read_only_view.rs`): a copy of them whose
+                // GPU writes are dropped, the gate unasked and no page pinned. It joins no other
+                // buffer over the bytes, nor does one lie in it.
+                if drops_writes && !crate::read_only_view::VIEWS_DROP_WRITES {
+                    // SAFETY: the caller's contract.
+                    let copied =
+                        unsafe { self.copied_buffer(copy, release, dirty, CopiedFor::ReadOnly) };
+                    return copied.map(|buffer| {
+                        let buffer = kept(buffer, log, kept_runs);
+                        shared.aliases.place(buffer.identity().key, made_over);
+                        buffer
+                    });
+                }
                 let refused_by_host = copyable
                     && host.by_pointer
                     && gate.as_ref().is_some_and(|gate| {
@@ -591,11 +613,11 @@ impl Device {
                         };
                         !gate(request)
                     });
-                let copy = (call, pointer, length, modes, placement, of_heap);
                 if refused_by_host {
                     shared.counts.host_import_refused_by_host();
                     // SAFETY: the caller's contract.
-                    let copied = unsafe { self.copied_buffer(copy, release, dirty, None) };
+                    let copied =
+                        unsafe { self.copied_buffer(copy, release, dirty, CopiedFor::Refused) };
                     return copied.map(|buffer| noted(kept(buffer, log, kept_runs)));
                 }
                 // Only a buffer that imports its pages pins them, and so has their writability
@@ -640,8 +662,9 @@ impl Device {
                     // announced.
                     Err(error) if copyable && copies_after(&error) => {
                         // SAFETY: the caller's contract.
-                        let copied =
-                            unsafe { self.copied_buffer(copy, release, dirty, Some(error)) };
+                        let copied = unsafe {
+                            self.copied_buffer(copy, release, dirty, CopiedFor::Failed(error))
+                        };
                         return copied.map(|buffer| noted(kept(buffer, log, kept_runs)));
                     }
                     Err(error) => return Err(error),
@@ -672,6 +695,7 @@ impl Device {
             owner: Owner::Caller,
             release,
             of_heap,
+            drops_writes,
             mirror: None,
             #[cfg(unix)]
             again,
@@ -769,10 +793,13 @@ impl Device {
         // where Metal lays their texels out, which keeps their alignment only at that offset. New
         // bytes at another offset in their page are given a copy of them laid out at the old
         // offset (`copied.rs`), as no import lays them there: the gate is not asked, as nothing is
-        // imported. A buffer whose GPU writes are dropped is never a copy, and is refused so.
+        // imported. A buffer whose GPU writes are dropped is a copy of the new pages where the
+        // system maps no read-only view of them (`read_only_view.rs`), as at its making, and is
+        // never one where it imports such a view, which refuses bytes that moved.
         let texels = cell.texels();
         let in_place = cell.in_place_images();
-        let copyable = !drops_writes;
+        let read_only_copy = drops_writes && !crate::read_only_view::VIEWS_DROP_WRITES;
+        let copyable = !drops_writes || read_only_copy;
         let moved = (!texels.is_empty() || !in_place.is_empty()) && window.offset != cell.offset();
         if moved && !copyable {
             return Err(Error::NotImplemented(RuntimeGap::RebindTextures));
@@ -864,7 +891,9 @@ impl Device {
                 // permission is asked (a copy pins no page, and drops the GPU's writes to pages the
                 // process cannot write); or where the import it admitted fails, of the pointer or
                 // of the caller's dma-bufs. Bytes moved in their page are a copy, the gate unasked.
-                let gate = gate.filter(|_| copyable && host.by_pointer && !moved && !chunk_bound);
+                let gate = gate.filter(|_| {
+                    copyable && !read_only_copy && host.by_pointer && !moved && !chunk_bound
+                });
                 let refused_by_host = match gate {
                     Some(gate) => {
                         // Asked with no lock of the runtime's held: the textures over detached
@@ -886,7 +915,7 @@ impl Device {
                     shared.counts.host_import_refused_by_host();
                 }
                 // Only pages imported here are pinned, and so have their writability asked.
-                let imports = !chunk_bound && !refused_by_host && !moved;
+                let imports = !chunk_bound && !refused_by_host && !moved && !read_only_copy;
                 let host = match imports {
                     true => writability_settled(host, writable, &shared.counts)?,
                     false => host,
@@ -901,7 +930,16 @@ impl Device {
                 let copy = |failed: Option<Error>| {
                     let window = &copy_window;
                     // SAFETY: the caller's contract.
-                    unsafe { self.copied_pages(pointer, length, window, images, own_pages, failed) }
+                    unsafe {
+                        self.copied_pages(
+                            pointer,
+                            length,
+                            window,
+                            (images, own_pages),
+                            failed,
+                            read_only_copy,
+                        )
+                    }
                 };
                 let imported = match (in_chunk, imports) {
                     (Some(bound), _) => Ok(Ok(bound)),
@@ -1006,6 +1044,7 @@ impl Device {
                         let cause = match (moved, &failed) {
                             (true, _) => CopiedBecause::Moved,
                             (false, Some(_)) => CopiedBecause::Failed,
+                            (false, None) if read_only_copy => CopiedBecause::ReadOnly,
                             (false, None) => CopiedBecause::Refused,
                         };
                         let (host, placement, copied) = copy(failed)?;
@@ -1377,7 +1416,8 @@ impl Device {
     /// Where images in place ride on it (`own_pages`), the copy is fresh pages the runtime maps and
     /// imports by their pointer where the device takes them ([`Device::fresh_page_buffer`]), so
     /// each image is made for host allocations, as over the caller's pages, under the device's
-    /// check for fresh pages (`in_place.rs`); else memory the device allocates. Refused as
+    /// check for fresh pages (`in_place.rs`); else memory the device allocates. The GPU's writes
+    /// to the copy are dropped where `read_only` (Metal's private option bit 24). Refused as
     /// [`Device::copied_buffer`] refuses its copy.
     ///
     /// # Safety
@@ -1388,9 +1428,9 @@ impl Device {
         pointer: NonNull<u8>,
         length: u64,
         window: &ImportWindow,
-        images: Option<u64>,
-        own_pages: bool,
+        (images, own_pages): (Option<u64>, bool),
         failed: Option<Error>,
+        read_only: bool,
     ) -> Result<(HostBuffer, Placement, crate::copied::Copied), Error> {
         let shared = self.shared();
         let raw_device = shared.vk();
@@ -1428,7 +1468,7 @@ impl Device {
         // SAFETY: the copy is the placement's `length` bytes past the window's offset, mapped,
         // which nothing uses yet and which stay mapped while the import holds them; the caller's
         // bytes stay mapped as long (the caller's contract).
-        let copied = match unsafe { shared.copied.add(pointer, copy, bytes) } {
+        let copied = match unsafe { shared.copied.add(pointer, copy, bytes, read_only) } {
             Ok(copied) => copied,
             Err(why) => {
                 discard(&memory);
@@ -1532,13 +1572,21 @@ impl Device {
                     "they lie at another offset in their page than the buffer's old bytes, \
                      where a texture over the buffer was planned, which no import lays them at"
                 }
+                CopiedBecause::ReadOnly => {
+                    "Metal's private option bit 24 (0x1000000) makes them memory the GPU's \
+                     writes do not reach, and no import of them here keeps the GPU's writes out"
+                }
             };
-            let dropped = match drops {
-                true => {
+            let dropped = match (drops, cause) {
+                (true, CopiedBecause::ReadOnly) => {
+                    ", whose GPU writes are dropped, as Metal drops them, and never written to \
+                     the pages"
+                }
+                (true, _) => {
                     ", whose GPU writes are dropped, as Metal drops them, since the process maps \
                      some of their pages read-only"
                 }
-                false => "",
+                (false, _) => "",
             };
             (
                 format!("{call} over {length:#x} bytes at {pointer:p}"),
@@ -1581,10 +1629,11 @@ impl Device {
     /// A copied host buffer over the `length` bytes at `pointer` (`copied.rs`), of `modes`, at
     /// `placement`, for `call`, a heap's own buffer where `of_heap` (laid where the heap's
     /// textures could lie, its hazard identity a heap's), given back to `release`, its caller's
-    /// log `dirty` kept with it:
-    /// made where the caller's gate refused the pointer's import (`failed` is `None`), or where
-    /// the import the gate and the device admitted failed with `failed`. Announced
-    /// (`copied-host-pages`) and counted either way. Refused where its own memory cannot be had
+    /// log `dirty` kept with it, made `why` says: where the caller's gate refused the pointer's
+    /// import, where the import the gate and the device admitted failed, or for memory whose GPU
+    /// writes Metal's private option bit 24 drops where the system maps no read-only view of the
+    /// pages (`read_only_view.rs`), whose GPU writes the copy drops. Announced
+    /// (`copied-host-pages`) and counted each way. Refused where its own memory cannot be had
     /// (typed as the allocation answers), and where the process cannot read every page (memory
     /// Metal makes no buffer over): with the import's failure where there was one, else as not
     /// importable.
@@ -1604,8 +1653,14 @@ impl Device {
         ),
         release: Option<super::host_memory::Release>,
         dirty: Option<Arc<super::dirty_pages::DirtySource>>,
-        failed: Option<Error>,
+        why: CopiedFor,
     ) -> Result<Buffer, Error> {
+        let read_only = matches!(why, CopiedFor::ReadOnly);
+        let (cause, failed) = match why {
+            CopiedFor::Refused => (CopiedBecause::Refused, None),
+            CopiedFor::Failed(failed) => (CopiedBecause::Failed, Some(failed)),
+            CopiedFor::ReadOnly => (CopiedBecause::ReadOnly, None),
+        };
         let shared = self.shared();
         let raw_device = shared.vk();
         // The pages' refusal where they cannot be copied: the import's failure, or a refusal of
@@ -1661,7 +1716,7 @@ impl Device {
         // SAFETY: the copy is the placement's `length` bytes, mapped, which nothing uses yet and
         // which stay mapped while the import holds them; the caller's bytes stay mapped as long
         // (the caller's contract).
-        let copied = match unsafe { shared.copied.add(pointer, copy, bytes) } {
+        let copied = match unsafe { shared.copied.add(pointer, copy, bytes, read_only) } {
             Ok(copied) => copied,
             Err(why) => {
                 discard(&memory);
@@ -1686,6 +1741,7 @@ impl Device {
             owner: Owner::Caller,
             release,
             of_heap,
+            drops_writes: read_only,
             mirror: None,
             #[cfg(unix)]
             again: None,
@@ -1698,10 +1754,6 @@ impl Device {
                 pages.keep_dirty(dirty);
             }
         }
-        let cause = match failed {
-            Some(_) => CopiedBecause::Failed,
-            None => CopiedBecause::Refused,
-        };
         shared.counts.copied_host_buffer_made(cause);
         if of_heap {
             shared.counts.copied_heap_made();
@@ -1935,7 +1987,8 @@ fn pages_log(
 /// ([`host_window`]).
 struct HostWindow {
     /// The GPU's writes to them are dropped: they are imported through a read-only view of them
-    /// (`read_only_view.rs`), by their pointer alone.
+    /// (`read_only_view.rs`), by their pointer alone, or where the system maps no such view, they
+    /// are copied (`copied.rs`).
     drops_writes: bool,
     /// The pages: the range rounded out to the host page.
     window: ImportWindow,
@@ -1973,6 +2026,26 @@ fn writability_settled(
         }),
         Err(error) => Err(error),
     }
+}
+
+/// `options` of a no-copy buffer or heap over the caller's bytes without
+/// [`ResourceOptions::PRIVATE_BIT`], and whether its memory drops the GPU's writes, as Metal's does
+/// where the options set the bit: on macOS the runtime imports the pages through a read-only view
+/// of them (`read_only_view.rs`); elsewhere it makes the object over a copy of them whose GPU
+/// writes it never writes back (`copied.rs`, announced as `copied-host-pages`).
+pub(super) fn no_copy_options(options: ResourceOptions) -> (ResourceOptions, bool) {
+    options.without_private_bit()
+}
+
+/// Why a no-copy buffer or heap is made over a copy of the caller's pages (`Device::copied_buffer`).
+enum CopiedFor {
+    /// The caller's gate refused their import (`HostMemory::with_import_gate`).
+    Refused,
+    /// The import the device and the gate admitted failed, with this.
+    Failed(Error),
+    /// Metal's private option bit 24 drops the GPU's writes to the memory, and the system maps
+    /// no read-only view of the pages (`read_only_view.rs`): the copy drops them.
+    ReadOnly,
 }
 
 /// Whether `error`, an import's failure that is not the device's refusal of the pages, leaves the

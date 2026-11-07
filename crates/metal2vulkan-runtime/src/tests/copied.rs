@@ -312,7 +312,7 @@ fn copied_pages_of_a_dma_buf_mapping_are_copied() {
     let mut copy = vec![0_u8; length];
     // SAFETY: the copy is the test's; the mapping is `length` bytes, readable, live past the
     // answer.
-    let copied = unsafe { buffers.add(mapping.pages, at(&mut copy), length) };
+    let copied = unsafe { buffers.add(mapping.pages, at(&mut copy), length, false) };
     assert!(copied.is_ok(), "copied");
     assert!(copy == pattern, "the copy holds the dma-buf's bytes");
 }

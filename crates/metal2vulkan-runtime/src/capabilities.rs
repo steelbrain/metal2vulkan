@@ -483,9 +483,12 @@ impl DeviceProperties {
     /// visibility result all complete and leave the pages as they were, and a colour attachment with
     /// [`StoreAction::Store`](crate::StoreAction::Store), a resolve target or a depth or stencil
     /// attachment over such memory ends its command buffer in error. On macOS, where the device
-    /// imports the pages through a read-only view of them, that is yes; elsewhere the import is of
-    /// the caller's own pages and this answers no, with the difference announced
-    /// ([`Degradation::PrivateResourceOption`](crate::Degradation::PrivateResourceOption)).
+    /// imports the pages through a read-only view of them, that is yes. Elsewhere the memory is a
+    /// copy of the pages whose GPU writes are dropped, announced
+    /// ([`Degradation::CopiedHostPages`](crate::Degradation::CopiedHostPages)), and this answers
+    /// no: the CPU and the command buffers committed after a writer's completion read the pages'
+    /// own bytes, but a command buffer committed before it may read the GPU's writes, and a render
+    /// pass's store-out into the copy completes.
     pub fn drops_gpu_writes_to_read_only_memory(&self) -> bool {
         crate::read_only_view::VIEWS_DROP_WRITES
     }

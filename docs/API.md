@@ -2133,11 +2133,11 @@ bound.
   Metal placed one.
 - `metal2vulkan-degrade-private-resource-option` (precision). `PrivateResourceOption`: A heap of
   the runtime's memory or an indirect command buffer made with `MTLResourceOptions` bit 24
-  (`ResourceOptions::PRIVATE_BIT`), or off macOS a no-copy buffer or heap over the caller's bytes,
-  which Metal makes and keeps the GPU's writes from the memory of, is made as without it, and
-  reports its options without it, as Metal's does. On macOS a no-copy buffer or heap with the bit
-  drops the GPU's writes as Metal's does, its pages imported through a read-only view of them,
-  announcing nothing. A buffer of the runtime's memory or a texture descriptor with the bit is
+  (`ResourceOptions::PRIVATE_BIT`), which Metal makes and keeps the GPU's writes from the memory
+  of, is made as without it, and reports its options without it, as Metal's does. A no-copy
+  buffer or heap with the bit drops the GPU's writes as Metal's does: on macOS its pages are
+  imported through a read-only view of them, announcing nothing; elsewhere it is made over a copy
+  of them that drops the GPU's writes (`copied-host-pages`). A buffer of the runtime's memory or a texture descriptor with the bit is
   refused, as Metal ends the process there; a buffer placed in a heap without the bit is made as
   without it, announcing nothing. Cost: the GPU's writes reach the resource's memory, the CPU and
   later command buffers, where Metal's never reach them.
@@ -2812,7 +2812,12 @@ bound.
   with plain loads where the process maps every page readable. Pages not mapped, or mapped
   without read permission, are never copied: the buffer is refused, as their import is. A copy
   whose own allocation fails refuses the call (`OutOfMemory`). Memory whose GPU writes Metal's
-  private option bit 24 drops is never copied. A buffer's or heap's rebind is copied the same way,
+  private option bit 24 drops is copied off macOS alone, where no import keeps the GPU's writes
+  out of the pages, the gate not asked (`copied_read_only_memory`): the copy drops the GPU's writes
+  as a copy of read-only pages does, though a command buffer committed before the writer's batch
+  completed may still read them, and a render pass's store-out into it completes where Metal's
+  faults its command buffer. On macOS the pages are imported through a read-only view of them. A
+  buffer's or heap's rebind is copied the same way,
   its heap's bound textures and its images in place made again over the copy, and a buffer's
   rebind to bytes at another offset in their page under a texture planned at the old one is a copy
   laid out there (the detail says which). A buffer made over exactly the bytes (the same first
@@ -2823,8 +2828,8 @@ bound.
   accesses; a rebind to them does too where its textures were planned at the copy's offset and no
   image in place rides on it. A heap's own buffer and memory whose GPU writes are dropped keep
   their own. Counted: `WorkCounts::copied_host_buffers_made`, of them
-  `copied_host_buffers_refused`, `copied_host_buffers_degraded` and `copied_rebind_pages_moved`
-  (and `copied_heaps_made`, `copied_rebind_pages_made`, `copied_rebind_images_made`); each such
+  `copied_host_buffers_refused`, `copied_host_buffers_degraded`, `copied_rebind_pages_moved` and
+  `copied_read_only_memory` (and `copied_heaps_made`, `copied_rebind_pages_made`, `copied_rebind_images_made`); each such
   buffer, and each buffer placed in such a heap, answers `Buffer::host_backing` with
   `HostBacking::Copied` until its next rebind or detach. Cost: the GPU
   uses a copy of

@@ -2580,6 +2580,7 @@ field	metal2vulkan-runtime::WorkCounts.copied_host_buffers_shared	pub copied_hos
 field	metal2vulkan-runtime::WorkCounts.copied_merge_back_bytes	pub copied_merge_back_bytes: u64
 field	metal2vulkan-runtime::WorkCounts.copied_merges_compared	pub copied_merges_compared: u64
 field	metal2vulkan-runtime::WorkCounts.copied_merges_skipped	pub copied_merges_skipped: u64
+field	metal2vulkan-runtime::WorkCounts.copied_read_only_memory	pub copied_read_only_memory: u64
 field	metal2vulkan-runtime::WorkCounts.copied_rebind_images_made	pub copied_rebind_images_made: u64
 field	metal2vulkan-runtime::WorkCounts.copied_rebind_pages_made	pub copied_rebind_pages_made: u64
 field	metal2vulkan-runtime::WorkCounts.copied_rebind_pages_moved	pub copied_rebind_pages_moved: u64

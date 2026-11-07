@@ -224,7 +224,8 @@ impl Buffer {
     /// a copied host buffer ([`HostBacking::Copied`](crate::HostBacking::Copied)), whose memory is
     /// a copy the runtime brings in step with the pages only at its own commits and completions;
     /// pages imported as dma-bufs (several allocations, sparsely bound); pages of Metal's private
-    /// option bit 24, whose import is of a read-only view that drops the GPU's writes; a detached
+    /// option bit 24, whose import is of a read-only view that drops the GPU's writes (on macOS;
+    /// elsewhere they are a copied host buffer); a detached
     /// buffer; and an import the device released while idle and could not make again (the device
     /// is then lost). As [`vk_buffer`](Self::vk_buffer) does, the call keeps an import the device
     /// would release while idle imported for good.

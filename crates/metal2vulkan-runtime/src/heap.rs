@@ -628,7 +628,8 @@ impl Device {
         token: Option<RangeToken>,
     ) -> Result<Heap, Error> {
         const CALL: &str = "new_heap_with_bytes_no_copy";
-        let (options, drops_writes) = self.no_copy_options(CALL, descriptor.resource_options);
+        let (options, drops_writes) =
+            super::buffer_descriptor::no_copy_options(descriptor.resource_options);
         let modes = Modes::of(options)?;
         if modes.storage != StorageMode::Shared || descriptor.heap_type == HeapType::Sparse {
             return Err(invalid(CALL, Problem::StorageMode));

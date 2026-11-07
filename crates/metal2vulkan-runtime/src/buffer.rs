@@ -174,8 +174,8 @@ pub(super) struct HostCell {
     /// (`WorkCounts::no_copy_lies_read`).
     device: Device,
     /// The GPU's writes to the buffer are dropped, as Metal's private option bit 24 drops them:
-    /// its pages are imported through a read-only view of them (`read_only_view.rs`), which a
-    /// rebind's are too.
+    /// its pages are imported through a read-only view of them (`read_only_view.rs`), or copied,
+    /// the copy's GPU writes never written back (`copied.rs`), and a rebind's are too.
     drops_writes: bool,
     /// The deallocator of the pages its last detach let go of (`detach.rs`), held back until its
     /// next rebind or its release, as Metal runs it then ([`Release::hold_back`]).
@@ -373,7 +373,7 @@ impl Detached {
 }
 
 impl HostCell {
-    /// Whether the GPU's writes to the buffer are dropped (`read_only_view.rs`).
+    /// Whether the GPU's writes to the buffer are dropped (`read_only_view.rs`, `copied.rs`).
     pub(super) fn drops_writes(&self) -> bool {
         self.drops_writes
     }
@@ -1867,6 +1867,10 @@ pub(super) struct BufferParts {
     pub(super) release: Option<Release>,
     /// The buffer is a heap's own (`heap.rs`): `Default` hazard tracking resolves to untracked.
     pub(super) of_heap: bool,
+    /// The GPU's writes to a no-copy buffer's pages are dropped, as Metal's private option bit 24
+    /// drops them: they are imported through a read-only view of them (`read_only_view.rs`), or
+    /// copied, the copy's GPU writes never written back (`copied.rs`), and a rebind's are too.
+    pub(super) drops_writes: bool,
     /// A `Managed` buffer's host copy, on a device without unified memory.
     pub(super) mirror: Option<Arc<Mirror>>,
     /// What imports a no-copy buffer's dma-bufs again, where the device may release its import
@@ -2315,6 +2319,7 @@ impl Device {
             owner: Owner::Runtime,
             release: None,
             of_heap,
+            drops_writes: false,
             mirror,
             #[cfg(unix)]
             again: None,
@@ -2460,6 +2465,7 @@ impl Device {
             owner: Owner::Runtime,
             release: None,
             of_heap: false,
+            drops_writes: false,
             mirror: None,
             #[cfg(unix)]
             again: None,
@@ -2481,6 +2487,7 @@ impl Device {
             owner,
             release,
             of_heap,
+            drops_writes,
             mirror,
             #[cfg(unix)]
             again,
@@ -2501,7 +2508,7 @@ impl Device {
                 let import = self.host_import(pages, again, kept);
                 #[cfg(not(unix))]
                 let import = Arc::new(HostImport::new(self, pages, kept));
-                self.host_lie(identity.key, import, release)
+                self.host_lie(identity.key, import, release, drops_writes)
             }
             Owner::Runtime | Owner::Vulkan => Lie::Fixed(Arc::new(FixedPages {
                 device: self.clone(),
@@ -2560,7 +2567,7 @@ impl Device {
     ) -> Buffer {
         let identity = Identity::new(modes.hazard, false);
         let own = OwnBytes {
-            lie: self.host_lie(identity.key, import, release),
+            lie: self.host_lie(identity.key, import, release, false),
             reserved,
             identity,
             owner: Owner::Caller,
@@ -2571,9 +2578,16 @@ impl Device {
     }
 
     /// A no-copy buffer's lie, of `key`: pages of its own in `import`, released to `release`
-    /// once nothing holds them, which a rebind replaces (`rebind.rs`).
-    fn host_lie(&self, key: ResourceKey, import: Arc<HostImport>, release: Option<Release>) -> Lie {
-        let drops_writes = import.drops_writes();
+    /// once nothing holds them, which a rebind replaces (`rebind.rs`); the GPU's writes to it
+    /// dropped where `drops_writes`, or where `import` is of a read-only view of the pages.
+    fn host_lie(
+        &self,
+        key: ResourceKey,
+        import: Arc<HostImport>,
+        release: Option<Release>,
+        drops_writes: bool,
+    ) -> Lie {
+        let drops_writes = drops_writes || import.drops_writes();
         let host = HostPages::new(import);
         if let Some(release) = release {
             host.release_to(release);

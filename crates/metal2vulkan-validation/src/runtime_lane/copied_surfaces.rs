@@ -436,18 +436,17 @@ fn a_shared_and_a_managed_buffer_over_one_refused_surface_share_its_copy() {
     });
 }
 
-/// Whether the GPU's writes to no-copy memory made with Metal's private option bit 24 are dropped
-/// here (`degrade_notices`'s `DROPS_WRITES`): on macOS, where the runtime imports its pages through a
-/// read-only view of them.
-const DROPS_WRITES: bool = cfg!(target_os = "macos");
+/// Whether the runtime imports the pages of no-copy memory made with Metal's private option bit 24
+/// through a read-only view of them here (`degrade_notices`'s `VIEWS_DROP_WRITES`): on macOS. Else
+/// such memory is a copy of its own whose GPU writes are dropped.
+const VIEWS_DROP_WRITES: bool = cfg!(target_os = "macos");
 
 /// A buffer made with Metal's private option bit 24 over a refused surface's pages stays apart from
-/// the surface's copy, where the device drops such a buffer's writes (macOS): Metal drops the GPU's
-/// writes to that memory, and the runtime imports a read-only view of the pages for it, never a
-/// copy (the gate is not asked), where a copy shared with the surface's buffer would take its
-/// writes and merge them back. No copy is made or shared for it, and its fill is dropped, while it
-/// reads the surface buffer's write once that completed. Where the device does not drop them, it
-/// is a plain buffer, which lies in the surface's copy.
+/// the surface's copy: Metal drops the GPU's writes to that memory, and a copy shared with the
+/// surface's buffer would take its writes and merge them back. On macOS the runtime imports a
+/// read-only view of the pages for it, making no copy; elsewhere it makes a copy of its own that
+/// drops its writes, sharing none. The gate is not asked either way. Its fill is dropped, while it
+/// reads the surface buffer's write once that completed.
 #[test]
 fn a_buffer_whose_writes_are_dropped_stays_apart_from_a_copy() {
     on_device(|device| {
@@ -462,9 +461,9 @@ fn a_buffer_whose_writes_are_dropped_stays_apart_from_a_copy() {
         // SAFETY: as above.
         let dropping = unsafe { refused(device, memory.pointer(), bit) };
         let counts = copy_counts(&before, &device.work_counts());
-        let expected = match DROPS_WRITES {
+        let expected = match VIEWS_DROP_WRITES {
             true => [0, 0, 0, 0],
-            false => [0, 0, 1, 0],
+            false => [1, 0, 0, 0],
         };
         assert_eq!(
             counts, expected,
@@ -480,8 +479,7 @@ fn a_buffer_whose_writes_are_dropped_stays_apart_from_a_copy() {
         blit.end_encoding().unwrap();
         command_buffer.commit().unwrap();
         finish(&command_buffer);
-        let kept = if DROPS_WRITES { 0x11 } else { 0x5a };
-        assert_eq!(memory.read(0..LEN as usize), vec![kept; LEN as usize]);
+        assert_eq!(memory.read(0..LEN as usize), vec![0x11; LEN as usize]);
         // The surface buffer's write, once completed, is what it reads.
         let command_buffer = queue.command_buffer().unwrap();
         let mut blit = command_buffer.blit_command_encoder().unwrap();

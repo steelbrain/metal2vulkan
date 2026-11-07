@@ -369,7 +369,11 @@ happens where:
 - on NVIDIA's driver, the pages are a mapping the kernel cannot pin (a dma-buf's), which the
   runtime never hands that driver (`RuntimeDriverDefect::UnpinnablePagesBreakHostMemory`,
   `WorkCounts::host_imports_unpinnable`), and no dma-buf of the caller's source served them
-  (`copied_host_buffers_degraded`).
+  (`copied_host_buffers_degraded`);
+- off macOS, the memory is of Metal's private option bit 24 (`ResourceOptions::PRIVATE_BIT`),
+  whose GPU writes Metal drops: no import there keeps the GPU's writes out of the pages, so the
+  copy is made without asking the gate and drops them (below; `copied_read_only_memory`). On macOS
+  such pages are imported through a read-only view of them instead.
 
 A buffer made over exactly the bytes (the same first byte and length) a live copied buffer was
 made over lies in that copy, of either storage mode, as a buffer over a live import's bytes lies in
@@ -419,8 +423,11 @@ maximum protection lowered to read) are copied the same way, and the copy drops 
 as Metal drops them: each batch's completion takes the bytes the GPU changed back out of the copy
 and writes nothing to the pages (`copied_dropped_bytes`), so later commands of the same command
 buffer read the writes back and a later command buffer reads the pages' bytes. The runtime asks
-the system whether the process can write the pages as it makes the copy. The announcement's detail
-says so.
+the system whether the process can write the pages as it makes the copy. The copy of memory of
+Metal's private option bit 24 drops the GPU's writes the same way, whatever the pages' protection.
+A command buffer committed before the writer's batch completed may still read the writes, where
+Metal's never does, and a render pass's store-out into such a copy completes, where Metal's faults
+its command buffer. The announcement's detail says so.
 
 A no-copy heap's own buffer is copied the same way (`copied_heaps_made`): its buffers lie in the
 copy, and its textures are shadows of its bytes. `Buffer::rebind_bytes_no_copy` and

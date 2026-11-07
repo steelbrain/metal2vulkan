@@ -1712,9 +1712,10 @@ pub enum RuntimeGap {
     EmptyFillPattern,
     /// `Buffer::rebind_bytes_no_copy` of a no-copy buffer whose GPU writes are dropped (Metal's
     /// private option bit 24) with a live texture over its bytes, given memory at another offset
-    /// in its page than the old: the texture's copies and texel views are planned at the bytes'
-    /// offset in their `VkBuffer` (`rebind.rs`), and such a buffer is never a copy laid out there,
-    /// as any other buffer's moved bytes are. Also a rebind of a no-copy buffer or heap with a
+    /// in its page than the old, on macOS: the texture's copies and texel views are planned at the
+    /// bytes' offset in their `VkBuffer` (`rebind.rs`), and such a buffer imports a read-only view
+    /// of its pages there, never a copy laid out there, as any other buffer's moved bytes are
+    /// (elsewhere such a buffer is a copy, laid out there). Also a rebind of a no-copy buffer or heap with a
     /// texture whose image is bound to its bytes, where the device makes no such image over the
     /// new memory: over memory it imports by its pointer, one that takes the import's type and
     /// lies where the texture's texels do, its rows (and slices) as far apart as the old image's,

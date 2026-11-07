@@ -44,7 +44,7 @@
 //! texture views of another component layout shadowed in `view_reinterpretation`
 //! ([`VIEW_SHADOWS`]), executions of an indirect command buffer from one command
 //! with two lengths in `visibility` ([`REPEATED_STARTS`]), passes writing a `Boolean` visibility
-//! result there ([`BOOLEANS`]), resources made with Metal's private
+//! result there ([`BOOLEANS`]), heaps of the runtime's memory made with Metal's private
 //! option bit here ([`PRIVATE_OPTION`]), indexed indirect draws of bytes a draw wrote with no
 //! barrier in `indirect_draws` ([`UNORDERED_DRAWS`]), pipeline states whose functions read an
 //! argument their function constants removed in `absent_reads` ([`ABSENT_READS`]), a slot's
@@ -453,7 +453,8 @@ pub(super) fn on_device_with(
 /// reconvergence; no kind is in two lists, and no list names a kind twice. `misplaced-notice`
 /// ([`MISPLACED`]), `copied-host-pages` ([`COPIED_PAGES`]) and `device-memory-overflow`
 /// ([`OVERFLOWED`]) are taken by the runtime's own tests instead, as no lane can meet the first,
-/// only a refusing gate meets the second, and only a full device-local heap the third.
+/// only a refusing gate or, off macOS, Metal's private option bit 24 meets the second, and only a
+/// full device-local heap the third.
 ///
 /// This module compiles only under the device cfgs, so a kind that lands with no site leaves this
 /// test red where the ordinary gate cannot read it. The runtime crate's
@@ -796,10 +797,11 @@ const STILL_MAKING: [Degradation; 3] = [
 
 /// The kind a no-copy buffer takes whose import of the caller's pages the caller's gate
 /// (`HostMemory::with_import_gate`) refused, or whose import the gate and the device admitted and
-/// that then failed, so the pages are copied. Only `copied_surfaces` meets it, behind its refusing
-/// gate, where its notices are not its subject; no venue's driver fails an admitted import on
-/// demand (NVIDIA's runs out of the host kernel's mappings only past `vm.max_map_count`). The
-/// runtime's own tests
+/// that then failed, so the pages are copied; off macOS, also no-copy memory of Metal's private
+/// option bit 24 ([`read_only_kinds`]), which is a copy that drops the GPU's writes. Beside those,
+/// only `copied_surfaces` meets it, behind its refusing gate, where its notices are not its
+/// subject; no venue's driver fails an admitted import on demand (NVIDIA's runs out of the host
+/// kernel's mappings only past `vm.max_map_count`). The runtime's own tests
 /// `copied_buffer_is_made_where_the_caller_s_gate_refuses_the_import` and
 /// `copied_buffer_is_made_where_an_admitted_import_fails_announced` take its site, the import
 /// failed by the runtime's test hook.
@@ -814,8 +816,7 @@ const COPIED_PAGES: [Degradation; 1] = [Degradation::CopiedHostPages];
 const OVERFLOWED: [Degradation; 1] = [Degradation::DeviceMemoryOverflow];
 
 /// The kind Metal's private option bit takes where the GPU's writes reach the memory here
-/// ([`the_private_option_bit_is_announced_on_a_heap_of_the_runtime_s_memory`],
-/// [`the_private_option_bit_drops_the_gpu_s_writes_to_no_copy_memory`]).
+/// ([`the_private_option_bit_is_announced_on_a_heap_of_the_runtime_s_memory`]).
 const PRIVATE_OPTION: [Degradation; 1] = [Degradation::PrivateResourceOption];
 
 /// `options` with Metal's private option bit 24 (0x1000000).
@@ -896,10 +897,25 @@ fn the_private_option_bit_is_announced_on_a_heap_of_the_runtime_s_memory() {
     });
 }
 
-/// Whether the GPU's writes to no-copy memory made with Metal's private option bit 24 are
-/// dropped here, as Metal drops them: on macOS, where the runtime imports its pages through a
-/// read-only view of them (the runtime's `read_only_view.rs`).
-const DROPS_WRITES: bool = cfg!(target_os = "macos");
+/// Whether the runtime imports the pages of no-copy memory made with Metal's private option bit
+/// 24 through a read-only view of them here (the runtime's `read_only_view.rs`): on macOS. Else it
+/// makes the memory over a copy of the pages whose GPU writes it drops (`copied.rs`).
+const VIEWS_DROP_WRITES: bool = cfg!(target_os = "macos");
+
+/// The kinds no-copy memory made with Metal's private option bit 24 announces here: none where a
+/// read-only view of its pages drops the GPU's writes, else the copy's (`copied-host-pages`).
+fn read_only_kinds() -> &'static [Degradation] {
+    match VIEWS_DROP_WRITES {
+        true => &[],
+        false => &COPIED_PAGES,
+    }
+}
+
+/// The no-copy objects made over a copy of memory of Metal's private option bit 24 since `before`
+/// (`WorkCounts::copied_read_only_memory`).
+fn read_only_copies(device: &Device, before: &metal2vulkan_runtime::WorkCounts) -> u64 {
+    device.work_counts().copied_read_only_memory - before.copied_read_only_memory
+}
 
 /// Of `buffer`, a no-copy buffer over host pages whose bytes are its `contents`: the CPU writes
 /// 0x11 to its first 16 bytes, a command buffer fills them with 0x5a, and later command buffers
@@ -951,12 +967,14 @@ fn drops_the_fill(device: &Device, buffer: &Buffer) -> bool {
 /// A no-copy buffer, a buffer placed in a no-copy heap and that buffer rebound to other pages,
 /// made with Metal's private option bit 24, which Metal makes and keeps the GPU's writes from the
 /// memory of (the M3 Max under macOS 27.0.1: a blit's fill reaches neither the CPU nor a later
-/// command buffer, which reads the CPU's bytes): on macOS each drops a fill so, and nothing is
-/// announced; elsewhere the fill reaches the pages, announced once. Each reports its options
-/// without the bit, as Metal's does.
+/// command buffer, which reads the CPU's bytes): each drops a fill so. On macOS their pages are
+/// imported through a read-only view of them and nothing is announced; elsewhere each is made over
+/// a copy of the pages that drops the GPU's writes, counted and announced once. Each reports its
+/// options without the bit, as Metal's does.
 #[test]
 fn the_private_option_bit_drops_the_gpu_s_writes_to_no_copy_memory() {
     on_device(|device, messages| {
+        let before = device.work_counts();
         let bit = ResourceOptions::PRIVATE_BIT;
         let shared = with_private_bit(ResourceOptions::shared());
         let plain = device
@@ -982,13 +1000,19 @@ fn the_private_option_bit_drops_the_gpu_s_writes_to_no_copy_memory() {
             no_copy => no_copy.unwrap(),
         };
         assert_eq!(no_copy.resource_options(), plain);
-        assert_eq!(drops_the_fill(device, &no_copy), DROPS_WRITES);
+        assert!(
+            drops_the_fill(device, &no_copy),
+            "the no-copy buffer took the fill"
+        );
         // Rebound to other pages, it drops the GPU's writes to them too.
         // SAFETY: the other mapping outlives the buffer, and no other thread encodes or commits.
         unsafe { no_copy.rebind_bytes_no_copy(HostMemory::new(other.pointer()), None, None) }
             .unwrap();
         assert_eq!(no_copy.contents(), Some(other.pointer()));
-        assert_eq!(drops_the_fill(device, &no_copy), DROPS_WRITES);
+        assert!(
+            drops_the_fill(device, &no_copy),
+            "the rebound buffer took the fill"
+        );
         let heap_memory = Mapping::anonymous(HEAP);
         let descriptor = HeapDescriptor::new(HeapType::Automatic, HEAP as u64, shared);
         // SAFETY: the mapping outlives the heap, which is dropped first.
@@ -1003,14 +1027,17 @@ fn the_private_option_bit_drops_the_gpu_s_writes_to_no_copy_memory() {
         .unwrap();
         assert_eq!(heap.resource_options().raw() & bit, 0);
         let placed = heap.new_buffer(256, ResourceOptions::shared()).unwrap();
-        assert_eq!(drops_the_fill(device, &placed), DROPS_WRITES);
+        assert!(
+            drops_the_fill(device, &placed),
+            "the heap's buffer took the fill"
+        );
         drop((placed, heap, no_copy));
+        // The buffer, its rebind and the heap: each a copy where no view drops the writes.
+        let copies = read_only_copies(device, &before);
+        eprintln!("PRIVATEBIT: views drop writes {VIEWS_DROP_WRITES}; copies made {copies}");
+        assert_eq!(copies, if VIEWS_DROP_WRITES { 0 } else { 3 });
         // Beside them, what the `Shared` resources force on the device.
-        let kinds: &[Degradation] = match DROPS_WRITES {
-            true => &[],
-            false => &PRIVATE_OPTION,
-        };
-        assert_made_once(messages, kinds, &shared_kinds(device));
+        assert_made_once(messages, read_only_kinds(), &shared_kinds(device));
     });
 }
 
@@ -1116,12 +1143,14 @@ fn kernel_store_reads(device: &Device, memory: &Buffer) -> KernelStoreReads {
 /// conformance suite's `host-page-writes-kernel-store-read-only`), a later command of the same
 /// command buffer reads the stored words back from the GPU's caches, every run, while a later
 /// command buffer and the CPU read the pages' own bytes. On macOS the runtime imports the pages
-/// through a read-only view of them, which answers as Metal does at all three sites and announces
-/// nothing; elsewhere the stores reach the pages and are read at all three, announced once. Every byte of
-/// the window the stores do not name keeps the pages' own byte at every site.
+/// through a read-only view of them, and elsewhere makes the buffer over a copy of them that drops
+/// the GPU's writes at the batch's completion (counted and announced once): either answers as
+/// Metal does at all three sites. Every byte of the window the stores do not name keeps the pages'
+/// own byte at every site.
 #[test]
 fn a_kernel_s_stores_into_private_bit_memory_reach_only_its_own_command_buffer() {
     on_device(|device, messages| {
+        let before = device.work_counts();
         let memory = Mapping::anonymous(GUEST_PAGE);
         // SAFETY: the mapping's `GUEST_PAGE` bytes are this process's and nothing else uses them.
         unsafe { std::ptr::write_bytes(memory.pointer().as_ptr(), PAD, GUEST_PAGE) };
@@ -1150,46 +1179,32 @@ fn a_kernel_s_stores_into_private_bit_memory_reach_only_its_own_command_buffer()
             stored[at..at + 4].copy_from_slice(&word.to_le_bytes());
         }
         let kept = vec![PAD; WINDOW];
-        let past = match DROPS_WRITES {
-            true => &kept,
-            false => &stored,
-        };
+        let copies = read_only_copies(device, &before);
         eprintln!(
-            "PRIVATEBIT-KERNEL: drops writes {DROPS_WRITES}; same command buffer stored {}, later \
-             command buffer stored {}, CPU stored {}",
+            "PRIVATEBIT-KERNEL: views drop writes {VIEWS_DROP_WRITES}; copies made {copies}; same \
+             command buffer stored {}, later command buffer stored {}, CPU stored {}",
             reads.same == stored,
             reads.later == stored,
             reads.cpu == stored
         );
+        assert_eq!(copies, u64::from(!VIEWS_DROP_WRITES));
         assert!(
             reads.same == stored,
             "a later command of the dispatch's command buffer reads the stored words, as Metal's \
              does"
         );
         assert!(
-            reads.later == *past,
-            "a later command buffer reads {}",
-            match DROPS_WRITES {
-                true => "the pages' own bytes: the stores were dropped",
-                false => "the stores, which reached the pages",
-            }
+            reads.later == kept,
+            "a later command buffer reads the pages' own bytes: the stores were dropped"
         );
         assert!(
-            reads.cpu == *past,
-            "the CPU reads {}",
-            match DROPS_WRITES {
-                true => "the pages' own bytes: the stores were dropped",
-                false => "the stores, which reached the pages",
-            }
+            reads.cpu == kept,
+            "the CPU reads the pages' own bytes: the stores were dropped"
         );
         drop(no_copy);
         let mut first = shared_kinds(device);
         first.extend(reads.made);
-        let kinds: &[Degradation] = match DROPS_WRITES {
-            true => &[],
-            false => &PRIVATE_OPTION,
-        };
-        assert_made_once(messages, kinds, &first);
+        assert_made_once(messages, read_only_kinds(), &first);
     });
 }
 

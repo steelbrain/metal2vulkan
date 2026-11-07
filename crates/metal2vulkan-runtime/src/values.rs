@@ -134,7 +134,11 @@ impl ResourceOptions {
     ///   pass's visibility result -- and reaches neither the CPU nor a later command buffer. What a
     ///   render pass's own machinery writes faults the command buffer: a colour attachment over
     ///   that memory, a resolve into it, a depth or stencil attachment in a heap of the bit, and a
-    ///   blit into a texture over or in it. The runtime makes them as without it, and announces
+    ///   blit into a texture over or in it. The runtime drops the GPU's writes to a no-copy
+    ///   buffer's or heap's memory with it, as Metal does: on macOS its pages are imported through
+    ///   a read-only view of them, announcing nothing; elsewhere it is made over a copy of them
+    ///   whose GPU writes are dropped, announced as `metal2vulkan-degrade-copied-host-pages`. A
+    ///   heap of the runtime's memory with it is made as without it, announcing
     ///   `metal2vulkan-degrade-private-resource-option` once; so does an indirect command buffer
     ///   made with it, which Metal makes and whose GPU-written records under it are not measured;
     /// - a buffer placed in a heap without it is made as without it, as Metal's is, announcing

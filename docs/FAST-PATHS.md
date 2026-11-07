@@ -411,24 +411,25 @@ driver's. Each is open work.
   families of one queue, a single-graphics-queue device -- still shares, and the sharing is counted
   (`WorkCounts::queues_sharing_a_vk_queue`). Not announced.
 
-- **GPU writes into read-only memory reach it off macOS.** Metal drops what a shader or the blit
-  engine writes into memory whose backing is read-only (no-copy memory of its private option bit 24,
-  or pages replaced read-only): a kernel's or a draw stage's stores, through a bound slot or an
-  address loaded out of an argument buffer, a blit fill and a visibility result complete, and
-  neither a later command buffer nor the CPU sees them, though a later command of the same command
-  buffer may read them back from the GPU's caches; what its atomics do there is unmeasured. A render
-  pass's store-out over such memory (`storeAction = Store`, or a multisample primary stored there)
-  ends its command buffer in error (`MTLCommandBufferErrorDomain` /
-  `kIOGPUCommandBufferCallbackErrorPageFault`), while attachments at `storeAction = DontCare` or
-  `loadAction = Load` complete; resolving *into* such memory is unknown (no page fault in 520
-  processes, almost all of them recovery victims). On macOS the runtime imports such pages through a
-  read-only view of them (`read_only_view.rs`), which takes the GPU's writes nowhere as Metal's
-  memory does. Elsewhere the import is of the caller's own pages and the GPU's writes reach them
-  (a copy of pages the process maps read-only, where the caller's gate refused their import or it
-  failed, drops them as Metal does, `copied.rs`): honouring bit 24 there means a read-only import (`Device::no_copy_options`, `host_lie`'s
-  `drops_writes`) and measuring what the drivers then do, since ANV lost the device and RADV failed
-  every submission over read-only imported pages. Announced meanwhile as `private-resource-option`
-  and `read-only-pages-written`.
+- **Off macOS, GPU writes into read-only memory are dropped only at the writer's completion.**
+  Metal drops what a shader or the blit engine writes into memory whose backing is read-only
+  (no-copy memory of its private option bit 24, or pages replaced read-only): a kernel's or a draw
+  stage's stores, through a bound slot or an address loaded out of an argument buffer, a blit fill
+  and a visibility result complete, and neither a later command buffer nor the CPU sees them,
+  though a later command of the same command buffer may read them back from the GPU's caches; what
+  its atomics do there is unmeasured. A render pass's store-out over such memory (`storeAction =
+  Store`, or a multisample primary stored there) ends its command buffer in error
+  (`MTLCommandBufferErrorDomain` / `kIOGPUCommandBufferCallbackErrorPageFault`), while attachments
+  at `storeAction = DontCare` or `loadAction = Load` complete; resolving *into* such memory is
+  unknown (no page fault in 520 processes, almost all of them recovery victims). On macOS the
+  runtime imports such pages through a read-only view of them (`read_only_view.rs`), which takes the
+  GPU's writes nowhere as Metal's memory does. Elsewhere no import keeps them out (ANV lost the
+  device and RADV failed every submission over read-only imported pages), so the memory is a copy
+  of the pages whose GPU writes each batch's completion takes back out (`copied.rs`, announced as
+  `copied-host-pages`): the CPU and a command buffer committed after that completion read the
+  pages' bytes, as Metal's do, but one committed before it, while the writer is in flight, reads
+  the writes, and a render pass's store-out into the copy completes where Metal's faults its
+  command buffer.
 
 - **A function linked from a module that declares function constants** is refused
   (`Unsupported{Linking; NotImplemented}` at a surviving call to the stub, `canon::link`), keyed on

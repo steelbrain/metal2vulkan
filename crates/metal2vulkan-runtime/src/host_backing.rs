@@ -35,8 +35,9 @@ pub enum HostBacking {
     /// A copy of the pages in memory of the device's own, which the GPU reads and writes in their
     /// place: the caller's gate refused their import
     /// ([`HostMemory::with_import_gate`](crate::HostMemory::with_import_gate)), the import the
-    /// device and the gate admitted failed, or a rebind's new bytes lie at another offset in
-    /// their page than the old under a texture over the buffer. Announced as the
+    /// device and the gate admitted failed, a rebind's new bytes lie at another offset in their
+    /// page than the old under a texture over the buffer, or off macOS the memory is of Metal's
+    /// private option bit 24, whose GPU writes the copy drops. Announced as the
     /// [`copied-host-pages`](crate::Degradation::CopiedHostPages) degradation: each commit writes
     /// into the copy the bytes the CPU changed in the pages, and each batch's completion writes
     /// back the bytes the GPU changed, where Metal's GPU uses the pages themselves.

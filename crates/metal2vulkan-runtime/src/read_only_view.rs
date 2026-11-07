@@ -79,10 +79,14 @@
 //!   the import's 11 to 20 ms per GiB.
 //! - **Freed.** The view is unmapped once the memory imported from it is freed (`memory.rs`'s
 //!   `Block`), as the import requires it mapped for its whole life.
-//! - **Elsewhere** the import is of the caller's pages: Linux drivers pin imported pages for
-//!   writing and refuse or fault on read-only ones (`host_memory.rs`), so there the GPU's writes
-//!   reach the pages, and the difference is announced
-//!   ([`Degradation::PrivateResourceOption`](crate::Degradation::PrivateResourceOption)).
+//! - **Elsewhere** no import keeps the GPU's writes out: Linux drivers pin imported pages for
+//!   writing and refuse or fault on read-only ones (`host_memory.rs`; ANV lost the device and RADV
+//!   failed every submission over read-only imported pages). So there such memory is a copy of the
+//!   pages whose GPU writes are dropped (`copied.rs`, announced as
+//!   [`Degradation::CopiedHostPages`](crate::Degradation::CopiedHostPages)): each commit copies in
+//!   what the CPU wrote, later commands of a batch read its GPU writes back, and its completion
+//!   puts the copy back to the pages' bytes, which the GPU never writes. A render pass's
+//!   store-out into it completes there, where Metal's faults its command buffer.
 
 use std::ptr::NonNull;
 
