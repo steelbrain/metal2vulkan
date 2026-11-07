@@ -883,7 +883,8 @@ fn what_an_encoder_keeps_of_a_key_takes_what_a_lookup_takes() {
                 aliases.unplace(key);
             }
             1 => {
-                let length = (1 + next(1 << next(6))) * PAGE;
+                let class = next(6);
+                let length = (1 + next(1 << class)) * PAGE;
                 let place = (BASE + next(96) * PAGE, length);
                 at[index] = Some(place);
                 aliases.place(key, place);
