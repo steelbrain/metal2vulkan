@@ -3684,7 +3684,9 @@ bound.
   Metal answers `0x7fc00000`; a 32-bit float texel's NaN in a gather in the device's encoding,
   and its denormal in a gather a zero of its sign, where Metal hands back the texel's bits
   (NVIDIA's 615.71.09 on the RTX 5080 Laptop GPU gathers every NaN as `0x7fffffff` and every
-  denormal as a zero); every other class Metal's value.
+  denormal as a zero); a 32-bit float texel's denormal in a nearest sample a zero of its sign on a
+  device that flushes it there (RADV's Mesa 26.2.6 on the RX 7900 XTX and the Radeon 780M, which
+  gathers it as stored); every other class Metal's value.
 - `metal2vulkan-degrade-device-vertex-conversion` (precision).
   `PrecisionNote::DeviceVertexConversion`: Native vertex input (a conversion): a render pipeline's
   vertex descriptor gives a normalized format (`UCharNormalized` through `Short4Normalized` of

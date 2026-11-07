@@ -5,7 +5,10 @@
 //! its samplers, while RADV's gathers and nearest samples, NVIDIA's gathers and ANV's nearest
 //! samples hand back **the zero of the texel's sign** — and every one of those devices' plain
 //! fetches keeps it. A denormal flushed to zero is a value a comparison in floats would call
-//! almost right, so every site here records unsigned words and compares them exactly.
+//! almost right, so every site here records unsigned words and compares them exactly. This case's
+//! replay on RADV (Mesa 26.2.6, the RX 7900 XTX and the Radeon 780M, 2026-11-07) differed at the
+//! four nearest-sample sites alone: its gathers kept the word there. The device's flush is its
+//! native answer, `device-texel-conversion`.
 //!
 //! The owned fixture `denormal_texels` is the one written for this question. Lane `i` reads the
 //! coordinate `in[i].xy` and writes eight `float4`s, each a site of its own because each is its own
