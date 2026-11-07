@@ -21,22 +21,25 @@
 //!   heap's bytes: the bytes a move of its texels out of the image would leave there, without
 //!   the move (`ShadowCopies::record_kept_from_staging`, `WorkCounts::shadow_keeps_from_staging`).
 //! - **Merged in place**, where the texture's first byte is a whole word of its buffer, its last
-//!   byte's word lies in the buffer, and the bytes lie in pages when the merge is planned (not
-//!   detached, `detach.rs`): the shadow's texels are copied into the *changed* part, and the merge
-//!   kernel binds the buffer's own bytes as its current buffer, from the texture's first byte
-//!   rounded down to 256 (the largest `minStorageBufferOffsetAlignment`), its first word pushed,
-//!   to its last byte's word. A word whose kept and changed words are equal is neither read nor
-//!   written: the bytes the commands left, those between the rows and those past the last texel
-//!   in its word keep whatever another writer wrote there meanwhile. In a word they changed, each
-//!   byte they changed becomes the texture's, and the others keep the buffer's: another writer's
-//!   write to the word's other bytes during the merge itself is a race the merge does not order.
+//!   byte's word lies in the buffer, none of its bytes lie in its tail, and the bytes lie in pages
+//!   when the merge is planned (not detached, `detach.rs`): the shadow's texels are copied into the
+//!   *changed* part, and the merge kernel binds the buffer's own bytes as its current buffer, from
+//!   the texture's first byte rounded down to 256 (the largest `minStorageBufferOffsetAlignment`),
+//!   its first word pushed, to its last byte's word. A word whose kept and changed words are equal
+//!   is neither read nor written: the bytes the commands left, those between the rows and those
+//!   past the last texel in its word keep whatever another writer wrote there meanwhile. In a word
+//!   they changed, each byte they changed becomes the texture's, and the others keep the buffer's:
+//!   another writer's write to the word's other bytes during the merge itself is a race the merge
+//!   does not order.
 //! - **Merged through a copy** elsewhere (a texture's first byte inside a word, through a staging
-//!   buffer, or a last word past its buffer; never recorded over detached bytes): the shadow's
-//!   texels are copied into the *changed* part, and the buffer's bytes from the texture's first to
-//!   its last into the *current* part. One dispatch of the merge kernel then takes, in each byte of
-//!   the current part, the changed part's byte where it differs from the kept one, and the current
-//!   part is copied back into the buffer: another writer's write to the texture's bytes between
-//!   that copy and the copy back is undone (`docs/FAST-PATHS.md`'s known gaps).
+//!   buffer, a last word past its buffer, or bytes in its tail: texels past the buffer's length, or
+//!   a 2D array's slices past its first over an IOSurface plane, `buffer_texture.rs`; never
+//!   recorded over detached bytes): the shadow's texels are copied into the *changed* part, and the
+//!   buffer's bytes from the texture's first to its last into the *current* part. One dispatch of
+//!   the merge kernel then takes, in each byte of the current part, the changed part's byte where
+//!   it differs from the kept one, and the current part is copied back into the buffer: another
+//!   writer's write to the texture's bytes between that copy and the copy back is undone
+//!   (`docs/FAST-PATHS.md`'s known gaps).
 //! - **Cut.** Where a merge after commands that write through the texture goes in place over one
 //!   region's texels, the keep holds the rectangle the encoder's commands write in, where they
 //!   bound it (`ShadowUse::area`: a pass's attachment it loads, inside its draws' scissors), else
@@ -263,9 +266,11 @@ struct Merged {
     /// from the rectangle's first word to its last (its kernel writes words of the rectangle
     /// alone, the module docs), else every byte of the texture's.
     written: Range<u64>,
-    /// Where the texture's bytes past its buffer's length lie, where its texels run past it: its
-    /// tail, the staging buffer its copies go through (`buffer_texture.rs`). A merge through a
-    /// copy takes the current part's bytes past the length from there and gives them back there.
+    /// Where the texture's bytes past those it keeps in its buffer lie (past the buffer's length,
+    /// or a 2D array's second slice on over an IOSurface plane, `Texels::kept`), where it has
+    /// such bytes: its tail, the staging buffer its copies go through (`buffer_texture.rs`). A
+    /// merge through a copy takes the current part's bytes past those from there and gives them
+    /// back there.
     tail: Option<MergeTail>,
 }
 
@@ -410,7 +415,7 @@ impl ShadowMerge {
         };
         let span = bytes.end - bytes.start;
         // A staging buffer that holds fewer of the buffer's bytes than the texture spans is its
-        // tail: its texels run past the buffer's length (`buffer_texture.rs`).
+        // tail: its texels run past the bytes it keeps in the buffer (`buffer_texture.rs`).
         let tail = copies
             .staged_bytes()
             .filter(|staging| staging.into.size < span)
@@ -433,9 +438,13 @@ impl ShadowMerge {
         // command over detached bytes (`EncoderCore::skips`), so their merge, planned through a
         // copy, whose windows bind the scratch alone, is never recorded.
         // In place, the merge reads and writes whole words, up to the last byte's word, which
-        // must lie in the buffer's bytes.
+        // must lie in the buffer's bytes, and the buffer's alone: a texture with a tail merges
+        // through a copy, whose current part takes the tail's bytes from the tail. A 2D array's
+        // slices past its first over an IOSurface plane lie in its tail even where the buffer's
+        // bytes run on past them: those bytes are the plane's own, which the array never writes.
         let rounded = span.next_multiple_of(4);
         let in_place = copies.merges_back()
+            && merged.tail.is_none()
             && first.is_multiple_of(4)
             && first + rounded <= buffer.end()
             && merged.buffer != vk::Buffer::null();
