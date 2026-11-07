@@ -37,6 +37,7 @@ fn rules() -> LocalRules {
         required_subgroup_size: None,
         stage_flags: vk::PipelineShaderStageCreateFlags::empty(),
         scratch: None,
+        rows: false,
         tile: false,
         tile_threadgroup: None,
     }
@@ -542,6 +543,58 @@ fn a_partial_simdgroup_asks_for_the_emulated_simdgroups_variant() {
         cluster.dispatch_variant(&groups([64, 1, 1])),
         Ok(VariantKey::new())
     );
+}
+
+/// A flattened kernel whose simdgroup semantics are only lockstep barriers that order pairs
+/// meeting across rows (`LocalRules::rows`, `RuntimeFact::RowLockstep`) runs a threadgroup of one
+/// row on its planned pipeline whatever its width, that region without `REQUIRE_FULL_SUBGROUPS`
+/// where it is not whole subgroups: its simdgroups lie within the row. A partial threadgroup of two
+/// rows, or a `dispatchThreads` grid with such an edge, still asks for the emulated-simdgroups
+/// variant, and whole subgroups keep the flag.
+#[test]
+fn a_row_of_a_row_lockstep_kernel_runs_on_the_planned_pipeline() {
+    let mut t = flat_template();
+    t.local.rows = true;
+    let plan = compute_plan(&t, VariantKey::new());
+    let mut emulated = VariantKey::new();
+    emulated.emulated_simdgroups = true;
+    let full = vk::PipelineShaderStageCreateFlags::REQUIRE_FULL_SUBGROUPS;
+    for (n, flags) in [
+        (1, vk::PipelineShaderStageCreateFlags::empty()),
+        (16, vk::PipelineShaderStageCreateFlags::empty()),
+        (48, vk::PipelineShaderStageCreateFlags::empty()),
+        (32, full),
+        (64, full),
+    ] {
+        let d = groups([n, 1, 1]);
+        assert_eq!(plan.dispatch_variant(&d), Ok(VariantKey::new()), "{n}");
+        let c = plan.instantiate_dispatch(&state(0), &d).expect("runs");
+        assert_eq!(c.regions.len(), 1);
+        assert_eq!(c.regions[0].stage_flags, flags, "{n}");
+        assert_eq!(c.regions[0].required_subgroup_size, Some(32), "{n}");
+    }
+    // A grid of rows whose edge is one partial row: the whole rows keep the flag.
+    let edge = Dispatch::Threads {
+        threads: [100, 1, 1],
+        threads_per_group: [32, 1, 1],
+    };
+    assert_eq!(plan.dispatch_variant(&edge), Ok(VariantKey::new()));
+    let c = plan.instantiate_dispatch(&state(0), &edge).expect("runs");
+    let flags: Vec<_> = c.regions.iter().map(|r| r.stage_flags).collect();
+    assert_eq!(flags, [full, vk::PipelineShaderStageCreateFlags::empty()]);
+    for d in [
+        groups([8, 2, 1]),
+        groups([5, 3, 1]),
+        Dispatch::Threads {
+            threads: [16, 4, 1],
+            threads_per_group: [16, 3, 1],
+        },
+    ] {
+        assert_eq!(plan.dispatch_variant(&d), Ok(emulated.clone()), "{d:?}");
+    }
+    // Without the fact every partial region asks for the variant.
+    let plain = compute_plan(&flat_template(), VariantKey::new());
+    assert_eq!(plain.dispatch_variant(&groups([16, 1, 1])), Ok(emulated));
 }
 
 /// The plan of the emulated-simdgroups variant (its local size not flattened, no multiple) states

@@ -216,6 +216,13 @@ pub struct BarrierPlan {
     /// control flow do not. A program's barrier is not among them: it keeps the profile's
     /// reconvergence.
     pub uniform_placed: std::collections::BTreeSet<ValueId>,
+    /// `lower::simd::lockstep` inserted a simdgroup barrier: the simd class takes it at
+    /// [`lockstep_class`], once the program's own operations have set theirs.
+    pub lockstep_simdgroup: bool,
+    /// The inserted simdgroup barriers are the kernel's only simdgroup semantics, and they order
+    /// only pairs that meet where a simdgroup spans two rows of its threadgroup
+    /// (`air::Lockstep::rows`): on a flattened tier the kernel records `RuntimeFact::RowLockstep`.
+    pub rows_only: bool,
 }
 
 /// Whether tangled instruction `v` depends on how subgroups reconverge: every one but a threadgroup
@@ -223,6 +230,20 @@ pub struct BarrierPlan {
 /// ([`BarrierPlan::uniform_placed`]).
 pub fn reconverges(plan: &BarrierPlan, v: ValueId) -> bool {
     !plan.uniform_placed.contains(&v)
+}
+
+/// Raise the simd class of a function the lockstep pass gave simdgroup barriers, once selection
+/// has set the class of the program's own operations, and record whether those barriers are its
+/// only simdgroup semantics and order only pairs that meet across rows
+/// ([`BarrierPlan::rows_only`]): the program's class is then none and it has no simdgroup
+/// operation, whose class its family raises later.
+pub fn lockstep_class(cx: &mut SelectCx<'_>) {
+    if !cx.families.barrier.lockstep_simdgroup {
+        return;
+    }
+    cx.families.barrier.rows_only =
+        cx.simd == SimdClass::None && !cx.families.simd.groups && cx.entry.lockstep.rows;
+    cx.simd = with_simdgroup_barrier(cx.simd);
 }
 
 /// Complete the barrier family's plan: a kernel with derivatives depends on a local size that is
@@ -338,6 +359,11 @@ fn select_barrier(
     let scope = match scope {
         ThreadScope::Threadgroup if cx.stage.has_workgroup() => Scope::Workgroup,
         ThreadScope::Threadgroup => return Err(tile_shading()),
+        // An inserted barrier's class is taken after selection ([`lockstep_class`]).
+        ThreadScope::Simdgroup if origin != Origin::Program => {
+            cx.families.barrier.lockstep_simdgroup = true;
+            Scope::Subgroup
+        }
         ThreadScope::Simdgroup => {
             cx.simd = with_simdgroup_barrier(cx.simd);
             Scope::Subgroup

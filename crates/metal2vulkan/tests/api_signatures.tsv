@@ -1581,6 +1581,7 @@ field	metal2vulkan-air::LinkedSamplerGroup.states	pub states: Vec<SamplerState>
 field	metal2vulkan-air::Lockstep.barriers	pub barriers: Vec<crate::ir::InstId>
 field	metal2vulkan-air::Lockstep.device	pub device: u32
 field	metal2vulkan-air::Lockstep.emulated	pub emulated: bool
+field	metal2vulkan-air::Lockstep.rows	pub rows: bool
 field	metal2vulkan-air::SpecRequest.call_stack_depth	pub call_stack_depth: u32
 field	metal2vulkan-air::SpecRequest.constants	pub constants: BTreeMap<u32, ConstValue>
 field	metal2vulkan-air::SpecRequest.entry	pub entry: String
@@ -14087,6 +14088,7 @@ variant	metal2vulkan::pipeline::RuntimeFact::ReplayBindings	ReplayBindings
 variant	metal2vulkan::pipeline::RuntimeFact::ResourcePresence	ResourcePresence { slot: SlotRef }
 variant	metal2vulkan::pipeline::RuntimeFact::RotatedInputBlend	RotatedInputBlend { color: u32, blend: crate::pipeline::lower_inputs::BlendEquation, kept: crate::vk::ColorComponentFlags }
 variant	metal2vulkan::pipeline::RuntimeFact::RotatedWeights	RotatedWeights
+variant	metal2vulkan::pipeline::RuntimeFact::RowLockstep	RowLockstep
 variant	metal2vulkan::pipeline::RuntimeFact::SampleCount	SampleCount
 variant	metal2vulkan::pipeline::RuntimeFact::SamplerCoordinates	SamplerCoordinates { slot: SlotRef }
 variant	metal2vulkan::pipeline::RuntimeFact::SamplerReduction	SamplerReduction { slot: SlotRef }

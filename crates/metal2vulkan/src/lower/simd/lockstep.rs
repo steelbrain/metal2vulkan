@@ -692,7 +692,7 @@ pub fn order(mut e: Entry, p: &DeviceProfile, m: &mut Meter) -> Result<Entry, Er
     let decided = decide(&e, (device, tangle), m);
     let spent = usize::try_from(m.ledger().saturating_sub(before)).unwrap_or(usize::MAX);
     m.release(spent);
-    let Some(d) = decided? else {
+    let Some((d, rows)) = decided? else {
         return Ok(e);
     };
     let barriers = if d.inserts.is_empty() {
@@ -707,18 +707,20 @@ pub fn order(mut e: Entry, p: &DeviceProfile, m: &mut Meter) -> Result<Entry, Er
         barriers,
         emulated: d.emulated,
         device: d.device,
+        rows,
     };
     Ok(e)
 }
 
-/// The barriers kernel `e` needs, or `None` when it needs none; `device`: the device runs a
-/// simdgroup in lockstep; `tangle`: a subgroup barrier in divergent flow orders the threads that
-/// run it together (maximal reconvergence on 32-lane subgroups).
+/// The barriers kernel `e` needs, or `None` when it needs none, and whether none is needed where
+/// each simdgroup lies within one row of its threadgroup ([`Lockstep::rows`]); `device`: the
+/// device runs a simdgroup in lockstep; `tangle`: a subgroup barrier in divergent flow orders the
+/// threads that run it together (maximal reconvergence on 32-lane subgroups).
 fn decide(
     e: &Entry,
     (device, tangle): (bool, bool),
     m: &mut Meter,
-) -> Result<Option<Decision>, Error> {
+) -> Result<Option<(Decision, bool)>, Error> {
     let Some(body) = e.module.func(e.func).and_then(|f| f.body.as_ref()) else {
         return Ok(None);
     };
@@ -738,7 +740,7 @@ fn decide(
     let u = Uniformity::under_barriers(e, body, Among::Workgroup, &loops, m)?;
     let us = Uniformity::under_barriers(e, body, Among::Simdgroup, &loops, m)?;
     let pdom = PostDomTree::compute(&e.cfg, m)?;
-    let mut af = AddrFacts::new(e, body, &layouts, &us, m)?;
+    let mut af = AddrFacts::new(e, body, &layouts, &us, false, m)?;
     let mut wants: BTreeSet<Want> = BTreeSet::new();
     let mut flags = MemFlags::default();
     for (space, acc) in &spaces {
@@ -758,10 +760,38 @@ fn decide(
     if wants.is_empty() {
         return Ok(None);
     }
+    // The same pairs where each simdgroup lies within one row of its threadgroup, so that two of
+    // its threads' positions differ in `x` (`AddrFacts::new`'s `rows`): where none conflicts, a
+    // dispatch of such threadgroups needs none of the barriers. Only a kernel whose subgroup
+    // barriers keep a 32-lane tier asks (`tangle`, without the device's own lockstep).
+    drop(af);
+    let mut rows = tangle && !device;
+    if rows {
+        let mut rows_af = AddrFacts::new(e, body, &layouts, &us, true, m)?;
+        for (_, acc) in &spaces {
+            let mut found = BTreeSet::new();
+            pairs(
+                e,
+                acc,
+                (&u, &us),
+                (&pdom, &loops),
+                &mut rows_af,
+                &mut found,
+                m,
+            )?;
+            if !found.is_empty() {
+                rows = false;
+                break;
+            }
+        }
+    }
     let term = spaces
         .first()
         .map_or(&[][..], |(_, acc)| acc.term.as_slice());
-    Ok(Some(stab(&wants, flags, (device, tangle), term, m)?))
+    Ok(Some((
+        stab(&wants, flags, (device, tangle), term, m)?,
+        rows,
+    )))
 }
 
 /// Collect into `wants` where barriers must order the conflicting pairs of `acc`, the accesses of

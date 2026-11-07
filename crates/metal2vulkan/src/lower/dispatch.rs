@@ -573,6 +573,9 @@ pub fn plan_kernel(cx: &mut SelectCx<'_>, tier: Tier) -> Result<DispatchPlan, Er
         cx.facts.insert(RuntimeFact::LocalSizeConstraint {
             multiple: req.local_size_multiple,
         });
+        if cx.families.barrier.rows_only {
+            cx.facts.insert(RuntimeFact::RowLockstep);
+        }
     }
     // A flat grid reads the grid's size whatever builtins it reads, and so does a folded
     // variant its group counts; the plans of both state their variant.

@@ -788,6 +788,10 @@ fn plan(p: &ComputePipeline, device: &Device, shape: &BindShape) -> Result<Bindi
             fixed: arena_bytes(arena, regions_total.unwrap_or(0)),
             available: limits.max_compute_shared_memory_size,
         }),
+        rows: p
+            .dependencies
+            .iter()
+            .any(|d| d.fact == RuntimeFact::RowLockstep),
         tile: is_tile_function(p),
         tile_threadgroup: tile_threadgroup(p, shape)?,
     };

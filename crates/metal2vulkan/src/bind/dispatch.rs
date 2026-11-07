@@ -39,7 +39,10 @@
 //! emulated simdgroups, and instantiating it on the plan of another variant is
 //! `BindError::NeedsVariant`, before anything is written. Only the variant's scratch is left to the
 //! variant's own plan, since only its compile knows it. A dispatch of whole subgroups keeps the
-//! flattened pipeline.
+//! flattened pipeline, and so does a region of one row of a kernel whose only simdgroup semantics
+//! are lockstep barriers that order pairs meeting across rows (`RuntimeFact::RowLockstep`): its
+//! simdgroups lie within the row, where no pair meets, so it runs whatever its width, without
+//! `REQUIRE_FULL_SUBGROUPS`.
 //!
 //! **Push bytes.** Each region's push write covers the stage's whole push range, so every
 //! statically used push byte is written (VUID-vkCmdDispatch-maintenance4-08602): the
@@ -237,13 +240,30 @@ pub(crate) enum Fit {
 /// A flattened tier's region of local size `r` that is not whole subgroups of its size: every
 /// multiple of a flattened plan is its tier's subgroup size, since the flattened tiers refuse
 /// derivatives (`ComputeDerivativesWithSimd`).
-fn partial(rules: &LocalRules, r: [u32; 3]) -> bool {
+fn unwhole(rules: &LocalRules, r: [u32; 3]) -> bool {
     let n: u64 = r.iter().map(|&x| u64::from(x)).product();
     rules.flat
         && rules
             .multiples
             .iter()
             .any(|&m| m > 0 && !n.is_multiple_of(u64::from(m)))
+}
+
+/// A region that is not whole subgroups ([`unwhole`]) and needs emulated simdgroups: any but a
+/// region of one row of a kernel whose simdgroup semantics need no simdgroup spanning two rows
+/// (`LocalRules::rows`), whose simdgroups then lie within its row, where no pair meets.
+fn partial(rules: &LocalRules, r: [u32; 3]) -> bool {
+    unwhole(rules, r) && !(rules.rows && r[1] == 1 && r[2] == 1)
+}
+
+/// The stage flags of a region of local size `r` on the planned pipeline: the pipeline's, but
+/// `REQUIRE_FULL_SUBGROUPS` for a region that is not whole subgroups, a row [`partial`] admits.
+fn region_flags(rules: &LocalRules, r: [u32; 3]) -> vk::PipelineShaderStageCreateFlags {
+    if unwhole(rules, r) {
+        rules.stage_flags & !vk::PipelineShaderStageCreateFlags::REQUIRE_FULL_SUBGROUPS
+    } else {
+        rules.stage_flags
+    }
 }
 
 /// The local-size rules of the kernel's emulated-simdgroups variant as the plan of its flattened
@@ -257,6 +277,7 @@ fn emulated_rules(rules: &LocalRules) -> LocalRules {
         required_subgroup_size: None,
         stage_flags: vk::PipelineShaderStageCreateFlags::empty(),
         scratch: None,
+        rows: false,
         ..rules.clone()
     }
 }
@@ -1079,7 +1100,7 @@ fn instantiate(
                 }]
             },
             indirect,
-            stage_flags: t.local.stage_flags,
+            stage_flags: region_flags(&t.local, r.local),
             required_subgroup_size: t.local.required_subgroup_size,
         });
     }

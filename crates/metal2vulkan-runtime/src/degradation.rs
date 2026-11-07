@@ -483,7 +483,9 @@ degradations! {
             "one Vulkan dispatch per region (the interior and each partial edge, per chunk of \
              group counts), each on its own specialized pipeline, a barrier between each two";
         /// A dispatch whose threadgroups are not whole subgroups of the kernel's pinned
-        /// subgroup size runs on the kernel's emulated-simdgroups variant.
+        /// subgroup size runs on the kernel's emulated-simdgroups variant. A threadgroup of one
+        /// row of a kernel whose only simdgroup semantics are lockstep barriers that order pairs
+        /// meeting across rows (`RuntimeFact::RowLockstep`) runs on the kernel's own pipeline.
         EmulatedSimdgroups = "emulated-simdgroups", Performance,
             "a second compile of the kernel whose simdgroup operations go through threadgroup \
              memory between barriers";

@@ -686,14 +686,20 @@ pub(super) struct AddrFacts<'a> {
     guards: BTreeMap<u32, Guards>,
     /// By PHI or select: the objects it may point into ([`AddrFacts::roots`]), once walked.
     merges: BTreeMap<InstId, Option<Vec<Root>>>,
+    /// Each simdgroup lies within one row of its threadgroup (a single row, or rows of a multiple
+    /// of 32 threads), so two of its threads' positions differ in `x` ([`AddrFacts::builtin_inj`]).
+    rows: bool,
 }
 
 impl<'a> AddrFacts<'a> {
+    /// The facts of kernel `e`'s body, under uniformity `u` among a simdgroup's threads; `rows`:
+    /// of a threadgroup whose simdgroups each lie within one row.
     pub fn new(
         e: &'a Entry,
         body: &'a Body,
         layouts: &'a TypeLayouts,
         u: &'a Uniformity,
+        rows: bool,
         m: &mut Meter,
     ) -> Result<AddrFacts<'a>, Error> {
         let n = body.insts.len();
@@ -721,6 +727,7 @@ impl<'a> AddrFacts<'a> {
             anchors: BTreeMap::new(),
             guards: BTreeMap::new(),
             merges: BTreeMap::new(),
+            rows,
         })
     }
 
@@ -2147,16 +2154,16 @@ impl<'a> AddrFacts<'a> {
             return Ok(None);
         };
         Ok(match v {
-            Value::Arg(a) => self.builtin_inj(a.raw()).and_then(|i| i.truncated(w)),
+            // A scalar position is its `x`.
+            Value::Arg(a) => self.builtin_inj(a.raw(), true).and_then(|i| i.truncated(w)),
             Value::Const(_) => None,
             Value::Inst(_) => match self.kind(v) {
                 // A component of a position vector.
                 Some(InstKind::ExtractElement {
                     vec: Value::Arg(a),
-                    idx: Value::Const(_),
-                }) => self
-                    .builtin_inj(a.raw())
-                    .filter(|i| i.same)
+                    idx: Value::Const(c),
+                }) if self.is_position(a.raw()) => self
+                    .builtin_inj(a.raw(), const_int(self.e, *c) == Some(0))
                     .and_then(|i| i.truncated(w)),
                 Some(InstKind::BinOp {
                     op: op @ (BinOp::Add | BinOp::Sub | BinOp::Or),
@@ -2269,17 +2276,23 @@ impl<'a> AddrFacts<'a> {
     /// position, in the grid or in the threadgroup, is the threadgroup's origin, one for the
     /// simdgroup, plus the thread's position in the threadgroup, below 1024: two threads' differ by
     /// at most 1023, and may be equal (in a threadgroup narrower than 32, threads of a simdgroup
-    /// share an `x`).
-    fn builtin_inj(&self, param: u32) -> Option<Inj> {
+    /// share an `x`). Where each simdgroup lies within one row of its threadgroup (`rows`), the
+    /// `x` of a position (`x`: the value is it) is the row's first plus the thread's place in the
+    /// row, so it differs by 1 to 31 between two threads of a simdgroup, as an index does.
+    fn builtin_inj(&self, param: u32, x: bool) -> Option<Inj> {
         let role = &self.e.ep.params.iter().find(|p| p.param == param)?.role;
+        let index = Inj {
+            step: 1,
+            spread: 31,
+            same: false,
+        };
         match role {
             ParamRole::Builtin(
                 Builtin::ThreadIndexInSimdgroup | Builtin::ThreadIndexInThreadgroup,
-            ) => Some(Inj {
-                step: 1,
-                spread: 31,
-                same: false,
-            }),
+            ) => Some(index),
+            ParamRole::Builtin(
+                Builtin::ThreadPositionInGrid | Builtin::ThreadPositionInThreadgroup,
+            ) if self.rows && x => Some(index),
             ParamRole::Builtin(
                 Builtin::ThreadPositionInGrid | Builtin::ThreadPositionInThreadgroup,
             ) => Some(Inj {
@@ -2289,6 +2302,19 @@ impl<'a> AddrFacts<'a> {
             }),
             _ => None,
         }
+    }
+
+    /// Whether parameter `param` is a position in the grid or in the threadgroup.
+    fn is_position(&self, param: u32) -> bool {
+        self.e.ep.params.iter().any(|p| {
+            p.param == param
+                && matches!(
+                    p.role,
+                    ParamRole::Builtin(
+                        Builtin::ThreadPositionInGrid | Builtin::ThreadPositionInThreadgroup
+                    )
+                )
+        })
     }
 
     /// The pointer index width of address `v`'s space.

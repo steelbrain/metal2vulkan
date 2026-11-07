@@ -129,6 +129,7 @@ fn every_fact() -> Vec<RuntimeFact> {
         RuntimeFact::AliasedImageblock { data_size: 24 },
         RuntimeFact::CallStackDepth { depth: 8 },
         RuntimeFact::OpenClMode,
+        RuntimeFact::RowLockstep,
         RuntimeFact::FlatGrid,
         RuntimeFact::SparseTextureWrites {
             slot,
@@ -372,6 +373,7 @@ fn variant(f: &RuntimeFact) -> usize {
         RuntimeFact::PartialObjectThreadgroups => 89,
         RuntimeFact::RotatedInputBlend { .. } => 90,
         RuntimeFact::OpenClMode => 91,
+        RuntimeFact::RowLockstep => 92,
     }
 }
 
@@ -379,7 +381,7 @@ fn variant(f: &RuntimeFact) -> usize {
 fn mechanism_is_total_over_every_fact_and_profile() {
     let facts = every_fact();
     let covered: std::collections::BTreeSet<usize> = facts.iter().map(variant).collect();
-    assert_eq!(covered, (0..92).collect(), "every_fact misses a variant");
+    assert_eq!(covered, (0..93).collect(), "every_fact misses a variant");
     for (stem, _) in super::committed_profiles() {
         let dev = device(&stem);
         let p = dev.profile();
@@ -426,7 +428,8 @@ fn mechanism_is_total_over_every_fact_and_profile() {
                 | RuntimeFact::StorageTextureWriteRounding { .. }
                 | RuntimeFact::HeapWriteRounding { .. }
                 | RuntimeFact::HeapCrossClassNeutral { .. }
-                | RuntimeFact::ObjectThreadgroupArena { .. } => Mechanism::PlanTimeCheck,
+                | RuntimeFact::ObjectThreadgroupArena { .. }
+                | RuntimeFact::RowLockstep => Mechanism::PlanTimeCheck,
                 RuntimeFact::DispatchGrid
                 | RuntimeFact::TileThreadgroup { .. }
                 | RuntimeFact::PartialObjectThreadgroups => Mechanism::RegionSelected,

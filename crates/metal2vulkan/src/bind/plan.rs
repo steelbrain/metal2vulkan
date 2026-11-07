@@ -574,6 +574,8 @@ pub(crate) struct LocalRules {
     pub stage_flags: vk::PipelineShaderStageCreateFlags,
     /// The emulated simdgroups' scratch (`RuntimeFact::SimdgroupEmulation`).
     pub scratch: Option<ScratchRule>,
+    /// A region of one row needs no whole subgroups (`RuntimeFact::RowLockstep`).
+    pub rows: bool,
     /// The pipeline is a tile function (`RuntimeFact::TileFunction`): its threads take Metal's
     /// tile-dispatch layout, built for the threadgroups `dispatch::tile_layout_measured` takes,
     /// dispatched by threadgroups.

@@ -153,6 +153,8 @@ pub fn mechanism(fact: &RuntimeFact, profile: &DeviceProfile) -> Mechanism {
         // The mode a kernel was compiled in: the compile layer checks it against the pipeline's;
         // nothing on the device reads it.
         RuntimeFact::OpenClMode => Mechanism::None,
+        // The binder's local-size rules read it: a one-row region of the planned pipeline.
+        RuntimeFact::RowLockstep => Mechanism::PlanTimeCheck,
         // A pipeline compiled under the flat-grid variant; its plans state it.
         RuntimeFact::FlatGrid => Mechanism::Variant,
         // A sparse texture's writes are dropped under the slot's `SparseTexture` specialization;

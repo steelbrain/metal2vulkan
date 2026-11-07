@@ -1733,7 +1733,9 @@ bound.
   two.
 - `metal2vulkan-degrade-emulated-simdgroups` (performance). `EmulatedSimdgroups`: A dispatch whose
   threadgroups are not whole subgroups of the kernel's pinned subgroup size runs on the kernel's
-  emulated-simdgroups variant. Cost: a second compile of the kernel whose simdgroup operations go
+  emulated-simdgroups variant. A threadgroup of one row of a kernel whose only simdgroup semantics
+  are the barriers its lockstep order took, ordering pairs that meet only where a simdgroup spans
+  two rows, runs on the kernel's own pipeline instead. Cost: a second compile of the kernel whose simdgroup operations go
   through threadgroup memory between barriers.
 - `metal2vulkan-degrade-separate-depth-stencil` (performance). `SeparateDepthStencil`: A pass of
   separate depth and stencil textures, or of a stencil-only texture alone at custom sample

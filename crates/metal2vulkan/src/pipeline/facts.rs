@@ -336,6 +336,12 @@ pub enum RuntimeFact {
     /// otherwise); a `Function` kernel is compiled under its pipeline's. Nothing on the device
     /// reads it.
     OpenClMode,
+    /// The kernel's only simdgroup semantics are the barriers its lockstep order took
+    /// (`lower::simd::lockstep`), on a flattened tier, and they order only pairs whose threads meet
+    /// where a simdgroup spans two rows of its threadgroup (`Lockstep::rows`). A dispatch region
+    /// of one row runs on the planned pipeline whatever its width, without whole subgroups, where
+    /// no pair meets; any other region keeps the tier's whole subgroups or emulated simdgroups.
+    RowLockstep,
     /// The kernel was compiled under `VariantKey::flat_grid` (`LoweringInputs::flat_grid`): it
     /// runs any grid in threadgroups of its own size, reading the grid from the 32-byte region
     /// record at its `PushField::ReplayRegionAddress`, which a preprocess writes beside the

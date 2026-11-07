@@ -2087,3 +2087,154 @@ fn an_emulated_exchange_reaches_a_word_with_one_access_chain() {
         }
     }
 }
+
+/// `kernel void name(device uint *b [[buffer(0)]], constant uint &n [[buffer(1)]], uint gid
+/// [[thread_position_in_grid]], uint lane [[thread_index_in_simdgroup]])`: `if (gid < n)
+/// b[index] = b[index] * 3 + extra`, `index` and `extra` the instructions `index` and `extra`
+/// compute (`%x`, an `i64`, and `%e`, an `i32`) from `%gid` and `%lane`. The read and the write
+/// of one word stand where only some threads of a simdgroup run, so the lockstep pass orders
+/// them with a simdgroup barrier, a tangle barrier on the RTX 5080's maximal reconvergence.
+fn row_kernel(name: &str, index: &str, extra: &str) -> String {
+    format!(
+        r#"target datalayout = "e-p:64:64:64-i1:8:8-i8:8:8-i16:16:16-i32:32:32-i64:64:64-f32:32:32-f64:64:64-v16:16:16-v24:32:32-v32:32:32-v48:64:64-v64:64:64-v96:128:128-v128:128:128-v192:256:256-v256:256:256-v512:512:512-v1024:1024:1024-n8:16:32"
+target triple = "air64_v28-apple-macosx26.0.0"
+
+define void @{name}(ptr addrspace(1) %b, ptr addrspace(2) %np, i32 %gid, i32 %lane) #0 {{
+entry:
+  %n = load i32, ptr addrspace(2) %np, align 4
+  %in = icmp ult i32 %gid, %n
+  br i1 %in, label %then, label %end
+then:
+  {index}
+  {extra}
+  %p = getelementptr inbounds i32, ptr addrspace(1) %b, i64 %x
+  %v = load i32, ptr addrspace(1) %p, align 4
+  %m = mul i32 %v, 3
+  %w = add i32 %m, %e
+  store i32 %w, ptr addrspace(1) %p, align 4
+  br label %end
+end:
+  ret void
+}}
+
+attributes #0 = {{ convergent mustprogress nounwind willreturn }}
+
+!air.kernel = !{{!0}}
+!air.version = !{{!7}}
+!air.language_version = !{{!8}}
+
+!0 = !{{ptr @{name}, !1, !2}}
+!1 = !{{}}
+!2 = !{{!3, !4, !5, !6}}
+!3 = !{{i32 0, !"air.buffer", !"air.location_index", i32 0, i32 1, !"air.read_write", !"air.address_space", i32 1, !"air.arg_type_size", i32 4, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"uint", !"air.arg_name", !"b"}}
+!4 = !{{i32 1, !"air.buffer", !"air.buffer_size", i32 4, !"air.location_index", i32 1, i32 1, !"air.read", !"air.address_space", i32 2, !"air.arg_type_size", i32 4, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"uint", !"air.arg_name", !"n"}}
+!5 = !{{i32 2, !"air.thread_position_in_grid", !"air.arg_type_name", !"uint", !"air.arg_name", !"gid"}}
+!6 = !{{i32 3, !"air.thread_index_in_simdgroup", !"air.arg_type_name", !"uint", !"air.arg_name", !"lane"}}
+!7 = !{{i32 2, i32 8, i32 0}}
+!8 = !{{!"Metal", i32 4, i32 0, i32 0}}
+"#
+    )
+}
+
+/// Buffers 0 and 1 bound.
+fn two_buffers() -> BindState {
+    let mut state = bind_state(None);
+    if let Some(table) = state.stages.get_mut(&Stage::Kernel) {
+        table.buffers.insert(
+            1,
+            BoundBuffer::Buffer {
+                length: 4,
+                offset: 0,
+                gpu_address: 0x2_0000,
+                device_address: None,
+                attribute_stride: None,
+            },
+        );
+    }
+    state
+}
+
+/// A kernel whose only simdgroup semantics are the barrier its lockstep order took, between a
+/// read and a write of `b[gid]` that two threads of one simdgroup meet at only where the
+/// simdgroup spans two rows of its threadgroup (the shape of OpenCL C's `if (i < n) b[i] *= k`),
+/// keeps the RTX 5080's `Direct` tier, records `RowLockstep`, and runs a threadgroup of one row
+/// (1, 16 or 48 threads) on its one compiled pipeline, without whole subgroups: no
+/// emulated-simdgroups variant is compiled, so none is announced. A threadgroup of two rows that
+/// is not whole subgroups still asks for the variant. The same kernel at `b[gid >> 1]` (two
+/// threads of a row meet) or reading its simdgroup lane keeps every partial threadgroup on the
+/// variant.
+#[test]
+fn a_row_of_a_lockstep_only_kernel_takes_one_compile() {
+    let x = "%x = zext i32 %gid to i64";
+    let none = "%e = add i32 0, 0";
+    let kernels = [
+        ("row_scale", x, none, true),
+        (
+            "row_scale_pairs",
+            "%h = lshr i32 %gid, 1\n  %x = zext i32 %h to i64",
+            none,
+            false,
+        ),
+        ("row_scale_lane", x, "%e = add i32 %lane, 0", false),
+    ];
+    let dev = device("nvidia-rtx5080-laptop");
+    let p = dev.profile();
+    let state = two_buffers();
+    let shape = state.shape();
+    for (name, index, extra, rows) in kernels {
+        let Some(bc) = assemble_text(name, &row_kernel(name, index, extra)) else {
+            return;
+        };
+        let (own, _) = typed_module(&bc, name, p).unwrap_or_else(|e| panic!("{name}: {e}"));
+        assert_eq!(own.simd.1, Tier::Direct, "{name}");
+        assert!(
+            own.facts
+                .contains(&RuntimeFact::LocalSizeConstraint { multiple: 32 }),
+            "{name}"
+        );
+        assert_eq!(
+            own.facts.contains(&RuntimeFact::RowLockstep),
+            rows,
+            "{name}"
+        );
+        let base = pipeline(&dev, &bc, name);
+        let plan = base.plan(&dev, &shape).expect("plan");
+        for n in [1, 16, 48] {
+            let want = if rows {
+                VariantKey::new()
+            } else {
+                emulated_key()
+            };
+            assert_eq!(
+                plan.dispatch_variant(&threads(n)),
+                Ok(want),
+                "{name} at {n}"
+            );
+        }
+        let two_rows = Dispatch::Threadgroups {
+            groups: [1, 1, 1],
+            threads_per_group: [8, 2, 1],
+        };
+        assert_eq!(
+            plan.dispatch_variant(&two_rows),
+            Ok(emulated_key()),
+            "{name}"
+        );
+        if rows {
+            let c = plan
+                .instantiate_dispatch(&state, &threads(16))
+                .expect("one row on the planned pipeline");
+            assert_eq!(
+                c.regions[0].stage_flags,
+                vk::PipelineShaderStageCreateFlags::empty()
+            );
+            assert_eq!(c.regions[0].required_subgroup_size, Some(32));
+            let c = plan
+                .instantiate_dispatch(&state, &threads(32))
+                .expect("whole subgroups");
+            assert!(c.regions[0]
+                .stage_flags
+                .contains(vk::PipelineShaderStageCreateFlags::REQUIRE_FULL_SUBGROUPS));
+        }
+    }
+}

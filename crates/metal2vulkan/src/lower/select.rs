@@ -1585,6 +1585,8 @@ fn finish(
 ) -> Result<Plan, Error> {
     let p = cx.profile;
     let stage = cx.stage;
+    // The class of the lockstep pass's simdgroup barriers, beside the program's own.
+    sync::barrier::lockstep_class(&mut cx);
     // Each family completes its own plan and contributes its descriptors, facts, simd class,
     // and tangled instructions before the combined checks below.
     stage_io::finish(&mut cx)?;
