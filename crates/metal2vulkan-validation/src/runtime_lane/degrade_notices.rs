@@ -2016,15 +2016,20 @@ fn a_creation_s_notices_and_messages_reach_the_sink_on_the_asking_thread() {
 /// (`Device::degrade_stages` at the making), each where the device has not announced it before:
 /// every precision note a stage records that no specialization removes (a specialized one is
 /// announced where a draw or dispatch binds a variant keeping it), but
-/// `ArgumentPixelSamplerScaling`, which a draw or dispatch listing the state announces;
+/// `ArgumentPixelSamplerScaling`, which a draw or dispatch listing the state announces, and
+/// `DevicePointSize`, which a draw that rasterizes points announces;
 /// `shader-color-conversion` where a stage rounds a color write to Metal's code; and reconvergence
 /// that is not Metal's.
 fn making_kinds<'a>(stages: impl IntoIterator<Item = &'a StageModule>) -> BTreeSet<Degradation> {
+    const AT_DRAWS: [PrecisionNote; 2] = [
+        PrecisionNote::ArgumentPixelSamplerScaling,
+        PrecisionNote::DevicePointSize,
+    ];
     let mut kinds = BTreeSet::new();
     for stage in stages {
         for &note in &stage.precision_notes {
             let specialized = stage.specialized_notes.iter().any(|s| s.note == note);
-            if !specialized && note != PrecisionNote::ArgumentPixelSamplerScaling {
+            if !specialized && !AT_DRAWS.contains(&note) {
                 kinds.insert(Degradation::from_precision_note(note));
             }
         }

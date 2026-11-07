@@ -146,26 +146,33 @@ const RUNS: u32 = 8;
 /// `render-draw-forms-lines` is the control, and it is a case rather than an argument: its
 /// indexed draw is the eight-argument direct form, so it reaches no bounds pass, moves neither
 /// count, declares nothing and replays **exact** on the same venue in the same run.
-/// The degrade notices **every** case of the family may announce, whatever draw form it uses. A
-/// list rather than a device query, because a case never branches on the device: it runs and reads
-/// what came back, and a venue that announces a kind not here fails the case until the kind is
-/// added.
+/// The degrade notices a case of the family whose draws are `rows` may announce for the primitives
+/// they draw, whatever draw form each uses. A list rather than a device query, because a case never
+/// branches on the device: it runs and reads what came back, and a venue that announces a kind not
+/// here fails the case until the kind is added.
 ///
 /// Each is a declaration over the notices site and loosens no value: an `RGBA32Uint` texel is the
 /// `uint4` the fragment function returned, so every channel of every case still compares exactly.
 ///
+/// - `device-point-size` where a row draws points: the vertex function writes `[[point_size]]`,
+///   which a device whose largest point is below Metal's announces at a draw of points, the one
+///   primitive it sizes. The triangles and lines cases announce none of it.
+///
 /// The vertex stage's own arithmetic on a device whose float arithmetic is not Metal's
 /// (`device-arithmetic`) is the device's own answer, which the suite declares for every case
 /// ([`crate::replay::NATIVE_NOTES`]).
-const PASS_NOTICES: &[Degradation] = &[
-    // The vertex function writes `[[point_size]]`, which a device without `shaderPointSize`'s
-    // guarantee takes as its own point size rather than Metal's.
-    Degradation::DevicePointSize,
-];
+fn pass_kinds(rows: &[Row]) -> Vec<Degradation> {
+    let points = rows.iter().any(|row| row.primitive == PrimitiveType::Point);
+    points
+        .then_some(Degradation::DevicePointSize)
+        .into_iter()
+        .collect()
+}
 
-/// The allowances every case keeps: one declaration per kind of [`PASS_NOTICES`].
-fn pass_notices() -> Vec<Allowance> {
-    let mut allowances: Vec<Allowance> = PASS_NOTICES
+/// The allowances a case whose draws are `rows` keeps: one declaration per kind of
+/// [`pass_kinds`].
+fn pass_notices(rows: &[Row]) -> Vec<Allowance> {
+    let mut allowances: Vec<Allowance> = pass_kinds(rows)
         .iter()
         .map(|kind| crate::replay::notice_allowance(kind.code()))
         .collect();
@@ -175,8 +182,8 @@ fn pass_notices() -> Vec<Allowance> {
     allowances
 }
 
-fn bounds_pass_notice() -> Vec<Allowance> {
-    let mut allowances = pass_notices();
+fn bounds_pass_notice(rows: &[Row]) -> Vec<Allowance> {
+    let mut allowances = pass_notices(rows);
     allowances.push(crate::replay::notice_allowance(
         Degradation::IndirectIndexBoundsPass.code(),
     ));
@@ -862,7 +869,7 @@ impl Case for Points {
         // returned: there is no conversion, no interpolation and no arithmetic of the shader's in
         // the path, so every channel is an exact answer or it is a bug. What is declared is the one
         // notice this case's own indexed indirect draw provokes ([`bounds_pass_notice`]).
-        bounds_pass_notice()
+        bounds_pass_notice(&point_rows())
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {
@@ -1022,7 +1029,7 @@ impl Case for Triangles {
     fn allowances(&self) -> Vec<Allowance> {
         // No value loosened, for the reason the points case states, and the same one notice: this
         // case makes an indexed indirect draw too ([`bounds_pass_notice`]).
-        bounds_pass_notice()
+        bounds_pass_notice(&triangle_rows())
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {
@@ -1165,7 +1172,7 @@ impl Case for Lines {
         // pass. A line's covered set is a rasterization rule rather than arithmetic, so the module
         // test holds this case to what any rule implies and the comparison holds both legs to the
         // same bytes: a coverage rule that differs is a finding, not a tolerance.
-        pass_notices()
+        pass_notices(&line_rows())
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {
@@ -1320,7 +1327,7 @@ impl Case for Empty {
         // This case makes an indexed indirect draw, so it declares the same one notice the points
         // and triangles cases do ([`bounds_pass_notice`]) -- the runtime bounds the indices before
         // the pass whatever the count turns out to be. No value is loosened.
-        bounds_pass_notice()
+        bounds_pass_notice(&empty_rows())
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {
@@ -2053,16 +2060,20 @@ mod tests {
     /// its name: a case that grew one would start announcing the bounds pass, and this is what
     /// makes the declaration follow the draws.
     fn line_rows_hold_no_indexed_indirect(case: &str) -> bool {
-        let rows = match case {
+        !rows_of(case)
+            .iter()
+            .any(|row| matches!(row.form, Form::IndexedIndirect { .. }))
+    }
+
+    /// The draws of `case`, a case of this family.
+    fn rows_of(case: &str) -> Vec<Row> {
+        match case {
             "render-draw-forms-points" => point_rows(),
             "render-draw-forms-triangles" => triangle_rows(),
             "render-draw-forms-lines" => line_rows(),
             "render-draw-forms-empty" => empty_rows(),
             other => panic!("{other} is not a case of this family"),
-        };
-        !rows
-            .iter()
-            .any(|row| matches!(row.form, Form::IndexedIndirect { .. }))
+        }
     }
 
     /// **Every case of the family names itself once**, and the names are the ones the recordings
@@ -2079,7 +2090,8 @@ mod tests {
             // No case loosens a value: every channel it reads is a `uint` the fragment function
             // returned, so every allowance any case names sits over the notices site.
             //
-            // Every case declares the family's own list ([`PASS_NOTICES`]). On top of it, the
+            // Every case declares the family's list for its primitives ([`pass_kinds`]), and
+            // `device-point-size` exactly where it draws points. On top of it, the
             // notice an **indexed indirect** draw provokes is declared by exactly the cases that
             // make one -- which is the falsification of that declaration rather than a
             // restatement of it, because the lines case reaches the same code with the direct
@@ -2094,6 +2106,18 @@ mod tests {
             let names_bounds_pass = declared
                 .iter()
                 .any(|allowance| allowance.justified_by == bounds_pass);
+            let point_size =
+                Justification::Degradation(Degradation::DevicePointSize.code().to_owned());
+            let draws_points =
+                (rows_of(case.name()).iter()).any(|row| row.primitive == PrimitiveType::Point);
+            assert_eq!(
+                declared
+                    .iter()
+                    .any(|allowance| allowance.justified_by == point_size),
+                draws_points,
+                "{} and its point-size declaration disagree",
+                case.name()
+            );
             let indirect = line_rows_hold_no_indexed_indirect(case.name());
             assert_eq!(
                 names_bounds_pass,
@@ -2105,7 +2129,7 @@ mod tests {
                 declared.len(),
                 // The family's own list, the notice a device's own memory model provokes, and the
                 // bounds-pass notice where the draw is an indexed indirect one.
-                PASS_NOTICES.len() + 1 + usize::from(!indirect),
+                pass_kinds(&rows_of(case.name())).len() + 1 + usize::from(!indirect),
                 "{} declares the wrong number of notices",
                 case.name()
             );

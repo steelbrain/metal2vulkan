@@ -3484,6 +3484,11 @@ impl Device {
                 if note == PrecisionNote::ArgumentPixelSamplerScaling {
                     continue;
                 }
+                // Announced at a draw that rasterizes points (`Device::degrade_point_size`), the
+                // one primitive a point size sizes, not at the making or a bind.
+                if note == PrecisionNote::DevicePointSize {
+                    continue;
+                }
                 self.degrade_at(at, Degradation::from_precision_note(note), || {
                     (object(), self.stage_note_reason(note, stage))
                 });
@@ -4047,6 +4052,28 @@ impl Device {
                      of pixel coordinates lives, which a program's argument buffer may name",
                     self.note_reason(NOTE),
                     state.gpu_resource_id().0
+                ),
+            )
+        });
+    }
+
+    /// Announce `PrecisionNote::DevicePointSize` at `call`'s draw of a state of `stages` that
+    /// rasterizes points: where a stage records the note, the size it writes past the device's
+    /// largest point draws at that bound. `[[point_size]]` sizes points alone (Metal has no point
+    /// fill mode, and Vulkan reads `PointSize` only where it rasterizes points), so a draw of
+    /// lines or triangles of the same state is Metal's exactly and announces nothing. Nothing else
+    /// announces the note.
+    pub(crate) fn degrade_point_size(&self, call: &'static str, stages: &[StageModule]) {
+        const NOTE: PrecisionNote = PrecisionNote::DevicePointSize;
+        let Some(stage) = stages.iter().find(|s| s.precision_notes.contains(&NOTE)) else {
+            return;
+        };
+        self.degrade(Degradation::DevicePointSize, || {
+            (
+                stage_object(stage.stage).to_owned(),
+                format!(
+                    "{}: {call} draws points of the size it writes",
+                    self.note_reason(NOTE)
                 ),
             )
         });

@@ -327,8 +327,9 @@ impl Case for RestartIndices {
         // bounds pass, and every texel of every cell still compares exactly.
         //
         // Two kinds are declared over the notices site. The vertex function writes
-        // `[[point_size]]`, which a device without `shaderPointSize`'s guarantee takes as its own
-        // (`device-point-size`); and the positions, indices, marks, frames and read-back are all
+        // `[[point_size]]`, which a device whose largest point is below Metal's announces at the
+        // `Point` cells' draws, the only ones it sizes (`device-point-size`; a line or triangle
+        // cell announces nothing of it); and the positions, indices, marks, frames and read-back are all
         // `Shared`, which a device with no unified memory keeps in system memory because that is
         // the only memory both sides can reach (`shared-in-system-memory`). Both belong to the
         // venue -- its point-size guarantee and its memory model -- rather than to a primitive

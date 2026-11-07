@@ -256,8 +256,9 @@ impl ShapeInputs<'_> {
     /// ([`DrawSettings`]), as a draw settles it and as an execution's precompile at commit does
     /// (`render/executions.rs`), `hidden` where the draw gives the pass its hidden depth and
     /// stencil (`RenderCommandEncoder::needed_hidden`). Where the draw keeps Vulkan's clipping of
-    /// points, or a depth the fragment function writes past Metal's clamp, that is announced
-    /// once where `announce`: the precompile, which draws nothing, announces nothing. Refused
+    /// points, rasterizes points of a size the device bounds below Metal's, or a depth the
+    /// fragment function writes past Metal's clamp, that is announced once where `announce`: the
+    /// precompile, which draws nothing, announces nothing. Refused
     /// as `call`'s draw is.
     pub(super) fn settings(
         &self,
@@ -422,6 +423,18 @@ impl ShapeInputs<'_> {
                         .to_owned(),
                 )
             });
+        }
+        // A point size the vertex or mesh function writes past the device's largest point, which
+        // draws at that bound: announced once at a draw that rasterizes points, a mesh draw's
+        // points its mesh function's (`GraphicsState::mesh_corners`), and at no other draw, whose
+        // primitives no point size sizes (`Device::degrade_point_size`).
+        let rasterizes_points = !base.rasterizer_discard
+            && match assembly {
+                Assembly::Meshes => base.mesh_corners == Some(1),
+                _ => topology == metal2vulkan::vk::PrimitiveTopology::POINT_LIST,
+            };
+        if announce && rasterizes_points {
+            device.degrade_point_size(call, &pipeline.base().stages);
         }
         let compensation = written_clamp.and_then(|w| w.compensation).or(compensation);
         // A draw of points takes Metal's guard band where it can, else keeps Vulkan's clipping

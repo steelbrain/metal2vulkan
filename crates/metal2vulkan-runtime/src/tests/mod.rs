@@ -267,6 +267,8 @@ mod pipeline;
 mod pipeline_wait_order;
 #[cfg(unix)]
 mod pixel_format_info;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod point_size_notices;
 #[cfg(all(any(m2v_gpu, m2v_cpu_icd), target_os = "linux"))]
 mod pointer_residency;
 mod pool_room;

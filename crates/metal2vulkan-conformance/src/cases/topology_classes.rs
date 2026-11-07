@@ -236,10 +236,11 @@ impl Case for TopologyClassCase {
         // topology class: the positions and the read-back are `Shared`
         // ([`crate::replay::shared_memory_notice`], measured on the 5080). It loosens no texel.
         let mut allowances: Vec<Allowance> = vec![crate::replay::shared_memory_notice()];
-        // And the point-size function's case alone declares what a device without
-        // `shaderPointSize`'s guarantee announces for the size it writes: measured on llvmpipe for
-        // that row and for neither the plain row nor any venue whose driver is Metal.
-        if self.subject.vertex == POINT_VERTEX {
+        // And the point-size function's case alone, whose draws are points, declares what a
+        // device whose largest point is below Metal's announces at a draw of points of the size it
+        // writes: measured on llvmpipe for that row and for neither the plain row, which draws
+        // triangles, nor any venue whose driver is Metal.
+        if self.subject.vertex == POINT_VERTEX && self.subject.primitive == PrimitiveType::Point {
             allowances.push(crate::replay::notice_allowance(
                 Degradation::DevicePointSize.code(),
             ));
