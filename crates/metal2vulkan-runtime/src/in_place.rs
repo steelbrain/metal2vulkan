@@ -52,14 +52,14 @@
 //!   Elsewhere the texture is a shadow (`shadow.rs`), its notice naming why ([`ShadowCause`]) and
 //!   counted by cause (`WorkCounts::host_texture_shadows_*`, and those that render apart).
 //! - **Before the verdict.** A texture made before its class's verdict for its access is known
-//!   starts the check on a thread of its own, unless it started, and waits for that verdict, up to
-//!   [`VERDICT_WAIT`] (`WorkCounts::in_place_verdicts_waited` counts the textures whose wait
-//!   ended with it): a texture made as a program starts, a compositor's framebuffer among them,
-//!   would otherwise be a shadow for its life. The wait is the check's rounds of the class and
-//!   access, and of those before them, once per driver (each round's submission waiting, as an
-//!   internal one does, for the work submitted before it on the device's first `VkQueue`). Past
-//!   it the texture is a shadow ([`ShadowCause::CheckPending`], counted apart). A device whose
-//!   record holds the verdicts knows them as it is made, and starts none.
+//!   waits for nothing: it is a shadow for its life ([`ShadowCause::CheckPending`], counted apart),
+//!   and the first such texture starts the check on a thread of its own. Its making waits for no
+//!   check: the check's rounds take seconds on some devices and builds (1.8 s for the first
+//!   texture, waited for, on a Radeon 780M in a debug build), past what a program's first texture
+//!   may take, a guest's message that makes one among them. A device whose record holds the
+//!   verdicts knows them as it is made, and starts none; a program that will make such textures
+//!   starts the check earlier, where it likes, through `Device::settle_in_place_checks` (with no
+//!   wait: a zero timeout).
 //! - **Visibility.** A command reads the image's texels in the memory a buffer over the same pages
 //!   reads: the pages' host-visible, host-coherent import (a dma-buf's own import is of the same
 //!   memory type). So a CPU write reaches a command through the image as it reaches the buffer's
@@ -361,11 +361,6 @@ pub(crate) fn in_place(
     Ok(())
 }
 
-/// The longest a texture over host pages waits as it is made for its class's verdict for its
-/// access while the device's check runs (the module docs): past it, the texture is a shadow
-/// ([`ShadowCause::CheckPending`]).
-pub(crate) const VERDICT_WAIT: Duration = Duration::from_secs(5);
-
 /// A device's check verdicts (`DeviceShared::in_place`): one per class and access
 /// ([`VERDICTS`]), and whether its check started and settled.
 pub(crate) struct InPlaceChecks {
@@ -420,27 +415,6 @@ impl InPlaceChecks {
     /// Give `class` its verdict for `access`.
     pub(crate) fn set(&self, class: PagesClass, access: Access, verdict: Verdict) {
         self.verdicts[verdict_index(class, access)].store(verdict.byte(), Ordering::Release);
-        // Under the lock a waiter reads the verdict under, so that none misses the wake.
-        let _held = lock(&self.settled);
-        self.wake.notify_all();
-    }
-
-    /// `class`'s verdict for `access` once it is known, the check settled, or `timeout` passed,
-    /// whichever comes first.
-    pub(crate) fn wait_for(&self, class: PagesClass, access: Access, timeout: Duration) -> Verdict {
-        let deadline = Instant::now() + timeout;
-        let mut settled = lock(&self.settled);
-        loop {
-            let verdict = self.verdict(class, access);
-            let left = deadline.saturating_duration_since(Instant::now());
-            if verdict != Verdict::Pending || *settled || left.is_zero() {
-                return verdict;
-            }
-            settled = match self.wake.wait_timeout(settled, left) {
-                Ok((settled, _)) => settled,
-                Err(poisoned) => poisoned.into_inner().0,
-            };
-        }
     }
 
     /// Whether the check is to fail whatever the moves did.
@@ -686,18 +660,11 @@ impl Device {
     }
 
     /// `class`'s verdict for `access` for a texture asking it as it is made: a pending one
-    /// starts the check, unless it started already, and waits for that verdict, up to
-    /// [`VERDICT_WAIT`] (the module docs).
+    /// starts the check, unless it started already. Never waits (the module docs).
     pub(crate) fn in_place_verdict(&self, class: PagesClass, access: Access) -> Verdict {
-        let checks = &self.shared().in_place;
-        let verdict = checks.verdict(class, access);
-        if verdict != Verdict::Pending {
-            return verdict;
-        }
-        self.start_in_place_checks();
-        let verdict = checks.wait_for(class, access, VERDICT_WAIT);
-        if verdict != Verdict::Pending {
-            self.shared().counts.in_place_verdict_waited();
+        let verdict = self.shared().in_place.verdict(class, access);
+        if verdict == Verdict::Pending {
+            self.start_in_place_checks();
         }
         verdict
     }
@@ -705,7 +672,9 @@ impl Device {
     /// Start the device's check where its verdicts are pending and no check started, and wait
     /// until every verdict is known or `timeout` passed: whether they are. Under
     /// `HostPageTexturePolicy::Shadow` no check runs and no verdict is known: false at once. A
-    /// runtime extension for the lanes that hold a texture over host pages to the path it takes.
+    /// runtime extension for the lanes that hold a texture over host pages to the path it takes,
+    /// and for a program that starts the check before it makes such textures (a zero `timeout`
+    /// waits for nothing), as a texture made before its verdict is a shadow (the module docs).
     #[doc(hidden)]
     pub fn settle_in_place_checks(&self, timeout: Duration) -> bool {
         if self.compile_device().policy().host_page_textures != HostPageTexturePolicy::InPlace {

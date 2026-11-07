@@ -345,27 +345,3 @@ fn the_checks_state_settles_once_and_wakes_its_waiters() {
     assert_eq!(checks.took(), Some(Duration::from_millis(5)));
     assert!(InPlaceChecks::new(true).forced_failure());
 }
-
-#[test]
-fn a_waiter_for_a_verdict_wakes_as_it_is_given() {
-    let checks = InPlaceChecks::new(false);
-    let (class, access) = (PagesClass::Pointer, Access::Renders);
-    // Nothing given: the wait runs out, pending.
-    assert_eq!(
-        checks.wait_for(class, access, Duration::from_millis(1)),
-        Verdict::Pending
-    );
-    std::thread::scope(|scope| {
-        let waiter = scope.spawn(|| checks.wait_for(class, access, Duration::from_secs(60)));
-        // Another verdict wakes it to wait on; its own ends the wait.
-        checks.set(class, Access::Reads, Verdict::Failed);
-        checks.set(class, access, Verdict::Passed);
-        assert_eq!(waiter.join().ok(), Some(Verdict::Passed));
-    });
-    // A settled check ends a wait for a verdict it never gave.
-    checks.settle(None);
-    assert_eq!(
-        checks.wait_for(PagesClass::DmaBuf, access, Duration::from_secs(60)),
-        Verdict::Pending
-    );
-}

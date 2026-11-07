@@ -2798,7 +2798,6 @@ field	metal2vulkan-runtime::WorkCounts.in_place_checks_passed	pub in_place_check
 field	metal2vulkan-runtime::WorkCounts.in_place_checks_recalled	pub in_place_checks_recalled: u64
 field	metal2vulkan-runtime::WorkCounts.in_place_checks_run	pub in_place_checks_run: u64
 field	metal2vulkan-runtime::WorkCounts.in_place_checks_unchecked	pub in_place_checks_unchecked: u64
-field	metal2vulkan-runtime::WorkCounts.in_place_verdicts_waited	pub in_place_verdicts_waited: u64
 field	metal2vulkan-runtime::WorkCounts.indirect_chunks_kept	pub indirect_chunks_kept: u64
 field	metal2vulkan-runtime::WorkCounts.indirect_commands_kept	pub indirect_commands_kept: u64
 field	metal2vulkan-runtime::WorkCounts.indirect_draws_recorded	pub indirect_draws_recorded: u64

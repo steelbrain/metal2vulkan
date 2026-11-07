@@ -305,9 +305,11 @@ texels and passes a kind only where every first move (and render pass, for one t
 kernel's storage writes, for one a shader writes) kept every byte. It runs on a thread of its own, started by the first such texture, once per driver and
 driver version; with a shader-cache directory its verdicts are kept there, named by the driver and
 the check's own version (not the runtime release), and recalled as the next device is made, else
-it runs once per process. The first texture waits for its verdict as it is made, up to 5 seconds
-(`WorkCounts::in_place_verdicts_waited`); past that it is a shadow
-(`WorkCounts::host_texture_shadows_check_pending`). A texture a shader writes of 1- or 2-byte
+it runs once per process. A texture made before its verdict is a shadow, made without waiting for
+the check (`WorkCounts::host_texture_shadows_check_pending`): a program that makes such textures
+as it starts (a compositor's framebuffers) and wants them in place on a driver's first run starts
+the check earlier, for instance as it makes the device, with `Device::settle_in_place_checks` and a
+zero timeout, which waits for nothing. A texture a shader writes of 1- or 2-byte
 texels (`host_texture_shadows_store_width`), one the check failed or could not cover, and one
 no image in place serves (a pitch the device's linear images do not take --
 `host_texture_shadows_refused_pitch`; over dma-buf pages, a source that makes no one dma-buf of

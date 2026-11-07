@@ -343,6 +343,8 @@ fn a_texture_over_a_long_buffer_is_its_bytes(name: &str, policy: HostPageTexture
     const ROW: u64 = 512;
     let scratch = Scratch::new(name);
     let device = device_with(&scratch.0, policy);
+    // The check's verdicts first: a texture made before its verdict is a shadow (`in_place.rs`).
+    device.settle_in_place_checks(WAIT);
     let queue = device.new_command_queue().unwrap();
     let buffer = device.new_buffer(LONG, ResourceOptions::shared()).unwrap();
     let contents = buffer.contents().unwrap();

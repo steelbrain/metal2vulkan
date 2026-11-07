@@ -344,9 +344,10 @@ clears and stores them, while the CPU writes the bytes between their rows and af
 one a shader writes, images made with `ShaderWrite` usage, whose every texel a kernel stores
 through an unsigned-integer view of 4, 8 or 16-byte texels while the CPU writes the bytes beside
 them (a program's atomics are among no round). It runs
-on a thread of its own, which the first such texture starts and waits for, up to 5 seconds, for
-its kind of pages and access (`WorkCounts::in_place_verdicts_waited`; past it the texture is a
-shadow), once per driver and driver version: its verdicts are kept in the shader cache's
+on a thread of its own, which the first such texture starts; a texture made before its kind of
+pages and access has its verdict is a shadow, made without waiting for the check
+(`WorkCounts::host_texture_shadows_check_pending`). It runs once per driver and driver version: its
+verdicts are kept in the shader cache's
 directory, named by the driver and the check's own version, not the runtime's (a device without
 one checks once per process), and recalled as the next device is made
 (`WorkCounts::in_place_checks_run`, `_passed`, `_failed`, `_unchecked`, `_recalled`). Such a
