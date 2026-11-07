@@ -2081,43 +2081,12 @@ impl Opening {
     }
 }
 
-/// What a render encoder's open takes from the device's ended render encoders
-/// ([`RenderLowering::assemble`]): the bind state the last one left (`live_bind.rs`), the views and
-/// sampler descriptions its binds made or found (`binding::BindMemo`), and the room its draws
-/// gathered into (`render/draw_room.rs`).
-struct Spares {
-    live: Arc<Mutex<LiveBind>>,
-    bind_memo: binding::BindMemo,
-    room: draw_room::DrawRoom,
-}
-
 impl RenderLowering {
     /// An encoder over `core` of the pass `opening` describes, its first instance's draws
     /// recording into `draws` (null where it records inline), made in its box: the box is
-    /// allocated first and the lowering made into it ([`opened`](Self::opened)), where a box
-    /// made of a made lowering copies its thousands of bytes in from the stack.
+    /// allocated first and the lowering written into it, where `Box::new` of a lowering makes it
+    /// on the stack and copies its thousands of bytes in.
     fn assemble(core: Box<EncoderCore>, draws: vk::CommandBuffer, opening: Opening) -> Box<Self> {
-        let shared = core.device().shared();
-        let spares = Spares {
-            live: shared.live_binds.take(),
-            bind_memo: shared.bind_memos.take(),
-            room: shared.draw_rooms.take(),
-        };
-        Box::write(
-            Box::new_uninit(),
-            RenderLowering::opened(core, draws, opening, spares),
-        )
-    }
-
-    /// [`assemble`](Self::assemble)'s lowering, with the device's `spares`. Never inlined: a call
-    /// whose result goes straight into the box is compiled to make the result there.
-    #[inline(never)]
-    fn opened(
-        core: Box<EncoderCore>,
-        draws: vk::CommandBuffer,
-        opening: Opening,
-        spares: Spares,
-    ) -> RenderLowering {
         let Opening {
             layout,
             render_target_array_length,
@@ -2131,132 +2100,137 @@ impl RenderLowering {
             log,
             grouped,
         } = opening;
-        let Spares {
-            live,
-            bind_memo,
-            room,
-        } = spares;
         let rerecord = extended.keeps_draws();
+        // The bind state the device's last ended render encoder left (`live_bind.rs`).
+        let live = core.device().shared().live_binds.take();
+        // The views and sampler descriptions its binds made or found (`binding::BindMemo`).
+        let bind_memo = core.device().shared().bind_memos.take();
+        // What its draws gather into, with the room an ended encoder's left
+        // (`render/draw_room.rs`).
+        let room = core.device().shared().draw_rooms.take();
         // Metal's default viewport and scissor rectangle cover the render area: a rate map's.
         let area = rate_map
             .as_ref()
             .map_or(layout.extent, RateMappedPass::area);
-        RenderLowering {
-            core,
-            earlier: Vec::new(),
-            current: Instance {
-                draws,
-                shape: Versioned::new(shape.clone()),
-                compatible: Arc::clone(&compatible),
-                recorded: false,
-                shadow: false,
-                shader_tests: false,
-                imageblock: false,
-                interlocked_writes: InterlockedStorage::NONE,
-                indirect_reads: IndirectReads::new(),
-                geometry_writes: GeometryWrites::new(),
-                tile_memory: false,
-                barriers: false,
-                views: ViewSetup::default(),
-                pieces: Vec::new(),
-                shadows: room.shadows,
-                before: Vec::new(),
-                reformats: Vec::new(),
-                positioned: None,
-                rerecord: rerecord.then(Vec::new),
-                bound: Bound::default(),
-                drawn: room.first_drawn,
-                inline: false,
-                continues: false,
-                kept: None,
-                planned: false,
-                feedback: Feedback::NONE,
-                storage_colors: 0,
+        Box::write(
+            Box::new_uninit(),
+            RenderLowering {
+                core,
+                earlier: Vec::new(),
+                current: Instance {
+                    draws,
+                    shape: Versioned::new(shape.clone()),
+                    compatible: Arc::clone(&compatible),
+                    recorded: false,
+                    shadow: false,
+                    shader_tests: false,
+                    imageblock: false,
+                    interlocked_writes: InterlockedStorage::NONE,
+                    indirect_reads: IndirectReads::new(),
+                    geometry_writes: GeometryWrites::new(),
+                    tile_memory: false,
+                    barriers: false,
+                    views: ViewSetup::default(),
+                    pieces: Vec::new(),
+                    shadows: room.shadows,
+                    before: Vec::new(),
+                    reformats: Vec::new(),
+                    positioned: None,
+                    rerecord: rerecord.then(Vec::new),
+                    bound: Bound::default(),
+                    drawn: room.first_drawn,
+                    inline: false,
+                    continues: false,
+                    kept: None,
+                    planned: false,
+                    feedback: Feedback::NONE,
+                    storage_colors: 0,
+                },
+                state: Versioned::new(EncoderState::metal_defaults(area)),
+                scissors: ScissorRects::metal_default(area),
+                render_target_array_length,
+                visibility: Visibility::new(layout.visibility.clone()),
+                layout: Versioned::new(layout),
+                passes: vec![(shape, compatible)],
+                pipeline: None,
+                routed: None,
+                vertex: ArgumentTable::default(),
+                fragment: ArgumentTable::default(),
+                object: ArgumentTable::default(),
+                mesh: ArgumentTable::default(),
+                object_threadgroup_lengths: BTreeMap::new(),
+                tile: ArgumentTable::default(),
+                dispatches: Vec::new(),
+                dispatched: false,
+                scratch: Vec::new(),
+                shadow: None,
+                returned_stencil: false,
+                depth_stand_in: None,
+                imageblock: None,
+                tile_imageblock: false,
+                factors: Factors::default(),
+                rate_map,
+                amplification: Versioned::new(Amplification::default()),
+                barrier: false,
+                loads_ordered: false,
+                barrier_splits: 0,
+                attached_read_splits: 0,
+                driver_restarts: false,
+                tile_memory_splits: 0,
+                tile_memory: tile_memory::TileMemory::default(),
+                residency,
+                executions: Vec::new(),
+                pending: Vec::new(),
+                draw_calls: 0,
+                tile_dispatch_calls: 0,
+                replaying: false,
+                replay_plain: false,
+                plain_drawn: false,
+                replayed_heaps: Vec::new(),
+                executing_encoder: None,
+                rerouting: false,
+                forms: BufferForms::Bound,
+                replayed: None,
+                drawn_before: Vec::new(),
+                run_barrier: false,
+                command_barrier: false,
+                unordered: UnorderedWrites::new(),
+                zero_indices: None,
+                unordered_dispatches: UnorderedWrites::new(),
+                barriered: false,
+                barrier_inside: false,
+                reaches_unnamed: false,
+                reload_at: BTreeSet::new(),
+                called: false,
+                depth_writes: false,
+                drew_depth_writes: false,
+                drew: false,
+                drawn: room.drawn,
+                coverage: linear_attachment::Coverage::default(),
+                inputs_read: BTreeSet::new(),
+                kept_attachments: None,
+                extended_written,
+                extended,
+                pass_start: room.pass_start,
+                restart: None,
+                live,
+                log,
+                quiet_bound_values: QuietKept::default(),
+                bind_memo,
+                shape_memo: ShapeMemo::default(),
+                last_retained: LastRetained::default(),
+                heaps_noted: None,
+                resident_again: None,
+                unreadable: Default::default(),
+                inline: match inline {
+                    Some(splits) => inline_first::Inline::Open { splits },
+                    None => inline_first::Inline::Never,
+                },
+                held_bound: Bound::default(),
+                again: draw_again::DrawAgain::default(),
+                grouped,
             },
-            state: Versioned::new(EncoderState::metal_defaults(area)),
-            scissors: ScissorRects::metal_default(area),
-            render_target_array_length,
-            visibility: Visibility::new(layout.visibility.clone()),
-            layout: Versioned::new(layout),
-            passes: vec![(shape, compatible)],
-            pipeline: None,
-            routed: None,
-            vertex: ArgumentTable::default(),
-            fragment: ArgumentTable::default(),
-            object: ArgumentTable::default(),
-            mesh: ArgumentTable::default(),
-            object_threadgroup_lengths: BTreeMap::new(),
-            tile: ArgumentTable::default(),
-            dispatches: Vec::new(),
-            dispatched: false,
-            scratch: Vec::new(),
-            shadow: None,
-            returned_stencil: false,
-            depth_stand_in: None,
-            imageblock: None,
-            tile_imageblock: false,
-            factors: Factors::default(),
-            rate_map,
-            amplification: Versioned::new(Amplification::default()),
-            barrier: false,
-            loads_ordered: false,
-            barrier_splits: 0,
-            attached_read_splits: 0,
-            driver_restarts: false,
-            tile_memory_splits: 0,
-            tile_memory: tile_memory::TileMemory::default(),
-            residency,
-            executions: Vec::new(),
-            pending: Vec::new(),
-            draw_calls: 0,
-            tile_dispatch_calls: 0,
-            replaying: false,
-            replay_plain: false,
-            plain_drawn: false,
-            replayed_heaps: Vec::new(),
-            executing_encoder: None,
-            rerouting: false,
-            forms: BufferForms::Bound,
-            replayed: None,
-            drawn_before: Vec::new(),
-            run_barrier: false,
-            command_barrier: false,
-            unordered: UnorderedWrites::new(),
-            zero_indices: None,
-            unordered_dispatches: UnorderedWrites::new(),
-            barriered: false,
-            barrier_inside: false,
-            reaches_unnamed: false,
-            reload_at: BTreeSet::new(),
-            called: false,
-            depth_writes: false,
-            drew_depth_writes: false,
-            drew: false,
-            drawn: room.drawn,
-            coverage: linear_attachment::Coverage::default(),
-            inputs_read: BTreeSet::new(),
-            kept_attachments: None,
-            extended_written,
-            extended,
-            pass_start: room.pass_start,
-            restart: None,
-            live,
-            log,
-            quiet_bound_values: QuietKept::default(),
-            bind_memo,
-            shape_memo: ShapeMemo::default(),
-            last_retained: LastRetained::default(),
-            heaps_noted: None,
-            resident_again: None,
-            unreadable: Default::default(),
-            inline: match inline {
-                Some(splits) => inline_first::Inline::Open { splits },
-                None => inline_first::Inline::Never,
-            },
-            held_bound: Bound::default(),
-            again: draw_again::DrawAgain::default(),
-            grouped,
-        }
+        )
     }
 }
 
