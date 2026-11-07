@@ -496,7 +496,7 @@
         "gate_waits": 1,
         "gate_waits_slept": 1,
         "graphics_pipelines_looked_up": 2,
-        "heads_held_for_host_steps": 4,
+        "heads_held_for_host_steps": 3,
         "heap_tables_worked_out": 4,
         "host_steps_recorded": 1,
         "linked_use_questions_asked": 4,
@@ -508,9 +508,7 @@
         "object_churn.images_parked": 2,
         "object_churn.images_recycled": 2,
         "object_churn.textures_image": 2,
-        "object_churn.vk_image_bindings": 1,
         "object_churn.vk_image_views_made": 2,
-        "object_churn.vk_images_made": 1,
         "owned_descriptor_pools": 1,
         "owned_kernel_spirv_bytes": 1288,
         "owned_kernels_made": 1,
@@ -527,9 +525,7 @@
         "resident_textures_looked_at": 1,
         "scheduled_where_submitted": 1,
         "scheduler_passes": 5,
-        "scheduler_passes_by_waiters": 1,
         "scheduler_sleeps": 3,
-        "scheduler_wakes_commit": 1,
         "scheduler_wakes_host": 3,
         "shader_modules_made": 5,
         "shader_modules_shared": 4,
@@ -546,7 +542,7 @@
         "variant_pipelines_made": 4,
         "wakes_completion_waiters": 1,
         "wakes_handler_threads": 1,
-        "wakes_spared": 9
+        "wakes_spared": 8
       },
       "composed": {
         "argument_samplers_taken": 2,

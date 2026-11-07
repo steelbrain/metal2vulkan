@@ -498,9 +498,9 @@
         "object_churn.buffers_evicted": 6,
         "object_churn.buffers_parked": 8,
         "object_churn.buffers_recycled": 2,
-        "object_churn.vk_buffer_bindings": 8,
+        "object_churn.vk_buffer_bindings": 6,
         "object_churn.vk_buffers_destroyed": 6,
-        "object_churn.vk_buffers_made": 8,
+        "object_churn.vk_buffers_made": 6,
         "passes_not_inline_layouts": 4,
         "pipeline_layouts_made": 1,
         "pipeline_layouts_shared": 3,
@@ -530,7 +530,7 @@
         "variant_pipelines_made": 4,
         "wakes_completion_waiters": 1,
         "wakes_handler_threads": 1,
-        "wakes_spared": 10
+        "wakes_spared": 8
       },
       "moving": {
         "gate_waits_slept": 0

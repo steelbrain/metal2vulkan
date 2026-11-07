@@ -596,7 +596,6 @@
         "row_copies": 1,
         "row_copy_regions": 8,
         "scheduled_where_submitted": 9,
-        "scheduler_passes": 1,
         "scheduler_passes_by_waiters": 9,
         "scheduler_sleeps": 9,
         "scheduler_wakes_commit": 9,
@@ -609,13 +608,11 @@
         "wakes_spared": 63
       },
       "moving": {
-        "batches_submitted_by_waiters": 3,
         "gate_waits_slept": 7
       },
       "composed": {
         "addressable_buffers_made": 2,
         "arena_pools_made": 0,
-        "batches_submitted_by_waiters": 7,
         "device_memory_allocated": 268435456,
         "owned_kernel_spirv_bytes": 1288,
         "owned_kernels_made": 0,

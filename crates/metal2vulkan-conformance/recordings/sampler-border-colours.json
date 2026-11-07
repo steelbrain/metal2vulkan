@@ -873,6 +873,7 @@
         "resident_textures_looked_at": 6,
         "sampler_sets_made": 1,
         "scheduled_where_submitted": 6,
+        "scheduler_passes": 5,
         "scheduler_passes_by_waiters": 6,
         "scheduler_sleeps": 6,
         "scheduler_wakes_commit": 6,
@@ -888,11 +889,9 @@
         "wakes_spared": 42
       },
       "moving": {
-        "batches_submitted_by_waiters": 1,
         "gate_waits_slept": 4
       },
       "composed": {
-        "batches_submitted_by_waiters": 4,
         "command_buffers_begun": 10,
         "command_buffers_begun_batch_barriers": 1,
         "command_buffers_begun_batch_work": 1,

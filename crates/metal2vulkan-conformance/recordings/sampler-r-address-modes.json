@@ -877,7 +877,7 @@
         "resident_textures_looked_at": 6,
         "sampler_sets_made": 1,
         "scheduled_where_submitted": 6,
-        "scheduler_passes": 7,
+        "scheduler_passes": 8,
         "scheduler_passes_by_waiters": 6,
         "scheduler_sleeps": 9,
         "scheduler_wakes_commit": 6,
@@ -893,11 +893,9 @@
         "wakes_spared": 43
       },
       "moving": {
-        "batches_submitted_by_waiters": 0,
         "gate_waits_slept": 4
       },
       "composed": {
-        "batches_submitted_by_waiters": 4,
         "command_buffers_deferred": 0,
         "commands_recorded.cmd_bind_descriptor_sets": 0,
         "commands_recorded.cmd_bind_pipeline": 0,

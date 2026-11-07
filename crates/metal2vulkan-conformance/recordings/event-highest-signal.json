@@ -118,7 +118,6 @@
       "bounds": {
         "addressable_buffers_made": 2,
         "bare_starts": 4,
-        "batches_submitted_by_waiters": 4,
         "batches_with_none_pending": 4,
         "command_buffers_begun": 7,
         "command_buffers_begun_batch_barriers": 1,
@@ -165,7 +164,6 @@
         "wakes_spared": 31
       },
       "moving": {
-        "batches_submitted_by_waiters": 0,
         "command_buffers_begun": 6,
         "command_buffers_begun_batch_barriers": 0,
         "command_buffers_submitted": 6,
@@ -176,7 +174,6 @@
       },
       "composed": {
         "addressable_buffers_made": 2,
-        "batches_submitted_by_waiters": 0,
         "device_memory_allocated": 201326592,
         "pooled_memory_blocks_made": 3,
         "queues_sharing_a_vk_queue": 0

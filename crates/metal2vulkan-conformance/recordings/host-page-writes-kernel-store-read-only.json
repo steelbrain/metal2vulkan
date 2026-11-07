@@ -380,7 +380,6 @@
         "argument_tables_retained": 1,
         "bare_starts": 2,
         "batches_held_past_a_look": 1,
-        "batches_submitted_by_waiters": 1,
         "batches_with_none_pending": 2,
         "command_buffers_begun": 7,
         "command_buffers_begun_batch_barriers": 2,
@@ -461,11 +460,9 @@
         "wakes_spared": 16
       },
       "moving": {
-        "batches_submitted_by_waiters": 0,
         "gate_waits_slept": 0
       },
       "composed": {
-        "batches_submitted_by_waiters": 0,
         "creation_pipelines_made": 0,
         "device_memory_allocated": 201326592,
         "functions_translated": 1,

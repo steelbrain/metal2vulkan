@@ -1531,10 +1531,12 @@
         "inline_passes": 12,
         "linked_use_questions_asked": 18,
         "new_buffer_bytes_cleared": 16400,
+        "object_churn.buffers_evicted": 1,
         "object_churn.buffers_parked": 14,
         "object_churn.buffers_recycled": 14,
         "object_churn.images_own_memory": 12,
         "object_churn.textures_image": 12,
+        "object_churn.vk_buffers_destroyed": 1,
         "object_churn.vk_image_bindings": 12,
         "object_churn.vk_image_views_made": 12,
         "object_churn.vk_images_destroyed": 12,
@@ -1567,7 +1569,6 @@
         "wakes_spared": 7
       },
       "moving": {
-        "batches_submitted_by_waiters": 0,
         "gate_waits_slept": 0
       },
       "composed": {

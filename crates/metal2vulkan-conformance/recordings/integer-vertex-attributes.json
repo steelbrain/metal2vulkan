@@ -3175,7 +3175,6 @@
         "wakes_spared": 7
       },
       "moving": {
-        "batches_submitted_by_waiters": 0,
         "flights_followed": 22,
         "gate_waits_slept": 0,
         "shader_cache_writes_on_thread": 0

@@ -197,13 +197,11 @@
         "wakes_spared": 175
       },
       "moving": {
-        "batches_submitted_by_waiters": 15,
         "gate_waits_slept": 23
       },
       "composed": {
         "addressable_buffers_made": 2,
         "arena_pools_made": 4,
-        "batches_submitted_by_waiters": 23,
         "device_memory_allocated": 201326592,
         "owned_kernel_spirv_bytes": 11016,
         "owned_kernels_made": 1,

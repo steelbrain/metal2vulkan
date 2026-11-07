@@ -532,7 +532,7 @@
         "queues_sharing_a_vk_queue": 1,
         "resident_textures_looked_at": 4,
         "scheduled_where_submitted": 3,
-        "scheduler_passes": 1,
+        "scheduler_passes": 3,
         "scheduler_passes_by_waiters": 3,
         "scheduler_sleeps": 3,
         "scheduler_wakes_commit": 3,
@@ -548,11 +548,9 @@
         "wakes_spared": 21
       },
       "moving": {
-        "batches_submitted_by_waiters": 0,
         "gate_waits_slept": 1
       },
       "composed": {
-        "batches_submitted_by_waiters": 0,
         "command_buffers_begun": 13,
         "command_buffers_begun_batch_barriers": 3,
         "command_buffers_begun_batch_work": 1,

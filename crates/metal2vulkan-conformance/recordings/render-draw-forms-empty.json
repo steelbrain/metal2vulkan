@@ -480,7 +480,7 @@
         "memory_frees.dedicated": 1,
         "memory_frees_posted": 1,
         "new_buffer_bytes_cleared": 44096,
-        "object_churn.buffers_evicted": 7,
+        "object_churn.buffers_evicted": 3,
         "object_churn.buffers_parked": 8,
         "object_churn.buffers_recycled": 5,
         "object_churn.images_own_memory": 1,
@@ -488,7 +488,7 @@
         "object_churn.images_recycled": 1,
         "object_churn.textures_image": 1,
         "object_churn.vk_buffer_bindings": 5,
-        "object_churn.vk_buffers_destroyed": 9,
+        "object_churn.vk_buffers_destroyed": 5,
         "object_churn.vk_buffers_made": 5,
         "object_churn.vk_image_views_made": 1,
         "object_churn.vk_memory_allocations": 1,
@@ -527,12 +527,10 @@
         "wakes_spared": 7
       },
       "moving": {
-        "batches_submitted_by_waiters": 0,
         "gate_waits_slept": 0
       },
       "composed": {
         "addressable_buffers_made": 2,
-        "batches_submitted_by_waiters": 0,
         "command_buffers_begun": 12,
         "command_buffers_begun_batch_barriers": 2,
         "command_buffers_begun_secondaries": 5,

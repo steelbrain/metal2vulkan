@@ -1576,7 +1576,7 @@
         "inline_passes": 3,
         "linked_use_questions_asked": 2,
         "new_buffer_bytes_cleared": 1440,
-        "object_churn.buffers_evicted": 19,
+        "object_churn.buffers_evicted": 20,
         "object_churn.buffers_parked": 18,
         "object_churn.buffers_recycled": 18,
         "object_churn.images_evicted": 3,
@@ -1584,7 +1584,7 @@
         "object_churn.images_parked": 3,
         "object_churn.textures_image": 3,
         "object_churn.vk_buffer_bindings": 5,
-        "object_churn.vk_buffers_destroyed": 19,
+        "object_churn.vk_buffers_destroyed": 20,
         "object_churn.vk_buffers_made": 5,
         "object_churn.vk_image_bindings": 3,
         "object_churn.vk_image_views_made": 9,
@@ -1617,7 +1617,6 @@
         "wakes_spared": 7
       },
       "moving": {
-        "batches_submitted_by_waiters": 0,
         "gate_waits_slept": 0
       },
       "composed": {

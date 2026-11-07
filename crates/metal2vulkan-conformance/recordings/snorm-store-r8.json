@@ -486,6 +486,7 @@
         "render_passes_made": 2,
         "resident_textures_looked_at": 1,
         "scheduled_where_submitted": 2,
+        "scheduler_passes": 1,
         "scheduler_passes_by_waiters": 2,
         "scheduler_sleeps": 2,
         "scheduler_wakes_commit": 2,
@@ -503,7 +504,6 @@
         "wakes_spared": 14
       },
       "moving": {
-        "batches_submitted_by_waiters": 1,
         "gate_waits_slept": 1
       },
       "composed": {

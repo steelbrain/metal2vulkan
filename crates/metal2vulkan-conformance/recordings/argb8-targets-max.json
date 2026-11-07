@@ -601,7 +601,6 @@
         "wakes_spared": 14
       },
       "moving": {
-        "batches_submitted_by_waiters": 0,
         "gate_waits_slept": 0
       },
       "composed": {

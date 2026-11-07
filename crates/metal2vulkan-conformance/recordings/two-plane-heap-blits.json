@@ -21535,7 +21535,7 @@
         "requirement_images_made": 15,
         "requirement_limits_asked": 15,
         "scheduled_where_submitted": 75,
-        "scheduler_passes": 1,
+        "scheduler_passes": 5,
         "scheduler_passes_by_waiters": 75,
         "scheduler_sleeps": 75,
         "scheduler_wakes_commit": 75,
@@ -21547,13 +21547,11 @@
         "wakes_spared": 525
       },
       "moving": {
-        "batches_submitted_by_waiters": 33,
         "gate_waits_slept": 60
       },
       "composed": {
         "addressable_buffers_made": 2,
         "arena_pools_made": 3,
-        "batches_submitted_by_waiters": 74,
         "device_memory_allocated": 201326592,
         "pooled_memory_blocks_made": 3,
         "queues_sharing_a_vk_queue": 0

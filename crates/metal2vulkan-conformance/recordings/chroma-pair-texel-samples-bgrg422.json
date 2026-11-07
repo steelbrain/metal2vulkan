@@ -383,13 +383,11 @@
         "wakes_spared": 7
       },
       "moving": {
-        "batches_submitted_by_waiters": 0,
         "host_texel_copies": 2
       },
       "composed": {
         "addressable_buffers_made": 2,
         "arena_pools_made": 1,
-        "batches_submitted_by_waiters": 0,
         "command_buffers_begun": 5,
         "command_buffers_begun_batch_barriers": 1,
         "command_buffers_begun_batch_work": 1,

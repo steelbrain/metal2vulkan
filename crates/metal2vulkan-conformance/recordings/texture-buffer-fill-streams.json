@@ -1106,15 +1106,18 @@
         "gate_waits": 26,
         "gate_waits_slept": 26,
         "new_buffer_bytes_cleared": 16000,
+        "object_churn.buffers_evicted": 2,
         "object_churn.buffers_parked": 64,
         "object_churn.buffers_recycled": 25,
         "object_churn.textures_texels": 26,
-        "object_churn.vk_buffer_bindings": 40,
-        "object_churn.vk_buffers_made": 40,
+        "object_churn.vk_buffer_bindings": 39,
+        "object_churn.vk_buffers_destroyed": 2,
+        "object_churn.vk_buffers_made": 39,
         "pooled_memory_blocks_made": 3,
         "queue_submissions": 26,
         "queues_sharing_a_vk_queue": 1,
         "scheduled_where_submitted": 26,
+        "scheduler_passes": 1,
         "scheduler_passes_by_waiters": 26,
         "scheduler_sleeps": 26,
         "scheduler_wakes_commit": 26,
@@ -1126,12 +1129,10 @@
         "wakes_spared": 182
       },
       "moving": {
-        "batches_submitted_by_waiters": 14,
         "gate_waits_slept": 19
       },
       "composed": {
         "addressable_buffers_made": 2,
-        "batches_submitted_by_waiters": 16,
         "device_memory_allocated": 201326592,
         "pooled_memory_blocks_made": 3,
         "queues_sharing_a_vk_queue": 0

@@ -388,6 +388,7 @@
         "render_passes_made": 3,
         "resident_textures_looked_at": 1,
         "scheduled_where_submitted": 1,
+        "scheduler_passes": 1,
         "scheduler_passes_by_waiters": 1,
         "scheduler_sleeps": 1,
         "scheduler_wakes_commit": 1,
@@ -404,10 +405,8 @@
         "wakes_completion_waiters": 1,
         "wakes_spared": 7
       },
-      "moving": {
-        "batches_submitted_by_waiters": 0
-      },
       "composed": {
+        "argument_samplers_taken": 1,
         "command_buffers_deferred": 0,
         "commands_recorded.cmd_begin_render_pass": 0,
         "commands_recorded.cmd_bind_descriptor_sets": 0,

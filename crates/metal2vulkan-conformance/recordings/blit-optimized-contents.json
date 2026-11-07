@@ -206,9 +206,6 @@
         "wakes_completion_waiters": 1,
         "wakes_spared": 7
       },
-      "moving": {
-        "batches_submitted_by_waiters": 0
-      },
       "composed": {
         "device_memory_allocated": 201326592,
         "queues_sharing_a_vk_queue": 0

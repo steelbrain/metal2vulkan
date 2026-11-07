@@ -660,11 +660,7 @@
         "ycbcr_planes_images_kept_conversion": 2,
         "ycbcr_textures_in_place": 2
       },
-      "moving": {
-        "batches_submitted_by_waiters": 2
-      },
       "composed": {
-        "batches_submitted_by_waiters": 2,
         "command_buffers_begun": 12,
         "command_buffers_begun_batch_barriers": 2,
         "command_buffers_begun_continuations": 2,

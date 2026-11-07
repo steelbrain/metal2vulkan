@@ -388,7 +388,6 @@
         "arena_pools_made": 1,
         "argument_samplers_taken": 1,
         "bare_starts": 2,
-        "batches_submitted_by_waiters": 2,
         "batches_with_none_pending": 2,
         "bound_notices_made": 1,
         "command_buffers_begun": 6,
@@ -508,11 +507,9 @@
         "wakes_spared": 16
       },
       "moving": {
-        "batches_submitted_by_waiters": 1,
         "gate_waits_slept": 1
       },
       "composed": {
-        "batches_submitted_by_waiters": 0,
         "commands_recorded.cmd_copy_buffer": 3,
         "commands_recorded.cmd_pipeline_barrier": 8,
         "creation_pipelines_drawn": 1,

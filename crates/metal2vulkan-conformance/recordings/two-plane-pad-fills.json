@@ -359,13 +359,11 @@
         "slot_returns": 9,
         "spare_command_pools_taken": 9,
         "submit_infos": 9,
-        "submit_stalls_on_work": 1,
         "trail_waits": 9,
         "wakes_completion_waiters": 9,
         "wakes_spared": 63
       },
       "moving": {
-        "batches_submitted_by_waiters": 4,
         "gate_waits_slept": 7
       },
       "composed": {

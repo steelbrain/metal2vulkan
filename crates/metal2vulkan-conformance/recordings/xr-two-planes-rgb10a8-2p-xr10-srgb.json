@@ -1162,11 +1162,11 @@
         "queues_sharing_a_vk_queue": 1,
         "resident_textures_looked_at": 9,
         "scheduled_where_submitted": 9,
-        "scheduler_passes": 19,
-        "scheduler_passes_by_waiters": 9,
-        "scheduler_sleeps": 19,
+        "scheduler_passes": 18,
+        "scheduler_passes_by_waiters": 8,
+        "scheduler_sleeps": 18,
         "scheduler_wakes_commit": 9,
-        "scheduler_wakes_host": 10,
+        "scheduler_wakes_host": 9,
         "shader_modules_made": 8,
         "slot_returns": 9,
         "spare_command_pools_taken": 9,
@@ -1177,17 +1177,15 @@
         "variant_pipelines_made": 8,
         "variants_taken_back": 4,
         "wakes_completion_waiters": 9,
-        "wakes_spared": 66
+        "wakes_spared": 64
       },
       "moving": {
-        "batches_submitted_by_waiters": 0,
         "gate_waits_slept": 8,
         "host_steps_recorded": 3
       },
       "composed": {
         "addressable_buffers_made": 1,
         "arena_pools_made": 2,
-        "batches_submitted_by_waiters": 4,
         "command_buffers_begun": 22,
         "command_buffers_begun_batch_work": 1,
         "command_buffers_submitted": 22,

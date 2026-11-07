@@ -2522,7 +2522,6 @@
         "wakes_spared": 7
       },
       "moving": {
-        "batches_submitted_by_waiters": 0,
         "shader_cache_writes_on_thread": 0
       },
       "composed": {

@@ -524,12 +524,8 @@
         "wakes_completion_waiters": 1,
         "wakes_spared": 7
       },
-      "moving": {
-        "batches_submitted_by_waiters": 0
-      },
       "composed": {
         "argument_samplers_taken": 1,
-        "batches_submitted_by_waiters": 0,
         "command_buffers_begun": 6,
         "command_buffers_begun_secondaries": 2,
         "commands_recorded.end_command_buffer": 6,

@@ -182,12 +182,10 @@
         "wakes_spared": 175
       },
       "moving": {
-        "batches_submitted_by_waiters": 10,
         "gate_waits_slept": 22
       },
       "composed": {
         "addressable_buffers_made": 2,
-        "batches_submitted_by_waiters": 23,
         "device_memory_allocated": 201326592,
         "pooled_memory_blocks_made": 3,
         "queues_sharing_a_vk_queue": 0

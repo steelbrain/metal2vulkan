@@ -6135,12 +6135,11 @@
         "resident_textures_looked_at": 60,
         "sampler_sets_made": 1,
         "scheduled_where_submitted": 60,
-        "scheduler_passes": 11,
+        "scheduler_passes": 22,
         "scheduler_passes_by_waiters": 60,
-        "scheduler_sleep_slices": 1,
-        "scheduler_sleeps": 64,
+        "scheduler_sleeps": 62,
         "scheduler_wakes_commit": 60,
-        "scheduler_wakes_host": 3,
+        "scheduler_wakes_host": 2,
         "shader_modules_made": 1,
         "slot_returns": 60,
         "spare_command_pools_taken": 60,
@@ -6152,12 +6151,10 @@
         "wakes_spared": 421
       },
       "moving": {
-        "batches_submitted_by_waiters": 7,
         "gate_waits_slept": 54
       },
       "composed": {
         "addressable_buffers_made": 2,
-        "batches_submitted_by_waiters": 58,
         "command_buffers_begun": 64,
         "command_buffers_begun_batch_work": 1,
         "command_buffers_submitted": 64,

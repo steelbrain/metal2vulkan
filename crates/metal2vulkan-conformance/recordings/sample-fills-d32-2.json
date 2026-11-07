@@ -248,13 +248,11 @@
         "wakes_spared": 7
       },
       "moving": {
-        "batches_submitted_by_waiters": 0,
         "gate_waits_slept": 0
       },
       "composed": {
         "addressable_buffers_made": 2,
         "arena_pools_made": 1,
-        "batches_submitted_by_waiters": 0,
         "command_buffers_begun": 10,
         "command_buffers_begun_batch_barriers": 3,
         "command_buffers_begun_continuations": 1,

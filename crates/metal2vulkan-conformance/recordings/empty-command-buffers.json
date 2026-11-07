@@ -344,18 +344,14 @@
         "scheduler_sleeps": 2,
         "scheduler_wakes_commit": 2,
         "slot_returns": 3,
-        "spare_command_pools_taken": 2,
+        "spare_command_pools_taken": 3,
         "submit_infos": 1,
         "trail_waits": 3,
         "wakes_completion_waiters": 1,
         "wakes_handler_threads": 4,
         "wakes_spared": 19
       },
-      "moving": {
-        "batches_submitted_by_waiters": 0
-      },
       "composed": {
-        "batches_submitted_by_waiters": 0,
         "device_memory_allocated": 201326592,
         "queues_sharing_a_vk_queue": 0
       },

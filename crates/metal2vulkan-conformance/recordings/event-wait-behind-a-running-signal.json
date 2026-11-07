@@ -401,7 +401,7 @@
         "trail_waits": 2,
         "wakes_completion_waiters": 4,
         "wakes_handler_threads": 4,
-        "wakes_spared": 34
+        "wakes_spared": 35
       },
       "composed": {
         "device_memory_allocated": 738197504,

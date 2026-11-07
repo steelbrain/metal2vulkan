@@ -206,7 +206,8 @@
         "completion_arms": 3,
         "completion_arms_after_a_wake": 2,
         "completion_reads_ran_ahead": 1,
-        "completion_waiter_parks": 2,
+        "completion_waiter_parks": 3,
+        "completion_waiter_parks_timed_out": 1,
         "device_memory_allocated": 201326592,
         "encoder_command_buffers_begun": 3,
         "event_waits_met": 1,
@@ -216,8 +217,10 @@
         "gate_waits": 2,
         "gate_waits_slept": 2,
         "heads_held_for_event_values": 3,
+        "object_churn.buffers_evicted": 25,
         "object_churn.buffers_parked": 1,
         "object_churn.buffers_recycled": 1,
+        "object_churn.vk_buffers_destroyed": 25,
         "pooled_memory_blocks_made": 3,
         "primaries_begun_ahead": 2,
         "queue_submissions": 3,
@@ -235,7 +238,7 @@
         "trail_waits": 2,
         "wakes_completion_waiters": 2,
         "wakes_handler_threads": 3,
-        "wakes_spared": 18
+        "wakes_spared": 19
       },
       "moving": {
         "completion_arms": 2,

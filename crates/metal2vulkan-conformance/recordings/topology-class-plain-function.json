@@ -660,7 +660,7 @@
         "gate_waits": 4,
         "gate_waits_slept": 4,
         "graphics_pipelines_looked_up": 4,
-        "heads_held_for_host_steps": 7,
+        "heads_held_for_host_steps": 6,
         "heap_tables_worked_out": 8,
         "host_steps_recorded": 2,
         "host_texel_copies": 4,
@@ -690,11 +690,11 @@
         "render_passes_made": 2,
         "resident_textures_looked_at": 4,
         "scheduled_where_submitted": 4,
-        "scheduler_passes": 9,
+        "scheduler_passes": 8,
         "scheduler_passes_by_waiters": 4,
-        "scheduler_sleeps": 8,
+        "scheduler_sleeps": 9,
         "scheduler_wakes_commit": 4,
-        "scheduler_wakes_host": 4,
+        "scheduler_wakes_host": 5,
         "shader_modules_made": 3,
         "shader_modules_shared": 8,
         "slot_returns": 4,
@@ -708,9 +708,6 @@
         "wakes_completion_waiters": 4,
         "wakes_handler_threads": 2,
         "wakes_spared": 30
-      },
-      "moving": {
-        "batches_submitted_by_waiters": 0
       },
       "composed": {
         "argument_samplers_taken": 4,

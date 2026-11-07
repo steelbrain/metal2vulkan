@@ -214,9 +214,6 @@
         "wakes_completion_waiters": 1,
         "wakes_spared": 7
       },
-      "moving": {
-        "batches_submitted_by_waiters": 0
-      },
       "composed": {
         "arena_pools_made": 0,
         "command_buffers_deferred": 0,

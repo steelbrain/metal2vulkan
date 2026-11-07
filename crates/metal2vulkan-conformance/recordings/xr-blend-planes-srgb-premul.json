@@ -651,14 +651,12 @@
         "wakes_spared": 14
       },
       "moving": {
-        "batches_submitted_by_waiters": 0,
         "gate_waits_slept": 1
       },
       "composed": {
         "addressable_buffers_made": 2,
         "arena_pools_made": 3,
         "argument_samplers_taken": 1,
-        "batches_submitted_by_waiters": 0,
         "command_buffers_begun": 16,
         "command_buffers_begun_batch_barriers": 4,
         "command_buffers_begun_batch_work": 2,

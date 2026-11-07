@@ -246,11 +246,9 @@
         "wakes_spared": 21
       },
       "moving": {
-        "batches_submitted_by_waiters": 0,
         "gate_waits_slept": 2
       },
       "composed": {
-        "batches_submitted_by_waiters": 2,
         "command_buffers_deferred": 0,
         "commands_recorded.cmd_copy_buffer_to_image": 0,
         "commands_recorded.cmd_copy_image_to_buffer": 0,
