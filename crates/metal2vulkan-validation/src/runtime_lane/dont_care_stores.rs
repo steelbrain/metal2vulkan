@@ -14,9 +14,10 @@
 //! two (`DriverFact::DontCareStoreIsOneOfMetals`) is handed `DONT_CARE`; every other device stores
 //! the attachment, and each of its texels must be one of the two too.
 //!
-//! Those cases run under the runtime's default policy, where a color attachment of a texture's
-//! own image stored `DontCare` is stored as the driver stores it and no pass renders through a
-//! backing (`WorkCounts::kept_texels_passes` stays 0). Under `DontCareColorPolicy::Kept`, which
+//! Those cases run under the runtime's default `DontCareColorPolicy::Driver` (set over the lane's
+//! `exact_answers()`), where a color attachment of a texture's own image stored `DontCare` is
+//! stored as the driver stores it and no pass renders through a backing
+//! (`WorkCounts::kept_texels_passes` stays 0). Under `DontCareColorPolicy::Kept`, which
 //! `DevicePolicy::exact_answers()` selects, such an attachment keeps its earlier texels exactly
 //! on every driver and announces no `dont-care-store`: on a driver with the fact, in a pass
 //! recorded as one render pass instance, handed to Metal; everywhere else, and in a pass the
@@ -258,6 +259,12 @@ fn kept_lane() -> (Messages, super::ScratchCache, Lane) {
     lane_with(|options| options.policy.dont_care_colors = DontCareColorPolicy::Kept)
 }
 
+/// [`lane`] on a device whose colors stored `DontCare` are stored as the driver stores them
+/// (`DontCareColorPolicy::Driver`, the runtime's default), over the lane's `exact_answers()`.
+fn driver_lane() -> (Messages, super::ScratchCache, Lane) {
+    lane_with(|options| options.policy.dont_care_colors = DontCareColorPolicy::Driver)
+}
+
 /// Passes recorded as one render pass instance keep their attachments' earlier texels under
 /// `DontCare` and `MultisampleResolve` on a driver that stores them as Metal's own (our probes'
 /// answers), and announce no `dont-care-store` there: a color attachment cleared and drawn, loaded
@@ -265,10 +272,11 @@ fn kept_lane() -> (Messages, super::ScratchCache, Lane) {
 /// `RGBA8Unorm` and a 4x `BGRA8Unorm_sRGB` attachment cleared, drawn and resolved, or stored
 /// `DontCare`; a `Depth32Float` and a `Depth32Float_Stencil8` attachment cleared and drawn; and a
 /// 4x `Depth32Float` attachment cleared, drawn and resolved. Every other driver announces it once,
-/// and prints whether it kept them. The resolve textures hold the draw everywhere.
+/// and prints whether it kept them. The resolve textures hold the draw everywhere. Under
+/// `DontCareColorPolicy::Driver`, the runtime's default: no pass renders through a backing.
 #[test]
 fn dont_care_stores_keep_the_texels_where_the_driver_stores_them_as_metal_s() {
-    let (messages, _cache, lane) = lane();
+    let (messages, _cache, lane) = driver_lane();
     let pipeline = lane.pipeline(&[RGBA8], (None, None), 1);
     let old = OLD.repeat((SIDE * SIDE) as usize);
     for (case, load, draw, area) in [
@@ -437,7 +445,8 @@ fn dont_care_stores_keep_the_texels_where_the_driver_stores_them_as_metal_s() {
 /// draws (MoltenVK restarts its Metal pass there, storing the attachment); a barrier over
 /// buffers, which splits the pass into two render pass instances, the first storing; a 4x
 /// attachment cleared, not drawn and resolved (Metal leaves the clear where it compresses the
-/// texture); and a 4x pass at custom sample positions, where the device takes them.
+/// texture); and a 4x pass at custom sample positions, where the device takes them. Under
+/// `DontCareColorPolicy::Driver`, the runtime's default.
 #[test]
 fn dont_care_stores_a_driver_may_store_otherwise_are_announced() {
     let old = OLD.repeat((SIDE * SIDE) as usize);
@@ -445,7 +454,7 @@ fn dont_care_stores_a_driver_may_store_otherwise_are_announced() {
         ("barrier_render_targets", BarrierScope::RENDER_TARGETS),
         ("barrier_buffers", BarrierScope::BUFFERS),
     ] {
-        let (messages, _cache, lane) = lane();
+        let (messages, _cache, lane) = driver_lane();
         let pipeline = lane.pipeline(&[RGBA8], (None, None), 1);
         let texture = lane.old_color(RGBA8, PLAIN, TARGET);
         let descriptor = color_pass(&texture, LoadAction::Clear, StoreAction::DontCare, None);
@@ -485,7 +494,7 @@ fn dont_care_stores_a_driver_may_store_otherwise_are_announced() {
     }
     {
         let case = "ms4_clear_nodraw_resolve";
-        let (messages, _cache, lane) = lane();
+        let (messages, _cache, lane) = driver_lane();
         let reference = resolved(&lane, &earlier_msaa(&lane, RGBA8), RGBA8);
         let texture = earlier_msaa(&lane, RGBA8);
         let into = lane.texture(RGBA8, PLAIN, TARGET);
@@ -513,7 +522,7 @@ fn dont_care_stores_a_driver_may_store_otherwise_are_announced() {
     }
     {
         let case = "ms4_positions_clear_draw_resolve";
-        let (messages, _cache, lane) = lane();
+        let (messages, _cache, lane) = driver_lane();
         let pipeline = lane.pipeline(&[RGBA8], (None, None), 4);
         let reference = resolved(&lane, &earlier_msaa(&lane, RGBA8), RGBA8);
         let texture = earlier_msaa(&lane, RGBA8);
