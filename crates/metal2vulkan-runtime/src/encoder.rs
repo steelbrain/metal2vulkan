@@ -82,22 +82,25 @@ use std::sync::{Arc, Mutex, Weak};
 /// The next core's [`EncoderCore::id`]: from 1, so none is `retained::HeldBy`'s 0.
 static CORES: AtomicU64 = AtomicU64::new(1);
 
-/// The most emptied core boxes a device keeps ([`SpareCores`]): one per render encoder ending at
-/// once beyond it makes a box again, as every encoder did before.
+/// The most emptied core boxes a device keeps ([`SpareCores`]): a render encoder that opens while
+/// more than these are open makes a box of its own.
 const SPARE_CORES: usize = 4;
+
+/// The box of an ended render encoder's core, emptied: room for the next encoder's core.
+struct CoreRoom(Box<MaybeUninit<EncoderCore>>);
 
 /// The boxes of a device's render encoders' cores, emptied as their encoders end, which the next
 /// render encoders it opens take. A render encoder holds its core in a box (`render.rs`), so its
 /// end hands the core on through each step as a pointer rather than its state; its open takes the
 /// box an ended encoder gave back, so the box costs no allocation once the device has one.
 #[derive(Default)]
-pub(crate) struct SpareCores(Mutex<Vec<Box<MaybeUninit<EncoderCore>>>>);
+pub(crate) struct SpareCores(Mutex<Vec<CoreRoom>>);
 
 impl SpareCores {
     /// Room for a core: the latest box an ended encoder gave back, else a new one.
     fn take(&self) -> Box<MaybeUninit<EncoderCore>> {
         let room = lock(&self.0).pop();
-        room.unwrap_or_else(Box::new_uninit)
+        room.map_or_else(Box::new_uninit, |CoreRoom(room)| room)
     }
 
     /// Keep `room`, an ended encoder's core's box, emptied, where fewer than [`SPARE_CORES`] are
@@ -105,7 +108,7 @@ impl SpareCores {
     fn give(&self, room: Box<MaybeUninit<EncoderCore>>) {
         let mut spare = lock(&self.0);
         if spare.len() < SPARE_CORES {
-            spare.push(room);
+            spare.push(CoreRoom(room));
         }
     }
 }
