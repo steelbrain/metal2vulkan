@@ -48,6 +48,16 @@
 //!   round: the program's last drop stops it there and waits for its round in progress and its
 //!   release of its buffer, so the device goes on the program's thread, and the check ends
 //!   unrecorded.
+//! - **Not where the driver writes over the device's loader word.** On a device whose word the
+//!   runtime found overwritten (`loader_word.rs`: MoltenVK with each activity logged at once
+//!   names the device in each message), the check runs no round, or no further one, and each
+//!   class it has not answered stays unchecked for the device's life, recorded nowhere, so its
+//!   textures over host pages take the shadow. Its rounds make their buffers and textures through
+//!   the product's paths, which take locks the program's threads hold while they make calls the
+//!   loader serves, so the word cannot be held across a round as the device's other checks hold
+//!   it across their steps; and with the check beside the program's own submissions, a queue
+//!   waiter's `vkAllocateCommandBuffers` faulted on the magic (an M3 Max under MoltenVK 1.4.2,
+//!   one run of three), where the same work with no check running did not in 30 000 rounds.
 //! - **Its dma-bufs.** The runtime runs no `udmabuf` code, so the dma-buf class's pages are an
 //!   allocation of the device's own, host-visible and exported as a dma-buf, mapped: the device
 //!   refuses their pointer (a driver that takes it leaves the class unchecked), and the check's
@@ -156,11 +166,17 @@ impl Device {
 fn run(weak: crate::device::WeakDevice) {
     mark_checking();
     let started = Instant::now();
+    let mut stopped = false;
     for class in PagesClass::ALL {
         let Some(device) = weak.hold() else {
             return;
         };
         if device.shared().in_place.verdict(class) != Verdict::Pending {
+            continue;
+        }
+        if stopped || word_overwritten(&device) {
+            stopped = true;
+            device.shared().in_place.set(class, Verdict::Unchecked);
             continue;
         }
         let Some(verdict) = check_class(&device, class) else {
@@ -176,7 +192,15 @@ fn run(weak: crate::device::WeakDevice) {
     };
     let checks = &device.shared().in_place;
     let verdicts = checks.verdicts();
-    if !checks.forced_failure() && !verdicts.contains(&Verdict::Pending) {
+    let stopped = stopped || word_overwritten(&device);
+    if stopped {
+        checks.note(
+            "not run, or not to its end: the device's loader word was found overwritten (the \
+             driver names the device in its messages), which the check's rounds cannot hold"
+                .to_owned(),
+        );
+    }
+    if !checks.forced_failure() && !stopped && !verdicts.contains(&Verdict::Pending) {
         let identity = device.driver_identity();
         let bytes = encode(&identity, verdicts);
         // A failed write leaves the verdicts to the device's life alone.
@@ -189,8 +213,16 @@ fn run(weak: crate::device::WeakDevice) {
     checks.settle(Some(started.elapsed()));
 }
 
-/// The verdict of `class` on `device`: every shape's rounds, until one fails. `None` where the
-/// process is exiting, or the program's last drop stopped the device's holds before a round
+/// Whether the runtime found `device`'s loader word overwritten (`loader_word.rs`): the check then
+/// runs no further round (the module docs).
+fn word_overwritten(device: &Device) -> bool {
+    // SAFETY: the device is live while `device` is.
+    unsafe { device.shared().loader_word.overwritten() }
+}
+
+/// The verdict of `class` on `device`: every shape's rounds, until one fails, or until the
+/// device's loader word is found overwritten (unchecked then where no round ran). `None` where
+/// the process is exiting, or the program's last drop stopped the device's holds before a round
 /// (`device/holds.rs`).
 fn check_class(device: &Device, class: PagesClass) -> Option<Verdict> {
     let page = host_page();
@@ -205,6 +237,9 @@ fn check_class(device: &Device, class: PagesClass) -> Option<Verdict> {
         for round in 0..ROUNDS {
             if !device.holds_go_on(Holder::InPlaceCheck) {
                 return None;
+            }
+            if word_overwritten(device) {
+                return Some(Verdict::Unchecked);
             }
             let outcome = {
                 let _busy = exit_guard::enter()?;
