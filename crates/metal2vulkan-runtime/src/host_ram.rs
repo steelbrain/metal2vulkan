@@ -38,10 +38,19 @@
 //!   alone, as below; those after it in the chunk's import. A buffer's run import is one more
 //!   listed import, released while idle as a no-copy buffer's own import is (`host_residency.rs`),
 //!   and the buffer is bound in the chunk at its next use; a heap's, or a buffer's whose address
-//!   was handed out, stays while it lives. A chunk only its slot holds (no buffer bound in it, no
-//!   pending command buffer that used one) is released once it stayed so for its window, as a
-//!   no-copy buffer's idle import is (2 s, doubled at each release of the chunk up to 64 s), by
-//!   the same thread; the next object over it asks for it again. Counted:
+//!   was handed out, stays while it lives. The first kernel submission that lists a chunk just
+//!   imported waits while the kernel writes the chunk's page tables, an entry a host page, and
+//!   every other submission of the device waits for it, as it holds the lock of the device's
+//!   page tables (measured with the kernel stacks of the waiting threads on the Radeon 780M,
+//!   Mesa 26.2.6, Linux 7.3.1: 231 to 275 ms of a gather's submission for a chunk of 3.94 GiB
+//!   imported again). So a chunk, once imported, stays imported while the device uses the RAM,
+//!   where the whole RAM fits in the share of the memory the device's imports count against
+//!   that [`releases_idle_chunks`] keeps it in: RADV lists every import in every kernel
+//!   submission, which fails once they pass the kernel's GTT. Where it does not fit, a chunk
+//!   only its slot holds (no buffer bound in it, no pending command buffer that used one) is
+//!   released once it stayed so for its window, as a no-copy buffer's idle import is (2 s,
+//!   doubled at each release of the chunk up to 64 s), by the same thread; the next object over
+//!   it asks for it again, and the first submission after its import waits again. Counted:
 //!   `WorkCounts::host_ram_chunks_released`.
 //! - **A window ahead of the objects.** From [`Device::use_host_ram`] on, a thread of the
 //!   device's ([`import_ahead`]) keeps imported the chunk an object last took and a window of
@@ -546,9 +555,14 @@ pub(crate) struct Plan {
     pub(crate) bytes: u64,
     /// The device's held imports add to the cost of every submission and the RAM's chunks are
     /// its dma-bufs (the module docs): its chunks are as long as [`listed_chunk_bytes`] allows,
-    /// none is imported ahead, each is imported by the device's thread once an object over it
-    /// asked, and one no object holds is released while idle.
+    /// none is imported ahead, and each is imported by the device's thread once an object over
+    /// it asked.
     pub(crate) listed: bool,
+    /// A listed chunk no object holds is released once idle for its window
+    /// ([`RamOnDevice::idle`]): only where the whole RAM does not fit in the share of the memory
+    /// the device's imports count against that [`releases_idle_chunks`] keeps it in. Elsewhere
+    /// every chunk stays imported while the device uses the RAM.
+    pub(crate) releases: bool,
 }
 
 impl Plan {
@@ -556,6 +570,7 @@ impl Plan {
     pub(crate) const AHEAD: Plan = Plan {
         bytes: CHUNK_BYTES,
         listed: false,
+        releases: false,
     };
 }
 
@@ -574,6 +589,35 @@ pub(crate) fn listed_chunk_bytes(
     let buffer = if buffer == 0 { u64::MAX } else { buffer };
     let most = largest_dma_buf.min(allocation).min(buffer).min(storage);
     (most / CHUNK_BYTES).max(1) * CHUNK_BYTES
+}
+
+/// The bytes of the memory a device's imports of host pages count against, from its memory
+/// `heaps`: with unified memory (`unified`), every heap, as the device's memory is the host's and
+/// its driver may report it in several (RADV on a Radeon 780M reports the kernel's GTT and the
+/// carve-out together, two thirds of them as a device-local heap and the rest as another);
+/// without, the heaps that are not `DEVICE_LOCAL` (a discrete GPU's GTT, which amdgpu charges
+/// with every dma-buf imported, as its `mem_info_gtt_used` shows).
+fn import_heap_bytes(heaps: &[vk::MemoryHeap], unified: bool) -> u64 {
+    (heaps.iter())
+        .filter(|heap| unified || !heap.flags.contains(vk::MemoryHeapFlags::DEVICE_LOCAL))
+        .fold(0u64, |bytes, heap| bytes.saturating_add(heap.size))
+}
+
+/// Whether a RAM of `ram_bytes` whose plan is [`Plan::listed`] has its idle chunks released
+/// ([`Plan::releases`]), on a device whose imports count against `import_heaps` bytes
+/// ([`import_heap_bytes`]), with unified memory or without (`unified`): only where the RAM does
+/// not fit in half of them with unified memory (where they hold the device's own memory too, and
+/// the carve-out besides the host's memory the imports count against), three quarters without.
+/// RADV lists every import in every kernel submission, which fails once they pass the kernel's
+/// GTT, so chunks kept past their objects must fit in it; and where they fit, a released chunk
+/// imported again costs the device's every submission a stall while the kernel writes its page
+/// tables again (the module docs).
+fn releases_idle_chunks(ram_bytes: u64, import_heaps: u64, unified: bool) -> bool {
+    let kept = match unified {
+        true => import_heaps / 2,
+        false => import_heaps / 4 * 3,
+    };
+    ram_bytes > kept
 }
 
 /// The chunks of `ranges` (host addresses, by start): `bytes` from each range's start, the last
@@ -994,11 +1038,11 @@ fn import_ahead(device: WeakDevice, ram: Weak<RamOnDevice>, wake: Arc<Wake>) {
 /// [`import_ahead`]: it imports each chunk an object over it asked for
 /// ([`RamOnDevice::next_asked`]), one at a time, each once ([`RamOnDevice::chunk`]) and inside a
 /// section of the exit guard, off the threads making the objects, which are bound in imports of
-/// their own runs meanwhile ([`RamOnDevice::run_alone`]); between imports, and every
-/// `host_residency::TICK` while it waits, it releases the chunks only their slot has held for
-/// their window ([`RamOnDevice::idle`]), each freed inside a section of the exit guard as its last
-/// holder goes, and imported again once an object over it asks. Counted:
-/// `WorkCounts::host_ram_chunks_released`. A chunk it fails to import is left to the objects
+/// their own runs meanwhile ([`RamOnDevice::run_alone`]); where the plan releases idle chunks
+/// ([`Plan::releases`]), between imports, and every `host_residency::TICK` while it waits, it
+/// releases the chunks only their slot has held for their window ([`RamOnDevice::idle`]), each
+/// freed inside a section of the exit guard as its last holder goes, and imported again once an
+/// object over it asks. Counted: `WorkCounts::host_ram_chunks_released`. A chunk it fails to import is left to the objects
 /// over it, which import it on their own threads, as without this thread; so is a chunk asked
 /// for once one more import would leave the device less than a quarter of its
 /// `maxMemoryAllocationCount` (`allocations.rs`). It ends once the use ended, the device went or
@@ -1033,11 +1077,13 @@ fn listed_chunks(device: WeakDevice, ram: Weak<RamOnDevice>, wake: Arc<Wake>) {
             std::thread::yield_now();
             continue;
         }
-        let gone = ram.idle(Instant::now());
-        for _ in &gone {
-            shared.counts.host_ram_chunk_released();
+        if ram.plan.releases {
+            let gone = ram.idle(Instant::now());
+            for _ in &gone {
+                shared.counts.host_ram_chunk_released();
+            }
+            drop(gone);
         }
-        drop(gone);
         drop((ram, device));
         wake.wait_for(host_residency::TICK);
     }
@@ -1141,8 +1187,9 @@ fn give_back_untaken(device: WeakDevice) {
 /// do the command buffers that use them, until they completed; the device holds it while it uses
 /// the RAM ([`HostRamUse`]). The last holder destroys the `VkBuffer` and frees the memory, and the
 /// RAM, which the chunk holds, goes after the free: its keep-alive with it once no chunk holds it.
-/// Released while idle only where each listed import costs every submission ([`Plan::listed`],
-/// [`listed_chunks`]). Left to the process's end while it exits.
+/// Released while idle only where each listed import costs every submission and the RAM does not
+/// fit in the memory its imports count against ([`Plan::releases`], [`listed_chunks`]). Left to
+/// the process's end while it exits.
 pub(crate) struct RamChunk {
     device: Device,
     /// The host bytes imported.
@@ -1358,6 +1405,10 @@ pub(crate) struct RamSource {
     /// while it is set starts none, so its chunks are imported by the objects over them alone.
     #[cfg(test)]
     held: AtomicBool,
+    /// The tests' bytes of the memory the device's imports count against, in place of its heaps'
+    /// ([`Device::count_host_ram_imports_against`]); 0 for the heaps'.
+    #[cfg(test)]
+    import_heaps: std::sync::atomic::AtomicU64,
 }
 
 impl RamSource {
@@ -1397,6 +1448,13 @@ impl Device {
     /// thread has not reached is.
     pub(crate) fn hold_host_ram_imports(&self) {
         self.shared().host_ram.held.store(true, Ordering::Relaxed);
+    }
+
+    /// Plan the RAMs used from now on as though the device's imports counted against `bytes` of
+    /// memory, in place of its heaps' ([`releases_idle_chunks`]): the tests' way to see a listed
+    /// RAM's idle chunks released, or kept, whatever the device's heaps.
+    pub(crate) fn count_host_ram_imports_against(&self, bytes: u64) {
+        (self.shared().host_ram.import_heaps).store(bytes, Ordering::Relaxed);
     }
 
     /// Each RAM the device uses: whether it imports it as each listed import costing every
@@ -1460,7 +1518,11 @@ impl Device {
     /// hundreds of milliseconds), and that object and those over the chunk meanwhile are bound in
     /// imports of their own runs alone, as above; a buffer's is released while idle, the buffer
     /// bound in the chunk at its next use, and a heap's, or a buffer's whose address was handed
-    /// out, stays while it lives. The thread releases a chunk no object nor pending command
+    /// out, stays while it lives. A chunk stays imported once imported, as the first submission
+    /// after a chunk's import waits while the kernel writes its page tables (hundreds of
+    /// milliseconds for a chunk of 4 GiB on a Radeon 780M), where the whole RAM fits in half the
+    /// device's memory heaps with unified memory, else in three quarters of those that are not
+    /// device-local. Where it does not, the thread releases a chunk no object nor pending command
     /// buffer held for 2 s, the window doubled at each release of the chunk up to 64 s
     /// (`WorkCounts::host_ram_chunks_released`); the next object over it asks for it again.
     ///
@@ -1593,6 +1655,22 @@ impl Device {
             .limits
             .max_storage_buffer_range;
         let allocation = self.compile_device().allocation();
+        let shared = self.shared();
+        // SAFETY: the device's own physical device, of its instance.
+        let memory =
+            unsafe { (shared.instance.raw).get_physical_device_memory_properties(shared.physical) };
+        let heaps =
+            &memory.memory_heaps[..(memory.memory_heap_count as usize).min(vk::MAX_MEMORY_HEAPS)];
+        let unified = self.properties().has_unified_memory;
+        let import_heaps = import_heap_bytes(heaps, unified);
+        #[cfg(test)]
+        let import_heaps = match shared.host_ram.import_heaps.load(Ordering::Relaxed) {
+            0 => import_heaps,
+            set => set,
+        };
+        let ram_bytes = (ram.ranges.iter()).fold(0u64, |bytes, range| {
+            bytes.saturating_add(range.end - range.start)
+        });
         Plan {
             bytes: listed_chunk_bytes(
                 ram.largest_dma_buf,
@@ -1601,6 +1679,7 @@ impl Device {
                 u64::from(storage),
             ),
             listed: true,
+            releases: releases_idle_chunks(ram_bytes, import_heaps, unified),
         }
     }
 }
@@ -2019,6 +2098,38 @@ mod tests {
             listed_chunk_bytes(4 * GIB, 4 * GIB, 0, 128 * MIB - 1),
             CHUNK_BYTES
         );
+    }
+
+    #[test]
+    fn listed_chunks_stay_imported_where_the_ram_fits_the_memory_imports_count_against() {
+        const GIB: u64 = 1 << 30;
+        let heap = |size: u64, flags: vk::MemoryHeapFlags| vk::MemoryHeap { size, flags };
+        let local = vk::MemoryHeapFlags::DEVICE_LOCAL;
+        let none = vk::MemoryHeapFlags::empty();
+        // RADV on the Radeon 780M of a host with a 4 GiB carve-out and a 13,939 MiB GTT: both
+        // reported together, two thirds device-local; on the RX 7900 XTX beside it, 24 GiB of
+        // VRAM and the GTT.
+        let (gtt, carve_out) = (13939 * MIB, 4 * GIB);
+        let apu = [
+            heap((gtt + carve_out) / 3, none),
+            heap((gtt + carve_out) - (gtt + carve_out) / 3, local),
+        ];
+        let discrete = [heap(24 * GIB, local), heap(gtt, none)];
+        assert_eq!(import_heap_bytes(&apu, true), gtt + carve_out);
+        assert_eq!(import_heap_bytes(&discrete, false), gtt);
+        assert_eq!(import_heap_bytes(&[heap(8 * GIB, local)], false), 0);
+        // An 8 GiB guest RAM stays imported on both; a 16 GiB one is released while idle.
+        assert!(!releases_idle_chunks(8 * GIB, gtt + carve_out, true));
+        assert!(!releases_idle_chunks(8 * GIB, gtt, false));
+        assert!(releases_idle_chunks(16 * GIB, gtt + carve_out, true));
+        assert!(releases_idle_chunks(16 * GIB, gtt, false));
+        // The bounds: half with unified memory, three quarters without; nothing to count against
+        // releases every RAM.
+        assert!(!releases_idle_chunks(4 * GIB, 8 * GIB, true));
+        assert!(releases_idle_chunks(4 * GIB + 1, 8 * GIB, true));
+        assert!(!releases_idle_chunks(6 * GIB, 8 * GIB, false));
+        assert!(releases_idle_chunks(6 * GIB + 1, 8 * GIB, false));
+        assert!(releases_idle_chunks(1, 0, false));
     }
 
     #[test]

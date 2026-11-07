@@ -742,10 +742,11 @@ fn submit_per_ram_dma_buf() {
 /// made over chunks not imported (its pages resolved to the RAM's own, `HostMemory::with_runs`)
 /// and used by one command buffer; once the device's thread imported the chunks, one more object
 /// was made over each stride, the first objects' run imports were released while idle and each
-/// was used again (so lies in its chunk); and [`RAM_IDLE`] after the buffers went. Then three
-/// gathers (`copy_from_host_ram`) from the released chunks, encoded, committed and waited for:
-/// [`RAM_COPY_RUN`] at 16 strides of the first chunk, the same again once that chunk is imported,
-/// and one at each stride. Printed as `SUBMIT-PER-IMPORT` lines (`submit_per_import`'s) and
+/// was used again (so lies in its chunk); and [`RAM_IDLE`] after the buffers went, the chunks
+/// kept where the RAM fits in the memory the device's imports count against, else released.
+/// Then three gathers (`copy_from_host_ram`) from those chunks, encoded, committed and waited
+/// for: [`RAM_COPY_RUN`] at 16 strides of the first chunk, the same again once the device's
+/// thread settled (a released chunk imported again by then), and one at each stride. Printed as `SUBMIT-PER-IMPORT` lines (`submit_per_import`'s) and
 /// `SUBMIT-PER-RAM-CHUNK` lines: the chunks the device imported
 /// (`WorkCounts::host_ram_chunks_imported`, `host_ram_chunk_bytes`, `host_ram_chunks_live`,
 /// `host_ram_chunks_imported_ahead`, `host_ram_chunks_released`), the run imports and dma-buf
@@ -970,7 +971,7 @@ fn submit_per_ram_chunk() {
         eprintln!(
             "SUBMIT-PER-RAM-CHUNK {}: {what}: a gather of {} runs of {} KiB encoded in {:.3} ms, \
              committed to completed in {:.3} ms ({:.3} ms of it submitting); {} dma-buf imports \
-             made, {} chunks imported by then",
+             made, {} chunks imported by then, {} live, {} released before it",
             device.name(),
             runs.len(),
             runs[0].end.saturating_sub(runs[0].start) >> 10,
@@ -979,12 +980,14 @@ fn submit_per_ram_chunk() {
             submitting * 1e3,
             counts.host_ram_dma_buf_imports - before.host_ram_dma_buf_imports,
             counts.host_ram_chunks_imported - before.host_ram_chunks_imported,
+            counts.host_ram_chunks_live,
+            before.host_ram_chunks_released - made.host_ram_chunks_released,
         );
     };
-    gather("16 in the first chunk, released", &few);
+    gather("16 in the first chunk, after the idle wait", &few);
     std::thread::sleep(RAM_QUIET);
-    gather("16 in the first chunk, imported again", &few);
-    gather("one at each 64 MiB, the other chunks released", &every);
+    gather("16 in the first chunk again", &few);
+    gather("one at each 64 MiB", &every);
     report("after the copies", &made);
     drop(used);
 }

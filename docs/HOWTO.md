@@ -570,10 +570,16 @@ submission, can give the device the guest's RAM once instead:
   object, and every object over the chunk until the import is done, is bound in an import of its
   own run alone, as above, so no making waits for the chunk; each is one more listed import, a
   buffer's released after its idle window and a heap's, or a buffer's whose address was handed
-  out, kept while the object lives. A chunk no buffer bound in it and no pending command buffer that
-  used it holds for its idle window (2 s, doubled at each release of the chunk up to 64 s) is
-  released by the same thread (`host_ram_chunks_released`), and the next object over it asks for
-  it again.
+  out, kept while the object lives. The first kernel submission after a chunk's import waits while
+  the kernel writes the chunk's page tables, and so does every other submission of the device
+  (231 to 275 ms for a 3.94 GiB chunk on the Radeon 780M), so a chunk stays imported once
+  imported where the whole RAM fits in half the device's memory heaps with unified memory, or in
+  three quarters of its heaps that are not device-local without (an 8 GiB RAM does on the 780M
+  and the RX 7900 XTX of a 27 GiB host). Each kept chunk adds about half a microsecond to every
+  submission. Where the RAM does not fit, a chunk no buffer bound in it and no pending command
+  buffer that used it holds for its idle window (2 s, doubled at each release of the chunk up to
+  64 s) is released by the same thread (`host_ram_chunks_released`), and the next object over it
+  asks for it again.
 - Any other answer (several runs, one run crossing a chunk's end, `None`) takes the paths above:
   the gate, then the import or the copy. The runs are kept with the object.
 - Elsewhere the chunks are never released while idle. Once the use is dropped, each is freed when

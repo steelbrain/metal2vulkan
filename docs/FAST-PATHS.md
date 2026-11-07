@@ -184,8 +184,15 @@ recorded here.
   again at the first blit after the window (HOWTO.md section 6). For the same reason a guest RAM
   there (`Device::use_host_ram`, with a source of dma-bufs) is imported in a few long chunks
   (`HostRam::with_largest_dma_buf`, within the device's allocation, buffer and storage-range
-  limits), none ahead of the objects, and a chunk no buffer nor pending command buffer holds is
-  released after the same window (`WorkCounts::host_ram_chunks_released`). The first object over
+  limits), none ahead of the objects. A chunk, once imported, stays imported where the whole RAM
+  fits in half the device's memory heaps with unified memory, or in three quarters of those that
+  are not device-local without: the first kernel submission after a chunk's import waits while
+  the kernel writes its page tables, and every other submission of the device with it (231 to
+  275 ms for a 3.94 GiB chunk on the Radeon 780M), where each kept chunk costs every submission
+  about half a microsecond (3 chunks for an 8 GiB RAM: 16 µs a submission, 14 µs with none).
+  Where the RAM does not fit, a chunk no buffer nor pending command buffer holds is released
+  after the same window (`WorkCounts::host_ram_chunks_released`), as RADV lists every import in
+  every kernel submission, which fails once they pass the kernel's GTT. The first object over
   a chunk not imported asks a thread of the device's for it, which imports it off the object's
   thread (it pins every page of the chunk: 660 to 692 ms for 2.7 GiB on the Radeon 780M and the
   RX 7900 XTX), and the objects over it meanwhile are each bound in an import of its own run,
