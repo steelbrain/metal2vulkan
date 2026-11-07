@@ -15,14 +15,14 @@
 //! its offset 0: **upward** over the RAM's first 256 runs, **downward** over its last 256 from
 //! the top, **scattered** over 256 distinct runs drawn over all of it.
 //!
-//! Each of the first three waits 1 s after the use begins. Each order prints the makings of 5 ms or more, the
-//! slowest and the median, the chunks imported ahead of the objects and by their makings, and
-//! the heaps bound in a chunk (`HOST-RAM-WINDOW`), and each making of 5 ms or more: its take,
+//! Each of the first three waits 1 s after the use begins. Each order prints the makings of 5 ms or
+//! more, the slowest and the median, the chunks imported ahead of the objects and by their makings,
+//! and the heaps bound in a chunk (`HOST-RAM-WINDOW`), and each making of 5 ms or more: its take,
 //! its chunk, and what it made, the counts it moved (`HOST-RAM-WINDOW-SLOW`). The orders run
 //! [`REPEATS`] times over RAM in 2 MiB pages, the main case (QEMU's file-backed RAM where shared
-//! memory takes the advice for huge pages), then over RAM in 4 KiB pages (`RamPages`), each
-//! order's line with the system's count of shared memory in huge pages at its end. Ignored: run it in release,
-//! `cargo test --release -p metal2vulkan-runtime --lib host_ram_window_bench -- --ignored
+//! memory takes the advice for huge pages), then over RAM in 4 KiB pages (`RamPages`), each order's
+//! line with the system's count of shared memory in huge pages at its end. Ignored: run it in
+//! release, `cargo test --release -p metal2vulkan-runtime --lib host_ram_window_bench -- --ignored
 //! --nocapture` under `--cfg m2v_gpu`.
 
 use super::host_ram_device::{ahead_device, fresh_ram_in, gate, itself, resolver, RamPages};
