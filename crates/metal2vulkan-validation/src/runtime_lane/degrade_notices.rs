@@ -2060,6 +2060,30 @@ pub(super) fn made_render_kinds(
     kinds
 }
 
+/// The kinds a draw of points of a render pipeline state of `descriptor` on `device` announces
+/// past its making's ([`made_render_kinds`]), each where the device has not announced it before:
+/// `DevicePointSize` where a stage records `PrecisionNote::DevicePointSize`, a point size on a
+/// device whose largest point is below Metal's (lavapipe's 256, ANV's 255), which a draw of points
+/// announces and no other draw does (`Device::degrade_point_size`).
+pub(super) fn point_draw_kinds(
+    device: &Device,
+    descriptor: &RenderPipelineDescriptor,
+) -> BTreeSet<Degradation> {
+    let compiled = device
+        .compile_device()
+        .compile_render_pipeline(descriptor, &Budget::standard())
+        .unwrap();
+    let noted = (compiled.stages.iter()).any(|stage| {
+        stage
+            .precision_notes
+            .contains(&PrecisionNote::DevicePointSize)
+    });
+    noted
+        .then_some(Degradation::DevicePointSize)
+        .into_iter()
+        .collect()
+}
+
 /// [`making_kinds`] of a mesh render pipeline state of `descriptor` on `device`, as its compile
 /// layer compiles it (`compile_mesh_pipeline`), and its layout's ([`layout_kinds`]).
 pub(super) fn made_mesh_kinds(

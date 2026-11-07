@@ -23,7 +23,9 @@
 //! 1.5 and the next `float` past it, with the rule's.
 
 use super::buffer_with;
-use super::degrade_notices::{assert_made_once, made_render_kinds, shared_in_system_memory};
+use super::degrade_notices::{
+    assert_made_once, made_render_kinds, point_draw_kinds, shared_in_system_memory,
+};
 use super::rate_maps::descriptor;
 use super::render_state::{quiet, texture, validated, Probe, PASS};
 use super::WAIT;
@@ -165,9 +167,12 @@ fn points(probe: &Probe) -> RenderPipelineState {
 }
 
 /// The kinds a test of [`points`] forces where the device has not announced them: its making's
-/// (`made_render_kinds`) and the `Shared` buffers' system memory.
+/// (`made_render_kinds`), its draws of points' (`point_draw_kinds`) and the `Shared` buffers'
+/// system memory.
 fn forced_kinds(probe: &Probe) -> BTreeSet<Degradation> {
-    let mut kinds = made_render_kinds(&probe.device, &points_descriptor(probe));
+    let descriptor = points_descriptor(probe);
+    let mut kinds = made_render_kinds(&probe.device, &descriptor);
+    kinds.extend(point_draw_kinds(&probe.device, &descriptor));
     if shared_in_system_memory(&probe.device) {
         kinds.insert(Degradation::SharedInSystemMemory);
     }
