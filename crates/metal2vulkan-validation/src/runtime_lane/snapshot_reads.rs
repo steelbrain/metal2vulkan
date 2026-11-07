@@ -178,13 +178,11 @@ fn readers(
     (bytes, moved)
 }
 
-/// How [`readers_over`]' target was made: whether its image aliases its bytes (made as no
-/// shadow, `WorkCounts::shadowed_textures`), and whether the image its passes render took
-/// feedback loop usage (`WorkCounts::feedback_loop_alias_images`, or
+/// How [`readers_over`]' target was made: whether the image its passes render took feedback loop
+/// usage (`WorkCounts::feedback_loop_alias_images` for an image aliasing its bytes, or
 /// `feedback_loop_shadow_images` for a shadow).
 #[derive(Debug)]
 struct Made {
-    aliased: bool,
     feedback: bool,
 }
 
@@ -230,7 +228,6 @@ fn readers_over(
     };
     let counts = device.work_counts();
     let made = Made {
-        aliased: counts.shadowed_textures == made.shadowed_textures,
         feedback: counts.feedback_loop_alias_images > made.feedback_loop_alias_images
             || counts.feedback_loop_shadow_images > made.feedback_loop_shadow_images,
     };
