@@ -44,7 +44,7 @@ Its limits, measured rather than asserted:
 | committed recordings | 1228 |
 | distinct SDK items the Metal leg reaches, of any status | 819 |
 | of those, reached only where this cannot name the family | 3 |
-| ledger rows (a case whose gap is recorded) | 2638 |
+| ledger rows (a case whose gap is recorded) | 2635 |
 | declared crossings of the option space (pairs put to Metal at once) | 26 |
 | declared crossings that are no pair of it (a boolean or numeric field, or one type in two slots) | 30 |
 
@@ -2520,7 +2520,6 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `vertex-format-float4` | A NaN of a narrow float attribute (`half`, or a small float of `FloatRG11B10`): the first differing element is Metal 0x7FC00000 against our 0x7FC02000, the devi… |
 | `vertex-format-float4` | A NaN of a narrow float attribute (`half`, or a small float of `FloatRG11B10`): the first differing element is Metal 0x7FC00000 against our 0x7FC02000, the devi… |
 | `vertex-format-float4` | A NaN of a narrow float attribute (`half`, or a small float of `FloatRG11B10`): the first differing element is Metal 0x7FC00000 against our 0x7FC02000, the devi… |
-| `vertex-format-float4` | This is NOT a rounding difference and it is not the narrow-float NaN rows of the same case. Metal's `float4` fetch of an `MTLVertexFormatFloatRGB9E5` attribute … |
 | `vertex-format-half4` | A normalized attribute the function reads as `half`: Metal rounds the field's value to `half`, and ours hands on the device's `float` conversion unrounded (Meta… |
 | `vertex-format-half4` | A normalized attribute the function reads as `half`: Metal rounds the field's value to `half`, and ours hands on the device's `float` conversion unrounded (Meta… |
 | `vertex-format-half4` | A normalized attribute the function reads as `half`: Metal rounds the field's value to `half`, and ours hands on the device's `float` conversion unrounded (Meta… |
@@ -2593,8 +2592,6 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `vertex-format-half4` | An attribute the function reads as `half`: Metal rounds the attribute's value to `half` (a value past the `half`'s range to infinity), and ours keeps the `float… |
 | `vertex-format-half4` | An attribute the function reads as `half`: Metal rounds the attribute's value to `half` (a value past the `half`'s range to infinity), and ours keeps the `float… |
 | `vertex-format-half4` | An attribute the function reads as `half`: Metal rounds the attribute's value to `half` (a value past the `half`'s range to infinity), and ours keeps the `float… |
-| `vertex-format-half4` | This is NOT a rounding difference and it is not the narrow-float NaN rows of the same case. Metal's `float4` fetch of an `MTLVertexFormatFloatRGB9E5` attribute … |
-| `vertex-format-instance-step` | This is NOT a rounding difference and it is not the narrow-float NaN rows of the same case. Metal's `float4` fetch of an `MTLVertexFormatFloatRGB9E5` attribute … |
 | `vertex-format-instance-step` | Metal converts a normalized vertex field as `c / (2^b - 1)`, correctly rounded, and this device's fixed-function vertex input is one ULP high: at the first diff… |
 | `vertex-format-instance-step` | Metal converts a normalized vertex field as `c / (2^b - 1)`, correctly rounded, and this device's fixed-function vertex input is one ULP high: at the first diff… |
 | `vertex-format-instance-step` | Metal converts a normalized vertex field as `c / (2^b - 1)`, correctly rounded, and this device's fixed-function vertex input is one ULP high: at the first diff… |

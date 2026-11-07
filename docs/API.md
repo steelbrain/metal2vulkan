@@ -610,7 +610,9 @@ A `RenderPipeline` holds:
 - `layout`: one pipeline layout for every stage;
 - `vertex_input`: Vulkan bindings and attributes. An attribute Vulkan cannot fetch as described is
   pulled in the shader instead, and so is every attribute on a device without
-  `robustBufferAccess` (unless containment is off);
+  `robustBufferAccess` (unless containment is off). A `FloatRGB9E5` attribute is pulled on every
+  device: no device must fetch the shared-exponent format as vertex input, and its decode is
+  exact, so the shader's is the answer a conformant fetch gives;
 - `graphics`: the fixed-function state (topology, attachment formats and blend states, sample
   count, dynamic states, input attachments, ...). Build
   `VkPipelineColorBlendStateCreateInfo::pAttachments` from `graphics.color_blend_attachments()`.

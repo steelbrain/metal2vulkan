@@ -20,15 +20,15 @@
 //!   its place (`VkProperty::MetalNormalizedVertexFetch`), so neither keys a translation
 //!   (`a_pipeline_notes_what_the_device_converts_from_one_translation`).
 //! - **one module per pulled format.** A format the fixed-function path cannot fetch is decoded in
-//!   the shader, and each decode is its own code. Necessary: no format of the 45-format sweep is
-//!   pulled on the suite's venue.
+//!   the shader, and each decode is its own code. Of the 45-format sweep only `FloatRGB9E5` is
+//!   pulled on the suite's venue, as on every device (`metal::vertex::attribute_fetch`).
 //! - **the step function: nothing, where the device fetches it.** Metal's constant step is a
 //!   Vulkan binding of divisor 0 and stride 0 (`metal::vertex::attribute_fetch`,
 //!   `link::vertex::binding_stride`), which is `VertexAttribute` and `VertexBinding` state and
 //!   names no instruction, so a constant-step sweep costs exactly what the per-vertex sweep costs.
 //!   Where that binding is not available -- the portability subset forbids a stride of 0, which is
 //!   what makes the fetch independent of the base instance -- every format is pulled instead and
-//!   the sweep is one module a creation: 45 of 45 on `moltenvk-m3`, 1 on a native driver.
+//!   the sweep is one module a creation: 45 of 45 on `moltenvk-m3`, 2 on a native driver.
 //!
 //! Counts, not times: a count is the same on a loaded host as on a quiet one. No GPU is used, and
 //! `llvm-as` assembles the fixture, so a missing tool skips visibly.
@@ -195,35 +195,36 @@ fn count(bc: &[u8], p: &DeviceProfile, entry: &str, step: VertexStepFunction) ->
     }
 }
 
-/// `vertex-format-float4`'s own sweep under the default: the device fetches every one of the 45
-/// formats in fixed function, and the whole sweep is **one** module of one translation.
+/// `vertex-format-float4`'s own sweep under the default: the device fetches 44 of the 45 formats
+/// in fixed function, which share **one** module of one translation, and the shader pulls
+/// `FloatRGB9E5`, as on every device: two modules for the whole sweep.
 #[test]
-fn a_float_read_compiles_one_module_for_the_whole_sweep() {
+fn a_float_read_compiles_two_modules_for_the_whole_sweep() {
     let Some(bc) = fixture() else { return };
     let got = count(&bc, &prof(), TO_FLOAT4, VertexStepFunction::PerVertex);
     assert_eq!(got.creations, 45, "the swept formats");
     assert_eq!(
         got.pulled,
-        Vec::<&str>::new(),
-        "no format of the sweep is pulled on {PROFILE} under the default"
+        vec!["MTLVertexFormatFloatRGB9E5"],
+        "the formats of the sweep pulled on {PROFILE} under the default"
     );
     assert_eq!(
         (got.projections, got.modules),
-        (1, 1),
+        (2, 2),
         "projections and modules of {} creations",
         got.creations
     );
 }
 
-/// The same sweep read as a `half4`: one module of one translation too.
+/// The same sweep read as a `half4`: two modules of two translations too.
 #[test]
-fn a_half_read_compiles_one_module_for_the_whole_sweep() {
+fn a_half_read_compiles_two_modules_for_the_whole_sweep() {
     let Some(bc) = fixture() else { return };
     let got = count(&bc, &prof(), TO_HALF4, VertexStepFunction::PerVertex);
     assert_eq!(got.creations, 45, "the swept formats");
     assert_eq!(
         (got.projections, got.modules),
-        (1, 1),
+        (2, 2),
         "projections and modules of {} creations",
         got.creations
     );
@@ -506,9 +507,8 @@ fn a_pulled_normalized_decode_notes_the_device_s_product() {
 /// The same sweep where a constant-step binding is available: fixed-function vertex input fetches
 /// the formats the per-vertex sweep fetches, so the constant step costs exactly what the
 /// per-vertex step costs -- **one** module of one translation over the 45 creations, for a `float`
-/// read and a `half` one alike. 45 modules to 1. A format the device does not accept as a vertex buffer
-/// is pulled under either step and is named as such, not as a step the step function costs
-/// (`FloatRGB9E5` on the Intel profiles).
+/// read and a `half` one alike, and the pulled `FloatRGB9E5` (pulled under either step, on every
+/// device) one more. 45 modules to 2.
 #[test]
 fn a_constant_step_binding_compiles_one_module_for_the_whole_sweep() {
     let Some(bc) = fixture() else { return };
@@ -533,27 +533,17 @@ fn a_constant_step_binding_compiles_one_module_for_the_whole_sweep() {
             (half_per_vertex.projections, half_per_vertex.modules),
             "{stem}: the same for a `half` read"
         );
-        // The absolute figure where the device accepts every swept format as a vertex buffer.
-        if got.pulled.is_empty() {
-            assert_eq!(
-                (got.projections, got.modules, half.projections, half.modules),
-                (1, 1, 1, 1),
-                "{stem}: projections and modules of {} creations",
-                got.creations
-            );
-        } else {
-            assert_eq!(
-                got.pulled,
-                vec!["MTLVertexFormatFloatRGB9E5"],
-                "{stem}: the formats the device does not fetch as a vertex buffer"
-            );
-            assert_eq!(
-                (got.projections, got.modules, half.projections, half.modules),
-                (2, 2, 2, 2),
-                "{stem}: projections and modules of {} creations",
-                got.creations
-            );
-        }
+        assert_eq!(
+            got.pulled,
+            vec!["MTLVertexFormatFloatRGB9E5"],
+            "{stem}: the formats the shader pulls"
+        );
+        assert_eq!(
+            (got.projections, got.modules, half.projections, half.modules),
+            (2, 2, 2, 2),
+            "{stem}: projections and modules of {} creations",
+            got.creations
+        );
     }
 }
 
