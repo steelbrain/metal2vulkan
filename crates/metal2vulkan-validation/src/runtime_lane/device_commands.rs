@@ -452,3 +452,85 @@ fn caller_s_commands(device: &Device, moltenvk: bool, headless: bool, layered: b
     // SAFETY: the swapchain over it is destroyed.
     unsafe { surface_fn.destroy_surface(surface, None) };
 }
+
+/// Two command buffers of a fill each, committed one after the other on a new queue and waited
+/// for: `overwrite`'s work on MoltenVK, whose pools' command buffers the loader allocates, without
+/// its look at the word, which a check's own restore may have put back meanwhile.
+fn commit_two(device: &Device) {
+    let queue = device.new_command_queue().unwrap();
+    let buffer = device.new_buffer(256, ResourceOptions::private()).unwrap();
+    for _ in 0..2 {
+        let command_buffer = queue.command_buffer().unwrap();
+        let mut blit = command_buffer.blit_command_encoder().unwrap();
+        blit.fill_buffer(&buffer, 0..256, 0x5a).unwrap();
+        blit.end_encoding().unwrap();
+        command_buffer.commit().unwrap();
+        command_buffer.wait_until_completed_for(WAIT).unwrap();
+    }
+}
+
+/// The devices [`the_device_s_checks_run_beside_the_caller_s_loader_served_calls`] makes, each
+/// over a cache of its own, so that each runs its checks.
+const BESIDE_DEVICES: usize = 5;
+
+/// On MoltenVK, with each activity logged at once, the device's checks that run beside the
+/// program on threads of their own (its submission checks, its in-place check, its queue-switch
+/// check where its driver lends two `VkQueue`s it can time) run while the caller's thread makes
+/// calls the loader serves: two command buffers committed and waited for at a time (their pools'
+/// command buffers allocated through the loader, [`commit_two`]) and a command loaded through
+/// `Device::device_proc_addr`, until every check answered. Each check holds the device's loader
+/// word across its submissions, and across its whole steps where the runtime found the word
+/// overwritten (`loader_word.rs` of the runtime), so no call of the caller's reads the magic as
+/// its table: no `SIGSEGV`, on [`BESIDE_DEVICES`] devices. Printed (`API device commands beside
+/// the checks`): each device's rounds, and which checks ran. Elsewhere nothing writes the word,
+/// and the test says so and ends.
+#[test]
+fn the_device_s_checks_run_beside_the_caller_s_loader_served_calls() {
+    for made in 0..BESIDE_DEVICES {
+        let cache = ScratchCache::new().unwrap();
+        let messages = Messages::default();
+        {
+            let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), |options| {
+                options.layers.clear();
+                options.layer_settings.extend(immediate_tracking());
+                options.policy.host_page_textures =
+                    metal2vulkan::device::HostPageTexturePolicy::InPlace;
+            })
+            .unwrap();
+            if device.properties().description.driver_id != Some(DriverId::MOLTENVK) {
+                eprintln!(
+                    "API device commands beside the checks: not MoltenVK, nothing writes the \
+                     word; not run"
+                );
+                return;
+            }
+            let answered = |device: &Device| {
+                device.settle_submit_checks(Duration::ZERO)
+                    && device.settle_in_place_checks(Duration::ZERO)
+                    && device.settle_queue_switch_check(Duration::ZERO)
+            };
+            let start = std::time::Instant::now();
+            let mut rounds = 0;
+            while !answered(&device) {
+                assert!(start.elapsed() < WAIT, "the device's checks never answered");
+                commit_two(&device);
+                let loaded = device.device_proc_addr(c"vkGetDeviceQueue");
+                assert!(loaded.is_some(), "vkGetDeviceQueue loads");
+                rounds += 1;
+            }
+            let counts = device.work_counts();
+            eprintln!(
+                "API device commands beside the checks: device {made}, {rounds} rounds: \
+                 submission checks run {}, in-place checks run {}, queue-switch checks run {}; \
+                 {}; {}",
+                counts.submit_checks_run,
+                counts.in_place_checks_run,
+                counts.queue_switch_checks_run,
+                device.submit_check_report(),
+                device.queue_switch_check_report()
+            );
+            assert_eq!(counts.submit_checks_run, 1, "the submission checks ran");
+        }
+        nothing_reported_without_the_layer(&messages, "nothing MoltenVK said fails");
+    }
+}

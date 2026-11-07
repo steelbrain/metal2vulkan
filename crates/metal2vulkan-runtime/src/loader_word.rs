@@ -15,23 +15,29 @@
 //!
 //! The device's word is a [`DeviceWord`]: each of the runtime's calls the loader serves puts it
 //! back and runs under its lock ([`DeviceWord::restored`]), and the runtime's own work that runs
-//! beside the program's and makes MoltenVK name the device (the submission checks,
-//! `submit_check.rs`) holds the lock across its submission calls ([`DeviceWord::held`]), so
-//! neither goes between the other's write and the loader's read. MoltenVK names the device from
-//! its own threads too, as a submission's Metal command buffer completes, and at other calls than
-//! submissions: on a device whose word was found overwritten, by a restore or as a step starts
+//! beside the program's on threads of its own and makes MoltenVK name the device holds the lock
+//! across its submission calls ([`DeviceWord::held`], taken inside the queue's lock), so neither
+//! goes between the other's write and the loader's read. That work is the device's checks: its
+//! submission checks (`submit_check.rs`), its queue-switch check (`queue_switch_check.rs`) and its
+//! in-place check's internal submissions (`in_place_check.rs`, through
+//! `Device::submit_internal_naming`). MoltenVK names the device from its own threads too, as a
+//! submission's Metal command buffer completes, and at other calls than submissions: on a device
+//! whose word was found overwritten, by a restore or as a step starts
 //! ([`DeviceWord::overwritten`], a fact of the device and never of its driver), the checks hold
-//! the lock across each whole step, the wait for their submissions' completion included, so the
-//! runtime's loader-served calls on other threads may wait for one step of theirs, once, while
-//! they run (the checks run once per driver and runtime, for milliseconds); elsewhere the word
-//! never changes and they hold it across their submission calls alone. A narrower hold, around
-//! the calls that read the word alone, cannot exclude the writer: MoltenVK writes from its own
+//! the lock across each whole step of theirs that makes no use of a queue (their objects' making
+//! and release) and from each submission through the wait for its completion, so the runtime's
+//! loader-served calls on other threads may wait for one step of theirs, once, while they run
+//! (the checks run once per driver and runtime, for milliseconds); elsewhere the word never
+//! changes and they hold it across their submission calls alone. A narrower hold, around the
+//! calls that read the word alone, cannot exclude the writer: MoltenVK writes from its own
 //! threads as each of the checks' Metal command buffers completes, at no call of the runtime's,
-//! so only keeping the checks' work out of flight while a loader-served call runs does. Seen on MoltenVK 1.4.2 with each activity
-//! logged at once, before the lock: the scheduler's `vkAllocateCommandBuffers` faulted reading
-//! the magic as its table while the checks submitted beside it (`runtime_lane::device_commands`,
-//! which passed before the checks). A driver thread that writes the word on its own (a message
-//! from MoltenVK's completion handlers) is not held off.
+//! so only keeping the checks' work out of flight while a loader-served call runs does. Seen on
+//! MoltenVK 1.4.2 with each activity logged at once, before the lock: the scheduler's
+//! `vkAllocateCommandBuffers` faulted reading the magic as its table while the submission checks
+//! submitted beside it (`runtime_lane::device_commands`, which passed before them), and still
+//! with the lock across their submission calls alone. A driver thread that writes the word on its
+//! own for the program's work (a message from MoltenVK's completion handlers as one of the
+//! program's command buffers completes) is not held off.
 
 use crate::device::lock;
 use ash::vk::{self, Handle};

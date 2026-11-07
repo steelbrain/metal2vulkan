@@ -59,7 +59,7 @@ use crate::error::{vulkan, Error};
 use crate::exit_guard::{self, Call};
 use crate::freed_memory::Parking;
 use crate::in_place::DriverIdentity;
-use crate::loader_word::DeviceWord;
+use crate::loader_word::{DeviceWord, Held};
 use crate::queue_share::{encode, record_name, QueueSwitch, Verdict, SWITCH_IDLES};
 use crate::release;
 use crate::shader_cache::store::Store;
@@ -184,6 +184,13 @@ impl Parts {
         }
     }
 
+    /// A hold of the device's loader word across a step, where the word was found overwritten
+    /// (`loader_word.rs`): none elsewhere.
+    fn step_held(&self) -> Option<Held<'_>> {
+        // SAFETY: the device is live while its check runs (its teardown stops it first).
+        unsafe { self.loader_word.step_hold(None) }
+    }
+
     /// Settle the device's verdict (`Device::settle_queue_switch`).
     fn settle(&self, verdict: Verdict, cost: i64, took: Option<Duration>) {
         let slots = &self.queues[..self.round_robin];
@@ -261,6 +268,7 @@ impl Objects {
     /// then a timestamp at the top of the pipe and one at the bottom. `Ok(None)` where the process
     /// is exiting.
     fn make(parts: &Parts, batches: usize) -> Result<Option<Objects>, Error> {
+        let _held = parts.step_held();
         let Some(_busy) = exit_guard::enter() else {
             return Ok(None);
         };
@@ -393,7 +401,11 @@ impl Objects {
         done: [u64; 2],
     ) -> Result<bool, Error> {
         self.settled = false;
-        let (submitted, refused) = match self.submit(parts, batches, gate) {
+        // Where the device's loader word was found overwritten, held from the gate's signal
+        // through the wait for the batches (`loader_word.rs`): MoltenVK names the device as each
+        // completes. Taken with no queue's lock held: each batch's submission takes its queue's
+        // lock and then the word, and lets both go.
+        let (submitted, refused, step) = match self.submit(parts, batches, gate) {
             Some(answer) => answer,
             None => return Ok(false),
         };
@@ -402,7 +414,9 @@ impl Objects {
             let lane = usize::from(batch.signal.0 != self.done[0]);
             reached[lane] = reached[lane].min(batch.signal.1 - 1);
         }
-        if !self.wait(parts, reached)? {
+        let waited = self.wait(parts, reached)?;
+        drop(step);
+        if !waited {
             return Ok(false);
         }
         self.settled = true;
@@ -413,14 +427,15 @@ impl Objects {
     }
 
     /// Submit `batches`, each alone on its `VkQueue`, in order until one is refused, then signal
-    /// the gate to `gate` from the host, inside one section: how many were submitted, and the
-    /// refusal; `None` where the process is exiting.
-    fn submit(
+    /// the gate to `gate` from the host, inside one section: how many were submitted, the
+    /// refusal, and the hold of the device's loader word the signal was made under where the
+    /// word was found overwritten; `None` where the process is exiting.
+    fn submit<'p>(
         &self,
-        parts: &Parts,
+        parts: &'p Parts,
         batches: &[Batch],
         gate: u64,
-    ) -> Option<(usize, Option<vk::Result>)> {
+    ) -> Option<(usize, Option<vk::Result>, Option<Held<'p>>)> {
         let _busy = exit_guard::enter()?;
         let raw = parts.vk();
         let uses = parts.queue_uses();
@@ -445,16 +460,22 @@ impl Objects {
             // SAFETY: the queue is used under its lock, inside a section; the command buffer is
             // recorded, ended and in no other submission; each timeline's signals rise in the order
             // they run (each lane's batches run in its queue's order); the gate's wait is
-            // signalled below.
-            let made = uses.use_queue(
+            // signalled below. The device's loader word is held across the call and the relay's
+            // mark after it (MoltenVK names the device as it logs each, `loader_word.rs`), taken
+            // inside the queue's lock. None of the round's batches runs before the gate's signal,
+            // which the caller makes under the word where it was found overwritten, so none
+            // completes while the word is let go between them.
+            let (held, made) = uses.use_queue(
                 batch.queue,
                 By::Runtime,
                 Uses::OneSignalling,
                 |queue| unsafe {
+                    let held = parts.loader_word.held();
                     parts.counts.queue_submitted(1, 1);
-                    raw.queue_submit(queue, &[submit], vk::Fence::null())
+                    (held, raw.queue_submit(queue, &[submit], vk::Fence::null()))
                 },
             );
+            drop(held);
             exit_guard::called(Call::QueueSubmit);
             if let Err(error) = made {
                 refused = Some(error);
@@ -465,10 +486,11 @@ impl Objects {
         let signal = vk::SemaphoreSignalInfo::default()
             .semaphore(self.gate)
             .value(gate);
+        let step = parts.step_held();
         // SAFETY: the gate's value rises with each signal, its only signaller the host.
         let signalled = unsafe { raw.signal_semaphore(&signal) };
         exit_guard::called(Call::SignalSemaphore);
-        Some((submitted, refused.or(signalled.err())))
+        Some((submitted, refused.or(signalled.err()), step))
     }
 
     /// Wait for each `VkQueue`'s timeline to reach its value of `done`, a slice at a time, each a
@@ -508,6 +530,7 @@ impl Objects {
     /// The median gap between batches on the two `VkQueue`s and on one, in nanoseconds, from the
     /// timestamps (`Ok(None)` where fewer than [`FEWEST`] of either kind were written).
     fn gaps(&self, parts: &Parts) -> Result<Option<(i64, i64)>, Error> {
+        let _held = parts.step_held();
         let Some(_busy) = exit_guard::enter() else {
             return Ok(None);
         };
@@ -575,6 +598,7 @@ impl Objects {
         if !self.settled {
             return;
         }
+        let _held = parts.step_held();
         let Some(_busy) = exit_guard::enter() else {
             return;
         };

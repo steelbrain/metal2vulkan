@@ -265,15 +265,24 @@ impl Device {
         // SAFETY: the queue is used under its lock; the command buffers are executable; every
         // signal of the timeline is above its value. Where the queue's failures are relayed, a
         // failure of this submission loses the device (`relay.rs`).
-        let made = shared.use_queue(0, By::Runtime, Uses::OneSignalling, |queue| unsafe {
+        // On the device's in-place check's thread, which runs beside the program's
+        // (`in_place_check.rs`), the device's loader word is held across the call and the relay's
+        // mark after it, taken inside the queue's lock, and, where the word was found
+        // overwritten, through the wait for the submission (MoltenVK names the device as it logs
+        // each and as the work completes, `loader_word.rs`), as the device's other checks hold it.
+        let checking = crate::in_place::checking();
+        let (word, made) = shared.use_queue(0, By::Runtime, Uses::OneSignalling, |queue| unsafe {
+            let word = checking.then(|| shared.loader_word.held());
             // No buffer of addresses goes while it encodes (`freed_memory.rs`).
             let _gate = (shared.parking.get()).map(|parking| parking.submitting());
             let buffers = submits
                 .iter()
                 .map(|info| info.command_buffer_count as usize);
             shared.counts.queue_submitted(submits.len(), buffers.sum());
-            raw.queue_submit(queue, &submits, objects.fence)
+            (word, raw.queue_submit(queue, &submits, objects.fence))
         });
+        // SAFETY: the device is live while `self` is.
+        let _word = word.and_then(|held| unsafe { shared.loader_word.step_hold(Some(held)) });
         // A `vkQueueSubmit` that fails leaves what its submissions reference as it was, or loses
         // the device: the work goes back as `taken` drops.
         if let Err(error) = made {
