@@ -32,6 +32,9 @@ const PER_THREAD: u64 = 500;
 /// How long each submission handler of the order test runs.
 const HANDLER: Duration = Duration::from_micros(30);
 
+/// How often, in commits, the checked order test lets its queue drain before a commit.
+const DRAINED: u64 = 50;
+
 /// The device the cfg selects: a CPU device under `m2v_cpu_icd`, else a GPU.
 fn device() -> Device {
     let options = DeviceOptions {
@@ -438,13 +441,18 @@ fn a_refusing_check_fails_its_submission_alike_at_commit_and_on_the_scheduler() 
 /// Two threads commit 1000 command buffers with submission checks to one queue, each in turn
 /// with `commit` and with `commit_and_submit`, their commits in one order (a lock held across
 /// each call): every check, and every submission handler, runs in that order, each check once,
-/// some on a committing thread and some on the scheduler's.
+/// some on a committing thread and some on the scheduler's. Every [`DRAINED`]th commit, a
+/// `commit_and_submit`, first waits for the commit before it to complete: on a device whose
+/// batches may wait in a group (`command_buffer/group.rs`), a committing thread takes a head's
+/// checks only where its `VkQueue` runs at most one earlier submission not seen complete, which
+/// the two threads' backlog alone may never leave it.
 #[test]
 fn checked_command_buffers_keep_commit_order_across_commit_and_commit_and_submit() {
     let device = device();
     let queue = device.new_command_queue().unwrap();
     let target = device.new_buffer(256, ResourceOptions::private()).unwrap();
     let next = Mutex::new(0u64);
+    let last: Mutex<Option<CommandBuffer>> = Mutex::default();
     let checks: Arc<Mutex<Vec<(u64, ThreadId)>>> = Arc::default();
     let handled: Arc<Mutex<Vec<u64>>> = Arc::default();
     let before = device.work_counts();
@@ -458,7 +466,7 @@ fn checked_command_buffers_keep_commit_order_across_commit_and_commit_and_submit
         std::thread::scope(|scope| {
             let threads: Vec<_> = (0..2u64)
                 .map(|thread| {
-                    let (queue, target, next) = (&queue, &target, &next);
+                    let (queue, target, next, last) = (&queue, &target, &next, &last);
                     let (checks, handled) = (&checks, &handled);
                     scope.spawn(move || {
                         let mut committed = Vec::new();
@@ -488,12 +496,19 @@ fn checked_command_buffers_keep_commit_order_across_commit_and_commit_and_submit
                                 }))
                                 .unwrap();
                             let mut next = next.lock().unwrap();
+                            let drained = *next % DRAINED == DRAINED - 1;
+                            if drained {
+                                if let Some(before) = last.lock().unwrap().as_ref() {
+                                    before.wait_until_completed().unwrap();
+                                }
+                            }
                             sequence.store(*next, Ordering::SeqCst);
                             *next += 1;
-                            match (at + thread) % 2 {
-                                0 => command_buffer.commit_and_submit().unwrap(),
-                                _ => command_buffer.commit().unwrap(),
+                            match drained || (at + thread) % 2 == 0 {
+                                true => command_buffer.commit_and_submit().unwrap(),
+                                false => command_buffer.commit().unwrap(),
                             }
+                            *last.lock().unwrap() = Some(command_buffer.clone());
                             drop(next);
                             committed.push(command_buffer);
                         }
