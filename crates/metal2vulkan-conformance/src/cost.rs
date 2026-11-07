@@ -457,7 +457,7 @@ const POOLED: &str = "an object made because no spare was free, where a spare co
 /// replays of a larger case set — which reads like a regression and is not one. See [`BORROWED`].
 /// `slot_returns` beside it stays gated: it counts work items, one a command buffer, and has held
 /// still alone and in both case sets.
-const RACY: [(&str, &str); 40] = [
+const RACY: [(&str, &str); 41] = [
     ("fences_made", POOLED),
     // What is alive, parked or waiting at the instant the counts were read.
     ("memory_blocks_live", INSTANTANEOUS),
@@ -506,6 +506,13 @@ const RACY: [(&str, &str); 40] = [
         "completion_waiter_",
         "how many times a queue's waiter slept on its condition variable, which is when that \
          thread ran and not what the case asked for",
+    ),
+    (
+        "batches_submitted_by_waiters",
+        "the batches a thread about to block for a command buffer's completion submitted in its \
+         own pass over the scheduler's order, which is nonzero only where the scheduler's own \
+         thread had not yet submitted them, which is when that thread ran and not what the case \
+         asked for",
     ),
     (
         "batches_held_for_another_queue",

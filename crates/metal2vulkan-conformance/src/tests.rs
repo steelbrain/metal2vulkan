@@ -4927,6 +4927,10 @@ fn a_count_that_says_which_thread_arrived_first_is_never_gated() {
         "completed_where_seen",
         "pooled_memory_blocks_freed",
         "finales_folded",
+        // A waiter's own submission of batches the scheduler's thread had not reached yet:
+        // `xr-gradient-bgra10xr-srgb-unblended-x4` read 1 alone and 0 or 1 across one whole-set
+        // measurement's runs.
+        "batches_submitted_by_waiters",
     ] {
         assert!(racy(count).is_some(), "{count}");
     }
