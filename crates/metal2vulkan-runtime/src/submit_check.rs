@@ -10,20 +10,22 @@
 //! - **Merge.** [`ROUNDS`] rounds of each of two forms, alternating, each of [`MERGED`] empty
 //!   command buffers on the device's first `VkQueue`: one `vkQueueSubmit` of [`MERGED`]
 //!   `VkSubmitInfo`s, the last with a fence, against [`MERGED`] calls of one each, the last with
-//!   the fence; the time inside the calls. A driver whose one call costs at most [`MERGE_RATIO`]
-//!   of the calls apart merges them (`Holds`): Mesa's common queue does
+//!   the fence; the time inside the calls. A driver whose one call's floor is at most
+//!   [`MERGE_RATIO`] of the calls' apart in every block of [`BLOCK`] rounds merges them (`Holds`),
+//!   and one whose floor passes it in every block does not (`Fails`): Mesa's common queue does
 //!   (`vulkan/runtime/vk_queue.c`, `vk_queue_submits_merge`: "Don't merge if there are signals in
 //!   between"), so its batches may wait and go in one call (`command_buffer/group.rs`); elsewhere
-//!   each batch takes its own. Measured with a probe of the same rounds (2026-11-07, Mesa 26.2.6,
-//!   Linux 7.3.1): RADV on the Radeon 780M 13.2 against 37.3 us (0.35), the RX 7900 XTX 13.4
-//!   against 35.0 (0.38), the RX 550 11.6 against 35.1 (0.33); ANV on the Iris Xe of RPL-P 5.1
-//!   against 13.1 (0.39); MoltenVK 1.4.2 on the M3 Max 4.5 against 4.6 (0.98).
+//!   each batch takes its own. Measured with a probe of the same rounds (medians, 2026-11-07,
+//!   Mesa 26.2.6, Linux 7.3.1): RADV on the Radeon 780M 13.2 against 37.3 us (0.35), the RX 7900
+//!   XTX 13.4 against 35.0 (0.38), the RX 550 11.6 against 35.1 (0.33); ANV on the Iris Xe of
+//!   RPL-P 5.1 against 13.1 (0.39); MoltenVK 1.4.2 on the M3 Max 4.5 against 4.6 (0.98).
 //! - **Import tax.** One import of [`TAX_BYTES`] of anonymous pages the check maps and writes,
 //!   by their pointer, held through every other of [`TAX_PHASES`] phases of [`TAX_SUBMITS`]
 //!   submissions of one empty command buffer with a fence, none held through the rest; the time
-//!   inside each call. Where the median with the import held passes the median without by more
-//!   than [`TAX_FLOOR`] or an eighth of it, whichever is more, a held import costs every
-//!   submission (`Holds`), and the runtime keeps its own long buffers out of fresh pages
+//!   inside each call. Where the floor of each phase with the import held passes that of each
+//!   phase without it beside it by more than [`TAX_FLOOR`] or an eighth of it, whichever is more,
+//!   a held import costs every submission (`Holds`), and where none passes, it does not
+//!   (`Fails`). Where it does, the runtime keeps its own long buffers out of fresh pages
 //!   (`fresh_pages.rs`): each would add that cost, and more for its length, to every submission
 //!   for its whole life, where its fresh pages save one clear of its bytes. RADV lists every
 //!   memory it imported in each kernel submission, and amdgpu gets every page of a pointer import
@@ -46,14 +48,26 @@
 //!   remap of pages the kernel wired is not made. Anonymous pages replace anonymous pages, mapped
 //!   throughout, so no submission meets a range without pages; only the first page of each pair
 //!   is replaced, and the GPU writes only the second.
+//! - **Load beside it.** Other work on the device or the host's CPU adds to a submission's time
+//!   and never takes from it, so each timed check reads floors, a form's least time in a block or
+//!   a phase, and answers only where every block or pair of phases agrees. A try whose blocks or
+//!   phases disagree is made again, at most [`TRIES`] times; where none agrees, the check answers
+//!   `Unchecked` for the device's life and the record is not written, so the next device measures
+//!   again. Seen on the Radeon 780M while the checks compared medians of single tries: a device
+//!   made while a test's thread made and released buffers in a loop (`tests/in_place_check.rs`)
+//!   placed its long buffers in fresh pages, which follows only from an answer that a held import
+//!   adds nothing, where the quiet devices of the same run answered that it adds about 6 us; its
+//!   record would have kept that answer for the kernel's release.
 //! - **Its verdicts** are `Pending` until it answers, and the device takes the form a driver
 //!   without each answer takes: every batch its own call, its long buffers placed and cleared as
 //!   ever, every pointer import kept. `Unchecked` where a check could not run (no
-//!   `VK_EXT_external_memory_host`, a call refused, too few rounds), with the same forms.
+//!   `VK_EXT_external_memory_host`, a call refused, too few rounds) or its tries disagreed, with
+//!   the same forms.
 //! - **Its cost**: [`ROUNDS`] rounds of each merge form and [`TAX_PHASES`] phases of
 //!   [`TAX_SUBMITS`] submissions, each waited for, every command buffer empty; the import of
 //!   [`TAX_BYTES`] made and freed [`TAX_PHASES`] times over pages written once; and on Linux
-//!   three copies of 256 bytes. The probe's rounds took 3 to 12 ms on those devices.
+//!   three copies of 256 bytes; each timed check again, at most [`TRIES`] times in all, where its
+//!   blocks or phases disagree. The probe's rounds took 3 to 12 ms on those devices.
 //! - **Kept.** Once every check answered, the verdicts are written as one record in the shader
 //!   cache's content directory (`shader_cache/store.rs`), named by the driver's identity, the
 //!   kernel's release (the import tax is the kernel's work on RADV), the check's version and the
@@ -98,6 +112,13 @@ pub(crate) const ROUNDS: usize = 16;
 
 /// The untimed rounds of each form first.
 const WARM: usize = 2;
+
+/// The merge's rounds in each block it compares: each form's floor in a block of this many.
+pub(crate) const BLOCK: usize = 4;
+
+/// The tries of a timed check (the merge, the import tax) whose blocks or phases disagree, before
+/// it answers `Unchecked` for the device's life and nothing is recorded (the module docs).
+pub(crate) const TRIES: usize = 3;
 
 /// The most one call of the merge's infos costs, as a share of its calls apart, where the driver
 /// merges them.
@@ -183,7 +204,8 @@ impl Verdict {
 }
 
 /// What the checks measured, in nanoseconds, in a record's order: one call of the merge's infos
-/// and its calls apart (medians), and one submission with the import held and without.
+/// and its calls apart, and one submission with the import held and without (floors, each the
+/// least of its form in the try that answered).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct Measured {
     pub(crate) merged: i64,
@@ -201,6 +223,8 @@ pub(crate) struct SubmitChecks {
     wake: Condvar,
     /// The checks' run in this process, in nanoseconds; 0 where none ended.
     took: AtomicU64,
+    /// The tries whose blocks or phases disagreed, in this process (the module docs).
+    split: AtomicU64,
     /// The device's teardown stopped the checks ([`SubmitChecks::stop`]): read between steps.
     stopping: AtomicBool,
     /// Whether the checks' thread runs, and what tells its end.
@@ -222,6 +246,7 @@ impl SubmitChecks {
             settled: Mutex::new(false),
             wake: Condvar::new(),
             took: AtomicU64::new(0),
+            split: AtomicU64::new(0),
             stopping: AtomicBool::new(false),
             running: Mutex::new(false),
             ending: Condvar::new(),
@@ -353,7 +378,7 @@ impl SubmitChecks {
     }
 }
 
-/// The merge's verdict from the medians of its two forms.
+/// The merge's verdict from its two forms' floors in one block.
 pub(crate) fn merge_verdict(merged: i64, apart: i64) -> Verdict {
     match apart > 0 && merged as f64 <= MERGE_RATIO * apart as f64 {
         true => Verdict::Holds,
@@ -361,7 +386,7 @@ pub(crate) fn merge_verdict(merged: i64, apart: i64) -> Verdict {
     }
 }
 
-/// The import tax's verdict from the medians of a submission with the import held and without.
+/// The import tax's verdict from the floors of a phase with the import held and of one without.
 pub(crate) fn tax_verdict(held: i64, bare: i64) -> Verdict {
     match held - bare > TAX_FLOOR.max(bare / 8) {
         true => Verdict::Holds,
@@ -369,9 +394,66 @@ pub(crate) fn tax_verdict(held: i64, bare: i64) -> Verdict {
     }
 }
 
+/// What one try of a timed check answered: the verdict its blocks or phases agree on (`None`
+/// where they disagree), and its two forms' floors, in nanoseconds.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Timed {
+    pub(crate) verdict: Option<Verdict>,
+    pub(crate) floors: (i64, i64),
+}
+
+/// One merge try's answer from its rounds' times, in nanoseconds, of one call of the infos and
+/// of the calls apart: each block of [`BLOCK`] rounds compares the two forms' floors
+/// ([`merge_verdict`]).
+pub(crate) fn merge_try(merged: &[i64], apart: &[i64]) -> Timed {
+    let blocks = (merged.chunks(BLOCK).zip(apart.chunks(BLOCK)))
+        .map(|(merged, apart)| merge_verdict(floor(merged), floor(apart)));
+    Timed {
+        verdict: agree(blocks),
+        floors: (floor(merged), floor(apart)),
+    }
+}
+
+/// One import tax try's answer from its phases' submission times, in nanoseconds, the first
+/// phase without the import and every other one with it held: each held phase's floor against
+/// that of each phase without it beside it ([`tax_verdict`]).
+pub(crate) fn tax_try(phases: &[Vec<i64>]) -> Timed {
+    let floors: Vec<i64> = phases.iter().map(Vec::as_slice).map(floor).collect();
+    let pairs = (1..floors.len()).map(|at| match at % 2 {
+        1 => (floors[at], floors[at - 1]),
+        _ => (floors[at - 1], floors[at]),
+    });
+    let of = |holding: usize| {
+        let phases = floors.iter().skip(holding).step_by(2).copied();
+        phases.min().unwrap_or(0)
+    };
+    Timed {
+        verdict: agree(pairs.map(|(held, bare)| tax_verdict(held, bare))),
+        floors: (of(1), of(0)),
+    }
+}
+
+/// The verdict every one of `verdicts` gives; `None` where they differ, or there are none.
+fn agree(verdicts: impl Iterator<Item = Verdict>) -> Option<Verdict> {
+    let mut agreed = None;
+    for verdict in verdicts {
+        match agreed {
+            None => agreed = Some(verdict),
+            Some(seen) if seen != verdict => return None,
+            Some(_) => {}
+        }
+    }
+    agreed
+}
+
+/// The least of `times`, the time no load beside the check added to (it only adds); 0 for none.
+fn floor(times: &[i64]) -> i64 {
+    times.iter().min().copied().unwrap_or(0)
+}
+
 /// The version of what the checks measure and of how their record is named and framed: a change
 /// to either bumps it, and a record of another version is never read.
-pub(crate) const CHECK_VERSION: u32 = 1;
+pub(crate) const CHECK_VERSION: u32 = 2;
 
 /// A record's first bytes.
 const MAGIC: [u8; 8] = *b"M2VSUBC\0";
@@ -592,9 +674,14 @@ impl Device {
             0 => "not run here".to_owned(),
             nanos => format!("ran {:.2} ms", nanos as f64 / 1e6),
         };
+        let split = match checks.split.load(Ordering::Relaxed) {
+            0 => String::new(),
+            tries => format!(", {tries} tries split"),
+        };
         format!(
             "merge {:?} ({:.1} us in one call of {MERGED} against {:.1} us apart), import tax \
-             {:?} ({:.1} us a submission with {} MiB held against {:.1} us), follows {:?}, {took}",
+             {:?} ({:.1} us a submission with {} MiB held against {:.1} us), follows {:?}, \
+             {took}{split} (floors)",
             checks.verdict(Check::Merge),
             us(m.merged),
             us(m.apart),
@@ -699,7 +786,7 @@ fn run(parts: &Parts) {
     };
     let ran = measure(parts, &objects);
     let released = objects.release(parts);
-    let Some(measured) = ran.filter(|_| released) else {
+    let Some((measured, kept)) = ran.filter(|_| released) else {
         // The process is exiting, or the device's teardown stopped the checks: nothing is kept.
         checks.settle_unchecked();
         return;
@@ -707,7 +794,7 @@ fn run(parts: &Parts) {
     checks.set_measured(measured);
     parts.counts.submit_checks_ran();
     let verdicts = Check::ALL.map(|check| checks.verdict(check));
-    if !verdicts.contains(&Verdict::Pending) {
+    if kept && !verdicts.contains(&Verdict::Pending) {
         let identity = &parts.identity;
         let bytes = encode(identity, verdicts, measured);
         // A failed write leaves the verdicts to the device's life alone.
@@ -716,34 +803,51 @@ fn run(parts: &Parts) {
     checks.settle(Some(started.elapsed()));
 }
 
-/// Each check in turn, its verdict set as it is known: what they measured, `None` where the
-/// process is exiting or the device's teardown stopped the checks.
-fn measure(parts: &Parts, objects: &Objects) -> Option<Measured> {
+/// Each check in turn, its verdict set as it is known: what they measured, and whether their
+/// verdicts may be recorded (no timed check's tries all disagreed); `None` where the process is
+/// exiting or the device's teardown stopped the checks.
+fn measure(parts: &Parts, objects: &Objects) -> Option<(Measured, bool)> {
     let checks = &parts.checks;
-    let mut measured = Measured::default();
-    match merge(parts, objects)? {
-        Some((merged, apart)) => {
-            measured.merged = merged;
-            measured.apart = apart;
-            checks.set(Check::Merge, merge_verdict(merged, apart));
-        }
-        None => checks.set(Check::Merge, Verdict::Unchecked),
-    }
-    match tax(parts, objects)? {
-        Some((held, bare)) => {
-            measured.held = held;
-            measured.bare = bare;
-            checks.set(Check::ImportTax, tax_verdict(held, bare));
-        }
-        None => checks.set(Check::ImportTax, Verdict::Unchecked),
-    }
+    let (merges, (merged, apart), merge_kept) = tried(checks, || merge(parts, objects))?;
+    checks.set(Check::Merge, merges);
+    let (taxed, (held, bare), tax_kept) = tried(checks, || tax(parts, objects))?;
+    checks.set(Check::ImportTax, taxed);
     checks.set(Check::Follows, follows(parts, objects)?);
-    Some(measured)
+    let measured = Measured {
+        merged,
+        apart,
+        held,
+        bare,
+    };
+    Some((measured, merge_kept && tax_kept))
 }
 
-/// The merge's medians, in nanoseconds: one call of [`MERGED`] infos, and [`MERGED`] calls.
+/// A timed check's verdict and floors over at most [`TRIES`] tries of `once`, and whether they
+/// may be recorded: the first try whose blocks or phases agree answers. Where none does, the
+/// check is `Unchecked` for the device's life and not recorded (load beside the check may have
+/// split them, and the next device measures again). `Unchecked`, recorded, where a call was
+/// refused (`once` answered `Some(None)`); `None` where the check stops.
+pub(crate) fn tried(
+    checks: &SubmitChecks,
+    mut once: impl FnMut() -> Option<Option<Timed>>,
+) -> Option<(Verdict, (i64, i64), bool)> {
+    let mut floors = (0, 0);
+    for _ in 0..TRIES {
+        let Some(timed) = once()? else {
+            return Some((Verdict::Unchecked, (0, 0), true));
+        };
+        floors = timed.floors;
+        if let Some(verdict) = timed.verdict {
+            return Some((verdict, floors, true));
+        }
+        checks.split.fetch_add(1, Ordering::Relaxed);
+    }
+    Some((Verdict::Unchecked, floors, false))
+}
+
+/// One merge try ([`merge_try`]) of one call of [`MERGED`] infos against [`MERGED`] calls.
 /// `Some(None)` where a call was refused; `None` where the check stops.
-fn merge(parts: &Parts, objects: &Objects) -> Option<Option<(i64, i64)>> {
+fn merge(parts: &Parts, objects: &Objects) -> Option<Option<Timed>> {
     let mut merged = Vec::with_capacity(ROUNDS);
     let mut apart = Vec::with_capacity(ROUNDS);
     for round in 0..WARM + ROUNDS {
@@ -762,19 +866,18 @@ fn merge(parts: &Parts, objects: &Objects) -> Option<Option<(i64, i64)>> {
             }
         }
     }
-    Some(Some((median(&mut merged), median(&mut apart))))
+    Some(Some(merge_try(&merged, &apart)))
 }
 
-/// The import tax's medians, in nanoseconds: a submission with the import of [`TAX_BYTES`]
-/// held, and without. `Some(None)` where the device imports no host pointer, the system maps no
-/// pages or a call was refused; `None` where the check stops.
-fn tax(parts: &Parts, objects: &Objects) -> Option<Option<(i64, i64)>> {
+/// One import tax try ([`tax_try`]) of a submission with the import of [`TAX_BYTES`] held, and
+/// without. `Some(None)` where the device imports no host pointer, the system maps no pages or a
+/// call was refused; `None` where the check stops.
+fn tax(parts: &Parts, objects: &Objects) -> Option<Option<Timed>> {
     let Some(pages) = Pages::map(TAX_BYTES) else {
         return Some(None);
     };
     pages.fill(0x5a);
-    let mut held = Vec::with_capacity(TAX_PHASES / 2 * TAX_SUBMITS);
-    let mut bare = Vec::with_capacity(TAX_PHASES / 2 * TAX_SUBMITS);
+    let mut phases = Vec::with_capacity(TAX_PHASES);
     for phase in 0..TAX_PHASES {
         let holding = phase % 2 == 1;
         if !parts.goes_on() {
@@ -805,12 +908,9 @@ fn tax(parts: &Parts, objects: &Objects) -> Option<Option<(i64, i64)>> {
         if refused {
             return Some(None);
         }
-        match holding {
-            true => held.extend(times),
-            false => bare.extend(times),
-        }
+        phases.push(times);
     }
-    Some(Some((median(&mut held), median(&mut bare))))
+    Some(Some(tax_try(&phases)))
 }
 
 /// The follows check's verdict (the module docs); `None` where the check stops.
@@ -1381,10 +1481,4 @@ impl Objects {
         }
         true
     }
-}
-
-/// The median of `values` (sorted here); 0 for none.
-fn median(values: &mut [i64]) -> i64 {
-    values.sort_unstable();
-    values.get(values.len() / 2).copied().unwrap_or(0)
 }

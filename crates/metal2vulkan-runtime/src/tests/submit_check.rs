@@ -3,8 +3,9 @@
 
 use crate::in_place::DriverIdentity;
 use crate::submit_check::{
-    decode, encode, merge_verdict, record_name, tax_verdict, Measured, Verdict, MERGE_RATIO,
-    TAX_FLOOR,
+    decode, encode, merge_try, merge_verdict, record_name, tax_try, tax_verdict, tried, Measured,
+    SubmitChecks, Timed, Verdict, BLOCK, MERGE_RATIO, ROUNDS, TAX_FLOOR, TAX_PHASES, TAX_SUBMITS,
+    TRIES,
 };
 
 /// The probe's medians (2026-11-07, Mesa 26.2.6 under Linux 7.3.1, MoltenVK 1.4.2 under macOS
@@ -49,6 +50,122 @@ fn the_verdicts_meet_their_bounds() {
     let slow = 80_000;
     assert_eq!(tax_verdict(slow + slow / 8, slow), Verdict::Fails);
     assert_eq!(tax_verdict(slow + slow / 8 + 1, slow), Verdict::Holds);
+}
+
+/// The import tax's phases, without the import first: each `(floor, rest)`, a phase's least
+/// submission and its others.
+fn phases(each: [(i64, i64); TAX_PHASES]) -> Vec<Vec<i64>> {
+    (each.iter())
+        .map(|&(floor, rest)| {
+            let mut times = vec![rest; TAX_SUBMITS];
+            times[TAX_SUBMITS / 2] = floor;
+            times
+        })
+        .collect()
+}
+
+/// The middle of `times`.
+fn median(times: &[i64]) -> i64 {
+    let mut times = times.to_vec();
+    times.sort_unstable();
+    times[times.len() / 2]
+}
+
+/// A device whose held import costs 5.7 us a submission (the Radeon 780M's floors), its phases
+/// without the import lengthened by load beside the check in all but one submission each: the
+/// medians of all submissions answer that the import adds nothing, as they did on the 780M under
+/// a test's load, and the floors answer that it adds its cost.
+#[test]
+fn a_taxed_device_under_load_answers_from_its_floors() {
+    let loaded = phases([
+        (8_600, 25_000),
+        (14_300, 15_000),
+        (8_700, 25_000),
+        (14_200, 15_000),
+        (8_500, 25_000),
+        (14_400, 15_000),
+    ]);
+    let (held, bare): (Vec<_>, Vec<_>) =
+        (loaded.iter().enumerate()).partition(|(at, _)| at % 2 == 1);
+    let all = |phases: Vec<(usize, &Vec<i64>)>| -> Vec<i64> {
+        phases
+            .into_iter()
+            .flat_map(|(_, times)| times.clone())
+            .collect()
+    };
+    let medians = tax_verdict(median(&all(held)), median(&all(bare)));
+    assert_eq!(medians, Verdict::Fails, "the medians' answer");
+    let floors = tax_try(&loaded);
+    assert_eq!(
+        floors,
+        Timed {
+            verdict: Some(Verdict::Holds),
+            floors: (14_200, 8_500),
+        }
+    );
+    let quiet = phases([
+        (8_600, 9_000),
+        (8_700, 9_100),
+        (8_500, 9_000),
+        (8_800, 9_000),
+        (8_600, 9_200),
+        (8_700, 9_000),
+    ]);
+    assert_eq!(tax_try(&quiet).verdict, Some(Verdict::Fails), "no tax");
+}
+
+/// Where load lengthened every submission of one phase or one block, its comparisons disagree
+/// with the others' and the try gives no verdict: one phase without the import whose floor
+/// passes the held phases', and one merge block whose one call's floor passes the ratio.
+#[test]
+fn a_try_whose_phases_or_blocks_disagree_gives_no_verdict() {
+    let split = phases([
+        (8_600, 9_000),
+        (14_300, 15_000),
+        (30_000, 31_000),
+        (14_200, 15_000),
+        (8_500, 9_000),
+        (14_400, 15_000),
+    ]);
+    assert_eq!(tax_try(&split).verdict, None);
+    let apart = vec![35_000; ROUNDS];
+    let mut merged = vec![13_000; ROUNDS];
+    assert_eq!(merge_try(&merged, &apart).verdict, Some(Verdict::Holds));
+    // One round of a block at the floor keeps the block's answer.
+    merged[1..BLOCK].fill(34_000);
+    assert_eq!(merge_try(&merged, &apart).verdict, Some(Verdict::Holds));
+    merged[..BLOCK].fill(34_000);
+    assert_eq!(merge_try(&merged, &apart).verdict, None);
+}
+
+/// The tries: the first that agrees answers, recorded; a refused call answers `Unchecked`,
+/// recorded; [`TRIES`] that disagree answer `Unchecked` for the device's life, not recorded, the
+/// last try's floors kept.
+#[test]
+fn tries_that_all_disagree_are_unchecked_and_unrecorded() {
+    let timed = |verdict| Timed {
+        verdict,
+        floors: (1, 2),
+    };
+    let checks = SubmitChecks::new();
+    let mut tries = 0;
+    let second = tried(&checks, || {
+        tries += 1;
+        Some(Some(timed((tries == 2).then_some(Verdict::Holds))))
+    });
+    assert_eq!((second, tries), (Some((Verdict::Holds, (1, 2), true)), 2));
+    let refused = tried(&checks, || Some(None));
+    assert_eq!(refused, Some((Verdict::Unchecked, (0, 0), true)));
+    let mut tries = 0;
+    let split = tried(&checks, || {
+        tries += 1;
+        Some(Some(timed(None)))
+    });
+    assert_eq!(
+        (split, tries),
+        (Some((Verdict::Unchecked, (1, 2), false)), TRIES)
+    );
+    assert_eq!(tried(&checks, || None), None, "a stopped check");
 }
 
 fn identity(device_id: u32) -> DriverIdentity {
