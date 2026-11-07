@@ -1293,9 +1293,11 @@ fn interlocked(modes: &[u32]) -> bool {
 /// the shadow in place of the codes (as many image reads as the pipeline unshadowed) and writes it
 /// (one write more), declares the interlock the pipeline did not and early fragment tests, passes
 /// L3 and plans the same variant against itself. `rt6_resolve_white`, writing a `BGRA10_XR` color 0
-/// unblended through an ordinary output, writes the shadow and reads nothing; in four samples its
-/// shadow is refused (the function would run per sample), where `rt6_samples`' four-sample blend
-/// holds a multisampled shadow. Before, the runtime kept every such draw on the codes.
+/// unblended through an ordinary output, writes the shadow and reads nothing; in four samples (on
+/// a profile that renders the raw format at four) its shadow is refused (the function would run
+/// per sample), where `rt6_samples`' four-sample blend holds a multisampled shadow. A profile
+/// without the interlock refuses the shadowed variant by what it lacks. Before, the runtime kept
+/// every such draw on the codes.
 #[test]
 fn a_shadowed_extended_range_attachment_over_its_input_attachment_holds_its_half() {
     use crate::metal::{BlendFactor, ColorWriteMask};
@@ -1488,17 +1490,21 @@ fn a_shadowed_extended_range_attachment_over_its_input_attachment_holds_its_half
         );
         assert!(interlocked(&execution_modes(&words)), "{stem}: unblended");
         valid(&stem, "unblended", &variant, &dev);
-        // In four samples the plain writer's shadow is refused.
+        // In four samples, where the profile renders the raw format at four (a profile captured
+        // without the count refuses the pipeline whatever the shadow), the plain writer's shadow
+        // is refused,
         let mut d = plain();
         d.raster_sample_count = 4;
-        let base = dev
-            .compile_render_pipeline(&d, &Budget::standard())
-            .unwrap_or_else(|e| panic!("{stem}: multisampled: {e}"));
+        let base = match dev.compile_render_pipeline(&d, &Budget::standard()) {
+            Ok(base) => base,
+            Err(Error::Unsupported(u)) if u.needs != Needs::NotImplemented => continue,
+            Err(e) => panic!("{stem}: multisampled: {e}"),
+        };
         assert!(
             refused(base.plan(&dev, &shadowed.shape())),
             "{stem}: multisampled plain writer"
         );
-        // And a four-sample blend holds a multisampled shadow.
+        // and a four-sample blend holds a multisampled shadow.
         let d = sampled();
         let base = dev
             .compile_render_pipeline(&d, &Budget::standard())
