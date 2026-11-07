@@ -3,8 +3,9 @@
 
 use crate::in_place::DriverIdentity;
 use crate::submit_check::{
-    decode, encode, merge_try, merge_verdict, record_name, tax_try, tax_verdict, tried, Measured,
-    SubmitChecks, Timed, Verdict, MERGE_RATIO, ROUNDS, TAX_FLOOR, TAX_PHASES, TAX_SUBMITS, TRIES,
+    decode, encode, merge_try, merge_verdict, record_name, tax_clear, tax_tried, tax_try,
+    tax_verdict, tried, Measured, SubmitChecks, Timed, Verdict, MERGE_RATIO, ROUNDS, TAX_FLOOR,
+    TAX_MARGIN, TAX_PHASES, TAX_REPEATS, TAX_SUBMITS, TRIES,
 };
 
 /// The probe's medians (2026-11-07, Mesa 26.2.6 under Linux 7.3.1, MoltenVK 1.4.2 under macOS
@@ -181,6 +182,72 @@ fn tries_that_all_disagree_are_unchecked_and_unrecorded() {
         (Some((Verdict::Unchecked, (1, 2), false)), TRIES)
     );
     assert_eq!(tried(&checks, || None), None, "a stopped check");
+}
+
+/// What the import tax's tries answer ([`tax_tried`]) where each answers the next of `answers`
+/// (the last again past them), and how many it made.
+fn tax_answers(answers: &[Option<Timed>]) -> (Option<(Verdict, (i64, i64), bool)>, usize) {
+    let checks = SubmitChecks::new();
+    let mut tries = 0;
+    let answered = tax_tried(&checks, || {
+        let answer = answers[tries.min(answers.len() - 1)];
+        tries += 1;
+        Some(answer)
+    });
+    (answered, tries)
+}
+
+/// An import tax `Holds` is recorded only where it passes its bound [`TAX_MARGIN`] times over in
+/// its try and in each of [`TAX_REPEATS`] tries more: lavapipe's under the load of the device
+/// tests (1.4 against 0.2 us, past the bound by a fifth) answers for the device's life after one
+/// try, unrecorded, where the record kept it for the kernel's release; the Radeon 780M's is
+/// recorded after its repeats; one whose repeat answers `Fails`, falls short of the margin,
+/// splits or is refused answers for the device's life with its first try's floors, unrecorded; a
+/// `Fails` is recorded after one try.
+#[test]
+fn an_import_tax_holds_is_recorded_only_past_its_margin_and_repeated() {
+    let holds = |floors| {
+        Some(Timed {
+            verdict: Some(Verdict::Holds),
+            floors,
+        })
+    };
+    let fails = |floors| {
+        Some(Timed {
+            verdict: Some(Verdict::Fails),
+            floors,
+        })
+    };
+    let lavapipe = (1_400, 200);
+    assert_eq!(tax_verdict(lavapipe.0, lavapipe.1), Verdict::Holds);
+    let unrecorded = (Some((Verdict::Holds, lavapipe, false)), 1);
+    assert_eq!(tax_answers(&[holds(lavapipe)]), unrecorded, "under load");
+    let radeon = (20_700, 10_400);
+    let recorded = (Some((Verdict::Holds, radeon, true)), 1 + TAX_REPEATS);
+    assert_eq!(tax_answers(&[holds(radeon)]), recorded, "the Radeon 780M");
+    let unrecorded = (Some((Verdict::Holds, radeon, false)), 2);
+    let short = holds((12_000, 10_400));
+    let split = Some(Timed {
+        verdict: None,
+        floors: radeon,
+    });
+    for (again, why) in [
+        (fails((10_500, 10_400)), "a repeat that fails"),
+        (short, "a repeat short of the margin"),
+        (split, "a repeat that splits"),
+        (None, "a repeat refused"),
+    ] {
+        assert_eq!(tax_answers(&[holds(radeon), again]), unrecorded, "{why}");
+    }
+    let m3 = (2_700, 3_000);
+    let one = (Some((Verdict::Fails, m3, true)), 1);
+    assert_eq!(tax_answers(&[fails(m3)]), one, "a Fails");
+    let bare = 4_000;
+    assert!(!tax_clear((bare + TAX_MARGIN * TAX_FLOOR, bare)));
+    assert!(tax_clear((bare + TAX_MARGIN * TAX_FLOOR + 1, bare)));
+    let slow = 80_000;
+    assert!(!tax_clear((slow + TAX_MARGIN * (slow / 8), slow)));
+    assert!(tax_clear((slow + TAX_MARGIN * (slow / 8) + 1, slow)));
 }
 
 fn identity(device_id: u32) -> DriverIdentity {

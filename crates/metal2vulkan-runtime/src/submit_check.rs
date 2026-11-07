@@ -66,7 +66,15 @@
 //!   an answer that a held import adds nothing, where the quiet devices of the same run answered
 //!   that it adds about 6 us; its record would have kept that answer for the kernel's release. And
 //!   on the M3 Max, under the load of the device tests beside it, a comparison of each phase alone
-//!   split three tries in a row where its floors over all the phases differed by 0.1 us.
+//!   split three tries in a row where its floors over all the phases differed by 0.1 us. Load
+//!   that lengthens every submission of the phases with the imports held still passes the tax's
+//!   bound where a submission costs little: on lavapipe, beside the device tests, one device
+//!   answered `Holds` from 1.4 against 0.2 us and the next device of the same test `Fails` from
+//!   2.1 against 1.8 (one import of 16 MiB held, the check's form before it held
+//!   [`TAX_IMPORTS`]), and the first's record would have kept its answer for the kernel's
+//!   release. So an import tax `Holds` is recorded only where it passes its bound [`TAX_MARGIN`]
+//!   times over, and again so in each of [`TAX_REPEATS`] tries more; short of that, it answers
+//!   for the device's life alone, and the next device measures again.
 //! - **Its verdicts** are `Pending` until it answers, and the device takes the form a driver
 //!   without each answer takes: every batch its own call, its long buffers placed and cleared as
 //!   ever, every pointer import kept. `Unchecked` where a check could not run (no
@@ -75,14 +83,17 @@
 //! - **Its cost**: [`ROUNDS`] rounds of each merge form and [`TAX_PHASES`] phases of
 //!   [`TAX_SUBMITS`] submissions, each waited for, every command buffer empty; the
 //!   [`TAX_IMPORTS`] imports of [`TAX_BYTES`] in all made and freed [`TAX_PHASES`] times over
-//!   pages written once; and on Linux
-//!   three copies of 256 bytes; each timed check again, at most [`TRIES`] times in all, where its
-//!   halves disagree. The probe's rounds took 3 to 12 ms on those devices.
-//! - **Kept.** Once every check answered, the verdicts are written as one record in the shader
-//!   cache's content directory (`shader_cache/store.rs`), named by the driver's identity, the
-//!   kernel's release (the import tax is the kernel's work on RADV), the check's version and the
-//!   runtime's ([`record_name`]): a device of the same driver, release and kernel reads them as
-//!   it is made and runs no check. A failed write leaves the verdicts for the device's life.
+//!   pages written once; and on Linux three copies of 256 bytes; each timed check again, at most
+//!   [`TRIES`] times in all, where its halves disagree, and the import tax's [`TAX_REPEATS`]
+//!   tries more where it answers `Holds` past its margin. The probe's rounds took 3 to 12 ms on
+//!   those devices.
+//! - **Kept.** Once every check answered and each timed check's answer earned its record (no
+//!   check's tries all disagreed; an import tax `Holds` passed its margin and repeated, above),
+//!   the verdicts are written as one record in the shader cache's content directory
+//!   (`shader_cache/store.rs`), named by the driver's identity, the kernel's release (the import
+//!   tax is the kernel's work on RADV), the check's version and the runtime's ([`record_name`]):
+//!   a device of the same driver, release and kernel reads them as it is made and runs no check.
+//!   A failed write leaves the verdicts for the device's life.
 //! - **Its thread** holds nothing of the device, as the queue-switch check's does
 //!   (`queue_switch_check.rs`): only the parts of it the checks work with ([`Parts`]), never a
 //!   handle, so the device's last handle never goes on it. It reads the stop between its steps
@@ -155,6 +166,16 @@ pub(crate) const TAX_SUBMITS: usize = 8;
 /// The least a held import adds to a submission, in nanoseconds, that the tax check counts: a
 /// microsecond, about 0.25% of a core at the 2500 submissions a second of a guest's frames.
 pub(crate) const TAX_FLOOR: i64 = 1_000;
+
+/// How many times over an import tax `Holds` passes its bound ([`tax_verdict`]) for it to be
+/// recorded: load beside the check that lengthened every submission with the imports held passed
+/// the bound by a fifth (lavapipe: the module docs), where the taxes the probe measured pass it
+/// six times over and more (its medians: RADV on three GPUs, ANV on i915 with 32 imports held).
+pub(crate) const TAX_MARGIN: i64 = 2;
+
+/// The tries more an import tax `Holds` past [`TAX_MARGIN`] answers again, each past it, before
+/// it is recorded.
+pub(crate) const TAX_REPEATS: usize = 2;
 
 /// How long one wait for a fence lasts before it is repeated.
 const WAIT_SLICE: Duration = Duration::from_millis(100);
@@ -243,6 +264,8 @@ pub(crate) struct SubmitChecks {
     took: AtomicU64,
     /// The tries whose blocks or phases disagreed, in this process (the module docs).
     split: AtomicU64,
+    /// The import tax answered `Holds` short of its record, in this process ([`tax_tried`]).
+    unearned: AtomicBool,
     /// The device's teardown stopped the checks ([`SubmitChecks::stop`]): read between steps.
     stopping: AtomicBool,
     /// Whether the checks' thread runs, and what tells its end.
@@ -265,6 +288,7 @@ impl SubmitChecks {
             wake: Condvar::new(),
             took: AtomicU64::new(0),
             split: AtomicU64::new(0),
+            unearned: AtomicBool::new(false),
             stopping: AtomicBool::new(false),
             running: Mutex::new(false),
             ending: Condvar::new(),
@@ -406,10 +430,22 @@ pub(crate) fn merge_verdict(merged: i64, apart: i64) -> Verdict {
 
 /// The import tax's verdict from the floors of a phase with the import held and of one without.
 pub(crate) fn tax_verdict(held: i64, bare: i64) -> Verdict {
-    match held - bare > TAX_FLOOR.max(bare / 8) {
+    match held - bare > tax_bound(bare) {
         true => Verdict::Holds,
         false => Verdict::Fails,
     }
+}
+
+/// The most a held import adds to a submission of `bare` nanoseconds without it that is no tax:
+/// [`TAX_FLOOR`], or an eighth of the submission, whichever is more.
+fn tax_bound(bare: i64) -> i64 {
+    TAX_FLOOR.max(bare / 8)
+}
+
+/// Whether floors `(held, bare)` pass the import tax's bound [`TAX_MARGIN`] times over: what
+/// each try of a `Holds` that is recorded answers ([`tax_tried`]).
+pub(crate) fn tax_clear((held, bare): (i64, i64)) -> bool {
+    held - bare > TAX_MARGIN * tax_bound(bare)
 }
 
 /// What one try of a timed check answered: the verdict its two halves agree on (`None` where they
@@ -463,9 +499,10 @@ fn floor(times: &[i64]) -> i64 {
     times.iter().min().copied().unwrap_or(0)
 }
 
-/// The version of what the checks measure and of how their record is named and framed: a change
-/// to either bumps it, and a record of another version is never read.
-pub(crate) const CHECK_VERSION: u32 = 3;
+/// The version of what the checks measure, of what earns a record and of how it is named and
+/// framed: a change to any bumps it, and a record of another version is never read (one of 3 may
+/// hold an import tax `Holds` short of [`TAX_MARGIN`]).
+pub(crate) const CHECK_VERSION: u32 = 4;
 
 /// A record's first bytes.
 const MAGIC: [u8; 8] = *b"M2VSUBC\0";
@@ -700,11 +737,15 @@ impl Device {
             0 => String::new(),
             tries => format!(", {tries} tries split"),
         };
+        let unearned = match checks.unearned.load(Ordering::Relaxed) {
+            true => ", its import tax Holds short of a record",
+            false => "",
+        };
         format!(
             "merge {:?} ({:.1} us in one call of {MERGED} against {:.1} us apart), import tax \
              {:?} ({:.1} us a submission with {} imports of {} MiB in all held against {:.1} us), \
              follows {:?}, \
-             {took}{split} (floors)",
+             {took}{split}{unearned} (floors)",
             checks.verdict(Check::Merge),
             us(m.merged),
             us(m.apart),
@@ -882,13 +923,14 @@ fn run(parts: &Parts, made: Made) {
 }
 
 /// Each check in turn, its verdict set as it is known: what they measured, and whether their
-/// verdicts may be recorded (no timed check's tries all disagreed); `None` where the process is
-/// exiting or the device's teardown stopped the checks.
+/// verdicts may be recorded (no timed check's tries all disagreed, an import tax `Holds` earned
+/// its record: [`tax_tried`]); `None` where the process is exiting or the device's teardown
+/// stopped the checks.
 fn measure(parts: &Parts, objects: &Objects) -> Option<(Measured, bool)> {
     let checks = &parts.checks;
     let (merges, (merged, apart), merge_kept) = tried(checks, || merge(parts, objects))?;
     checks.set(Check::Merge, merges);
-    let (taxed, (held, bare), tax_kept) = tried(checks, || tax(parts, objects))?;
+    let (taxed, (held, bare), tax_kept) = tax_tried(checks, || tax(parts, objects))?;
     checks.set(Check::ImportTax, taxed);
     checks.set(Check::Follows, follows(parts, objects)?);
     let measured = Measured {
@@ -921,6 +963,36 @@ pub(crate) fn tried(
         checks.split.fetch_add(1, Ordering::Relaxed);
     }
     Some((Verdict::Unchecked, floors, false))
+}
+
+/// The import tax's verdict and floors over its tries of `once` ([`tried`]), and whether they may
+/// be recorded: a `Holds` only where its floors pass the bound [`TAX_MARGIN`] times over
+/// ([`tax_clear`]) and each of [`TAX_REPEATS`] tries more answers `Holds` so again (the module
+/// docs, "Load beside it"). A `Holds` short of that answers for the device's life alone, with
+/// the floors of its first try, and the next device measures again; a refused call ends the
+/// repeats, unrecorded. `None` where the check stops.
+pub(crate) fn tax_tried(
+    checks: &SubmitChecks,
+    mut once: impl FnMut() -> Option<Option<Timed>>,
+) -> Option<(Verdict, (i64, i64), bool)> {
+    let (verdict, floors, kept) = tried(checks, &mut once)?;
+    if verdict != Verdict::Holds || !kept {
+        return Some((verdict, floors, kept));
+    }
+    let mut earned = tax_clear(floors);
+    for _ in 0..TAX_REPEATS {
+        if !earned {
+            break;
+        }
+        earned = match once()? {
+            Some(again) => again.verdict == Some(Verdict::Holds) && tax_clear(again.floors),
+            None => false,
+        };
+    }
+    if !earned {
+        checks.unearned.store(true, Ordering::Relaxed);
+    }
+    Some((verdict, floors, earned))
 }
 
 /// One merge try ([`merge_try`]) of one call of [`MERGED`] infos against [`MERGED`] calls.

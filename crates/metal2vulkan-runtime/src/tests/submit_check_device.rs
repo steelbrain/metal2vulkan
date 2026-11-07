@@ -9,8 +9,8 @@
 //!   (`commands_recorded`: a device that ran them recorded the copies one that recalled them did,
 //!   the follows check's three among neither); a later device over the same cache recalls them
 //!   (`submit_checks_recalled`), runs none, and holds the verdicts of the last device that ran
-//!   them: the first's, or, where load split its tries and nothing was recorded, those of the
-//!   next device that ran them.
+//!   them: the first's, or, where load split its tries or its import tax answered `Holds` short
+//!   of a record and nothing was recorded, those of the next device that ran them.
 //! - **The paths follow them.** Grouped batches where the merge holds
 //!   (`WorkCounts::grouped_submissions`), a long `Shared` buffer in fresh pages where a held
 //!   import adds nothing to a submission (`fresh_page_buffers_made`), a no-copy buffer's pointer
@@ -108,7 +108,8 @@ fn the_checks_answer_once_and_a_second_device_recalls_them() {
     let identity = first.driver_identity();
     drop(first);
     // The verdicts of the last device that ran the checks, which its record holds where it wrote
-    // one (a device whose tries split writes none, and the next runs them again).
+    // one (a device whose tries split, or whose import tax `Holds` fell short of a record, writes
+    // none, and the next runs them again).
     let mut ran = answered;
     let start = std::time::Instant::now();
     loop {
