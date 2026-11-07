@@ -34,6 +34,19 @@
 //   ./short_row_blits in
 //   ./short_row_blits out
 //   ./short_row_blits half
+//
+// WHAT IT MEASURED, Apple M3 Max, macOS 27.0.1 (26A434), plain Metal:
+//
+// - `in`: every copy returned and read every row whole from `y x bytesPerRow`, 166 of 166 (eight
+//   formats, `Private` and `Shared`, every pitch asked, multiples of 16 among them).
+// - `out`: every copy returned, nothing written past the rows' span; where rows overlap, the
+//   bytes that stand follow the format and the pitch (at a 64-byte row and a 32-byte pitch,
+//   `R8Unorm`'s later rows over the earlier, `R16Uint`'s and `YCBCR8_422_1P`'s even rows over the
+//   odd ones), and 7 of 166 cases answered otherwise in another of three processes.
+// - `half`: of 300 shapes of 12 formats at half the row, each in three processes, about a third
+//   of a format's shapes left the later rows' bytes standing (every width of 48 texels), a sixth
+//   every even row's (a width of 16) and the rest neither order's; 15 shapes answered otherwise
+//   in another process. No one order holds a copy out whose rows overlap.
 
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
