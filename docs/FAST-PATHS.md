@@ -256,6 +256,17 @@ recorded here.
   texture keeps, the buffer's texels copied in first (`dont-care-stand-in`), so the buffer keeps its
   bytes as Metal's does: about 10 µs a pass on the Iris Xe (ANV). A pass that clears and stores
   `DontCare` costs no more, and one that stores renders in place.
+- **A colour attachment of a texture's own image stored `DontCare`** keeps the texels it held
+  before the pass, as Metal's does on Apple's GPUs (Metal's documentation leaves them open; the
+  conformance case `pass-sequence-color-actions` measured them on an M3 Max): where the pass is
+  not handed to a driver whose `DONT_CARE` is Metal's own (MoltenVK), it renders through a backing
+  its queue keeps for the attachment's shape (`kept_bytes.rs`, `WorkCounts::kept_texels_passes`),
+  into which a `Load` copies the texels first. Measured against the same pass stored `Store`, one
+  pass of one draw over an `RGBA8Unorm` texture a command buffer, the median of 300 interleaved,
+  commit to completion: a `Load` pass 19 µs more at 1920x1080 and 10 µs more at 256x256 on the RTX
+  5080 Laptop GPU (16 µs and 7 µs of GPU time), 0.5-0.8 ms and 30 µs more on lavapipe (llvmpipe,
+  LLVM 23.1.4); a `Clear` pass 3 µs more on the 5080, within the runs' spread on lavapipe. The
+  backing is one image of the attachment's shape per queue.
 - **The interlocked pass on the M4.** Every device splits a pass the pixel interlock would split,
   about a quarter faster than kept whole on the M3 Max (`DriverFact::InterlockedPassSplitNoSlower`);
   the M4 ran that pass about 8% faster kept whole.
