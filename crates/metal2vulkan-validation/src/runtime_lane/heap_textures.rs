@@ -43,7 +43,7 @@ use crate::candidate::engine::ComputeOutput;
 use crate::gpu::TEST_DEVICE;
 use metal2vulkan::device::{DriverFact, HeapCompressionPolicy};
 use metal2vulkan::error::{Feature, LinearNeed, Needs};
-use metal2vulkan::metal::format::{footprint, is_depth_stencil, Footprint};
+use metal2vulkan::metal::format::{copies_only, footprint, is_depth_stencil, Footprint};
 use metal2vulkan::metal::{
     IndirectCommandType, PixelFormat, PrimitiveType, RenderStages, ResourceUsage, TextureType,
     TextureUsage,
@@ -1305,7 +1305,8 @@ fn tiling_refusal(error: &Error) -> Option<LinearNeed> {
 /// the footprint **and** makes the texture, so the refusal is this crate's open gap and the
 /// `HEAPTEX shared no image` lines name every format and descriptor it covers. Every such format
 /// answers in all four swept usages, counted from that table, so one that stops answering fails
-/// rather than passing as a query and a call that both refuse. An ASTC texture on a device that
+/// rather than passing as a query and a call that both refuse. A footprint format held for copies
+/// alone (`metal::format::copies_only`) is made instead, in all four, counted from that table too. An ASTC texture on a device that
 /// holds it in a carrier with a decoded twin (lavapipe) answers Metal's model of its blocks and is
 /// refused its making, `NotImplemented(DecodedHeapTexture)`: the twin would decode what the heap's
 /// bytes held. `HEAPTEX shared decoded` lines name each.
@@ -1333,6 +1334,7 @@ fn shared_heap_textures_are_made_or_refused_for_linear_tiling() {
         );
         let staged = device.work_counts().staging_submissions;
         let (mut made, mut round_trips, mut refused) = (0usize, 0usize, Vec::new());
+        let mut copies = 0usize;
         let mut changed = Vec::new();
         let mut changed_again = Vec::new();
         let mut gaps = Vec::new();
@@ -1345,6 +1347,7 @@ fn shared_heap_textures_are_made_or_refused_for_linear_tiling() {
             match (query, call) {
                 (Ok(_), Ok(texture)) => {
                     made += 1;
+                    copies += usize::from(copies_only(descriptor.pixel_format));
                     let Some(bytes) = texel_bytes(descriptor.pixel_format) else {
                         return;
                     };
@@ -1530,14 +1533,24 @@ fn shared_heap_textures_are_made_or_refused_for_linear_tiling() {
             "colour textures refused as gaps: {gaps:#?}"
         );
         // Every format whose footprint its own structure decides answered that footprint in all
-        // four swept usages, the packed 10-bit pair's `NoTexture` 0 bytes at 16 among them (the
-        // arm above). The count comes from the product's own table rather than a number here, so
-        // a footprint that stops answering fails this instead of passing quietly as a query and a
-        // call that both refuse.
+        // four swept usages: one held for copies alone (`copies_only`) with its texture made, every
+        // other with no image of the format, the packed 10-bit pair's `NoTexture` 0 bytes at 16
+        // among them (the arm above). The counts come from the product's own tables rather than
+        // numbers here, so a footprint that stops answering, or a held format whose making stops,
+        // fails this instead of passing quietly as a query and a call that both refuse.
+        let held = PixelFormat::ALL
+            .iter()
+            .filter(|&&pf| copies_only(pf))
+            .count();
         let answering = PixelFormat::ALL
             .iter()
-            .filter(|&&pf| footprint(pf).is_some())
+            .filter(|&&pf| footprint(pf).is_some() && !copies_only(pf))
             .count();
+        assert_eq!(
+            copies,
+            held * SWEPT_USAGES.len(),
+            "textures made of the formats held for copies alone"
+        );
         assert_eq!(
             no_image.len(),
             answering * SWEPT_USAGES.len(),
