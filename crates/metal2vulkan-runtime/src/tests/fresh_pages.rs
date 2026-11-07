@@ -25,9 +25,12 @@
 //!   again and reads zero, nothing written.
 //! - **A copy of bytes.** `new_buffer_with_bytes` of a long pattern lies in fresh pages and reads
 //!   the pattern, through `contents` and a blit.
-//! - **A texture over a long buffer** is a shadow of its bytes
-//!   (`WorkCounts::shadows_over_fresh_pages`): a blit out of it reads the bytes the CPU wrote, and
-//!   a render pass's clear through it reaches them once the command buffer completed.
+//! - **A texture over a long buffer** that renders is a shadow of its bytes under
+//!   `HostPageTexturePolicy::Shadow` (`WorkCounts::shadows_over_fresh_pages`), and under `InPlace`
+//!   an image in place where the device's check passed for render targets over fresh pages, else
+//!   such a shadow: either way a blit out of it reads the bytes the CPU wrote, and a render pass's
+//!   clear through it reaches them once the command buffer completed, the bytes between its rows
+//!   kept.
 //!
 //! Device tests: compiled only under the GPU safety cfgs (`m2v_gpu`, `m2v_cpu_icd`).
 
@@ -39,6 +42,7 @@ use crate::{
     RenderPassDescriptor, ResourceOptions, ShaderCacheOptions, Size, StorageMode, StoreAction,
     TextureDescriptor, WorkCounts,
 };
+use metal2vulkan::device::HostPageTexturePolicy;
 use metal2vulkan::metal::{PixelFormat, TextureUsage};
 use std::path::Path;
 
@@ -48,7 +52,12 @@ const LONG: u64 = FRESH_PAGES_PAST + 4100;
 
 /// The device the cfg selects, its shader cache in `cache`, its submission checks answered.
 fn device(cache: &Path) -> Device {
-    let options = DeviceOptions {
+    device_with(cache, HostPageTexturePolicy::InPlace)
+}
+
+/// [`device`], its textures over host pages held as `policy` says.
+fn device_with(cache: &Path, policy: HostPageTexturePolicy) -> Device {
+    let mut options = DeviceOptions {
         kinds: match cfg!(m2v_cpu_icd) {
             true => vec![DeviceKind::Cpu],
             false => vec![
@@ -63,6 +72,7 @@ fn device(cache: &Path) -> Device {
         },
         ..DeviceOptions::default()
     };
+    options.policy.host_page_textures = policy;
     let device = Device::system_default_with(&options).unwrap();
     assert!(
         device.settle_submit_checks(crate::tests::SETTLE),
@@ -317,10 +327,22 @@ fn a_long_buffer_with_bytes_reads_them() {
 
 #[test]
 fn a_texture_over_a_long_buffer_is_its_bytes_through_a_shadow() {
+    a_texture_over_a_long_buffer_is_its_bytes("fresh-pages-texture", HostPageTexturePolicy::Shadow);
+}
+
+#[test]
+fn a_texture_over_a_long_buffer_is_its_bytes_in_place_where_the_check_passed() {
+    let policy = HostPageTexturePolicy::InPlace;
+    a_texture_over_a_long_buffer_is_its_bytes("fresh-pages-texture-in-place", policy);
+}
+
+/// A render target over a long buffer on a device of `policy`, its scratch named `name` (the
+/// module docs).
+fn a_texture_over_a_long_buffer_is_its_bytes(name: &str, policy: HostPageTexturePolicy) {
     const SIDE: u64 = 64;
     const ROW: u64 = 512;
-    let scratch = Scratch::new("fresh-pages-texture");
-    let device = device(&scratch.0);
+    let scratch = Scratch::new(name);
+    let device = device_with(&scratch.0, policy);
     let queue = device.new_command_queue().unwrap();
     let buffer = device.new_buffer(LONG, ResourceOptions::shared()).unwrap();
     let contents = buffer.contents().unwrap();
@@ -335,9 +357,38 @@ fn a_texture_over_a_long_buffer_is_its_bytes_through_a_shadow() {
     let texture = buffer.new_texture(&descriptor, 0, ROW).unwrap();
     let after = device.work_counts();
     let over_fresh = after.shadows_over_fresh_pages - before.shadows_over_fresh_pages;
-    assert_eq!(over_fresh, u64::from(buffer.in_fresh_pages()));
+    // SAFETY: the handle is only compared, while the texture lives.
+    let in_place = unsafe { texture.vk_image() }.is_some();
+    let renders_in_place = device
+        .in_place_check_report()
+        .iter()
+        .any(|line| line == "Fresh renders: Passed");
+    eprintln!(
+        "FRESH-PAGES on {}: {policy:?}: in fresh pages {}, in place {in_place}, the check passed \
+         for render targets there {renders_in_place}",
+        device.name(),
+        buffer.in_fresh_pages()
+    );
     if buffer.in_fresh_pages() {
-        assert_eq!(after.shadowed_textures - before.shadowed_textures, 1);
+        let shadow = !in_place;
+        assert_eq!(over_fresh, u64::from(shadow));
+        assert_eq!(
+            after.shadowed_textures - before.shadowed_textures,
+            u64::from(shadow)
+        );
+        assert_eq!(
+            after.host_textures_in_place - before.host_textures_in_place,
+            u64::from(in_place)
+        );
+        match policy {
+            HostPageTexturePolicy::Shadow => assert!(shadow, "a shadow under Shadow"),
+            _ => assert_eq!(
+                in_place, renders_in_place,
+                "in place where the check passed"
+            ),
+        }
+    } else {
+        assert_eq!(over_fresh, 0);
     }
 
     // A blit out of the texture reads the bytes the CPU wrote, row by row.

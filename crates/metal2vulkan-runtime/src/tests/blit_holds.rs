@@ -23,7 +23,7 @@ use crate::{
     Device, DeviceKind, DeviceOptions, Error, HostMemory, Origin, PurgeableState, ResourceOptions,
     ShaderCacheOptions, Size, Texture, TextureDescriptor,
 };
-use metal2vulkan::device::PipelineWaitPolicy;
+use metal2vulkan::device::{HostPageTexturePolicy, PipelineWaitPolicy};
 use metal2vulkan::metal::{PixelFormat, TextureType, TextureUsage};
 use std::alloc::Layout;
 use std::path::{Path, PathBuf};
@@ -146,6 +146,15 @@ pub(super) fn device(cache: &Path) -> Device {
 pub(super) fn exact_waits_device(cache: &Path) -> Device {
     let mut options = options(cache);
     options.policy.pipeline_waits = PipelineWaitPolicy::Exact;
+    Device::system_default_with(&options).unwrap()
+}
+
+/// As [`device`], every texture over host pages a shadow (`HostPageTexturePolicy::Shadow`): for a
+/// test whose subject is such a shadow (its copies, merges and runs), which under the default
+/// policy a render target over host pages is only where the device's check did not pass for it.
+pub(super) fn shadow_device(cache: &Path) -> Device {
+    let mut options = options(cache);
+    options.policy.host_page_textures = HostPageTexturePolicy::Shadow;
     Device::system_default_with(&options).unwrap()
 }
 

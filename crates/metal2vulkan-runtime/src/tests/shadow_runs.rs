@@ -1,8 +1,10 @@
 //! Runs of passes over a shadowed texture merged back, merged once (`pass_runs.rs`): a 2D
 //! `BGRA8Unorm` texture of 1024 x 1024 texels over a no-copy buffer's host pages whose rows lie
 //! 15360 bytes apart (a 3840-texel surface's), so each row holds 11264 bytes past its texels that
-//! no pass writes: a shadow on every device, its writes merged back into the bytes
-//! (`shadow.rs`'s **Merged back**).
+//! no pass writes: a shadow, its writes merged back into the bytes (`shadow.rs`'s **Merged
+//! back**), on a device that makes every texture over host pages one
+//! (`HostPageTexturePolicy::Shadow`, `blit_holds::shadow_device`): under the default policy a
+//! render target there is an image in place where the device's check passed for it.
 //!
 //! One command buffer mixes passes over the texture (each loading and storing it, blending a
 //! rectangle over it) with the encoders and commands that end a run or pass it: a 1x1
@@ -32,7 +34,7 @@
 //! `m2v_cpu_icd`), on the kind of device the cfg selects. The functions are the owned fixture
 //! `validation/fixtures/public/engine/tob_renders.ll` (`llvm-as`).
 
-use super::blit_holds::{device, Scratch, WAIT};
+use super::blit_holds::{shadow_device as device, Scratch, WAIT};
 use super::encoder_holds::{bytes_of, library};
 use super::linear_runs::attachmentless;
 use super::merge_scratch::{blit, drawn, read, staged, TEXEL};
