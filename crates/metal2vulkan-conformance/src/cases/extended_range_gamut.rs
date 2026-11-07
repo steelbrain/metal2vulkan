@@ -337,13 +337,16 @@ impl Case for GamutDraw {
     /// `MultisampleResolve`, and the depth and stencil stored `DontCare`, on a driver measured to
     /// keep one of Metal's answers), and on a device without multisampled storage images
     /// `sample-planes` and `fetch-through-scratch` (the interlocked blend reads and writes the
-    /// samples as planes, through a scratch image the target's usage needs). None loosens a code:
-    /// every texel still compares exactly.
+    /// samples as planes, through a scratch image the target's usage needs). And
+    /// `render-pass-split` (`crate::replay::interlocked_split_notice`): the second draw blends in
+    /// the pixel interlock over what the first wrote there. None loosens a code: every texel still
+    /// compares exactly.
     fn allowances(&self) -> Vec<Allowance> {
         let mut named = notices(&self.format);
         named.push(crate::replay::notice_allowance(
             Degradation::ExtendedRangeBlendsStoredCodes.code(),
         ));
+        named.push(crate::replay::interlocked_split_notice());
         if self.samples > 1 {
             named.extend(
                 [
@@ -787,13 +790,22 @@ impl Case for MaskedDraw {
     /// Beside the family's notices, for the blended write, `extended-range-blends-stored-codes`:
     /// it blends over the codes the first draw stored on a device whose passes hold no `half`
     /// shadow (`framebuffer_fetch::holds_extended_shadows`); on lavapipe the shadow is held beside
-    /// the input attachment. It loosens no code.
+    /// the input attachment. And `render-pass-split` (`crate::replay::interlocked_split_notice`):
+    /// a blended write, and a masked one into `BGR10_XR`'s shared word, reads and writes in the
+    /// pixel interlock what the first draw wrote there. It loosens no code.
     fn allowances(&self) -> Vec<Allowance> {
         let mut named = notices(&self.format);
         if self.blend.is_some() {
             named.push(crate::replay::notice_allowance(
                 Degradation::ExtendedRangeBlendsStoredCodes.code(),
             ));
+        }
+        let shared_word = matches!(
+            self.format.format,
+            PixelFormat::BGR10XR | PixelFormat::BGR10XRSRGB
+        );
+        if self.blend.is_some() || shared_word {
+            named.push(crate::replay::interlocked_split_notice());
         }
         named
     }

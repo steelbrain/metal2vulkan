@@ -231,10 +231,15 @@ impl Case for FetchOrdered {
         // nothing else (replay-nvidia.log). On MoltenVK, where
         // the chip's GPU shares the CPU's memory, it cannot fire at all, which is why no
         // recording of this suite declares it.
+        //
+        // Every row fetches in the pixel interlock draw after draw, so on a driver whose such draws
+        // race under load each draw after the first begins a render pass instance of its own
+        // (`crate::replay::interlocked_split_notice` holds the reason and the run it rests on).
         std::iter::once(crate::replay::shared_memory_notice())
-            .chain([crate::replay::notice_allowance(
-                Degradation::FetchThroughScratch.code(),
-            )])
+            .chain([
+                crate::replay::notice_allowance(Degradation::FetchThroughScratch.code()),
+                crate::replay::interlocked_split_notice(),
+            ])
             .collect()
     }
 

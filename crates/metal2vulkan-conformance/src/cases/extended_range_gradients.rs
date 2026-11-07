@@ -253,7 +253,9 @@ impl Case for GradientDraw {
     /// codes), `dont-care-store` (the multisampled attachment of `MultisampleResolve`, on a driver
     /// measured to keep one of Metal's answers), and on a device without multisampled storage
     /// images `sample-planes` and `fetch-through-scratch` (the interlocked blend reads and writes
-    /// the samples as planes, through a scratch image the target's usage needs).
+    /// the samples as planes, through a scratch image the target's usage needs). A blended row also
+    /// declares `render-pass-split` (`crate::replay::interlocked_split_notice`): its second draw
+    /// blends in the pixel interlock over what the first wrote there.
     fn allowances(&self) -> Vec<Allowance> {
         let mut named = vec![crate::replay::shared_memory_notice()];
         named.extend(super::compressed_blits::kept_encoding_notice(
@@ -280,6 +282,9 @@ impl Case for GradientDraw {
                 .into_iter()
                 .map(|kind| crate::replay::notice_allowance(kind.code())),
         );
+        if self.blended {
+            named.push(crate::replay::interlocked_split_notice());
+        }
         named
     }
 

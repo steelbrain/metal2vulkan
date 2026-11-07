@@ -364,6 +364,26 @@ pub fn shared_memory_notice() -> crate::allowance::Allowance {
     notice_allowance(metal2vulkan_runtime::Degradation::SharedInSystemMemory.code())
 }
 
+/// The declaration a case needs for the split a **venue's driver** makes the runtime take between
+/// two draws that read and write a color in the pixel interlock: `render-pass-split`, which the
+/// runtime announces where a draw that reaches interlocked storage an earlier draw of its
+/// instance wrote begins a render pass instance of its own, on a driver whose such draws race
+/// under load (`DriverFact::InterlockedDrawsRaceUnderLoad`: MoltenVK on Apple's GPUs, which
+/// encodes no Metal barrier inside a render pass there).
+///
+/// **Why it is the venue's and not ours.** Metal runs the case's draws in one pass, ordered by its
+/// tile, and records no split; a driver that orders such draws by the interlock or by a barrier
+/// inside the instance runs them in one instance too. The split is the runtime ordering them on a
+/// driver that does neither, and the notice is it reporting the cost. Like every
+/// [`notice_allowance`] it loosens the notices site alone: every value still compares exactly.
+///
+/// **Its evidence.** Measured on the M3 Max (MoltenVK 1.4.2, macOS 27.0.1): it fired for every row
+/// of `fetch-ordered-*`, `xr-gamut-*`, `xr-masked-*` whose second draw blends or writes a
+/// `BGR10_XR` word under a mask, and `xr-gradient-*-blended-*`, the families that name it.
+pub fn interlocked_split_notice() -> crate::allowance::Allowance {
+    notice_allowance(metal2vulkan_runtime::Degradation::RenderPassSplit.code())
+}
+
 /// The slug of `docs/API.md`'s accepted difference that says what a device presenting a Mac that
 /// keeps no texture compressed answers, as a Mac with an Intel or AMD GPU does
 /// ([`without_compression`]): "A device answers as the class of Mac it presents".
