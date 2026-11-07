@@ -276,7 +276,7 @@ impl Sink<'_> {
                 let lane = self.int(e, c, m)?;
                 let mut lane_read = call.clone();
                 lane_read.args = Box::new([lane]);
-                let v = self.push(ty, InstKind::Call(lane_read), m)?;
+                let v = self.push(ty, InstKind::Call(Box::new(lane_read)), m)?;
                 if g.var != GlobalVar::ThreadPositionInGrid {
                     return Ok(v);
                 }
