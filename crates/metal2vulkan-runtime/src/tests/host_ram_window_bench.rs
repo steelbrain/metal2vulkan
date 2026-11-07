@@ -99,7 +99,7 @@ fn orders() -> Vec<Order> {
 
 /// Make the order's heaps over fresh RAM, timing each making, and print what it took.
 fn run(device: &crate::Device, order: &Order) {
-    let (ram, start, _) = fresh_ram(order.chunks * CHUNK);
+    let (ram, start, _) = fresh_ram(device, order.chunks * CHUNK);
     let before = device.work_counts();
     let used = device.use_host_ram(&ram).unwrap();
     let (runs, gates): (Arc<Mutex<_>>, Arc<Mutex<_>>) = Default::default();

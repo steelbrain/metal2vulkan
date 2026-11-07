@@ -457,7 +457,11 @@ pages then takes a kernel mapping per page) can give the device the guest's RAM 
   `Problem::HostRam`).
 - One run inside one chunk: the device imports the RAM by host pointer in chunks of 64 MiB, never
   across a range's end, each once (`WorkCounts::host_ram_chunks_imported`, `host_ram_chunk_bytes`,
-  `host_ram_chunks_live`). From `use_host_ram` on, a thread of the device's imports chunks ahead
+  `host_ram_chunks_live`). A device that refuses pointers to shared memory
+  (`Device::imports_shared_host_pointers` false: RADV) imports no chunk of a RAM of shared memory
+  (`memory-backend-memfd,share=on`) with no dma-buf source, and refuses each object over it
+  (`Unsupported`, `HostMemory`). From `use_host_ram` on, a thread of the device's imports chunks
+  ahead
   of the objects over them (`host_ram_chunks_imported_ahead`): the chunk an object last took, then a
   window of chunks past it in the direction the takes go, up the RAM or down it, one chunk after a
   take that starts no run (and the RAM's first chunk before any take), four once a take lands inside

@@ -1030,7 +1030,11 @@ impl Device {
     ///
     /// Refused: a device without `VK_EXT_external_memory_host` (`Unsupported`, naming it); a RAM
     /// whose ranges meet those of a RAM the device uses already, itself among them (`Invalid`,
-    /// `Problem::HostRam`); a lost device.
+    /// `Problem::HostRam`); a lost device. On a device that refuses pointers to shared memory
+    /// ([`Device::imports_shared_host_pointers`] false: RADV), a RAM of shared memory (QEMU's
+    /// `memory-backend-memfd,share=on` RAM) with no dma-buf source is taken but imports no chunk,
+    /// and each object over it is refused as its own import of the pointer is (`Unsupported`,
+    /// `HostMemory`).
     pub fn use_host_ram(&self, ram: &Arc<HostRam>) -> Result<HostRamUse, Error> {
         const CALL: &str = "use_host_ram";
         if self.is_lost() {

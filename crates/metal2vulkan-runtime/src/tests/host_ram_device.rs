@@ -26,8 +26,9 @@
 //!   after that command buffer completed, and the RAM's keep-alive goes after it; the same RAM
 //!   used twice is refused, a RAM apart from it taken; a new RAM over the same ranges is taken once
 //!   the first use ended.
-//! - **Ahead of the objects.** The device's thread imports chunks of fresh RAM (a `memfd`
-//!   advised for huge pages, as QEMU's RAM is) ahead of the objects: the RAM's first chunk once
+//! - **Ahead of the objects.** The device's thread imports chunks of fresh RAM (advised for huge
+//!   pages, as QEMU's RAM is: a `memfd` mapped shared, or private anonymous memory on a device
+//!   that refuses pointers to shared memory) ahead of the objects: the RAM's first chunk once
 //!   the use begins, and the window past it once a heap took it, so the consumer's 2 MiB heaps
 //!   over consecutive runs, past a chunk's end, import nothing as they are made; a heap's bytes
 //!   go from the CPU to the GPU and back; every heap gone, one made again imports nothing.
@@ -53,6 +54,10 @@
 //!   (`RuntimeDriverDefect::AliasedImportBlitsUnordered`, MoltenVK's) no run is imported alone
 //!   either: an object over a chunk not imported imports the chunk, and the tests hold it to that.
 //!
+//! - **Shared RAM a device refuses.** On a device that refuses pointers to shared memory (RADV),
+//!   a RAM of a `memfd` mapped shared with no dma-buf source imports no chunk, and an object over
+//!   it is refused (`Unsupported`, `HostMemory`).
+//!
 //! Every other test holds the device's thread back (`Device::hold_host_ram_imports`), so that
 //! each chunk is imported by the first object over it, as one the thread has not reached is.
 //!
@@ -66,6 +71,7 @@ use crate::{
     HeapDescriptor, HeapType, HostBacking, HostMemory, HostRam, ImportGate, ImportRequest,
     KeepAlive, Problem, ResourceOptions, RunResolver, Size,
 };
+use metal2vulkan::error::{Feature, Unsupported};
 use std::ops::Range;
 use std::ptr::NonNull;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -166,6 +172,9 @@ pub(super) fn ahead_device() -> Option<Device> {
         eprintln!("HOST-RAM: the device imports no host memory here; nothing to test");
         return None;
     }
+    // Asked now, by an import of one page released at once, so that no test's counts or
+    // allocation limit meet that import ([`fresh_ram`] reads the answer).
+    device.imports_shared_host_pointers().unwrap();
     Some(device)
 }
 
@@ -252,21 +261,45 @@ fn settles(flag: &AtomicBool) -> bool {
     true
 }
 
-/// Fresh RAM of `length` bytes, never touched: a `memfd` mapped shared and advised for huge pages,
-/// as QEMU's `memory-backend-memfd,share=on` RAM is (anonymous shared memory off Linux), unmapped
-/// by the keep-alive it is given to; its first byte, and whether its keep-alive was dropped.
-pub(super) fn fresh_ram(length: u64) -> (Arc<HostRam>, u64, Arc<AtomicBool>) {
+/// Fresh RAM of `length` bytes, never touched, advised for huge pages, unmapped by the keep-alive
+/// it is given to, of the kind `device` imports: a `memfd` mapped shared, as QEMU's
+/// `memory-backend-memfd,share=on` RAM is (anonymous shared memory off Linux), on a device that
+/// imports pointers to shared memory (`Device::imports_shared_host_pointers`), and private
+/// anonymous memory, as QEMU's `memory-backend-ram` RAM is, on one that refuses them (RADV:
+/// [`a_ram_of_shared_memory_a_device_refuses_imports_no_chunk_and_refuses_its_objects`] checks
+/// shared RAM there); its first byte, and whether its keep-alive was dropped.
+pub(super) fn fresh_ram(device: &Device, length: u64) -> (Arc<HostRam>, u64, Arc<AtomicBool>) {
+    let shared = device.imports_shared_host_pointers().unwrap();
+    if !shared {
+        eprintln!(
+            "HOST-RAM {}: the device refuses pointers to shared memory; the fresh RAM is private \
+             anonymous memory",
+            device.name()
+        );
+    }
+    fresh_ram_of(length, shared)
+}
+
+/// Fresh RAM of `length` bytes, as [`fresh_ram`]'s: shared memory where `shared`, else private
+/// anonymous memory.
+fn fresh_ram_of(length: u64, shared: bool) -> (Arc<HostRam>, u64, Arc<AtomicBool>) {
     #[cfg(target_os = "linux")]
-    let (flags, fd) = {
-        // SAFETY: a name and flags the call takes.
-        let fd = unsafe { libc::memfd_create(c"m2v-fresh-ram".as_ptr(), libc::MFD_CLOEXEC) };
-        assert!(fd >= 0);
-        // SAFETY: the descriptor was just made, and is closed below.
-        assert_eq!(unsafe { libc::ftruncate(fd, length as libc::off_t) }, 0);
-        (libc::MAP_SHARED, fd)
+    let (flags, fd) = match shared {
+        true => {
+            // SAFETY: a name and flags the call takes.
+            let fd = unsafe { libc::memfd_create(c"m2v-fresh-ram".as_ptr(), libc::MFD_CLOEXEC) };
+            assert!(fd >= 0);
+            // SAFETY: the descriptor was just made, and is closed below.
+            assert_eq!(unsafe { libc::ftruncate(fd, length as libc::off_t) }, 0);
+            (libc::MAP_SHARED, fd)
+        }
+        false => (libc::MAP_PRIVATE | libc::MAP_ANON, -1),
     };
     #[cfg(not(target_os = "linux"))]
-    let (flags, fd) = (libc::MAP_SHARED | libc::MAP_ANON, -1);
+    let (flags, fd) = match shared {
+        true => (libc::MAP_SHARED | libc::MAP_ANON, -1),
+        false => (libc::MAP_PRIVATE | libc::MAP_ANON, -1),
+    };
     // SAFETY: a fresh mapping of the file's first `length` bytes (or of anonymous memory).
     let start = unsafe {
         libc::mmap(
@@ -309,7 +342,7 @@ fn chunks_are_imported_ahead_so_no_making_waits_for_one() {
     // A RAM of the start's one chunk and a full window past it: the device's thread imports all
     // of it once the first heap took the first chunk.
     const CHUNKS: u64 = 1 + AHEAD_CHUNKS as u64;
-    let (ram, start, dropped) = fresh_ram(CHUNKS * 64 * MIB);
+    let (ram, start, dropped) = fresh_ram(&device, CHUNKS * 64 * MIB);
     let before = device.work_counts();
     let ahead_of = |counts: &crate::WorkCounts| {
         counts.host_ram_chunks_imported_ahead - before.host_ram_chunks_imported_ahead
@@ -453,7 +486,7 @@ fn the_ahead_thread_leaves_the_allocation_limit_to_the_objects() {
         .unwrap();
     allocations.limit_to(limit);
     assert_eq!(allocations.limit(), limit);
-    let (ram, start, dropped) = fresh_ram(CHUNKS * 64 * MIB);
+    let (ram, start, dropped) = fresh_ram(&device, CHUNKS * 64 * MIB);
     let before = device.work_counts();
     let used = device.use_host_ram(&ram).unwrap();
     let ahead = |counts: &crate::WorkCounts| {
@@ -588,7 +621,7 @@ fn the_window_ahead_moves_with_the_objects_and_imports_no_more() {
     // The start's chunk, two full windows, a chunk skipped, a jump's one chunk, and a full
     // window past it.
     const CHUNKS: u64 = 3 * WINDOW + 4;
-    let (ram, start, dropped) = fresh_ram(CHUNKS * 64 * MIB);
+    let (ram, start, dropped) = fresh_ram(&device, CHUNKS * 64 * MIB);
     let before = device.work_counts();
     let used = device.use_host_ram(&ram).unwrap();
     let ahead = |counts: &crate::WorkCounts| {
@@ -698,12 +731,63 @@ fn the_window_ahead_moves_with_the_objects_and_imports_no_more() {
 /// is not an import under way, so the object imports nothing of its own. The look lasts past the
 /// object's making's start; where the making reached the chunk after it ended, it binds there
 /// too.
+/// On a device that refuses pointers to shared memory (`Device::imports_shared_host_pointers`
+/// false: RADV, whose amdgpu userptr takes private anonymous pages alone), a RAM of shared memory
+/// (a `memfd` mapped shared, as QEMU's `memory-backend-memfd,share=on` RAM is) imports no chunk,
+/// ahead or for an object, and an object over it is refused as its own import of the pointer is
+/// (`Unsupported`, `HostMemory`), the RAM given no dma-buf source. The use still ends, the RAM's
+/// keep-alive going after it. A device that imports such pointers says so and passes.
+#[test]
+fn a_ram_of_shared_memory_a_device_refuses_imports_no_chunk_and_refuses_its_objects() {
+    let Some(device) = ahead_device() else {
+        return;
+    };
+    if device.imports_shared_host_pointers().unwrap() {
+        eprintln!(
+            "HOST-RAM {}: the device imports pointers to shared memory; nothing to test",
+            device.name()
+        );
+        return;
+    }
+    let (ram, start, dropped) = fresh_ram_of(2 * 64 * MIB, true);
+    let before = device.work_counts();
+    let used = device.use_host_ram(&ram).unwrap();
+    let page = device.shared().host_import.as_ref().unwrap().page;
+    let (runs, gates): (Arc<Mutex<_>>, Arc<Mutex<_>>) = Default::default();
+    let made = buffer(
+        &device,
+        start,
+        4 * page,
+        resolver(&runs, itself),
+        gate(&gates, true),
+    );
+    assert_eq!(
+        made.err(),
+        Some(Error::Unsupported(Unsupported::not_representable(
+            Feature::HostMemory
+        ))),
+        "an object over the shared RAM"
+    );
+    // The device's thread met the same refusal for the RAM's first chunk, or meets it now.
+    std::thread::sleep(Duration::from_millis(300));
+    let after = device.work_counts();
+    assert_eq!(
+        after.host_ram_chunks_imported - before.host_ram_chunks_imported,
+        0,
+        "no chunk of the shared RAM imported"
+    );
+    assert_eq!(after.host_ram_chunks_live - before.host_ram_chunks_live, 0);
+    drop(used);
+    drop(ram);
+    assert!(settles(&dropped), "the RAM's keep-alive dropped");
+}
+
 #[test]
 fn an_object_made_while_its_imported_chunk_is_looked_at_is_bound_in_the_chunk() {
     let Some(device) = ahead_device() else {
         return;
     };
-    let (ram, start, dropped) = fresh_ram(2 * 64 * MIB);
+    let (ram, start, dropped) = fresh_ram(&device, 2 * 64 * MIB);
     let before = device.work_counts();
     let used = device.use_host_ram(&ram).unwrap();
     let ahead = |counts: &crate::WorkCounts| {
@@ -756,7 +840,7 @@ fn a_run_of_heaps_down_the_ram_finds_its_chunks_imported_and_none_waits_for_one(
     const WINDOW: u64 = AHEAD_CHUNKS as u64;
     // The start's chunk, a full window below the top's, and one more.
     const CHUNKS: u64 = 2 * WINDOW + 2;
-    let (ram, start, dropped) = fresh_ram(CHUNKS * 64 * MIB);
+    let (ram, start, dropped) = fresh_ram(&device, CHUNKS * 64 * MIB);
     let before = device.work_counts();
     let used = device.use_host_ram(&ram).unwrap();
     let ahead = |counts: &crate::WorkCounts| {
@@ -890,7 +974,7 @@ fn an_object_within_the_allocation_margin_imports_its_chunk_and_no_run() {
         return;
     };
     let allocations = &device.shared().allocations.allocations;
-    let (ram, start, dropped) = fresh_ram(4 * 64 * MIB);
+    let (ram, start, dropped) = fresh_ram(&device, 4 * 64 * MIB);
     let before = device.work_counts();
     let used = device.use_host_ram(&ram).unwrap();
     let ahead = |counts: &crate::WorkCounts| {
@@ -959,7 +1043,7 @@ fn a_run_bound_and_a_chunk_bound_buffer_over_the_same_pages_order_by_their_host_
     let Some(device) = ahead_device() else {
         return;
     };
-    let (ram, start, dropped) = fresh_ram(4 * 64 * MIB);
+    let (ram, start, dropped) = fresh_ram(&device, 4 * 64 * MIB);
     let before = device.work_counts();
     let used = device.use_host_ram(&ram).unwrap();
     let ahead = |counts: &crate::WorkCounts| {
@@ -1098,7 +1182,7 @@ fn a_run_bound_buffer_and_a_copy_of_its_pages_order_by_their_host_bytes() {
     let Some(device) = ahead_device() else {
         return;
     };
-    let (ram, start, dropped) = fresh_ram(4 * 64 * MIB);
+    let (ram, start, dropped) = fresh_ram(&device, 4 * 64 * MIB);
     let before = device.work_counts();
     let used = device.use_host_ram(&ram).unwrap();
     let ahead = |counts: &crate::WorkCounts| {
