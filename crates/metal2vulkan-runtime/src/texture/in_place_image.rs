@@ -744,6 +744,37 @@ impl Device {
         Ok(swaps)
     }
 
+    /// Whether a rebind's copy of a buffer's bytes (`copied.rs`) may lie in fresh pages the
+    /// runtime imports (`Device::fresh_page_buffer`) for the images in place that `watches` note:
+    /// where the device's check passed for fresh pages and each live image's accesses
+    /// ([`fresh_pages_take`](Self::fresh_pages_take)), as each is then made over them for host
+    /// allocations. Where it did not, the copy lies in memory the device allocates, and each image
+    /// is a linear image of its own over it ([`in_place_over_copy`](Self::in_place_over_copy)).
+    /// On RADV the check leaves fresh pages unchecked: no new buffer lies in them where each held
+    /// pointer import costs every submission (`fresh_pages.rs`), so the check finds none to try.
+    pub(crate) fn fresh_pages_take_images(&self, watches: &[InPlaceWatch]) -> bool {
+        (watches.iter().filter_map(watched)).all(|image| self.fresh_pages_take(&image))
+    }
+
+    /// Whether the device's check passed for fresh pages and each of `image`'s accesses: an
+    /// image of attachment usage renders, one of storage usage is written, one of neither reads.
+    fn fresh_pages_take(&self, image: &Image) -> bool {
+        use metal2vulkan::vk::ImageUsageFlags;
+        let usage = image.plan().usage;
+        let renders = usage.contains(ImageUsageFlags::COLOR_ATTACHMENT);
+        let writes = usage.contains(ImageUsageFlags::STORAGE);
+        let accesses = [
+            (Access::Reads, !renders && !writes),
+            (Access::Renders, renders),
+            (Access::Writes, writes),
+        ];
+        accesses.into_iter().all(|(access, takes)| {
+            !takes
+                || self.in_place_verdict(PagesClass::Fresh, access)
+                    == crate::in_place::Verdict::Passed
+        })
+    }
+
     /// The image in place of `image`'s plan over a rebind's copy of the caller's pages
     /// (`copied.rs`: the caller's gate refused their import, it failed, or the bytes moved in
     /// their page), its texels where `watch` notes them, swapped in once the rebind is made. Over
@@ -773,21 +804,7 @@ impl Device {
         // device allocates, a linear image of its own.
         let made = match pages.over_own_pages() {
             true => {
-                use metal2vulkan::vk::ImageUsageFlags;
-                let usage = image.plan().usage;
-                let renders = usage.contains(ImageUsageFlags::COLOR_ATTACHMENT);
-                let writes = usage.contains(ImageUsageFlags::STORAGE);
-                let accesses = [
-                    (Access::Reads, !renders && !writes),
-                    (Access::Renders, renders),
-                    (Access::Writes, writes),
-                ];
-                let passed = accesses.into_iter().all(|(access, takes)| {
-                    !takes
-                        || self.in_place_verdict(PagesClass::Fresh, access)
-                            == crate::in_place::Verdict::Passed
-                });
-                if !passed {
+                if !self.fresh_pages_take(&image) {
                     return Err(refused());
                 }
                 let facts = self

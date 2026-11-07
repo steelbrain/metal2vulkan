@@ -944,7 +944,7 @@ impl Device {
                 // `Device::rebound_in_place_images`): its memory holds whole pages from a multiple
                 // of the import's unit.
                 let images = (heap.is_some() || !in_place.is_empty()).then_some(unit);
-                let own_pages = !in_place.is_empty();
+                let own_pages = !in_place.is_empty() && self.fresh_pages_take_images(&in_place);
                 let copy = |failed: Option<Error>| {
                     let window = &copy_window;
                     // SAFETY: the caller's contract.
@@ -1405,20 +1405,21 @@ impl Device {
         match source {}
     }
 
-    /// A copy of the `length` bytes at `pointer` for a rebind's new pages (`copied.rs`), laid
-    /// out as their import of `window` would be: a `VkBuffer` from the window's first page, the
-    /// bytes `window.offset` into it, in host-visible memory of the device's own, so the texel
-    /// views planned at the bytes' offset lie where they lay. Its memory's host address is the
-    /// window's, so the buffer's `contents` stays the pointer. Where images will be bound in it
-    /// (`images`, the import's unit: a heap's textures bound to its bytes, images in place over the
-    /// buffer's), its memory holds the window's whole pages from a multiple of that unit, as the
-    /// import's did, so each image's texels lie at the offset from an aligned start they had there.
-    /// Where images in place ride on it (`own_pages`), the copy is fresh pages the runtime maps and
-    /// imports by their pointer where the device takes them ([`Device::fresh_page_buffer`]), so
-    /// each image is made for host allocations, as over the caller's pages, under the device's
-    /// check for fresh pages (`in_place.rs`); else memory the device allocates. The GPU's writes
-    /// to the copy are dropped where `read_only` (Metal's private option bit 24). Refused as
-    /// [`Device::copied_buffer`] refuses its copy.
+    /// A copy of the `length` bytes at `pointer` for a rebind's new pages (`copied.rs`), laid out
+    /// as their import of `window` would be: a `VkBuffer` from the window's first page, the bytes
+    /// `window.offset` into it, in host-visible memory of the device's own, so the texel views
+    /// planned at the bytes' offset lie where they lay. Its memory's host address is the window's,
+    /// so the buffer's `contents` stays the pointer. Where images will be bound in it (`images`,
+    /// the import's unit: a heap's textures bound to its bytes, images in place over the buffer's),
+    /// its memory holds the window's whole pages from a multiple of that unit, as the import's did,
+    /// so each image's texels lie at the offset from an aligned start they had there. Where images
+    /// in place ride on it and the device's check passed for fresh pages and their accesses
+    /// (`own_pages`, `Device::fresh_pages_take_images`), the copy is fresh pages the runtime maps
+    /// and imports by their pointer where the device takes them ([`Device::fresh_page_buffer`]), so
+    /// each image is made for host allocations, as over the caller's pages; else memory the device
+    /// allocates, each image a linear image of its own. The GPU's writes to the copy are dropped
+    /// where `read_only` (Metal's private option bit 24). Refused as [`Device::copied_buffer`]
+    /// refuses its copy.
     ///
     /// # Safety
     ///

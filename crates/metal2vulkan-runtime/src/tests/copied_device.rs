@@ -1041,6 +1041,70 @@ fn copied_rebind_makes_a_texture_s_image_in_place_again_over_the_copy() {
     drop((texture, buffer));
 }
 
+/// A rebind's copy under an image in place lies in fresh pages only where the device's check
+/// passed for them: with the check's verdicts for fresh pages set unchecked (as on RADV, whose new
+/// buffers take no fresh pages, so its check finds none to try), the copy lies in memory the
+/// device allocates, and the image in place is a linear image of the driver's own over it. Where
+/// that image does not lie at the texels' pitch, the rebind is refused, as the image cannot be made
+/// over the copy.
+#[test]
+fn a_copied_rebind_where_fresh_pages_are_unchecked_takes_memory_the_device_allocates() {
+    use crate::in_place::{Access, PagesClass, Verdict};
+    let (first, second) = (Host::new(26), Host::new(27));
+    let Some((device, _heard)) = device() else {
+        return;
+    };
+    device.settle_in_place_checks(Duration::from_secs(120));
+    let buffer = first.buffer(&device, None);
+    let (texture, in_place) = texture_over(&device, &buffer);
+    if !in_place {
+        eprintln!("COPIED-REBIND-UNCHECKED: the texture is a shadow here; nothing to test");
+        return;
+    }
+    for access in Access::ALL {
+        (device.shared().in_place).set(PagesClass::Fresh, access, Verdict::Unchecked);
+    }
+    let asked: Arc<Mutex<Vec<ImportRequest>>> = Arc::default();
+    let before = device.work_counts();
+    let rebound = rebind(&buffer, &second, Some(gate(&asked, false)));
+    let after = device.work_counts();
+    assert_eq!(
+        after.fresh_page_buffers_made - before.fresh_page_buffers_made,
+        0,
+        "the copy lies in memory the device allocates, not in fresh pages"
+    );
+    let images = after.copied_rebind_images_made - before.copied_rebind_images_made;
+    match rebound {
+        Ok(()) => {
+            assert_eq!(images, 1, "the image in place made over the copy");
+            texture_follows_the_copy(
+                &device,
+                &buffer,
+                &texture,
+                second.pointer,
+                &second.pattern(),
+            );
+        }
+        Err(crate::Error::NotImplemented(crate::RuntimeGap::RebindTextures)) => {
+            assert_eq!(images, 0);
+            assert_eq!(
+                texels(&device, &texture),
+                rows(&first.pattern()),
+                "the old texels"
+            );
+        }
+        Err(error) => panic!("the rebind: {error:?}"),
+    }
+    eprintln!(
+        "COPIED-REBIND-UNCHECKED: a gate-refused rebind with fresh pages unchecked: {}",
+        match images {
+            1 => "the image in place over a copy in memory the device allocates",
+            _ => "refused: the driver's own linear image lies at another pitch",
+        }
+    );
+    drop((texture, buffer));
+}
+
 /// Host memory of `LENGTH` bytes `at` bytes into a page, in `seed`'s pattern, freed when dropped.
 struct OffPage {
     allocation: NonNull<u8>,
