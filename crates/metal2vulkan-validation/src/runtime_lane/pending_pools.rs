@@ -88,7 +88,7 @@ impl Drawing {
 }
 
 /// A private render target of the surface's shape.
-fn target(device: &Device) -> Texture {
+fn private_target(device: &Device) -> Texture {
     let mut d = TextureDescriptor::texture_2d(PixelFormat::BGRA8Unorm, WIDTH, HEIGHT, false);
     d.usage = TextureUsage::RENDER_TARGET;
     d.resource_options = ResourceOptions::private();
@@ -96,7 +96,7 @@ fn target(device: &Device) -> Texture {
 }
 
 /// A private depth texture of the surface's shape.
-fn depth(device: &Device) -> Texture {
+fn private_depth(device: &Device) -> Texture {
     let mut d = TextureDescriptor::texture_2d(PixelFormat::Depth32Float, WIDTH, HEIGHT, false);
     d.usage = TextureUsage::RENDER_TARGET;
     d.resource_options = ResourceOptions::private();
@@ -153,8 +153,8 @@ fn command_buffers_let_go_of_while_pending_keep_their_pools_until_they_ran() {
             color: staged(&device, &floats([0.25, 0.5, 0.75, 0.5])),
         };
         let (buffer, texture) = surface(&device, &mapping, len);
-        let (inline_target, depth) = (target(&device), depth(&device));
-        let (aside_target, aside_depth) = (target(&device), depth(&device));
+        let (inline_target, depth) = (private_target(&device), private_depth(&device));
+        let (aside_target, aside_depth) = (private_target(&device), private_depth(&device));
         let framed: SharedEvent = device.new_shared_event().unwrap();
         let host: SharedEvent = device.new_shared_event().unwrap();
         let before = device.work_counts();
