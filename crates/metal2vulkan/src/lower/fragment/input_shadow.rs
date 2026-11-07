@@ -6,32 +6,32 @@
 //! or a fetch onto what an earlier draw of the pass wrote sees that draw's `half` (`fetch`'s module
 //! docs, "The `half` shadow"). Where the draw's render pass instance holds the attachment's shadow
 //! (`LoweringInputs::extended_shadows`) on such a device, the attachment stays the subpass's: its
-//! codes are read through its input attachment and written through the output variable, ordered
-//! by rasterization-order attachment access, as without the shadow (`input_blend`, `color`). The
+//! codes are read through its input attachment and written through the output variable, ordered by
+//! rasterization-order attachment access, as without the shadow (`input_blend`, `color`). The
 //! shadow is a second storage image of the attachment's extent in `Rgba16f`
-//! (`ResourceKind::ExtendedShadow`, `fetch::declare_shadow`), one sample, or a multisampled image of
-//! the pipeline's samples read and written at the invocation's `SampleId`. The function's body runs
-//! inside the ordered pixel interlock (`fragment::wrap_entry`), which orders each fragment's read and
-//! write of the shadow after every earlier fragment's of the pixel in primitive order, across the
-//! draws of the instance, as the storage form's are. A `[[color(n)]]` read and a blend's destination
-//! are the shadow's texel as Metal reads the tile (`extended_range::tile_read`), and every write
-//! stores the value it computes there, unclamped, the blend's result or the unblended output's
-//! `half` (the channels a write mask keeps as the shadow held them), beside the codes' encode,
-//! unless the invocation was discarded. Every value the shadow holds is a `half`, so the device's
-//! conversions both ways are exact, and the codes always hold the encode of the last `half` written
-//! to each written channel.
+//! (`ResourceKind::ExtendedShadow`, `fetch::declare_shadow`), one sample, or a multisampled image
+//! of the pipeline's samples read and written at the invocation's `SampleId`. The function's body
+//! runs inside the ordered pixel interlock (`fragment::wrap_entry`), which orders each fragment's
+//! read and write of the shadow after every earlier fragment's of the pixel in primitive order,
+//! across the draws of the instance, as the storage form's are. A `[[color(n)]]` read and a blend's
+//! destination are the shadow's texel as Metal reads the tile (`extended_range::tile_read`), and
+//! every write stores the value it computes there, unclamped, the blend's result or the unblended
+//! output's `half` (the channels a write mask keeps as the shadow held them), beside the codes'
+//! encode, unless the invocation was discarded. Every value the shadow holds is a `half`, so the
+//! device's conversions both ways are exact, and the codes always hold the encode of the last
+//! `half` written to each written channel.
 //!
 //! The device's depth and stencil tests run after the function, so a store of the shadow before
 //! them would keep a fragment they drop and its codes do not: beside a depth or stencil attachment
-//! the module declares early fragment tests, which drop the fragment before its codes and its shadow
-//! alike, where that keeps Metal's answers (Metal's function declares them, or it discards nothing,
-//! writes no other memory and returns no depth or stencil, on a driver that keeps an early-tests
-//! function's image writes at the pipeline's samples). Every other shadowed function is refused
-//! (`NotImplemented(FramebufferFetch)`), and so is one that returns a sample mask, one in a pipeline
-//! with alpha to coverage (both drop samples of the codes after the function), one that loops over
-//! its covered samples, and in a multisampled pipeline one that does not read the attachment (Metal
-//! runs it once per pixel, where the shadow holds each sample): the runtime keeps such a draw's
-//! colors on the codes (`render/extended_shadow.rs`), which it announces.
+//! the module declares early fragment tests, which drop the fragment before its codes and its
+//! shadow alike, where that keeps Metal's answers (Metal's function declares them, or it discards
+//! nothing, writes no other memory and returns no depth or stencil, on a driver that keeps an
+//! early-tests function's image writes at the pipeline's samples). Every other shadowed function is
+//! refused (`NotImplemented(FramebufferFetch)`), and so is one that returns a sample mask, one in a
+//! pipeline with alpha to coverage (both drop samples of the codes after the function), one that
+//! loops over its covered samples, and in a multisampled pipeline one that does not read the
+//! attachment (Metal runs it once per pixel, where the shadow holds each sample): the runtime keeps
+//! such a draw's colors on the codes (`render/extended_shadow.rs`), which it announces.
 
 use std::collections::BTreeMap;
 

@@ -1655,11 +1655,12 @@ degradations! {
         /// Apple M4; the M3 Max's run of the same probes), where the runtime stores the codes at
         /// each draw, so a later blend or read sees the stored codes. Not a color whose `half`
         /// shadow the runtime holds (`render/extended_shadow.rs`): in a pass of one layer on a
-        /// device that orders framebuffer fetch through the pixel interlock alone, at one sample
-        /// or more, from the pass's clear or (at one sample) its load, a draw's blend or read
-        /// sees the `half` Metal's tile holds. Over input attachments (lavapipe), in a
-        /// multisampled pass that loads the color, and once a draw ends the shadow, the codes
-        /// stay. Over input attachments it also names a draw that writes some of an
+        /// device that orders framebuffer fetch through the pixel interlock alone, or through
+        /// input attachments (lavapipe) with the pixel interlock, fragment stores and `Rgba16f`
+        /// storage images (multisampled ones at more than one sample), from the pass's clear or
+        /// (at one sample) its load, a draw's blend or read sees the `half` Metal's tile holds.
+        /// In a multisampled pass that loads the color, and once a draw ends the shadow, the
+        /// codes stay. Over input attachments it also names a draw that writes some of an
         /// extended-range word's codes under a mask (`BGR10_XR`'s, a two-plane format's color
         /// word), whose function reads the word only to keep the other codes, exactly: the
         /// pipeline's state does not tell that read from the function's own fetch.

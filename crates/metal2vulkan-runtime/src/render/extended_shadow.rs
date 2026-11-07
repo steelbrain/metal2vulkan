@@ -22,35 +22,34 @@
 //!   rasterization order, and the draw reads and writes the shadow beside it inside the pixel
 //!   interlock (`lower::fragment`'s `input_shadow`), behind the same barrier; there a multisampled
 //!   pass holds the samples in a multisampled image.
-//! - **The start.** The pass's instances keep their draws for recording again
-//!   (`render/reroute.rs`) on every device while the pass has such a color, of one layer, without
-//!   a rasterization-rate map, fetching in the pixel interlock, or through input attachments on a
-//!   device whose functions read and write the shadow beside them (the pixel interlock, fragment
-//!   stores, the shadow's format as a storage image and, at more than one sample, multisampled
-//!   storage images: `framebuffer_fetch::holds_extended_shadows`); a multisampled pass's draws do not
-//!   record again, so there a color starts at the first draw that reads it (blends into it,
-//!   fetches it), not only at one that reads what an earlier draw wrote. At the draw
-//!   (the gate above), a color that no instance before the current one wrote (no draw, tile
-//!   dispatch or execution of render commands) starts: where the current instance's draws wrote
-//!   it, they record again first into an instance that leaves the color out of its subpass (in a
-//!   pass that fetches through input attachments, one of the same shape), in its place, holding
-//!   the shadow (`record_leaving_out`); else the draw's own instance holds it.
-//!   The instance that first holds it sets it before it, between barriers: to the clear color's
-//!   halves where the pass clears the color (`ExtendedRange::clear_tile_value`, every sample),
-//!   else, in a single-sampled pass, by the shadow load of the codes
-//!   (`bind::extended_shadow_module`), which writes each texel's tile value, the fetch's own
-//!   decode, reading the codes as a storage image (in a pass that fetches through input
-//!   attachments, where the texture's image has that usage). A color an earlier instance wrote, or whose instance's draws cannot record again,
-//!   keeps the codes (the announcement), as does one whose start fails (its draws' shadowed
-//!   variants refused, a load the device cannot build, a multisampled pass that does not clear
-//!   it), for the rest of the pass.
-//! - **The end.** A draw whose shadowed variant is refused (a mesh pipeline's, an amplified
-//!   draw's, and over input attachments one whose shadow stores the tests or the coverage could
-//!   leave apart from its codes: `lower::fragment`'s `input_shadow`) gives up the shadows of the colors it writes or reads, and an execution of render
-//!   commands or a tile dispatch, whose commands write the codes alone, gives up every shadow:
-//!   the codes hold the encode of the last `half` written, and the draws after it see them, as
-//!   before the shadow. None starts again in the pass. Not while the encoder records an
-//!   execution's commands, which bind no shadow.
+//! - **The start.** The pass's instances keep their draws for recording again (`render/reroute.rs`)
+//!   on every device while the pass has such a color, of one layer, without a rasterization-rate
+//!   map, fetching in the pixel interlock, or through input attachments on a device whose functions
+//!   read and write the shadow beside them (the pixel interlock, fragment stores, the shadow's
+//!   format as a storage image and, at more than one sample, multisampled storage images:
+//!   `framebuffer_fetch::holds_extended_shadows`); a multisampled pass's draws do not record again,
+//!   so there a color starts at the first draw that reads it (blends into it, fetches it), not only
+//!   at one that reads what an earlier draw wrote. At the draw (the gate above), a color that no
+//!   instance before the current one wrote (no draw, tile dispatch or execution of render commands)
+//!   starts: where the current instance's draws wrote it, they record again first into an instance
+//!   that leaves the color out of its subpass (in a pass that fetches through input attachments,
+//!   one of the same shape), in its place, holding the shadow (`record_leaving_out`); else the
+//!   draw's own instance holds it. The instance that first holds it sets it before it, between
+//!   barriers: to the clear color's halves where the pass clears the color
+//!   (`ExtendedRange::clear_tile_value`, every sample), else, in a single-sampled pass, by the
+//!   shadow load of the codes (`bind::extended_shadow_module`), which writes each texel's tile
+//!   value, the fetch's own decode, reading the codes as a storage image (in a pass that fetches
+//!   through input attachments, where the texture's image has that usage). A color an earlier
+//!   instance wrote, or whose instance's draws cannot record again, keeps the codes (the
+//!   announcement), as does one whose start fails (its draws' shadowed variants refused, a load the
+//!   device cannot build, a multisampled pass that does not clear it), for the rest of the pass.
+//! - **The end.** A draw whose shadowed variant is refused (a mesh pipeline's, an amplified draw's,
+//!   and over input attachments one whose shadow stores the tests or the coverage could leave apart
+//!   from its codes: `lower::fragment`'s `input_shadow`) gives up the shadows of the colors it
+//!   writes or reads, and an execution of render commands or a tile dispatch, whose commands write
+//!   the codes alone, gives up every shadow: the codes hold the encode of the last `half` written,
+//!   and the draws after it see them, as before the shadow. None starts again in the pass. Not
+//!   while the encoder records an execution's commands, which bind no shadow.
 //! - **The announcement**. A draw that held a color's shadow read what Metal's tile memory holds,
 //!   so `extended-range-blends-stored-codes` names only the colors a draw read from the codes
 //!   (`degrade_extended_range_blends`, `ExtendedShadows::held`).
@@ -412,18 +411,18 @@ pub(super) fn reads_color(graphics: &GraphicsState, index: u32) -> bool {
 
 /// The colors whose shadows a state's creation predicts its first draw holds
 /// (`pipeline/predicted.rs`), for a pipeline of `graphics` whose color attachments are `colors`
-/// (each index's pixel format) at `samples`, in a pass that `holds` shadows: in a multisampled pass, each color of a measured extended-range form the draw
-/// reads ([`reads_color`]), as such a pass starts that color's shadow at the first draw that reads
-/// it where it clears the color ([`RenderLowering::start_extended_shadows`]), and a multisampled
-/// color's only contents at the pass's start that are not undefined are its clear's or its
-/// load's, a load being what a pass of memoryless samples cannot take. None in a single-sampled
-/// pass, which starts the shadow only where an earlier draw of the pass wrote the color or its
-/// clear's codes cannot hold the clear, which no creation sees: of the suite's single-sampled
-/// draws that blend into such a color, the `xr-blend-planes-*` ones blend once over a loaded
-/// target and hold no shadow. None where the pass would hold no shadow (not `holds`,
-/// [`ExtendedShadows::of`]: a device whose pass fetches through input attachments and whose
-/// functions cannot read and write the shadow beside them); the creation predicts the pass of one
-/// layer without a rasterization-rate map, Metal's defaults.
+/// (each index's pixel format) at `samples`, in a pass that `holds` shadows: in a multisampled
+/// pass, each color of a measured extended-range form the draw reads ([`reads_color`]), as such a
+/// pass starts that color's shadow at the first draw that reads it where it clears the color
+/// ([`RenderLowering::start_extended_shadows`]), and a multisampled color's only contents at the
+/// pass's start that are not undefined are its clear's or its load's, a load being what a pass of
+/// memoryless samples cannot take. None in a single-sampled pass, which starts the shadow only
+/// where an earlier draw of the pass wrote the color or its clear's codes cannot hold the clear,
+/// which no creation sees: of the suite's single-sampled draws that blend into such a color, the
+/// `xr-blend-planes-*` ones blend once over a loaded target and hold no shadow. None where the pass
+/// would hold no shadow (not `holds`, [`ExtendedShadows::of`]: a device whose pass fetches through
+/// input attachments and whose functions cannot read and write the shadow beside them); the
+/// creation predicts the pass of one layer without a rasterization-rate map, Metal's defaults.
 pub(crate) fn predicted_shadows(
     graphics: &GraphicsState,
     colors: &[Option<PixelFormat>],
