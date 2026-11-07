@@ -2247,37 +2247,115 @@ pub(super) fn attachment_uses_but(
 /// attachment other than as an attachment, inside its render pass instance, which Vulkan leaves
 /// undefined (`texture/attached_reads.rs`). A use that reads a copy or a snapshot names another
 /// resource. An attachment's memory is the key and range [`attachment_uses`] gives both its read
-/// and its write, taken here one attachment at a time, nothing collected: every draw asks while
-/// the notice is pending (`Device::degrade_attachment_reads`).
+/// and its write, taken here one attachment at a time, nothing collected: a draw against a layout
+/// of no version (a stand-in's) asks so, and a render encoder's draws ask its [`AttachedMemo`].
 pub(super) fn shares_attachment(
     layout: &PassLayout,
     uses: &[Use<ResourceKey>],
 ) -> Result<bool, Error> {
-    let used = || {
-        uses.iter()
-            .filter(|used| used.read != Access::NONE || used.write != Access::NONE)
-    };
-    if used().next().is_none() {
+    if !any_access(uses) {
         return Ok(false);
     }
-    let colors = layout.colors.iter().flatten();
-    let targets = colors
-        .clone()
-        .map(|color| &color.target)
-        .chain(layout.depth_stencil.as_ref().map(|ds| &ds.target))
-        .chain(colors.filter_map(|color| color.resolve.as_ref().map(|r| &r.attachment)))
-        .chain(depth_stencil_steps(layout).map(|step| &step.resolve.attachment));
-    for target in targets {
-        let levels = target.level..target.level + 1;
-        let layers = target.layer..target.layer + target.layers;
-        let a = target
-            .texture
-            .image_use(levels, layers, Access::NONE, false)?;
-        if used().any(|used| a.key == used.key && a.range.overlaps(&used.range)) {
+    for target in attachment_targets(layout) {
+        let a = target_use(target)?;
+        if meets(&a, uses) {
             return Ok(true);
         }
     }
     Ok(false)
+}
+
+/// Whether one of `uses` reads or writes.
+fn any_access(uses: &[Use<ResourceKey>]) -> bool {
+    uses.iter()
+        .any(|used| used.read != Access::NONE || used.write != Access::NONE)
+}
+
+/// Whether one of `uses` that reads or writes meets `attached`'s memory.
+fn meets(attached: &Use<ResourceKey>, uses: &[Use<ResourceKey>]) -> bool {
+    uses.iter()
+        .filter(|used| used.read != Access::NONE || used.write != Access::NONE)
+        .any(|used| attached.key == used.key && attached.range.overlaps(&used.range))
+}
+
+/// The targets of `layout`'s attachments, in the order [`shares_attachment`] takes them: its
+/// colors, its depth and stencil, its colors' resolves and its depth and stencil resolves.
+fn attachment_targets(layout: &PassLayout) -> impl Iterator<Item = &Target> {
+    let colors = layout.colors.iter().flatten();
+    colors
+        .clone()
+        .map(|color| &color.target)
+        .chain(layout.depth_stencil.as_ref().map(|ds| &ds.target))
+        .chain(colors.filter_map(|color| color.resolve.as_ref().map(|r| &r.attachment)))
+        .chain(depth_stencil_steps(layout).map(|step| &step.resolve.attachment))
+}
+
+/// The memory `target` renders, as a use of no access.
+fn target_use(target: &Target) -> Result<Use<ResourceKey>, Error> {
+    let levels = target.level..target.level + 1;
+    let layers = target.layer..target.layer + target.layers;
+    target
+        .texture
+        .image_use(levels, layers, Access::NONE, false)
+}
+
+/// [`shares_attachment`]'s answers for a render encoder's layout, its attachments' memory worked
+/// out once for each version of the layout (`versioned.rs`), whose targets change only with it, and
+/// kept: every draw asks while the notice is pending (`Device::degrade_attachment_reads`), and
+/// working each attachment's use out again (its texture's image and aspects) was about a
+/// twentieth of a draw rebound's time. Checked against the layout's answer in builds with debug
+/// assertions.
+#[derive(Default)]
+pub(super) struct AttachedMemo {
+    /// The version of the layout the uses were worked out for.
+    version: Option<u64>,
+    /// Its targets' uses, in [`attachment_targets`]' order, up to the first whose use is
+    /// refused, and that refusal.
+    uses: Vec<Use<ResourceKey>>,
+    refused: Option<Error>,
+}
+
+impl AttachedMemo {
+    /// [`shares_attachment`] of `layout`, at `version`, and `uses`: the same answer, the same
+    /// refusal where it would meet one.
+    pub(super) fn shares(
+        &mut self,
+        (layout, version): (&PassLayout, u64),
+        uses: &[Use<ResourceKey>],
+    ) -> Result<bool, Error> {
+        if !any_access(uses) {
+            return Ok(false);
+        }
+        if self.version != Some(version) {
+            self.uses.clear();
+            self.refused = None;
+            for target in attachment_targets(layout) {
+                match target_use(target) {
+                    Ok(used) => self.uses.push(used),
+                    Err(refused) => {
+                        self.refused = Some(refused);
+                        break;
+                    }
+                }
+            }
+            self.version = Some(version);
+        }
+        let answer = match self.uses.iter().any(|attached| meets(attached, uses)) {
+            true => Ok(true),
+            false => match &self.refused {
+                Some(refused) => Err(refused.clone()),
+                None => Ok(false),
+            },
+        };
+        // Checked in builds with debug assertions: the answer the layout gives.
+        #[cfg(debug_assertions)]
+        assert_eq!(
+            answer,
+            shares_attachment(layout, uses),
+            "an attachment memo answered otherwise than its layout"
+        );
+        answer
+    }
 }
 
 /// The keys of the buffers whose bytes the pass's attachments lie in (their resolve textures

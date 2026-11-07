@@ -3071,19 +3071,18 @@ fn attachment_read_notice(call: &'static str) -> (String, String) {
 
 impl Device {
     /// Announce `AttachmentReadInPlace` where `uses`, what a draw of `call` binds or reaches,
-    /// share memory with an attachment of `layout`'s render pass instance
-    /// (`render_target::shares_attachment`). The check runs only while the kind would be
-    /// announced: once it was, a device that announces it once skips it.
+    /// share memory with an attachment of its render pass instance, as `shares` answers
+    /// (`render_target::shares_attachment`, or a render encoder's `AttachedMemo` of it). The check
+    /// runs only while the kind would be announced: once it was, a device that announces it once
+    /// skips it.
     pub(super) fn degrade_attachment_reads(
         &self,
         call: &'static str,
-        layout: &PassLayout,
+        shares: impl FnOnce(&[Use<ResourceKey>]) -> Result<bool, Error>,
         uses: &[Use<ResourceKey>],
     ) -> Result<(), Error> {
         let kind = Degradation::AttachmentReadInPlace;
-        if !self.shared().announced.pending(kind)
-            || !render_target::shares_attachment(layout, uses)?
-        {
+        if !self.shared().announced.pending(kind) || !shares(uses)? {
             return Ok(());
         }
         self.degrade(kind, || attachment_read_notice(call));
@@ -3098,7 +3097,10 @@ impl Device {
     pub(super) fn degrade_resident_attachment_reads(
         &self,
         call: &'static str,
-        (layout, version): (&PassLayout, Option<u64>),
+        (mut shares, version): (
+            impl FnMut(&[Use<ResourceKey>]) -> Result<bool, Error>,
+            Option<u64>,
+        ),
         (uses, prefix): (&mut CommandUses, ResidentPrefix),
     ) -> Result<(), Error> {
         let kind = Degradation::AttachmentReadInPlace;
@@ -3106,21 +3108,21 @@ impl Device {
             return Ok(());
         }
         let past = version.map_or(0, |version| uses.apart(version));
-        let shares = render_target::shares_attachment(layout, &uses[past..])?;
+        let shared = shares(&uses[past..])?;
         #[cfg(debug_assertions)]
         assert_eq!(
-            shares,
-            render_target::shares_attachment(layout, uses)?,
+            shared,
+            shares(uses)?,
             "a draw's uses checked against the attachments by their identity less than its uses"
         );
         if past == 0 {
             let counts = self.shared().counts.thread();
             counts.resident_uses_against_attachments(prefix.len as u64);
-            if let Some(version) = version.filter(|_| !shares) {
+            if let Some(version) = version.filter(|_| !shared) {
                 uses.apart_from(version);
             }
         }
-        if shares {
+        if shared {
             self.degrade(kind, || attachment_read_notice(call));
         }
         Ok(())

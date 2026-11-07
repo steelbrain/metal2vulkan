@@ -239,11 +239,14 @@ impl RenderLowering {
         let _: &mut Option<super::Checked> = checked;
         // The attachments' reads: its last check, refused here, as it may have announced.
         let device = self.core.device();
+        let version = self.layout.version();
+        let (memo, layout) = (&mut self.attached, &*self.layout);
+        let mut shares = |uses: &[_]| memo.shares((layout, version), uses);
         let attached = match live.uses.prefix() {
-            None => device.degrade_attachment_reads(call, &self.layout, &live.uses),
+            None => device.degrade_attachment_reads(call, shares, &live.uses),
             Some(prefix) => {
-                let layout = (&*self.layout, Some(self.layout.version()));
-                device.degrade_resident_attachment_reads(call, layout, (&mut live.uses, prefix))
+                let shares = (&mut shares, Some(version));
+                device.degrade_resident_attachment_reads(call, shares, (&mut live.uses, prefix))
             }
         };
         if let Err(refused) = attached {

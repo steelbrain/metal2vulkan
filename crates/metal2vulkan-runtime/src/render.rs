@@ -1656,6 +1656,9 @@ pub(crate) struct RenderLowering {
     /// The variants, plans and specializations of its draws under which the bound values'
     /// notices were quiet (`Device::degrade_bound_values`).
     quiet_bound_values: QuietKept,
+    /// What its layout's attachments render, worked out once a version of it, which every draw
+    /// compares its uses with while their notice is pending (`render_target::AttachedMemo`).
+    attached: render_target::AttachedMemo,
     /// The views and sampler descriptions its draws' binds made or found, taken from the
     /// device's ended render encoders' and given back as it ends (`binding::BindMemo`).
     bind_memo: binding::BindMemo,
@@ -2221,6 +2224,7 @@ impl RenderLowering {
                 live,
                 log,
                 quiet_bound_values: QuietKept::default(),
+                attached: render_target::AttachedMemo::default(),
                 bind_memo,
                 shape_memo: ShapeMemo::default(),
                 last_retained: LastRetained::default(),
@@ -8986,12 +8990,19 @@ impl RenderLowering {
         // which no copy serves (`texture/attached_reads.rs`): a draw that reads through snapshots
         // reads no attachment otherwise (`snapshot_holds`).
         if snapshot.is_none() {
+            // The encoder's layout's attachments as its memo keeps them; a stand-in's, which has
+            // no version, one at a time.
+            let version = stood.is_none().then(|| self.layout.version());
+            let memo = &mut self.attached;
+            let mut shares = |uses: &[Use<ResourceKey>]| match version {
+                Some(version) => memo.shares((layout, version), uses),
+                None => render_target::shares_attachment(layout, uses),
+            };
             match uses.prefix() {
-                None => device.degrade_attachment_reads(call, layout, uses)?,
+                None => device.degrade_attachment_reads(call, shares, uses)?,
                 Some(prefix) => {
-                    let version = stood.is_none().then(|| self.layout.version());
                     let uses = (&mut *uses, prefix);
-                    device.degrade_resident_attachment_reads(call, (layout, version), uses)?;
+                    device.degrade_resident_attachment_reads(call, (&mut shares, version), uses)?;
                 }
             }
         }
