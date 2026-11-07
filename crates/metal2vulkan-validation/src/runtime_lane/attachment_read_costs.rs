@@ -54,7 +54,7 @@
 //! frame the splits, snapshots, render pass instances begun, shadow copies, texels copied in
 //! (and of them those of a surface's shadow copied in again), keeps and their texels, merges, the
 //! shadows made of render targets over host pages and the textures in place over them (once the
-//! device's in-place check answered, each line printed, `SELF-READ-CHECK`), and the images made
+//! device's in-place check answered, each line and its time printed, `SELF-READ-CHECK`), and the images made
 //! with feedback loop usage.
 //!
 //! Ignored by default: measurements, not checks. Run them by name with `--run-ignored all`.
@@ -926,6 +926,11 @@ fn self_reads_on(device: &Device, policy: HostPageTexturePolicy) {
             );
         }
     }
+    println!(
+        "SELF-READ-CHECK {}: took {:?}",
+        device.name(),
+        device.in_place_check_took()
+    );
     let bgra = PixelFormat::BGRA8Unorm;
     let draws = (
         state(device, "tob_solid", "tob_renders.ll", bgra),
