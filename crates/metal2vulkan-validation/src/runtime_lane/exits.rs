@@ -52,7 +52,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 /// The longest an exit may take, from the child's last line to the end of its last exit handler
 /// ([`exit_end`]; the runtime's notice where it ended the process at once and that handler did not
-/// run, [`AT_ONCE`]), or,
+/// run, [`AT_ONCE`]; the mark before the first device's driver's and layer's handlers where the
+/// child made one, [`after_the_later_devices`]), or,
 /// where the exit waits for a CPU device's work that ends later (macOS), from that work's end: the
 /// work runs for as long as the host's load lets it ([`CPU_WORK_TIME`]), and the exit's own part
 /// does not. Less the time the exiting thread waited for a CPU meanwhile, which is the host's
@@ -231,9 +232,16 @@ extern "C" fn drop_the_held_device() {
 /// An exit handler the case `instance_after_handler_exit` registers right after the child's first
 /// device, so that it runs after every handler registered since (the later instances' and
 /// devices', the hook's later registrations, [`drop_the_held_device`]) and before those
-/// registered as the first device was made (its driver's and layer's): print when it ran.
+/// registered as the first device was made (its driver's and layer's): print when it ran
+/// (`at_ms`), and the exiting thread's wait for a CPU until then (`queued_us`, as [`exit_end`]'s),
+/// where the exit's own part ends ([`exits_cleanly`]).
 extern "C" fn after_the_later_devices() {
-    let line = format!("{REPORT}-MARK at_ms={}\n", now_ms());
+    let queued = exit_thread_queued().unwrap_or_default();
+    let line = format!(
+        "{REPORT}-MARK at_ms={} queued_us={}\n",
+        now_ms(),
+        queued.as_micros()
+    );
     // SAFETY: a write of the line's bytes to standard output.
     unsafe { libc::write(1, line.as_ptr().cast(), line.len()) };
 }
@@ -815,7 +823,13 @@ fn stdout_line<'a>(exited: &'a Exited, start: &str) -> Option<&'a str> {
 /// within [`EXIT_LIMIT`] of the child's last line, or of the end of
 /// the CPU device's work the exit waits for where that is later (the marker's `seen_ms`), less the
 /// time the exiting thread waited for a CPU since (`queued_us`; none where the child gave no
-/// count). What each child did, in order.
+/// count). Where the child marked the end of the handlers registered since its first device
+/// ([`after_the_later_devices`]), the exit's part ends at the mark: the handlers after it are those
+/// registered as the first device was made, its driver's and the layer's, and the hook's first
+/// registration, whose run finds no device and makes no Vulkan call (`exit_guard::hook`), so their
+/// time is the driver's and the layer's (on an RTX 5080 laptop beside other GPU work, 454 to
+/// 997 ms where the rest of the exit took 2 ms), printed and not bounded. What each child did, in
+/// order.
 fn exits_cleanly(cases: &[&str]) -> Vec<Exited> {
     let mut all = Vec::new();
     for &case in cases {
@@ -872,13 +886,28 @@ fn exits_cleanly(cases: &[&str]) -> Vec<Exited> {
                 .parse()
                 .ok()
         };
+        // Where the child marked the end of the handlers registered since its first device,
+        // the exit's part ends at the mark: its first device's driver's and layer's handlers
+        // after it are printed, not counted.
+        let mark = stdout_line(&exited, &format!("{REPORT}-MARK "));
+        let mark_field = |name: &str| -> Option<u128> {
+            mark?
+                .split_whitespace()
+                .find_map(|pair| pair.strip_prefix(name)?.strip_prefix('='))?
+                .parse()
+                .ok()
+        };
         // Where the runtime ended the process at once, the exit's part ends at its notice: the
         // kernel's teardown of the process after it is printed, not counted.
         let handled_ms = end_field("at_ms").or(*at_once_ms).unwrap_or(*ended_ms);
-        let wall = Duration::from_millis(handled_ms.saturating_sub(from_ms) as u64);
-        let queued = end_field("queued_us").map_or(Duration::ZERO, |us| {
-            Duration::from_micros(u64::try_from(us).unwrap_or(u64::MAX))
-        });
+        let own_ms = mark_field("at_ms").unwrap_or(handled_ms);
+        let wall = Duration::from_millis(own_ms.saturating_sub(from_ms) as u64);
+        let queued = mark_field("queued_us")
+            .or_else(|| end_field("queued_us"))
+            .map_or(Duration::ZERO, |us| {
+                Duration::from_micros(u64::try_from(us).unwrap_or(u64::MAX))
+            });
+        let first_device = mark_field("at_ms").map(|mark| handled_ms.saturating_sub(mark));
         let took = wall.saturating_sub(queued);
         let after = Duration::from_millis(ended_ms.saturating_sub(handled_ms) as u64);
         let work = Duration::from_millis(from_ms.saturating_sub(at_ms) as u64);
@@ -898,7 +927,7 @@ fn exits_cleanly(cases: &[&str]) -> Vec<Exited> {
         let skipped = stdout.contains(&format!("{REPORT}-SKIPPED {case}"));
         println!(
             "runtime exit, {case}: {} ms ({} ms of wall time, less {} ms the exiting thread \
-             waited for a CPU; the process ended {} ms after its handlers){}{}",
+             waited for a CPU; the process ended {} ms after its handlers){}{}{}",
             took.as_millis(),
             wall.as_millis(),
             queued.as_millis(),
@@ -915,6 +944,13 @@ fn exits_cleanly(cases: &[&str]) -> Vec<Exited> {
                 " (host memory refused)"
             } else {
                 ""
+            },
+            match first_device {
+                Some(ms) => format!(
+                    "; then the first device's driver's and layer's handlers, not counted, \
+                     {ms} ms"
+                ),
+                None => String::new(),
             }
         );
         // The child exits before its message list goes, so its count is printed here.
