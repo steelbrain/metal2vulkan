@@ -44,7 +44,7 @@ Its limits, measured rather than asserted:
 | committed recordings | 1228 |
 | distinct SDK items the Metal leg reaches, of any status | 819 |
 | of those, reached only where this cannot name the family | 3 |
-| ledger rows (a case whose gap is recorded) | 2625 |
+| ledger rows (a case whose gap is recorded) | 2626 |
 | declared crossings of the option space (pairs put to Metal at once) | 26 |
 | declared crossings that are no pair of it (a boolean or numeric field, or one type in two slots) | 30 |
 
@@ -2609,7 +2609,6 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `host-page-writes-visibility-read-only` | Metal DROPS what a shader or the blit engine writes into memory whose backing is read-only, silently and with no error, and we land the write. Metal's rule is m… |
 | `host-page-writes-visibility-read-only` | Metal DROPS what a shader or the blit engine writes into memory whose backing is read-only, silently and with no error, and we land the write. Metal's rule is m… |
 | `host-page-writes-visibility-read-only` | Metal DROPS what a shader or the blit engine writes into memory whose backing is read-only, silently and with no error, and we land the write. Metal's rule is m… |
-| `norm-storage-fields-bgr10a2unorm` | Metal dispatches a kernel that writes a `BGR10A2Unorm` storage texture reached through its resource ID inside an argument buffer, and we refuse the bind state `… |
 | `pass-sequence-color-actions` | Metal's `MTLStoreActionDontCare` leaves the attachment holding the texels it held BEFORE the pass, and we leave what the pass rendered. Metal's answer is this c… |
 | `pass-sequence-color-actions` | Metal's `MTLStoreActionDontCare` leaves the attachment holding the texels it held BEFORE the pass, and we leave what the pass rendered. Metal's answer is this c… |
 | `pass-sequence-color-actions` | Metal's `MTLStoreActionDontCare` leaves the attachment holding the texels it held BEFORE the pass, and we leave what the pass rendered. Metal's answer is this c… |
@@ -3639,6 +3638,8 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `astc-12x10-srgb` | A read of an ETC2, EAC or ASTC sRGB form's texels through its decoded twin's `R8G8B8A8_SRGB` view, which holds Metal's own codes: the device decodes each 8-bit … |
 | `astc-12x12-srgb` | A read of an ASTC sRGB form's texels through its decoded twin's `R8G8B8A8_SRGB` view, which holds Metal's own codes: the device decodes each 8-bit code by its o… |
 | `astc-12x12-srgb` | A read of an ETC2, EAC or ASTC sRGB form's texels through its decoded twin's `R8G8B8A8_SRGB` view, which holds Metal's own codes: the device decodes each 8-bit … |
+| `read-write-tier-held` | A read of an 8-bit sRGB texel of a texture held in an argument buffer: the device stores no sRGB format, so the heap views the texture through its UNORM alias (… |
+| `read-write-tier-held` | A read of an 8-bit sRGB texel of a texture held in an argument buffer: the device stores no sRGB format, so the heap views the texture through its UNORM alias (… |
 | `read-write-tier-round-trip-float` | A read of the round-tripped 8-bit sRGB texels through the texture's sRGB view: the device decodes each 8-bit code by its own sRGB transfer function, where Metal… |
 | `read-write-tier-round-trip-float` | A read of the round-tripped 8-bit sRGB texels through the texture's sRGB view: the device decodes each 8-bit code by its own sRGB transfer function, where Metal… |
 | `read-write-tier-round-trip-float` | A read of the round-tripped 8-bit sRGB texels through the texture's sRGB view: the device decodes each 8-bit code by its own sRGB transfer function, where Metal… |
