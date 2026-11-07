@@ -11,7 +11,7 @@
 //!
 //! # The strides
 //!
-//! One draw of [`VERTICES`] points a stride, each writing its own segment of `out`:
+//! One draw of `VERTICES` points a stride, each writing its own segment of `out`:
 //!
 //! | stride | 64-bit displacement of vertices 1, 2, 3 | the same in 32 bits |
 //! |---|---|---|
@@ -28,7 +28,7 @@
 //!
 //! The fixture's `icb_render_stride_template` writes `(v, vid)` at `out[vid]`, and the attribute
 //! buffer holds `0x10 + e` at element `e`, so each segment's words name the elements its stride
-//! fetched. `out` is made holding [`UNWRITTEN`] and read whole.
+//! fetched. `out` is made holding `UNWRITTEN` and read whole.
 //!
 //! # Safety
 //!
