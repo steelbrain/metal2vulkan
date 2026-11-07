@@ -801,7 +801,10 @@ pub(super) enum Unplaced {
 /// consecutive) are `pixel` bytes, `row_bytes` a row (`into_texture` from the buffer): each row's
 /// offset from the buffer's byte 0, in order. Measured on an Apple M3 Max under macOS 27.0.1 (its
 /// API validation stops every offset off the pixel), for 1-, 2-, 4-, 8- and 16-byte colour, depth
-/// and stencil samples at 2 and 4 samples, both ways, 1 to 8 texels wide:
+/// and stencil samples at 2 and 4 samples, both ways, 1 to 8 texels wide, and nine of those
+/// layouts measured again at render-target usage with and without `PixelFormatView`
+/// (`metal2vulkan-conformance/probes/multisample_buffer_copies.m`, each copy in a spawned process:
+/// in a child that forked and has not exec'd, Metal's blit aborts making its program):
 ///
 /// - the first row lies at the offset rounded down to 4 bytes, or to the pixel where that is
 ///   smaller, and to 2 bytes for a 32-byte pixel;

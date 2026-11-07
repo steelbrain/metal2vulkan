@@ -2,8 +2,10 @@
 //! bytes) copy the bytes plain Metal copies: each row where Metal places it
 //! (`sample_interleave::placed_rows`), through a staging buffer where a row's offset in the
 //! buffer's `VkBuffer` is off a sample, announced as `staged-texture-copy`. Every case's rows are
-//! what the probe measured on an Apple M3 Max under macOS 27.0.1, for its format, sample count,
-//! width, offset and `bytesPerRow`, four rows tall.
+//! what plain Metal placed on an Apple M3 Max under macOS 27.0.1, for its format, sample count,
+//! width, offset and `bytesPerRow`, four rows tall, measured again by
+//! `metal2vulkan-conformance/probes/multisample_buffer_copies.m` at the texture's usage here
+//! (render target and shader read) and with `PixelFormatView`.
 //!
 //! Into the texture, the copy back out at the pixel's own layout gives each placed row's bytes
 //! (rows that overlap included); out of it, the buffer holds the texture's rows at the placed

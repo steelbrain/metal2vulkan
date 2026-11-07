@@ -4224,8 +4224,12 @@ each item named states the rule in full.
   out of it in no one order, the even rows' bytes standing or neither order's, varying from run to
   run (`probes/short_row_kinds.m`, three runs); the runtime's answer is the later row's there too.
   A multisampled texture's copy out at such a pitch stays refused (`Copy(BytesPerRow)`): where
-  Metal places its rows there is not measured, as that probe's every copy between a buffer and a
-  multisampled texture, at the packed row too, ended its process in Metal's blit (`SIGABRT`).
+  Metal places its rows there is not measured. That probe's every copy between a buffer and a
+  multisampled texture, at the packed row too, ended its process in Metal's blit (`SIGABRT`)
+  because each case ran in a child that forked and had not exec'd, where Metal's compiler, which
+  makes a multisampled blit's program, aborts. Spawned, the same copies return at every usage,
+  storage mode and call tried, and nine of the multisampled layouts the runtime copies lie where
+  it places them (`probes/multisample_buffer_copies.m`).
 
 **Render passes**
 

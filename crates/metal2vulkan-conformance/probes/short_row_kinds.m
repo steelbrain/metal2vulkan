@@ -45,8 +45,11 @@
 //   * Every multisampled case ended its process (`DIED 6`, `SIGABRT` in Metal's blit, as it
 //     made the blit's program) before the copy at the short pitch: the `RGBA8Unorm` and
 //     `R32Uint` ones at the copy out at the packed row, after the copy in at it returned, the
-//     `R8Unorm` one at the copy in at the packed row. Where Metal places such a texture's rows
-//     at a short pitch is not answered.
+//     `R8Unorm` one at the copy in at the packed row. That is this probe's harness, not Metal's
+//     answer to the copy: a case runs in a child that forked and has not exec'd, where Metal's
+//     compiler, which makes a multisampled blit's program, aborts; spawned, the same copies
+//     return (`multisample_buffer_copies.m`). Where Metal places such a texture's rows at a
+//     short pitch is not answered.
 //   * Every other kind returned at every pitch, both ways. `in`: every row read whole from
 //     `y x bytesPerRow` (`whole 8 of 8`), none on the aligned path, at pitches that are
 //     multiples of 16 too. `out`: each row's bytes at `y x bytesPerRow`, nothing past the rows'

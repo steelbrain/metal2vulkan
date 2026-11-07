@@ -36,6 +36,21 @@
 // Run without MTL_DEBUG_LAYER (its validation stops the layouts off the pixel):
 //
 //   ./multisample_buffer_copies
+//
+// **What it answered** (an Apple M3 Max under macOS 27.0.1, 26A434; one run):
+//
+//   * How the process started is what decides. Each `fork` case ended its process (`DIED 6`,
+//     `SIGABRT`), at the copy in or the copy out: Metal's blit made its program
+//     (`findOrCreateDriverProgramVariant` of a `BlitFragmentProgram` or a `BlitComputeProgram`)
+//     through its compiler (`-[MTLCompiler compileBuiltinRequestInternal:...]`), which aborts
+//     (`_os_crash_msg`) in a child that forked and has not exec'd. Every spawned case returned
+//     and gave its bytes back as written: both kinds, at all four usages, `Private` and `Shared`
+//     (Metal made a `Shared` multisample texture), with and without `options:`, with and without
+//     a clearing pass, `plain` too. Usage, storage mode and the call change nothing here.
+//   * `place`: every layout's rows lay where `multisample_buffer_layouts` expects them, at both
+//     usages: into the texture `(5, 20)` at 4 20 36 52, `(28, 143)` at 28 156 284 412, `(4, 64)`
+//     at 4 68 132 196, `(7, 32)` at 6 38 70 102, `(4, 4)` at 4 4 4 4; out of it `(7, 64)` at 4 68
+//     132 196, `(22, 32)` at 22 54 86 118, `(21, 64)` at 20 84 148 212, `(0, 54)` at 0 48 96 144.
 
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
