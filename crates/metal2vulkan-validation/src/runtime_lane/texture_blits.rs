@@ -616,6 +616,8 @@ fn copies_off_metals_rules_land_where_plain_metal_puts_them() {
         let targets: Vec<Texture> = cases.iter().map(|_| rgba8()).collect();
         let out = device.new_buffer(256, ResourceOptions::shared()).unwrap();
         with_bytes(&out, |b| b.fill(0xee));
+        let overlapped = device.new_buffer(64, ResourceOptions::shared()).unwrap();
+        with_bytes(&overlapped, |b| b.fill(0xee));
         // Blit options a format does not take (`bo_*`): a combined depth/stencil texture
         // without one copies its depth, and an option naming an aspect a format lacks is
         // ignored.
@@ -650,15 +652,11 @@ fn copies_off_metals_rules_land_where_plain_metal_puts_them() {
         }
         blit.copy_from_texture_to_buffer(&targets[2], 0, 0, at, four, &out, 0, 18, 0, none)
             .unwrap();
-        // Refused: writes out of a texture whose rows overlap (they race on Metal), and a pitch
-        // of 0 on the aligned path (Metal reads garbage).
-        assert_eq!(
-            blit.copy_from_texture_to_buffer(&targets[0], 0, 0, at, four, &out, 0, 8, 0, none),
-            Err(invalid(
-                "copy_from_texture_to_buffer",
-                Problem::Copy(CopyProblem::BytesPerRow)
-            ))
-        );
+        // Out of a texture at a pitch below its row: each row at `y x bytesPerRow`, written in
+        // turn, the later row's bytes standing (one of the orders plain Metal writes them in).
+        blit.copy_from_texture_to_buffer(&targets[0], 0, 0, at, four, &overlapped, 0, 8, 0, none)
+            .unwrap();
+        // Refused: a pitch of 0 on the aligned path (Metal reads garbage).
         assert_eq!(
             blit.copy_from_buffer_to_texture(&source, 0, 0, 0, four, &targets[0], 0, 0, at, none),
             Err(invalid(
@@ -719,6 +717,14 @@ fn copies_off_metals_rules_land_where_plain_metal_puts_them() {
             written[at..at + 16].copy_from_slice(&counted(16 * row, 16));
         }
         assert_eq!(with_bytes(&out, |b| b.to_vec()), written);
+        // `targets[0]` holds the rows from 4, 20, 36 and 52; each but the last keeps its first 8
+        // bytes, the rest under the next row's.
+        let mut standing = vec![0xeeu8; 64];
+        for (row, from) in [4, 20, 36].into_iter().enumerate() {
+            standing[8 * row..8 * row + 8].copy_from_slice(&counted(from, 8));
+        }
+        standing[24..40].copy_from_slice(&counted(52, 16));
+        assert_eq!(with_bytes(&overlapped, |b| b.to_vec()), standing);
         if combined.is_ok() {
             assert_eq!(with_bytes(&depth_out, |b| b.to_vec()), depth);
         }
