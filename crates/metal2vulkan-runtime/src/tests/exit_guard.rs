@@ -1058,8 +1058,11 @@ fn a_busy_exit_past_the_bound_ends_at_once_with_its_status() {
 #[cfg(all(target_os = "linux", target_env = "gnu"))]
 #[test]
 fn the_at_once_notice_names_the_bounds() {
-    for bound in [exit_guard::BOUND, exit_guard::MAKING_BOUND] {
-        let named = format!(" {} s", bound.as_secs());
+    let named = [
+        format!("wait of {} s", exit_guard::BOUND.as_secs()),
+        format!("({} s while", exit_guard::MAKING_BOUND.as_secs()),
+    ];
+    for named in named {
         assert!(
             exit_guard::AT_ONCE_NOTICE.contains(&named),
             "{named:?} in {}",
