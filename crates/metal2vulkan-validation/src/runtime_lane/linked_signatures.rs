@@ -16,6 +16,7 @@
 
 use super::host_memory::{on_device, run};
 use super::read_buffer;
+use crate::air_library::AirLibrary;
 use metal2vulkan::error::{Error as CompileError, Feature};
 use metal2vulkan::pipeline::{ComputePipelineDescriptor, LinkedFunctions, StageSource};
 use metal2vulkan_devtools::linked_signatures::{Answer, Case, CASES, STITCHED_PAIR};
