@@ -484,7 +484,7 @@ fn the_factor_set_masks_and_blend_color_store_metals_code() {
         ColorWriteMask,
         Option<Form>,
         Option<Form>,
-    ); 4] = [
+    ); 5] = [
         // Source alpha over: the color's source product rounded first; alpha a lerp of the
         // source alpha from the destination's.
         (
@@ -500,6 +500,36 @@ fn the_factor_set_masks_and_blend_color_store_metals_code() {
                     BlendMath::Fast => fused(ar, (l.d, m, rounded(ar, l.s * l.sa))),
                     BlendMath::Rounded => {
                         rounded(ar, rounded(ar, l.s * l.sa) + rounded(ar, l.d * m))
+                    }
+                }
+            }),
+            Some(|ar, math, l| {
+                let m = rounded(ar, 1.0 - l.sa);
+                match math {
+                    BlendMath::Fast => fused(ar, (l.sa, rounded(ar, l.sa - l.da), l.da)),
+                    BlendMath::Rounded => {
+                        rounded(ar, rounded(ar, l.sa * l.sa) + rounded(ar, l.da * m))
+                    }
+                }
+            }),
+        ),
+        // The destination alpha and its one minus: the color's source product rounded first, as
+        // its one minus ranks as the source alpha's does (`argb8-targets-destination-alpha`'s
+        // `RGBA8Unorm` texels, a `float4` output under fast math: every color channel of 8,192;
+        // `half` arithmetic takes the same rank, not measured); alpha as source alpha over's.
+        (
+            eq(
+                (F::DestinationAlpha, F::OneMinusDestinationAlpha, O::Add),
+                (F::SourceAlpha, F::OneMinusSourceAlpha, O::Add),
+            ),
+            PixelFormat::BGRA8Unorm,
+            ColorWriteMask::ALL,
+            Some(|ar, math, l| {
+                let m = rounded(ar, 1.0 - l.da);
+                match math {
+                    BlendMath::Fast => fused(ar, (l.d, m, rounded(ar, l.s * l.da))),
+                    BlendMath::Rounded => {
+                        rounded(ar, rounded(ar, l.s * l.da) + rounded(ar, l.d * m))
                     }
                 }
             }),

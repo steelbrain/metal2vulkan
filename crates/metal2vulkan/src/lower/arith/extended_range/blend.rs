@@ -630,6 +630,14 @@ fn alpha_rank(f: BlendFactor) -> u8 {
 /// An 8-bit unorm attachment's factor rank, of a color factor or alpha's where `alpha`, in the
 /// arithmetic `arith`: of an added pair, the destination's product is rounded first where the
 /// source factor's rank is at least the destination factor's, else the source's.
+///
+/// In a color lane the one minus the destination alpha ranks as the one minus the source alpha
+/// does. Plain Metal on the M3 Max under macOS 27.0.1 blends `DestinationAlpha` over
+/// `OneMinusDestinationAlpha` with the source's product rounded first, into `RGBA8Unorm` from a
+/// `float4` output under fast math: `f(fma(d, f(1 - da), f(s · da)))` gives Metal's code in every
+/// color channel of the 8,192 texels of the `argb8-targets-destination-alpha` recording, and the
+/// destination's product rounded first misses 10 of them. The same rank in `half` arithmetic is
+/// not measured.
 fn unorm8_rank(f: BlendFactor, alpha: bool, arith: BlendArith) -> u8 {
     use BlendFactor as F;
     let float = arith == BlendArith::Float;
@@ -638,10 +646,13 @@ fn unorm8_rank(f: BlendFactor, alpha: bool, arith: BlendArith) -> u8 {
         | F::SourceAlpha
         | F::DestinationColor
         | F::OneMinusDestinationColor
-        | F::DestinationAlpha
-        | F::OneMinusDestinationAlpha => 0,
+        | F::DestinationAlpha => 0,
+        F::OneMinusDestinationAlpha if alpha => 0,
         F::OneMinusSourceColor | F::OneMinusSourceAlpha if alpha && !float => 0,
-        F::OneMinusSourceColor | F::OneMinusSourceAlpha | F::SourceAlphaSaturated => 1,
+        F::OneMinusSourceColor
+        | F::OneMinusSourceAlpha
+        | F::OneMinusDestinationAlpha
+        | F::SourceAlphaSaturated => 1,
         F::BlendColor | F::BlendAlpha if float => 1,
         F::BlendColor | F::BlendAlpha => 2,
         F::OneMinusBlendColor | F::OneMinusBlendAlpha => 3,
