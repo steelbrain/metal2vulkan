@@ -29,7 +29,7 @@
 //!   go of.
 
 use super::error::{invalid, vulkan, Error, Problem, RuntimeGap};
-use super::event::EventShared;
+use super::event::EventRef;
 use super::{Device, SharedEvent};
 use ash::vk;
 use std::os::fd::{FromRawFd, OwnedFd};
@@ -98,7 +98,7 @@ impl Device {
         if self.shared().opaque_fd_semaphores.is_none() {
             return Err(Error::NotImplemented(RuntimeGap::ExportableSemaphore));
         }
-        Ok(SharedEvent(EventShared::new(self, true, Some(HANDLE))?))
+        self.new_exported_shared_event(HANDLE)
     }
 }
 
@@ -119,16 +119,18 @@ impl SharedEvent {
     /// `Problem::NotExportable`), `DeviceLost`, and the driver's failure.
     pub fn export_semaphore_fd(&self) -> Result<OwnedFd, Error> {
         const CALL: &str = "export_semaphore_fd";
-        let device = self.0.device();
+        let event = EventRef::from(self);
+        let event = event.shared();
+        let device = event.device();
         if device.is_lost() {
             return Err(Error::DeviceLost);
         }
         let export = device.shared().opaque_fd_semaphores.as_ref();
-        let Some(export) = export.filter(|_| self.0.exportable()) else {
+        let Some(export) = export.filter(|_| event.exportable()) else {
             return Err(invalid(CALL, Problem::NotExportable));
         };
         let info = vk::SemaphoreGetFdInfoKHR::default()
-            .semaphore(self.0.semaphore())
+            .semaphore(event.semaphore())
             .handle_type(HANDLE);
         // SAFETY: the semaphore is the event's, live while the event is, made exportable as the
         // handle type (`EventShared::new`); the functions are the device's.

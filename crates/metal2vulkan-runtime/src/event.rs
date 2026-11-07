@@ -80,7 +80,7 @@ pub struct Event(Arc<EventShared>);
 /// A Metal shared event (`MTLSharedEvent`): an event the host can also signal, read, wait for and
 /// listen to. Cheap to clone (a retain); `Send + Sync`.
 #[derive(Clone)]
-pub struct SharedEvent(pub(super) Arc<EventShared>);
+pub struct SharedEvent(Arc<EventShared>);
 
 /// An in-process handle of a shared event (`MTLSharedEventHandle`): opened with
 /// [`Device::new_shared_event_with_handle`], it gives the same event.
@@ -177,7 +177,7 @@ impl Drop for EventShared {
 impl EventShared {
     /// `settable` for a shared event (`MTLSharedEvent`), whose value the host may set; its
     /// semaphore made exportable as `export` names where given (`exported_semaphore.rs`).
-    pub(super) fn new(
+    fn new(
         device: &Device,
         settable: bool,
         export: Option<vk::ExternalSemaphoreHandleTypeFlags>,
@@ -602,6 +602,15 @@ impl Device {
     /// `newSharedEvent`.
     pub fn new_shared_event(&self) -> Result<SharedEvent, Error> {
         Ok(SharedEvent(EventShared::new(self, true, None)?))
+    }
+
+    /// [`Device::new_shared_event`], its semaphore made exportable as `export`
+    /// (`exported_semaphore.rs`), a handle type the device exports a timeline semaphore as.
+    pub(super) fn new_exported_shared_event(
+        &self,
+        export: vk::ExternalSemaphoreHandleTypeFlags,
+    ) -> Result<SharedEvent, Error> {
+        Ok(SharedEvent(EventShared::new(self, true, Some(export))?))
     }
 
     /// `newSharedEventWithHandle:`: the event of `handle`, made by this device. Two calls of

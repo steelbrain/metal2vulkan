@@ -9687,7 +9687,7 @@ struct	metal2vulkan-runtime::ShaderCacheError	#[derive(Clone, Debug, PartialEq, 
 struct	metal2vulkan-runtime::ShaderCacheOptions	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct ShaderCacheOptions
 struct	metal2vulkan-runtime::ShaderCacheStatistics	#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)] #[non_exhaustive] pub struct ShaderCacheStatistics
 struct	metal2vulkan-runtime::ShadowKeeps	#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)] pub struct ShadowKeeps
-struct	metal2vulkan-runtime::SharedEvent	#[derive(Clone)] pub struct SharedEvent(pub(super) Arc<EventShared>)
+struct	metal2vulkan-runtime::SharedEvent	#[derive(Clone)] pub struct SharedEvent(Arc<EventShared>)
 struct	metal2vulkan-runtime::SharedEventHandle	#[derive(Clone)] pub struct SharedEventHandle(Arc<EventShared>)
 struct	metal2vulkan-runtime::SharedEventListener	#[derive(Clone)] pub struct SharedEventListener(Arc<ListenerHandle>)
 struct	metal2vulkan-runtime::SharedTextureHandle	#[derive(Clone)] pub struct SharedTextureHandle(Texture)
