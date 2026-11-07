@@ -118,9 +118,14 @@ before it returns, where Metal compiles. The prediction comes from the descripto
 alone: the pass of its attachments, its input primitive class, each vertex-descriptor layout's
 buffer bound at an aligned offset (a layout of `MTLBufferLayoutStrideDynamic` at the stride that
 packs its attributes), Metal's default sampler at each runtime sampler slot, no texture, and
-Metal's default encoder state. A draw whose key differs makes its own `VkPipeline` at that draw.
-Tessellated and mesh states, separate depth and stencil formats and fragment functions that write
-depth make nothing at creation.
+Metal's default encoder state. A pipeline's key holds no pass's resolves, which render pass
+compatibility ignores, so a draw in a pass that resolves takes the predicted one. A point-class
+state's prediction takes the variant its draws of points take under Metal's guard band, and a
+multisampled state that blends into or reads an extended-range color (`BGRA10_XR` and its kin) the
+variant that holds the color's `half` shadow, as its draws in a pass that clears the color do. A
+draw whose key differs makes its own `VkPipeline` at that draw. Tessellated and mesh states,
+separate depth and stencil formats and fragment functions that write depth make nothing at
+creation.
 
 Where the device links its render pipelines from graphics pipeline libraries
 (`VK_EXT_graphics_pipeline_library` with fast linking; MoltenVK makes them whole),

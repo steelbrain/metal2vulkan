@@ -401,7 +401,7 @@ mod draw_again;
 mod draw_room;
 mod draw_shape;
 mod executions;
-mod extended_shadow;
+pub(crate) mod extended_shadow;
 mod heap_part;
 mod inline_first;
 mod inline_splits;

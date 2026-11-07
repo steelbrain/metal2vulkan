@@ -391,6 +391,41 @@ pub(super) fn reads_color(graphics: &GraphicsState, index: u32) -> bool {
         || color(graphics, index).is_some_and(|a| a.blend.is_some())
 }
 
+/// The colors whose shadows a state's creation predicts its first draw holds
+/// (`pipeline/predicted.rs`), for a pipeline of `graphics` whose color attachments are `colors`
+/// (each index's pixel format) at `samples`, in a pass fetching through input attachments where
+/// `fetch_inputs`: in a multisampled pass, each color of a measured extended-range form the draw
+/// reads ([`reads_color`]), as such a pass starts that color's shadow at the first draw that reads
+/// it where it clears the color ([`RenderLowering::start_extended_shadows`]), and a multisampled
+/// color's only contents at the pass's start that are not undefined are its clear's or its
+/// load's, a load being what a pass of memoryless samples cannot take. None in a single-sampled
+/// pass, which starts the shadow only where an earlier draw of the pass wrote the color or its
+/// clear's codes cannot hold the clear, which no creation sees: of the suite's single-sampled
+/// draws that blend into such a color, the `xr-blend-planes-*` ones blend once over a loaded
+/// target and hold no shadow. None where the pass would hold no shadow ([`ExtendedShadows::of`]):
+/// a device whose pass fetches through input attachments; the creation predicts the pass of one
+/// layer without a rasterization-rate map, Metal's defaults.
+pub(crate) fn predicted_shadows(
+    graphics: &GraphicsState,
+    colors: &[Option<PixelFormat>],
+    samples: u32,
+    fetch_inputs: bool,
+) -> BTreeSet<u32> {
+    if samples <= 1 || fetch_inputs {
+        return BTreeSet::new();
+    }
+    (0u32..)
+        .zip(colors)
+        .filter(|(index, format)| {
+            format
+                .and_then(ExtendedRange::of)
+                .is_some_and(|form| !form.padded() && !form.bfloat())
+                && reads_color(graphics, *index)
+        })
+        .map(|(index, _)| index)
+        .collect()
+}
+
 /// Whether a draw of `graphics` may write color `index`: in the interlocked storage form, or
 /// through a write mask that names a channel.
 pub(super) fn writes_color(graphics: &GraphicsState, index: u32) -> bool {

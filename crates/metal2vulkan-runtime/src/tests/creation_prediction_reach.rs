@@ -1,5 +1,5 @@
 //! A render state's creation predicts the `VkPipeline` its first draw takes
-//! (`pipeline/predicted.rs`), and two shapes of draw take it where they made their own:
+//! (`pipeline/predicted.rs`), and three shapes of draw take it where they made their own:
 //!
 //! - **A draw in a pass that resolves.** A creation cannot know whether its draws' passes resolve,
 //!   and render pass compatibility ignores the resolves in a pass of one subpass, so a key holds
@@ -8,6 +8,10 @@
 //! - **A draw of points under the point class.** Such a draw takes Metal's guard band where the
 //!   device takes it (`render_state::guard_points`), a variant of its own, which the creation now
 //!   predicts.
+//! - **A multisampled blend into `BGRA10_XR`** in a pass that clears it, which holds the color's
+//!   `half` shadow from that draw on (`render/extended_shadow.rs`): the variant that reads and
+//!   writes the shadow, which the creation now predicts. A device whose pass fetches through
+//!   input attachments holds no shadow, and its creation predicts none.
 //!
 //! Each reads one creation's makings and the draw's takings as deltas on the test's own device
 //! (`WorkCounts::creation_pipelines_made` and `creation_pipelines_drawn`), once the device's
@@ -17,8 +21,8 @@
 //! A device test: compiled only under the validation crate's GPU safety cfgs (`m2v_gpu`,
 //! `m2v_cpu_icd`), on the kind of device the cfg selects. The functions are those of the owned
 //! fixture `validation/fixtures/public/engine/rt6_render_state.ll` (`llvm-as`): `rt6_full`, a
-//! fullscreen triangle, and `rt6_point`, a point of 4 pixels that writes `[[point_size]]`, each
-//! reading its depth from vertex buffer 0, and `rt6_white`.
+//! fullscreen triangle, `rt6_point`, a point of 4 pixels that writes `[[point_size]]`, and
+//! `rt6_white`, each reading its depth from vertex buffer 0.
 
 use super::blit_holds::{device, Scratch, WAIT};
 use super::uniform_bind_offsets::idle;
@@ -27,7 +31,7 @@ use crate::{
     ResourceOptions, StoreAction, Texture, TextureDescriptor, WorkCounts,
 };
 use metal2vulkan::metal::{
-    PixelFormat, PrimitiveTopologyClass, PrimitiveType, TextureType, TextureUsage,
+    BlendFactor, PixelFormat, PrimitiveTopologyClass, PrimitiveType, TextureType, TextureUsage,
 };
 use metal2vulkan::pipeline::{ColorAttachmentDescriptor, RenderPipelineDescriptor, StageSource};
 use std::path::Path;
@@ -186,6 +190,45 @@ fn a_point_draw_of_the_point_class_takes_the_creation_s_pipeline() {
     let drawn = idle(&device);
     taken(
         "a point draw of the point class",
+        reach(&before, &created, &drawn),
+    );
+}
+
+/// A four-sample source-over blend into a `BGRA10_XR` color the pass clears takes the creation's
+/// pipeline, which is of the variant that holds the color's shadow where the device's pass holds
+/// one.
+#[test]
+fn a_multisampled_extended_range_blend_takes_the_creation_s_pipeline() {
+    let scratch = Scratch::new("creation-reach-xr");
+    let device = device(&scratch.0);
+    let Some(target) = target(&device, PixelFormat::BGRA10XR, 4) else {
+        eprintln!("SKIPPED: no four-sample BGRA10_XR target here");
+        return;
+    };
+    let before = idle(&device);
+    let mut color = ColorAttachmentDescriptor::new(PixelFormat::BGRA10XR);
+    color.blending_enabled = true;
+    color.source_rgb_blend_factor = BlendFactor::One;
+    color.source_alpha_blend_factor = BlendFactor::One;
+    color.destination_rgb_blend_factor = BlendFactor::OneMinusSourceAlpha;
+    color.destination_alpha_blend_factor = BlendFactor::OneMinusSourceAlpha;
+    let state = state(
+        &device,
+        "rt6_full",
+        color,
+        4,
+        PrimitiveTopologyClass::Unspecified,
+    );
+    let created = idle(&device);
+    let mut pass = RenderPassDescriptor::new();
+    let attachment = &mut pass.color_attachments[0];
+    attachment.texture = Some(target);
+    attachment.load_action = LoadAction::Clear;
+    attachment.store_action = StoreAction::Store;
+    draw(&device, &state, &pass, PrimitiveType::Triangle);
+    let drawn = idle(&device);
+    taken(
+        "a multisampled blend into BGRA10_XR",
         reach(&before, &created, &drawn),
     );
 }

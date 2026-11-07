@@ -8,8 +8,8 @@
 //! defaults, built from the state alone (where it runs: the end of these docs):
 //!
 //! - **The variant** the base, where the plan of a draw binding the vertex buffers alone (below)
-//!   runs on it, but for the two a first draw takes of the state alone (the tests and the points,
-//!   below; a variant only a draw needs is made by that draw, as before); **the
+//!   runs on it, but for the three a first draw takes of the state alone (the tests, the points
+//!   and the shadows, below; a variant only a draw needs is made by that draw, as before); **the
 //!   specialization** that plan's: each constant at the value an unbound slot gives it, and each
 //!   buffer slot read through a uniform view read at its residual (its
 //!   `SpecKey::RangeAtBindOffset` at 0, the key's residual form, `render/residual.rs`), as an
@@ -53,6 +53,13 @@
 //!   Metal's guard band where the device takes it under Metal's default encoder state, as such a
 //!   draw does (`render_state::guard_points`): that variant, whose vertex stage culls at the band
 //!   (`ViewportCompensation::point_guard`), is translated and its pipeline made here.
+//! - **The shadows**: in a multisampled pipeline, each color of a measured extended-range form
+//!   (`BGR10_XR`, `BGRA10_XR`, `RGB10A8_2P_XR10` and the `_sRGB` twins) the fragment function
+//!   blends into or reads, whose `half` shadow such a pass holds from the first draw that reads it
+//!   wherever the pass clears the color (`render/extended_shadow.rs`, `predicted_shadows`): that
+//!   variant is translated and its pipeline made here. A single-sampled pass starts a shadow only
+//!   where an earlier draw wrote the color or its clear's codes cannot hold the clear, which a
+//!   creation cannot see, so a single-sampled pipeline's prediction holds none.
 //!
 //!   Where that shape's plan needs another variant than the one named or refuses it, the same
 //!   shape on the base is predicted.
@@ -103,6 +110,7 @@ use super::BufferForms;
 use crate::color_list::ColorList;
 use crate::fetch_reach::format_bytes;
 use crate::framebuffer_fetch;
+use crate::render::extended_shadow::predicted_shadows;
 use crate::render_state::{self, EncoderState, OneDepth, VertexClamp};
 use crate::render_target::{self, PassShape};
 use ash::vk;
@@ -157,8 +165,8 @@ impl GraphicsState {
     /// The plan of the predicted first draw, a draw of `primitive`: [`with_default_samplers`]'s,
     /// where it plans; else that of the draw binding the vertex layouts alone ([`bound_layouts`]).
     /// Each on the variant the module docs name where the draw takes one (its tests, the guard
-    /// band of its points), else on the base; where that variant's plan refuses, the same shape
-    /// on the base.
+    /// band of its points, its colors' shadows), else on the base; where that variant's plan
+    /// refuses, the same shape on the base.
     fn predicted_plan(
         &self,
         descriptor: &RenderPipelineDescriptor,
@@ -176,6 +184,20 @@ impl GraphicsState {
             PrimitiveType::Point => self.predicted_point_guard(graphics),
             _ => None,
         };
+        let profile = self.device().compile_device().profile();
+        let formats: Vec<Option<PixelFormat>> = (descriptor.color_attachments.iter())
+            .map(|color| color.as_ref().map(|c| c.pixel_format))
+            .collect();
+        let shadows = predicted_shadows(
+            graphics,
+            &formats,
+            descriptor.raster_sample_count,
+            formats
+                .iter()
+                .flatten()
+                .any(|&pf| pf != PixelFormat::Invalid)
+                && framebuffer_fetch::through_inputs(profile),
+        );
         let planned = |mut shape: BindShape| {
             shape.fragment_tests = tests;
             if tests == FragmentTests::Drop {
@@ -183,6 +205,7 @@ impl GraphicsState {
             }
             let base = shape.clone();
             shape.viewport_compensation = compensation;
+            shape.extended_shadows.clone_from(&shadows);
             match shape == base {
                 true => self.base_plan(&shape),
                 false => {
