@@ -816,7 +816,11 @@ fn a_left_out_color_s_framebuffer_view_is_a_placeholder() {
 /// first fold, whose draws read and write the colors as storage images, the memoryless one's
 /// backing arriving with it; through input attachments before the first step, a write of the
 /// memoryless color (`WorkCounts::inline_memoryless_write_splits`). The instance after the split
-/// records inline too, after the backing is cleared (`render/inline_splits.rs`).
+/// records inline too, after the backing is cleared (`render/inline_splits.rs`). Where the device
+/// splits before a draw that reads and writes a color an earlier draw of its instance wrote in the
+/// interlock ([`splits_interlocked_writes`]), each pass splits before its two steps and its second
+/// fold too. Which of the instances after those record inline is the inline rule's and is not held
+/// here: on the M3 Max the first pass's recorded in secondaries and the second's inline.
 #[test]
 fn a_memoryless_attachment_fetched_after_a_plain_inline_draw_starts_from_zero() {
     let (messages, cache, lane) = lane();
@@ -824,14 +828,18 @@ fn a_memoryless_attachment_fetched_after_a_plain_inline_draw_starts_from_zero() 
     let unwritten = library(&lane, "exf2_fetch_unwritten");
     let stepping = library(&lane, "mli_memoryless_step");
     let pf = PixelFormat::RGBA32Uint;
+    // A pass's passes inline, splits before a write of the memoryless color, instances inline
+    // after a split, and splits before a draw after interlocked writes.
     let counted = || {
         let counts = lane.device.work_counts();
-        let splits = counts.inline_memoryless_write_splits;
-        (counts.inline_passes, splits, counts.inline_split_instances)
+        [
+            counts.inline_passes,
+            counts.inline_memoryless_write_splits,
+            counts.inline_split_instances,
+            counts.instance_splits_interlocked_writes,
+        ]
     };
-    let raced = || lane.device.work_counts().instance_splits_interlocked_writes;
-    let raced_before = raced();
-    let before = counted();
+    let mut counts = Vec::new();
     let ran = (|| {
         let seed = pipeline(
             &lane,
@@ -865,13 +873,14 @@ fn a_memoryless_attachment_fetched_after_a_plain_inline_draw_starts_from_zero() 
         unloaded.color_attachments[1].load_action = LoadAction::DontCare;
         let mut read = Vec::new();
         for _ in 0..2 {
+            let before = counted();
             steps(&lane, &unloaded, &[&seed, &fold, &step, &step, &fold])?;
+            let after = counted();
+            counts.push([0, 1, 2, 3].map(|i| after[i] - before[i]));
             read.extend(lane.read(&count, (0, 0), 16, BlitOption::None));
         }
         Ok(read)
     })();
-    let raced = raced() - raced_before;
-    let (inline, splits, later) = counted();
     let texel: Vec<u8> = (1u32..=4).flat_map(|c| (c * 11).to_le_bytes()).collect();
     expect(
         &lane,
@@ -879,32 +888,30 @@ fn a_memoryless_attachment_fetched_after_a_plain_inline_draw_starts_from_zero() 
         ran,
         &texel.repeat(2 * TEXELS),
     );
-    let (inline, splits) = (inline - before.0, splits - before.1);
-    let later = later - before.2;
     eprintln!(
-        "a memoryless attachment fetched after a plain inline draw on {}: {inline} passes \
-         inline, {splits} split before a write of it, {later} instances inline after a split",
+        "a memoryless attachment fetched after a plain inline draw on {}: each pass's passes \
+         inline, splits before a write of it, instances inline after a split and splits before \
+         a draw after interlocked writes {counts:?}",
         lane.device.name()
     );
-    let written = match through_inputs(&lane) {
-        true => 2,
+    let written = u64::from(through_inputs(&lane));
+    let raced = match splits_interlocked_writes(&lane) {
+        true => 3,
         false => 0,
     };
-    // Where the device splits before an interlocked draw an earlier draw of its instance wrote
-    // for, each pass splits before its two steps and its second fold too.
-    let want_raced = match splits_interlocked_writes(&lane) {
-        true => 6,
-        false => 0,
-    };
-    assert_eq!(
-        raced, want_raced,
-        "splits before a draw after interlocked writes"
-    );
-    assert_eq!(
-        (inline, splits, later),
-        (2, written, 2),
-        "inline, and split into an instance inline too"
-    );
+    for &[inline, splits, later, races] in &counts {
+        assert_eq!(
+            (inline, splits, races),
+            (1, written, raced),
+            "inline, split before a write of the memoryless color, and before draws after \
+             interlocked writes: {counts:?}"
+        );
+        assert!(
+            (1..=1 + raced).contains(&later),
+            "split into an instance inline too: {counts:?}"
+        );
+    }
+    assert_eq!(counts.len(), 2, "the passes counted");
     drop(cache);
     quiet(lane, &messages);
 }

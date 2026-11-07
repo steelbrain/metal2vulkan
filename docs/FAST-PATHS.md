@@ -307,7 +307,9 @@ recorded here.
   (`runtime_lane::tile_path_costs`, `wide blended in the function`). Not on a driver measured to
   order them (`DriverFact::InterlockOrdersDraws`: ANV on the Iris Xe;
   `runtime_lane::interlocked_draw_order`). The imageblock's storage and a depth stand-in keep
-  theirs on every device.
+  theirs on every device. On MoltenVK on Apple's GPUs, which drops the barrier and whose such
+  draws race under load (`DriverFact::InterlockedDrawsRaceUnderLoad`), the later draw begins a
+  render pass instance of its own instead (a known gap below).
 - **A shadow over bytes another writer may write is merged back, not copied back.** Metal writes
   only the texels a command writes, and another writer writing bytes no command touches while a
   command buffer runs is valid under its contract. On an M3 Max under macOS 27.0.1, a CPU write to
@@ -378,6 +380,19 @@ recorded here.
 
 Open differences from Metal that no note announces yet, and runtime costs still above the
 driver's. Each is open work.
+
+- **A draw that reads and writes a color in the pixel interlock after an earlier draw of its
+  instance wrote it begins a render pass instance of its own on MoltenVK on Apple's GPUs**
+  (`DriverFact::InterlockedDrawsRaceUnderLoad`, `WorkCounts::instance_splits_interlocked_writes`,
+  `render-pass-split`). MoltenVK encodes no Metal barrier inside a render pass there, so the
+  barrier other drivers take orders nothing, and the raster order group it puts the storage in
+  did not order such draws while other processes' work ran on the GPU. Each instance stores and
+  loads the pass's attachments, a tile flush a draw. On the M3 Max (MoltenVK 1.4.2, macOS
+  27.0.1; `runtime_lane::tile_path_costs`, release, four runs each) `wide blended in the
+  function` takes 11.5 to 12.9 ms a frame against 1.8 ms with the barrier (243 instances a frame
+  against 9), `extended range` 11.8 to 12.4 ms against 2.5 to 2.6 ms (234 against 9), and
+  `extended range, wide attached` 10.7 to 12.4 ms against 2.5 to 2.7 ms; every other case keeps
+  its instances and its time.
 
 - **A copied host buffer costs O(its size) at every batch's completion that may have written
   it, and at every commit where its pages carry no log** (`copied.rs`, `copied-host-pages`): each
