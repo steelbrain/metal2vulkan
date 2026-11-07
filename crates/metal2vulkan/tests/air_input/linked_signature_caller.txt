@@ -1,0 +1,734 @@
+target triple = "air64_v29-apple-macosx27.0.0"
+source_filename = "-"
+; datalayout DataLayout { endian: Little, pointers: {0: PointerSpec { size_bits: 64, abi_bits: 64, pref_bits: 64, index_bits: 64 }}, ints: {1: AlignSpec { abi_bits: 8, pref_bits: 8 }, 8: AlignSpec { abi_bits: 8, pref_bits: 8 }, 16: AlignSpec { abi_bits: 16, pref_bits: 16 }, 32: AlignSpec { abi_bits: 32, pref_bits: 32 }, 64: AlignSpec { abi_bits: 64, pref_bits: 64 }}, floats: {16: AlignSpec { abi_bits: 16, pref_bits: 16 }, 32: AlignSpec { abi_bits: 32, pref_bits: 32 }, 64: AlignSpec { abi_bits: 64, pref_bits: 64 }, 128: AlignSpec { abi_bits: 128, pref_bits: 128 }}, vectors: {16: AlignSpec { abi_bits: 16, pref_bits: 16 }, 24: AlignSpec { abi_bits: 32, pref_bits: 32 }, 32: AlignSpec { abi_bits: 32, pref_bits: 32 }, 48: AlignSpec { abi_bits: 64, pref_bits: 64 }, 64: AlignSpec { abi_bits: 64, pref_bits: 64 }, 96: AlignSpec { abi_bits: 128, pref_bits: 128 }, 128: AlignSpec { abi_bits: 128, pref_bits: 128 }, 192: AlignSpec { abi_bits: 256, pref_bits: 256 }, 256: AlignSpec { abi_bits: 256, pref_bits: 256 }, 512: AlignSpec { abi_bits: 512, pref_bits: 512 }, 1024: AlignSpec { abi_bits: 1024, pref_bits: 1024 }}, aggregate: AlignSpec { abi_bits: 0, pref_bits: 64 }, native_ints: [8, 16, 32], stack_align_bits: None, alloca_space: 0, program_space: 0, globals_space: 0, mangling: None, fn_ptr_align: None, non_integral: [] }
+%t1 = type [4 x ptr addrspace(0)]
+%t3 = type float (float, float)
+%t4 = type float (ptr addrspace(0))
+%t6 = type void (ptr addrspace(0), float)
+%t7 = type void (ptr addrspace(0))
+%t9 = type void (ptr addrspace(0), ptr addrspace(2))
+%t11 = type void (ptr addrspace(1), ptr addrspace(1))
+%t12 = type float (float, float, float)
+%t13 = type float (float, float, float, float)
+%t14 = type float (float, float, ptr addrspace(1))
+%t16 = type float (<2 x float>)
+%t19 = type i32 (float, half)
+%t20 = type float (<2 x float>, float)
+%t21 = type i32 (float, float)
+%t22 = type half (float, float)
+%t23 = type float (ptr addrspace(1))
+%t25 = type float (i64)
+%t27 = type [8 x i8]
+%t28 = type float (%t27, float, float)
+%t29 = type [6 x i32]
+%t30 = type float (%t29)
+%t31 = type void (float, float)
+%t32 = type void (ptr addrspace(1), ptr addrspace(2))
+%t33 = type float (ptr addrspace(2))
+%t35 = type [2 x i32]
+c64 = %t1 [@f1, @f4, @f2, @f3]
+c65 = %t35 [27, 2]
+c83 = %t27 [1, 0, 0, 0, 0, 0, 0, 0]
+c87 = %t29 [1073741824, 1, 2, 3, 4, 1077936128]
+@g0 "llvm.compiler.used" = appending addrspace(0) global %t1 c64, section "llvm.metadata"
+
+define %t3 @f0 "stitch_add" memory(NoModRef, NoModRef, NoModRef) "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="0" "no-builtins"="" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" {
+bb0:
+  %i0 = fadd reassoc nnan ninf nsz arcp contract afn float %a1, %a0
+  ret %i0
+}
+
+define linkonce_odr %t4 @f1 "_ZN5metal22_stitching_traits_implIfE13load_argumentEPU9MTLthreadv" "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="0" "no-builtins"="" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true", align 2 {
+bb0:
+  %i0 = bitcast %a0 to ptr addrspace(0)
+  %i1 = load float, %i0, align 4
+  ret %i1
+}
+
+define linkonce_odr %t6 @f2 "_ZN5metal22_stitching_traits_implIfE18store_return_valueEPU9MTLthreadvf" "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="0" "no-builtins"="" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true", align 2 {
+bb0:
+  %i0 = bitcast %a0 to ptr addrspace(0)
+  store %a1, %i0, align 4
+  ret void
+}
+
+define linkonce_odr %t7 @f3 "_ZN5metal22_stitching_traits_implIfE7destroyEPU9MTLthreadv" "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="0" "no-builtins"="" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true", align 2 {
+bb0:
+  ret void
+}
+
+define linkonce_odr %t9 @f4 "_ZN5metal22_stitching_traits_implIfE16copy_from_bufferEPU9MTLthreadvPU11MTLconstantKv" "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="0" "no-builtins"="" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true", align 2 {
+bb0:
+  %i0 = bitcast %a0 to ptr addrspace(0)
+  %i1 = bitcast %a1 to ptr addrspace(2)
+  %i2 = load float, %i1, align 4
+  store %i2, %i0, align 4
+  ret void
+}
+
+define %t11 @f5 "k_stitched_extra" "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="0" "no-builtins"="" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" %a0( Mod nocapture "air-buffer-no-alias"="" ) %a1( Ref nocapture "air-buffer-no-alias"="" ) {
+bb0:
+  %i0 = load float, %a1, align 4
+  %i1 = getelementptr inbounds float, %a1, i64 1
+  %i2 = load float, %i1, align 4
+  %i3 = getelementptr inbounds float, %a1, i64 2
+  %i4 = load float, %i3, align 4
+  %i5 = tail call reassoc nnan ninf nsz arcp contract afn float @f6(%i0, %i2, %i4) "no-builtins"=""
+  %i6 = bitcast %a0 to ptr addrspace(1)
+  store %i5, %i6, align 4
+  %i8 = getelementptr inbounds i32, %a0, i64 1
+  store i32 24135, %i8, align 4
+  ret void
+}
+
+declare %t12 @f6 "stitched_pair.MTL_VISIBLE_FN_REF", section "air.externally_defined"
+
+define %t11 @f7 "k_extra" "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="0" "no-builtins"="" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" %a0( Mod nocapture "air-buffer-no-alias"="" ) %a1( Ref nocapture "air-buffer-no-alias"="" ) {
+bb0:
+  %i0 = load float, %a1, align 4
+  %i1 = getelementptr inbounds float, %a1, i64 1
+  %i2 = load float, %i1, align 4
+  %i3 = getelementptr inbounds float, %a1, i64 2
+  %i4 = load float, %i3, align 4
+  %i5 = tail call reassoc nnan ninf nsz arcp contract afn float @f8(%i0, %i2, %i4) "no-builtins"=""
+  %i6 = bitcast %a0 to ptr addrspace(1)
+  store %i5, %i6, align 4
+  %i8 = getelementptr inbounds i32, %a0, i64 1
+  store i32 24135, %i8, align 4
+  ret void
+}
+
+declare %t12 @f8 "extra.MTL_VISIBLE_FN_REF", section "air.externally_defined"
+
+define %t11 @f9 "k_extra_two" "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="0" "no-builtins"="" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" %a0( Mod nocapture "air-buffer-no-alias"="" ) %a1( Ref nocapture "air-buffer-no-alias"="" ) {
+bb0:
+  %i0 = load float, %a1, align 4
+  %i1 = getelementptr inbounds float, %a1, i64 1
+  %i2 = load float, %i1, align 4
+  %i3 = getelementptr inbounds float, %a1, i64 2
+  %i4 = load float, %i3, align 4
+  %i5 = getelementptr inbounds float, %a1, i64 3
+  %i6 = load float, %i5, align 4
+  %i7 = tail call reassoc nnan ninf nsz arcp contract afn float @f10(%i0, %i2, %i4, %i6) "no-builtins"=""
+  %i8 = bitcast %a0 to ptr addrspace(1)
+  store %i7, %i8, align 4
+  %i10 = getelementptr inbounds i32, %a0, i64 1
+  store i32 24135, %i10, align 4
+  ret void
+}
+
+declare %t13 @f10 "extra_two.MTL_VISIBLE_FN_REF", section "air.externally_defined"
+
+define %t11 @f11 "k_extra_pointer" "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="0" "no-builtins"="" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" %a0( Mod nocapture "air-buffer-no-alias"="" ) %a1( "air-buffer-no-alias"="" ) {
+bb0:
+  %i0 = load float, %a1, align 4
+  %i1 = getelementptr inbounds float, %a1, i64 1
+  %i2 = load float, %i1, align 4
+  %i3 = tail call reassoc nnan ninf nsz arcp contract afn float @f12(%i0, %i2, %a1) "no-builtins"=""
+  %i4 = bitcast %a0 to ptr addrspace(1)
+  store %i3, %i4, align 4
+  %i6 = getelementptr inbounds i32, %a0, i64 1
+  store i32 24135, %i6, align 4
+  ret void
+}
+
+declare %t14 @f12 "extra_pointer.MTL_VISIBLE_FN_REF", section "air.externally_defined"
+
+define %t11 @f13 "k_missing" "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="0" "no-builtins"="" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" %a0( Mod nocapture "air-buffer-no-alias"="" ) %a1( Ref nocapture "air-buffer-no-alias"="" ) {
+bb0:
+  %i0 = load float, %a1, align 4
+  %i1 = getelementptr inbounds float, %a1, i64 1
+  %i2 = load float, %i1, align 4
+  %i3 = tail call reassoc nnan ninf nsz arcp contract afn float @f14(%i0, %i2) "no-builtins"=""
+  %i4 = bitcast %a0 to ptr addrspace(1)
+  store %i3, %i4, align 4
+  %i6 = getelementptr inbounds i32, %a0, i64 1
+  store i32 24135, %i6, align 4
+  ret void
+}
+
+declare %t3 @f14 "missing.MTL_VISIBLE_FN_REF", section "air.externally_defined"
+
+define %t11 @f15 "k_missing_unused" "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="0" "no-builtins"="" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" %a0( Mod nocapture "air-buffer-no-alias"="" ) %a1( Ref nocapture "air-buffer-no-alias"="" ) {
+bb0:
+  %i0 = load float, %a1, align 4
+  %i1 = getelementptr inbounds float, %a1, i64 1
+  %i2 = load float, %i1, align 4
+  %i3 = tail call reassoc nnan ninf nsz arcp contract afn float @f16(%i0, %i2) "no-builtins"=""
+  %i4 = bitcast %a0 to ptr addrspace(1)
+  store %i3, %i4, align 4
+  %i6 = getelementptr inbounds i32, %a0, i64 1
+  store i32 24135, %i6, align 4
+  ret void
+}
+
+declare %t3 @f16 "missing_unused.MTL_VISIBLE_FN_REF", section "air.externally_defined"
+
+define %t11 @f17 "k_missing_pointer_unused" "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="0" "no-builtins"="" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" %a0( Mod nocapture "air-buffer-no-alias"="" ) %a1( Ref nocapture "air-buffer-no-alias"="" ) {
+bb0:
+  %i0 = load float, %a1, align 4
+  %i1 = getelementptr inbounds float, %a1, i64 1
+  %i2 = load float, %i1, align 4
+  %i3 = tail call reassoc nnan ninf nsz arcp contract afn float @f18(%i0, %i2) "no-builtins"=""
+  %i4 = bitcast %a0 to ptr addrspace(1)
+  store %i3, %i4, align 4
+  %i6 = getelementptr inbounds i32, %a0, i64 1
+  store i32 24135, %i6, align 4
+  ret void
+}
+
+declare %t3 @f18 "missing_pointer_unused.MTL_VISIBLE_FN_REF", section "air.externally_defined"
+
+define %t11 @f19 "k_int_param" "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="0" "no-builtins"="" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" %a0( Mod nocapture "air-buffer-no-alias"="" ) %a1( Ref nocapture "air-buffer-no-alias"="" ) {
+bb0:
+  %i0 = load float, %a1, align 4
+  %i1 = getelementptr inbounds float, %a1, i64 1
+  %i2 = load float, %i1, align 4
+  %i3 = getelementptr inbounds float, %a1, i64 2
+  %i4 = load float, %i3, align 4
+  %i5 = tail call reassoc nnan ninf nsz arcp contract afn float @f20(%i0, %i2, %i4) "no-builtins"=""
+  %i6 = bitcast %a0 to ptr addrspace(1)
+  store %i5, %i6, align 4
+  %i8 = getelementptr inbounds i32, %a0, i64 1
+  store i32 24135, %i8, align 4
+  ret void
+}
+
+declare %t12 @f20 "int_param.MTL_VISIBLE_FN_REF", section "air.externally_defined"
+
+define %t11 @f21 "k_half2_param" "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="0" "no-builtins"="" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" %a0( Mod nocapture "air-buffer-no-alias"="" ) %a1( Ref nocapture "air-buffer-no-alias"="" ) {
+bb0:
+  %i0 = load float, %a1, align 4
+  %i1 = getelementptr inbounds float, %a1, i64 1
+  %i2 = load float, %i1, align 4
+  %i3 = tail call reassoc nnan ninf nsz arcp contract afn float @f22(%i0, %i2) "no-builtins"=""
+  %i4 = bitcast %a0 to ptr addrspace(1)
+  store %i3, %i4, align 4
+  %i6 = getelementptr inbounds i32, %a0, i64 1
+  store i32 24135, %i6, align 4
+  ret void
+}
+
+declare %t3 @f22 "half2_param.MTL_VISIBLE_FN_REF", section "air.externally_defined"
+
+define %t11 @f23 "k_uint2_param" "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="64" "no-builtins"="" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" %a0( Mod nocapture "air-buffer-no-alias"="" ) %a1( Ref nocapture "air-buffer-no-alias"="" ) {
+bb0:
+  %i0 = load float, %a1, align 4
+  %i1 = insertelement <2 x float> undef, %i0, i64 0
+  %i2 = getelementptr inbounds float, %a1, i64 1
+  %i3 = load float, %i2, align 4
+  %i4 = insertelement %i1, %i3, i64 1
+  %i5 = tail call reassoc nnan ninf nsz arcp contract afn float @f24(%i4) "no-builtins"=""
+  %i6 = bitcast %a0 to ptr addrspace(1)
+  store %i5, %i6, align 4
+  %i8 = getelementptr inbounds i32, %a0, i64 1
+  store i32 24135, %i8, align 4
+  ret void
+}
+
+declare %t16 @f24 "uint2_param.MTL_VISIBLE_FN_REF", section "air.externally_defined"
+
+define %t11 @f25 "k_half_param" "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="0" "no-builtins"="" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" %a0( Mod nocapture "air-buffer-no-alias"="" ) %a1( Ref nocapture "air-buffer-no-alias"="" ) {
+bb0:
+  %i0 = load float, %a1, align 4
+  %i1 = getelementptr inbounds float, %a1, i64 1
+  %i2 = load float, %i1, align 4
+  %i3 = tail call reassoc nnan ninf nsz arcp contract afn float @f26(%i0, %i2) "no-builtins"=""
+  %i4 = bitcast %a0 to ptr addrspace(1)
+  store %i3, %i4, align 4
+  %i6 = getelementptr inbounds i32, %a0, i64 1
+  store i32 24135, %i6, align 4
+  ret void
+}
+
+declare %t3 @f26 "half_param.MTL_VISIBLE_FN_REF", section "air.externally_defined"
+
+define %t11 @f27 "k_uint_for_half" "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="0" "no-builtins"="" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" %a0( Mod nocapture "air-buffer-no-alias"="" ) %a1( Ref nocapture "air-buffer-no-alias"="" ) {
+bb0:
+  %i0 = load float, %a1, align 4
+  %i1 = getelementptr inbounds float, %a1, i64 1
+  %i2 = load float, %i1, align 4
+  %i3 = fptrunc %i2 to half
+  %i4 = tail call i32 @f28(%i0, %i3) "no-builtins"=""
+  store %i4, %a0, align 4
+  %i6 = getelementptr inbounds i32, %a0, i64 1
+  store i32 24135, %i6, align 4
+  ret void
+}
+
+declare %t19 @f28 "uint_for_half.MTL_VISIBLE_FN_REF", section "air.externally_defined"
+
+define %t11 @f29 "k_long_param" "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="0" "no-builtins"="" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" %a0( Mod nocapture "air-buffer-no-alias"="" ) %a1( Ref nocapture "air-buffer-no-alias"="" ) {
+bb0:
+  %i0 = load float, %a1, align 4
+  %i1 = getelementptr inbounds float, %a1, i64 1
+  %i2 = load float, %i1, align 4
+  %i3 = tail call reassoc nnan ninf nsz arcp contract afn float @f30(%i0, %i2) "no-builtins"=""
+  %i4 = bitcast %a0 to ptr addrspace(1)
+  store %i3, %i4, align 4
+  %i6 = getelementptr inbounds i32, %a0, i64 1
+  store i32 24135, %i6, align 4
+  ret void
+}
+
+declare %t3 @f30 "long_param.MTL_VISIBLE_FN_REF", section "air.externally_defined"
+
+define %t11 @f31 "k_float2_for_two" "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="64" "no-builtins"="" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" %a0( Mod nocapture "air-buffer-no-alias"="" ) %a1( Ref nocapture "air-buffer-no-alias"="" ) {
+bb0:
+  %i0 = load float, %a1, align 4
+  %i1 = insertelement <2 x float> undef, %i0, i64 0
+  %i2 = getelementptr inbounds float, %a1, i64 1
+  %i3 = load float, %i2, align 4
+  %i4 = insertelement %i1, %i3, i64 1
+  %i5 = getelementptr inbounds float, %a1, i64 2
+  %i6 = load float, %i5, align 4
+  %i7 = tail call reassoc nnan ninf nsz arcp contract afn float @f32(%i4, %i6) "no-builtins"=""
+  %i8 = bitcast %a0 to ptr addrspace(1)
+  store %i7, %i8, align 4
+  %i10 = getelementptr inbounds i32, %a0, i64 1
+  store i32 24135, %i10, align 4
+  ret void
+}
+
+declare %t20 @f32 "float2_for_two.MTL_VISIBLE_FN_REF", section "air.externally_defined"
+
+define %t11 @f33 "k_bool_param" "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="0" "no-builtins"="" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" %a0( Mod nocapture "air-buffer-no-alias"="" ) %a1( Ref nocapture "air-buffer-no-alias"="" ) {
+bb0:
+  %i0 = load float, %a1, align 4
+  %i1 = getelementptr inbounds float, %a1, i64 1
+  %i2 = load float, %i1, align 4
+  %i3 = tail call reassoc nnan ninf nsz arcp contract afn float @f34(%i0, %i2) "no-builtins"=""
+  %i4 = bitcast %a0 to ptr addrspace(1)
+  store %i3, %i4, align 4
+  %i6 = getelementptr inbounds i32, %a0, i64 1
+  store i32 24135, %i6, align 4
+  ret void
+}
+
+declare %t3 @f34 "bool_param.MTL_VISIBLE_FN_REF", section "air.externally_defined"
+
+define %t11 @f35 "k_int_return" "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="0" "no-builtins"="" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" %a0( Mod nocapture "air-buffer-no-alias"="" ) %a1( Ref nocapture "air-buffer-no-alias"="" ) {
+bb0:
+  %i0 = load float, %a1, align 4
+  %i1 = getelementptr inbounds float, %a1, i64 1
+  %i2 = load float, %i1, align 4
+  %i3 = tail call i32 @f36(%i0, %i2) "no-builtins"=""
+  store %i3, %a0, align 4
+  %i5 = getelementptr inbounds i32, %a0, i64 1
+  store i32 24135, %i5, align 4
+  ret void
+}
+
+declare %t21 @f36 "int_return.MTL_VISIBLE_FN_REF", section "air.externally_defined"
+
+define %t11 @f37 "k_float_for_half_return" "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="0" "no-builtins"="" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" %a0( Mod nocapture "air-buffer-no-alias"="" ) %a1( Ref nocapture "air-buffer-no-alias"="" ) {
+bb0:
+  %i0 = load float, %a1, align 4
+  %i1 = getelementptr inbounds float, %a1, i64 1
+  %i2 = load float, %i1, align 4
+  %i3 = tail call reassoc nnan ninf nsz arcp contract afn float @f38(%i0, %i2) "no-builtins"=""
+  %i4 = bitcast %a0 to ptr addrspace(1)
+  store %i3, %i4, align 4
+  %i6 = getelementptr inbounds i32, %a0, i64 1
+  store i32 24135, %i6, align 4
+  ret void
+}
+
+declare %t3 @f38 "float_for_half_return.MTL_VISIBLE_FN_REF", section "air.externally_defined"
+
+define %t11 @f39 "k_half_for_float_return" "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="0" "no-builtins"="" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" %a0( Mod nocapture "air-buffer-no-alias"="" ) %a1( Ref nocapture "air-buffer-no-alias"="" ) {
+bb0:
+  %i0 = load float, %a1, align 4
+  %i1 = getelementptr inbounds float, %a1, i64 1
+  %i2 = load float, %i1, align 4
+  %i3 = tail call reassoc nnan ninf nsz arcp contract afn half @f40(%i0, %i2) "no-builtins"=""
+  %i4 = fpext %i3 to float
+  %i5 = bitcast %a0 to ptr addrspace(1)
+  store %i4, %i5, align 4
+  %i7 = getelementptr inbounds i32, %a0, i64 1
+  store i32 24135, %i7, align 4
+  ret void
+}
+
+declare %t22 @f40 "half_for_float_return.MTL_VISIBLE_FN_REF", section "air.externally_defined"
+
+define %t11 @f41 "k_value_for_void" "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="0" "no-builtins"="" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" %a0( Mod nocapture "air-buffer-no-alias"="" ) %a1( Ref nocapture "air-buffer-no-alias"="" ) {
+bb0:
+  %i0 = load float, %a1, align 4
+  %i1 = getelementptr inbounds float, %a1, i64 1
+  %i2 = load float, %i1, align 4
+  %i3 = tail call reassoc nnan ninf nsz arcp contract afn float @f42(%i0, %i2) "no-builtins"=""
+  %i4 = bitcast %a0 to ptr addrspace(1)
+  store %i3, %i4, align 4
+  %i6 = getelementptr inbounds i32, %a0, i64 1
+  store i32 24135, %i6, align 4
+  ret void
+}
+
+declare %t3 @f42 "value_for_void.MTL_VISIBLE_FN_REF", section "air.externally_defined"
+
+define %t11 @f43 "k_value_for_pointer" "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="0" "no-builtins"="" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" %a0( Mod nocapture "air-buffer-no-alias"="" ) %a1( "air-buffer-no-alias"="" ) {
+bb0:
+  %i0 = tail call reassoc nnan ninf nsz arcp contract afn float @f44(%a1) "no-builtins"=""
+  %i1 = bitcast %a0 to ptr addrspace(1)
+  store %i0, %i1, align 4
+  %i3 = getelementptr inbounds i32, %a0, i64 1
+  store i32 24135, %i3, align 4
+  ret void
+}
+
+declare %t23 @f44 "value_for_pointer.MTL_VISIBLE_FN_REF", section "air.externally_defined"
+
+define %t11 @f45 "k_pointer_for_value" "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="0" "no-builtins"="" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" %a0( Mod nocapture "air-buffer-no-alias"="" ) %a1( NoModRef nocapture "air-buffer-no-alias"="" ) {
+bb0:
+  %i0 = tail call reassoc nnan ninf nsz arcp contract afn float @f46(i64 0) "no-builtins"=""
+  %i1 = bitcast %a0 to ptr addrspace(1)
+  store %i0, %i1, align 4
+  %i3 = getelementptr inbounds i32, %a0, i64 1
+  store i32 24135, %i3, align 4
+  ret void
+}
+
+declare %t25 @f46 "pointer_for_value.MTL_VISIBLE_FN_REF", section "air.externally_defined"
+
+define %t11 @f47 "k_constant_for_device" "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="0" "no-builtins"="" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" %a0( Mod nocapture "air-buffer-no-alias"="" ) %a1( "air-buffer-no-alias"="" ) {
+bb0:
+  %i0 = tail call reassoc nnan ninf nsz arcp contract afn float @f48(%a1) "no-builtins"=""
+  %i1 = bitcast %a0 to ptr addrspace(1)
+  store %i0, %i1, align 4
+  %i3 = getelementptr inbounds i32, %a0, i64 1
+  store i32 24135, %i3, align 4
+  ret void
+}
+
+declare %t23 @f48 "constant_for_device.MTL_VISIBLE_FN_REF", section "air.externally_defined"
+
+define %t11 @f49 "k_pair_for_floats" "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="0" "no-builtins"="" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" %a0( Mod nocapture "air-buffer-no-alias"="" ) %a1( Ref nocapture "air-buffer-no-alias"="" ) {
+bb0:
+  %i0 = load float, %a1, align 4
+  %i1 = getelementptr inbounds float, %a1, i64 1
+  %i2 = load float, %i1, align 4
+  %i3 = tail call reassoc nnan ninf nsz arcp contract afn float @f50(%i0, %i2) "no-builtins"=""
+  %i4 = bitcast %a0 to ptr addrspace(1)
+  store %i3, %i4, align 4
+  %i6 = getelementptr inbounds i32, %a0, i64 1
+  store i32 24135, %i6, align 4
+  ret void
+}
+
+declare %t3 @f50 "pair_for_floats.MTL_VISIBLE_FN_REF", section "air.externally_defined"
+
+define %t11 @f51 "k_uints_for_floats" "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="0" "no-builtins"="" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" %a0( Mod nocapture "air-buffer-no-alias"="" ) %a1( Ref nocapture "air-buffer-no-alias"="" ) {
+bb0:
+  %i0 = load float, %a1, align 4
+  %i1 = getelementptr inbounds float, %a1, i64 1
+  %i2 = load float, %i1, align 4
+  %i3 = tail call reassoc nnan ninf nsz arcp contract afn float @f52(%i0, %i2) "no-builtins"=""
+  %i4 = bitcast %a0 to ptr addrspace(1)
+  store %i3, %i4, align 4
+  %i6 = getelementptr inbounds i32, %a0, i64 1
+  store i32 24135, %i6, align 4
+  ret void
+}
+
+declare %t3 @f52 "uints_for_floats.MTL_VISIBLE_FN_REF", section "air.externally_defined"
+
+define %t11 @f53 "k_bytes_extra" "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="0" "no-builtins"="" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" %a0( Mod nocapture "air-buffer-no-alias"="" ) %a1( Ref nocapture "air-buffer-no-alias"="" ) {
+bb0:
+  %i0 = load float, %a1, align 4
+  %i1 = getelementptr inbounds float, %a1, i64 1
+  %i2 = load float, %i1, align 4
+  %i3 = tail call reassoc nnan ninf nsz arcp contract afn float @f54(%t27 c83, %i0, %i2) "no-builtins"=""
+  %i4 = bitcast %a0 to ptr addrspace(1)
+  store %i3, %i4, align 4
+  %i6 = getelementptr inbounds i32, %a0, i64 1
+  store i32 24135, %i6, align 4
+  ret void
+}
+
+declare %t28 @f54 "bytes_extra.MTL_VISIBLE_FN_REF", section "air.externally_defined"
+
+define %t11 @f55 "k_uint_array_for_float_array" "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="0" "no-builtins"="" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" %a0( Mod nocapture "air-buffer-no-alias"="" ) %a1( NoModRef nocapture "air-buffer-no-alias"="" ) {
+bb0:
+  %i0 = tail call reassoc nnan ninf nsz arcp contract afn float @f56(%t29 c87) "no-builtins"=""
+  %i1 = bitcast %a0 to ptr addrspace(1)
+  store %i0, %i1, align 4
+  %i3 = getelementptr inbounds i32, %a0, i64 1
+  store i32 24135, %i3, align 4
+  ret void
+}
+
+declare %t30 @f56 "uint_array_for_float_array.MTL_VISIBLE_FN_REF", section "air.externally_defined"
+
+define %t11 @f57 "k_void_for_value" "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="0" "no-builtins"="" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" %a0( Mod nocapture "air-buffer-no-alias"="" ) %a1( Ref nocapture "air-buffer-no-alias"="" ) {
+bb0:
+  %i0 = load float, %a1, align 4
+  %i1 = getelementptr inbounds float, %a1, i64 1
+  %i2 = load float, %i1, align 4
+  tail call void @f58(%i0, %i2) "no-builtins"=""
+  store i32 7, %a0, align 4
+  %i5 = getelementptr inbounds i32, %a0, i64 1
+  store i32 24135, %i5, align 4
+  ret void
+}
+
+declare %t31 @f58 "void_for_value.MTL_VISIBLE_FN_REF", section "air.externally_defined"
+
+define %t32 @f59 "k_device_for_constant" "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="0" "no-builtins"="" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" %a0( Mod nocapture "air-buffer-no-alias"="" ) %a1( "air-buffer-no-alias"="" ) {
+bb0:
+  %i0 = tail call reassoc nnan ninf nsz arcp contract afn float @f60(%a1) "no-builtins"=""
+  %i1 = bitcast %a0 to ptr addrspace(1)
+  store %i0, %i1, align 4
+  %i3 = getelementptr inbounds i32, %a0, i64 1
+  store i32 24135, %i3, align 4
+  ret void
+}
+
+declare %t33 @f60 "device_for_constant.MTL_VISIBLE_FN_REF", section "air.externally_defined"
+!md0 = !"SDK Version"
+!md1 = !"wchar_size"
+!md2 = !"frame-pointer"
+!md3 = !"air.max_device_buffers"
+!md4 = !"air.max_constant_buffers"
+!md5 = !"air.max_threadgroup_buffers"
+!md6 = !"air.max_textures"
+!md7 = !"air.max_read_write_textures"
+!md8 = !"air.max_samplers"
+!md9 = !"air.visible_output"
+!md10 = !"air.arg_type_name"
+!md11 = !"float"
+!md12 = !"air.visible_input"
+!md13 = !"air.arg_name"
+!md14 = !"a"
+!md15 = !"b"
+!md16 = !"air.stitching_info"
+!md17 = !"air.stitching_type"
+!md18 = !"air.float_type"
+!md19 = !"air.stitching_argument"
+!md20 = !"air.buffer"
+!md21 = !"air.location_index"
+!md22 = !"air.read_write"
+!md23 = !"air.address_space"
+!md24 = !"air.arg_type_size"
+!md25 = !"air.arg_type_align_size"
+!md26 = !"uint"
+!md27 = !"out"
+!md28 = !"air.read"
+!md29 = !"in"
+!md30 = !"air.arg_unused"
+!md31 = !"air.compile.denorms_disable"
+!md32 = !"air.compile.fast_math_enable"
+!md33 = !"air.compile.framebuffer_fetch_enable"
+!md34 = !"air.visible_function_reference"
+!md35 = !"stitched_pair"
+!md36 = !"extra"
+!md37 = !"extra_two"
+!md38 = !"extra_pointer"
+!md39 = !"missing"
+!md40 = !"missing_unused"
+!md41 = !"missing_pointer_unused"
+!md42 = !"int_param"
+!md43 = !"half2_param"
+!md44 = !"uint2_param"
+!md45 = !"half_param"
+!md46 = !"uint_for_half"
+!md47 = !"long_param"
+!md48 = !"float2_for_two"
+!md49 = !"bool_param"
+!md50 = !"int_return"
+!md51 = !"float_for_half_return"
+!md52 = !"half_for_float_return"
+!md53 = !"value_for_void"
+!md54 = !"value_for_pointer"
+!md55 = !"pointer_for_value"
+!md56 = !"constant_for_device"
+!md57 = !"pair_for_floats"
+!md58 = !"uints_for_floats"
+!md59 = !"bytes_extra"
+!md60 = !"uint_array_for_float_array"
+!md61 = !"void_for_value"
+!md62 = !"device_for_constant"
+!md63 = !"Apple metal version 32023.922 (metalfe-32023.922.4)"
+!md64 = !"Metal"
+!md65 = !"omnipotent char"
+!md66 = !"Simple C++ TBAA"
+!md67 = !"air-alias-scope-arg(1)"
+!md68 = !"air-alias-scope-arg(0)"
+!md69 = !"int"
+!md70 = i32 2
+!md71 = %t35 c65
+!md72 = i32 1
+!md73 = i32 4
+!md74 = i32 7
+!md75 = i32 31
+!md76 = i32 128
+!md77 = i32 8
+!md78 = i32 16
+!md79 = ptr addrspace(0) @f0
+!md80 = i32 0
+!md81 = ptr addrspace(0) @f1
+!md82 = ptr addrspace(0) @f2
+!md83 = ptr addrspace(0) @f3
+!md84 = ptr addrspace(0) @f4
+!md85 = ptr addrspace(0) @f5
+!md86 = ptr addrspace(0) @f7
+!md87 = ptr addrspace(0) @f9
+!md88 = ptr addrspace(0) @f11
+!md89 = ptr addrspace(0) @f13
+!md90 = ptr addrspace(0) @f15
+!md91 = ptr addrspace(0) @f17
+!md92 = ptr addrspace(0) @f19
+!md93 = ptr addrspace(0) @f21
+!md94 = ptr addrspace(0) @f23
+!md95 = ptr addrspace(0) @f25
+!md96 = ptr addrspace(0) @f27
+!md97 = ptr addrspace(0) @f29
+!md98 = ptr addrspace(0) @f31
+!md99 = ptr addrspace(0) @f33
+!md100 = ptr addrspace(0) @f35
+!md101 = ptr addrspace(0) @f37
+!md102 = ptr addrspace(0) @f39
+!md103 = ptr addrspace(0) @f41
+!md104 = ptr addrspace(0) @f43
+!md105 = ptr addrspace(0) @f45
+!md106 = ptr addrspace(0) @f47
+!md107 = ptr addrspace(0) @f49
+!md108 = ptr addrspace(0) @f51
+!md109 = ptr addrspace(0) @f53
+!md110 = ptr addrspace(0) @f55
+!md111 = ptr addrspace(0) @f57
+!md112 = ptr addrspace(0) @f59
+!md113 = ptr addrspace(0) @f6
+!md114 = ptr addrspace(0) @f8
+!md115 = ptr addrspace(0) @f10
+!md116 = ptr addrspace(0) @f12
+!md117 = ptr addrspace(0) @f14
+!md118 = ptr addrspace(0) @f16
+!md119 = ptr addrspace(0) @f18
+!md120 = ptr addrspace(0) @f20
+!md121 = ptr addrspace(0) @f22
+!md122 = ptr addrspace(0) @f24
+!md123 = ptr addrspace(0) @f26
+!md124 = ptr addrspace(0) @f28
+!md125 = ptr addrspace(0) @f30
+!md126 = ptr addrspace(0) @f32
+!md127 = ptr addrspace(0) @f34
+!md128 = ptr addrspace(0) @f36
+!md129 = ptr addrspace(0) @f38
+!md130 = ptr addrspace(0) @f40
+!md131 = ptr addrspace(0) @f42
+!md132 = ptr addrspace(0) @f44
+!md133 = ptr addrspace(0) @f46
+!md134 = ptr addrspace(0) @f48
+!md135 = ptr addrspace(0) @f50
+!md136 = ptr addrspace(0) @f52
+!md137 = ptr addrspace(0) @f54
+!md138 = ptr addrspace(0) @f56
+!md139 = ptr addrspace(0) @f58
+!md140 = ptr addrspace(0) @f60
+!md141 = i32 9
+!md142 = i64 0
+!md143 = !{!md70, !md0, !md71}
+!md144 = !{!md72, !md1, !md73}
+!md145 = !{!md74, !md2, !md70}
+!md146 = !{!md74, !md3, !md75}
+!md147 = !{!md74, !md4, !md75}
+!md148 = !{!md74, !md5, !md75}
+!md149 = !{!md74, !md6, !md76}
+!md150 = !{!md74, !md7, !md77}
+!md151 = !{!md74, !md8, !md78}
+!md152 = !{!md9, !md10, !md11}
+!md153 = !{!md152}
+!md154 = !{!md80, !md12, !md10, !md11, !md13, !md14}
+!md155 = !{!md72, !md12, !md10, !md11, !md13, !md15}
+!md156 = !{!md154, !md155}
+!md157 = !{!md18, !md73, !md73, null}
+!md158 = !{!md17, !md157, !md81, !md82, !md83, !md84}
+!md159 = !{!md19, !md158, !md14}
+!md160 = !{!md19, !md158, !md15}
+!md161 = !{!md16, !md158, !md159, !md160}
+!md162 = !{!md79, !md153, !md156, !md161}
+!md163 = !{}
+!md164 = !{!md80, !md20, !md21, !md80, !md72, !md22, !md23, !md72, !md24, !md73, !md25, !md73, !md10, !md26, !md13, !md27}
+!md165 = !{!md72, !md20, !md21, !md72, !md72, !md28, !md23, !md72, !md24, !md73, !md25, !md73, !md10, !md11, !md13, !md29}
+!md166 = !{!md164, !md165}
+!md167 = !{!md85, !md163, !md166}
+!md168 = !{!md86, !md163, !md166}
+!md169 = !{!md87, !md163, !md166}
+!md170 = !{!md88, !md163, !md166}
+!md171 = !{!md89, !md163, !md166}
+!md172 = !{!md90, !md163, !md166}
+!md173 = !{!md91, !md163, !md166}
+!md174 = !{!md92, !md163, !md166}
+!md175 = !{!md93, !md163, !md166}
+!md176 = !{!md94, !md163, !md166}
+!md177 = !{!md95, !md163, !md166}
+!md178 = !{!md96, !md163, !md166}
+!md179 = !{!md97, !md163, !md166}
+!md180 = !{!md98, !md163, !md166}
+!md181 = !{!md99, !md163, !md166}
+!md182 = !{!md100, !md163, !md166}
+!md183 = !{!md101, !md163, !md166}
+!md184 = !{!md102, !md163, !md166}
+!md185 = !{!md103, !md163, !md166}
+!md186 = !{!md104, !md163, !md166}
+!md187 = !{!md72, !md20, !md21, !md72, !md72, !md28, !md23, !md72, !md24, !md73, !md25, !md73, !md10, !md11, !md13, !md29, !md30}
+!md188 = !{!md164, !md187}
+!md189 = !{!md105, !md163, !md188}
+!md190 = !{!md106, !md163, !md166}
+!md191 = !{!md107, !md163, !md166}
+!md192 = !{!md108, !md163, !md166}
+!md193 = !{!md109, !md163, !md166}
+!md194 = !{!md110, !md163, !md188}
+!md195 = !{!md111, !md163, !md166}
+!md196 = !{!md72, !md20, !md21, !md72, !md72, !md28, !md23, !md70, !md24, !md73, !md25, !md73, !md10, !md11, !md13, !md29}
+!md197 = !{!md164, !md196}
+!md198 = !{!md112, !md163, !md197}
+!md199 = !{!md31}
+!md200 = !{!md32}
+!md201 = !{!md33}
+!md202 = !{!md34, !md113, !md35}
+!md203 = !{!md34, !md114, !md36}
+!md204 = !{!md34, !md115, !md37}
+!md205 = !{!md34, !md116, !md38}
+!md206 = !{!md34, !md117, !md39}
+!md207 = !{!md34, !md118, !md40}
+!md208 = !{!md34, !md119, !md41}
+!md209 = !{!md34, !md120, !md42}
+!md210 = !{!md34, !md121, !md43}
+!md211 = !{!md34, !md122, !md44}
+!md212 = !{!md34, !md123, !md45}
+!md213 = !{!md34, !md124, !md46}
+!md214 = !{!md34, !md125, !md47}
+!md215 = !{!md34, !md126, !md48}
+!md216 = !{!md34, !md127, !md49}
+!md217 = !{!md34, !md128, !md50}
+!md218 = !{!md34, !md129, !md51}
+!md219 = !{!md34, !md130, !md52}
+!md220 = !{!md34, !md131, !md53}
+!md221 = !{!md34, !md132, !md54}
+!md222 = !{!md34, !md133, !md55}
+!md223 = !{!md34, !md134, !md56}
+!md224 = !{!md34, !md135, !md57}
+!md225 = !{!md34, !md136, !md58}
+!md226 = !{!md34, !md137, !md59}
+!md227 = !{!md34, !md138, !md60}
+!md228 = !{!md34, !md139, !md61}
+!md229 = !{!md34, !md140, !md62}
+!md230 = !{!md63}
+!md231 = !{!md70, !md141, !md80}
+!md232 = !{!md64, !md73, !md72, !md80}
+!md233 = !{!md66}
+!md234 = !{!md65, !md233, !md142}
+!md235 = !{!md11, !md234, !md142}
+!md236 = !{!md235, !md235, !md142}
+!md237 = !{!md69, !md234, !md142}
+!md238 = !{!md237, !md237, !md142}
+!"llvm.module.flags" = !{!md143, !md144, !md145, !md146, !md147, !md148, !md149, !md150, !md151}
+!"air.visible" = !{!md162}
+!"air.kernel" = !{!md167, !md168, !md169, !md170, !md171, !md172, !md173, !md174, !md175, !md176, !md177, !md178, !md179, !md180, !md181, !md182, !md183, !md184, !md185, !md186, !md189, !md190, !md191, !md192, !md193, !md194, !md195, !md198}
+!"air.compile_options" = !{!md199, !md200, !md201}
+!"air.visible_function_references" = !{!md202, !md203, !md204, !md205, !md206, !md207, !md208, !md209, !md210, !md211, !md212, !md213, !md214, !md215, !md216, !md217, !md218, !md219, !md220, !md221, !md222, !md223, !md224, !md225, !md226, !md227, !md228, !md229}
+!"llvm.ident" = !{!md230}
+!"air.version" = !{!md231}
+!"air.language_version" = !{!md232}

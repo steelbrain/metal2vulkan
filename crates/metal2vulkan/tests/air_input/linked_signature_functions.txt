@@ -1,0 +1,411 @@
+target triple = "air64_v29-apple-macosx27.0.0"
+source_filename = "-"
+; datalayout DataLayout { endian: Little, pointers: {0: PointerSpec { size_bits: 64, abi_bits: 64, pref_bits: 64, index_bits: 64 }}, ints: {1: AlignSpec { abi_bits: 8, pref_bits: 8 }, 8: AlignSpec { abi_bits: 8, pref_bits: 8 }, 16: AlignSpec { abi_bits: 16, pref_bits: 16 }, 32: AlignSpec { abi_bits: 32, pref_bits: 32 }, 64: AlignSpec { abi_bits: 64, pref_bits: 64 }}, floats: {16: AlignSpec { abi_bits: 16, pref_bits: 16 }, 32: AlignSpec { abi_bits: 32, pref_bits: 32 }, 64: AlignSpec { abi_bits: 64, pref_bits: 64 }, 128: AlignSpec { abi_bits: 128, pref_bits: 128 }}, vectors: {16: AlignSpec { abi_bits: 16, pref_bits: 16 }, 24: AlignSpec { abi_bits: 32, pref_bits: 32 }, 32: AlignSpec { abi_bits: 32, pref_bits: 32 }, 48: AlignSpec { abi_bits: 64, pref_bits: 64 }, 64: AlignSpec { abi_bits: 64, pref_bits: 64 }, 96: AlignSpec { abi_bits: 128, pref_bits: 128 }, 128: AlignSpec { abi_bits: 128, pref_bits: 128 }, 192: AlignSpec { abi_bits: 256, pref_bits: 256 }, 256: AlignSpec { abi_bits: 256, pref_bits: 256 }, 512: AlignSpec { abi_bits: 512, pref_bits: 512 }, 1024: AlignSpec { abi_bits: 1024, pref_bits: 1024 }}, aggregate: AlignSpec { abi_bits: 0, pref_bits: 64 }, native_ints: [8, 16, 32], stack_align_bits: None, alloca_space: 0, program_space: 0, globals_space: 0, mangling: None, fn_ptr_align: None, non_integral: [] }
+%t2 = type float (float, float)
+%t3 = type float (float)
+%t4 = type float (float, float, float)
+%t6 = type float (float, float, ptr addrspace(1))
+%t8 = type float (float, i32, float)
+%t9 = type float (i32)
+%t12 = type float (float, <2 x half>)
+%t14 = type float (<2 x i32>)
+%t15 = type float (float, half)
+%t16 = type i32 (float, i32)
+%t18 = type float (float, i64)
+%t19 = type float (i64)
+%t21 = type float (i1, float)
+%t22 = type half (float, float)
+%t24 = type void (float, float)
+%t25 = type float (ptr addrspace(1))
+%t27 = type float (ptr addrspace(2))
+%t28 = type float (i32, i32)
+%t30 = type [8 x i8]
+%t31 = type float (%t30, float)
+%t32 = type float (i8)
+%t33 = type [6 x float]
+%t34 = type float (%t33)
+%t35 = type void (ptr addrspace(1), i32)
+%t37 = type [2 x i32]
+c34 = %t37 [27, 2]
+
+define %t2 @f0 "extra" memory(NoModRef, NoModRef, NoModRef) "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="0" "no-builtins"="" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" {
+bb0:
+  %i0 = fadd reassoc nnan ninf nsz arcp contract afn float %a1, %a0
+  ret %i0
+}
+
+define %t3 @f1 "extra_two" memory(NoModRef, NoModRef, NoModRef) "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="0" "no-builtins"="" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" {
+bb0:
+  ret %a0
+}
+
+define %t2 @f2 "extra_pointer" memory(NoModRef, NoModRef, NoModRef) "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="0" "no-builtins"="" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" {
+bb0:
+  %i0 = fadd reassoc nnan ninf nsz arcp contract afn float %a1, %a0
+  ret %i0
+}
+
+define %t4 @f3 "missing" memory(NoModRef, NoModRef, NoModRef) "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="0" "no-builtins"="" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" {
+bb0:
+  %i0 = fadd reassoc nnan ninf nsz arcp contract afn float %a1, %a0
+  %i1 = fadd reassoc nnan ninf nsz arcp contract afn float %i0, %a2
+  ret %i1
+}
+
+define %t4 @f4 "missing_unused" memory(NoModRef, NoModRef, NoModRef) "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="0" "no-builtins"="" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" {
+bb0:
+  %i0 = fadd reassoc nnan ninf nsz arcp contract afn float %a1, %a0
+  ret %i0
+}
+
+define %t6 @f5 "missing_pointer_unused" memory(NoModRef, NoModRef, NoModRef) "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="0" "no-builtins"="" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" %a2( NoModRef nocapture ) {
+bb0:
+  %i0 = fadd reassoc nnan ninf nsz arcp contract afn float %a1, %a0
+  ret %i0
+}
+
+define %t8 @f6 "int_param" memory(NoModRef, NoModRef, NoModRef) "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="0" "no-builtins"="" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" {
+bb0:
+  %i0 = tail call reassoc nnan ninf nsz arcp contract afn float @f7 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Signed, src_fp8: None })](%a1)
+  %i1 = fadd reassoc nnan ninf nsz arcp contract afn float %i0, %a0
+  ret %i1
+}
+
+declare %t9 @f7 "air.convert.f.f32.s.i32" memory(NoModRef, NoModRef, NoModRef)
+
+define %t12 @f8 "half2_param" memory(NoModRef, NoModRef, NoModRef) "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="32" "no-builtins"="" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" {
+bb0:
+  %i0 = extractelement %a1, i64 0
+  %i1 = fpext %i0 to float
+  %i2 = fadd reassoc nnan ninf nsz arcp contract afn float %i1, %a0
+  %i3 = extractelement %a1, i64 1
+  %i4 = fpext %i3 to float
+  %i5 = fadd reassoc nnan ninf nsz arcp contract afn float %i2, %i4
+  ret %i5
+}
+
+define %t14 @f9 "uint2_param" memory(NoModRef, NoModRef, NoModRef) "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="64" "no-builtins"="" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" {
+bb0:
+  %i0 = extractelement %a0, i64 0
+  %i1 = tail call reassoc nnan ninf nsz arcp contract afn float @f10 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None })](%i0)
+  %i2 = extractelement %a0, i64 1
+  %i3 = tail call reassoc nnan ninf nsz arcp contract afn float @f10 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None })](%i2)
+  %i4 = fadd reassoc nnan ninf nsz arcp contract afn float %i3, %i1
+  ret %i4
+}
+
+declare %t9 @f10 "air.convert.f.f32.u.i32" memory(NoModRef, NoModRef, NoModRef)
+
+define %t15 @f11 "half_param" memory(NoModRef, NoModRef, NoModRef) "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="0" "no-builtins"="" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" {
+bb0:
+  %i0 = fpext %a1 to float
+  %i1 = fadd reassoc nnan ninf nsz arcp contract afn float %i0, %a0
+  ret %i1
+}
+
+define %t16 @f12 "uint_for_half" memory(NoModRef, NoModRef, NoModRef) "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="0" "no-builtins"="" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" {
+bb0:
+  ret %a1
+}
+
+define %t18 @f13 "long_param" memory(NoModRef, NoModRef, NoModRef) "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="0" "no-builtins"="" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" {
+bb0:
+  %i0 = tail call reassoc nnan ninf nsz arcp contract afn float @f14 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I64, lanes: 1 }, src_kind: Signed, src_fp8: None })](%a1)
+  %i1 = fadd reassoc nnan ninf nsz arcp contract afn float %i0, %a0
+  ret %i1
+}
+
+declare %t19 @f14 "air.convert.f.f32.s.i64" memory(NoModRef, NoModRef, NoModRef)
+
+define %t2 @f15 "float2_for_two" memory(NoModRef, NoModRef, NoModRef) "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="0" "no-builtins"="" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" {
+bb0:
+  %i0 = fmul reassoc nnan ninf nsz arcp contract afn float %a1, float 0x41200000
+  %i1 = fadd reassoc nnan ninf nsz arcp contract afn float %i0, %a0
+  ret %i1
+}
+
+define %t21 @f16 "bool_param" memory(NoModRef, NoModRef, NoModRef) "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="0" "no-builtins"="" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" {
+bb0:
+  %i0 = fneg reassoc nnan ninf nsz arcp contract afn float %a1
+  %i1 = select reassoc nnan ninf nsz arcp contract afn float %a0, %a1, %i0
+  ret %i1
+}
+
+define %t2 @f17 "int_return" memory(NoModRef, NoModRef, NoModRef) "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="0" "no-builtins"="" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" {
+bb0:
+  %i0 = fadd reassoc nnan ninf nsz arcp contract afn float %a1, %a0
+  ret %i0
+}
+
+define %t22 @f18 "float_for_half_return" memory(NoModRef, NoModRef, NoModRef) "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="0" "no-builtins"="" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" {
+bb0:
+  %i0 = fadd reassoc nnan ninf nsz arcp contract afn float %a1, %a0
+  %i1 = fptrunc %i0 to half
+  ret %i1
+}
+
+define %t2 @f19 "half_for_float_return" memory(NoModRef, NoModRef, NoModRef) "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="0" "no-builtins"="" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" {
+bb0:
+  %i0 = fadd reassoc nnan ninf nsz arcp contract afn float %a1, %a0
+  ret %i0
+}
+
+define %t24 @f20 "value_for_void" memory(NoModRef, NoModRef, NoModRef) "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="0" "no-builtins"="" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" {
+bb0:
+  ret void
+}
+
+define %t2 @f21 "void_for_value" memory(NoModRef, NoModRef, NoModRef) "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="0" "no-builtins"="" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" {
+bb0:
+  %i0 = fadd reassoc nnan ninf nsz arcp contract afn float %a1, %a0
+  ret %i0
+}
+
+define %t3 @f22 "value_for_pointer" memory(NoModRef, NoModRef, NoModRef) "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="0" "no-builtins"="" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" {
+bb0:
+  ret %a0
+}
+
+define %t25 @f23 "pointer_for_value" memory(NoModRef, NoModRef, NoModRef) "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="0" "no-builtins"="" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" %a0( NoModRef ) {
+bb0:
+  %i0 = icmp eq %a0, ptr addrspace(1) zeroinitializer
+  %i1 = select reassoc nnan ninf nsz arcp contract afn float %i0, float 0x3F800000, float 0x40000000
+  ret %i1
+}
+
+define %t27 @f24 "constant_for_device" memory(NoModRef, NoModRef, NoModRef) "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="0" "no-builtins"="" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" %a0( Ref nocapture ) {
+bb0:
+  %i0 = load float, %a0, align 4
+  %i1 = getelementptr inbounds float, %a0, i64 1
+  %i2 = load float, %i1, align 4
+  %i3 = fadd reassoc nnan ninf nsz arcp contract afn float %i2, %i0
+  ret %i3
+}
+
+define %t25 @f25 "device_for_constant" memory(Ref, NoModRef, NoModRef) "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="0" "no-builtins"="" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" %a0( Ref nocapture ) {
+bb0:
+  %i0 = load float, %a0, align 4
+  %i1 = getelementptr inbounds float, %a0, i64 1
+  %i2 = load float, %i1, align 4
+  %i3 = fadd reassoc nnan ninf nsz arcp contract afn float %i2, %i0
+  ret %i3
+}
+
+define %t2 @f26 "pair_for_floats" memory(NoModRef, NoModRef, NoModRef) "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="0" "no-builtins"="" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" {
+bb0:
+  %i0 = fadd reassoc nnan ninf nsz arcp contract afn float %a1, %a0
+  ret %i0
+}
+
+define %t28 @f27 "uints_for_floats" memory(NoModRef, NoModRef, NoModRef) "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="0" "no-builtins"="" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" {
+bb0:
+  %i0 = tail call reassoc nnan ninf nsz arcp contract afn float @f10 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None })](%a0)
+  %i1 = tail call reassoc nnan ninf nsz arcp contract afn float @f10 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None })](%a1)
+  %i2 = fadd reassoc nnan ninf nsz arcp contract afn float %i1, %i0
+  ret %i2
+}
+
+define %t31 @f28 "bytes_extra" memory(NoModRef, NoModRef, NoModRef) "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="0" "no-builtins"="" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" {
+bb0:
+  %i0 = extractvalue i8 %a0, 0
+  %i1 = tail call reassoc nnan ninf nsz arcp contract afn float @f29 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I8, lanes: 1 }, src_kind: Unsigned, src_fp8: None })](%i0)
+  %i2 = fadd reassoc nnan ninf nsz arcp contract afn float %i1, %a1
+  ret %i2
+}
+
+declare %t32 @f29 "air.convert.f.f32.u.i8" memory(NoModRef, NoModRef, NoModRef)
+
+define %t34 @f30 "uint_array_for_float_array" memory(NoModRef, NoModRef, NoModRef) "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="0" "no-builtins"="" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" {
+bb0:
+  %i0 = extractvalue float %a0, 0
+  %i1 = extractvalue float %a0, 5
+  %i2 = fadd reassoc nnan ninf nsz arcp contract afn float %i0, %i1
+  ret %i2
+}
+
+define %t35 @f31 "linked_signature_functions" memory(Mod, NoModRef, NoModRef) "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="0" "no-builtins"="" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" %a0( Mod nocapture "air-buffer-no-alias"="" ) {
+bb0:
+  %i0 = zext %a1 to i64
+  %i1 = getelementptr inbounds i32, %a0, %i0
+  store %a1, %i1, align 4
+  ret void
+}
+!md0 = !"SDK Version"
+!md1 = !"wchar_size"
+!md2 = !"frame-pointer"
+!md3 = !"air.max_device_buffers"
+!md4 = !"air.max_constant_buffers"
+!md5 = !"air.max_threadgroup_buffers"
+!md6 = !"air.max_textures"
+!md7 = !"air.max_read_write_textures"
+!md8 = !"air.max_samplers"
+!md9 = !"air.visible_output"
+!md10 = !"air.arg_type_name"
+!md11 = !"float"
+!md12 = !"air.visible_input"
+!md13 = !"air.arg_name"
+!md14 = !"a"
+!md15 = !"b"
+!md16 = !"c"
+!md17 = !"p"
+!md18 = !"int"
+!md19 = !"half2"
+!md20 = !"uint2"
+!md21 = !"v"
+!md22 = !"half"
+!md23 = !"uint"
+!md24 = !"long"
+!md25 = !"bool"
+!md26 = !"x"
+!md27 = !"uchar"
+!md28 = !"air.buffer"
+!md29 = !"air.location_index"
+!md30 = !"air.read_write"
+!md31 = !"air.address_space"
+!md32 = !"air.arg_type_size"
+!md33 = !"air.arg_type_align_size"
+!md34 = !"out"
+!md35 = !"air.thread_position_in_grid"
+!md36 = !"tid"
+!md37 = !"air.compile.denorms_disable"
+!md38 = !"air.compile.fast_math_enable"
+!md39 = !"air.compile.framebuffer_fetch_enable"
+!md40 = !"Apple metal version 32023.922 (metalfe-32023.922.4)"
+!md41 = !"Metal"
+!md42 = !"omnipotent char"
+!md43 = !"Simple C++ TBAA"
+!md44 = i32 2
+!md45 = %t37 c34
+!md46 = i32 1
+!md47 = i32 4
+!md48 = i32 7
+!md49 = i32 31
+!md50 = i32 128
+!md51 = i32 8
+!md52 = i32 16
+!md53 = ptr addrspace(0) @f0
+!md54 = i32 0
+!md55 = ptr addrspace(0) @f1
+!md56 = ptr addrspace(0) @f2
+!md57 = ptr addrspace(0) @f3
+!md58 = ptr addrspace(0) @f4
+!md59 = ptr addrspace(0) @f5
+!md60 = ptr addrspace(0) @f6
+!md61 = ptr addrspace(0) @f8
+!md62 = ptr addrspace(0) @f9
+!md63 = ptr addrspace(0) @f11
+!md64 = ptr addrspace(0) @f12
+!md65 = ptr addrspace(0) @f13
+!md66 = ptr addrspace(0) @f15
+!md67 = ptr addrspace(0) @f16
+!md68 = ptr addrspace(0) @f17
+!md69 = ptr addrspace(0) @f18
+!md70 = ptr addrspace(0) @f19
+!md71 = ptr addrspace(0) @f20
+!md72 = ptr addrspace(0) @f21
+!md73 = ptr addrspace(0) @f22
+!md74 = ptr addrspace(0) @f23
+!md75 = ptr addrspace(0) @f24
+!md76 = ptr addrspace(0) @f25
+!md77 = ptr addrspace(0) @f26
+!md78 = ptr addrspace(0) @f27
+!md79 = ptr addrspace(0) @f28
+!md80 = ptr addrspace(0) @f30
+!md81 = ptr addrspace(0) @f31
+!md82 = i32 9
+!md83 = i64 0
+!md84 = !{!md44, !md0, !md45}
+!md85 = !{!md46, !md1, !md47}
+!md86 = !{!md48, !md2, !md44}
+!md87 = !{!md48, !md3, !md49}
+!md88 = !{!md48, !md4, !md49}
+!md89 = !{!md48, !md5, !md49}
+!md90 = !{!md48, !md6, !md50}
+!md91 = !{!md48, !md7, !md51}
+!md92 = !{!md48, !md8, !md52}
+!md93 = !{!md9, !md10, !md11}
+!md94 = !{!md93}
+!md95 = !{!md54, !md12, !md10, !md11, !md13, !md14}
+!md96 = !{!md46, !md12, !md10, !md11, !md13, !md15}
+!md97 = !{!md95, !md96}
+!md98 = !{!md53, !md94, !md97}
+!md99 = !{!md95}
+!md100 = !{!md55, !md94, !md99}
+!md101 = !{!md56, !md94, !md97}
+!md102 = !{!md44, !md12, !md10, !md11, !md13, !md16}
+!md103 = !{!md95, !md96, !md102}
+!md104 = !{!md57, !md94, !md103}
+!md105 = !{!md58, !md94, !md103}
+!md106 = !{!md44, !md12, !md10, !md11, !md13, !md17}
+!md107 = !{!md95, !md96, !md106}
+!md108 = !{!md59, !md94, !md107}
+!md109 = !{!md46, !md12, !md10, !md18, !md13, !md15}
+!md110 = !{!md95, !md109, !md102}
+!md111 = !{!md60, !md94, !md110}
+!md112 = !{!md46, !md12, !md10, !md19, !md13, !md15}
+!md113 = !{!md95, !md112}
+!md114 = !{!md61, !md94, !md113}
+!md115 = !{!md54, !md12, !md10, !md20, !md13, !md21}
+!md116 = !{!md115}
+!md117 = !{!md62, !md94, !md116}
+!md118 = !{!md46, !md12, !md10, !md22, !md13, !md15}
+!md119 = !{!md95, !md118}
+!md120 = !{!md63, !md94, !md119}
+!md121 = !{!md9, !md10, !md23}
+!md122 = !{!md121}
+!md123 = !{!md46, !md12, !md10, !md23, !md13, !md15}
+!md124 = !{!md95, !md123}
+!md125 = !{!md64, !md122, !md124}
+!md126 = !{!md46, !md12, !md10, !md24, !md13, !md15}
+!md127 = !{!md95, !md126}
+!md128 = !{!md65, !md94, !md127}
+!md129 = !{!md66, !md94, !md97}
+!md130 = !{!md54, !md12, !md10, !md25, !md13, !md14}
+!md131 = !{!md130, !md96}
+!md132 = !{!md67, !md94, !md131}
+!md133 = !{!md68, !md94, !md97}
+!md134 = !{!md9, !md10, !md22}
+!md135 = !{!md134}
+!md136 = !{!md69, !md135, !md97}
+!md137 = !{!md70, !md94, !md97}
+!md138 = !{}
+!md139 = !{!md71, !md138, !md97}
+!md140 = !{!md72, !md94, !md97}
+!md141 = !{!md54, !md12, !md10, !md11, !md13, !md26}
+!md142 = !{!md141}
+!md143 = !{!md73, !md94, !md142}
+!md144 = !{!md54, !md12, !md10, !md11, !md13, !md17}
+!md145 = !{!md144}
+!md146 = !{!md74, !md94, !md145}
+!md147 = !{!md75, !md94, !md145}
+!md148 = !{!md76, !md94, !md145}
+!md149 = !{!md77, !md94, !md97}
+!md150 = !{!md54, !md12, !md10, !md23, !md13, !md14}
+!md151 = !{!md150, !md123}
+!md152 = !{!md78, !md94, !md151}
+!md153 = !{!md54, !md12, !md10, !md27, !md13, !md16}
+!md154 = !{!md46, !md12, !md10, !md11, !md13, !md26}
+!md155 = !{!md153, !md154}
+!md156 = !{!md79, !md94, !md155}
+!md157 = !{!md80, !md94, !md99}
+!md158 = !{!md54, !md28, !md29, !md54, !md46, !md30, !md31, !md46, !md32, !md47, !md33, !md47, !md10, !md23, !md13, !md34}
+!md159 = !{!md46, !md35, !md10, !md23, !md13, !md36}
+!md160 = !{!md158, !md159}
+!md161 = !{!md81, !md138, !md160}
+!md162 = !{!md37}
+!md163 = !{!md38}
+!md164 = !{!md39}
+!md165 = !{!md40}
+!md166 = !{!md44, !md82, !md54}
+!md167 = !{!md41, !md47, !md46, !md54}
+!md168 = !{!md43}
+!md169 = !{!md42, !md168, !md83}
+!md170 = !{!md11, !md169, !md83}
+!md171 = !{!md170, !md170, !md83}
+!"llvm.module.flags" = !{!md84, !md85, !md86, !md87, !md88, !md89, !md90, !md91, !md92}
+!"air.visible" = !{!md98, !md100, !md101, !md104, !md105, !md108, !md111, !md114, !md117, !md120, !md125, !md128, !md129, !md132, !md133, !md136, !md137, !md139, !md140, !md143, !md146, !md147, !md148, !md149, !md152, !md156, !md157}
+!"air.kernel" = !{!md161}
+!"air.compile_options" = !{!md162, !md163, !md164}
+!"llvm.ident" = !{!md165}
+!"air.version" = !{!md166}
+!"air.language_version" = !{!md167}
