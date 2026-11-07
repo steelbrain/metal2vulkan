@@ -81,7 +81,10 @@ use crate::device::requirements::VkLimit;
 use crate::error::{BindError, Capability, Feature, LowerFamily, Unsupported};
 use crate::indirect_commands::BINDING_COUNT;
 use crate::lower::dispatch::{pack_nominal, region_bytes};
+use crate::metal::vertex::vertex_bytes;
+use crate::metal::{StepFunction, VertexFormat};
 use crate::pipeline::interface::{AccessSet, BufferForm, PushLoc};
+use crate::pipeline::stage_io::StageInFetch;
 use crate::pipeline::sym::{Axis, PushField, SlotClass, SpecKey, Stage};
 use crate::vk;
 
@@ -867,6 +870,28 @@ fn stage_in_stride(state: &BindState, index: u32) -> u32 {
     }
 }
 
+/// The axis (0 for x, 1 for y) of fetch `f`'s thread-position step; `None` for any other step.
+/// These are the steps whose element the region clamps, and which `SpecKey::StageInReach` bounds
+/// (`lower::stage_io::stage_in`).
+pub(super) fn grid_axis(f: &StageInFetch) -> Option<usize> {
+    match f.step_function {
+        StepFunction::ThreadPositionInGridX => Some(0),
+        StepFunction::ThreadPositionInGridY => Some(1),
+        _ => None,
+    }
+}
+
+/// The end of fetch `f`'s attribute bytes in an element: its offset plus its format's store
+/// size ([`vertex_bytes`]; `MTLAttributeFormat` lists `MTLVertexFormat`'s formats at the same
+/// values). An element `e` at stride `s` lies in the first `2^32` bytes from the bind offset
+/// exactly where `e · s` plus this end is at most `2^32` (`lower::stage_io::fetch`'s
+/// `within_reach`). `None` for a format no fetch decodes.
+fn element_end(f: &StageInFetch) -> Option<u64> {
+    let format = VertexFormat::try_from(f.format.as_raw()).ok()?;
+    let bytes = vertex_bytes(format)?;
+    Some(u64::from(f.offset) + u64::from(bytes))
+}
+
 /// The `SpecKey::StageInReach` of a dispatch of `t` over Metal's `grid` (0 on each axis for an
 /// indirect dispatch, whose grid only the GPU knows) in stage-in region `region`, under `state`'s
 /// strides. It says whether an element that a thread-position fetch reads may lie past the first
@@ -886,10 +911,7 @@ fn stage_in_reach(
         return !t.stage_in_grid.is_empty();
     };
     t.stage_in_grid.iter().any(|f| {
-        let (Some(axis), Some(end)) = (
-            crate::lower::stage_io::stage_in::grid_axis(f),
-            crate::lower::stage_io::stage_in::element_end(f),
-        ) else {
+        let (Some(axis), Some(end)) = (grid_axis(f), element_end(f)) else {
             return true;
         };
         let stride = f

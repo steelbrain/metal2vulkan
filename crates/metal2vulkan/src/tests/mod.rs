@@ -190,6 +190,7 @@ mod owned_divisions;
 mod profile_fingerprint_derived;
 mod public_fixtures_engine;
 mod relocated_once;
+mod stage_in_element_bytes;
 mod stage_in_unread_key;
 mod stage_input_siblings;
 mod tessellator;

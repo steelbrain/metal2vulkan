@@ -116,6 +116,15 @@ pub(crate) fn vk_scaled_vertex_format(format: VertexFormat) -> Option<vk::Format
     })
 }
 
+/// The bytes an attribute of `format` takes in its element: its Vulkan format's block, the bytes
+/// a fixed-function fetch of it reads and the bytes a pulled one decodes
+/// (`lower::stage_io::fetch::Encoding::bytes`, which `tests::stage_in_element_bytes` holds equal
+/// to this for every format). `None` for `Invalid`, which no fetch decodes.
+pub(crate) fn vertex_bytes(format: VertexFormat) -> Option<u32> {
+    let f = vk_vertex_format(format).ok()?;
+    f.block().map(|b| b.size)
+}
+
 /// The alignment in bytes Vulkan's fixed-function vertex input requires of an attribute's address
 /// in `format` ("Vertex Input Address Calculation", `VUID-vkCmdDraw-format-10389`/`-10390`): the
 /// [`vk::FormatBlock::vertex_alignment`] of its Vulkan format, the component size or the whole

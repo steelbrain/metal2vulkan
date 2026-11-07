@@ -186,6 +186,7 @@ fn the_runtime_sources_are_the_committed_ones() {
         ("metal2vulkan/src/pipeline/layout.rs", values),
         ("metal2vulkan/src/pipeline/lower_inputs.rs", "the compiled pipeline's value types; the artifact digests their values (the storage image classes)"),
         ("metal2vulkan/src/pipeline/mod.rs", values),
+        ("metal2vulkan/src/pipeline/stage_io.rs", "the compiled pipeline's value types; the artifact digests their values (a kernel's `[[stage_in]]` fetches, which its binding plan carries for the stage-in reach the binder decides)"),
         ("metal2vulkan/src/pipeline/sym.rs", "the compiled pipeline's value types; the artifact digests their values (slots, push fields, handle classes)"),
         ("metal2vulkan/src/pipeline/vertex.rs", "the compiled pipeline's value types; the artifact digests their values (the vertex layout)"),
         ("metal2vulkan/src/reflection/mod.rs", "Metal's reflection answers, which the runtime returns beside a pipeline state it creates or for a library's function, and the bindings it lays an argument encoder out from (`new_argument_encoder_with_buffer_binding`); no run reads them or makes such an encoder"),
