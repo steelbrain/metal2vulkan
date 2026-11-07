@@ -49,11 +49,10 @@
 //!
 //! **Stage-in region**. A kernel that reads the region (a `[[stage_in]]` step by thread position,
 //! `[[grid_origin]]`, or `[[grid_size]]`) is dispatched only with one the encoder set: without it,
-//! `BindError::MissingStageInRegion`, since what Metal reads then is not established. A kernel
-//! whose step reads the thread position alone (a step rate above 1, or an indexed step) depends on
-//! the region's origin being 0 on that axis; a dispatch with another origin there is
-//! `Unsupported{KernelStageIn, NotImplemented}`: whether Metal adds the origin before or after the
-//! division or the index lookup is not established.
+//! `BindError::MissingStageInRegion`, since what Metal reads then is not established. A step at a
+//! rate above 1 adds the region's origin to the quotient, and an indexed step adds it to the index
+//! it looks up at the thread position, as an M4 and an M3 Max read (`lower::stage_io::stage_in`):
+//! the binder writes the region whatever its origin.
 //!
 //! **Indirect.** When any axis of `maxComputeWorkGroupCount` is below `2^32 - 1`, an indirect
 //! dispatch carries an [`IndirectClamp`] prepass and its region reads the clamp's scratch
