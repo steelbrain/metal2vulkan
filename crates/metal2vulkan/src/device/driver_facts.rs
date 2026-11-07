@@ -1458,10 +1458,11 @@ pub enum DriverFact {
     /// with or without a by-region barrier from the fragment shader's writes between the draws.
     /// The causes are MoltenVK's and Metal's: MoltenVK puts each such storage image in Metal's
     /// raster order group 0 as a coherent read-write texture, which did not order the draws under
-    /// that load, and on Apple's GPUs it encodes no Metal barrier for a memory barrier inside a
-    /// render pass (its device setup turns render pass barriers off for the Apple GPU families,
-    /// stating that Apple's GPUs do not support them), so the barrier the runtime records there
-    /// orders nothing. On a driver with it the runtime records such a draw into a new render pass
+    /// that load; and MoltenVK 1.4.2 sets its `memoryBarriers` feature false on the Apple GPU
+    /// families ("Apple GPUs don't support them") and so encodes a plain `VkMemoryBarrier` inside
+    /// a render pass as nothing (it restarts its Metal render pass only for an image barrier into
+    /// `GENERAL` or a by-region one whose destination reads input attachments), so the barrier the
+    /// runtime records there orders nothing. On a driver with it the runtime records such a draw into a new render pass
     /// instance after the one the earlier draw wrote in, in place of the barrier (`render.rs`'s
     /// `InterlockedStorage`), and the instances' boundary orders the two.
     InterlockedDrawsRaceUnderLoad,
