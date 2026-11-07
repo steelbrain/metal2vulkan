@@ -309,8 +309,11 @@ const DRAW_ALLOCATIONS_DEBUG: f64 = 20.0;
 /// rectangle (`render_state::ViewportList`), its attachments' extents and its tracker's first part
 /// (`tracker::EncoderUses`) are held in place, and its lowering is boxed once where it is built
 /// (`render.rs`), its current instance inside that box, which the encoder then moves as a pointer.
-/// Measured: 4.00 on lavapipe in a build with debug assertions; 5.00 on the M3 Max through
-/// MoltenVK.
+/// Its core is boxed too, so the pass's end hands it on as a pointer, in the box the device kept
+/// from its last ended render encoder (`encoder::SpareCores`): no allocation of its own once the
+/// device has one. Measured: 4.00 on lavapipe (llvmpipe, LLVM 23.1.4) in a build with debug
+/// assertions; 5.00 on the M3 Max through MoltenVK. With a new box for the core at each open,
+/// 5.00 on lavapipe.
 #[cfg(not(m2v_system_alloc))]
 const OPEN_ALLOCATIONS: f64 = 4.5;
 /// The most allocations a frame's pass end (`end_encoding`) makes on the encoding thread on
