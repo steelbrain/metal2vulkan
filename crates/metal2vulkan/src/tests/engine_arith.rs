@@ -1762,8 +1762,12 @@ fn a_fast_division_leaves_its_nans_to_the_device() {
 /// An `fdiv` without `arcp` on `float`, Metal's precise division, is the device's `OpFDiv` on
 /// every profile (`arith.fdiv.native`), noted `NativeDivision`: here the interpreter's correctly
 /// rounded quotient (lane 0x42aa3a21 / 0x44c80075 gives 0x3D59E382, Metal's word, where `arcp`
-/// gives 0x3D59E381), and `0x7FC00000` for `0 / 0`. A `half` division under every flag set,
-/// `arcp` included, is the `float` quotient rounded once to `half`.
+/// gives 0x3D59E381). Metal answers `0x7FC00000` for `0 / 0`; the module selects no NaN, so the
+/// quotient is a NaN whose bits are the device's (the interpreter's are its host CPU's: x86-64's
+/// default NaN, `0xFFC00000`, has its sign set, arm64's is `0x7FC00000`), noted
+/// `NativeNanEncoding` exactly where the profile does not state the device answers Metal's
+/// (`DriverDeviation::MetalCanonicalNans`). A `half` division under every flag set, `arcp`
+/// included, is the `float` quotient rounded once to `half`.
 #[test]
 fn a_division_without_arcp_is_the_devices_quotient() {
     let xy = format!(
@@ -1778,11 +1782,12 @@ fn a_division_without_arcp_is_the_devices_quotient() {
         on("hyb", 16, 0x4200)
     );
     let half_q = (f32::from_bits(0x3EAA_A000)).to_bits();
-    let kernel = |name: &'static str, body: String, want: u32| Kernel {
+    // `want` is the stored word, or `None` for a NaN whose bits are the device's.
+    let kernel = |name: &'static str, body: String, want: Option<u32>| Kernel {
         name,
         body,
         float: true,
-        want: Some(want),
+        want,
         needs: &[],
         note: None,
     };
@@ -1790,27 +1795,27 @@ fn a_division_without_arcp_is_the_devices_quotient() {
         kernel(
             "plain_divide",
             format!("{xy}  %r = fdiv float %x, %y\n"),
-            0x3D59_E382,
+            Some(0x3D59_E382),
         ),
         kernel(
             "divide_without_arcp",
             format!("{xy}  %r = fdiv nnan ninf nsz contract float %x, %y\n"),
-            0x3D59_E382,
+            Some(0x3D59_E382),
         ),
         kernel(
             "divide_zero_by_zero",
             format!("{}  %r = fdiv float %z, %z\n", of("z", 0.0)),
-            0x7FC0_0000,
+            None,
         ),
         kernel(
             "divide_half",
             format!("{hxy}  %q = fdiv half %hx, %hy\n  %r = fpext half %q to float\n"),
-            half_q,
+            Some(half_q),
         ),
         kernel(
             "divide_half_under_arcp",
             format!("{hxy}  %q = fdiv fast half %hx, %hy\n  %r = fpext half %q to float\n"),
-            half_q,
+            Some(half_q),
         ),
     ];
     let Some(bitcode) = assemble("precise-divide", &module(&ks)) else {
@@ -1818,6 +1823,8 @@ fn a_division_without_arcp_is_the_devices_quotient() {
     };
     for stem in ["moltenvk-m3", "lavapipe", "vk12-floor"] {
         let p = profile(stem, exact_maths()).expect("profile");
+        let device_nans =
+            p.takes_driver_deviation(crate::error::DriverDeviation::MetalCanonicalNans);
         for kk in &ks {
             let what = format!("{} on {stem}", kk.name);
             let a = compile(&bitcode, kk.name, &p).unwrap_or_else(|e| panic!("{what}: {e:?}"));
@@ -1833,7 +1840,18 @@ fn a_division_without_arcp_is_the_devices_quotient() {
                 a.strategies.entries
             );
             let got = interpret(&bitcode, kk.name, &p);
-            assert_eq!(Some(got), kk.want, "{what}: {got:#x}");
+            match kk.want {
+                Some(want) => assert_eq!(got, want, "{what}: {got:#x}"),
+                None => {
+                    assert!(stores_nan(got, false), "{what}: {got:#x}");
+                    assert_eq!(
+                        a.precision.contains(&PrecisionNote::NativeNanEncoding),
+                        !device_nans,
+                        "{what}: {:?}",
+                        a.precision
+                    );
+                }
+            }
         }
     }
 }
