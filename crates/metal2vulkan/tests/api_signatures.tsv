@@ -7945,6 +7945,7 @@ method	metal2vulkan-runtime::Device::new_dynamic_library	pub fn new_dynamic_libr
 method	metal2vulkan-runtime::Device::new_dynamic_library_with_url	pub fn new_dynamic_library_with_url(&self, url: &Path) -> Result<DynamicLibrary, Error>
 method	metal2vulkan-runtime::Device::new_event	pub fn new_event(&self) -> Result<Event, Error>
 method	metal2vulkan-runtime::Device::new_exportable_buffer	pub fn new_exportable_buffer(&self, length: u64, options: ResourceOptions) -> Result<Buffer, Error>
+method	metal2vulkan-runtime::Device::new_exportable_shared_event	pub fn new_exportable_shared_event(&self) -> Result<SharedEvent, Error>
 method	metal2vulkan-runtime::Device::new_fence	pub fn new_fence(&self) -> Fence
 method	metal2vulkan-runtime::Device::new_heap	pub fn new_heap(&self, descriptor: &HeapDescriptor) -> Result<Heap, Error>
 method	metal2vulkan-runtime::Device::new_heap_with_bytes_no_copy	pub unsafe fn new_heap_with_bytes_no_copy(&self, memory: HostMemory, descriptor: &HeapDescriptor, deallocator: Option<Deallocator>, keep_alive: Option<KeepAlive>) -> Result<Heap, Error>
@@ -8444,6 +8445,7 @@ method	metal2vulkan-runtime::ScissorRect::new	pub fn new(x: u64, y: u64, width: 
 method	metal2vulkan-runtime::ShaderCacheError::new	pub fn new(path: Option<PathBuf>, kind: std::io::ErrorKind, message: &str) -> ShaderCacheError
 method	metal2vulkan-runtime::ShaderCacheOptions::in_directory	pub fn in_directory(directory: impl Into<PathBuf>) -> ShaderCacheOptions
 method	metal2vulkan-runtime::SharedEvent::device	pub fn device(&self) -> Option<&Device>
+method	metal2vulkan-runtime::SharedEvent::export_semaphore_fd	pub fn export_semaphore_fd(&self) -> Result<OwnedFd, Error>
 method	metal2vulkan-runtime::SharedEvent::label	pub fn label(&self) -> Option<String>
 method	metal2vulkan-runtime::SharedEvent::new_shared_event_handle	pub fn new_shared_event_handle(&self) -> SharedEventHandle
 method	metal2vulkan-runtime::SharedEvent::notify_listener	pub fn notify_listener(&self, listener: &SharedEventListener, value: u64, block: SharedEventNotification)
@@ -9685,7 +9687,7 @@ struct	metal2vulkan-runtime::ShaderCacheError	#[derive(Clone, Debug, PartialEq, 
 struct	metal2vulkan-runtime::ShaderCacheOptions	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct ShaderCacheOptions
 struct	metal2vulkan-runtime::ShaderCacheStatistics	#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)] #[non_exhaustive] pub struct ShaderCacheStatistics
 struct	metal2vulkan-runtime::ShadowKeeps	#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)] pub struct ShadowKeeps
-struct	metal2vulkan-runtime::SharedEvent	#[derive(Clone)] pub struct SharedEvent(Arc<EventShared>)
+struct	metal2vulkan-runtime::SharedEvent	#[derive(Clone)] pub struct SharedEvent(pub(super) Arc<EventShared>)
 struct	metal2vulkan-runtime::SharedEventHandle	#[derive(Clone)] pub struct SharedEventHandle(Arc<EventShared>)
 struct	metal2vulkan-runtime::SharedEventListener	#[derive(Clone)] pub struct SharedEventListener(Arc<ListenerHandle>)
 struct	metal2vulkan-runtime::SharedTextureHandle	#[derive(Clone)] pub struct SharedTextureHandle(Texture)
@@ -12191,6 +12193,7 @@ variant	metal2vulkan-runtime::RuntimeGap::EmptyFillPattern	EmptyFillPattern
 variant	metal2vulkan-runtime::RuntimeGap::ExecutionRangeOffFour	ExecutionRangeOffFour { offset: u64 }
 variant	metal2vulkan-runtime::RuntimeGap::ExecutionRangePastBuffer	ExecutionRangePastBuffer { offset: u64, length: u64 }
 variant	metal2vulkan-runtime::RuntimeGap::ExportableMemory	ExportableMemory
+variant	metal2vulkan-runtime::RuntimeGap::ExportableSemaphore	ExportableSemaphore
 variant	metal2vulkan-runtime::RuntimeGap::ExtensionEnable	ExtensionEnable(VkExtension)
 variant	metal2vulkan-runtime::RuntimeGap::FeatureEnable	FeatureEnable(VkFeature)
 variant	metal2vulkan-runtime::RuntimeGap::FunctionTablePastMaxBufferLength	FunctionTablePastMaxBufferLength { count: u64, max_buffer_length: u64 }

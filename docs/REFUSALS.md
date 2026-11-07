@@ -28,7 +28,7 @@ Columns:
 | Kind | Variants | With a site | Reach system | Reach app | Reach rare | Reach none | Unassessed |
 |---|---|---|---|---|---|---|---|
 | Translator and front-end refusals | 128 | 128 | 6 | 32 | 71 | 19 | 0 |
-| Runtime gaps | 74 | 74 | 1 | 8 | 46 | 19 | 0 |
+| Runtime gaps | 75 | 75 | 1 | 8 | 46 | 20 | 0 |
 | Apple-only calls | 4 | 4 | 0 | 0 | 0 | 4 | 0 |
 | Binder refusals at a device limit | 9 | 9 | 0 | 1 | 7 | 1 | 0 |
 | Translation caps | 14 | 14 | 0 | 0 | 7 | 7 | 0 |
@@ -42,7 +42,7 @@ Columns:
 | Kind | `metal-measured` | `metal-documented` | `metal-takes` | `device` | `ours` | `unknown` | `delegated` | `-` |
 |---|---|---|---|---|---|---|---|---|
 | Translator and front-end refusals | 0 | 0 | 0 | 48 | 57 | 0 | 0 | 23 |
-| Runtime gaps | 0 | 0 | 0 | 0 | 74 | 0 | 0 | 0 |
+| Runtime gaps | 0 | 0 | 0 | 0 | 75 | 0 | 0 | 0 |
 | Apple-only calls | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 4 |
 | Binder refusals at a device limit | 0 | 0 | 0 | 9 | 0 | 0 | 0 | 0 |
 | Translation caps | 0 | 0 | 0 | 0 | 14 | 0 | 0 | 0 |
@@ -215,6 +215,7 @@ Columns:
 | `SamplePositionsAtBegin` | A render pass whose custom sample positions Vulkan takes only through what the runtime does not build | every device (runtime piece not built) | `ours` | 3: `crates/metal2vulkan-runtime/src/depth_stencil_scratch.rs (stencil_scratch)`, `crates/metal2vulkan-runtime/src/render_pass.rs (positioned_stand_in)` (+1) | `rare`: custom sample positions Vulkan takes only at begin |
 | `InterpolateAtSampleWithPositions` | A draw at custom sample positions (`setSamplePositions:count:`) through a pipeline whose fragment function reads an `interpolant` at a sample it... | every device (runtime piece not built) | `ours` | 1: `crates/metal2vulkan-runtime/src/render.rs (settle_draw)` | `rare`: interpolate_at_sample in a pass at custom sample positions |
 | `ExportableMemory` | A buffer whose memory another API imports (`Device::new_exportable_buffer`, a runtime extension | every device (runtime piece not built) | `ours` | 1: `crates/metal2vulkan-runtime/src/exported_memory.rs (new_exportable_buffer)` | `none`: a runtime extension's exportable buffer on a device without the opaque-fd export |
+| `ExportableSemaphore` | A shared event whose timeline semaphore another API imports (`Device::new_exportable_shared_event`, a runtime extension | every device (runtime piece not built) | `ours` | 1: `crates/metal2vulkan-runtime/src/exported_semaphore.rs (new_exportable_shared_event)` | `none`: a runtime extension's exportable shared event on a device without the opaque-fd export |
 | `SharedEventAcrossDevices` | A shared event handle opened on a device other than its event's | every device (runtime piece not built) | `ours` | 1: `crates/metal2vulkan-runtime/src/event.rs (new_shared_event_with_handle)` | `rare`: a shared event opened on another device |
 | `VkImagePlaneCopy` | A copy, fill or mipmap generation of a texture over a plane of the caller's multi-planar `VkImage` (`Device::new_texture_with_vk_image_plane`), a... | every device (runtime piece not built) | `ours` | 3: `crates/metal2vulkan-runtime/src/texture.rs (check_plane_copied)`, `crates/metal2vulkan-runtime/src/texture/view_shadow.rs (new_view_shadow)` (+1) | `none`: a runtime extension's texture over a plane of the caller's VkImage copied, filled, mipmapped or rendered to |
 | `ViewportDepthRange` | A viewport depth range past `[0, 1]`, which Metal takes, on a device without the features to take it natively or by the vertex stage's... | every device (runtime piece not built) | `ours` | 7: `crates/metal2vulkan-runtime/src/render/draw_shape.rs (settings)`, `crates/metal2vulkan-runtime/src/render_state.rs` (+5) | `rare`: viewport depth outside [0, 1] without the device features |
@@ -336,7 +337,7 @@ Columns:
 | `WrappedImage` | An image the caller made that cannot be wrapped as a texture of the descriptor (`new_texture_with_vk_image`) | every device (a public call's own check of its arguments) | `ours`: a runtime extension: Metal wraps no Vulkan image | 2: `crates/metal2vulkan-runtime/src/texture/wrapped.rs (new_texture_with_vk_image)`, `crates/metal2vulkan-runtime/src/texture/wrapped.rs (new_texture_with_vk_image_plane)` | `-` |
 | `NotShareable` | A handle of a texture that is not shareable, for which Metal answers nil, an [`Error::Nil`] | every device (a public call's own check of its arguments) | `unknown`: Metal's nil for a texture that is not shareable is unmeasured | 1: `crates/metal2vulkan-runtime/src/texture/shared.rs (new_shared_texture_handle)` | `-` |
 | `Semaphore` | A semaphore that cannot be one of the caller's binary semaphores | every device (a public call's own check of its arguments) | `ours`: a runtime extension: Metal has no binary semaphores | 1: `crates/metal2vulkan-runtime/src/command_buffer/mod.rs (binary_command)` | `-` |
-| `NotExportable` | The memory of a buffer not made exportable (`Buffer::export_memory_fd` of a buffer `Device::new_exportable_buffer` did not make) | every device (a public call's own check of its arguments) | `ours`: a runtime extension: Metal exports no buffer's memory | 2: `crates/metal2vulkan-runtime/src/exported_memory.rs (export_memory_fd, 2 sites)` | `-` |
+| `NotExportable` | The memory of a buffer, or the semaphore of a shared event, not made exportable (`Buffer::export_memory_fd` of a buffer... | every device (a public call's own check of its arguments) | `ours`: a runtime extension: Metal exports no buffer's memory and no event's semaphore | 3: `crates/metal2vulkan-runtime/src/exported_memory.rs (export_memory_fd, 2 sites)`, `crates/metal2vulkan-runtime/src/exported_semaphore.rs (export_semaphore_fd)` | `-` |
 | `NoPipelineState` | No pipeline state is set (plain Metal faults at a compute dispatch without one) | every device (a public call's own check of its arguments) | `unknown`: plain Metal is held to fault at a dispatch with no pipeline state, on no measurement recorded here | 8: `crates/metal2vulkan-runtime/src/compute.rs`, `crates/metal2vulkan-runtime/src/compute.rs (dispatch_indirect_resident)` (+6) | `-` |
 | `IndexOutOfRange` | An argument-table index past Metal's table (plain Metal writes past its own table | every device (a public call's own check of its arguments) | `metal-measured`: an M4: a compute texture at index 128 faulted the dispatch | 2: `crates/metal2vulkan-runtime/src/argument_table.rs (check_index)`, `crates/metal2vulkan-runtime/src/command_buffer/mod.rs (problem)` | `-` |
 | `OffsetOutOfRange` | An offset past the end of the buffer | every device (a public call's own check of its arguments) | `metal-takes`: an Apple M3 Max, macOS 27.0.1: setVertexBuffer at offset 512 of a buffer of 256 bytes returns, the encoder ends and the pass completes; Metal's API validation alone refuses it | 5: `crates/metal2vulkan-runtime/src/argument_encoder.rs (buffer_word)`, `crates/metal2vulkan-runtime/src/argument_table.rs (check_bound_buffer)` (+3) | `-` |
@@ -724,6 +725,7 @@ Each refusal's sites, with the function that builds it.
 - `gap::SamplePositionsAtBegin`: `crates/metal2vulkan-runtime/src/depth_stencil_scratch.rs (stencil_scratch)`; `crates/metal2vulkan-runtime/src/render_pass.rs (positioned_stand_in)`; `crates/metal2vulkan-runtime/src/sample_positions.rs (refusal_error)`
 - `gap::InterpolateAtSampleWithPositions`: `crates/metal2vulkan-runtime/src/render.rs (settle_draw)`
 - `gap::ExportableMemory`: `crates/metal2vulkan-runtime/src/exported_memory.rs (new_exportable_buffer)`
+- `gap::ExportableSemaphore`: `crates/metal2vulkan-runtime/src/exported_semaphore.rs (new_exportable_shared_event)`
 - `gap::SharedEventAcrossDevices`: `crates/metal2vulkan-runtime/src/event.rs (new_shared_event_with_handle)`
 - `gap::VkImagePlaneCopy`: `crates/metal2vulkan-runtime/src/texture.rs (check_plane_copied)`; `crates/metal2vulkan-runtime/src/texture/view_shadow.rs (new_view_shadow)`; `crates/metal2vulkan-runtime/src/texture/wrapped.rs (new_texture_with_vk_image_plane)`
 - `gap::ViewportDepthRange`: `crates/metal2vulkan-runtime/src/render/draw_shape.rs (settings)`; `crates/metal2vulkan-runtime/src/render_state.rs`; `crates/metal2vulkan-runtime/src/render_state.rs (bias_holds)`; `crates/metal2vulkan-runtime/src/render_state.rs (collapses)`; `crates/metal2vulkan-runtime/src/render_state.rs (compensation)`; `crates/metal2vulkan-runtime/src/render_state.rs (depth_range)`; `crates/metal2vulkan-runtime/src/render_state.rs (depth_ranges_refused)`
@@ -815,7 +817,7 @@ Each refusal's sites, with the function that builds it.
 - `invalid::WrappedImage`: `crates/metal2vulkan-runtime/src/texture/wrapped.rs (new_texture_with_vk_image)`; `crates/metal2vulkan-runtime/src/texture/wrapped.rs (new_texture_with_vk_image_plane)`
 - `invalid::NotShareable`: `crates/metal2vulkan-runtime/src/texture/shared.rs (new_shared_texture_handle)`
 - `invalid::Semaphore`: `crates/metal2vulkan-runtime/src/command_buffer/mod.rs (binary_command)`
-- `invalid::NotExportable`: `crates/metal2vulkan-runtime/src/exported_memory.rs (export_memory_fd, 2 sites)`
+- `invalid::NotExportable`: `crates/metal2vulkan-runtime/src/exported_memory.rs (export_memory_fd, 2 sites)`; `crates/metal2vulkan-runtime/src/exported_semaphore.rs (export_semaphore_fd)`
 - `invalid::NoPipelineState`: `crates/metal2vulkan-runtime/src/compute.rs`; `crates/metal2vulkan-runtime/src/compute.rs (dispatch_indirect_resident)`; `crates/metal2vulkan-runtime/src/compute.rs (dispatch_resident)`; `crates/metal2vulkan-runtime/src/compute.rs (inherited_pipeline)`; `crates/metal2vulkan-runtime/src/render.rs (drawn_by)`; `crates/metal2vulkan-runtime/src/render/executions.rs (inherited_pipeline)`; `crates/metal2vulkan-runtime/src/render/mesh.rs (mesh_draws_nothing)`; `crates/metal2vulkan-runtime/src/render/tile_dispatch.rs (dispatch_tiles_resident)`
 - `invalid::IndexOutOfRange`: `crates/metal2vulkan-runtime/src/argument_table.rs (check_index)`; `crates/metal2vulkan-runtime/src/command_buffer/mod.rs (problem)`
 - `invalid::OffsetOutOfRange`: `crates/metal2vulkan-runtime/src/argument_encoder.rs (buffer_word)`; `crates/metal2vulkan-runtime/src/argument_table.rs (check_bound_buffer)`; `crates/metal2vulkan-runtime/src/argument_table.rs (check_offsets)`; `crates/metal2vulkan-runtime/src/argument_table.rs (take_buffer_offset)`; `crates/metal2vulkan-runtime/src/render/table_facts.rs (set_buffer_offset)`

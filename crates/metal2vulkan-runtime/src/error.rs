@@ -583,11 +583,13 @@ pub enum Problem {
     ///
     /// Basis: ours (a runtime extension: Metal has no binary semaphores).
     Semaphore(SemaphoreProblem),
-    /// The memory of a buffer not made exportable (`Buffer::export_memory_fd` of a buffer
-    /// `Device::new_exportable_buffer` did not make): it lies in the device's pooled blocks,
-    /// which no other API imports.
+    /// The memory of a buffer, or the semaphore of a shared event, not made exportable
+    /// (`Buffer::export_memory_fd` of a buffer `Device::new_exportable_buffer` did not make, and
+    /// `SharedEvent::export_semaphore_fd` of an event `Device::new_exportable_shared_event` did
+    /// not make): no other API imports it.
     ///
-    /// Basis: ours (a runtime extension: Metal exports no buffer's memory).
+    /// Basis: ours (a runtime extension: Metal exports no buffer's memory and no event's
+    /// semaphore).
     NotExportable,
     /// No pipeline state is set (plain Metal faults at a compute dispatch without one).
     ///
@@ -1585,6 +1587,15 @@ pub enum RuntimeGap {
     /// `VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT` not exportable for the runtime's buffer
     /// usage). Every other buffer is made as before.
     ExportableMemory,
+    /// A shared event whose timeline semaphore another API imports
+    /// (`Device::new_exportable_shared_event`, a runtime extension: Metal has none) on a device
+    /// that does not enable `VK_KHR_external_semaphore_fd` (the runtime enables it wherever the
+    /// device lists it; an adopted device's consumer enables it or not), or that exports no
+    /// timeline semaphore as an opaque file descriptor
+    /// (`vkGetPhysicalDeviceExternalSemaphoreProperties` answers
+    /// `VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_FD_BIT` not exportable for a timeline
+    /// semaphore). Every other event is made as before.
+    ExportableSemaphore,
     /// A shared event handle opened on a device other than its event's: another physical
     /// device's, or one made with other options or adopted (equal options make one device, as
     /// Metal's calls do). Vulkan semaphores do not cross devices unless exported, which the runtime

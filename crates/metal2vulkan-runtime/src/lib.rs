@@ -107,6 +107,8 @@ pub use exit_guard::{registrations as exit_registrations, Registrations as ExitR
 mod executed_commands;
 #[cfg(unix)]
 mod exported_memory;
+#[cfg(unix)]
+mod exported_semaphore;
 mod fence;
 mod fetch_reach;
 mod fill_value;

@@ -80,7 +80,7 @@ pub struct Event(Arc<EventShared>);
 /// A Metal shared event (`MTLSharedEvent`): an event the host can also signal, read, wait for and
 /// listen to. Cheap to clone (a retain); `Send + Sync`.
 #[derive(Clone)]
-pub struct SharedEvent(Arc<EventShared>);
+pub struct SharedEvent(pub(super) Arc<EventShared>);
 
 /// An in-process handle of a shared event (`MTLSharedEventHandle`): opened with
 /// [`Device::new_shared_event_with_handle`], it gives the same event.
@@ -127,6 +127,9 @@ pub(super) struct EventShared {
     device: Device,
     /// The timeline semaphore; its counter is the signal index.
     semaphore: vk::Semaphore,
+    /// The semaphore was made exportable as an opaque file descriptor
+    /// (`exported_semaphore.rs`).
+    exportable: bool,
     state: Mutex<EventState>,
     /// Signaled whenever the value rises.
     changed: Condvar,
@@ -172,23 +175,35 @@ impl Drop for EventShared {
 }
 
 impl EventShared {
-    /// `settable` for a shared event (`MTLSharedEvent`), whose value the host may set.
-    fn new(device: &Device, settable: bool) -> Result<Arc<EventShared>, Error> {
+    /// `settable` for a shared event (`MTLSharedEvent`), whose value the host may set; its
+    /// semaphore made exportable as `export` names where given (`exported_semaphore.rs`).
+    pub(super) fn new(
+        device: &Device,
+        settable: bool,
+        export: Option<vk::ExternalSemaphoreHandleTypeFlags>,
+    ) -> Result<Arc<EventShared>, Error> {
         if device.is_lost() {
             return Err(Error::DeviceLost);
         }
         let mut kind = vk::SemaphoreTypeCreateInfo::default()
             .semaphore_type(vk::SemaphoreType::TIMELINE)
             .initial_value(0);
-        let info = vk::SemaphoreCreateInfo::default().push_next(&mut kind);
+        let mut exportable = vk::ExportSemaphoreCreateInfo::default()
+            .handle_types(export.unwrap_or(vk::ExternalSemaphoreHandleTypeFlags::empty()));
+        let mut info = vk::SemaphoreCreateInfo::default().push_next(&mut kind);
+        if export.is_some() {
+            info = info.push_next(&mut exportable);
+        }
         // SAFETY: the device is live and enables `timelineSemaphore` (created devices enable it;
-        // `Device::from_raw` requires it).
+        // `Device::from_raw` requires it); an export's handle type is one the device exports a
+        // timeline semaphore as (the caller's).
         let semaphore =
             unsafe { device.shared().vk().create_semaphore(&info, None) }.map_err(vulkan)?;
         device.shared().interop.timeline_made(semaphore);
         Ok(Arc::new(EventShared {
             device: device.clone(),
             semaphore,
+            exportable: export.is_some(),
             state: Mutex::new(EventState {
                 timeline: EventTimeline::new(settable),
                 notifications: Vec::new(),
@@ -207,6 +222,11 @@ impl EventShared {
     /// The timeline semaphore.
     pub(super) fn semaphore(&self) -> vk::Semaphore {
         self.semaphore
+    }
+
+    /// Whether the semaphore was made exportable (`exported_semaphore.rs`).
+    pub(super) fn exportable(&self) -> bool {
+        self.exportable
     }
 
     /// How a batch submitted now waits for `value`; `None` while nothing submitted or set reaches
@@ -576,12 +596,12 @@ fn due(state: &mut EventState) -> Vec<Notification> {
 impl Device {
     /// `newEvent`.
     pub fn new_event(&self) -> Result<Event, Error> {
-        Ok(Event(EventShared::new(self, false)?))
+        Ok(Event(EventShared::new(self, false, None)?))
     }
 
     /// `newSharedEvent`.
     pub fn new_shared_event(&self) -> Result<SharedEvent, Error> {
-        Ok(SharedEvent(EventShared::new(self, true)?))
+        Ok(SharedEvent(EventShared::new(self, true, None)?))
     }
 
     /// `newSharedEventWithHandle:`: the event of `handle`, made by this device. Two calls of

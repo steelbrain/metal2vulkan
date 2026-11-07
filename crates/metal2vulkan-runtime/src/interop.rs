@@ -21,6 +21,10 @@
 //! - **The caller's buffers** (`wrapped_buffer.rs`): buffers over `VkBuffer`s the caller made and
 //!   bound to its own memory (an imported dma-buf, for example), `Shared` at a host address the
 //!   caller gives, or `Private`.
+//! - **Shared events whose semaphore another API imports** (`exported_semaphore.rs`,
+//!   [`Device::new_exportable_shared_event`](super::Device::new_exportable_shared_event)): the
+//!   event's timeline semaphore exported as an opaque file descriptor, its counter the signal
+//!   index the hooks above name.
 //! - **Buffers whose memory another API imports** (`exported_memory.rs`,
 //!   [`Device::new_exportable_buffer`](super::Device::new_exportable_buffer)): an allocation of
 //!   its own, exported as an opaque file descriptor; the buffer outlives every import.
@@ -469,7 +473,9 @@ impl SharedEvent {
     ///
     /// For a [`VkEventSignal::Counter`] answer, the caller submits exactly one signal operation of
     /// the semaphore to `counter`, in a submission that first waits for the semaphore to reach
-    /// `after` where given, to a queue of the event's device, soon: every later signal of the
+    /// `after` where given, to a queue of the event's device (or of an API that imported the
+    /// semaphore of an event made exportable, [`export_semaphore_fd`](Self::export_semaphore_fd)),
+    /// soon: every later signal of the
     /// event and every wait for a value it reaches waits for it, the runtime's command buffers'
     /// on their queues included, and a reservation never signalled stalls them for good. Where
     /// the submission fails, the caller signals the semaphore to `counter` from the host

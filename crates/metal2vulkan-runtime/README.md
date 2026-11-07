@@ -270,6 +270,14 @@ the record the pass is making.
   contents are lost for the imports too, and a device made again exports new allocations. A
   device without `VK_KHR_external_memory_fd`, or that exports no buffer's memory so, refuses it
   (`RuntimeGap::ExportableMemory`).
+- `Device::new_exportable_shared_event` makes a shared event whose timeline semaphore another API
+  imports (CUDA's external semaphores, another `VkDevice`), made exportable as an opaque file
+  descriptor; `SharedEvent::export_semaphore_fd` answers a new descriptor each call. Its counter
+  is the signal index the event's interop hooks name: the importer waits for the counter
+  `vk_wait` answers and signals only one `reserve_vk_signal` reserved. The event outlives every
+  import and every signal and wait an importer submitted; on a device loss its state is lost for
+  the imports too. A device without `VK_KHR_external_semaphore_fd`, or that exports no timeline
+  semaphore so, refuses it (`RuntimeGap::ExportableSemaphore`).
 
 ## The memory model
 

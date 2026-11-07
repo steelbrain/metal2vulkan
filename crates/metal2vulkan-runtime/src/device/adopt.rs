@@ -281,6 +281,8 @@ impl Device {
         // Nor whether `VK_KHR_external_memory_fd` was (`exported_memory.rs`): the consumer lists
         // it.
         let memory_fd = super::create::memory_fd_name(&listed).is_some();
+        // Nor whether `VK_KHR_external_semaphore_fd` was (`exported_semaphore.rs`).
+        let semaphore_fd = super::create::semaphore_fd_name(&listed).is_some();
         let graphics_pipeline_library = super::create::graphics_pipeline_library(&listed, || {
             // SAFETY: the consumer's physical device of its instance, which lists the
             // extension (the consumer enabled it), at Vulkan 1.2 or later.
@@ -336,6 +338,7 @@ impl Device {
             dma_buf,
             dma_buf_images,
             memory_fd,
+            semaphore_fd,
             calibration: gpu_time::Extension::among(&raw.device_extensions.into_iter().collect()),
             gpu_times_from_host: raw.gpu_times_from_host,
             mac_class: raw.mac_class,

@@ -359,6 +359,11 @@ pub(super) struct DeviceShared {
     /// (`exported_memory.rs`).
     #[cfg(unix)]
     pub(super) opaque_fd: Option<crate::exported_memory::OpaqueFdExport>,
+    /// How it exports an exportable shared event's timeline semaphore as an opaque file
+    /// descriptor; `None` where it enables no `VK_KHR_external_semaphore_fd` or exports no
+    /// timeline semaphore so (`exported_semaphore.rs`).
+    #[cfg(unix)]
+    pub(super) opaque_fd_semaphores: Option<crate::exported_semaphore::OpaqueFdSemaphores>,
     /// Whether the device imports a pointer to shared memory, once asked
     /// (`Device::imports_shared_host_pointers`).
     pub(super) shared_pointer_imports: OnceLock<bool>,
@@ -1345,6 +1350,9 @@ pub(super) struct Parts {
     /// It enables `VK_KHR_external_memory_fd` (`create.rs`'s `memory_fd_name`; `adopt.rs`, where
     /// the consumer lists it), outside `enabled`'s vocabulary (`exported_memory.rs`).
     pub(super) memory_fd: bool,
+    /// It enables `VK_KHR_external_semaphore_fd` (`create.rs`'s `semaphore_fd_name`; `adopt.rs`,
+    /// where the consumer lists it), outside `enabled`'s vocabulary (`exported_semaphore.rs`).
+    pub(super) semaphore_fd: bool,
     /// The sparse members of the core features it enables, outside `enabled`'s vocabulary
     /// (`sparse/device.rs`).
     pub(super) sparse_features: vk::PhysicalDeviceFeatures,
@@ -1403,6 +1411,10 @@ impl Device {
             memory_fd,
             #[cfg(not(unix))]
                 memory_fd: _,
+            #[cfg(unix)]
+            semaphore_fd,
+            #[cfg(not(unix))]
+                semaphore_fd: _,
             sparse_features,
             memory_reads,
             owned,
@@ -1818,6 +1830,25 @@ impl Device {
                 )
             }
         };
+        // How the device exports a timeline semaphore as an opaque file descriptor, where it
+        // enables `VK_KHR_external_semaphore_fd` and exports one so (`exported_semaphore.rs`).
+        #[cfg(unix)]
+        let opaque_fd_semaphores = {
+            // SAFETY: as above; the loader serves `vkGetDeviceProcAddr` once the word is put
+            // back, and the device enables the extension.
+            let functions = semaphore_fd.then(|| unsafe {
+                loader_word
+                    .restored(|| ash::khr::external_semaphore_fd::Device::new(&instance.raw, &raw))
+            });
+            // SAFETY: `physical` belongs to `instance`, created at Vulkan 1.2 or later.
+            unsafe {
+                crate::exported_semaphore::OpaqueFdSemaphores::new(
+                    &instance.raw,
+                    physical,
+                    functions,
+                )
+            }
+        };
         // The host image copy functions, where the device enabled `hostImageCopy` and copies to
         // and from `GENERAL` on the host: by their core names from Vulkan 1.4, else by the
         // extension's, which the device then enabled.
@@ -2053,6 +2084,8 @@ impl Device {
             host_import,
             #[cfg(unix)]
             opaque_fd,
+            #[cfg(unix)]
+            opaque_fd_semaphores,
             shared_pointer_imports: OnceLock::new(),
             extended_dynamic_state,
             sized_index_bind,
