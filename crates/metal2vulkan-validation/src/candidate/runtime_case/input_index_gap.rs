@@ -9,26 +9,27 @@
 //! attachment `i` is `pInputAttachments[i]`, and the render pass is part of both states, so a
 //! pipeline linked from libraries made against one has it.
 //!
-//! In layer v1.4.357 (commit e4786f7c) the check runs only for dynamic rendering:
+//! In layer v1.4.357 (tag commit e4786f7c) the check runs only for dynamic rendering:
 //! `CoreChecks::ValidateShaderInputAttachment` (`layers/core_checks/cc_spirv.cpp` line 87) tests
-//! `rp_state->UsesDynamicRendering()` first. v1.4.363 (commit 2ea16de8) adds a second pass at
-//! link time, in `CoreChecks::ValidateInterfaceFragmentOutput`
+//! `rp_state->UsesDynamicRendering()` first. v1.4.363 (tag commit 2ea16de8) adds a second pass
+//! at link time, in `CoreChecks::ValidateInterfaceFragmentOutput`
 //! (`layers/core_checks/cc_shader_interface.cpp` line 221), for a pipeline that takes its
 //! fragment shader or fragment output state from a library, and that pass tests no such thing:
 //! it calls `ValidateShaderInputAttachmentDynamicRendering` with the libraries' render pass,
 //! whose `dynamic_pipeline_rendering_create_info` a `VkRenderPass` never sets
-//! (`layers/state_tracker/render_pass_state.cpp` lines 340 and 357), so it compares each index with a
-//! colour attachment count of 0. The layer's main branch adds the missing test in 65fdd118 of
-//! 2026-10-03, "layers: Fix 09652 false positive", after the v1.4.363 tag.
+//! (`layers/state_tracker/render_pass_state.cpp` lines 340 and 357), so it compares each index
+//! with a colour attachment count of 0. The layer's main branch adds the missing test in
+//! 65fdd118 of 2026-10-03, "layers: Fix 09652 false positive", after the v1.4.363 tag.
 //!
 //! The runtime makes every graphics pipeline against a `VkRenderPass`, and links one from
 //! libraries where the device enables `VK_EXT_graphics_pipeline_library` and links them fast
 //! (`runtime/src/pipeline/libraries.rs`), so on layer v1.4.363 every linked pipeline that fetches
-//! through an input attachment reports each one it reads (lavapipe links them). [`shape`] matches only the second pass's message: at the create info's location (the
-//! per-stage check reports at `pStages[i]`), against a count of 0. [`read`] keys the layer
-//! releases whose source was read with the gap in place. On any other release such a message
-//! fails, marked "re-read the link-time input attachment check in layer X.Y.Z", so a fixed or
-//! changed layer is checked again rather than trusted.
+//! through an input attachment reports each one it reads (lavapipe links them). [`shape`]
+//! matches only the second pass's message, word for word but for its numbers: at the create
+//! info's location (the per-stage check reports at `pStages[i]`), against a count of 0. [`read`]
+//! keys the layer releases whose source was read with the gap in place. On any other release
+//! such a message fails, marked "re-read the link-time input attachment check in layer X.Y.Z",
+//! so a fixed or changed layer is checked again rather than trusted.
 
 use ash::vk;
 
@@ -42,7 +43,7 @@ const ID_NAME: &str = "VUID-VkGraphicsPipelineCreateInfo-renderPass-09652";
 const CALL: &str = "vkCreateGraphicsPipelines(): pCreateInfos[";
 
 /// What follows the create info's index: the fragment shader's input attachment
-/// (`DescribeInputAttachmentIndex`).
+/// (`DescribeInputAttachmentIndex`), its set and binding.
 const SHADER: &str = "] shader [VK_SHADER_STAGE_FRAGMENT_BIT] [Set ";
 
 /// The end of the message's first line: compared with the colour attachment count a
@@ -50,13 +51,25 @@ const SHADER: &str = "] shader [VK_SHADER_STAGE_FRAGMENT_BIT] [Set ";
 const COUNT: &str =
     " which is not less than VkPipelineRenderingCreateInfo::colorAttachmentCount (0)";
 
-/// What the layer's message goes on with, on the next line.
-const NEXT: &str = "If VkRenderingInputAttachmentIndexInfo is provided, the index can be set, \
-    but without it, it uses the default index values.";
+/// The rest of the message, after its first line, as layer v1.4.363 words it.
+const REST: &str = "If VkRenderingInputAttachmentIndexInfo is provided, the index can be set, \
+    but without it, it uses the default index values.\nHint: If using Depth/Stencil attachments, \
+    you should be omitting the input attachment index in the shader to access the depth/stencil \
+    attachments.\nThe Vulkan spec states: If the pipeline is being created with fragment shader \
+    state and fragment output state, the value of renderPass is VK_NULL_HANDLE, and \
+    VkRenderingInputAttachmentIndexInfo is not included, the fragment shader must not contain any \
+    input attachments with a InputAttachmentIndex greater than or equal to \
+    VkPipelineRenderingCreateInfo::colorAttachmentCount \
+    (https://docs.vulkan.org/spec/latest/chapters/pipelines.html\
+    #VUID-VkGraphicsPipelineCreateInfo-renderPass-09652)";
 
 /// The note the layer puts before a message it reports for the last time
-/// (`duplicate_message_limit`).
-const LAST_TIME: &str = "(Warning - This VUID has now been reported ";
+/// (`duplicate_message_limit`), around the count.
+const LAST_TIME: (&str, &str) = (
+    "(Warning - This VUID has now been reported ",
+    " times, which is the duplicate_message_limit value, this will be the last time reporting \
+     it).\n",
+);
 
 /// The layer releases (`VkLayerProperties::specVersion` of `VK_LAYER_KHRONOS_validation`) whose
 /// source was read with the gap in place: v1.4.363 (tag commit 2ea16de8).
@@ -70,15 +83,15 @@ pub(super) const SOURCE: &str = "Vulkan-ValidationLayers v1.4.363 (2ea16de8) \
 
 /// Whether a message with this id, id name and text is the gap's: the link-time pass's report of
 /// a fragment shader's input attachment at the create info's location, against a colour
-/// attachment count of 0.
+/// attachment count of 0, word for word as layer v1.4.363 reports it but for its numbers.
 pub(super) fn shape(id: i32, id_name: &str, text: &str) -> bool {
     if id != ID || id_name != ID_NAME {
         return false;
     }
-    // Before the message, nothing or the layer's last-time note on a line of its own.
-    let text = match text.strip_prefix(LAST_TIME) {
-        Some(_) => match text.split_once('\n') {
-            Some((_, rest)) => rest,
+    // Before the message, nothing or the layer's last-time note.
+    let text = match text.strip_prefix(LAST_TIME.0) {
+        Some(note) => match number(note).and_then(|rest| rest.strip_prefix(LAST_TIME.1)) {
+            Some(rest) => rest,
             None => return false,
         },
         None => text,
@@ -86,14 +99,38 @@ pub(super) fn shape(id: i32, id_name: &str, text: &str) -> bool {
     let Some((first, rest)) = text.split_once('\n') else {
         return false;
     };
-    let Some(after) = first.strip_prefix(CALL) else {
+    let Some(index) = first.strip_prefix(CALL).and_then(number) else {
         return false;
     };
-    let digits = after.bytes().take_while(u8::is_ascii_digit).count();
-    if digits == 0 || !after[digits..].starts_with(SHADER) {
+    let Some(binding) = index.strip_prefix(SHADER).and_then(number) else {
         return false;
-    }
-    first.ends_with(COUNT) && rest.starts_with(NEXT)
+    };
+    let Some(read) = binding
+        .strip_prefix(", Binding ")
+        .and_then(number)
+        .and_then(|rest| rest.strip_prefix("] has an "))
+    else {
+        return false;
+    };
+    // The index the shader reads, or an array's element of one.
+    let end = match read.strip_prefix("InputAttachmentIndex of ") {
+        Some(rest) => number(rest),
+        None => read
+            .strip_prefix("effective InputAttachmentIndex of ")
+            .and_then(number)
+            .and_then(|rest| rest.strip_prefix(" (started at InputAttachmentIndex "))
+            .and_then(number)
+            .and_then(|rest| rest.strip_prefix(" plus index "))
+            .and_then(number)
+            .and_then(|rest| rest.strip_prefix(" into the array)")),
+    };
+    end == Some(COUNT) && rest == REST
+}
+
+/// What follows the decimal digits `text` starts with; `None` without any.
+fn number(text: &str) -> Option<&str> {
+    let digits = text.bytes().take_while(u8::is_ascii_digit).count();
+    (digits > 0).then(|| &text[digits..])
 }
 
 /// Whether the layer release `version` is one whose source was read with the gap in place.
@@ -106,28 +143,31 @@ mod tests {
     use super::*;
     use std::path::{Path, PathBuf};
 
-    /// The message as the lanes saw it on lavapipe (Mesa, LLVM 23.1.4) with the layer 1.4.363.
+    /// The message as the lanes saw it on lavapipe (Mesa, LLVM 23.1.4) with the layer 1.4.363,
+    /// word for word.
     fn seen() -> String {
-        format!(
-            "vkCreateGraphicsPipelines(): pCreateInfos[0] shader [VK_SHADER_STAGE_FRAGMENT_BIT] \
-             [Set 0, Binding 2] has an InputAttachmentIndex of 0{COUNT}\n{NEXT}\nHint: If using \
-             Depth/Stencil attachments, you should be omitting the input attachment index in the \
-             shader to access the depth/stencil attachments.\nThe Vulkan spec states: If the \
-             pipeline is being created with fragment shader state and fragment output state, the \
-             value of renderPass is VK_NULL_HANDLE, and VkRenderingInputAttachmentIndexInfo is not \
-             included, the fragment shader must not contain any input attachments with a \
-             InputAttachmentIndex greater than or equal to \
-             VkPipelineRenderingCreateInfo::colorAttachmentCount \
-             (https://docs.vulkan.org/spec/latest/chapters/pipelines.html#VUID-VkGraphicsPipelineCreateInfo-renderPass-09652)"
-        )
+        "vkCreateGraphicsPipelines(): pCreateInfos[0] shader [VK_SHADER_STAGE_FRAGMENT_BIT] \
+         [Set 0, Binding 2] has an InputAttachmentIndex of 0 which is not less than \
+         VkPipelineRenderingCreateInfo::colorAttachmentCount (0)\nIf \
+         VkRenderingInputAttachmentIndexInfo is provided, the index can be set, but without it, \
+         it uses the default index values.\nHint: If using Depth/Stencil attachments, you should \
+         be omitting the input attachment index in the shader to access the depth/stencil \
+         attachments.\nThe Vulkan spec states: If the pipeline is being created with fragment \
+         shader state and fragment output state, the value of renderPass is VK_NULL_HANDLE, and \
+         VkRenderingInputAttachmentIndexInfo is not included, the fragment shader must not \
+         contain any input attachments with a InputAttachmentIndex greater than or equal to \
+         VkPipelineRenderingCreateInfo::colorAttachmentCount \
+         (https://docs.vulkan.org/spec/latest/chapters/pipelines.html\
+         #VUID-VkGraphicsPipelineCreateInfo-renderPass-09652)"
+            .to_owned()
     }
 
     #[test]
     fn the_link_time_report_of_an_input_attachment_is_the_gap() {
         assert!(shape(ID, ID_NAME, &seen()));
         let last = format!(
-            "{LAST_TIME}10 times, which is the duplicate_message_limit value, this will be the \
-             last time reporting it).\n{}",
+            "(Warning - This VUID has now been reported 10 times, which is the \
+             duplicate_message_limit value, this will be the last time reporting it).\n{}",
             seen()
         );
         assert!(shape(ID, ID_NAME, &last));
@@ -188,8 +228,17 @@ mod tests {
         assert!(!shape(ID, ID_NAME, &before), "another preface");
         let first = text.split_once('\n').unwrap().0.to_owned();
         assert!(!shape(ID, ID_NAME, &first), "the first line alone");
-        let after = text.replacen(NEXT, "Something else.", 1);
+        let after = text.replacen("If VkRenderingInputAttachmentIndexInfo", "If something", 1);
         assert!(!shape(ID, ID_NAME, &after), "another second line");
+        let longer = format!("{text} More.");
+        assert!(!shape(ID, ID_NAME, &longer), "more after the message");
+        let named = text.replacen("Binding 2]", "Binding 2, variable \"x\"]", 1);
+        assert!(
+            !shape(ID, ID_NAME, &named),
+            "another descriptor's description"
+        );
+        let note = format!("{}{}{}", LAST_TIME.0, LAST_TIME.1, text);
+        assert!(!shape(ID, ID_NAME, &note), "a note without its count");
     }
 
     #[test]
