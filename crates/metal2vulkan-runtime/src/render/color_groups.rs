@@ -468,7 +468,7 @@ impl RenderLowering {
         let shape = PassShape::of(&layout)?;
         let compatible = render_target::shared_compatible_pass(&device, &shape)?;
         let draws = core.command_buffer().begin_draws(&compatible)?;
-        let extended = ExtendedShadows::of(&descriptor, &layout, rate_map.is_some());
+        let extended = ExtendedShadows::of(&device, &descriptor, &layout, rate_map.is_some());
         let opening = Opening::new(
             &descriptor,
             (layout, extended),

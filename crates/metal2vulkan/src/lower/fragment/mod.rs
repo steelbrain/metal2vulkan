@@ -63,6 +63,7 @@ mod discard;
 pub(crate) mod fetch;
 mod imageblock;
 mod input_blend;
+mod input_shadow;
 mod interpolate;
 mod rog;
 mod snapshot;
@@ -115,6 +116,8 @@ pub use fetch::{
 pub use imageblock::{select_output as select_imageblock_output, ImageblockPlan};
 pub(crate) use input_blend::texel as input_blend_texel;
 pub use input_blend::{select_second_output as select_input_second_output, InputBlend};
+pub use input_shadow::InputShadow;
+pub(crate) use input_shadow::{shadows as input_shadow, store as input_shadow_store};
 #[cfg(test)]
 pub(crate) use snapshot::{decode as snapshot_decode, encode as snapshot_encode};
 pub(crate) use snapshot::{prepare as snapshot_prepare, read as snapshot_read};
@@ -208,6 +211,9 @@ pub struct FragmentPlan {
     /// attachments, on a device that orders fetch through them (`word_input`), by index: the bits
     /// of the fields each write keeps from the texel.
     pub word_merges: BTreeMap<u32, u32>,
+    /// The extended-range attachments whose `half` shadow the draw's instance holds, on a device
+    /// that orders fetch through input attachments (`input_shadow`), by index.
+    pub input_shadows: BTreeMap<u32, InputShadow>,
     /// The stage interface's `FragCoord` object, which gives the pixel of the storage form and
     /// of the shader-side stencil.
     pub fetch_coord: Option<usize>,
@@ -346,11 +352,16 @@ pub fn finish(cx: &mut SelectCx<'_>, m: &mut Meter) -> Result<(), Error> {
     imageblock::finish(cx)?;
     fetch::finish(cx)?;
     stencil::finish(cx)?;
-    // An imageblock, an attachment in the storage form, and the shadow of a shader-side stencil
-    // are read and written inside the critical section whether or not the function names a
-    // raster order group.
+    // An imageblock, an attachment in the storage form, the shadow of a shader-side stencil and
+    // an extended-range attachment's shadow over its input attachment are read and written inside
+    // the critical section whether or not the function names a raster order group.
     let shadow = cx.families.fragment.stencil.is_some();
-    let storage = !cx.families.fragment.fetch.is_empty() || shadow;
+    let input_shadows = !cx.families.fragment.input_shadows.is_empty();
+    // A function looping over its covered samples runs no interlocked body (`wrap_entry`).
+    if input_shadows && looped {
+        return Err(Unsupported::not_implemented(Feature::FramebufferFetch).into());
+    }
+    let storage = !cx.families.fragment.fetch.is_empty() || shadow || input_shadows;
     let interlock =
         if rog::declared(cx.entry) || cx.families.fragment.imageblock.is_some() || storage {
             Some(rog::mode(cx)?)
@@ -413,6 +424,11 @@ pub fn finish(cx: &mut SelectCx<'_>, m: &mut Meter) -> Result<(), Error> {
         ))
         .saturating_add(stencil::words(cx, rets))
         .saturating_add(input_blend::words(cx, returns(cx)))
+        .saturating_add(input_shadow::words(
+            cx,
+            color::uses(cx, &cx.families.fragment.colors),
+            returns(cx),
+        ))
         .saturating_add(word_input::words(cx, returns(cx)))
         .saturating_add(depth_test::words(cx, rets))
         .saturating_add(killing_rets.saturating_mul(RETURN_KILL_WORDS))
@@ -456,7 +472,8 @@ pub struct Declared {
     /// The stand-in of the stencil attachment an in-shader stencil test reads and writes.
     pub stencil_stand_in: Option<GlobalId>,
     /// The `half` shadow of each extended-range attachment the storage form reads and writes
-    /// against it (`fetch::StorageColor::shadowed`), by color index.
+    /// against it (`fetch::StorageColor::shadowed`), or that a function on a device that fetches
+    /// through input attachments reads and writes beside them (`input_shadow`), by color index.
     pub extended_shadows: BTreeMap<u32, GlobalId>,
     /// The `Private u32` holding the sample of the loop's pass over the covered samples.
     pub loop_sample: Option<GlobalId>,
@@ -511,6 +528,10 @@ pub fn declare(
             d.extended_shadows
                 .insert(color, fetch::declare_shadow(mb, color, sc.view.samples)?);
         }
+    }
+    for (&color, shadow) in &fp.input_shadows {
+        d.extended_shadows
+            .insert(color, fetch::declare_shadow(mb, color, shadow.samples)?);
     }
     d.imageblock = imageblock::declare(mb, fp.imageblock.as_ref())?;
     d.shadow_stencil = stencil::declare(mb, fp.stencil.as_ref())?;
@@ -618,6 +639,7 @@ pub fn select_param(cx: &mut SelectCx<'_>, b: &ParamBinding) -> Result<(), Error
 pub fn plan_entry(cx: &mut SelectCx<'_>) -> Result<(), Error> {
     fetch::plan(cx)?;
     input_blend::plan(cx)?;
+    input_shadow::plan(cx)?;
     word_input::plan(cx)?;
     coverage::plan(cx)
 }

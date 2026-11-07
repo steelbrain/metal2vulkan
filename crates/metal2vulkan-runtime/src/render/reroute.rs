@@ -1,6 +1,7 @@
 //! Recording a render pass instance's draws again, into an instance that leaves more colors out
-//! of its subpass, in its place: the start of an extended-range color's `half` shadow where the
-//! current instance's draws wrote the color (`render/extended_shadow.rs`).
+//! of its subpass (in a pass that fetches through input attachments, one of the same shape), in
+//! its place: the start of an extended-range color's `half` shadow where the current instance's
+//! draws wrote the color (`render/extended_shadow.rs`).
 //!
 //! In a pass that may hold such a shadow (`ExtendedShadows::keeps_draws`), on every device, while
 //! every recording of the current instance is a draw that can record again (below), each draw
@@ -131,7 +132,6 @@ impl RenderLowering {
             || self.rerouting
             || !current.recorded
             || !kept
-            || self.layout.fetch_inputs
             || self.layout.samples != 1
             || self.dispatched
             || self.barrier
@@ -146,6 +146,13 @@ impl RenderLowering {
             return Ok(false);
         }
         let locations = current.shape.locations.clone();
+        // A pass that fetches through input attachments leaves no color out: its draws read and
+        // write the shadow beside the color's input attachment (`lower::fragment`'s
+        // `input_shadow`), so the rerouted instance is one of the current one's shape.
+        let colors = match self.layout.fetch_inputs {
+            true => Vec::new(),
+            false => colors,
+        };
         // `rerouting` has `next_instance` take the current instance's place as an empty one's.
         // Ordered after the current instance's draws: a new instance even where its shape is
         // the current one's (a shadow's start, whose color the current instance may already

@@ -1308,13 +1308,23 @@ fn plan(p: &RenderPipeline, device: &Device, shape: &BindShape) -> Result<Bindin
         .map(|a| a.color_index)
         .collect();
     // The extended-range colors whose `half` shadow the draw's instance holds that the fragment
-    // function writes or reads in the storage form: the variant that reads and writes the
-    // shadows beside the codes. Every such color is in a pass of one layer (the encoder holds no
-    // other shadow); a pipeline compiled with shadows binds them. In a multisampled pipeline only
-    // a color the pipeline already reads in the storage form (a blended or fetched one, whose
-    // function runs per sample): a plain writer's would be moved into the per-sample form, which
-    // runs the function per sample where Metal runs it per pixel, as for the interlocked colors
-    // above.
+    // function writes or reads in the storage form, or, on a device that fetches through input
+    // attachments, writes or reads through its input attachment: the variant that reads and writes
+    // the shadows beside the codes. Every such color is in a pass of one layer (the encoder holds
+    // no other shadow); a pipeline compiled with shadows binds them. In a multisampled pipeline
+    // only a color the pipeline already reads (a blended or fetched one, whose function runs per
+    // sample): a plain writer's would run the function per sample where Metal runs it per pixel,
+    // as for the interlocked colors above.
+    let reads_color = |c: u32| {
+        p.graphics
+            .storage_attachments
+            .iter()
+            .any(|a| a.color_index == c)
+            || p.graphics
+                .input_attachments
+                .iter()
+                .any(|a| a.color_index == c)
+    };
     let extended_shadows: std::collections::BTreeSet<u32> = shape
         .extended_shadows
         .iter()
@@ -1322,18 +1332,10 @@ fn plan(p: &RenderPipeline, device: &Device, shape: &BindShape) -> Result<Bindin
         .filter(|&c| {
             1u32.checked_shl(c)
                 .is_some_and(|bit| p.graphics.color_outputs & bit != 0)
-                || p.graphics
-                    .storage_attachments
-                    .iter()
-                    .any(|a| a.color_index == c)
+                || reads_color(c)
         })
         .collect();
-    let moved_shadow = extended_shadows.iter().any(|&c| {
-        !p.graphics
-            .storage_attachments
-            .iter()
-            .any(|a| a.color_index == c)
-    });
+    let moved_shadow = extended_shadows.iter().any(|&c| !reads_color(c));
     if !extended_shadows.is_empty()
         && (mesh
             || (p.graphics.rasterization_samples.as_raw() > 1 && moved_shadow)

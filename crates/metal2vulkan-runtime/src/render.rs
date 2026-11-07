@@ -1022,7 +1022,9 @@ impl DrawStates {
 struct InterlockedStorage {
     /// The pass's fragment imageblock storage (`fragment_imageblock.rs`).
     imageblock: bool,
-    /// Colors in the interlocked storage form, the fetch's (`framebuffer_fetch.rs`).
+    /// Colors in the interlocked storage form, the fetch's (`framebuffer_fetch.rs`), and in a
+    /// pass that fetches through input attachments the extended-range colors' `half` shadows,
+    /// which its draws read and write in the interlock beside them (`render/extended_shadow.rs`).
     colors: bool,
     /// The depth's stand-in, which a draw that tests the depth in the shader reads and may write
     /// (`depth_stand_in.rs`).
@@ -1044,26 +1046,27 @@ impl InterlockedStorage {
         depth: true,
     };
 
-    /// What a draw of `graphics` whose colors in the interlocked storage form are `storage`
+    /// What a draw of `graphics` whose colors in the interlocked storage form are `storage`, and
+    /// which reads and writes extended-range shadows beside input attachments where `shadows`,
     /// reaches, and what it writes, on a device whose driver orders interlocked draws' colors by
     /// the interlock alone where `colors_ordered` (then no color is a kind of it). A draw that
-    /// reaches the imageblock may write it, and one that tests the depth in the shader may write
-    /// the depth's stand-in.
+    /// reaches the imageblock may write it, one that tests the depth in the shader may write the
+    /// depth's stand-in, and one that binds shadows may write them.
     fn of(
         graphics: &GraphicsState,
-        storage: &[StorageAttachmentUse],
+        (storage, shadows): (&[StorageAttachmentUse], bool),
         colors_ordered: bool,
     ) -> (Self, Self) {
         let imageblock = graphics.fragment_imageblock.is_some();
         let depth = graphics.shader_tests.is_some();
         let reaches = Self {
             imageblock,
-            colors: !colors_ordered && !storage.is_empty(),
+            colors: !colors_ordered && (!storage.is_empty() || shadows),
             depth,
         };
         let writes = Self {
             imageblock,
-            colors: !colors_ordered && storage.iter().any(|s| s.writes),
+            colors: !colors_ordered && (storage.iter().any(|s| s.writes) || shadows),
             depth,
         };
         (reaches, writes)
@@ -1956,7 +1959,7 @@ impl CommandBuffer {
         // an ended encoder's calls again, nor in a pass of several color groups, whose later
         // groups record after the first group's pass: its draws' secondary begins only where a
         // command records into it (`RenderCommandEncoder::begin_current_draws`).
-        let extended = ExtendedShadows::of(descriptor, &layout, rate_map.is_some());
+        let extended = ExtendedShadows::of(device, descriptor, &layout, rate_map.is_some());
         let opens = match again.is_none() && groups == 1 {
             true => inline_first::opens_inline(device, &layout, rate_map.is_some(), &extended),
             false => Err(NotInline::Encoders),
@@ -8523,8 +8526,11 @@ impl RenderLowering {
         let storage = self.storage_attachments(graphics)?;
         let colors_ordered =
             (device.properties().driver_facts).contains(&DriverFact::InterlockOrdersDraws);
+        // The shadows a draw of a pass that fetches through input attachments reads and writes
+        // in the interlock (`render/extended_shadow.rs`), where the storage form holds none.
+        let shadows = self.layout.fetch_inputs && !live.state.extended_shadows.is_empty();
         let (interlocked, interlocked_writes) =
-            InterlockedStorage::of(graphics, &storage, colors_ordered);
+            InterlockedStorage::of(graphics, (&storage, shadows), colors_ordered);
         let failing = match &failing_state {
             None => None,
             Some(state) => {

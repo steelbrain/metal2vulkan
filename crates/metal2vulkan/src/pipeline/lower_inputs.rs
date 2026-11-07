@@ -684,8 +684,10 @@ pub struct LoweringInputs {
     /// (`ResourceKind::ExtendedShadow`) as the tile value, and a write stores the value it computes
     /// there as well as the codes, at the invocation's own sample in a multisampled pipeline. Each
     /// is an attachment the function writes or reads in the storage form under
-    /// `framebuffer_fetch`; any other is `NotImplemented(FramebufferFetch)`. Empty for any other
-    /// function.
+    /// `framebuffer_fetch`, or on a device that fetches through rasterization-order input
+    /// attachments one it writes through its first output or reads, beside its input attachment
+    /// (`lower::fragment`'s `input_shadow`); any other is `NotImplemented(FramebufferFetch)`.
+    /// Empty for any other function.
     #[cfg_attr(feature = "serde", serde(default))]
     pub extended_shadows: BTreeSet<u32>,
     /// Sampled texture slots bound to a texture whose format's numeric class (`Float`, `Sint` or

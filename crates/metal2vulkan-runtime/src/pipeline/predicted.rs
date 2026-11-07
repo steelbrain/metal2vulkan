@@ -188,15 +188,17 @@ impl GraphicsState {
         let formats: Vec<Option<PixelFormat>> = (descriptor.color_attachments.iter())
             .map(|color| color.as_ref().map(|c| c.pixel_format))
             .collect();
+        let fetch_inputs = formats
+            .iter()
+            .flatten()
+            .any(|&pf| pf != PixelFormat::Invalid)
+            && framebuffer_fetch::through_inputs(profile);
+        let samples = descriptor.raster_sample_count;
         let shadows = predicted_shadows(
             graphics,
             &formats,
-            descriptor.raster_sample_count,
-            formats
-                .iter()
-                .flatten()
-                .any(|&pf| pf != PixelFormat::Invalid)
-                && framebuffer_fetch::through_inputs(profile),
+            samples,
+            framebuffer_fetch::holds_extended_shadows(profile, fetch_inputs, samples),
         );
         let planned = |mut shape: BindShape| {
             shape.fragment_tests = tests;

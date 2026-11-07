@@ -188,7 +188,9 @@
 //! value the shadow holds is a `half`, so the device's conversions both ways are exact, and the
 //! codes always hold the encode of the last `half` written to each channel. A shadowed attachment
 //! the storage form does not take, or of a padded or bfloat form, is refused whatever the policy
-//! (the runtime keeps such a draw off the shadow).
+//! (the runtime keeps such a draw off the shadow). On a device that orders fetch through
+//! rasterization-order input attachments the attachment keeps its input attachment, and the
+//! function reads and writes the shadow beside it inside the interlock (`input_shadow`).
 //!
 //! **A 16-bit float attachment's blend** (`R16Float`, `RG16Float`, `RGBA16Float`): no Vulkan blend
 //! applies to a storage write, so the shader computes Metal's: the write reads the texel at the pixel inside the interlock, blends the function's `half`
@@ -1390,7 +1392,7 @@ pub(super) fn body_facts(cx: &SelectCx<'_>) -> BodyFacts {
 /// constant index (another index is refused when the parameter is planned). Each such
 /// parameter's type is checked here, so a function no pipeline state would make lowerable is
 /// refused before it needs one.
-fn colors_read(cx: &SelectCx<'_>, used: &BTreeSet<u32>) -> Result<BTreeSet<u32>, Error> {
+pub(super) fn colors_read(cx: &SelectCx<'_>, used: &BTreeSet<u32>) -> Result<BTreeSet<u32>, Error> {
     let mut out = BTreeSet::new();
     for b in cx
         .entry
@@ -2362,7 +2364,7 @@ pub(super) fn declare_shadow(
 /// The shadow of attachment `color`, held as `samples` ([`declare_shadow`]), the texel of the
 /// invocation's sample, and the access's image operands, as [`image_and_texel`] gives the
 /// attachment's own.
-fn shadow_and_texel(
+pub(super) fn shadow_and_texel(
     cx: &mut EmitCx<'_>,
     fb: &mut FunctionBuilder<'_>,
     color: u32,

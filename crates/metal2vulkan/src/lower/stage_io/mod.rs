@@ -2203,6 +2203,14 @@ fn output_part(
                     None => word,
                 }
             }
+            // The output's `half`, which the instance's shadow of the attachment holds
+            // (`lower::fragment`'s `input_shadow`), and its encode.
+            (None, Some(e)) if crate::lower::fragment::input_shadow(cx, color).is_some() => {
+                let v = extended_color::held(fb, e.form, o.link.form, part)?;
+                crate::lower::fragment::input_shadow_store(cx, fb, color, v)?;
+                let texel = crate::lower::arith::extended_range::encode(fb, e.form, v)?;
+                extended_color::raw_components(fb, e.form, texel)?
+            }
             (None, Some(e)) => extended_color::encode(fb, e, o.link.form, part)?,
             (None, None) => color_write::round(cx, fb, color, o.link.form, part)?,
         },
