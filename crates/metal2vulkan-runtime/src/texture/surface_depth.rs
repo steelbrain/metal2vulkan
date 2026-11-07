@@ -123,8 +123,7 @@ impl Texture {
                 .filter(|plane| plane.aspect == unit.aspect)
                 .collect();
             let aspect = unit.aspect.into();
-            let regions: Vec<_> = regions
-                .into_iter()
+            let regions: Vec<_> = (regions.into.into_iter())
                 .filter(|region| region.image_subresource.aspect_mask == aspect)
                 .collect();
             // The plane's aspect alone: one part, of the planes given.
