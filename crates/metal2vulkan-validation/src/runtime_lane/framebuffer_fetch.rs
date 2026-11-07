@@ -163,12 +163,13 @@ use super::resolves::{lane, quiet, Lane, Shape, FULL, ONE, WHITE};
 use super::Messages;
 use crate::air_library::AirLibrary;
 use crate::runtime_lane::{buffer_with, pipelines_settled, read_buffer, WAIT};
-use metal2vulkan::device::{DriverFact, VkFeature};
+use metal2vulkan::device::{DriverFact, FormatUsage, VkFeature};
 use metal2vulkan::metal::{
     BlendFactor, IndexType, IndirectCommandType, PixelFormat, PrimitiveType, TextureType,
     TextureUsage,
 };
 use metal2vulkan::pipeline::{ColorAttachmentDescriptor, RenderPipelineDescriptor, StageSource};
+use metal2vulkan::vk;
 use metal2vulkan_devtools::llvm_assemble;
 use metal2vulkan_runtime::{
     BlitOption, Buffer, ClearColor, Degradation, Error, IndirectCommandBufferDescriptor, Library,
@@ -325,6 +326,19 @@ pub(super) fn through_inputs(lane: &Lane) -> bool {
         .profile()
         .fragment()
         .rasterization_order_color_access
+}
+
+/// Whether a single-sampled pass on the lane's device holds an extended-range color's `half`
+/// shadow (`metal2vulkan_runtime`'s `render/extended_shadow.rs`): every device that fetches in the
+/// pixel interlock, whose storage form reads and writes it, and one that fetches through input
+/// attachments where its functions read and write the shadow beside them in the interlock, with
+/// fragment stores and the shadow's `R16G16B16A16_SFLOAT` as a storage image (lavapipe).
+pub(super) fn holds_extended_shadows(lane: &Lane) -> bool {
+    let profile = lane.device.compile_device().profile();
+    !through_inputs(lane)
+        || (profile.fragment().pixel_interlock
+            && (profile.enabled().features).contains(&VkFeature::FragmentStoresAndAtomics)
+            && profile.supports_format(vk::Format::R16G16B16A16_SFLOAT, FormatUsage::StorageImage))
 }
 
 /// Whether the device announces a split the interlock alone makes (`render-pass-split`, and

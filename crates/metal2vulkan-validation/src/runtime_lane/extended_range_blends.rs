@@ -530,9 +530,10 @@ pub(super) const STORED_CODES: [Degradation; 1] = [Degradation::ExtendedRangeBle
 /// shadow of what the first instance stored: it blends onto the codes the first stored and
 /// announces `extended-range-blends-stored-codes` once, naming the color (the M3 Max's run of the
 /// same probes). A pass of one blended draw, and one of two unblended
-/// draws, announce none. A device with raster-order attachment access (lavapipe), which blends over
-/// the color's input attachment and holds no shadow, announces it at the pass of two draws already,
-/// once for the device.
+/// draws, announce none. A device with raster-order attachment access blends over the color's
+/// input attachment, and holds the shadow beside it where its functions read and write it there
+/// (lavapipe, `framebuffer_fetch::holds_extended_shadows`), announcing alike; one that holds none
+/// announces it at the pass of two draws already, once for the device.
 #[test]
 fn a_blend_onto_an_earlier_draw_announces_the_stored_codes_only_past_its_shadow() {
     let (messages, _cache, lane) = lane();
@@ -547,7 +548,7 @@ fn a_blend_onto_an_earlier_draw_announces_the_stored_codes_only_past_its_shadow(
         color.destination_alpha_blend_factor = BlendFactor::OneMinusSourceAlpha;
         color
     };
-    let shadowed = !super::framebuffer_fetch::through_inputs(&lane);
+    let shadowed = super::framebuffer_fetch::holds_extended_shadows(&lane);
     let t = filled(&lane, pf, (&plane, &alpha));
     if let Err(e) = draws(
         &lane,
@@ -609,9 +610,11 @@ fn a_blend_onto_an_earlier_draw_announces_the_stored_codes_only_past_its_shadow(
 /// (`render/extended_shadow.rs`). A second draw a memory barrier later, in an instance of its
 /// own, still holds it: the shadow, once started, lasts through the pass's splits. A pass that
 /// clears to zero, every channel a code's value, announces none. A device with raster-order
-/// attachment access (lavapipe), which blends over the color's input attachment and holds no
-/// shadow, announces `extended-range-blends-stored-codes` at the first pass between two codes, once
-/// for the device.
+/// attachment access blends over the color's input attachment, and holds the shadow beside it
+/// where its functions read and write it there (lavapipe,
+/// `framebuffer_fetch::holds_extended_shadows`), announcing none alike; one that holds none
+/// announces `extended-range-blends-stored-codes` at the first pass between two codes, once for
+/// the device.
 #[test]
 fn a_blend_onto_a_clear_between_two_codes_reads_the_clears_half() {
     let (messages, _cache, lane) = lane();
@@ -629,7 +632,7 @@ fn a_blend_onto_a_clear_between_two_codes_reads_the_clears_half() {
         .unwrap_or_else(|e| panic!("the pipeline: {e}"));
     let cleared = counts(&messages.take_notices());
     assert!(!cleared.contains_key(&STORED_CODES[0]), "{cleared:?}");
-    let shadowed = !super::framebuffer_fetch::through_inputs(&lane);
+    let shadowed = super::framebuffer_fetch::holds_extended_shadows(&lane);
     let between = Some(ClearColor::new(0.0, 0.0, 0.0, 0.5));
     for (count, split) in [(1, false), (2, true)] {
         draws(&lane, &t, &halves, blended, (between, count, split))
@@ -1000,13 +1003,15 @@ fn tile_read(held: [f32; 4]) -> [f32; 4] {
 /// store, where Metal's pass zeroes color 2's color words' top two bits (`extended-range-bits-kept`
 /// says so, `render/tile_store.rs`). The pipeline is made on every device:
 /// one that fetches through the interlock writes the storage form and holds color 0's `half` shadow
-/// from the second draw on (`render/extended_shadow.rs`), one with raster-order attachment access
-/// reads an input attachment of the raw texels and writes the raw output, each draw reading the
-/// codes the one before stored, which the runtime announces (`extended-range-blends-stored-codes`).
-/// Where the fragment stage records `PrecisionNote::NativeHalfConversion`, the device's conversion
-/// to `half` and back may be dropped (the note's bound): a texel through the codes then holds as
-/// Metal's rule or as the same draws over each fetch's unrounded decode (`tile_unrounded`), as
-/// lavapipe answers (Mesa 26.2.6, all 8,192 texels).
+/// from the second draw on (`render/extended_shadow.rs`); one with raster-order attachment access
+/// reads an input attachment of the raw texels and writes the raw output, and holds the shadow
+/// beside it from the second draw on where its functions read and write it there (lavapipe,
+/// `framebuffer_fetch::holds_extended_shadows`; Mesa 26.2.6 holds all 8,192 texels on Metal's
+/// rule), else each draw reads the codes the one before stored, which the runtime announces
+/// (`extended-range-blends-stored-codes`). There, where the fragment stage records
+/// `PrecisionNote::NativeHalfConversion`, the device's conversion to `half` and back may be
+/// dropped (the note's bound): a texel through the codes then holds as Metal's rule or as the same
+/// draws over each fetch's unrounded decode (`tile_unrounded`).
 #[test]
 fn a_fetched_two_plane_attachment_written_unblended_stores_metals_write() {
     use crate::air_library::AirLibrary;
@@ -1107,8 +1112,9 @@ fn a_fetched_two_plane_attachment_written_unblended_stores_metals_write() {
         }
     })
     .unwrap_or_else(|e| panic!("the pass on {name}: {e}"));
-    // Metal's rule, texel by texel: through the shadow in the interlock, else through the codes.
-    let shadowed = !super::framebuffer_fetch::through_inputs(&lane);
+    // Metal's rule, texel by texel: through the shadow where the device holds it, else through
+    // the codes.
+    let shadowed = super::framebuffer_fetch::holds_extended_shadows(&lane);
     // The texel the three draws leave from `word` and `a`, each fetch through the codes decoded by
     // `fetch`.
     let drawn = |i: usize, word: u32, a: u8, fetch: fn(u32, u8) -> [f32; 4]| -> [u32; 2] {
