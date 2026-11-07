@@ -1095,19 +1095,20 @@ impl Device {
     /// system that cannot start the thread, or a thread that stopped, leaves each chunk to the
     /// first object over it, which imports it. The use lasts until the returned [`HostRamUse`]
     /// is dropped; a device may use several RAMs at once whose ranges are apart, and a new RAM
-    /// once an earlier use of the same ranges ended (a VMM's next guest). A RAM with a source of
-    /// dma-bufs ([`HostRam::with_dma_buf`]) has its chunks imported as dma-bufs where the
-    /// device's held pointer imports add to every submission's cost, or it refuses their pointer
-    /// (`WorkCounts::host_ram_dma_buf_imports`); for it the call first waits for the device's
-    /// submission checks, which take milliseconds, for at most 10 s.
+    /// once an earlier use of the same ranges ended (a VMM's next guest).
+    ///
+    /// A RAM with a source of dma-bufs ([`HostRam::with_dma_buf`]) has its chunks imported as
+    /// dma-bufs where the device's held pointer imports add to every submission's cost, or where
+    /// it refuses their pointer (`WorkCounts::host_ram_dma_buf_imports`); for it the call first
+    /// waits for the device's submission checks, which take milliseconds, for at most 10 s. On a
+    /// device that refuses pointers to shared memory ([`Device::imports_shared_host_pointers`]
+    /// false: RADV), a RAM of shared memory (QEMU's `memory-backend-memfd,share=on` RAM) is
+    /// imported so with a source; with none, it is taken but imports no chunk, and each object
+    /// over it is refused as its own import of the pointer is (`Unsupported`, `HostMemory`).
     ///
     /// Refused: a device without `VK_EXT_external_memory_host` (`Unsupported`, naming it); a RAM
     /// whose ranges meet those of a RAM the device uses already, itself among them (`Invalid`,
-    /// `Problem::HostRam`); a lost device. On a device that refuses pointers to shared memory
-    /// ([`Device::imports_shared_host_pointers`] false: RADV), a RAM of shared memory (QEMU's
-    /// `memory-backend-memfd,share=on` RAM) with no dma-buf source is taken but imports no chunk,
-    /// and each object over it is refused as its own import of the pointer is (`Unsupported`,
-    /// `HostMemory`).
+    /// `Problem::HostRam`); a lost device.
     pub fn use_host_ram(&self, ram: &Arc<HostRam>) -> Result<HostRamUse, Error> {
         const CALL: &str = "use_host_ram";
         if self.is_lost() {

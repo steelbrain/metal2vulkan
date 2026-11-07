@@ -460,8 +460,9 @@ submission, can give the device the guest's RAM once instead:
 - One run inside one chunk: the device imports the RAM by host pointer in chunks of 64 MiB, never
   across a range's end, each once (`WorkCounts::host_ram_chunks_imported`, `host_ram_chunk_bytes`,
   `host_ram_chunks_live`). A device that refuses pointers to shared memory
-  (`Device::imports_shared_host_pointers` false: RADV) imports no chunk of a RAM of shared memory
-  (`memory-backend-memfd,share=on`) with no dma-buf source, and refuses each object over it
+  (`Device::imports_shared_host_pointers` false: RADV) imports each chunk of a RAM of shared memory
+  (`memory-backend-memfd,share=on`) as a dma-buf where the RAM has a source of them
+  (`HostRam::with_dma_buf`, below); with none, it imports no chunk and refuses each object over it
   (`Unsupported`, `HostMemory`). From `use_host_ram` on, a thread of the device's imports chunks
   ahead
   of the objects over them (`host_ram_chunks_imported_ahead`): the chunk an object last took, then a

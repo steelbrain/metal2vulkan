@@ -725,18 +725,14 @@ fn the_window_ahead_moves_with_the_objects_and_imports_no_more() {
     );
 }
 
-/// An object over a chunk the device's thread imported, made while the chunk's state is looked at
-/// as the thread looks at each chunk of its window as it passes them
-/// (`Device::looking_at_host_ram_chunk`), waits for the look and is bound in the chunk: the look
-/// is not an import under way, so the object imports nothing of its own. The look lasts past the
-/// object's making's start; where the making reached the chunk after it ended, it binds there
-/// too.
 /// On a device that refuses pointers to shared memory (`Device::imports_shared_host_pointers`
 /// false: RADV, whose amdgpu userptr takes private anonymous pages alone), a RAM of shared memory
 /// (a `memfd` mapped shared, as QEMU's `memory-backend-memfd,share=on` RAM is) imports no chunk,
 /// ahead or for an object, and an object over it is refused as its own import of the pointer is
-/// (`Unsupported`, `HostMemory`), the RAM given no dma-buf source. The use still ends, the RAM's
-/// keep-alive going after it. A device that imports such pointers says so and passes.
+/// (`Unsupported`, `HostMemory`), the RAM given no dma-buf source: the chunk's import by its
+/// pointer is refused (`WorkCounts::host_ram_pointer_imports_failed`) and none goes as a dma-buf
+/// (`host_ram_dma_buf_imports`). The use still ends, the RAM's keep-alive going after it. A device
+/// that imports such pointers says so and passes.
 #[test]
 fn a_ram_of_shared_memory_a_device_refuses_imports_no_chunk_and_refuses_its_objects() {
     let Some(device) = ahead_device() else {
@@ -777,11 +773,26 @@ fn a_ram_of_shared_memory_a_device_refuses_imports_no_chunk_and_refuses_its_obje
         "no chunk of the shared RAM imported"
     );
     assert_eq!(after.host_ram_chunks_live - before.host_ram_chunks_live, 0);
+    let failed = after.host_ram_pointer_imports_failed - before.host_ram_pointer_imports_failed;
+    let dma_bufs = after.host_ram_dma_buf_imports - before.host_ram_dma_buf_imports;
+    eprintln!(
+        "HOST-RAM {}: shared RAM, no source: {failed} pointer import(s) refused, {dma_bufs} \
+         dma-buf import(s)",
+        device.name()
+    );
+    assert!(failed >= 1, "the chunk's pointer import was refused");
+    assert_eq!(dma_bufs, 0, "no dma-buf without a source");
     drop(used);
     drop(ram);
     assert!(settles(&dropped), "the RAM's keep-alive dropped");
 }
 
+/// An object over a chunk the device's thread imported, made while the chunk's state is looked at
+/// as the thread looks at each chunk of its window as it passes them
+/// (`Device::looking_at_host_ram_chunk`), waits for the look and is bound in the chunk: the look
+/// is not an import under way, so the object imports nothing of its own. The look lasts past the
+/// object's making's start; where the making reached the chunk after it ended, it binds there
+/// too.
 #[test]
 fn an_object_made_while_its_imported_chunk_is_looked_at_is_bound_in_the_chunk() {
     let Some(device) = ahead_device() else {
