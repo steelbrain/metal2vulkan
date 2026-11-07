@@ -9,6 +9,17 @@
 //! it past the discard — and `(1, 0, 0, 0)` means it also counted the dropped quads that share the
 //! simdgroup.
 //!
+//! Which pixels share a fragment simdgroup is the device's (`fragment-simdgroup-grouping`), which
+//! Metal permits. The M3 Max's 32-lane simdgroup holds the 8 by 4 target's dropped quads beside
+//! the kept one; a device whose fragment subgroup holds the kept quad alone has no dropped quad to
+//! count, so the shapes whose sum Metal counts the dropped quads in read `(0, 0, 0, 0)` there.
+//! Measured on x86-64 lavapipe (Mesa, LLVM 23.1.4): under its default 256-bit vectors its fragment
+//! subgroups are 8 lanes, two quads, and the counted shapes answer Metal's `(1, 0, 0, 0)`; forced
+//! to 128-bit vectors (`LP_NATIVE_VECTOR_WIDTH=128`, the width arm64 lavapipe runs) they are 4
+//! lanes, one quad, and `counted_dependent`, `counted_store` and `counted_atomic` read 0 in the
+//! first word of each kept texel and nothing else. The note derives no tolerance, so those sites
+//! are `known-gaps.tsv` rows scoped to the width.
+//!
 //! Thirteen fragment functions, one row each: the shapes the lane measured for where Metal's
 //! compiler places the sum. Record mode runs every one of them on native Metal, so the recording
 //! holds Metal's own target rather than the lane's two-valued table, and the lane's table becomes a
@@ -196,8 +207,8 @@ impl Case for DiscardHoist {
             // Two more kinds our side announces on lavapipe, declared so the notices site stays
             // readable there: it splits a fragment quad at a clipped edge where Metal keeps it
             // whole (`quads-split-by-clipping`) and groups a fragment simdgroup its own way
-            // (`fragment-simdgroup-grouping`). Declarations only -- `discard-quad-sum-placement`
-            // stays divergent on the sums it measures, which is the finding.
+            // (`fragment-simdgroup-grouping`). Declarations only: the grouping's note derives no
+            // tolerance, so a sum it moves stays divergent, a ledger row (the module doc).
             // And the notice a card without unified memory announces for the `Shared` buffer the
             // case reads its sums back through, which is the venue's memory model and not this
             // case's shape. Measured on the RTX 5080 Laptop (615.71.09), where it fired for this

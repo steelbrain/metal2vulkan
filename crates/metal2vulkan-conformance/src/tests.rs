@@ -3316,16 +3316,16 @@ fn the_known_gaps_ledger_parses_and_names_real_cases() {
             .starts_with("mesh-object-draws-partial-threadgroup-")),
         "{ledger:?}"
     );
-    // The divergence rows this round left open: the fragment quad's placement on one lavapipe
-    // build, which MoltenVK answers exactly, so the rows are venue-scoped rather than global.
+    // The fragment quad's sum on a lavapipe built for 128-bit vectors, whose 4-lane fragment
+    // subgroups hold one quad each (the device's grouping, which MoltenVK does not share), so the
+    // rows are venue-scoped rather than global.
     //
-    // The scope is the build and not the implementation. These rows were measured in the gate
-    // container's arm64 lavapipe, and the suite's other lavapipe -- x86-64, `LLVM 23.1.1`,
-    // 256-bit vectors -- does not hold them. A venue field of `llvmpipe` is a substring of both
-    // device names, so it held the rows on a venue the gap was never measured on, where the
-    // retire direction then read all three as fixed. The two legs are told apart by the only thing
-    // in a venue's description that differs, which is the device name `llvmpipe` writes itself,
-    // so that is what the field carries.
+    // The scope is the vector width, which sets the subgroup's: measured on the gate container's
+    // arm64 `LLVM 21.1.8` build and on x86-64 `LLVM 23.1.4` forced to 128 bits, and absent from
+    // x86-64 lavapipe at its 256-bit default (8 lanes, two quads). A venue field of `llvmpipe`
+    // held the rows on a venue that does not hold the gap, where the retire direction read all
+    // three as fixed; one build's name missed the other 128-bit build. The width `llvmpipe`
+    // writes into its device name is what the field carries.
     let quads: Vec<&crate::known_gaps::KnownGap> = ledger
         .iter()
         .filter(|known| known.case == "discard-quad-sum-placement")
@@ -3338,18 +3338,30 @@ fn the_known_gaps_ledger_parses_and_names_real_cases() {
         lossless_compression: true,
         host: None,
     };
-    let measured = lavapipe("llvmpipe (LLVM 21.1.8, 128 bits)");
-    let other = lavapipe("llvmpipe (LLVM 23.1.1, 256 bits)");
     for known in &quads {
-        assert!(known.covers_venue(&measured), "{known:?}");
-        assert!(
-            !known.covers_venue(&other),
-            "the row holds on a lavapipe it was never measured on: {known:?}"
-        );
+        for measured in [
+            "llvmpipe (LLVM 21.1.8, 128 bits)",
+            "llvmpipe (LLVM 23.1.4, 128 bits)",
+        ] {
+            assert!(
+                known.covers_venue(&lavapipe(measured)),
+                "{measured}: {known:?}"
+            );
+        }
+        for other in [
+            "llvmpipe (LLVM 23.1.1, 256 bits)",
+            "llvmpipe (LLVM 23.1.4, 256 bits)",
+            "Apple M3 Max",
+        ] {
+            assert!(
+                !known.covers_venue(&lavapipe(other)),
+                "the row holds on a venue that does not hold the gap, {other}: {known:?}"
+            );
+        }
     }
     for known in quads {
         assert_eq!(known.expects, crate::known_gaps::Expects::Divergent);
-        assert_eq!(known.venue, "llvmpipe (LLVM 21.1.8, 128 bits)");
+        assert_eq!(known.venue, "128 bits)");
         // A divergence row says how much moved -- how many of the site's leaves differ and how
         // far -- and never where the walk first noticed, which is a property of the data and not
         // of the bug. All four texels of the kept quad differ, which the first-mismatch answer
@@ -3358,8 +3370,11 @@ fn the_known_gaps_ledger_parses_and_names_real_cases() {
             known.answer, "4 elements differ (I32), the largest difference 1",
             "{known:?}"
         );
-        // And it is honest about what is not established, which is the whole cause.
-        assert!(known.waiting_on.contains("NOT established"), "{known:?}");
+        // And it names the cause, the device's grouping, and the note that announces it.
+        assert!(
+            known.waiting_on.contains("fragment-simdgroup-grouping"),
+            "{known:?}"
+        );
     }
 
     // Every row's site must be one its case's committed recording actually holds. A row for a
