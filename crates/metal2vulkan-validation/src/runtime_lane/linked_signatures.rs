@@ -17,7 +17,7 @@
 use super::host_memory::{on_device, run};
 use super::read_buffer;
 use crate::air_library::AirLibrary;
-use metal2vulkan::error::{Error as CompileError, Feature};
+use metal2vulkan::error::Feature;
 use metal2vulkan::pipeline::{ComputePipelineDescriptor, LinkedFunctions, StageSource};
 use metal2vulkan_devtools::linked_signatures::{Answer, Case, CASES, STITCHED_PAIR};
 use metal2vulkan_devtools::stitched;
@@ -108,7 +108,7 @@ fn a_reference_of_another_type_computes_by_position() {
                         assert_eq!(got, Ok([w, 0x5e47]), "{}", case.name);
                     }
                     Answer::Refused => match got {
-                        Err(Error::Compile(CompileError::Unsupported(u))) => {
+                        Err(Error::Unsupported(u)) => {
                             assert_eq!(u.feature, Feature::Linking, "{}: {u}", case.name);
                         }
                         other => panic!("{}: not refused: {other:?}", case.name),
