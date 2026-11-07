@@ -1400,7 +1400,8 @@ impl Device {
     }
 
     /// Each RAM the device uses: whether it imports it as each listed import costing every
-    /// submission ([`Plan::listed`]), and its chunks.
+    /// submission ([`Plan::listed`]), and its chunks (read by the dma-buf tests, Linux's).
+    #[cfg(target_os = "linux")]
     pub(crate) fn host_ram_chunks(&self) -> Vec<(bool, Vec<Range<u64>>)> {
         let rams = self.shared().host_ram.used();
         (rams.iter())
