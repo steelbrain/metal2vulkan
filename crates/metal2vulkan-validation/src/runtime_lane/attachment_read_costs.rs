@@ -45,7 +45,8 @@
 //!
 //! `self_reads` is the consumer's guest's self-read shape (its `selfread` probe): one command
 //! buffer a frame of one render pass over a [`SELF_SIZE`] `BGRA8Unorm` target (a surface over host
-//! pages, as the guest's framebuffer is, or a private texture), loaded but in the first frame,
+//! pages, as the guest's framebuffer is, its rows 64-byte aligned as IOSurface lays them out, on a
+//! device of each setting of `host_page_textures`; or a private texture), loaded but in the first frame,
 //! which clears it, and stored; [`SELF_PAIRS`] times a fill of a [`SELF_RECT`] rectangle, a memory
 //! barrier over the render targets and a draw over the same rectangle that reads the target at
 //! its own pixels (`tob_read`), through no scissor; each target also without the barriers and
@@ -61,6 +62,7 @@ use super::host_memory::{no_copy, Mapping, GUEST_PAGE};
 use super::{open_device, WAIT};
 use crate::gpu::TEST_DEVICE;
 use metal2vulkan::bind::SamplerDescriptor;
+use metal2vulkan::device::HostPageTexturePolicy;
 use metal2vulkan::metal::{
     BarrierScope, BlendFactor, PixelFormat, PrimitiveType, RenderStages, TextureUsage,
 };
@@ -896,20 +898,36 @@ fn self_frame(
 #[test]
 #[ignore = "a release-mode measurement: run by name"]
 fn self_reads() {
-    let device = open_device(TEST_DEVICE, DeviceOptions::default()).unwrap();
+    // Each setting of `host_page_textures`: the surface in place where the device takes it so,
+    // and its shadow; the private target once.
+    for policy in [
+        HostPageTexturePolicy::InPlace,
+        HostPageTexturePolicy::Shadow,
+    ] {
+        let mut options = DeviceOptions::default();
+        options.policy.host_page_textures = policy;
+        let device = open_device(TEST_DEVICE, options).unwrap();
+        self_reads_on(&device, policy);
+    }
+}
+
+/// [`self_reads`] on `device`, of `policy`: its surface, and under `InPlace` the private target.
+fn self_reads_on(device: &Device, policy: HostPageTexturePolicy) {
     let bgra = PixelFormat::BGRA8Unorm;
     let draws = (
-        state(&device, "tob_solid", "tob_renders.ll", bgra),
-        state(&device, "tob_read", "tob_renders.ll", bgra),
+        state(device, "tob_solid", "tob_renders.ll", bgra),
+        state(device, "tob_read", "tob_renders.ll", bgra),
     );
     let [width, height] = SELF_SIZE;
-    let row = 4 * width;
+    // A surface's rows at a multiple of 64 bytes, as IOSurface lays them out (a plane of a
+    // surface without planes takes a multiple of 16 alone).
+    let row = (4 * width).next_multiple_of(64);
     let len = ((row * height) as usize).next_multiple_of(GUEST_PAGE);
     let mapping = Mapping::anonymous(len);
     // SAFETY: the measurement drops the texture and the buffer before the mapping.
     let buffer = unsafe {
         no_copy(
-            &device,
+            device,
             mapping.pointer(),
             len,
             ResourceOptions::default(),
@@ -927,7 +945,11 @@ fn self_reads() {
     let private = device.new_texture(&d).unwrap();
     let queue = device.new_command_queue().unwrap();
     let name = device.name().to_owned();
-    for (target, kind) in [(&surface, "surface"), (&private, "private")] {
+    let mut targets = vec![(&surface, format!("surface ({policy:?})"))];
+    if policy == HostPageTexturePolicy::InPlace {
+        targets.push((&private, "private".to_owned()));
+    }
+    for (target, kind) in targets {
         for baseline in [true, false] {
             let mut frames = 0..;
             let mut next = || frames.next().unwrap();
@@ -952,11 +974,11 @@ fn self_reads() {
                 c.shadow_keeps.render_cut_texels + c.shadow_keeps.render_whole_texels
             };
             println!(
-                "SELF-READ-COST {name} {kind} {width}x{height} {} pairs {} {}x{}: GPU {:.3} \
-                 ms/frame (median); per frame: splits {:.2}, snapshotted {:.2}, instances {:.2}, \
-                 shadow copies {:.2}, bounded {:.2}, texels copied in {:.0}, of a surface again \
-                 {:.0}, keeps {:.2}, texels kept {:.0}, merges {:.2}; render-target shadows over \
-                 host pages {}",
+                "SELF-READ-COST {name} {kind} {width}x{height} rows of {row} bytes {} pairs {} \
+                 {}x{}: GPU {:.3} ms/frame (median); per frame: splits {:.2}, snapshotted \
+                 {:.2}, instances {:.2}, shadow copies {:.2}, bounded {:.2}, texels copied in \
+                 {:.0}, of a surface again {:.0}, keeps {:.2}, texels kept {:.0}, merges {:.2}; \
+                 render-target shadows over host pages {}",
                 SELF_PAIRS,
                 if baseline { "baseline" } else { "self-read" },
                 SELF_RECT[0],
