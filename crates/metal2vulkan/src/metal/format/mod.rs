@@ -3039,7 +3039,7 @@ pub fn storage_view_formats(pf: PixelFormat, profile: &DeviceProfile) -> Vec<vk:
 /// `BGRA8Unorm`, `BGRA8Unorm_sRGB` and `BGR10A2Unorm`, on every device. A heap texture's
 /// handle-table entry carries it (`memory::handles::FLAG_RED_BLUE`), which tells such a member
 /// from the red-first format of the same texel class.
-pub fn red_blue_exchanged(pf: PixelFormat) -> bool {
+pub(crate) fn red_blue_exchanged(pf: PixelFormat) -> bool {
     matches!(
         pf,
         PixelFormat::BGRA8Unorm | PixelFormat::BGRA8UnormSRGB | PixelFormat::BGR10A2Unorm
