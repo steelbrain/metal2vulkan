@@ -2492,10 +2492,10 @@ mod the_ratio {
 ///
 /// # The census these numbers are, read off the committed recordings
 ///
-/// 589 recordings carry a cost record that makes a creation pipeline at all. Over them: **1,446
-/// made, 815 taken by a command, 631 taken by none.** 158 cases take every one they make, 411 take
-/// none of theirs, and 16 take some and not others — the `xr-blend-planes-*` family at 3 made and 1
-/// taken, `topology-class-plain-function` and `frame-length-chain` at 4 and 2.
+/// 576 cost records make a creation pipeline at all. Over them: **1,451 made, 924 taken by a
+/// command, 527 taken by none.** 227 take every one they make, 326 take none of theirs, and 23 take
+/// some and not others — the `xr-blend-planes-*` family at 3 made and 1 taken,
+/// `topology-class-plain-function` and `frame-length-chain` at 4 and 2.
 ///
 /// **The ceiling rose from 508 to 624 because the coverage did, and the rate improved sharply while
 /// it did.** Every one of the 1,103 recordings carries a cost record now, where 399 carried none,
@@ -2509,12 +2509,12 @@ mod the_ratio {
 /// # And the total is two predictions, which is the thing it cannot say
 ///
 /// `creation_pipelines_made` is one count over the render prediction (`pipeline/predicted.rs`) and
-/// the compute one (`pipeline/dispatch_making.rs`), so 631 says nothing about either. Split by the
+/// the compute one (`pipeline/dispatch_making.rs`), so 527 says nothing about either. Split by the
 /// commands each record's own counts say our leg recorded ([`Speculated`], and no new counter was
-/// needed for it), the two are nothing like each other: **the render prediction is taken 754 times
-/// in 799 over the 154 rows that draw and do not dispatch, and the compute prediction 0 times in
-/// 461 over the 277 rows that dispatch and do not draw.** 461 of the 631 is one prediction with no
-/// hit in the whole committed census, and 455 of those 461 are rows that make no render pass at
+/// needed for it), the two are nothing like each other: **the render prediction is taken 829 times
+/// in 860 over the 191 rows that draw and do not dispatch, and the compute prediction 0 times in
+/// 386 over the 223 rows that dispatch and do not draw.** 386 of the 527 is one prediction with no
+/// hit in the whole committed census, and 379 of those 386 are rows that make no render pass at
 /// all. [`WASTED_BY_CLASS`] holds the four classes apart and [`DRAWS_TAKEN`] holds the render
 /// prediction's reach, which a ceiling on waste does not.
 #[cfg(test)]
@@ -2536,7 +2536,12 @@ mod the_creation_prediction {
     /// dispatch rather than draw, so no command can take a predicted render pipeline, which is
     /// the legitimate half of the question and the shape `known-slow-calls.tsv` already names as
     /// the largest single share of this count.
-    const WASTED: u64 = 631;
+    ///
+    /// **Lowered to 595 by the render prediction's reach** (a key holds no pass's resolves, a
+    /// point draw of the point class takes its guard band's variant, a multisampled reader of an
+    /// extended-range color its shadow's), which took 22 from the draws class and 14 from both
+    /// kinds ([`WASTED_BY_CLASS`]); the census reads 527.
+    const WASTED: u64 = 595;
 
     /// **The same ceiling, per class of speculation**, which is the statement [`WASTED`] cannot
     /// make: it is one number over two predictions, so it holds neither.
@@ -2546,21 +2551,37 @@ mod the_creation_prediction {
     ///
     /// | class | rows | made | taken | by none | taken |
     /// |---|---|---|---|---|---|
-    /// | draws and no dispatch | 184 | 846 | 799 | 47 | 94.4% |
+    /// | draws and no dispatch | 191 | 860 | 829 | 31 | 96.4% |
     /// | dispatches and no draw | 223 | 386 | 0 | 386 | 0.0% |
-    /// | both kinds | 63 | 81 | 49 | 32 | 60.5% |
+    /// | both kinds | 103 | 141 | 95 | 46 | 67.4% |
     /// | no command at all | 59 | 64 | 0 | 64 | 0.0% |
-    /// | all | 529 | 1,377 | 848 | 529 | 61.6% |
+    /// | all | 576 | 1,451 | 924 | 527 | 63.7% |
     ///
     /// **So the two predictions are nothing like each other, and the total hides it.** The render
-    /// prediction is taken 799 times in 846 on the cases that draw, and its 47 misses are spread
-    /// one or two to a row over 44 rows led by `sample-positions-*` and the `a2c-*` sweeps — the
-    /// shape this module's docs already name as unpredictable, since `GraphicsKey` carries
-    /// `sample_positions` and the pass. The compute prediction is taken **0** times in 386 over
-    /// 223 rows. 386 of the 529 is one prediction, and 379 of those 386 are rows that make no
-    /// render pass at all.
+    /// prediction is taken 829 times in 860 on the cases that draw. The compute prediction is
+    /// taken **0** times in 386 over 223 rows. 386 of the 527 is one prediction, and 379 of those
+    /// 386 are rows that make no render pass at all.
     ///
-    /// **Two of the draws class's 47 are an open bug, not coverage.**
+    /// **The draws class's 31, by what a creation cannot know** (`pipeline/predicted.rs`), one to
+    /// a row but `topology-class-plain-function`'s two:
+    ///
+    /// - 17 `sample-positions-*` rows whose pass sets custom sample positions, which `GraphicsKey`
+    ///   carries and a creation cannot see.
+    /// - The six `xr-masked-bgr10xr-*` rows: a single-sampled pass holds an extended-range color's
+    ///   `half` shadow only once an earlier draw wrote it (`render/extended_shadow.rs`), which a
+    ///   creation cannot see either.
+    /// - Five draws of another primitive than the state's class predicts: the
+    ///   `topology-class-*` cases' states of the point and line classes drawing triangles, and
+    ///   states of the unspecified class drawing points or lines (`point-viewport-coverage`,
+    ///   `render-draw-forms-lines`, `topology-class-point-size-function`'s unspecified state),
+    ///   which a creation predicts as triangles.
+    /// - `depthstencil-stencil-compares`, one, not traced to its key.
+    ///
+    /// None of them is a draw in a pass that resolves, a point draw of the point class or a
+    /// multisampled blend into an extended-range color: a creation predicts those
+    /// (`PassShape::keyed`, the point guard, the shadows), and their draws take its pipeline.
+    ///
+    /// **Two of the draws class's 31 are an open bug, not coverage.**
     /// `render-then-sample-magnified-nearest` and `-linear` each make one pipeline no draw takes,
     /// 3 made and 2 taken: a state whose fragment function converts a texture's texels to `half`
     /// makes its predicted key's general form at its creation and hands the predicted key itself
@@ -2570,9 +2591,9 @@ mod the_creation_prediction {
     ///
     /// # Why the total cannot hold this
     ///
-    /// A ceiling on the sum passes a trade between the halves. Were the compute prediction's 461
-    /// to go to nothing while the render prediction lost half its accuracy — 799 made, about 400
-    /// taken — the census would read about 586 against the ceiling of 631 and this family would
+    /// A ceiling on the sum passes a trade between the halves. Were the compute prediction's 386
+    /// to go to nothing while the render prediction lost half its accuracy — 860 made, about 430
+    /// taken — the census would read about 540 against the ceiling of 595 and this family would
     /// report everything well. The per-class ceilings below fail it, and name the class that
     /// widened.
     ///
@@ -2580,7 +2601,7 @@ mod the_creation_prediction {
     /// the rows that grew rows that run no command of that kind — legitimate — or rows that
     /// mispredict a command they do run.
     const WASTED_BY_CLASS: [(Speculated, u64); 4] = [
-        (Speculated::Draws, 47),
+        (Speculated::Draws, 31),
         (Speculated::Dispatches, 461),
         (Speculated::Both, 46),
         (Speculated::NoCommand, 79),
@@ -2592,9 +2613,9 @@ mod the_creation_prediction {
     /// A ceiling on waste is not this statement. A case family that stops drawing, or a landing
     /// that removes one, lowers the waste and the reach together, and only the ceiling notices
     /// nothing. This is the half that says the prediction is still *right*, and it is the reason
-    /// the render prediction must not be made lazy: at 754 of 799 it is taken 94.4% of the time,
+    /// the render prediction must not be made lazy: at 829 of 860 it is taken 96.4% of the time,
     /// so a lazy render pipeline would move a creation's compile into the first draw's command
-    /// buffer 94 times in 100 — which is the cold making inside a command buffer's execution that
+    /// buffer 96 times in 100 — which is the cold making inside a command buffer's execution that
     /// `pipeline/predicted.rs` exists to have removed.
     const DRAWS_TAKEN: u64 = 754;
 
@@ -2889,7 +2910,7 @@ mod the_creation_prediction {
             "the rows that draw and do not dispatch now take {} of the {} pipelines their \
              creations make, where {DRAWS_TAKEN} were taken. A ceiling on waste cannot say this: \
              a family that stops drawing lowers the waste and the reach together. The render \
-             prediction being taken 94% of the time is why it is made at a creation at all, so a \
+             prediction being taken 96% of the time is why it is made at a creation at all, so a \
              drop here is a cold compile moving back inside a first draw's command buffer",
             read.drawn,
             read.made,
