@@ -262,6 +262,7 @@ impl From<&MeshPipelineDescriptor> for RenderLinkInputs {
             alpha_to_coverage: d.alpha_to_coverage,
             alpha_to_one: d.alpha_to_one,
             rasterization_enabled: d.rasterization_enabled,
+            max_vertex_amplification_count: d.max_vertex_amplification_count,
             texture_write_rounding_mode: d.texture_write_rounding_mode,
             ..RenderLinkInputs::new()
         }

@@ -177,7 +177,8 @@
 //!   function that chooses its render target slice, or a fragment function that reads it), which a
 //!   multiview pipeline cannot (`VUID-VkGraphicsPipelineCreateInfo-renderPass-06050`, `-06059`):
 //!   the binder refuses such a pipeline's amplified draws, and its draws at a count of 1 are
-//!   ordinary layered rendering.
+//!   ordinary layered rendering. A mesh pipeline keeps its count and needs no `multiview`: its
+//!   draws of more than one amplification are refused at the draw (`bind::graphics`).
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -265,15 +266,17 @@ fn color_group(
     Ok(())
 }
 
-/// The vertex amplification count of render inputs `r` (see the module docs).
-fn vertex_amplification(r: &RenderLinkInputs, p: &DeviceProfile) -> Result<u32, Error> {
+/// The vertex amplification count of render inputs `r` (see the module docs), of a mesh pipeline
+/// where `mesh`: it draws no amplification as a view, so it needs no multiview (its draws of more
+/// than one amplification are refused at the draw, `bind::graphics`).
+fn vertex_amplification(r: &RenderLinkInputs, mesh: bool, p: &DeviceProfile) -> Result<u32, Error> {
     let count = r.max_vertex_amplification_count;
     if count == 0 {
         return Err(Error::InvalidDescriptor(
             DescriptorError::VertexAmplificationCount { count },
         ));
     }
-    if count == 1 {
+    if count == 1 || mesh {
         return Ok(count);
     }
     let f = p.fields();
@@ -309,7 +312,7 @@ pub fn graphics_state(
         .into());
     }
     color_group(r, (vs, fs), tessellation.is_some(), p)?;
-    let max_vertex_amplification_count = vertex_amplification(r, p)?;
+    let max_vertex_amplification_count = vertex_amplification(r, vs.stage == Stage::Mesh, p)?;
     // A vertex function that selects its slice through the synthesized geometry stage
     // (`IoRole::SelectedLayer`) declares `Layer` there, and a fragment function that reads it as 0
     // (`StageIo::zero_indices`) reads it as Metal does only where no amplification moves it.
