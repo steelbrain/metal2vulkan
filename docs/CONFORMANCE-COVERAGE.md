@@ -44,7 +44,7 @@ Its limits, measured rather than asserted:
 | committed recordings | 1229 |
 | distinct SDK items the Metal leg reaches, of any status | 820 |
 | of those, reached only where this cannot name the family | 3 |
-| ledger rows (a case whose gap is recorded) | 3293 |
+| ledger rows (a case whose gap is recorded) | 3285 |
 | declared crossings of the option space (pairs put to Metal at once) | 26 |
 | declared crossings that are no pair of it (a boolean or numeric field, or one type in two slots) | 30 |
 
@@ -5338,10 +5338,6 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `half-storage-writes-rgba16f-held` | A NaN the function writes to a 16-bit float storage texture: the first differing element is Metal 0x7E00 against our 0xFE00, the device's own conversion of the … |
 | `half-storage-writes-rgba16f-read-write` | A NaN the function writes to a 16-bit float storage texture: the first differing element is Metal 0x7E00 against our 0xFE00, the device's own conversion of the … |
 | `half-storage-writes-rgba16f-write` | A NaN the function writes to a 16-bit float storage texture: the first differing element is Metal 0x7E00 against our 0xFE00, the device's own conversion of the … |
-| `host-page-writes-kernel-store-read-only` | Metal DROPS what a shader or the blit engine writes into memory whose backing is read-only, silently and with no error, and we land the write. Metal's rule is m… |
-| `host-page-writes-kernel-store-read-only` | Metal DROPS what a shader or the blit engine writes into memory whose backing is read-only, silently and with no error, and we land the write. Metal's rule is m… |
-| `host-page-writes-visibility-read-only` | Metal DROPS what a shader or the blit engine writes into memory whose backing is read-only, silently and with no error, and we land the write. Metal's rule is m… |
-| `host-page-writes-visibility-read-only` | Metal DROPS what a shader or the blit engine writes into memory whose backing is read-only, silently and with no error, and we land the write. Metal's rule is m… |
 | `math-frexp-ilogb-half` | `frexp` of a `half` NaN (the operands 0x7E01, 0xFE55 and the signalling 0x7C01): Metal's mantissa is the operand's own bits, and ours is the device's narrowing … |
 | `math-frexp-ilogb-half` | `frexp` of a `half` NaN (the operands 0x7E01, 0xFE55 and the signalling 0x7C01): Metal's mantissa is the operand's own bits, and ours is the device's narrowing … |
 | `nearest-sample-positions` | A nearest sample at coordinates on texel boundaries under repeat and mirrored repeat: where the elements differ, ours reads the neighbouring texel (the first di… |
@@ -5349,10 +5345,6 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `pass-bytes-half-tanh-regimes` | Each word holds `fast::tanh` of a `float` over its regimes, which the device computes by its own `Tanh` (`native-transcendentals`, on every device; a NaN's bits… |
 | `pass-bytes-half-tanh-regimes` | Each word holds two `half` results of `tanh` over its regimes, which the device computes by its own `Tanh` (a `half` held as `float`, on every device) and narro… |
 | `pass-bytes-srgb-encode-sweep` | Each word holds an sRGB encode of a `float` or a `half` colour packed to four bytes. Metal encodes through its twelve-bit table; the module encodes by the MSL t… |
-| `pass-sequence-color-actions` | Metal's `MTLStoreActionDontCare` leaves the attachment holding the texels it held BEFORE the pass, and we leave what the pass rendered. Metal's answer is this c… |
-| `pass-sequence-color-actions` | Metal's `MTLStoreActionDontCare` leaves the attachment holding the texels it held BEFORE the pass, and we leave what the pass rendered. Metal's answer is this c… |
-| `pass-sequence-color-actions` | Metal's `MTLStoreActionDontCare` leaves the attachment holding the texels it held BEFORE the pass, and we leave what the pass rendered. Metal's answer is this c… |
-| `pass-sequence-color-actions` | Metal's `MTLStoreActionDontCare` leaves the attachment holding the texels it held BEFORE the pass, and we leave what the pass rendered. Metal's answer is this c… |
 | `rgb10a2-srgb-reads` | `RGB10A2Unorm_sRGB`'s colour read, sampled, written or stored: the function decodes a code `c` as `c` times the `f32` nearest `1 / 1023` through the MSL transfe… |
 | `rgb10a2-srgb-samples-linear-f` | `RGB10A2Unorm_sRGB`'s colour read, sampled, written or stored: the function decodes a code `c` as `c` times the `f32` nearest `1 / 1023` through the MSL transfe… |
 | `rgb10a2-srgb-samples-linear-h` | `RGB10A2Unorm_sRGB`'s colour read, sampled, written or stored: the function decodes a code `c` as `c` times the `f32` nearest `1 / 1023` through the MSL transfe… |
