@@ -44,7 +44,7 @@ Its limits, measured rather than asserted:
 | committed recordings | 1229 |
 | distinct SDK items the Metal leg reaches, of any status | 820 |
 | of those, reached only where this cannot name the family | 3 |
-| ledger rows (a case whose gap is recorded) | 2813 |
+| ledger rows (a case whose gap is recorded) | 3014 |
 | declared crossings of the option space (pairs put to Metal at once) | 26 |
 | declared crossings that are no pair of it (a boolean or numeric field, or one type in two slots) | 30 |
 
@@ -5047,4 +5047,205 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `extended-swizzles-rgba16bfloat` | A bfloat texel's NaN code read, sampled or gathered (`RGBA16Bfloat`): the function shifts the code up 16 bits and keeps the NaN as it is, its sign and payload, … |
 | `extended-swizzles-rgba16bfloat` | A bfloat texel's NaN code read, sampled or gathered (`RGBA16Bfloat`): the function shifts the code up 16 bits and keeps the NaN as it is, its sign and payload, … |
 | `extended-swizzles-rgba16bfloat` | A bfloat texel's NaN code read, sampled or gathered (`RGBA16Bfloat`): the function shifts the code up 16 bits and keeps the NaN as it is, its sign and payload, … |
+| `half-output-blends-r16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are RADV's. Metal's compiler folds the attachment's blend and its format… |
+| `half-output-blends-r16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are RADV's. Metal's compiler folds the attachment's blend and its format… |
+| `half-output-blends-r16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are RADV's. Metal's compiler folds the attachment's blend and its format… |
+| `half-output-blends-r16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are RADV's. Metal's compiler folds the attachment's blend and its format… |
+| `half-output-blends-r16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are RADV's. Metal's compiler folds the attachment's blend and its format… |
+| `half-output-blends-r16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are RADV's. Metal's compiler folds the attachment's blend and its format… |
+| `half-output-blends-r16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are RADV's. Metal's compiler folds the attachment's blend and its format… |
+| `half-output-blends-r16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are RADV's. Metal's compiler folds the attachment's blend and its format… |
+| `half-output-blends-r16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are RADV's. Metal's compiler folds the attachment's blend and its format… |
+| `half-output-blends-r16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are RADV's. Metal's compiler folds the attachment's blend and its format… |
+| `half-output-blends-r16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are RADV's. Metal's compiler folds the attachment's blend and its format… |
+| `half-output-blends-r16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are RADV's. Metal's compiler folds the attachment's blend and its format… |
+| `half-output-blends-r16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are RADV's. Metal's compiler folds the attachment's blend and its format… |
+| `half-output-blends-r16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are RADV's. Metal's compiler folds the attachment's blend and its format… |
+| `half-output-blends-r16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are RADV's. Metal's compiler folds the attachment's blend and its format… |
+| `half-output-blends-r16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are RADV's. Metal's compiler folds the attachment's blend and its format… |
+| `half-output-blends-r16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are RADV's. Metal's compiler folds the attachment's blend and its format… |
+| `half-output-blends-r32f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are RADV's. Metal's compiler folds the attachment's blend and its format… |
+| `half-output-blends-r32f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are RADV's. Metal's compiler folds the attachment's blend and its format… |
+| `half-output-blends-r32f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are RADV's. Metal's compiler folds the attachment's blend and its format… |
+| `half-output-blends-rg16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are RADV's. Metal's compiler folds the attachment's blend and its format… |
+| `half-output-blends-rg16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are RADV's. Metal's compiler folds the attachment's blend and its format… |
+| `half-output-blends-rg16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are RADV's. Metal's compiler folds the attachment's blend and its format… |
+| `half-output-blends-rg16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are RADV's. Metal's compiler folds the attachment's blend and its format… |
+| `half-output-blends-rg16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are RADV's. Metal's compiler folds the attachment's blend and its format… |
+| `half-output-blends-rg16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are RADV's. Metal's compiler folds the attachment's blend and its format… |
+| `half-output-blends-rg16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are RADV's. Metal's compiler folds the attachment's blend and its format… |
+| `half-output-blends-rg16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are RADV's. Metal's compiler folds the attachment's blend and its format… |
+| `half-output-blends-rg16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are RADV's. Metal's compiler folds the attachment's blend and its format… |
+| `half-output-blends-rg16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are RADV's. Metal's compiler folds the attachment's blend and its format… |
+| `half-output-blends-rg16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are RADV's. Metal's compiler folds the attachment's blend and its format… |
+| `half-output-blends-rg16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are RADV's. Metal's compiler folds the attachment's blend and its format… |
+| `half-output-blends-rg16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are RADV's. Metal's compiler folds the attachment's blend and its format… |
+| `half-output-blends-rg16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are RADV's. Metal's compiler folds the attachment's blend and its format… |
+| `half-output-blends-rg16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are RADV's. Metal's compiler folds the attachment's blend and its format… |
+| `half-output-blends-rg16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are RADV's. Metal's compiler folds the attachment's blend and its format… |
+| `half-output-blends-rg16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are RADV's. Metal's compiler folds the attachment's blend and its format… |
+| `half-output-blends-rg32f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are RADV's. Metal's compiler folds the attachment's blend and its format… |
+| `half-output-blends-rg32f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are RADV's. Metal's compiler folds the attachment's blend and its format… |
+| `half-output-blends-rg32f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are RADV's. Metal's compiler folds the attachment's blend and its format… |
+| `half-output-blends-rg32f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are RADV's. Metal's compiler folds the attachment's blend and its format… |
+| `half-output-blends-rgba16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are RADV's. Metal's compiler folds the attachment's blend and its format… |
+| `half-output-blends-rgba16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are RADV's. Metal's compiler folds the attachment's blend and its format… |
+| `half-output-blends-rgba16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are RADV's. Metal's compiler folds the attachment's blend and its format… |
+| `half-output-blends-rgba16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are RADV's. Metal's compiler folds the attachment's blend and its format… |
+| `half-output-blends-rgba16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are RADV's. Metal's compiler folds the attachment's blend and its format… |
+| `half-output-blends-rgba16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are RADV's. Metal's compiler folds the attachment's blend and its format… |
+| `half-output-blends-rgba16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are RADV's. Metal's compiler folds the attachment's blend and its format… |
+| `half-output-blends-rgba16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are RADV's. Metal's compiler folds the attachment's blend and its format… |
+| `half-output-blends-rgba16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are RADV's. Metal's compiler folds the attachment's blend and its format… |
+| `half-output-blends-rgba16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are RADV's. Metal's compiler folds the attachment's blend and its format… |
+| `half-output-blends-rgba16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are RADV's. Metal's compiler folds the attachment's blend and its format… |
+| `half-output-blends-rgba16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are RADV's. Metal's compiler folds the attachment's blend and its format… |
+| `half-output-blends-rgba16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are RADV's. Metal's compiler folds the attachment's blend and its format… |
+| `half-output-blends-rgba16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are RADV's. Metal's compiler folds the attachment's blend and its format… |
+| `half-output-blends-rgba16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are RADV's. Metal's compiler folds the attachment's blend and its format… |
+| `half-output-blends-rgba16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are RADV's. Metal's compiler folds the attachment's blend and its format… |
+| `half-output-blends-rgba16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are RADV's. Metal's compiler folds the attachment's blend and its format… |
+| `half-output-blends-rgba16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are RADV's. Metal's compiler folds the attachment's blend and its format… |
+| `half-output-blends-rgba32f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are RADV's. Metal's compiler folds the attachment's blend and its format… |
+| `half-output-blends-rgba32f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are RADV's. Metal's compiler folds the attachment's blend and its format… |
+| `half-output-blends-rgba32f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are RADV's. Metal's compiler folds the attachment's blend and its format… |
+| `half-output-blends-rgba32f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are RADV's. Metal's compiler folds the attachment's blend and its format… |
+| `pixel-downscales-1000x1080` | The digest of a linear-filtered downscale's output, which differs wherever the site's `head` and `tail` elements do: the case samples through the device's own f… |
+| `pixel-downscales-1000x1080` | A linear-filtered downscale through the device's own sampler: the site's elements differ by at most 0.031 codes of 1/255 (0.000123). `device-sampling` records t… |
+| `pixel-downscales-1000x1080` | A linear-filtered downscale through the device's own sampler: the site's elements differ by at most 0.031 codes of 1/255 (0.000123). `device-sampling` records t… |
+| `pixel-downscales-1000x1080` | The digest of a linear-filtered downscale's output through a pixel sampler, on the device's own sampler at the coordinate divided by the size, which differs whe… |
+| `pixel-downscales-1000x1080` | A linear-filtered downscale through a pixel sampler, on the device's own sampler at the coordinate divided by the size: the site's elements differ by at most 0.… |
+| `pixel-downscales-1000x1080` | A linear-filtered downscale through a pixel sampler, on the device's own sampler at the coordinate divided by the size: the site's elements differ by at most 0.… |
+| `pixel-downscales-1366x1080` | The digest of a linear-filtered downscale's output, which differs wherever the site's `head` and `tail` elements do: the case samples through the device's own f… |
+| `pixel-downscales-1366x1080` | A linear-filtered downscale through the device's own sampler: the site's elements differ by at most 0.031 codes of 1/255 (0.000123). `device-sampling` records t… |
+| `pixel-downscales-1366x1080` | A linear-filtered downscale through the device's own sampler: the site's elements differ by at most 0.031 codes of 1/255 (0.000123). `device-sampling` records t… |
+| `pixel-downscales-1366x1080` | The digest of a linear-filtered downscale's output through a pixel sampler, on the device's own sampler at the coordinate divided by the size, which differs whe… |
+| `pixel-downscales-1366x1080` | A linear-filtered downscale through a pixel sampler, on the device's own sampler at the coordinate divided by the size: the site's elements differ by at most 0.… |
+| `pixel-downscales-1366x1080` | A linear-filtered downscale through a pixel sampler, on the device's own sampler at the coordinate divided by the size: the site's elements differ by at most 0.… |
+| `pixel-downscales-1440x1080` | The digest of a linear-filtered downscale's output, which differs wherever the site's `head` and `tail` elements do: the case samples through the device's own f… |
+| `pixel-downscales-1440x1080` | A linear-filtered downscale through the device's own sampler: the site's elements differ by at most 0.031 codes of 1/255 (0.000123). `device-sampling` records t… |
+| `pixel-downscales-1440x1080` | A linear-filtered downscale through the device's own sampler: the site's elements differ by at most 0.031 codes of 1/255 (0.000123). `device-sampling` records t… |
+| `pixel-downscales-1440x1080` | The digest of a linear-filtered downscale's output through a pixel sampler, on the device's own sampler at the coordinate divided by the size, which differs whe… |
+| `pixel-downscales-1440x1080` | A linear-filtered downscale through a pixel sampler, on the device's own sampler at the coordinate divided by the size: the site's elements differ by at most 0.… |
+| `pixel-downscales-1440x1080` | A linear-filtered downscale through a pixel sampler, on the device's own sampler at the coordinate divided by the size: the site's elements differ by at most 0.… |
+| `pixel-downscales-1440x1152` | The digest of a linear-filtered downscale's output, which differs wherever the site's `head` and `tail` elements do: the case samples through the device's own f… |
+| `pixel-downscales-1440x1152` | A linear-filtered downscale through the device's own sampler: the site's elements differ by at most 0.031 codes of 1/255 (0.000123). `device-sampling` records t… |
+| `pixel-downscales-1440x1152` | A linear-filtered downscale through the device's own sampler: the site's elements differ by at most 0.031 codes of 1/255 (0.000123). `device-sampling` records t… |
+| `pixel-downscales-1440x1152` | The digest of a linear-filtered downscale's output through a pixel sampler, on the device's own sampler at the coordinate divided by the size, which differs whe… |
+| `pixel-downscales-1440x1152` | A linear-filtered downscale through a pixel sampler, on the device's own sampler at the coordinate divided by the size: the site's elements differ by at most 0.… |
+| `pixel-downscales-1440x1152` | A linear-filtered downscale through a pixel sampler, on the device's own sampler at the coordinate divided by the size: the site's elements differ by at most 0.… |
+| `pixel-downscales-1536x1080` | The digest of a linear-filtered downscale's output, which differs wherever the site's `head` and `tail` elements do: the case samples through the device's own f… |
+| `pixel-downscales-1536x1080` | A linear-filtered downscale through the device's own sampler: the site's elements differ by at most 0.031 codes of 1/255 (0.000123). `device-sampling` records t… |
+| `pixel-downscales-1536x1080` | A linear-filtered downscale through the device's own sampler: the site's elements differ by at most 0.031 codes of 1/255 (0.000123). `device-sampling` records t… |
+| `pixel-downscales-1536x1080` | The digest of a linear-filtered downscale's output through a pixel sampler, on the device's own sampler at the coordinate divided by the size, which differs whe… |
+| `pixel-downscales-1536x1080` | A linear-filtered downscale through a pixel sampler, on the device's own sampler at the coordinate divided by the size: the site's elements differ by at most 0.… |
+| `pixel-downscales-1536x1080` | A linear-filtered downscale through a pixel sampler, on the device's own sampler at the coordinate divided by the size: the site's elements differ by at most 0.… |
+| `pixel-downscales-1536x1152` | The digest of a linear-filtered downscale's output, which differs wherever the site's `head` and `tail` elements do: the case samples through the device's own f… |
+| `pixel-downscales-1536x1152` | A linear-filtered downscale through the device's own sampler: the site's elements differ by at most 0.031 codes of 1/255 (0.000123). `device-sampling` records t… |
+| `pixel-downscales-1536x1152` | A linear-filtered downscale through the device's own sampler: the site's elements differ by at most 0.031 codes of 1/255 (0.000123). `device-sampling` records t… |
+| `pixel-downscales-1536x1152` | The digest of a linear-filtered downscale's output through a pixel sampler, on the device's own sampler at the coordinate divided by the size, which differs whe… |
+| `pixel-downscales-1536x1152` | A linear-filtered downscale through a pixel sampler, on the device's own sampler at the coordinate divided by the size: the site's elements differ by at most 0.… |
+| `pixel-downscales-1536x1152` | A linear-filtered downscale through a pixel sampler, on the device's own sampler at the coordinate divided by the size: the site's elements differ by at most 0.… |
+| `pixel-downscales-1920x1080` | The digest of a linear-filtered downscale's output, which differs wherever the site's `head` and `tail` elements do: the case samples through the device's own f… |
+| `pixel-downscales-1920x1080` | A linear-filtered downscale through the device's own sampler: the site's elements differ by at most 0.031 codes of 1/255 (0.000123). `device-sampling` records t… |
+| `pixel-downscales-1920x1080` | A linear-filtered downscale through the device's own sampler: the site's elements differ by at most 0.031 codes of 1/255 (0.000123). `device-sampling` records t… |
+| `pixel-downscales-1920x1080` | The digest of a linear-filtered downscale's output through a pixel sampler, on the device's own sampler at the coordinate divided by the size, which differs whe… |
+| `pixel-downscales-1920x1080` | A linear-filtered downscale through a pixel sampler, on the device's own sampler at the coordinate divided by the size: the site's elements differ by at most 0.… |
+| `pixel-downscales-1920x1080` | A linear-filtered downscale through a pixel sampler, on the device's own sampler at the coordinate divided by the size: the site's elements differ by at most 0.… |
+| `half-read-nans-r16f` | A `float` read or nearest sample of a 16-bit float texel's NaN: the first differing element is Metal 0x7FC00000 against our 0xFFC00000, and the site's largest d… |
+| `half-read-nans-r16f` | A `float` read or nearest sample of a 16-bit float texel's NaN: the first differing element is Metal 0x7FC00000 against our 0x7F802000, and the site's largest d… |
+| `half-read-nans-r32f` | A `float` nearest sample of a 32-bit float texel's NaN: the first differing element is Metal 0x7FC00000 against our 0xFFC00000, and the site's largest differenc… |
+| `half-read-nans-rg16f` | A `float` read or nearest sample of a 16-bit float texel's NaN: the first differing element is Metal 0x7FC00000 against our 0xFFC00000, and the site's largest d… |
+| `half-read-nans-rg16f` | A `float` read or nearest sample of a 16-bit float texel's NaN: the first differing element is Metal 0x7FC00000 against our 0x7FAAA000, and the site's largest d… |
+| `half-read-nans-rg32f` | A `float` nearest sample of a 32-bit float texel's NaN: the first differing element is Metal 0x7FC00000 against our 0xFFC00000, and the site's largest differenc… |
+| `half-read-nans-rgba16f` | A `float` read or nearest sample of a 16-bit float texel's NaN: the first differing element is Metal 0x7FC00000 against our 0xFFC00000, and the site's largest d… |
+| `half-read-nans-rgba16f` | A `float` read or nearest sample of a 16-bit float texel's NaN: the first differing element is Metal 0x7FC00000 against our 0x7FAAA000, and the site's largest d… |
+| `half-read-nans-rgba32f` | A `float` nearest sample of a 32-bit float texel's NaN: the first differing element is Metal 0x7FC00000 against our 0xFFC00000, and the site's largest differenc… |
+| `half-texel-nans-r16f` | A `half` read, sample or read-through-sample of a float texel's NaN: the first differing element is Metal 0x7C01 against our 0x7E01, and the site's largest diff… |
+| `half-texel-nans-r16f` | A `half` read, sample or read-through-sample of a float texel's NaN: the first differing element is Metal 0x7C01 against our 0x7E01, and the site's largest diff… |
+| `half-texel-nans-r16f` | The `float` widening of the `half` this case reads from a 16-bit float texel's NaN: the first differing element is Metal 0x7FC00000 against our 0x7FC02000, and … |
+| `half-texel-nans-r32f` | A `half` read, sample or read-through-sample of a float texel's NaN: the first differing element is Metal 0x7E00 against our 0xFE00, and the site's largest diff… |
+| `half-texel-nans-r32f` | A `half` read, sample or read-through-sample of a float texel's NaN: the first differing element is Metal 0x7E00 against our 0x7FFF, and the site's largest diff… |
+| `half-texel-nans-r32f` | A `half` read, sample or read-through-sample of a float texel's NaN: the first differing element is Metal 0x7E00 against our 0x7FFF, and the site's largest diff… |
+| `half-texel-nans-r32f` | The `float` widening of the `half` this case reads from a 32-bit float texel's NaN: the first differing element is Metal 0x7FC00000 against our 0x7FFFE000, and … |
+| `half-texel-nans-rg11b10f` | A `half` read, sample or read-through-sample of an `RG11B10Float` texel's NaN: the first differing element is Metal 0x7E00 against our 0xFE00, and the site's la… |
+| `half-texel-nans-rg11b10f` | A `half` read, sample or read-through-sample of an `RG11B10Float` texel's NaN: the first differing element is Metal 0x7E00 against our 0x7E10, and the site's la… |
+| `half-texel-nans-rg11b10f` | A `half` read, sample or read-through-sample of an `RG11B10Float` texel's NaN: the first differing element is Metal 0x7E00 against our 0x7E10, and the site's la… |
+| `half-texel-nans-rg11b10f` | The `float` widening of the `half` this case reads from an `RG11B10Float` texel's NaN: the first differing element is Metal 0x7FC00000 against our 0x7FC20000, a… |
+| `half-texel-nans-rg16f` | A `half` read, sample or read-through-sample of a float texel's NaN: the first differing element is Metal 0x7D55 against our 0x7F55, and the site's largest diff… |
+| `half-texel-nans-rg16f` | A `half` read, sample or read-through-sample of a float texel's NaN: the first differing element is Metal 0x7D55 against our 0x7F55, and the site's largest diff… |
+| `half-texel-nans-rg16f` | The `float` widening of the `half` this case reads from a 16-bit float texel's NaN: the first differing element is Metal 0x7FC00000 against our 0x7FEAA000, and … |
+| `half-texel-nans-rg32f` | A `half` read, sample or read-through-sample of a float texel's NaN: the first differing element is Metal 0x7E00 against our 0xFE00, and the site's largest diff… |
+| `half-texel-nans-rg32f` | A `half` read, sample or read-through-sample of a float texel's NaN: the first differing element is Metal 0x7E00 against our 0x7FFF, and the site's largest diff… |
+| `half-texel-nans-rg32f` | A `half` read, sample or read-through-sample of a float texel's NaN: the first differing element is Metal 0x7E00 against our 0x7FFF, and the site's largest diff… |
+| `half-texel-nans-rg32f` | The `float` widening of the `half` this case reads from a 32-bit float texel's NaN: the first differing element is Metal 0x7FC00000 against our 0x7FFFE000, and … |
+| `half-texel-nans-rgba16f` | A `half` read, sample or read-through-sample of a float texel's NaN: the first differing element is Metal 0x7D55 against our 0x7F55, and the site's largest diff… |
+| `half-texel-nans-rgba16f` | A `half` read, sample or read-through-sample of a float texel's NaN: the first differing element is Metal 0x7D55 against our 0x7F55, and the site's largest diff… |
+| `half-texel-nans-rgba16f` | The `float` widening of the `half` this case reads from a 16-bit float texel's NaN: the first differing element is Metal 0x7FC00000 against our 0x7FEAA000, and … |
+| `half-texel-nans-rgba32f` | A `half` read, sample or read-through-sample of a float texel's NaN: the first differing element is Metal 0x7E00 against our 0xFE00, and the site's largest diff… |
+| `half-texel-nans-rgba32f` | A `half` read, sample or read-through-sample of a float texel's NaN: the first differing element is Metal 0x7E00 against our 0x7FFF, and the site's largest diff… |
+| `half-texel-nans-rgba32f` | A `half` read, sample or read-through-sample of a float texel's NaN: the first differing element is Metal 0x7E00 against our 0x7FFF, and the site's largest diff… |
+| `half-texel-nans-rgba32f` | The `float` widening of the `half` this case reads from a 32-bit float texel's NaN: the first differing element is Metal 0x7FC00000 against our 0x7FFFE000, and … |
+| `half-write-nans-r32f` | A `half` NaN written to a 32-bit float storage texture: the first differing element is Metal 0x7FC00000 against our 0x7FC02000, and the site's largest differenc… |
+| `half-write-nans-rg11b10f` | A `half` NaN written to an `RG11B10Float` storage texture: the first differing element is Metal 0xFC3F07E0 against our 0xFE7F07E0, and the site's largest differ… |
+| `half-write-nans-rg32f` | A `half` NaN written to a 32-bit float storage texture: the first differing element is Metal 0x7FC00000 against our 0x7FC02000, and the site's largest differenc… |
+| `half-write-nans-rgba32f` | A `half` NaN written to a 32-bit float storage texture: the first differing element is Metal 0x7FC00000 against our 0x7FC02000, and the site's largest differenc… |
+| `pixel-samplers-rgba16f-linear-border` | A pixel-coordinate sample through the device's own sampler at the coordinate divided by the texture's size (`pixel-sampler-scaling`, `argument-pixel-sampler-sca… |
+| `pixel-samplers-rgba16f-linear-border` | A pixel-coordinate sample through the device's own sampler: the digest of the site's output differs, so the report gives no count or bound here. The case reads … |
+| `pixel-samplers-rgba16f-linear-border` | A pixel-coordinate sample through the device's own sampler: the digest of the site's output differs, so the report gives no count or bound here. The case reads … |
+| `pixel-samplers-rgba16f-linear-border` | A pixel-coordinate sample through the device's own sampler at the coordinate divided by the texture's size (`pixel-sampler-scaling`, `argument-pixel-sampler-sca… |
+| `pixel-samplers-rgba16f-linear-edge` | A pixel-coordinate sample through the device's own sampler at the coordinate divided by the texture's size (`pixel-sampler-scaling`, `argument-pixel-sampler-sca… |
+| `pixel-samplers-rgba16f-linear-edge` | A pixel-coordinate sample through the device's own sampler: the digest of the site's output differs, so the report gives no count or bound here. The case reads … |
+| `pixel-samplers-rgba16f-linear-edge` | A pixel-coordinate sample through the device's own sampler: the digest of the site's output differs, so the report gives no count or bound here. The case reads … |
+| `pixel-samplers-rgba16f-linear-edge` | A pixel-coordinate sample through the device's own sampler at the coordinate divided by the texture's size (`pixel-sampler-scaling`, `argument-pixel-sampler-sca… |
+| `pixel-samplers-rgba16f-linear-mirror` | A pixel-coordinate sample through the device's own sampler at the coordinate divided by the texture's size (`pixel-sampler-scaling`, `argument-pixel-sampler-sca… |
+| `pixel-samplers-rgba16f-linear-mirror` | A pixel-coordinate sample through the device's own sampler: the digest of the site's output differs, so the report gives no count or bound here. The case reads … |
+| `pixel-samplers-rgba16f-linear-mirror` | A pixel-coordinate sample through the device's own sampler at the coordinate divided by the texture's size (`pixel-sampler-scaling`, `argument-pixel-sampler-sca… |
+| `pixel-samplers-rgba16f-linear-zero` | A pixel-coordinate sample through the device's own sampler at the coordinate divided by the texture's size (`pixel-sampler-scaling`, `argument-pixel-sampler-sca… |
+| `pixel-samplers-rgba16f-linear-zero` | A pixel-coordinate sample through the device's own sampler: the digest of the site's output differs, so the report gives no count or bound here. The case reads … |
+| `pixel-samplers-rgba16f-linear-zero` | A pixel-coordinate sample through the device's own sampler: the digest of the site's output differs, so the report gives no count or bound here. The case reads … |
+| `pixel-samplers-rgba16f-linear-zero` | A pixel-coordinate sample through the device's own sampler at the coordinate divided by the texture's size (`pixel-sampler-scaling`, `argument-pixel-sampler-sca… |
+| `pixel-samplers-rgba16f-nearest-mirror` | A pixel-coordinate sample through the device's own sampler: the digest of the site's output differs, so the report gives no count or bound here. The case reads … |
+| `pixel-samplers-rgba8-linear-border` | A pixel-coordinate sample through the device's own sampler at the coordinate divided by the texture's size (`pixel-sampler-scaling`, `argument-pixel-sampler-sca… |
+| `pixel-samplers-rgba8-linear-border` | A pixel-coordinate sample through the device's own sampler: the digest of the site's output differs, so the report gives no count or bound here. The case reads … |
+| `pixel-samplers-rgba8-linear-border` | A pixel-coordinate sample through the device's own sampler: the digest of the site's output differs, so the report gives no count or bound here. The case reads … |
+| `pixel-samplers-rgba8-linear-border` | A pixel-coordinate sample through the device's own sampler at the coordinate divided by the texture's size (`pixel-sampler-scaling`, `argument-pixel-sampler-sca… |
+| `pixel-samplers-rgba8-linear-edge` | A pixel-coordinate sample through the device's own sampler at the coordinate divided by the texture's size (`pixel-sampler-scaling`, `argument-pixel-sampler-sca… |
+| `pixel-samplers-rgba8-linear-edge` | A pixel-coordinate sample through the device's own sampler: the digest of the site's output differs, so the report gives no count or bound here. The case reads … |
+| `pixel-samplers-rgba8-linear-edge` | A pixel-coordinate sample through the device's own sampler: the digest of the site's output differs, so the report gives no count or bound here. The case reads … |
+| `pixel-samplers-rgba8-linear-edge` | A pixel-coordinate sample through the device's own sampler at the coordinate divided by the texture's size (`pixel-sampler-scaling`, `argument-pixel-sampler-sca… |
+| `pixel-samplers-rgba8-linear-mirror` | A pixel-coordinate sample through the device's own sampler at the coordinate divided by the texture's size (`pixel-sampler-scaling`, `argument-pixel-sampler-sca… |
+| `pixel-samplers-rgba8-linear-mirror` | A pixel-coordinate sample through the device's own sampler: the digest of the site's output differs, so the report gives no count or bound here. The case reads … |
+| `pixel-samplers-rgba8-linear-mirror` | A pixel-coordinate sample through the device's own sampler at the coordinate divided by the texture's size (`pixel-sampler-scaling`, `argument-pixel-sampler-sca… |
+| `pixel-samplers-rgba8-linear-zero` | A pixel-coordinate sample through the device's own sampler at the coordinate divided by the texture's size (`pixel-sampler-scaling`, `argument-pixel-sampler-sca… |
+| `pixel-samplers-rgba8-linear-zero` | A pixel-coordinate sample through the device's own sampler: the digest of the site's output differs, so the report gives no count or bound here. The case reads … |
+| `pixel-samplers-rgba8-linear-zero` | A pixel-coordinate sample through the device's own sampler: the digest of the site's output differs, so the report gives no count or bound here. The case reads … |
+| `pixel-samplers-rgba8-linear-zero` | A pixel-coordinate sample through the device's own sampler at the coordinate divided by the texture's size (`pixel-sampler-scaling`, `argument-pixel-sampler-sca… |
+| `pixel-samplers-rgba8-nearest-mirror` | A pixel-coordinate sample through the device's own sampler: the digest of the site's output differs, so the report gives no count or bound here. The case reads … |
+| `pixel-samplers-subnormal-border` | Metal's sampler reads a negative subnormal pixel coordinate as texel -1: this case's committed recording, taken on an Apple M3 Max under macOS 27.0.1, answers (… |
+| `pixel-samplers-subnormal-border` | A pixel-coordinate sample of a texture at subnormal coordinates through the device's own sampler: the digest of the site's output differs, so the report gives n… |
+| `pixel-samplers-subnormal-border` | Metal's sampler reads a negative subnormal pixel coordinate as texel -1: this case's committed recording, taken on an Apple M3 Max under macOS 27.0.1, answers (… |
+| `pixel-samplers-subnormal-zero` | Metal's sampler reads a negative subnormal pixel coordinate as texel -1: this case's committed recording, taken on an Apple M3 Max under macOS 27.0.1, answers (… |
+| `pixel-samplers-subnormal-zero` | A pixel-coordinate sample of a texture at subnormal coordinates through the device's own sampler: the digest of the site's output differs, so the report gives n… |
+| `pixel-samplers-subnormal-zero` | Metal's sampler reads a negative subnormal pixel coordinate as texel -1: this case's committed recording, taken on an Apple M3 Max under macOS 27.0.1, answers (… |
+| `vertex-format-constant-step` | A NaN of a narrow float attribute (`half`, or a small float of `FloatRG11B10`): the first differing element is Metal 0x7FC00000 against our 0x7FFE0000, the devi… |
+| `vertex-format-constant-step` | A NaN of a narrow float attribute (`half`, or a small float of `FloatRG11B10`): the first differing element is Metal 0x7FC00000 against our 0x7FC02000, the devi… |
+| `vertex-format-constant-step` | A NaN of a narrow float attribute (`half`, or a small float of `FloatRG11B10`): the first differing element is Metal 0x7FC00000 against our 0x7FC02000, the devi… |
+| `vertex-format-constant-step` | A NaN of a narrow float attribute (`half`, or a small float of `FloatRG11B10`): the first differing element is Metal 0x7FC00000 against our 0x7FC02000, the devi… |
+| `vertex-format-constant-step` | A NaN of a narrow float attribute (`half`, or a small float of `FloatRG11B10`): the first differing element is Metal 0x7FC00000 against our 0x7FC02000, the devi… |
+| `vertex-format-float4` | A NaN of a narrow float attribute (`half`, or a small float of `FloatRG11B10`): the first differing element is Metal 0x7FC00000 against our 0x7FFE0000, the devi… |
+| `vertex-format-float4` | A NaN of a narrow float attribute (`half`, or a small float of `FloatRG11B10`): the first differing element is Metal 0x7FC00000 against our 0x7FC02000, the devi… |
+| `vertex-format-float4` | A NaN of a narrow float attribute (`half`, or a small float of `FloatRG11B10`): the first differing element is Metal 0x7FC00000 against our 0x7FC02000, the devi… |
+| `vertex-format-float4` | A NaN of a narrow float attribute (`half`, or a small float of `FloatRG11B10`): the first differing element is Metal 0x7FC00000 against our 0x7FC02000, the devi… |
+| `vertex-format-float4` | A NaN of a narrow float attribute (`half`, or a small float of `FloatRG11B10`): the first differing element is Metal 0x7FC00000 against our 0x7FC02000, the devi… |
+| `vertex-format-half4` | A `float` attribute the function reads as `half`: at the one differing element Metal answers its canonical `0x7FC00000` for a NaN, and ours keeps the NaN's sign… |
+| `vertex-format-half4` | A `float` attribute the function reads as `half`: at the one differing element Metal answers its canonical `0x7FC00000` for a NaN, and ours keeps the NaN's sign… |
+| `vertex-format-half4` | A `float` attribute the function reads as `half`: at the one differing element Metal answers its canonical `0x7FC00000` for a NaN, and ours keeps the NaN's sign… |
+| `vertex-format-half4` | A `float` attribute the function reads as `half`: at the one differing element Metal answers its canonical `0x7FC00000` for a NaN, and ours keeps the NaN's sign… |
+| `vertex-format-half4` | A `float` attribute the function reads as `half`: at the one differing element Metal answers its canonical `0x7FC00000` for a NaN, and ours keeps the NaN's sign… |
+| `vertex-format-half4` | A `float` attribute the function reads as `half`: at the one differing element Metal answers its canonical `0x7FC00000` for a NaN, and ours keeps the NaN's sign… |
+| `vertex-format-half4` | A `float` attribute the function reads as `half`: at the one differing element Metal answers its canonical `0x7FC00000` for a NaN, and ours keeps the NaN's sign… |
+| `vertex-format-half4` | A `float` attribute the function reads as `half`: at the one differing element Metal answers its canonical `0x7FC00000` for a NaN, and ours keeps the NaN's sign… |
+| `vertex-format-half4` | A `float` attribute the function reads as `half`: at the one differing element Metal answers its canonical `0x7FC00000` for a NaN, and ours keeps the NaN's sign… |
+| `vertex-format-instance-step` | A NaN of a narrow float attribute (`half`, or a small float of `FloatRG11B10`): the first differing element is Metal 0x7FC00000 against our 0x7FC02000, the devi… |
 
