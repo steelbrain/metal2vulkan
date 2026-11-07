@@ -6,6 +6,9 @@
 pub(super) enum Key {
     // ---- Roles: resources ----
     Buffer,
+    /// `air.constant`: an argument Apple's OpenCL compiler passes by value, read from a constant
+    /// buffer at its location (kernels only).
+    Constant,
     IndirectBuffer,
     Texture,
     Sampler,
@@ -156,6 +159,7 @@ pub(super) const BUFFER_ACCESS: &str = "air.read|air.write|air.read_write";
 #[cfg(test)]
 const KEYS: &[(&str, Key)] = &[
     ("air.buffer", Key::Buffer),
+    ("air.constant", Key::Constant),
     ("air.payload", Key::Payload),
     ("air.mesh_grid_properties", Key::MeshGridProperties),
     ("air.mesh", Key::Mesh),
@@ -326,6 +330,7 @@ impl Key {
     pub(super) fn parse(bytes: &[u8]) -> Option<Key> {
         let key = match bytes {
             b"air.buffer" => Key::Buffer,
+            b"air.constant" => Key::Constant,
             b"air.payload" => Key::Payload,
             b"air.mesh_grid_properties" => Key::MeshGridProperties,
             b"air.mesh" => Key::Mesh,
@@ -456,6 +461,7 @@ impl Key {
     pub(super) fn name(self) -> &'static str {
         match self {
             Key::Buffer => "air.buffer",
+            Key::Constant => "air.constant",
             Key::IndirectBuffer => "air.indirect_buffer",
             Key::Texture => "air.texture",
             Key::Sampler => "air.sampler",

@@ -7,8 +7,9 @@
 //! arguments, each buffer 3 past its index and threadgroup memory at its own, then
 //! `__global_offset_and_num_dims` (index 0, read-only `uint`, 4 bytes aligned to 4),
 //! `__printf_buffer` (1, read-write `char`, 1 byte aligned to 1) and
-//! `__image_order_data_type_table` (2, read-only `uint`), every binding used. The module is LLVM
-//! text written here (`llvm-as`).
+//! `__image_order_data_type_table` (2, read-only `uint`), every binding used; an argument passed
+//! by value is a read-only buffer of its own type, size and alignment, a struct's `Struct`. The
+//! modules are LLVM text written here (`llvm-as`).
 
 use crate::budget::Budget;
 use crate::error::{DescriptorError, Error, Feature, LowerFamily};
@@ -94,9 +95,59 @@ attributes #5 = { convergent nounwind willreturn }\n\
 !7 = !{i32 2, i32 9, i32 0}\n\
 !8 = !{!\"Metal\", i32 1, i32 1, i32 0}\n";
 
+/// `__kernel void v(__global float *o, float k, struct S s)`, `struct S { float a; int b; }`:
+/// `o[get_global_id(0)] = k + s.a`, each argument passed by value read from its constant pointer
+/// as the OpenCL compiler writes it (the struct copied to a private `byval` copy).
+const BY_VALUE: &str = "target datalayout = \"e-p:64:64:64-i1:8:8-i8:8:8-i16:16:16-i32:32:32-i64:64:64-f32:32:32-f64:64:64-v16:16:16-v24:32:32-v32:32:32-v48:64:64-v64:64:64-v96:128:128-v128:128:128-v192:256:256-v256:256:256-v512:512:512-v1024:1024:1024-n8:16:32\"\n\
+target triple = \"air64_v29-apple-macosx27.0.0\"\n\
+%struct.S = type { float, i32 }\n\
+define void @__entry_v(ptr addrspace(1) %0, ptr addrspace(2) %1, ptr addrspace(2) %2) #0 {\n\
+entry:\n\
+  %3 = alloca i64, align 8\n\
+  %4 = load float, ptr addrspace(2) %1, align 4\n\
+  %5 = load i64, ptr addrspace(2) %2, align 4\n\
+  store i64 %5, ptr %3, align 8\n\
+  tail call fastcc void @v(ptr addrspace(1) %0, float %4, ptr nonnull byval(%struct.S) %3)\n\
+  ret void\n}\n\
+define internal fastcc void @v(ptr addrspace(1) %o, float %k, ptr byval(%struct.S) align 4 %s) #1 {\n\
+entry:\n\
+  %i = tail call fastcc i64 @_Z13get_global_idj(i32 0)\n\
+  %pa = getelementptr inbounds %struct.S, ptr %s, i64 0, i32 0\n\
+  %a = load float, ptr %pa, align 4\n\
+  %r = fadd float %k, %a\n\
+  %po = getelementptr inbounds float, ptr addrspace(1) %o, i64 %i\n\
+  store float %r, ptr addrspace(1) %po, align 4\n\
+  ret void\n}\n\
+define internal fastcc i64 @_Z13get_global_idj(i32 %0) #2 {\n\
+  %2 = tail call i32 @air.get_global_id.i32(i32 %0) #3\n\
+  %3 = zext i32 %2 to i64\n\
+  ret i64 %3\n}\n\
+declare i32 @air.get_global_id.i32(i32) #3\n\
+attributes #0 = { nounwind }\n\
+attributes #1 = { convergent nounwind }\n\
+attributes #2 = { nounwind optsize }\n\
+attributes #3 = { nounwind readnone willreturn }\n\
+!air.kernel = !{!0}\n\
+!air.version = !{!7}\n\
+!air.language_version = !{!8}\n\
+!0 = !{ptr @__entry_v, !1, !2}\n\
+!1 = !{}\n\
+!2 = !{!3, !4, !5}\n\
+!3 = !{i32 0, !\"air.buffer\", !\"air.location_index\", i32 0, i32 1, !\"air.read_write\", !\"air.address_space\", i32 1, !\"air.arg_type_size\", i32 4, !\"air.arg_type_align_size\", i32 4, !\"air.arg_type_name\", !\"float\", !\"air.arg_name\", !\"o\"}\n\
+!4 = !{i32 1, !\"air.constant\", !\"air.location_index\", i32 1, i32 1, !\"air.arg_type_size\", i32 4, !\"air.arg_type_align_size\", i32 4, !\"air.arg_type_name\", !\"float\", !\"air.arg_name\", !\"k\"}\n\
+!5 = !{i32 2, !\"air.constant\", !\"air.location_index\", i32 2, i32 1, !\"air.struct_type_info\", !6, !\"air.arg_type_size\", i32 8, !\"air.arg_type_align_size\", i32 4, !\"air.arg_type_name\", !\"S\", !\"air.arg_name\", !\"s\"}\n\
+!6 = !{i32 0, i32 4, i32 0, !\"float\", !\"a\", i32 4, i32 4, i32 0, !\"int\", !\"b\"}\n\
+!7 = !{i32 2, i32 9, i32 0}\n\
+!8 = !{!\"Metal\", i32 1, i32 1, i32 0}\n";
+
 /// The kernel's function, or `None` (a skip) without `llvm-as`.
 fn kernel() -> Option<FunctionDescriptor> {
-    let bitcode = match metal2vulkan_devtools::llvm_assemble_text(MODULE) {
+    function(MODULE, "__entry_k")
+}
+
+/// Function `entry` of the module `text`, or `None` (a skip) without `llvm-as`.
+fn function(text: &str, entry: &str) -> Option<FunctionDescriptor> {
+    let bitcode = match metal2vulkan_devtools::llvm_assemble_text(text) {
         Ok(b) => b,
         Err(AssembleError::Missing(why)) => {
             eprintln!("SKIPPED: {why}");
@@ -105,9 +156,7 @@ fn kernel() -> Option<FunctionDescriptor> {
         Err(AssembleError::Rejected(why)) => panic!("llvm-as rejected the module: {why}"),
     };
     let lib = Library::from_air(&bitcode).expect("library");
-    Some(FunctionDescriptor::new(
-        lib.function("__entry_k").expect("__entry_k"),
-    ))
+    Some(FunctionDescriptor::new(lib.function(entry).expect(entry)))
 }
 
 /// The compute descriptor of `kernel`, in OpenCL mode where `open_cl_mode`.
@@ -286,4 +335,57 @@ fn an_opencl_mode_kernel_compiles_in_its_mode_alone() {
             compiled: true
         }))
     );
+}
+
+/// An argument passed by value reflects as the M3 Max reflects it in OpenCL mode: a read-only
+/// buffer 3 past its index, of its own type, size and alignment, a struct's data type `Struct`
+/// (size 8, alignment 4 for `struct { float; int; }`). The kernel compiles.
+#[test]
+fn an_opencl_mode_argument_by_value_reflects_as_a_constant_buffer_of_its_type() {
+    let Some(v) = function(BY_VALUE, "__entry_v") else {
+        return;
+    };
+    let rows = rows(&descriptor(StageSource::Function(v.clone()), true));
+    let own: Vec<_> = rows[..3]
+        .iter()
+        .map(|(name, ty, index, access, used, buffer)| {
+            (name.as_str(), *ty, *index, *access, *used, *buffer)
+        })
+        .collect();
+    assert_eq!(
+        own,
+        [
+            (
+                "o",
+                BindingType::Buffer,
+                3,
+                BindingAccess::ReadWrite,
+                true,
+                Some((4, 4, DataType::Float))
+            ),
+            (
+                "k",
+                BindingType::Buffer,
+                4,
+                BindingAccess::ReadOnly,
+                true,
+                Some((4, 4, DataType::Float))
+            ),
+            (
+                "s",
+                BindingType::Buffer,
+                5,
+                BindingAccess::ReadOnly,
+                true,
+                Some((8, 4, DataType::Struct))
+            ),
+        ]
+    );
+    assert_eq!(rows.len(), 6);
+    device("moltenvk-m3")
+        .compile_compute_pipeline(
+            &descriptor(StageSource::Function(v), true),
+            &Budget::standard(),
+        )
+        .expect("an OpenCL-mode pipeline");
 }

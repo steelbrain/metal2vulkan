@@ -327,7 +327,10 @@ impl<'m> Cx<'m, '_> {
             pointer,
             MemberSpace::Unstated,
         )?;
-        if !input_in_stage(&role, stage) {
+        // Only a kernel takes an argument by value.
+        let by_value_outside_kernel =
+            node.role == Key::Constant && !matches!(stage, Stage::Kernel { .. });
+        if by_value_outside_kernel || !input_in_stage(&role, stage) {
             return Err(node.site.err(AbiError::UnknownKey, Some(node.role.name())));
         }
         Ok(ParamBinding {
@@ -666,6 +669,33 @@ impl<'m> Cx<'m, '_> {
                     }
                     _ => ParamRole::Buffer(arg),
                 }
+            }
+            // An argument passed by value (Apple's OpenCL compiler writes one for each scalar,
+            // vector or struct parameter of a kernel): the entry reads it from a constant-space
+            // pointer, so it is a read-only constant buffer holding exactly its own bytes, as a
+            // `constant T&` reference is. Its node states no access and no address space.
+            Key::Constant if !indirect => {
+                a.allow(
+                    self.meter,
+                    site,
+                    &[&[
+                        Key::LocationIndex,
+                        Key::StructTypeInfo,
+                        Key::ArgTypeSize,
+                        Key::ArgTypeAlignSize,
+                    ]],
+                )?;
+                let size = a
+                    .size
+                    .ok_or_else(|| site.err(AbiError::MissingKey, Some(Key::ArgTypeSize.name())))?;
+                ParamRole::Buffer(BufferArg {
+                    location: a.location(site)?,
+                    access: Access::Read,
+                    space: AddrSpace::Constant,
+                    buffer_size: Some(size),
+                    layout: l.layout,
+                    raster_order_group: None,
+                })
             }
             Key::Texture => {
                 a.allow(

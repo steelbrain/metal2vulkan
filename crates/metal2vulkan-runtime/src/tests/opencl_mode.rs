@@ -5,12 +5,15 @@
 //! and compared with what the M3 Max (macOS 27.0.1) computes for the same kernels:
 //!
 //! - **add**: `c[i] = a[i] + b[i]` over 1024 threads, `a[i] = i`, `b[i] = 2i + 1`: `3i + 1`.
+//! - **scale**: `b[i] *= k` for `i < n`, `k` and `n` passed by value, over 128 threads, `b[i] = i`:
+//!   `k = 2.5, n = 100` set as bytes, then `k = 3, n = 50` in a buffer at offsets 16 and 32.
+//! - **st**: `o[i] = s.a + s.b` for a struct passed by value, `s = {2.5, 4}`: 6.5.
 //! - **lsum**: each threadgroup of 64 sums its `in[i] = i` through `__local` memory and a barrier:
 //!   2016, 6112, 10208, 14304.
 //! - **cmul**: `o[i] *= c[i & 3]` through a `__constant` pointer, `o[i] = i + 1`, `c = 1, 2, 3, 4`:
 //!   1, 4, 9, 16, 5, 12, ...
-//! - **items**: every work-item function, of the dimensions it names and of one it reads from a
-//!   constant buffer, over a grid of 8 by 4 threads in threadgroups of 4 by 2 at offset (3, 5), of
+//! - **items**: every work-item function, of the dimensions it names and of one passed by value,
+//!   over a grid of 8 by 4 threads in threadgroups of 4 by 2 at offset (3, 5), of
 //!   two dimensions. The M3 Max answers each word as OpenCL defines it, but for the store of
 //!   `get_global_id(3) + get_local_size(4) + get_global_size(5)`, which it leaves unwritten; the
 //!   crate stores OpenCL's 2.
@@ -89,6 +92,17 @@ fn buffer(n: u32, index: u32, access: &str, space: u32, ty: &str, name: &str) ->
     )
 }
 
+/// The node of argument `n`, passed by value at `index`: `size` bytes of `ty`, its layout the node
+/// `layout` names where `Some`.
+fn constant(n: u32, index: u32, size: u32, ty: &str, name: &str, layout: Option<&str>) -> String {
+    let layout = layout
+        .map(|l| format!(" !\"air.struct_type_info\", {l},"))
+        .unwrap_or_default();
+    format!(
+        "!{{i32 {n}, !\"air.constant\", !\"air.location_index\", i32 {index}, i32 1,{layout} !\"air.arg_type_size\", i32 {size}, !\"air.arg_type_align_size\", i32 4, !\"air.arg_type_name\", !\"{ty}\", !\"air.arg_name\", !\"{name}\"}}"
+    )
+}
+
 /// The kernel list of `entry` with argument nodes `args`.
 fn kernel_list(entry: &str, args: &[String]) -> String {
     let refs: Vec<String> = (0..args.len()).map(|i| format!("!{}", 3 + i)).collect();
@@ -125,6 +139,68 @@ entry:\n\
         buffer(2, 2, "read_write", 1, "float", "c"),
     ];
     format!("{body}{}", kernel_list("__entry_add", &args))
+}
+
+/// `__kernel void scale(__global float *b, float k, uint n)`: `if (i < n) b[i] *= k`.
+fn scale() -> String {
+    let body = "define void @__entry_scale(ptr addrspace(1) %0, ptr addrspace(2) %1, ptr addrspace(2) %2) #0 {\n\
+entry:\n\
+  %3 = load float, ptr addrspace(2) %1, align 4\n\
+  %4 = load i32, ptr addrspace(2) %2, align 4\n\
+  tail call fastcc void @scale(ptr addrspace(1) %0, float %3, i32 %4)\n\
+  ret void\n}\n\
+define internal fastcc void @scale(ptr addrspace(1) %b, float %k, i32 %n) #1 {\n\
+entry:\n\
+  %i = tail call fastcc i64 @_Z13get_global_idj(i32 0)\n\
+  %wide = zext i32 %n to i64\n\
+  %in = icmp ult i64 %i, %wide\n\
+  br i1 %in, label %then, label %end\n\
+then:\n\
+  %p = getelementptr inbounds float, ptr addrspace(1) %b, i64 %i\n\
+  %v = load float, ptr addrspace(1) %p, align 4\n\
+  %m = fmul float %v, %k\n\
+  store float %m, ptr addrspace(1) %p, align 4\n\
+  br label %end\n\
+end:\n\
+  ret void\n}\n";
+    let args = [
+        buffer(0, 0, "read_write", 1, "float", "b"),
+        constant(1, 1, 4, "float", "k", None),
+        constant(2, 2, 4, "uint", "n", None),
+    ];
+    format!("{body}{}", kernel_list("__entry_scale", &args))
+}
+
+/// `__kernel void st(__global float *o, struct S s)`, `struct S { float a; int b; }`: `o[i] = s.a +
+/// s.b`, the entry copying the struct to the private `byval` copy the kernel reads.
+fn st() -> String {
+    let body = "%struct.S = type { float, i32 }\n\
+define void @__entry_st(ptr addrspace(1) %0, ptr addrspace(2) %1) #0 {\n\
+entry:\n\
+  %2 = alloca i64, align 8\n\
+  %3 = load i64, ptr addrspace(2) %1, align 4\n\
+  store i64 %3, ptr %2, align 8\n\
+  tail call fastcc void @st(ptr addrspace(1) %0, ptr nonnull byval(%struct.S) %2)\n\
+  ret void\n}\n\
+define internal fastcc void @st(ptr addrspace(1) %o, ptr byval(%struct.S) align 4 %s) #1 {\n\
+entry:\n\
+  %i = tail call fastcc i64 @_Z13get_global_idj(i32 0)\n\
+  %pa = getelementptr inbounds %struct.S, ptr %s, i64 0, i32 0\n\
+  %a = load float, ptr %pa, align 4\n\
+  %pb = getelementptr inbounds %struct.S, ptr %s, i64 0, i32 1\n\
+  %b = load i32, ptr %pb, align 4\n\
+  %fb = tail call float @air.convert.f.f32.s.i32(i32 %b) #3\n\
+  %r = fadd float %a, %fb\n\
+  %po = getelementptr inbounds float, ptr addrspace(1) %o, i64 %i\n\
+  store float %r, ptr addrspace(1) %po, align 4\n\
+  ret void\n}\n\
+declare float @air.convert.f.f32.s.i32(i32) #3\n\
+!50 = !{i32 0, i32 4, i32 0, !\"float\", !\"a\", i32 4, i32 4, i32 0, !\"int\", !\"b\"}\n";
+    let args = [
+        buffer(0, 0, "read_write", 1, "float", "o"),
+        constant(1, 1, 8, "S", "s", Some("!50")),
+    ];
+    format!("{body}{}", kernel_list("__entry_st", &args))
 }
 
 /// `__kernel void lsum(__global const float *in, __global float *out, __local float *tmp)`:
@@ -197,8 +273,7 @@ entry:\n\
     format!("{body}{}", kernel_list("__entry_cmul", &args))
 }
 
-/// `__kernel void items(__global uint *o, __constant uint *dp)`, `d = dp[0]`: thread `i` (its
-/// linear index in the grid) stores eight words at `o[8i]`: `get_global_id(0)`,
+/// `__kernel void items(__global uint *o, uint d)`: thread `i` (its linear index in the grid) stores eight words at `o[8i]`: `get_global_id(0)`,
 /// `get_global_id(1)`, the local ids and group ids of dimensions 0 and 1 a byte each, the group
 /// counts and local sizes so, the global sizes and `get_work_dim()` so, the sum of
 /// `get_global_id`, `get_local_size`, `get_num_groups` and `get_global_offset` of `d`,
@@ -293,7 +368,7 @@ entry:\n\
   ret void\n}\n";
     let args = [
         buffer(0, 0, "read_write", 1, "uint", "o"),
-        buffer(1, 1, "read", 2, "uint", "dp"),
+        constant(1, 1, 4, "uint", "d", None),
     ];
     format!("{body}{}", kernel_list("__entry_items", &args))
 }
@@ -348,15 +423,29 @@ fn floats(buffer: &Buffer) -> Vec<f32> {
     words(buffer).into_iter().map(f32::from_bits).collect()
 }
 
+/// One of a kernel's own arguments, as bound.
+#[derive(Clone, Copy)]
+enum Arg<'a> {
+    /// A buffer from a byte offset (`setBuffer:offset:atIndex:`).
+    Buffer(&'a Buffer, u64),
+    /// Bytes (`setBytes:length:atIndex:`).
+    Bytes(&'a [u8]),
+}
+
+/// `buffer` from its start.
+fn whole(buffer: &Buffer) -> Arg<'_> {
+    Arg::Buffer(buffer, 0)
+}
+
 /// `state` dispatched over `grid` threads in threadgroups of `group`, buffer 0 holding the global
 /// offset `offset` and the dimension count `dims`, buffers 1 and 2 bound as the dispatcher binds
-/// them, `buffers` at 3 and up, and `local` bytes of threadgroup memory at index 0 where `Some`.
+/// them, `args` at 3 and up, and `local` bytes of threadgroup memory at index 0 where `Some`.
 fn run(
     device: &Device,
     state: &ComputePipelineState,
     (grid, group): (Size, Size),
     (offset, dims): ([u32; 3], u32),
-    buffers: &[&Buffer],
+    args: &[Arg<'_>],
     local: Option<u32>,
 ) {
     let hidden = [
@@ -368,8 +457,14 @@ fn run(
     let command_buffer = queue.command_buffer().unwrap();
     let mut encoder = command_buffer.compute_command_encoder().unwrap();
     encoder.set_compute_pipeline_state(state).unwrap();
-    for (index, b) in (0u32..).zip(hidden.iter().chain(buffers.iter().copied())) {
+    for (index, b) in (0u32..).zip(&hidden) {
         encoder.set_buffer(Some(b), 0, index).unwrap();
+    }
+    for (index, arg) in (3u32..).zip(args) {
+        match *arg {
+            Arg::Buffer(b, offset) => encoder.set_buffer(Some(b), offset, index).unwrap(),
+            Arg::Bytes(bytes) => encoder.set_bytes(bytes, index).unwrap(),
+        }
     }
     if let Some(bytes) = local {
         encoder.set_threadgroup_memory_length(bytes, 0).unwrap();
@@ -405,7 +500,7 @@ fn opencl_mode_kernels_compute_what_metal_computes() {
         &add_state,
         line(N as u64, 64),
         one,
-        &[&a, &b, &c],
+        &[whole(&a), whole(&b), whole(&c)],
         None,
     );
     let sums: Vec<f32> = (0..N).map(|i| (3 * i + 1) as f32).collect();
@@ -419,7 +514,7 @@ fn opencl_mode_kernels_compute_what_metal_computes() {
         &lsum_state,
         line(256, 64),
         one,
-        &[&input, &out],
+        &[whole(&input), whole(&out)],
         Some(64 * 4),
     );
     assert_eq!(floats(&out), [2016.0, 6112.0, 10208.0, 14304.0], "lsum");
@@ -430,10 +525,80 @@ fn opencl_mode_kernels_compute_what_metal_computes() {
     );
     let k = floats_buffer(&device, &[1.0, 2.0, 3.0, 4.0]);
     let cmul_state = state(&device, &cmul(), "__entry_cmul");
-    run(&device, &cmul_state, line(64, 32), one, &[&o, &k], None);
+    run(
+        &device,
+        &cmul_state,
+        line(64, 32),
+        one,
+        &[whole(&o), whole(&k)],
+        None,
+    );
     let products: Vec<f32> = (0..64).map(|i| ((i + 1) * (i % 4 + 1)) as f32).collect();
     assert_eq!(floats(&o), products, "cmul");
     assert_eq!(floats(&o)[..6], [1.0, 4.0, 9.0, 16.0, 5.0, 12.0]);
+
+    let ramp: Vec<f32> = (0..128).map(|i| i as f32).collect();
+    let scaled = |k: f32, n: usize| -> Vec<f32> {
+        (0..128)
+            .map(|i| if i < n { i as f32 * k } else { i as f32 })
+            .collect()
+    };
+    let scale_state = state(&device, &scale(), "__entry_scale");
+    let b = floats_buffer(&device, &ramp);
+    run(
+        &device,
+        &scale_state,
+        line(128, 32),
+        one,
+        &[
+            whole(&b),
+            Arg::Bytes(&2.5f32.to_le_bytes()),
+            Arg::Bytes(&100u32.to_le_bytes()),
+        ],
+        None,
+    );
+    let got = floats(&b);
+    assert_eq!(got, scaled(2.5, 100), "scale, by bytes");
+    assert_eq!(
+        [got[1], got[99], got[100], got[127]],
+        [2.5, 247.5, 100.0, 127.0]
+    );
+    let b = floats_buffer(&device, &ramp);
+    let mut values = [0u32; 16];
+    values[4] = 3.0f32.to_bits();
+    values[8] = 50;
+    let values = words_buffer(&device, &values);
+    run(
+        &device,
+        &scale_state,
+        line(128, 32),
+        one,
+        &[
+            whole(&b),
+            Arg::Buffer(&values, 16),
+            Arg::Buffer(&values, 32),
+        ],
+        None,
+    );
+    let got = floats(&b);
+    assert_eq!(got, scaled(3.0, 50), "scale, by buffers at offsets");
+    assert_eq!([got[1], got[49], got[50]], [3.0, 147.0, 50.0]);
+
+    let st_state = state(&device, &st(), "__entry_st");
+    let o = floats_buffer(&device, &[0.0; 16]);
+    let s: Vec<u8> = [2.5f32.to_bits(), 4]
+        .iter()
+        .flat_map(|w| w.to_le_bytes())
+        .collect();
+    run(
+        &device,
+        &st_state,
+        line(16, 16),
+        one,
+        &[whole(&o), Arg::Bytes(&s)],
+        None,
+    );
+    assert_eq!(floats(&o), [6.5; 16], "st");
 }
 
 /// The eight words thread `(x, y)` of [`items`] stores over the 8-by-4 grid in groups of 4 by 2 at
@@ -466,13 +631,12 @@ fn opencl_mode_work_item_functions_read_the_dispatch() {
     // Dimension 1, as the M3 Max ran it, and dimension 5, past the grid's.
     for d in [1u32, 5] {
         let o = words_buffer(&device, &[0xEEEE_EEEE; 32 * 8]);
-        let dp = words_buffer(&device, &[d]);
         run(
             &device,
             &items_state,
             (Size::new(8, 4, 1), Size::new(4, 2, 1)),
             ([3, 5, 0], 2),
-            &[&o, &dp],
+            &[whole(&o), Arg::Bytes(&d.to_le_bytes())],
             None,
         );
         let got = words(&o);

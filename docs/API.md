@@ -607,6 +607,12 @@ layout stride of `None` is `MTLBufferLayoutStrideDynamic`: the stride comes from
     `InvalidInput(Intrinsic(ImmediateNotConstant))` at the call. `llvm.ctpop`, `llvm.bitreverse`
     and `llvm.bswap` are folded over constants, on a width no SPIR-V type has (`i2`) too; an
     integer `llvm.*` operation on such a width that is not folded is refused (`Lowering(Arith)`).
+  - An argument passed by value (a kernel's scalar, vector or struct parameter, `air.constant`):
+    the entry reads it from a constant-space pointer at its location, so it is a read-only
+    constant buffer holding its own bytes, bound with `set_bytes` or a buffer at an offset. The
+    reflection lists it as such a buffer of its own data type, size and alignment, a struct as
+    `Struct` with its members, as the M3 Max answers: `float k` is `Float`, 4 bytes aligned to 4,
+    and `struct { float a; int b; }` is `Struct`, 8 bytes aligned to 4.
   - OpenCL mode. Metal makes a pipeline of such a kernel only with
     `ComputePipelineDescriptor::open_cl_mode_enabled` (`openCLModeEnabled`, Apple SPI), and the
     crate compiles the kernel as Metal links it then (`LoweringInputs::open_cl_mode`, part of the
