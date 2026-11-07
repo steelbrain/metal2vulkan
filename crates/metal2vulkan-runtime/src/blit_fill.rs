@@ -111,7 +111,8 @@
 //! first. The block is the power of two of bytes at least `n` and 16, holding the pattern's whole
 //! copies from its start and, past them and past the block, bytes of the calling thread's stack:
 //! zeros in every probe of ours, a 9-byte fill after an 8-byte one in the same encoder too, while
-//! the consumer's process read an earlier fill's bytes there. The runtime writes zeros there,
+//! the consumer's dev-build Rust process, whose sends run objc2's method check first, read an
+//! earlier fill's bytes there (not measured in a plain process). The runtime writes zeros there,
 //! announced once where a chunk reads them (`Degradation::TextureBufferFillLeftover`). The rule
 //! holds byte for byte for long patterns too (our probe `tblf.m`: 18 fills of patterns of 16 to
 //! 32752 bytes into `R8Uint`, `R32Uint` and `RGBA32Uint` texture buffers at offsets 4 to 64, up
