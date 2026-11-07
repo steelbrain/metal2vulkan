@@ -235,7 +235,9 @@ fn immediate_tracking() -> Vec<LayerSetting> {
 /// MoltenVK names the device in each message, and holds every step after its word was found
 /// overwritten (its first steps among them, as the device's own calls found it so first), and,
 /// where its queue's failures are relayed, waits for the relay's marks after its submissions
-/// before it lets go (MoltenVK names the device as each mark completes too). The checks' threads
+/// before it lets go (MoltenVK names the device as each mark completes too); the queue-switch
+/// check's held rounds wait for fences of their own on their batches, which cover them where no
+/// mark follows (an adopted device's queues, never relayed). The checks' threads
 /// make no call the loader serves (their command buffers are made as the device is made).
 /// Printed (`LOADER-WORD`): each device's steps held, the marks waited for, the restores on the
 /// checks' threads and its checks' run.
@@ -267,6 +269,10 @@ fn the_checks_hold_the_loader_word_across_steps_only_where_it_was_overwritten() 
             device.settle_submit_checks(SETTLE),
             "the checks never answered"
         );
+        assert!(
+            device.settle_queue_switch_check(SETTLE),
+            "the queue-switch check never answered"
+        );
         let moltenvk = device.properties().description.driver_id == Some(DriverId::MOLTENVK);
         let word = &device.shared().loader_word;
         // SAFETY: the device is live.
@@ -275,14 +281,18 @@ fn the_checks_hold_the_loader_word_across_steps_only_where_it_was_overwritten() 
         let marks = word.marks_waited();
         let restores = word.check_thread_restores();
         let relayed = device.shared().flights(0).is_some();
+        let fences = device.shared().queue_switch.fences_waited();
         let counts = device.work_counts();
         println!(
             "LOADER-WORD on {}: MoltenVK {moltenvk}, activities logged at once {immediate}: \
              overwritten {overwritten}, steps held {held}, relay's marks waited {marks} \
-             (relayed {relayed}), restores on the checks' threads {restores}; checks run {}: {}",
+             (relayed {relayed}), restores on the checks' threads {restores}; checks run {}: {}; \
+             queue-switch checks run {}, their own fences waited {fences}: {}",
             device.name(),
             counts.submit_checks_run,
-            device.submit_check_report()
+            device.submit_check_report(),
+            counts.queue_switch_checks_run,
+            device.queue_switch_check_report()
         );
         assert_eq!(counts.submit_checks_run, 1, "the checks did not run");
         assert_eq!(
@@ -310,6 +320,12 @@ fn the_checks_hold_the_loader_word_across_steps_only_where_it_was_overwritten() 
             overwritten && relayed,
             "the held steps waited for the relay's marks elsewhere than where the word was \
              overwritten and the queue relayed"
+        );
+        assert_eq!(
+            fences > 0,
+            overwritten && counts.queue_switch_checks_run > 0,
+            "the queue-switch check's held rounds waited for fences of their own elsewhere than \
+             where the word was overwritten and the check ran"
         );
     }
 }

@@ -253,6 +253,13 @@ impl Parts {
         unsafe { self.loader_word.step_hold(None) }
     }
 
+    /// Whether the device's loader word was found overwritten (`loader_word.rs`): a round
+    /// started then is held whole.
+    fn overwritten(&self) -> bool {
+        // SAFETY: the device is live while its check runs (its teardown stops it first).
+        unsafe { self.loader_word.overwritten() }
+    }
+
     /// Settle the device's verdict (`Device::settle_queue_switch`).
     fn settle(&self, verdict: Verdict, cost: i64, took: Option<Duration>) {
         let slots = &self.queues[..self.round_robin];
@@ -313,14 +320,15 @@ fn measure(parts: &Parts, pair: (usize, usize), made: Made) -> Result<Option<(i6
 }
 
 /// The check's Vulkan objects: its command pool and command buffers ([`Made`]), a timestamp pool
-/// of two queries per batch, and its timelines: the gate, and one per `VkQueue` its batches
-/// signal.
+/// of two queries per batch, its timelines (the gate, and one per `VkQueue` its batches signal),
+/// and a fence for each of a round's two batches, which a held round's submissions signal.
 struct Objects {
     pool: vk::CommandPool,
     buffers: Vec<vk::CommandBuffer>,
     queries: vk::QueryPool,
     gate: vk::Semaphore,
     done: [vk::Semaphore; 2],
+    fences: [vk::Fence; 2],
     /// Whether every batch submitted completed (or none was submitted): only then are they
     /// released (`false` once the process is exiting mid-run).
     settled: bool,
@@ -341,6 +349,7 @@ impl Objects {
             queries: vk::QueryPool::null(),
             gate: vk::Semaphore::null(),
             done: [vk::Semaphore::null(); 2],
+            fences: [vk::Fence::null(); 2],
             settled: true,
         };
         let filled = objects.fill(parts);
@@ -354,8 +363,8 @@ impl Objects {
         }
     }
 
-    /// Make the query pool and the timelines, and record the command buffers, inside the
-    /// caller's section.
+    /// Make the query pool, the timelines and the fences, and record the command buffers, inside
+    /// the caller's section.
     fn fill(&mut self, parts: &Parts) -> Result<(), Error> {
         let raw = parts.vk();
         let batches = self.buffers.len();
@@ -374,6 +383,12 @@ impl Objects {
             // SAFETY: the device is live and enables `timelineSemaphore`, inside a section.
             *semaphore = unsafe { raw.create_semaphore(&info, None) }.map_err(vulkan)?;
             exit_guard::called(Call::CreateSemaphore);
+        }
+        for fence in &mut self.fences {
+            // SAFETY: the device is live, inside a section.
+            *fence = unsafe { raw.create_fence(&vk::FenceCreateInfo::default(), None) }
+                .map_err(vulkan)?;
+            exit_guard::called(Call::CreateFence);
         }
         let begin = vk::CommandBufferBeginInfo::default()
             .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
@@ -444,12 +459,16 @@ impl Objects {
         done: [u64; 2],
     ) -> Result<bool, Error> {
         self.settled = false;
-        // Where the device's loader word was found overwritten, held from the gate's signal
-        // through the wait for the batches and the relay's marks after them (`loader_word.rs`):
-        // MoltenVK names the device as each completes, after the timelines are signalled. Taken
-        // with no queue's lock held: each batch's submission takes its queue's lock and then the
-        // word, and lets both go.
-        let (submitted, refused, step, marks) = match self.submit(parts, batches, gate) {
+        // Where the device's loader word was found overwritten as the round starts, held from the
+        // gate's signal through the wait for the batches, for the check's own fences of them and
+        // for the relay's marks after them (`loader_word.rs`): MoltenVK names the device as each
+        // completes, after the timelines are signalled. It signals each fence as the batch's
+        // Metal command buffer completes, as the submission checks' own fences end their steps;
+        // where the queue's failures are not relayed (an adopted device, whose instance has no
+        // relay), no mark follows them. Taken with no queue's lock held: each batch's submission
+        // takes its queue's lock and then the word, and lets both go.
+        let hold = parts.overwritten();
+        let (submitted, refused, step, marks) = match self.submit(parts, batches, gate, hold) {
             Some(answer) => answer,
             None => return Ok(false),
         };
@@ -458,7 +477,11 @@ impl Objects {
             let lane = usize::from(batch.signal.0 != self.done[0]);
             reached[lane] = reached[lane].min(batch.signal.1 - 1);
         }
-        let waited = self.wait(parts, reached)?;
+        let fenced = match hold {
+            true => &self.fences[..submitted],
+            false => &[],
+        };
+        let waited = self.wait(parts, reached)? && self.wait_fences(parts, fenced)?;
         parts.loader_word.end_step(step, marks);
         if !waited {
             return Ok(false);
@@ -472,17 +495,27 @@ impl Objects {
 
     /// Submit `batches`, each alone on its `VkQueue`, in order until one is refused, then signal
     /// the gate to `gate` from the host, inside one section: how many were submitted, the
-    /// refusal, the hold of the device's loader word the signal was made under where the word was
-    /// found overwritten, and the relay's marks after the batches, kept; `None` where the process
-    /// is exiting.
-    fn submit<'p>(&self, parts: &'p Parts, batches: &[Batch], gate: u64) -> Option<Submitted<'p>> {
+    /// refusal, the hold of the device's loader word the signal was made under where the round is
+    /// held (`hold`, each batch then signalling its fence of the check's own), and the relay's
+    /// marks after the batches, kept; `None` where the process is exiting.
+    fn submit<'p>(
+        &self,
+        parts: &'p Parts,
+        batches: &[Batch],
+        gate: u64,
+        hold: bool,
+    ) -> Option<Submitted<'p>> {
         let _busy = exit_guard::enter()?;
         let raw = parts.vk();
         let uses = parts.queue_uses();
         let mut submitted = 0;
         let mut refused = None;
         let mut marks = Vec::new();
-        for batch in batches {
+        for (batch, &own) in batches.iter().zip(&self.fences) {
+            let fence = match hold {
+                true => own,
+                false => vk::Fence::null(),
+            };
             let buffers = [batch.buffer];
             let waits = [batch.wait.0];
             let wait_values = [batch.wait.1];
@@ -501,7 +534,8 @@ impl Objects {
             // SAFETY: the queue is used under its lock, inside a section; the command buffer is
             // recorded, ended and in no other submission; each timeline's signals rise in the order
             // they run (each lane's batches run in its queue's order); the gate's wait is
-            // signalled below. The device's loader word is held across the call and the relay's
+            // signalled below; the fence, where there is one, is unsignaled (made so, or reset once
+            // the round before signalled it) and in no pending submission. The device's loader word is held across the call and the relay's
             // mark after it (MoltenVK names the device as it logs each, `loader_word.rs`), taken
             // inside the queue's lock. None of the round's batches runs before the gate's signal,
             // which the caller makes under the word where it was found overwritten, so none
@@ -515,7 +549,7 @@ impl Objects {
                 |queue| unsafe {
                     let held = parts.loader_word.held();
                     parts.counts.queue_submitted(1, 1);
-                    (held, raw.queue_submit(queue, &[submit], vk::Fence::null()))
+                    (held, raw.queue_submit(queue, &[submit], fence))
                 },
             );
             drop(held);
@@ -530,7 +564,10 @@ impl Objects {
         let signal = vk::SemaphoreSignalInfo::default()
             .semaphore(self.gate)
             .value(gate);
-        let step = parts.step_held();
+        let step = match hold {
+            true => parts.step_held(),
+            false => None,
+        };
         // SAFETY: the gate's value rises with each signal, its only signaller the host.
         let signalled = unsafe { raw.signal_semaphore(&signal) };
         exit_guard::called(Call::SignalSemaphore);
@@ -569,6 +606,39 @@ impl Objects {
                 Err(error) => return Err(vulkan(error)),
             }
         }
+    }
+
+    /// Wait for `fences`, the check's own of a held round's batches submitted, a slice at a time,
+    /// each a section, then reset them for the next round: whether they were signalled (false
+    /// once the process is exiting).
+    fn wait_fences(&self, parts: &Parts, fences: &[vk::Fence]) -> Result<bool, Error> {
+        if fences.is_empty() {
+            return Ok(true);
+        }
+        loop {
+            let Some(_busy) = exit_guard::enter() else {
+                return Ok(false);
+            };
+            // SAFETY: the check's fences, each in a submission made.
+            let waited =
+                unsafe { (parts.vk()).wait_for_fences(fences, true, WAIT_SLICE.as_nanos() as u64) };
+            exit_guard::called(Call::WaitForFences);
+            match waited {
+                Ok(()) => break,
+                Err(vk::Result::TIMEOUT) => continue,
+                Err(error) => return Err(vulkan(error)),
+            }
+        }
+        #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+        parts.switch.waited_fences(fences.len());
+        let Some(_busy) = exit_guard::enter() else {
+            return Ok(false);
+        };
+        // SAFETY: each is signalled, its submission completed.
+        let reset = unsafe { parts.vk().reset_fences(fences) };
+        exit_guard::called(Call::ResetFences);
+        reset.map_err(vulkan)?;
+        Ok(true)
     }
 
     /// The median gap between batches on the two `VkQueue`s and on one, in nanoseconds, from the
@@ -653,6 +723,11 @@ impl Objects {
             for semaphore in [self.gate, self.done[0], self.done[1]] {
                 if semaphore != vk::Semaphore::null() {
                     release::object(raw, semaphore);
+                }
+            }
+            for fence in self.fences {
+                if fence != vk::Fence::null() {
+                    release::object(raw, fence);
                 }
             }
             if self.queries != vk::QueryPool::null() {

@@ -353,6 +353,10 @@ pub(crate) struct QueueSwitch {
     /// release of its Vulkan objects, and the drop of its shares of the device's parts.
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     last_steps: [AtomicU64; 2],
+    /// The crate's device tests' count of the fences of the check's own its held rounds waited
+    /// for (`queue_switch_check.rs`).
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    fences_waited: AtomicU64,
 }
 
 impl QueueSwitch {
@@ -374,6 +378,8 @@ impl QueueSwitch {
             held: Default::default(),
             #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
             last_steps: Default::default(),
+            #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+            fences_waited: AtomicU64::new(0),
         }
     }
 
@@ -460,6 +466,19 @@ impl QueueSwitch {
     pub(crate) fn timed_step(&self, step: usize, from: Instant) {
         let nanos = u64::try_from(from.elapsed().as_nanos()).unwrap_or(u64::MAX);
         self.last_steps[step].store(nanos.max(1), Ordering::Release);
+    }
+
+    /// Record that a held round of the check waited for `fences` of its own.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) fn waited_fences(&self, fences: usize) {
+        (self.fences_waited).fetch_add(fences as u64, Ordering::Relaxed);
+    }
+
+    /// The fences of its own the check's held rounds waited for so far
+    /// ([`waited_fences`](Self::waited_fences)).
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) fn fences_waited(&self) -> u64 {
+        self.fences_waited.load(Ordering::Relaxed)
     }
 
     /// How long the check's last two steps took ([`timed_step`](Self::timed_step)).

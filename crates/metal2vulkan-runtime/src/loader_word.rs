@@ -29,9 +29,11 @@
 //! submissions: on a device whose word was found overwritten, by a restore or as a step starts
 //! ([`DeviceWord::overwritten`], a fact of the device and never of its driver), the checks hold the
 //! lock across each whole step of theirs that makes no use of a queue (their objects' making and
-//! release) and from each submission through the wait for its completion and, where the queue's
-//! failures are relayed, for the relay's mark after it ([`DeviceWord::end_step`]: the use's last
-//! submission on the queue, whose Metal command buffer completes after the check's own), so the
+//! release) and from each submission through the wait for its completion (each check's through a
+//! fence of its own, signalled as its Metal command buffer completes: the queue-switch check's
+//! timelines are signalled before) and, where the queue's failures are relayed, for the relay's
+//! mark after it ([`DeviceWord::end_step`]: the use's last submission on the queue, whose Metal
+//! command buffer completes after the check's own), so the
 //! runtime's loader-served calls on other threads may wait for one step of theirs, once, while they
 //! run (the checks run once per driver and runtime, for milliseconds); elsewhere the word never
 //! changes and they hold it across their submission calls alone. A narrower hold, around the calls
