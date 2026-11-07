@@ -630,7 +630,7 @@
         "completion_arms_after_a_wake": 1,
         "completion_waiter_parks": 1,
         "device_memory_allocated": 201326592,
-        "dispatch_pipelines_pooled": 1,
+        "dispatch_pipelines_pooled": 2,
         "dispatch_shapes_found": 3,
         "dispatch_shapes_made": 6,
         "dispatch_used_resources_listed": 1,
@@ -641,7 +641,7 @@
         "functions_translated": 1,
         "gate_waits": 1,
         "gate_waits_slept": 1,
-        "heads_held_for_host_steps": 3,
+        "heads_held_for_host_steps": 5,
         "heap_tables_worked_out": 1,
         "host_steps_recorded": 1,
         "new_buffer_bytes_cleared": 864,
@@ -654,7 +654,7 @@
         "queues_sharing_a_vk_queue": 1,
         "resident_textures_looked_at": 1,
         "scheduled_where_submitted": 1,
-        "scheduler_passes": 4,
+        "scheduler_passes": 6,
         "scheduler_passes_by_waiters": 1,
         "scheduler_sleeps": 4,
         "scheduler_wakes_commit": 1,
@@ -667,7 +667,7 @@
         "stage_entries_specialized": 1,
         "submit_infos": 2,
         "trail_waits": 1,
-        "variant_pipelines_made": 1,
+        "variant_pipelines_made": 2,
         "wakes_completion_waiters": 1,
         "wakes_spared": 16
       },
@@ -691,7 +691,7 @@
         "pooled_memory_blocks_made": 3
       },
       "per_state": {
-        "pipelines": 1,
+        "pipelines": 2,
         "states": 1
       }
     }

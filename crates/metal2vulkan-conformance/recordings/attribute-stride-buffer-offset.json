@@ -708,7 +708,7 @@
         "completion_arms_after_a_wake": 1,
         "completion_waiter_parks": 1,
         "device_memory_allocated": 201326592,
-        "dispatch_pipelines_pooled": 1,
+        "dispatch_pipelines_pooled": 2,
         "dispatch_shapes_found": 5,
         "dispatch_shapes_made": 6,
         "dispatch_used_resources_listed": 1,
@@ -744,16 +744,12 @@
         "stage_entries_specialized": 1,
         "submit_infos": 2,
         "trail_waits": 1,
-        "variant_pipelines_made": 1,
+        "variant_pipelines_made": 2,
         "variants_taken_back": 1,
         "wakes_completion_waiters": 1,
         "wakes_spared": 7
       },
-      "moving": {
-        "batches_submitted_by_waiters": 0
-      },
       "composed": {
-        "batches_submitted_by_waiters": 0,
         "command_buffers_begun": 24,
         "command_buffers_begun_batch_barriers": 1,
         "command_buffers_begun_continuations": 11,
@@ -763,7 +759,7 @@
         "commands_recorded.cmd_pipeline_barrier": 10,
         "commands_recorded.end_command_buffer": 24,
         "device_memory_allocated": 201326592,
-        "dispatch_pipelines_pooled": 1,
+        "dispatch_pipelines_pooled": 2,
         "dispatch_used_resources_listed": 1,
         "encoder_command_buffers_begun": 23,
         "functions_translated": 1,
@@ -778,7 +774,7 @@
         "pipeline_layouts_made": 1,
         "pooled_memory_blocks_made": 3,
         "shader_modules_made": 1,
-        "variant_pipelines_made": 1
+        "variant_pipelines_made": 2
       },
       "per_state": {
         "pipelines": 0,

@@ -21261,10 +21261,34 @@
   "costs": [
     {
       "venue": "Apple M3 Max",
-      "runs": 0,
-      "measured": "no measurement: the run stopped before the case finished (a call did not answer, at MTLPixelFormatRGB10A2Unorm_PQ/Type2D/64x64x1/levels-1/samples-1/slices-1/usage-0x1/shared/makes-texture)",
-      "bounds": {},
-      "unmeasurable": "a call did not answer, at MTLPixelFormatRGB10A2Unorm_PQ/Type2D/64x64x1/levels-1/samples-1/slices-1/usage-0x1/shared/makes-texture"
+      "runs": 8,
+      "measured": "8 run(s) of the whole selection on Apple M3 Max, in the case set's own order, the largest each count reached",
+      "contrasted": "8 run(s) of each case on its own on Apple M3 Max, nothing before it on the device, the largest each count reached",
+      "bounds": {
+        "addressable_buffers_made": 2,
+        "device_memory_allocated": 268435456,
+        "host_texel_copies": 30,
+        "images_started_on_the_host": 80,
+        "new_buffer_bytes_cleared": 1920,
+        "object_churn.buffers_parked": 20,
+        "object_churn.buffers_recycled": 20,
+        "object_churn.images_evicted": 400,
+        "object_churn.images_own_memory": 480,
+        "object_churn.images_parked": 400,
+        "object_churn.textures_image": 480,
+        "object_churn.textures_texels": 20,
+        "object_churn.vk_image_bindings": 480,
+        "object_churn.vk_images_destroyed": 480,
+        "object_churn.vk_images_made": 480,
+        "pooled_memory_blocks_made": 4
+      },
+      "composed": {
+        "device_memory_allocated": 268435456
+      },
+      "ceilings": {
+        "addressable_buffers_made": 2,
+        "pooled_memory_blocks_made": 4
+      }
     }
   ],
   "times": [
