@@ -292,9 +292,10 @@ fn layouts_off_metals_rules_copy_where_plain_metal_places_their_rows() {
     let half = at(P::YCBCR84221P, [32, 4, 1], 0, 32, true);
     assert_eq!(half, Ok(vec![0, 32, 64, 96]));
     // Out of a texture at a pitch below a row: each row at its own offset, the rows overlapping in
-    // the buffer (written in turn: `a_copy_out_at_a_pitch_below_the_row_leaves_the_later_rows`).
+    // the buffer (written in turn: `a_copy_out_at_a_pitch_below_the_row_leaves_the_later_rows`),
+    // so at a pitch of 0 the last row alone, which covers every other whole.
     assert_eq!(at(rgba8.0, rgba8.1, 0, 8, false), Ok(vec![0, 8, 16, 24]));
-    assert_eq!(at(rgba8.0, rgba8.1, 0, 0, false), Ok(vec![0, 0, 0, 0]));
+    assert_eq!(at(rgba8.0, rgba8.1, 0, 0, false), Ok(vec![0]));
     assert_eq!(
         at(rgba8.0, [8, 4, 1], 0, 16, false),
         Ok(vec![0, 16, 32, 48])
