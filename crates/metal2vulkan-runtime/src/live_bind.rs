@@ -245,6 +245,11 @@ pub(super) struct LiveBind {
     pub(super) offsets: Vec<u32>,
     /// The last draw's vertex buffers, `(binding, buffer, offset, stride)`, kept likewise.
     pub(super) vertex_buffers: Vec<(u32, vk::Buffer, u64, u64)>,
+    /// Where the space each of those buffers is bound in starts in its `VkBuffer`
+    /// (`Buffer::space`), in their order, kept likewise: a draw rebound binds a buffer whose
+    /// offset alone moved since from there, without looking at where the buffer lies
+    /// (`render/draw_again/rebound.rs`).
+    pub(super) vertex_starts: Vec<u64>,
     /// The storage of the samplers the last draw's writes named (`binding::bind_into`), kept
     /// likewise and empty between draws: its encoder retains them as the draw records.
     pub(super) samplers: Vec<Arc<OwnedSampler>>,

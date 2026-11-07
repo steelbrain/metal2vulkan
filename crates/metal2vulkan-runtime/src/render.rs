@@ -9047,8 +9047,10 @@ impl RenderLowering {
         if self.replaying && !self.gathered().covers(&draw_shadows) {
             return Err(Error::NotImplemented(RuntimeGap::IndirectRenderCommands));
         }
-        // Over the last draw's, in their storage (`LiveBind::vertex_buffers`).
+        // Over the last draw's, in their storage (`LiveBind::vertex_buffers`), with where their
+        // spaces start (`LiveBind::vertex_starts`).
         live.vertex_buffers.clear();
+        live.vertex_starts.clear();
         for bind in &plan.vertex_buffers {
             let table = pass_start.or(Stage::Vertex, &self.vertex);
             let offset = commands
@@ -9077,6 +9079,7 @@ impl RenderLowering {
                 (None, None) => return Err(internal("the plan binds an unbound vertex buffer")),
             };
             (live.vertex_buffers).push((bind.binding, raw, start + offset, stride.unwrap_or(0)));
+            live.vertex_starts.push(start);
         }
         let vertex_buffers = &live.vertex_buffers[..];
         // Its draw state: the one an earlier draw of the variant derived under the same settings'

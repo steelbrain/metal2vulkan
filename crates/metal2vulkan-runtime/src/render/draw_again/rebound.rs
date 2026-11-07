@@ -130,10 +130,15 @@ fn settles_kept(encoder: &RenderLowering, live: &LiveBind) -> bool {
 }
 
 /// The buffer, texture and sampler slots calls changed since the kept draw read its tables: at
-/// most [`SLOTS`].
+/// most [`SLOTS`]; and of the vertex stage's buffer slots below 64, those every one of those
+/// calls changed by the offset alone, a bit each.
 struct Changed {
     slots: [SlotRef; SLOTS],
     count: usize,
+    /// The vertex buffer slots some call changed by the offset alone, and those some call changed
+    /// otherwise.
+    offsets: u64,
+    whole: u64,
 }
 
 impl Changed {
@@ -147,7 +152,28 @@ impl Changed {
         Changed {
             slots: [any; SLOTS],
             count: 0,
+            offsets: 0,
+            whole: 0,
         }
+    }
+
+    /// Note a call's change of `slot`, by its offset alone where `offset` (a buffer slot's).
+    fn note(&mut self, slot: SlotRef, offset: bool) {
+        if slot.stage != Stage::Vertex || slot.class != SlotClass::Buffer {
+            return;
+        }
+        let bit = 1u64.checked_shl(slot.index).unwrap_or(0);
+        match offset {
+            true => self.offsets |= bit,
+            false => self.whole |= bit,
+        }
+    }
+
+    /// Whether every call since changed vertex buffer slot `index` by its offset alone: the slot
+    /// binds the buffer the kept draw bound there.
+    fn moved_alone(&self, index: u32) -> bool {
+        let bit = 1u64.checked_shl(index).unwrap_or(0);
+        self.offsets & !self.whole & bit != 0
     }
 
     /// Add `slot`: whether there was room.
@@ -267,20 +293,20 @@ impl RenderLowering {
             if !read || !views.holds(stage, state.at_bind_views) {
                 return None;
             }
-            for (class, index) in table.changed_since(under)? {
+            for (class, index, offset) in table.changed_since(under)? {
                 let bound = matches!(
                     class,
                     SlotClass::Buffer | SlotClass::Texture | SlotClass::Sampler
                 );
-                if !bound
-                    || !changed.add(SlotRef {
-                        stage,
-                        class,
-                        index,
-                    })
-                {
+                let slot = SlotRef {
+                    stage,
+                    class,
+                    index,
+                };
+                if !bound || !changed.add(slot) {
                     return None;
                 }
+                changed.note(slot, offset);
             }
         }
         // A texture or sampler changed: no texture its functions use memoryless (a draw of one
@@ -449,8 +475,15 @@ impl RenderLowering {
             }
             counts.resident_keys_settled(live.uses.settled() as u64);
         }
-        // Its fixed-function vertex buffers at the changed slots, in the plan's order.
-        for (bind, at) in plan.vertex_buffers.iter().zip(&mut live.vertex_buffers) {
+        // Its fixed-function vertex buffers at the changed slots, in the plan's order. A slot
+        // whose offset alone moved binds the buffer the kept draw bound there, whose space starts
+        // where it did, as no no-copy buffer moved since (`bring_in`): it is not looked at again
+        // (`LiveBind::vertex_starts`).
+        let kept = (live.vertex_buffers.iter_mut()).zip(&mut live.vertex_starts);
+        if plan.vertex_buffers.len() != kept.len() {
+            return false;
+        }
+        for (bind, (at, kept_start)) in plan.vertex_buffers.iter().zip(kept) {
             let slot = SlotRef {
                 stage: Stage::Vertex,
                 class: SlotClass::Buffer,
@@ -462,18 +495,21 @@ impl RenderLowering {
             let offset =
                 (commands.buffer_offsets.iter()).find(|(binding, _)| *binding == bind.binding);
             let space = match (
+                changed.moved_alone(bind.buffer_index),
                 self.vertex.buffers.get(&bind.buffer_index),
                 self.vertex.bytes.get(&bind.buffer_index),
             ) {
-                (Some((buffer, _)), _) => buffer.space(),
-                (None, Some(bytes)) => (bytes.region.raw(), bytes.region.offset()),
-                (None, None) => return false,
+                (true, Some(_), _) => (at.1, *kept_start),
+                (_, Some((buffer, _)), _) => buffer.space(),
+                (_, None, Some(bytes)) => (bytes.region.raw(), bytes.region.offset()),
+                (_, None, None) => return false,
             };
             let (Some(&(_, offset)), (raw, start)) = (offset, space) else {
                 return false;
             };
             at.1 = raw;
             at.2 = start + offset;
+            *kept_start = start;
         }
         // No shadowed texture among its uses, and no barrier its fragments need after an earlier
         // draw's geometry writes.
