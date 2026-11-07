@@ -7,6 +7,7 @@
 //   ms4-rgba8   `RGBA8Unorm` multisampled, 4 samples, 8 x 8 (a pixel's samples one after
 //               another in the buffer: 16 bytes a pixel, 128 a row). Out only.
 //   ms2-r8      `R8Unorm` multisampled, 2 samples, 16 x 8 (32 bytes a row). Out only.
+//   ms4-rgba8-w4, ms4-rgba8-w2, ms2-rgba8-w4, ms2-r32-w8: narrower multisampled ones, out only.
 //   overbuf     `RGBA8Unorm` 32 x 8 over a `Shared` buffer at a `bytesPerRow` of 128 (the
 //               texture's bytes read and written in that buffer directly).
 //   depth16     `Depth16Unorm` 32 x 8.
@@ -65,6 +66,10 @@ struct kind {
 static const struct kind kKinds[] = {
     {"ms4-rgba8", MTLPixelFormatRGBA8Unorm, 8, 4, 16, MTLBlitOptionNone, false, true},
     {"ms2-r8", MTLPixelFormatR8Unorm, 16, 2, 2, MTLBlitOptionNone, false, true},
+    {"ms4-rgba8-w4", MTLPixelFormatRGBA8Unorm, 4, 4, 16, MTLBlitOptionNone, false, true},
+    {"ms4-rgba8-w2", MTLPixelFormatRGBA8Unorm, 2, 4, 16, MTLBlitOptionNone, false, true},
+    {"ms2-rgba8-w4", MTLPixelFormatRGBA8Unorm, 4, 2, 8, MTLBlitOptionNone, false, true},
+    {"ms2-r32-w8", MTLPixelFormatR32Uint, 8, 2, 8, MTLBlitOptionNone, false, true},
     {"overbuf", MTLPixelFormatRGBA8Unorm, 32, 1, 4, MTLBlitOptionNone, true, false},
     {"depth16", MTLPixelFormatDepth16Unorm, 32, 1, 2, MTLBlitOptionNone, false, false},
     {"stencil8", MTLPixelFormatStencil8, 32, 1, 1, MTLBlitOptionNone, false, false},
@@ -129,7 +134,7 @@ static id<MTLTexture> makeTexture(const struct kind *k, id<MTLBuffer> *backing) 
     if (k->samples > 1) {
         d.textureType = MTLTextureType2DMultisample;
         d.sampleCount = k->samples;
-        d.usage = MTLTextureUsageRenderTarget;
+        d.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead;
     }
     if (k->overBuffer) {
         d.storageMode = MTLStorageModeShared;
