@@ -4832,6 +4832,7 @@ fn	metal2vulkan::metal::format::block_extent	pub fn block_extent(pf: PixelFormat
 fn	metal2vulkan::metal::format::bound_texel_format	pub fn bound_texel_format(pf: PixelFormat) -> u32
 fn	metal2vulkan::metal::format::byte_format	pub fn byte_format(pf: PixelFormat) -> Option<vk::Format>
 fn	metal2vulkan::metal::format::color_record	pub fn color_record(formats: &[Option<PixelFormat>]) -> Option<Vec<Option<(u32, u32)>>>
+fn	metal2vulkan::metal::format::copies_only	pub fn copies_only(pf: PixelFormat) -> bool
 fn	metal2vulkan::metal::format::direct_format	pub fn direct_format(pf: PixelFormat) -> Option<vk::Format>
 fn	metal2vulkan::metal::format::explicit_imageblock_sample_length	pub fn explicit_imageblock_sample_length(data_size: u32, alignment: u32, colors: u32) -> Option<u32>
 fn	metal2vulkan::metal::format::extended_range_blend	pub fn extended_range_blend(pf: PixelFormat, profile: &DeviceProfile) -> Result<(), Unsupported>
@@ -12158,7 +12159,6 @@ variant	metal2vulkan-runtime::RuntimeGap::HiddenDepthStencil	HiddenDepthStencil
 variant	metal2vulkan-runtime::RuntimeGap::ImageblockMasters	ImageblockMasters
 variant	metal2vulkan-runtime::RuntimeGap::IndirectCommandBufferPastMaxBufferLength	IndirectCommandBufferPastMaxBufferLength { count: u64, max_buffer_length: u64 }
 variant	metal2vulkan-runtime::RuntimeGap::IndirectCommandPastSize	IndirectCommandPastSize { index: u64, size: u64 }
-variant	metal2vulkan-runtime::RuntimeGap::IndirectCommandUnstridedBuffer	IndirectCommandUnstridedBuffer { index: u32 }
 variant	metal2vulkan-runtime::RuntimeGap::IndirectDrawArguments	IndirectDrawArguments
 variant	metal2vulkan-runtime::RuntimeGap::IndirectImageblockSize	IndirectImageblockSize { width: u64, height: u64 }
 variant	metal2vulkan-runtime::RuntimeGap::IndirectRenderCommands	IndirectRenderCommands
@@ -13759,6 +13759,7 @@ variant	metal2vulkan::metal::format::Footprint::Tiled	Tiled { bytes: u32, block:
 variant	metal2vulkan::metal::format::Footprint::TwoPlanes	TwoPlanes
 variant	metal2vulkan::metal::format::FormatEmulation::AlphaInRed	AlphaInRed
 variant	metal2vulkan::metal::format::FormatEmulation::Bfloat	Bfloat
+variant	metal2vulkan::metal::format::FormatEmulation::CopiesOnly	CopiesOnly
 variant	metal2vulkan::metal::format::FormatEmulation::Decoded	Decoded
 variant	metal2vulkan::metal::format::FormatEmulation::DepthInCombined	DepthInCombined
 variant	metal2vulkan::metal::format::FormatEmulation::DepthWidened	DepthWidened

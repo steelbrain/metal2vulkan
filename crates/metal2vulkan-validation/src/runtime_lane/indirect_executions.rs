@@ -45,7 +45,7 @@ use metal2vulkan_runtime::{
     ExecutedPipeline, Execution, Heap, HeapDescriptor, HeapType, HostMemory, IndirectCommand,
     IndirectCommandBuffer, IndirectCommandBufferDescriptor, IndirectCommandBufferProblem, Invalid,
     PipelineCreationCause, PipelineOptions, Problem, Region, RenderPassDescriptor, ResourceOptions,
-    RuntimeGap, Size, VisibleFunctionTableDescriptor, VkResultCode,
+    Size, VisibleFunctionTableDescriptor, VkResultCode,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;

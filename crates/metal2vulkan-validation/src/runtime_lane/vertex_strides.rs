@@ -33,7 +33,7 @@ use metal2vulkan_devtools::llvm_assemble;
 use metal2vulkan_runtime::{
     Buffer, CommandBufferStatus, CommandQueue, Device, Error, IndirectCommandBufferDescriptor,
     IndirectRenderCommand, PipelineOptions, RenderCommandEncoder, RenderPassDescriptor,
-    RenderPipelineState, ResourceOptions, RuntimeGap,
+    RenderPipelineState, ResourceOptions,
 };
 use std::path::Path;
 
@@ -390,10 +390,12 @@ fn vertex_fetches_past_4_gib_of_a_buffer_are_refused() {
             buffer_with(&device, &long).unwrap(),
         );
         let past = |reach: u64| {
-            Err(Error::NotImplemented(RuntimeGap::VertexFetchPast4GiB {
-                buffer_index: 0,
-                reach,
-            }))
+            Err(Error::NotImplemented(
+                metal2vulkan_runtime::RuntimeGap::VertexFetchPast4GiB {
+                    buffer_index: 0,
+                    reach,
+                },
+            ))
         };
         let mut pass = RenderPassDescriptor::new();
         pass.render_target_width = 1;

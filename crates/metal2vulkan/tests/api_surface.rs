@@ -905,6 +905,7 @@ surface! {
         fn block_extent;
         enum Footprint N;
         fn footprint;
+        fn copies_only;
         fn imageblock_sample_length;
         fn color_record;
         fn explicit_imageblock_sample_length;
