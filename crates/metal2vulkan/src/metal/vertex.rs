@@ -181,7 +181,7 @@ pub enum AttributeFetch {
 ///   the attribute extent the pulled fetch reads.
 /// - A format the profile cannot fetch as `VERTEX_BUFFER`: pulled.
 /// - `FloatRGB9E5` (`E5B9G9R9_UFLOAT_PACK32`): pulled on every profile
-///   ([`fixed_function_format`]).
+///   (`fixed_function_format`).
 /// - Every attribute on a profile whose buffer containment is checked in the shader
 ///   (`contain::encoding` is `Check::InShader`: containment on, neither `robustBufferAccess`
 ///   nor `robustBufferAccess2` enabled): pulled. Vulkan bounds fixed-function vertex input only
