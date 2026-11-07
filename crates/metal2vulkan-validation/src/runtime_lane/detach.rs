@@ -46,6 +46,8 @@ use super::degrade_notices::{
 };
 use super::host_memory::{gpu_read, on_device, recording, Mapping, Seen};
 use super::no_copy_heaps::shared;
+#[cfg(any(m2v_cpu_icd, m2v_gpu_hazards))]
+use super::property_reads::{batches_submitted, first_batch_submitted};
 use super::rebind_reach::{
     buffer_len, buffer_over, heap_member, kept_member_over, member_over, node, pages,
     rebind_heap_to, rebind_to, walk, Outputs, Uses, Walked, A, B, POINTER_WALKER,
@@ -690,15 +692,11 @@ impl Spinning {
         let mut blit = command_buffer.blit_command_encoder().unwrap();
         blit.fill_buffer(&filled, 0..16, 0x3c).unwrap();
         blit.end_encoding().unwrap();
+        // Its kernel start shows only with its end, which waits for the gate: the device's
+        // submitted batches show the first.
+        let before = batches_submitted(device);
         command_buffer.commit().unwrap();
-        let deadline = Instant::now() + WAIT;
-        while command_buffer.kernel_start_time() == 0.0 {
-            assert!(
-                Instant::now() < deadline,
-                "the first batch was never submitted"
-            );
-            std::thread::sleep(Duration::from_millis(1));
-        }
+        first_batch_submitted(device, before);
         Spinning {
             command_buffer,
             flag,
