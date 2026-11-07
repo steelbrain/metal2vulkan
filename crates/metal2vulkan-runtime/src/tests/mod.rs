@@ -74,6 +74,8 @@ mod cpu_copy_layouts;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod creation_prediction_kinds;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod creation_prediction_reach;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod creation_split;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod deferred_calls;

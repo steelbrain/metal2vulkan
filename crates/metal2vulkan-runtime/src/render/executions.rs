@@ -1953,7 +1953,7 @@ impl RenderLowering {
             specialization: plan.specialization.clone(),
             topology,
             primitive_restart,
-            pass: self.current.shape.clone(),
+            pass: self.current.shape.keyed(),
             strides: Vec::new(),
             fixed: FixedState::without_dynamic(fixed, &graphics.dynamic_states),
             sample_positions: self.layout.sample_positions.clone(),

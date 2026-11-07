@@ -253,6 +253,45 @@ impl PassShape {
         })
     }
 
+    /// This shape as a pipeline's key holds it (`pipeline/graphics.rs`): its resolves left out,
+    /// which render pass compatibility ignores in a pass of one subpass, as every instance's pass
+    /// is (the module docs). A pipeline made against a pass that resolves is then the one a draw
+    /// in a pass of the same shape that resolves nothing takes, and the other way round, as it is
+    /// the one a creation predicts (`pipeline/predicted.rs`), which cannot know whether its draws'
+    /// passes resolve.
+    pub(super) fn keyed(&self) -> PassShape {
+        let mut keyed = self.clone();
+        keyed.color_resolves.fill(None);
+        keyed.depth_stencil_resolve = None;
+        keyed
+    }
+
+    /// Whether `keyed`, a pipeline key's shape ([`keyed`](PassShape::keyed)), is this shape's.
+    pub(super) fn keys_as(&self, keyed: &PassShape) -> bool {
+        let PassShape {
+            colors,
+            depth_stencil,
+            samples,
+            color_resolves: _,
+            depth_stencil_resolve: _,
+            fetch_inputs,
+            no_inputs,
+            storage,
+            view_mask,
+            locations,
+        } = self;
+        *colors == keyed.colors
+            && *depth_stencil == keyed.depth_stencil
+            && *samples == keyed.samples
+            && keyed.color_resolves.iter().all(Option::is_none)
+            && keyed.depth_stencil_resolve.is_none()
+            && *fetch_inputs == keyed.fetch_inputs
+            && *no_inputs == keyed.no_inputs
+            && *storage == keyed.storage
+            && *view_mask == keyed.view_mask
+            && *locations == keyed.locations
+    }
+
     /// This shape with `storage` (ascending) left out of the draws' subpass; refused (an
     /// invariant) past a pass's color attachments.
     pub(super) fn with_storage(self, storage: &[u32]) -> Result<PassShape, Error> {

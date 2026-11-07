@@ -51,6 +51,9 @@
 //! - **The pass** of the descriptor's attachments: each color's and the depth and stencil's
 //!   format as an attachment of its pixel format, its raster sample count, no resolve, and the
 //!   colors the pipeline reads through storage left out of the subpass (`framebuffer_fetch.rs`).
+//!   A key holds no pass's resolves (`PassShape::keyed`): render pass compatibility ignores them
+//!   in a pass of one subpass, as every instance's pass is, so a draw in a pass that resolves
+//!   takes the key predicted here.
 //! - **The input assembly** of the descriptor's topology class (a list; a triangle list when
 //!   unspecified), and **the fixed state** of Metal's default encoder state.
 //!
