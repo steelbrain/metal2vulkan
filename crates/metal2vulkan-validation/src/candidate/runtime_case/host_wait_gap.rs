@@ -38,9 +38,15 @@ const ID: i32 = 1544472022;
 /// The id name of the hazard.
 const ID_NAME: &str = "SYNC-HAZARD-WRITE-AFTER-WRITE";
 
-/// The start of the hazard as the layer reports it at a `vkQueueSubmit`: the hazard against a
-/// command buffer submitted earlier (`sync_error_messages.cpp`, `AddReplayInfo`).
-const SUBMIT_START: &str = "vkQueueSubmit(): WRITE_AFTER_WRITE hazard detected. ";
+/// The call the layer reports the hazard at: a `vkQueueSubmit`, against a command buffer
+/// submitted earlier.
+const SUBMIT: &str = "vkQueueSubmit(): ";
+
+/// The hazard, after the call, or after the command buffer's place in the submission where the
+/// layer names it (v1.4.363: `pSubmits[0].pCommandBuffers[1]`, `sync_submit.cpp` line 737,
+/// `submit_loc.dot(vvl::Field::pSubmits, batch_index)` then `.dot(vvl::Field::pCommandBuffers,
+/// index)`; v1.4.357 names none).
+const HAZARD: &str = "WRITE_AFTER_WRITE hazard detected. ";
 
 /// What names the queue of the command buffer being submitted.
 const CURRENT_QUEUE: &str = " submitted on the current ";
@@ -80,7 +86,10 @@ pub(super) fn shape(id: i32, id_name: &str, text: &str) -> bool {
     if id != ID || id_name != ID_NAME {
         return false;
     }
-    let Some(rest) = text.strip_prefix(SUBMIT_START) else {
+    let Some(rest) = text.strip_prefix(SUBMIT) else {
+        return false;
+    };
+    let Some(rest) = after_place(rest).strip_prefix(HAZARD) else {
         return false;
     };
     let Some(prior_at) = rest.find(PRIOR) else {
@@ -100,6 +109,23 @@ pub(super) fn shape(id: i32, id_name: &str, text: &str) -> bool {
         return false;
     };
     current_queue == prior_queue && prior.contains(NO_BARRIER)
+}
+
+/// What follows a command buffer's place in a submission, `pSubmits[N].pCommandBuffers[M] `, that
+/// `text` begins with; `text` itself where it begins with none.
+fn after_place(text: &str) -> &str {
+    let index = |text: &'static str, rest: &str| -> Option<usize> {
+        let digits = rest.strip_prefix(text)?;
+        let end = digits.find(|c: char| !c.is_ascii_digit())?;
+        (end > 0 && digits[end..].starts_with(']')).then_some(text.len() + end + 1)
+    };
+    let Some(submit) = index("pSubmits[", text) else {
+        return text;
+    };
+    let Some(buffer) = index(".pCommandBuffers[", &text[submit..]) else {
+        return text;
+    };
+    text[submit + buffer..].strip_prefix(' ').unwrap_or(text)
 }
 
 /// Whether the layer release `version` is one whose source was read with the gap in place.
@@ -155,6 +181,30 @@ mod tests {
     #[test]
     fn the_layer_s_message_is_the_gap() {
         assert!(shape(ID, ID_NAME, SEEN));
+        // As v1.4.363 reports it: the command buffer's place in the submission after the call,
+        // and the parameter before the resource.
+        let placed = SEEN
+            .replacen(
+                "vkQueueSubmit(): ",
+                "vkQueueSubmit(): pSubmits[0].pCommandBuffers[1] ",
+                1,
+            )
+            .replacen("writes to VkBuffer", "writes to dstBuffer VkBuffer", 1);
+        assert!(shape(ID, ID_NAME, &placed));
+        // Another place, or a place the layer does not print so.
+        let other = placed.replace(
+            "pSubmits[0].pCommandBuffers[1]",
+            "pSubmits[12].pCommandBuffers[3]",
+        );
+        assert!(shape(ID, ID_NAME, &other));
+        for broken in [
+            "pSubmits[].pCommandBuffers[1]",
+            "pSubmits[0].pCommandBufferInfos[1]",
+            "pSubmits[0]",
+        ] {
+            let broken = placed.replace("pSubmits[0].pCommandBuffers[1]", broken);
+            assert!(!shape(ID, ID_NAME, &broken), "{broken}");
+        }
     }
 
     #[test]
