@@ -428,8 +428,8 @@ driver's. Each is open work.
   stage's stores, through a bound slot or an address loaded out of an argument buffer, a blit fill
   and a visibility result complete, and neither a later command buffer nor the CPU sees them,
   though a later command of the same command buffer may read them back from the GPU's caches; what
-  its atomics do there is unmeasured. A render pass's store-out over such memory (`storeAction =
-  Store`, or a multisample primary stored there) ends its command buffer in error
+  its atomics do there is unmeasured. A render pass's store-out over such memory
+  (`storeAction = Store`, or a multisample primary stored there) ends its command buffer in error
   (`MTLCommandBufferErrorDomain` / `kIOGPUCommandBufferCallbackErrorPageFault`), while attachments
   at `storeAction = DontCare` or `loadAction = Load` complete; resolving *into* such memory is
   unknown (no page fault in 520 processes, almost all of them recovery victims). On macOS the
@@ -440,7 +440,11 @@ driver's. Each is open work.
   `copied-host-pages`): the CPU and a command buffer committed after that completion read the
   pages' bytes, as Metal's do, but one committed before it, while the writer is in flight, reads
   the writes, and a render pass's store-out into the copy completes where Metal's faults its
-  command buffer.
+  command buffer. The copy costs what any copied host buffer costs (the first gap above). On the
+  RTX 5080 Laptop GPU, commit to completion, median of 300: beside a live 16 MiB copy whose pages
+  carry no log, a 256-byte fill into a writable 16 MiB no-copy buffer took 1.5 ms (49 µs beside a
+  64 KiB copy, into a 64 KiB buffer), as every commit compares the copy, and the same fill into the
+  copy 2.6 ms, its completion restoring it; into the 64 KiB copy 53 µs.
 
 - **A function linked from a module that declares function constants** is refused
   (`Unsupported{Linking; NotImplemented}` at a surviving call to the stub, `canon::link`), keyed on
