@@ -113,7 +113,7 @@ pub(super) struct DeviceWord {
     /// Whether the word was found overwritten: the driver names the device in its messages.
     overwritten: AtomicBool,
     /// The steps of the runtime's own work held whole ([`DeviceWord::step_hold`]), for the tests.
-    #[cfg(test)]
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     steps_held: std::sync::atomic::AtomicU64,
     /// The thread that holds the lock and how many holds it has.
     holder: Mutex<Option<(ThreadId, usize)>>,
@@ -148,7 +148,7 @@ impl DeviceWord {
             // SAFETY: the caller's.
             word: unsafe { LoaderWord::of_device(device) },
             overwritten: AtomicBool::new(false),
-            #[cfg(test)]
+            #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
             steps_held: std::sync::atomic::AtomicU64::new(0),
             holder: Mutex::new(None),
             free: Condvar::new(),
@@ -203,13 +203,13 @@ impl DeviceWord {
         if !unsafe { self.overwritten() } {
             return None;
         }
-        #[cfg(test)]
+        #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
         self.steps_held.fetch_add(1, Ordering::Relaxed);
         Some(held.unwrap_or_else(|| self.held()))
     }
 
     /// The steps held whole so far ([`DeviceWord::step_hold`]).
-    #[cfg(test)]
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     pub(crate) fn steps_held(&self) -> u64 {
         self.steps_held.load(Ordering::Relaxed)
     }
