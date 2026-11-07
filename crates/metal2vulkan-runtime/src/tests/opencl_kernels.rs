@@ -48,8 +48,10 @@ fn words(buffer: &Buffer) -> Vec<u32> {
     // SAFETY: the buffer's bytes, which no command uses now.
     let bytes = unsafe { std::slice::from_raw_parts(contents.as_ptr(), buffer.length() as usize) };
     bytes
-        .chunks_exact(4)
-        .map(|w| u32::from_le_bytes(w.try_into().unwrap()))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|w| u32::from_le_bytes(*w))
         .collect()
 }
 
