@@ -311,6 +311,20 @@ fn layouts_off_metals_rules_copy_where_plain_metal_places_their_rows() {
         at(P::Depth16Unorm, [4, 4, 1], 1, 8, true),
         Err(CopyProblem::Offset)
     );
+    // Depth and stencil formats but `Depth32Float` at a pitch below the row on the copy unit
+    // (`rows_below_row`): each row at `y x bytesPerRow`, both ways (an M3 Max,
+    // `probes/short_row_kinds.m`), out of the texture the later row's bytes standing. A pitch off
+    // the unit, or of 0, stays refused.
+    for into in [true, false] {
+        let depth = at(P::Depth16Unorm, [8, 4, 1], 0, 10, into);
+        assert_eq!(depth, Ok(vec![0, 10, 20, 30]), "{into}");
+        let stencil = at(P::Stencil8, [8, 4, 1], 0, 5, into);
+        assert_eq!(stencil, Ok(vec![0, 5, 10, 15]), "{into}");
+    }
+    let aligned = at(P::Depth16Unorm, [16, 4, 1], 0, 16, true);
+    assert_eq!(aligned, Ok(vec![0, 16, 32, 48]));
+    assert_eq!(at(P::Depth16Unorm, [8, 4, 1], 0, 9, true), refused);
+    assert_eq!(at(P::Depth16Unorm, [8, 4, 1], 0, 0, false), refused);
     // The images of a 3D texture (`sw_3d`): each row on its own, no aligned path.
     let t = tex(P::RGBA8Unorm, TextureType::Type3D, [4, 2, 2]);
     let u = unit(&t, BlitOption::None).unwrap();
@@ -1166,22 +1180,35 @@ fn copies_into_textures_over_buffers_move_texel_rows() {
         (16..40, 292..364)
     );
     assert!(!copy.meets());
-    // Metal's checks of the buffer's side: rows that do not cover the region.
-    let short = BufferLayout {
-        bytes_per_row: 4,
+    // A pitch below the region's row on the copy unit (`rows_below_row`): each row at
+    // `y x bytesPerRow`, the rows overlapping in the buffer (an M3 Max,
+    // `probes/short_row_kinds.m`). Out of the texture the later row's bytes stand: each row but
+    // the last copies its first `bytesPerRow` bytes.
+    let short = |bytes_per_row| BufferLayout {
+        bytes_per_row,
         ..layout
     };
-    assert_eq!(
+    let rows = |l: &BufferLayout, length| {
         plan_rows_copy(
             &t.record,
-            &region([0, 0, 0], [2, 2, 1]),
+            &region([0, 0, 0], [2, 3, 1]),
             &unit,
-            &short,
-            4096,
-            &texels
-        ),
-        Err(CopyProblem::BytesPerRow)
-    );
+            l,
+            length,
+            &texels,
+        )
+    };
+    let (from, to) = rows(&short(4), 4096).unwrap();
+    assert_eq!(from, vec![16..24, 20..28, 24..32]);
+    assert_eq!(to, vec![256..264, 288..296, 320..328]);
+    let out = RowsCopy::new(&to, &from);
+    let written: Vec<(u64, u64)> = out.rows.iter().map(|r| (r.dst, r.size)).collect();
+    assert_eq!(written, vec![(16, 4), (20, 4), (24, 8)]);
+    // Refused: a pitch off the unit or of 0, and a last row past the buffer.
+    assert_eq!(rows(&short(6), 4096), Err(CopyProblem::BytesPerRow));
+    assert_eq!(rows(&short(0), 4096), Err(CopyProblem::BytesPerRow));
+    assert_eq!(rows(&short(4), 31), Err(CopyProblem::BufferRange));
+    assert_eq!(rows(&short(4), 32).map(|_| ()), Ok(()));
 }
 
 /// A BC texture over a surface's rows (`linear_plan.rs`) copies rows of blocks: a region's texels

@@ -38,6 +38,20 @@
 // Run without MTL_DEBUG_LAYER (its validation stops a `bytesPerRow` below the row):
 //
 //   ./short_row_kinds
+//
+// **What it answered** (an Apple M3 Max under macOS 27.0.1; three runs, every case in its own
+// process):
+//
+//   * Every multisampled case ended its process (`DIED 6`, `SIGABRT` in Metal's blit, as it
+//     made the blit's program) before the copy at the short pitch: the `RGBA8Unorm` and
+//     `R32Uint` ones at the copy out at the packed row, after the copy in at it returned, the
+//     `R8Unorm` one at the copy in at the packed row. Where Metal places such a texture's rows
+//     at a short pitch is not answered.
+//   * Every other kind returned at every pitch, both ways. `in`: every row read whole from
+//     `y x bytesPerRow` (`whole 8 of 8`), none on the aligned path, at pitches that are
+//     multiples of 16 too. `out`: each row's bytes at `y x bytesPerRow`, nothing past the rows'
+//     span written; the rows overlapping, the order differed from run to run (`even` or
+//     neither), never `later` or `earlier` in these shapes.
 
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>

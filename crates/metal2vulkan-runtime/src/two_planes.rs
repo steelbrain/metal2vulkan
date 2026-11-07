@@ -22,6 +22,11 @@
 //!   rows the same way, so they move texels between rows and the bytes between them too
 //!   (`two_planes/buffer_rows.rs` states the rows, measured on an Apple M3 Max under macOS
 //!   27.0.1); `getBytes` and `replaceRegion` move the texels at every width.
+//! - At a `bytesPerRow` below the row (on 4 bytes, of more than one row) a blit between a buffer
+//!   and a 32 x 8 texture moves each row's color words at `y x bytesPerRow`: into the texture
+//!   each row reads them whole from there, out of it the rows land there in no one order (an
+//!   Apple M3 Max under macOS 27.0.1, `probes/short_row_kinds.m`: half the row, half plus a word
+//!   and the row less 16, twice).
 //!
 //! **Held** as one `R32G32_UINT` image (`metal::format::ExtendedRange::Planes`): each texel's
 //! color word, then its alpha byte in the second word.
@@ -36,6 +41,10 @@
 //!   bands of rows ([`bands`]), one blit command: per band, one copy of its texels out of the
 //!   image, one dispatch of `bind::plane_words_module` moving each texel's first word into the
 //!   buffer's bytes or out of them, and, into the texture, one copy of the texels back.
+//! - **Blits between a buffer and the texture** at a `bytesPerRow` below the row, of a level a
+//!   multiple of 4 wide and not 3D: the same bands at the caller's pitch, the rows overlapping in
+//!   the buffer; out of the texture the rows go in turn, the later row's words standing, as two
+//!   blits of words that do not overlap (`BlitCommandEncoder::plane_short_rows_copy`).
 //! - **Blits between a buffer and the texture** at a width that is not a multiple of 4: a 2D
 //!   texture or array of one level is blitted at Metal's rows through a scratch buffer laid out
 //!   as plane 0 (`buffer_rows.rs`), announced (`two-plane-buffer-blit`, precision) where rows meet
@@ -78,8 +87,9 @@
 //!   and into it at a width of 12 wrote nothing, not modelled.
 //!
 //! Refused `NotImplemented(Format)` naming the format, Metal's answer not measured: a layout
-//! whose rows or images overlap or lie below a row or an image apart, or whose offset, rows or
-//! images are off 4 bytes; a copy between such a texture and one of another pixel format.
+//! whose images overlap or lie below an image apart, whose rows lie below a row apart in a level
+//! not a multiple of 4 wide or of a 3D texture, or whose offset, rows or images are off 4 bytes;
+//! a copy between such a texture and one of another pixel format.
 
 use super::blit::{BlitCommandEncoder, TRANSFER};
 use super::blit_plan::{BufferLayout, ImageCopyRegion};

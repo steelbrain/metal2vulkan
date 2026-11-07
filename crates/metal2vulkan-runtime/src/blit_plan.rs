@@ -211,13 +211,14 @@ fn placed(pf: PixelFormat) -> bool {
 /// Whether `layout` is off Metal's rules for a region of shape `s` in `unit`s by a `bytesPerRow`
 /// below the region's row alone: rows of more than one, of one image, from an offset on the copy
 /// unit, at a nonzero pitch on the copy unit below the row. Plain Metal's blit copies such a
-/// layout of every kind of texture its copies take, each row whole at `y x bytesPerRow`: read so
-/// into a texture, and written so out of one, in no one order where the rows overlap (an Apple
-/// M3 Max under macOS 27.0.1, `probes/short_row_kinds.m`: `Depth16Unorm`, `Stencil8`, both
-/// aspects of `Depth32Float_Stencil8`, an `RGBA8Unorm` texture over a buffer and
-/// `RGB10A8_2P_XR10`, 32 x 8, at half the row, half plus a unit and the row less 16, both ways,
-/// twice), so a depth or stencil format copies it where [`placed_rows`] places it, and a texture
-/// over a buffer as [`plan_rows_copy`] does.
+/// layout of each kind of single-sample texture measured, each row whole at
+/// `offset + y x bytesPerRow`: read so into the texture, and written so out of it, in no one
+/// order where the rows overlap (an Apple M3 Max under macOS 27.0.1, `probes/short_row_kinds.m`:
+/// `Depth16Unorm`, `Stencil8`, both aspects of `Depth32Float_Stencil8`, an `RGBA8Unorm` texture
+/// over a buffer and `RGB10A8_2P_XR10`, 32 x 8, from offset 0 at half the row, half plus a unit
+/// and the row less 16, both ways, twice; the colour formats' rows lie so from other offsets on
+/// the unit too, [`placed_rows`]). So a depth or stencil format copies such a layout where
+/// [`placed_rows`] places it, and a texture over a buffer as [`plan_rows_copy`] does.
 pub(super) fn rows_below_row(layout: &BufferLayout, s: &Shape, unit: &CopyUnit) -> bool {
     let bytes = u64::from(unit.bytes);
     let bpr = layout.bytes_per_row;
@@ -832,12 +833,14 @@ pub(super) struct RowsCopy {
 
 impl RowsCopy {
     /// Each row of `src` into the same row of `dst` (as many rows, each as long). Destination
-    /// rows overlap in one shape alone: a buffer's rows whose images meet, at a `bytesPerImage`
-    /// below the region's rows, which `check_layout` takes as plain Metal does. There the later
+    /// rows overlap in two shapes alone, both a buffer's: rows whose images meet, at a
+    /// `bytesPerImage` below the region's rows, which `check_layout` takes as plain Metal does,
+    /// and rows at a `bytesPerRow` below the region's row ([`plan_rows_copy`]). There the later
     /// row keeps the bytes they share, as plain Metal writes overlapping images in turn (an M4
-    /// under macOS 27.0.1, the `ctb.race.*` cases; [`plan_placed_copy`] states the same rule for
-    /// a layout off Metal's rules): an earlier row copies only the bytes no later row writes
-    /// ([`later_rows_win`]). No texture's own rows overlap as the destination: a plane's shared
+    /// under macOS 27.0.1, the `ctb.race.*` cases) and as one of the orders it writes such rows
+    /// in ([`plan_placed_copy`] states the same rule for a layout off Metal's rules): an earlier
+    /// row copies only the bytes no later row writes ([`later_rows_win`]). No texture's own rows
+    /// overlap as the destination: a plane's shared
     /// bytes, which have no one Metal order, are refused wherever they would be written
     /// (`blit_texture.rs`), and a rotated texture's rows share no byte
     /// (`buffer_texture::turned_plane`). A plane's rows do overlap as the source, where they are

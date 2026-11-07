@@ -4215,8 +4215,16 @@ each item named states the rule in full.
   shapes of 12 formats copied out at half the row, about a fifth left the later rows' bytes
   standing, a fifth every even row's and the rest neither order's, and 15 answered otherwise in
   another process (`probes/short_row_blits.m`). The runtime's answer is one of those, the same
-  every time. A multisampled texture's copy out at such a pitch stays refused
-  (`Copy(BytesPerRow)`): where Metal places its rows there is not measured.
+  every time. Depth and stencil textures, textures over a buffer and two-plane extended-range
+  textures (a level a multiple of 4 wide, not 3D) copy the same way, both ways: on the same GPU,
+  32 x 8 `Depth16Unorm`, `Stencil8`, both aspects of `Depth32Float_Stencil8`, an `RGBA8Unorm`
+  texture over a buffer and `RGB10A8_2P_XR10` at half the row, half plus a texel and the row less
+  16 bytes read each row whole from `y x bytesPerRow` into the texture, and wrote the rows there
+  out of it in no one order, the even rows' bytes standing or neither order's, varying from run to
+  run (`probes/short_row_kinds.m`, three runs); the runtime's answer is the later row's there too.
+  A multisampled texture's copy out at such a pitch stays refused (`Copy(BytesPerRow)`): where
+  Metal places its rows there is not measured, as that probe's every copy between a buffer and a
+  multisampled texture, at the packed row too, ended its process in Metal's blit (`SIGABRT`).
 
 **Render passes**
 

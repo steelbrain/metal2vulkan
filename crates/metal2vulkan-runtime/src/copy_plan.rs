@@ -113,11 +113,12 @@ pub enum CopyProblem {
     /// A `bytesPerRow` that is not a multiple of the copy unit, or that does not cover a row,
     /// where plain Metal's answer is undefined or not measured: Metal's aligned path into a
     /// texture at a pitch of 0 (it reads garbage) or from an offset of 16 or more, a depth or
-    /// stencil format other than `Depth32Float`, a texture over a buffer, a multisampled
-    /// texture's copy out at a pitch below a row (where its rows lie is not measured), and a CPU
-    /// copy of a texture over a buffer or of a pitch of 0 for more than one row and image (other
-    /// layouts copy where plain Metal places the rows, a blit's rows out of a texture that
-    /// overlap in turn, the later row's bytes standing).
+    /// stencil format other than `Depth32Float` or a texture over a buffer at a pitch off the
+    /// copy unit or of 0 for more than one row, a multisampled texture's copy out at a pitch
+    /// below a row (where its rows lie is not measured), and a CPU copy of a texture over a
+    /// buffer or of a pitch of 0 for more than one row and image (other layouts copy where plain
+    /// Metal places the rows, a blit's rows out of a texture that overlap in turn, the later
+    /// row's bytes standing).
     ///
     /// Basis: unknown (undefined or unmeasured by the shapes listed above).
     BytesPerRow,

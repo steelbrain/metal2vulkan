@@ -821,12 +821,12 @@ impl BlitCommandEncoder {
                 if let Some(texels) = source_texture.buffer_texels() {
                     // Rows that share bytes (an IOSurface plane's on Metal's GPU) are served
                     // here, where they are read and not written. The plane is the source; the
-                    // destination is the caller's buffer, whose rows never share a byte, so no
-                    // row's bytes are taken from another: `plan_rows_copy` refuses a
-                    // `bytesPerRow` below the region's row (`CopyProblem::BytesPerRow`), and a
-                    // plane is a 2D texture of one image, so the only other way a layout's rows
-                    // could meet -- images closer than their rows -- cannot arise and
-                    // `RowsCopy::new` finds nothing to order. Each destination row takes the
+                    // destination is the caller's buffer, whose rows share bytes only at a
+                    // `bytesPerRow` below the region's row, where they are written in turn, the
+                    // later row's bytes standing, as plain Metal's blit may leave them
+                    // (`plan_rows_copy`, `RowsCopy::new`); a plane is a 2D texture of one image,
+                    // so the other way a layout's rows could meet -- images closer than their
+                    // rows -- cannot arise. Each destination row takes the
                     // plane's bytes at its own GPU row, so a byte two rows share is read once
                     // for each of them, which is what Metal's own copy reads (an Apple M3 Max
                     // under macOS 27.0.1, one shape a process,

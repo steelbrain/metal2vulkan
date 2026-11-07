@@ -388,6 +388,8 @@ mod shadow_twins;
 mod shared_draw_locks;
 #[cfg(all(unix, any(m2v_gpu, m2v_cpu_icd)))]
 mod shared_pointers;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod short_row_kinds;
 mod sorted_chunks;
 mod spares;
 mod sparse;
