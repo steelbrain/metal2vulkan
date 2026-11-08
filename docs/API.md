@@ -4758,6 +4758,15 @@ each item named states the rule in full.
   began. A device's teardown that the exit finds in progress (its last reference let go on
   another thread) leaves the device to the process's end at its next step, so the exit waits for
   that step alone.
+- **An exit while a pipeline's making is in progress can run the driver's compiler's destructors
+  beside it** where the making runs on the program's own thread, or where the compiler registered
+  them in the last 2 ms before the exit, where Metal compiles in another process. A making on the
+  runtime's own threads is waited for (above), and while one is in progress the runtime registers
+  its exit handler again every 2 ms (at most 16384 times in a process), so the destructors the
+  compiler registered before that run after the wait. One such exit, with a program's making
+  thread left running, ended a consumer's process with `SIGSEGV` inside NVIDIA's SPIR-V compiler
+  (`libnvidia-glvkspirv.so`, RTX 5080). A program that ends its making threads before it exits
+  leaves only the 2 ms window.
 
 **Two-plane YCbCr textures**
 
