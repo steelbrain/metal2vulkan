@@ -730,6 +730,12 @@ fn finish(watch: &Watch, lists: &mut FenceLists, mut finished: Vec<(usize, Submi
         }
     }
     let settled = settle(&device, lists);
+    // A test's failed wait for the fences of work that completed, as a real loss fails it.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    let settled = match trace::settle_fails(&ending) {
+        true => Settled::Failed(failure(&device, vk::Result::ERROR_DEVICE_LOST)),
+        false => settled,
+    };
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     trace::step("fences settled");
     // Their GPU times' timestamps are read, and their slots given back, and their GPU times
@@ -764,12 +770,13 @@ fn finish(watch: &Watch, lists: &mut FenceLists, mut finished: Vec<(usize, Submi
     true
 }
 
-/// Every pending batch, and the command buffers `ending` whose work completed (their fences let
-/// go of already), finish with `error`: a wait or a read failed. The pending batches' fences are
-/// let go of ([`let_go`]).
+/// Every pending batch finishes with `error`: a wait or a read failed. The command buffers
+/// `ending`, whose work completed (their queues' timelines passed them; their fences let go of
+/// already), complete: only the wait for their fences, or the fences' reset, failed. The pending
+/// batches' fences are let go of ([`let_go`]).
 ///
-/// First the device's queues are drained (`Device::drain_queues`): a failed command buffer lets go
-/// of its pools as it finishes, and a driver may still read them after the failed wait returned
+/// First the device's queues are drained (`Device::drain_queues`): a finished command buffer lets
+/// go of its pools as it finishes, and a driver may still read them after the failed wait returned
 /// (MoltenVK 1.4.1, from its later completed handlers), until its own completion of the work ran.
 ///
 /// A lost device its line recovers (`device/line.rs`) answers as Metal's GPU recovery does
@@ -794,7 +801,7 @@ fn fail(watch: &Watch, ending: Vec<Hold<CommandBufferShared>>, error: CommandBuf
             let hung = lock(&watch.pending).hung;
             answers = match hung {
                 true => Answers::Recovered(None),
-                false => Answers::recovered(device, &failed, ending.len()),
+                false => Answers::recovered(device, &failed),
             };
             if matches!(answers, Answers::Recovered(Some(_))) {
                 lock(&watch.pending).hung = true;
@@ -822,7 +829,20 @@ fn fail(watch: &Watch, ending: Vec<Hold<CommandBufferShared>>, error: CommandBuf
         }
         last.then_some(buffer)
     });
-    for buffer in ending.into_iter().chain(failed) {
+    // Those whose work completed complete: their queues' timelines passed them, and only the
+    // wait for their fences or the fences' reset failed. Their GPU times as their work ran, where
+    // the device still reads them (else their completion's), placed before they finish, in their
+    // queues' order before the failed ones (`CommandBufferShared::place_gpu_times`).
+    if let Some(_busy) = (!ending.is_empty()).then(exit_guard::enter).flatten() {
+        for buffer in &ending {
+            buffer.read_stamps();
+            buffer.place_gpu_times();
+        }
+    }
+    for buffer in ending {
+        CommandBufferShared::post_finished(buffer, Ok(()));
+    }
+    for buffer in failed {
         let error = answers.of(&buffer);
         CommandBufferShared::post_finished(buffer, Err(error));
     }
@@ -839,12 +859,12 @@ enum Answers {
 
 impl Answers {
     /// The answers of a loss of `device` its line recovers from, `failed` the pending batches in
-    /// each queue's order and `ending` more command buffers that fail with them. The culprit is
+    /// each queue's order. The culprit is
     /// the command buffer of the oldest incomplete batch: on one `VkQueue` with work in flight,
     /// its first pending batch, exactly (an in-order queue); on two or more, an inference, the
     /// first pending batch of the queue whose command buffer was submitted first. Named on the
     /// device's line, for its notice and the hold of its queue (`device/line.rs`).
-    fn recovered(device: &Device, failed: &[(usize, Submitted)], ending: usize) -> Answers {
+    fn recovered(device: &Device, failed: &[(usize, Submitted)]) -> Answers {
         // Each queue's first pending batch, of a command buffer that was submitted.
         let mut fronts: Vec<&Submitted> = Vec::new();
         let mut queue = None;
@@ -861,7 +881,7 @@ impl Answers {
             return Answers::Recovered(None);
         };
         let buffer = &culprit.buffer;
-        let failing = failed.iter().filter(|(_, batch)| batch.last).count() + ending;
+        let failing = failed.iter().filter(|(_, batch)| batch.last).count();
         device.line().named(Culprit {
             queue: Arc::downgrade(buffer.queue.common()),
             label: buffer.queue.label(),
@@ -1358,8 +1378,35 @@ fn failure(device: &Device, error: vk::Result) -> CommandBufferError {
 /// (`tests::completion_latency`).
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 pub(crate) mod trace {
+    use super::super::gate::Hold;
+    use super::super::{CommandBuffer, CommandBufferShared};
     use std::sync::atomic::{AtomicBool, Ordering};
-    use std::sync::Mutex;
+    use std::sync::{Arc, Mutex};
+
+    /// The address of the shared part of the command buffer whose completion turn fails as a
+    /// failed wait for its fence does, once ([`fail_settle_of`]).
+    static FAIL_SETTLE_OF: Mutex<Option<usize>> = Mutex::new(None);
+
+    /// The completion turn that finishes `command_buffer` fails as a wait for its fence fails once
+    /// its device was lost: its work completed, its queue's timeline past it. A real loss's
+    /// failed wait, which the test hook (`Device::recover_for_test`) never takes.
+    pub(crate) fn fail_settle_of(command_buffer: &CommandBuffer) {
+        *FAIL_SETTLE_OF.lock().unwrap() = Some(Arc::as_ptr(&command_buffer.0).addr());
+    }
+
+    /// Whether the turn that finishes `ending` fails so ([`fail_settle_of`]), at most once.
+    pub(super) fn settle_fails(ending: &[Hold<CommandBufferShared>]) -> bool {
+        let mut armed = FAIL_SETTLE_OF.lock().unwrap();
+        let ours = |buffer: &Hold<CommandBufferShared>| {
+            let shared: &CommandBufferShared = buffer;
+            Some(std::ptr::from_ref(shared).addr()) == *armed
+        };
+        let fails = ending.iter().any(ours);
+        if fails {
+            *armed = None;
+        }
+        fails
+    }
 
     /// One step, its host time in nanoseconds of the host's clock (`gpu_time::host_nanos`).
     #[derive(Clone, Copy, Debug)]

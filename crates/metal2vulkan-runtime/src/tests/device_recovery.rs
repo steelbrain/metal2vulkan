@@ -156,3 +156,27 @@ fn a_loss_holds_the_hang_s_queue_until_the_recovery() {
     }
     panic!("no loss of {ATTEMPTS} caught the busy command buffer in flight");
 }
+
+/// A command buffer whose work completed, its queue's timeline past it, completes though the wait
+/// for its fence then fails with the device's loss: a real loss's failed wait, which the test hook
+/// never takes. The loss is recorded: the next call recovers the device, and the queue serves on.
+#[test]
+fn work_that_completed_before_a_failed_wait_completes() {
+    let scratch = Scratch::new();
+    let device = device(&scratch.0);
+    let queue = device.new_command_queue().unwrap();
+    let filled = device.new_buffer(4096, ResourceOptions::shared()).unwrap();
+    let completed = filled_by(&queue, &filled);
+    crate::command_buffer::completion::trace::fail_settle_of(&completed);
+    completed.commit().unwrap();
+    assert_eq!(outcome(&completed), (CommandBufferStatus::Completed, None));
+    // SAFETY: a shared buffer of 4096 bytes, its command buffer completed.
+    let bytes = unsafe { std::slice::from_raw_parts(filled.contents().unwrap().as_ptr(), 4096) };
+    assert!(bytes.iter().all(|&byte| byte == 1), "its fill ran");
+    drop((completed, filled));
+    let after = device.new_buffer(4096, ResourceOptions::shared()).unwrap();
+    let next = filled_by(&queue, &after);
+    next.commit().unwrap();
+    assert_eq!(outcome(&next), (CommandBufferStatus::Completed, None));
+    assert_eq!(device.work_counts().device_recoveries, 1);
+}
