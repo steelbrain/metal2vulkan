@@ -265,28 +265,43 @@ declare { <4 x float>, i8 } @air.read_texture_2d.v4f32(ptr addrspace(1), ptr add
 !31 = !{!"Metal", i32 4, i32 0, i32 0}
 "#;
 
-/// Every texel of `texture` read (`READ`) in one command buffer of its own.
-fn read(device: &Device, texture: &Texture) {
+/// The pipeline state of `READ`.
+pub(super) fn reader(device: &Device) -> ComputePipelineState {
     let air = metal2vulkan_devtools::llvm_assemble_text(READ).unwrap();
     let library = metal2vulkan::library::Library::from_air(&air).unwrap();
     let function = device
         .new_library_with_compile_library(library)
         .new_function_with_name("read_texels")
         .unwrap();
-    let state = device
+    device
         .new_compute_pipeline_state_with_function(&function, &PipelineOptions::default())
-        .unwrap();
+        .unwrap()
+}
+
+/// Every texel of `texture` read (`READ`) in one command buffer of its own.
+fn read(device: &Device, texture: &Texture) {
+    read_with(device, &reader(device), texture, [W, H]);
+}
+
+/// The texels of `texture` in the `grid` from its origin read by `state`, [`reader`]'s, in one
+/// command buffer of its own.
+pub(super) fn read_with(
+    device: &Device,
+    state: &ComputePipelineState,
+    texture: &Texture,
+    [w, h]: [u64; 2],
+) {
     let out = device
-        .new_buffer(16 * W * H, ResourceOptions::shared())
+        .new_buffer(16 * w * h, ResourceOptions::shared())
         .unwrap();
     let queue = device.new_command_queue().unwrap();
     let command_buffer = queue.command_buffer().unwrap();
     let mut encoder = command_buffer.compute_command_encoder().unwrap();
-    encoder.set_compute_pipeline_state(&state).unwrap();
+    encoder.set_compute_pipeline_state(state).unwrap();
     encoder.set_texture(Some(texture), 0).unwrap();
     encoder.set_buffer(Some(&out), 0, 0).unwrap();
     encoder
-        .dispatch_threads(Size::new(W, H, 1), Size::new(8, 8, 1))
+        .dispatch_threads(Size::new(w, h, 1), Size::new(8, 8, 1))
         .unwrap();
     encoder.end_encoding().unwrap();
     command_buffer.commit().unwrap();

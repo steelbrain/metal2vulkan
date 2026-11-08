@@ -6,16 +6,18 @@
 //! builds no such kernel, and a program that times its calls sees one of them cost far more than
 //! Metal's for reasons the call itself cannot explain.
 //!
-//! `WorkCounts::owned_kernels_made` and `owned_kernel_spirv_bytes` name it. Here a two-plane YCbCr
-//! texture over a surface's planes, whose making needs the conversion's kernels
-//! (`ycbcr.rs`, `texture/ycbcr_image.rs`), is made twice: the first making builds them and the
-//! second builds none. The same counter is what an encoding increments where the encoding is the
-//! call that first needs a kernel, so the two sites can be told apart in one recording.
+//! `WorkCounts::owned_kernels_made` and `owned_kernel_spirv_bytes` name it. Here two two-plane
+//! YCbCr textures over a surface's planes, whose first conversion needs the conversion's kernels
+//! (`ycbcr.rs`, `texture/ycbcr_image.rs`), are each read: the making builds none, the first
+//! texture's first conversion builds them, and no later one builds any. The counter is what any
+//! call increments where it is the call that first needs a kernel, so the sites can be told apart
+//! in one recording.
 //!
 //! Device tests: compiled only under the validation crate's GPU safety cfgs (`m2v_gpu`,
 //! `m2v_cpu_icd`), on the kind of device the cfg selects.
 
 use super::blit_holds::{device, Scratch};
+use super::ycbcr_in_place_loop::{read_with, reader};
 use crate::{
     Device, Error, IoSurfacePlane, IoSurfaceYCbCr, ResourceOptions, Texture, TextureDescriptor,
 };
@@ -32,6 +34,9 @@ const CHROMA: (u64, u64) = (2 * W * H, 2 * W);
 
 /// The surface's bytes.
 const LENGTH: usize = (CHROMA.0 + CHROMA.1 * H / 2) as usize;
+
+/// The texels a conversion's read reads, from the origin: its command converts the whole image.
+const GRID: [u64; 2] = [8, 8];
 
 /// The kernels built and the SPIR-V bytes they compiled while `run` ran, and the conversion
 /// scratch buffers it took and their bytes.
@@ -57,8 +62,11 @@ fn plane_texture(buffer: &crate::Buffer) -> Result<Texture, Error> {
     buffer.new_texture_with_iosurface_plane(&descriptor, plane)
 }
 
-/// The first making of such a texture builds the conversion's kernels and the second builds
-/// none, so the count says which call paid for them.
+/// The making of such a texture builds no kernel and takes no scratch: its conversion is made at
+/// its first conversion (`ycbcr.rs`), which a `read()` of it takes (it reads the converted image).
+/// That conversion builds the kernels and takes the texture's scratch, and the next builds and
+/// takes none; a second texture over the same surface builds none at its first conversion and
+/// takes scratch of its own. So the count says which call paid for them.
 #[test]
 fn an_emulated_formats_kernels_are_built_by_the_call_that_first_needs_them() {
     let scratch = Scratch::new("owned-kernel-builds");
@@ -68,46 +76,50 @@ fn an_emulated_formats_kernels_are_built_by_the_call_that_first_needs_them() {
         eprintln!("{}: no buffer of the surface's bytes", device.name());
         return;
     };
+    let reader = reader(&device);
     let mut first = None;
-    let counted = built(&device, || first = Some(plane_texture(&buffer)));
-    match first {
-        Some(Ok(_texture)) => {}
+    let making = built(&device, || first = Some(plane_texture(&buffer)));
+    let texture = match first {
+        Some(Ok(texture)) => texture,
         made => {
             eprintln!("{}: no `x420` plane texture: {made:?}", device.name());
             return;
         }
-    }
-    let [kernels, words, scratch, scratch_bytes] = counted;
-    let again = built(&device, || drop(plane_texture(&buffer)));
+    };
+    let converted = built(&device, || read_with(&device, &reader, &texture, GRID));
+    let again = built(&device, || read_with(&device, &reader, &texture, GRID));
+    let Ok(other) = plane_texture(&buffer) else {
+        panic!("a second `x420` plane texture over the surface was refused");
+    };
+    let other = built(&device, || read_with(&device, &reader, &other, GRID));
     eprintln!(
-        "{}: making the first such texture built {kernels} kernels of {words} SPIR-V bytes and \
-         took {scratch} scratch buffers of {scratch_bytes} bytes; the second built {} of {} and \
-         took {} of {}",
-        device.name(),
-        again[0],
-        again[1],
-        again[2],
-        again[3]
+        "{}: [kernels, SPIR-V bytes, scratch buffers, scratch bytes]: the making {making:?}, \
+         the first conversion {converted:?}, the next {again:?}, a second texture's first {other:?}",
+        device.name()
     );
+    assert_eq!(
+        making, [0; 4],
+        "the making of the texture built kernels or took scratch, which its first conversion makes"
+    );
+    let [kernels, words, scratch, scratch_bytes] = converted;
     assert!(
         kernels > 0 && words > 0,
-        "the making of a texture of an emulated format built no kernel of the runtime's own, \
-         so the counter no longer names where the build falls"
+        "the first conversion of a texture of an emulated format built no kernel of the runtime's \
+         own, so the counter no longer names where the build falls"
     );
-    assert_eq!(
-        [again[0], again[1]],
-        [0, 0],
-        "a second making built kernels again, so they are not kept for the device"
-    );
-    // The kernels are the device's, the scratch is the texture's: the second making takes its own.
     assert!(
         scratch > 0 && scratch_bytes >= LENGTH as u64,
-        "the conversion took no scratch of the planes' byte range"
+        "the first conversion took no scratch of the planes' byte range"
     );
     assert_eq!(
-        [again[2], again[3]],
-        [scratch, scratch_bytes],
-        "a second texture over the same surface took different scratch, so the count is not \
-         per texture"
+        again, [0; 4],
+        "the texture's next conversion built kernels or took scratch again"
+    );
+    // The kernels are the device's, the scratch is the texture's: the second takes its own.
+    assert_eq!(
+        other,
+        [0, 0, scratch, scratch_bytes],
+        "a second texture's first conversion built kernels again, so they are not kept for the \
+         device, or took other scratch, so the count is not per texture"
     );
 }
