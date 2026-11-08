@@ -14,6 +14,11 @@
 //! over a private texture of the same first texels, which merges nothing. The texels each blit
 //! read mid-sequence, and those the sequence left, are the same in all three.
 //!
+//! Each test waits for the device's in-place check to end before it makes anything
+//! (`merge_scratch::settled`), and reads the counts of a window of its own commands only then
+//! (`merge_scratch::counts_alone`): the check's own passes over linear images, on its thread, are
+//! counted with the test's.
+//!
 //! Device tests: compiled only under the validation crate's GPU safety cfgs (`m2v_gpu`,
 //! `m2v_cpu_icd`), on the kind of device the cfg selects. The functions are the owned fixture
 //! `validation/fixtures/public/engine/tob_renders.ll` (`llvm-as`).
@@ -21,6 +26,7 @@
 use super::blit_holds::{device, Scratch, WAIT};
 use super::encoder_holds::{bytes_of, library};
 use super::merge_scratch::{blending, blit, bytes, drawn, first_bytes, staged, target, texels};
+use super::merge_scratch::{counts_alone, settled};
 use super::merge_scratch::{Host, Over, H, TEXEL};
 use crate::{
     BlitOption, Buffer, CommandBuffer, CommandQueue, Device, EventRef, LoadAction, Origin,
@@ -289,7 +295,7 @@ fn texels_of(queue: &CommandQueue, texture: &Texture) -> Vec<u8> {
 fn runs_hold_their_texels(over: Over, (width, row): (u64, u64)) {
     let cache = Scratch::new(&format!("linear-runs-{over:?}-{width}"));
     let host = Host::new(row * H);
-    let device = device(&cache.0);
+    let device = settled(device(&cache.0));
     let queue = device.new_command_queue().unwrap();
     let blending = blending(&device);
     let attachmentless = attachmentless(&device);
@@ -346,8 +352,8 @@ fn runs_hold_their_texels(over: Over, (width, row): (u64, u64)) {
             blending: &blending,
             attachmentless: &attachmentless,
         };
+        let before = counts_alone(&device);
         forced.store(true, Ordering::Relaxed);
-        let before = device.work_counts();
         let (reads, after) = sequence(&queue, &on_target, apart);
         forced.store(false, Ordering::Relaxed);
         let delta = |of: fn(&WorkCounts) -> u64| of(&after) - of(&before);
@@ -422,7 +428,7 @@ fn a_rebound_run_over_host_pages_is_encoded_again_whole() {
     let (width, row) = (300, 1200);
     let (host, moved_to) = (Host::new(row * H), Host::new(row * H));
     let cache = Scratch::new("linear-runs-rebound");
-    let device = device(&cache.0);
+    let device = settled(device(&cache.0));
     let queue = device.new_command_queue().unwrap();
     let blending = blending(&device);
     let packed = width * TEXEL;
@@ -469,8 +475,8 @@ fn a_rebound_run_over_host_pages_is_encoded_again_whole() {
     moved_to.write(&first_bytes(width, row));
     let gate = device.new_shared_event().unwrap();
     let forced = &device.shared().linear_rule_forced;
+    let before = counts_alone(&device);
     forced.store(true, Ordering::Relaxed);
-    let before = device.work_counts();
     let command_buffer = queue.command_buffer().unwrap();
     (command_buffer.encode_wait_for_event(EventRef::Shared(&gate), 1)).unwrap();
     for i in 0..REBOUND_PASSES {
@@ -593,7 +599,7 @@ fn passes_reading_host_pages_form_one_run() {
         Host::new(CHUNK_STRIDE * CHUNK_PASSES as u64),
     );
     let cache = Scratch::new("linear-runs-chunk");
-    let device = device(&cache.0);
+    let device = settled(device(&cache.0));
     let queue = device.new_command_queue().unwrap();
     let blending = blending(&device);
     let usage = TextureUsage::RENDER_TARGET | TextureUsage::SHADER_READ;
@@ -676,8 +682,8 @@ fn passes_reading_host_pages_form_one_run() {
         "the target is a linear image"
     );
     let forced = &device.shared().linear_rule_forced;
+    let before = counts_alone(&device);
     forced.store(true, Ordering::Relaxed);
-    let before = device.work_counts();
     let (encoding, whole, gpu) = encode(&texture);
     let after = device.work_counts();
     forced.store(false, Ordering::Relaxed);
@@ -746,7 +752,7 @@ fn a_pass_of_a_run_encoded_again_alone_reloads_the_run() {
         Host::new(chunk_bytes),
     );
     let cache = Scratch::new("linear-runs-reloaded");
-    let device = device(&cache.0);
+    let device = settled(device(&cache.0));
     let queue = device.new_command_queue().unwrap();
     let blending = blending(&device);
     let usage = TextureUsage::RENDER_TARGET | TextureUsage::SHADER_READ;
@@ -832,8 +838,8 @@ fn a_pass_of_a_run_encoded_again_alone_reloads_the_run() {
     );
     let gate = device.new_shared_event().unwrap();
     let forced = &device.shared().linear_rule_forced;
+    let before = counts_alone(&device);
     forced.store(true, Ordering::Relaxed);
-    let before = device.work_counts();
     let command_buffer = queue.command_buffer().unwrap();
     (command_buffer.encode_wait_for_event(EventRef::Shared(&gate), 1)).unwrap();
     encode(&command_buffer, &texture);

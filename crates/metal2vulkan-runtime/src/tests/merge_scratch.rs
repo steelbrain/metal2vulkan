@@ -22,23 +22,30 @@
 //! passes one run (`pass_runs.rs`, `tests::shadow_runs`). Either way the texels equal those the same passes leave in a private
 //! texture of the same first texels, and the bytes between the rows keep theirs.
 //!
+//! Each test waits for the device's in-place check to end before it makes anything ([`settled`]):
+//! the check's own passes and memory are counted with the test's, and a target over host pages
+//! takes its place for good only once the check's verdict for it is known.
+//!
 //! Device tests: compiled only under the validation crate's GPU safety cfgs (`m2v_gpu`,
 //! `m2v_cpu_icd`), on the kind of device the cfg selects. The functions are the owned fixture
 //! `validation/fixtures/public/engine/tob_renders.ll` (`llvm-as`).
 
 use super::blit_holds::{device, shadow_device, Scratch, WAIT};
 use super::encoder_holds::{bytes_of, library};
+use crate::in_place::Verdict;
 use crate::{
     BlitOption, Buffer, ClearColor, CommandQueue, Device, Error, HostMemory, LoadAction, Origin,
     PipelineOptions, RenderPassDescriptor, RenderPipelineState, ResourceOptions, Size, StoreAction,
     Texture, TextureDescriptor, WorkCounts,
 };
+use metal2vulkan::device::HostPageTexturePolicy;
 use metal2vulkan::metal::{BlendFactor, PixelFormat, PrimitiveType, TextureUsage};
 use metal2vulkan::pipeline::{ColorAttachmentDescriptor, RenderPipelineDescriptor, StageSource};
 use std::alloc::Layout;
 use std::path::Path;
 use std::ptr::NonNull;
 use std::sync::atomic::Ordering;
+use std::time::Duration;
 
 /// The targets' height and texel bytes (`RGBA8Unorm`).
 pub(super) const H: u64 = 96;
@@ -126,6 +133,48 @@ pub(super) fn blit(queue: &CommandQueue, encode: impl FnOnce(&mut crate::BlitCom
     command_buffer.commit().unwrap();
     command_buffer.wait_until_completed_for(WAIT).unwrap();
     assert_eq!(command_buffer.error(), None);
+}
+
+/// The longest a test waits for the device's in-place check to end ([`settled`]).
+const CHECK_WAIT: Duration = Duration::from_secs(120);
+
+/// Whether `device` runs an in-place check of textures over host pages (`in_place_check.rs`):
+/// under `HostPageTexturePolicy::InPlace`.
+fn checks(device: &Device) -> bool {
+    device.compile_device().policy().host_page_textures == HostPageTexturePolicy::InPlace
+}
+
+/// `device` once its in-place check of textures over host pages ended, where it runs one, waited
+/// for before the test makes anything: for a test that reads the device's counts across windows
+/// of its own commands ([`counts_alone`]). The check renders passes over linear images of its own,
+/// on a thread of its own, which the device's counts take as they take the test's
+/// (`WorkCounts::linear_passes_through_copies`) and the rule a test forces
+/// (`DeviceShared::linear_rule_forced`) renders apart as it renders the test's; and it allocates
+/// and frees memory of its own. Once every verdict is known it runs no more. And every texture the
+/// test makes then takes its place for good, in place where the check passed for it, where one
+/// made before a verdict is a shadow that may move in place at a later commit (`in_place.rs`).
+pub(super) fn settled(device: Device) -> Device {
+    if checks(&device) {
+        assert!(
+            device.settle_in_place_checks(CHECK_WAIT),
+            "the device's in-place check ended"
+        );
+    }
+    device
+}
+
+/// The device's counts at the start of a window of the test's own commands: only once its
+/// in-place check ended, where it runs one ([`settled`]), so that the window's counts are the
+/// test's work alone.
+pub(super) fn counts_alone(device: &Device) -> WorkCounts {
+    if checks(device) {
+        let verdicts = device.shared().in_place.verdicts();
+        assert!(
+            !verdicts.contains(&Verdict::Pending),
+            "a window of the device's counts opened while its in-place check runs"
+        );
+    }
+    device.work_counts()
 }
 
 /// Page-aligned host memory of `length` bytes (whole pages of any host), freed when dropped:
@@ -370,7 +419,7 @@ fn reference(queue: &CommandQueue, state: &RenderPipelineState, width: u64) -> V
 fn one_scratch(device_of: fn(&Path) -> Device, over: Over, (width, row): (u64, u64)) {
     let cache = Scratch::new(&format!("merge-scratch-{over:?}-{width}"));
     let host = Host::new(row * H);
-    let device = device_of(&cache.0);
+    let device = settled(device_of(&cache.0));
     let queue = device.new_command_queue().unwrap();
     let state = blending(&device);
     let expected = reference(&queue, &state, width);
@@ -385,7 +434,7 @@ fn one_scratch(device_of: fn(&Path) -> Device, over: Over, (width, row): (u64, u
     // The check's verdict for render targets over host pages, for texels that lie in lines as
     // the target's do: `RGBA8Unorm` rows `row` bytes apart from the buffer's start.
     let renders_in_place = {
-        use crate::in_place::{Access, PagesClass, RowEnds, Verdict};
+        use crate::in_place::{Access, PagesClass, RowEnds};
         let layout = crate::linear_plan::BufferLayout {
             offset: 0,
             row_pitch: row,
@@ -410,9 +459,9 @@ fn one_scratch(device_of: fn(&Path) -> Device, over: Over, (width, row): (u64, u
             "a linear image over host pages where the check did not pass for render targets"
         );
     }
+    let before = counts_alone(&device);
     let forced = &device.shared().linear_rule_forced;
     forced.store(true, Ordering::Relaxed);
-    let before = device.work_counts();
     let encoded = passes(&queue, &state, &texture);
     let after = device.work_counts();
     forced.store(false, Ordering::Relaxed);
@@ -535,7 +584,7 @@ fn two_ways_merges_take_few_scratches() {
     let (width, row) = (200, 1024);
     let cache = Scratch::new("merge-scratch-two-ways");
     let host = Host::new(row * H);
-    let device = device(&cache.0);
+    let device = settled(device(&cache.0));
     let queue = device.new_command_queue().unwrap();
     let library = library(&device, "engine/tob_renders.ll");
     let function = library.new_function_with_name("tob_two_ways").unwrap();
@@ -550,7 +599,7 @@ fn two_ways_merges_take_few_scratches() {
     descriptor.resource_options = buffer.resource_options();
     let texture = buffer.new_texture(&descriptor, 0, row).unwrap();
     assert!(texture.shadow().is_some(), "the texture is a shadow");
-    let before = device.work_counts();
+    let before = counts_alone(&device);
     let command_buffer = queue.command_buffer().unwrap();
     for i in 0..TWO_WAYS {
         let mut encoder = command_buffer.compute_command_encoder().unwrap();
