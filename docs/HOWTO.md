@@ -314,7 +314,12 @@ no texture by its ID, while none that does is still running (a program that neve
 keeps them shadows). A program that makes such textures as it starts (a compositor's
 framebuffers) and wants them in place from their first use on a driver's first run starts the
 check earlier, for instance as it makes the device, with `Device::settle_in_place_checks` and a
-zero timeout, which waits for nothing. A texture a shader writes of 1- or 2-byte
+zero timeout, which waits for nothing; the same call with a zero timeout later says whether the
+verdicts are known. A program that routes each surface either to a texture over its pages or to a
+copy of its own asks `Buffer::texture_placement` (or `texture_placement_with_iosurface_plane`)
+with the arguments it would make the texture with: the answer (`TexturePlacement`: in place,
+pending, a shadow and why, no host pages, another shape) is the making's own decision, so no report
+string needs parsing. A texture a shader writes of 1- or 2-byte
 texels (`host_texture_shadows_store_width`), one the check failed or could not cover, and one
 no image in place serves (a pitch the device's linear images do not take --
 `host_texture_shadows_refused_pitch`; over dma-buf pages, a source that makes no one dma-buf of
