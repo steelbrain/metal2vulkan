@@ -71,6 +71,17 @@
 //!   its commit and before it runs with no shadow copy (`shadow_copies`), and a pass that clears
 //!   and stores it writes the clear into the pages, every byte past its texels kept; else it stays
 //!   a shadow, no move counted. Printed (`IN-PLACE-MOVE`): each texture's path and the counts.
+//! - [`the_guests_surface_lies_in_place_where_its_checks_passed`], under the validation layer: the
+//!   guest's 3664x2039 `BGRA8Unorm` surface over a no-copy buffer of anonymous pages, at a 14848-byte
+//!   pitch (the next multiple of 256, at which RADV lays linear rows) and at 14656 bytes, of
+//!   `ShaderRead` usage, with `RenderTarget`, and with `ShaderWrite`: each is in place only where
+//!   the check passed for its access and row ends (`Pointer`, `Pointer renders`, `Pointer buffer
+//!   writes` where its padding is free), and where it passed, in place or refused by the device's
+//!   image (`host_texture_shadows_refused_*`). A blit then reads the pages' texels through it, a
+//!   pass that clears and stores it, or a kernel that writes every texel, leaves its texels in the
+//!   pages; the bytes between the rows and past the last hold the pattern, but rows' padding that
+//!   is free under a shader's writes. Printed (`IN-PLACE-SURFACE`): each case's placement query
+//!   answer, path, verdict and refusals.
 //! - [`a_failed_check_keeps_the_shadow_and_no_record`], under the validation layer: a device made
 //!   to fail its check (`DeviceOptions::fail_in_place_check`) answers failed or unchecked for every
 //!   class and makes such a texture a shadow counted as the failed check's, never in place, and
@@ -1038,6 +1049,180 @@ fn textures_that_render_or_write_take_the_path_their_checks_answered() {
         messages.take_notices();
         drop((buffer, device));
         drop(mapping);
+    }
+    layer_reported_nothing_at_all(&messages);
+}
+
+/// The guest's surface: 3664x2039 `BGRA8Unorm` (16-pixel rows of 14656 bytes), at that pitch and
+/// at 14848 bytes, the next multiple of 256.
+const SURFACE_PITCHES: [(u64, u64, u64); 2] = [(3664, 2039, 14848), (3664, 2039, 14656)];
+
+/// What a pass that clears to (0.25, 0.5, 0.75, 1) and a kernel that writes it (`write_at_level`)
+/// leave in a `BGRA8Unorm` texel: B, G, R and A, each within 1 of it.
+const SURFACE_TEXEL: [u8; 4] = [191, 128, 64, 255];
+
+#[test]
+fn the_guests_surface_lies_in_place_where_its_checks_passed() {
+    use TextureUsage as U;
+    let cache = ScratchCache::new().unwrap();
+    let messages = Messages::default();
+    let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), in_place).unwrap();
+    settled(&device);
+    let queue = device.new_command_queue().unwrap();
+    let kernel = super::level_writes_by_usage::kernel(&device, "write_at_level");
+    let accesses = [
+        ("reads", U::SHADER_READ),
+        ("renders", U::SHADER_READ | U::RENDER_TARGET),
+        ("writes", U::SHADER_READ | U::SHADER_WRITE),
+    ];
+    for (w, h, bpr) in SURFACE_PITCHES {
+        for (access, usage) in accesses {
+            let case = format!("{w}x{h} at {bpr}, {access}");
+            let len = ((bpr * h) as usize).next_multiple_of(GUEST_PAGE);
+            let mapping = Mapping::anonymous(len);
+            let pattern = counting(len, 5);
+            mapping.write(0, &pattern);
+            // SAFETY: the mapping outlives the buffer and the texture (dropped first).
+            let buffer = match unsafe {
+                no_copy(
+                    &device,
+                    mapping.pointer(),
+                    len,
+                    ResourceOptions::default(),
+                    None,
+                )
+            } {
+                Ok(buffer) => buffer,
+                Err(error) if not_importable(&error) => {
+                    eprintln!("IN-PLACE-SURFACE: the device imports no host memory: {error:?}");
+                    return;
+                }
+                Err(error) => panic!("new_buffer_with_bytes_no_copy: {error:?}"),
+            };
+            let rows = (w * 4, h, bpr);
+            let checked = match access {
+                "reads" => passed(&device, "Pointer", &buffer, rows),
+                "renders" => passed(&device, "Pointer renders", &buffer, rows),
+                _ => writes_passed(&device, "Pointer", &buffer, rows),
+            };
+            let first = buffer.contents().map_or(0, |at| at.as_ptr() as u64);
+            let free =
+                access == "writes" && in_place_rows::padding_free(&device, first, bpr, h, true);
+            let mut d = TextureDescriptor::texture_2d(PixelFormat::BGRA8Unorm, w, h, false);
+            d.usage = usage;
+            d.resource_options = buffer.resource_options();
+            let placement = buffer.texture_placement(&d, 0, bpr).unwrap();
+            let before = device.work_counts();
+            let texture = buffer.new_texture(&d, 0, bpr).unwrap();
+            let after = device.work_counts();
+            // SAFETY: the handle is only read, while the texture lives.
+            let aliased = unsafe { texture.vk_image() }.is_some();
+            let delta = |counts: fn(&WorkCounts) -> u64| counts(&after) - counts(&before);
+            let pitch_refused = delta(|c| c.host_texture_shadows_refused_pitch);
+            eprintln!(
+                "IN-PLACE-SURFACE on {}: {case}: placement {placement:?}, in place {aliased} \
+                 (verdict passed {checked}, padding free {free}, refused for its pitch \
+                 {pitch_refused}, shadows refused {})",
+                device.name(),
+                refused(&before, &after)
+            );
+            // In place only where its check passed; where the check passed, in place or refused
+            // by the device's image at that pitch.
+            assert!(!aliased || checked, "{case}: in place without its check");
+            if checked {
+                assert!(
+                    aliased || refused(&before, &after) == 1,
+                    "{case}: {placement:?}"
+                );
+            }
+            if aliased {
+                assert_eq!(delta(|c| c.host_textures_in_place), 1, "{case}");
+            }
+            // The access itself: a blit reads it; a pass clears and stores it; a kernel writes
+            // every texel. Then the pages hold the texels the access leaves, and the bytes
+            // between the rows hold the pattern but where a shader's writes may change rows'
+            // padding that is free.
+            let command_buffer = queue.command_buffer().unwrap();
+            let read = device
+                .new_buffer(w * 4 * h, ResourceOptions::shared())
+                .unwrap();
+            match access {
+                "renders" => {
+                    let mut pass = RenderPassDescriptor::new();
+                    let color = &mut pass.color_attachments[0];
+                    color.texture = Some(texture.clone());
+                    color.load_action = LoadAction::Clear;
+                    color.store_action = StoreAction::Store;
+                    color.clear_color = ClearColor::new(0.25, 0.5, 0.75, 1.0);
+                    let encoder = command_buffer.render_command_encoder(&pass).unwrap();
+                    encoder.end_encoding().unwrap();
+                }
+                "writes" => encode_writes(&command_buffer, &kernel, &texture, (w, h)),
+                _ => {
+                    let mut blit = command_buffer.blit_command_encoder().unwrap();
+                    blit.copy_from_texture_to_buffer(
+                        &texture,
+                        0,
+                        0,
+                        Origin::new(0, 0, 0),
+                        Size::new(w, h, 1),
+                        &read,
+                        0,
+                        w * 4,
+                        w * 4 * h,
+                        BlitOption::None,
+                    )
+                    .unwrap();
+                    blit.end_encoding().unwrap();
+                }
+            }
+            command_buffer.commit().unwrap();
+            command_buffer.wait_until_completed_for(WAIT).unwrap();
+            assert_eq!(command_buffer.error(), None, "{case}");
+            let now = mapping.read(0..len);
+            if access == "reads" {
+                let contents = read.contents().unwrap();
+                // SAFETY: the buffer's bytes, which no command writes any longer.
+                let got =
+                    unsafe { std::slice::from_raw_parts(contents.as_ptr(), (w * 4 * h) as usize) };
+                assert!(
+                    got == texels_of(&pattern, (w, h, 4), bpr).as_slice(),
+                    "{case}: the blit's texels"
+                );
+            }
+            for y in 0..h {
+                let at = (y * bpr) as usize;
+                let row = &now[at..at + (w * 4) as usize];
+                if access != "reads" {
+                    let off = row.as_chunks::<4>().0.iter().position(|texel| {
+                        texel
+                            .iter()
+                            .zip(SURFACE_TEXEL)
+                            .any(|(&got, due)| got.abs_diff(due) > 1)
+                    });
+                    assert_eq!(off, None, "{case}: row {y}'s texels");
+                }
+                let between = at + (w * 4) as usize..((y + 1) * bpr) as usize;
+                if !free {
+                    assert!(
+                        now[between.clone()] == pattern[between],
+                        "{case}: row {y}'s padding"
+                    );
+                }
+            }
+            let past = (h * bpr) as usize..len;
+            assert!(
+                now[past.clone()] == pattern[past],
+                "{case}: past the last row"
+            );
+            let notices = counts(&messages.take_notices());
+            eprintln!(
+                "IN-PLACE-SURFACE on {}: {case}: done, notices {notices:?}",
+                device.name()
+            );
+            drop((texture, read, buffer));
+            drop(mapping);
+        }
     }
     layer_reported_nothing_at_all(&messages);
 }
