@@ -103,12 +103,17 @@
 //!   `UNDEFINED` in its texture table, under the validation layer.
 //! - **Failure.** A submission that fails gives its work back, still to be done.
 //! - **Out of reach of a submission.** A texture's `VkImage` handed out (`Texture::vk_image`)
-//!   rests in `GENERAL` as its contract says: handing it out does its work first, by an internal
-//!   submission waited for, which makes every buffer's fill waiting too (that of the buffer an
-//!   image in place lies in among them). So does a buffer's `VkBuffer` handed out
-//!   (`Buffer::vk_buffer`) or its memory exported (`Buffer::export_memory_fd`) where a fill
-//!   waits on that `VkBuffer` ([`FirstMoves::fills_wait`]): the caller's own work may write the
-//!   bytes at once, and a fill made after it would wipe them.
+//!   rests in `GENERAL` as its contract says: handing it out does its work first, by a
+//!   submission waited for, which makes the fills of the buffer an image in place lies in too.
+//!   So does a buffer's `VkBuffer` handed out (`Buffer::vk_buffer`) or its memory exported
+//!   (`Buffer::export_memory_fd`) where a fill waits on that `VkBuffer`
+//!   ([`FirstMoves::fills_wait`]): the caller's own work may write the bytes at once, and a fill
+//!   made after it would wipe them. Each takes its own work alone ([`FirstMoves::take_mine`]),
+//!   in its order, the rest waiting for the device's next submission, and waits for no other
+//!   work of the device's: its sources are the host's and its destinations new
+//!   (`Device::settle_mine`, on the staging queue for a buffer's fills where the device has
+//!   one). A texture in a heap's memory, the caller's or a sparse one, takes the device's work
+//!   as an internal submission does.
 
 use super::super::creation;
 use super::super::device::lock;
@@ -906,6 +911,26 @@ fn past_bound(waiting: &[Waiting]) -> bool {
     copies > STAGED_COPIES || bytes > STAGED_BYTES
 }
 
+/// The work a handle handed out settles ([`FirstMoves::take_mine`]): the fills whose destination
+/// is `buffer`, and the moves of and copies into the image at `image` (an `Image`'s address).
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Mine {
+    pub(crate) buffer: Option<vk::Buffer>,
+    pub(crate) image: Option<*const ()>,
+}
+
+impl Mine {
+    /// Whether `entry` is its work.
+    fn names(self, entry: &Waiting) -> bool {
+        let image = |at: *const ()| self.image == Some(at);
+        match entry {
+            Waiting::Fill(_, fill) => self.buffer == Some(fill.buffer),
+            Waiting::Moves(weak) => image(weak.as_ptr().cast()),
+            Waiting::Texels(weak, _) => image(weak.as_ptr().cast()),
+        }
+    }
+}
+
 impl FirstMoves {
     /// The first moves of a device whose registrations wait for their place in the order where
     /// `ordered` ([`FirstMoves::ordered`]).
@@ -1009,7 +1034,15 @@ impl FirstMoves {
     /// The submission's place in the order is held until it was made or the work given back
     /// ([`Taken`]): every submission takes, whether or not anything waits.
     pub(crate) fn take(&self, named: impl Fn(ResourceKey) -> bool) -> Taken<'_> {
-        self.take_with(named, || None)
+        self.take_with(named, || None, |_| true)
+    }
+
+    /// As [`take`](Self::take), for a handle handed out (`Buffer::vk_buffer`,
+    /// `Buffer::export_memory_fd`, `Texture::vk_image`): only the work [`Mine`] names, in the order
+    /// it was registered, the rest left waiting for the device's next submission. A move of an
+    /// image bound to host pages is taken where `Mine` names its image, whatever its key.
+    pub(crate) fn take_mine(&self, mine: Mine) -> Taken<'_> {
+        self.take_with(|_| true, || None, |entry| mine.names(entry))
     }
 
     /// As [`take`](Self::take), for a submission whose commands may bind the heap sets (a
@@ -1021,7 +1054,7 @@ impl FirstMoves {
         named: impl Fn(ResourceKey) -> bool,
         hold: impl FnOnce() -> HeldSlots,
     ) -> Taken<'_> {
-        self.take_with(named, || (!self.ordered).then(hold))
+        self.take_with(named, || (!self.ordered).then(hold), |_| true)
     }
 
     /// The submissions' order, for a submission: taken, and the wait counted where another
@@ -1052,11 +1085,13 @@ impl FirstMoves {
         )
     }
 
-    /// As [`take`](Self::take), holding the slots `hold` gives once its place is taken.
+    /// As [`take`](Self::take), holding the slots `hold` gives once its place is taken, and
+    /// taking only the entries `wanted` says: the rest stay waiting, in their order.
     fn take_with(
         &self,
         named: impl Fn(ResourceKey) -> bool,
         hold: impl FnOnce() -> Option<HeldSlots>,
+        wanted: impl Fn(&Waiting) -> bool,
     ) -> Taken<'_> {
         let order = self.submission_place();
         let slots = hold();
@@ -1074,6 +1109,10 @@ impl FirstMoves {
             }
             let mut kept = Vec::new();
             for entry in waiting.drain(..) {
+                if !wanted(&entry) {
+                    kept.push(entry);
+                    continue;
+                }
                 match entry {
                     Waiting::Moves(weak) => {
                         let Some(fresh) = weak.upgrade() else {

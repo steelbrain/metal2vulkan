@@ -43,7 +43,7 @@ use super::rebind::{ImportHold, Unexact};
 use super::recycle::{self, BufferMaking};
 use super::resource::{Identity, ObjectId, ResourceKey};
 use super::retained::HeldBy;
-use super::texture::first_move::Filled;
+use super::texture::first_move::{Filled, Mine};
 use super::values::{CpuCacheMode, HazardTrackingMode, ResourceOptions, StorageMode};
 use super::Device;
 use crate::release;
@@ -3231,17 +3231,26 @@ impl Buffer {
         self.0.handed_out.store(true, Ordering::Release);
     }
 
-    /// Make the first work still waiting on its `VkBuffer` `raw` now, by an internal submission
-    /// waited for: a new buffer's zeros or staged bytes, or a `Managed` buffer's upload
-    /// (`clear_first`, `fill_first_from`, `upload`), which the device's next submission would make
-    /// before its commands (`texture/first_move.rs`), over what the caller's own work wrote
-    /// through the handle meanwhile. Nothing is submitted where none waits: once any submission of
-    /// the device's took it. `raw` is the caller's: a no-copy buffer's import counts each read of
-    /// its `VkBuffer` apart for its reason (`HostImport::note_read_apart`), so this reads none.
+    /// Make the first work still waiting on its `VkBuffer` `raw` now, by a submission waited for:
+    /// a new buffer's zeros or staged bytes, or a `Managed` buffer's upload (`clear_first`,
+    /// `fill_first_from`, `upload`), which the device's next submission would make before its
+    /// commands (`texture/first_move.rs`), over what the caller's own work wrote through the
+    /// handle meanwhile. Only the work whose destination is `raw`, in the order it was noted: on
+    /// the staging queue where the device reserved one, else on its first `VkQueue`, and after no
+    /// other queue's work (`Device::settle_mine`). Nothing is submitted where none waits: once any
+    /// submission of the device's took it. `raw` is the caller's: a no-copy buffer's import counts
+    /// each read of its `VkBuffer` apart for its reason (`HostImport::note_read_apart`), so this
+    /// reads none.
     pub(super) fn settle_first_work(&self, raw: vk::Buffer) -> Result<(), Error> {
         let device = &self.0.device;
         match device.shared().textures.first_moves.fills_wait(raw) {
-            true => device.submit_internal(|_, _| {}),
+            true => device.settle_mine(
+                Mine {
+                    buffer: Some(raw),
+                    image: None,
+                },
+                false,
+            ),
             false => Ok(()),
         }
     }

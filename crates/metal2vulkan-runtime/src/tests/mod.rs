@@ -174,6 +174,8 @@ mod general_form;
 mod gpu_pools;
 mod gpu_time;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod hand_out_waits;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod handler_orders;
 mod heap;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]

@@ -257,6 +257,9 @@ pub(super) struct DeviceShared {
     /// The families of those queues and of the caller's reserved queues, the primary first, each
     /// once: what the device's buffers and images are shared among (`sharing.rs`).
     pub(super) queue_families: Vec<u32>,
+    /// Those families, then the staging queue's where the device reserved one: what the device's
+    /// buffers are shared among (`sharing.rs`).
+    buffer_families: Vec<u32>,
     /// How many of `queues`, the first, logical queues share round robin; the rest are reserved
     /// for presenting queues.
     round_robin: usize,
@@ -793,7 +796,7 @@ impl DeviceShared {
 
     /// How the device's buffers and images are shared among its queue families (`sharing.rs`).
     pub(crate) fn sharing(&self) -> Sharing<'_> {
-        Sharing::new(&self.queue_families)
+        Sharing::with_buffers(&self.queue_families, &self.buffer_families)
     }
 
     /// The family of the device's `VkQueue` at `index` (a logical queue's), which the command
@@ -1767,6 +1770,9 @@ impl Device {
                 queue_families.push(family);
             }
         }
+        let buffer_families: Vec<u32> = (queue_families.iter().copied())
+            .chain(staging_place.map(|(family, _)| family))
+            .collect();
         let staging = staging_place.map(|(family, index)| {
             // SAFETY: the queue exists (the caller's contract), and the loader serves the call
             // after the word is put back; it was just returned, its word the loader's.
@@ -1952,7 +1958,7 @@ impl Device {
                 &loader_word,
                 queue_family,
                 &queues,
-                Sharing::new(&queue_families),
+                Sharing::with_buffers(&queue_families, &buffer_families),
                 drawn.has(prime::Has {
                     timestamps: timestamp_bits > 0,
                     // A device the runtime created enables it (`enables.rs`).
@@ -2013,6 +2019,7 @@ impl Device {
             parking.clone(),
             properties.description.driver_id,
         );
+        memory.share_buffers_among(buffer_families.clone());
         memory.log_to(MemoryLog::new(instance.sink()));
         if zero_initialize_device_memory {
             memory.zero_image_blocks();
@@ -2291,6 +2298,7 @@ impl Device {
             round_robin: queues.len() - present_queues,
             queues: queues.into(),
             queue_families,
+            buffer_families,
             round_robin_made: AtomicU64::new(0),
             presenting_made: AtomicU64::new(0),
             queue_switch: Arc::new(crate::queue_share::QueueSwitch::new(

@@ -212,10 +212,13 @@ impl Buffer {
     /// at each command buffer's first use, as one over the CPU's bytes does: the caller's own
     /// work may write them. Handing it out first makes the work that still waits on its bytes
     /// (a new `Private` buffer's zeros or bytes, a `Managed` buffer's upload, which the device's
-    /// next submission would make before its commands), by an internal submission waited for,
-    /// as [`Texture::vk_image`](crate::Texture::vk_image) makes its texture's: so the caller's
-    /// work on the handle comes after it. Nothing is submitted where no such work waits. Where
-    /// that submission fails (the device lost, or out of memory), the work waits for the next.
+    /// next submission would make before its commands), that work alone, by a submission waited
+    /// for, as [`Texture::vk_image`](crate::Texture::vk_image) makes its texture's: so the
+    /// caller's work on the handle comes after it. Where the device reserved a copy engine for
+    /// its staging copies, the submission goes there and waits for no work of the program's;
+    /// elsewhere it goes to the device's first `VkQueue`, behind what was submitted there before.
+    /// Nothing is submitted where no such work waits. Where that submission fails (the device
+    /// lost, or out of memory), the work waits for the next.
     ///
     /// # Safety
     ///

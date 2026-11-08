@@ -587,7 +587,11 @@ impl Texture {
     /// waits (`texture/first_move.rs`). Refused as `image` is.
     pub(crate) fn exported_image(&self) -> Result<vk::Image, Error> {
         let image = self.image()?;
-        image.settle()?;
+        let lies_in = match self.storage() {
+            Storage::Alias { texels, .. } => Some(texels.buffer.at(0).0),
+            _ => None,
+        };
+        image.settle_handed_out(lies_in)?;
         // The caller may write through the handle whenever it likes, and no call of the runtime's
         // sees it: the image's texels are never held on the host again
         // (`texture/host_shadow.rs`).

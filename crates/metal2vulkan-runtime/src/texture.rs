@@ -119,7 +119,7 @@ use crate::release;
 use ash::vk;
 use ash::vk::Handle;
 use decoded_twin::{Decoded, PassScratch};
-use first_move::{FirstMove, Fresh, Pattern, Patterned, TexelCopy, PATTERN_BYTES};
+use first_move::{FirstMove, Fresh, Mine, Pattern, Patterned, TexelCopy, PATTERN_BYTES};
 use heap_tiled::{FreshDepth, FreshPattern};
 use heap_two_planes::TwoPlaneHeapLayout;
 use metal2vulkan::bind::{AstcDecode, EtcDecode, ImageViewDesc, PvrtcDecode, TextureFacts};
@@ -1186,6 +1186,37 @@ impl Image {
             return Ok(());
         }
         self.submit_copy(|_, _| {})
+    }
+
+    /// [`settle`](Self::settle), for its `VkImage` handed out (`Texture::vk_image`): only its own
+    /// first work, its moves and the host calls' copies into it, and, where it lies in the
+    /// `VkBuffer` `lies_in` (a texture whose image aliases a buffer's bytes), that buffer's fills
+    /// before them (`FirstMoves::take_mine`), the rest left for the device's next submission. None
+    /// of it reads another command's writes but the buffer's fills: they run first in the same
+    /// submission while they wait, and where a batch took them instead, the submission waits for
+    /// the batches on the other `VkQueue`s that did first work (`Device::settle_mine`). An image
+    /// in a heap's memory, or the caller's or a sparse one, settles as before.
+    fn settle_handed_out(&self, lies_in: Option<vk::Buffer>) -> Result<(), Error> {
+        let firsts = &self.device.shared().textures.first_moves;
+        let fills = lies_in.is_some_and(|buffer| firsts.fills_wait(buffer));
+        let after_other_queues = match (&self.owner, lies_in) {
+            (Owner::Runtime { .. }, None) => false,
+            (Owner::Buffer { .. }, Some(_)) => !fills,
+            _ => return self.settle(),
+        };
+        // The copies queued for the staging queue, waited for (`texture/staging_copy.rs`).
+        if self.takes_staging_copies() {
+            self.device.flush_staging_waited()?;
+        }
+        let at: *const Image = self;
+        if !self.move_waits() && !firsts.texels_wait(at.cast()) && !fills {
+            return Ok(());
+        }
+        let mine = Mine {
+            buffer: lies_in,
+            image: Some(at.cast()),
+        };
+        self.device.settle_mine(mine, after_other_queues)
     }
 
     /// Record a host call's copy of its texels with `record`, on an internal submission the call

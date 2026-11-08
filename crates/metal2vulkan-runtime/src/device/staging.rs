@@ -33,7 +33,10 @@
 //!   carries them all ([`StagingLock::submit`]): the next batch or internal submission of the
 //!   device's makes it before its own, and a `get_bytes` carries them before its read. So none
 //!   of its work waits in `texture/first_move.rs` for a batch, and neither its making nor its
-//!   writes wait for a submission.
+//!   writes wait for a submission. A buffer's `VkBuffer` handed out, or its memory exported,
+//!   has its own fills still waiting (a new `Private` buffer's zeros or staged bytes) made here,
+//!   in a submission of their own the call waits for (`Device::settle_mine`): every buffer of the
+//!   device's is shared with this queue's family (`sharing.rs`).
 
 use super::{lock, Device, LoaderWord};
 use crate::error::{internal, vulkan, Error};

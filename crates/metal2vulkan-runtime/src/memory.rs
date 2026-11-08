@@ -1346,9 +1346,11 @@ pub(super) struct Memory {
     /// The device has unified memory (`DeviceProperties::has_unified_memory`), which
     /// [`candidates`] ranks `WriteCombined` memory by.
     unified: bool,
-    /// The device's queue families, which its buffers of addresses are shared among
-    /// (`sharing.rs`).
+    /// The device's queue families, which its images are shared among (`sharing.rs`).
     families: Vec<u32>,
+    /// Those families, then the staging queue's where the device reserved one: what its buffers,
+    /// those of addresses among them, are shared among (`sharing.rs`).
+    buffer_families: Vec<u32>,
     /// The bytes of the blocks allocated so far ([`Memory::allocated`]).
     allocated: u64,
     /// Where the device's driver fails pending work when memory a device-address buffer lay in
@@ -1440,6 +1442,7 @@ impl Memory {
             address_types: None,
             kept: None,
             unified,
+            buffer_families: families.clone(),
             families,
             allocated: 0,
             parking,
@@ -1472,6 +1475,11 @@ impl Memory {
     /// used read zero, and an image placed in any other starts as before.
     pub(super) fn zero_image_blocks(&mut self) {
         self.zero_images = true;
+    }
+
+    /// Share its buffers among `families`: the device's, then its staging queue's (`sharing.rs`).
+    pub(super) fn share_buffers_among(&mut self, families: Vec<u32>) {
+        self.buffer_families = families;
     }
 
     /// Log each `VkDeviceMemory` allocated, imported or freed from now on to `log`
@@ -1628,7 +1636,7 @@ impl Memory {
     /// take ([`Memory::kept`]'s queries).
     #[cfg(all(test, any(m2v_cpu_icd, all(m2v_gpu, m2v_gpu_hazards))))]
     pub(super) fn type_view(&self, device: &ash::Device) -> Result<TypeView, Error> {
-        let sharing = Sharing::new(&self.families);
+        let sharing = Sharing::with_buffers(&self.families, &self.buffer_families);
         Ok(TypeView {
             types: self.types.clone(),
             heap_sizes: self.heaps.iter().map(|&(size, _)| size).collect(),
@@ -1769,7 +1777,7 @@ impl Memory {
             return Ok(None);
         }
         if self.address_types.is_none() {
-            let sharing = Sharing::new(&self.families);
+            let sharing = Sharing::with_buffers(&self.families, &self.buffer_families);
             self.address_types = Some(buffer_types(device, usage(true), sharing)?);
         }
         Ok(self.address_types)
@@ -1869,7 +1877,7 @@ impl Memory {
             block_bytes: self.block_bytes,
             host_visible,
             device_address: self.device_address,
-            families: self.families.clone(),
+            families: self.buffer_families.clone(),
             zero_images: self.zero_images,
         }
     }
@@ -1885,7 +1893,7 @@ impl Memory {
             return Ok(kept.clone());
         }
         let addresses = self.address_types(device)?.unwrap_or(u32::MAX);
-        let sharing = Sharing::new(&self.families);
+        let sharing = Sharing::with_buffers(&self.families, &self.buffer_families);
         let buffers = buffer_types(device, usage(false), sharing)? & addresses;
         let images = color_image_types(device, sharing)?;
         let best = |bits: u32, class: MemoryClass| {
@@ -1966,7 +1974,7 @@ impl Memory {
         counts: &Counters,
     ) -> Result<(), Error> {
         let at = self.pool_at(Holds::Buffers, type_index);
-        let sharing = Sharing::new(&self.families);
+        let sharing = Sharing::with_buffers(&self.families, &self.buffer_families);
         let payload = self.pools[at]
             .payload_mut(block)
             .expect("a placed block is live");
@@ -2295,7 +2303,7 @@ struct BlockMaker {
     host_visible: u32,
     /// As [`Memory`]'s.
     device_address: bool,
-    /// As [`Memory`]'s.
+    /// The families its buffers of addresses are shared among: [`Memory`]'s buffers'.
     families: Vec<u32>,
     /// As [`Memory`]'s.
     zero_images: bool,

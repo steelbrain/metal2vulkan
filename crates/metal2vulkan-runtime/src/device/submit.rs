@@ -10,6 +10,9 @@
 //! `VkQueue`s that did such work: no new resource waits for one, so making one waits for no GPU
 //! work. That work is recorded first in the submission's one command buffer, before the host
 //! calls' staged copies and the work, as a batch's is in its own (`command_buffer/submit.rs`).
+//! A handle handed out (`Buffer::vk_buffer`, `Texture::vk_image`) takes only its own first work,
+//! after no other queue's batches (`Device::settle_mine`); a buffer's fills alone go to the
+//! staging queue where the device reserved one (`staging.rs`).
 //!
 //! The one submission no one waits for is a no-copy buffer's sparse binding of its dma-bufs
 //! (`dma_buf.rs`), on the same queue and timeline: it would wait behind the queue's work in
@@ -24,11 +27,24 @@ use crate::error::{vulkan, Error};
 use crate::exit_guard::{self, Call};
 use crate::release;
 use crate::resource::ResourceKey;
+use crate::texture::first_move::{FirstMoves, Mine, Taken};
 use crate::work_counts::Begun;
 use ash::vk;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::OnceLock;
 use std::time::Duration;
+
+/// How far an internal submission's first work reaches ([`Device::submit_internal_taking`]).
+#[derive(Clone, Copy, Debug)]
+enum Reach {
+    /// The device's: every new resource's first work but moves of images bound to host pages
+    /// its commands do not name, after the staging queue's queued copies, the last binding of a
+    /// no-copy buffer's dma-bufs and the batches on the other `VkQueue`s that did first work.
+    Device,
+    /// A handle's own ([`Device::settle_mine`]): after the batches on the other `VkQueue`s that
+    /// did first work only where `after_other_queues`.
+    Mine { after_other_queues: bool },
+}
 
 /// How long one wait for an internal submission lasts before it is repeated.
 const WAIT_SLICE: Duration = Duration::from_millis(100);
@@ -170,6 +186,62 @@ impl Device {
         named: impl Fn(ResourceKey) -> bool,
         record: impl FnOnce(&Vk, vk::CommandBuffer),
     ) -> Result<(), Error> {
+        self.submit_internal_taking(|firsts| firsts.take(&named), Reach::Device, record)
+    }
+
+    /// Make the first work of a handle handed out now (`Buffer::vk_buffer`,
+    /// `Buffer::export_memory_fd`, `Texture::vk_image`), and wait for it: `mine` alone
+    /// ([`FirstMoves::take_mine`]), the rest left for the device's next submission. Its sources
+    /// are the host's (the device's zeros, staging buffers, a `Managed` buffer's host copy) and
+    /// its destinations new, so it waits for no other work of the device's: fills alone, on a
+    /// device that reserved a staging queue, run there, a copy engine, behind nothing but its
+    /// earlier copies (`staging.rs`); the rest alone on the device's first `VkQueue`, behind what
+    /// was submitted there before, and, where `after_other_queues` (an image in a buffer's memory
+    /// whose fill a batch took), on the GPU after the batches on the other `VkQueue`s that did
+    /// first work. The device's submissions take their place in the order once it was made, as
+    /// they do after any submission (`texture/first_move.rs`), and a batch made after it waits
+    /// for it on the GPU until the host saw it complete, which the host has once this returns.
+    pub(crate) fn settle_mine(&self, mine: Mine, after_other_queues: bool) -> Result<(), Error> {
+        if self.is_lost() {
+            return Err(self.lost_refusal());
+        }
+        if !self.has_staging_queue() || mine.image.is_some() {
+            return self.submit_internal_taking(
+                |firsts| firsts.take_mine(mine),
+                Reach::Mine { after_other_queues },
+                |_, _| {},
+            );
+        }
+        let shared = self.shared();
+        let raw = shared.vk();
+        // Its place in the order is held from its take until its submission was made, so no
+        // batch is made between without it.
+        let taken = shared.textures.first_moves.take_mine(mine);
+        if !taken.has_first() {
+            return Ok(());
+        }
+        let mut staging = self.staging_lock()?;
+        let value = staging.submit(|_, command_buffer, flags| {
+            // SAFETY: recording for the staging queue's family, outside a render pass: fills of
+            // buffers alone, each shared with that family, as their sources are (`sharing.rs`);
+            // the submission is made before any that uses them (the order is held) and waited
+            // for below.
+            unsafe { taken.record((raw, &shared.counts), command_buffer, flags) }
+        })?;
+        // What it works on, held until it completed.
+        let _held = taken.submitted(None);
+        drop(staging);
+        self.wait_staging(value)
+    }
+
+    /// [`submit_internal`](Self::submit_internal), its first work what `take` takes, reaching
+    /// as far as `reach` says.
+    fn submit_internal_taking<'a>(
+        &'a self,
+        take: impl FnOnce(&'a FirstMoves) -> Taken<'a>,
+        reach: Reach,
+        record: impl FnOnce(&Vk, vk::CommandBuffer),
+    ) -> Result<(), Error> {
         if self.is_lost() {
             return Err(self.lost_refusal());
         }
@@ -183,19 +255,29 @@ impl Device {
         if internal.is_none() {
             *internal = Some(Internal::new(self)?);
         }
-        let taken = firsts.take(&named);
+        let taken = take(firsts);
         // The copies queued for the staging queue, submitted there first, which this waits for on
         // the GPU (below), holding what they copied until it completed
-        // (`texture/staging_copy.rs`).
-        let _staged = self.flush_staging()?;
+        // (`texture/staging_copy.rs`). A handle's own work reads none of them.
+        let _staged = match reach {
+            Reach::Device => self.flush_staging()?,
+            Reach::Mine { .. } => None,
+        };
         let Some(objects) = internal.as_mut() else {
             unreachable!("made above");
         };
         let begin = vk::CommandBufferBeginInfo::default()
             .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
-        let waits = firsts.waits(0, |point| {
-            shared.queues[point.queue].completed_value() >= point.value
-        });
+        let after_other_queues = match reach {
+            Reach::Device => true,
+            Reach::Mine { after_other_queues } => after_other_queues,
+        };
+        let waits = match after_other_queues {
+            true => firsts.waits(0, |point| {
+                shared.queues[point.queue].completed_value() >= point.value
+            }),
+            false => Vec::new(),
+        };
         // SAFETY: the command buffer is not pending (every submission is waited for below) and
         // the internal lock is held; beginning it resets it (the pool resets command buffers).
         unsafe { raw.begin_command_buffer(objects.buffer, &begin) }.map_err(vulkan)?;
@@ -229,14 +311,17 @@ impl Device {
         unsafe { raw.reset_fences(&[objects.fence]) }.map_err(vulkan)?;
         let buffers = [objects.buffer];
         // And the last binding of a no-copy buffer's dma-bufs, and the staging queue's last
-        // submission, until each completed.
-        let staging = self.staging_wait();
+        // submission, until each completed: a handle's own work uses neither.
+        let (binding, staging) = match reach {
+            Reach::Device => (self.binding_wait(), self.staging_wait()),
+            Reach::Mine { .. } => (None, None),
+        };
         if staging.is_some() {
             shared.counts.staging_gpu_wait();
         }
         let waits: Vec<(vk::Semaphore, u64)> = (waits.iter())
             .map(|point| (shared.queues[point.queue].timeline, point.value))
-            .chain(self.binding_wait())
+            .chain(binding)
             .chain(staging)
             .collect();
         let wait_semaphores: Vec<vk::Semaphore> = waits.iter().map(|wait| wait.0).collect();

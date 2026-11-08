@@ -7,6 +7,12 @@
 //! and the runtime transfers no ownership: every buffer and image it makes is concurrent among
 //! all the device's families. A device of one family keeps them exclusive. MoltenVK reads no
 //! sharing mode, so the concurrent form costs nothing there.
+//!
+//! Where the device reserved a staging queue (`device/staging.rs`, a copy engine), every buffer
+//! it makes is concurrent among its families and the staging queue's too: a new buffer's zeros or
+//! staged bytes made at its hand-out run there (`Buffer::settle_first_work`), behind no command of
+//! the program's, and no buffer changes owner. Its images keep the device's families (but those
+//! that copy on the staging queue, `Device::staging_sharing`).
 
 use ash::vk;
 
@@ -14,12 +20,24 @@ use ash::vk;
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Sharing<'a> {
     families: &'a [u32],
+    /// The families its buffers are shared among: `families`, then the staging queue's where the
+    /// device has one (the module docs).
+    buffers: &'a [u32],
 }
 
 impl<'a> Sharing<'a> {
     /// The sharing of a device that submits to `families` (at least one).
     pub(crate) fn new(families: &'a [u32]) -> Sharing<'a> {
-        Sharing { families }
+        Sharing {
+            families,
+            buffers: families,
+        }
+    }
+
+    /// The sharing of a device that submits to `families` (at least one), whose buffers are
+    /// shared among `buffers`: `families`, then its staging queue's (the module docs).
+    pub(crate) fn with_buffers(families: &'a [u32], buffers: &'a [u32]) -> Sharing<'a> {
+        Sharing { families, buffers }
     }
 
     /// The queue families it shares among.
@@ -32,15 +50,16 @@ impl<'a> Sharing<'a> {
         self.families.len() > 1
     }
 
-    /// `info` with the device's sharing.
+    /// `info` with the device's sharing of buffers: concurrent among the buffers' families where
+    /// they are more than one.
     pub(crate) fn buffer<'b>(self, info: vk::BufferCreateInfo<'b>) -> vk::BufferCreateInfo<'b>
     where
         'a: 'b,
     {
-        match self.concurrent() {
+        match self.buffers.len() > 1 {
             true => info
                 .sharing_mode(vk::SharingMode::CONCURRENT)
-                .queue_family_indices(self.families),
+                .queue_family_indices(self.buffers),
             false => info.sharing_mode(vk::SharingMode::EXCLUSIVE),
         }
     }
@@ -102,5 +121,17 @@ mod tests {
         assert!(!sharing.admits(vk::SharingMode::EXCLUSIVE, &[]));
         assert!(!sharing.admits(vk::SharingMode::CONCURRENT, &[0, 1, 2]));
         assert!(sharing.admits(vk::SharingMode::CONCURRENT, &[3, 2, 1, 0]));
+    }
+
+    #[test]
+    fn a_staging_family_makes_buffers_concurrent_and_leaves_images_exclusive() {
+        let buffers = [0, 2];
+        let sharing = Sharing::with_buffers(&buffers[..1], &buffers);
+        let info = sharing.buffer(vk::BufferCreateInfo::default());
+        assert!(info.sharing_mode == vk::SharingMode::CONCURRENT);
+        assert_eq!(info.queue_family_index_count, 2);
+        let info = sharing.image(vk::ImageCreateInfo::default());
+        assert!(info.sharing_mode == vk::SharingMode::EXCLUSIVE);
+        assert!(sharing.admits(vk::SharingMode::EXCLUSIVE, &[]));
     }
 }
