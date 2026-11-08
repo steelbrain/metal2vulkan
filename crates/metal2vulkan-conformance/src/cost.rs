@@ -1866,6 +1866,28 @@ pub enum Shape {
     Alone,
 }
 
+/// Why a `cost --write` of `shape` over `selected` of the case set's `whole` cases writes nothing,
+/// where it may not: an in-set measurement of a selection that is not the whole case set.
+///
+/// A case's in-set counts are of what ran before it in the process, and [`judge`] holds them to
+/// their bounds only in a run of the whole set, so a bound or ratio written from a smaller
+/// selection is of a composition the gate never runs. Measured: the 36 cases the interlocked split
+/// moved, written from a selection of those 36 alone, recorded `xr-masked-bgr10xr-red` at 3
+/// pipelines over its 2 states and `xr-masked-bgr10xr-blue-green` at 6, where every whole-set run
+/// reads 6 and 3 (the released variants the next creation takes back are another case's in the
+/// whole set), and the gate failed both. Each case alone is the same shape in any selection, so an
+/// alone measurement writes from any.
+pub fn write_refusal(shape: Shape, selected: usize, whole: usize) -> Option<String> {
+    (shape == Shape::InSet && selected != whole).then(|| {
+        format!(
+            "--write takes an in-set measurement of the whole case set ({whole} cases) alone, \
+             and this selection holds {selected}: a case's in-set counts are of what ran before \
+             it, and the gate holds them to their bounds only in a run of the whole set \
+             (`--alone --write` writes from any selection)"
+        )
+    })
+}
+
 /// What one case's cost run came to: the counts it moved, and how long it took.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CaseCost {

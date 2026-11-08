@@ -7704,3 +7704,18 @@ fn a_recorded_refusal_is_unmeasured_and_gates_no_count() {
         "an empty record bounds every count at zero, which is what the refusal must not do"
     );
 }
+
+/// `cost --write` takes an in-set measurement of the whole case set alone: a selection's in-set
+/// counts are of another composition than the one the gate judges (`cost::write_refusal`), and an
+/// alone measurement, whose shape no selection changes, writes from any.
+#[test]
+fn an_in_set_write_takes_the_whole_case_set_alone() {
+    use crate::cost::{write_refusal, Shape};
+    let whole = crate::cases::all().len();
+    assert_eq!(write_refusal(Shape::InSet, whole, whole), None);
+    let refused = write_refusal(Shape::InSet, 36, whole).expect("a selection of 36 is refused");
+    assert!(refused.contains(&format!("{whole} cases")), "{refused}");
+    assert!(refused.contains("holds 36"), "{refused}");
+    assert_eq!(write_refusal(Shape::Alone, 36, whole), None);
+    assert_eq!(write_refusal(Shape::Alone, whole, whole), None);
+}

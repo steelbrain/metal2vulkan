@@ -443,7 +443,9 @@ over 1,755 states, 1.519 each, the worst row `swizzled-storage-rgba8unorm` at 11
 hold none, and for a reason the record states: 453 cases create no pipeline state, so there is no
 denominator, and 11 carry a recorded refusal instead. A bound measured over a selection would not
 do: `judge` refuses any selection but the whole set, which is the shape the gate runs in, so the
-bound is written from a whole-set `cost --runs 8 --write` and nothing smaller.
+bound is written from a whole-set `cost --runs 8 --write` and nothing smaller: `cost --write` of a
+selection refuses before it runs (`cost::write_refusal`), and `cost --alone --write`, whose shape
+no selection changes, writes from any.
 
 `cost`'s own per-case wall-clock figure stays **advisory**: it is printed so a reader can see where
 the counts are large, and it is neither recorded nor gated. Timing against Metal is the times half,

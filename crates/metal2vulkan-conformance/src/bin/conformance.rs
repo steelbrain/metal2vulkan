@@ -325,6 +325,14 @@ fn cost(
     } else {
         metal2vulkan_conformance::cost::Shape::InSet
     };
+    // Refused before the runs, which take minutes over the whole set.
+    if write {
+        let whole = metal2vulkan_conformance::cases::all().len();
+        if let Some(why) = metal2vulkan_conformance::cost::write_refusal(shape, cases.len(), whole)
+        {
+            return Err(why);
+        }
+    }
     let (venue, measured) = if alone {
         run::cost_alone_on_under(venues, policy, cases, runs)?
     } else {
