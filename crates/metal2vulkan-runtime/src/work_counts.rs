@@ -6614,8 +6614,10 @@ pub struct WorkCounts {
     /// `device_memory_allocated`).
     pub owned_kernel_spirv_bytes: u64,
     /// The scratch buffers a YCbCr texture's conversion took (`ycbcr.rs`), counted as each was
-    /// allocated: one for the conversion that reads the texture's planes, and one more for the
-    /// write-back where the texture takes writes. **One of each per texture**, not per device, and
+    /// allocated: one for the conversion that reads the texture's planes, made at its first
+    /// conversion (none for a texture whose planes every function reads in place, which never
+    /// converts), and one more for the write-back where the texture takes writes. **At most one
+    /// of each per texture**, not per device, and
     /// each is `Private` memory the size of the planes' whole byte range: a 3840 x 2160 `x420`
     /// surface's plane is a 24.9 MiB allocation a texture of it, however many such textures a
     /// program makes over the same surface. Metal wraps the plane and samples the format, so it

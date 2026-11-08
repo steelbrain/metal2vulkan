@@ -1830,6 +1830,11 @@ impl EncoderCore {
         shadows: &[ShadowUse],
         uses: &[Use<ResourceKey>],
     ) -> Result<Vec<ShadowCopy>, Error> {
+        // What a copy in records beyond what the texture holds from its making: a converted
+        // two-plane YCbCr texture's conversion, made at its first use of its image.
+        for shadow in shadows {
+            shadow.copies.prepare()?;
+        }
         let device = self.device().clone();
         let aliased = self.aliased(uses);
         let uses = aliased.as_deref().unwrap_or(uses);

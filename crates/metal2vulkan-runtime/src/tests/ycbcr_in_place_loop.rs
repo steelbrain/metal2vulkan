@@ -226,3 +226,111 @@ fn a_sample_in_a_loop_of_planes_read_in_place_makes_its_pipeline() {
         false => assert_eq!((in_place, bound), (0, 0)),
     }
 }
+
+/// A kernel that reads every texel of texture 0 into buffer 0, `float4`s in rows of the grid: a
+/// `read()`, which the in-place form does not read, so it binds the texture's converted image.
+const READ: &str = r#"; Owned synthetic kernel.
+source_filename = "ycbcr_in_place_read.metal"
+
+define void @read_texels(ptr addrspace(1) %t, ptr addrspace(1) noalias %out, <2 x i32> %gid, <2 x i32> %size) {
+entry:
+  %s = tail call ptr addrspace(2) @air.get_read_sampler()
+  %r = tail call { <4 x float>, i8 } @air.read_texture_2d.v4f32(ptr addrspace(1) %t, ptr addrspace(2) %s, <2 x i32> %gid, <2 x i32> zeroinitializer, i32 0, i32 1)
+  %v = extractvalue { <4 x float>, i8 } %r, 0
+  %x = extractelement <2 x i32> %gid, i64 0
+  %y = extractelement <2 x i32> %gid, i64 1
+  %w = extractelement <2 x i32> %size, i64 0
+  %row = mul i32 %y, %w
+  %i = add i32 %row, %x
+  %j = zext i32 %i to i64
+  %p = getelementptr inbounds <4 x float>, ptr addrspace(1) %out, i64 %j
+  store <4 x float> %v, ptr addrspace(1) %p, align 16
+  ret void
+}
+
+declare ptr addrspace(2) @air.get_read_sampler()
+declare { <4 x float>, i8 } @air.read_texture_2d.v4f32(ptr addrspace(1), ptr addrspace(2), <2 x i32>, <2 x i32>, i32, i32)
+
+!air.kernel = !{!0}
+!air.version = !{!30}
+!air.language_version = !{!31}
+!0 = !{ptr @read_texels, !1, !2}
+!1 = !{}
+!2 = !{!3, !4, !5, !6}
+!3 = !{i32 0, !"air.texture", !"air.location_index", i32 0, i32 1, !"air.read", !"air.arg_type_name", !"texture2d<float, read>", !"air.arg_name", !"t"}
+!4 = !{i32 1, !"air.buffer", !"air.location_index", i32 0, i32 1, !"air.read_write", !"air.address_space", i32 1, !"air.arg_type_size", i32 16, !"air.arg_type_align_size", i32 16, !"air.arg_type_name", !"float4", !"air.arg_name", !"out"}
+!5 = !{i32 2, !"air.thread_position_in_grid", !"air.arg_type_name", !"uint2", !"air.arg_name", !"gid"}
+!6 = !{i32 3, !"air.threads_per_grid", !"air.arg_type_name", !"uint2", !"air.arg_name", !"size"}
+!30 = !{i32 2, i32 8, i32 0}
+!31 = !{!"Metal", i32 4, i32 0, i32 0}
+"#;
+
+/// Every texel of `texture` read (`READ`) in one command buffer of its own.
+fn read(device: &Device, texture: &Texture) {
+    let air = metal2vulkan_devtools::llvm_assemble_text(READ).unwrap();
+    let library = metal2vulkan::library::Library::from_air(&air).unwrap();
+    let function = device
+        .new_library_with_compile_library(library)
+        .new_function_with_name("read_texels")
+        .unwrap();
+    let state = device
+        .new_compute_pipeline_state_with_function(&function, &PipelineOptions::default())
+        .unwrap();
+    let out = device
+        .new_buffer(16 * W * H, ResourceOptions::shared())
+        .unwrap();
+    let queue = device.new_command_queue().unwrap();
+    let command_buffer = queue.command_buffer().unwrap();
+    let mut encoder = command_buffer.compute_command_encoder().unwrap();
+    encoder.set_compute_pipeline_state(&state).unwrap();
+    encoder.set_texture(Some(texture), 0).unwrap();
+    encoder.set_buffer(Some(&out), 0, 0).unwrap();
+    encoder
+        .dispatch_threads(Size::new(W, H, 1), Size::new(8, 8, 1))
+        .unwrap();
+    encoder.end_encoding().unwrap();
+    command_buffer.commit().unwrap();
+    command_buffer.wait_until_completed_for(WAIT).unwrap();
+    assert_eq!(command_buffer.error(), None);
+}
+
+/// A texture whose planes every function so far read in place holds no conversion: its
+/// samples took no conversion's scratch buffer (`WorkCounts::ycbcr_conversion_scratch_buffers`),
+/// however many dispatches sampled it. Its first `read()`, which reads the converted image, makes
+/// the conversion, once. On a device that keeps the image alone, the texture's first sample
+/// makes it.
+#[test]
+fn a_texture_read_only_in_place_makes_no_conversion() {
+    let scratch = Scratch::new("ycbcr-in-place-conversion");
+    let device = device(&scratch.0);
+    let once = state(&device, "sample_once", false);
+    let sampler = device.new_sampler_state(&SamplerDescriptor::new()).unwrap();
+    let surface = device
+        .new_buffer_with_bytes(&surface_bytes(13), ResourceOptions::shared())
+        .unwrap();
+    let reads = device
+        .compile_device()
+        .profile()
+        .reads_ycbcr_planes_in_place();
+    let scratches = || device.work_counts().ycbcr_conversion_scratch_buffers;
+    let before = scratches();
+    let texture = texture(&surface);
+    assert_eq!(
+        scratches() - before,
+        0,
+        "the texture is made with no conversion"
+    );
+    sample(&device, &once, &texture, &sampler);
+    sample(&device, &once, &texture, &sampler);
+    let sampled = scratches() - before;
+    read(&device, &texture);
+    read(&device, &texture);
+    let all = scratches() - before;
+    eprintln!(
+        "planes in place: {reads}; conversions after the samples {sampled}, after the reads {all}"
+    );
+    match reads {
+        true => assert_eq!((sampled, all), (0, 1)),
+        false => assert_eq!((sampled, all), (1, 1)),
+    }
+}

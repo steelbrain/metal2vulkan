@@ -573,6 +573,17 @@ impl ShadowStaging {
 }
 
 impl ShadowCopies {
+    /// Make what its copies in record where they record more than the texture holds from its
+    /// making: a conversion's staging buffer, sets and refresh (`ycbcr.rs`,
+    /// `YCbCrConversion::make`), which a texture whose planes every function reads in place never
+    /// needs. Refused as the conversion's making is.
+    pub(super) fn prepare(&self) -> Result<(), Error> {
+        match &self.source {
+            ShadowSource::Converted { conversion, .. } => conversion.make(),
+            _ => Ok(()),
+        }
+    }
+
     /// The image a clear in of the shadow clears ([`ShadowCopy::clear`]): an image's shadow of
     /// its own format (one copied image to image, not through a buffer), or a 2D texture's image
     /// over a buffer's bytes; `None` for every other shadow (a staging buffer, a rotated, tiled or

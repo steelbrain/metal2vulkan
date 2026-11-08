@@ -76,18 +76,23 @@
 //!   whose function only samples it (nearest or linear, no comparison, anisotropy or
 //!   `min_lod_clamp`) or reads its size binds a uniform texel buffer over the planes' bytes,
 //!   `R8G8_UINT` of 8-bit codes and `R16G16_UINT` of 10-bit ones, and the function fetches the codes
-//!   and converts and filters them as Metal does, exactly; the draw or dispatch reads those bytes
-//!   alone, and converts no image (`WorkCounts::ycbcr_textures_in_place`, `ycbcr_planes_bound`).
+//!   and converts and filters them itself (a linear sample by Vulkan's Y′CbCr model by default,
+//!   Metal's exact filter under `YCbCrInPlacePolicy::Exact`: `metal2vulkan::lower::sampler`); the
+//!   draw or dispatch reads those bytes alone, and converts no image
+//!   (`WorkCounts::ycbcr_textures_in_place`, `ycbcr_planes_bound`). The conversion's staging buffer,
+//!   sets and refresh are made at the texture's first conversion, so such a texture holds none.
 //!   Where the device converts the 4:2:0 format as a linear image with Metal's reconstruction and
 //!   the planes lie as that image's would, in memory the runtime allocated, they are also such an
 //!   image (`texture/ycbcr_planes.rs`), and a slot whose every sample the device's sampler takes
 //!   samples it through the device's conversion instead (`WorkCounts::ycbcr_planes_images`,
-//!   `ycbcr_planes_images_bound`); elsewhere the function converts them as Metal does, on a device
-//!   that converts the format itself too, where the texture's image holds the device's conversion.
+//!   `ycbcr_planes_images_bound`); elsewhere the function converts them itself, as above, on a
+//!   device that converts the format itself too, where the texture's image holds the device's
+//!   conversion.
 //!   A read, a gather or any other use binds the image, converted as above. A discrete, virtual or
 //!   other GPU keeps the image alone (`ycbcr_images_kept_device`): it reads the host's planes
 //!   across its bus at every pass, where the image lies in its own memory. Both forms are Metal's
-//!   (but for the image of a device that converts the format itself); the choice is the cheaper one
+//!   (but for the image of a device that converts the format itself, and the in-place form's linear
+//!   sample under the default `YCbCrInPlacePolicy::Model`); the choice is the cheaper one
 //!   by device kind, measured as GPU time of a 3840 x 2160 texture whose
 //!   planes lie in host memory composited into 1680 x 1050 (µs, best of 3 x 40; the image's form
 //!   the refresh's compare and the samples, over unchanged planes; Mesa 26.2.4, MoltenVK 1.4.2):
@@ -252,6 +257,7 @@ use metal2vulkan::error::{DiagName, Feature, Unsupported};
 use metal2vulkan::metal::format::ycbcr_format;
 use metal2vulkan::metal::PixelFormat;
 use std::ops::Range;
+use std::sync::{Mutex, OnceLock};
 
 /// The OSTypes of the full-range surfaces (the module docs): a texture over a surface of any other
 /// OSType reads its codes as video range.
@@ -517,11 +523,29 @@ fn planes_end(planes: &YCbCrPlanes) -> u64 {
 }
 
 /// The conversion of a two-plane YCbCr texture's planes into its image (the module docs): the
-/// copy in of its shadow (`ShadowSource::Converted`).
+/// copy in of its shadow (`ShadowSource::Converted`). Its staging buffer, its kernels' sets and its
+/// refresh are made at its first conversion ([`make`](Self::make)): a texture whose planes every
+/// function reads in place (`texture/ycbcr_image.rs`) never converts, and holds none of them.
 pub(super) struct YCbCrConversion {
+    device: Device,
     /// The planes it converts, and the bytes of their buffer they lie in, which a view as the
     /// texture's `_sRGB` twin converts too (`texture/ycbcr_image.rs`).
     source: (YCbCrPlanes, Range<u64>),
+    /// The planes' buffer's `VkBuffer` and where their bytes start in it.
+    from: (vk::Buffer, u64),
+    /// The storage view of the texture's image it writes.
+    view: vk::ImageView,
+    /// The bytes the planes read past their span, zeros: the chroma of a texture whose chroma
+    /// codes are 0, and rows past the end of the buffer.
+    zeros: u64,
+    /// What its conversions record, made at the first ([`make`](Self::make)).
+    made: OnceLock<Made>,
+    /// Held while one thread makes it, so no two make it.
+    making: Mutex<()>,
+}
+
+/// A conversion's staging buffer, its kernels' sets and its refresh ([`YCbCrConversion::make`]).
+struct Made {
     /// The shape at its start, the planes' bytes from `BYTES_AT`; held for the texture's life.
     staging: Buffer,
     /// The staging buffer's identity and its bytes.
@@ -740,22 +764,52 @@ impl YCbCrRefresh {
 
 impl YCbCrConversion {
     /// The conversion of `planes`, whose bytes lie in `bytes` of their buffer, at `at` of its
-    /// `VkBuffer`, into `view`, a storage view of the texture's image, on `device`. Refused as
-    /// `new_buffer` refuses the staging buffer and as the kernel's objects are refused.
+    /// `VkBuffer`, into `view`, a storage view of the texture's image, on `device`; made at its
+    /// first conversion ([`make`](Self::make)). Where the device converts the planes itself, that
+    /// is announced here, where the texture is made.
     pub(super) fn new(
         device: &Device,
-        (planes, bytes_in): (&YCbCrPlanes, Range<u64>),
+        (planes, bytes): (&YCbCrPlanes, Range<u64>),
         (source, at): (vk::Buffer, u64),
         view: vk::ImageView,
-    ) -> Result<YCbCrConversion, Error> {
+    ) -> YCbCrConversion {
+        let span = (bytes.end - bytes.start).next_multiple_of(4);
+        let zeros = planes_end(planes).saturating_sub(span).next_multiple_of(4);
+        if YCbCrSampler::of(device, planes, zeros > 0).is_some() && span % 4 == 0 {
+            announce_device_conversion(device, planes);
+        }
+        YCbCrConversion {
+            device: device.clone(),
+            source: (*planes, bytes),
+            from: (source, at),
+            view,
+            zeros,
+            made: OnceLock::new(),
+            making: Mutex::new(()),
+        }
+    }
+
+    /// Make what its conversions record, where no conversion made it yet: the staging buffer,
+    /// which starts zeroed with no conversion completed, so the first converts every texel, the
+    /// conversion's sets and its refresh. Refused as `new_buffer` refuses the staging buffer and
+    /// as the kernels' objects are refused.
+    pub(super) fn make(&self) -> Result<(), Error> {
+        if self.made.get().is_some() {
+            return Ok(());
+        }
+        let _making = super::device::lock(&self.making);
+        if self.made.get().is_some() {
+            return Ok(());
+        }
+        let device = &self.device;
+        let (planes, bytes_in) = (&self.source.0, &self.source.1);
+        let (source, at) = self.from;
         let span = bytes_in.end - bytes_in.start;
         let bytes = span.next_multiple_of(4);
-        // The bytes the planes read past their span, zeros (the chroma of a texture whose chroma
-        // codes are 0, and rows past the end of the buffer), filled at every conversion.
-        let zeros = planes_end(planes).saturating_sub(bytes).next_multiple_of(4);
+        let zeros = self.zeros;
         let held = bytes + zeros;
         let staging = device.own_buffer(BYTES_AT + held, ResourceOptions::private())?;
-        // One of these a texture, the planes' whole byte range
+        // One of these a texture that converts, the planes' whole byte range
         // (`WorkCounts::ycbcr_conversion_scratch_buffers`).
         device
             .shared()
@@ -769,7 +823,7 @@ impl YCbCrConversion {
             planes,
             (raw, start + BYTES_AT, held),
             (start, zeros > 0),
-            view,
+            self.view,
         )?;
         let limits = &device.properties().description.limits;
         if groups[0] > limits.max_compute_work_group_count[0]
@@ -780,8 +834,7 @@ impl YCbCrConversion {
             ));
         }
         let refresh = YCbCrRefresh::new(device, (source, at, span), (raw, start), groups[0]);
-        Ok(YCbCrConversion {
-            source: (*planes, bytes_in),
+        let made = Made {
             staging_use: (identity.key, range),
             shape_at: start,
             shape,
@@ -795,7 +848,10 @@ impl YCbCrConversion {
             converts,
             groups,
             refresh,
-        })
+        };
+        // Held under `making`: no other thread set it.
+        let _ = self.made.set(made);
+        Ok(())
     }
 
     /// The planes it converts, and the bytes of their buffer they lie in.
@@ -808,31 +864,46 @@ impl YCbCrConversion {
     /// (five words); `None` where the conversion has no refresh.
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     pub(crate) fn refresh_state(&self) -> Option<(&Buffer, u64)> {
-        self.refresh.as_ref().map(|_| (&self.staging, STATE_AT))
+        let made = self.made.get()?;
+        made.refresh.as_ref().map(|_| (&made.staging, STATE_AT))
     }
 
     /// The conversion's workgroups across, which the refresh's indirect arguments take where it
     /// converts.
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     pub(crate) fn groups_across(&self) -> u32 {
-        self.groups[0]
+        self.made.get().map_or(0, |made| made.groups[0])
     }
 
     /// Whether the texture reads zeros the staging buffer holds past the planes' bytes: chroma
     /// codes 0 (over plane 1 of its surface, or a surface without planes), or rows past the end
     /// of its buffer. Its writes and passes, and its retyped views, are refused.
     pub(super) fn reads_zeros(&self) -> bool {
-        self.zeros.1 > 0
+        self.zeros > 0
     }
 
     /// The conversion's uses: `truth`, the read of the planes' bytes, then the staging buffer's
-    /// writes and read, and the write of every texel of the image of `copies`.
+    /// writes and read, and the write of every texel of the image of `copies`. Before it was made
+    /// ([`make`](Self::make)), which every copy in's planning does (`Encoder::plan_shadows`), it
+    /// has no staging buffer to use, and records nothing.
     pub(super) fn uses(
         &self,
         truth: Use<ResourceKey>,
         copies: &ShadowCopies,
     ) -> Vec<Use<ResourceKey>> {
-        let (key, range) = self.staging_use.clone();
+        let image = Use::writes(
+            copies.shadow_key,
+            copies.tracked,
+            copies.shadow_range.clone(),
+            Access::new(
+                vk::PipelineStageFlags2::COMPUTE_SHADER,
+                vk::AccessFlags2::SHADER_STORAGE_WRITE,
+            ),
+        );
+        let Some(made) = self.made.get() else {
+            return vec![truth, image];
+        };
+        let (key, range) = made.staging_use.clone();
         vec![
             truth,
             Use {
@@ -852,15 +923,7 @@ impl YCbCrConversion {
                     vk::AccessFlags2::TRANSFER_WRITE | vk::AccessFlags2::SHADER_STORAGE_WRITE,
                 ),
             },
-            Use::writes(
-                copies.shadow_key,
-                copies.tracked,
-                copies.shadow_range.clone(),
-                Access::new(
-                    vk::PipelineStageFlags2::COMPUTE_SHADER,
-                    vk::AccessFlags2::SHADER_STORAGE_WRITE,
-                ),
-            ),
+            image,
         ]
     }
 
@@ -874,17 +937,22 @@ impl YCbCrConversion {
     /// # Safety
     ///
     /// `command_buffer` is recording, outside a render pass; `source`, the staging buffer and
-    /// the image are live until it completes, and the image is in the `GENERAL` layout.
+    /// the image are live until it completes, and the image is in the `GENERAL` layout; the
+    /// conversion was made ([`make`](Self::make)), as every copy in's planning makes it
+    /// (`Encoder::plan_shadows`).
     pub(super) unsafe fn record(
         &self,
         device: &Vk,
         command_buffer: vk::CommandBuffer,
         source: vk::Buffer,
     ) {
-        let owner = self.staging.device();
-        let staging = self.staging.at(0).0;
-        let state_at = self.shape_at + STATE_AT;
-        let completed_at = self.shape_at + COMPLETED_AT;
+        let Some(made) = self.made.get() else {
+            return;
+        };
+        let owner = made.staging.device();
+        let staging = made.staging.at(0).0;
+        let state_at = made.shape_at + STATE_AT;
+        let completed_at = made.shape_at + COMPLETED_AT;
         let word = |w: u32| w.to_le_bytes();
         let refresh = self
             .refresh
@@ -894,10 +962,10 @@ impl YCbCrConversion {
         // staging buffer, the copy and the planes' words in `source` (checked when the texture was
         // made), and the sets bind them.
         unsafe {
-            device.cmd_update_buffer(command_buffer, staging, self.shape_at, &self.shape);
-            let (zeros_at, zeros) = self.zeros;
+            device.cmd_update_buffer(command_buffer, staging, made.shape_at, &made.shape);
+            let (zeros_at, zeros) = made.zeros;
             crate::word_fill::record(
-                self.staging.device(),
+                made.staging.device(),
                 command_buffer,
                 staging,
                 zeros_at..zeros_at + zeros,
@@ -908,7 +976,7 @@ impl YCbCrConversion {
                     // The arguments of no workgroup across, which the refresh raises where it
                     // must; the completed word, kept for the refresh, then cleared.
                     let arguments: Vec<u8> =
-                        [0, self.groups[1], 1].into_iter().flat_map(word).collect();
+                        [0, made.groups[1], 1].into_iter().flat_map(word).collect();
                     device.cmd_update_buffer(command_buffer, staging, state_at, &arguments);
                     let kept = vk::BufferCopy {
                         src_offset: completed_at,
@@ -942,17 +1010,17 @@ impl YCbCrConversion {
                 None => {
                     device.cmd_update_buffer(command_buffer, staging, completed_at, &word(0));
                     Barrier::everything().record(device, command_buffer);
-                    device.cmd_copy_buffer(command_buffer, source, staging, &[self.into]);
+                    device.cmd_copy_buffer(command_buffer, source, staging, &[made.into]);
                     owner.shared().counts.ycbcr_converted_whole();
                 }
             }
             Barrier::everything().record(device, command_buffer);
-            self.converts.record(
+            made.converts.record(
                 device,
                 command_buffer,
-                (staging, self.shape_at + BYTES_AT),
+                (staging, made.shape_at + BYTES_AT),
                 refresh.map(|_| state_at),
-                self.groups,
+                made.groups,
             );
             Barrier::everything().record(device, command_buffer);
             device.cmd_update_buffer(command_buffer, staging, completed_at, &word(1));

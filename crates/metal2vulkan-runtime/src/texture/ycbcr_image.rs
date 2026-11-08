@@ -366,7 +366,7 @@ impl Device {
             usage: ImageUsageFlags::STORAGE,
         })?;
         let (raw, at) = texels.buffer.at(span.start);
-        let conversion = YCbCrConversion::new(self, (planes, span.clone()), (raw, at), view)?;
+        let conversion = YCbCrConversion::new(self, (planes, span.clone()), (raw, at), view);
         let (bytes, tracked) = texels.buffer.tracked(span);
         let copies = ShadowCopies {
             source: ShadowSource::Converted {
