@@ -1916,27 +1916,34 @@ fn a_gpu_fault_fails_its_command_buffer_and_the_queue_runs_on() {
 /// Linux the runtime's check of the process's mappings, on macOS the import's answer), the
 /// deallocator dropped unrun. Nothing reaches the GPU. Each answer is printed
 /// (`REFUSED-AT-MAKING`). The driver may report each import it failed, as MoltenVK reports its
-/// failed `vkAllocateMemory`; nothing else is reported.
+/// failed `vkAllocateMemory`; nothing else is reported. A mapped page followed by one the test
+/// unmapped is made again over a fresh reservation where another thread's mapping took the
+/// unmapped page before the making looked (seen mapped once the buffer was made: 7 of 20 runs on
+/// the M3 Max at d65be37964, m3-max-5626), so the making is held to memory whose page is unmapped
+/// as it looks.
 #[test]
 fn memory_metal_makes_no_buffer_over_is_refused_when_it_is_made() {
     let reported = on_device_reporting(|device| {
         let len = 2 * GUEST_PAGE;
-        // SAFETY: a fresh reservation of this test's, without access.
-        let reserved = unsafe {
-            libc::mmap(
-                std::ptr::null_mut(),
-                len,
-                libc::PROT_NONE,
-                libc::MAP_PRIVATE | libc::MAP_ANON,
-                -1,
-                0,
-            )
+        let reserve = || {
+            // SAFETY: a fresh reservation of this test's, without access.
+            let reserved = unsafe {
+                libc::mmap(
+                    std::ptr::null_mut(),
+                    len,
+                    libc::PROT_NONE,
+                    libc::MAP_PRIVATE | libc::MAP_ANON,
+                    -1,
+                    0,
+                )
+            };
+            assert_ne!(reserved, libc::MAP_FAILED, "mmap");
+            NonNull::new(reserved.cast::<u8>()).unwrap()
         };
-        assert_ne!(reserved, libc::MAP_FAILED, "mmap");
-        let at = NonNull::new(reserved.cast::<u8>()).unwrap();
+        let at = reserve();
         let seen = Arc::<Seen>::default();
         let mut answers = Vec::new();
-        let mut refused = |what: &str, length: usize| {
+        let refused = |what: &str, length: usize| {
             // SAFETY: deliberately not memory the contract asks for: the call refuses it before
             // any use, and the buffer is never made.
             let made = unsafe {
@@ -1955,22 +1962,80 @@ fn memory_metal_makes_no_buffer_over_is_refused_when_it_is_made() {
                 not_importable(&error) || matches!(error, Error::OutOfMemory(_)),
                 "{what}: {error:?}"
             );
-            answers.push(format!("{what}: {error:?}"));
+            format!("{what}: {error:?}")
         };
-        refused("pages mapped without access", GUEST_PAGE);
-        // SAFETY: the reservation's own pages: its second goes, its first is mapped readable
-        // and writable.
-        unsafe {
-            let second = at.as_ptr().add(GUEST_PAGE).cast();
-            assert_eq!(libc::munmap(second, GUEST_PAGE), 0, "munmap");
-            anonymous_in_place(at, GUEST_PAGE);
+        answers.push(refused("pages mapped without access", GUEST_PAGE));
+        // A mapped page and then one not mapped, in a reservation of their own: its second page
+        // goes, its first is mapped readable and writable. Another thread's mapping (the
+        // driver's, or one of the runtime's threads') may land in the page just unmapped before
+        // the making looks at it: then every byte is mapped, and the making rightly makes a
+        // buffer. Such a try, its page seen mapped again, is made again over a fresh reservation,
+        // so the case holds the making to memory whose second page is unmapped as it looks.
+        let mut retried = 0;
+        loop {
+            let half = reserve();
+            // SAFETY: the reservation's own pages: its second goes, its first is mapped readable
+            // and writable.
+            unsafe {
+                let second = half.as_ptr().add(GUEST_PAGE).cast();
+                assert_eq!(libc::munmap(second, GUEST_PAGE), 0, "munmap");
+                anonymous_in_place(half, GUEST_PAGE);
+            }
+            let what = "a mapped page and then one not mapped";
+            let tried = Arc::<Seen>::default();
+            // SAFETY: as `refused`'s.
+            let made = unsafe {
+                no_copy(
+                    device,
+                    half,
+                    len,
+                    ResourceOptions::default(),
+                    Some(recording(&tried, ())),
+                )
+            };
+            // SAFETY: a query of the second page's mapping, which reads and writes nothing.
+            let second_mapped = unsafe {
+                libc::msync(
+                    half.as_ptr().add(GUEST_PAGE).cast(),
+                    GUEST_PAGE,
+                    libc::MS_ASYNC,
+                )
+            } == 0;
+            match made {
+                Err(error) => {
+                    assert!(
+                        not_importable(&error) || matches!(error, Error::OutOfMemory(_)),
+                        "{what}: {error:?}"
+                    );
+                    assert_eq!(tried.runs.load(Ordering::SeqCst), 0, "{what}: ran");
+                    assert_eq!(tried.dropped.load(Ordering::SeqCst), 1, "{what}: kept");
+                    answers.push(format!("{what}: {error:?} ({retried} tries made again)"));
+                    // SAFETY: the first page goes too, and with it the reservation.
+                    assert_eq!(unsafe { libc::munmap(half.as_ptr().cast(), GUEST_PAGE) }, 0);
+                    break;
+                }
+                Ok(buffer) => {
+                    assert!(
+                        second_mapped,
+                        "{what}: a buffer was made, its second page unmapped still"
+                    );
+                    assert!(
+                        retried < 8,
+                        "{what}: another mapping took the page {retried} times"
+                    );
+                    drop(buffer);
+                    retried += 1;
+                    // SAFETY: the try's first page goes; the mapping that took the second is
+                    // another's, left as it is.
+                    assert_eq!(unsafe { libc::munmap(half.as_ptr().cast(), GUEST_PAGE) }, 0);
+                }
+            }
         }
-        refused("a mapped page and then one not mapped", len);
-        // SAFETY: the first page goes too, and with it the reservation.
-        assert_eq!(unsafe { libc::munmap(at.as_ptr().cast(), GUEST_PAGE) }, 0);
-        refused("pages not mapped", GUEST_PAGE);
+        // SAFETY: the first reservation's pages go.
+        assert_eq!(unsafe { libc::munmap(at.as_ptr().cast(), len) }, 0);
+        answers.push(refused("pages not mapped", GUEST_PAGE));
         assert_eq!(seen.runs.load(Ordering::SeqCst), 0);
-        assert_eq!(seen.dropped.load(Ordering::SeqCst), 3);
+        assert_eq!(seen.dropped.load(Ordering::SeqCst), 2);
         eprintln!(
             "REFUSED-AT-MAKING {}: {}",
             device.name(),
