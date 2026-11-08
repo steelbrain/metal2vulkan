@@ -443,7 +443,7 @@ pub(super) struct DeviceShared {
     recording: Option<Slot>,
     /// The reasons a draw that reads its pass's texture took the split that the device said
     /// already, where `METAL2VULKAN_LOG_PIPELINES` is set (`render/snapshot.rs`).
-    pub(super) snapshot_fallbacks: Mutex<Vec<&'static str>>,
+    pub(super) snapshot_fallbacks: Mutex<Vec<crate::render::SplitReason>>,
     /// The draws the area rule weighed, by size, where `METAL2VULKAN_LOG_PIPELINES` is set
     /// (`render/snapshot.rs`, `reader_sizes.rs`).
     pub(super) reader_sizes: Mutex<crate::reader_sizes::ReaderSizes>,

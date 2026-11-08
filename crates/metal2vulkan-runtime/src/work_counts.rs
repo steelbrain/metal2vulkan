@@ -13,6 +13,7 @@ use super::device::lock;
 use super::heap_sets::Unkept;
 use super::memory::FreeCause;
 use super::recorder::CommandsRecorded;
+use super::render::SplitReason;
 use super::scheduler::HeldFor;
 use super::shadow::{Backing, CarryTally, CopyCause, Lost, ShadowCopy, ShadowSource};
 use super::shadow_standing::{LetGo, Missed, Unskipped};
@@ -492,6 +493,7 @@ pub(crate) struct Counters {
     attachment_read_clears: AtomicU64,
     reading_draws_snapshotted: AtomicU64,
     snapshot_inline_splits: AtomicU64,
+    reading_draws_split: [AtomicU64; 15],
     reading_draws_by_coverage: AtomicU64,
     coverage_queries: AtomicU64,
     coverage_pools_made: AtomicU64,
@@ -3677,6 +3679,12 @@ impl Counters {
     /// inline (`render/snapshot.rs`).
     pub(crate) fn snapshot_inline_split(&self) {
         self.snapshot_inline_splits.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A draw that reads its pass's texture after a barrier, through a slot its function reads
+    /// at its own pixels, took the split, for `reason` (`render/snapshot.rs`).
+    pub(crate) fn reading_draw_split(&self, reason: SplitReason) {
+        self.reading_draws_split[reason as usize].fetch_add(1, Ordering::Relaxed);
     }
 
     /// A reader of its pass's color was weighed by what it covered when a pass last measured it
@@ -7075,6 +7083,45 @@ pub struct WorkCounts {
     /// was recorded inline, its render pass instance begun without the feedback loop layout the
     /// snapshot needs (`render/snapshot.rs`, `render/inline_first.rs`).
     pub snapshot_inline_splits: u64,
+    /// Draws that read a texture of their render pass after a memory barrier at their own pixels
+    /// and took the split (`attachment_read_splits`), by why the snapshot did not serve them
+    /// (`render/snapshot.rs`, `SplitReason`; the log names each reason once a device). This one:
+    /// the function's read reaches what no snapshot serves (`StageModule::snapshot_textures`: a
+    /// branch, a sample, a derivative, a store, or the function writes memory).
+    pub reading_draws_split_unreadable_own_pixel: u64,
+    /// The texture is not read where its attachment renders it in place, or its image lacks the
+    /// feedback loop usage (`Texture::snapshot_color`).
+    pub reading_draws_split_not_in_place: u64,
+    /// The device lacks `attachmentFeedbackLoopLayout`, `extendedDynamicState3ColorWriteMask` or
+    /// `fragmentShaderPixelInterlock`.
+    pub reading_draws_split_device_lacks: u64,
+    /// A visibility query is active.
+    pub reading_draws_split_visibility_query: u64,
+    /// The pass fetches input attachments, or has a rasterization-rate map, samples or layers.
+    pub reading_draws_split_pass_shape: u64,
+    /// The draw renders the attachment through a view of another format.
+    pub reading_draws_split_other_format: u64,
+    /// A framebuffer fetch of the attachment would render it through a stand-in, and the draw
+    /// cannot pin it.
+    pub reading_draws_split_stand_in: u64,
+    /// The draw reads two attachments of one image.
+    pub reading_draws_split_one_image: u64,
+    /// The area rule, weighed at the pixels the reader covered when last measured
+    /// (`render/coverage.rs`): the snapshot costs more than the split's copy.
+    pub reading_draws_split_coverage: u64,
+    /// The area rule, weighed at the draw's scissors: the snapshot costs more than the split's
+    /// copy.
+    pub reading_draws_split_area: u64,
+    /// The compile or bind layer refused the variant that reads through snapshots.
+    pub reading_draws_split_variant_refused: u64,
+    /// The binder left a slot out of the variant.
+    pub reading_draws_split_slot_left_out: u64,
+    /// The draw renders views.
+    pub reading_draws_split_views: u64,
+    /// The draw binds the texture as a storage image.
+    pub reading_draws_split_storage_binding: u64,
+    /// The draw reads another attachment's texture.
+    pub reading_draws_split_other_attachment: u64,
     /// Draws that read a color of their render pass after a memory barrier, which the area rule
     /// weighs between the snapshot and the split, weighed by the pixels they covered in the
     /// latest pass that measured them rather than by their scissors (`render/coverage.rs`):
@@ -7264,6 +7311,9 @@ impl Device {
         let standing = |let_go: Option<LetGo>| {
             let at = let_go.map_or(0, |let_go| let_go as usize + 1);
             counters.shadow_texels_unskipped_standing[at].load(Ordering::Relaxed)
+        };
+        let split = |reason: SplitReason| {
+            counters.reading_draws_split[reason as usize].load(Ordering::Relaxed)
         };
         let never_stood = |missed: Missed| {
             counters.shadow_texels_never_stood[missed as usize].load(Ordering::Relaxed)
@@ -8079,6 +8129,21 @@ impl Device {
             attachment_read_clears: counters.attachment_read_clears.load(Ordering::Relaxed),
             reading_draws_snapshotted: counters.reading_draws_snapshotted.load(Ordering::Relaxed),
             snapshot_inline_splits: counters.snapshot_inline_splits.load(Ordering::Relaxed),
+            reading_draws_split_unreadable_own_pixel: split(SplitReason::UnreadableOwnPixel),
+            reading_draws_split_not_in_place: split(SplitReason::NotInPlace),
+            reading_draws_split_device_lacks: split(SplitReason::DeviceLacks),
+            reading_draws_split_visibility_query: split(SplitReason::VisibilityQuery),
+            reading_draws_split_pass_shape: split(SplitReason::PassShape),
+            reading_draws_split_other_format: split(SplitReason::OtherFormat),
+            reading_draws_split_stand_in: split(SplitReason::StandIn),
+            reading_draws_split_one_image: split(SplitReason::OneImage),
+            reading_draws_split_coverage: split(SplitReason::Coverage),
+            reading_draws_split_area: split(SplitReason::Area),
+            reading_draws_split_variant_refused: split(SplitReason::VariantRefused),
+            reading_draws_split_slot_left_out: split(SplitReason::SlotLeftOut),
+            reading_draws_split_views: split(SplitReason::Views),
+            reading_draws_split_storage_binding: split(SplitReason::StorageBinding),
+            reading_draws_split_other_attachment: split(SplitReason::OtherAttachment),
             reading_draws_by_coverage: counters.reading_draws_by_coverage.load(Ordering::Relaxed),
             coverage_queries: counters.coverage_queries.load(Ordering::Relaxed),
             coverage_pools_made: counters.coverage_pools_made.load(Ordering::Relaxed),

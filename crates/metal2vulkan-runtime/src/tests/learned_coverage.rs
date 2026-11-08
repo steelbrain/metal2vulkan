@@ -202,6 +202,37 @@ fn moved(before: &WorkCounts, after: &WorkCounts) -> [u64; 4] {
     ]
 }
 
+/// Why a pass's reader took the split, of the counts between `before` and `after`
+/// (`WorkCounts::reading_draws_split_*`): the device lacks the snapshot path, the coverage rule,
+/// an app's visibility query, and every other reason.
+fn split_by(before: &WorkCounts, after: &WorkCounts) -> [u64; 4] {
+    let delta = |count: fn(&WorkCounts) -> u64| count(after) - count(before);
+    let named = [
+        delta(|c| c.reading_draws_split_device_lacks),
+        delta(|c| c.reading_draws_split_coverage),
+        delta(|c| c.reading_draws_split_visibility_query),
+    ];
+    let every = [
+        delta(|c| c.reading_draws_split_unreadable_own_pixel),
+        delta(|c| c.reading_draws_split_not_in_place),
+        delta(|c| c.reading_draws_split_device_lacks),
+        delta(|c| c.reading_draws_split_visibility_query),
+        delta(|c| c.reading_draws_split_pass_shape),
+        delta(|c| c.reading_draws_split_other_format),
+        delta(|c| c.reading_draws_split_stand_in),
+        delta(|c| c.reading_draws_split_one_image),
+        delta(|c| c.reading_draws_split_coverage),
+        delta(|c| c.reading_draws_split_area),
+        delta(|c| c.reading_draws_split_variant_refused),
+        delta(|c| c.reading_draws_split_slot_left_out),
+        delta(|c| c.reading_draws_split_views),
+        delta(|c| c.reading_draws_split_storage_binding),
+        delta(|c| c.reading_draws_split_other_attachment),
+    ];
+    let others = every.iter().sum::<u64>() - named.iter().sum::<u64>();
+    [named[0], named[1], named[2], others]
+}
+
 /// The device made, its states and its pipelines made by two passes over an untracked target.
 fn prepared(cache: &Scratch) -> (Device, CommandQueue, [RenderPipelineState; 2]) {
     let device = device(&cache.0);
@@ -234,7 +265,9 @@ fn a_readers_form_follows_what_it_covered_in_the_pass_before() {
     for (pass, &rect) in rects.iter().enumerate() {
         let before = device.work_counts();
         let reds = pass_over(&queue, &target, (&fill, &read), (pass, rect), None);
-        let moved = moved(&before, &device.work_counts());
+        let after = device.work_counts();
+        let moved = moved(&before, &after);
+        let split_by = split_by(&before, &after);
         eprintln!(
             "LEARNED-COVERAGE pass {pass} over {rect:?}: (splits, snapshotted, queries, by \
              coverage) {moved:?}"
@@ -271,6 +304,12 @@ fn a_readers_form_follows_what_it_covered_in_the_pass_before() {
             want,
             "pass {pass} over {rect:?} on {}: splits, snapshotted, queries, by coverage",
             device.name()
+        );
+        // Each split counted by its reason: the device's lack, else the count's.
+        let want_by = [u64::from(!snapshots), u64::from(snapshots && split), 0, 0];
+        assert_eq!(
+            split_by, want_by,
+            "pass {pass} over {rect:?}: split by the device, coverage, a query, others"
         );
         learned = Some(rect);
     }
@@ -314,7 +353,15 @@ fn an_apps_visibility_query_keeps_its_count_with_a_reader_inside_it() {
     // samples and the reader's.
     let before = device.work_counts();
     let reds = pass_over(&queue, &target, (&fill, &read), (1, SPARSE), Some(&results));
-    let inside = moved(&before, &device.work_counts());
+    let after = device.work_counts();
+    let inside = moved(&before, &after);
+    // The device's lack is checked first, then the query.
+    let want_by = [u64::from(!snapshots), 0, u64::from(snapshots), 0];
+    assert_eq!(
+        split_by(&before, &after),
+        want_by,
+        "inside the app's query: split by the device, coverage, a query, others"
+    );
     eprintln!(
         "LEARNED-COVERAGE {} inside a visibility query: (splits, snapshotted, queries, by \
          coverage) {inside:?}",

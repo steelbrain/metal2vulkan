@@ -426,6 +426,7 @@ mod reroute;
 mod restart;
 mod shadows;
 mod snapshot;
+pub(crate) use snapshot::SplitReason;
 mod table_facts;
 mod tessellation_scan;
 mod tile_dispatch;
@@ -11235,7 +11236,7 @@ impl RenderLowering {
                 Err(Error::Unsupported(_) | Error::Bind(BindError::Unsupported(_)))
                     if snapshot.is_some() =>
                 {
-                    let reason = "the variant that reads through snapshots is refused";
+                    let reason = snapshot::SplitReason::VariantRefused;
                     snapshot::snapshot_fallback(self.core.device(), reason);
                     *snapshot = None;
                     continue;

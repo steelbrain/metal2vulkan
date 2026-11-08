@@ -150,7 +150,9 @@
 //!   its reader splits.
 //! - **Counted**: `WorkCounts::reading_draws_snapshotted`, and of them
 //!   `WorkCounts::snapshot_inline_splits` and `WorkCounts::reading_draws_pinned`; the passes whose
-//!   stand-ins arrived after a pin, `WorkCounts::stand_ins_after_pins`. With `METAL2VULKAN_LOG_PIPELINES` set,
+//!   stand-ins arrived after a pin, `WorkCounts::stand_ins_after_pins`; each draw at its own pixels
+//!   that took the split, by the check that took it (`SplitReason`,
+//!   `WorkCounts::reading_draws_split_*`), a function whose read no snapshot serves among them. With `METAL2VULKAN_LOG_PIPELINES` set,
 //!   the first draw of each reason a draw took the split says so, once per device
 //!   (`metal2vulkan-snapshot-fallback`), and the draws the area rule weighed are counted by their
 //!   share of their colors' pixels and texel bytes, a line at 64 of them, each power of two
@@ -362,34 +364,46 @@ impl RenderLowering {
                 continue;
             }
             let Some(index) = texture.snapshot_color(&self.layout) else {
-                return self.snapshot_fallback("the texture is not read where its attachment renders it in place, or its image lacks feedback loop usage");
+                // On a device without the path no image takes the feedback loop usage.
+                let reason = match self.core.device().shared().color_write_masks.is_none() {
+                    true => SplitReason::DeviceLacks,
+                    false => SplitReason::NotInPlace,
+                };
+                return self.snapshot_fallback(reason);
             };
             wanted.slots.insert(slot);
             wanted.feedback.0 |= 1 << index;
         }
         if wanted.slots.is_empty() {
+            // A function that reads, after the barrier, a texture of the pass at its own pixels
+            // in a way no snapshot serves (`StageModule::snapshot_textures`) takes the split.
+            let unreadable = ordered
+                && (fragment.own_pixel_textures.iter()).any(|slot| {
+                    !fragment.snapshot_textures.contains(slot)
+                        && (self.fragment.textures.get(slot))
+                            .is_some_and(|texture| texture.attached_in(&self.layout))
+                });
+            if unreadable {
+                return self.snapshot_fallback(SplitReason::UnreadableOwnPixel);
+            }
             return None;
         }
         let device = self.core.device();
         if device.shared().color_write_masks.is_none() {
-            return self.snapshot_fallback("the device lacks attachmentFeedbackLoopLayout, extendedDynamicState3ColorWriteMask or fragmentShaderPixelInterlock");
+            return self.snapshot_fallback(SplitReason::DeviceLacks);
         }
         if self.visibility.active() {
-            return self.snapshot_fallback("a visibility query is active");
+            return self.snapshot_fallback(SplitReason::VisibilityQuery);
         }
         if self.layout.fetch_inputs
             || self.rate_map.is_some()
             || self.layout.samples != 1
             || self.layout.layers != 1
         {
-            return self.snapshot_fallback(
-                "the pass fetches input attachments, or has a rasterization-rate map, samples or layers",
-            );
+            return self.snapshot_fallback(SplitReason::PassShape);
         }
         if reformats.iter().any(|r| wanted.feedback.has(r.index)) {
-            return self.snapshot_fallback(
-                "the draw renders the attachment through a view of another format",
-            );
+            return self.snapshot_fallback(SplitReason::OtherFormat);
         }
         let colors: Vec<usize> = (0..self.layout.colors.len())
             .filter(|&i| wanted.feedback.has(i))
@@ -405,9 +419,7 @@ impl RenderLowering {
                 color.target.texture.want_storage_form();
             }
             if !self.pins_own_attachment(pipeline, index) {
-                return self.snapshot_fallback(
-                    "a framebuffer fetch of the attachment would render it through a stand-in",
-                );
+                return self.snapshot_fallback(SplitReason::StandIn);
             }
             wanted.pins |= 1 << index;
         }
@@ -423,7 +435,7 @@ impl RenderLowering {
             .enumerate()
             .any(|(i, a)| a.is_none() || images[i + 1..].iter().any(|b| b == a));
         if shared {
-            return self.snapshot_fallback("the draw reads two attachments of one image");
+            return self.snapshot_fallback(SplitReason::OneImage);
         }
         Some(wanted)
     }
@@ -471,12 +483,8 @@ impl RenderLowering {
         };
         let wanted = match (within, learned) {
             (true, _) => Some(wanted),
-            (false, Some(_)) => self.snapshot_fallback(
-                "coverage: the snapshot draw over the pixels the reader covered when last measured costs more than the split's copy",
-            ),
-            (false, None) => self.snapshot_fallback(
-                "area: the snapshot draw over the draw's scissors costs more than the split's copy",
-            ),
+            (false, Some(_)) => self.snapshot_fallback(SplitReason::Coverage),
+            (false, None) => self.snapshot_fallback(SplitReason::Area),
         };
         Ok((wanted, query))
     }
@@ -625,7 +633,7 @@ impl RenderLowering {
         &self,
         settled: &Settled,
         wanted: &Wanted,
-    ) -> Result<(), &'static str> {
+    ) -> Result<(), SplitReason> {
         let plan = &settled.plan;
         let kept: BTreeSet<u32> = plan
             .variant
@@ -635,10 +643,10 @@ impl RenderLowering {
             .map(|slot| slot.index)
             .collect();
         if kept != wanted.slots || !settled.variant.pipeline().graphics.snapshot_reads {
-            return Err("the binder left a slot out");
+            return Err(SplitReason::SlotLeftOut);
         }
         if plan.views.view_mask != 0 {
-            return Err("the draw renders views");
+            return Err(SplitReason::Views);
         }
         for write in &plan.descriptors {
             let slot = match &write.source {
@@ -651,10 +659,10 @@ impl RenderLowering {
             };
             let snapshot = is_snapshot_slot(&wanted.slots, slot);
             if snapshot && write.ty == metal2vulkan::vk::DescriptorType::STORAGE_IMAGE {
-                return Err("the draw binds the texture as a storage image");
+                return Err(SplitReason::StorageBinding);
             }
             if !snapshot && self.slot_attached(slot) {
-                return Err("the draw reads another attachment's texture");
+                return Err(SplitReason::OtherAttachment);
             }
         }
         Ok(())
@@ -724,9 +732,9 @@ impl RenderLowering {
                 .any(|&c| wanted.feedback.has(c as usize))
     }
 
-    /// Say, once per device and reason, where `METAL2VULKAN_LOG_PIPELINES` is set, why a draw
-    /// that reads its pass's texture took the split; `None`, for the caller to return.
-    pub(super) fn snapshot_fallback(&self, reason: &'static str) -> Option<Wanted> {
+    /// Count why a draw that reads its pass's texture took the split, and say it, once per device
+    /// and reason, where `METAL2VULKAN_LOG_PIPELINES` is set; `None`, for the caller to return.
+    pub(super) fn snapshot_fallback(&self, reason: SplitReason) -> Option<Wanted> {
         snapshot_fallback(self.core.device(), reason);
         None
     }
@@ -751,8 +759,78 @@ pub(super) fn is_snapshot_slot(slots: &BTreeSet<u32>, slot: &SlotRef) -> bool {
     slot.stage == Stage::Fragment && slot.class == SlotClass::Texture && slots.contains(&slot.index)
 }
 
-/// [`RenderLowering::snapshot_fallback`]'s message, from anywhere the device is known.
-pub(super) fn snapshot_fallback(device: &crate::Device, reason: &'static str) {
+/// Why a draw that reads its pass's texture after a barrier at its own pixels takes the split
+/// (the module docs' checks, in their order), each counted by draw
+/// (`WorkCounts::reading_draws_split_*`, in this order).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SplitReason {
+    UnreadableOwnPixel,
+    NotInPlace,
+    DeviceLacks,
+    VisibilityQuery,
+    PassShape,
+    OtherFormat,
+    StandIn,
+    OneImage,
+    Coverage,
+    Area,
+    VariantRefused,
+    SlotLeftOut,
+    Views,
+    StorageBinding,
+    OtherAttachment,
+}
+
+impl SplitReason {
+    /// What the log says of it.
+    fn text(self) -> &'static str {
+        match self {
+            SplitReason::UnreadableOwnPixel => {
+                "the function reads the texture at its own pixels in a way no snapshot serves (its \
+                 read reaches a branch, a sample, a derivative or a store, or the function writes \
+                 memory)"
+            }
+            SplitReason::NotInPlace => {
+                "the texture is not read where its attachment renders it in place, or its image \
+                 lacks feedback loop usage"
+            }
+            SplitReason::DeviceLacks => {
+                "the device lacks attachmentFeedbackLoopLayout, extendedDynamicState3ColorWriteMask \
+                 or fragmentShaderPixelInterlock"
+            }
+            SplitReason::VisibilityQuery => "a visibility query is active",
+            SplitReason::PassShape => {
+                "the pass fetches input attachments, or has a rasterization-rate map, samples or \
+                 layers"
+            }
+            SplitReason::OtherFormat => {
+                "the draw renders the attachment through a view of another format"
+            }
+            SplitReason::StandIn => {
+                "a framebuffer fetch of the attachment would render it through a stand-in"
+            }
+            SplitReason::OneImage => "the draw reads two attachments of one image",
+            SplitReason::Coverage => {
+                "coverage: the snapshot draw over the pixels the reader covered when last measured \
+                 costs more than the split's copy"
+            }
+            SplitReason::Area => {
+                "area: the snapshot draw over the draw's scissors costs more than the split's copy"
+            }
+            SplitReason::VariantRefused => "the variant that reads through snapshots is refused",
+            SplitReason::SlotLeftOut => "the binder left a slot out",
+            SplitReason::Views => "the draw renders views",
+            SplitReason::StorageBinding => "the draw binds the texture as a storage image",
+            SplitReason::OtherAttachment => "the draw reads another attachment's texture",
+        }
+    }
+}
+
+/// [`RenderLowering::snapshot_fallback`]'s count and message, from anywhere the device is known:
+/// every such draw counted by `reason`, and, where `METAL2VULKAN_LOG_PIPELINES` is set, the
+/// first of each reason on the device said.
+pub(super) fn snapshot_fallback(device: &crate::Device, reason: SplitReason) {
+    device.shared().counts.reading_draw_split(reason);
     if !crate::pipeline::creation_log_enabled() {
         return;
     }
@@ -766,6 +844,7 @@ pub(super) fn snapshot_fallback(device: &crate::Device, reason: &'static str) {
         first
     };
     if first {
+        let reason = reason.text();
         device.inform(
             "metal2vulkan-snapshot-fallback",
             format!(
