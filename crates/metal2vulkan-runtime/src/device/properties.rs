@@ -121,10 +121,11 @@ pub struct PhysicalDeviceIdentity {
     /// `recommendedMaxWorkingSetSize`, which it is not: Metal's is its estimate of the memory the
     /// GPU can use without hurting its performance, and this is the heap's whole size, fixed for
     /// the physical device, with nothing taken off for the system or for other processes' use
-    /// (what `VK_EXT_memory_budget` would report) and no device made to read it. On a discrete
-    /// GPU the heap is its own memory; on one of unified memory, the share of the host's memory
-    /// its driver reports. No device property answers it. `None` only where the driver reports
-    /// no `DEVICE_LOCAL` heap, which Vulkan requires one of.
+    /// (what `VK_EXT_memory_budget` would report) and no device made to read it. On an Apple M3
+    /// Max of 64 GiB (macOS 27.0.1, MoltenVK 1.4.2) it is 68,719,476,736, the host's whole
+    /// memory, where Metal's `recommendedMaxWorkingSetSize` is 55,662,788,608. No device
+    /// property answers it. `None` only where the driver reports no `DEVICE_LOCAL` heap, which
+    /// Vulkan requires one of.
     pub recommended_max_working_set_size: Option<u64>,
 }
 
