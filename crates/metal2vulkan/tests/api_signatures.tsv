@@ -2845,6 +2845,7 @@ field	metal2vulkan-runtime::WorkCounts.instance_splits_tile_dispatch	pub instanc
 field	metal2vulkan-runtime::WorkCounts.instance_splits_tile_memory	pub instance_splits_tile_memory: u64
 field	metal2vulkan-runtime::WorkCounts.instance_splits_visibility	pub instance_splits_visibility: u64
 field	metal2vulkan-runtime::WorkCounts.internal_submissions	pub internal_submissions: u64
+field	metal2vulkan-runtime::WorkCounts.joins_withheld_from_old_heads	pub joins_withheld_from_old_heads: u64
 field	metal2vulkan-runtime::WorkCounts.joins_withheld_from_unshared	pub joins_withheld_from_unshared: u64
 field	metal2vulkan-runtime::WorkCounts.kept_backings_made	pub kept_backings_made: u64
 field	metal2vulkan-runtime::WorkCounts.kept_bytes_passes	pub kept_bytes_passes: u64
@@ -2898,6 +2899,7 @@ field	metal2vulkan-runtime::WorkCounts.passes_not_inline_memoryless	pub passes_n
 field	metal2vulkan-runtime::WorkCounts.passes_not_inline_memoryless_writes	pub passes_not_inline_memoryless_writes: u64
 field	metal2vulkan-runtime::WorkCounts.passes_not_inline_stand_ins	pub passes_not_inline_stand_ins: u64
 field	metal2vulkan-runtime::WorkCounts.passes_not_inline_storage	pub passes_not_inline_storage: u64
+field	metal2vulkan-runtime::WorkCounts.picks_with_none_busy	pub picks_with_none_busy: u64
 field	metal2vulkan-runtime::WorkCounts.pipeline_layouts_made	pub pipeline_layouts_made: u64
 field	metal2vulkan-runtime::WorkCounts.pipeline_layouts_shared	pub pipeline_layouts_shared: u64
 field	metal2vulkan-runtime::WorkCounts.pipeline_libraries_made	pub pipeline_libraries_made: u64

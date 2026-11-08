@@ -228,6 +228,8 @@ pub(crate) struct Counters {
     long_queue_settles: AtomicU64,
     queue_moves_off_unshared: AtomicU64,
     joins_withheld_from_unshared: AtomicU64,
+    picks_with_none_busy: AtomicU64,
+    joins_withheld_from_old_heads: AtomicU64,
     queue_switch_checks_run: AtomicU64,
     queue_switch_checks_recalled: AtomicU64,
     submit_checks_run: AtomicU64,
@@ -2220,6 +2222,18 @@ impl Counters {
     /// unshared queue it holds (`queue_share.rs`).
     pub(crate) fn join_withheld_from_unshared(&self) {
         (self.joins_withheld_from_unshared).fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A command queue's choice found no other `VkQueue` with batches in flight
+    /// (`queue_share.rs`).
+    pub(crate) fn picked_with_none_busy(&self) {
+        self.picks_with_none_busy.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A command queue's choice joined no `VkQueue`, passing over a busy one for its oldest
+    /// batch's age (`queue_share.rs`).
+    pub(crate) fn join_withheld_from_old_head(&self) {
+        (self.joins_withheld_from_old_heads).fetch_add(1, Ordering::Relaxed);
     }
 
     /// The device's check of its GPU's idling between `VkQueue`s ran in this process
@@ -4977,6 +4991,16 @@ pub struct WorkCounts {
     /// Choices of a command queue that passed over a busy `VkQueue` whose oldest batch was young,
     /// which it might have joined, because an unshared queue holds it.
     pub joins_withheld_from_unshared: u64,
+    /// Choices of a command queue at an idle point that found no other `VkQueue` of its family
+    /// with batches in flight: nothing to join. Work committed but not yet submitted is not in
+    /// flight, so on a busy host a queue choosing just after another's commits can find so.
+    pub picks_with_none_busy: u64,
+    /// Choices of a command queue at an idle point that joined no `VkQueue` and passed over
+    /// another with batches in flight, which no long or unshared queue holds, because its oldest
+    /// batch had run 0.5 ms or longer (or for a time not known): a queue joining it would likely
+    /// wait behind a long command buffer. Beside another process's GPU work, or on a host too busy
+    /// to see batches complete at once, a busy `VkQueue` can look so.
+    pub joins_withheld_from_old_heads: u64,
     /// Runs in this process of the device's check of its GPU's idling between `VkQueue`s
     /// (`queue_switch_check.rs`), whatever they answered.
     pub queue_switch_checks_run: u64,
@@ -7050,6 +7074,10 @@ impl Device {
             queue_moves_off_unshared: counters.queue_moves_off_unshared.load(Ordering::Relaxed),
             joins_withheld_from_unshared: counters
                 .joins_withheld_from_unshared
+                .load(Ordering::Relaxed),
+            picks_with_none_busy: counters.picks_with_none_busy.load(Ordering::Relaxed),
+            joins_withheld_from_old_heads: counters
+                .joins_withheld_from_old_heads
                 .load(Ordering::Relaxed),
             queue_switch_checks_run: counters.queue_switch_checks_run.load(Ordering::Relaxed),
             queue_switch_checks_recalled: counters

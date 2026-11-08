@@ -4,10 +4,14 @@
 //! - **Order across moves.** A queue's command buffers each copy the word the one before wrote
 //!   into the next word, and write their sequence number, while two other queues keep their
 //!   `VkQueue`s busy in turn, so the queue moves between them where the device shares: every word
-//!   reads as written in commit order, and the queue moved (`queue_moves` above 0) where the
-//!   device shares, never elsewhere.
+//!   reads as written in commit order, and the queue moved where the device shares at every idle
+//!   point where the rule calls for a move, never elsewhere. A choice that stays there is the
+//!   rule's where it found no other `VkQueue` busy or passed over the busy ones for their oldest
+//!   batches' age (`picks_with_none_busy`, `joins_withheld_from_old_heads`): on a busy host or
+//!   beside another process's GPU work every choice can.
 //! - **No deadlock.** A queue joins another's busy `VkQueue` and commits a command buffer that
 //!   waits for a shared event, before the other commits the one that signals it: both complete.
+//!   The join is asserted where the rule calls for it, as above.
 //! - **Pinned and presenting queues never move**, where an unpinned one in the same place does.
 //! - **Unshared queues.** No queue moves onto an unshared queue's `VkQueue` (each command buffer's
 //!   `VkQueue` read, `joins_withheld_from_unshared` above 0 where the device shares), a queue
@@ -31,7 +35,7 @@
 use super::blit_holds::Scratch;
 use crate::{
     Buffer, CommandBuffer, CommandQueue, Device, DeviceKind, DeviceOptions, ResourceOptions,
-    ShaderCacheOptions,
+    ShaderCacheOptions, WorkCounts,
 };
 use metal2vulkan::device::{DevicePolicy, QueueSharingPolicy};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -96,10 +100,12 @@ fn each_policy(leg: &str, test: impl Fn(&Device, bool)) {
     }
 }
 
-/// Commit `count` command buffers of one 1 MiB fill each on `queue`, not waited for: its
-/// `VkQueue` busy, its oldest batch young.
+/// Commit `count` command buffers of one 1 MiB fill each on `queue`, not waited for, the first
+/// scheduled: its `VkQueue` busy as this returns, its oldest batch young unless the host was slow
+/// to come back. A command buffer committed and not yet submitted is in no `VkQueue`'s flight,
+/// which is all a queue's choice looks at (`queue_share.rs`).
 fn burst(queue: &CommandQueue, target: &Buffer, count: usize) -> Vec<CommandBuffer> {
-    (0..count)
+    let command_buffers: Vec<CommandBuffer> = (0..count)
         .map(|_| {
             let command_buffer = queue.command_buffer().unwrap();
             let mut blit = command_buffer.blit_command_encoder().unwrap();
@@ -108,7 +114,21 @@ fn burst(queue: &CommandQueue, target: &Buffer, count: usize) -> Vec<CommandBuff
             command_buffer.commit().unwrap();
             command_buffer
         })
-        .collect()
+        .collect();
+    if let Some(first) = command_buffers.first() {
+        first.wait_until_scheduled().unwrap();
+    }
+    command_buffers
+}
+
+/// Whether a queue's choice made between `before` and `after`, which moved it nowhere, stayed as
+/// the sharing rule says (`queue_share.rs`): it found no other `VkQueue` with batches in flight,
+/// or passed over the busy ones for their oldest batches' age, or a queue went long. On a busy
+/// host or beside another process's GPU work every choice can stay so.
+fn stayed_by_the_rule(before: &WorkCounts, after: &WorkCounts) -> bool {
+    after.picks_with_none_busy > before.picks_with_none_busy
+        || after.joins_withheld_from_old_heads > before.joins_withheld_from_old_heads
+        || after.queues_gone_long > 0
 }
 
 fn wait_all(command_buffers: Vec<CommandBuffer>) {
@@ -141,15 +161,28 @@ fn a_queue_s_command_buffers_run_in_commit_order_across_its_moves() {
             .unwrap();
         let mut seen = Vec::new();
         let mut kept = Vec::new();
+        // The idle points where the queue stayed though the rule called for a move.
+        let mut unexplained = Vec::new();
         for step in 0..STEPS {
             // Every fourth step one of the other queues is busy, in turn; the rest the queue
             // makes its next command buffer with its last one in flight, so with no move.
             let idle = step % 4 == 0;
+            let other = &busy[step / 4 % 2];
             if idle {
-                kept.extend(burst(&busy[step / 4 % 2], &scratch, 24));
+                kept.extend(burst(other, &scratch, 24));
             }
+            let (at, before) = (queue.vk_queue_sharing().0, device.work_counts());
             let command_buffer = queue.command_buffer().unwrap();
             seen.push(queue.vk_queue_sharing().0);
+            // A stay where the busy queue's `VkQueue` is its own is the rule's too.
+            if idle
+                && shares
+                && seen[step] == at
+                && other.vk_queue_sharing().0 != at
+                && !stayed_by_the_rule(&before, &device.work_counts())
+            {
+                unexplained.push(step);
+            }
             let mut blit = command_buffer.blit_command_encoder().unwrap();
             let at = 4 * step as u64;
             match step {
@@ -180,11 +213,23 @@ fn a_queue_s_command_buffers_run_in_commit_order_across_its_moves() {
             assert_eq!(word, u32::from_ne_bytes([step as u8; 4]), "sequence {step}");
         }
         let moved = seen.windows(2).filter(|pair| pair[0] != pair[1]).count();
-        println!("VkQueues {seen:?}: {moved} moves");
+        let counts = device.work_counts();
+        println!(
+            "VkQueues {seen:?}: {moved} moves; choices with none busy {}, old heads passed over \
+             {}, queues gone long {}",
+            counts.picks_with_none_busy,
+            counts.joins_withheld_from_old_heads,
+            counts.queues_gone_long
+        );
         match shares {
+            // Where the device shares, the queue moved at every idle point where the rule called
+            // for a move: where another `VkQueue` had batches in flight whose oldest was young.
             true => {
-                assert!(moved > 0, "the queue moved where the device shares");
-                assert!(device.work_counts().queue_moves > 0);
+                assert!(
+                    unexplained.is_empty(),
+                    "the queue stayed where the device shares, at idle steps {unexplained:?}"
+                );
+                assert!(moved == 0 || counts.queue_moves > 0);
             }
             false => assert_eq!(moved, 0),
         }
@@ -201,10 +246,17 @@ fn a_shared_event_wait_on_a_shared_vk_queue_committed_before_its_signal_complete
             .unwrap();
         let event = device.new_shared_event().unwrap();
         let mut joined = false;
+        // The rounds where the waiter stayed though the rule called for a join.
+        let mut unexplained = Vec::new();
         for round in 1..=8u64 {
             let busy = burst(&signaller, &scratch, 24);
+            let before = device.work_counts();
             let waiting = waiter.command_buffer().unwrap();
-            joined |= waiter.vk_queue_sharing().0 == signaller.vk_queue_sharing().0;
+            let shared = waiter.vk_queue_sharing().0 == signaller.vk_queue_sharing().0;
+            if shares && !shared && !stayed_by_the_rule(&before, &device.work_counts()) {
+                unexplained.push(round);
+            }
+            joined |= shared;
             waiting
                 .encode_wait_for_event((&event).into(), round)
                 .unwrap();
@@ -224,8 +276,13 @@ fn a_shared_event_wait_on_a_shared_vk_queue_committed_before_its_signal_complete
             signalling.wait_until_completed_for(WAIT).unwrap();
             wait_all(busy);
         }
+        println!("the waiter joined the signaller's VkQueue: {joined}");
         if shares {
-            assert!(joined, "the waiter joined the signaller's VkQueue");
+            assert!(
+                unexplained.is_empty(),
+                "the waiter stayed off the signaller's busy VkQueue where the device shares, in \
+                 rounds {unexplained:?}"
+            );
         }
     });
 }

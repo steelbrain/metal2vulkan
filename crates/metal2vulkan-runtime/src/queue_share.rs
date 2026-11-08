@@ -59,7 +59,12 @@
 //!   `VkQueue` and an unshared queue's are made so that two made at once never both succeed: each
 //!   counts itself there first, then reads the other's count, both sequentially consistent.
 //! - **Counted**: `WorkCounts::queue_moves`, `queue_joins`, `queues_gone_long`,
-//!   `long_queue_settles`, `queue_moves_off_unshared` and `joins_withheld_from_unshared`.
+//!   `long_queue_settles`, `queue_moves_off_unshared`, `joins_withheld_from_unshared`,
+//!   `picks_with_none_busy` and `joins_withheld_from_old_heads`. A choice at an idle point that
+//!   moves nothing found no other `VkQueue` with batches in flight (`picks_with_none_busy`: work
+//!   committed and not yet submitted is in none's flight), passed over a busy one for its oldest
+//!   batch's age (`joins_withheld_from_old_heads`) or for the unshared queue that holds it, found
+//!   the busy ones held by long or unshared queues, or stayed on its own busy, young one.
 //!   Announced `queue-sharing` at the device's first join, a move onto a `VkQueue` with another
 //!   queue's work in flight.
 
@@ -251,6 +256,17 @@ pub(crate) fn choose(current: usize, looks: &[Look]) -> (Choice, bool) {
         (None, None) => Choice::Stay,
     };
     (choice, withheld)
+}
+
+/// Whether a command queue on `current` passes over `look` for its oldest batch alone: another
+/// `VkQueue` with batches in flight, which no long or unshared queue holds, whose oldest batch has
+/// run [`YOUNG_HEAD`] or longer, or for a time not known.
+pub(crate) fn old_busy(current: usize, look: &Look) -> bool {
+    look.index != current
+        && look.depth > 0
+        && !look.long
+        && !look.unshared
+        && !look.head_age.is_some_and(|age| age < YOUNG_HEAD)
 }
 
 /// The `VkQueue` a long queue on `current` settles on, among `looks`: an idle one no long or
@@ -651,7 +667,9 @@ impl Device {
     /// The choice of a round robin's command queue on `current` that holds no uncompleted command
     /// buffer and is not long (the module docs): one pass over the `VkQueue`s of its family,
     /// atomics alone. Counted where a busy, young `VkQueue` was passed over for the unshared queue
-    /// it holds alone (`WorkCounts::joins_withheld_from_unshared`).
+    /// it holds alone (`WorkCounts::joins_withheld_from_unshared`); where no other `VkQueue` had
+    /// batches in flight (`picks_with_none_busy`); else where it joined none and passed over a busy
+    /// one for its oldest batch's age alone ([`old_busy`], `joins_withheld_from_old_heads`).
     pub(crate) fn pick_vk_queue(&self, current: usize) -> Choice {
         let mut looks = [Look {
             index: 0,
@@ -668,9 +686,21 @@ impl Device {
                 count += 1;
             }
         }
-        let (choice, withheld) = choose(current, &looks[..count]);
+        let looks = &looks[..count];
+        let (choice, withheld) = choose(current, looks);
+        let counts = &self.shared().counts;
         if withheld {
-            self.shared().counts.join_withheld_from_unshared();
+            counts.join_withheld_from_unshared();
+        }
+        if !looks
+            .iter()
+            .any(|look| look.index != current && look.depth > 0)
+        {
+            counts.picked_with_none_busy();
+        } else if !matches!(choice, Choice::Join(_))
+            && looks.iter().any(|look| old_busy(current, look))
+        {
+            counts.join_withheld_from_old_head();
         }
         choice
     }

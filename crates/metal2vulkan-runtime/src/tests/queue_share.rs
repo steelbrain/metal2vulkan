@@ -6,6 +6,8 @@
 //!   batches in flight (then the latest submission), never one a long or unshared queue holds;
 //!   with none it stays, unless a long or unshared queue holds its own, when it leaves for the
 //!   most recently used idle one (off an unshared queue's, any other where none is idle).
+//! - **Passed over.** A busy `VkQueue` no long or unshared queue holds, whose oldest batch is not
+//!   young, is one a queue passes over for that batch alone (counted where it joins none).
 //! - **Settling.** A long queue takes the least recently used idle `VkQueue` no long or unshared
 //!   queue holds, or stays.
 //! - **Unshared.** An unshared queue tries the `VkQueue`s no queue holds, least recently used
@@ -15,7 +17,7 @@
 
 use crate::in_place::DriverIdentity;
 use crate::queue_share::{
-    choose, decode, encode, record_name, settle, unshared_order, Choice, Look, Verdict,
+    choose, decode, encode, old_busy, record_name, settle, unshared_order, Choice, Look, Verdict,
 };
 
 /// A `VkQueue` at `index`, idle, used at `last_submit`, held by no long or unshared queue.
@@ -76,6 +78,38 @@ fn a_queue_joins_the_deepest_young_busy_vk_queue_and_never_a_long_or_unshared_on
         },
     ];
     assert_eq!(choose(0, &unknown).0, Choice::Stay);
+}
+
+#[test]
+fn a_busy_vk_queue_is_passed_over_for_its_oldest_batch_alone_where_that_batch_is_not_young() {
+    // Another busy one whose oldest batch has run 0.5 ms or longer, or for a time not known.
+    assert!(old_busy(0, &busy(1, 2, 600_000, 5)));
+    assert!(old_busy(
+        0,
+        &Look {
+            head_age: None,
+            ..busy(1, 2, 0, 5)
+        }
+    ));
+    // A young one, an idle one, its own, or one a long or unshared queue holds: not for its
+    // oldest batch.
+    assert!(!old_busy(0, &busy(1, 2, 100_000, 5)));
+    assert!(!old_busy(0, &idle(1, 5)));
+    assert!(!old_busy(1, &busy(1, 2, 600_000, 5)));
+    assert!(!old_busy(
+        0,
+        &Look {
+            long: true,
+            ..busy(1, 2, 600_000, 5)
+        }
+    ));
+    assert!(!old_busy(
+        0,
+        &Look {
+            unshared: true,
+            ..busy(1, 2, 600_000, 5)
+        }
+    ));
 }
 
 #[test]
