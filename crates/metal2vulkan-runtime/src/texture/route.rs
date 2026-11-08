@@ -89,6 +89,7 @@ impl Device {
             Route::Host {
                 class,
                 rows,
+                padding,
                 way: HostWay::InPlace { storable },
             } => {
                 let made = (texels, class, storable);
@@ -96,7 +97,12 @@ impl Device {
                     Ok(()) => HostWay::InPlace { storable },
                     Err((refusal, why)) => HostWay::Shadow(ShadowCause::Refused(refusal, why)),
                 };
-                Route::Host { class, rows, way }
+                Route::Host {
+                    class,
+                    rows,
+                    padding,
+                    way,
+                }
             }
             route => route,
         };
