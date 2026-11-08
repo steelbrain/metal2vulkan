@@ -287,7 +287,12 @@
       "runs": 8,
       "measured": "8 run(s) of the whole selection on Apple M3 Max, in the case set's own order, the largest each count reached",
       "contrasted": "8 run(s) of each case on its own on Apple M3 Max, nothing before it on the device, the largest each count reached",
-      "bounds": {}
+      "bounds": {
+        "linear_alignments_probed": 175,
+        "object_churn.making_sites_dropped": 864,
+        "object_churn.vk_images_destroyed": 864,
+        "object_churn.vk_images_made": 864
+      }
     }
   ],
   "times": [
@@ -297,30 +302,30 @@
       "chip": "apple-m3-max",
       "os_build": "26A434",
       "rounds": 8,
-      "measured": "8 round(s) of the whole selection, in the case set's own order, each round on a fresh device, our shader cache carried over between the cases of a round; a figure is the median of the rounds' own medians; Metal's leg ran at a one-minute load average of 3.18 and ours at 2.63; the legs run one after the other, so the per-call margin is judged only when both are 26.0 or under and within 2.0x of each other",
-      "instrument": 236,
+      "measured": "8 round(s) of the whole selection, in the case set's own order, each round on a fresh device, our shader cache carried over between the cases of a round; a figure is the median of the rounds' own medians; Metal's leg ran at a one-minute load average of 6.10 and ours at 6.01; the legs run one after the other, so the per-call margin is judged only when both are 26.0 or under and within 2.0x of each other",
+      "instrument": 295,
       "times": {
         "case": "device-linear-texture-alignments",
         "calls": 16,
-        "in_calls": 15835,
-        "on_cpu": 19584,
+        "in_calls": 41333,
+        "on_cpu": 43669,
         "blocked": 0,
-        "elsewhere": 2542,
-        "spend": 17085,
-        "spend_least": 14541,
-        "spend_most": 29541,
+        "elsewhere": 2167,
+        "spend": 44374,
+        "spend_least": 41498,
+        "spend_most": 60125,
         "per_call": [
           {
             "call": "minimum_linear_texture_alignment",
             "least_calls": 16,
             "most_calls": 16,
-            "wall": 750,
-            "on_cpu": 959,
+            "wall": 2250,
+            "on_cpu": 2375,
             "blocked": 0,
-            "wall_least": 583,
-            "wall_most": 917,
-            "wall_total": 15835,
-            "on_cpu_total": 19584,
+            "wall_least": 2208,
+            "wall_most": 2333,
+            "wall_total": 41333,
+            "on_cpu_total": 43669,
             "blocked_total": 0
           }
         ]
@@ -332,30 +337,30 @@
       "chip": "apple-m3-max",
       "os_build": "26A434",
       "rounds": 8,
-      "measured": "8 round(s) of the whole selection, in the case set's own order, each round on a fresh device, our shader cache carried over between the cases of a round; a figure is the median of the rounds' own medians; Metal's leg ran at a one-minute load average of 3.18 and ours at 2.63; the legs run one after the other, so the per-call margin is judged only when both are 26.0 or under and within 2.0x of each other",
-      "instrument": 233,
+      "measured": "8 round(s) of the whole selection, in the case set's own order, each round on a fresh device, our shader cache carried over between the cases of a round; a figure is the median of the rounds' own medians; Metal's leg ran at a one-minute load average of 6.10 and ours at 6.01; the legs run one after the other, so the per-call margin is judged only when both are 26.0 or under and within 2.0x of each other",
+      "instrument": 312,
       "times": {
         "case": "device-linear-texture-alignments",
         "calls": 16,
-        "in_calls": 5501,
-        "on_cpu": 8959,
+        "in_calls": 5583502,
+        "on_cpu": 5585833,
         "blocked": 0,
-        "elsewhere": 542,
-        "spend": 5668,
-        "spend_least": 2001,
-        "spend_most": 14541,
+        "elsewhere": 5083,
+        "spend": 5587585,
+        "spend_least": 5484376,
+        "spend_most": 7287918,
         "per_call": [
           {
             "call": "minimum_linear_texture_alignment",
             "least_calls": 16,
             "most_calls": 16,
-            "wall": 84,
-            "on_cpu": 292,
+            "wall": 459,
+            "on_cpu": 625,
             "blocked": 0,
-            "wall_least": 42,
-            "wall_most": 417,
-            "wall_total": 5501,
-            "on_cpu_total": 8959,
+            "wall_least": 459,
+            "wall_most": 584,
+            "wall_total": 5583502,
+            "on_cpu_total": 5585833,
             "blocked_total": 0
           }
         ]
