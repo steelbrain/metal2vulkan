@@ -2703,7 +2703,8 @@ pub struct DegradeNotice {
     /// thread lowers it), the opening of an encoder of it, its commit (at the call, or once a
     /// render encoder's end it waited for was lowered), the submission of a batch of it and the
     /// settling of what rode on that batch, a host step of it on the scheduler's steps thread (an
-    /// indirect command buffer's execution recorded there among them), an encoding again of its
+    /// indirect command buffer's execution recorded there among them) and a predicated loop's run
+    /// again of what such steps recorded, on that loop's thread, an encoding again of its
     /// encoders at a rebind, and a read of its GPU times once it completed
     /// ([`CommandBuffer::gpu_start_time`](crate::CommandBuffer::gpu_start_time),
     /// [`CommandBuffer::gpu_end_time`](crate::CommandBuffer::gpu_end_time)). A notice a bind

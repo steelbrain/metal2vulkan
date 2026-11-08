@@ -346,6 +346,7 @@ impl LoopCheck {
         work: &Deferred,
         again: &Again,
     ) -> Result<RecordedSegment, Stop> {
+        let _for = buffer.notices_for();
         let device = &buffer.device;
         let Some(_busy) = exit_guard::enter() else {
             return Err(Stop::Exiting);
