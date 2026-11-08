@@ -121,14 +121,13 @@ pub enum TextureShadowReason {
     /// rows the log reports changed (`WorkCounts::device_copy_textures`), the GPU's copy of the two
     /// a `Managed` resource is on a Mac with a discrete GPU. Not announced.
     DeviceCopy,
-    /// Over a buffer of the device's own memory whose rows the device's own linear image lays out
-    /// otherwise than Metal: the texture's rows take `bytes` bytes to their pitch, past the bound
-    /// up to which it takes a `DRM_FORMAT_MOD_LINEAR` image at Metal's pitch
+    /// Over a `Private` buffer of the device's own memory whose rows the device's own linear
+    /// image lays out otherwise than Metal, a tracked texture: its rows take `bytes` bytes to their
+    /// pitch, past the bound up to which it takes a `DRM_FORMAT_MOD_LINEAR` image at Metal's pitch
     /// ([`TexturePlacement::NotHostPages`]), as such an image renders and samples slower than the
-    /// shadow's own image with its copies past it. The same bound on every device. A texture that
-    /// only samples a `Shared` or `Managed` buffer's bytes, or an untracked texture that only
-    /// samples, takes the image at any size: its shadow would be copied in at every command
-    /// buffer.
+    /// shadow's own image with its copies past it, and over memory only the runtime's commands
+    /// write both give the same answer. The same bound on every device. Over a `Shared` or
+    /// `Managed` buffer, and for an untracked texture, the image is taken at any size.
     LinearCost {
         /// The bytes of the texture's rows, each to its pitch.
         bytes: u64,

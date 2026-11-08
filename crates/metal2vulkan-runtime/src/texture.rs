@@ -2925,13 +2925,11 @@ impl Device {
         if !in_place::checking() {
             let layout = &texels.layout;
             let bytes = layout.slice_pitch * (layout.slices - 1) + layout.row_pitch * layout.rows;
-            // The bound weighs a linear image against a shadow that renders into its own image,
-            // or samples it copied in once: a texture that only samples bytes more than the
-            // runtime's commands may write takes the image at any size, as its shadow would be
-            // copied in whole at every command buffer that samples it.
-            let sampled_apart =
-                in_place::Access::Reads.takes(usage) && !texels.only_commands_write();
-            if bytes > in_place::POOLED_PITCHED_BYTES && !sampled_apart {
+            // The bound chooses between two speeds over bytes only the runtime's commands write
+            // (a tracked `Private` buffer's), where both forms give the same answer. Over bytes
+            // the CPU may write, or an untracked texture's, the image lies at any size wherever
+            // the device's check passed, as over host pages, however much slower.
+            if bytes > in_place::POOLED_PITCHED_BYTES && texels.only_commands_write() {
                 return Ok(Err(ShadowCause::LinearCost(bytes)));
             }
             let line = self.shared().in_place.line();

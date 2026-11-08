@@ -1813,7 +1813,8 @@ impl Texels {
     /// (`ShadowCopies::only_commands_write`): a tracked texture's over a buffer of private or
     /// memoryless storage the runtime allocated. A shadow of these may stand across command
     /// buffers, copied in once (`shadow_standing.rs`); a shadow of others copies them in at every
-    /// command buffer that uses it, as the CPU may have written them.
+    /// command buffer that uses it, as the CPU or work the runtime does not order may have written
+    /// them.
     pub(super) fn only_commands_write(&self) -> bool {
         let private = matches!(
             self.backing(),

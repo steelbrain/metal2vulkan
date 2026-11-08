@@ -536,19 +536,19 @@ pub(crate) enum ShadowCause {
     Unchecked(PagesClass, Access, RowEnds),
     /// The device makes no image over its texels as Metal lays them out: why, and the words.
     Refused(Refusal, String),
-    /// Over the runtime's pooled memory ([`PagesClass::Pooled`]), its rows to their pitch take
-    /// this many bytes, past [`POOLED_PITCHED_BYTES`], and it renders or is written, or it only
-    /// samples bytes only the runtime's commands write, which its shadow is copied in from once: a
-    /// `DRM_FORMAT_MOD_LINEAR` image of them renders and samples slower than the shadow's own
-    /// image with its copies.
+    /// Over the runtime's pooled memory ([`PagesClass::Pooled`]) that only the runtime's
+    /// commands write (a tracked texture's over a `Private` buffer), its rows to their pitch take
+    /// this many bytes, past [`POOLED_PITCHED_BYTES`]: a `DRM_FORMAT_MOD_LINEAR` image of them
+    /// renders and samples slower than the shadow's own image with its copies.
     LinearCost(u64),
 }
 
-/// The most bytes (a texture's rows to their pitch) a texture over the runtime's pooled memory
-/// takes a `DRM_FORMAT_MOD_LINEAR` image at Metal's pitch for ([`PagesClass::Pooled`]); past it
-/// the texture is a shadow ([`ShadowCause::LinearCost`]). Over `Private` memory no CPU reads the
-/// bytes and the device's check judges the image's first move, so both forms give the same
-/// answer, and the bound chooses between two speeds: a shadow's copy per command buffer that
+/// The most bytes (a texture's rows to their pitch) a tracked texture over a `Private` buffer of
+/// the runtime's pooled memory takes a `DRM_FORMAT_MOD_LINEAR` image at Metal's pitch for
+/// ([`PagesClass::Pooled`]); past it the texture is a shadow ([`ShadowCause::LinearCost`]). Only
+/// the runtime's commands write such bytes (`Texels::only_commands_write`): no CPU reads them and
+/// the device's check judges the image's first move, so both forms give the same answer, and the
+/// bound chooses between two speeds: a shadow's copy per command buffer that
 /// writes the texture costs a fixed few microseconds, which a small texture's linear image saves,
 /// and every draw into a linear image costs more than into the shadow's optimal one, about 270
 /// picoseconds a pixel against 74 on an Iris Xe whatever the texture's size, so the crossover
@@ -563,19 +563,20 @@ pub(crate) enum ShadowCause {
 /// 177.7/197.6, 198.3/306.7, 290.5/743.3; 250x250 at 1024 (256 KB) 187.8/190.1, 208.2/258.9,
 /// 242.0/430.8, 388.3/1114.9. A texture of up to 47 KB drawn at most once a frame runs faster in
 /// place; past that one draw a frame runs faster as a shadow, and four or more draws a frame do at
-/// every size measured. A texture that only samples, over bytes more than the runtime's commands
-/// may write (a `Shared` or `Managed` buffer's, which the CPU writes, or an untracked texture's:
-/// `Texels::only_commands_write`), takes the image at any size: its shadow is copied in whole at
-/// every command buffer that samples it, which costs more than the linear image's sampling saves.
-/// Measured the same way,
-/// each frame a command buffer that samples each of four such textures whole after the CPU wrote
-/// a texel of each (`runtime_lane::pooled_draw_costs::pooled_sample_costs`), a frame's GPU time
-/// in microseconds as shadows at a padded pitch against linear images at the tight one, over
-/// `Shared` buffers: 1308x512 (2.7 MB) 327.8/215.9, 1324x940 (5.0 MB) 802.2/380.1, 3648x2038 (30
-/// MB) 5789.3/2601.6; over `Private` ones, whose shadows stand copied in once, 237.7/216.2,
-/// 404.4/409.4 and 2028.1/2433.2, so a texture there that only samples keeps the bound. A Radeon
-/// 780M (RADV) makes no such image at a pitch off a multiple of 256 bytes, at which its own linear
-/// image lays rows, so no texture there takes one. The same bound on every device.
+/// every size measured. Over bytes the CPU may write (a `Shared` or `Managed` buffer's) and an
+/// untracked texture's, a texture of any access takes the image at any size wherever the device's
+/// check passed, as over host pages: the GPU works on CPU-visible memory in place however much
+/// slower, a shadow there only where in place is impossible (the owner's ruling, 2026-11-07).
+/// There a texture that only samples gains as well, as its shadow is copied in whole at every
+/// command buffer that samples it: each frame a command buffer that samples each of four
+/// `BGRA8Unorm` textures whole after the CPU wrote a texel of each
+/// (`runtime_lane::pooled_draw_costs::pooled_sample_costs`), a frame's GPU time in microseconds as
+/// shadows at a padded pitch against linear images at the tight one, over `Shared` buffers:
+/// 1308x512 (2.7 MB) 327.8/215.9, 1324x940 (5.0 MB) 802.2/380.1, 3648x2038 (30 MB)
+/// 5789.3/2601.6; over `Private` ones, whose shadows stand copied in once (`shadow_standing.rs`),
+/// 237.7/216.2, 404.4/409.4 and 2028.1/2433.2. A Radeon 780M (RADV) makes no such image at a pitch
+/// off a multiple of 256 bytes, at which its own linear image lays rows, so no texture there takes
+/// one. The same bound on every device.
 pub(crate) const POOLED_PITCHED_BYTES: u64 = 48 << 10;
 
 /// Why the device makes no image in place over a texture's texels.
