@@ -1526,6 +1526,13 @@ degradations! {
         /// argument buffer holds where a texture the command makes resident or binds that its
         /// handles can name is two-plane YCbCr, through an argument buffer's sampler only where a
         /// live sampler state filters (which state the buffer's memory names is not read).
+        ///
+        /// And, on any device, a linear sample of a 4:2:0 texture whose planes the function reads
+        /// in place through a texel buffer by Vulkan's Y′CbCr model of the codes
+        /// (`YCbCrInPlacePolicy::Model`, the default; `lower::sampler::in_place`): the stage
+        /// records the same notes under the bound converted 4:2:0 format (through a runtime
+        /// sampler slot, only where the bound word filters linearly and addresses no border),
+        /// announced as above at a draw or dispatch that binds such a texture there.
         YCbCrFilterNotExact = "ycbcr-filter-not-exact", Precision,
             "where the device converts the planes' format, the texels are its own Y′CbCr \
              conversion's, at its precision and unclamped where it does not clamp, not Metal's \

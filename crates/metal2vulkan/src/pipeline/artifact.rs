@@ -1052,9 +1052,15 @@ pub enum PrecisionNote {
     /// reads one texel of one level (nearest minification and magnification, no mip filter or a
     /// nearest one, no anisotropy: a constexpr one, or a runtime slot's bound one) and a gather
     /// are not filtered and do not carry it. A device that samples natively records
-    /// [`PrecisionNote::DeviceSampling`] instead. The `float` result's counterpart is
-    /// [`PrecisionNote::FloatSampleFilter`]. Validation derives no tolerance from it: the class is
-    /// unbounded.
+    /// [`PrecisionNote::DeviceSampling`] instead.
+    ///
+    /// On every device, a linear sample of a two-plane YCbCr texture whose planes the function
+    /// reads in place (`lower::sampler::in_place`) by Vulkan's Y′CbCr model of the codes
+    /// (`YCbCrInPlacePolicy::Model`, the default; `Exact` takes Metal's filter) records it too,
+    /// under the slot's bound converted 4:2:0 format and, through a runtime sampler slot, the bound
+    /// word's linear filter that addresses no border, announced as `ycbcr-filter-not-exact`. The
+    /// `float` result's counterpart is [`PrecisionNote::FloatSampleFilter`]. Validation derives no
+    /// tolerance from it: the class is unbounded.
     HalfSampleFilter,
     /// The module reads, samples, or gathers a texture with a `half` or `float` result through
     /// the device's sRGB decode, or decodes the device's filter of its codes, where the texture may
@@ -1105,8 +1111,10 @@ pub enum PrecisionNote {
     /// known when the function compiles, and for a heap's texture under what its handles and an
     /// argument buffer's sampler can name, as [`PrecisionNote::HalfSampleFilter`] is: the runtime
     /// reads them at each draw or dispatch and announces it as `ycbcr-filter-not-exact`. A
-    /// device that samples natively records [`PrecisionNote::DeviceSampling`] instead. Validation
-    /// derives no tolerance from it: the class is unbounded.
+    /// device that samples natively records [`PrecisionNote::DeviceSampling`] instead. The model's
+    /// linear sample of planes read in place records it on every device, as
+    /// [`PrecisionNote::HalfSampleFilter`] states. Validation derives no tolerance from it: the
+    /// class is unbounded.
     FloatSampleFilter,
     /// A vertex or fragment function keeps more private memory (its `alloca`s, a call stack among
     /// them, or constants held as `Private` variables) than the floor, 16 KiB a thread, on a device

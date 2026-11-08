@@ -101,10 +101,22 @@ compile does. `DevicePolicy::default()` is `DevicePolicy::UNTRUSTED`:
   own, most of them change nothing.
 - `DevicePolicy::exact_answers()` selects Metal's answer for each of the runtime's choices that
   offers one (the batch order, render lowering, wide lines and extended-range blits below, the
-  heap texture compression, command buffer completion and textures over host pages) and the AIR's
+  heap texture compression, command buffer completion and textures over host pages), the AIR's
   rounding of each `half` operation
-  on a device without `shaderFloat16` (below), each listed in [FAST-PATHS.md](FAST-PATHS.md)
+  on a device without `shaderFloat16` and Metal's filter of planes read in place (below), each listed in [FAST-PATHS.md](FAST-PATHS.md)
   with its bound and the measured cost of its exact form.
+- **The model's linear sample of planes read in place** (`YCbCrInPlacePolicy::Model`, the
+  default; changes emitted code). On an integrated GPU or a CPU device a function that only
+  samples, gathers or sizes a `YCBCR8_420_2P` or `YCBCR10_420_2P` texture reads its planes' codes
+  in place through a uniform texel buffer, which no sampler of the device reads, so the shader
+  filters and converts them. A linear sample that addresses no border is Vulkan's Y′CbCr model
+  of the codes, as the device's own conversion with a linear chroma filter computes it: four
+  luma codes and four chroma pairs blended bilinearly, then the range and matrix in `float`,
+  clamped into `[0, 1]` (eight fetches), recorded `HalfSampleFilter` or `FloatSampleFilter` and
+  announced `ycbcr-filter-not-exact`. `ycbcr_in_place_reads = YCbCrInPlacePolicy::Exact`, which
+  `exact_answers()` selects, converts each of Metal's four taps and sums them on the grid
+  `2048`, exactly (twenty fetches). A nearest sample, a border mode and a gather are Metal's
+  under either value.
 - **`half` chains held at `float` precision without `shaderFloat16`** (`HalfChainPolicy::AtExits`,
   the default; changes emitted code). A device without 16-bit floats has no `half` arithmetic, so
   a module computes each `half` `+ - *` in `float` and rounds it by the device's quantize. An
@@ -2645,8 +2657,9 @@ bound.
   are read in place through the device's conversion of a linear image of them (where the device's
   linear tiling of the 4:2:0 format has Metal's reconstruction), the device's filter of the codes
   too, announced where the image is made; and a pipeline stage's filtered sample of a
-  texture slot bound to a two-plane YCbCr texture, through Metal's own sampler (MoltenVK), does not
-  take Metal's exact filter of the format: the stage records `PrecisionNote::HalfSampleFilter` or
+  texture slot bound to a two-plane YCbCr texture, through Metal's own sampler (MoltenVK), or of
+  a 4:2:0 texture's planes read in place by Vulkan's Y′CbCr model (`YCbCrInPlacePolicy::Model`,
+  on any device), does not take Metal's exact filter of the format: the stage records `PrecisionNote::HalfSampleFilter` or
   `FloatSampleFilter` under the slot's bound format, the one its binding presents (a view in its
   texture's own format as another type, and a texture over a P3 surface, present the code-reading
   format of their codes, which Metal's sampler filters as that format's: neither is announced),
@@ -3595,7 +3608,8 @@ bound.
   magnification, a linear mip filter, anisotropy, or a runtime sampler slot whose bound sampler
   filters so) that Metal's own sampler (MoltenVK) answers otherwise than Metal filters the format
   bound there: a two-plane YCbCr texture's, at a slot or held by an argument buffer (announced as
-  `ycbcr-filter-not-exact`).
+  `ycbcr-filter-not-exact`); or, on any device, a linear sample by Vulkan's Y′CbCr model of a
+  4:2:0 texture's planes read in place (`YCbCrInPlacePolicy::Model`).
 - `metal2vulkan-degrade-srgb-texel-decode` (precision). `PrecisionNote::SrgbTexelDecode`: The module
   reads, samples, or gathers a texture with a `half` or `float` result through the device's sRGB
   decode, or decodes the device's filter of its codes, where the texture may be bound in an 8-bit
@@ -3611,7 +3625,9 @@ bound.
 - `metal2vulkan-degrade-float-sample-filter` (precision). `PrecisionNote::FloatSampleFilter`: The
   module samples a texture with a `float` result through a filter that Metal's own sampler
   (MoltenVK) answers otherwise than Metal filters the format bound there: a two-plane YCbCr
-  texture's, at a slot or held by an argument buffer (announced as `ycbcr-filter-not-exact`).
+  texture's, at a slot or held by an argument buffer (announced as `ycbcr-filter-not-exact`); or,
+  on any device, a linear sample by Vulkan's Y′CbCr model of a 4:2:0 texture's planes read in
+  place (`YCbCrInPlacePolicy::Model`).
 - `metal2vulkan-degrade-function-storage-assumed` (precision).
   `PrecisionNote::FunctionStorageAssumed`: A vertex or fragment function keeps more private memory
   (its `alloca`s, a call stack among them, or constants held as `Private` variables) than the floor,
