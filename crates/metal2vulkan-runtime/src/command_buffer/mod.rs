@@ -3377,12 +3377,14 @@ impl CommandBuffer {
             }
         };
         // The first segment a host step records, which the device announces (a loop's check
-        // records nothing).
+        // and a staged scatter's CPU copy record nothing).
         let announced = segments
             .iter()
             .zip(&prepared)
             .find(|((work, host), prepared)| {
-                *host && !prepared.for_good && !matches!(work, Deferred::Loop(_))
+                *host
+                    && !prepared.for_good
+                    && !matches!(work, Deferred::Loop(_) | Deferred::ScatterDrain(_))
             })
             .map(|((work, _), _)| work.clone());
         // A host step may record commands after the commit (a segment not recorded for good).
@@ -4432,13 +4434,13 @@ impl CommandBufferShared {
         // (`gpu_execute::Rerecord`), unless a route outgrew it (`Deferred::outgrown`), which the
         // step records from the records; nor does work recorded again for the CPU's writes since
         // the commit alone (`Deferred::rewritten`), or for its pipelines alone; nor a loop's check,
-        // which records nothing.
+        // which records nothing, nor a staged scatter's copies (`host_ram/copy.rs`).
         let announced = steps
             .iter()
             .find(|(_, work, inputs)| {
                 work.gpu_written()
                     && (!matches!(inputs, Some(StepInputs::Rerecord(_))) || work.outgrown())
-                    && !matches!(inputs, Some(StepInputs::Loop))
+                    && !matches!(inputs, Some(StepInputs::Loop | StepInputs::Scatter))
             })
             .map(|(_, work, _)| work.clone());
         let buffer = CommandBuffer(Arc::clone(self));

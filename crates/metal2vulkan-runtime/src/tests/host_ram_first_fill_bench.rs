@@ -795,7 +795,8 @@ fn host_ram_block_release_bench() {
     let ms = |a: u64, b: u64| (b - a) as f64 / 1e6;
     eprintln!(
         "BLOCK-RELEASE counts: run imports made {}, import waits {} for {:.1} ms, chunks imported \
-         {} (ahead {}) in {:.1} ms, gathers staged {}",
+         {} (ahead {}) in {:.1} ms, gathers staged {}, scatters staged {}, their CPU copies \
+         {:.1} ms",
         after.run_imports_made - before.run_imports_made,
         after.host_ram_copy_import_waits - before.host_ram_copy_import_waits,
         ms(
@@ -809,6 +810,11 @@ fn host_ram_block_release_bench() {
             after.host_ram_chunk_import_nanos
         ),
         after.host_ram_copies_staged - before.host_ram_copies_staged,
+        after.host_ram_scatters_staged - before.host_ram_scatters_staged,
+        ms(
+            before.host_ram_staged_drain_nanos,
+            after.host_ram_staged_drain_nanos
+        ),
     );
     drop(used);
     drop(ram);

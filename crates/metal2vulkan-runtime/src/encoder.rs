@@ -174,14 +174,19 @@ impl Segment {
     /// Whether the host step records it before its batch is submitted: the GPU may write what
     /// its work reads, whether it could at the call or only since (`Deferred::gpu_written` is
     /// for good), or `commit` left it for the pipelines it records, or recorded it from records
-    /// the CPU wrote since (`Deferred::rewritten`); or `commit`'s recording on the
+    /// the CPU wrote since (`Deferred::rewritten`), or leaves every such work to its step
+    /// (`Deferred::records_at_its_step`); or `commit`'s recording on the
     /// GPU alone must be made again ([`rerecords`](Self::rerecords)); or `commit` recorded it on
     /// the GPU for good, and a route encoded since may write more than it decided on, or gives an
     /// execution's check something to see (`Deferred::outgrown`); or its step left work its batch
     /// waits for (`Deferred::holds`).
     pub(super) fn needs_step(&self) -> bool {
         (!self.stepped
-            && (self.host || self.pipelines || self.work.gpu_written() || self.work.rewritten()))
+            && (self.host
+                || self.pipelines
+                || self.work.gpu_written()
+                || self.work.rewritten()
+                || self.work.records_at_its_step()))
             || self.rerecords()
             || self.work.outgrown()
             || self.work.holds()
@@ -242,11 +247,13 @@ impl Segment {
     }
 
     /// What its recording will use, on `device`, while `commit` left it to the host step for the
-    /// pipelines it records alone (and not for what the GPU may write): its work's uses, which
-    /// the encoder knew, only the `VkPipeline` missing (`Deferred::known_summary`). `None` where
-    /// the step or the submission finds them.
+    /// pipelines it records alone, or as such work always is (`Deferred::records_at_its_step`),
+    /// and not for what the GPU may write: its work's uses, which the encoder knew, only the
+    /// `VkPipeline` missing (`Deferred::known_summary`). `None` where the step or the submission
+    /// finds them.
     pub(super) fn known_summary(&self, device: &Device) -> Option<Summary<ResourceKey>> {
-        match self.pipelines && !self.steps_after_the_gpu() {
+        let left = self.pipelines || self.work.records_at_its_step();
+        match left && !self.steps_after_the_gpu() {
             true => self.work.known_summary(device),
             false => None,
         }

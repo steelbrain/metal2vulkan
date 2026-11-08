@@ -715,22 +715,36 @@ submission, can give the device the guest's RAM once instead:
   import one command of at most 1024: no other byte of their pages is read or written, and of runs
   that write a byte twice the later's bytes stay (`WorkCounts::host_ram_copy_regions`). A copy
   takes each chunk it touches as an object over it does, and the thread's window moves past it.
-  Over a chunk not imported yet, a gather on a device whose thread imports ahead (every device but
+  Over a chunk not imported yet, a copy on a device whose thread imports ahead (every device but
   one whose listed imports cost each submission: RADV with a dma-buf source) is staged through the
-  CPU, however few its ranges: an import of a gather's ranges alone pins every page between ranges
+  CPU, however few its ranges: an import of a copy's ranges alone pins every page between ranges
   less than 2 MiB apart on the encoding thread (a 24 MiB cache of 2,477 runs over five chunks, its
   runs joined where less than 1 MiB apart, pinned 317 MiB in 61 ms on an RTX 5080 Laptop GPU, where
-  the CPU copied the runs in 2.8 ms). A
-  scatter, and a gather where the thread does not import, of at most 16 ranges imports those
-  ranges alone, as an object's run is imported (not on MoltenVK or ANV). A staged gather's CPU
-  copies its runs from the pages into memory of the command buffer's own once its batch is
-  otherwise ready to submit (its event waits met), and the GPU copies them from there into the
-  buffer. No import is made or waited for, no page is pinned for it, and the thread imports each
-  such chunk next, so the copies after it read the imports (`WorkCounts::host_ram_copies_staged`, `host_ram_staged_fill_nanos`). Where a buffer
-  or heap over host pages lies over the runs' bytes, or a scatter into those chunks was recorded,
-  the CPU's copy first waits until every queue completed the work submitted before it
-  (`host_ram_staged_fills_gated`), and where that is so at the encoding the copy takes the imports'
-  path. Any other copy imports the chunk on its encoding thread, or waits for the import under way
+  the CPU copied the runs in 2.8 ms). A copy where the thread does not import, of at most 16
+  ranges, imports those ranges alone, as an object's run is imported (not on MoltenVK or ANV). No
+  staged copy makes or waits for an import, no page is pinned for it, and the thread imports each
+  such chunk next, so the copies after it go through the imports.
+  - A staged gather's CPU copies its runs from the pages into memory of the command buffer's own
+    once its batch is otherwise ready to submit (its event waits met), and the GPU copies them
+    from there into the buffer (`WorkCounts::host_ram_copies_staged`,
+    `host_ram_staged_fill_nanos`). Where a buffer or heap over host pages lies over the runs'
+    bytes, or a scatter into those chunks was recorded, the CPU's copy first waits until every
+    queue completed the work submitted before it (`host_ram_staged_fills_gated`), and where that
+    is so at the encoding the copy takes the imports' path.
+  - A staged scatter's GPU copy is recorded by its batch's host step, off the encoding and
+    committing threads, into memory of the command buffer's own that the step takes; the work
+    after it goes in a batch of its own, whose host step waits until every queue completed the
+    work submitted before it, then copies each run's bytes by the CPU into the pages (a byte two
+    runs name keeps the later's) before that batch is submitted. So the pages hold the bytes once
+    the command buffer completed, and every command after the copy, in its command buffer or a
+    later one, sees them (`host_ram_scatters_staged`, `host_ram_staged_drain_nanos`). The cost is
+    one wait for the GPU between the copy and the work after it in its command buffer. A rebind,
+    before the command buffer's first submission, of a buffer over host pages that the copy's
+    encoder also used finds that encoder kept no log to encode it again from
+    (`CommandBufferError::EncodedUseRebound`, as for an encoder with an indirect dispatch the
+    host reads).
+
+  Any other copy imports the chunk on its encoding thread, or waits for the import under way
   (`host_ram_copy_import_waits`, `host_ram_copy_import_wait_nanos`; every chunk import's time in
   `host_ram_chunk_import_nanos`). Of a RAM with a source of run lists, on a device whose held
   imports add to every submission's cost, a copy over chunks not imported imports lists of its own

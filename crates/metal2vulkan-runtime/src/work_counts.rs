@@ -359,6 +359,8 @@ pub(crate) struct Counters {
     host_ram_copies_staged: AtomicU64,
     host_ram_staged_fills_gated: AtomicU64,
     host_ram_staged_fill_nanos: AtomicU64,
+    host_ram_scatters_staged: AtomicU64,
+    host_ram_staged_drain_nanos: AtomicU64,
     host_ram_dma_buf_imports: AtomicU64,
     host_ram_run_list_imports: AtomicU64,
     host_ram_run_list_import_nanos: AtomicU64,
@@ -2924,6 +2926,17 @@ impl Counters {
         if gated {
             (self.host_ram_staged_fills_gated).fetch_add(1, Ordering::Relaxed);
         }
+    }
+
+    /// A scatter into a guest RAM was staged through the CPU (`host_ram/copy.rs`).
+    pub(crate) fn host_ram_scatter_staged(&self) {
+        (self.host_ram_scatters_staged).fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A staged scatter's host step copied its staging into the pages in `nanos` nanoseconds
+    /// (`host_ram/copy.rs`).
+    pub(crate) fn host_ram_staged_drained(&self, nanos: u64) {
+        (self.host_ram_staged_drain_nanos).fetch_add(nanos, Ordering::Relaxed);
     }
 
     /// The device imported a chunk of a guest RAM, or an object's run inside one, as a dma-buf
@@ -6272,6 +6285,15 @@ pub struct WorkCounts {
     pub host_ram_staged_fills_gated: u64,
     /// The nanoseconds the CPU copies of those gathers took, on the device's threads.
     pub host_ram_staged_fill_nanos: u64,
+    /// Scatters into a guest RAM (`BlitCommandEncoder::copy_to_host_ram` and
+    /// `copy_runs_to_host_ram`) staged through the CPU: over a chunk the device's thread was to
+    /// import, which the copy would have imported its ranges of alone or waited for, the GPU
+    /// copied its bytes into memory of the command buffer's, which a host step took, and the CPU
+    /// copied them on into the pages once that copy completed, before the command buffer did,
+    /// with no import made or waited for and no memory made on the encoding thread.
+    pub host_ram_scatters_staged: u64,
+    /// The nanoseconds the CPU copies of those scatters took, on the device's threads.
+    pub host_ram_staged_drain_nanos: u64,
     /// The imports of guest RAM, chunks and objects' runs alike, made as one dma-buf each of the
     /// RAM's source (`HostRam::with_dma_buf`), not by their pointer: where the device's held
     /// pointer imports add to every submission's cost, or it refused the pointer.
@@ -7792,6 +7814,10 @@ impl Device {
                 .host_ram_staged_fills_gated
                 .load(Ordering::Relaxed),
             host_ram_staged_fill_nanos: counters.host_ram_staged_fill_nanos.load(Ordering::Relaxed),
+            host_ram_scatters_staged: counters.host_ram_scatters_staged.load(Ordering::Relaxed),
+            host_ram_staged_drain_nanos: counters
+                .host_ram_staged_drain_nanos
+                .load(Ordering::Relaxed),
             host_ram_dma_buf_imports: counters.host_ram_dma_buf_imports.load(Ordering::Relaxed),
             host_ram_run_list_imports: counters.host_ram_run_list_imports.load(Ordering::Relaxed),
             host_ram_run_list_import_nanos: counters

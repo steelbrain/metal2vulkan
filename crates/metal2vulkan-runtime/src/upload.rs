@@ -14,7 +14,9 @@
 //!   memory, and a vertex-heavy draw's GPU time the same (28.19 ms against 28.18). A region is
 //!   never reused while the command buffer lives: every command reads data no other command wrote,
 //!   and the host writes it before the command's batch is submitted (a host step's, after the
-//!   batches before it). The regions the GPU writes: where a pass's visibility results land before
+//!   batches before it). The regions the GPU writes: a staged scatter's staging, which a host
+//!   step takes and the GPU's copy writes, and which a host step of a later batch reads once
+//!   that copy completed (`host_ram/copy.rs`); where a pass's visibility results land before
 //!   they are copied on into a no-copy buffer (`visibility.rs`), within one command of barriers,
 //!   and an index bounds pass's bounds words and the command buffer's index pool
 //!   (`index_bounds.rs`), written before the pass between barriers; and a flat dispatch's region
@@ -43,8 +45,9 @@
 //!   its device address is 16-aligned. A root table and the resident set it searches start at a
 //!   device address that is a multiple of 32 too (`upload_aligned`). A region's bytes past the data
 //!   are zero: [`Uploads::upload`] sets them, since the chunk holds no value as it is made; but an
-//!   unset region's ([`Uploads::unset`]: a staged copy's pages, which a host step writes before
-//!   its batch is submitted, every byte its command reads among them). The bytes an alignment
+//!   unset region's ([`Uploads::unset`]: a staged gather's pages, which a host step writes before
+//!   its batch is submitted, every byte its command reads among them; a staged scatter's bytes,
+//!   which its copy writes, every byte the host reads after it among them). The bytes an alignment
 //!   leaves between two regions belong to no region, and nothing reads them.
 
 use super::buffer::{Buffer, NewBytes};
@@ -151,7 +154,8 @@ impl Uploads {
 
     /// A region of `len` bytes whose bytes hold no value until written ([`Upload::write_at`]):
     /// the caller writes every byte a command reads before the batch that reads them is
-    /// submitted (a host step's, a staged copy's pages, `host_ram/copy.rs`).
+    /// submitted (a host step's, a staged gather's pages, `host_ram/copy.rs`), or every byte the
+    /// host reads by a command that completed before (a staged scatter's copy).
     pub(super) fn unset(&mut self, device: &Device, len: u64) -> Result<Upload, Error> {
         self.place(device, &[], (len, 1), false)
     }
@@ -354,7 +358,7 @@ impl Upload {
     }
 
     /// Copy the `len` bytes at `from` into the region from its byte `at`, before any batch that
-    /// reads the region is submitted: a staged copy's pages, by a host step (`host_ram/copy.rs`).
+    /// reads the region is submitted: a staged gather's pages, by a host step (`host_ram/copy.rs`).
     /// A copy past the region is cut to it.
     ///
     /// # Safety
@@ -374,6 +378,32 @@ impl Upload {
             std::ptr::copy_nonoverlapping(
                 from,
                 mapped.as_ptr().add((self.offset + at) as usize),
+                len,
+            );
+        }
+    }
+
+    /// Copy the `len` bytes of the region from its byte `at` to `to`: a staged scatter's bytes
+    /// into the pages, by a host step (`host_ram/copy.rs`). A copy past the region is cut to it.
+    ///
+    /// # Safety
+    ///
+    /// The `len` bytes at `to` stay mapped and writable while the call runs, and lie outside the
+    /// region; every command that writes those bytes of the region completed, and their writes
+    /// are visible to the host (its batch's end, `tracker::Barrier::to_host`).
+    pub(super) unsafe fn copy_out(&self, at: u64, to: *mut u8, len: u64) {
+        let Some(mapped) = self.buffer.contents() else {
+            unreachable!("upload chunks are Shared buffers")
+        };
+        let len = len.min(self.len.saturating_sub(at)) as usize;
+        // SAFETY: `[offset + at, offset + at + len)` is inside the region, which no other region
+        // overlaps and no command writes any more (the caller's contract), in host-coherent
+        // memory; the bytes at `to` are writable and apart from it (the caller's contract). A raw
+        // copy, as another thread may read or write those bytes meanwhile.
+        unsafe {
+            std::ptr::copy_nonoverlapping(
+                mapped.as_ptr().add((self.offset + at) as usize),
+                to,
                 len,
             );
         }

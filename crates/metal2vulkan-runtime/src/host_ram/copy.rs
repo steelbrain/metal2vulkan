@@ -29,40 +29,63 @@
 //!   more ranges than [`MOST_ALONE`], a range that is the whole chunk, a range's import that fails)
 //!   the copy imports the chunk, or waits for its import under way, which is the chunk's one import
 //!   (`Device::import_chunk`), made and counted as an object's is
-//!   (`WorkCounts::host_ram_copy_import_waits`, `host_ram_copy_import_wait_nanos`). A gather over
-//!   a chunk the device's thread imports takes neither: it takes the CPU's path below.
-//! - **First touch through the CPU** ([`StagedFill`]). A gather over a chunk not imported yet,
-//!   which the device's thread imports (`RamOnDevice::copy_take`), on a device whose plan is not
-//!   `Plan::listed`, and over none whose import only the copy would make, is staged instead of
-//!   importing its ranges alone or waiting for the chunk's: an import of a gather's ranges pins
-//!   every page less than 2 MiB from the next on the encoding thread (a cache of 2,477 runs over
-//!   five chunks, its runs joined where less than 1 MiB apart, pinned 317 MiB in 61 ms on an RTX
-//!   5080 Laptop GPU, where the CPU copied the runs in 2.8 ms: `tests/host_ram_first_fill_bench.rs`),
-//!   a consumer's fills of new surfaces there with three video clips at once took 1.4 to 2.1 s
-//!   while chunks were being imported. It takes a region of the command buffer's
-//!   arena as long as the copy's bytes, host-visible memory of the runtime's own, which the host
-//!   step of the copy's batch fills by the CPU from the pages, each piece at its byte, before the
-//!   batch is submitted; and one `vkCmdCopyBuffer` of the bytes the runs cover from it into the
-//!   buffer (at most [`MOST_REGIONS`] regions a command, a byte two runs name taking the later's,
-//!   as the CPU wrote it last). No import is made or waited for, and no page pinned for it; each
-//!   chunk is taken as an object takes it, and asked of the device's thread, which imports it
-//!   before its window's next (`RamOnDevice::ask_for_copy`), so the copies after it read the
-//!   chunks' imports. Its uses are the chunks' bytes it reads, by their keys, and the buffer's
-//!   writes, so hazard tracking orders it as it orders a copy through the imports, the later
-//!   writers of those bytes among them. It reads what Metal's copy would: the step runs once the
-//!   batch is otherwise ready, after its event waits are met and every batch before it in its
-//!   order was submitted, so the CPU's writes before the commit, or before a signal its batch
-//!   waits for, are in the pages. Where some use but a copy's read may write the copy's host
-//!   bytes (a buffer or heap over host pages lies over them, which it does until every command
-//!   buffer that used it completed, or a copy into those chunks was recorded:
-//!   `RamOnDevice::written_over`), the GPU may be writing them: the step then waits until every
-//!   `VkQueue` completed what was submitted before it, as a host step that reads what the GPU
-//!   writes waits (`scheduler/mod.rs`), and reads after. A copy over bytes some use in its own
-//!   command buffer may write takes the imports' path, since that work is not submitted before
-//!   its step; so does a copy encoded again (`replay.rs`), and one whose staging the device has
-//!   no memory for. Counted:
-//!   `WorkCounts::host_ram_copies_staged`, `host_ram_staged_fills_gated`,
-//!   `host_ram_staged_fill_nanos`.
+//!   (`WorkCounts::host_ram_copy_import_waits`, `host_ram_copy_import_wait_nanos`). A copy over
+//!   a chunk the device's thread imports takes neither: it takes the CPU's path below, unless it
+//!   is encoded again.
+//! - **First touch through the CPU** ([`StagedFill`], [`StagedScatter`]). A copy over a chunk not
+//!   imported yet, which the device's thread imports (`RamOnDevice::copy_take`), on a device whose
+//!   plan is not `Plan::listed`, and over none whose import only the copy would make, is staged
+//!   instead of importing its ranges alone or waiting for the chunk's: an import of a copy's
+//!   ranges pins every page less than 2 MiB from the next on the encoding thread (a cache of 2,477
+//!   runs over five chunks, its runs joined where less than 1 MiB apart, pinned 317 MiB in 61 ms
+//!   on an RTX 5080 Laptop GPU, where the CPU copied the runs in 2.8 ms:
+//!   `tests/host_ram_first_fill_bench.rs`), a consumer's fills of new surfaces there with three
+//!   video clips at once took 1.4 to 2.1 s while chunks were being imported. No import is made or
+//!   waited for, and no page pinned for it; each chunk is taken as an object takes it, and asked
+//!   of the device's thread, which imports it before its window's next
+//!   (`RamOnDevice::ask_for_copy`), so the copies after it go through the chunks' imports.
+//!   - A gather takes a region of the command buffer's arena as long as the copy's bytes,
+//!     host-visible memory of the runtime's own, which the host step of the copy's batch fills by
+//!     the CPU from the pages, each piece at its byte, before the batch is submitted; and one
+//!     `vkCmdCopyBuffer` of the bytes the runs cover from it into the buffer (at most
+//!     [`MOST_REGIONS`] regions a command, a byte two runs name taking the later's, as the CPU
+//!     wrote it last). Its uses are the chunks' bytes it reads, by their keys, and the buffer's
+//!     writes, so hazard tracking orders it as it orders a copy through the imports, the later
+//!     writers of those bytes among them. It reads what Metal's copy would: the step runs once
+//!     the batch is otherwise ready, after its event waits are met and every batch before it in
+//!     its order was submitted, so the CPU's writes before the commit, or before a signal its
+//!     batch waits for, are in the pages. Where some use but a copy's read may write the copy's
+//!     host bytes (a buffer or heap over host pages lies over them, which it does until every
+//!     command buffer that used it completed, or a copy into those chunks was recorded:
+//!     `RamOnDevice::written_over`), the GPU may be writing them: the step then waits until every
+//!     `VkQueue` completed what was submitted before it, as a host step that reads what the GPU
+//!     writes waits (`scheduler/mod.rs`), and reads after. A gather over bytes some use in its own
+//!     command buffer may write takes the imports' path, since that work is not submitted before
+//!     its step; so does one whose staging the device has no memory for. Counted:
+//!     `WorkCounts::host_ram_copies_staged`, `host_ram_staged_fills_gated`,
+//!     `host_ram_staged_fill_nanos`.
+//!   - A scatter leaves its work to two host steps (`Deferred::ScatterStage`,
+//!     `Deferred::ScatterDrain`). The host step of the copy's batch, which waits for no work on the
+//!     GPU, takes a region of the command buffer's arena as long as the copy's bytes and records
+//!     one `vkCmdCopyBuffer` of the bytes the runs cover from the buffer into it (at most
+//!     [`MOST_REGIONS`] regions a command), at the copy's place among the encoder's commands: so
+//!     the region's memory is made on neither the encoding nor the committing thread. The copy
+//!     then goes on in a part of its own, as work whose host step reads what the GPU wrote does
+//!     (`encoder.rs`'s segments): that batch's host step waits until every `VkQueue` completed
+//!     what was submitted before it, and copies each run's bytes from the region into the pages,
+//!     in the runs' order (a host byte two runs name keeps the later's), before the batch is
+//!     submitted. So the pages hold the bytes once the command buffer completed, as Metal's
+//!     completion says, and every command after the copy, in its command buffer or a later one,
+//!     runs after the CPU wrote them. Its uses: the buffer's read where the GPU's copy lies, and
+//!     the chunks' bytes it writes, by their keys, at the start of the part after it, where the
+//!     CPU's copy lies, so hazard tracking orders the later readers and writers of those bytes
+//!     after that write, and the RAM's log is told of them as of a copy through the imports. A
+//!     region the device has no memory for fails the command buffer at that host step. An
+//!     encoder that holds one keeps no log a rebind encodes it again from
+//!     (`command_buffer/rebound_use.rs`'s `Unlogged::Segments`). Counted:
+//!     `WorkCounts::host_ram_scatters_staged`, `host_ram_staged_drain_nanos`.
+//!
+//!   A copy encoded again (`replay.rs`) takes the imports' path.
 //! - **Lists of runs.** Where each listed import costs every submission and the RAM's chunks are
 //!   the device's dma-bufs of the RAM's source (RADV's: `host_ram.rs`'s `Plan::listed`), and the
 //!   RAM came with a source of run lists (`HostRam::with_dma_buf_of_runs`), a copy neither imports
@@ -138,8 +161,11 @@
 use super::{CopyImports, CopyTake, HostRam, RamChunk, RamOnDevice};
 use crate::blit::{bytes_in, reads_by, writes_by, BlitCommandEncoder, TRANSFER};
 use crate::buffer::{Buffer, CallerMemory};
+use crate::command_buffer::CommandBuffer;
+use crate::deferred::Deferred;
 use crate::dirty_pages::PagesLog;
-use crate::error::{invalid, Error, Problem};
+use crate::encoder::{EncoderCore, RecordedSegment};
+use crate::error::{internal, invalid, Error, Problem};
 use crate::owned_kernel::{OwnedBinds, OwnedModule, OwnedSet};
 use crate::replay::BlitCall;
 use crate::resource::ResourceKey;
@@ -298,6 +324,86 @@ impl StagedFill {
         self.filled.store(true, Ordering::Release);
         let nanos = u64::try_from(started.elapsed().as_nanos()).unwrap_or(u64::MAX);
         (device.shared().counts).host_ram_staged_filled(nanos, self.gated.load(Ordering::Relaxed));
+    }
+}
+
+/// A scatter staged through the CPU (the module docs' "First touch"), its work left to two host
+/// steps: the first, of the batch that holds the copy, takes `region` of its command buffer's
+/// arena and records the GPU's copy of the bytes the runs cover from the buffer into it
+/// ([`stage`](Self::stage), `Deferred::ScatterStage`); the second, of the batch after it, once
+/// every batch submitted before it completed, copies each piece's bytes from the region into the
+/// pages ([`drain`](Self::drain), `Deferred::ScatterDrain`). Held by its segments until its
+/// command buffer completes.
+pub(crate) struct StagedScatter {
+    /// Kept until the CPU's copy: the pages stay mapped while the RAM lives (`HostRam::new`).
+    _ram: Arc<RamOnDevice>,
+    /// The buffer's `VkBuffer` and the byte of it the copy's first byte is at (`blit_at`, whose
+    /// command buffer keeps it live until it completes).
+    source: (vk::Buffer, u64),
+    /// The copy's bytes: the region's length.
+    length: u64,
+    /// The bytes of the copy the pieces cover ([`covered`]): the GPU's regions, each byte once.
+    covered: Vec<Range<u64>>,
+    /// Each piece's first host byte, its length and its byte of the region, in the runs' order:
+    /// where two name one host byte, the later's bytes stay.
+    pieces: Vec<(u64, u64, u64)>,
+    /// The region, once the first step took it.
+    region: OnceLock<Upload>,
+}
+
+impl StagedScatter {
+    /// The first host step, on the steps' thread before the copy's batch is submitted: the
+    /// region of the arena, and the GPU's copy into it, at most [`MOST_REGIONS`] regions a
+    /// command, after every command before it (`EncoderCore::segment`'s barrier) and before
+    /// every later one. Refused, failing the command buffer, where the device has no memory for
+    /// the region.
+    pub(crate) fn stage(&self, command_buffer: &CommandBuffer) -> Result<RecordedSegment, Error> {
+        let device = command_buffer.device().clone();
+        let region = (command_buffer.state().uploads).unset(&device, self.length)?;
+        let (source, at) = self.source;
+        let target = region.raw();
+        let regions: Vec<vk::BufferCopy> = (self.covered.iter())
+            .map(|bytes| vk::BufferCopy {
+                src_offset: at + bytes.start,
+                dst_offset: region.offset() + bytes.start,
+                size: bytes.end - bytes.start,
+            })
+            .collect();
+        let mut core = EncoderCore::segment(command_buffer, true)?;
+        core.command(TRANSFER, &[], |functions, raw| {
+            for part in regions.chunks(MOST_REGIONS) {
+                // SAFETY: the segment's command buffer is recording, outside a render pass; the
+                // buffer and the arena's region are live until the command buffer completes
+                // (`blit_at`, the arena); each region lies inside the buffer's bytes (`bytes_in`)
+                // and inside the arena's (as long as the copy's bytes), and no byte is written by
+                // two (`covered`).
+                unsafe { functions.cmd_copy_buffer(raw, source, target, part) };
+            }
+        });
+        if self.region.set(region).is_err() {
+            return Err(internal("a staged scatter's staging taken twice"));
+        }
+        core.end_segment()
+    }
+
+    /// The second host step, once every batch submitted before its own completed, the GPU's
+    /// copy into the region among them (its batch ended with the barrier to the host): each
+    /// piece's bytes copied from the region into the pages, in the runs' order, counted on
+    /// `device`. It records nothing.
+    pub(crate) fn drain(&self, device: &Device) -> Result<RecordedSegment, Error> {
+        let region = (self.region.get())
+            .ok_or_else(|| internal("a staged scatter drained before its staging"))?;
+        let started = Instant::now();
+        for &(host, length, at) in &self.pieces {
+            // SAFETY: the piece's host bytes lie in the RAM's ranges (`pieces`), which stay
+            // mapped, readable and writable while `_ram` holds the RAM (`HostRam::new`); the
+            // region is memory of the runtime's own, apart from them, and no command writes it
+            // any more.
+            unsafe { region.copy_out(at, host as *mut u8, length) };
+        }
+        let nanos = u64::try_from(started.elapsed().as_nanos()).unwrap_or(u64::MAX);
+        (device.shared().counts).host_ram_staged_drained(nanos);
+        Ok(RecordedSegment::submitted(Vec::new()))
     }
 }
 
@@ -722,10 +828,13 @@ impl BlitCommandEncoder {
     /// run lists ([`HostRam::with_dma_buf_of_runs`]; RADV's, `Device::use_host_ram`), as one
     /// dma-buf of that source for each list of up to its count of runs
     /// (`WorkCounts::host_ram_run_list_imports`), the chunk neither imported nor asked for, so
-    /// the copy makes no page of the guest's RAM resident but its own; elsewhere, for up to 16
-    /// ranges of the chunk, each range alone while the device imports the chunk, as an object
-    /// over it is bound in its own run's import. Where that cannot be, the chunk is imported
-    /// first, or its import waited for.
+    /// the copy makes no page of the guest's RAM resident but its own; on a device whose thread
+    /// imports the chunks ahead, through the CPU, importing nothing of its own, while the thread
+    /// imports the chunk next (the module docs' "First touch": a gather's pages read by the CPU
+    /// before its batch is submitted, a scatter's written by the CPU once its GPU copy
+    /// completed, before its command buffer completes); elsewhere, for up to 16 ranges of the
+    /// chunk, each range alone, as an object over it is bound in its own run's import. Where
+    /// that cannot be, the chunk is imported first, or its import waited for.
     ///
     /// No runs copy nothing.
     ///
@@ -759,8 +868,10 @@ impl BlitCommandEncoder {
     /// the order given, by the GPU, into the device's imports of the RAM's chunks: the scatter
     /// [`copy_from_host_ram`](Self::copy_from_host_ram) gathers, a runtime extension (Metal has
     /// none). Ordered and seen as a copy from `source` into a no-copy buffer over the pages
-    /// would be: hazard tracking orders it against every other use of the same host bytes, the
-    /// GPU's writes are in the pages once the command buffer completed, and where the RAM came
+    /// would be: hazard tracking orders it against every other use of the same host bytes, its
+    /// bytes are in the pages once the command buffer completed (over a chunk not imported yet,
+    /// copied there by the CPU from the GPU's copy into memory of the command buffer's own, as
+    /// [`copy_from_host_ram`](Self::copy_from_host_ram) says), and where the RAM came
     /// with a log of its pages' writes (`HostRam::with_dirty_pages`) they are reported to it as
     /// the GPU's writes in place, so every copy the runtime keeps of those pages takes them. A
     /// run that starts or ends inside a page writes its bytes alone: the rest of the page keeps
@@ -924,8 +1035,14 @@ impl BlitCommandEncoder {
             for (slot, _) in chunk_ranges(&pieces, MOST_RANGES) {
                 ram.copy_wrote(slot);
             }
+            if self.stages(ram, importer, (&pieces, &spans), PagesCopy::Scatter) {
+                let bytes = (raw, at, span, total);
+                return self.record_staged_scatter(call, ram, (&pieces, &spans), bytes);
+            }
         }
-        if call.copy == PagesCopy::Gather && self.stages(ram, importer, &pieces, &spans) {
+        if call.copy == PagesCopy::Gather
+            && self.stages(ram, importer, (&pieces, &spans), PagesCopy::Gather)
+        {
             // Its staging, unless the device has no memory for it: the imports' path then.
             let staging = (self.core().command_buffer().state().uploads)
                 .unset(&device, span.end - span.start);
@@ -1087,19 +1204,21 @@ impl BlitCommandEncoder {
         Ok(())
     }
 
-    /// Whether a gather of `pieces` (cut where the chunks of `spans` end) is staged through the
-    /// CPU (the module docs' "First touch"): it is over a chunk not imported yet that the
-    /// device's thread imports ([`CopyTake::ThroughCpu`]), over none whose import only it would
-    /// make ([`CopyTake::Waits`]), and no use but a copy's read may write its host bytes
-    /// ([`RamOnDevice::written_over`]), none in its own command buffer before it among them. Not
-    /// in an encoder encoded again (`replay.rs`, `command_buffer/reencode.rs`), whose recording
-    /// takes no host step of its own.
+    /// Whether a copy of `pieces` (cut where the chunks of `spans` end), a gather or a scatter as
+    /// `copy` says, is staged through the CPU (the module docs' "First touch"): it is over a
+    /// chunk not imported yet that the device's thread imports ([`CopyTake::ThroughCpu`]), over
+    /// none whose import only it would make ([`CopyTake::Waits`]); and, of a gather, no use but a
+    /// copy's read may write its host bytes ([`RamOnDevice::written_over`]), none in its own
+    /// command buffer before it among them. A scatter's CPU copy waits for every batch submitted
+    /// before it to complete, its own command buffer's before it among them. Not in an encoder
+    /// encoded again (`replay.rs`, `command_buffer/reencode.rs`), whose recording takes no host
+    /// step of its own.
     fn stages(
         &mut self,
         ram: &RamOnDevice,
         importer: &super::Importer,
-        pieces: &[Piece],
-        spans: &[Range<u64>],
+        (pieces, spans): (&[Piece], &[Range<u64>]),
+        copy: PagesCopy,
     ) -> bool {
         if self.core().encodes_again() {
             return false;
@@ -1113,7 +1232,9 @@ impl BlitCommandEncoder {
                 CopyTake::Waits => return false,
             }
         }
-        through_cpu && !ram.written_over(&device, &touched_bytes(pieces, spans))
+        through_cpu
+            && (copy == PagesCopy::Scatter
+                || !ram.written_over(&device, &touched_bytes(pieces, spans)))
     }
 
     /// Record `call`, a gather staged through the CPU ([`stages`](Self::stages)), into the
@@ -1191,6 +1312,72 @@ impl BlitCommandEncoder {
         let counts = &device.shared().counts;
         counts.host_ram_copied(total, 0);
         counts.host_ram_copy_staged();
+        Ok(())
+    }
+
+    /// Record `call`, a scatter staged through the CPU ([`stages`](Self::stages)), from the
+    /// buffer's bytes `span`, at byte `at` of its `raw` (the module docs' "First touch"): its
+    /// work left to two host steps ([`StagedScatter`]), the GPU's copy into the staging at its
+    /// place in the encoder, its read of the buffer noted there, and the CPU's copy into the
+    /// pages at the start of a part of its own after it, its writes of the chunks' bytes noted
+    /// there, by their keys. Each chunk is taken as an object over it takes it, and asked of the
+    /// device's thread where it is not imported ([`RamOnDevice::ask_for_copy`]). A buffer
+    /// detached since records nothing, as a command over it does.
+    fn record_staged_scatter(
+        &mut self,
+        call: &HostRamCall,
+        ram: &Arc<RamOnDevice>,
+        (pieces, spans): (&[Piece], &[Range<u64>]),
+        (raw, at, span, total): (vk::Buffer, u64, Range<u64>, u64),
+    ) -> Result<(), Error> {
+        let device = self.core().device().clone();
+        let read = Access::new(TRANSFER, vk::AccessFlags2::TRANSFER_READ);
+        let write = Access::new(TRANSFER, vk::AccessFlags2::TRANSFER_WRITE);
+        let reads = [reads_by(&call.buffer, span.clone(), read)];
+        if !self.core().note_left_uses(TRANSFER, &reads) {
+            return Ok(());
+        }
+        let in_pages: Vec<(u64, u64, u64)> = (pieces.iter())
+            .map(|piece| {
+                (
+                    spans[piece.slot].start + piece.offset,
+                    piece.length,
+                    piece.at,
+                )
+            })
+            .collect();
+        let staged = Arc::new(StagedScatter {
+            _ram: Arc::clone(ram),
+            source: (raw, at),
+            length: span.end - span.start,
+            covered: covered(pieces),
+            pieces: in_pages,
+            region: OnceLock::new(),
+        });
+        self.core()
+            .defer(Deferred::ScatterStage(Arc::clone(&staged)))?;
+        self.core().defer(Deferred::ScatterDrain(staged))?;
+        let touched = chunk_ranges(pieces, MOST_RANGES);
+        let mut writes = Vec::new();
+        for (slot, ranges) in &touched {
+            let key = ram.chunk_key(&device, *slot);
+            for range in ranges {
+                writes.push(Use::writes(
+                    key,
+                    true,
+                    UseRange::Bytes(range.clone()),
+                    write,
+                ));
+            }
+        }
+        self.core().note_left_uses(TRANSFER, &writes);
+        for slot in touched.keys() {
+            ram.take_for_copy(*slot);
+            ram.ask_for_copy(*slot);
+        }
+        let counts = &device.shared().counts;
+        counts.host_ram_copied(total, 0);
+        counts.host_ram_scatter_staged();
         Ok(())
     }
 

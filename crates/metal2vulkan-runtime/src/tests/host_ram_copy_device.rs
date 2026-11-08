@@ -44,9 +44,8 @@
 //!   their own, one past the buffer or at a byte past `u64`; no runs copy nothing.
 //! - **A chunk taken as an object takes it**, on a device whose thread imports ahead: a gather
 //!   from the RAM's first chunk finds it imported ahead and opens the full window past it, and a
-//!   scatter into a chunk past the window imports its page alone while the thread imports the
-//!   chunk (on a device with `AliasedImportBlitsUnordered`, the chunk itself); the thread imports
-//!   nothing past the window.
+//!   scatter into a chunk past the window is staged, importing nothing of its own, while the
+//!   thread imports the chunk; the thread imports nothing past the window.
 //! - **A first touch through the CPU**, on a device whose thread imports ahead: a gather of
 //!   pages scattered over two chunks not imported yet, more ranges in each than are imported
 //!   alone, is staged: no wait for an import, the CPU's writes after its encoding and before the
@@ -55,7 +54,13 @@
 //!   ranges, which an import of its ranges alone could take: its encoding imports nothing. One
 //!   encoded before a buffer over one of its pages was made and written by the GPU in a command
 //!   buffer committed before it waits for that write (its fill gated), and reads it; one behind a
-//!   shared event reads the CPU's writes made before the signal.
+//!   shared event reads the CPU's writes made before the signal. A scatter over two such chunks,
+//!   from a `Private` buffer the GPU wrote just before it in its encoder, a page named twice among
+//!   its runs, is staged: its encoding imports nothing and waits for none, its pages hold its
+//!   bytes once it completed (the later's where a page is named twice) and no other page moved,
+//!   and a buffer over one of them reads them in a later encoder and in a command buffer of
+//!   another queue committed after it. So is one of few ranges, whose encoding imports nothing,
+//!   and the scatter after it, over the chunks the thread imported, goes through their imports.
 //!
 //! Every other test holds the device's thread back (`Device::hold_host_ram_imports`).
 //!
@@ -1372,12 +1377,8 @@ fn a_copy_takes_its_chunks_as_an_object_does_and_the_window_ahead_moves_past_the
         0,
         "the copy found its chunk imported ahead"
     );
-    // A scatter into the chunk past the window: its page imported alone for the copy while the
-    // thread imports the chunk, and the window past it is the RAM's end. On a device whose
-    // barriers do not order blits through two imports of the same pages
-    // (`AliasedImportBlitsUnordered`) the copy imports the chunk itself.
-    let defect = metal2vulkan::error::RuntimeDriverDefect::AliasedImportBlitsUnordered;
-    let a = u64::from(!device.properties().driver_defects.contains(&defect));
+    // A scatter into the chunk past the window: staged through the CPU, no import of its own,
+    // while the thread imports the chunk it asked for; the window past it is the RAM's end.
     let last_page = page_of(CHUNKS - 1);
     let scattering = device.work_counts();
     blit(&device, |encoder| {
@@ -1393,8 +1394,8 @@ fn a_copy_takes_its_chunks_as_an_object_does_and_the_window_ahead_moves_past_the
     });
     assert_eq!(
         (by_copies(&jumped), ahead(&jumped)),
-        (1 - a, 1 + WINDOW + a),
-        "the copy outside the window imported its page alone, or its chunk; nothing past the \
+        (0, 2 + WINDOW),
+        "the copy outside the window imported nothing, the thread its chunk; nothing past the \
          RAM's end"
     );
     assert_eq!(
@@ -1404,10 +1405,10 @@ fn a_copy_takes_its_chunks_as_an_object_does_and_the_window_ahead_moves_past_the
     assert_eq!(
         (
             jumped.run_imports_made - scattering.run_imports_made,
-            jumped.run_imports_live,
+            jumped.host_ram_scatters_staged - scattering.host_ram_scatters_staged,
         ),
-        (a, scattering.run_imports_live),
-        "the page's import alone counted made, and gone with the copy"
+        (0, 1),
+        "the scatter staged, with no import of its page alone"
     );
     drop((used, ram));
 }
@@ -1629,6 +1630,214 @@ fn a_staged_gather_after_a_gpu_write_over_its_pages_waits_for_that_write() {
         "its fill waited for the work before it"
     );
     drop((over, used, ram));
+}
+
+/// The bytes `runs` hold once a scatter of `source`'s bytes, one run after another, completed:
+/// each distinct run's, the later's where two runs name one.
+fn scattered(runs: &[Range<u64>], source: &[u8]) -> Vec<(Range<u64>, Vec<u8>)> {
+    let mut landed: Vec<(Range<u64>, Vec<u8>)> = Vec::new();
+    let mut at = 0;
+    for run in runs {
+        let length = (run.end - run.start) as usize;
+        let bytes = source[at..at + length].to_vec();
+        at += length;
+        match landed.iter_mut().find(|(was, _)| was == run) {
+            Some(was) => was.1 = bytes,
+            None => landed.push((run.clone(), bytes)),
+        }
+    }
+    landed
+}
+
+#[test]
+fn a_first_scatter_over_chunks_the_thread_imports_is_in_its_pages_once_it_completes() {
+    let Some((device, used, ram, start, before)) = ahead_ram() else {
+        return;
+    };
+    let ahead = |counts: &WorkCounts| {
+        counts.host_ram_chunks_imported_ahead - before.host_ram_chunks_imported_ahead
+    };
+    let by_copies = |counts: &WorkCounts| {
+        counts.host_ram_chunks_imported - before.host_ram_chunks_imported - ahead(counts)
+    };
+    // The scattered pages, then the first named again: its later bytes stay.
+    let mut runs = scattered_pages(start);
+    runs.push(runs[0].clone());
+    // A page beside one of them, which no run names.
+    let beside = runs[1].end..runs[1].end + PAGE;
+    for run in runs.iter().chain([&beside]) {
+        write_pattern(run.clone(), 2);
+    }
+    let kept = bytes(beside.clone());
+    let total: u64 = runs.iter().map(|run| run.end - run.start).sum();
+    let source = shared(&device, total, |at| pattern(at, 11));
+    let cache = device
+        .new_buffer(total, ResourceOptions::private())
+        .unwrap();
+    let queue = device.new_command_queue().unwrap();
+    let command_buffer = queue.command_buffer().unwrap();
+    let mut encoder = command_buffer.blit_command_encoder().unwrap();
+    let encoding = device.work_counts();
+    // The cache written by the GPU just before the scatter reads it.
+    encoder
+        .copy_from_buffer_to_buffer(&source, 0, &cache, 0, total)
+        .unwrap();
+    encoder.copy_to_host_ram(&cache, 0, &ram, &runs).unwrap();
+    encoder.end_encoding().unwrap();
+    let encoded = device.work_counts();
+    eprintln!(
+        "HOST-RAM-FIRST-SCATTER {}: staged {}, run imports made once encoded {}, chunks imported \
+         by copies {}, import waits {}",
+        device.name(),
+        encoded.host_ram_scatters_staged - encoding.host_ram_scatters_staged,
+        encoded.run_imports_made - encoding.run_imports_made,
+        by_copies(&encoded),
+        encoded.host_ram_copy_import_waits - encoding.host_ram_copy_import_waits,
+    );
+    assert_eq!(
+        encoded.host_ram_scatters_staged - encoding.host_ram_scatters_staged,
+        1,
+        "the scatter was not staged"
+    );
+    assert_eq!(
+        (
+            encoded.run_imports_made - encoding.run_imports_made,
+            by_copies(&encoded),
+            encoded.host_ram_copy_import_waits - encoding.host_ram_copy_import_waits,
+        ),
+        (0, 0, 0),
+        "the encoding imported the copy's ranges or a chunk, or waited for one"
+    );
+    // Later readers of one of its pages, through a buffer over it: a later encoder of the same
+    // command buffer, and a command buffer of another queue committed after it.
+    let target = runs[7].clone();
+    let over = over_ram(&device, target.start, PAGE, itself(), true);
+    let read = shared(&device, PAGE, |_| 0);
+    let mut later = command_buffer.blit_command_encoder().unwrap();
+    later
+        .copy_from_buffer_to_buffer(&over, 0, &read, 0, PAGE)
+        .unwrap();
+    later.end_encoding().unwrap();
+    let other = device.new_command_queue().unwrap();
+    let after_it = other.command_buffer().unwrap();
+    let read_apart = shared(&device, PAGE, |_| 0);
+    let mut apart = after_it.blit_command_encoder().unwrap();
+    apart
+        .copy_from_buffer_to_buffer(&over, 0, &read_apart, 0, PAGE)
+        .unwrap();
+    apart.end_encoding().unwrap();
+    command_buffer.commit().unwrap();
+    after_it.commit().unwrap();
+    command_buffer.wait_until_completed_for(WAIT).unwrap();
+    assert_eq!(command_buffer.status(), CommandBufferStatus::Completed);
+    // Its completion: the pages hold its bytes.
+    let landed = scattered(&runs, &contents(&source));
+    for (run, expected) in &landed {
+        assert!(
+            bytes(run.clone()) == *expected,
+            "the scatter's bytes at {run:x?}"
+        );
+    }
+    assert!(bytes(beside) == kept, "a page no run names");
+    after_it.wait_until_completed_for(WAIT).unwrap();
+    assert_eq!(after_it.status(), CommandBufferStatus::Completed);
+    let wanted = &landed.iter().find(|(run, _)| *run == target).unwrap().1;
+    assert!(
+        contents(&read) == *wanted,
+        "a later encoder reads the scatter"
+    );
+    assert!(
+        contents(&read_apart) == *wanted,
+        "another queue's later command buffer reads the scatter"
+    );
+    let after = device.work_counts();
+    assert!(after.host_ram_staged_drain_nanos > encoding.host_ram_staged_drain_nanos);
+    drop((over, used, ram));
+}
+
+/// A scatter of few ranges over chunks not imported yet, which an import of its ranges alone
+/// could take (fewer than `copy::MOST_ALONE`, none the whole chunk), is staged as one of many
+/// is: its encoding imports nothing, and its pages hold its bytes once it completed. The chunks
+/// it asked for are imported by the device's thread, and the scatter after it goes through
+/// their imports, neither staged nor waiting.
+#[test]
+fn a_first_scatter_of_few_ranges_imports_nothing_on_the_encoding_thread() {
+    let Some((device, used, ram, start, before)) = ahead_ram() else {
+        return;
+    };
+    let ahead = |counts: &WorkCounts| {
+        counts.host_ram_chunks_imported_ahead - before.host_ram_chunks_imported_ahead
+    };
+    // Three pages 1 MiB apart in chunk 2, one range alone, and one page in chunk 3.
+    let runs: Vec<Range<u64>> = [0, MIB, 2 * MIB, 64 * MIB + 5 * MIB]
+        .iter()
+        .map(|&at| {
+            let page = start + 2 * 64 * MIB + at;
+            page..page + PAGE
+        })
+        .collect();
+    let total: u64 = runs.iter().map(|run| run.end - run.start).sum();
+    let source = shared(&device, total, |at| pattern(at, 12));
+    let queue = device.new_command_queue().unwrap();
+    let command_buffer = queue.command_buffer().unwrap();
+    let mut encoder = command_buffer.blit_command_encoder().unwrap();
+    let encoding = device.work_counts();
+    encoder.copy_to_host_ram(&source, 0, &ram, &runs).unwrap();
+    encoder.end_encoding().unwrap();
+    let encoded = device.work_counts();
+    command_buffer.commit().unwrap();
+    command_buffer.wait_until_completed_for(WAIT).unwrap();
+    assert_eq!(command_buffer.status(), CommandBufferStatus::Completed);
+    eprintln!(
+        "HOST-RAM-FEW-SCATTER {}: staged {}, run imports made once encoded {}, import waits {}",
+        device.name(),
+        encoded.host_ram_scatters_staged - encoding.host_ram_scatters_staged,
+        encoded.run_imports_made - encoding.run_imports_made,
+        encoded.host_ram_copy_import_waits - encoding.host_ram_copy_import_waits,
+    );
+    assert_eq!(
+        encoded.run_imports_made, encoding.run_imports_made,
+        "the encoding imported the copy's ranges alone"
+    );
+    assert_eq!(
+        encoded.host_ram_copy_import_waits,
+        encoding.host_ram_copy_import_waits
+    );
+    assert_eq!(
+        encoded.host_ram_scatters_staged - encoding.host_ram_scatters_staged,
+        1,
+        "the scatter was not staged"
+    );
+    assert!(gathered(&runs) == contents(&source), "the scattered pages");
+    // The thread imports the two chunks the copy asked for, and no other.
+    let imported = settled(&device, |counts| ahead(counts) == 3);
+    assert_eq!(
+        ahead(&imported),
+        3,
+        "the start's chunk and the two asked for"
+    );
+    assert_eq!(
+        imported.host_ram_chunks_imported - before.host_ram_chunks_imported,
+        3,
+        "no other chunk"
+    );
+    // The scatter after it goes through their imports.
+    let again = shared(&device, total, |at| pattern(at, 13));
+    blit(&device, |encoder| {
+        encoder.copy_to_host_ram(&again, 0, &ram, &runs).unwrap();
+    });
+    assert!(gathered(&runs) == contents(&again), "through the imports");
+    let last = device.work_counts();
+    assert_eq!(
+        last.host_ram_scatters_staged,
+        encoded.host_ram_scatters_staged
+    );
+    assert_eq!(last.run_imports_made, encoded.run_imports_made);
+    assert_eq!(
+        last.host_ram_copy_import_waits,
+        encoded.host_ram_copy_import_waits
+    );
+    drop((used, ram));
 }
 
 #[test]

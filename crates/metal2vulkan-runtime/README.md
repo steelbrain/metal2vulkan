@@ -552,7 +552,9 @@ Calls Metal does not have, for a consumer that emulates a Metal device:
   (host addresses from a 4-byte word to any byte) gathered into consecutive bytes of a buffer,
   or scattered back, from the device's chunk imports: runs that start and end on a word (whole
   pages, or rows of 4-byte texels) by one compute dispatch per chunk the runs touch, other runs by
-  a copy region per run in a chunk; neither touches another byte of their pages; with no view
+  a copy region per run in a chunk; over a chunk not imported yet, where the device's thread
+  imports ahead, through memory of the command buffer's own that the CPU copies from or into
+  the pages; neither touches another byte of their pages; with no view
   of the pages and no import of their own; ordered and seen as a copy between the buffer and a
   no-copy buffer over the pages
   ([HOWTO](../../docs/HOWTO.md#guest-ram-imported-whole)). `copy_runs_from_host_ram` and

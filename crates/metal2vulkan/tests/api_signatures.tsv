@@ -2819,6 +2819,8 @@ field	metal2vulkan-runtime::WorkCounts.host_ram_dma_buf_imports	pub host_ram_dma
 field	metal2vulkan-runtime::WorkCounts.host_ram_pointer_imports_failed	pub host_ram_pointer_imports_failed: u64
 field	metal2vulkan-runtime::WorkCounts.host_ram_run_list_import_nanos	pub host_ram_run_list_import_nanos: u64
 field	metal2vulkan-runtime::WorkCounts.host_ram_run_list_imports	pub host_ram_run_list_imports: u64
+field	metal2vulkan-runtime::WorkCounts.host_ram_scatters_staged	pub host_ram_scatters_staged: u64
+field	metal2vulkan-runtime::WorkCounts.host_ram_staged_drain_nanos	pub host_ram_staged_drain_nanos: u64
 field	metal2vulkan-runtime::WorkCounts.host_ram_staged_fill_nanos	pub host_ram_staged_fill_nanos: u64
 field	metal2vulkan-runtime::WorkCounts.host_ram_staged_fills_gated	pub host_ram_staged_fills_gated: u64
 field	metal2vulkan-runtime::WorkCounts.host_range_lookups	pub host_range_lookups: u64

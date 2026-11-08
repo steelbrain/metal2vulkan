@@ -70,7 +70,7 @@
 //!   imported while it stays inside the window. The thread faults in no more than the window
 //!   past the objects, and never goes back: the RAM the objects never reach stays as the guest
 //!   left it, not resident nor pinned for the device. Before the window's next chunk it imports
-//!   each chunk a gather staged through the CPU took while it was not imported asked for
+//!   each chunk a copy staged through the CPU took while it was not imported asked for
 //!   ([`RamOnDevice::ask_for_copy`], `copy.rs`), wherever it lies: so a copy over scattered
 //!   chunks, which moves the window to each in turn, finds them all imported by its next turn.
 //!   Counted: `WorkCounts::host_ram_chunks_imported_ahead`.
@@ -535,7 +535,7 @@ struct ChunkSlot {
     /// again, and the first object over it imports it, as it would have.
     tried: AtomicBool,
     /// An object over the chunk found it not imported and was bound in its own run's import, on
-    /// a device whose plan is [`Plan::listed`], or a gather was staged through the CPU while it
+    /// a device whose plan is [`Plan::listed`], or a copy was staged through the CPU while it
     /// was not imported ([`RamOnDevice::ask_for_copy`], any other plan): the device's thread
     /// imports it next ([`RamOnDevice::next_asked`]). Changed inside [`ChunkSlot::import`]'s lock.
     asked: AtomicBool,
@@ -561,7 +561,7 @@ struct Idle {
     window: Duration,
 }
 
-/// How a gather takes a chunk not imported yet ([`RamOnDevice::copy_take`]).
+/// How a copy takes a chunk not imported yet ([`RamOnDevice::copy_take`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum CopyTake {
     /// With no wait: the chunk's import is made, or the copy's ranges are imported alone.
@@ -1024,7 +1024,7 @@ impl RamOnDevice {
         Ok((imports, Duration::ZERO))
     }
 
-    /// How a gather of chunk `slot`'s bytes `ranges` (offsets in the chunk, by start, apart) takes
+    /// How a copy of chunk `slot`'s bytes `ranges` (offsets in the chunk, by start, apart) takes
     /// the chunk: at once where its import is made ([`CopyTake::Now`]); else, where the device's
     /// thread imports it (its plan not [`Plan::listed`]), through the CPU meanwhile
     /// ([`CopyTake::ThroughCpu`]: a copy that may be staged, `host_ram/copy.rs`), never by an
@@ -1035,7 +1035,7 @@ impl RamOnDevice {
     /// listed). The device's thread's window is not moved: [`RamOnDevice::take_for_copy`] moves
     /// it.
     ///
-    /// Why not alone. An import of a gather's ranges pins every page between them that lies
+    /// Why not alone. An import of a copy's ranges pins every page between them that lies
     /// less than 2 MiB from the next ([`copy::alone_ranges`]), on the encoding thread: a cache of
     /// 2,477 runs scattered over five 64 MiB chunks of a fresh RAM, its runs joined where less
     /// than 1 MiB apart, pinned 317 MiB in 61 ms on an RTX 5080 Laptop GPU, where the CPU copied
@@ -1086,7 +1086,7 @@ impl RamOnDevice {
         }
     }
 
-    /// A gather staged through the CPU took chunk `slot` while it was not imported
+    /// A copy staged through the CPU took chunk `slot` while it was not imported
     /// ([`CopyTake::ThroughCpu`]): the device's thread imports it before its window's next
     /// ([`RamOnDevice::next_ahead`]), woken for it, so that the copies after it read the chunk's
     /// import, wherever it lies.
@@ -1310,7 +1310,7 @@ impl RamOnDevice {
         true
     }
 
-    /// The chunk the device's thread imports next: the first a staged gather asked for
+    /// The chunk the device's thread imports next: the first a staged copy asked for
     /// ([`RamOnDevice::ask_for_copy`], as [`RamOnDevice::next_asked`] finds it), so that every
     /// chunk such a copy took is imported, however far apart they lie; else the first of the
     /// window ([`Window::slots`]), within the RAM, that is neither imported nor failed by that
@@ -1330,7 +1330,7 @@ impl RamOnDevice {
 
     /// The chunk the device's thread imports next on a device whose plan is [`Plan::listed`]
     /// ([`listed_chunks`]), and before its window's on any other ([`RamOnDevice::next_ahead`]):
-    /// the first an object or a staged gather asked for ([`ChunkSlot::asked`]) that is neither
+    /// the first an object or a staged copy asked for ([`ChunkSlot::asked`]) that is neither
     /// imported, nor being imported now, nor failed by that thread; `None` while there is none.
     /// Each ask it passes is answered: cleared.
     fn next_asked(&self) -> Option<usize> {
@@ -2770,7 +2770,7 @@ mod tests {
         assert_eq!(last.next_ahead(), Some(full + 2), "the chunk taken");
         done(&last, full + 2);
         assert_eq!(last.next_ahead(), None, "nothing past the RAM's end");
-        // A staged gather's asks come first, each once, wherever the window lies.
+        // A staged copy's asks come first, each once, wherever the window lies.
         let asked = RamOnDevice::new(&ram, Plan::AHEAD);
         assert!(asked.take(full + 2));
         asked.ask_for_copy(1);
