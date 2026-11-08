@@ -250,7 +250,7 @@ impl Pair {
         // (each test drops the answer first).
         let copied = unsafe {
             add_reading(
-                &buffers,
+                buffers,
                 at(&mut self.pages),
                 at(&mut self.copy),
                 length,
