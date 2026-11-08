@@ -650,6 +650,8 @@ fn blit_into(
 fn uses_of_the_later_levels_alone_copy_nothing_of_the_first() {
     let scratch = Scratch::new("tiled-texture-later-levels-alone");
     let rig = rig(&scratch);
+    // Each shape's counts, printed before any is asserted.
+    let mut counted = Vec::new();
     for shape in SHAPES {
         let ((width, height), levels) = shape;
         let case = format!("{width}x{height} of {levels} levels");
@@ -659,7 +661,7 @@ fn uses_of_the_later_levels_alone_copy_nothing_of_the_first() {
             .unwrap();
         write_rows(&target, (width, height), checker);
         let kept = read(&target);
-        // A blit into level 1 alone: no copy of level 0 in, back, kept or merged.
+        // A blit into level 1 alone.
         let (w, h) = (width / 2, height / 2);
         let pattern = packed((w, h), |x, y| texel(6, x, y));
         let source = holding(&rig.device, w * h * 4, &pattern);
@@ -667,18 +669,8 @@ fn uses_of_the_later_levels_alone_copy_nothing_of_the_first() {
         let one = copies_of(&rig.device, || {
             rig.run(|command_buffer| blit_into(command_buffer, (&source, &texture), 1, at));
         });
-        eprintln!("TILED-TEXTURE: {case}: a level-1 blit {one:?}");
         assert_eq!(level_bytes(&texture, (width, height), 1), pattern, "{case}");
-        let none = Copies {
-            copies: 0,
-            texels_in: 0,
-            texels_back: 0,
-            texels_kept: 0,
-            fetched: 0,
-        };
-        assert_eq!(one, none, "{case}: the level-1 blit");
-        // `generate_mipmaps` reads level 0, copied in, and writes the later levels alone: nothing
-        // back, kept or merged.
+        // `generate_mipmaps`, which reads level 0 and writes the later levels alone.
         let mips = copies_of(&rig.device, || {
             rig.run(|command_buffer| {
                 let mut blit = command_buffer.blit_command_encoder().unwrap();
@@ -686,8 +678,26 @@ fn uses_of_the_later_levels_alone_copy_nothing_of_the_first() {
                 blit.end_encoding().unwrap();
             });
         });
+        eprintln!("TILED-TEXTURE: {case}: a level-1 blit {one:?}");
         eprintln!("TILED-TEXTURE: {case}: generate_mipmaps {mips:?}");
-        let first = width * height;
+        // Level 1 as `generate_mipmaps` left it: its first texel's blue the checkerboard's 2x2
+        // average.
+        let blue = level_bytes(&texture, (width, height), 1)[0];
+        assert!((127..=128).contains(&blue), "{case}: level 1 blue {blue}");
+        assert_eq!(read(&target), kept, "{case}: the buffer's bytes");
+        counted.push((case, width * height, one, mips));
+    }
+    let none = Copies {
+        copies: 0,
+        texels_in: 0,
+        texels_back: 0,
+        texels_kept: 0,
+        fetched: 0,
+    };
+    for (case, first, one, mips) in counted {
+        // The level-1 blit: no copy of level 0 in, back, kept or merged.
+        assert_eq!(one, none, "{case}: the level-1 blit");
+        // `generate_mipmaps`: level 0 copied in, which it reads; nothing back, kept or merged.
         assert!(
             mips.texels_in > 0 && mips.texels_in.is_multiple_of(first),
             "{case}: generate_mipmaps copied in {mips:?}"
@@ -697,11 +707,6 @@ fn uses_of_the_later_levels_alone_copy_nothing_of_the_first() {
             (0, 0, 0),
             "{case}: generate_mipmaps {mips:?}"
         );
-        // Level 1 as `generate_mipmaps` left it: its first texel's blue the checkerboard's 2x2
-        // average.
-        let blue = level_bytes(&texture, (width, height), 1)[0];
-        assert!((127..=128).contains(&blue), "{case}: level 1 blue {blue}");
-        assert_eq!(read(&target), kept, "{case}: the buffer's bytes");
     }
 }
 
