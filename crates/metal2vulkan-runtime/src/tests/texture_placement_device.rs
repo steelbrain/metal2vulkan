@@ -10,8 +10,10 @@
 //!   question answers in place exactly where the check passed for the pages' kind, the texture's
 //!   access and its row ends, and a texture made then takes that answer; the texture made before
 //!   moves to it by the end of the next quiet command buffer.
-//! - **Each other route** the device reaches: a store width (an `R8Unorm` texture a shader
-//!   writes), a render target, an IOSurface plane, a buffer of fresh pages where the device puts
+//! - **Each other route** the device reaches: an `R8Unorm` texture a shader writes, which takes
+//!   the verdict of the check of 1- and 2-byte texels' writes (in place where it passed, else the
+//!   shadow that verdict names, never one by its width), a render target, an IOSurface plane, a
+//!   buffer of fresh pages where the device puts
 //!   a long buffer in them, texels past the buffer's length, a buffer of no host pages, a texture
 //!   buffer (another shape), detached bytes, `HostPageTexturePolicy::Shadow`, and a check that
 //!   failed (`DeviceOptions::fail_in_place_check`). A discrete GPU's device copy and a copied
@@ -36,7 +38,7 @@
 //! case's answer and what the making took.
 
 use super::blit_holds::{device, over_host, shadow_device, Host, Scratch};
-use crate::in_place::{Access, PagesClass, RowEnds, Verdict};
+use crate::in_place::{Access, Padding, PagesClass, RowEnds, Verdict};
 use crate::{
     BlitOption, Buffer, Device, DeviceKind, DeviceOptions, Error, InPlaceAccess, InPlaceRefusal,
     InPlaceRowEnds, IoSurfacePlane, Origin, ResourceOptions, ShaderCacheOptions, Size, Texture,
@@ -361,7 +363,8 @@ fn the_answer_is_the_route_the_texture_takes() {
         "the texture made before the verdict, once {late:?}"
     );
 
-    // A texture a shader writes, of texels of a width the check's kernel stores none of.
+    // A texture a shader writes of 1-byte texels: the verdict of the check of such writes, for
+    // its row ends and its padding (rows one after another, the buffer's own).
     let narrow = descriptor(
         PixelFormat::R8Unorm,
         (side * 4, side),
@@ -372,8 +375,44 @@ fn the_answer_is_the_route_the_texture_takes() {
     let ask = || buffer.texture_placement(&narrow, at, side * 4);
     let make = || buffer.new_texture(&narrow, at, side * 4);
     let (answer, _) = made_as_asked(&device, "R8Unorm a shader writes", ask, make);
-    let width = TextureShadowReason::StoreWidth { texel_bytes: 1 };
-    assert_eq!(answer, TexturePlacement::Shadow(width));
+    let layout = crate::linear_plan::BufferLayout {
+        offset: at,
+        row_pitch: side * 4,
+        slice_pitch: side * side * 4,
+        row_bytes: side * 4,
+        rows: side,
+        slices: 1,
+    };
+    let start = buffer.contents().map_or(0, |at| at.as_ptr().addr() as u64);
+    let line = device.shared().in_place.line();
+    let (rows, padding) = (
+        RowEnds::of(start, &layout, line),
+        Padding::of(start, &layout, line, true),
+    );
+    let written = Access::written(1, padding).expect("the check stores 1-byte texels");
+    let verdict = device
+        .shared()
+        .in_place
+        .verdict(PagesClass::Pointer, written, rows);
+    let (access, row_ends) = (InPlaceAccess::Writes, public_rows(rows));
+    let right = match verdict {
+        Verdict::Passed => matches!(
+            answer,
+            TexturePlacement::InPlace | TexturePlacement::Shadow(TextureShadowReason::Refused(_))
+        ),
+        Verdict::Failed => {
+            answer
+                == TexturePlacement::Shadow(TextureShadowReason::CheckFailed { access, row_ends })
+        }
+        Verdict::Unchecked => {
+            answer == TexturePlacement::Shadow(TextureShadowReason::Unchecked { access, row_ends })
+        }
+        Verdict::Pending => answer == TexturePlacement::Pending,
+    };
+    assert!(
+        right,
+        "R8Unorm a shader writes: {answer:?} where {written:?} {rows:?} answered {verdict:?}"
+    );
 
     // A render target, whatever its check answered.
     let renders = descriptor(
