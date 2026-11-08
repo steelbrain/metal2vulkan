@@ -79,7 +79,9 @@
 //!   quad scope: "neighboring framebuffer locations"). Its copy in moves only the texels inside
 //!   the rectangle bounding its Vulkan scissors, a pixel wider each way, clamped as the read's
 //!   coordinate is (`ShadowUse::loads`, `WorkCounts::own_pixel_reads`); a later copy, only those
-//!   of them the instances since changed. It is exact with a barrier before it or not: the copy
+//!   of them the instances since changed. A command buffer's first copy in of a shadow over a
+//!   `Private` buffer's bytes is cut so too: its pass renders the shadow's truth apart from it, so
+//!   no standing across command buffers (`shadow_standing.rs`) takes every texel. It is exact with a barrier before it or not: the copy
 //!   before the pass holds, at the draw's own pixels, the texels from before the pass, Metal's
 //!   answer there (probe `selfsample`), and one after a split what the draws before the barrier
 //!   wrote; the rest of the copy holds what no read of the draw reaches. Every texel of a copy

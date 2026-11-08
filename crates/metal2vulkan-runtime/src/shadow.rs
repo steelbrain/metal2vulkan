@@ -2424,6 +2424,30 @@ fn two_ways(shadows: &[ShadowUse], i: usize, uses: &[Use<ResourceKey>]) -> bool 
     bytes_written || shadow_written
 }
 
+/// Whether a command that uses the shadowed textures `shadows` and has `uses` writes the truth of
+/// `shadow` apart from it: through `uses` (a render pass's color attachment over the bytes, which
+/// its image renders in place, as the pass of a draw that reads the attachment's shadow does,
+/// `texture/attached_reads.rs`), or through another shadowed texture over them. After such a
+/// command the image holds the truth whole only where a later copy in takes again what it wrote,
+/// so a first copy in of every texel for the image's standing across command buffers
+/// (`shadow_standing.rs`) buys nothing: the copy moves what the command needs.
+fn writes_truth_apart(
+    shadows: &[ShadowUse],
+    shadow: &ShadowUse,
+    uses: &[Use<ResourceKey>],
+) -> bool {
+    let bytes_written = uses
+        .iter()
+        .any(|used| !used.write.is_empty() && shadow.copies.meets(used));
+    let shadow_written = shadows.iter().any(|other| {
+        other.writes
+            && !other.copies.drops_writes
+            && other.copies.shadow_key != shadow.copies.shadow_key
+            && other.copies.shares_truth(&shadow.copies)
+    });
+    bytes_written || shadow_written
+}
+
 /// The shadowed textures among `textures` (bound, made resident, or a pass's) a command with
 /// `uses` uses, each once, writing through it when any of its uses writes.
 pub(super) fn shadow_uses<'a>(
@@ -3340,9 +3364,13 @@ impl<M: Clone + KeptArea> ShadowSync<M> {
             // texel at the command buffer's first use of a shadow that may stand across command
             // buffers, whose copy in moves nothing where the image stands, and leaves it holding
             // every texel for this command buffer's later commands and the next command buffer's
-            // (`shadow_standing.rs`).
+            // (`shadow_standing.rs`), but by a command that writes its truth apart from it
+            // ([`writes_truth_apart`]), after which the image holds the truth whole nowhere a
+            // command buffer's end could leave standing.
             let first_use = self.entries[i].standing == Standing::Unread;
-            let standing = first_use && shadow.copies.stands_across();
+            let standing = first_use
+                && shadow.copies.stands_across()
+                && !writes_truth_apart(shadows, shadow, uses);
             let whole = two_ways || !shadow.copies.cuts() || shadow.copies.logged() || standing;
             let needs = match whole {
                 true => None,

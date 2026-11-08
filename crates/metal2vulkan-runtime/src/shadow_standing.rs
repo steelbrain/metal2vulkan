@@ -26,7 +26,11 @@
 //!   work may write.
 //! - **The copy in.** A command buffer's first copy in of such a shadow takes every texel, even
 //!   for a command that reads inside a rectangle (a pass's scissored draws), so the image holds
-//!   them all after it for the command buffer's later commands and for its end. Made before any
+//!   them all after it for the command buffer's later commands and for its end; but for a command
+//!   that writes the truth apart from the shadow (a pass whose color attachment renders the bytes
+//!   in place, read through the shadow by a draw of the pass, `texture/attached_reads.rs`), after
+//!   which the image holds the truth whole only where a later copy takes again what it wrote: that
+//!   copy moves what the command needs, as any other does. Made before any
 //!   command of its encoder wrote what it reads, it goes to its batch's submission
 //!   (`shadow::GatedCopyIn`), and copies nothing there where the shadow stands and no earlier
 //!   encoder of the command buffer wrote the truth or the image, and the command buffer reaches
