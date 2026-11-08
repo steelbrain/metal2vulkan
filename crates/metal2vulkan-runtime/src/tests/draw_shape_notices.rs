@@ -142,8 +142,8 @@ struct Draws<'a> {
 
 impl Draws<'_> {
     /// Encode the draws in one pass into a new `RGBA8Unorm` target, commit and wait: the draws
-    /// that reused their shapes, each draw of the encoder's last draw again among them, which
-    /// records as the draw it repeats, of that draw's shape (`render/draw_again.rs`).
+    /// that reused their shapes, each draw of the encoder's last draw again or rebound among them,
+    /// which records as the draw it repeats, of that draw's shape (`render/draw_again.rs`).
     fn run(&self, device: &Device) -> u64 {
         let target = target(device, PixelFormat::RGBA8Unorm);
         let mut descriptor: RenderPassDescriptor = pass(&target);
@@ -156,7 +156,9 @@ impl Draws<'_> {
         }
         let queue = device.new_command_queue().unwrap();
         let command_buffer = queue.command_buffer().unwrap();
-        let reused = |counts: crate::WorkCounts| counts.draw_shapes_reused + counts.draws_as_before;
+        let reused = |counts: crate::WorkCounts| {
+            counts.draw_shapes_reused + counts.draws_as_before + counts.draws_rebound
+        };
         let before = reused(device.work_counts());
         let mut encoder = command_buffer.render_command_encoder(&descriptor).unwrap();
         self.encode(&mut encoder);
@@ -310,7 +312,8 @@ fn a_kind_a_draws_state_meets_is_announced_at_every_draw() {
 
 /// Draws that each set a scissor rectangle of their own before they draw, as a window compositor's
 /// do, reuse their shapes as draws through one rectangle do (the rectangles are no input of a
-/// shape: `render_state::ScissorRects`), each of them, and each records its own scissor.
+/// shape: `render_state::ScissorRects`), each of them, or are rebound from the draw before,
+/// restated (`render/draw_again/restated.rs`), and each records its own scissor.
 #[test]
 fn draws_after_new_scissor_rectangles_reuse_shapes() {
     let scratch = Scratch::new("draw-shape-scissors");
