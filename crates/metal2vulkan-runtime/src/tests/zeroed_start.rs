@@ -11,9 +11,8 @@
 //! Device tests: compiled only under the GPU safety cfgs (`m2v_gpu`, `m2v_cpu_icd`).
 
 use super::blit_holds::{device, Scratch};
-use crate::{
-    CommandBufferStatus, PixelFormat, Region, ResourceOptions, TextureDescriptor, TextureUsage,
-};
+use crate::{CommandBufferStatus, Region, ResourceOptions, TextureDescriptor};
+use metal2vulkan::metal::{PixelFormat, TextureUsage};
 use std::time::{Duration, Instant};
 
 /// The side of the texture made while the GPU is busy.
@@ -56,7 +55,7 @@ fn a_shared_texture_made_while_the_gpu_is_busy_waits_for_none_of_it_and_reads_ze
         assert!(at.elapsed() < Duration::from_secs(30), "never submitted");
         std::thread::yield_now();
     }
-    let mut descriptor = TextureDescriptor::texture_2d(PixelFormat::Rgba8Unorm, SIDE, SIDE, false);
+    let mut descriptor = TextureDescriptor::texture_2d(PixelFormat::RGBA8Unorm, SIDE, SIDE, false);
     descriptor.usage = TextureUsage::SHADER_READ;
     descriptor.resource_options = ResourceOptions::shared();
     let made = Instant::now();
@@ -64,12 +63,20 @@ fn a_shared_texture_made_while_the_gpu_is_busy_waits_for_none_of_it_and_reads_ze
     let took = made.elapsed();
     let status = busy.status();
     let after = device.work_counts();
+    // A second one, and the CPU's first write into it (one texel), while the busy work may still
+    // run: where that write waits, the wait moved from the making to the first copy.
+    let written = device.new_texture(&descriptor).unwrap();
+    let wrote_at = Instant::now();
+    (written.replace_region(Region::new_2d(0, 0, 1, 1), 0, 0, &[1, 2, 3, 4], 4, 0)).unwrap();
+    let wrote = wrote_at.elapsed();
+    let status_after_write = busy.status();
     let shared = device.shared();
     let zeroed = shared.zero_initialize_device_memory && shared.host_copies.is_some();
     println!(
         "ZEROED-START {}: new_texture (Shared, {SIDE} x {SIDE}) took {took:?} with {count} fills \
          queued ({each:?} each), the busy work {status:?} as it returned; started on the host \
-         {}, zeroed {}; zeroInitializeDeviceMemory {zeroed}",
+         {}, zeroed {}; zeroInitializeDeviceMemory {zeroed}; a second one's first replace_region \
+         took {wrote:?}, the busy work {status_after_write:?} after it",
         device.name(),
         after.images_started_on_the_host - before.images_started_on_the_host,
         after.images_started_zeroed - before.images_started_zeroed,
