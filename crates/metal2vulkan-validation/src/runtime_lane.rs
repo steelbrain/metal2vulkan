@@ -915,6 +915,8 @@ mod vertex_cost;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod vertex_strides;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+mod video_frames;
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod view_attachments;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod view_base_offsets;
