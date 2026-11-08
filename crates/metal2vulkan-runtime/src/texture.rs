@@ -848,9 +848,40 @@ fn first_color_subresource() -> vk::ImageSubresource {
     }
 }
 
-/// An image aliasing a texture's buffer bytes, or why none does: what the shadow's notice
-/// (`shadowed-texture`) names.
-type Aliased = Result<Arc<Image>, String>;
+/// An image aliasing a texture's buffer bytes and what it counts as the texture's
+/// ([`AliasCount`]), or why none does: what the shadow's notice (`shadowed-texture`) names, and the
+/// cause the image at Metal's pitch over the device's pooled memory gave where it was tried
+/// (`Device::pooled_pitched_image`).
+type Aliased = Result<(Arc<Image>, AliasCount), (String, Option<ShadowCause>)>;
+
+/// What an image aliasing a buffer of the device's own memory counts as it becomes a texture's: as
+/// the texture is made (`Device::storage_over_buffer`), or as a shadow made before its pooled
+/// class's verdicts moves to it (`texture/storage_form.rs`).
+#[derive(Clone, Copy)]
+pub(super) struct AliasCount {
+    /// A `DRM_FORMAT_MOD_LINEAR` image at Metal's pitch (`WorkCounts::pooled_pitched_images`).
+    pitched: bool,
+    /// Its rows (or slices) lie apart over bytes its buffer declares unobserved
+    /// (`WorkCounts::unobserved_padding_aliases`).
+    unobserved: bool,
+    /// It took the feedback loop usage (`WorkCounts::feedback_loop_alias_images`).
+    feedback: bool,
+}
+
+impl AliasCount {
+    /// Count the image in `counts`.
+    pub(super) fn count(self, counts: &crate::work_counts::Counters) {
+        if self.pitched {
+            counts.pooled_pitched_image();
+        }
+        if self.unobserved {
+            counts.unobserved_padding_alias();
+        }
+        if self.feedback {
+            counts.feedback_loop_alias_image();
+        }
+    }
+}
 
 /// The images a rebind made for the textures over the bytes it gives pages it imported as
 /// dma-bufs ([`Device::dma_buf_images_again`]), before it settled: each texture's image with its
@@ -2298,7 +2329,8 @@ impl Device {
         let over = (Arc::new(texels), &mut pending);
         let storage = self.storage_over_buffer(call, over, descriptor, layout)?;
         let texture = Texture::made(self, storage, record, None, id_use);
-        // A shadow made before its pages' in-place verdict moves in place once it passes.
+        // A shadow made before its pages' (or its pooled memory's) in-place verdict moves in
+        // place once it passes.
         if let Some(pending) = pending {
             texture.wait_to_move_in_place(pending);
         }
@@ -2308,8 +2340,10 @@ impl Device {
     /// The storage of a texture of `descriptor` (checked as `layout`) over `texels`, as
     /// [`new_texture_over_buffer`](Self::new_texture_over_buffer) makes it: an aliasing image (one
     /// in place over host pages), else a shadow (announced once, counted by why over host pages).
-    /// A shadow over host pages made before their class's verdict for its access sets `pending`
-    /// to what it needs to move in place once the verdict passes. Refused as it is.
+    /// A shadow over host pages made before their class's verdict for its access, or over the
+    /// device's pooled memory before its class's verdict for an image at Metal's pitch there
+    /// (`Device::pooled_pitched_image`), sets `pending` to what it needs to move in place once the
+    /// verdict passes. Refused as it is.
     fn storage_over_buffer(
         &self,
         call: &'static str,
@@ -2343,107 +2377,89 @@ impl Device {
                 ..
             }
         );
-        let why = match route {
-            Route::Levels(levels) => format!(
+        let why =
+            match route {
+                Route::Levels(levels) => format!(
                 "it has {levels} levels, and no image over the buffer's memory holds levels past \
                  the first: one image of its own holds every level, its first a copy of the \
                  buffer's bytes, copied in before the commands that use it and back after those \
                  that write it"
             ),
-            Route::Past => "its texels run past the buffer's length, which no image over the \
+                Route::Past => "its texels run past the buffer's length, which no image over the \
                             buffer's memory reaches: the texture's tail holds them"
-                .to_owned(),
-            Route::Host {
-                way: HostWay::DeviceCopy,
-                ..
-            } => String::new(),
-            Route::Host {
-                class,
-                rows,
-                padding,
-                way: HostWay::InPlace { storable },
-            } => {
-                let checking = in_place::checking();
-                let made = (&*texels, class, storable);
-                let cause = match self.in_place_image(&plan, descriptor, made, &facts)? {
-                    Ok((image, pitched)) => {
-                        if !checking {
-                            let counts = &self.shared().counts;
-                            let written = in_place::Access::Writes.takes(usage);
-                            counts.host_texture_in_place(class, pitched, written);
-                            let usage = image.plan().usage;
-                            if usage.contains(ImageUsageFlags::ATTACHMENT_FEEDBACK_LOOP_EXT) {
-                                counts.feedback_loop_alias_image();
+                    .to_owned(),
+                Route::Host {
+                    way: HostWay::DeviceCopy,
+                    ..
+                } => String::new(),
+                Route::Host {
+                    class,
+                    rows,
+                    padding,
+                    way: HostWay::InPlace { storable },
+                } => {
+                    let checking = in_place::checking();
+                    let made = (&*texels, class, storable);
+                    let cause = match self.in_place_image(&plan, descriptor, made, &facts)? {
+                        Ok((image, pitched)) => {
+                            if !checking {
+                                let counts = &self.shared().counts;
+                                let written = in_place::Access::Writes.takes(usage);
+                                counts.host_texture_in_place(class, pitched, written);
+                                let usage = image.plan().usage;
+                                if usage.contains(ImageUsageFlags::ATTACHMENT_FEEDBACK_LOOP_EXT) {
+                                    counts.feedback_loop_alias_image();
+                                }
                             }
+                            return Ok(Storage::Alias { image, texels });
                         }
-                        return Ok(Storage::Alias { image, texels });
-                    }
-                    Err((refusal, why)) => ShadowCause::Refused(refusal, why),
-                };
-                let shadowed = (class, (rows, padding), cause);
-                self.host_shadowed(shadowed, (usage, &plan), descriptor, pending)?
-            }
-            Route::Host {
-                class,
-                rows,
-                padding,
-                way: HostWay::Shadow(cause),
-            } => {
-                let shadowed = (class, (rows, padding), cause);
-                self.host_shadowed(shadowed, (usage, &plan), descriptor, pending)?
-            }
-            Route::Device { holds } => {
-                // The usage the texture lacks, as for a texture of its own: plain Metal writes a
-                // texture over a buffer made without `ShaderWrite` and reads one made without
-                // `ShaderRead`. A linear image aliasing the buffer's memory takes it where one
-                // with it still lies on Metal's layout there: a linear image is never
-                // compressed, and its memory is the buffer's, so the usage costs it nothing.
-                // Else the image without it, and else the shadow, with it where that costs the
-                // shadow nothing.
-                let wider = undeclared_usage(plan.clone(), layout, usage, &facts, |_, w| Ok(w))?;
-                // The plans a linear image aliasing the bytes is tried with, the first the device
-                // makes: with the feedback loop usage a draw takes that reads the texture its own
-                // pass renders through a snapshot (`feedback_candidate`,
-                // `texture/attached_reads.rs`), which costs a linear image nothing as the usage
-                // the texture lacks does; then the usage the texture lacks; then the texture's
-                // own.
-                let feedback = feedback_candidate(&wider, self);
-                let mut plans: Vec<&ImagePlan> = feedback.iter().collect();
-                if wider != plan {
-                    plans.push(&wider);
+                        Err((refusal, why)) => ShadowCause::Refused(refusal, why),
+                    };
+                    let shadowed = (class, (rows, padding), cause);
+                    self.host_shadowed(shadowed, (usage, &plan), descriptor, pending)?
                 }
-                plans.push(&plan);
-                // An aliasing image, counted where it took the feedback loop usage.
-                let alias = |image: Arc<Image>, texels: Arc<Texels>| {
-                    let usage = image.plan().usage;
-                    let feedback = usage.contains(ImageUsageFlags::ATTACHMENT_FEEDBACK_LOOP_EXT);
-                    if feedback && !in_place::checking() {
-                        self.shared().counts.feedback_loop_alias_image();
-                    }
-                    Ok(Storage::Alias { image, texels })
-                };
-                // Where no image aliases the bytes, the reason the plan's attempt gives is the
-                // notice's.
-                let over = (&*texels, &holds, usage);
-                for &wider in &plans[..plans.len() - 1] {
-                    let made = self.alias_image(wider.clone(), descriptor, over, &facts)?;
-                    if let Ok(image) = made {
-                        return alias(image, texels);
-                    }
+                Route::Host {
+                    class,
+                    rows,
+                    padding,
+                    way: HostWay::Shadow(cause),
+                } => {
+                    let shadowed = (class, (rows, padding), cause);
+                    self.host_shadowed(shadowed, (usage, &plan), descriptor, pending)?
                 }
-                match self.alias_image(plan.clone(), descriptor, over, &facts)? {
-                    Ok(image) => return alias(image, texels),
-                    // The device's check of its pooled memory makes no shadow: its round is
-                    // not made.
-                    Err(_) if in_place::checking() => {
-                        return Err(internal(
+                Route::Device { holds } => {
+                    let over = (&*texels, &holds, usage);
+                    match self.alias_over_device(&plan, (descriptor, layout), over, &facts)? {
+                        Ok((image, count)) => {
+                            if !in_place::checking() {
+                                count.count(&self.shared().counts);
+                            }
+                            return Ok(Storage::Alias { image, texels });
+                        }
+                        // The device's check of its pooled memory makes no shadow: its round is
+                        // not made.
+                        Err(_) if in_place::checking() => return Err(internal(
                             "the in-place check's texture takes no image over its pooled memory",
-                        ))
+                        )),
+                        // Made before its pooled class's verdict for an image at Metal's pitch: the
+                        // shadow moves to that image once the verdict passes, as the texture would
+                        // have been made then (`texture/storage_form.rs`).
+                        Err((why, Some(ShadowCause::CheckPending(_, _, rows)))) => {
+                            let line = self.shared().in_place.line();
+                            *pending = Some(in_place::PendingMove {
+                                class: PagesClass::Pooled,
+                                rows,
+                                padding: texels.padding(line),
+                                usage,
+                                plan: plan.clone(),
+                                descriptor: *descriptor,
+                            });
+                            why
+                        }
+                        Err((why, _)) => why,
                     }
-                    Err(why) => why,
                 }
-            }
-        };
+            };
         let plan = self.with_undeclared_usage(plan, layout, usage, &facts)?;
         if !plan
             .usage
@@ -2959,8 +2975,9 @@ impl Device {
     /// `GENERAL` keeps. The image's hazard tracking is the buffer's. `holds`: whether an image may
     /// hold the texels (`linear_plan::holding`), or why not. Over a buffer that declares the bytes
     /// between rows and slices unobserved (`BufferDescriptor::padding_unobserved`), the image may
-    /// hold those bytes too (`linear_plan::within_padding`), counted where its rows or slices lie
-    /// apart (`WorkCounts::unobserved_padding_aliases`).
+    /// hold those bytes too (`linear_plan::within_padding`). With what it counts as the texture's
+    /// ([`AliasCount`]: a `DRM_FORMAT_MOD_LINEAR` image at Metal's pitch, rows or slices that lie
+    /// apart over unobserved bytes, the feedback loop usage), which the caller counts.
     fn alias_image(
         &self,
         plan: ImagePlan,
@@ -2974,27 +2991,27 @@ impl Device {
                 return Err(internal("an aliasing image over the caller's host pages"));
             }
             Some(CallerMemory::VkBuffer) => {
-                return Ok(Err(
-                    "the buffer is over the caller's VkBuffer, whose memory backs no \
-                               image of the runtime's"
+                return Ok(Err((
+                    "the buffer is over the caller's VkBuffer, whose memory backs no image of \
+                     the runtime's"
                         .to_owned(),
-                ))
+                    None,
+                )))
             }
         }
         if let Err(why) = holds {
-            return Ok(Err(why.clone()));
+            return Ok(Err((why.clone(), None)));
         }
         let (memory, buffer_offset, _) = texels.buffer.memory();
         let memory_offset = buffer_offset + texels.layout.offset;
         let raw_device = self.shared().vk();
         let made = match self.alias_unbound(&plan, texels, usage, facts)? {
             Ok(made) => made,
-            Err((linear, cause)) => return Ok(Err(format!("{linear}; and {}", cause.words()))),
+            Err((linear, cause)) => {
+                let why = format!("{linear}; and {}", cause.words());
+                return Ok(Err((why, Some(cause))));
+            }
         };
-        let checking = in_place::checking();
-        if made.initial == vk::ImageLayout::UNDEFINED && !checking {
-            self.shared().counts.pooled_pitched_image();
-        }
         let LinearMade { raw, initial, .. } = made;
         // SAFETY: the image is live and unbound; the memory is the buffer's, which outlives the
         // texture holding it, in a type the image takes, at an offset `aliases` checked against
@@ -3042,10 +3059,70 @@ impl Device {
         // check of its pooled memory showed it (`Device::pooled_pitched_image`).
         let first = FirstMove::new(raw, image.plan().format, initial, None);
         *lock(&image.first_move) = Some(first);
-        if texels.buffer.padding_unobserved() && texels.layout.padded() && !checking {
-            self.shared().counts.unobserved_padding_alias();
+        let count = AliasCount {
+            pitched: initial == vk::ImageLayout::UNDEFINED,
+            unobserved: texels.buffer.padding_unobserved() && texels.layout.padded(),
+            feedback: (image.plan().usage).contains(ImageUsageFlags::ATTACHMENT_FEEDBACK_LOOP_EXT),
+        };
+        Ok(Ok((image.shared(), count)))
+    }
+
+    /// The image aliasing `texels` in their buffer's memory, the device's own, of a texture of
+    /// Metal `usage` and declared plan `plan`, made with `descriptor` (checked as `layout`): the
+    /// first of its plans the device makes one of ([`alias_image`](Self::alias_image)), with what
+    /// it counts; else why none, the declared plan's attempt's (the notice's), and its pooled
+    /// memory's cause where an image at Metal's pitch was tried. The usage the texture lacks, as
+    /// for a texture of its own: plain Metal writes a texture over a buffer made without
+    /// `ShaderWrite` and reads one made without `ShaderRead`, and a linear image takes it where
+    /// one with it still lies on Metal's layout there (it is never compressed, and its memory is
+    /// the buffer's, so the usage costs it nothing). So the plans, the first the device makes: with
+    /// the feedback loop usage a draw takes that reads the texture its own pass renders through a
+    /// snapshot (`feedback_candidate`, `texture/attached_reads.rs`), which costs a linear image
+    /// nothing as the usage the texture lacks does; then the usage the texture lacks; then the
+    /// texture's own. `holds`: whether an image may hold the texels (`linear_plan::holding`), or
+    /// why not.
+    fn alias_over_device(
+        &self,
+        plan: &ImagePlan,
+        (descriptor, layout): (&TextureDescriptor, &TextureLayout),
+        (texels, holds, usage): (&Texels, &Result<(), String>, TextureUsage),
+        facts: &ImageFacts<'_>,
+    ) -> Result<Aliased, Error> {
+        let wider = undeclared_usage(plan.clone(), layout, usage, facts, |_, w| Ok(w))?;
+        let feedback = feedback_candidate(&wider, self);
+        let mut plans: Vec<&ImagePlan> = feedback.iter().collect();
+        if wider != *plan {
+            plans.push(&wider);
         }
-        Ok(Ok(image.shared()))
+        let over = (texels, holds, usage);
+        for &wider in &plans {
+            if let Ok(made) = self.alias_image(wider.clone(), descriptor, over, facts)? {
+                return Ok(Ok(made));
+            }
+        }
+        self.alias_image(plan.clone(), descriptor, over, facts)
+    }
+
+    /// The image a shadow over the device's pooled memory made before its class's verdict for an
+    /// image at Metal's pitch there moves to (`texture/storage_form.rs`), `pending` what it moves
+    /// with, over `texels`: the image the texture would have been made with had the verdict been
+    /// known then ([`alias_over_device`](Self::alias_over_device), of its declared plan), with what
+    /// it counts as it moves in; `None` where the device makes none.
+    pub(super) fn pooled_move_image(
+        &self,
+        pending: &in_place::PendingMove,
+        texels: &Texels,
+        facts: &ImageFacts<'_>,
+    ) -> Result<Option<(Arc<Image>, AliasCount)>, Error> {
+        let descriptor = &pending.descriptor;
+        let Ok(layout) = descriptor.check(self.properties().texture_rules()) else {
+            return Ok(None);
+        };
+        let unobserved = texels.buffer.padding_unobserved();
+        let holds = crate::linear_plan::holding(&texels.layout, pending.usage, unobserved);
+        let over = (texels, &holds, pending.usage);
+        let made = self.alias_over_device(&pending.plan, (descriptor, &layout), over, facts)?;
+        Ok(made.ok())
     }
 
     /// The image of a texture over dma-buf pages (over a buffer, or placed in a heap), `made` of

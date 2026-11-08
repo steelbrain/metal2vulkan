@@ -76,7 +76,9 @@
 //!   discard the bytes as an image over host pages' may, and the same rule takes it: where the
 //!   device's policy and its check of that class pass for the texture's accesses (of one that
 //!   renders over padding its buffer declares unobserved, [`Access::UnobservedRenders`]). A
-//!   texture made there before the class's verdicts are known stays a shadow.
+//!   texture made there before the class's verdicts are known is a shadow that moves to that image
+//!   once they pass, as one over host pages does (below;
+//!   `WorkCounts::pooled_textures_moved_in_place`).
 //! - **Before the verdict.** A texture made before its class's verdict for its access is known
 //!   waits for nothing: it is a shadow ([`ShadowCause::CheckPending`], counted apart), and the
 //!   first such texture starts the check on a thread of its own. Once its class's verdicts are

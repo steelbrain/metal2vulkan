@@ -587,8 +587,10 @@ fn run(weak: crate::device::WeakDevice) {
             .content_store()
             .write_record_soon(&record_name(&identity), bytes);
     }
-    checks.settle(Some(started.elapsed()));
+    // The shadows made before the verdicts that pass wait for a switch before a call waiting for
+    // the verdicts wakes: its next quiet commit moves them (`texture/storage_form.rs`).
     device.in_place_verdicts_given();
+    checks.settle(Some(started.elapsed()));
 }
 
 /// Whether the runtime found `device`'s loader word overwritten (`loader_word.rs`): the check then

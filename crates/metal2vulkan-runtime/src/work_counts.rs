@@ -482,6 +482,8 @@ pub(crate) struct Counters {
     feedback_loop_alias_images: AtomicU64,
     unobserved_padding_aliases: AtomicU64,
     pooled_pitched_images: AtomicU64,
+    pooled_textures_moved_in_place: AtomicU64,
+    pooled_texture_shadows_freed_after_move: AtomicU64,
     feedback_loop_shadow_images: AtomicU64,
     depth_attachments_moved: AtomicU64,
     depth_instances_held: AtomicU64,
@@ -3525,6 +3527,19 @@ impl Counters {
     /// (`Device::pooled_pitched_image`).
     pub(crate) fn pooled_pitched_image(&self) {
         self.pooled_pitched_images.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A shadow over a buffer of the device's pooled memory made before that class's in-place
+    /// verdicts moved to its image at Metal's pitch once they passed
+    /// (`texture/storage_form.rs`).
+    pub(crate) fn pooled_texture_moved_in_place(&self) {
+        (self.pooled_textures_moved_in_place).fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// The shadow image of a texture over the device's pooled memory that moved in place went
+    /// once the command buffer that took the move completed (`texture/storage_form.rs`).
+    pub(crate) fn pooled_texture_shadow_freed_after_move(&self) {
+        (self.pooled_texture_shadows_freed_after_move).fetch_add(1, Ordering::Relaxed);
     }
 
     /// The device made the image of a texture over a buffer's bytes that the encoders copy them
@@ -6690,6 +6705,18 @@ pub struct WorkCounts {
     /// host pages); without one the texture is a shadow (`shadowed_textures`). One per image made.
     /// A runtime extension: Metal has none.
     pub pooled_pitched_images: u64,
+    /// Textures over a buffer of the device's pooled memory made shadows before the device's
+    /// check of that memory had answered (`TexturePlacement::Pending` as they were made, counted
+    /// in `shadowed_textures`) that moved to their `DRM_FORMAT_MOD_LINEAR` image at Metal's pitch
+    /// once the check passed for their accesses, at the commit of the device's only uncommitted
+    /// command buffer, with no copy (`texture/storage_form.rs`, as `host_textures_moved_in_place`
+    /// over host pages): each is counted in `pooled_pitched_images` too from then on. A runtime
+    /// extension: Metal has none.
+    pub pooled_textures_moved_in_place: u64,
+    /// Shadow images of textures that moved in place over the device's pooled memory
+    /// (`pooled_textures_moved_in_place`) let go of once the command buffer that took the move
+    /// completed, as `host_texture_shadows_freed_after_move` counts those over host pages.
+    pub pooled_texture_shadows_freed_after_move: u64,
     /// Images of textures over a buffer's bytes that the encoders copy them into and back (the
     /// texture's shadow, `shadow.rs`: a texture over host pages that renders, among others) that
     /// the device made with feedback loop usage where it cost them nothing
@@ -7598,6 +7625,11 @@ impl Device {
             feedback_loop_alias_images: counters.feedback_loop_alias_images.load(Ordering::Relaxed),
             unobserved_padding_aliases: counters.unobserved_padding_aliases.load(Ordering::Relaxed),
             pooled_pitched_images: counters.pooled_pitched_images.load(Ordering::Relaxed),
+            pooled_textures_moved_in_place: (counters.pooled_textures_moved_in_place)
+                .load(Ordering::Relaxed),
+            pooled_texture_shadows_freed_after_move: (counters
+                .pooled_texture_shadows_freed_after_move)
+                .load(Ordering::Relaxed),
             feedback_loop_shadow_images: counters
                 .feedback_loop_shadow_images
                 .load(Ordering::Relaxed),
