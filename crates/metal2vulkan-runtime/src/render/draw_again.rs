@@ -16,10 +16,13 @@
 //!   meets or are work of the draw's own. Its uses are noted as the next draw would note them
 //!   (`NotedApart`). A draw that met a notice its device announces or refuses at every occurrence
 //!   (`EachWatch`) keeps nothing: its next draw must meet it again.
-//! - **Forgotten at every call but a bind.** Every call of the encoder but the two direct draws
-//!   and the vertex and fragment buffer, bytes, texture and sampler state binds forgets it as it
-//!   logs itself (`RenderLowering::log`, which every call does: at the call, on the device's
-//!   lowering thread, and encoded again), refused or not, whatever it changes. A bind changes its
+//! - **Forgotten at every call but a bind or a pipeline state set.** Every call of the encoder
+//!   but the two direct draws, the vertex and fragment buffer, bytes, texture and sampler state
+//!   binds and `set_render_pipeline_state` forgets it as it logs itself (`RenderLowering::log`,
+//!   which every call does: at the call, on the device's lowering thread, and encoded again),
+//!   refused or not, whatever it changes, with every kept draw set aside (below); so does a draw
+//!   that keeps nothing (a draw again, a draw rebound and a draw kept are the only draws that
+//!   leave them). A bind changes its
 //!   stage table's slots alone (and a bytes bind takes room in its command buffer's uploads), and
 //!   a table's stamp tells each change apart (`argument_table::Stamp`): the kept draw keeps the
 //!   four tables' stamps as it read them, and a draw whose tables kept them is the kept draw
@@ -33,6 +36,18 @@
 //!   `noted_apart.rs`), with the command buffer the current instance records into, and the count
 //!   of the device's sampler IDs' slots' changes (a sampler state made or gone, which every step
 //!   of a draw lists again: `sampler::ArgumentSamplers`).
+//! - **One per pipeline state.** A pipeline state set keeps the kept draw: at the next draw
+//!   through another state, it goes aside with its state's bind state and the storage its draws
+//!   wrote (`LiveBind::select`, `RenderLowering::select_kept`), and the draw starts from its own
+//!   state's, with the draw kept beside it, where one is under the encoder's epoch (which every
+//!   forgetting draws afresh: `DrawAgain`). Such a draw is between (`Kept::between`): draws of
+//!   other states recorded since, each a draw kept or drawn again, into the same instance, whose
+//!   steps only add to what the encoder holds (below). Its next draw is rebound whatever its
+//!   tables' stamps (`rebound.rs`), the changes of its tables since it read them brought in, its
+//!   uses noted, added to the pass's reads and gathered whole, and every state command its
+//!   record does not hold recorded; it takes no shortcut of a draw moved, which reads what the
+//!   encoder's last draw left. Two states of one interface share a bind state: the draw kept of
+//!   one is not the other's.
 //! - **What a kept draw left holds for the next.** Each of its steps adds to what the encoder
 //!   holds, and adding the same again changes nothing: its drawn area and coverage (rectangles
 //!   and boxes, `clear_reach::DrawnArea`, `linear_attachment::Coverage`), the pass's reads
@@ -74,23 +89,47 @@ use crate::error::Error;
 use crate::execution::{ExecutedPipeline, Execution};
 use crate::live_bind::LiveBind;
 use crate::noted_apart::NotedInto;
+use crate::pipeline::{RenderPipelineState, RenderStateKind, WeakRenderPipelineState};
 use crate::resource::ResourceKey;
 use crate::tracker::{Use, UseRange};
 use metal2vulkan::metal::RenderStages;
 
 /// The encoder's last direct draw, where it is kept (the module docs).
-#[derive(Default)]
 pub(super) struct DrawAgain {
     kept: Option<Kept>,
+    /// What the encoder's kept draws were kept under: drawn afresh as every kept draw is
+    /// forgotten, the one of the last direct draw and those its bind state set aside with the
+    /// states of other pipeline states (`LiveBind::select`), so a draw set aside is kept still
+    /// where it holds this.
+    epoch: Stamp,
     /// Draws again since the draw was kept: in builds with debug assertions, the first and every
     /// second one after it take every step instead (the module docs).
     #[cfg(debug_assertions)]
     hits: u64,
 }
 
+impl Default for DrawAgain {
+    fn default() -> DrawAgain {
+        DrawAgain {
+            kept: None,
+            epoch: Stamp::fresh(),
+            #[cfg(debug_assertions)]
+            hits: 0,
+        }
+    }
+}
+
 /// What a kept draw was, what it read, and what a draw again repeats of it (the module docs).
 #[derive(PartialEq)]
-pub(super) struct Kept {
+pub(crate) struct Kept {
+    /// The pipeline state it drew, and the encoder's epoch it was kept under ([`DrawAgain`]).
+    pub(super) pipeline: WeakRenderPipelineState,
+    pub(super) epoch: Stamp,
+    /// Whether another draw recorded since it, or since the last draw again of it: it was set
+    /// aside with its pipeline state's bind state while draws of other states recorded
+    /// (`LiveBind::select`). Its next draw is then rebound whatever its tables' stamps
+    /// (`rebound.rs`), recording every state command its record does not hold.
+    pub(super) between: bool,
     pub(super) call: &'static str,
     pub(super) assembly: Assembly,
     pub(super) draw: DrawCall,
@@ -239,9 +278,50 @@ impl RenderLowering {
         }
     }
 
-    /// Forget the kept draw (a call came, another draw, or the encoder's end).
+    /// Forget every kept draw, the last direct draw's and those set aside with other pipeline
+    /// states' bind states (a call came, a draw that kept nothing, or the encoder's end).
     pub(super) fn forget_again(&mut self) {
         self.again.kept = None;
+        self.again.epoch = Stamp::fresh();
+    }
+
+    /// The epoch a draw kept now is kept under ([`DrawAgain`]).
+    pub(super) fn again_epoch(&self) -> Stamp {
+        self.again.epoch
+    }
+
+    /// The last direct draw's kept draw, where it is kept.
+    pub(super) fn again_kept(&self) -> Option<&Kept> {
+        self.again.kept.as_ref()
+    }
+
+    /// Let go of the last direct draw's kept draw alone, which the draw about to take every step
+    /// keeps itself in place of where it can: those set aside stay kept.
+    pub(super) fn drop_kept(&mut self) {
+        self.again.kept = None;
+    }
+
+    /// Bring in the kept draw of the pipeline state the encoder draws through, where its last draw
+    /// drew through another: the last draw's kept draw set aside with the bind state `live` holds
+    /// for that state, and the bind state of this one selected (`LiveBind::select`), with the
+    /// draw kept beside it where one is, kept under the encoder's epoch still. Such a draw drew
+    /// before draws of other states recorded: it is [`Kept::between`].
+    pub(super) fn select_kept(&mut self, live: &mut LiveBind) {
+        let Some(RenderStateKind::Graphics(pipeline)) = self.pipeline.as_ref().map(|p| p.kind())
+        else {
+            return;
+        };
+        let interface = &pipeline.base().interface;
+        if live.reads_through(interface) {
+            return;
+        }
+        live.set_aside_kept(self.again.kept.take());
+        live.select(interface);
+        let epoch = self.again.epoch;
+        self.again.kept = live.take_kept().filter(|kept| kept.epoch == epoch);
+        if let Some(kept) = self.again.kept.as_mut() {
+            kept.between = true;
+        }
     }
 
     /// The stamps of the encoder's vertex, fragment, object and mesh tables.
@@ -266,9 +346,11 @@ impl RenderLowering {
             return Again::No;
         };
         let index = buffers.index.as_ref().map(KeptIndex::of);
+        let drawn_by = |state: &RenderPipelineState| kept.pipeline.names(state);
         let same = buffers.indirect.is_none()
             && buffers.patch_indices.is_none()
             && buffers.control_point_indices.is_none()
+            && self.pipeline.as_ref().is_some_and(drawn_by)
             && kept.call == call
             && kept.assembly == assembly
             && kept.draw == *draw
@@ -280,7 +362,7 @@ impl RenderLowering {
             return Again::No;
         }
         let stamps = self.table_stamps();
-        if kept.stamps != stamps {
+        if kept.stamps != stamps || kept.between {
             return match kept.rebinds {
                 true => self.draw_rebound(live, call, (assembly, draw), buffers, stamps, checked),
                 false => Again::No,
@@ -580,8 +662,13 @@ impl Checked {
         }
         let again = encoder.again.kept.as_mut();
         let again = again.unwrap_or_else(|| panic!("a draw again kept no draw"));
-        let (draw_alone, stamps, under, settled) =
-            (again.draw_alone, again.stamps, again.under, again.settled);
+        let (draw_alone, stamps, under, settled, between) = (
+            again.draw_alone,
+            again.stamps,
+            again.under,
+            again.settled,
+            again.between,
+        );
         assert!(
             draw_alone || rebound,
             "a draw again recorded a state command"
@@ -591,12 +678,13 @@ impl Checked {
             "a draw rebound whose every step keeps nothing to rebind"
         );
         // A draw rebound reads its tables under their stamps now, its uses noted into the state
-        // now; and every step recorded through its instance's record since (`Kept::settled`).
-        (again.draw_alone, again.stamps, again.under, again.settled) =
-            (kept.draw_alone, kept.stamps, kept.under, kept.settled);
+        // now; and every step recorded through its instance's record since (`Kept::settled`),
+        // the encoder's last draw (`Kept::between`).
+        (again.draw_alone, again.stamps, again.under) = (kept.draw_alone, kept.stamps, kept.under);
+        (again.settled, again.between) = (kept.settled, kept.between);
         assert!(*again == kept, "a draw again kept another draw");
-        (again.draw_alone, again.stamps, again.under, again.settled) =
-            (draw_alone, stamps, under, settled);
+        (again.draw_alone, again.stamps, again.under) = (draw_alone, stamps, under);
+        (again.settled, again.between) = (settled, between);
         encoder.again.hits = hits;
     }
 }

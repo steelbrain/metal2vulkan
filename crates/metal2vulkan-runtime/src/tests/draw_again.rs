@@ -729,6 +729,96 @@ fn draws_after_buffer_changes_rebind_what_every_step_binds() {
     }
 }
 
+/// [`DRAWS`] draws of the rectangles of `columns`, each through the next of `states` in turn
+/// (set before each draw), the `at`th at `16 * at` bytes of vertex buffer 0 (its offset set before
+/// each draw but the first, then `between`) in the color of fragment bytes 0 (set before each
+/// draw); `drawn` draws each.
+fn switching_rectangles(
+    encoder: &mut RenderCommandEncoder,
+    (states, columns): (&[&RenderPipelineState], &Buffer),
+    between: impl Fn(&mut RenderCommandEncoder),
+    drawn: impl Fn(&mut RenderCommandEncoder, usize),
+) {
+    encoder.set_vertex_buffer(Some(columns), 0, 0).unwrap();
+    for at in 0..DRAWS {
+        let state = (at as usize) % states.len();
+        encoder.set_render_pipeline_state(states[state]).unwrap();
+        if at > 0 {
+            encoder.set_vertex_buffer_offset(16 * at, 0).unwrap();
+            between(encoder);
+        }
+        let bytes = bytes_of(&[(at + 1) as f32 / 64.0; 4], f32::to_le_bytes);
+        encoder.set_fragment_bytes(&bytes, 0).unwrap();
+        drawn(encoder, state);
+    }
+}
+
+/// Draws that switch between two pipeline states at each draw rebind each state's own last draw,
+/// its kept draw set aside with its state's bind state while the other state draws
+/// (`render/draw_again.rs`): every draw after each state's first is rebound
+/// (`WorkCounts::draws_rebound`), with the same commands of every kind, state commands and pixels
+/// as the same draws each taking every step, after a call between each that changes nothing for
+/// them (`set_blend_color` of the color the encoder holds), which forgets the kept draws of both
+/// states. And a draw that keeps nothing (one that writes memory, `cfb_dn_count`) forgets the
+/// other state's kept draw: draws switching with it take every step.
+#[test]
+fn draws_switching_pipeline_states_rebind_each_state_s_last_draw() {
+    let scratch = Scratch::new("draw-again-states");
+    let heard = Heard::default();
+    let device = device(&scratch.0, &[], &heard);
+    let (first, second) = (adding_state(&device), adding_state(&device));
+    let columns = rectangles_from_columns(&device);
+    let states = (&[&first, &second][..], &columns);
+    let same_color =
+        |encoder: &mut RenderCommandEncoder| encoder.set_blend_color(0.0, 0.0, 0.0, 0.0);
+    let drawn = |encoder: &mut RenderCommandEncoder, _| rectangle(encoder);
+    warm(&device, |encoder| {
+        switching_rectangles(encoder, states, |_| {}, drawn)
+    });
+    let rebound_count = |counts: &WorkCounts| counts.draws_rebound;
+    let states_recorded = |counts: &WorkCounts| counts.draw_states_recorded;
+    let rebound = run(&device, |encoder| {
+        switching_rectangles(encoder, states, |_| {}, drawn)
+    });
+    let every = run(&device, |encoder| {
+        switching_rectangles(encoder, states, same_color, drawn)
+    });
+    assert_eq!(rebound.counted(rebound_count), drawn_alone(DRAWS - 2));
+    assert_eq!(every.counted(rebound_count), 0);
+    assert_eq!(rebound.commands, every.commands);
+    assert_eq!(rebound.commands["cmd_draw"], DRAWS);
+    assert_eq!(
+        rebound.counted(states_recorded),
+        every.counted(states_recorded)
+    );
+    assert_eq!(rebound.words, every.words, "the pixels of the draws");
+    let last = SIDE as usize - 1;
+    assert_ne!(rebound.words[0], rebound.words[last], "the draws' offsets");
+    // Between the adding state's draws, draws that count their fragments in a buffer.
+    let counting = state_counting(&device);
+    let counter = device.new_buffer(4, ResourceOptions::shared()).unwrap();
+    let writing = (&[&first, &counting][..], &columns);
+    let drawn = |encoder: &mut RenderCommandEncoder, state: usize| match state {
+        0 => rectangle(encoder),
+        _ => {
+            encoder.set_fragment_buffer(Some(&counter), 0, 0).unwrap();
+            let drawn = encoder.draw_primitives(PrimitiveType::Triangle, 0, 3, 1, 0);
+            assert_eq!(drawn, Ok(()));
+        }
+    };
+    warm(&device, |encoder| {
+        switching_rectangles(encoder, writing, |_| {}, drawn)
+    });
+    clear(&counter);
+    let ran = run(&device, |encoder| {
+        switching_rectangles(encoder, writing, |_| {}, drawn)
+    });
+    assert_eq!(ran.counted(rebound_count), 0);
+    assert_eq!(ran.counted(|counts| counts.draws_as_before), 0);
+    let counted = DRAWS / 2 * SIDE * SIDE;
+    assert_eq!(words_of(&counter), [counted as u32]);
+}
+
 /// [`DRAWS`] rectangles of the columns [`rectangles_from_columns`] holds, each as the six points of
 /// its two triangles (`tob_triangle`'s, in `tob_rect`'s order), [`POINTS`] bytes each.
 fn rectangle_points(device: &Device) -> Buffer {

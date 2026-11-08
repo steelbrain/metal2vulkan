@@ -441,7 +441,7 @@ pub(crate) use deferral::{lowering, DeferredEncoders, EndInFlight};
 use deferral::{Logged, OwnLowering};
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 pub(crate) use deferral::{BATCH_CALLS, HANDED_BATCHES};
-pub(crate) use draw_again::KeptStorage;
+pub(crate) use draw_again::{Kept, KeptStorage};
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 pub(crate) use draw_room::made as draw_rooms_made;
 pub(crate) use draw_room::SpareDrawRooms;
@@ -2814,7 +2814,10 @@ impl RenderLowering {
         &mut self,
         state: &RenderPipelineState,
     ) -> Result<(), Error> {
-        self.log(|log| RenderCall::PipelineState(log.hold_render_state(state)));
+        // The kept draw stays, set aside with its state's bind state at the next draw through
+        // another state (`render/draw_again.rs`): a draw of a state changes nothing a draw of
+        // another reads but what its plain draws hold for the next.
+        self.log_keeping(|log| RenderCall::PipelineState(log.hold_render_state(state)));
         let turn = self.group_turn();
         if let color_groups::Turn::Later(false) = turn {
             return Err(color_groups::gap());
@@ -7855,7 +7858,10 @@ impl RenderLowering {
     ) -> Result<(), Error> {
         self.sync_heaps();
         // The encoder's kept draw again, which no call came between: its Vulkan draw alone
-        // (`render/draw_again.rs`). Any other draw forgets it, and keeps itself where it can.
+        // (`render/draw_again.rs`), the pipeline state's own where the last draw drew through
+        // another. Any other draw keeps itself in its place where it can, and forgets every
+        // kept draw where it cannot.
+        self.select_kept(live);
         let mut checked = None;
         match self.draw_again(live, call, assembly, &draw, &buffers, &mut checked) {
             draw_again::Again::Drawn => return Ok(()),
@@ -7867,7 +7873,7 @@ impl RenderLowering {
                 return Err(refused);
             }
         }
-        self.forget_again();
+        self.drop_kept();
         let watch = EachWatch::start();
         // And whether it rasterizes, without which its primitives reach no tile (`no_raster_t11`).
         // And whether it chooses its viewport.
@@ -7884,7 +7890,10 @@ impl RenderLowering {
         // where it writes there (`render/color_groups.rs`); a skipped draw is counted as drawn.
         let turn = self.group_turn();
         match turn {
-            color_groups::Turn::Later(false) => return Err(color_groups::gap()),
+            color_groups::Turn::Later(false) => {
+                self.forget_again();
+                return Err(color_groups::gap());
+            }
             color_groups::Turn::Later(true) if self.group_skips() => self.group_skipped(),
             _ => {
                 self.plain_drawn = false;
@@ -7896,6 +7905,12 @@ impl RenderLowering {
                 }
                 drawn?;
             }
+        }
+        // A draw that kept nothing may have changed what a draw set aside with another pipeline
+        // state's bind state reads: every kept draw is forgotten, as at a call. One kept
+        // recorded as a draw again of it would, into its instance as it stood.
+        if self.again_kept().is_none() {
+            self.forget_again();
         }
         // Every draw, one of nothing too; an execution's commands announce at the
         // execution (`executions.rs`).
@@ -10779,8 +10794,12 @@ impl RenderLowering {
             _ => {}
         }
         // Its uses noted as the next draw would find them noted (`noted_apart.rs`).
+        let drawn_by = self
+            .pipeline
+            .as_ref()
+            .and_then(RenderPipelineState::downgrade);
         let keeps = plain && !self.replaying && self.core.noted_now(&live.noted);
-        if keeps {
+        if let (true, Some(drawn_by)) = (keeps, drawn_by) {
             let execution = records.then(|| draw_again::KeptExecution {
                 pipeline: ExecutedPipeline::Render(Arc::clone(variant.shared_pipeline())),
                 shape: Arc::clone(&shape),
@@ -10815,6 +10834,9 @@ impl RenderLowering {
                 live.kept.keep(&writes, dynamic, recorded);
             }
             let kept = draw_again::Kept {
+                pipeline: drawn_by,
+                epoch: self.again_epoch(),
+                between: false,
                 call,
                 assembly,
                 draw,

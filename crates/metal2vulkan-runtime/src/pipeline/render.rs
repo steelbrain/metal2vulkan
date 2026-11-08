@@ -126,6 +126,22 @@ impl WeakRenderPipelineState {
             .upgrade()
             .map(|state| RenderPipelineState(Kind::Graphics(GraphicsState(state))))
     }
+
+    /// Whether it names `state`: the same drawing state, whose allocation it keeps, so no other
+    /// state lies at its address while it is kept.
+    pub(crate) fn names(&self, state: &RenderPipelineState) -> bool {
+        match &state.0 {
+            Kind::Graphics(graphics) => std::ptr::eq(self.0.as_ptr(), Arc::as_ptr(&graphics.0)),
+            Kind::Tile(_) => false,
+        }
+    }
+}
+
+/// The same drawing state ([`WeakRenderPipelineState::names`]'s identity).
+impl PartialEq for WeakRenderPipelineState {
+    fn eq(&self, other: &WeakRenderPipelineState) -> bool {
+        Weak::ptr_eq(&self.0, &other.0)
+    }
 }
 
 /// A drawing state's program, named without holding it ([`GraphicsState::program_name`]): its

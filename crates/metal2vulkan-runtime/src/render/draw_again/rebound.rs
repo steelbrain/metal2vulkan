@@ -3,8 +3,9 @@
 //! the kept draw's (`render/draw_again.rs`), so only what those slots decide is worked out again.
 //!
 //! - **Which draw.** The kept draw again ([`RenderLowering::draw_again`]: the same call and
-//!   arguments, under the same `Under`, into the same command buffer) after calls that changed only
-//!   buffer, texture and sampler slots of its tables, each table's changes since the kept draw read
+//!   arguments, through the same pipeline state, under the same `Under`, into the same command
+//!   buffer) after calls that changed only buffer, texture and sampler slots of its tables, or
+//!   after draws of other pipeline states (`Kept::between`, `render/draw_again.rs`), each table's changes since the kept draw read
 //!   it still listed (`argument_table::Changes`, at most [`SLOTS`] slots), where the kept draw kept
 //!   what this takes ([`KeptStorage`]: a draw whose set-0 writes hold no keeper, of no use beyond
 //!   its plan's and its draw's own, and of a state that made no visible-function table). The kept
@@ -460,8 +461,11 @@ impl RenderLowering {
             ..
         } = settled;
         // A draw moved: its commands' descriptor ranges as the kept draw left them, which tell
-        // whether its set-0 writes are the kept draw's (below).
-        let moved = changed.moved;
+        // whether its set-0 writes are the kept draw's (below). Not one after draws of other
+        // pipeline states (`Kept::between`): what it skips looking at again, and what it notes
+        // apart, it takes from the encoder's last draw.
+        let between = (self.again.kept.as_ref()).is_some_and(|kept| kept.between);
+        let moved = changed.moved && !between;
         if moved {
             live.kept.ranges.clear();
             (live.kept.ranges).extend_from_slice(&live.commands.descriptor_ranges);
@@ -926,6 +930,7 @@ impl RenderLowering {
             .ok_or_else(|| crate::error::internal("a draw rebound without its kept draw"))?;
         kept.stamps = stamps;
         kept.settled = Some(settled);
+        kept.between = false;
         // Whether its uses read an image: what its drawing again notes (`Kept::reads_images`).
         if images {
             kept.reads_images = live.uses.iter().any(super::reads_image);

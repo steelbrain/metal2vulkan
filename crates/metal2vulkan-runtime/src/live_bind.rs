@@ -67,7 +67,9 @@
 //! - **The draws' storage kept with it.** The vectors a draw fills and drops (its commands, push
 //!   writes, uses, descriptor writes, pushed set 0 and vertex buffers, and a draw rebound's slot
 //!   rebinds, which outlast the settle they were made for) are kept here too, each draw's written
-//!   over the last one's storage. Those hold values and raw handles, but for the
+//!   over the last one's storage: of each state set aside, its own last draw's, with the draw
+//!   its encoder kept of it, so a draw of that state after draws of others is rebound from it
+//!   (`render/draw_again.rs`). Those hold values and raw handles, but for the
 //!   descriptor writes, whose keepers hold samplers and function tables: those are emptied as
 //!   the draw is done with them ([`Emptied`]), so they hold nothing past it, as a new vector's did.
 //! - **The resident textures' shadows listed once per change.** The shadows' copies of the
@@ -98,7 +100,7 @@ use super::binding::{CommandUses, PushWrite, SetWrite, Write};
 use super::device::lock;
 use super::noted_apart::NotedApart;
 use super::pipeline::{BufferForms, GraphicsState, ProgramName, Settled};
-use super::render::{KeptHeap, KeptStorage};
+use super::render::{Kept, KeptHeap, KeptStorage};
 use super::sampler::OwnedSampler;
 use super::shadow::ResidentShadows;
 use super::work_counts::Counting;
@@ -281,6 +283,10 @@ pub(super) struct LiveBind {
     /// What a draw rebound takes of its encoder's kept draw beyond its objects, kept likewise
     /// (`render/draw_again/rebound.rs`).
     pub(super) kept: KeptStorage,
+    /// The kept draw of the state's pipeline state, set aside here while its encoder draws
+    /// through another (`render/draw_again.rs`, `RenderLowering::select_kept`): in place of the
+    /// state, the encoder holds it.
+    draw_kept: Option<Kept>,
     /// The shadows' copies of the textures its encoder made resident, listed once per change (the
     /// module docs).
     pub(super) shadows: ResidentShadows,
@@ -334,6 +340,17 @@ struct SetAside {
     read_from: ReadFrom,
     settled: Option<SettledHere>,
     rebinds: SlotRebinds,
+    /// Its last draw's storage and kept draw, as [`LiveBind`] holds them for its last draw's
+    /// state: a draw rebound after draws of other states rebinds its own state's last draw.
+    commands: DrawCommands,
+    pushes: Vec<PushWrite>,
+    uses: CommandUses,
+    pushed: Vec<SetWrite>,
+    offsets: Vec<u32>,
+    vertex_buffers: Vec<(u32, vk::Buffer, u64, u64)>,
+    vertex_starts: Vec<u64>,
+    kept: KeptStorage,
+    draw_kept: Option<Kept>,
     /// [`LiveBind::asides`] as it went aside.
     at: u64,
 }
@@ -565,7 +582,32 @@ impl LiveBind {
         std::mem::swap(&mut self.read_from, &mut aside.read_from);
         std::mem::swap(&mut self.settled, &mut aside.settled);
         std::mem::swap(&mut self.rebinds, &mut aside.rebinds);
+        std::mem::swap(&mut self.commands, &mut aside.commands);
+        std::mem::swap(&mut self.pushes, &mut aside.pushes);
+        std::mem::swap(&mut self.uses, &mut aside.uses);
+        std::mem::swap(&mut self.pushed, &mut aside.pushed);
+        std::mem::swap(&mut self.offsets, &mut aside.offsets);
+        std::mem::swap(&mut self.vertex_buffers, &mut aside.vertex_buffers);
+        std::mem::swap(&mut self.vertex_starts, &mut aside.vertex_starts);
+        std::mem::swap(&mut self.kept, &mut aside.kept);
+        std::mem::swap(&mut self.draw_kept, &mut aside.draw_kept);
         aside.at = self.asides;
+    }
+
+    /// Whether the state in place is the one a draw through `interface` starts from
+    /// ([`select`](Self::select) keeps it).
+    pub(super) fn reads_through(&self, interface: &PipelineInterface) -> bool {
+        self.read_from.through(interface)
+    }
+
+    /// Set `kept` aside with the state in place, its pipeline state's (the field's docs).
+    pub(super) fn set_aside_kept(&mut self, kept: Option<Kept>) {
+        self.draw_kept = kept;
+    }
+
+    /// The kept draw set aside with the state in place, taken.
+    pub(super) fn take_kept(&mut self) -> Option<Kept> {
+        self.draw_kept.take()
     }
 
     /// What the state's last recorded draw settled, where it drew `pipeline` in `forms` and its
@@ -593,8 +635,10 @@ impl LiveBind {
     /// Let go of every state's kept settle, as their encoder ends.
     fn forget_settles(&mut self) {
         self.settled = None;
+        self.draw_kept = None;
         for aside in &mut self.set_aside {
             aside.settled = None;
+            aside.draw_kept = None;
         }
     }
 
