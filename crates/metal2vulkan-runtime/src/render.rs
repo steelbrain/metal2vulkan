@@ -398,6 +398,7 @@ mod arguments;
 mod bound;
 mod call_checks;
 mod color_groups;
+pub(crate) mod coverage;
 mod deferral;
 mod draw_again;
 mod draw_room;
@@ -1465,6 +1466,9 @@ pub(crate) struct RenderLowering {
     /// (`set_object_threadgroup_memory_length`), which its mesh draws bind.
     object_threadgroup_lengths: BTreeMap<u32, u32>,
     visibility: Visibility,
+    /// The pass's readers of its own colors the area rule weighed, and those it measures
+    /// (`render/coverage.rs`).
+    readers: coverage::Readers,
     /// The tile stage's table, which tile dispatches bind (`tile_dispatch.rs`).
     tile: ArgumentTable,
     /// The pass's tile dispatches, each recorded after the instance before it.
@@ -2177,6 +2181,7 @@ impl RenderLowering {
                 scissors: ScissorRects::metal_default(area),
                 render_target_array_length,
                 visibility: Visibility::new(layout.visibility.clone()),
+                readers: coverage::Readers::default(),
                 layout: Versioned::new(layout),
                 passes: vec![(shape, compatible)],
                 pipeline: None,
@@ -4232,6 +4237,7 @@ impl RenderLowering {
             mut layout,
             passes,
             mut visibility,
+            readers,
             dispatches,
             scratch: tile_scratch,
             shadow,
@@ -4271,6 +4277,11 @@ impl RenderLowering {
         // The bind state its last draw left, which the device's next render encoder starts from
         // (`live_bind.rs`): no draw holds it once the encoder ends.
         core.device().shared().live_binds.give(live);
+        // The pass's measured readers, whose counts their textures take as the command buffer
+        // completes (`render/coverage.rs`): held with its pool until then.
+        if let Some(readback) = readers.readback() {
+            core.retain(readback);
+        }
         // The pass's instances in order: the earlier ones (a pass split), then the current one.
         let mut instances = earlier;
         instances.push(current);
@@ -8033,6 +8044,13 @@ impl RenderLowering {
         // through a snapshot where it can (`render/snapshot.rs`): asked of the plan, kept where
         // the plan reads so, else `None` and the split.
         let mut snapshot = self.snapshot_wanted(&pipeline, &reformats);
+        // Weighed by what it covered when a pass last measured it, else by the area rule, and
+        // measured where the device measures readers: its drawing commands record inside the
+        // query (`render/coverage.rs`).
+        let mut covered_query = None;
+        if let Some(wanted) = snapshot.take() {
+            (snapshot, covered_query) = self.snapshot_by_area(&pipeline, wanted)?;
+        }
         // Its runtime samplers' address modes as the textures they sample map them: what it
         // settles under, and binds with.
         let sampler_maps = self.sampler_maps(&pipeline, &pass_start)?;
@@ -10372,7 +10390,34 @@ impl RenderLowering {
                     None => (&pushes[a][..], vk_draws),
                 }
             };
+            // A measured reader's drawing commands record inside its query, into its instance or
+            // kept with its draws where the instance is kept (`render/inline_splits.rs`); not
+            // those of a pipeline still being made, which a later step records, nor a replay's
+            // (`render/coverage.rs`). A query never recorded reads as never run.
+            let covered_query =
+                covered_query.filter(|_| made_now.is_some() && self.replayed.is_none());
             for &phase in phases {
+                let counted = covered_query.filter(|_| phase != Some(snapshot::Phase::Snapshot));
+                if let Some((pool, query)) = counted {
+                    match &mut self.current.kept {
+                        Some(kept) => kept.begin_query(pool, query),
+                        // SAFETY: the instance's command buffer (or the pass's, inline) is
+                        // recording inside its pass, which has one sample and one layer (the
+                        // area rule's checks); the query is the pass's own, reset on the host and
+                        // begun nowhere else; no other occlusion query is active (no visibility
+                        // query is, the checks); the pool is held until the command buffer
+                        // completes.
+                        None => unsafe {
+                            device.shared().vk().cmd_begin_query(
+                                self.current.draws,
+                                pool,
+                                query,
+                                vk::QueryControlFlags::PRECISE,
+                            )
+                        },
+                    }
+                    device.shared().counts.coverage_query();
+                }
                 let mut first = true;
                 // Amplification by amplification, each through its recordings' regions: Metal
                 // renders every primitive of one before the next's, and a pixel's regions are one.
@@ -10465,6 +10510,18 @@ impl RenderLowering {
                                 (None, _) => owned.push(recording.owned()),
                             }
                         }
+                    }
+                }
+                if let Some((pool, query)) = counted {
+                    match &mut self.current.kept {
+                        Some(kept) => kept.end_query(pool, query),
+                        // SAFETY: the query this phase began, in the same subpass.
+                        None => unsafe {
+                            device
+                                .shared()
+                                .vk()
+                                .cmd_end_query(self.current.draws, pool, query)
+                        },
                     }
                 }
             }

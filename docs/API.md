@@ -1537,7 +1537,7 @@ driver cache record or not, or another caller's) and the link; and, once per rea
 that reads its own pass's color attachment after a barrier took the split rather than a snapshot
 (id name `metal2vulkan-snapshot-fallback`, `Info` severity; `WorkCounts::reading_draws_snapshotted`
 counts those that took a snapshot), and now and then a count of the draws the snapshot's area rule
-weighed, by their scissors' share of the target, texel bytes and side of the rule (id name
+weighed, by their scissors' share of the target, texel bytes and the form each took (id name
 `metal2vulkan-snapshot-readers`, `Info` severity). With `METAL2VULKAN_LOG_MEMORY` set, a device
 logs one line per `VkDeviceMemory` it allocates, imports or frees (id name `metal2vulkan-memory`,
 `Info` severity): what it holds (a block of buffers or images, a host-memory import with its host

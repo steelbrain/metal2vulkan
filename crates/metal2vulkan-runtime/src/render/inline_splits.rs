@@ -170,6 +170,10 @@ enum KeptCommand {
     /// A barrier before a draw whose fragment shader touches what a draw before it wrote before
     /// its fragments, of the view mask (`render_target::after_geometry_writes`).
     GeometryBarrier(u32, LegacyBarrier),
+    /// The begin of the precise occlusion query a reader's drawing commands record inside, and
+    /// its end, of the pool and query (`render/coverage.rs`).
+    BeginQuery(vk::QueryPool, u32),
+    EndQuery(vk::QueryPool, u32),
 }
 
 impl Kept {
@@ -213,6 +217,19 @@ impl Kept {
         self.room
             .commands
             .push(KeptCommand::GeometryBarrier(view_mask, barrier));
+    }
+
+    /// Keep the begin of a reader's coverage query, before its drawing commands
+    /// (`render/coverage.rs`).
+    pub(super) fn begin_query(&mut self, pool: vk::QueryPool, query: u32) {
+        self.room
+            .commands
+            .push(KeptCommand::BeginQuery(pool, query));
+    }
+
+    /// Keep the end of a reader's coverage query, after its drawing commands.
+    pub(super) fn end_query(&mut self, pool: vk::QueryPool, query: u32) {
+        self.room.commands.push(KeptCommand::EndQuery(pool, query));
     }
 }
 
@@ -627,6 +644,10 @@ fn record_kept(
                 KeptCommand::GeometryBarrier(view_mask, barrier) => {
                     render_target::after_geometry_writes(raw, held, *view_mask, *barrier)
                 }
+                KeptCommand::BeginQuery(pool, query) => {
+                    raw.cmd_begin_query(held, *pool, *query, vk::QueryControlFlags::PRECISE)
+                }
+                KeptCommand::EndQuery(pool, query) => raw.cmd_end_query(held, *pool, *query),
             }
         }
     }

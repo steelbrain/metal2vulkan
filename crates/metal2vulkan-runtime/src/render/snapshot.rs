@@ -118,6 +118,14 @@
 //!   withholds `fragmentShaderPixelInterlock`) a reader over 1.5% of the target took 0.09 to 0.43
 //!   times the split's GPU time, and one over the whole target 1.03 to 1.20 times on the Iris Xe,
 //!   1.95 to 2.30 times on the Radeon 780M and 1.30 to 2.10 times on the RX 7900 XTX.
+//! - **Learned coverage.** On a device that measures readers (`occlusionQueryPrecise`, queries
+//!   reset on the host), each reader the area rule would weigh records its drawing commands inside
+//!   a precise occlusion query, and once a pass completed, that reader's later passes are weighed
+//!   at the pixels it covered then instead (`render/coverage.rs`): the snapshot where its draw at
+//!   [`SNAPSHOT_PIXEL_COST`] for each of those pixels, for each color, costs no more than the
+//!   split's copy. A reader covering the whole target takes the split from its second pass on, one
+//!   covering 3% of it keeps the snapshot. Both forms give Metal's results; a reader whose
+//!   coverage changes takes the form its old count chose until a pass after the change completes.
 //! - **Pins.** A fetch of a color in the pixel interlock reads and writes its image as a storage
 //!   image, so a later fetch of a color whose image lacks `STORAGE` renders it through a stand-in
 //!   (`attachment_stand_in.rs`), which the pass's end puts in place for the whole pass, copied in
@@ -188,7 +196,7 @@ pub(super) fn form(plan: &BindingPlan, slot: u32) -> Option<SnapshotForm> {
 /// color's codes, 4 bytes a pixel, costs about what one of the fetched lanes' bits, 16, does.
 /// Measured at about 14 on the Iris Xe and 20 on the Radeon 780M
 /// (`runtime_lane::attachment_read_costs::snapshot_area_costs`).
-const SNAPSHOT_PIXEL_COST: u64 = 20;
+pub(super) const SNAPSHOT_PIXEL_COST: u64 = 20;
 
 /// What either form costs a draw whatever it covers, in bytes of the split's copy (the module
 /// docs' area rule): the snapshot's two barriers and its second draw, or the split's end of one
@@ -320,8 +328,9 @@ pub(super) fn phase_hole(holes: &[PushHole]) -> Option<(vk::ShaderStageFlags, u3
 
 impl RenderLowering {
     /// What a draw of `pipeline` (its state's base) through `reformats` asks to read through
-    /// snapshots, where it can ask (the module docs' checks that come before the plan); `None`
-    /// where it reads no attachment so or takes the split.
+    /// snapshots, where it can ask (the module docs' checks that come before the area rule and
+    /// the plan, [`snapshot_by_area`](Self::snapshot_by_area) weighing it next); `None` where it
+    /// reads no attachment so or a check takes the split.
     pub(super) fn snapshot_wanted(
         &self,
         pipeline: &DrawingState,
@@ -413,12 +422,60 @@ impl RenderLowering {
         if shared {
             return self.snapshot_fallback("the draw reads two attachments of one image");
         }
-        if !self.snapshot_cheaper(pipeline, &colors) {
-            return self.snapshot_fallback(
-                "area: the snapshot draw over the draw's scissors costs more than the split's copy",
-            );
-        }
         Some(wanted)
+    }
+
+    /// Whether the draw of `pipeline` that asks to read the pass's colors through snapshots as
+    /// `wanted` ([`snapshot_wanted`](Self::snapshot_wanted)) takes them: where it costs no more
+    /// than the split ([`snapshot_cheaper`](Self::snapshot_cheaper)), weighed at what the reader
+    /// covered in the latest pass that measured it, where one did, else by the area rule; and,
+    /// where the device measures readers, the query of the pass's its drawing commands record
+    /// inside, whose count its texture keeps as the pass completes (`render/coverage.rs`). `None`
+    /// where it takes the split.
+    pub(super) fn snapshot_by_area(
+        &mut self,
+        pipeline: &DrawingState,
+        wanted: Wanted,
+    ) -> Result<(Option<Wanted>, Option<(vk::QueryPool, u32)>), crate::Error> {
+        let colors: Vec<usize> = (0..self.layout.colors.len())
+            .filter(|&i| wanted.feedback.has(i))
+            .collect();
+        let first = colors
+            .first()
+            .and_then(|&index| self.layout.colors.get(index)?.as_ref())
+            .map(|color| color.target.texture.clone());
+        // A reader over a buffer's bytes takes the snapshot at any area: nothing to learn.
+        let reader = match first {
+            Some(texture) if !self.over_bytes(&colors) => {
+                Some((self.readers.next_key(pipeline.address(), &texture), texture))
+            }
+            _ => None,
+        };
+        let learned = reader
+            .as_ref()
+            .and_then(|(key, texture)| texture.learned_coverage(*key));
+        if learned.is_some() {
+            self.core
+                .device()
+                .shared()
+                .counts
+                .reading_draw_by_coverage();
+        }
+        let within = self.snapshot_cheaper(pipeline, &colors, learned);
+        let query = match reader {
+            Some((key, texture)) => self.readers.measure(self.core.device(), &texture, key)?,
+            None => None,
+        };
+        let wanted = match (within, learned) {
+            (true, _) => Some(wanted),
+            (false, Some(_)) => self.snapshot_fallback(
+                "coverage: the snapshot draw over the pixels the reader covered when last measured costs more than the split's copy",
+            ),
+            (false, None) => self.snapshot_fallback(
+                "area: the snapshot draw over the draw's scissors costs more than the split's copy",
+            ),
+        };
+        Ok((wanted, query))
     }
 
     /// Whether the draw of `pipeline` reads the pass's color `index`, whose own image a later
@@ -461,12 +518,26 @@ impl RenderLowering {
 
     /// Whether a draw of `pipeline` that reads the pass's `colors` through snapshots costs no
     /// more than the split would: at any area over a buffer's bytes
-    /// ([`over_bytes`](Self::over_bytes)), else by the area rule ([`snapshot_within`]) over
+    /// ([`over_bytes`](Self::over_bytes)); else, where the reader covered `learned` pixels in the
+    /// latest pass that measured it, by what the snapshot draw costs over them
+    /// (`coverage::snapshot_covers`); else by the area rule ([`snapshot_within`]) over
     /// [`snapshot_weights`](Self::snapshot_weights); counted by its size where
     /// `METAL2VULKAN_LOG_PIPELINES` is set (`reader_sizes.rs`).
-    fn snapshot_cheaper(&self, pipeline: &DrawingState, colors: &[usize]) -> bool {
+    fn snapshot_cheaper(
+        &self,
+        pipeline: &DrawingState,
+        colors: &[usize],
+        learned: Option<u64>,
+    ) -> bool {
         let (covered, pixels, bytes, copied) = self.snapshot_weights(pipeline, colors);
-        let within = self.over_bytes(colors) || snapshot_within(covered, copied);
+        let within = self.over_bytes(colors)
+            || match learned {
+                Some(drawn) => super::coverage::snapshot_covers(
+                    drawn.saturating_mul(colors.len() as u64),
+                    copied,
+                ),
+                None => snapshot_within(covered, copied),
+            };
         if crate::pipeline::creation_log_enabled() {
             let device = self.core.device();
             let line = crate::device::lock(&device.shared().reader_sizes)

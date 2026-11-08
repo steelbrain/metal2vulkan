@@ -474,6 +474,8 @@ pub(crate) struct Counters {
     attachment_read_clears: AtomicU64,
     reading_draws_snapshotted: AtomicU64,
     snapshot_inline_splits: AtomicU64,
+    reading_draws_by_coverage: AtomicU64,
+    coverage_queries: AtomicU64,
     reading_draws_pinned: AtomicU64,
     stand_ins_after_pins: AtomicU64,
     feedback_loop_alias_images: AtomicU64,
@@ -3455,6 +3457,19 @@ impl Counters {
     /// inline (`render/snapshot.rs`).
     pub(crate) fn snapshot_inline_split(&self) {
         self.snapshot_inline_splits.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A reader of its pass's color was weighed by what it covered when a pass last measured it
+    /// (`render/coverage.rs`).
+    pub(crate) fn reading_draw_by_coverage(&self) {
+        self.reading_draws_by_coverage
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A reader of its pass's color recorded its drawing commands inside an occlusion query
+    /// that measures what it covers (`render/coverage.rs`).
+    pub(crate) fn coverage_query(&self) {
+        self.coverage_queries.fetch_add(1, Ordering::Relaxed);
     }
 
     /// A draw read through a snapshot a color whose image a later fetch would render through a
@@ -6600,6 +6615,15 @@ pub struct WorkCounts {
     /// was recorded inline, its render pass instance begun without the feedback loop layout the
     /// snapshot needs (`render/snapshot.rs`, `render/inline_first.rs`).
     pub snapshot_inline_splits: u64,
+    /// Draws that read a color of their render pass after a memory barrier, which the area rule
+    /// weighs between the snapshot and the split, weighed by the pixels they covered in the
+    /// latest pass that measured them rather than by their scissors (`render/coverage.rs`):
+    /// among `reading_draws_snapshotted` or `attachment_read_splits`, as they took.
+    pub reading_draws_by_coverage: u64,
+    /// Occlusion queries such draws recorded their drawing commands inside, whose counts their
+    /// textures keep as the command buffers complete (`render/coverage.rs`): one a draw, on a
+    /// device with `occlusionQueryPrecise` that resets queries on the host.
+    pub coverage_queries: u64,
     /// Of `reading_draws_snapshotted`, the draws that read a color whose image lacks the
     /// `STORAGE` a later framebuffer fetch of it in the interlock would need, so that a fetch would
     /// render it through a stand-in for the whole pass: each pins its instance, and those before
@@ -7521,6 +7545,8 @@ impl Device {
             attachment_read_clears: counters.attachment_read_clears.load(Ordering::Relaxed),
             reading_draws_snapshotted: counters.reading_draws_snapshotted.load(Ordering::Relaxed),
             snapshot_inline_splits: counters.snapshot_inline_splits.load(Ordering::Relaxed),
+            reading_draws_by_coverage: counters.reading_draws_by_coverage.load(Ordering::Relaxed),
+            coverage_queries: counters.coverage_queries.load(Ordering::Relaxed),
             reading_draws_pinned: counters.reading_draws_pinned.load(Ordering::Relaxed),
             stand_ins_after_pins: counters.stand_ins_after_pins.load(Ordering::Relaxed),
             feedback_loop_alias_images: counters.feedback_loop_alias_images.load(Ordering::Relaxed),

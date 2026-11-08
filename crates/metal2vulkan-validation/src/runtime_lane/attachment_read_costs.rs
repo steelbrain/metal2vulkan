@@ -29,7 +29,9 @@
 //! and a reader (`tob_read`) through the scissor whose rectangle, at the same corner, covers a
 //! share of it. The cells cross the scissor's sides ([`SCISSORS`]), the share the reader covers
 //! ([`COVERAGES`]) and the fill: the whole scissor, or at most [`GUEST_FILL`]. The cells run in
-//! turn, round after round, so the GPU's clock weighs on each alike; printed per cell
+//! turn, round after round, so the GPU's clock weighs on each alike, each cell's timed frame after
+//! an untimed one of its own, so its readers are weighed by what they covered there where the
+//! device learns it (`render/coverage.rs`), not by what the cell before covered; printed per cell
 //! (`SNAPSHOT-CROSSOVER`): the median GPU time per pass, the readers the device snapshotted and
 //! split, the texels copied in per pass, and the clock (`gt_cur_freq_mhz`) at the first and last
 //! round.
@@ -480,6 +482,10 @@ fn snapshot_crossover() {
     for round in 0..ROUNDS {
         for (index, cell) in cells.iter().enumerate() {
             let target = if cell.host { &host } else { &private };
+            // An untimed frame of the cell first, so its readers are weighed by what a pass of
+            // the cell covered, where the device learns it (`render/coverage.rs`), not by the
+            // cell before's.
+            cross_frame(&queue, target, &fill, &read, cell);
             clocks.entry(index).or_default().push(clock());
             let before = device.work_counts();
             let gpu = cross_frame(&queue, target, &fill, &read, cell);

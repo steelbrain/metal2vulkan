@@ -2618,6 +2618,7 @@ field	metal2vulkan-runtime::WorkCounts.copied_rebind_pages_moved	pub copied_rebi
 field	metal2vulkan-runtime::WorkCounts.copied_unwritable_pages	pub copied_unwritable_pages: u64
 field	metal2vulkan-runtime::WorkCounts.copy_regions_split	pub copy_regions_split: u64
 field	metal2vulkan-runtime::WorkCounts.copy_sites	pub copy_sites: [CopySite; 32]
+field	metal2vulkan-runtime::WorkCounts.coverage_queries	pub coverage_queries: u64
 field	metal2vulkan-runtime::WorkCounts.cpu_block_decodes	pub cpu_block_decodes: u64
 field	metal2vulkan-runtime::WorkCounts.creation_dispatch_pipelines_drawn	pub creation_dispatch_pipelines_drawn: u64
 field	metal2vulkan-runtime::WorkCounts.creation_dispatch_pipelines_made	pub creation_dispatch_pipelines_made: u64
@@ -2938,6 +2939,7 @@ field	metal2vulkan-runtime::WorkCounts.queue_switch_checks_recalled	pub queue_sw
 field	metal2vulkan-runtime::WorkCounts.queue_switch_checks_run	pub queue_switch_checks_run: u64
 field	metal2vulkan-runtime::WorkCounts.queues_gone_long	pub queues_gone_long: u64
 field	metal2vulkan-runtime::WorkCounts.queues_sharing_a_vk_queue	pub queues_sharing_a_vk_queue: u64
+field	metal2vulkan-runtime::WorkCounts.reading_draws_by_coverage	pub reading_draws_by_coverage: u64
 field	metal2vulkan-runtime::WorkCounts.reading_draws_pinned	pub reading_draws_pinned: u64
 field	metal2vulkan-runtime::WorkCounts.reading_draws_snapshotted	pub reading_draws_snapshotted: u64
 field	metal2vulkan-runtime::WorkCounts.reencodes_refused	pub reencodes_refused: u64

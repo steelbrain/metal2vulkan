@@ -2258,6 +2258,12 @@ impl GraphicsState {
         Arc::ptr_eq(&self.0, &other.0)
     }
 
+    /// The state's address, while the program holds it: what a reader of its draws is known by
+    /// across passes (`render/coverage.rs`).
+    pub(crate) fn address(&self) -> usize {
+        Arc::as_ptr(&self.0).addr()
+    }
+
     /// Another reference to the state, which a command buffer holds it by
     /// (`EncoderCore::retain_shared`).
     pub(crate) fn held(&self) -> Arc<dyn Any + Send + Sync> {

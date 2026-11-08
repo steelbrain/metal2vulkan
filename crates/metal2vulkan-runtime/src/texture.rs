@@ -430,6 +430,10 @@ pub(super) struct TextureShared {
     /// texture's texels into before it reads them (`texture/attached_reads.rs`), one a form, each
     /// made at the first such draw: on the texture a view was made from, never a view's own.
     snapshot: Mutex<Vec<Texture>>,
+    /// What the draws that read it where their pass renders it covered, by reader, as passes
+    /// that measured them completed (`render/coverage.rs`): on the texture a view was made from,
+    /// never a view's own.
+    coverage: Mutex<crate::render::coverage::Learned>,
     /// A memoryless texture's backings, one per queue and subresource, made at the first pass
     /// that needs one and kept with the texture (`attachment_stand_in::kept_backing`).
     kept_backings: Mutex<Vec<KeptBacking>>,
@@ -4327,6 +4331,32 @@ pub(super) enum IdUse {
 }
 
 impl Texture {
+    /// The texture a view was made from, through every view between; else this one.
+    fn root(&self) -> &Texture {
+        let mut owner = self;
+        while let Some(parent) = &owner.0.parent {
+            owner = parent;
+        }
+        owner
+    }
+
+    /// The identity a reader of the texture is known by across passes (`render/coverage.rs`):
+    /// the address of the texture a view was made from, while it lives.
+    pub(crate) fn root_address(&self) -> usize {
+        Arc::as_ptr(&self.root().0).addr()
+    }
+
+    /// The pixels the reader `key` of the texture covered in the latest pass that measured it
+    /// (`render/coverage.rs`).
+    pub(crate) fn learned_coverage(&self, key: crate::render::coverage::ReaderKey) -> Option<u64> {
+        crate::device::lock(&self.root().0.coverage).get(key)
+    }
+
+    /// The reader `key` of the texture covered `covered` pixels in a pass that completed.
+    pub(crate) fn learn_coverage(&self, key: crate::render::coverage::ReaderKey, covered: u64) {
+        crate::device::lock(&self.root().0.coverage).learn(key, covered);
+    }
+
     /// A new texture object of `device` over `storage`, presenting `record`, a view of `parent`
     /// if any, with its resource ID as `id_use` says. A program's texture takes its ID's slot,
     /// and the device's texture table and heap sets hold it there (`heap_sets::place`).
@@ -4381,6 +4411,7 @@ impl Texture {
             usage_shadow: OnceLock::new(),
             usage_shadow_making: Mutex::new(()),
             snapshot: Mutex::new(Vec::new()),
+            coverage: Mutex::default(),
             kept_backings: Mutex::new(Vec::new()),
             render_shadow: Mutex::new(None),
             heap,
