@@ -3956,6 +3956,49 @@ fn a_site_the_venue_lacks_is_the_venues_gap_and_not_a_refusal() {
     assert_eq!(replayed.verdict.word(), "refused");
 }
 
+/// A run that stops at a typed refusal reports that error, not a call that never answered:
+/// `cost` and `times` print and record the line [`Abort::stopped`] makes. A failure outside the
+/// runtime's typed errors still reads as a call that did not answer, and the venue's own gap as
+/// what it lacks.
+#[test]
+fn a_run_stopped_at_a_typed_refusal_reports_the_error() {
+    use metal2vulkan::error::{Feature, Unsupported};
+    let at = "MTLPixelFormatRGB10A8_2P/Type2D/makes-texture".to_owned();
+    let error =
+        metal2vulkan_runtime::Error::Unsupported(Unsupported::not_implemented(Feature::Format));
+    let refused = Abort {
+        at: at.clone(),
+        failure: Failure::of(&error),
+    };
+    assert_eq!(refused.stopped(), format!("refused {error}, at {at}"));
+    assert!(
+        refused.stopped().contains("NotImplemented"),
+        "{}",
+        refused.stopped()
+    );
+    // The same through the annotation a program's interpreter adds.
+    let stepped = Abort {
+        at: at.clone(),
+        failure: Failure::of(&error).at_step(3),
+    };
+    assert_eq!(stepped.stopped(), refused.stopped());
+    let untyped = Abort {
+        at: at.clone(),
+        failure: Failure::named("NoSuchBarrierScope", "0x9: no such bits"),
+    };
+    assert_eq!(untyped.stopped(), format!("a call did not answer, at {at}"));
+    let mut lacking = Failure::of(&error);
+    lacking.lacks = Some("the device enables no such capability".to_owned());
+    let lacks = Abort {
+        at: at.clone(),
+        failure: lacking,
+    };
+    assert_eq!(
+        lacks.stopped(),
+        format!("the device enables no such capability, at {at}")
+    );
+}
+
 #[test]
 fn an_allowance_no_site_needed_is_counted_and_named_rather_than_silently_kept() {
     // The hole this closes: the up-front check over a case's allowances has to exempt a degrade

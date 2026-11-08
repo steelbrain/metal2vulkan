@@ -258,14 +258,7 @@ pub fn cost_on_under(
             let nanos = u64::try_from(started.elapsed().as_nanos()).unwrap_or(u64::MAX);
             let moved = read_counts(&device)?.since(&before);
             let states = crate::states::made().saturating_sub(states_before);
-            let stopped = abort.map(|abort| {
-                let what = abort
-                    .failure
-                    .lacks
-                    .as_deref()
-                    .unwrap_or("a call did not answer");
-                format!("{what}, at {}", abort.at)
-            });
+            let stopped = abort.map(|abort| abort.stopped());
             announced.extend(sites.finish().announced_notices().into_keys());
             let announced = crate::replay::degrading(announced);
             if round == 0 {
@@ -776,14 +769,7 @@ fn timed<S: Side>(case: &dyn Case, side: S) -> Result<crate::times::CaseRound, S
     let mut announced = side.announced();
     announced.extend(sites.finish().announced_notices().into_keys());
     let degraded = crate::replay::degrading(announced);
-    let stopped = abort.map(|abort| {
-        let what = abort
-            .failure
-            .lacks
-            .as_deref()
-            .unwrap_or("a call did not answer");
-        format!("{what}, at {}", abort.at)
-    });
+    let stopped = abort.map(|abort| abort.stopped());
     Ok(crate::times::CaseRound {
         observed,
         window_wall,

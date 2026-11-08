@@ -457,6 +457,10 @@ pub struct Failure {
     /// What the venue lacks, where the typed refusal names capabilities a device could enable or
     /// a measured driver defect ([`device_gap`]). `None` where the refusal is ours to answer for.
     pub lacks: Option<String>,
+    /// The typed runtime error's own text where the failure is one ([`Failure::of`]); `None` for
+    /// a failure outside the runtime's typed errors. What a run that stopped at it reports
+    /// ([`Abort::stopped`]).
+    refusal: Option<String>,
 }
 
 impl Failure {
@@ -468,6 +472,7 @@ impl Failure {
                 payload: Box::new(Value::Lines(vec![error.to_string()])),
             },
             lacks: device_gap(error),
+            refusal: Some(error.to_string()),
         }
     }
 
@@ -495,6 +500,7 @@ impl Failure {
                 payload: Box::new(payload),
             },
             lacks: None,
+            refusal: None,
         }
     }
 
@@ -558,6 +564,7 @@ impl Failure {
         Self {
             error: Value::fields([(part, Value::Uint(index as u64)), (REFUSED, self.error)]),
             lacks: self.lacks,
+            refusal: self.refusal,
         }
     }
 }
@@ -610,6 +617,20 @@ pub struct Abort {
     /// The site the call was emitted at.
     pub at: String,
     pub failure: Failure,
+}
+
+impl Abort {
+    /// The line a run that stopped here reports, then the site: what the venue lacks where the
+    /// refusal is its own gap, else the typed runtime error the call answered, else that the call
+    /// did not answer (a failure outside the runtime's typed errors).
+    pub fn stopped(&self) -> String {
+        let what = match (&self.failure.lacks, &self.failure.refusal) {
+            (Some(lacks), _) => lacks.clone(),
+            (None, Some(error)) => format!("refused {error}"),
+            (None, None) => "a call did not answer".to_owned(),
+        };
+        format!("{what}, at {}", self.at)
+    }
 }
 
 /// The venue a side runs on: what a result carries so a report can say where it ran. A case never
