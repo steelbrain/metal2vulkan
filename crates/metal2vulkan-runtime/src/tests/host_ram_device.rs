@@ -176,6 +176,12 @@ pub(super) fn ahead_device() -> Option<Device> {
     // Asked now, by an import of one page released at once, so that no test's counts or
     // allocation limit meet that import ([`fresh_ram`] reads the answer).
     device.imports_shared_host_pointers().unwrap();
+    // The submission checks' imports, held while they run (`submit_check.rs`), likewise: a
+    // test that read the device's live allocations while they ran saw them go later.
+    assert!(
+        device.settle_submit_checks(crate::tests::SETTLE),
+        "the submission checks never answered"
+    );
     Some(device)
 }
 
