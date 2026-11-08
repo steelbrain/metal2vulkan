@@ -721,6 +721,17 @@ sample and an offset through Vulkan's interpolation functions; without them only
 (`device-interpolation-offset`), and a draw at custom sample positions through a function that
 reads at a sample is refused (`RuntimeGap::InterpolateAtSampleWithPositions`).
 
+`Device::minimum_linear_texture_alignment_for_pixel_format`
+(`minimumLinearTextureAlignmentForPixelFormat:`) answers, per pixel format, the alignment of a
+texture's offset and `bytesPerRow` in a buffer at which the device's images hold the texture in
+place over host pages, at least the 16 bytes Metal answers on an Apple GPU. The runtime asks the
+driver at the format's first query by making those images (none is bound), keeps that first answer
+for the device's life, and records it per driver in the shader cache's content directory. The M3
+Max's MoltenVK answers 16 for every format, RADV 256 and lavapipe 64. A texture at a smaller
+multiple of 16 is still made, as a shadow where the device's images do not take its layout
+(`shadowed-texture`). The private `deviceLinearTextureAlignmentBytes` and
+`linearTextureAlignmentBytes` answer the largest of the formats' answers.
+
 Where Metal's answers differ by macOS release (which pixel formats it describes, how a heap
 texture's blocks lie, its private device properties),
 every device answers as one release, `MACOS_RELEASE` (macOS 27.0.1, measured on an Apple M3 Max),

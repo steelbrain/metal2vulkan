@@ -63,15 +63,16 @@ struct Over {
 }
 
 /// A `ShaderRead` texture of `pf`, `w` x `h` texels of `texel` bytes, at `offset` with rows
-/// `bpr` apart in a no-copy buffer of anonymous pages holding [`counting`] bytes; `None` where the
-/// device imports no host pages.
+/// `bpr` apart in a no-copy buffer of anonymous pages holding [`counting`] bytes, with room for 4
+/// rows past its last (lavapipe's linear image takes its height rounded up to 4, and an image in
+/// place lies inside the buffer's memory); `None` where the device imports no host pages.
 fn over_pages(
     device: &Device,
     (pf, texel): (PixelFormat, u64),
     (w, h): (u64, u64),
     (offset, bpr): (u64, u64),
 ) -> Option<Over> {
-    let end = offset + bpr * (h - 1) + w * texel;
+    let end = offset + bpr * (h + 4);
     let len = (end as usize).next_multiple_of(GUEST_PAGE);
     let mapping = Mapping::anonymous(len);
     mapping.write(0, &counting(len, 3));
