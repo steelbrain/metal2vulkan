@@ -270,8 +270,9 @@ recorded here.
   (on the Radeon 780M 0.55 to 0.71 and 1.04, on the RX 7900 XTX 0.90 to 0.91 and 1.04 to 1.05).
   Other devices are not measured.
 - **A texture over a no-copy buffer's host pages, or over a host-visible buffer longer than 32
-  MiB, that a shader writes of 1- or 2-byte texels (or whose class's check has not passed for an
-  access of its, or whose format, usage or pitch no image takes, or under
+  MiB, that a shader writes of texels of a width the check stores none of (none of 1, 2, 4, 8 and
+  16 bytes; or whose class's check has not passed for an access of its, or whose format, usage or
+  pitch no image takes, or under
   `HostPageTexturePolicy::Shadow`), and a texture over a buffer of the runtime's memory whose rows
   lie with bytes between them,** is a shadow (`shadowed-texture`, its reason named): its texels
   copied in before each use and merged back after each write (only those inside the draws'

@@ -1576,8 +1576,9 @@ bound.
   32 MiB lies in), where an image bound to them would start `UNDEFINED` and Vulkan lets its layout
   transitions (its first move among them) read and write any byte bound to it, where Metal keeps
   every CPU write, and the device takes no image in place there: the policy keeps the exact form
-  (`HostPageTexturePolicy::Shadow`), a shader writes the texture's texels of 1 or 2 bytes, which
-  the device's check stores none of, the device's check that the operations of an access of the
+  (`HostPageTexturePolicy::Shadow`), a shader writes the texture's texels of a width the
+  device's check stores none of (none of 1, 2, 4, 8 and 16 bytes), the device's check that the
+  operations of an access of the
   texture (the first move; a render pass's load and store; a kernel's storage writes) keep every
   byte (but, for a kernel's writes of a texture over a buffer's rows whose padding is free, that
   padding: section 10, **Kernels**) over that kind of pages, for texels that share a line of the
