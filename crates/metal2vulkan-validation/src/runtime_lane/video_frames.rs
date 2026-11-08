@@ -772,7 +772,8 @@ fn parts(device: &Device, forms: &[Form], reads: metal2vulkan::device::YCbCrInPl
 /// consumer's guest makes them: CoreVideo's 8-bit `420v` planes (`R8Unorm` 3840x2160 and `RG8Unorm`
 /// 1920x1080, rows 3840 bytes apart) and 10-bit `x420` planes (`R16Unorm` and `RG16Unorm`, rows
 /// 7680 apart), each at 0, 32 (CoreVideo's), 64, 128 and 256 bytes into its page, sampled alone
-/// (`ShaderRead`) and written too (`ShaderRead | ShaderWrite`), over `Shared` and `Private` buffers
+/// (`ShaderRead`), written too (`ShaderRead | ShaderWrite`) and rendered into
+/// (`ShaderRead | RenderTarget`), over `Shared` and `Private` buffers
 /// of the runtime's own (each with its address, its contents' offset into a page and the device's
 /// linear texture alignments), anonymous pages and, on Linux,
 /// a `memfd`'s pages with a dma-buf source and a guest RAM's (`HostRam` over a `memfd`, its source
@@ -908,6 +909,7 @@ fn probe_planes(device: &Device, what: &str, buffer: &Buffer) {
     let usages = [
         TextureUsage::SHADER_READ,
         TextureUsage::SHADER_READ | TextureUsage::SHADER_WRITE,
+        TextureUsage::SHADER_READ | TextureUsage::RENDER_TARGET,
     ];
     let first = device.work_counts();
     for (pf, w, h, row) in planes {
