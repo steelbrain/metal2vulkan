@@ -874,14 +874,9 @@ impl<'a> ModuleDecoder<'a> {
             })
         };
         match (self.vst_offset, self.vst_bit) {
-            (None, None) => {
-                return if self.fn_entries.is_empty() {
-                    Ok(())
-                } else {
-                    Err(vst_malformed())
-                }
-            }
-            (None, Some(_)) if legacy => {
+            // No offsets to check: no symbol table, or version 1's from before LLVM 3.8, ahead of
+            // the bodies, which follow record order.
+            (None, table) if table.is_none() || legacy => {
                 return if self.fn_entries.is_empty() {
                     Ok(())
                 } else {
@@ -897,12 +892,9 @@ impl<'a> ModuleDecoder<'a> {
                 code: VST_FNENTRY,
             })
         };
-        let entries_fit = if legacy {
-            self.fn_entries.len() <= self.defined.len()
-        } else {
-            self.fn_entries.len() == self.defined.len()
-        };
-        if !entries_fit {
+        // Version 2 gives every defined function an entry. Version 1's name defined functions
+        // only, each once (its records refuse an offset on anything else).
+        if !legacy && self.fn_entries.len() != self.defined.len() {
             return Err(entry_malformed());
         }
         // Sorted copies keep the check O(n log n) in the number of functions.
@@ -918,7 +910,6 @@ impl<'a> ModuleDecoder<'a> {
         }
         // Blocks are recorded in stream order, so their positions increase.
         let blocks = &self.block_bits;
-        let mut matched = 0;
         for (&f, &bit) in self.defined.iter().zip(blocks) {
             m.tick(1)?;
             let words = entries
@@ -931,7 +922,6 @@ impl<'a> ModuleDecoder<'a> {
                 None if legacy => continue,
                 None => return Err(entry_malformed()),
             };
-            matched += 1;
             match words.checked_mul(32) {
                 Some(b) if b == bit => {}
                 Some(b) if blocks.binary_search(&b).is_ok() => {
@@ -946,9 +936,6 @@ impl<'a> ModuleDecoder<'a> {
                 }
                 _ => return Err(entry_malformed()),
             }
-        }
-        if matched != entries.len() {
-            return Err(entry_malformed());
         }
         Ok(())
     }
