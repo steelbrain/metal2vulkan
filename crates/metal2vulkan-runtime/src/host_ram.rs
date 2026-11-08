@@ -26,16 +26,18 @@
 //!   source and the device's held imports add to the cost of every submission (RADV lists every
 //!   import in each submission: measured with a probe on the Radeon 780M, Mesa 26.2.6, Linux 7.3.1,
 //!   an 8 GiB RAM held as 128 dma-bufs of 64 MiB raised a submission's median from 14 us to 60 to
-//!   88 us, as 32 of 256 MiB to 32 to 33 us, as 3 of 2730 MiB to 16 us), a chunk is as long as
-//!   [`LONGEST_LISTED_CHUNK`] (256 MiB), one dma-buf of the source
+//!   88 us, as 32 of 256 MiB to 32 to 33 us, as 16 of 512 MiB to 24 us, as 3 of 2730 MiB to 16
+//!   us), a chunk is as long as [`LONGEST_LISTED_CHUNK`] (512 MiB), one dma-buf of the source
 //!   ([`HostRam::with_largest_dma_buf`]) and the device's `maxMemoryAllocationSize`,
 //!   `maxBufferSize` and `maxStorageBufferRange` take, in whole [`CHUNK_BYTES`]
-//!   ([`listed_chunk_bytes`]): an 8 GiB RAM is 32 imports at most. The cap is a bound on memory,
+//!   ([`listed_chunk_bytes`]): an 8 GiB RAM is 16 imports at most. The cap is a bound on memory,
 //!   not on speed: a chunk's import pins every page of it, udmabuf allocating those the guest never
 //!   touched (they stay allocated in the guest's file once the chunk is freed), so each chunk an
 //!   object lies in makes all its bytes resident (a probe's 8 GiB RAM with one 2 MiB object in each
 //!   chunk was all resident at every length from 64 MiB to 1 GiB; a 16 GiB guest on the Radeon 780M
-//!   in about 2.5 GiB chunks had 4.4 GiB more of QEMU's RAM resident than without the source).
+//!   in about 2.5 GiB chunks had 4.4 GiB more of QEMU's RAM resident than without the source; at
+//!   its desktop, 0.45 GiB more in 512 MiB chunks, at most 12 live, and 0.94 GiB more in 256 MiB
+//!   chunks, at most 18 live, the means of two boots each).
 //!   There no thread imports ahead: a chunk is imported once an object over it asks, by a thread of
 //!   the device's ([`listed_chunks`]), off the object's thread, as a long chunk's import pins all
 //!   its pages (measured with a probe on the Radeon 780M and the RX 7900 XTX, Mesa 26.2.6: 660 to
@@ -585,7 +587,7 @@ impl Plan {
 /// they stay allocated in the guest's file after the import is freed. So a chunk's length bounds
 /// what one object over it makes resident of the RAM the guest left untouched, while each listed
 /// chunk costs every submission about half a microsecond (the module docs).
-pub(crate) const LONGEST_LISTED_CHUNK: u64 = 256 << 20;
+pub(crate) const LONGEST_LISTED_CHUNK: u64 = 512 << 20;
 
 /// The bytes of each chunk of a RAM on a device whose held imports add to the cost of every
 /// submission ([`Plan::listed`]): as many whole [`CHUNK_BYTES`] as [`LONGEST_LISTED_CHUNK`], one
@@ -1530,7 +1532,7 @@ impl Device {
     /// dma-bufs (RADV), each listed import costs every submission, so the RAM is imported in fewer,
     /// longer chunks instead: as long as one dma-buf of its source holds
     /// ([`HostRam::with_largest_dma_buf`]) and the device's `maxMemoryAllocationSize`,
-    /// `maxBufferSize` and `maxStorageBufferRange` take, in whole 64 MiB, and never past 256 MiB (a
+    /// `maxBufferSize` and `maxStorageBufferRange` take, in whole 64 MiB, and never past 512 MiB (a
     /// chunk's import makes every page of it resident, those the guest never touched too). There
     /// the thread imports nothing ahead: the first object over a chunk not imported asks it for the
     /// chunk, which it imports off the object's thread (a chunk's import pins all its pages: 660 to

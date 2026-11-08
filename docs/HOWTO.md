@@ -566,8 +566,8 @@ submission, can give the device the guest's RAM once instead:
   submission's median from 14 us to 60 to 88 us on the Radeon 780M (Mesa 26.2.6, Linux 7.3.1;
   `runtime_lane::submit_per_import::submit_per_ram_dma_buf`), as 3 of 2730 MiB to 16 us. There
   each chunk is as long as that, the device's `maxMemoryAllocationSize`, `maxBufferSize` and
-  `maxStorageBufferRange` all take, in whole 64 MiB, and never longer than 256 MiB (an 8 GiB RAM in
-  32 chunks at most): a chunk's import pins every page of it, and `udmabuf` allocates the pages
+  `maxStorageBufferRange` all take, in whole 64 MiB, and never longer than 512 MiB (an 8 GiB RAM in
+  16 chunks at most): a chunk's import pins every page of it, and `udmabuf` allocates the pages
   of the `memfd` the guest never touched, which stay allocated after the chunk is freed, so a
   longer chunk makes more of the guest's untouched RAM resident. Without the call, or where a
   kernel caps it at 64 MiB, the chunks stay 64 MiB. On such a device no chunk is imported ahead. The first object over a chunk

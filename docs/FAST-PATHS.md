@@ -188,27 +188,29 @@ recorded here.
   costs every submission about half a microsecond (an 8 GiB RAM in 2 MiB pages on the Radeon 780M,
   `runtime_lane::submit_per_import::submit_per_ram_chunk_length`: a submission's median 14 to 15 µs
   with none, 59 to 91 µs with 128 chunks of 64 MiB, 36 to 50 µs with 64 of 128 MiB, 32 to 33 µs with
-  32 of 256 MiB, 24 µs with 16 of 512 MiB, 19 µs with 8 of 1 GiB). The chunks stop at 256 MiB,
+  32 of 256 MiB, 24 µs with 16 of 512 MiB, 19 µs with 8 of 1 GiB). The chunks stop at 512 MiB,
   trading that speed for memory, not accuracy (no switch): a chunk's import pins every page of it,
   udmabuf allocating the pages the guest never touched, which stay allocated in the guest's file
   after the chunk is freed. In that probe, one 2 MiB object in each chunk left all 8 GiB resident at
   every length; a 16 GiB guest in chunks of about 2.5 GiB had 4.4 GiB more of its RAM resident than
-  without the source. A 16 GiB RAM in 256 MiB chunks lists 64 at most. The first submission that
-  lists a RAM's chunks took 52 to 56 ms for the 8 GiB at every length. A chunk, once imported, stays
-  imported where the whole RAM fits in half the device's memory heaps with unified memory, or in
-  three quarters of those that are not device-local without: the first kernel submission after a
-  chunk's import waits while the kernel writes its page tables, and every other submission of the
-  device with it (231 to 462 ms for a 3.94 GiB chunk on the Radeon 780M: a gather after the idle
-  window took 475 to 480 ms where its chunk was released and imported again, 2.6 to 2.8 ms where it
-  was kept). Where the RAM does not fit, a chunk no buffer nor pending command buffer holds is
-  released after the same window (`WorkCounts::host_ram_chunks_released`), as RADV lists every
-  import in every kernel submission, which fails once they pass the kernel's GTT. The first object
-  over a chunk not imported asks a thread of the device's for it, which imports it off the object's
-  thread (it pins every page of the chunk: 660 to 692 ms for 2.7 GiB on the Radeon 780M and the RX
-  7900 XTX), and the objects over it meanwhile are each bound in an import of its own run, one more
-  listed import apiece: a buffer's is released after its idle window and the buffer bound in the
-  chunk at its next blit, but a heap's, or a buffer's whose address was handed out, stays while it
-  lives.
+  without the source. The same guest's QEMU had 0.45 GiB more resident at its desktop in 512 MiB
+  chunks, with at most 11 to 12 live, and 0.94 GiB more in 256 MiB chunks, with at most 15 to 18
+  (0.15 and 0.25 GiB more at the end of its run; the means of two boots each). A 16 GiB RAM in 512
+  MiB chunks lists 32 at most. The first submission that lists a RAM's chunks took 52 to 56 ms for
+  the 8 GiB at every length. A chunk, once imported, stays imported where the whole RAM fits in half
+  the device's memory heaps with unified memory, or in three quarters of those that are not
+  device-local without: the first kernel submission after a chunk's import waits while the kernel
+  writes its page tables, and every other submission of the device with it (231 to 462 ms for a 3.94
+  GiB chunk on the Radeon 780M: a gather after the idle window took 475 to 480 ms where its chunk
+  was released and imported again, 2.6 to 2.8 ms where it was kept). Where the RAM does not fit, a
+  chunk no buffer nor pending command buffer holds is released after the same window
+  (`WorkCounts::host_ram_chunks_released`), as RADV lists every import in every kernel submission,
+  which fails once they pass the kernel's GTT. The first object over a chunk not imported asks a
+  thread of the device's for it, which imports it off the object's thread (it pins every page of the
+  chunk: 660 to 692 ms for 2.7 GiB on the Radeon 780M and the RX 7900 XTX), and the objects over it
+  meanwhile are each bound in an import of its own run, one more listed import apiece: a buffer's is
+  released after its idle window and the buffer bound in the chunk at its next blit, but a heap's,
+  or a buffer's whose address was handed out, stays while it lives.
 - **A pass in color groups runs once per group** (the `ColorAttachmentGroups` row above), the later
   groups' draws again over a twin of the depth and stencil, made for the pass and loaded by a copy
   or a clear (`render/color_groups.rs`). On lavapipe restricted to four colors
