@@ -10,21 +10,19 @@
 //! - its answer (`heap_texture_size_and_align`) and the notices its making announced, which name
 //!   its route, what its images take of the heap and the answer (`texture/heap.rs`);
 //! - the device's own images of its format and shape, made beside it through the queue's
-//!   `VkDevice` (`CommandQueue::with_vk_queue`): optimal, optimal of a mutable format, and linear,
-//!   each image's size and alignment;
+//!   `VkDevice` (`CommandQueue::with_vk_queue`): optimal, optimal of a mutable format, optimal of
+//!   host-transfer usage where the device enabled host image copy, and linear, each image's size
+//!   and alignment;
 //! - per frame of a command buffer that clears it in a render pass and blits it into a texture of
 //!   its own (and of one that only blits it), the work counts that moved and the GPU time's
 //!   median, beside the same frames over a texture of the same descriptor outside a heap.
 //!
-//! Two more measurements take no GPU work, for a host where the GPU is busy: `HEAP-IMAGES` lines,
-//! the memory requirements of the device's images of every shape of the count (optimal, optimal
-//! of a mutable format, optimal of host-transfer usage, linear), made and destroyed on a
-//! `VkDevice` of the test's own that records and submits nothing; and `HEAP-ANSWERS` lines,
-//! Metal's answer and the device's for each shape, which ask a device no GPU work either.
+//! A second measurement records and submits nothing: `HEAP-IMAGES` lines, for every shape of the
+//! count, Metal's answer, the device's, and the device's images of it as above.
 
 use super::video_frames::moved_per_frame;
 use super::{validated_device_with, Messages, ScratchCache, WAIT};
-use crate::gpu::{DeviceType, TEST_DEVICE};
+use crate::gpu::TEST_DEVICE;
 use ash::vk;
 use metal2vulkan::device::HeapCompressionPolicy;
 use metal2vulkan::metal::{PixelFormat, TextureType, TextureUsage};
@@ -102,18 +100,37 @@ fn vk_format(format: PixelFormat) -> vk::Format {
     }
 }
 
-/// The size and alignment of the device's image of `shape` with `tiling` and `flags`, made and
-/// destroyed through the queue's `VkDevice`, or why it was not made.
+/// The size and alignment of the device's image of `shape` with `tiling`, `flags` and the colour
+/// usage a heap's render target takes (and `extra`), made and destroyed through the queue's
+/// `VkDevice`, or why it was not made: the format's limits for it are asked first, so no image is
+/// made the device refuses.
 fn requirements(
     queue: &CommandQueue,
     (format, _, width, height): (PixelFormat, TextureType, u64, u64),
     tiling: vk::ImageTiling,
     flags: vk::ImageCreateFlags,
+    extra: vk::ImageUsageFlags,
 ) -> String {
     let usage = vk::ImageUsageFlags::SAMPLED
         | vk::ImageUsageFlags::COLOR_ATTACHMENT
         | vk::ImageUsageFlags::TRANSFER_SRC
-        | vk::ImageUsageFlags::TRANSFER_DST;
+        | vk::ImageUsageFlags::TRANSFER_DST
+        | extra;
+    // SAFETY: an instance-level query of the live device's physical device.
+    let limits = unsafe {
+        let raw = queue.device().raw();
+        (raw.instance).get_physical_device_image_format_properties(
+            raw.physical_device,
+            vk_format(format),
+            vk::ImageType::TYPE_2D,
+            tiling,
+            usage,
+            flags,
+        )
+    };
+    if let Err(e) = limits {
+        return format!("not made ({e:?})");
+    }
     let info = vk::ImageCreateInfo::default()
         .flags(flags)
         .image_type(vk::ImageType::TYPE_2D)
@@ -130,8 +147,8 @@ fn requirements(
         .usage(usage)
         .sharing_mode(vk::SharingMode::EXCLUSIVE)
         .initial_layout(vk::ImageLayout::UNDEFINED);
-    // SAFETY: the image is made, queried and destroyed on the queue's own device, which outlives
-    // the call, and nothing else sees it.
+    // SAFETY: the image, within the format's limits for it, is made, queried and destroyed on the
+    // queue's own device, which outlives the call, and nothing else sees it.
     unsafe {
         queue.with_vk_queue(|device, _, _| match device.create_image(&info, None) {
             Ok(image) => {
@@ -231,28 +248,11 @@ fn heap_texture_shadow_costs() {
             let copy = device.new_texture(&d).unwrap();
             messages.take_notices();
             let (format, texture_type, width, height) = shape;
-            let optimal = requirements(
-                &queue,
-                shape,
-                vk::ImageTiling::OPTIMAL,
-                vk::ImageCreateFlags::empty(),
-            );
-            let mutable = requirements(
-                &queue,
-                shape,
-                vk::ImageTiling::OPTIMAL,
-                vk::ImageCreateFlags::MUTABLE_FORMAT,
-            );
-            let linear = requirements(
-                &queue,
-                shape,
-                vk::ImageTiling::LINEAR,
-                vk::ImageCreateFlags::empty(),
-            );
+            let [optimal, mutable, transfer, linear] = images(&queue, shape);
             eprintln!(
                 "HEAP-SHADOW on {} ({policy:?}) {format:?} {texture_type:?} {width}x{height}: \
                  answer {} at {}; made: {made}; notices {notices:?}; images: optimal {optimal}, \
-                 mutable {mutable}, linear {linear}",
+                 mutable {mutable}, host-transfer {transfer}, linear {linear}",
                 device.name(),
                 answer.size,
                 answer.align,
@@ -269,199 +269,55 @@ fn heap_texture_shadow_costs() {
     }
 }
 
-/// A `VkDevice` of the test's own on the physical device the cfg selects, with host image copy
-/// where the device has it, which records and submits nothing.
-struct QueryDevice {
-    instance: ash::Instance,
-    device: ash::Device,
-    physical: vk::PhysicalDevice,
-    name: String,
-    host_transfer: bool,
-    _entry: ash::Entry,
-}
-
-impl QueryDevice {
-    fn new() -> QueryDevice {
-        // SAFETY: the loader is loaded once here and outlives the instance, which `Drop`
-        // destroys before it.
-        let entry = unsafe { ash::Entry::load() }.expect("a Vulkan loader");
-        let app = vk::ApplicationInfo::default().api_version(vk::API_VERSION_1_3);
-        let info = vk::InstanceCreateInfo::default().application_info(&app);
-        // SAFETY: a valid create info with no layers or extensions.
-        let instance = unsafe { entry.create_instance(&info, None) }.expect("an instance");
-        let wanted = match TEST_DEVICE {
-            DeviceType::Cpu => [vk::PhysicalDeviceType::CPU; 2],
-            DeviceType::Gpu => [
-                vk::PhysicalDeviceType::INTEGRATED_GPU,
-                vk::PhysicalDeviceType::DISCRETE_GPU,
-            ],
-        };
-        // SAFETY: queries of the live instance.
-        let (physical, properties) = unsafe {
-            let all = instance.enumerate_physical_devices().unwrap();
-            (all.into_iter())
-                .map(|p| (p, instance.get_physical_device_properties(p)))
-                .find(|(_, properties)| wanted.contains(&properties.device_type))
-                .expect("a physical device of the cfg's type")
-        };
-        let name = properties
-            .device_name_as_c_str()
-            .map_or_else(|_| "?".to_owned(), |n| n.to_string_lossy().into_owned());
-        // SAFETY: queries of the live physical device.
-        let extensions = unsafe { instance.enumerate_device_extension_properties(physical) };
-        let named = |name: &std::ffi::CStr| {
-            (extensions.iter().flatten()).any(|e| e.extension_name_as_c_str() == Ok(name))
-        };
-        let mut copy = vk::PhysicalDeviceHostImageCopyFeaturesEXT::default();
-        if named(ash::ext::host_image_copy::NAME) {
-            let mut features = vk::PhysicalDeviceFeatures2::default().push_next(&mut copy);
-            // SAFETY: a query of the live physical device; the chain lives for the call.
-            unsafe { instance.get_physical_device_features2(physical, &mut features) };
+/// The device's optimal, mutable-format, host-transfer (where the device enabled host image copy)
+/// and linear images of `shape` ([`requirements`]).
+fn images(queue: &CommandQueue, shape: (PixelFormat, TextureType, u64, u64)) -> [String; 4] {
+    let optimal = vk::ImageTiling::OPTIMAL;
+    let none = vk::ImageUsageFlags::empty();
+    let plain = vk::ImageCreateFlags::empty();
+    let mutable = vk::ImageCreateFlags::MUTABLE_FORMAT;
+    let transfer = match queue
+        .device()
+        .enables_extension(ash::ext::host_image_copy::NAME)
+    {
+        true => {
+            let usage = vk::ImageUsageFlags::HOST_TRANSFER_EXT;
+            requirements(queue, shape, optimal, plain, usage)
         }
-        let host_transfer = copy.host_image_copy == vk::TRUE;
-        let priorities = [1.0];
-        let queues = [vk::DeviceQueueCreateInfo::default()
-            .queue_family_index(0)
-            .queue_priorities(&priorities)];
-        let names = [ash::ext::host_image_copy::NAME.as_ptr()];
-        let mut enable =
-            vk::PhysicalDeviceHostImageCopyFeaturesEXT::default().host_image_copy(true);
-        let mut info = vk::DeviceCreateInfo::default().queue_create_infos(&queues);
-        if host_transfer {
-            info = info.enabled_extension_names(&names).push_next(&mut enable);
-        }
-        // SAFETY: a valid create info for the live physical device: its first queue family, and
-        // the host image copy extension and feature only where it has them.
-        let device = unsafe { instance.create_device(physical, &info, None) }.expect("a device");
-        QueryDevice {
-            instance,
-            device,
-            physical,
-            name,
-            host_transfer,
-            _entry: entry,
-        }
-    }
-
-    /// The size and alignment of the device's image of `shape` with `tiling`, `flags` and the
-    /// colour usage a heap's render target takes (and `extra`), or why none is made: the format's
-    /// limits for it are asked first, so no image is made the device refuses.
-    fn requirements(
-        &self,
-        (format, _, width, height): (PixelFormat, TextureType, u64, u64),
-        tiling: vk::ImageTiling,
-        flags: vk::ImageCreateFlags,
-        extra: vk::ImageUsageFlags,
-    ) -> String {
-        let usage = vk::ImageUsageFlags::SAMPLED
-            | vk::ImageUsageFlags::COLOR_ATTACHMENT
-            | vk::ImageUsageFlags::TRANSFER_SRC
-            | vk::ImageUsageFlags::TRANSFER_DST
-            | extra;
-        let format = vk_format(format);
-        // SAFETY: a query of the live physical device.
-        let limits = unsafe {
-            self.instance.get_physical_device_image_format_properties(
-                self.physical,
-                format,
-                vk::ImageType::TYPE_2D,
-                tiling,
-                usage,
-                flags,
-            )
-        };
-        if let Err(e) = limits {
-            return format!("not made ({e:?})");
-        }
-        let info = vk::ImageCreateInfo::default()
-            .flags(flags)
-            .image_type(vk::ImageType::TYPE_2D)
-            .format(format)
-            .extent(vk::Extent3D {
-                width: width as u32,
-                height: height as u32,
-                depth: 1,
-            })
-            .mip_levels(1)
-            .array_layers(1)
-            .samples(vk::SampleCountFlags::TYPE_1)
-            .tiling(tiling)
-            .usage(usage)
-            .sharing_mode(vk::SharingMode::EXCLUSIVE)
-            .initial_layout(vk::ImageLayout::UNDEFINED);
-        // SAFETY: an image within the format's limits for it, made, queried and destroyed on the
-        // live device, which nothing else uses.
-        unsafe {
-            match self.device.create_image(&info, None) {
-                Ok(image) => {
-                    let r = self.device.get_image_memory_requirements(image);
-                    self.device.destroy_image(image, None);
-                    format!("{} at {}", r.size, r.alignment)
-                }
-                Err(e) => format!("not made ({e:?})"),
-            }
-        }
-    }
-}
-
-impl Drop for QueryDevice {
-    fn drop(&mut self) {
-        // SAFETY: the device made no object that outlives it, and the instance outlives it.
-        unsafe {
-            self.device.destroy_device(None);
-            self.instance.destroy_instance(None);
-        }
-    }
+        false => "not made (no host image copy)".to_owned(),
+    };
+    [
+        requirements(queue, shape, optimal, plain, none),
+        requirements(queue, shape, optimal, mutable, none),
+        transfer,
+        requirements(queue, shape, vk::ImageTiling::LINEAR, plain, none),
+    ]
 }
 
 #[test]
 #[ignore = "a measurement, not a check: run by name with --run-ignored all"]
-fn heap_texture_image_requirements() {
-    let query = QueryDevice::new();
-    for shape in COUNTED {
-        let (format, texture_type, width, height) = shape;
-        let optimal = vk::ImageTiling::OPTIMAL;
-        let none = vk::ImageUsageFlags::empty();
-        let plain = vk::ImageCreateFlags::empty();
-        let image = query.requirements(shape, optimal, plain, none);
-        let mutable =
-            query.requirements(shape, optimal, vk::ImageCreateFlags::MUTABLE_FORMAT, none);
-        let transfer = match query.host_transfer {
-            true => {
-                let usage = vk::ImageUsageFlags::HOST_TRANSFER_EXT;
-                query.requirements(shape, optimal, plain, usage)
-            }
-            false => "not made (no hostImageCopy)".to_owned(),
-        };
-        let linear = query.requirements(shape, vk::ImageTiling::LINEAR, plain, none);
-        eprintln!(
-            "HEAP-IMAGES on {} {format:?} {texture_type:?} {width}x{height}: optimal {image}, \
-             mutable {mutable}, host-transfer {transfer}, linear {linear}",
-            query.name
-        );
-    }
-}
-
-#[test]
-#[ignore = "a measurement, not a check: run by name with --run-ignored all"]
-fn heap_texture_answers() {
+fn heap_texture_images() {
     let messages = Messages::default();
     let cache = ScratchCache::new().unwrap();
     let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), |options| {
         options.layers.clear();
     })
     .unwrap();
+    let queue = device.new_command_queue().unwrap();
     for shape in COUNTED {
         let d = descriptor(shape);
         let (format, texture_type, width, height) = shape;
         let metal = device.metal_heap_texture_size_and_align(&d).unwrap();
-        let answer = device.heap_texture_size_and_align(&d).unwrap();
         let metal = metal.map_or_else(
             || "none".to_owned(),
             |m| format!("{} at {}", m.size, m.align),
         );
+        let answer = device.heap_texture_size_and_align(&d).unwrap();
+        let [optimal, mutable, transfer, linear] = images(&queue, shape);
         eprintln!(
-            "HEAP-ANSWERS {format:?} {texture_type:?} {width}x{height}: Metal {metal}; {} {} at {}",
+            "HEAP-IMAGES on {} {format:?} {texture_type:?} {width}x{height}: Metal answers {metal}, \
+             the device {} at {}; images: optimal {optimal}, mutable {mutable}, host-transfer \
+             {transfer}, linear {linear}",
             device.name(),
             answer.size,
             answer.align
