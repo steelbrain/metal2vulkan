@@ -44,6 +44,41 @@ fn sections_start_until_the_guard_closes_and_never_after() {
         .unwrap());
 }
 
+/// Each thread's outermost section in progress keeps its caller's place, which the hook names
+/// once its wait passed half its bound: a nested section keeps none, another thread's keeps its
+/// own, and a section that ended leaves none.
+#[test]
+fn the_sections_in_progress_name_where_they_began() {
+    let guard = guard();
+    assert_eq!(exit_guard::own(), 0);
+    assert!(guard.places_in_progress().is_empty());
+    let (outer, line) = (guard.enter().expect("open"), line!());
+    let nested = guard.enter().expect("open");
+    let here = format!("{}:{line}", file!());
+    assert_eq!(guard.places_in_progress(), [here.clone()]);
+    let (entered, done) = (Arc::new(Barrier::new(2)), Arc::new(Barrier::new(2)));
+    let worker = {
+        let (entered, done) = (Arc::clone(&entered), Arc::clone(&done));
+        std::thread::spawn(move || {
+            let (busy, line) = (guard.enter().expect("open"), line!());
+            entered.wait();
+            done.wait();
+            drop(busy);
+            line
+        })
+    };
+    entered.wait();
+    let mut places = guard.places_in_progress();
+    done.wait();
+    let there = format!("{}:{}", file!(), worker.join().unwrap());
+    places.sort();
+    let mut expected = vec![here, there];
+    expected.sort();
+    assert_eq!(places, expected);
+    drop((nested, outer));
+    assert!(guard.places_in_progress().is_empty());
+}
+
 /// The hook waits for a section in progress on another thread (a submission, a poll, a device's
 /// teardown) and returns once it ended. That section runs to its end, the sections inside it
 /// included (a drop's releases), while no section starts afresh after the close.
@@ -1066,7 +1101,8 @@ fn an_exit_runs_the_handlers_before_the_hook_once_the_work_ended() {
 /// submission, as the GPU-assisted validation layer 1.4.357 was; a CPU device's work that never
 /// completes) ends the process at once with that status, says so on standard error in one line,
 /// and runs no handler registered before the hook, so that no destructor runs beside the driver's
-/// work: after [`BOUND`](exit_guard::BOUND), not later.
+/// work: after [`BOUND`](exit_guard::BOUND), not later. A section in progress is named on the line
+/// before, where it began, once the wait passed half the bound.
 #[cfg(all(target_os = "linux", target_env = "gnu"))]
 #[test]
 fn a_busy_exit_past_the_bound_ends_at_once_with_its_status() {
@@ -1113,11 +1149,22 @@ fn a_busy_exit_past_the_bound_ends_at_once_with_its_status() {
                 exit.took,
                 exit_guard::BOUND
             );
-            assert_eq!(
-                exit.stderr,
-                exit_guard::AT_ONCE_NOTICE,
-                "{busy} in progress"
-            );
+            // Past half the bound, a section in progress is named where it began, once.
+            let named = exit.stderr.strip_suffix(exit_guard::AT_ONCE_NOTICE);
+            let named = named.unwrap_or_else(|| panic!("{busy} in progress: {}", exit.stderr));
+            match busy {
+                "a section" => {
+                    let place = format!("begun at: {}:", file!());
+                    assert!(
+                        named.starts_with("metal2vulkan: the exit has waited ")
+                            && named.contains(&place)
+                            && named.ends_with('\n')
+                            && named.lines().count() == 1,
+                        "{busy} in progress: {named}"
+                    );
+                }
+                _ => assert_eq!(named, "", "{busy} in progress"),
+            }
         }
     }
 }

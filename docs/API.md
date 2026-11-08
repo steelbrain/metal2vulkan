@@ -4718,7 +4718,9 @@ each item named states the rule in full.
   waits for that work (the runtime's calls in the driver, a CPU device's commands) for at most
   2 s, and at most 60 s while a pipeline's making is in progress in the driver; once it ended the
   exit handlers registered before the runtime's run, as Metal's exit runs them. Past those bounds
-  they do not run (a terminal's restore, say), where Metal's exit runs them.
+  they do not run (a terminal's restore, say), where Metal's exit runs them. Once the wait passed
+  half its bound, one line on standard error names where the runtime's work still in progress
+  began.
 
 **Two-plane YCbCr textures**
 

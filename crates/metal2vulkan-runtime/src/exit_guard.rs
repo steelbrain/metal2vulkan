@@ -59,7 +59,11 @@
 //!   buffer whose making it is before it exits. Seen: with two seconds, two lane processes on ANV
 //!   ended with `SIGSEGV` and `SIGABRT` inside the validation layer 3 and 20 s after their test
 //!   passed, where a bicubic kernel's making took 6.6 s under the lane's load; a making in
-//!   progress then is inferred from the timing. Then, within what is left of the bound, it waits
+//!   progress then is inferred from the timing. Once that wait passed half its bound, it says on
+//!   standard error, once, where the sections still in progress began: each thread's outermost
+//!   section keeps its caller's place while it lasts (`Location::caller`, through the
+//!   `#[track_caller]` doors, so a release names its caller), and an exit that waits that long
+//!   names the calls it waits for. Then, within what is left of the bound, it waits
 //!   for a CPU device's work (below). Once they ended it returns, and the exit handlers registered
 //!   before it (the program's: a VMM's re-attach of host USB devices to their drivers, a
 //!   terminal's restore) run, as Metal's exit runs them. Past the bound, what the hook does depends
@@ -181,7 +185,8 @@
 use super::loaded;
 use std::cell::Cell;
 use std::marker::PhantomData;
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
+use std::panic::Location;
+use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, PoisonError, Weak};
 use std::time::{Duration, Instant};
 
@@ -204,12 +209,20 @@ pub(crate) const WAKE: Duration = Duration::from_millis(50);
 /// How often the hook looks at the sections in progress.
 const POLL: Duration = Duration::from_millis(1);
 
+/// The outermost sections in progress whose places a guard keeps at once ([`Guard::places`]): one
+/// that begins while every slot is taken goes unnamed.
+const PLACES: usize = 64;
+
 /// The sections in progress, and whether the guard closed. The process has one ([`GUARD`]).
 pub(crate) struct Guard {
     active: AtomicUsize,
     closed: AtomicBool,
     /// The sections in progress that make a `VkPipeline` ([`Guard::enter_making`]).
     making: AtomicUsize,
+    /// Where each outermost section in progress began (the caller of [`enter`] or
+    /// [`Guard::enter`], through every `#[track_caller]` function between), a slot each while it
+    /// lasts, null where free: what [`Guard::close`] names once its wait passed half its bound.
+    places: [AtomicPtr<Location<'static>>; PLACES],
 }
 
 /// The process's guard.
@@ -719,6 +732,9 @@ pub(crate) struct Busy<'a> {
     counted: bool,
     /// It makes a `VkPipeline`, counted in its guard's makings ([`Guard::enter_making`]).
     making: bool,
+    /// Its slot among its guard's places ([`Guard::places`]), where it is this thread's outermost
+    /// section and a slot was free.
+    place: Option<usize>,
     /// Counted on this thread ([`OWN`]), so neither `Send` nor `Sync`.
     _thread: PhantomData<*const ()>,
 }
@@ -730,6 +746,7 @@ impl Guard {
             active: AtomicUsize::new(0),
             closed: AtomicBool::new(false),
             making: AtomicUsize::new(0),
+            places: [const { AtomicPtr::new(std::ptr::null_mut()) }; PLACES],
         }
     }
 
@@ -739,24 +756,59 @@ impl Guard {
     /// The count rises before the guard is read and [`Guard::close`] closes it before it reads
     /// the count, both sequentially consistent: a section either sees the guard closed and
     /// starts not, or is counted by the time the closing thread reads the count. A section
-    /// inside another is counted while the closing thread waits for the outer one.
+    /// inside another is counted while the closing thread waits for the outer one. The
+    /// thread's outermost section keeps its caller's place ([`Guard::places`]).
+    #[track_caller]
     pub(crate) fn enter(&self) -> Option<Busy<'_>> {
         self.active.fetch_add(1, Ordering::SeqCst);
-        if self.closed.load(Ordering::SeqCst) && OWN.with(Cell::get) == 0 {
+        let own = OWN.with(Cell::get);
+        if self.closed.load(Ordering::SeqCst) && own == 0 {
             self.active.fetch_sub(1, Ordering::SeqCst);
             return None;
         }
-        OWN.with(|own| own.set(own.get() + 1));
+        OWN.with(|count| count.set(own + 1));
+        let place = match own {
+            0 => self.take_place(Location::caller()),
+            _ => None,
+        };
         Some(Busy {
             guard: self,
             counted: false,
             making: false,
+            place,
             _thread: PhantomData,
         })
     }
 
+    /// Keep `place` in a free slot of [`places`](Self::places): the slot, `None` where every one
+    /// is taken.
+    fn take_place(&self, place: &'static Location<'static>) -> Option<usize> {
+        let place = std::ptr::from_ref(place).cast_mut();
+        let free = std::ptr::null_mut();
+        (self.places.iter()).position(|slot| {
+            slot.load(Ordering::Relaxed).is_null()
+                && (slot.compare_exchange(free, place, Ordering::Relaxed, Ordering::Relaxed))
+                    .is_ok()
+        })
+    }
+
+    /// Where the outermost sections in progress began, as `file:line` each, in no order; those
+    /// begun while every slot was taken are not among them ([`PLACES`]).
+    pub(crate) fn places_in_progress(&self) -> Vec<String> {
+        (self.places.iter())
+            .map(|slot| slot.load(Ordering::Relaxed))
+            .filter(|place| !place.is_null())
+            .map(|place| {
+                // SAFETY: a slot holds null or a `&'static Location` (`take_place`).
+                let place = unsafe { &*place };
+                format!("{}:{}", place.file(), place.line())
+            })
+            .collect()
+    }
+
     /// [`enter`](Self::enter) a section around a driver's making of a `VkPipeline`: while one is
     /// in progress, [`close`](Self::close) waits up to its making's bound.
+    #[track_caller]
     pub(crate) fn enter_making(&self) -> Option<Busy<'_>> {
         let mut busy = self.enter()?;
         busy.making = true;
@@ -779,16 +831,31 @@ impl Guard {
     /// The wait gives up only on a count read after the makings', which a section's end lowers
     /// before its making's ([`Busy`]'s drop): a making that ended is never taken for a section
     /// still in progress.
+    ///
+    /// Once its wait passed half `bound`, it says on standard error, once, where the sections
+    /// still in progress began ([`places_in_progress`](Self::places_in_progress)): an exit that
+    /// waits that long waits for a driver's call or a message sink, which the place names.
     pub(crate) fn close(&self, own: usize, bound: Duration, making: Duration) -> bool {
         self.closed.store(true, Ordering::SeqCst);
         let start = Instant::now();
-        let mut said = false;
+        let (mut said, mut named) = (false, false);
         loop {
-            if self.active.load(Ordering::SeqCst) <= own {
+            let active = self.active.load(Ordering::SeqCst);
+            if active <= own {
                 return true;
             }
             between_counts();
             let waited = start.elapsed();
+            if waited >= bound / 2 && !named {
+                named = true;
+                eprintln!(
+                    "metal2vulkan: the exit has waited {} ms for {} section(s) of the runtime's \
+                     Vulkan work, begun at: {}",
+                    waited.as_millis(),
+                    active - own,
+                    self.places_in_progress().join(", ")
+                );
+            }
             let makings = self.making.load(Ordering::SeqCst);
             if waited >= bound && (makings == 0 || waited >= making) {
                 return self.active.load(Ordering::SeqCst) <= own;
@@ -816,6 +883,9 @@ impl Drop for Busy<'_> {
         if self.making {
             self.guard.making.fetch_sub(1, Ordering::SeqCst);
         }
+        if let Some(slot) = self.place {
+            self.guard.places[slot].store(std::ptr::null_mut(), Ordering::Relaxed);
+        }
         if self.counted {
             // After the section's Vulkan calls, which may have registered a destructor.
             let calls = PENDING.with(|pending| {
@@ -833,6 +903,7 @@ impl Drop for Busy<'_> {
 }
 
 /// Start a section of the process's guard; `None` once the process is exiting.
+#[track_caller]
 pub(crate) fn enter() -> Option<Busy<'static>> {
     let mut busy = GUARD.enter()?;
     busy.counted = true;
@@ -843,6 +914,7 @@ pub(crate) fn enter() -> Option<Busy<'static>> {
 /// is in a section (a pool's piece), which the hook waits for up to its making's bound
 /// ([`Guard::enter_making`], the module docs); on the program's own thread, as it is. A section
 /// inside one runs even once the guard closed, so the making is always counted.
+#[track_caller]
 pub(crate) fn driver_making<T>(make: impl FnOnce() -> T) -> T {
     let _making = match in_section() {
         true => GUARD.enter_making(),
