@@ -65,21 +65,24 @@
 //!   `host_ram_staged_fill_nanos`.
 //! - **Lists of runs.** Where each listed import costs every submission and the RAM's chunks are
 //!   the device's dma-bufs of the RAM's source (RADV's: `host_ram.rs`'s `Plan::listed`), and the
-//!   RAM came with a source of run lists (`HostRam::with_dma_buf_of_runs`), a copy neither
-//!   imports a chunk not imported yet nor asks for it (`RamOnDevice::copy_imports`): its ranges of
-//!   every such chunk, widened to whole host pages, those that then share or touch a page one
+//!   RAM came with a source of run lists (`HostRam::with_dma_buf_of_runs`), a copy neither imports
+//!   a chunk not imported yet nor asks for it (`RamOnDevice::copy_imports`): its ranges of every
+//!   such chunk, widened to whole host pages, those that then share or touch a page one
 //!   ([`page_runs`]), are taken by address across the chunks and imported as one dma-buf of that
 //!   source for each list of at most the source's count of runs and one chunk's bytes
-//!   ([`run_lists`]), made on the encoding thread, each run's bytes in the list's `VkBuffer`
-//!   from where the runs before it end (`RamChunk::offset_of`), held by the command buffer until
-//!   it completed, then freed (`WorkCounts::host_ram_run_list_imports`, `run_imports_live`): a
-//!   tile of 1,800 pages anywhere in the RAM is one list or two. So a copy pins its own pages
-//!   while it runs, and none of the chunks' others, where a chunk's import pins every page of it
-//!   and the source's dma-buf allocates the pages of the guest's file the guest never touched,
-//!   for good. The chunks already imported take their own imports. Where that cannot be (the
-//!   allocation limit's margin, `RuntimeDriverDefect::AliasedImportBlitsUnordered`, a run that
-//!   is the whole chunk or passes a list's bytes, a list's import that fails) the copy takes the
-//!   chunks as above.
+//!   ([`run_lists`]), made on the encoding thread, each run's bytes in the list's `VkBuffer` from
+//!   where the runs before it end (`RamChunk::offset_of`), held by the command buffer until it
+//!   completed (`WorkCounts::host_ram_run_list_imports`, `run_imports_live`): a tile of 1,800 pages
+//!   anywhere in the RAM is one list or two. Each list is kept past the copy for the copies after
+//!   it, which take it for every run of theirs one of its runs holds whole and import nothing for
+//!   those (`host_ram/kept.rs`: at most 64 MiB and 16 lists, each released once no copy took it for
+//!   2 s and no command buffer holds it). So copies pin their own pages while they run or their
+//!   lists are kept, and none of the chunks' others, where a chunk's import pins every page of it
+//!   and the source's dma-buf allocates the pages of the guest's file the guest never touched, for
+//!   good. The chunks already imported take their own imports. Where that cannot be (the allocation
+//!   limit's margin, `RuntimeDriverDefect::AliasedImportBlitsUnordered`, a run that is the whole
+//!   chunk or passes a list's bytes, a list's import that fails) the copy takes the chunks as
+//!   above.
 //! - **Runs of words: one dispatch per chunk.** Where every run also ends on a word, and lies at a
 //!   word of the buffer's memory ([`in_words`]: a surface's whole pages, or the rows of one of
 //!   4-byte texels), the pieces become a table of runs of at most a 4 KiB page each, each its first

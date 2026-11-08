@@ -6157,7 +6157,9 @@ pub struct WorkCounts {
     /// as one dma-buf of its source of run lists (`HostRam::with_dma_buf_of_runs`): a copy by
     /// runs over a chunk not imported, on a device whose held imports add to every submission's
     /// cost and whose chunks of the RAM are its dma-bufs (RADV's). Each is live in
-    /// `run_imports_live` until the copy's command buffer completed.
+    /// `run_imports_live` while a copy's command buffer holds it or the RAM keeps it for the
+    /// copies after it (at most 16 such, released once no copy took one for 2 s): a copy whose
+    /// runs a kept list holds imports none for them.
     pub host_ram_run_list_imports: u64,
     /// The nanoseconds those imports took on the copies' encoding threads, failed ones included:
     /// the source's dma-buf of the list's pages (`UDMABUF_CREATE_LIST`, which pins them) and the
@@ -6211,7 +6213,8 @@ pub struct WorkCounts {
     /// `host_ram_run_list_imports`), that are not yet let go of (a gauge): each goes with its last
     /// holder, the buffer or a command buffer that used it, whatever became of the chunk, or, a
     /// buffer's (not a heap's) whose address was never handed out, once released while idle, the
-    /// buffer bound in the chunk's import at its next use where that is made by then.
+    /// buffer bound in the chunk's import at its next use where that is made by then; a list, once
+    /// the RAM let it go of too (released while idle, or past the lists it keeps).
     pub run_imports_live: u64,
     /// The live host imports the device never releases while idle as a heap's own import (a
     /// no-copy heap's). With the next three and `host_imports_kept_for_fds`, they are every live
