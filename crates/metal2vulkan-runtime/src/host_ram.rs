@@ -1010,12 +1010,23 @@ impl RamOnDevice {
     }
 
     /// How a gather of chunk `slot`'s bytes `ranges` (offsets in the chunk, by start, apart) takes
-    /// the chunk, as [`RamOnDevice::for_copy`] would: at once ([`CopyTake::Now`]: its import made,
-    /// or the ranges imported alone); else by waiting for the chunk's import, which the device's
-    /// thread makes ([`CopyTake::ThroughCpu`]: a copy that may be staged through the CPU meanwhile,
-    /// `host_ram/copy.rs`) or no one else does ([`CopyTake::Waits`]: the thread stopped, failed
-    /// it or holds back for the allocation limit's margin, or the plan is [`Plan::listed`]). The
-    /// device's thread's window is not moved: [`RamOnDevice::take_for_copy`] moves it.
+    /// the chunk: at once where its import is made ([`CopyTake::Now`]); else, where the device's
+    /// thread imports it (its plan not [`Plan::listed`]), through the CPU meanwhile
+    /// ([`CopyTake::ThroughCpu`]: a copy that may be staged, `host_ram/copy.rs`), never by an
+    /// import of its ranges alone on the calling thread, which [`RamOnDevice::for_copy`] would
+    /// make; else at once by such an import where the ranges take one ([`CopyTake::Now`]), or by
+    /// waiting for the chunk's import, which no one else makes ([`CopyTake::Waits`]: the thread
+    /// stopped, failed it or holds back for the allocation limit's margin, or the plan is
+    /// listed). The device's thread's window is not moved: [`RamOnDevice::take_for_copy`] moves
+    /// it.
+    ///
+    /// Why not alone. An import of a gather's ranges pins every page between them that lies
+    /// less than 2 MiB from the next ([`copy::alone_ranges`]), on the encoding thread: a cache of
+    /// 2,477 runs scattered over five 64 MiB chunks of a fresh RAM, its runs joined where less
+    /// than 1 MiB apart, pinned 317 MiB in 61 ms on an RTX 5080 Laptop GPU, where the CPU copied
+    /// the same runs in 2.8 ms (`tests/host_ram_first_fill_bench.rs`); a consumer's fills of new
+    /// surfaces there with three video clips at once took 1.4 to 2.1 s while chunks were being
+    /// imported.
     pub(crate) fn copy_take(
         &self,
         device: &Device,
@@ -1044,9 +1055,9 @@ impl RamOnDevice {
             && !runs.any(|run| run == span.span);
         // The thread that imports ahead imports the chunk next: the window moves to it.
         let thread = running && !self.plan.listed;
-        match (alone, thread) {
-            (true, _) => CopyTake::Now,
-            (false, true) => CopyTake::ThroughCpu,
+        match (thread, alone) {
+            (true, _) => CopyTake::ThroughCpu,
+            (false, true) => CopyTake::Now,
             (false, false) => CopyTake::Waits,
         }
     }

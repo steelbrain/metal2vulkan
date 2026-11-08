@@ -51,9 +51,10 @@
 //!   pages scattered over two chunks not imported yet, more ranges in each than are imported
 //!   alone, is staged: no wait for an import, the CPU's writes after its encoding and before the
 //!   commit gathered (its pages read at its batch's submission), and its chunks imported by the
-//!   thread next, and nothing else, so the gather after it reads their imports. One encoded
-//!   before a buffer over one of its pages was made and written by the GPU in a command buffer
-//!   committed before it waits for that write (its fill gated), and reads it; one behind a
+//!   thread next, and nothing else, so the gather after it reads their imports. So is one of few
+//!   ranges, which an import of its ranges alone could take: its encoding imports nothing. One
+//!   encoded before a buffer over one of its pages was made and written by the GPU in a command
+//!   buffer committed before it waits for that write (its fill gated), and reads it; one behind a
 //!   shared event reads the CPU's writes made before the signal.
 //!
 //! Every other test holds the device's thread back (`Device::hold_host_ram_imports`).
@@ -1507,6 +1508,69 @@ fn a_first_gather_over_chunks_the_thread_imports_reads_its_pages_by_the_cpu_at_i
     assert_eq!(
         last.host_ram_copy_import_waits,
         after.host_ram_copy_import_waits
+    );
+    drop((used, ram));
+}
+
+/// A gather of few ranges over chunks not imported yet, which an import of its ranges alone could
+/// take (fewer than `copy::MOST_ALONE`, none the whole chunk), is staged as one of many is: its
+/// encoding imports nothing (no run import is live once it is encoded), it waits for no import,
+/// and it reads the pages.
+#[test]
+fn a_first_gather_of_few_ranges_imports_nothing_on_the_encoding_thread() {
+    let Some((device, used, ram, start, before)) = ahead_ram() else {
+        return;
+    };
+    // Three pages 1 MiB apart in chunk 2, one range alone, and one page in chunk 3.
+    let runs: Vec<Range<u64>> = [0, MIB, 2 * MIB, 64 * MIB + 5 * MIB]
+        .iter()
+        .map(|&at| {
+            let page = start + 2 * 64 * MIB + at;
+            page..page + PAGE
+        })
+        .collect();
+    for run in &runs {
+        write_pattern(run.clone(), 9);
+    }
+    let total: u64 = runs.iter().map(|run| run.end - run.start).sum();
+    let cache = device
+        .new_buffer(total, ResourceOptions::private())
+        .unwrap();
+    let back = shared(&device, total, |_| 0);
+    let queue = device.new_command_queue().unwrap();
+    let command_buffer = queue.command_buffer().unwrap();
+    let mut encoder = command_buffer.blit_command_encoder().unwrap();
+    encoder.copy_from_host_ram(&ram, &runs, &cache, 0).unwrap();
+    encoder
+        .copy_from_buffer_to_buffer(&cache, 0, &back, 0, total)
+        .unwrap();
+    encoder.end_encoding().unwrap();
+    let encoded = device.work_counts();
+    command_buffer.commit().unwrap();
+    command_buffer.wait_until_completed_for(WAIT).unwrap();
+    assert_eq!(command_buffer.status(), CommandBufferStatus::Completed);
+    assert!(contents(&back) == gathered(&runs), "the gathered pages");
+    let after = device.work_counts();
+    eprintln!(
+        "HOST-RAM-FEW-RANGES {}: staged {}, run imports live once encoded {}, import waits {}",
+        device.name(),
+        after.host_ram_copies_staged - before.host_ram_copies_staged,
+        encoded.run_imports_live - before.run_imports_live,
+        after.host_ram_copy_import_waits - before.host_ram_copy_import_waits,
+    );
+    assert_eq!(
+        encoded.run_imports_live, before.run_imports_live,
+        "the encoding imported the copy's ranges alone"
+    );
+    assert_eq!(
+        after.host_ram_copies_staged - before.host_ram_copies_staged,
+        1,
+        "the gather was not staged"
+    );
+    assert_eq!(
+        after.host_ram_copy_import_waits - before.host_ram_copy_import_waits,
+        0,
+        "no wait for a chunk's import"
     );
     drop((used, ram));
 }

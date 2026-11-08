@@ -29,12 +29,17 @@
 //!   more ranges than [`MOST_ALONE`], a range that is the whole chunk, a range's import that fails)
 //!   the copy imports the chunk, or waits for its import under way, which is the chunk's one import
 //!   (`Device::import_chunk`), made and counted as an object's is
-//!   (`WorkCounts::host_ram_copy_import_waits`, `host_ram_copy_import_wait_nanos`); but a gather
-//!   takes the CPU's path below.
-//! - **First touch through the CPU** ([`StagedFill`]). A gather that would wait for a chunk's
-//!   import the device's thread makes (its ranges too many, a range the whole chunk, or the
-//!   device's defect: `RamOnDevice::copy_take`), on a device whose plan is not `Plan::listed`, and
-//!   none that only the copy would make, is staged instead: a region of the command buffer's
+//!   (`WorkCounts::host_ram_copy_import_waits`, `host_ram_copy_import_wait_nanos`). A gather over
+//!   a chunk the device's thread imports takes neither: it takes the CPU's path below.
+//! - **First touch through the CPU** ([`StagedFill`]). A gather over a chunk not imported yet,
+//!   which the device's thread imports (`RamOnDevice::copy_take`), on a device whose plan is not
+//!   `Plan::listed`, and over none whose import only the copy would make, is staged instead of
+//!   importing its ranges alone or waiting for the chunk's: an import of a gather's ranges pins
+//!   every page less than 2 MiB from the next on the encoding thread (a cache of 2,477 runs over
+//!   five chunks, its runs joined where less than 1 MiB apart, pinned 317 MiB in 61 ms on an RTX
+//!   5080 Laptop GPU, where the CPU copied the runs in 2.8 ms: `tests/host_ram_first_fill_bench.rs`),
+//!   a consumer's fills of new surfaces there with three video clips at once took 1.4 to 2.1 s
+//!   while chunks were being imported. It takes a region of the command buffer's
 //!   arena as long as the copy's bytes, host-visible memory of the runtime's own, which the host
 //!   step of the copy's batch fills by the CPU from the pages, each piece at its byte, before the
 //!   batch is submitted; and one `vkCmdCopyBuffer` of the bytes the runs cover from it into the
@@ -1080,9 +1085,9 @@ impl BlitCommandEncoder {
     }
 
     /// Whether a gather of `pieces` (cut where the chunks of `spans` end) is staged through the
-    /// CPU (the module docs' "First touch"): it would wait for a chunk's import the device's
-    /// thread makes ([`CopyTake::ThroughCpu`]), none that only it would make
-    /// ([`CopyTake::Waits`]), and no use but a copy's read may write its host bytes
+    /// CPU (the module docs' "First touch"): it is over a chunk not imported yet that the
+    /// device's thread imports ([`CopyTake::ThroughCpu`]), over none whose import only it would
+    /// make ([`CopyTake::Waits`]), and no use but a copy's read may write its host bytes
     /// ([`RamOnDevice::written_over`]), none in its own command buffer before it among them. Not
     /// in an encoder encoded again (`replay.rs`, `command_buffer/reencode.rs`), whose recording
     /// takes no host step of its own.

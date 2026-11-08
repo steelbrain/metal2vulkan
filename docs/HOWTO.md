@@ -701,14 +701,18 @@ submission, can give the device the guest's RAM once instead:
   import one command of at most 1024: no other byte of their pages is read or written, and of runs
   that write a byte twice the later's bytes stay (`WorkCounts::host_ram_copy_regions`). A copy
   takes each chunk it touches as an object over it does, and the thread's window moves past it.
-  Over a chunk not imported yet, a copy of at most 16 ranges of it imports those ranges alone, as
-  an object's run is imported (not on MoltenVK or ANV). A gather of more, on a device whose thread
-  imports ahead (every device but one whose listed imports cost each submission: RADV with a
-  dma-buf source), is staged through the CPU instead. The CPU copies its runs from the pages into
-  memory of the command buffer's own once its batch is otherwise ready to submit (its event waits
-  met), and the GPU copies them from there into the buffer. No import is made or waited for, no
-  page is pinned for it, and the thread imports each such chunk next, so the copies after it read
-  the imports (`WorkCounts::host_ram_copies_staged`, `host_ram_staged_fill_nanos`). Where a buffer
+  Over a chunk not imported yet, a gather on a device whose thread imports ahead (every device but
+  one whose listed imports cost each submission: RADV with a dma-buf source) is staged through the
+  CPU, however few its ranges: an import of a gather's ranges alone pins every page between ranges
+  less than 2 MiB apart on the encoding thread (a 24 MiB cache of 2,477 runs over five chunks, its
+  runs joined where less than 1 MiB apart, pinned 317 MiB in 61 ms on an RTX 5080 Laptop GPU, where
+  the CPU copied the runs in 2.8 ms). A
+  scatter, and a gather where the thread does not import, of at most 16 ranges imports those
+  ranges alone, as an object's run is imported (not on MoltenVK or ANV). A staged gather's CPU
+  copies its runs from the pages into memory of the command buffer's own once its batch is
+  otherwise ready to submit (its event waits met), and the GPU copies them from there into the
+  buffer. No import is made or waited for, no page is pinned for it, and the thread imports each
+  such chunk next, so the copies after it read the imports (`WorkCounts::host_ram_copies_staged`, `host_ram_staged_fill_nanos`). Where a buffer
   or heap over host pages lies over the runs' bytes, or a scatter into those chunks was recorded,
   the CPU's copy first waits until every queue completed the work submitted before it
   (`host_ram_staged_fills_gated`), and where that is so at the encoding the copy takes the imports'
