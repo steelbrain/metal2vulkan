@@ -2231,16 +2231,18 @@ fn heap_depth_textures_keep_their_texels_in_metal_s_tiles() {
 /// spin. The texture's image holds the copied texels between, so a keep of the heap's bytes as
 /// it runs would hold the CPU's write, and the merge would undo it with the image's value; the
 /// keep holds the bytes the copy in read. A `HEAPTEX keep after copy in` line prints whether the
-/// write fell between (the ticket seen, and the spin ended by its release rather than its cap: a
-/// device that shows a running kernel no host store, or the host none of its stores, leaves it
-/// unordered, and the writes are kept all the same). Where the device makes the texture a shadow
-/// of Metal's tiles (`WorkCounts::heap_textures_tiled`), the keep is counted
-/// (`WorkCounts::shadow_texels_kept`), and not as one right after its copy in
-/// (`WorkCounts::shadow_keeps_from_staging`): the first encoder's is the only copy in.
+/// write fell between: after the spin began (its ticket seen, where the device shows the host a
+/// running kernel's store, or the command buffer's GPU start time 2 ms before it), and before the
+/// release ended the spin rather than its cap (a device that shows a running kernel no host
+/// store leaves it unordered, and the writes are kept all the same). Where the device makes the
+/// texture a shadow of Metal's tiles (`WorkCounts::heap_textures_tiled`), the merge is counted
+/// (`WorkCounts::shadow_merge_dispatches_planned`), and its keep not as one right after its copy
+/// in (`WorkCounts::shadow_keeps_from_staging`): the first encoder's is the only copy in.
 #[test]
 fn a_heap_depth_texture_keeps_a_cpu_write_made_after_its_copy_in() {
     use super::first_use::{release, Busy};
     use super::heap_layouts::tiled_offset;
+    use metal2vulkan_runtime::host_time;
     use std::sync::atomic::{AtomicU32, Ordering};
     use std::time::{Duration, Instant};
     // The word at `index` of a Shared buffer, read atomically while the GPU may write it.
@@ -2326,9 +2328,9 @@ fn a_heap_depth_texture_keeps_a_cpu_write_made_after_its_copy_in() {
             .unwrap();
         write.end_encoding().unwrap();
         command_buffer.commit().unwrap();
-        // A device that shows the host no store of a running kernel's leaves the ticket unseen,
-        // and the write goes on unordered with the copies.
-        let deadline = Instant::now() + Duration::from_millis(200);
+        // The spin's ticket raised, where the device shows the host a running kernel's store;
+        // else 20 ms on, which the GPU's start of the command buffer is checked against below.
+        let deadline = Instant::now() + Duration::from_millis(20);
         let seen = loop {
             match word(&ticket, 0) == 2 {
                 true => break true,
@@ -2336,6 +2338,7 @@ fn a_heap_depth_texture_keeps_a_cpu_write_made_after_its_copy_in() {
                 false => std::thread::sleep(Duration::from_micros(50)),
             }
         };
+        let written_at = host_time();
         let contents = over.contents().expect("a Shared heap's buffer");
         // SAFETY: the texel's four bytes inside the buffer, which no command of the running
         // command buffer touches.
@@ -2348,18 +2351,25 @@ fn a_heap_depth_texture_keeps_a_cpu_write_made_after_its_copy_in() {
             .wait_until_completed_for(super::WAIT)
             .unwrap();
         assert_eq!(command_buffer.error(), None);
-        // Between the copy in and the keep: after the spin started, before its release ended it.
-        let between = seen && word(&words, 1) == 5;
+        // Between the copy in and the keep: after the spin started (its ticket seen, or the
+        // command buffer begun on the GPU 2 ms before), and before its release ended it.
+        let started = command_buffer.gpu_start_time().unwrap_or(f64::MAX);
+        let begun = seen || started + 0.002 < written_at;
+        let released = word(&words, 1) == 5;
         let after = device.work_counts();
-        let kept = after.shadow_texels_kept - counted.shadow_texels_kept;
+        let merges =
+            after.shadow_merge_dispatches_planned - counted.shadow_merge_dispatches_planned;
         let staged_keeps = after.shadow_keeps_from_staging - counted.shadow_keeps_from_staging;
         eprintln!(
             "HEAPTEX keep after copy in: tiled {tiled}, the CPU's write between the copy in and \
-             the keep {between}, {kept} texels kept, {staged_keeps} keeps from staging right \
-             after a copy in"
+             the keep {} (the ticket seen {seen}, the GPU began {:.1} ms before the write, the \
+             spin released {released}), {merges} merge dispatches, {staged_keeps} keeps from \
+             staging right after a copy in",
+            begun && released,
+            (written_at - started) * 1e3
         );
         if tiled {
-            assert!(kept > 0, "the merge's keep");
+            assert!(merges > 0, "the merge");
             assert_eq!(staged_keeps, 0, "a keep apart from its copy in");
         }
         let bytes = gpu_read(&queue, &over, 0..answer.size);
