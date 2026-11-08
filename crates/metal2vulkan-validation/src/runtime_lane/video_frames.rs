@@ -321,6 +321,9 @@ fn frame_bytes(n: u32, luma_at: u64) -> Vec<u8> {
     bytes
 }
 
+/// A surface's buffer and the textures a form samples over it ([`textures`]).
+type Made = (Buffer, Vec<(Texture, String)>);
+
 /// The textures `form` samples over `buffer`, each with its placement as the runtime answered it
 /// before making it.
 fn textures(buffer: &Buffer, form: Form) -> Vec<(Texture, String)> {
@@ -603,8 +606,7 @@ fn video_frame_costs() {
             ];
             let pipeline = pipeline(&device, fragment(form));
             for making in [Making::Once, Making::EachFrame] {
-                let mut kept: Vec<Option<(Buffer, Vec<(Texture, String)>)>> =
-                    (0..POOL).map(|_| None).collect();
+                let mut kept: Vec<Option<Made>> = (0..POOL).map(|_| None).collect();
                 let mut placements = String::new();
                 let (mut writes, mut makes, mut encodes, mut waits, mut gpus) =
                     (Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new());
@@ -710,8 +712,8 @@ fn video_frame_parts() {
 /// [`video_frame_parts`] on `device`, whose planes read in place follow `reads`, of `forms`.
 fn parts(device: &Device, forms: &[Form], reads: metal2vulkan::device::YCbCrInPlacePolicy) {
     let queue = device.new_command_queue().unwrap();
-    let corners = whole_target(&device);
-    let target = target(&device);
+    let corners = whole_target(device);
+    let target = target(device);
     let surfaces: Vec<Surface> = (0..POOL)
         .map(|_| Surface::Anonymous(Mapping::anonymous(LEN)))
         .collect();
@@ -720,18 +722,18 @@ fn parts(device: &Device, forms: &[Form], reads: metal2vulkan::device::YCbCrInPl
             frame_bytes(0, form.luma_at()),
             frame_bytes(1, form.luma_at()),
         ];
-        let pipeline = pipeline(&device, fragment(form));
-        let made: Vec<(Buffer, Vec<(Texture, String)>)> = surfaces
+        let pipeline = pipeline(device, fragment(form));
+        let made: Vec<Made> = surfaces
             .iter()
             .map(|surface| {
                 surface.write(&frames[0]);
-                let buffer = surface.buffer(&device);
+                let buffer = surface.buffer(device);
                 let textures = textures(&buffer, form);
                 (buffer, textures)
             })
             .collect();
         for filter in [SamplerMinMagFilter::Linear, SamplerMinMagFilter::Nearest] {
-            let sampler = sampler(&device, filter);
+            let sampler = sampler(device, filter);
             for written in [true, false] {
                 let mut gpus = Vec::new();
                 let before = device.work_counts();
@@ -807,7 +809,7 @@ fn video_device_cache_costs() {
     let pipeline = pipeline(&device, fragment(Form::Planes));
     let staging = [0, 1].map(|n| staged(&device, &frame_bytes(n, LUMA_AT)));
     for aligned in [None, Some(LUMA_AT)] {
-        let made: Vec<(Buffer, Vec<(Texture, String)>)> = (0..POOL)
+        let made: Vec<Made> = (0..POOL)
             .map(|_| {
                 let d = BufferDescriptor::new(
                     LEN as u64,
