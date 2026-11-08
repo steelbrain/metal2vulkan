@@ -1368,6 +1368,9 @@ pub(super) struct Memory {
     /// the lock released where the driver's import runs.
     #[cfg(test)]
     pub(crate) import_hold: Option<Arc<dyn Fn() + Send + Sync>>,
+    /// A test's stand-in for every heap's budget of kept empty blocks ([`Memory::kept_budget`]).
+    #[cfg(test)]
+    pub(crate) kept_budget_stand_in: Option<u64>,
     /// Blocks of images are allocated with `VK_MEMORY_ALLOCATE_ZERO_INITIALIZE_BIT_EXT`
     /// ([`Memory::zero_image_blocks`]).
     zero_images: bool,
@@ -1440,6 +1443,8 @@ impl Memory {
             host_copy_blocks: HostCopyBlocks::default(),
             #[cfg(test)]
             import_hold: None,
+            #[cfg(test)]
+            kept_budget_stand_in: None,
         }
     }
 
@@ -1507,6 +1512,10 @@ impl Memory {
     /// of the heap, at most [`KEPT_EMPTY_BYTES`]. Its pools' first [`KEPT_EMPTY_BLOCKS`] empty
     /// pooled blocks are kept whatever it says, and count against it.
     fn kept_budget(&self, heap: usize) -> u64 {
+        #[cfg(test)]
+        if let Some(budget) = self.kept_budget_stand_in {
+            return budget;
+        }
         let size = self.heaps.get(heap).map_or(0, |&(size, _)| size);
         (size / KEPT_EMPTY_SHARE).min(KEPT_EMPTY_BYTES)
     }

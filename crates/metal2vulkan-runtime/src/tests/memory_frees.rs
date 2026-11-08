@@ -3,10 +3,11 @@
 //! object's pages as it frees it charges that page-table update to the free, so what a workload
 //! frees is what sets the cost and the cause says which of those frees a change could remove.
 //!
-//! A buffer with a block of its own is counted as a dedicated block; an import of the caller's
-//! host memory, which is a dedicated block too, is counted apart as the import it is; and the
-//! blocks counted are never more than the process's `vkFreeMemory` calls, so no block is counted
-//! twice or counted that was never freed.
+//! A buffer with a block of its own keeps it for the next buffer of its size where its heap's
+//! budget of empty blocks spares it, and is counted as a dedicated block where it does not; an
+//! import of the caller's host memory, which is a dedicated block too, is counted apart as the
+//! import it is; and the blocks counted are never more than the process's `vkFreeMemory` calls,
+//! so no block is counted twice or counted that was never freed.
 //!
 //! Device tests: compiled only under the validation crate's GPU safety cfgs (`m2v_gpu`,
 //! `m2v_cpu_icd`), on the kind of device the cfg selects.
@@ -45,12 +46,14 @@ fn frees(device: &Device) -> (MemoryFrees, u64) {
     (counts.memory_frees, counts.object_churn.vk_memory_freed)
 }
 
-/// A buffer with a block of its own, released, frees one block, counted as a dedicated block:
-/// one resource going away with memory of its own, which only a shorter lifetime removes.
+/// A buffer with a block of its own, released where its heap keeps no empty block (the budget's
+/// test stand-in at 0), frees one block, counted as a dedicated block: one resource going away
+/// with memory of its own.
 #[test]
 fn a_buffer_with_a_block_of_its_own_frees_a_dedicated_block() {
     let scratch = Scratch::new("dedicated");
     let device = device(&scratch.0);
+    crate::device::lock(&device.shared().memory).kept_budget_stand_in = Some(0);
     let (before, _) = frees(&device);
     let buffer = device
         .new_buffer(OWN_BLOCK, ResourceOptions::private())
@@ -77,6 +80,44 @@ fn a_buffer_with_a_block_of_its_own_frees_a_dedicated_block() {
         "the allocator's blocks ({}) are no more than the process's vkFreeMemory calls ({total})",
         after.blocks,
     );
+}
+
+/// A buffer with a block of its own, released where its heap's budget spares the block, frees
+/// none: the block is kept, and the next buffer of its size takes it with no allocation.
+#[test]
+fn a_buffer_with_a_block_of_its_own_keeps_it_for_the_next_of_its_size() {
+    let scratch = Scratch::new("kept");
+    let device = device(&scratch.0);
+    let buffer = device
+        .new_buffer(OWN_BLOCK, ResourceOptions::private())
+        .unwrap();
+    let (before, _) = frees(&device);
+    let counts = device.work_counts();
+    drop(buffer);
+    let (after, _) = frees(&device);
+    assert_eq!(
+        after.blocks, before.blocks,
+        "the released buffer's block was kept"
+    );
+    let kept = device.work_counts();
+    assert_eq!(
+        kept.empty_memory_blocks_live,
+        counts.empty_memory_blocks_live + 1,
+        "the block is kept empty"
+    );
+    let again = device
+        .new_buffer(OWN_BLOCK, ResourceOptions::private())
+        .unwrap();
+    let taken = device.work_counts();
+    assert_eq!(
+        taken.object_churn.vk_memory_allocations, kept.object_churn.vk_memory_allocations,
+        "the next buffer of its size took the kept block"
+    );
+    assert_eq!(
+        taken.empty_memory_blocks_live,
+        counts.empty_memory_blocks_live
+    );
+    drop(again);
 }
 
 /// An import of the caller's host memory is a dedicated block too, and is counted as the import
