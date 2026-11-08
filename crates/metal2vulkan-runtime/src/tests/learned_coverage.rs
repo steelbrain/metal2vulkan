@@ -230,6 +230,7 @@ fn a_readers_form_follows_what_it_covered_in_the_pass_before() {
     let rects = [SPARSE, SPARSE, WHOLE, WHOLE, WHOLE, SPARSE, SPARSE];
     let mut want_reds = vec![CLEARED; (SIDE * SIDE) as usize];
     let mut learned: Option<[u64; 4]> = None;
+    let pools_before = device.work_counts().coverage_pools_made;
     for (pass, &rect) in rects.iter().enumerate() {
         let before = device.work_counts();
         let reds = pass_over(&queue, &target, (&fill, &read), (pass, rect), None);
@@ -273,6 +274,15 @@ fn a_readers_form_follows_what_it_covered_in_the_pass_before() {
         );
         learned = Some(rect);
     }
+    // Each pass takes the pool an earlier one gave back as its command buffer completed: a pass
+    // makes one only where none has come back yet (the give-back may follow the wait's return).
+    let pools = device.work_counts().coverage_pools_made - pools_before;
+    eprintln!(
+        "LEARNED-COVERAGE {}: pools made over {} passes: {pools}",
+        device.name(),
+        rects.len()
+    );
+    assert!(pools <= 2, "{pools} pools made over {} passes", rects.len());
 }
 
 #[test]

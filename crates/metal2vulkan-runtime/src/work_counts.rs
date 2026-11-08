@@ -476,6 +476,7 @@ pub(crate) struct Counters {
     snapshot_inline_splits: AtomicU64,
     reading_draws_by_coverage: AtomicU64,
     coverage_queries: AtomicU64,
+    coverage_pools_made: AtomicU64,
     reading_draws_pinned: AtomicU64,
     stand_ins_after_pins: AtomicU64,
     feedback_loop_alias_images: AtomicU64,
@@ -3470,6 +3471,12 @@ impl Counters {
     /// that measures what it covers (`render/coverage.rs`).
     pub(crate) fn coverage_query(&self) {
         self.coverage_queries.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A render pass that measures its readers made an occlusion query pool, the device having
+    /// no spare (`render/coverage.rs`).
+    pub(crate) fn coverage_pool_made(&self) {
+        self.coverage_pools_made.fetch_add(1, Ordering::Relaxed);
     }
 
     /// A draw read through a snapshot a color whose image a later fetch would render through a
@@ -6624,6 +6631,9 @@ pub struct WorkCounts {
     /// textures keep as the command buffers complete (`render/coverage.rs`): one a draw, on a
     /// device with `occlusionQueryPrecise` that resets queries on the host.
     pub coverage_queries: u64,
+    /// Occlusion query pools those queries' passes made, where the device had no spare pool
+    /// that an earlier pass gave back as its command buffer completed (`render/coverage.rs`).
+    pub coverage_pools_made: u64,
     /// Of `reading_draws_snapshotted`, the draws that read a color whose image lacks the
     /// `STORAGE` a later framebuffer fetch of it in the interlock would need, so that a fetch would
     /// render it through a stand-in for the whole pass: each pins its instance, and those before
@@ -7547,6 +7557,7 @@ impl Device {
             snapshot_inline_splits: counters.snapshot_inline_splits.load(Ordering::Relaxed),
             reading_draws_by_coverage: counters.reading_draws_by_coverage.load(Ordering::Relaxed),
             coverage_queries: counters.coverage_queries.load(Ordering::Relaxed),
+            coverage_pools_made: counters.coverage_pools_made.load(Ordering::Relaxed),
             reading_draws_pinned: counters.reading_draws_pinned.load(Ordering::Relaxed),
             stand_ins_after_pins: counters.stand_ins_after_pins.load(Ordering::Relaxed),
             feedback_loop_alias_images: counters.feedback_loop_alias_images.load(Ordering::Relaxed),

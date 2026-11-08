@@ -2055,6 +2055,7 @@ impl Gpu for Runtime {
             ("snapshot_inline_splits", c.snapshot_inline_splits),
             ("reading_draws_by_coverage", c.reading_draws_by_coverage),
             ("coverage_queries", c.coverage_queries),
+            ("coverage_pools_made", c.coverage_pools_made),
             ("reading_draws_pinned", c.reading_draws_pinned),
             ("stand_ins_after_pins", c.stand_ins_after_pins),
             ("feedback_loop_alias_images", c.feedback_loop_alias_images),

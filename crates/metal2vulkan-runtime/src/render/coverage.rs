@@ -9,7 +9,8 @@
 //!   snapshot for both, which costs the second about twice the split on the Radeon 780M.
 //! - **Measured.** Each reader the rule weighs (a draw that could read through snapshots, of a
 //!   private color, every check before the rule passed: `RenderLowering::snapshot_wanted`) records
-//!   its drawing commands inside a precise occlusion query of its pass's own pool (Vulkan's
+//!   its drawing commands inside a precise occlusion query of a pool its pass holds, one of the
+//!   device's spares where it has one ([`SparePools`]) (Vulkan's
 //!   `VK_QUERY_CONTROL_PRECISE_BIT`: "the query result will be the number of samples that passed"),
 //!   whichever form it took: its snapshot draws' fragments are its drawing draws' (the snapshot
 //!   module's docs), and the pass has one sample (the rule's checks). As the command buffer
@@ -21,8 +22,8 @@
 //!   `SNAPSHOT_PIXEL_COST` (`render/snapshot.rs`) at each pixel it covered, for each color, costs no
 //!   more than the split's copy ([`snapshot_covers`]), the two forms' fixed costs (about a mebibyte
 //!   of the copy each, measured) left out on both sides; a reader with none is weighed by the
-//!   area rule. Counted: `WorkCounts::reading_draws_by_coverage`, and the queries recorded,
-//!   `WorkCounts::coverage_queries`.
+//!   area rule. Counted: `WorkCounts::reading_draws_by_coverage`, the queries recorded,
+//!   `WorkCounts::coverage_queries`, and the pools made, `WorkCounts::coverage_pools_made`.
 //! - **What a stale count costs.** A reader that covers another share than its count holds takes
 //!   the form the count chose until a pass after the change completes: one pass where each waits
 //!   for the one before, more where passes are committed ahead of the GPU. Both forms are exact:
@@ -49,9 +50,14 @@ use crate::texture::Texture;
 use ash::vk;
 use metal2vulkan::device::VkFeature;
 use std::collections::VecDeque;
+use std::sync::Mutex;
 
 /// The readers one pass measures, at most: its pool's queries.
 const MEASURED: u32 = 64;
+
+/// The spare pools a device keeps, at most ([`SparePools`]): one that comes back past them is
+/// released.
+const SPARE_POOLS: usize = 16;
 
 /// The readers' counts a texture keeps, at most.
 pub(crate) const LEARNED: usize = 32;
@@ -138,8 +144,8 @@ impl Readers {
     }
 
     /// Measure the reader `key` of `texture` where `device` measures readers and the pass has a
-    /// query left: the query its drawing commands record inside, from the pass's pool, made and
-    /// reset on the host at its first. `None` where it is not measured.
+    /// query left: the query its drawing commands record inside, from the pass's pool, taken at
+    /// its first ([`SparePools::take`]). `None` where it is not measured.
     pub(super) fn measure(
         &mut self,
         device: &Device,
@@ -182,30 +188,83 @@ impl Readers {
     }
 }
 
-/// A pass's occlusion query pool, released as it drops.
+/// A device's occlusion query pools of [`MEASURED`] queries that no pass holds, [`SPARE_POOLS`]
+/// at most, which the next pass that measures a reader takes before making one: a pool made
+/// and released for each pass costs the GPU work running as it is released (on the Iris Xe,
+/// about 15% of the passes' GPU time in `runtime_lane::attachment_read_costs::
+/// snapshot_crossover`, whose passes commit four command buffers back to back), and the host its
+/// making. Released as the device ends.
+#[derive(Default)]
+pub(crate) struct SparePools(Mutex<Vec<vk::QueryPool>>);
+
+impl SparePools {
+    /// A pool of [`MEASURED`] occlusion queries, each unavailable (reset on the host, on a device
+    /// that resets queries there: `Readers::measure`): a spare where the device has one, else a
+    /// new one.
+    fn take(&self, device: &Device) -> Result<vk::QueryPool, Error> {
+        let raw = device.shared().vk();
+        let spare = crate::device::lock(&self.0).pop();
+        let pool = match spare {
+            Some(pool) => pool,
+            None => {
+                let info = vk::QueryPoolCreateInfo::default()
+                    .query_type(vk::QueryType::OCCLUSION)
+                    .query_count(MEASURED);
+                // SAFETY: the device is live and `info` valid.
+                let pool = unsafe { raw.create_query_pool(&info, None) }.map_err(vulkan)?;
+                exit_guard::called(Call::CreateQueryPool);
+                device.shared().counts.coverage_pool_made();
+                pool
+            }
+        };
+        // SAFETY: the device enables `hostQueryReset`; no pending command uses the pool: a spare
+        // came back once the command buffer of the pass that held it completed or went
+        // unsubmitted ([`Readback`]), and a new one none used; no other thread holds it.
+        unsafe { raw.reset_query_pool(pool, 0, MEASURED) };
+        exit_guard::called(Call::ResetQueryPool);
+        Ok(pool)
+    }
+
+    /// Take back `pool`, which no pending command uses: a spare, or released past
+    /// [`SPARE_POOLS`].
+    fn give(&self, device: &ash::Device, pool: vk::QueryPool) {
+        let mut spares = crate::device::lock(&self.0);
+        if spares.len() < SPARE_POOLS {
+            spares.push(pool);
+            return;
+        }
+        drop(spares);
+        // SAFETY: the caller's: no pending command uses the pool.
+        unsafe { crate::release::object(device, pool) };
+    }
+
+    /// Release every spare, as the device ends.
+    ///
+    /// # Safety
+    ///
+    /// No pending command uses them: the device's queues are idle.
+    pub(crate) unsafe fn release(&self, device: &ash::Device) {
+        for pool in crate::device::lock(&self.0).drain(..) {
+            // SAFETY: the caller's.
+            unsafe { crate::release::object(device, pool) };
+        }
+    }
+}
+
+/// A pass's occlusion query pool, given back to its device's spares as it drops.
 struct Pool {
     device: Device,
     raw: vk::QueryPool,
 }
 
 impl Pool {
-    /// A pool of [`MEASURED`] occlusion queries, reset on the host, on a device that resets
-    /// queries there (`gpu_time.rs`).
+    /// A pool of [`MEASURED`] occlusion queries, each unavailable, on a device that resets
+    /// queries on the host ([`SparePools::take`]).
     fn new(device: &Device) -> Result<Pool, Error> {
-        let info = vk::QueryPoolCreateInfo::default()
-            .query_type(vk::QueryType::OCCLUSION)
-            .query_count(MEASURED);
-        let raw = device.shared().vk();
-        // SAFETY: the device is live and `info` valid.
-        let pool = unsafe { raw.create_query_pool(&info, None) }.map_err(vulkan)?;
-        exit_guard::called(Call::CreateQueryPool);
-        // SAFETY: the device enables `hostQueryReset` (`Readers::measure`), and no command uses
-        // the new pool.
-        unsafe { raw.reset_query_pool(pool, 0, MEASURED) };
-        exit_guard::called(Call::ResetQueryPool);
+        let raw = device.shared().coverage_pools.take(device)?;
         Ok(Pool {
             device: device.clone(),
-            raw: pool,
+            raw,
         })
     }
 }
@@ -216,9 +275,10 @@ impl Drop for Pool {
         let Some(_busy) = exit_guard::enter() else {
             return;
         };
-        // SAFETY: no pending command uses the pool: its pass's command buffer held it until it
+        // No pending command uses the pool: its pass's command buffer held it until it
         // completed, or never recorded it.
-        unsafe { crate::release::object(self.device.shared().vk(), self.raw) };
+        let shared = self.device.shared();
+        shared.coverage_pools.give(shared.vk(), self.raw);
     }
 }
 

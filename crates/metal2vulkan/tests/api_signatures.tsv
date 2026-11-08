@@ -2618,6 +2618,7 @@ field	metal2vulkan-runtime::WorkCounts.copied_rebind_pages_moved	pub copied_rebi
 field	metal2vulkan-runtime::WorkCounts.copied_unwritable_pages	pub copied_unwritable_pages: u64
 field	metal2vulkan-runtime::WorkCounts.copy_regions_split	pub copy_regions_split: u64
 field	metal2vulkan-runtime::WorkCounts.copy_sites	pub copy_sites: [CopySite; 32]
+field	metal2vulkan-runtime::WorkCounts.coverage_pools_made	pub coverage_pools_made: u64
 field	metal2vulkan-runtime::WorkCounts.coverage_queries	pub coverage_queries: u64
 field	metal2vulkan-runtime::WorkCounts.cpu_block_decodes	pub cpu_block_decodes: u64
 field	metal2vulkan-runtime::WorkCounts.creation_dispatch_pipelines_drawn	pub creation_dispatch_pipelines_drawn: u64

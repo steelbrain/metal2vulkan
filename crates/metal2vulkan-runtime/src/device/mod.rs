@@ -597,6 +597,9 @@ pub(super) struct DeviceShared {
     /// The bind states its ended render encoders left, which the next ones start from
     /// (`live_bind.rs`).
     pub(super) live_binds: crate::live_bind::SpareLiveBinds,
+    /// The occlusion query pools no render pass holds, which a pass that measures what its
+    /// readers cover takes (`render/coverage.rs`).
+    pub(super) coverage_pools: crate::render::coverage::SparePools,
     /// The bind states its ended compute encoders left, which the next ones start from
     /// (`compute/live.rs`).
     pub(super) live_dispatches: crate::compute::SpareLiveDispatches,
@@ -905,6 +908,8 @@ impl Drop for DeviceShared {
             // Nor a timestamp slot: each command buffer gave its slot back as it finished, or
             // with its state.
             self.timing.release(self.vk());
+            // Nor a coverage query pool: each pass's came back as its command buffer finished.
+            self.coverage_pools.release(self.vk());
         }
         // Nor a kept barrier command buffer, nor a submission taking a driver's stall idle: the
         // queues are idle.
@@ -2398,6 +2403,7 @@ impl Device {
             sparse,
             spares: Spares::default(),
             live_binds: Default::default(),
+            coverage_pools: Default::default(),
             live_dispatches: Default::default(),
             usage_shadows_made: Default::default(),
             heap_textures_end: Default::default(),
