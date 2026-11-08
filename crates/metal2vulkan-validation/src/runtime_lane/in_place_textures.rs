@@ -990,13 +990,17 @@ fn a_failed_check_keeps_the_shadow_and_no_record() {
         drop(mapping);
         messages.take_notices();
     }
-    // Nothing kept: the next device on the cache recalls nothing and checks.
+    // Nothing kept: the next device on the cache recalls nothing and checks. Its verdicts, one
+    // per class and access: what the check found changed where one failed follows them in the
+    // checking process's report alone, which no record keeps.
     let verdicts = {
         let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), in_place).unwrap();
         assert_eq!(device.work_counts().in_place_checks_recalled, 0);
         settled(&device);
         assert!(device.in_place_check_took().is_some());
-        device.in_place_check_report()
+        let mut report = device.in_place_check_report();
+        report.truncate(9);
+        report
     };
     // Its record is recalled whole by the device after it, which checks nothing.
     {
