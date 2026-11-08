@@ -105,7 +105,7 @@ fn udmabuf_parameter(name: &str, default: u64) -> u64 {
 /// `memory-backend-memfd` seals it, and as udmabuf requires), its source udmabufs of its pages at
 /// the RAM's addresses, as long as the host's udmabuf limit allows, and its source of run lists
 /// udmabuf's lists, of at most the host's `list_limit` runs; its first byte.
-fn ram(length: u64) -> (Arc<HostRam>, u64) {
+pub(super) fn ram(length: u64) -> (Arc<HostRam>, u64) {
     // SAFETY: a new anonymous file, owned at once, then sized and sealed.
     let fd = unsafe {
         let fd = libc::memfd_create(

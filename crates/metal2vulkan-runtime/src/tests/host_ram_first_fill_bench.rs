@@ -28,11 +28,23 @@ use crate::{
 };
 use std::ops::Range;
 use std::ptr::NonNull;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 const WAIT: Duration = Duration::from_secs(60);
 const PAGE: u64 = 4096;
+
+/// Raises its flag as it goes, on a panic's unwind too: a bench's threads that run until the flag
+/// is raised end once the thread holding this ends, however it ends, so a panic ends the bench
+/// (`std::thread::scope` waits for every thread it started before it returns or unwinds).
+struct Stops<'a>(&'a AtomicBool);
+
+impl Drop for Stops<'_> {
+    fn drop(&mut self) {
+        self.0.store(true, Ordering::Release);
+    }
+}
 const CHUNK: u64 = 64 << 20;
 /// A RAM of 16 chunks.
 const RAM_BYTES: u64 = 16 * CHUNK;
@@ -500,8 +512,9 @@ fn host_ram_contended_fill_bench() {
     // Let the device's thread import the RAM's start, as at a boot's desktop.
     std::thread::sleep(Duration::from_secs(1));
     let before = device.work_counts();
-    let done = std::sync::atomic::AtomicBool::new(false);
+    let done = AtomicBool::new(false);
     let (times, churns) = std::thread::scope(|scope| {
+        let stops = Stops(&done);
         let clips: Vec<_> = (0..CLIPS)
             .map(|clip| {
                 let (device, ram, fresh) = (&device, &ram, &fresh);
@@ -533,7 +546,7 @@ fn host_ram_contended_fill_bench() {
         let churn = scope.spawn(|| {
             const BYTES: usize = 32 << 20;
             let mut churns = 0;
-            while !done.load(std::sync::atomic::Ordering::Acquire) {
+            while !done.load(Ordering::Acquire) {
                 // SAFETY: a fresh private anonymous mapping, unmapped below after its buffer.
                 let pointer = unsafe {
                     libc::mmap(
@@ -571,7 +584,7 @@ fn host_ram_contended_fill_bench() {
             .into_iter()
             .flat_map(|clip| clip.join().unwrap())
             .collect();
-        done.store(true, std::sync::atomic::Ordering::Release);
+        drop(stops);
         (times, churn.join().unwrap())
     });
     let after = device.work_counts();
@@ -639,6 +652,26 @@ fn release_runs(seed: u64, first: u64, bytes: u64, few: bool) -> Vec<Range<u64>>
         .collect()
 }
 
+/// The block-release bench's RAM over a sealed `memfd` with its dma-buf sources
+/// (`host_ram_listed_bench`'s), its first byte; why not, where the host makes no udmabuf.
+#[cfg(target_os = "linux")]
+fn sourced_ram() -> Result<(Arc<HostRam>, u64), String> {
+    let udmabuf = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open("/dev/udmabuf");
+    match udmabuf {
+        Ok(_) => Ok(super::host_ram_listed_bench::ram(RELEASE_BYTES)),
+        Err(error) => Err(format!("/dev/udmabuf cannot be opened ({error})")),
+    }
+}
+
+/// Elsewhere no dma-buf source is made.
+#[cfg(not(target_os = "linux"))]
+fn sourced_ram() -> Result<(Arc<HostRam>, u64), String> {
+    Err("this system makes no dma-buf source".to_owned())
+}
+
 /// Device caches released to fresh guest pages beside a compositor, as a consumer's clip switch
 /// releases its blocks: [`RELEASES`] scatters of each shape (single pages over three chunks no
 /// copy took, or four runs in one) and size (4 and 24 MiB), each by one `copy_to_host_ram` from
@@ -646,7 +679,9 @@ fn release_runs(seed: u64, first: u64, bytes: u64, few: bool) -> Vec<Range<u64>>
 /// another thread commits a frame of [`FRAME_GPU`] of GPU work on a queue of its own every
 /// [`FRAME`] and waits for it. Printed (`BLOCK-RELEASE`): per shape and size, the calls', the
 /// commits' and the completions' spread; the frames' commit to completion meanwhile; and the
-/// copies' counts over the run.
+/// copies' counts over the run. Its RAM is a shared mapping's, with a dma-buf source of its pages
+/// where the device refuses shared host pointers ([`sourced_ram`]); where that source cannot be
+/// made either, it prints one `BLOCK-RELEASE SKIP` line saying why and ends.
 #[test]
 #[ignore = "a release benchmark: run with --ignored --nocapture"]
 fn host_ram_block_release_bench() {
@@ -663,11 +698,31 @@ fn host_ram_block_release_bench() {
         eprintln!("BLOCK-RELEASE: the device imports no host memory here");
         return;
     }
-    let fresh = Fresh::of(RELEASE_BYTES);
-    let at = NonNull::new(fresh.start as *mut u8).unwrap();
-    let keep: KeepAlive = Box::new(());
-    // SAFETY: the mapping is readable and writable until `fresh` goes, after the RAM's use.
-    let ram = Arc::new(unsafe { HostRam::new(&[(at, RELEASE_BYTES)], Some(keep)) }.unwrap());
+    // Fresh pages of a shared mapping, as a guest's RAM is. A device that refuses shared host
+    // pointers (RADV) takes them from a dma-buf source of the RAM's pages, as a consumer's guest
+    // RAM gives it there (`HostRam::with_dma_buf`, udmabufs of the RAM's file); without one it
+    // refuses the copies, so where the host makes no udmabuf the bench says why and ends.
+    let (ram, start, fresh) = match device.imports_shared_host_pointers().unwrap() {
+        true => {
+            let fresh = Fresh::of(RELEASE_BYTES);
+            let at = NonNull::new(fresh.start as *mut u8).unwrap();
+            let keep: KeepAlive = Box::new(());
+            // SAFETY: the mapping is readable and writable until `fresh` goes, after the RAM's
+            // use.
+            let ram = unsafe { HostRam::new(&[(at, RELEASE_BYTES)], Some(keep)) }.unwrap();
+            (Arc::new(ram), fresh.start, Some(fresh))
+        }
+        false => match sourced_ram() {
+            Ok((ram, start)) => (ram, start, None),
+            Err(why) => {
+                eprintln!(
+                    "BLOCK-RELEASE SKIP: {} refuses shared host pointers and {why}",
+                    device.name()
+                );
+                return;
+            }
+        },
+    };
     let used = device.use_host_ram(&ram).unwrap();
     // The compositor's frame: a fill of a `Private` buffer as long as takes `FRAME_GPU`.
     let queue = device.new_command_queue().unwrap();
@@ -687,13 +742,16 @@ fn host_ram_block_release_bench() {
     // Let the device's thread import the RAM's start, as at a boot's desktop.
     std::thread::sleep(Duration::from_secs(1));
     let before = device.work_counts();
-    let done = std::sync::atomic::AtomicBool::new(false);
+    let done = AtomicBool::new(false);
     let (times, frames) = std::thread::scope(|scope| {
+        let stops = Stops(&done);
         let compositor = scope.spawn(|| {
+            // A panic here ends the releases too.
+            let _stops = Stops(&done);
             let queue = device.new_command_queue().unwrap();
             let mut frames = Vec::new();
             let mut gpus = Vec::new();
-            while !done.load(std::sync::atomic::Ordering::Acquire) {
+            while !done.load(Ordering::Acquire) {
                 let started = Instant::now();
                 let (_, gpu, completion) = timed(&queue, |encoder| {
                     encoder.fill_buffer(&target, 0..frame_bytes, 2).unwrap();
@@ -707,14 +765,17 @@ fn host_ram_block_release_bench() {
         let queue = device.new_command_queue().unwrap();
         let mut times = Vec::new();
         let mut first = 1;
-        for few in [false, true] {
+        'releases: for few in [false, true] {
             for bytes in [4u64 << 20, 24 << 20] {
                 for release in 0..RELEASES {
+                    if done.load(Ordering::Acquire) {
+                        break 'releases;
+                    }
                     let seed = 0x9e37_79b9_7f4a_7c15 ^ (bytes << 8 | release << 1 | u64::from(few));
                     let runs = release_runs(seed, first, bytes, few);
                     first += if few { 1 } else { 3 };
                     let host: Vec<Range<u64>> = (runs.iter())
-                        .map(|run| fresh.start + run.start..fresh.start + run.end)
+                        .map(|run| start + run.start..start + run.end)
                         .collect();
                     let cache = device
                         .new_buffer(bytes, ResourceOptions::private())
@@ -752,7 +813,7 @@ fn host_ram_block_release_bench() {
                 }
             }
         }
-        done.store(true, std::sync::atomic::Ordering::Release);
+        drop(stops);
         (times, compositor.join().unwrap())
     });
     let after = device.work_counts();
