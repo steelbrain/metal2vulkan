@@ -1444,6 +1444,7 @@ enum	metal2vulkan::device::VkFeature	#[cfg_attr(feature = "serde", derive(serde:
 enum	metal2vulkan::device::VkLimit	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum VkLimit
 enum	metal2vulkan::device::VkProperty	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum VkProperty
 enum	metal2vulkan::device::WideLinePolicy	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum WideLinePolicy
+enum	metal2vulkan::device::YCbCrInPlacePolicy	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum YCbCrInPlacePolicy
 enum	metal2vulkan::error::AbiError	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub enum AbiError
 enum	metal2vulkan::error::Attachment	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum Attachment
 enum	metal2vulkan::error::BindError	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub enum BindError
@@ -3940,6 +3941,7 @@ field	metal2vulkan::device::DevicePolicy.pointer_domain	pub pointer_domain: Poin
 field	metal2vulkan::device::DevicePolicy.queue_sharing	pub queue_sharing: QueueSharingPolicy
 field	metal2vulkan::device::DevicePolicy.render_lowering	pub render_lowering: RenderLoweringPolicy
 field	metal2vulkan::device::DevicePolicy.wide_lines	pub wide_lines: WideLinePolicy
+field	metal2vulkan::device::DevicePolicy.ycbcr_in_place_reads	pub ycbcr_in_place_reads: YCbCrInPlacePolicy
 field	metal2vulkan::device::DriverDiagnostic.id	pub id: i32
 field	metal2vulkan::device::DriverDiagnostic.id_name	pub id_name: &'static str
 field	metal2vulkan::device::DriverDiagnostic.text	pub text: Cow<'static, str>
@@ -13406,6 +13408,8 @@ variant	metal2vulkan::device::VkProperty::SubgroupStage	SubgroupStage(Stage)
 variant	metal2vulkan::device::VkProperty::VariableSampleLocations	VariableSampleLocations
 variant	metal2vulkan::device::WideLinePolicy::Device	Device
 variant	metal2vulkan::device::WideLinePolicy::Exact	Exact
+variant	metal2vulkan::device::YCbCrInPlacePolicy::Exact	Exact
+variant	metal2vulkan::device::YCbCrInPlacePolicy::Model	Model
 variant	metal2vulkan::error::AbiError::BadSamplerState	BadSamplerState
 variant	metal2vulkan::error::AbiError::BadValue	BadValue
 variant	metal2vulkan::error::AbiError::ContainerMismatch	ContainerMismatch
