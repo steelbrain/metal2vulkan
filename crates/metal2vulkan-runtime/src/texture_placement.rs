@@ -125,7 +125,10 @@ pub enum TextureShadowReason {
     /// otherwise than Metal: the texture's rows take `bytes` bytes to their pitch, past the bound
     /// up to which it takes a `DRM_FORMAT_MOD_LINEAR` image at Metal's pitch
     /// ([`TexturePlacement::NotHostPages`]), as such an image renders and samples slower than the
-    /// shadow's own image with its copies past it. The same bound on every device.
+    /// shadow's own image with its copies past it. The same bound on every device. A texture that
+    /// only samples a `Shared` or `Managed` buffer's bytes, or an untracked texture that only
+    /// samples, takes the image at any size: its shadow would be copied in at every command
+    /// buffer.
     LinearCost {
         /// The bytes of the texture's rows, each to its pitch.
         bytes: u64,

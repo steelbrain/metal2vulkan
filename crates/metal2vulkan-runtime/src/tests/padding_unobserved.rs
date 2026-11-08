@@ -17,6 +17,12 @@
 //!   (`in_place::Access::UnobservedRenders`: its rows, each to its pitch, share no line with bytes
 //!   past them), else a shadow; through the image, the texels the CPU wrote read back, a pass's
 //!   clear reaches the buffer's rows, and the bytes after the last row keep the CPU's.
+//! - **Past the pooled bound** (`in_place::POOLED_PITCHED_BYTES`). A texture that renders whose
+//!   rows to their pitch take more bytes takes no pitched image and, where one inside the bound
+//!   took one, answers `Shadow(LinearCost)`. One that only samples takes the pitched image over a
+//!   `Shared` buffer where the device's check of reads over its pooled memory passed, and never
+//!   answers `Shadow(LinearCost)` there; over a `Private` buffer it answers `Shadow(LinearCost)`
+//!   where the device makes such images.
 //! - **Undeclared.** The same texture over a buffer made without the declaration answers
 //!   `Shadow(BytesBetweenRows)` and is a shadow (`shadowed_textures`), at every pitch.
 //! - **Over the caller's memory**, the declaration is refused: `Invalid`
@@ -414,6 +420,97 @@ fn a_rendered_texture_past_the_pooled_bound_stays_a_shadow_of_its_linear_cost() 
             "past the bound: the answer"
         );
         assert_eq!(past.3, 1, "past the bound: counted as a shadow");
+    }
+}
+
+/// A texture of shader read usage alone past the pooled bound, 164x82 `BGRA8Unorm` at 704-byte
+/// rows (57,728 bytes): over a `Shared` buffer, whose bytes the CPU writes, it takes a
+/// `DRM_FORMAT_MOD_LINEAR` image at its pitch wherever the device makes one for a texture inside
+/// the bound and its check of reads over its pooled memory passed, and is never a shadow of its
+/// linear cost; over a `Private` buffer, whose shadow is copied in once, it stays a shadow of its
+/// linear cost where the device makes such images.
+#[test]
+fn a_sampled_texture_past_the_pooled_bound_lies_in_place_over_bytes_the_cpu_writes() {
+    use crate::in_place::{Access, PagesClass, RowEnds, Verdict, POOLED_PITCHED_BYTES};
+    let scratch = Scratch::new("padding-unobserved-sampled");
+    let device = device(&scratch.0);
+    assert!(
+        device.settle_in_place_checks(CHECK_WAIT),
+        "the check settles"
+    );
+    let [inside, (width, height, pitch)] = BOUNDED;
+    let bytes = pitch * height;
+    assert!(bytes > POOLED_PITCHED_BYTES);
+    // The texture made over a new buffer of `options` of `usage`: its answer, and whether it
+    // took a pitched image and was counted a shadow.
+    let made = |(width, height, pitch): (u64, u64, u64), options, usage| {
+        let descriptor = BufferDescriptor::new(pitch * height, options, BufferContents::Zero)
+            .with_padding_unobserved();
+        let buffer = device.new_buffer_with_descriptor(descriptor).unwrap();
+        let mut descriptor =
+            TextureDescriptor::texture_2d(PixelFormat::BGRA8Unorm, width, height, false);
+        descriptor.usage = usage;
+        descriptor.resource_options = buffer.resource_options();
+        let answer = buffer.texture_placement(&descriptor, 0, pitch).unwrap();
+        let before = device.work_counts();
+        let texture = buffer.new_texture(&descriptor, 0, pitch).unwrap();
+        let after = device.work_counts();
+        let pitched = after.pooled_pitched_images - before.pooled_pitched_images == 1;
+        let shadow = after.shadowed_textures - before.shadowed_textures == 1;
+        (buffer, texture, answer, pitched, shadow)
+    };
+    let rendered = TextureUsage::SHADER_READ | TextureUsage::RENDER_TARGET;
+    let (_, _, _, takes, _) = made(inside, ResourceOptions::shared(), rendered);
+    let read = TextureUsage::SHADER_READ;
+    let shared = made((width, height, pitch), ResourceOptions::shared(), read);
+    let private = made((width, height, pitch), ResourceOptions::private(), read);
+    // The check the texture over the `Shared` buffer asks: of reads, of rows that lie as its own.
+    let layout = crate::linear_plan::BufferLayout {
+        offset: 0,
+        row_pitch: pitch,
+        slice_pitch: pitch * height,
+        row_bytes: width * 4,
+        rows: height,
+        slices: 1,
+    };
+    let line = device.shared().in_place.line();
+    let start = shared.0.contents().unwrap().as_ptr().addr() as u64;
+    let rows = RowEnds::of(start, &layout, line);
+    let reads = device
+        .shared()
+        .in_place
+        .verdict(PagesClass::Pooled, Access::Reads, rows);
+    for (form, (_, texture, answer, pitched, shadow)) in
+        [("shared", &shared), ("private", &private)]
+    {
+        eprintln!(
+            "POOLED-SAMPLED on {}: {width}x{height} BGRA8Unorm at {pitch} ({bytes} bytes, the \
+             bound {POOLED_PITCHED_BYTES}) sampled over a {form} buffer: answer {answer:?}; \
+             pitched {pitched}, shadow {shadow}, aliases {}; inside the bound rendered pitched \
+             {takes}; pooled reads verdict {reads:?} ({rows:?})",
+            device.name(),
+            texture.aliases_buffer(),
+        );
+    }
+    let linear_cost = TexturePlacement::Shadow(TextureShadowReason::LinearCost { bytes });
+    assert_ne!(
+        shared.2, linear_cost,
+        "over the Shared buffer: never its linear cost"
+    );
+    if takes && reads == Verdict::Passed {
+        assert!(shared.3, "over the Shared buffer: a pitched image");
+        assert_eq!(
+            shared.2,
+            TexturePlacement::NotHostPages,
+            "over the Shared buffer"
+        );
+    }
+    if takes {
+        assert_eq!(
+            private.2, linear_cost,
+            "over the Private buffer: the answer"
+        );
+        assert!(!private.3 && private.4, "over the Private buffer: a shadow");
     }
 }
 

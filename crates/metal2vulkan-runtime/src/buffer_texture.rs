@@ -1809,6 +1809,19 @@ impl Texels {
         Backing::of(&self.buffer, self.surface)
     }
 
+    /// Whether only the runtime's commands write the texels' bytes, as a shadow of them finds
+    /// (`ShadowCopies::only_commands_write`): a tracked texture's over a buffer of private or
+    /// memoryless storage the runtime allocated. A shadow of these may stand across command
+    /// buffers, copied in once (`shadow_standing.rs`); a shadow of others copies them in at every
+    /// command buffer that uses it, as the CPU may have written them.
+    pub(super) fn only_commands_write(&self) -> bool {
+        let private = matches!(
+            self.backing(),
+            Backing::PrivateBuffer | Backing::PrivateSurface
+        );
+        self.tracked() && private
+    }
+
     /// Where the CPU's `replace_region` and `get_bytes` find the texels.
     pub(super) fn cpu_layout(&self) -> BufferLayout {
         self.cpu

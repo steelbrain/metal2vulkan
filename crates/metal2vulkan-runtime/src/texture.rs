@@ -2925,7 +2925,13 @@ impl Device {
         if !in_place::checking() {
             let layout = &texels.layout;
             let bytes = layout.slice_pitch * (layout.slices - 1) + layout.row_pitch * layout.rows;
-            if bytes > in_place::POOLED_PITCHED_BYTES {
+            // The bound weighs a linear image against a shadow that renders into its own image,
+            // or samples it copied in once: a texture that only samples bytes more than the
+            // runtime's commands may write takes the image at any size, as its shadow would be
+            // copied in whole at every command buffer that samples it.
+            let sampled_apart =
+                in_place::Access::Reads.takes(usage) && !texels.only_commands_write();
+            if bytes > in_place::POOLED_PITCHED_BYTES && !sampled_apart {
                 return Ok(Err(ShadowCause::LinearCost(bytes)));
             }
             let line = self.shared().in_place.line();

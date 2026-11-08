@@ -1625,7 +1625,10 @@ bound.
   change, as the declaration does, and no byte past the last row's pitch); past a bound in bytes of its rows to their
   pitch, the same on every device, such a texture stays a shadow too
   (`TextureShadowReason::LinearCost`): there a linear image renders and samples slower than the
-  shadow's own image with its copies, and over the device's own memory both give the same answer;
+  shadow's own image with its copies, and over the device's own memory both give the same answer
+  (a texture that only samples a `Shared` or `Managed` buffer's bytes, or an untracked one that
+  only samples, takes the image at any size, as its shadow would be copied in at every command
+  buffer);
   or the buffer is over the caller's
   `VkBuffer`, whose memory backs no image of the runtime's; or it is a tiled texture of more than
   one level (`Buffer::new_tiled_texture`), over any buffer: no image over the buffer's memory holds
