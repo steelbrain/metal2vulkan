@@ -858,8 +858,8 @@ mod tests {
         // Rows that touch are one run; rows apart stay apart.
         let rows = [
             2048 * 3..2048 * 3 + 2046,
-            2048 * 4..2048 * 4 + 2046,
-            2048 * 4 + 2046..2048 * 5,
+            2048 * 4..2048 * 4 + 2044,
+            2048 * 4 + 2044..2048 * 5,
         ];
         assert_eq!(
             merged(&rows),
@@ -867,7 +867,7 @@ mod tests {
         );
         assert!(whole_pages(&[0..PAGE, 3 * PAGE..5 * PAGE]));
         assert!(!whole_pages(&[0..PAGE, 3 * PAGE..5 * PAGE - 2]));
-        assert!(!whole_pages(&[16..PAGE]));
+        assert!(!whole_pages(&one(16..PAGE)));
         assert!(whole_pages(&[]));
     }
 
