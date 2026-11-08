@@ -1428,8 +1428,14 @@ impl Device {
         if !view_formats.is_empty() {
             query = query.push_next(&mut list);
         }
+        // The import's properties are asked only beside the handle type they answer for: asked
+        // without one, the driver leaves them untouched, and the validation layer warns
+        // (`WARNING-vkGetPhysicalDeviceImageFormatProperties2-missing-external-info`).
         let mut imported = vk::ExternalImageFormatProperties::default();
-        let mut properties = vk::ImageFormatProperties2::default().push_next(&mut imported);
+        let mut properties = vk::ImageFormatProperties2::default();
+        if memory.handle_type().is_some() {
+            properties = properties.push_next(&mut imported);
+        }
         // SAFETY: the physical device is the instance's, whose device enables the extensions;
         // `query` and `properties` and their chains live for the call.
         let queried = unsafe {
