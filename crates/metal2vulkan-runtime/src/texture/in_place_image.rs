@@ -29,8 +29,10 @@
 //!   shader's writes over the class and the texels' row ends (those that let the rows' padding
 //!   change, where it is free) and the texel is one the check's kernel stores; the attachment
 //!   usage where it passed for renders over them; the sampled usage wherever, as a read touches
-//!   the texels alone. The image takes the first set of them, the most first, the device makes it
-//!   in place with. Plain Metal writes a texture beyond its `ShaderWrite` and renders into one made
+//!   the texels alone. The image takes the first set of them, the most first (of as many, the
+//!   storage usage's before the attachment usage's), the device makes it in place with: where it
+//!   makes one with the storage usage and none with both, a write beyond the declared usage
+//!   reaches the texels in place and a pass beyond it renders through a stand-in. Plain Metal writes a texture beyond its `ShaderWrite` and renders into one made
 //!   without `RenderTarget`; with the usage, such a write or pass reaches the texels in place. A
 //!   write or pass beyond what the image takes binds the texture's usage shadow
 //!   (`texture/usage_shadow.rs`), or renders through an attachment stand-in

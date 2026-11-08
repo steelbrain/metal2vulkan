@@ -36,15 +36,19 @@
 //!   validation layer: an in-place 64x64 `RGBA16Float` texture of `ShaderRead` usage alone, with
 //!   padded rows and with packed ones (where the device takes either in place), written by a
 //!   kernel (no `ShaderWrite`) and rendered into by a pass that clears and stores (no
-//!   `RenderTarget`): where the device's check passed for a shader's writes (`Pointer buffer
-//!   writes` where the rows' padding is free) or for renders over the class, the write or pass
-//!   reaches the image in place, which took the usage it lacks: no shadow announced
+//!   `RenderTarget`): where the image in place took the usage it lacks (the first set of them the
+//!   device makes the image with, the storage usage before the attachment usage, each where the
+//!   device's check passed for a shader's writes, `Pointer buffer writes` where the rows' padding
+//!   is free, or for renders over the class; a texture of the same shape that declares the set is
+//!   placed in place, `Buffer::texture_placement`), the write or pass
+//!   reaches the image in place: no shadow announced
 //!   (`undeclared-usage-shadow`), no texel copied in (`shadow_texels_copied_in`,
 //!   `shadow_texels_copied_in_images`); elsewhere through its shadow (or stand-in), announced.
 //!   The image stays the texture's (`vk_image` the same handle), and its texels stay in the pages
 //!   at the buffer's pitch: every texel of the pages then holds the value, and the bytes between
 //!   the rows hold the pattern but where a shader's writes in place may change rows' padding that
-//!   is free. Printed (`IN-PLACE-USAGE`): each form's path and the texels copied in.
+//!   is free. Printed (`IN-PLACE-USAGE`): each form's path, the texels copied in, and the
+//!   placement query's answers for the texture's shape declaring each set.
 //! - [`textures_that_render_or_write_take_the_path_their_checks_answered`], under the validation
 //!   layer: a 64x64 `R32Uint` texture over a no-copy buffer of anonymous pages, of each usage that
 //!   renders or writes, once the device's check answered: each is in place where the check passed
@@ -111,7 +115,7 @@ use metal2vulkan_runtime::{
     BlitOption, Buffer, BufferContents, BufferDescriptor, ClearColor, CommandBuffer, CommandQueue,
     ComputePipelineState, Degradation, Device, DeviceOptions, EventRef, LoadAction, Origin,
     RenderPassDescriptor, RenderPipelineState, ResourceOptions, ScissorRect, SharedEvent, Size,
-    StoreAction, Texture, TextureDescriptor, WorkCounts,
+    StoreAction, Texture, TextureDescriptor, TexturePlacement, WorkCounts,
 };
 
 /// The bytes of a buffer of the runtime's own that lies in fresh pages (past half a pooled block).
@@ -853,14 +857,41 @@ fn writes_and_passes_beyond_the_usage_reach_the_pages_where_their_checks_passed(
                 );
                 continue;
             };
-            // The image in place takes the usage the texture lacks where the device's check
-            // passed for what it lets reach the pages: a shader's writes (those that let the
-            // rows' padding change, where it is free), or renders.
+            // The image in place takes the first set of the usages the texture lacks that the
+            // device makes it in place with, the most first and the storage usage before the
+            // attachment usage, each where the device's check passed for what it lets reach the
+            // pages: a shader's writes (those that let the rows' padding change, where it is
+            // free), or renders. Whether the device makes it in place with a set is what the
+            // placement query answers for a texture of the same shape that declares it: the
+            // check's verdicts for its accesses, and the image's making up to the bind.
             let kernel = form.starts_with("kernel");
-            let reaches = match kernel {
-                true => writes_passed(&device, "Pointer", &buffer, (w * 8, h, bpr)),
-                false => passed(&device, "Pointer renders", &buffer, (w * 8, h, bpr)),
+            let placed = |usage: TextureUsage| {
+                let mut d = TextureDescriptor::texture_2d(PixelFormat::RGBA16Float, w, h, false);
+                d.usage = TextureUsage::SHADER_READ | usage;
+                d.resource_options = buffer.resource_options();
+                buffer.texture_placement(&d, 0, bpr).unwrap()
             };
+            let answers = [
+                TextureUsage::SHADER_WRITE | TextureUsage::RENDER_TARGET,
+                TextureUsage::SHADER_WRITE,
+                TextureUsage::RENDER_TARGET,
+            ]
+            .map(placed);
+            let [both, writes, renders] = answers.map(|answer| answer == TexturePlacement::InPlace);
+            let reaches = match kernel {
+                true => both || writes,
+                false => both || (renders && !writes),
+            };
+            // The check's verdicts the query asked: a texture that declares the usage alone is in
+            // place only where its check passed.
+            assert!(
+                !writes || writes_passed(&device, "Pointer", &buffer, (w * 8, h, bpr)),
+                "{form}: a written texture in place where its check did not pass"
+            );
+            assert!(
+                !renders || passed(&device, "Pointer renders", &buffer, (w * 8, h, bpr)),
+                "{form}: a rendered texture in place where its check did not pass"
+            );
             let first = buffer.contents().map_or(0, |at| at.as_ptr() as u64);
             let free = kernel && in_place_rows::padding_free(&device, first, bpr, h, true);
             let before = device.work_counts();
@@ -928,8 +959,12 @@ fn writes_and_passes_beyond_the_usage_reach_the_pages_where_their_checks_passed(
                 false => "through its shadow",
             };
             eprintln!(
-                "IN-PLACE-USAGE on {}: {form}: {path} (texels copied in {copied})",
-                device.name()
+                "IN-PLACE-USAGE on {}: {form}: {path} (texels copied in {copied}); declaring \
+                 ShaderWrite and RenderTarget {:?}, ShaderWrite {:?}, RenderTarget {:?}",
+                device.name(),
+                answers[0],
+                answers[1],
+                answers[2],
             );
             drop((texture, buffer));
             drop(mapping);
