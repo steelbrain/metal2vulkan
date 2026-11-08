@@ -31,9 +31,12 @@ use std::ptr::NonNull;
 use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
 
-/// [`device`], its check of the first move in place settled where it runs one, and the imports
-/// the check read apart gone before the test reads a gauge (the module docs): a device made just
-/// now reads none apart of its own.
+/// [`device`], its check of the first move in place settled where it runs one, and the check's
+/// imports gone before the test reads a gauge (the module docs): a device made just now holds no
+/// import of its own and reads none apart. The check's buffers go before it settles, each
+/// import's read apart counted off as it goes, but the free of one that a keep-alive alone waits
+/// for goes to a handler thread (`host_import_releases_pending`), where `host_imports_live` falls
+/// later.
 fn settled_device(cache: &std::path::Path) -> Device {
     let device = device(cache);
     let settled = device.settle_in_place_checks(std::time::Duration::from_secs(120));
@@ -42,7 +45,9 @@ fn settled_device(cache: &std::path::Path) -> Device {
         device.work_counts().in_place_checks_run
     );
     until("the in-place check's imports went", || {
-        device.work_counts().host_imports_read_apart == 0
+        let counts = device.work_counts();
+        (counts.host_imports_read_apart, counts.host_imports_live) == (0, 0)
+            && counts.host_import_releases_pending == 0
     });
     device
 }
