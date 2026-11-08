@@ -2124,7 +2124,8 @@ impl Device {
     ) -> Result<Buffer, Error> {
         self.keep_room();
         let options = self.own_memory_options("new_buffer", options)?;
-        let (buffer, class) = self.buffer_of_length("new_buffer", length, options, placement)?;
+        let placed = (placement.into(), None);
+        let (buffer, class) = self.buffer_of_length("new_buffer", length, options, placed)?;
         self.degrade_system_memory(&buffer, class, || format!("buffer of {length} bytes"));
         Ok(self.visible(buffer))
     }
@@ -2138,8 +2139,9 @@ impl Device {
         length: u64,
         options: ResourceOptions,
     ) -> Result<Buffer, Error> {
+        let placed = (AddressPlacement::Outside.into(), None);
         Ok(self
-            .buffer_of_length("new_buffer", length, options, AddressPlacement::Outside)?
+            .buffer_of_length("new_buffer", length, options, placed)?
             .0)
     }
 
@@ -2158,21 +2160,24 @@ impl Device {
     }
 
     /// A buffer of `length` bytes, all zero, with `options`, at `placement` in the address space,
-    /// for `call`, and the memory class it took: refused as [`Device::new_buffer`] refuses it,
-    /// and for a pin the address space cannot honour.
+    /// its byte `aligned` (where given) on a multiple of 256 bytes of its memory, for `call`, and
+    /// the memory class it took: refused as [`Device::new_buffer`] refuses it, and for a pin the
+    /// address space cannot honour.
     pub(super) fn buffer_of_length(
         &self,
         call: &'static str,
         length: u64,
         options: ResourceOptions,
-        placement: impl Into<Place>,
+        (placement, aligned): (Place, Option<u64>),
     ) -> Result<(Buffer, MemoryClass), Error> {
         let modes = Modes::of(options)?;
         let class = buffer_class(call, modes)?;
         if length == 0 || length > self.properties().max_buffer_length {
             return Err(nil(call, Problem::BufferLength { length }));
         }
-        let buffer = self.zeroed_buffer(call, length, modes, class, false, placement)?;
+        let of = NewBufferOf::Runtime(FreshPages::WherePaid);
+        let buffer =
+            self.zeroed_buffer_of(call, length, (modes, class), of, (placement, aligned))?;
         Ok((buffer, class))
     }
 
@@ -2245,8 +2250,20 @@ impl Device {
             true => NewBufferOf::Heap,
             false => NewBufferOf::Runtime(FreshPages::WherePaid),
         };
-        let (buffer, bytes) =
-            self.placed_new_buffer(call, length, modes, class, of, placement.into())?;
+        self.zeroed_buffer_of(call, length, (modes, class), of, (placement.into(), None))
+    }
+
+    /// [`zeroed_buffer`](Device::zeroed_buffer) for `of`, its byte `aligned` (where given) on a
+    /// multiple of 256 bytes of its memory ([`Device::placed_new_buffer`]).
+    fn zeroed_buffer_of(
+        &self,
+        call: &'static str,
+        length: u64,
+        (modes, class): (Modes, MemoryClass),
+        of: NewBufferOf,
+        placed: (Place, Option<u64>),
+    ) -> Result<Buffer, Error> {
+        let (buffer, bytes) = self.placed_new_buffer(call, length, modes, class, of, placed)?;
         // Fresh pages read zero as mapped (`fresh_pages.rs`): nothing is written.
         if bytes == NewBytes::Zero {
             return Ok(buffer);
@@ -2275,7 +2292,7 @@ impl Device {
             modes,
             class,
             NewBufferOf::Runtime(FreshPages::Wherever),
-            AddressPlacement::Outside.into(),
+            (AddressPlacement::Outside.into(), None),
         )?;
         if bytes == NewBytes::AsPlaced {
             buffer.clear_first()?;
@@ -2331,7 +2348,7 @@ impl Device {
             modes,
             class,
             NewBufferOf::Runtime(FreshPages::WherePaid),
-            AddressPlacement::Outside.into(),
+            (AddressPlacement::Outside.into(), None),
         )
     }
 
@@ -2342,6 +2359,12 @@ impl Device {
     /// holds one, and is noted as one it may park as it goes (`recycle.rs`); one made wherever the
     /// device takes them is neither: it is the in-place check's, whose import is held only for its
     /// round.
+    ///
+    /// Where `aligned` names a byte of it (`BufferDescriptor::aligned_byte`) off a multiple of
+    /// [`LINEAR_IMAGE_ALIGNMENT`], its `VkBuffer` is bound where its placement starts, a multiple
+    /// of that alignment, and its bytes start that byte's shortfall from the next multiple into
+    /// both, so that the byte lies on that multiple: the buffer takes that many more bytes, is
+    /// never parked nor taken from the parked, and lies in no fresh pages.
     fn placed_new_buffer(
         &self,
         call: &'static str,
@@ -2349,7 +2372,7 @@ impl Device {
         modes: Modes,
         class: MemoryClass,
         of: NewBufferOf,
-        placement: Place,
+        (placement, aligned): (Place, Option<u64>),
     ) -> Result<(Buffer, NewBytes), Error> {
         let (of_heap, fresh) = match of {
             NewBufferOf::Heap => (true, FreshPages::WherePaid),
@@ -2360,9 +2383,14 @@ impl Device {
         }
         let shared = self.shared();
         let raw_device = shared.vk();
+        // The bytes before the buffer's own in its `VkBuffer` and placement.
+        let lead = aligned.map_or(0, |byte| {
+            (LINEAR_IMAGE_ALIGNMENT - byte % LINEAR_IMAGE_ALIGNMENT) % LINEAR_IMAGE_ALIGNMENT
+        });
         // Padded to 16 bytes, so a device fill clears every byte too.
         let size = length
-            .checked_next_multiple_of(16)
+            .checked_add(lead)
+            .and_then(|size| size.checked_next_multiple_of(16))
             .ok_or_else(|| nil(call, Problem::BufferLength { length }))?;
         // A heap is never `Managed` (`heap.rs`).
         let mirror = if class == MemoryClass::Managed && !self.properties().has_unified_memory {
@@ -2384,14 +2412,16 @@ impl Device {
         // host-visible one of the runtime's own lies in fresh pages where the device takes them
         // and its check found a held import adds nothing to its submissions (`fresh_pages.rs`).
         let wants_fresh = !of_heap
+            && lead == 0
             && fresh_pages::takes_fresh_pages(size, class)
             && shared.host_import.is_ok()
             && (fresh == FreshPages::Wherever || self.fresh_pages_pay_now());
-        let making = (!of_heap && fresh == FreshPages::WherePaid).then_some(BufferMaking {
-            size,
-            class,
-            fresh_pages: wants_fresh,
-        });
+        let making =
+            (!of_heap && lead == 0 && fresh == FreshPages::WherePaid).then_some(BufferMaking {
+                size,
+                class,
+                fresh_pages: wants_fresh,
+            });
         let mut taken = making.and_then(|making| self.recycled_buffer(&making));
         let fresh = match (&taken, wants_fresh) {
             (None, true) => self.fresh_page_buffer(size, class)?,
@@ -2465,8 +2495,8 @@ impl Device {
         let buffer = self.buffer_of(BufferParts {
             raw,
             memory: placement,
-            offset: 0,
-            base: 0,
+            offset: lead,
+            base: lead,
             length,
             reach: length,
             modes,

@@ -144,6 +144,24 @@ pub struct BufferDescriptor<'a> {
     /// Metal counterpart, for a consumer that owns every read of the buffer's bytes; `false` by
     /// default, as Metal keeps every byte.
     pub padding_unobserved: bool,
+    /// A byte of the buffer the runtime lays on a multiple of 256 bytes of its memory, the largest
+    /// linear-image alignment measured (RADV's; the device's own is
+    /// `Device::minimum_linear_texture_alignment_for_pixel_format`'s answer): a texture over the
+    /// buffer whose texels start there (and at any multiple of 256 bytes past it) is then the
+    /// linear image aliasing the buffer's memory where the device lays one out at its pitch, not a
+    /// shadow, as one at offset 0 is. For a consumer whose textures start at an offset that is no
+    /// multiple of the alignment, as CoreVideo lays a frame's planes 32 bytes into their surface.
+    /// The buffer's memory starts that byte's remainder short of the next multiple, at most 255
+    /// more bytes of it taken, and its contents (`contents`) with it: where Metal's buffers start
+    /// on a page, this one's contents start that remainder short of a multiple of 256 (`0xE0` past
+    /// one for byte `0x20`). Its length, its `gpuAddress` (the runtime's address space's) and
+    /// Metal's rules of a texture's offset in it (`newTextureWithDescriptor:offset:bytesPerRow:`)
+    /// are Metal's. Such a buffer is never parked for another making nor laid in fresh pages.
+    /// Only for a buffer of the runtime's own memory (`Zero`, `Copy` or `CopyHost` contents);
+    /// refused (`Invalid`, `AlignedByteNoCopy`) with `NoCopy` contents, whose first byte is the
+    /// caller's. A runtime extension with no Metal counterpart; `None` by default, Metal's
+    /// placement.
+    pub aligned_byte: Option<u64>,
 }
 
 impl<'a> BufferDescriptor<'a> {
@@ -162,6 +180,7 @@ impl<'a> BufferDescriptor<'a> {
             range_of: None,
             pool_slot: None,
             padding_unobserved: false,
+            aligned_byte: None,
         }
     }
 
@@ -202,6 +221,15 @@ impl<'a> BufferDescriptor<'a> {
             ..self
         }
     }
+
+    /// This descriptor laying byte `byte` of the buffer on a multiple of 256 bytes of its memory
+    /// (`aligned_byte`).
+    pub fn with_aligned_byte(self, byte: u64) -> BufferDescriptor<'a> {
+        BufferDescriptor {
+            aligned_byte: Some(byte),
+            ..self
+        }
+    }
 }
 
 impl Device {
@@ -232,6 +260,9 @@ impl Device {
     /// With `padding_unobserved`, a texture over the buffer may hold the bytes between its rows
     /// and slices in its image (the field's docs). Refused: `Invalid` (`PaddingUnobservedNoCopy`)
     /// with `NoCopy` contents.
+    ///
+    /// With `aligned_byte`, that byte of the buffer lies on a multiple of 256 bytes of its memory
+    /// (the field's docs). Refused: `Invalid` (`AlignedByteNoCopy`) with `NoCopy` contents.
     pub fn new_buffer_with_descriptor(
         &self,
         descriptor: BufferDescriptor<'_>,
@@ -257,9 +288,13 @@ impl Device {
             range_of,
             pool_slot,
             padding_unobserved,
+            aligned_byte,
         } = descriptor;
         if padding_unobserved && matches!(contents, BufferContents::NoCopy { .. }) {
             return Err(invalid(CALL, Problem::PaddingUnobservedNoCopy));
+        }
+        if aligned_byte.is_some() && matches!(contents, BufferContents::NoCopy { .. }) {
+            return Err(invalid(CALL, Problem::AlignedByteNoCopy));
         }
         let place = match (range_of, pool_slot) {
             (Some(other), slot) => {
@@ -283,19 +318,21 @@ impl Device {
             _ => (self.own_memory_options(CALL, resource_options)?, false),
         };
         let buffer = match contents {
-            BufferContents::Zero => self.zero_buffer(CALL, length, resource_options, place),
+            BufferContents::Zero => {
+                self.zero_buffer(CALL, length, resource_options, (place, aligned_byte))
+            }
             BufferContents::Copy(bytes) => {
                 if bytes.len() as u64 != length {
                     return Err(invalid(CALL, Problem::LengthMismatch));
                 }
                 let bytes = HostBytes::from_slice(bytes);
-                self.buffer_with_bytes(CALL, bytes, resource_options, place)
+                self.buffer_with_bytes(CALL, bytes, resource_options, (place, aligned_byte))
             }
             BufferContents::CopyHost(bytes) => {
                 if bytes.len() as u64 != length {
                     return Err(invalid(CALL, Problem::LengthMismatch));
                 }
-                self.buffer_with_bytes(CALL, bytes, resource_options, place)
+                self.buffer_with_bytes(CALL, bytes, resource_options, (place, aligned_byte))
             }
             // SAFETY: the `HostMemory` constructor's caller vouched for `length` bytes at the
             // pointer.
@@ -346,7 +383,8 @@ impl Device {
         self.keep_room();
         let options = self.own_memory_options(CALL, options)?;
         let bytes = HostBytes::from_slice(bytes);
-        let buffer = self.buffer_with_bytes(CALL, bytes, options, AddressPlacement::Any)?;
+        let buffer =
+            self.buffer_with_bytes(CALL, bytes, options, (AddressPlacement::Any.into(), None))?;
         Ok(self.visible(buffer))
     }
 
@@ -476,22 +514,23 @@ impl Device {
         shared.counts.host_range_remapped(imports);
     }
 
-    /// A buffer of `length` zero bytes at `placement`, for `call`: refused as
-    /// [`Device::new_buffer`] is, and for a pin the address space cannot honour; announced as
-    /// `new_buffer` announces it.
+    /// A buffer of `length` zero bytes at `placement`, its byte `aligned` (where given) on a
+    /// multiple of 256 bytes of its memory, for `call`: refused as [`Device::new_buffer`] is, and
+    /// for a pin the address space cannot honour; announced as `new_buffer` announces it.
     fn zero_buffer(
         &self,
         call: &'static str,
         length: u64,
         options: ResourceOptions,
-        placement: impl Into<Place>,
+        (placement, aligned): (Place, Option<u64>),
     ) -> Result<Buffer, Error> {
-        let (buffer, class) = self.buffer_of_length(call, length, options, placement)?;
+        let (buffer, class) = self.buffer_of_length(call, length, options, placement, aligned)?;
         self.degrade_system_memory(&buffer, class, || format!("buffer of {length} bytes"));
         Ok(buffer)
     }
 
-    /// A buffer holding a copy of `bytes` at `placement`, for `call`: written through its
+    /// A buffer holding a copy of `bytes` at `placement`, its byte `aligned` (where given) on a
+    /// multiple of 256 bytes of its memory, for `call`: written through its
     /// mapping, and from there to a `Managed` buffer's own bytes where it has a host copy
     /// (`Buffer::upload`), or for `Private` storage copied from a staging buffer by the device's
     /// next submission, before any of its commands, which the call does not wait for
@@ -501,10 +540,10 @@ impl Device {
         call: &'static str,
         bytes: HostBytes<'_>,
         options: ResourceOptions,
-        placement: impl Into<Place>,
+        (placement, aligned): (Place, Option<u64>),
     ) -> Result<Buffer, Error> {
         let length = bytes.len() as u64;
-        let buffer = self.zero_buffer(call, length, options, placement)?;
+        let buffer = self.zero_buffer(call, length, options, (placement, aligned))?;
         // The bytes, read once, through their pointer, into the buffer's memory.
         let fill = |target: &Buffer| {
             let contents = target

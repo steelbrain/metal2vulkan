@@ -8,6 +8,8 @@
 
 mod address;
 mod address_map;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod aligned_byte;
 mod amplification;
 mod apple_only;
 mod argument_buffers;

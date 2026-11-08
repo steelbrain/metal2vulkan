@@ -1999,6 +1999,7 @@ field	metal2vulkan-runtime::AddressRange.start	pub start: GpuAddress
 field	metal2vulkan-runtime::BinaryArchiveDescriptor.url	pub url: Option<PathBuf>
 field	metal2vulkan-runtime::BinaryArchiveMiss.function	pub function: String
 field	metal2vulkan-runtime::BinaryArchiveMiss.pipeline	pub pipeline: ArchivedPipeline
+field	metal2vulkan-runtime::BufferDescriptor.aligned_byte	pub aligned_byte: Option<u64>
 field	metal2vulkan-runtime::BufferDescriptor.contents	pub contents: BufferContents<'a>
 field	metal2vulkan-runtime::BufferDescriptor.length	pub length: u64
 field	metal2vulkan-runtime::BufferDescriptor.padding_unobserved	pub padding_unobserved: bool
@@ -7830,6 +7831,7 @@ method	metal2vulkan-runtime::Buffer::tiled_texture_placement	pub fn tiled_textur
 method	metal2vulkan-runtime::Buffer::vk_buffer	pub unsafe fn vk_buffer(&self) -> (vk::Buffer, u64)
 method	metal2vulkan-runtime::Buffer::vk_host_memory	pub unsafe fn vk_host_memory(&self) -> Option<VkHostMemory>
 method	metal2vulkan-runtime::BufferDescriptor::new	pub fn new(length: u64, resource_options: ResourceOptions, contents: BufferContents<'a>) -> BufferDescriptor<'a>
+method	metal2vulkan-runtime::BufferDescriptor::with_aligned_byte	pub fn with_aligned_byte(self, byte: u64) -> BufferDescriptor<'a>
 method	metal2vulkan-runtime::BufferDescriptor::with_padding_unobserved	pub fn with_padding_unobserved(self) -> BufferDescriptor<'a>
 method	metal2vulkan-runtime::BufferDescriptor::with_placement	pub fn with_placement(self, placement: AddressPlacement) -> BufferDescriptor<'a>
 method	metal2vulkan-runtime::BufferDescriptor::with_pool_slot	pub fn with_pool_slot(self, pool: &'a AddressPool, offset: u64) -> BufferDescriptor<'a>
@@ -12106,6 +12108,7 @@ variant	metal2vulkan-runtime::PrivateFlag::SupportsSimdReduction	SupportsSimdRed
 variant	metal2vulkan-runtime::PrivateFlag::SupportsSimdShuffleAndFill	SupportsSimdShuffleAndFill
 variant	metal2vulkan-runtime::PrivateFlag::SupportsTexture2dMultisampleArray	SupportsTexture2dMultisampleArray
 variant	metal2vulkan-runtime::PrivateFlag::SupportsTileShaders	SupportsTileShaders
+variant	metal2vulkan-runtime::Problem::AlignedByteNoCopy	AlignedByteNoCopy
 variant	metal2vulkan-runtime::Problem::AlreadyCommitted	AlreadyCommitted
 variant	metal2vulkan-runtime::Problem::ArgumentEncoder	ArgumentEncoder(ArgumentEncoderProblem)
 variant	metal2vulkan-runtime::Problem::AttachmentNotAFormat	AttachmentNotAFormat { attachment: Attachment, format: PixelFormat }

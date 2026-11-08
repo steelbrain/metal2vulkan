@@ -698,6 +698,12 @@ pub enum Problem {
     ///
     /// Basis: ours (a runtime extension: Metal has no such declaration).
     PaddingUnobservedNoCopy,
+    /// A buffer descriptor that lays a byte of the buffer on a multiple of 256 bytes of its memory
+    /// (`BufferDescriptor::aligned_byte`) with `NoCopy` contents: the placement is of the runtime's
+    /// own memory, never the caller's pages, whose first byte is where the caller put it.
+    ///
+    /// Basis: ours (a runtime extension: Metal places no buffer's byte).
+    AlignedByteNoCopy,
     /// A texture buffer's fill given a pattern of more than 32752 bytes
     /// (`fillTexture:...:bytes:length:`): Metal's process ends in the call, in the blit's
     /// dispatch, whatever the region, of no texels or past the buffer too (an Apple M3 Max under

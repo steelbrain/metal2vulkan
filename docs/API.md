@@ -1617,7 +1617,10 @@ bound.
   them as the program writes them, unless the buffer, of the runtime's own memory, declares them
   unobserved (`BufferDescriptor::padding_unobserved`, a runtime extension: they may then change,
   and no other byte does); or no linear image of the device lays its texels out as Metal
-  does in the buffer's memory, holding no byte past them, and no `DRM_FORMAT_MOD_LINEAR` image at
+  does in the buffer's memory, holding no byte past them (among them a texture whose offset in the
+  buffer misses the device's linear-image alignment, as one 32 bytes in does on RADV, whose
+  images start on a multiple of 256: a buffer made with `BufferDescriptor::aligned_byte` at that
+  byte, a runtime extension, takes it), and no `DRM_FORMAT_MOD_LINEAR` image at
   Metal's pitch serves (the device makes none, its policy is `HostPageTexturePolicy::Shadow`, or
   its check of such images over its pooled memory has not passed for the texture's accesses:
   pending, failed or unchecked, as over host pages, a pending one moving to the image once the

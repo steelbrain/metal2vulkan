@@ -359,6 +359,22 @@ does (`WorkCounts::unobserved_padding_aliases` counts such images; `Buffer::text
 answers `NotHostPages` for such a texture, else the shadow's cause, and
 `Shadow(TextureShadowReason::BytesBetweenRows)` without the declaration).
 
+Such an image is bound at the buffer's memory offset plus the texture's offset, which must be a
+multiple of the device's linear-image alignment (`Device::minimum_linear_texture_alignment_for_pixel_format`
+answers it: 256 bytes on RADV, 128 on NVIDIA, 64 on lavapipe, 16 on MoltenVK). The runtime starts
+each buffer of its own memory on a multiple of 256, so a texture at offset 0 (or any multiple of
+256) aliases the buffer where the device lays its rows out; one at another offset, as a decoded
+frame's planes CoreVideo lays 32 bytes into their surface (and its second plane 32 bytes past a
+multiple of 256 after the first's rows), is a shadow there. A consumer that makes such a buffer
+for such textures (a device cache of decoded frames, say) may make it with
+`BufferDescriptor::with_aligned_byte(0x20)`: a runtime extension, no Metal counterpart, refused
+over the caller's memory (`NoCopy` contents). The buffer's memory then starts so that byte lies on
+a multiple of 256 (at most 255 bytes more of it taken), and a texture there, and at any multiple of
+256 bytes past it, aliases the buffer as one at offset 0 would. Its length, `gpuAddress` and
+Metal's rules of a texture's offset in it stay Metal's; its contents (`contents`) start that
+byte's remainder short of a multiple of 256, where Metal's start on a page. Such a buffer is never
+parked for another making nor laid in fresh pages.
+
 A blit that names a texture over a buffer runs on the buffers' bytes, a region per row where its
 rows lie apart, and a buffer-texture copy in a layout Vulkan cannot state moves its rows through a
 staging buffer, as does a shadow's copy back where its texels start off their alignment (and a

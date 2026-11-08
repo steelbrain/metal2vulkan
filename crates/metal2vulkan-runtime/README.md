@@ -516,6 +516,13 @@ Calls Metal does not have, for a consumer that emulates a Metal device:
   bytes may change whenever it is made or used; no other byte does
   (`WorkCounts::unobserved_padding_aliases`). No Metal counterpart; refused
   (`PaddingUnobservedNoCopy`) with `NoCopy` contents.
+- `BufferDescriptor::aligned_byte` (`with_aligned_byte`): a buffer of the runtime's own memory
+  laying one of its bytes on a multiple of 256 bytes of its memory, so a texture whose texels start
+  there (a decoded frame's plane 32 bytes into its surface, say) is a linear image aliasing the
+  buffer where the device lays one out, not a shadow, on a device whose linear images start on a
+  multiple of more than the texture's offset (RADV's 256). Its contents start that byte's remainder
+  short of a multiple of 256, not on a page as Metal's do; its length and `gpuAddress` are Metal's.
+  No Metal counterpart; refused (`AlignedByteNoCopy`) with `NoCopy` contents.
 - `Buffer::texture_placement` and `texture_placement_with_iosurface_plane` (with
   `TexturePlacement` and `TextureShadowReason`): where a texture `new_texture` or
   `new_texture_with_iosurface_plane` makes of the same arguments lies if made now: in place over
