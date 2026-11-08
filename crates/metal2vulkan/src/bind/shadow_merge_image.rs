@@ -11,7 +11,9 @@
 //!   the bit pattern changing" (`VkImageViewCreateInfo`), and an unsigned-integer view returns its
 //!   components' bits unconverted, so the words a fetch returns are the words a copy of the texel
 //!   writes (a 4-byte texel's `R8G8B8A8_UINT` bytes packed into its word, as
-//!   [`shadow_copy_back_module`](super::shadow_copy_back_module) packs them).
+//!   [`shadow_copy_back_module`](super::shadow_copy_back_module) packs them; a 1- or 2-byte
+//!   texel's bits as a word of their own, zero above them, its buffers holding a word per texel,
+//!   [`ShadowTexelView`]).
 //! - **Its own view of an 8-bit unsigned normalized format** ([`ShadowMergeRead::B8G8R8A8Unorm`],
 //!   [`ShadowMergeRead::R8G8B8A8Unorm`]), which needs no other format on the image. Vulkan
 //!   defines "the conversion from an unsigned normalized fixed-point value c to the corresponding
@@ -116,11 +118,13 @@ pub enum ShadowMergeRead {
 
 impl ShadowMergeRead {
     /// Every read.
-    pub const ALL: [ShadowMergeRead; 6] = [
+    pub const ALL: [ShadowMergeRead; 8] = [
         ShadowMergeRead::Words(ShadowTexelView::R32Uint),
         ShadowMergeRead::Words(ShadowTexelView::R8G8B8A8Uint),
         ShadowMergeRead::Words(ShadowTexelView::R32G32Uint),
         ShadowMergeRead::Words(ShadowTexelView::R32G32B32A32Uint),
+        ShadowMergeRead::Words(ShadowTexelView::R8Uint),
+        ShadowMergeRead::Words(ShadowTexelView::R16Uint),
         ShadowMergeRead::B8G8R8A8Unorm,
         ShadowMergeRead::R8G8B8A8Unorm,
     ];
@@ -685,10 +689,16 @@ mod tests {
         }
     }
 
-    /// Texel `(x, y)`'s word `i` of the image the tests read: `0x0100_0000 · (i + 1) +
-    /// 0x1000 · y + x`.
-    fn texel_word(x: u32, y: u32, i: u32) -> u32 {
-        0x0100_0000 * (i + 1) + 0x1000 * y + x
+    /// Texel `(x, y)`'s word `i` of the image the tests read through `read`: `0x0100_0000 ·
+    /// (i + 1) + 0x1000 · y + x`, but through a 1- or 2-byte texel's view, whose word holds its
+    /// bits alone, `x + 0x1d · y` in them, so that its rows differ too.
+    fn texel_word(read: ShadowMergeRead, x: u32, y: u32, i: u32) -> u32 {
+        match read {
+            ShadowMergeRead::Words(view) if view.word_mask() != u32::MAX => {
+                (x + 0x1d * y) & view.word_mask()
+            }
+            _ => 0x0100_0000 * (i + 1) + 0x1000 * y + x,
+        }
     }
 
     /// The components a fetch of the texel of `words` returns through a view of `texel`: an
@@ -740,7 +750,9 @@ mod tests {
     /// The `[width, height]` image the tests read through `read`, of texels whose words are
     /// [`texel_word`].
     fn image(extent: [u32; 2], read: ShadowMergeRead) -> Image {
-        image_of(IMAGE, extent, texel_of(read), texel_word)
+        image_of(IMAGE, extent, texel_of(read), |x, y, i| {
+            texel_word(read, x, y, i)
+        })
     }
 
     fn bytes_of(words: &[u32]) -> Vec<u8> {
@@ -781,7 +793,7 @@ mod tests {
                 if inside {
                     kept[(((y - y0) * width + (x - x0)) * words + i) as usize]
                 } else {
-                    0x5a5a_5a5a ^ texel_word(x, y, i)
+                    0x5a5a_5a5a ^ texel_word(read, x, y, i)
                 }
             })
         };
@@ -847,7 +859,7 @@ mod tests {
             let mut kept = Vec::new();
             for x in 0..width {
                 for i in 0..words {
-                    let word = texel_word(x0 + x, y0, i);
+                    let word = texel_word(read, x0 + x, y0, i);
                     kept.push(if x == 3 && i == 0 { word ^ 0xff } else { word });
                 }
             }
@@ -864,7 +876,7 @@ mod tests {
             );
             let mut want = current.clone();
             let at = (3 * words) as usize;
-            want[at] = (current[at] & !0xff) | (texel_word(x0 + 3, y0, 0) & 0xff);
+            want[at] = (current[at] & !0xff) | (texel_word(read, x0 + 3, y0, 0) & 0xff);
             assert_eq!(got, want, "{read:?} {form:?}");
         }
     }
@@ -895,7 +907,7 @@ mod tests {
             for y in 0..height {
                 for x in 0..width {
                     for i in 0..words {
-                        let word = texel_word(x0 + x, y0 + y, i);
+                        let word = texel_word(read, x0 + x, y0 + y, i);
                         kept.push(match (x + y) % 3 {
                             0 if i == 0 => word ^ 0xff,
                             1 => !word,
@@ -917,7 +929,7 @@ mod tests {
                 for x in 0..width {
                     for i in 0..words {
                         let at = (first_word + y * row_words + x * words + i) as usize;
-                        let word = texel_word(x0 + x, y0 + y, i);
+                        let word = texel_word(read, x0 + x, y0 + y, i);
                         want[at] = match (x + y) % 3 {
                             0 if i == 0 => (current[at] & !0xff) | (word & 0xff),
                             1 => word,

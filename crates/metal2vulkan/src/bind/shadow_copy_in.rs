@@ -36,8 +36,10 @@
 //! `(x, y)` with `x` below `width` reads the `n` words (`n` the module's texel width) at words
 //! `first_word + y · row_words + x · n` onward, stores them as texel `(x0 + x, y0 + y)` of level 0
 //! (through an `R8G8B8A8_UINT` view, byte `i` its component `i`) and at words `(y · width + x) · n`
-//! onward of the kept part; one at `x` past `width` does
-//! nothing. A dispatch takes `ceil(width / LOCAL_SIZE)` by the region's height workgroups
+//! onward of the kept part; one at `x` past `width` does nothing. A texel of 1 or 2 bytes
+//! (`R8_UINT`, `R16_UINT`) is one word of both buffers, its bits low ([`ShadowTexelView`]): the
+//! invocation keeps the word's low byte or bytes, zero above them, for the texel and the kept
+//! part alike, so its bytes binding holds a word per texel, not a narrow texture's own rows. A dispatch takes `ceil(width / LOCAL_SIZE)` by the region's height workgroups
 //! ([`ShadowCopyInModule::groups`]). No texel outside the region and no kept word past its texels
 //! is written, and nothing is written to the bytes.
 //!
@@ -167,6 +169,10 @@ fn typed_module(view: ShadowTexelView) -> BResult<TypedModule> {
     for lane in 0..words {
         lanes.push(u32_value(&mut f, lane)?);
     }
+    let mask = match view.word_mask() {
+        u32::MAX => None,
+        mask => Some(u32_value(&mut f, mask)?),
+    };
     let invocation = f.module().global_value(invocation)?;
     let invocation = f.load(invocation, MemAccess::default())?;
     let x = f.composite_extract(invocation, &[0])?;
@@ -196,6 +202,11 @@ fn typed_module(view: ShadowTexelView) -> BResult<TypedModule> {
             let place = f.binary(BinOp::IAdd, at, index)?;
             let from = f.access_chain(bytes, &[zero, place])?;
             let word = f.load(from, MemAccess::default())?;
+            // A 1- or 2-byte texel's word holds its bits alone: those above them are dropped.
+            let word = match mask {
+                Some(mask) => f.binary(BinOp::BitwiseAnd, word, mask)?,
+                None => word,
+            };
             let place = f.binary(BinOp::IAdd, kept_at, index)?;
             let to = f.access_chain(kept, &[zero, place])?;
             f.store(to, word, MemAccess::default())?;
@@ -246,8 +257,9 @@ fn binding_of(sym: &Symbol) -> Option<u32> {
 /// The copy-in module of `device` storing texels through `view`: built with the typed builder,
 /// checked by the owned verifier against the device's profile (requirements included),
 /// serialized, and numbered with the fixed bindings of [`ShadowCopyInModule`]. Refused,
-/// `Unsupported` (feature `Format`) naming what the device lacks, for the `R32G32_UINT` view
-/// without `shaderStorageImageExtendedFormats` (its `Rg32ui`).
+/// `Unsupported` (feature `Format`) naming what the device lacks, for the `R32G32_UINT`,
+/// `R8_UINT` and `R16_UINT` views without `shaderStorageImageExtendedFormats` (their `Rg32ui`,
+/// `R8ui` and `R16ui`).
 pub fn shadow_copy_in_module(
     device: &Device,
     view: ShadowTexelView,
@@ -279,14 +291,20 @@ mod tests {
     use crate::spirv::interp::{run_with_images, Buffer, Config, Image, Order, Resources};
     use crate::spirv::testing::{assert_valid, committed_profiles};
 
-    /// Valid on every committed profile that has what it needs: the `R32G32_UINT` kernel's
-    /// `Rg32ui` view needs extended storage image formats, which the Vulkan 1.2 floor lacks.
+    /// Valid on every committed profile that has what it needs: the `R32G32_UINT`, `R8_UINT`
+    /// and `R16_UINT` kernels' `Rg32ui`, `R8ui` and `R16ui` views need extended storage image
+    /// formats, which the Vulkan 1.2 floor lacks.
     #[test]
     fn the_copy_in_kernels_are_valid_on_every_committed_profile() {
+        let extended = [
+            ShadowTexelView::R32G32Uint,
+            ShadowTexelView::R8Uint,
+            ShadowTexelView::R16Uint,
+        ];
         for (_, p) in committed_profiles().expect("profiles") {
             for view in ShadowTexelView::ALL {
                 let m = typed_module(view).expect("module");
-                if view == ShadowTexelView::R32G32Uint && p.check(m.requirements()).is_err() {
+                if extended.contains(&view) && p.check(m.requirements()).is_err() {
                     continue;
                 }
                 assert_valid(m, &p);
@@ -363,8 +381,9 @@ mod tests {
     }
 
     /// Every texel of a region is its row's words (through an `R8G8B8A8_UINT` view its bytes, one
-    /// a component), in the image and row after row in the kept part, and no texel outside it and
-    /// no kept word past its texels changes: through every view, across workgroups.
+    /// a component; through a 1- or 2-byte texel's view its word's bits, zero above them), in the
+    /// image and row after row in the kept part, and no texel outside it and no kept word past its
+    /// texels changes: through every view, across workgroups.
     #[test]
     fn a_region_lands_in_the_image_and_the_kept_part_alone() {
         for view in ShadowTexelView::ALL {
@@ -393,6 +412,8 @@ mod tests {
                     let mut texel = [0, 0, 0, 0];
                     for i in 0..words {
                         let word = bytes[(first_word + y * row_words + x * words + i) as usize];
+                        // A 1- or 2-byte texel keeps its word's bits alone.
+                        let word = word & view.word_mask();
                         texel[i as usize] = word;
                         want_kept[((y * 70 + x) * words + i) as usize] = word;
                     }

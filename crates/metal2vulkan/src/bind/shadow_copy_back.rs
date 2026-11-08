@@ -14,7 +14,10 @@
 //! view is the consumer's choice of [`ShadowTexelView`]: a 4-byte texel's `R32_UINT` view returns
 //! its word, and its `R8G8B8A8_UINT` view its bytes in memory order (byte `i` in component `i`),
 //! which the kernel packs into the word (byte `i` at bits `8i` onward, [`fetched_words`]); a
-//! wider texel's is the 32-bit unsigned format of its width, whose components are its words.
+//! wider texel's is the 32-bit unsigned format of its width, whose components are its words. A
+//! texel of 1 or 2 bytes (`R8_UINT`, `R16_UINT`) is one word of the buffer, its bits low and zero
+//! above ([`ShadowTexelView`]): its module stores a word per texel, into a buffer of a word per
+//! texel, not into a narrow texture's own rows.
 //!
 //! **The module** (one per view, [`ShadowTexelView`]). One `GLCompute` entry `main` with local
 //! size ([`ShadowCopyBackModule::LOCAL_SIZE`], 1, 1), [`ShadowCopyBackModule::PUSH_BYTES`] of
@@ -34,9 +37,10 @@
 //! words). Nothing reads the storage binding, and no word between the region's rows or past its
 //! texels is written. How the invocations divide a row depends on `n`:
 //!
-//! - **A one-word texel** (`R32_UINT`, `R8G8B8A8_UINT`). Invocation `(x, y)` with `x` below
-//!   `width` fetches texel `(x0 + x, y0 + y)` of level 0 and stores its word at
-//!   `first_word + y · row_words + x`; one at `x` past `width` does nothing.
+//! - **A one-word texel** (`R32_UINT`, `R8G8B8A8_UINT`, and `R8_UINT` and `R16_UINT`, whose
+//!   texel takes a whole word). Invocation `(x, y)` with `x` below `width` fetches texel
+//!   `(x0 + x, y0 + y)` of level 0 and stores its word at `first_word + y · row_words + x`; one
+//!   at `x` past `width` does nothing.
 //! - **A texel of two or four words** (`R32G32_UINT`, `R32G32B32A32_UINT`). A row is `width · n`
 //!   words, and invocation `l` of workgroup `(g, y)` takes the row's words `w = nNg + Nk + l` for
 //!   `k` from 0 to `n - 1` (`N` [`ShadowCopyBackModule::LOCAL_SIZE`]), one after the other. Each
@@ -81,9 +85,13 @@ use crate::spirv::ir::{
 
 /// The unsigned-integer view of a shadow that its kernels read its texels through, and a copy in
 /// stores them through ([`shadow_copy_back_module`], `shadow_merge_image_module`,
-/// `shadow_merge_kept_image_module`, `shadow_copy_in_module`): the format of the texel's width, or for a 4-byte texel either its
-/// word's or its bytes'. Every one shares the texel's compatibility class, so a view of any
-/// reads and stores the texel's bits unconverted.
+/// `shadow_merge_kept_image_module`, `shadow_copy_in_module`): the format of the texel's width, or
+/// for a 4-byte texel either its word's or its bytes'. Every one shares the texel's compatibility
+/// class, so a view of any reads and stores the texel's bits unconverted. A texel of 1 or 2 bytes
+/// ([`R8Uint`](Self::R8Uint), [`R16Uint`](Self::R16Uint)) takes a whole word of the kernels' word
+/// buffers, its bits in the word's low byte or bytes and zero above them, as a fetch of it returns
+/// it: such a view's kernels move a narrow texel's bits through buffers of a word per texel, never
+/// through a narrow texture's own rows, whose texels share their words.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum ShadowTexelView {
     /// `R32_UINT`: a 4-byte texel's word, in component 0.
@@ -94,23 +102,43 @@ pub enum ShadowTexelView {
     R32G32Uint,
     /// `R32G32B32A32_UINT`: a 16-byte texel's words.
     R32G32B32A32Uint,
+    /// `R8_UINT`: a 1-byte texel, in component 0; a word of the buffers, its low byte.
+    R8Uint,
+    /// `R16_UINT`: a 2-byte texel, in component 0; a word of the buffers, its low two bytes.
+    R16Uint,
 }
 
 impl ShadowTexelView {
     /// Every view.
-    pub const ALL: [ShadowTexelView; 4] = [
+    pub const ALL: [ShadowTexelView; 6] = [
         ShadowTexelView::R32Uint,
         ShadowTexelView::R8G8B8A8Uint,
         ShadowTexelView::R32G32Uint,
         ShadowTexelView::R32G32B32A32Uint,
+        ShadowTexelView::R8Uint,
+        ShadowTexelView::R16Uint,
     ];
 
-    /// The texel's 4-byte words: 1, 2 or 4.
+    /// The texel's 4-byte words in the kernels' buffers: 1, 2 or 4 (1 for a texel of 1 or 2
+    /// bytes, which takes a whole word).
     pub fn words(self) -> u32 {
         match self {
-            ShadowTexelView::R32Uint | ShadowTexelView::R8G8B8A8Uint => 1,
+            ShadowTexelView::R32Uint
+            | ShadowTexelView::R8G8B8A8Uint
+            | ShadowTexelView::R8Uint
+            | ShadowTexelView::R16Uint => 1,
             ShadowTexelView::R32G32Uint => 2,
             ShadowTexelView::R32G32B32A32Uint => 4,
+        }
+    }
+
+    /// The bits of a word a texel of the view holds: all 32 but for a texel of 1 or 2 bytes, whose
+    /// word holds its bits low and zero above them.
+    pub(crate) fn word_mask(self) -> u32 {
+        match self {
+            ShadowTexelView::R8Uint => 0xff,
+            ShadowTexelView::R16Uint => 0xffff,
+            _ => u32::MAX,
         }
     }
 
@@ -121,6 +149,8 @@ impl ShadowTexelView {
             ShadowTexelView::R8G8B8A8Uint => crate::spv::ImageFormat::Rgba8ui,
             ShadowTexelView::R32G32Uint => crate::spv::ImageFormat::Rg32ui,
             ShadowTexelView::R32G32B32A32Uint => crate::spv::ImageFormat::Rgba32ui,
+            ShadowTexelView::R8Uint => crate::spv::ImageFormat::R8ui,
+            ShadowTexelView::R16Uint => crate::spv::ImageFormat::R16ui,
         }
     }
 }
@@ -203,7 +233,8 @@ fn u32_value(f: &mut FunctionBuilder<'_>, v: u32) -> BResult<Value> {
 
 /// The words of a texel that a fetch through the shadow's `view` returned (`texel`, a `uvec4`):
 /// an `R8G8B8A8_UINT` view's components, its bytes, packed into one word (byte `i` at bits `8i`
-/// onward); another view's components, its words (the module docs).
+/// onward); another view's components, its words (a 1- or 2-byte texel's component 0, its bits
+/// low and zero above, as an unsigned fetch returns it: its word; the module docs).
 pub(super) fn fetched_words(
     f: &mut FunctionBuilder<'_>,
     texel: Value,
@@ -226,7 +257,9 @@ pub(super) fn fetched_words(
 
 /// The `uvec4` a store of a texel of `words` (its words, in memory order) through the shadow's
 /// `view` takes, as [`fetched_words`] reads it back: an `R8G8B8A8_UINT` view's bytes, one a
-/// component; another view's words, zero in the components it lacks.
+/// component; another view's words, zero in the components it lacks (a 1- or 2-byte texel's
+/// word, its bits low and zero above them, [`ShadowTexelView`], so the value stored is one its
+/// format represents).
 pub(super) fn stored_texel(
     f: &mut FunctionBuilder<'_>,
     uvec4: TypeId,
@@ -516,15 +549,24 @@ mod tests {
         }
     }
 
-    /// A `[width, height]` image of texels whose word `i` at `(x, y)` is
-    /// `0x0100_0000 · (i + 1) + 0x1000 · y + x`, as `view` returns it: an `R8G8B8A8_UINT` view's
-    /// components its word's bytes, another view's its words (the components a view lacks 0, and
-    /// alpha 1).
+    /// Word `i` of the test image's texel `(x, y)` through `view`: `0x0100_0000 · (i + 1) +
+    /// 0x1000 · y + x`, but for a 1- or 2-byte texel's view, whose word holds its bits alone,
+    /// `x + 0x1d · y` in them, so that its rows differ too.
+    fn texel_word(view: ShadowTexelView, i: u32, [x, y]: [u32; 2]) -> u32 {
+        match view.word_mask() {
+            u32::MAX => 0x0100_0000 * (i + 1) + 0x1000 * y + x,
+            mask => (x + 0x1d * y) & mask,
+        }
+    }
+
+    /// A `[width, height]` image of texels whose word `i` at `(x, y)` is [`texel_word`]'s, as
+    /// `view` returns it: an `R8G8B8A8_UINT` view's components its word's bytes, another view's
+    /// its words (the components a view lacks 0, and alpha 1).
     fn image([width, height]: [u32; 2], view: ShadowTexelView) -> Image {
         let mut image = Image::new(IMAGE, [width, height, 1], 1, 1, 1);
         for y in 0..height {
             for x in 0..width {
-                let word = |i: u32| 0x0100_0000 * (i + 1) + 0x1000 * y + x;
+                let word = |i: u32| texel_word(view, i, [x, y]);
                 let mut texel = [0, 0, 0, 1];
                 match view {
                     ShadowTexelView::R8G8B8A8Uint => {
@@ -589,7 +631,8 @@ mod tests {
 
     /// Every texel of a region lands at its row's place as its words, and every word between the
     /// rows, before the first texel and past the last keeps the buffer's own (a padded row's
-    /// bytes, and a scissor's outside): through every view, across workgroups.
+    /// bytes, and a scissor's outside): through every view (a 1- or 2-byte texel's as a word of
+    /// its bits), across workgroups.
     #[test]
     fn a_region_lands_at_its_rows_and_no_other_word_changes() {
         for view in ShadowTexelView::ALL {
@@ -607,8 +650,7 @@ mod tests {
                 for x in 0..70 {
                     for i in 0..words {
                         let at = first_word + y * row_words + x * words + i;
-                        let (tx, ty) = (10 + x, 2 + y);
-                        want[at as usize] = 0x0100_0000 * (i + 1) + 0x1000 * ty + tx;
+                        want[at as usize] = texel_word(view, i, [10 + x, 2 + y]);
                     }
                 }
             }
@@ -655,8 +697,7 @@ mod tests {
                 for x in 0..width {
                     for i in 0..words {
                         let at = first_word + y * row_words + x * words + i;
-                        let (tx, ty) = (x0 + x, y0 + y);
-                        want[at as usize] = 0x0100_0000 * (i + 1) + 0x1000 * ty + tx;
+                        want[at as usize] = texel_word(view, i, [x0 + x, y0 + y]);
                     }
                 }
             }

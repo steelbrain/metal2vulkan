@@ -271,6 +271,8 @@ fn formats(texel: ShadowTexelView) -> (Format, PixelFormat) {
         ShadowTexelView::R8G8B8A8Uint => (Format::R8G8B8A8_UINT, PixelFormat::RGBA8Uint),
         ShadowTexelView::R32G32Uint => (Format::R32G32_UINT, PixelFormat::RG32Uint),
         ShadowTexelView::R32G32B32A32Uint => (Format::R32G32B32A32_UINT, PixelFormat::RGBA32Uint),
+        ShadowTexelView::R8Uint => (Format::R8_UINT, PixelFormat::R8Uint),
+        ShadowTexelView::R16Uint => (Format::R16_UINT, PixelFormat::R16Uint),
     }
 }
 
