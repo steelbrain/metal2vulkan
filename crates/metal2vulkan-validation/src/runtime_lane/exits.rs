@@ -233,12 +233,13 @@ extern "C" fn drop_the_held_device() {
     unsafe { libc::write(1, line.as_ptr().cast(), line.len()) };
 }
 
-/// An exit handler the case `instance_after_handler_exit` registers right after the child's first
-/// device, so that it runs after every handler registered since (the later instances' and
-/// devices', the hook's later registrations, [`drop_the_held_device`]) and before those
-/// registered as the first device was made (its driver's and layer's): print when it ran
-/// (`at_ms`), and the exiting thread's wait for a CPU until then (`queued_us`, as [`exit_end`]'s),
-/// where the exit's own part ends ([`exits_cleanly`]).
+/// An exit handler the cases `instance_after_handler_exit` and `making_exit` register right after
+/// the child's first device, so that it runs after every handler registered since (the later
+/// instances' and devices', the hook's later registrations, [`drop_the_held_device`], the
+/// destructors the driver's compiler registered in a making) and before those registered as the
+/// first device was made (its driver's and layer's): print when it ran (`at_ms`), and the exiting
+/// thread's wait for a CPU until then (`queued_us`, as [`exit_end`]'s), where the exit's own part
+/// ends ([`exits_cleanly`]).
 extern "C" fn after_the_later_devices() {
     let queued = exit_thread_queued().unwrap_or_default();
     let line = format!(
@@ -506,6 +507,11 @@ fn child() {
             exit_now(case, &messages);
         }
         "making_exit" => {
+            // Before the makings: the hook's registrations after their driver calls, and the
+            // destructors the driver's compiler registers in them, run before it, and the
+            // driver's and layer's handlers of the device after it.
+            // SAFETY: a handler with no arguments that never unwinds.
+            unsafe { libc::atexit(after_the_later_devices) };
             // A state whose creation makes its pipeline to its end on this thread: the making's
             // driver call, the driver's compile, returns before the exit.
             drop(configured(&device, Some(64), 0));
@@ -1090,9 +1096,20 @@ fn an_exit_while_a_host_step_waits_is_clean() {
 /// in it, and waits for the second making before them. Seen before: on an RTX 5080 a consumer's
 /// test process ended with `SIGSEGV` at `0x18` inside `libnvidia-glvkspirv.so`, the driver's SPIR-V
 /// compiler, during its exit after its test passed (one test of a whole run under load).
+///
+/// The exit's own part ends at the mark the child registers right after its device
+/// ([`after_the_later_devices`]): the hook's handlers, its wait for the making, and the compiler's
+/// destructors run before it, the device's driver's and layer's handlers after it. On an RTX 5080
+/// laptop beside the runtime suite, the part before the mark ended 8 to 41 ms after the last line,
+/// with the making ended by then, and the handlers after it took 1.5 to 5.9 s, printed and not
+/// bounded ([`exits_cleanly`]).
 #[test]
 fn an_exit_mid_making_is_clean() {
     let exited = exits_cleanly(&["making_exit"]);
+    assert!(
+        stdout_line(&exited[0], &format!("{REPORT}-MARK ")).is_some(),
+        "making_exit: no mark between the hook's handlers and the driver's"
+    );
     let line = stdout_line(&exited[0], &format!("{REPORT}-MAKING "))
         .expect("making_exit: no line of its making");
     println!("{line}");
