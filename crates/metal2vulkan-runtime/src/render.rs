@@ -441,7 +441,7 @@ pub(crate) use deferral::{lowering, DeferredEncoders, EndInFlight};
 use deferral::{Logged, OwnLowering};
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 pub(crate) use deferral::{BATCH_CALLS, HANDED_BATCHES};
-pub(crate) use draw_again::{Kept, KeptStorage};
+pub(crate) use draw_again::{Kept as DrawKept, KeptStorage};
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 pub(crate) use draw_room::made as draw_rooms_made;
 pub(crate) use draw_room::SpareDrawRooms;

@@ -100,7 +100,7 @@ use super::binding::{CommandUses, PushWrite, SetWrite, Write};
 use super::device::lock;
 use super::noted_apart::NotedApart;
 use super::pipeline::{BufferForms, GraphicsState, ProgramName, Settled};
-use super::render::{Kept, KeptHeap, KeptStorage};
+use super::render::{DrawKept, KeptHeap, KeptStorage};
 use super::sampler::OwnedSampler;
 use super::shadow::ResidentShadows;
 use super::work_counts::Counting;
@@ -286,7 +286,7 @@ pub(super) struct LiveBind {
     /// The kept draw of the state's pipeline state, set aside here while its encoder draws
     /// through another (`render/draw_again.rs`, `RenderLowering::select_kept`): in place of the
     /// state, the encoder holds it.
-    draw_kept: Option<Kept>,
+    draw_kept: Option<DrawKept>,
     /// The shadows' copies of the textures its encoder made resident, listed once per change (the
     /// module docs).
     pub(super) shadows: ResidentShadows,
@@ -350,7 +350,7 @@ struct SetAside {
     vertex_buffers: Vec<(u32, vk::Buffer, u64, u64)>,
     vertex_starts: Vec<u64>,
     kept: KeptStorage,
-    draw_kept: Option<Kept>,
+    draw_kept: Option<DrawKept>,
     /// [`LiveBind::asides`] as it went aside.
     at: u64,
 }
@@ -601,12 +601,12 @@ impl LiveBind {
     }
 
     /// Set `kept` aside with the state in place, its pipeline state's (the field's docs).
-    pub(super) fn set_aside_kept(&mut self, kept: Option<Kept>) {
+    pub(super) fn set_aside_kept(&mut self, kept: Option<DrawKept>) {
         self.draw_kept = kept;
     }
 
     /// The kept draw set aside with the state in place, taken.
-    pub(super) fn take_kept(&mut self) -> Option<Kept> {
+    pub(super) fn take_kept(&mut self) -> Option<DrawKept> {
         self.draw_kept.take()
     }
 

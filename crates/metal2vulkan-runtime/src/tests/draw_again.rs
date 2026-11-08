@@ -768,7 +768,8 @@ fn draws_switching_pipeline_states_rebind_each_state_s_last_draw() {
     let device = device(&scratch.0, &[], &heard);
     let (first, second) = (adding_state(&device), adding_state(&device));
     let columns = rectangles_from_columns(&device);
-    let states = (&[&first, &second][..], &columns);
+    let pair = [&first, &second];
+    let states = (&pair[..], &columns);
     let same_color =
         |encoder: &mut RenderCommandEncoder| encoder.set_blend_color(0.0, 0.0, 0.0, 0.0);
     let drawn = |encoder: &mut RenderCommandEncoder, _| rectangle(encoder);
@@ -797,7 +798,8 @@ fn draws_switching_pipeline_states_rebind_each_state_s_last_draw() {
     // Between the adding state's draws, draws that count their fragments in a buffer.
     let counting = state_counting(&device);
     let counter = device.new_buffer(4, ResourceOptions::shared()).unwrap();
-    let writing = (&[&first, &counting][..], &columns);
+    let with_counting = [&first, &counting];
+    let writing = (&with_counting[..], &columns);
     let drawn = |encoder: &mut RenderCommandEncoder, state: usize| match state {
         0 => rectangle(encoder),
         _ => {
