@@ -19,6 +19,11 @@
 //! [`pooled_surface_costs`] weighs a guest window server's desktop device cache, past the bound,
 //! against a private texture: frames of many passes into it, each its own encoder.
 //!
+//! [`pooled_sample_costs`] weighs caches a frame only samples, as a window server samples the
+//! surfaces an app drew, over `Shared` buffers the CPU writes each frame and over `Private` ones:
+//! at a padded pitch (a shadow past the bound) and at their tight one (the device's own linear
+//! image, in place at any size).
+//!
 //! Ignored by default: measurements, not checks. Run them by name with `--run-ignored all`.
 
 use super::attachment_reads::{floats, function};
@@ -344,5 +349,120 @@ fn pooled_surface_costs() {
         }
     }
     drop(caches);
+    messages.take_notices();
+}
+
+/// The `pooled_sample_costs` caches, (width, rows, padded row bytes): one of the consumer's common
+/// small device caches, a browser's tile, a browser's window and the desktop; each also at its
+/// tight rows.
+const SAMPLED: [(u64, u64, u64); 4] = [
+    (172, 67, 704),
+    (1307, 512, 5248),
+    (1324, 940, 5312),
+    (3648, 2038, 14848),
+];
+
+/// What a frame that samples each cache whole costs: [`TEXTURES`] `BGRA8Unorm` textures of shader
+/// read usage alone of each of [`SAMPLED`] at its padded pitch over a buffer that declares its
+/// padding unobserved and at its tight one, over `Shared` buffers whose first texels the CPU
+/// writes before each frame's commit and over `Private` ones; each frame one command buffer of a
+/// draw into a private target that reads each texture whole (`tob_read`). Printed per case
+/// (`POOLED-SAMPLE-COST`): the textures in place and as shadows, the median GPU time of a frame of
+/// [`TIMED`] after [`WARM`], and per frame the shadow copies and the texels they copy in.
+#[test]
+#[ignore = "a release-mode measurement: run by name"]
+fn pooled_sample_costs() {
+    let cache = ScratchCache::new().unwrap();
+    let messages = Messages::default();
+    let device = settled_device(&cache, &messages);
+    let queue = device.new_command_queue().unwrap();
+    let bgra = PixelFormat::BGRA8Unorm;
+    let reads = reading(&device, bgra, "tob_read");
+    let corners = staged(&device, &floats([-1.0, -1.0, 1.0, 1.0]));
+    let mut d = TextureDescriptor::texture_2d(bgra, 3648, 2038, false);
+    d.usage = TextureUsage::RENDER_TARGET;
+    d.resource_options = ResourceOptions::private();
+    let target = device.new_texture(&d).unwrap();
+    for (w, h, padded) in SAMPLED {
+        for options in [ResourceOptions::shared(), ResourceOptions::private()] {
+            for bpr in [padded, 4 * w] {
+                let before = device.work_counts();
+                let textures: Vec<_> = (0..TEXTURES)
+                    .map(|_| {
+                        let descriptor =
+                            BufferDescriptor::new(bpr * h, options, BufferContents::Zero)
+                                .with_padding_unobserved();
+                        let buffer = device.new_buffer_with_descriptor(descriptor).unwrap();
+                        let mut d = TextureDescriptor::texture_2d(bgra, w, h, false);
+                        d.usage = TextureUsage::SHADER_READ;
+                        d.resource_options = buffer.resource_options();
+                        let texture = buffer.new_texture(&d, 0, bpr).unwrap();
+                        (buffer, texture)
+                    })
+                    .collect();
+                let after = device.work_counts();
+                let shadows = after.shadowed_textures - before.shadowed_textures;
+                let frame = |n: usize| {
+                    for (buffer, _) in &textures {
+                        if let Some(contents) = buffer.contents() {
+                            let texel = [n as u8, 0x40, 0x80, 0xff];
+                            // SAFETY: a `Shared` buffer of at least a texel, which no command
+                            // uses now (the frame before was waited for).
+                            unsafe {
+                                std::ptr::copy_nonoverlapping(texel.as_ptr(), contents.as_ptr(), 4)
+                            };
+                        }
+                    }
+                    let command_buffer = queue.command_buffer().unwrap();
+                    let mut pass = RenderPassDescriptor::new();
+                    let color = &mut pass.color_attachments[0];
+                    color.texture = Some(target.clone());
+                    color.load_action = LoadAction::DontCare;
+                    color.store_action = StoreAction::Store;
+                    let mut encoder = command_buffer.render_command_encoder(&pass).unwrap();
+                    encoder.set_render_pipeline_state(&reads).unwrap();
+                    encoder.set_vertex_buffer(Some(&corners), 0, 0).unwrap();
+                    encoder
+                        .set_scissor_rect(ScissorRect::new(0, 0, w, h))
+                        .unwrap();
+                    for (_, texture) in &textures {
+                        encoder.set_fragment_texture(Some(texture), 0).unwrap();
+                        encoder
+                            .draw_primitives(PrimitiveType::Triangle, 0, 6, 1, 0)
+                            .unwrap();
+                    }
+                    encoder.end_encoding().unwrap();
+                    command_buffer.commit().unwrap();
+                    command_buffer.wait_until_completed_for(WAIT).unwrap();
+                    assert_eq!(command_buffer.error(), None);
+                    command_buffer.gpu_end_time().unwrap()
+                        - command_buffer.gpu_start_time().unwrap()
+                };
+                for n in 0..WARM {
+                    frame(n);
+                }
+                let before = device.work_counts();
+                let mut times: Vec<f64> = (WARM..WARM + TIMED).map(&frame).collect();
+                let after = device.work_counts();
+                times.sort_by(f64::total_cmp);
+                let per = |a: u64, b: u64| (b - a) as f64 / TIMED as f64;
+                println!(
+                    "POOLED-SAMPLE-COST {} {TEXTURES} textures {w}x{h} at {bpr} ({} KB) over {:?} \
+                     buffers: {} in place, {shadows} shadows; a frame's GPU time median {:.1} us; \
+                     per frame: shadow copies {:.1}, texels copied in {:.0}",
+                    device.name(),
+                    bpr * h / 1000,
+                    options.storage_mode(),
+                    TEXTURES as u64 - shadows,
+                    times[TIMED / 2] * 1e6,
+                    per(before.shadow_copies, after.shadow_copies),
+                    per(
+                        before.shadow_texels_copied_in,
+                        after.shadow_texels_copied_in
+                    ),
+                );
+            }
+        }
+    }
     messages.take_notices();
 }
