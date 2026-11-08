@@ -4,8 +4,8 @@
 //! A texture over a buffer whose rows no image lays as Metal does renders through a shadow image,
 //! copied back into the buffer's rows after the commands that write it (`shadow.rs`). The copy is
 //! `vkCmdCopyImageToBuffer` on every device. On a device measured to run that copy slower than a
-//! dispatch that stores the same words, the shadow of a one-level, one-slice 2D texture whose
-//! texel is 4, 8 or 16 bytes, copied in place, is made `MUTABLE_FORMAT` with the unsigned-integer
+//! dispatch that stores the same words, the shadow of a one-slice 2D texture whose texel is 4, 8
+//! or 16 bytes, copied in place, is made `MUTABLE_FORMAT` with the unsigned-integer
 //! format of its texel's width listed (`R32_UINT`, `R32G32_UINT` or `R32G32B32A32_UINT`), and
 //! sampled usage ([`with_word_view`]), and its copies back are one dispatch of
 //! `bind::shadow_copy_back_module` each: invocation `(x, y)` fetches texel `(x0 + x, y0 + y)`
@@ -44,8 +44,11 @@
 //! host (`tracker::Barrier::to_host`, `ALL_COMMANDS`/`MEMORY_WRITE` to `HOST`/`HOST_READ`, or
 //! `Barrier::to_all`, which adds every later command of its `VkQueue`: `batch_order.rs`).
 //!
+//! **Levels.** A tiled texture's shadow holds every level, and its copies move its first alone
+//! (`Buffer::new_tiled_texture`): the view is of that level, as the copies' one region is.
+//!
 //! **Where the copy stays.** A device without the fact, a texel of another width, a texture of
-//! more levels or slices, bytes copied through a staging buffer, a region past the device's
+//! more slices, bytes copied through a staging buffer, a region past the device's
 //! storage buffer range or workgroup counts, a buffer whose `VkBuffer` went, or a set the device
 //! does not make: each copies back as before, the exact form every device takes.
 
@@ -107,14 +110,15 @@ pub(super) fn word_format(bytes: u32, stores: bool) -> Option<(Format, ShadowTex
 /// [`dispatches_in`]), storage usage where the device stores the integer format and the image has
 /// it already or its own format is not a single 32-bit channel (the module's storage usage;
 /// `EXTENDED_USAGE` where its own format takes either not); with that format, the view and
-/// whether it stores. `None`, `plan` unchanged, for a one-level, one-slice 2D color image's texel
-/// of another width, a compressed block, or a device that does not sample the integer format.
+/// whether it stores. `None`, `plan` unchanged, for an image of more than one slice, a texel of
+/// another width, a compressed block, or a device that does not sample the integer format. An
+/// image of more levels takes it, its view of the first level alone (the module's levels).
 pub(super) fn with_word_view(
     mut plan: ImagePlan,
     facts: &ImageFacts<'_>,
     stores_in: bool,
 ) -> (ImagePlan, Option<(Format, ShadowTexelView, bool)>) {
-    let single = plan.levels == 1 && plan.layers == 1 && plan.extent[2] == 1;
+    let one_slice = plan.layers == 1 && plan.extent[2] == 1;
     let single_channel_word = matches!(
         plan.format,
         Format::R32_UINT | Format::R32_SINT | Format::R32_SFLOAT
@@ -127,7 +131,9 @@ pub(super) fn with_word_view(
         .and_then(|block| word_format(block.size, storing));
     let sampled = FormatFeatureFlags2::SAMPLED_IMAGE;
     let Some((format, texel)) = word.filter(|&(format, _)| {
-        single && compatible(plan.format, format, false) && facts.optimal(format).contains(sampled)
+        one_slice
+            && compatible(plan.format, format, false)
+            && facts.optimal(format).contains(sampled)
     }) else {
         return (plan, None);
     };

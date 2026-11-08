@@ -1279,7 +1279,9 @@ fn unorm_read(format: Format) -> Option<ShadowMergeRead> {
 
 /// `plan`, a shadow's image, made to take its [`UnormView`]: sampled usage, with the kernel's read
 /// ([`unorm_read`]). `None`, `plan` unchanged, for an image of another format, of more than one
-/// level or slice, or of a format the device does not sample. Sampled usage changes nothing of
+/// slice, or of a format the device does not sample. An image of more levels takes it, its view of
+/// the first level alone: a tiled texture's shadow, whose copies move that level alone
+/// (`Buffer::new_tiled_texture`). Sampled usage changes nothing of
 /// the texture MoltenVK makes for the image: MoltenVK 1.4.1 gives a texture
 /// `MTLTextureUsageShaderRead` for transfer-source usage, which every shadow has, as for sampled
 /// usage (`MVKPixelFormats::getMTLTextureUsage`), and the view, of the image's own format and
@@ -1288,11 +1290,11 @@ pub(super) fn with_unorm_view(
     mut plan: ImagePlan,
     facts: &ImageFacts<'_>,
 ) -> (ImagePlan, Option<ShadowMergeRead>) {
-    let single = plan.levels == 1 && plan.layers == 1 && plan.extent[2] == 1;
+    let one_slice = plan.layers == 1 && plan.extent[2] == 1;
     let sampled = facts
         .optimal(plan.format)
         .contains(FormatFeatureFlags2::SAMPLED_IMAGE);
-    let read = unorm_read(plan.format).filter(|_| single && sampled);
+    let read = unorm_read(plan.format).filter(|_| one_slice && sampled);
     if read.is_some() {
         plan.usage |= ImageUsageFlags::SAMPLED;
     }
