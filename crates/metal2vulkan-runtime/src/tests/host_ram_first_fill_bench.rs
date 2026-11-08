@@ -17,6 +17,10 @@
 //! `FIRST-FILL` lines. Ignored: run it in release under `--cfg m2v_gpu`,
 //! `cargo test --release -p metal2vulkan-runtime --lib host_ram_first_fill_bench -- --ignored
 //! --nocapture`.
+//!
+//! Beside it, new surfaces filled from a guest's RAM while others are
+//! (`host_ram_contended_fill_bench`), and device caches released to fresh guest pages beside a
+//! compositor (`host_ram_block_release_bench`).
 
 use crate::{
     Buffer, CommandBufferStatus, CommandQueue, Device, DeviceKind, DeviceOptions, HostMemory,
@@ -605,6 +609,206 @@ fn host_ram_contended_fill_bench() {
             after.host_ram_chunk_import_nanos
         ),
         after.host_ram_copy_dispatches - before.host_ram_copy_dispatches,
+    );
+    drop(used);
+    drop(ram);
+    drop(fresh);
+}
+
+/// The block-release bench's RAM: 48 chunks.
+const RELEASE_BYTES: u64 = 48 * CHUNK;
+/// The scatters of each shape and size.
+const RELEASES: u64 = 5;
+/// The compositor's frame period, and the GPU time its frame's work takes.
+const FRAME: Duration = Duration::from_micros(16_667);
+const FRAME_GPU: Duration = Duration::from_millis(2);
+
+/// A release's guest pages, as offsets in the RAM: `bytes` of single pages over the three chunks
+/// from chunk `first` ([`surface_pages`]), or, `few`, four runs of a quarter of them, 3 MiB more
+/// than a run apart in chunk `first` (as many ranges as a copy imports alone, none joined).
+fn release_runs(seed: u64, first: u64, bytes: u64, few: bool) -> Vec<Range<u64>> {
+    if !few {
+        return surface_pages(seed, first, bytes / PAGE);
+    }
+    let run = bytes / 4;
+    (0..4)
+        .map(|at| {
+            let start = first * CHUNK + at * (run + (3 << 20));
+            start..start + run
+        })
+        .collect()
+}
+
+/// Device caches released to fresh guest pages beside a compositor, as a consumer's clip switch
+/// releases its blocks: [`RELEASES`] scatters of each shape (single pages over three chunks no
+/// copy took, or four runs in one) and size (4 and 24 MiB), each by one `copy_to_host_ram` from
+/// a `Private` buffer the GPU filled, committed by `commit_and_submit` and waited for, while
+/// another thread commits a frame of [`FRAME_GPU`] of GPU work on a queue of its own every
+/// [`FRAME`] and waits for it. Printed (`BLOCK-RELEASE`): per shape and size, the calls', the
+/// commits' and the completions' spread; the frames' commit to completion meanwhile; and the
+/// copies' counts over the run.
+#[test]
+#[ignore = "a release benchmark: run with --ignored --nocapture"]
+fn host_ram_block_release_bench() {
+    let options = DeviceOptions {
+        kinds: vec![
+            DeviceKind::Discrete,
+            DeviceKind::Integrated,
+            DeviceKind::Virtual,
+        ],
+        ..DeviceOptions::default()
+    };
+    let device = Device::system_default_with(&options).unwrap();
+    if device.shared().host_import.is_err() {
+        eprintln!("BLOCK-RELEASE: the device imports no host memory here");
+        return;
+    }
+    let fresh = Fresh::of(RELEASE_BYTES);
+    let at = NonNull::new(fresh.start as *mut u8).unwrap();
+    let keep: KeepAlive = Box::new(());
+    // SAFETY: the mapping is readable and writable until `fresh` goes, after the RAM's use.
+    let ram = Arc::new(unsafe { HostRam::new(&[(at, RELEASE_BYTES)], Some(keep)) }.unwrap());
+    let used = device.use_host_ram(&ram).unwrap();
+    // The compositor's frame: a fill of a `Private` buffer as long as takes `FRAME_GPU`.
+    let queue = device.new_command_queue().unwrap();
+    let probe_bytes: u64 = 64 << 20;
+    let probe = device
+        .new_buffer(probe_bytes, ResourceOptions::private())
+        .unwrap();
+    let (_, gpu, _) = timed(&queue, |encoder| {
+        encoder.fill_buffer(&probe, 0..probe_bytes, 1).unwrap();
+    });
+    let scale = FRAME_GPU.as_secs_f64() / gpu.as_secs_f64().max(1e-6);
+    let frame_bytes = ((probe_bytes as f64 * scale) as u64).clamp(16 << 20, 1 << 30) / PAGE * PAGE;
+    drop(probe);
+    let target = device
+        .new_buffer(frame_bytes, ResourceOptions::private())
+        .unwrap();
+    // Let the device's thread import the RAM's start, as at a boot's desktop.
+    std::thread::sleep(Duration::from_secs(1));
+    let before = device.work_counts();
+    let done = std::sync::atomic::AtomicBool::new(false);
+    let (times, frames) = std::thread::scope(|scope| {
+        let compositor = scope.spawn(|| {
+            let queue = device.new_command_queue().unwrap();
+            let mut frames = Vec::new();
+            let mut gpus = Vec::new();
+            while !done.load(std::sync::atomic::Ordering::Acquire) {
+                let started = Instant::now();
+                let (_, gpu, completion) = timed(&queue, |encoder| {
+                    encoder.fill_buffer(&target, 0..frame_bytes, 2).unwrap();
+                });
+                frames.push(completion);
+                gpus.push(gpu);
+                std::thread::sleep(FRAME.saturating_sub(started.elapsed()));
+            }
+            (frames, gpus)
+        });
+        let queue = device.new_command_queue().unwrap();
+        let mut times = Vec::new();
+        let mut first = 1;
+        for few in [false, true] {
+            for bytes in [4u64 << 20, 24 << 20] {
+                for release in 0..RELEASES {
+                    let seed = 0x9e37_79b9_7f4a_7c15 ^ (bytes << 8 | release << 1 | u64::from(few));
+                    let runs = release_runs(seed, first, bytes, few);
+                    first += if few { 1 } else { 3 };
+                    let host: Vec<Range<u64>> = (runs.iter())
+                        .map(|run| fresh.start + run.start..fresh.start + run.end)
+                        .collect();
+                    let cache = device
+                        .new_buffer(bytes, ResourceOptions::private())
+                        .unwrap();
+                    timed(&queue, |encoder| {
+                        encoder.fill_buffer(&cache, 0..bytes, 3).unwrap();
+                    });
+                    let command_buffer = queue.command_buffer().unwrap();
+                    let mut encoder = command_buffer.blit_command_encoder().unwrap();
+                    let started = Instant::now();
+                    encoder.copy_to_host_ram(&cache, 0, &ram, &host).unwrap();
+                    let call = started.elapsed();
+                    encoder.end_encoding().unwrap();
+                    let committed = Instant::now();
+                    command_buffer.commit_and_submit().unwrap();
+                    let commit = committed.elapsed();
+                    command_buffer.wait_until_completed_for(WAIT).unwrap();
+                    let completion = committed.elapsed();
+                    assert_eq!(command_buffer.status(), CommandBufferStatus::Completed);
+                    // SAFETY: the run's bytes in the mapping, which no command writes any more.
+                    let landed = host.iter().all(|run| {
+                        unsafe {
+                            std::slice::from_raw_parts(
+                                run.start as *const u8,
+                                (run.end - run.start) as usize,
+                            )
+                        }
+                        .iter()
+                        .all(|&byte| byte == 3)
+                    });
+                    assert!(landed, "the release's bytes in the pages");
+                    times.push((few, bytes, call, commit, completion));
+                    // Between releases, as a clip switch's come.
+                    std::thread::sleep(Duration::from_millis(50));
+                }
+            }
+        }
+        done.store(true, std::sync::atomic::Ordering::Release);
+        (times, compositor.join().unwrap())
+    });
+    let after = device.work_counts();
+    let (mut frames, mut gpus) = frames;
+    eprintln!(
+        "BLOCK-RELEASE device: {}; a frame of {} MiB filled every {:.1} ms beside, its GPU time {}",
+        device.name(),
+        frame_bytes >> 20,
+        FRAME.as_secs_f64() * 1e3,
+        spread(&mut gpus),
+    );
+    for few in [false, true] {
+        for bytes in [4u64 << 20, 24 << 20] {
+            let (mut calls, mut commits, mut completions) = (Vec::new(), Vec::new(), Vec::new());
+            for time in times.iter().filter(|time| time.0 == few && time.1 == bytes) {
+                calls.push(time.2);
+                commits.push(time.3);
+                completions.push(time.4);
+            }
+            let shape = match few {
+                true => "4 runs",
+                false => "single pages over 3 chunks",
+            };
+            eprintln!(
+                "BLOCK-RELEASE {} MiB, {shape}: {} scatters; calls {}; commits {}; commit to \
+                 completion {}",
+                bytes >> 20,
+                calls.len(),
+                spread(&mut calls),
+                spread(&mut commits),
+                spread(&mut completions),
+            );
+        }
+    }
+    eprintln!(
+        "BLOCK-RELEASE frames: {} beside; commit to completion {}",
+        frames.len(),
+        spread(&mut frames)
+    );
+    let ms = |a: u64, b: u64| (b - a) as f64 / 1e6;
+    eprintln!(
+        "BLOCK-RELEASE counts: run imports made {}, import waits {} for {:.1} ms, chunks imported \
+         {} (ahead {}) in {:.1} ms, gathers staged {}",
+        after.run_imports_made - before.run_imports_made,
+        after.host_ram_copy_import_waits - before.host_ram_copy_import_waits,
+        ms(
+            before.host_ram_copy_import_wait_nanos,
+            after.host_ram_copy_import_wait_nanos
+        ),
+        after.host_ram_chunks_imported - before.host_ram_chunks_imported,
+        after.host_ram_chunks_imported_ahead - before.host_ram_chunks_imported_ahead,
+        ms(
+            before.host_ram_chunk_import_nanos,
+            after.host_ram_chunk_import_nanos
+        ),
+        after.host_ram_copies_staged - before.host_ram_copies_staged,
     );
     drop(used);
     drop(ram);
