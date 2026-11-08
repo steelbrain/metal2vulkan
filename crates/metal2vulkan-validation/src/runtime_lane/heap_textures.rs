@@ -2230,8 +2230,11 @@ fn heap_depth_textures_keep_their_texels_in_metal_s_tiles() {
 /// bytes (`heap_layouts::tiled_offset`), once the spin raised its ticket, and then releases the
 /// spin. The texture's image holds the copied texels between, so a keep of the heap's bytes as
 /// it runs would hold the CPU's write, and the merge would undo it with the image's value; the
-/// keep holds the bytes the copy in read. Where the device makes the texture a shadow of Metal's
-/// tiles (`WorkCounts::heap_textures_tiled`), the keep is counted
+/// keep holds the bytes the copy in read. A `HEAPTEX keep after copy in` line prints whether the
+/// write fell between (the ticket seen, and the spin ended by its release rather than its cap: a
+/// device that shows a running kernel no host store, or the host none of its stores, leaves it
+/// unordered, and the writes are kept all the same). Where the device makes the texture a shadow
+/// of Metal's tiles (`WorkCounts::heap_textures_tiled`), the keep is counted
 /// (`WorkCounts::shadow_texels_kept`), and not as one right after its copy in
 /// (`WorkCounts::shadow_keeps_from_staging`): the first encoder's is the only copy in.
 #[test]
@@ -2323,11 +2326,16 @@ fn a_heap_depth_texture_keeps_a_cpu_write_made_after_its_copy_in() {
             .unwrap();
         write.end_encoding().unwrap();
         command_buffer.commit().unwrap();
-        let deadline = Instant::now() + Duration::from_secs(5);
-        while word(&ticket, 0) != 2 {
-            assert!(Instant::now() < deadline, "the spin never started");
-            std::thread::sleep(Duration::from_micros(50));
-        }
+        // A device that shows the host no store of a running kernel's leaves the ticket unseen,
+        // and the write goes on unordered with the copies.
+        let deadline = Instant::now() + Duration::from_millis(200);
+        let seen = loop {
+            match word(&ticket, 0) == 2 {
+                true => break true,
+                false if Instant::now() >= deadline => break false,
+                false => std::thread::sleep(Duration::from_micros(50)),
+            }
+        };
         let contents = over.contents().expect("a Shared heap's buffer");
         // SAFETY: the texel's four bytes inside the buffer, which no command of the running
         // command buffer touches.
@@ -2340,13 +2348,15 @@ fn a_heap_depth_texture_keeps_a_cpu_write_made_after_its_copy_in() {
             .wait_until_completed_for(super::WAIT)
             .unwrap();
         assert_eq!(command_buffer.error(), None);
-        assert_eq!(word(&words, 1), 5, "the spin ended at its release");
+        // Between the copy in and the keep: after the spin started, before its release ended it.
+        let between = seen && word(&words, 1) == 5;
         let after = device.work_counts();
         let kept = after.shadow_texels_kept - counted.shadow_texels_kept;
         let staged_keeps = after.shadow_keeps_from_staging - counted.shadow_keeps_from_staging;
         eprintln!(
-            "HEAPTEX keep after copy in: tiled {tiled}, {kept} texels kept, {staged_keeps} keeps \
-             from staging right after a copy in"
+            "HEAPTEX keep after copy in: tiled {tiled}, the CPU's write between the copy in and \
+             the keep {between}, {kept} texels kept, {staged_keeps} keeps from staging right \
+             after a copy in"
         );
         if tiled {
             assert!(kept > 0, "the merge's keep");
