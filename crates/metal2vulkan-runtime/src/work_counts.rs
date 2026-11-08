@@ -612,8 +612,11 @@ struct CommandCounters {
     draws_unkept_barrier: AtomicU64,
     draws_unkept_shadowed: AtomicU64,
     draws_unkept_tables: AtomicU64,
+    draws_unkept_tables_heap: AtomicU64,
+    draws_unkept_tables_writing: AtomicU64,
     draws_unkept_index_copied: AtomicU64,
     draws_unkept_writing: AtomicU64,
+    draws_unkept_writing_resident: AtomicU64,
     draws_unkept_making: AtomicU64,
     draws_unkept_other: AtomicU64,
     draws_unlike_kept: AtomicU64,
@@ -641,6 +644,10 @@ pub(crate) struct UnkeptDraw {
     pub(crate) index_copied: bool,
     /// A use that writes, or reads indirect arguments.
     pub(crate) writing: bool,
+    /// Of `writing`: such a use among those of what its encoder made resident.
+    pub(crate) writing_resident: bool,
+    /// Of `tables`: a heap's set.
+    pub(crate) tables_heap: bool,
     /// Its `VkPipeline` still being made.
     pub(crate) making: bool,
 }
@@ -1012,7 +1019,7 @@ impl Counting<'_> {
         let counts = self.0;
         counts.add(|counts| &counts.draws_unkept, 1);
         let (begun, later, steps) = why.instance_split;
-        let groups: [(bool, fn(&CommandCounters) -> &AtomicU64); 10] = [
+        let groups: [(bool, fn(&CommandCounters) -> &AtomicU64); 13] = [
             (why.instance, |c| &c.draws_unkept_instance),
             (begun, |c| &c.draws_unkept_instance_begun),
             (later, |c| &c.draws_unkept_instance_later),
@@ -1020,8 +1027,13 @@ impl Counting<'_> {
             (why.barrier, |c| &c.draws_unkept_barrier),
             (why.shadowed, |c| &c.draws_unkept_shadowed),
             (why.tables, |c| &c.draws_unkept_tables),
+            (why.tables_heap, |c| &c.draws_unkept_tables_heap),
+            (why.tables && why.writing, |c| {
+                &c.draws_unkept_tables_writing
+            }),
             (why.index_copied, |c| &c.draws_unkept_index_copied),
             (why.writing, |c| &c.draws_unkept_writing),
+            (why.writing_resident, |c| &c.draws_unkept_writing_resident),
             (why.making, |c| &c.draws_unkept_making),
         ];
         let mut any = false;
@@ -5983,10 +5995,17 @@ pub struct WorkCounts {
     /// Of `draws_unkept`, those that read a heap's set, a texture or sampler table, a root table
     /// or a push hole, or whose argument samplers left states out.
     pub draws_unkept_tables: u64,
+    /// Of `draws_unkept_tables`, those that read a heap's set.
+    pub draws_unkept_tables_heap: u64,
+    /// Of `draws_unkept_tables`, those also counted in `draws_unkept_writing`.
+    pub draws_unkept_tables_writing: u64,
     /// Of `draws_unkept`, those that read their index buffer through a copy.
     pub draws_unkept_index_copied: u64,
     /// Of `draws_unkept`, those with a use that writes memory or reads indirect arguments.
     pub draws_unkept_writing: u64,
+    /// Of `draws_unkept_writing`, those with such a use among the uses of what their encoder made
+    /// resident (`use_resource`, `use_heap`).
+    pub draws_unkept_writing_resident: u64,
     /// Of `draws_unkept`, those that recorded against a `VkPipeline` still being made.
     pub draws_unkept_making: u64,
     /// Of `draws_unkept`, those that met none of the groups above (another condition a kept draw
@@ -7802,8 +7821,11 @@ impl Device {
             draws_unkept_barrier: commands(|counts| &counts.draws_unkept_barrier),
             draws_unkept_shadowed: commands(|counts| &counts.draws_unkept_shadowed),
             draws_unkept_tables: commands(|counts| &counts.draws_unkept_tables),
+            draws_unkept_tables_heap: commands(|counts| &counts.draws_unkept_tables_heap),
+            draws_unkept_tables_writing: commands(|counts| &counts.draws_unkept_tables_writing),
             draws_unkept_index_copied: commands(|counts| &counts.draws_unkept_index_copied),
             draws_unkept_writing: commands(|counts| &counts.draws_unkept_writing),
+            draws_unkept_writing_resident: commands(|counts| &counts.draws_unkept_writing_resident),
             draws_unkept_making: commands(|counts| &counts.draws_unkept_making),
             draws_unkept_other: commands(|counts| &counts.draws_unkept_other),
             draws_unlike_kept: commands(|counts| &counts.draws_unlike_kept),

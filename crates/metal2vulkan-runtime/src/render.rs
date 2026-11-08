@@ -10690,8 +10690,9 @@ impl RenderLowering {
         // Its uses: none written, none read as indirect arguments, and whether one reads an image
         // other than as an attachment (`draw_again::unwritten`). Those of what the encoder made
         // resident are a function of their identity, so they are walked once for it
-        // (`WorkCounts::resident_uses_again_checked`).
-        let (unwritten, reads_images) = {
+        // (`WorkCounts::resident_uses_again_checked`); whether those write is counted where the
+        // draw is not kept (`WorkCounts::draws_unkept_writing_resident`).
+        let (unwritten, reads_images, resident_writes) = {
             let (resident, own) = match uses.prefix() {
                 Some(prefix) => {
                     let facts = match self.resident_again {
@@ -10712,9 +10713,9 @@ impl RenderLowering {
             match resident {
                 (true, resident_reads) => {
                     let (unwritten, reads_images) = draw_again::unwritten(own);
-                    (unwritten, resident_reads || reads_images)
+                    (unwritten, resident_reads || reads_images, false)
                 }
-                (false, _) => (false, false),
+                (false, _) => (false, false, true),
             }
         };
         let extended = |c: &render_pass::ColorTarget| {
@@ -10824,6 +10825,8 @@ impl RenderLowering {
                     || unlisted.is_some(),
                 index_copied: !index.is_none_or(DrawSource::in_place),
                 writing: !unwritten,
+                writing_resident: resident_writes,
+                tables_heap: heap.is_some(),
                 making: !matches!(draw_pipeline, DrawPipeline::Made(_)),
             };
             self.core.counts().draw_unkept(unkept);
