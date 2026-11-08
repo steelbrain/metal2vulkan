@@ -3,11 +3,11 @@
 //! a host-visible buffer's fresh pages where the device imports them, a heap) returns with the
 //! block's `vkFreeMemory` posted to the thread (`WorkCounts::memory_frees_posted`). Such a block is
 //! kept for reuse instead while its heap keeps fewer empty bytes than its budget (at most 2 GiB,
-//! the runtime's `memory.rs`), so each kind makes [`PAST_KEPT`] bytes of its objects at once and
-//! releases them one by one: the releases past the budget free their blocks. Meanwhile a no-copy
-//! buffer's import of the caller's pages is freed before its release returns, posted never: Vulkan
-//! has "the application must ensure that the imported memory range remains valid and accessible for
-//! the lifetime of the imported memory object", and the caller frees its pages once the release
+//! the runtime's `memory.rs`), so each kind makes one object at a time, each longer than the last,
+//! until a release frees its block ([`Released::until_one_frees`]). Meanwhile a no-copy buffer's
+//! import of the caller's pages is freed before its release returns, posted never: Vulkan has "the
+//! application must ensure that the imported memory range remains valid and accessible for the
+//! lifetime of the imported memory object", and the caller frees its pages once the release
 //! returns. Each release's time is printed (`POSTED-FREES` lines).
 //!
 //! What the runtime crate's own tests hold the thread for (`tests/posted_frees.rs`): a pinned
@@ -27,14 +27,14 @@ use std::time::{Duration, Instant};
 /// runtime's recycler parks: a block of its own, freed as the buffer goes.
 const APART: u64 = 96 << 20;
 
-/// The bytes of each kind's objects made at once before their releases: past the most a heap of
-/// the runtime's keeps of empty blocks for reuse (2 GiB, `memory.rs`'s `KEPT_EMPTY_BYTES`).
-const PAST_KEPT: u64 = 5 << 29;
+/// The most objects of a kind [`Released::until_one_frees`] makes: from 96 MiB, each [`GROWTH`]
+/// longer than the last, their bytes pass twice the 2 GiB of empty blocks a heap keeps at most.
+const MOST_GROWN: usize = 24;
 
-/// The objects of `bytes` each that make up [`PAST_KEPT`].
-fn past_kept(bytes: u64) -> usize {
-    PAST_KEPT.div_ceil(bytes) as usize
-}
+/// Each object [`Released::until_one_frees`] makes is an eighth longer than the last, so it takes
+/// no block kept from the last (a kept block of its own takes a placement no longer than it), and
+/// the process holds at most the heap's kept budget and one object at once.
+const GROWTH: u64 = 8;
 
 /// The no-copy buffers' releases timed.
 const ROUNDS: usize = 4;
@@ -76,6 +76,22 @@ impl Released {
         self.add(&before, &after);
     }
 
+    /// Make objects through `make`, the first of `bytes` and each next [`GROWTH`] longer, each
+    /// released before the next is made, until a release frees a block (at most [`MOST_GROWN`]):
+    /// the runtime keeps a block of its own that empties for reuse while its heap keeps fewer
+    /// empty bytes than its budget (`memory.rs`'s `KEPT_EMPTY_BYTES`), and such a block takes only
+    /// a placement no longer than it, which none of these is.
+    fn until_one_frees<T>(&mut self, device: &Device, mut bytes: u64, make: impl Fn(u64) -> T) {
+        for _ in 0..MOST_GROWN {
+            let object = make(bytes);
+            self.release(device, object);
+            if self.blocks > 0 {
+                return;
+            }
+            bytes += bytes / GROWTH;
+        }
+    }
+
     fn add(&mut self, before: &WorkCounts, after: &WorkCounts) {
         self.blocks += after.memory_frees.blocks - before.memory_frees.blocks;
         self.posted += after.memory_frees_posted - before.memory_frees_posted;
@@ -106,12 +122,9 @@ fn a_released_block_is_freed_on_the_free_thread_and_a_host_import_before_the_rel
             ("managed buffer", managed()),
         ] {
             let mut released = Released::new();
-            let buffers: Vec<_> = (0..past_kept(APART))
-                .map(|_| device.new_buffer(APART, options).unwrap())
-                .collect();
-            for buffer in buffers {
-                released.release(device, buffer);
-            }
+            released.until_one_frees(device, APART, |bytes| {
+                device.new_buffer(bytes, options).unwrap()
+            });
             assert!(
                 released.posted > 0 && released.posted <= released.blocks,
                 "{kind}: the block's free was posted ({})",
@@ -119,18 +132,17 @@ fn a_released_block_is_freed_on_the_free_thread_and_a_host_import_before_the_rel
             );
             lines.push(released.line(kind));
         }
-        // 8192x8192 RGBA8: 256 MiB, past what the recycler parks of images.
-        let mut descriptor =
-            TextureDescriptor::texture_2d(PixelFormat::RGBA8Unorm, 8192, 8192, false);
-        descriptor.usage = TextureUsage::SHADER_READ;
-        descriptor.resource_options = ResourceOptions::private();
+        // RGBA8 from 8192x8192, 256 MiB, past what the recycler parks of images, to Metal's
+        // largest side.
         let mut released = Released::new();
-        let textures: Vec<_> = (0..past_kept(256 << 20))
-            .map(|_| device.new_texture(&descriptor).unwrap())
-            .collect();
-        for texture in textures {
-            released.release(device, texture);
-        }
+        released.until_one_frees(device, 256 << 20, |bytes| {
+            let side = ((bytes / 4).isqrt() / 16 * 16).min(16384);
+            let mut descriptor =
+                TextureDescriptor::texture_2d(PixelFormat::RGBA8Unorm, side, side, false);
+            descriptor.usage = TextureUsage::SHADER_READ;
+            descriptor.resource_options = ResourceOptions::private();
+            device.new_texture(&descriptor).unwrap()
+        });
         assert!(
             released.posted > 0 && released.posted <= released.blocks,
             "a texture's block's free was posted ({})",
@@ -138,14 +150,11 @@ fn a_released_block_is_freed_on_the_free_thread_and_a_host_import_before_the_rel
         );
         lines.push(released.line("private texture"));
         // A heap's bytes are a buffer's: past what the recycler parks too.
-        let heap = HeapDescriptor::new(HeapType::Automatic, APART, ResourceOptions::private());
         let mut released = Released::new();
-        let heaps: Vec<_> = (0..past_kept(APART))
-            .map(|_| device.new_heap(&heap).unwrap())
-            .collect();
-        for heap in heaps {
-            released.release(device, heap);
-        }
+        released.until_one_frees(device, APART, |bytes| {
+            let heap = HeapDescriptor::new(HeapType::Automatic, bytes, ResourceOptions::private());
+            device.new_heap(&heap).unwrap()
+        });
         assert!(
             released.posted > 0 && released.posted <= released.blocks,
             "a heap's block's free was posted ({})",
