@@ -585,10 +585,12 @@ pub enum Problem {
     ///
     /// Basis: ours (a runtime extension: Metal has no binary semaphores).
     Semaphore(SemaphoreProblem),
-    /// The memory of a buffer, or the semaphore of a shared event, not made exportable
-    /// (`Buffer::export_memory_fd` of a buffer `Device::new_exportable_buffer` did not make, and
+    /// The memory of a buffer, or the semaphore of a shared event, not made exportable as asked
+    /// (`Buffer::export_memory_fd` of a buffer not made exportable as an opaque file descriptor,
+    /// `Buffer::export_memory_dma_buf` of one not made exportable as a dma-buf,
+    /// `Buffer::external_write_done` of one made exportable as neither, and
     /// `SharedEvent::export_semaphore_fd` of an event `Device::new_exportable_shared_event` did
-    /// not make): no other API imports it.
+    /// not make): no other API imports it so.
     ///
     /// Basis: ours (a runtime extension: Metal exports no buffer's memory and no event's
     /// semaphore).
@@ -705,6 +707,12 @@ pub enum Problem {
     ///
     /// Basis: ours (a runtime extension: Metal places no buffer's byte).
     AlignedByteNoCopy,
+    /// A buffer descriptor that makes the buffer's memory exportable
+    /// (`BufferDescriptor::exported_as`) with `NoCopy` contents: the export is of the runtime's own
+    /// memory, never the caller's pages, which the caller can hand to another API itself.
+    ///
+    /// Basis: ours (a runtime extension: Metal exports no buffer's memory).
+    ExportedNoCopy,
     /// A texture buffer's fill given a pattern of more than 32752 bytes
     /// (`fillTexture:...:bytes:length:`): Metal's process ends in the call, in the blit's
     /// dispatch, whatever the region, of no texels or past the buffer too (an Apple M3 Max under
@@ -1602,6 +1610,15 @@ pub enum RuntimeGap {
     /// `VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT` not exportable for the runtime's buffer
     /// usage). Every other buffer is made as before.
     ExportableMemory,
+    /// A buffer whose memory another API imports as a dma-buf (`MemoryExport::DmaBuf`, a runtime
+    /// extension: Metal has none) on a device that does not enable `VK_KHR_external_memory_fd`,
+    /// `VK_EXT_external_memory_dma_buf` and `VK_EXT_queue_family_foreign`, whose queue family the
+    /// acquire of the other API's writes names (the runtime enables them wherever the device lists
+    /// them; an adopted device's consumer enables them or not), or that exports no buffer's memory
+    /// as a dma-buf (`vkGetPhysicalDeviceExternalBufferProperties` answers
+    /// `VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT` not exportable for the runtime's buffer
+    /// usage). Every other buffer is made as before.
+    DmaBufExport,
     /// A shared event whose timeline semaphore another API imports
     /// (`Device::new_exportable_shared_event`, a runtime extension: Metal has none) on a device
     /// that does not enable `VK_KHR_external_semaphore_fd` (the runtime enables it wherever the

@@ -51,7 +51,9 @@ pub struct RawDevice {
     /// a texture over a buffer's memory render into its linear image in place;
     /// `VK_KHR_external_memory_fd` with `VK_EXT_external_memory_dma_buf` serve
     /// `HostMemory::with_dma_buf`, and with them `VK_EXT_image_drm_format_modifier` with
-    /// `VK_EXT_queue_family_foreign` make textures over its pages images rather than shadows.
+    /// `VK_EXT_queue_family_foreign` make textures over its pages images rather than shadows;
+    /// those two with `VK_EXT_queue_family_foreign` make buffers whose memory is exported as a
+    /// dma-buf (`MemoryExport::DmaBuf`).
     pub device_extensions: Vec<CString>,
     /// Where the device keeps translated shaders: by default, the platform's per-user cache
     /// directory.
@@ -281,6 +283,9 @@ impl Device {
         // Nor whether `VK_KHR_external_memory_fd` was (`exported_memory.rs`): the consumer lists
         // it.
         let memory_fd = super::create::memory_fd_name(&listed).is_some();
+        // Nor whether `VK_EXT_queue_family_foreign` was beside the dma-buf route's
+        // (`exported_memory.rs`): the consumer lists them.
+        let foreign_family = super::create::foreign_family_name(&listed).is_some();
         // Nor whether `VK_KHR_external_semaphore_fd` was (`exported_semaphore.rs`).
         let semaphore_fd = super::create::semaphore_fd_name(&listed).is_some();
         let graphics_pipeline_library = super::create::graphics_pipeline_library(&listed, || {
@@ -338,6 +343,7 @@ impl Device {
             dma_buf,
             dma_buf_images,
             memory_fd,
+            foreign_family,
             semaphore_fd,
             calibration: gpu_time::Extension::among(&raw.device_extensions.into_iter().collect()),
             gpu_times_from_host: raw.gpu_times_from_host,

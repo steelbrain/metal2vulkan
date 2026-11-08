@@ -31,7 +31,10 @@
 //!   buffer's (`Buffer::fill_first_from`). So do a sparse texture's image (its move; an emulated
 //!   one's zeros too) and its tile map's bytes, and the device's neutrals: a neutral image's move
 //!   and its clear ([`FirstMove::cleared`]: it may be multisampled, which no copy writes), and a
-//!   neutral texel buffer's fill (`neutral.rs`).
+//!   neutral texel buffer's fill (`neutral.rs`). An exportable buffer whose memory an external
+//!   agent wrote notes its acquire from that agent's reserved queue family
+//!   (`Buffer::external_write_done`, [`FirstFill::acquired`]), recorded in the barrier that leads
+//!   the fills.
 //! - **Who records it.** The device's next submission that may reach the resource, before any of
 //!   its commands: every batch of the scheduler, whose commands may reach every texture through
 //!   its resource ID and every buffer through its address, unnamed (`heap_sets.rs`), and every
@@ -627,7 +630,8 @@ pub(super) const STAGED_COPIES: usize = 4096;
 
 /// A new buffer's fill: copies of the device's zeros onto `range` of `buffer`, or a fill of its
 /// words with zeros (`word_fill.rs`), or copies of the bytes a staging buffer holds, or a
-/// `Managed` buffer's upload from its host copy.
+/// `Managed` buffer's upload from its host copy; or an exportable buffer's acquire from the
+/// external agent that wrote its memory ([`FirstFill::acquired`]), which copies nothing.
 pub(crate) struct FirstFill {
     buffer: vk::Buffer,
     source: vk::Buffer,
@@ -639,6 +643,10 @@ pub(crate) struct FirstFill {
     /// What keeps the staging buffer `source` is, held until the submission that makes the fill
     /// completed; `None` where `source` is the device's zeros.
     staging: Option<Box<dyn Any + Send + Sync>>,
+    /// The queue families of an acquire of the whole `VkBuffer` (source, a family reserved for
+    /// external memory; target), recorded in the barrier before every fill, in place of copies
+    /// (none then).
+    acquire: Option<(u32, u32)>,
 }
 
 impl FirstFill {
@@ -660,6 +668,7 @@ impl FirstFill {
             copies,
             filled: None,
             staging: None,
+            acquire: None,
         }
     }
 
@@ -685,6 +694,7 @@ impl FirstFill {
                 copies: Vec::new(),
                 filled: Some(range),
                 staging: None,
+                acquire: None,
             });
         }
         let zeros = moves.zeros(device, 0)?;
@@ -715,7 +725,38 @@ impl FirstFill {
             }],
             filled: None,
             staging: Some(staging),
+            acquire: None,
         }
+    }
+
+    /// The acquire of `buffer`, whole, from `source`, a queue family reserved for external memory
+    /// (`VK_QUEUE_FAMILY_EXTERNAL`, `VK_QUEUE_FAMILY_FOREIGN_EXT`), for `target`: the device's
+    /// queue family, or `VK_QUEUE_FAMILY_IGNORED` where its buffers are concurrent among several.
+    fn acquired(buffer: vk::Buffer, (source, target): (u32, u32)) -> FirstFill {
+        FirstFill {
+            buffer,
+            source: vk::Buffer::null(),
+            copies: Vec::new(),
+            filled: None,
+            staging: None,
+            acquire: Some((source, target)),
+        }
+    }
+
+    /// The barrier of its acquire, where it is one: no access of the device's before it (an
+    /// acquire's source access is ignored), every access after.
+    fn acquire_barrier(&self) -> Option<vk::BufferMemoryBarrier<'static>> {
+        let (source, target) = self.acquire?;
+        Some(
+            vk::BufferMemoryBarrier::default()
+                .src_access_mask(vk::AccessFlags::empty())
+                .dst_access_mask(vk::AccessFlags::MEMORY_READ | vk::AccessFlags::MEMORY_WRITE)
+                .src_queue_family_index(source)
+                .dst_queue_family_index(target)
+                .buffer(self.buffer)
+                .offset(0)
+                .size(vk::WHOLE_SIZE),
+        )
     }
 }
 
@@ -991,6 +1032,23 @@ impl FirstMoves {
         let _order = self.registration_place();
         lock(&self.waiting).push(Waiting::Fill(keeper, fill));
         Ok(())
+    }
+
+    /// The exportable buffer `keeper` waits for the acquire of its `VkBuffer` `buffer`, whole,
+    /// from `families`' source, a queue family reserved for external memory, for its target
+    /// (`FirstFill::acquired`): what an external agent wrote to its memory, which the caller
+    /// waited for, is the device's to read once a submission made it, before any of its commands
+    /// (`Buffer::external_write_done`). Its barrier leads the submission's fills, so the caller
+    /// settles the buffer's own fills first.
+    pub(crate) fn register_acquire(
+        &self,
+        keeper: Weak<dyn Filled>,
+        buffer: vk::Buffer,
+        families: (u32, u32),
+    ) {
+        let fill = FirstFill::acquired(buffer, families);
+        let _order = self.registration_place();
+        lock(&self.waiting).push(Waiting::Fill(keeper, fill));
     }
 
     /// The buffer `keeper`, whose bytes the host cannot write, waits for the copy of `length`
@@ -1621,10 +1679,16 @@ impl Taken<'_> {
             })
         };
         if !fills.is_empty() {
-            // SAFETY: the caller's contract.
+            let acquires: Vec<vk::BufferMemoryBarrier<'_>> = fills
+                .iter()
+                .filter_map(|fill| fill.acquire_barrier())
+                .collect();
+            // SAFETY: the caller's contract; each acquired buffer is live (held), and its acquire
+            // names the device's family for it (`Device::external_acquirer`).
             unsafe {
                 let flags = vk::DependencyFlags::empty();
-                device.cmd_pipeline_barrier(command_buffer, all, all, flags, &written(), &[], &[]);
+                let (memory, buffers) = (&written(), &acquires);
+                device.cmd_pipeline_barrier(command_buffer, all, all, flags, memory, buffers, &[]);
             }
             exit_guard::called(Call::CmdPipelineBarrier);
         }
@@ -1659,6 +1723,10 @@ impl Taken<'_> {
                 }
                 exit_guard::called(Call::CmdFillBuffer);
                 counts.new_buffer_zero_filled();
+                continue;
+            }
+            // An acquire copies nothing: its barrier led the fills.
+            if fill.copies.is_empty() {
                 continue;
             }
             // SAFETY: as above; every copy lies within its source, the device's zeros (live and

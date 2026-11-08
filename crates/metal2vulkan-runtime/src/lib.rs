@@ -267,7 +267,7 @@ pub use attributes::PurgeableState;
 pub use binary_archive::{BinaryArchive, BinaryArchiveDescriptor};
 pub use blit::BlitCommandEncoder;
 pub use buffer::Buffer;
-pub use buffer_descriptor::{BufferContents, BufferDescriptor};
+pub use buffer_descriptor::{BufferContents, BufferDescriptor, MemoryExport};
 pub use buffer_texture::IoSurfacePlane;
 pub use capabilities::{DeviceProperties, MacClass, Query};
 pub use churn_counts::{ObjectChurn, ShadowKeeps};

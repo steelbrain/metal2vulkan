@@ -95,6 +95,40 @@ impl std::fmt::Debug for BufferContents<'_> {
     }
 }
 
+/// The handle type a buffer's memory is exported as, for another API to import it (a runtime
+/// extension: Metal exports no buffer's memory): `BufferDescriptor::exported_as`
+/// (`exported_memory.rs`).
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MemoryExport {
+    /// An opaque file descriptor (`VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT`), which CUDA and
+    /// another `VkDevice` of the same driver import: `Buffer::export_memory_fd`.
+    OpaqueFd,
+    /// A dma-buf (`VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT`), which VA-API's `DRM_PRIME_2`
+    /// surfaces and any other driver's dma-buf imports take: `Buffer::export_memory_dma_buf`.
+    DmaBuf,
+}
+
+impl MemoryExport {
+    /// What a device that does not export a buffer's memory as it refuses the making with.
+    pub(super) fn gap(self) -> RuntimeGap {
+        match self {
+            MemoryExport::OpaqueFd => RuntimeGap::ExportableMemory,
+            MemoryExport::DmaBuf => RuntimeGap::DmaBufExport,
+        }
+    }
+}
+
+/// How a buffer of the runtime's own memory a descriptor asks for is made: at `place` in the
+/// address space, its byte `aligned` (where given) on a multiple of 256 bytes of its memory, in
+/// memory exportable as `export` (where given).
+#[derive(Clone, Copy)]
+struct Made {
+    place: Place,
+    aligned: Option<u64>,
+    export: Option<MemoryExport>,
+}
+
 /// `MTLBufferDescriptor` (Apple's private class, a runtime extension): a buffer's length, resource
 /// options, contents, and address. Its default is Metal's: length 0, options 0, zero contents, an
 /// address the runtime picks (`pinnedGPUAddress` 0).
@@ -162,6 +196,16 @@ pub struct BufferDescriptor<'a> {
     /// caller's. A runtime extension with no Metal counterpart; `None` by default, Metal's
     /// placement.
     pub aligned_byte: Option<u64>,
+    /// The handle type its memory is exported as, for another API to import it
+    /// (`Buffer::export_memory_fd`, `Buffer::export_memory_dma_buf`): the buffer lies in memory
+    /// allocated exportable as it, as `Device::new_exportable_buffer` lays an opaque file
+    /// descriptor's (`exported_memory.rs`), with the other fields' effects (an aligned byte lies on
+    /// a multiple of 256 bytes of that memory). Only for a buffer of the runtime's own memory
+    /// (`Zero`, `Copy` or `CopyHost` contents); refused (`Invalid`, `ExportedNoCopy`) with `NoCopy`
+    /// contents, and `NotImplemented` on a device that does not export its memory so
+    /// (`RuntimeGap::ExportableMemory`, `RuntimeGap::DmaBufExport`). A runtime extension with no
+    /// Metal counterpart; `None` by default, memory no other API imports.
+    pub exported_as: Option<MemoryExport>,
 }
 
 impl<'a> BufferDescriptor<'a> {
@@ -181,6 +225,7 @@ impl<'a> BufferDescriptor<'a> {
             pool_slot: None,
             padding_unobserved: false,
             aligned_byte: None,
+            exported_as: None,
         }
     }
 
@@ -230,6 +275,14 @@ impl<'a> BufferDescriptor<'a> {
             ..self
         }
     }
+
+    /// This descriptor's buffer with its memory exportable as `export` (`exported_as`).
+    pub fn with_exported_as(self, export: MemoryExport) -> BufferDescriptor<'a> {
+        BufferDescriptor {
+            exported_as: Some(export),
+            ..self
+        }
+    }
 }
 
 impl Device {
@@ -263,6 +316,11 @@ impl Device {
     ///
     /// With `aligned_byte`, that byte of the buffer lies on a multiple of 256 bytes of its memory
     /// (the field's docs). Refused: `Invalid` (`AlignedByteNoCopy`) with `NoCopy` contents.
+    ///
+    /// With `exported_as`, the buffer's memory is exportable as that handle type (the field's
+    /// docs). Refused: `Invalid` (`ExportedNoCopy`) with `NoCopy` contents; `NotImplemented`
+    /// ([`RuntimeGap::ExportableMemory`], [`RuntimeGap::DmaBufExport`]) on a device that does not
+    /// export such memory.
     pub fn new_buffer_with_descriptor(
         &self,
         descriptor: BufferDescriptor<'_>,
@@ -289,12 +347,16 @@ impl Device {
             pool_slot,
             padding_unobserved,
             aligned_byte,
+            exported_as,
         } = descriptor;
         if padding_unobserved && matches!(contents, BufferContents::NoCopy { .. }) {
             return Err(invalid(CALL, Problem::PaddingUnobservedNoCopy));
         }
         if aligned_byte.is_some() && matches!(contents, BufferContents::NoCopy { .. }) {
             return Err(invalid(CALL, Problem::AlignedByteNoCopy));
+        }
+        if exported_as.is_some() && matches!(contents, BufferContents::NoCopy { .. }) {
+            return Err(invalid(CALL, Problem::ExportedNoCopy));
         }
         let place = match (range_of, pool_slot) {
             (Some(other), slot) => {
@@ -317,22 +379,25 @@ impl Device {
             BufferContents::NoCopy { .. } => no_copy_options(resource_options),
             _ => (self.own_memory_options(CALL, resource_options)?, false),
         };
+        let made = Made {
+            place,
+            aligned: aligned_byte,
+            export: exported_as,
+        };
         let buffer = match contents {
-            BufferContents::Zero => {
-                self.zero_buffer(CALL, length, resource_options, (place, aligned_byte))
-            }
+            BufferContents::Zero => self.zero_buffer(CALL, length, resource_options, made),
             BufferContents::Copy(bytes) => {
                 if bytes.len() as u64 != length {
                     return Err(invalid(CALL, Problem::LengthMismatch));
                 }
                 let bytes = HostBytes::from_slice(bytes);
-                self.buffer_with_bytes(CALL, bytes, resource_options, (place, aligned_byte))
+                self.buffer_with_bytes(CALL, bytes, resource_options, made)
             }
             BufferContents::CopyHost(bytes) => {
                 if bytes.len() as u64 != length {
                     return Err(invalid(CALL, Problem::LengthMismatch));
                 }
-                self.buffer_with_bytes(CALL, bytes, resource_options, (place, aligned_byte))
+                self.buffer_with_bytes(CALL, bytes, resource_options, made)
             }
             // SAFETY: the `HostMemory` constructor's caller vouched for `length` bytes at the
             // pointer.
@@ -514,23 +579,33 @@ impl Device {
         shared.counts.host_range_remapped(imports);
     }
 
-    /// A buffer of `length` zero bytes at `placement`, its byte `aligned` (where given) on a
-    /// multiple of 256 bytes of its memory, for `call`: refused as [`Device::new_buffer`] is, and
-    /// for a pin the address space cannot honour; announced as `new_buffer` announces it.
+    /// A buffer of `length` zero bytes made as `made` says, for `call`: refused as
+    /// [`Device::new_buffer`] is, for a pin the address space cannot honour, and for an export the
+    /// device does not make; announced as `new_buffer` announces it.
     fn zero_buffer(
         &self,
         call: &'static str,
         length: u64,
         options: ResourceOptions,
-        (placement, aligned): (Place, Option<u64>),
+        made: Made,
     ) -> Result<Buffer, Error> {
-        let (buffer, class) = self.buffer_of_length(call, length, options, (placement, aligned))?;
+        let Made {
+            place,
+            aligned,
+            export,
+        } = made;
+        if let Some(export) = export {
+            #[cfg(unix)]
+            return self.exportable_buffer(call, length, options, (place, aligned), export);
+            #[cfg(not(unix))]
+            return Err(Error::NotImplemented(export.gap()));
+        }
+        let (buffer, class) = self.buffer_of_length(call, length, options, (place, aligned))?;
         self.degrade_system_memory(&buffer, class, || format!("buffer of {length} bytes"));
         Ok(buffer)
     }
 
-    /// A buffer holding a copy of `bytes` at `placement`, its byte `aligned` (where given) on a
-    /// multiple of 256 bytes of its memory, for `call`: written through its
+    /// A buffer holding a copy of `bytes`, made as `made` says, for `call`: written through its
     /// mapping, and from there to a `Managed` buffer's own bytes where it has a host copy
     /// (`Buffer::upload`), or for `Private` storage copied from a staging buffer by the device's
     /// next submission, before any of its commands, which the call does not wait for
@@ -540,10 +615,10 @@ impl Device {
         call: &'static str,
         bytes: HostBytes<'_>,
         options: ResourceOptions,
-        (placement, aligned): (Place, Option<u64>),
+        made: Made,
     ) -> Result<Buffer, Error> {
         let length = bytes.len() as u64;
-        let buffer = self.zero_buffer(call, length, options, (placement, aligned))?;
+        let buffer = self.zero_buffer(call, length, options, made)?;
         // The bytes, read once, through their pointer, into the buffer's memory.
         let fill = |target: &Buffer| {
             let contents = target

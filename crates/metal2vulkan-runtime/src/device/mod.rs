@@ -259,7 +259,7 @@ pub(super) struct DeviceShared {
     pub(super) queue_families: Vec<u32>,
     /// Those families, then the staging queue's where the device reserved one: what the device's
     /// buffers are shared among (`sharing.rs`).
-    buffer_families: Vec<u32>,
+    pub(super) buffer_families: Vec<u32>,
     /// How many of `queues`, the first, logical queues share round robin; the rest are reserved
     /// for presenting queues.
     round_robin: usize,
@@ -404,7 +404,12 @@ pub(super) struct DeviceShared {
     /// it enables no `VK_KHR_external_memory_fd` or exports no buffer's memory so
     /// (`exported_memory.rs`).
     #[cfg(unix)]
-    pub(super) opaque_fd: Option<crate::exported_memory::OpaqueFdExport>,
+    pub(super) opaque_fd: Option<crate::exported_memory::FdExport>,
+    /// How it exports a dma-buf-exportable buffer's memory as a dma-buf; `None` where it enables
+    /// not the dma-buf route's extensions and `VK_EXT_queue_family_foreign`, or exports no
+    /// buffer's memory so (`exported_memory.rs`).
+    #[cfg(unix)]
+    pub(super) dma_buf_export: Option<crate::exported_memory::FdExport>,
     /// How it exports an exportable shared event's timeline semaphore as an opaque file
     /// descriptor; `None` where it enables no `VK_KHR_external_semaphore_fd` or exports no
     /// timeline semaphore so (`exported_semaphore.rs`).
@@ -1579,6 +1584,10 @@ pub(super) struct Parts {
     /// It enables `VK_KHR_external_memory_fd` (`create.rs`'s `memory_fd_name`; `adopt.rs`, where
     /// the consumer lists it), outside `enabled`'s vocabulary (`exported_memory.rs`).
     pub(super) memory_fd: bool,
+    /// It enables `VK_EXT_queue_family_foreign` beside the dma-buf route's extensions
+    /// (`create.rs`'s `foreign_family_name`; `adopt.rs`, where the consumer lists them), outside
+    /// `enabled`'s vocabulary (`exported_memory.rs`).
+    pub(super) foreign_family: bool,
     /// It enables `VK_KHR_external_semaphore_fd` (`create.rs`'s `semaphore_fd_name`; `adopt.rs`,
     /// where the consumer lists it), outside `enabled`'s vocabulary (`exported_semaphore.rs`).
     pub(super) semaphore_fd: bool,
@@ -1648,6 +1657,10 @@ impl Device {
             memory_fd,
             #[cfg(not(unix))]
                 memory_fd: _,
+            #[cfg(unix)]
+            foreign_family,
+            #[cfg(not(unix))]
+                foreign_family: _,
             #[cfg(unix)]
             semaphore_fd,
             #[cfg(not(unix))]
@@ -2056,25 +2069,42 @@ impl Device {
                 dma_buf_images,
             )
         };
-        // How the device exports a buffer's memory as an opaque file descriptor, where it enables
-        // `VK_KHR_external_memory_fd` and exports a buffer's memory so (`exported_memory.rs`).
+        // How the device exports a buffer's memory as an opaque file descriptor, and as a dma-buf,
+        // where it enables the extensions each needs and exports a buffer's memory so
+        // (`exported_memory.rs`).
         #[cfg(unix)]
-        let opaque_fd = {
+        let (opaque_fd, dma_buf_export) = {
             // SAFETY: as above; the loader serves `vkGetDeviceProcAddr` once the word is put
             // back, and the device enables the extension.
             let functions = memory_fd.then(|| unsafe {
                 loader_word
                     .restored(|| ash::khr::external_memory_fd::Device::new(&instance.raw, &raw))
             });
+            let usage = super::buffer::usage(device_address);
+            let handle = crate::exported_memory::MemoryExport::OpaqueFd;
             // SAFETY: `physical` belongs to `instance`, created at Vulkan 1.2 or later.
-            unsafe {
-                crate::exported_memory::OpaqueFdExport::new(
+            let opaque = unsafe {
+                crate::exported_memory::FdExport::new(
                     &instance.raw,
                     physical,
-                    functions,
-                    super::buffer::usage(device_address),
+                    functions.clone(),
+                    (usage, handle),
                 )
-            }
+            };
+            // As a dma-buf where it enables the route's extensions, which name
+            // `VK_KHR_external_memory_fd`, and the foreign family its acquire names.
+            let dma_buf_functions = functions.filter(|_| dma_buf && foreign_family);
+            let handle = crate::exported_memory::MemoryExport::DmaBuf;
+            // SAFETY: as above.
+            let dma_buf_export = unsafe {
+                crate::exported_memory::FdExport::new(
+                    &instance.raw,
+                    physical,
+                    dma_buf_functions,
+                    (usage, handle),
+                )
+            };
+            (opaque, dma_buf_export)
         };
         // How the device exports a timeline semaphore as an opaque file descriptor, where it
         // enables `VK_KHR_external_semaphore_fd` and exports one so (`exported_semaphore.rs`).
@@ -2359,6 +2389,8 @@ impl Device {
             host_import,
             #[cfg(unix)]
             opaque_fd,
+            #[cfg(unix)]
+            dma_buf_export,
             #[cfg(unix)]
             opaque_fd_semaphores,
             shared_pointer_imports: OnceLock::new(),

@@ -1227,6 +1227,16 @@ pub(crate) fn memory_fd_name(listed: &BTreeSet<CString>) -> Option<&'static CStr
     listed.contains(name).then_some(name)
 }
 
+/// The extension of the acquire of a dma-buf-exportable buffer's memory from the foreign agent
+/// that wrote it (`exported_memory.rs`, `Buffer::external_write_done`) of a device listing
+/// `listed`: `VK_EXT_queue_family_foreign`, where the device lists it and the dma-buf route's
+/// ([`dma_buf_names`]). The runtime's own need, outside the vocabulary as the route's are; the
+/// route's image extensions name it too ([`dma_buf_image_names`]), which enable it then.
+pub(crate) fn foreign_family_name(listed: &BTreeSet<CString>) -> Option<&'static CStr> {
+    let name = ash::ext::queue_family_foreign::NAME;
+    (dma_buf_names(listed).is_some() && listed.contains(name)).then_some(name)
+}
+
 /// The extension of shared events whose timeline semaphore another API imports
 /// (`exported_semaphore.rs`) of a device listing `listed`: `VK_KHR_external_semaphore_fd`, where
 /// the device lists it. The runtime's own need, outside the vocabulary.
@@ -1661,6 +1671,9 @@ pub(super) fn create_on(
     let dma_buf_images = dma_buf_image_names(&listed);
     // Wherever listed (`exported_memory.rs`); the dma-buf route's names enable it already.
     let memory_fd = memory_fd_name(&listed);
+    // Beside the route, wherever listed (`exported_memory.rs`); the route's image names enable it
+    // already where they are enabled.
+    let foreign_family = foreign_family_name(&listed);
     // Wherever listed (`exported_semaphore.rs`).
     let semaphore_fd = semaphore_fd_name(&listed);
     let extra: Vec<CString> = options
@@ -1673,6 +1686,7 @@ pub(super) fn create_on(
         .chain((memory_fd.filter(|_| dma_buf.is_none())).map(CStr::to_owned))
         .chain(semaphore_fd.map(CStr::to_owned))
         .chain(dma_buf_images.into_iter().flatten().map(CStr::to_owned))
+        .chain((foreign_family.filter(|_| dma_buf_images.is_none())).map(CStr::to_owned))
         .collect();
     let mut enables = Enables::of(&set, api, &listed, &extra)?;
     // The features of the caller's extensions whose structures the runtime knows, as the device
@@ -1899,6 +1913,7 @@ pub(super) fn create_on(
         dma_buf: dma_buf.is_some(),
         dma_buf_images: dma_buf_images.is_some(),
         memory_fd: memory_fd.is_some(),
+        foreign_family: foreign_family.is_some(),
         semaphore_fd: semaphore_fd.is_some(),
         sparse_features,
         memory_reads,

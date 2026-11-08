@@ -3148,6 +3148,17 @@ impl Buffer {
         })
     }
 
+    /// Note the acquire of the buffer's `VkBuffer`, whole, from `families`' source, a queue family
+    /// reserved for external memory, for its target, for the device's next submission to record
+    /// before any of its commands (`exported_memory.rs`, `Buffer::external_write_done`).
+    pub(super) fn note_acquire(&self, families: (u32, u32)) {
+        let (raw, _) = self.at(0);
+        let weak: Weak<BufferShared> = Arc::downgrade(&self.0);
+        let keeper: Weak<dyn Filled> = weak;
+        let device = &self.0.device;
+        (device.shared().textures.first_moves).register_acquire(keeper, raw, families);
+    }
+
     /// Set a new buffer's padded length of bytes to zero as [`clear`](Self::clear) does, without
     /// waiting for the GPU: the host's bytes (`Shared` and `Managed` storage, a `Managed`
     /// buffer's host copy) at once, so `contents` reads zero before any submission, and bytes the

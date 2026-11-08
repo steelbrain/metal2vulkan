@@ -58,9 +58,10 @@
 //!   (`texture.rs`'s `ImagePlacement`).
 //!
 //! - **Exportable buffers apart** ([`allocate_exported`], `exported_memory.rs`). A buffer whose
-//!   memory another API imports lies in a block allocated exportable ([`Holds::Exports`]), which
-//!   such buffers alone share, pooled and kept as any other; or in its dedicated allocation, freed
-//!   with it, where the device needs or prefers one for the export.
+//!   memory another API imports lies in a block allocated exportable as its handle type, an
+//!   opaque file descriptor ([`Holds::Exports`]) or a dma-buf ([`Holds::DmaBufs`]), which such
+//!   buffers alone share, pooled and kept as any other; or in its dedicated allocation, freed with
+//!   it, where the device needs or prefers one for the export.
 //!
 //! - **Host copies' blocks ready ahead** (`memory/ready.rs`). The pool a color texture's
 //!   host-transfer image places in ([`Memory::host_copy_pool`]) gets its blocks made off the
@@ -168,19 +169,35 @@ pub(super) enum MemoryClass {
 /// bound into a block of images, or a new one, took microseconds. So images take blocks
 /// of their own, one pool per memory type beside the buffers'.
 ///
-/// A third kind holds buffers whose memory another API imports (`exported_memory.rs`): its blocks
-/// are allocated exportable ([`EXPORT_HANDLE`]), which a buffer made without that handle type may
-/// not be bound to (`VUID-vkBindBufferMemory-memory-02726`), and such buffers share them.
+/// Two more kinds hold buffers whose memory another API imports (`exported_memory.rs`): their
+/// blocks are allocated exportable, as an opaque file descriptor ([`EXPORT_HANDLE`]) or as a
+/// dma-buf ([`DMA_BUF_HANDLE`]), which a buffer made without that handle type may not be bound to
+/// (`VUID-vkBindBufferMemory-memory-02726`), and the buffers of each handle type share them.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Holds {
     Buffers,
     Images,
     Exports,
+    DmaBufs,
 }
 
 impl Holds {
     /// The kinds, in the order of the device's pools ([`Memory::pool`]).
-    const ALL: [Holds; 3] = [Holds::Buffers, Holds::Images, Holds::Exports];
+    const ALL: [Holds; 4] = [
+        Holds::Buffers,
+        Holds::Images,
+        Holds::Exports,
+        Holds::DmaBufs,
+    ];
+
+    /// The handle type its blocks are allocated exportable as; `None` for blocks not exported.
+    fn handle(self) -> Option<vk::ExternalMemoryHandleTypeFlags> {
+        match self {
+            Holds::Buffers | Holds::Images => None,
+            Holds::Exports => Some(EXPORT_HANDLE),
+            Holds::DmaBufs => Some(DMA_BUF_HANDLE),
+        }
+    }
 }
 
 /// The handle type the runtime exports a buffer's memory as (`exported_memory.rs`): an opaque file
@@ -188,6 +205,12 @@ impl Holds {
 /// ([`Holds::Exports`]).
 pub(super) const EXPORT_HANDLE: vk::ExternalMemoryHandleTypeFlags =
     vk::ExternalMemoryHandleTypeFlags::OPAQUE_FD;
+
+/// The handle type the runtime exports a dma-buf-exportable buffer's memory as
+/// (`exported_memory.rs`, `VK_EXT_external_memory_dma_buf`). The blocks of such buffers are
+/// allocated exportable as it ([`Holds::DmaBufs`]).
+pub(super) const DMA_BUF_HANDLE: vk::ExternalMemoryHandleTypeFlags =
+    vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT;
 
 /// `VK_MEMORY_ALLOCATE_ZERO_INITIALIZE_BIT_EXT` (`VK_EXT_zero_initialize_device_memory`), which
 /// `ash 0.38` predates.
@@ -1851,9 +1874,11 @@ impl Memory {
                 (false, Holds::Buffers) => "made a pooled block of buffers",
                 (false, Holds::Images) => "made a pooled block of images",
                 (false, Holds::Exports) => "made a pooled block of exportable buffers",
+                (false, Holds::DmaBufs) => "made a pooled block of dma-buf-exportable buffers",
                 (true, Holds::Buffers) => "made a dedicated block of a buffer",
                 (true, Holds::Images) => "made a dedicated block of an image",
                 (true, Holds::Exports) => "made a dedicated block of an exportable buffer",
+                (true, Holds::DmaBufs) => "made a dedicated block of a dma-buf-exportable buffer",
             };
             self.say_block(what, &block);
         }
@@ -2314,7 +2339,7 @@ impl BlockMaker {
     /// of addresses where `addressed` gives the counts of such buffers made (its memory then as
     /// long as that buffer requires, if longer), allocated zero-initialized where it holds images
     /// on a device whose blocks of images are ([`Memory::zero_image_blocks`]), and exportable as
-    /// [`EXPORT_HANDLE`] where it holds exportable buffers ([`Holds::Exports`]).
+    /// the handle type of the exportable buffers it holds ([`Holds::handle`]).
     fn make(
         &self,
         device: &ash::Device,
@@ -2323,11 +2348,13 @@ impl BlockMaker {
         addressed: Option<&Counters>,
     ) -> Result<Block, Error> {
         let zeroed = holds == Holds::Images && self.zero_images;
-        let exported = Exported {
-            handle: EXPORT_HANDLE,
-            dedicated: false,
-        };
-        let export = (holds == Holds::Exports).then_some((vk::Buffer::null(), exported));
+        let export = holds.handle().map(|handle| {
+            let exported = Exported {
+                handle,
+                dedicated: false,
+            };
+            (vk::Buffer::null(), exported)
+        });
         self.make_as(device, type_index, size, addressed, export, zeroed)
     }
 
@@ -2856,11 +2883,13 @@ pub(super) fn allocate_addressed(
 /// buffer has the device-address usage of its own). The class's memory types are tried best
 /// first, then those it overflows into, as [`place`] tries them, and the block is made with
 /// `memory`'s lock released; refused with the failure of the last type tried. Else, as
-/// [`allocate`] places a buffer, in the blocks of exportable buffers ([`Holds::Exports`]): pooled,
-/// or of its own where it is larger than half a block, and kept for reuse as any block.
+/// [`allocate`] places a buffer, in the blocks of exportable buffers of its handle type
+/// ([`Holds::Exports`], [`Holds::DmaBufs`]): pooled, or of its own where it is larger than half a
+/// block, and kept for reuse as any block.
 ///
 /// `buffer` was made with `VkExternalMemoryBufferCreateInfo` naming `exported.handle`, which the
-/// device exports a buffer's memory as ([`EXPORT_HANDLE`]), and `requirements` are its own.
+/// device exports a buffer's memory as ([`EXPORT_HANDLE`] or [`DMA_BUF_HANDLE`]), and
+/// `requirements` are its own.
 pub(super) fn allocate_exported(
     memory: &Mutex<Memory>,
     device: &ash::Device,
@@ -2869,7 +2898,11 @@ pub(super) fn allocate_exported(
     (buffer, exported): (vk::Buffer, Exported),
 ) -> Result<Placement, Error> {
     if !exported.dedicated {
-        let (holds, fit) = (Holds::Exports, Fit::Pooled);
+        let holds = match exported.handle {
+            DMA_BUF_HANDLE => Holds::DmaBufs,
+            _ => Holds::Exports,
+        };
+        let fit = Fit::Pooled;
         return place(memory, device, requirements, class, None, holds, fit);
     }
     let size = requirements.size.max(1);
