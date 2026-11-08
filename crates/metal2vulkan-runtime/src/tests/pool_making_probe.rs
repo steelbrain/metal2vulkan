@@ -153,6 +153,7 @@ fn pool_making_probe() {
 
 fn runtime(lane: &Lane, layered: bool) {
     let program = std::thread::current().id();
+    let program_tid = gettid();
     let queue = lane.device.new_command_queue().unwrap();
     let warm = lane.encoded(&queue);
     warm.commit().unwrap();
@@ -162,11 +163,17 @@ fn runtime(lane: &Lane, layered: bool) {
         let first = lane.encoded(&queue);
         let ran: Arc<Mutex<Option<(u64, ThreadId)>>> = Arc::default();
         let log = Arc::clone(&ran);
+        let handler_tid: Arc<Mutex<Option<u32>>> = Arc::default();
+        let tid_log = Arc::clone(&handler_tid);
         first
             .add_completed_handler(Box::new(move |_| {
                 *log.lock().unwrap() = Some((host_nanos(), std::thread::current().id()));
+                *tid_log.lock().unwrap() = Some(gettid());
             }))
             .unwrap();
+        let stop = Arc::new(AtomicBool::new(false));
+        let sampler = tasks_sampled(Arc::clone(&stop));
+        std::thread::sleep(Duration::from_millis(2));
         trace::start();
         let commit = host_nanos();
         first.commit().unwrap();
@@ -177,6 +184,8 @@ fn runtime(lane: &Lane, layered: bool) {
         first.wait_until_completed_for(WAIT).unwrap();
         second.wait_until_completed_for(WAIT).unwrap();
         let steps = trace::stop();
+        stop.store(true, Ordering::Relaxed);
+        let tasks = sampler.join().unwrap();
         let (handled, handler) = ran.lock().unwrap().expect("the completed handler ran");
         let gpu_end = (first.gpu_end_time().unwrap() * 1e9) as u64;
         let mut threads: HashMap<ThreadId, String> = HashMap::new();
@@ -216,6 +225,23 @@ fn runtime(lane: &Lane, layered: bool) {
                 Traced::Mark { what, at, thread } => {
                     events.push((at, format!("{} {what}", name(thread))));
                 }
+                Traced::Lock {
+                    file,
+                    line,
+                    entered,
+                    at,
+                    thread,
+                } => {
+                    events.push((
+                        at,
+                        format!(
+                            "{} LOCK {file}:{line} waited {:.3} from {:+.3}",
+                            name(thread),
+                            ms(at, entered),
+                            ms(entered, start)
+                        ),
+                    ));
+                }
             }
         }
         events.push((gpu_end, "GPU END (first)".into()));
@@ -235,9 +261,75 @@ fn runtime(lane: &Lane, layered: bool) {
             ms(handled, gpu_end),
             lines.join(" | ")
         );
+        // Each task whose state or kernel wait changed between the commit and the handler.
+        for (tid, comm, changes) in &tasks {
+            let inside: Vec<String> = (changes.iter())
+                .filter(|(at, _)| (commit..=handled + 1_000_000).contains(at))
+                .map(|(at, now)| format!("{:+.3} {now}", ms(*at, start)))
+                .collect();
+            if inside.len() > 1 || (handler_tid.lock().unwrap().as_ref() == Some(tid)) {
+                eprintln!(
+                    "POOL-PROBE tasks layered={layered} round={round} tid={tid} comm={comm}{}{}: {}",
+                    if *tid == program_tid { " (program)" } else { "" },
+                    if handler_tid.lock().unwrap().as_ref() == Some(tid) { " (handler)" } else { "" },
+                    inside.join(", ")
+                );
+            }
+        }
         drop((first, second, other));
         std::thread::sleep(Duration::from_millis(100));
     }
+}
+
+/// This thread's kernel id.
+fn gettid() -> u32 {
+    // SAFETY: no precondition.
+    unsafe { libc::gettid() as u32 }
+}
+
+/// Each task of this process (but the sampler): its id, its name, and its state and kernel wait
+/// channel (`/proc/self/task/<tid>/stat`, `wchan`) whenever they changed, sampled about every
+/// 300 us until `stop`.
+fn tasks_sampled(
+    stop: Arc<AtomicBool>,
+) -> std::thread::JoinHandle<Vec<(u32, String, Vec<(u64, String)>)>> {
+    std::thread::spawn(move || {
+        let me = gettid();
+        let mut seen: BTreeMap<u32, (String, Vec<(u64, String)>)> = BTreeMap::new();
+        while !stop.load(Ordering::Relaxed) {
+            let at = host_nanos();
+            let Ok(dir) = std::fs::read_dir("/proc/self/task") else {
+                break;
+            };
+            for entry in dir.flatten() {
+                let Ok(tid) = entry.file_name().to_string_lossy().parse::<u32>() else {
+                    continue;
+                };
+                if tid == me {
+                    continue;
+                }
+                let path = entry.path();
+                let wchan = std::fs::read_to_string(path.join("wchan")).unwrap_or_default();
+                let stat = std::fs::read_to_string(path.join("stat")).unwrap_or_default();
+                let state = (stat.rsplit_once(')'))
+                    .and_then(|(_, rest)| rest.split_whitespace().next())
+                    .unwrap_or("?")
+                    .to_owned();
+                let now = format!("{state}:{}", wchan.trim());
+                let task = seen.entry(tid).or_insert_with(|| {
+                    let comm = std::fs::read_to_string(path.join("comm")).unwrap_or_default();
+                    (comm.trim().to_owned(), Vec::new())
+                });
+                if task.1.last().is_none_or(|(_, last)| *last != now) {
+                    task.1.push((at, now));
+                }
+            }
+            std::thread::sleep(Duration::from_micros(300));
+        }
+        (seen.into_iter())
+            .map(|(tid, (comm, changes))| (tid, comm, changes))
+            .collect()
+    })
 }
 
 /// One call of the sampling thread: which, entered and returned.
@@ -282,6 +374,17 @@ fn driver(device: &Device, layered: bool) {
                 let entered = host_nanos();
                 let _ = unsafe { raw.get_fence_status(fence) };
                 sampled.push(("fence", entered, host_nanos()));
+                // A fresh mapping, touched: mmap, a page fault and munmap, each under the
+                // process's memory map lock.
+                let entered = host_nanos();
+                let mut fresh = vec![0u8; 1 << 20];
+                fresh[4096] = 1;
+                std::hint::black_box(&fresh);
+                drop(fresh);
+                sampled.push(("mmap", entered, host_nanos()));
+                let entered = host_nanos();
+                std::thread::spawn(|| ()).join().unwrap();
+                sampled.push(("spawn", entered, host_nanos()));
                 std::thread::sleep(Duration::from_micros(50));
             }
             sampled
@@ -368,45 +471,47 @@ fn driver(device: &Device, layered: bool) {
         raw.destroy_semaphore(semaphore, None);
         raw.destroy_fence(fence, None);
     }
-    // Calls outside every phase: the baseline.
+    // Calls outside every phase: the baseline, per kind of call.
     let inside = |(_, entered, returned): &Sampled| {
         (phases.iter()).any(|&(_, from, to)| *entered < to && *returned > from)
     };
-    let mut outside: Vec<u64> = (sampled.iter())
-        .filter(|call| !inside(call))
-        .map(|&(_, entered, returned)| returned - entered)
-        .collect();
-    outside.sort_unstable();
     let quantile = |sorted: &[u64], q: f64| -> f64 {
         sorted
             .get(((sorted.len() as f64 - 1.0) * q) as usize)
             .map_or(0.0, |&nanos| nanos as f64 / 1e6)
     };
-    eprintln!(
-        "POOL-PROBE driver layered={layered} bytes={bytes} addressed={addressed} samples={} \
-         outside: n={} p50={:.3} p99={:.3} max={:.3}",
-        sampled.len(),
-        outside.len(),
-        quantile(&outside, 0.5),
-        quantile(&outside, 0.99),
-        quantile(&outside, 1.0)
-    );
+    for kind in ["counter", "wait0", "fence", "mmap", "spawn"] {
+        let mut outside: Vec<u64> = (sampled.iter())
+            .filter(|call| call.0 == kind && !inside(call))
+            .map(|&(_, entered, returned)| returned - entered)
+            .collect();
+        outside.sort_unstable();
+        eprintln!(
+            "POOL-PROBE driver layered={layered} bytes={bytes} addressed={addressed} {kind} \
+             outside the making: n={} p50={:.3} p99={:.3} max={:.3}",
+            outside.len(),
+            quantile(&outside, 0.5),
+            quantile(&outside, 0.99),
+            quantile(&outside, 1.0)
+        );
+    }
     let mut by_phase: BTreeMap<&'static str, Vec<String>> = BTreeMap::new();
     for &(what, from, to) in &phases {
-        // The longest sampled call that overlapped this phase, and how far past the phase's
-        // start it returned.
-        let longest = (sampled.iter())
-            .filter(|&&(_, entered, returned)| entered < to && returned > from)
-            .max_by_key(|&&(_, entered, returned)| returned - entered);
-        let text = match longest {
-            Some(&(call, entered, returned)) => format!(
-                "{:.3}ms[{call} {:.3}ms, returned {:+.3} of end]",
-                ms(to, from),
-                ms(returned, entered),
-                ms(returned, to)
-            ),
-            None => format!("{:.3}ms[no sample]", ms(to, from)),
-        };
+        // Per kind of call, the longest sampled one that overlapped this phase.
+        let mut text = format!("{:.3}ms[", ms(to, from));
+        for kind in ["counter", "wait0", "fence", "mmap", "spawn"] {
+            let longest = (sampled.iter())
+                .filter(|&&(call, entered, returned)| {
+                    call == kind && entered < to && returned > from
+                })
+                .map(|&(_, entered, returned)| returned - entered)
+                .max();
+            match longest {
+                Some(nanos) => text += &format!("{kind} {:.3} ", nanos as f64 / 1e6),
+                None => text += &format!("{kind} - "),
+            }
+        }
+        text.push(']');
         by_phase.entry(what).or_default().push(text);
     }
     for (what, texts) in by_phase {

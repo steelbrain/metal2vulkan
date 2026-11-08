@@ -1439,6 +1439,15 @@ pub(crate) mod trace {
         /// A commit's way to its submission reached step `what`: posted to the scheduler, its
         /// thread woken, taken in by a pass, the driver's submission called and returned.
         Submitting { what: &'static str, at: u64 },
+        /// A probe's lock (`device::lock`) that waited from `entered` to `at`, taken at `file`'s
+        /// `line`, by `thread`.
+        Lock {
+            file: &'static str,
+            line: u32,
+            entered: u64,
+            at: u64,
+            thread: std::thread::ThreadId,
+        },
         /// A probe's mark `what` elsewhere in the runtime, and the thread that reached it.
         Mark {
             what: &'static str,
@@ -1476,6 +1485,20 @@ pub(crate) mod trace {
             what,
             at: crate::gpu_time::host_nanos(),
         });
+    }
+
+    /// Keep a lock taken at `caller` that waited from `entered`, over 200 us.
+    pub(crate) fn waited_lock(caller: &'static std::panic::Location<'static>, entered: u64) {
+        let at = crate::gpu_time::host_nanos();
+        if at.saturating_sub(entered) > 200_000 {
+            record(|| Traced::Lock {
+                file: caller.file(),
+                line: caller.line(),
+                entered,
+                at,
+                thread: std::thread::current().id(),
+            });
+        }
     }
 
     /// Keep a probe's mark `what`, now, with this thread.
