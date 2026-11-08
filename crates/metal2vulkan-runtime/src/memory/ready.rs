@@ -15,14 +15,15 @@
 //! cleared, and the write took 160 us.
 //!
 //! - **Ahead.** `memory::keep_room`, which the device's creation calls run, starts a block's making
-//!   here once the pool lacks room for half a block and none is under way; the first is started by
-//!   the device's first creation call, before the program queued work. The block enters the pool
-//!   once every page was read: a placement never lands in memory whose pages the host has not
-//!   touched, so its host copies fault on none, whatever kernel work is pending then (a later
-//!   block's clear included).
-//! - **Waited for only for room.** A placement that finds the pool without room waits for the block
-//!   under way, rather than making one whose first touch would wait instead (`memory::place`);
-//!   where none is under way it makes one as before (counted, `WorkCounts::host_copy_blocks_made_in_place`).
+//!   here once the pool lacks room for half a block and holds no block made ready or being made;
+//!   the first is started by the device's first creation call, before the program queued work.
+//!   No image is placed in the block before every page was read, so its host copies fault on none
+//!   of them, whatever kernel work is pending then (a later block's clear included).
+//! - **Added at a placement.** The first placement in the pool that finds no room adds the block,
+//!   waiting for its making where it is still under way, rather than making one whose first touch
+//!   would wait instead (`memory::place`, `WorkCounts::host_copy_blocks_readied`); where none is
+//!   held it makes one as before (`WorkCounts::host_copy_blocks_made_in_place`). The pool's blocks
+//!   change only at its placements, never as a making here ends.
 //! - **One at a time,** on a thread of its own that ends with the block; the device's teardown
 //!   joins it and frees its block. Its Vulkan calls run in a section of the exit guard
 //!   (`exit_guard.rs`): once the process exits, no block is made.
@@ -69,11 +70,6 @@ impl Readying {
     /// The pool it is for.
     pub(super) fn pool(&self) -> (Holds, u32) {
         self.pool
-    }
-
-    /// Whether its block is ready, or its making failed: [`take`](Self::take) waits for nothing.
-    pub(super) fn finished(&self) -> bool {
-        self.thread.is_finished()
     }
 
     /// Its block, waited for: `None` where it could not be made.

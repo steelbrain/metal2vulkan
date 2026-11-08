@@ -83,12 +83,11 @@ fn a_shared_texture_made_while_the_gpu_is_busy_waits_for_none_of_it_and_reads_ze
          queued ({each:?} each), the busy work {status:?} as it returned; started on the host \
          {}, zeroed {}; zeroInitializeDeviceMemory {zeroed}; a second one's first replace_region \
          took {wrote:?}, the busy work {status_after_write:?} after it; host-copy blocks readied \
-         {}, waited for {}, made in place {}",
+         {}, made in place {}",
         device.name(),
         after.images_started_on_the_host - before.images_started_on_the_host,
         after.images_started_zeroed - before.images_started_zeroed,
         wrote_counts.host_copy_blocks_readied,
-        wrote_counts.host_copy_ready_waits,
         wrote_counts.host_copy_blocks_made_in_place,
     );
     assert_ne!(

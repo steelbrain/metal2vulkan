@@ -2741,7 +2741,6 @@ field	metal2vulkan-runtime::WorkCounts.held_depths_released	pub held_depths_rele
 field	metal2vulkan-runtime::WorkCounts.host_alias_lookups	pub host_alias_lookups: u64
 field	metal2vulkan-runtime::WorkCounts.host_copy_blocks_made_in_place	pub host_copy_blocks_made_in_place: u64
 field	metal2vulkan-runtime::WorkCounts.host_copy_blocks_readied	pub host_copy_blocks_readied: u64
-field	metal2vulkan-runtime::WorkCounts.host_copy_ready_waits	pub host_copy_ready_waits: u64
 field	metal2vulkan-runtime::WorkCounts.host_deallocators_delayed	pub host_deallocators_delayed: u64
 field	metal2vulkan-runtime::WorkCounts.host_holds_looked_up	pub host_holds_looked_up: u64
 field	metal2vulkan-runtime::WorkCounts.host_import_fds_kept	pub host_import_fds_kept: u64

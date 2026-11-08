@@ -1262,21 +1262,20 @@ pub(super) struct Memory {
     /// The pool a color texture's host-transfer image places in, once asked: `Some(None)` where
     /// the device copies no color texture on the host ([`Memory::host_copy_pool`]).
     host_copy_pool: Option<Option<(Holds, u32)>>,
-    /// The block of that pool being made ready, or made ready and not yet in it
-    /// (`memory/ready.rs`).
+    /// The block of that pool being made ready, or made ready and not yet in it: it enters the
+    /// pool at the first placement there that finds no room (`memory/ready.rs`).
     readying: Option<ready::Readying>,
-    /// Its blocks made ready ahead and added to it, the placements that waited for one, and the
-    /// blocks a placement in it made itself, finding none ready (`WorkCounts`).
+    /// Its blocks made ready ahead and added to it, and the blocks a placement in it made itself,
+    /// finding none ready (`WorkCounts`).
     host_copy_blocks: HostCopyBlocks,
 }
 
 /// The counts of the blocks of the pool host copies place in ([`Memory::host_copy_pool`]).
 #[derive(Clone, Copy, Debug, Default)]
 pub(super) struct HostCopyBlocks {
-    /// Made ready ahead off the program's thread and added to the pool (`memory/ready.rs`).
+    /// Made ready ahead off the program's thread and added to the pool by a placement that found
+    /// no room (`memory/ready.rs`).
     pub(super) readied: u64,
-    /// Placements that found no room and waited for the block being made ready.
-    pub(super) waits: u64,
     /// Blocks a placement made itself, finding no room and none being made ready.
     pub(super) made_in_place: u64,
 }
@@ -2705,14 +2704,15 @@ fn place(
             {
                 return Ok(guard.mark_overflowed(placement, overflowing));
             }
-            // The pool host copies place in, without room: the block being made ready for it
-            // rather than one of the placement's own, whose first touch would wait instead
-            // (`memory/ready.rs`).
+            // The pool host copies place in, without room: the block made ready for it (waited
+            // for where its making is still under way) rather than one of the placement's own,
+            // whose first touch would wait instead (`memory/ready.rs`). Where another placement
+            // took it meanwhile, the block it added may hold this one.
             let readying = (guard.readying.as_ref()).is_some_and(|ready| ready.pool() == pool);
             drop(guard);
-            if readying && adopt_ready(memory, true) {
+            if readying {
+                adopt_ready(memory);
                 let mut guard = lock(memory);
-                guard.host_copy_blocks.waits += 1;
                 if let Some(placement) =
                     guard.place_pooled(device, pool, (size, align), addressed, class)?
                 {
@@ -2775,9 +2775,10 @@ fn make_room(memory: &Mutex<Memory>, device: &ash::Device, type_index: u32) -> b
 /// with room rather than making one. A block of buffers gets its buffer of addresses (counted in
 /// `counts`) where blocks carry one. A block that fails to be made, or a pool the query fails for,
 /// is left to the placement that needs it. The pool host copies place in, where `copies` says the
-/// device copies color textures on the host, keeps its room in blocks made ready off this thread
-/// through `functions` (`memory/ready.rs`): the one made ready is added once it is, and another
-/// started where the pool lacks room.
+/// device copies color textures on the host, keeps its room in a block made ready off this thread
+/// through `functions` (`memory/ready.rs`), started where the pool lacks room and none is held:
+/// the first placement there that finds no room adds it, so that the pool's blocks change only
+/// at its placements, never as a making off the thread ends.
 pub(super) fn keep_room(
     memory: &Mutex<Memory>,
     device: &ash::Device,
@@ -2785,7 +2786,6 @@ pub(super) fn keep_room(
     functions: &Arc<Functions>,
     copies: impl FnOnce() -> bool,
 ) {
-    adopt_ready(memory, false);
     ready_ahead(memory, device, functions, copies);
     let (lacking, maker) = {
         let mut memory = lock(memory);
@@ -2822,7 +2822,7 @@ pub(super) fn keep_room(
 /// Start making a block ready for the pool host copies place in (`memory/ready.rs`,
 /// [`Memory::host_copy_pool`], where `copies`, asked with `memory`'s lock released until the pool
 /// was found, says the device copies color textures on the host), through `functions`, where it
-/// lacks room for half a block and none is being made ready.
+/// lacks room for half a block and holds no block made ready or being made.
 fn ready_ahead(
     memory: &Mutex<Memory>,
     device: &ash::Device,
@@ -2843,27 +2843,19 @@ fn ready_ahead(
     memory.readying = ready::Readying::start(maker, Arc::clone(functions), pool, bytes);
 }
 
-/// Add the block made ready for the pool host copies place in to it (`memory/ready.rs`), where
-/// its making finished, or where `wait`, once it finished, waited for with `memory`'s lock
-/// released: whether a block was added.
-fn adopt_ready(memory: &Mutex<Memory>, wait: bool) -> bool {
-    let readying = {
-        let mut memory = lock(memory);
-        match &memory.readying {
-            Some(readying) if wait || readying.finished() => memory.readying.take(),
-            _ => None,
-        }
-    };
-    let Some(readying) = readying else {
-        return false;
+/// Add the block made ready for the pool host copies place in to it (`memory/ready.rs`), its
+/// making waited for with `memory`'s lock released where it is still under way. Nothing where
+/// another placement took it first, or its making failed.
+fn adopt_ready(memory: &Mutex<Memory>) {
+    let Some(readying) = lock(memory).readying.take() else {
+        return;
     };
     let pool = readying.pool();
     let Some(block) = readying.take() else {
-        return false;
+        return;
     };
     let mut memory = lock(memory);
     let bytes = memory.block_bytes;
     memory.add_block(pool, block, bytes, false, 0);
     memory.host_copy_blocks.readied += 1;
-    true
 }
