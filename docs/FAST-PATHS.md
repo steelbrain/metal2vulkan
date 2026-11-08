@@ -248,12 +248,16 @@ recorded here.
   or more, and splits through smaller ones. Through no scissor over private `BGRA8Unorm` targets
   of 1280x720 to 3662x2039 (`runtime_lane::attachment_read_costs::snapshot_area_costs`, the split
   on a device that withholds `fragmentShaderPixelInterlock`), a reader covering 1.5% of the target
-  took 0.08 to 0.23 times the split's GPU time on the Radeon 780M and 0.25 to 0.43 on the RX 7900
-  XTX; one covering the whole target, the rule's worst case, 1.8 to 2.3 times and 1.3 to 2.1
-  times. Through scissors of 1280x720 over a private 1920x1080 target
-  (`runtime_lane::attachment_read_costs::snapshot_crossover`), a reader covering the whole
-  scissor took up to 2.0 times the split's time on the Radeon 780M and 1.4 times on the RX 7900
-  XTX. Other devices are not measured.
+  took 0.09 to 0.33 times the split's GPU time on the Iris Xe, 0.09 to 0.23 on the Radeon 780M and
+  0.25 to 0.43 on the RX 7900 XTX; one covering the whole target, the rule's worst case, 1.03 to
+  1.20 times, 1.95 to 2.30 times and 1.30 to 2.10 times. Over a private 1920x1080 target
+  (`runtime_lane::attachment_read_costs::snapshot_crossover`, against the split of the build
+  before the rule), readers through scissors of 320x180 and 960x540 split, and through 1280x720
+  and the whole target take the snapshot: one covering 1.5% of its scissor took 0.36 to 0.64
+  times the split's GPU time on the Iris Xe and 0.28 to 0.97 on the Radeon 780M, one covering
+  the whole scissor 1.12 to 1.18 times and 1.97 to 2.34 times; on the RX 7900 XTX, whose times
+  for one build varied up to 1.75 times between runs, 0.69 to 1.09 and 1.5 to 2.6 times. Other
+  devices are not measured.
 - **A texture over a no-copy buffer's host pages, or over a host-visible buffer longer than 32
   MiB, that a shader writes of 1- or 2-byte texels (or whose class's check has not passed for an
   access of its, or whose format, usage or pitch no image takes, or under

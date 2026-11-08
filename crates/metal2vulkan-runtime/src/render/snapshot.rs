@@ -112,12 +112,12 @@
 //!   scissors whatever it covers: a reader of a one-level, one-slice 4-byte color,
 //!   `RGBA8Unorm`'s or `BGRA8Unorm`'s, takes the snapshot through scissors whose rectangle holds
 //!   about 786,432 pixels (1024x768) or more, an `RGBA16Float` one's from about 65,536 (256x256),
-//!   and an `RGBA32Float` one's at any size. On the Radeon 780M and the RX 7900 XTX
+//!   and an `RGBA32Float` one's at any size. On the Iris Xe, the Radeon 780M and the RX 7900 XTX
 //!   (`runtime_lane::attachment_read_costs::snapshot_area_costs`, 30 readers a frame over private
 //!   `BGRA8Unorm` targets of 1280x720 to 3662x2039, no scissor, the split on a device that
-//!   withholds `fragmentShaderPixelInterlock`) a reader over 1.5% of the target took 0.08 to 0.43
-//!   times the split's GPU time, and one over the whole target 1.8 to 2.3 times on the Radeon 780M
-//!   and 1.3 to 2.1 times on the RX 7900 XTX.
+//!   withholds `fragmentShaderPixelInterlock`) a reader over 1.5% of the target took 0.09 to 0.43
+//!   times the split's GPU time, and one over the whole target 1.03 to 1.20 times on the Iris Xe,
+//!   1.95 to 2.30 times on the Radeon 780M and 1.30 to 2.10 times on the RX 7900 XTX.
 //! - **Pins.** A fetch of a color in the pixel interlock reads and writes its image as a storage
 //!   image, so a later fetch of a color whose image lacks `STORAGE` renders it through a stand-in
 //!   (`attachment_stand_in.rs`), which the pass's end puts in place for the whole pass, copied in
