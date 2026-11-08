@@ -34,6 +34,7 @@ use super::{validated_device_with, Messages, ScratchCache, WAIT};
 use crate::air_library::AirLibrary;
 use crate::gpu::TEST_DEVICE;
 use metal2vulkan::bind::SamplerDescriptor;
+use metal2vulkan::device::DevicePolicy;
 use metal2vulkan::metal::{PixelFormat, PrimitiveType, SamplerMinMagFilter, TextureUsage};
 use metal2vulkan::pipeline::{ColorAttachmentDescriptor, RenderPipelineDescriptor, StageSource};
 use metal2vulkan_devtools::llvm_assemble_text;
@@ -463,26 +464,45 @@ fn moved_per_frame(before: &WorkCounts, after: &WorkCounts, frames: usize) -> St
         .join(", ")
 }
 
+/// The device the cfg selects as a consumer makes it: the default policy, no layer and no
+/// execution records.
+fn consumer_device(messages: &Messages, cache: &ScratchCache) -> Device {
+    let device = validated_device_with(TEST_DEVICE, messages, cache.path(), |options| {
+        options.layers.clear();
+        options.policy = DevicePolicy::default();
+        options.record_executions = false;
+    })
+    .unwrap();
+    messages.take_notices();
+    device
+}
+
+/// A sampler of `filter` for minification and magnification.
+fn sampler(device: &Device, filter: SamplerMinMagFilter) -> SamplerState {
+    let mut d = SamplerDescriptor::new();
+    d.min_filter = filter;
+    d.mag_filter = filter;
+    device.new_sampler_state(&d).unwrap()
+}
+
+/// The compositor's 3840x2160 `BGRA8Unorm` target.
+fn target(device: &Device) -> Texture {
+    let mut d = TextureDescriptor::texture_2d(PixelFormat::BGRA8Unorm, W, H, false);
+    d.usage = TextureUsage::RENDER_TARGET;
+    d.resource_options = ResourceOptions::private();
+    device.new_texture(&d).unwrap()
+}
+
 #[test]
 #[ignore = "a release-mode measurement: run by name"]
 fn video_frame_costs() {
     let cache = ScratchCache::new().unwrap();
     let messages = Messages::default();
-    let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), |options| {
-        options.layers.clear();
-    })
-    .unwrap();
-    messages.take_notices();
+    let device = consumer_device(&messages, &cache);
     let queue = device.new_command_queue().unwrap();
-    let mut sampler = SamplerDescriptor::new();
-    sampler.min_filter = SamplerMinMagFilter::Linear;
-    sampler.mag_filter = SamplerMinMagFilter::Linear;
-    let sampler = device.new_sampler_state(&sampler).unwrap();
+    let sampler = sampler(&device, SamplerMinMagFilter::Linear);
     let corners = whole_target(&device);
-    let mut d = TextureDescriptor::texture_2d(PixelFormat::BGRA8Unorm, W, H, false);
-    d.usage = TextureUsage::RENDER_TARGET;
-    d.resource_options = ResourceOptions::private();
-    let target = device.new_texture(&d).unwrap();
+    let target = target(&device);
     let frames = [frame_bytes(0), frame_bytes(1)];
     let pages_kinds = [
         Pages::Anonymous,
@@ -582,4 +602,75 @@ fn video_frame_costs() {
     }
     let notices = super::degrade_notices::counts(&messages.take_notices());
     println!("VIDEO-NOTICES on {}: {notices:?}", device.name());
+}
+
+/// [`video_frame_costs`]' frame taken apart over anonymous pages, textures made once: each form
+/// sampled linear and nearest, with the CPU writing a new frame each time and with the frame left
+/// as written (the GPU reading pages the CPU has not touched since), so the sampling's own cost
+/// shows apart from the pages' (`VIDEO-PART`).
+#[test]
+#[ignore = "a release-mode measurement: run by name"]
+fn video_frame_parts() {
+    let cache = ScratchCache::new().unwrap();
+    let messages = Messages::default();
+    let device = consumer_device(&messages, &cache);
+    let queue = device.new_command_queue().unwrap();
+    let corners = whole_target(&device);
+    let target = target(&device);
+    let frames = [frame_bytes(0), frame_bytes(1)];
+    let surfaces: Vec<Surface> = (0..POOL)
+        .map(|_| Surface::Anonymous(Mapping::anonymous(LEN)))
+        .collect();
+    for form in [Form::YCbCr, Form::Planes] {
+        let pipeline = pipeline(
+            &device,
+            match form {
+                Form::YCbCr => "video_ycbcr",
+                Form::Planes => "video_planes",
+            },
+        );
+        let made: Vec<(Buffer, Vec<(Texture, String)>)> = surfaces
+            .iter()
+            .map(|surface| {
+                surface.write(&frames[0]);
+                let buffer = surface.buffer(&device);
+                let textures = textures(&buffer, form);
+                (buffer, textures)
+            })
+            .collect();
+        for filter in [SamplerMinMagFilter::Linear, SamplerMinMagFilter::Nearest] {
+            let sampler = sampler(&device, filter);
+            for written in [true, false] {
+                let mut gpus = Vec::new();
+                let before = device.work_counts();
+                for k in 0..WARM + FRAMES {
+                    let index = k % POOL;
+                    if written {
+                        surfaces[index].write(&frames[k % 2]);
+                    }
+                    let (_, _, gpu) = frame(
+                        &queue,
+                        &target,
+                        (&pipeline, &sampler, &corners),
+                        &made[index].1,
+                    );
+                    if k >= WARM {
+                        gpus.push(gpu);
+                    }
+                }
+                let after = device.work_counts();
+                let (gpu, gpu90) = median_p90(gpus);
+                let copied = (after.shadow_texels_copied_in - before.shadow_texels_copied_in)
+                    as f64
+                    / (WARM + FRAMES) as f64;
+                println!(
+                    "VIDEO-PART on {}: {form:?}, {filter:?}, frame written each time {written}: \
+                     GPU {gpu:.0} us (p90 {gpu90:.0}); shadow texels copied in a frame {copied:.0}",
+                    device.name(),
+                );
+            }
+        }
+        drop(made);
+    }
+    drop(surfaces);
 }
