@@ -57,6 +57,11 @@
 //!   it. Images are placed at a multiple of `bufferImageGranularity` and rounded up to it
 //!   (`texture.rs`'s `ImagePlacement`).
 //!
+//! - **Exportable buffers apart** ([`allocate_exported`], `exported_memory.rs`). A buffer whose
+//!   memory another API imports lies in a block allocated exportable ([`Holds::Exports`]), which
+//!   such buffers alone share, pooled and kept as any other; or in its dedicated allocation, freed
+//!   with it, where the device needs or prefers one for the export.
+//!
 //! - **Host copies' blocks ready ahead** (`memory/ready.rs`). The pool a color texture's
 //!   host-transfer image places in ([`Memory::host_copy_pool`]) gets its blocks made off the
 //!   program's thread, every page of their mapping read once before any image is placed in them,
@@ -91,16 +96,16 @@ mod ready;
 pub(super) const BLOCK_BYTES: u64 = 64 << 20;
 
 /// The empty pooled blocks a pool keeps for its next placements whatever its heap's budget
-/// ([`Pool::release`], [`Memory::kept_budget`]). In a pool the encodings place in, one of them is mostly
-/// the block [`keep_room`] made for room: with one kept, every other block that emptied was freed,
-/// and a block made again as the next placements filled that one, so a frame's buffers, returned
-/// each frame, made and freed a block a frame. With two they make and free none
+/// ([`Pool::release`], [`Memory::kept_budget`]). In a pool the encodings place in, one of them is
+/// mostly the block [`keep_room`] made for room: with one kept, every other block that emptied was
+/// freed, and a block made again as the next placements filled that one, so a frame's buffers,
+/// returned each frame, made and freed a block a frame. With two they make and free none
 /// (`runtime_lane::pool_churn`).
 pub(super) const KEPT_EMPTY_BLOCKS: usize = 2;
 
 /// The most bytes of empty blocks a heap keeps past its pools' [`KEPT_EMPTY_BLOCKS`]
-/// ([`Memory::kept_budget`]): 2 GiB, the eighth of an RTX 5080 Laptop GPU's 16 GiB. There a guest's page
-/// of two 4K HEVC clips made 12 pooled blocks and 66 decoded pictures of about 15 MiB each in
+/// ([`Memory::kept_budget`]): 2 GiB, the eighth of an RTX 5080 Laptop GPU's 16 GiB. There a guest's
+/// page of two 4K HEVC clips made 12 pooled blocks and 66 decoded pictures of about 15 MiB each in
 /// exportable buffers (`exported_memory.rs`), 1.8 GB in all, and the clips' ends freed them.
 pub(super) const KEPT_EMPTY_BYTES: u64 = 2 << 30;
 
@@ -179,7 +184,8 @@ impl Holds {
 }
 
 /// The handle type the runtime exports a buffer's memory as (`exported_memory.rs`): an opaque file
-/// descriptor. The blocks of exportable buffers are allocated exportable as it ([`Holds::Exports`]).
+/// descriptor. The blocks of exportable buffers are allocated exportable as it
+/// ([`Holds::Exports`]).
 pub(super) const EXPORT_HANDLE: vk::ExternalMemoryHandleTypeFlags =
     vk::ExternalMemoryHandleTypeFlags::OPAQUE_FD;
 
@@ -704,12 +710,12 @@ impl<T> Pool<T> {
     }
 
     /// Return `[offset, offset + size)` of block `index`, at `now`, where the empty blocks kept in
-    /// the pool's heap may grow by `spare` bytes more ([`Memory::kept_budget`]). A block that empties is
-    /// kept: a pooled one while fewer than [`KEPT_EMPTY_BLOCKS`] other empty pooled blocks are, or
-    /// its bytes fit in `spare`; a dedicated one where its bytes fit in `spare` and `reusable`
-    /// says another placement may take its memory ([`Pool::place_dedicated`]). Else the block's
-    /// payload, to be freed now, with whether it was a dedicated block rather than a pooled one:
-    /// the two reasons a release frees a block, which its caller counts apart ([`FreeCause`]).
+    /// the pool's heap may grow by `spare` bytes more ([`Memory::kept_budget`]). A block that
+    /// empties is kept: a pooled one while fewer than [`KEPT_EMPTY_BLOCKS`] other empty pooled
+    /// blocks are, or its bytes fit in `spare`; a dedicated one where its bytes fit in `spare` and
+    /// `reusable` says another placement may take its memory ([`Pool::place_dedicated`]). Else the
+    /// block's payload, to be freed now, with whether it was a dedicated block rather than a pooled
+    /// one: the two reasons a release frees a block, which its caller counts apart ([`FreeCause`]).
     pub(super) fn release(
         &mut self,
         index: usize,
@@ -1984,9 +1990,9 @@ impl Memory {
 
     /// Return `[offset, offset + size)` of block `block` of memory type `type_index`, freeing the
     /// block when it empties and is not kept ([`Pool::release`], within its heap's
-    /// [`Memory::kept_budget`]); `after` goes once it is freed. `after`, given back for the caller to let
-    /// go of with no lock held, unless the block waits with it. A kept empty block of the pool
-    /// that stayed empty too long goes too ([`Pool::stale`]).
+    /// [`Memory::kept_budget`]); `after` goes once it is freed. `after`, given back for the caller
+    /// to let go of with no lock held, unless the block waits with it. A kept empty block of the
+    /// pool that stayed empty too long goes too ([`Pool::stale`]).
     fn release_range(
         &mut self,
         device: &ash::Device,
