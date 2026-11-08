@@ -975,7 +975,10 @@ degradations! {
         /// writes through an alias
         /// ([`metal2vulkan::device::DriverFact::CompressedImagesHideAliasedWrites`]), whose image
         /// takes host-transfer usage, which the driver keeps uncompressed in the heap's bytes
-        /// ([`metal2vulkan::device::DriverFact::HostTransferImagesKeepTheirBytes`]).
+        /// ([`metal2vulkan::device::DriverFact::HostTransferImagesKeepTheirBytes`]). Also, on any
+        /// device, a single-sample colour texture whose image of the route it first took takes
+        /// more bytes or a coarser alignment than Metal's answer, where this one fits the answer:
+        /// it lies in the heap's bytes in place of a shadow of them (`texture/heap.rs`).
         HeapTextureHostTransfer = "heap-texture-host-transfer", Performance,
             "the texture's image is kept uncompressed, so writes through the heap's buffers and \
              textures over its bytes show in it as Metal's do: a clear of it loses the driver's \
@@ -984,7 +987,11 @@ degradations! {
         /// A colour texture made in a heap on such a device whose image takes no host-transfer
         /// usage (the device did not enable `hostImageCopy`, or an adopted device's consumer did
         /// not say so, or the format or shape takes none there): a linear image, which the driver does not compress, where one does all the
-        /// optimal image does for the texture.
+        /// optimal image does for the texture. Also, on any device, a single-sample colour
+        /// texture whose image of the route it first took takes more bytes or a coarser
+        /// alignment than Metal's answer, where no image of host-transfer usage fits the answer
+        /// and a linear one does: it lies in the heap's bytes in place of a shadow of them
+        /// (`texture/heap.rs`).
         HeapTextureLinear = "heap-texture-linear", Performance,
             "the texture's image is linear, so writes through the heap's buffers and textures \
              over its bytes show in it as Metal's do: its reads and writes go without the \

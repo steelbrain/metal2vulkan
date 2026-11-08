@@ -4724,8 +4724,10 @@ pub struct WorkCounts {
     /// Textures made in heaps laid out as Metal tiles them, each a shadow of its elements (a
     /// multisample texture's samples) in the heap's bytes (`texture/heap_tiled.rs`): in a heap over
     /// host pages, a depth or stencil texture in any heap on a driver that lays such images apart
-    /// from their memory or keeps them GPU-optimized (MoltenVK), and a multisample texture in any
-    /// heap whose memory takes no image of it.
+    /// from their memory or keeps them GPU-optimized (MoltenVK), a multisample texture in any
+    /// heap whose memory takes no image of it, and a texture in any heap whose images take more
+    /// bytes or a coarser alignment than Metal's answer where none of them that fits it binds
+    /// there (`texture/heap.rs`, `Device::fitting_heap_image`).
     pub heap_textures_tiled: u64,
     /// The images a heap's multisample texture's moves between its image and Metal's tiles made
     /// for a copy, as an encoder records it: each a wide, scratch or draw image of a band of one
