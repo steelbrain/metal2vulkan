@@ -218,3 +218,76 @@ fn a_shape_takes_at_most_sixteen_levels() {
     assert!(TiledTexelsModule::shape(&vec![level; limit], true, 64).is_some());
     assert!(TiledTexelsModule::shape(&vec![level; limit + 1], true, 64).is_none());
 }
+
+/// A level of 32-bit float depths that the move into the image clamps
+/// ([`TiledLevelMove::clamping_depth`]): each value inside `[0, 1]` bit for bit (`-0.0` and a
+/// denormal among them), a negative one 0.0, one above 1.0 (an infinity too) 1.0, and a NaN of
+/// either sign 1.0; the same level unclamped moves every value as it is, and back each takes the
+/// tight bytes as they are.
+#[test]
+fn clamped_depths_move_into_the_image_inside_0_1() {
+    let values: [u32; 12] = [
+        0x0000_0000,
+        0x8000_0000,
+        0x0000_0001,
+        0x3f00_0000,
+        0x3f80_0000,
+        0x3f80_0001,
+        0x7f80_0000,
+        0x7fc0_0000,
+        0xbf80_0000,
+        0xff80_0000,
+        0xffc0_0000,
+        0xeeee_eeee,
+    ];
+    let clamped: [u32; 12] = [
+        0x0000_0000,
+        0x8000_0000,
+        0x0000_0001,
+        0x3f00_0000,
+        0x3f80_0000,
+        0x3f80_0000,
+        0x3f80_0000,
+        0x3f80_0000,
+        0x0000_0000,
+        0x0000_0000,
+        0x3f80_0000,
+        0x0000_0000,
+    ];
+    let level = TiledLevelMove::new(4, [4, 3], 1, [4, 4], 1, 0, 64, 0, 64);
+    let word = |bytes: &[u8], at: usize| u32::from_le_bytes(bytes[at..at + 4].try_into().unwrap());
+    let mut tiled = vec![0u8; 64];
+    let mut tight = vec![0u8; 48];
+    for (i, value) in values.iter().enumerate() {
+        let (x, y) = (i as u32 % 4, i as u32 / 4);
+        let at = tiled_at(&level, 0, x, y);
+        tiled[at..at + 4].copy_from_slice(&value.to_le_bytes());
+        let at = tight_at(&level, 0, x, y);
+        tight[at..at + 4].copy_from_slice(&value.to_le_bytes());
+    }
+    for (levels, want) in [([level.clamping_depth()], clamped), ([level], values)] {
+        let (t, p) = moved(&levels, true, &[0; 48], &tiled);
+        assert_eq!(p, tiled, "the tiled bytes are only read");
+        for (i, want) in want.iter().enumerate() {
+            let at = tight_at(&level, 0, i as u32 % 4, i as u32 / 4);
+            assert_eq!(
+                word(&t, at),
+                *want,
+                "{:#x}, clamped {}",
+                values[i],
+                levels[0].clamps_depth
+            );
+        }
+        let (t, p) = moved(&levels, false, &tight, &[0; 64]);
+        assert_eq!(t, tight, "the tight bytes are only read");
+        for (i, value) in values.iter().enumerate() {
+            let at = tiled_at(&level, 0, i as u32 % 4, i as u32 / 4);
+            assert_eq!(
+                word(&p, at),
+                *value,
+                "back, clamped {}",
+                levels[0].clamps_depth
+            );
+        }
+    }
+}

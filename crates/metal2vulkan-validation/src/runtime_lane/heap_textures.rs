@@ -2374,6 +2374,155 @@ fn a_heap_depth_texture_keeps_a_cpu_write_made_after_its_copy_in() {
     layer_reported_nothing_at_all(&messages);
 }
 
+/// A heap's `Depth32Float` texture whose bytes hold depths outside `[0, 1]` (1.5, -0.5, 2.0, a
+/// NaN, an infinity and `0xeeeeeeee`, beside `-0.0` and depths inside) takes them into its image
+/// with no copy outside that range, under the validation layer's GPU-assisted check of buffer to
+/// image copies (`gpuav_buffer_copies`, which reports
+/// `VUID-vkCmdCopyBufferToImage-pRegions-07931` for each such value on a device without
+/// `VK_EXT_depth_range_unrestricted`). Where the device would store such a depth clamped
+/// (`ImageFacts::depth_clamps`: no such extension enabled, and no
+/// `DriverFact::DepthImageKeepsValuesOutsideUnitRange`), its shadow's copy in clamps each into
+/// `[0, 1]`, a NaN to 1.0 and `-0.0` kept, and a blit of the texture into a buffer reads the
+/// clamped values; elsewhere it reads the bytes as they are. The texture is a `Shared` placement
+/// heap's 37x5 one, its bytes written through a buffer over them where Metal's tiles place each
+/// texel (`heap_layouts::tiled_offset`). `HEAPTEX depth range` prints whether it was a shadow of
+/// Metal's tiles (`WorkCounts::heap_textures_tiled`), the route that copies it in, and the
+/// layer's other messages; of those, only the GPU-assisted check's warnings about its own
+/// settings pass.
+#[test]
+fn a_heap_depth_texture_s_copy_in_takes_no_depth_outside_0_1() {
+    use super::heap_layouts::tiled_offset;
+    use super::VALIDATION_LAYER;
+    use metal2vulkan_runtime::{LayerSetting, LayerSettingValue, MessageSeverity};
+    let messages = Messages::default();
+    let cache = ScratchCache::new().unwrap();
+    // Texel `i`'s bits: a depth outside [0, 1] or a NaN, else one inside naming it.
+    let bits = |i: u64| match i % 8 {
+        0 => 1.5f32.to_bits(),
+        1 => (-0.5f32).to_bits(),
+        2 => 0x7fc0_0000,
+        3 => f32::INFINITY.to_bits(),
+        4 => ((i + 1) as f32 / (1u32 << 23) as f32).to_bits(),
+        5 => (-0.0f32).to_bits(),
+        6 => 2.0f32.to_bits(),
+        _ => 0xeeee_eeee,
+    };
+    // The value the copy in leaves of `bits` where it clamps.
+    let clamped = |bits: u32| -> u32 {
+        let one = 1.0f32.to_bits();
+        match bits {
+            _ if bits & 0x7fff_ffff > 0x7f80_0000 => one,
+            0x8000_0000 => bits,
+            _ if bits > 0x8000_0000 => 0,
+            _ if bits > one => one,
+            _ => bits,
+        }
+    };
+    let (clamps, tiled, read) = {
+        let device = &validated_device_with(TEST_DEVICE, &messages, cache.path(), |options| {
+            let on = |name: &std::ffi::CStr| {
+                let value = LayerSettingValue::Bool(true);
+                LayerSetting::new(VALIDATION_LAYER.to_owned(), name.to_owned(), value)
+            };
+            options.layer_settings.extend([
+                on(c"gpuav_enable"),
+                on(c"gpuav_buffer_copies"),
+                LayerSetting::new(
+                    VALIDATION_LAYER.to_owned(),
+                    c"gpuav_shader_instrumentation".to_owned(),
+                    LayerSettingValue::Bool(false),
+                ),
+            ]);
+        })
+        .unwrap();
+        let facts = &device.properties().driver_facts;
+        let clamps = !device.enables_extension(ash::ext::depth_range_unrestricted::NAME)
+            && !facts.contains(&DriverFact::DepthImageKeepsValuesOutsideUnitRange);
+        let queue = device.new_command_queue().unwrap();
+        let options = tracked(StorageMode::Shared);
+        let [w, h] = [37, 5];
+        let mut descriptor = TextureDescriptor::texture_2d(PixelFormat::Depth32Float, w, h, false);
+        descriptor.resource_options = options;
+        descriptor.usage = TextureUsage::SHADER_READ | TextureUsage::RENDER_TARGET;
+        descriptor.allow_gpu_optimized_contents = false;
+        let answer = device.heap_texture_size_and_align(&descriptor).unwrap();
+        let heap = heap(device, HeapType::Placement, 1 << 20, options);
+        let made = device.work_counts();
+        let texture = heap.new_texture_at_offset(&descriptor, 0).unwrap();
+        let tiled = device.work_counts().heap_textures_tiled > made.heap_textures_tiled;
+        let over = heap.new_buffer_at_offset(answer.size, options, 0).unwrap();
+        let mut bytes = vec![0; answer.size as usize];
+        for i in 0..w * h {
+            let at = tiled_offset(4, [w, h], i % w, i / w) as usize;
+            bytes[at..at + 4].copy_from_slice(&bits(i).to_le_bytes());
+        }
+        let source = staged(device, &bytes);
+        let command_buffer = queue.command_buffer().unwrap();
+        let mut copy = command_buffer.blit_command_encoder().unwrap();
+        copy.copy_from_buffer_to_buffer(&source, 0, &over, 0, answer.size)
+            .unwrap();
+        copy.end_encoding().unwrap();
+        run(&command_buffer);
+        let row = 4 * w;
+        let into = staged(device, &vec![0; (row * h) as usize]);
+        let command_buffer = queue.command_buffer().unwrap();
+        let mut blit = command_buffer.blit_command_encoder().unwrap();
+        blit.copy_from_texture_to_buffer(
+            &texture,
+            0,
+            0,
+            Origin::new(0, 0, 0),
+            Size::new(w, h, 1),
+            &into,
+            0,
+            row,
+            row * h,
+            BlitOption::None,
+        )
+        .unwrap();
+        blit.end_encoding().unwrap();
+        run(&command_buffer);
+        (clamps, tiled, read_buffer(&into, 0, row * h).unwrap())
+    };
+    let reported = messages.take();
+    let (range, other): (Vec<_>, Vec<_>) = (reported.iter())
+        .partition(|message| message.id_name.contains("07931") || message.text.contains("07931"));
+    eprintln!(
+        "HEAPTEX depth range: clamps {clamps}, tiled {tiled}; {} copies outside [0, 1] reported, \
+         and {} other messages: {other:#?}",
+        range.len(),
+        other.len()
+    );
+    assert!(
+        range.is_empty(),
+        "a copy of a depth outside [0, 1]: {range:#?}"
+    );
+    // The GPU-assisted check's own warnings about its settings aside, nothing else.
+    let unexpected: Vec<_> = (other.iter())
+        .filter(|message| {
+            let gpuav = message.text.contains("GPU-AV") || message.text.contains("gpuav");
+            !(message.severity == MessageSeverity::Warning && gpuav)
+        })
+        .collect();
+    assert!(unexpected.is_empty(), "reported: {unexpected:#?}");
+    layer_reported_nothing_at_all(&messages);
+    let off: Vec<(u64, u32, u32)> = (0..37 * 5)
+        .filter_map(|i| {
+            let at = (4 * i) as usize;
+            let got = u32::from_le_bytes(read[at..at + 4].try_into().unwrap());
+            let want = match clamps {
+                true => clamped(bits(i)),
+                false => bits(i),
+            };
+            (got != want).then_some((i, bits(i), got))
+        })
+        .collect();
+    assert!(
+        off.is_empty(),
+        "texels read otherwise (texel, bits, read): {off:x?}"
+    );
+}
+
 /// One aspect of one slice of a multisample texture a lane moves ([`sample_round_trip`]): its
 /// element bytes, its blit option, the slice, and its plane's first byte in that slice from the
 /// texture's.

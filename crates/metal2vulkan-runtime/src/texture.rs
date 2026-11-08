@@ -5133,7 +5133,8 @@ impl Texture {
     /// copies in move the heap's bytes into its 32-bit float depth image (`texture/heap.rs`,
     /// `shadowed-texture`), on a device that may store a value outside `[0, 1]` there clamped
     /// (`ImageFacts::depth_clamps`): the bytes may hold any `float`, which Metal's texture keeps,
-    /// and the copies back write the stored value (`texture/heap_tiled.rs`).
+    /// the copies in clamp each into `[0, 1]`, a NaN to 1.0, as the device stores it, and the
+    /// copies back write the stored value (`texture/heap_tiled.rs`).
     pub(super) fn degrade_shadowed_depth(&self, call: &'static str) {
         if !self.float_depth_image() || !self.depth_clamps() {
             return;
@@ -5142,7 +5143,8 @@ impl Texture {
         device.degrade(Degradation::RestrictedDepthUpload, || {
             let why = format!(
                 "`{call}`'s texture in a heap takes the depth its bytes hold into its depth \
-                 image by copies, on a device without VK_EXT_depth_range_unrestricted"
+                 image clamped into [0, 1], a NaN as 1.0, on a device without \
+                 VK_EXT_depth_range_unrestricted"
             );
             (format!("a {format:?} texture"), why)
         });

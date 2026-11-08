@@ -3825,6 +3825,7 @@ field	metal2vulkan::bind::TileThreadgroupMemory.arguments	pub arguments: BTreeMa
 field	metal2vulkan::bind::TileThreadgroupMemory.length	pub length: u32
 field	metal2vulkan::bind::TiledLevelMove.across	pub across: u32
 field	metal2vulkan::bind::TiledLevelMove.chain_stride	pub chain_stride: u32
+field	metal2vulkan::bind::TiledLevelMove.clamps_depth	pub clamps_depth: bool
 field	metal2vulkan::bind::TiledLevelMove.extent	pub extent: [u32; 2]
 field	metal2vulkan::bind::TiledLevelMove.images	pub images: u32
 field	metal2vulkan::bind::TiledLevelMove.region_bytes	pub region_bytes: u32
@@ -9051,6 +9052,7 @@ method	metal2vulkan::bind::TextureFacts::offset_base_axes	pub fn offset_base_axe
 method	metal2vulkan::bind::TextureFacts::shape	pub fn shape(&self) -> TextureShape
 method	metal2vulkan::bind::TileThreadgroupArgument::new	pub fn new(length: u32, offset: u32) -> TileThreadgroupArgument
 method	metal2vulkan::bind::TileThreadgroupMemory::new	pub fn new(length: u32) -> TileThreadgroupMemory
+method	metal2vulkan::bind::TiledLevelMove::clamping_depth	pub const fn clamping_depth(self) -> TiledLevelMove
 method	metal2vulkan::bind::TiledLevelMove::invocations	pub const fn invocations(&self, into_tight: bool) -> u32
 method	metal2vulkan::bind::TiledLevelMove::new	pub const fn new(unit: u32, extent: [u32; 2], images: u32, tile: [u32; 2], across: u32, tiled_first: u32, chain_stride: u32, tight_first: u32, region_bytes: u32) -> TiledLevelMove
 method	metal2vulkan::bind::TiledTexelsModule::invocations	pub fn invocations(levels: &[TiledLevelMove], into_tight: bool) -> u32

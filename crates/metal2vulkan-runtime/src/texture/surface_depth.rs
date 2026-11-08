@@ -144,7 +144,8 @@ impl Texture {
                 })
                 .collect();
             let shape = (&planes[..], tight_len, 1);
-            let tiles = HeapTiledCopies::new(device, &staging, tiled, shape, &regions, hazard)?;
+            let tiles = (tiled, format);
+            let tiles = HeapTiledCopies::new(device, &staging, tiles, shape, &regions, hazard)?;
             let (truth, tracked) = texels.buffer.tracked(base..end);
             let copies = ShadowCopies {
                 source: ShadowSource::Bytes {

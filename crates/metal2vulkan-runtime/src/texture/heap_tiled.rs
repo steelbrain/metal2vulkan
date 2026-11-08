@@ -155,10 +155,13 @@
 //! values, the texture announces `drawn-depth-copy` once, as it is made.
 //!
 //! A texture with a **depth** aspect, of any sample count, takes the heap's bytes into its image
-//! by moves that may change a value: Vulkan leaves a depth outside `[0, 1]` that a copy or a draw
-//! writes undefined without `VK_EXT_depth_range_unrestricted` (ANV on the Iris Xe of RPL-P stores
-//! a 32-bit float one clamped: `restricted-depth-upload`, announced as the texture is made), and
-//! the drivers that `drawn-depth-copy` names change values inside it too. So a merge's keep holds
+//! by moves that may change a value: a copy into a depth image takes no value outside `[0, 1]`
+//! without `VK_EXT_depth_range_unrestricted` (`VUID-vkCmdCopyBufferToImage-pRegions-07931`), so on
+//! a device that would store a 32-bit float one clamped (`clamps_float_depth`: ANV on the Iris Xe
+//! of RPL-P) the move into the tight buffer clamps each such depth into `[0, 1]`, a NaN to 1.0
+//! (`TiledLevelMove::clamps_depth`), the value the device stores: `restricted-depth-upload`,
+//! announced as the texture is made. The drivers that `drawn-depth-copy` names change values
+//! inside it too. So a merge's keep holds
 //! the heap's bytes as the image stands for them, not the image's (`ShadowCopies::record_kept`):
 //! the staging buffer as the shadow's last copy left it, the bytes the copy in read or those the
 //! last copy back or merge wrote, and no move out of the image. A keep of the image would hold
@@ -1568,6 +1571,19 @@ struct MovedTexture {
     texture: Weak<TextureShared>,
 }
 
+/// Whether a heap texture's moves into its image of `format` on `device` clamp its 32-bit float
+/// depths into `[0, 1]` (`TiledLevelMove::clamps_depth`, a NaN to 1.0): a `D32_SFLOAT` or
+/// `D32_SFLOAT_S8_UINT` image on a device without `VK_EXT_depth_range_unrestricted` whose driver
+/// is not measured to keep a value outside there (`ImageFacts::depth_clamps`), where Vulkan
+/// takes no such value into a depth image by a copy
+/// (`VUID-vkCmdCopyBufferToImage-pRegions-07931`), and the device stores one clamped. The texture
+/// announces `restricted-depth-upload` as it is made (`Texture::degrade_shadowed_depth`).
+fn clamps_float_depth(device: &Device, format: Format) -> bool {
+    let profile = device.compile_device().profile();
+    matches!(format, Format::D32_SFLOAT | Format::D32_SFLOAT_S8_UINT)
+        && device.shared().textures.facts(profile).depth_clamps()
+}
+
 impl HeapTiledCopies {
     /// The tight buffer's copies to and from the image, one a level, each in the image's
     /// aspects, level and slices.
@@ -1577,9 +1593,14 @@ impl HeapTiledCopies {
 
     /// The kernel's levels of a texture of `tiles` whose image's elements lie in the tight
     /// buffer as `planes` say (`heap_plane_layout`, one plane a level of each aspect), each
-    /// part's levels its aspect's planes'; `None` where a byte the moves name lies past `u32`, or
-    /// the planes are not the levels'.
-    fn levels(tiles: &TiledTexture, planes: &[HeapPlane]) -> Option<Vec<TiledLevelMove>> {
+    /// part's levels its aspect's planes', a depth plane's of 4-byte elements clamped into the
+    /// image where `clamps` ([`clamps_float_depth`]); `None` where a byte the moves name lies
+    /// past `u32`, or the planes are not the levels'.
+    fn levels(
+        tiles: &TiledTexture,
+        planes: &[HeapPlane],
+        clamps: bool,
+    ) -> Option<Vec<TiledLevelMove>> {
         let narrow = |v: u64| u32::try_from(v).ok();
         let mut moves = Vec::new();
         for part in &tiles.parts {
@@ -1594,7 +1615,7 @@ impl HeapTiledCopies {
                 if plane.blocks != level.extent || plane.unit != layout.unit {
                     return None;
                 }
-                moves.push(TiledLevelMove::new(
+                let moved = TiledLevelMove::new(
                     narrow(layout.unit)?,
                     [narrow(level.extent[0])?, narrow(level.extent[1])?],
                     narrow(plane.images)?,
@@ -1604,7 +1625,12 @@ impl HeapTiledCopies {
                     narrow(layout.stride)?,
                     narrow(plane.offset)?,
                     narrow(level.bytes)?,
-                ));
+                );
+                let depth = plane.aspect == ImageAspectFlags::DEPTH && layout.unit == 4;
+                moves.push(match clamps && depth {
+                    true => moved.clamping_depth(),
+                    false => moved,
+                });
             }
         }
         // Every plane is a part's.
@@ -1639,7 +1665,7 @@ impl HeapTiledCopies {
                 .limits
                 .max_storage_buffer_range,
         );
-        let Some(levels) = Self::levels(tiles, planes) else {
+        let Some(levels) = Self::levels(tiles, planes, false) else {
             return false;
         };
         let moves = [true, false].iter().all(|&into| {
@@ -1699,19 +1725,21 @@ impl HeapTiledCopies {
     }
 
     /// The moves of a texture of `tiles` through `staging` (its `staging`),
-    /// whose image's elements lie in its tight buffer as `planes` say, `tight_len` bytes, copied
-    /// to and from the image by `regions` (offsets in that buffer), of the texture's `hazard`
-    /// tracking. Refused as `new_buffer` refuses the tight and shape buffers; the caller checked
-    /// that they `fit`.
+    /// whose image of `format` has its elements in its tight buffer as `planes` say, `tight_len`
+    /// bytes, copied to and from the image by `regions` (offsets in that buffer), of the
+    /// texture's `hazard` tracking: a 32-bit float depth clamped into `[0, 1]` on its way into
+    /// the image where the device takes no other value there ([`clamps_float_depth`]). Refused
+    /// as `new_buffer` refuses the tight and shape buffers; the caller checked that they `fit`.
     pub(crate) fn new(
         device: &Device,
         staging: &ShadowStaging,
-        tiles: TiledTexture,
+        (tiles, format): (TiledTexture, Format),
         (planes, tight_len, samples): (&[HeapPlane], u64, u32),
         regions: &[vk::BufferImageCopy],
         hazard: HazardTrackingMode,
     ) -> Result<HeapTiledCopies, Error> {
-        let levels = Self::levels(&tiles, planes)
+        let clamps = clamps_float_depth(device, format);
+        let levels = Self::levels(&tiles, planes, clamps)
             .ok_or_else(|| internal("a tiled heap texture's moves past u32"))?;
         let options =
             ResourceOptions::new(StorageMode::Private, CpuCacheMode::DefaultCache, hazard);
@@ -1874,8 +1902,9 @@ impl HeapTiledCopies {
 
     /// Whether the moves between the image and the staging buffer give back each byte they took:
     /// a single-sample image of colour aspects alone, whose copies to and from the tight buffer
-    /// move its texel blocks' bits (a depth aspect's copy writes values outside `[0, 1]` as
-    /// undefined, `VUID-vkCmdCopyBufferToImage-pRegions-07931`), and whose dispatches move words.
+    /// move its texel blocks' bits (a depth aspect's copy takes no value outside `[0, 1]`,
+    /// `VUID-vkCmdCopyBufferToImage-pRegions-07931`, which the move clamps where the device would
+    /// store it clamped), and whose dispatches move words.
     /// So, right after a move in, the staging buffer holds what a move out of the image would
     /// leave there (`ShadowCopies::record_kept_from_staging`).
     pub(crate) fn moves_bits(&self) -> bool {
@@ -1885,8 +1914,8 @@ impl HeapTiledCopies {
     }
 
     /// Whether the image has a depth aspect, whose moves into it may change a value the heap's
-    /// bytes hold (the module docs: a 32-bit float depth outside `[0, 1]`, which Vulkan leaves
-    /// undefined without `VK_EXT_depth_range_unrestricted`, and the values `drawn-depth-copy`
+    /// bytes hold (the module docs: a 32-bit float depth outside `[0, 1]`, clamped where the
+    /// device lacks `VK_EXT_depth_range_unrestricted`, and the values `drawn-depth-copy`
     /// names), so that a merge's keep copies the staging buffer, the heap's bytes as the image
     /// stands for them, and moves nothing out of the image (`ShadowCopies::record_kept`). Of a
     /// depth whose moves change none, the same bytes.

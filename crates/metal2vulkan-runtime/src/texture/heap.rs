@@ -4050,7 +4050,8 @@ impl Device {
         let hazard = options.hazard_tracking_mode()?;
         let staging = HeapTiledCopies::staging(self, &tiled, start, hazard)?;
         let shape = (&planes[..], tight_len, samples);
-        let tiles = HeapTiledCopies::new(self, &staging, tiled, shape, &regions, hazard)?;
+        let tiles = (tiled, plan.format);
+        let tiles = HeapTiledCopies::new(self, &staging, tiles, shape, &regions, hazard)?;
         let tiles = Box::new(tiles);
         let shadow_range = UseRange::Image {
             aspects: image_aspects(plan.format).into(),

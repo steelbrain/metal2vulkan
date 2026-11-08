@@ -29,7 +29,10 @@
 //!
 //! - **Into the image** (tight), word `j` of the level's tight elements: each of its bytes the
 //!   byte of the tiled buffer its element and byte place lie at; a byte past the level's
-//!   elements 0, which no consumer copies on.
+//!   elements 0, which no consumer copies on. A level whose elements are 32-bit float depths
+//!   clamped into the image ([`TiledLevelMove::clamps_depth`]) takes each in `[0, 1]`: a
+//!   negative one 0.0, one above 1.0 1.0, a NaN 1.0, and the others (`-0.0` among them) bit for
+//!   bit, compared as the word's bits, so no denormal is flushed.
 //! - **Back** (tiled), word `j` of the level's regions in the tiled buffer (one region a chain,
 //!   `region_bytes` long, from `tiled_first` past the chain's first byte): each byte an element's
 //!   lies in, that element's byte from the tight buffer; every other byte as it was.
@@ -92,6 +95,11 @@ pub struct TiledLevelMove {
     pub tight_first: u32,
     /// The bytes of its region in one chain of the tiled buffer, which the move back writes.
     pub region_bytes: u32,
+    /// Whether its elements are 32-bit float depths, of 4 bytes, that the move into the image
+    /// clamps into `[0, 1]` (the module docs): for a depth image of a device without
+    /// `VK_EXT_depth_range_unrestricted`, whose copy from a buffer takes no value outside
+    /// (`VUID-vkCmdCopyBufferToImage-pRegions-07931`). The move back takes them as they are.
+    pub clamps_depth: bool,
 }
 
 impl TiledLevelMove {
@@ -120,6 +128,16 @@ impl TiledLevelMove {
             chain_stride,
             tight_first,
             region_bytes,
+            clamps_depth: false,
+        }
+    }
+
+    /// The level, its elements 32-bit float depths that the move into the image clamps into
+    /// `[0, 1]` ([`clamps_depth`](Self::clamps_depth)).
+    pub const fn clamping_depth(self) -> TiledLevelMove {
+        TiledLevelMove {
+            clamps_depth: true,
+            ..self
         }
     }
 
@@ -149,7 +167,7 @@ impl TiledTexelsModule {
     /// The most levels one move takes.
     pub const MAX_LEVELS: u32 = 16;
     /// The words of a level's record in the shape.
-    const LEVEL_WORDS: u32 = 13;
+    const LEVEL_WORDS: u32 = 14;
     /// The words of the shape's header, before the levels' records.
     const HEADER_WORDS: u32 = 4;
     /// The words of the shape.
@@ -192,6 +210,7 @@ impl TiledTexelsModule {
                 level.tight_first,
                 level.region_bytes / 4,
                 level.images,
+                u32::from(level.clamps_depth),
             ];
             words[at..at + record.len()].copy_from_slice(&record);
             start += count;
@@ -251,6 +270,7 @@ struct Level {
     tight_first: Value,
     region_words: Value,
     images: Value,
+    clamps_depth: Value,
 }
 
 /// `v`'s low 16 bits spread to the even bits.
@@ -419,6 +439,30 @@ fn tight_byte(
     f.binary(BinOp::IAdd, l.tight_first, at)
 }
 
+/// The word `v` of a level's element into the image: where the level clamps its 32-bit float
+/// depths ([`TiledLevelMove::clamps_depth`]), in `[0, 1]` by its bits (the module docs), else as
+/// it is.
+fn clamped_depth(f: &mut FunctionBuilder<'_>, l: Level, v: Value) -> BResult<Value> {
+    let zero = u32_value(f, 0)?;
+    let one = u32_value(f, 0x3f80_0000)?;
+    let sign = u32_value(f, 0x8000_0000)?;
+    let infinity = u32_value(f, 0x7f80_0000)?;
+    let magnitude = u32_value(f, 0x7fff_ffff)?;
+    let abs = f.binary(BinOp::BitwiseAnd, v, magnitude)?;
+    let nan = f.binary(BinOp::UGreaterThan, abs, infinity)?;
+    // Above 1.0's bits: a positive above 1.0, and every value with its sign bit, of which -0.0
+    // alone stays.
+    let above = f.binary(BinOp::UGreaterThan, v, one)?;
+    let signed = f.binary(BinOp::UGreaterThanEqual, v, sign)?;
+    let minus_zero = f.binary(BinOp::IEqual, v, sign)?;
+    let r = f.select(above, one, v)?;
+    let r = f.select(signed, zero, r)?;
+    let r = f.select(minus_zero, v, r)?;
+    let r = f.select(nan, one, r)?;
+    let clamps = f.binary(BinOp::INotEqual, l.clamps_depth, zero)?;
+    f.select(clamps, r, v)
+}
+
 /// The byte at byte `at` of the words `words`.
 fn byte_at(f: &mut FunctionBuilder<'_>, words: Value, at: Value) -> BResult<Value> {
     let zero = u32_value(f, 0)?;
@@ -504,6 +548,7 @@ fn typed_module() -> BResult<TypedModule> {
         tight_first: at(&mut f, 10)?,
         region_words: at(&mut f, 11)?,
         images: at(&mut f, 12)?,
+        clamps_depth: at(&mut f, 13)?,
     };
     let has_levels = f.binary(BinOp::ULessThan, zero, levels)?;
     let past_start = f.binary(BinOp::UGreaterThanEqual, i, start)?;
@@ -533,6 +578,7 @@ fn typed_module() -> BResult<TypedModule> {
                 let from = f.binary(BinOp::ShiftRightLogical, from, two)?;
                 let p = f.access_chain(tiled, &[zero, from])?;
                 let v = f.load(p, MemAccess::default())?;
+                let v = clamped_depth(f, l, v)?;
                 f.store(at_to, v, MemAccess::default())?;
                 Ok(ArmEnd::FallThrough(Vec::new()))
             });
