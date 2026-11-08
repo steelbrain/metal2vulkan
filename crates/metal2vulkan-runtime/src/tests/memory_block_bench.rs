@@ -77,6 +77,8 @@ fn memory_block_bench() {
     let done = AtomicBool::new(false);
     let live_most = AtomicU64::new(0);
     let (buffer_makes, texture_makes) = (Mutex::new(Vec::new()), Mutex::new(Vec::new()));
+    // The pooled blocks made over each round's growth, as the first maker saw them.
+    let grown = Mutex::new(Vec::new());
     let before = device.work_counts();
     let (pings, frames) = std::thread::scope(|scope| {
         let stops = Stops(&done);
@@ -126,8 +128,8 @@ fn memory_block_bench() {
         let makers: Vec<_> = [false, true]
             .into_iter()
             .map(|textures| {
-                let (device, buffer_makes, texture_makes) =
-                    (&device, &buffer_makes, &texture_makes);
+                let (device, buffer_makes, texture_makes, grown) =
+                    (&device, &buffer_makes, &texture_makes, &grown);
                 scope.spawn(move || {
                     let mut descriptor =
                         TextureDescriptor::texture_2d(PixelFormat::RGBA8Unorm, SIDE, SIDE, false);
@@ -136,6 +138,7 @@ fn memory_block_bench() {
                     for _ in 0..ROUNDS {
                         let (mut buffers, mut textures_held): (Vec<Buffer>, Vec<Texture>) =
                             (Vec::new(), Vec::new());
+                        let made_before = device.work_counts().pooled_memory_blocks_made;
                         for at in 0..OBJECTS {
                             // Buffers from one thread, buffers and textures in turn from the other.
                             let texture = textures && at % 2 == 1;
@@ -149,6 +152,10 @@ fn memory_block_bench() {
                                 buffer_makes.lock().unwrap().push(started.elapsed());
                             }
                             std::thread::sleep(MAKE_EVERY);
+                        }
+                        if !textures {
+                            let made = device.work_counts().pooled_memory_blocks_made;
+                            grown.lock().unwrap().push(made - made_before);
                         }
                         std::thread::sleep(Duration::from_secs(1));
                         drop((buffers, textures_held));
@@ -182,11 +189,32 @@ fn memory_block_bench() {
         "BLOCK-MAKES frames, commit to completion: {}",
         spread(&mut frames)
     );
+    let frees = |counts: &crate::WorkCounts| {
+        let frees = &counts.memory_frees;
+        [
+            frees.pooled_emptied,
+            frees.kept_stale,
+            frees.kept_for_room,
+            frees.dedicated,
+        ]
+    };
+    let (freed_after, freed_before) = (frees(&after), frees(&before));
+    let freed: Vec<u64> = (freed_after.iter().zip(freed_before))
+        .map(|(a, b)| a - b)
+        .collect();
     eprintln!(
-        "BLOCK-MAKES counts: pooled blocks made {}, freed {}, most live {}, live at the end {}",
+        "BLOCK-MAKES counts: pooled blocks made {} (over each round's growth {:?}), freed {} \
+         (emptied past what is kept {}, stale {}, for room {}, dedicated {}), most live {}, at \
+         the end live {} and empty {}",
         after.pooled_memory_blocks_made - before.pooled_memory_blocks_made,
+        grown.lock().unwrap(),
         after.pooled_memory_blocks_freed - before.pooled_memory_blocks_freed,
+        freed[0],
+        freed[1],
+        freed[2],
+        freed[3],
         live_most.load(Ordering::Relaxed),
         after.memory_blocks_live,
+        after.empty_memory_blocks_live,
     );
 }
