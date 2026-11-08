@@ -6,8 +6,12 @@
 //!
 //! The host's write of zeros into new memory waited for the program's queued GPU work on an RX
 //! 7900 XTX (RADV, Mesa 26.2.6): 0.2 to 1.1 s behind about 1.5 s of fills. Where the GPU had
-//! idled into runtime suspend, the texture's first CPU write waits so instead; run as a process's
-//! first device work after the GPU idled 5 s (its autosuspend delay there) to see that case.
+//! idled into runtime suspend, the first CPU write into a texture placed in a block made then
+//! waited so instead, in the kernel's clear of the block; the blocks host copies place in are
+//! made ready ahead, every page read, from the device's first creation call on
+//! (`memory/ready.rs`), so the texture's block is one made before the fills, and no such block
+//! is made in place (`WorkCounts::host_copy_blocks_made_in_place`). Run as a process's first
+//! device work after the GPU idled 5 s (its autosuspend delay there) to see that case.
 //!
 //! Device tests: compiled only under the GPU safety cfgs (`m2v_gpu`, `m2v_cpu_icd`).
 
@@ -71,16 +75,21 @@ fn a_shared_texture_made_while_the_gpu_is_busy_waits_for_none_of_it_and_reads_ze
     (written.replace_region(Region::new_2d(0, 0, 1, 1), 0, 0, &[1, 2, 3, 4], 4, 0)).unwrap();
     let wrote = wrote_at.elapsed();
     let status_after_write = busy.status();
+    let wrote_counts = device.work_counts();
     let shared = device.shared();
     let zeroed = shared.zero_initialize_device_memory && shared.host_copies.is_some();
     println!(
         "ZEROED-START {}: new_texture (Shared, {SIDE} x {SIDE}) took {took:?} with {count} fills \
          queued ({each:?} each), the busy work {status:?} as it returned; started on the host \
          {}, zeroed {}; zeroInitializeDeviceMemory {zeroed}; a second one's first replace_region \
-         took {wrote:?}, the busy work {status_after_write:?} after it",
+         took {wrote:?}, the busy work {status_after_write:?} after it; host-copy blocks readied \
+         {}, waited for {}, made in place {}",
         device.name(),
         after.images_started_on_the_host - before.images_started_on_the_host,
         after.images_started_zeroed - before.images_started_zeroed,
+        wrote_counts.host_copy_blocks_readied,
+        wrote_counts.host_copy_ready_waits,
+        wrote_counts.host_copy_blocks_made_in_place,
     );
     assert_ne!(
         status,
@@ -96,6 +105,18 @@ fn a_shared_texture_made_while_the_gpu_is_busy_waits_for_none_of_it_and_reads_ze
             after.images_started_zeroed - before.images_started_zeroed,
             1,
             "the image did not start in memory the driver zeroed"
+        );
+    }
+    // Both lie in a block made ready before the fills, its pages read: neither placement made
+    // one, whose first touch would wait behind them (`memory/ready.rs`).
+    if hosted == 1 {
+        assert!(
+            wrote_counts.host_copy_blocks_readied >= 1,
+            "no block of host copies was made ready ahead"
+        );
+        assert_eq!(
+            wrote_counts.host_copy_blocks_made_in_place, 0,
+            "a placement made a block of host copies itself, its pages untouched"
         );
     }
     let row = SIDE * 4;

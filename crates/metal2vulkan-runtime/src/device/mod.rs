@@ -1264,7 +1264,15 @@ impl Device {
             return;
         }
         let shared = self.shared();
-        crate::memory::keep_room(&shared.memory, shared.vk(), &shared.counts);
+        let copies = || self.copies_color_on_the_host();
+        let memory = &shared.memory;
+        crate::memory::keep_room(
+            memory,
+            shared.vk(),
+            &shared.counts,
+            &shared.functions,
+            copies,
+        );
     }
 
     /// Whether `other` is this device (the same generation, not merely the same physical

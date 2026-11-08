@@ -52,8 +52,10 @@
 //!   its layout, and is zeroed as above. On an RX 7900 XTX (RADV, Mesa 26.2.6) the host's write
 //!   of zeros into new memory waited for the program's queued GPU work, 0.2 to 1.1 s behind
 //!   about 1.5 s of fills, and the zeroed start took 0.3 ms (`tests/zeroed_start.rs`). Counted:
-//!   `WorkCounts::images_started_zeroed`. Where the GPU had idled into runtime suspend, the
-//!   texture's first CPU write waits there instead (`docs/FAST-PATHS.md`, known gaps).
+//!   `WorkCounts::images_started_zeroed`. Where the GPU had idled into runtime suspend, the first
+//!   CPU write into a block made then waited there instead, 516 to 684 ms, in the kernel's clear
+//!   of the block's memory; the blocks of the pool these images place in are made ready ahead,
+//!   every page of their mapping read before any image is placed in them (`memory/ready.rs`).
 //! - **Copied.** `replace_region` copies the caller's bytes into the image on the host, straight
 //!   from them where they are laid out packed
 //!   (`HostLayout::is_packed`), else from packed bytes, and `get_bytes` copies the image's texels
@@ -249,6 +251,27 @@ unsafe fn write(
     unsafe { (functions.copy_memory_to_image_ext)(device, &info) }
         .result()
         .map_err(vulkan)
+}
+
+impl crate::Device {
+    /// Whether the device copies a color texture on the host: it copies on the host
+    /// ([`reaches_general`]), host copies reach `R8G8B8A8_UNORM` ([`reaches_format`]), which has
+    /// `HOST_IMAGE_TRANSFER` at optimal tiling, and a color texture's copies do not go to the
+    /// staging queue for want of memory the host caches (`Device::host_placed_image`'s tests,
+    /// `texture/staging_copy.rs`). The pool such images place in gets its blocks made ready ahead
+    /// (`memory/ready.rs`).
+    pub(crate) fn copies_color_on_the_host(&self) -> bool {
+        let shared = self.shared();
+        let format = Format::R8G8B8A8_UNORM;
+        let staged = self.has_staging_queue()
+            && !lock(&shared.memory).has_host_cached(crate::memory::MemoryClass::Private);
+        shared.host_copies.is_some()
+            && reaches_format(format, &self.properties().driver_defects)
+            && !staged
+            && (shared.textures.facts(self.compile_device().profile()))
+                .optimal(format)
+                .contains(metal2vulkan::vk::FormatFeatureFlags2::HOST_IMAGE_TRANSFER)
+    }
 }
 
 impl Image {

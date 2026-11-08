@@ -4399,6 +4399,21 @@ pub struct WorkCounts {
     pub pooled_memory_blocks_freed: u64,
     /// Its live dedicated blocks: a placement larger than half a block, or one placed apart.
     pub dedicated_memory_blocks_live: u64,
+    /// Of `pooled_memory_blocks_made`, the blocks of the pool a color texture's host-transfer
+    /// image places in made ready off the program's thread: allocated, every page of their
+    /// mapping read once by the host, then added to the pool, so that no host copy faults on
+    /// memory whose kernel work waits behind the program's queued GPU work (`memory/ready.rs`;
+    /// on RADV after runtime suspend, a new block's clear). None on a device that copies no
+    /// color texture on the host.
+    pub host_copy_blocks_readied: u64,
+    /// The placements in that pool that found no room and waited for the block being made ready
+    /// (`memory/ready.rs`): at most one per block, the device's first host-transfer textures
+    /// among them where they came before its first block was ready.
+    pub host_copy_ready_waits: u64,
+    /// The blocks of that pool a placement made itself, finding no room and none being made
+    /// ready: their pages untouched, a host copy's first touch there may wait for the memory's
+    /// kernel work (`memory/ready.rs`).
+    pub host_copy_blocks_made_in_place: u64,
     /// Every block its allocator freed so far, by what made it go (`MemoryFrees`): one
     /// `vkFreeMemory` each, and the allocator's whole share of
     /// `object_churn.vk_memory_freed`.
@@ -6736,7 +6751,7 @@ impl Device {
         let command_buffer_spared = counters.command_buffer_wakes_spared.load(Ordering::Relaxed);
         let event_wakes = counters.event_wakes.load(Ordering::Relaxed);
         let event_spared = counters.event_wakes_spared.load(Ordering::Relaxed);
-        let (allocated, overflows, census, (parked, waiting), (made, freed), frees) = {
+        let (allocated, overflows, census, (parked, waiting), (made, freed), frees, host_copy) = {
             let memory = lock(&self.shared().memory);
             let turnover = memory.turnover();
             (
@@ -6746,6 +6761,7 @@ impl Device {
                 memory.parked(),
                 turnover,
                 memory.frees(),
+                memory.host_copy_blocks(),
             )
         };
         let (frees_posted, frees_queue_full, free_waits) = self.shared().frees.counts();
@@ -6906,6 +6922,9 @@ impl Device {
             pooled_memory_blocks_made: made,
             pooled_memory_blocks_freed: freed,
             dedicated_memory_blocks_live: census.dedicated,
+            host_copy_blocks_readied: host_copy.readied,
+            host_copy_ready_waits: host_copy.waits,
+            host_copy_blocks_made_in_place: host_copy.made_in_place,
             memory_frees: MemoryFrees {
                 dedicated: frees[FreeCause::Dedicated as usize],
                 pooled_emptied: frees[FreeCause::PooledEmptied as usize],

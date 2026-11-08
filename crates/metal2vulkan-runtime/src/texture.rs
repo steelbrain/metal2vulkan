@@ -3192,20 +3192,14 @@ impl Device {
         // memory is allowed, the placement fails and `host_placed_image` makes the image without
         // host-transfer usage, its copies through submissions, as on a device without host copies.
         let hosted = plan.usage.contains(ImageUsageFlags::HOST_TRANSFER);
-        let cached = match hosted {
+        let (class, cached) = match hosted {
             true => {
-                let memory = lock(&shared.memory);
-                requirements.memory_type_bits &= !memory.host_incoherent();
-                memory.host_cached_placement(requirements.memory_type_bits, class)
-            }
-            false => None,
-        };
-        let class = match cached {
-            Some((cached, types)) => {
+                let allowed = requirements.memory_type_bits;
+                let (class, types, cached) = lock(&shared.memory).host_image_types(allowed, class);
                 requirements.memory_type_bits = types;
-                cached
+                (class, cached)
             }
-            None => class,
+            false => (class, false),
         };
         let placement =
             match crate::memory::allocate_image(&shared.memory, raw_device, &requirements, class) {
@@ -3225,7 +3219,7 @@ impl Device {
             unsafe { release::object(raw_device, raw) };
             return Err(vulkan(error));
         }
-        if hosted && cached.is_none() {
+        if hosted && !cached {
             shared.counts.uncached_host_image();
         }
         Ok((raw, placement))

@@ -48,6 +48,12 @@
 //!   buffer's or a heap's bytes lies in that buffer's memory, at the offset Metal's layout gives
 //!   it. Images are placed at a multiple of `bufferImageGranularity` and rounded up to it
 //!   (`texture.rs`'s `ImagePlacement`).
+//!
+//! - **Host copies' blocks ready ahead** (`memory/ready.rs`). The pool a color texture's
+//!   host-transfer image places in ([`Memory::host_copy_pool`]) gets its blocks made off the
+//!   program's thread, every page of their mapping read once before any image is placed in them,
+//!   so that no host copy's first touch faults on memory whose kernel work waits behind the
+//!   program's queued GPU work.
 
 use super::buffer::usage;
 use super::device::lock;
@@ -63,12 +69,15 @@ use super::range::RangeAllocator;
 use super::read_only_view::ReadOnlyView;
 use super::sharing::Sharing;
 use super::work_counts::Counters;
+use crate::device::functions::Functions;
 use crate::release;
 use ash::vk;
 use metal2vulkan::vk::DriverId;
 use std::ptr::NonNull;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+
+mod ready;
 
 /// The size of a pooled block, at most the device's `maxMemoryAllocationSize`.
 pub(super) const BLOCK_BYTES: u64 = 64 << 20;
@@ -1250,6 +1259,26 @@ pub(super) struct Memory {
     /// Blocks of images are allocated with `VK_MEMORY_ALLOCATE_ZERO_INITIALIZE_BIT_EXT`
     /// ([`Memory::zero_image_blocks`]).
     zero_images: bool,
+    /// The pool a color texture's host-transfer image places in, once asked: `Some(None)` where
+    /// the device copies no color texture on the host ([`Memory::host_copy_pool`]).
+    host_copy_pool: Option<Option<(Holds, u32)>>,
+    /// The block of that pool being made ready, or made ready and not yet in it
+    /// (`memory/ready.rs`).
+    readying: Option<ready::Readying>,
+    /// Its blocks made ready ahead and added to it, the placements that waited for one, and the
+    /// blocks a placement in it made itself, finding none ready (`WorkCounts`).
+    host_copy_blocks: HostCopyBlocks,
+}
+
+/// The counts of the blocks of the pool host copies place in ([`Memory::host_copy_pool`]).
+#[derive(Clone, Copy, Debug, Default)]
+pub(super) struct HostCopyBlocks {
+    /// Made ready ahead off the program's thread and added to the pool (`memory/ready.rs`).
+    pub(super) readied: u64,
+    /// Placements that found no room and waited for the block being made ready.
+    pub(super) waits: u64,
+    /// Blocks a placement made itself, finding no room and none being made ready.
+    pub(super) made_in_place: u64,
 }
 
 impl Memory {
@@ -1294,6 +1323,9 @@ impl Memory {
             binds_wait: binds_wait(driver),
             overflows: 0,
             zero_images: false,
+            host_copy_pool: None,
+            readying: None,
+            host_copy_blocks: HostCopyBlocks::default(),
         }
     }
 
@@ -1496,6 +1528,53 @@ impl Memory {
     /// The memory types the host maps without coherence, as bits ([`host_incoherent`]).
     pub(super) fn host_incoherent(&self) -> u32 {
         host_incoherent(&self.types)
+    }
+
+    /// The memory class and types, as bits, an image of `class` with host-transfer usage whose
+    /// requirements allow `allowed` takes (`texture/host_copy.rs`), and whether they are types the
+    /// host caches: never one the host maps without coherence ([`host_incoherent`]); those the
+    /// host caches where the image may take one ([`host_cached_placement`]); else `class` and
+    /// every other type allowed.
+    pub(super) fn host_image_types(
+        &self,
+        allowed: u32,
+        class: MemoryClass,
+    ) -> (MemoryClass, u32, bool) {
+        let allowed = allowed & !self.host_incoherent();
+        match self.host_cached_placement(allowed, class) {
+            Some((class, types)) => (class, types, true),
+            None => (class, allowed, false),
+        }
+    }
+
+    /// The pool a color texture's host-transfer image places in, found once, where `copies` (read
+    /// only then) says the device copies color textures on the host (`texture/host_copy.rs`): of
+    /// images, the best type of the class an `R8G8B8A8_UNORM` image of optimal tiling with
+    /// host-transfer usage takes ([`Memory::host_image_types`], of `Private`, the class of every texture's image but a
+    /// memoryless one's). Its blocks are made ready ahead (`memory/ready.rs`). `None` where the
+    /// device copies none, or the query fails.
+    fn host_copy_pool(&mut self, device: &ash::Device, copies: bool) -> Option<(Holds, u32)> {
+        if let Some(pool) = self.host_copy_pool {
+            return pool;
+        }
+        let pool = match copies {
+            true => (host_copy_image_types(device, Sharing::new(&self.families)).ok())
+                .and_then(|allowed| {
+                    let (class, types, _) = self.host_image_types(allowed, MemoryClass::Private);
+                    candidates(&self.types, types, class, self.unified)
+                        .first()
+                        .copied()
+                })
+                .map(|type_index| (Holds::Images, type_index)),
+            false => None,
+        };
+        self.host_copy_pool = Some(pool);
+        pool
+    }
+
+    /// The counts of the blocks of the pool host copies place in ([`HostCopyBlocks`]).
+    pub(super) fn host_copy_blocks(&self) -> HostCopyBlocks {
+        self.host_copy_blocks
     }
 
     /// The memory types of `class` among those `allowed` names, as bits.
@@ -2060,8 +2139,11 @@ impl Memory {
     /// and no resource is left. What waited with them, for the caller to let go of with no lock
     /// held.
     pub(super) fn destroy(&mut self, device: &ash::Device) -> Vec<Box<dyn Send>> {
+        // The block being made ready for host copies, waited for: nothing is placed in it.
+        let readied = self.readying.take().and_then(ready::Readying::take);
         let blocks: Vec<Block> = (self.pools.iter_mut())
             .flat_map(|pool| pool.drain())
+            .chain(readied)
             .collect();
         for block in blocks {
             self.say_block("freed a block as the device is destroyed", &block);
@@ -2241,6 +2323,28 @@ fn buffer_types(
 /// The memory types a color image of optimal tiling takes, as bits: those of a 1 x 1
 /// `R8G8B8A8_UNORM` image made for the query and destroyed at once, with no memory bound.
 fn color_image_types(device: &ash::Device, sharing: Sharing<'_>) -> Result<u32, Error> {
+    let usage = vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_DST;
+    image_types(device, sharing, usage)
+}
+
+/// The memory types an `R8G8B8A8_UNORM` image of optimal tiling with host-transfer usage takes,
+/// sampled and copied to and from (`texture/host_copy.rs`), as bits ([`Memory::host_copy_pool`]),
+/// on a device that enabled `hostImageCopy` and whose format has `HOST_IMAGE_TRANSFER` at optimal
+/// tiling.
+fn host_copy_image_types(device: &ash::Device, sharing: Sharing<'_>) -> Result<u32, Error> {
+    let usage = vk::ImageUsageFlags::SAMPLED
+        | vk::ImageUsageFlags::TRANSFER_SRC
+        | vk::ImageUsageFlags::TRANSFER_DST
+        | vk::ImageUsageFlags::HOST_TRANSFER;
+    image_types(device, sharing, usage)
+}
+
+/// The memory types a 1x1 `R8G8B8A8_UNORM` image of optimal tiling and `usage` takes, as bits.
+fn image_types(
+    device: &ash::Device,
+    sharing: Sharing<'_>,
+    usage: vk::ImageUsageFlags,
+) -> Result<u32, Error> {
     let info = sharing.image(
         vk::ImageCreateInfo::default()
             .image_type(vk::ImageType::TYPE_2D)
@@ -2254,11 +2358,12 @@ fn color_image_types(device: &ash::Device, sharing: Sharing<'_>) -> Result<u32, 
             .array_layers(1)
             .samples(vk::SampleCountFlags::TYPE_1)
             .tiling(vk::ImageTiling::OPTIMAL)
-            .usage(vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_DST)
+            .usage(usage)
             .initial_layout(vk::ImageLayout::UNDEFINED),
     );
-    // SAFETY: the device is live and `info` valid: the format is sampled and a transfer
-    // destination with optimal tiling on every device.
+    // SAFETY: the device is live and `info` valid: the format is sampled and a transfer source
+    // and destination with optimal tiling on every device, and a host-transfer usage is the
+    // caller's to have checked.
     let raw = unsafe { crate::creation::image(device, &info) }?;
     // SAFETY: `raw` is a live image of this device, destroyed right after the query with no
     // memory bound.
@@ -2594,11 +2699,25 @@ fn place(
     for (type_index, overflowing) in order {
         let pool = (holds, type_index);
         if fit == Fit::Pooled {
-            let mut memory = lock(memory);
+            let mut guard = lock(memory);
             if let Some(placement) =
-                memory.place_pooled(device, pool, (size, align), addressed, class)?
+                guard.place_pooled(device, pool, (size, align), addressed, class)?
             {
-                return Ok(memory.mark_overflowed(placement, overflowing));
+                return Ok(guard.mark_overflowed(placement, overflowing));
+            }
+            // The pool host copies place in, without room: the block being made ready for it
+            // rather than one of the placement's own, whose first touch would wait instead
+            // (`memory/ready.rs`).
+            let readying = (guard.readying.as_ref()).is_some_and(|ready| ready.pool() == pool);
+            drop(guard);
+            if readying && adopt_ready(memory, true) {
+                let mut guard = lock(memory);
+                guard.host_copy_blocks.waits += 1;
+                if let Some(placement) =
+                    guard.place_pooled(device, pool, (size, align), addressed, class)?
+                {
+                    return Ok(guard.mark_overflowed(placement, overflowing));
+                }
             }
         }
         // Frees posted still count against their heap: where the block would take its heap past
@@ -2617,6 +2736,9 @@ fn place(
         match made {
             Ok(block) => {
                 let mut memory = lock(memory);
+                if !dedicated && memory.host_copy_pool == Some(Some(pool)) {
+                    memory.host_copy_blocks.made_in_place += 1;
+                }
                 let fresh = block.zeroed;
                 let index = memory.add_block(pool, block, block_size, dedicated, size);
                 let mut placement = memory.placement(pool, index, 0, size, addressed.is_some());
@@ -2652,15 +2774,29 @@ fn make_room(memory: &Mutex<Memory>, device: &ash::Device, type_index: u32) -> b
 /// that an encoding or a commit, which must wait for no other process's GPU work, finds a block
 /// with room rather than making one. A block of buffers gets its buffer of addresses (counted in
 /// `counts`) where blocks carry one. A block that fails to be made, or a pool the query fails for,
-/// is left to the placement that needs it.
-pub(super) fn keep_room(memory: &Mutex<Memory>, device: &ash::Device, counts: &Counters) {
+/// is left to the placement that needs it. The pool host copies place in, where `copies` says the
+/// device copies color textures on the host, keeps its room in blocks made ready off this thread
+/// through `functions` (`memory/ready.rs`): the one made ready is added once it is, and another
+/// started where the pool lacks room.
+pub(super) fn keep_room(
+    memory: &Mutex<Memory>,
+    device: &ash::Device,
+    counts: &Counters,
+    functions: &Arc<Functions>,
+    copies: impl FnOnce() -> bool,
+) {
+    adopt_ready(memory, false);
+    ready_ahead(memory, device, functions, copies);
     let (lacking, maker) = {
         let mut memory = lock(memory);
         let Ok(kept) = memory.kept(device) else {
             return;
         };
         let room = memory.block_bytes / 2;
+        // The pool a block is being made ready for keeps its room so.
+        let readying = (memory.readying.as_ref()).map(ready::Readying::pool);
         let lacking: Vec<(Holds, u32)> = (kept.into_iter())
+            .filter(|&pool| readying != Some(pool))
             .filter(|&(holds, type_index)| !memory.pool(holds, type_index).has_room(room))
             .collect();
         (lacking, memory.maker())
@@ -2681,4 +2817,53 @@ pub(super) fn keep_room(memory: &Mutex<Memory>, device: &ash::Device, counts: &C
         }
         memory.add_block(pool, block, maker.block_bytes, false, 0);
     }
+}
+
+/// Start making a block ready for the pool host copies place in (`memory/ready.rs`,
+/// [`Memory::host_copy_pool`], where `copies`, asked with `memory`'s lock released until the pool
+/// was found, says the device copies color textures on the host), through `functions`, where it
+/// lacks room for half a block and none is being made ready.
+fn ready_ahead(
+    memory: &Mutex<Memory>,
+    device: &ash::Device,
+    functions: &Arc<Functions>,
+    copies: impl FnOnce() -> bool,
+) {
+    let copies = lock(memory).host_copy_pool.is_none() && copies();
+    let mut memory = lock(memory);
+    let Some(pool) = memory.host_copy_pool(device, copies) else {
+        return;
+    };
+    let room = memory.block_bytes / 2;
+    if memory.readying.is_some() || memory.pool(pool.0, pool.1).has_room(room) {
+        return;
+    }
+    let maker = memory.maker();
+    let bytes = maker.block_bytes;
+    memory.readying = ready::Readying::start(maker, Arc::clone(functions), pool, bytes);
+}
+
+/// Add the block made ready for the pool host copies place in to it (`memory/ready.rs`), where
+/// its making finished, or where `wait`, once it finished, waited for with `memory`'s lock
+/// released: whether a block was added.
+fn adopt_ready(memory: &Mutex<Memory>, wait: bool) -> bool {
+    let readying = {
+        let mut memory = lock(memory);
+        match &memory.readying {
+            Some(readying) if wait || readying.finished() => memory.readying.take(),
+            _ => None,
+        }
+    };
+    let Some(readying) = readying else {
+        return false;
+    };
+    let pool = readying.pool();
+    let Some(block) = readying.take() else {
+        return false;
+    };
+    let mut memory = lock(memory);
+    let bytes = memory.block_bytes;
+    memory.add_block(pool, block, bytes, false, 0);
+    memory.host_copy_blocks.readied += 1;
+    true
 }
