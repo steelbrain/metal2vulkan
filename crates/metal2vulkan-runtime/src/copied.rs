@@ -187,7 +187,7 @@ impl FirstRead {
     /// # Safety
     ///
     /// `read` reads `pages` as [`CopiedBuffers::read`]'s contract lets it.
-    unsafe fn of(
+    pub(crate) unsafe fn of(
         pages: NonNull<u8>,
         length: usize,
         read: impl FnOnce(NonNull<u8>, &mut [u8]) -> bool,
@@ -411,27 +411,6 @@ impl CopiedBuffers {
             read_only || !mapped_writable(start, start.saturating_add(length as u64));
         // SAFETY: the caller's.
         unsafe { FirstRead::of(pages, length, read, drops_writes) }
-    }
-
-    /// [`CopiedBuffers::read`] and [`CopiedBuffers::add`] of the copy at `copy`, the first bytes
-    /// of the pages read by `read`, which answers whether it read every one; the GPU's writes to
-    /// the copy dropped where `drops_writes`.
-    ///
-    /// # Safety
-    ///
-    /// As [`CopiedBuffers::read`]'s and [`CopiedBuffers::add`]'s.
-    pub(crate) unsafe fn add_reading(
-        self: &Arc<Self>,
-        pages: NonNull<u8>,
-        copy: NonNull<u8>,
-        length: usize,
-        read: impl FnOnce(NonNull<u8>, &mut [u8]) -> bool,
-        drops_writes: bool,
-    ) -> Result<Copied, NotCopied> {
-        // SAFETY: the caller's.
-        let first = unsafe { FirstRead::of(pages, length, read, drops_writes) }?;
-        // SAFETY: the caller's.
-        Ok(unsafe { self.add(first, pages, copy) })
     }
 
     /// Register the copy at `copy` of the caller's bytes at `pages` that `first` read, its bytes

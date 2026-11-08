@@ -5,7 +5,9 @@
 //! copied all the same and others refused; on Linux, a mapping of a dma-buf (`VM_PFNMAP`), which
 //! the kernel's read refuses, is copied (where `/dev/udmabuf` opens).
 
-use crate::copied::{read_caller, restore, sync, CopiedBuffers, CopiesReached, NotCopied};
+use crate::copied::{
+    read_caller, restore, sync, Copied, CopiedBuffers, CopiesReached, FirstRead, NotCopied,
+};
 use crate::dirty_pages::DirtyTally;
 use crate::resource::ResourceKey;
 use crate::work_counts::Counters;
@@ -16,6 +18,26 @@ use std::sync::Arc;
 /// `bytes` as a pointer the comparison reads or writes.
 fn at(bytes: &mut [u8]) -> NonNull<u8> {
     NonNull::new(bytes.as_mut_ptr()).unwrap()
+}
+
+/// The copy at `copy` of the `length` bytes at `pages` that `read` first reads, registered in
+/// `buffers`: the GPU's writes to it dropped where `drops_writes`.
+///
+/// # Safety
+///
+/// As [`FirstRead::of`]'s and [`CopiedBuffers::add`]'s.
+pub(super) unsafe fn add_reading(
+    buffers: &Arc<CopiedBuffers>,
+    pages: NonNull<u8>,
+    copy: NonNull<u8>,
+    length: usize,
+    read: impl FnOnce(NonNull<u8>, &mut [u8]) -> bool,
+    drops_writes: bool,
+) -> Result<Copied, NotCopied> {
+    // SAFETY: the caller's.
+    let first = unsafe { FirstRead::of(pages, length, read, drops_writes) }?;
+    // SAFETY: the caller's.
+    Ok(unsafe { buffers.add(first, pages, copy) })
 }
 
 #[test]
@@ -97,7 +119,8 @@ fn copied_merge_back_of_unwritable_pages_drops_the_gpu_s_writes() {
         true
     };
     // SAFETY: the copy and the pages are the test's, of `length` bytes, live past the answer.
-    let copied = unsafe { buffers.add_reading(at(&mut pages), at(&mut copy), length, read, true) };
+    let copied =
+        unsafe { add_reading(&buffers, at(&mut pages), at(&mut copy), length, read, true) };
     let copied = copied.unwrap();
     assert!(copied.drops_writes());
     // The GPU writes 100 bytes of the copy; the completion drops them.
@@ -119,8 +142,16 @@ fn copied_merge_back_of_unwritable_pages_drops_the_gpu_s_writes() {
     let mut writable = original.clone();
     let mut other = vec![0_u8; length];
     // SAFETY: as above.
-    let copied =
-        unsafe { buffers.add_reading(at(&mut writable), at(&mut other), length, read, false) };
+    let copied = unsafe {
+        add_reading(
+            &buffers,
+            at(&mut writable),
+            at(&mut other),
+            length,
+            read,
+            false,
+        )
+    };
     let copied = copied.unwrap();
     assert!(!copied.drops_writes());
     other[0] = !other[0];
@@ -295,8 +326,16 @@ fn copied_pages_the_kernel_cannot_read_are_copied_where_mapped_readable() {
         unsafe { read_caller(from, into, |_, _| false, readable) }
     };
     // SAFETY: the copy and the pages are the test's, of `length` bytes, live past the answer.
-    let copied =
-        unsafe { buffers.add_reading(at(&mut pages), at(&mut copy), length, read_readable, false) };
+    let copied = unsafe {
+        add_reading(
+            &buffers,
+            at(&mut pages),
+            at(&mut copy),
+            length,
+            read_readable,
+            false,
+        )
+    };
     assert!(copied.is_ok(), "copied");
     assert_eq!(copy, pages, "the copy holds the pages' bytes");
     assert_eq!(asked.get(), Some((start, start + length as u64)), "asked");
@@ -307,7 +346,8 @@ fn copied_pages_the_kernel_cannot_read_are_copied_where_mapped_readable() {
     };
     // SAFETY: as above; nothing reads the pages.
     let refused = unsafe {
-        buffers.add_reading(
+        add_reading(
+            &buffers,
             at(&mut pages),
             at(&mut refused_copy),
             length,
@@ -363,8 +403,12 @@ fn copied_pages_of_a_dma_buf_mapping_are_copied() {
     let mut copy = vec![0_u8; length];
     // SAFETY: the copy is the test's; the mapping is `length` bytes, readable, live past the
     // answer.
-    let copied = unsafe { buffers.add(mapping.pages, at(&mut copy), length, false) };
-    assert!(copied.is_ok(), "copied");
+    let first = match unsafe { CopiedBuffers::read(mapping.pages, length, false) } {
+        Ok(first) => first,
+        Err(not) => panic!("not copied: {not:?}"),
+    };
+    // SAFETY: as above.
+    let _copied = unsafe { buffers.add(first, mapping.pages, at(&mut copy)) };
     assert!(copy == pattern, "the copy holds the dma-buf's bytes");
 }
 
@@ -512,9 +556,27 @@ fn a_merge_back_compares_only_the_copies_its_batches_wrote() {
     let (mut pages_x, mut pages_y) = (vec![1_u8; length], vec![2_u8; length]);
     let (mut copy_x, mut copy_y) = (vec![0_u8; length], vec![0_u8; length]);
     // SAFETY: the copies and the pages are the test's, of `length` bytes, live past the answers.
-    let x = unsafe { buffers.add_reading(at(&mut pages_x), at(&mut copy_x), length, read, false) };
+    let x = unsafe {
+        add_reading(
+            &buffers,
+            at(&mut pages_x),
+            at(&mut copy_x),
+            length,
+            read,
+            false,
+        )
+    };
     // SAFETY: as above.
-    let y = unsafe { buffers.add_reading(at(&mut pages_y), at(&mut copy_y), length, read, false) };
+    let y = unsafe {
+        add_reading(
+            &buffers,
+            at(&mut pages_y),
+            at(&mut copy_y),
+            length,
+            read,
+            false,
+        )
+    };
     let (x, y) = (x.unwrap(), y.unwrap());
     let (key_x, key_y) = (ResourceKey::new(), ResourceKey::new());
     x.name(key_x);
@@ -568,9 +630,27 @@ fn a_commit_copies_in_only_the_copies_its_commands_use() {
     let (mut pages_x, mut pages_y) = (vec![1_u8; length], vec![2_u8; length]);
     let (mut copy_x, mut copy_y) = (vec![0_u8; length], vec![0_u8; length]);
     // SAFETY: the copies and the pages are the test's, of `length` bytes, live past the answers.
-    let x = unsafe { buffers.add_reading(at(&mut pages_x), at(&mut copy_x), length, read, false) };
+    let x = unsafe {
+        add_reading(
+            &buffers,
+            at(&mut pages_x),
+            at(&mut copy_x),
+            length,
+            read,
+            false,
+        )
+    };
     // SAFETY: as above.
-    let y = unsafe { buffers.add_reading(at(&mut pages_y), at(&mut copy_y), length, read, false) };
+    let y = unsafe {
+        add_reading(
+            &buffers,
+            at(&mut pages_y),
+            at(&mut copy_y),
+            length,
+            read,
+            false,
+        )
+    };
     let (x, y) = (x.unwrap(), y.unwrap());
     let (key_x, key_y) = (ResourceKey::new(), ResourceKey::new());
     x.name(key_x);
@@ -619,7 +699,8 @@ fn a_copy_s_keys_are_those_of_the_pages_lying_in_it() {
     };
     let (mut pages, mut copy) = (vec![1_u8; length], vec![0_u8; length]);
     // SAFETY: the copy and the pages are the test's, of `length` bytes, live past the answer.
-    let copied = unsafe { buffers.add_reading(at(&mut pages), at(&mut copy), length, read, false) };
+    let copied =
+        unsafe { add_reading(&buffers, at(&mut pages), at(&mut copy), length, read, false) };
     let copied = copied.unwrap();
     let first = ResourceKey::new();
     copied.name(first);

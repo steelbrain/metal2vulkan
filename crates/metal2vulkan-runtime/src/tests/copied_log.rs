@@ -14,6 +14,7 @@
 //! The log is the test's own ([`TestLog`]): it reports the writes it is told of, and lies by
 //! leaving out one it is not told, so a block it leaves out shows whether a copy in took it.
 
+use super::copied::add_reading;
 use crate::copied::{Copied, CopiedBuffers, CopiesReached, SYNC_BLOCK};
 use crate::dirty_pages::{hook, DirtySource, DirtyTally, PagesLog};
 use crate::work_counts::Counters;
@@ -137,7 +138,8 @@ fn a_copy_s_merge_back_reports_the_blocks_it_wrote_as_its_own() {
     let buffers = Arc::new(CopiedBuffers::default());
     let counts = Counters::default();
     // SAFETY: the copy and the pages are the test's, of `length` bytes, live past the answer.
-    let copied = unsafe { buffers.add_reading(at(&mut pages), at(&mut copy), length, read, false) };
+    let copied =
+        unsafe { add_reading(&buffers, at(&mut pages), at(&mut copy), length, read, false) };
     let copied = copied.unwrap();
     copied.set_log(&log);
     // The GPU writes a byte of blocks 0, 1, 2 and 5 (the last, short); in block 3 it writes a
@@ -178,8 +180,16 @@ fn a_copy_s_merge_back_reports_the_blocks_it_wrote_as_its_own() {
     // Another copy of the same pages is another writer.
     let mut other_copy = vec![0_u8; length];
     // SAFETY: as above.
-    let other =
-        unsafe { buffers.add_reading(at(&mut pages), at(&mut other_copy), length, read, false) };
+    let other = unsafe {
+        add_reading(
+            &buffers,
+            at(&mut pages),
+            at(&mut other_copy),
+            length,
+            read,
+            false,
+        )
+    };
     let other = other.unwrap();
     other.set_log(&log);
     other_copy[0] ^= 0xFF;
@@ -191,8 +201,16 @@ fn a_copy_s_merge_back_reports_the_blocks_it_wrote_as_its_own() {
     // A copy whose GPU writes are dropped writes nothing to the pages, and reports nothing.
     let mut dropping_copy = vec![0_u8; length];
     // SAFETY: as above.
-    let dropping =
-        unsafe { buffers.add_reading(at(&mut pages), at(&mut dropping_copy), length, read, true) };
+    let dropping = unsafe {
+        add_reading(
+            &buffers,
+            at(&mut pages),
+            at(&mut dropping_copy),
+            length,
+            read,
+            true,
+        )
+    };
     let dropping = dropping.unwrap();
     dropping.set_log(&log);
     let before = (
@@ -231,7 +249,14 @@ impl Pair {
         // SAFETY: the copy and the pages are the test's, of `length` bytes, live past the answer
         // (each test drops the answer first).
         let copied = unsafe {
-            buffers.add_reading(at(&mut self.pages), at(&mut self.copy), length, read, false)
+            add_reading(
+                &buffers,
+                at(&mut self.pages),
+                at(&mut self.copy),
+                length,
+                read,
+                false,
+            )
         };
         let copied = copied.unwrap();
         if let Some(log) = log {
@@ -378,7 +403,8 @@ fn a_copy_takes_another_copy_s_merge_back_over_the_same_pages() {
     let mut second_copy = vec![0_u8; length];
     // SAFETY: as in `Pair::copied`.
     let second = unsafe {
-        buffers.add_reading(
+        add_reading(
+            &buffers,
             at(&mut first.pages),
             at(&mut second_copy),
             length,

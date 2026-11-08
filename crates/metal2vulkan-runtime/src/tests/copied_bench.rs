@@ -10,6 +10,7 @@
 //! prints its median over its runs (`COPIED-BENCH`). Ignored: run it in release,
 //! `cargo test --release -p metal2vulkan-runtime --lib copied_bench -- --ignored --nocapture`.
 
+use super::copied::add_reading;
 use crate::copied::{CopiedBuffers, CopiesReached};
 use crate::dirty_pages::{hook, DirtySource, DirtyTally, PagesLog};
 use crate::resource::ResourceKey;
@@ -147,7 +148,7 @@ fn bench(logged: bool, named: bool) {
         };
         let length = pair.pages.len();
         // SAFETY: both are the pair's own, live while the bench runs.
-        let copied = unsafe { buffers.add_reading(pages, copy, length, read, false) }.unwrap();
+        let copied = unsafe { add_reading(&buffers, pages, copy, length, read, false) }.unwrap();
         if logged {
             let at = pages.as_ptr() as u64;
             let pages_log = PagesLog::new((at, length as u64), Some(&source), None).unwrap();
@@ -293,7 +294,7 @@ fn copied_stitched_bench() {
             true
         };
         // SAFETY: both are the pair's own, live while the bench runs.
-        let copied = unsafe { buffers.add_reading(pages, copy, length, read, false) }.unwrap();
+        let copied = unsafe { add_reading(&buffers, pages, copy, length, read, false) }.unwrap();
         let window: Vec<Range<u64>> = (0..STITCHED_PAGES)
             .map(|k| RAM + ram_page(c, k)..RAM + ram_page(c, k) + PAGE as u64)
             .collect();
