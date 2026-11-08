@@ -3,8 +3,9 @@
 //! placed in fresh host pages, is a linear image aliasing those pages, where the device's own check
 //! shows that the operations that may touch bytes beside the texels leave every byte alone. Over a
 //! copied host buffer (`copied.rs`) the image aliases the copy the GPU uses in the pages' stead,
-//! where the check passed for the copy's memory (fresh pages, or the runtime's pooled memory) and
-//! for the pages, for texels that lie in lines as they lie in each (`texture/route.rs`).
+//! where the check passed for the pages, and for fresh pages where the copy lies in them, for
+//! texels that lie in lines as they lie in each (`texture/route.rs`); a `DRM_FORMAT_MOD_LINEAR`
+//! image over a copy in memory the device allocates, for the runtime's pooled memory too.
 //!
 //! - **What Vulkan says.** An image bound to imported memory starts `UNDEFINED`
 //!   (`VUID-VkImageCreateInfo-pNext-01443`: "If the pNext chain includes a

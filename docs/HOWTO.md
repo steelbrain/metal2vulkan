@@ -470,12 +470,12 @@ publication (bounded) on the committing thread, and every copy compares every by
 commit and where a log answers `false`. The runtime reports to the log what the log cannot see: a
 copy's merge back, as the copy's own write, the GPU's writes into the pages through imports in
 place, and its own CPU writes into them. A texture over a copied buffer is a linear image over the
-copy, bound in its memory, wherever the device's in-place check passed for that memory and for the
-caller's pages, for the texture's accesses (`copied_textures_in_place`): in fresh pages the runtime
-imported, an image made for host allocations, as over the pages; in memory the device allocates,
-the driver's own linear image where it lays the rows at the texture's pitch, which starts
+copy, bound in its memory, wherever the device's in-place check passed for the caller's pages, for
+the texture's accesses (`copied_textures_in_place`): in fresh pages the runtime imported, an image
+made for host allocations, as over the pages, under the fresh pages' check too; in memory the device
+allocates, the driver's own linear image where it lays the rows at the texture's pitch, which starts
 `PREINITIALIZED` and so keeps the copy's bytes, else a `DRM_FORMAT_MOD_LINEAR` image at that pitch
-under the check of the runtime's pooled memory. Elsewhere it is a shadow of the copy's bytes, its
+under the check of the runtime's pooled memory too. Elsewhere it is a shadow of the copy's bytes, its
 notice naming why. The copy reads the pages through the kernel
 first, and where the kernel cannot read them, with plain loads where the process maps every page
 with read permission: on Linux the kernel's read pins each page, which a mapping of a dma-buf

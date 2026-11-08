@@ -135,8 +135,8 @@ impl Device {
     /// where one serves; else the shadow where the bytes were detached; else as the device's
     /// policy, the texture's usage and the device's check of the pages' class for each access take
     /// it (`in_place.rs`), asking the verdicts (a pending one starts the check): over a copied host
-    /// buffer (`copied.rs`), the class of the copy's memory (fresh pages, or the runtime's pooled
-    /// memory) and the caller's pages', each for texels that lie in lines as they lie there. The
+    /// buffer (`copied.rs`), the caller's pages' class's for texels that lie in lines as they lie
+    /// in the copy and as they lie in the pages, and fresh pages' where the copy lies in them. The
     /// device's check's own textures take the image in place whatever the policy and the
     /// verdicts.
     pub(crate) fn route_over_buffer(
@@ -154,11 +154,15 @@ impl Device {
         let copied = texels.buffer.copied();
         let class = match texels.buffer.caller_memory() {
             // A copied host buffer's bytes the GPU uses lie in a copy of the caller's pages in
-            // memory of the device's own (`copied.rs`): fresh pages the runtime imported, or
-            // memory the device allocates, whose class's verdicts the image over it takes.
+            // memory of the device's own (`copied.rs`). In fresh pages the runtime imported, its
+            // image is made for host allocations, as over them, under their class's verdicts; in
+            // memory the device allocates, the driver's linear image, whose first move keeps the
+            // bytes, or else a `DRM_FORMAT_MOD_LINEAR` one under the check of the runtime's
+            // pooled memory too (`Device::copy_unplaced`), each of whose renders and writes take
+            // the device's store path that the check of the caller's pages measures.
             Some(CallerMemory::HostPages) if copied => match texels.copy_in_fresh_pages() {
                 true => PagesClass::Fresh,
-                false => PagesClass::Pooled,
+                false => PagesClass::Pointer,
             },
             Some(CallerMemory::HostPages) if texels.buffer.over_dma_buf() => PagesClass::DmaBuf,
             Some(CallerMemory::HostPages) => PagesClass::Pointer,
@@ -226,10 +230,7 @@ impl Device {
         // the caller's pages' too, for texels that lie in lines as they lie there: a rebind may
         // import the pages by their pointer, the image made again over that import as an image in
         // place over them is (`Device::rebound_in_place_images`).
-        let caller = match copied {
-            true => texels.over_caller_pages(line),
-            false => None,
-        };
+        let caller = texels.over_caller_pages(line);
         let decided = in_place::in_place(policy, usage, pages, verdict).and_then(|()| {
             caller.map_or(Ok(()), |(rows, padding)| {
                 let pages = (PagesClass::Pointer, rows, pages.2, padding);

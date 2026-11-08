@@ -23,8 +23,8 @@ pub enum TexturePlacement {
     /// ([`InPlaceRefusal::Source`]) or the driver refuses its import ([`InPlaceRefusal::DmaBuf`]):
     /// the texture is then a shadow, its notice (`shadowed-texture`) naming why. Over a copied host
     /// buffer ([`HostBacking::Copied`](crate::HostBacking::Copied)), the image lies over the copy
-    /// the GPU uses in the pages' stead, in the copy's memory, where the check passed for that
-    /// memory's kind and the pages' (`WorkCounts::copied_textures_in_place`).
+    /// the GPU uses in the pages' stead, in the copy's memory, where the check passed for the
+    /// pages' kind and that memory's (`WorkCounts::copied_textures_in_place`).
     InPlace,
     /// A shadow now, as the device's check has not answered for the pages' kind and the
     /// texture's accesses: once it does, at the commit of the device's only uncommitted command

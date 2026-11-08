@@ -1077,15 +1077,16 @@ fn copied_rebind_makes_a_texture_s_image_in_place_again_over_the_copy() {
 }
 
 /// Whether the device's check passed, for a texture of `usage` over `buffer` (a copied buffer, its
-/// copy in memory the device allocates) at `pitch`, for its copy's memory (the runtime's pooled
-/// memory) and the caller's pages, each for texels that lie in lines as they lie there: whether
-/// the texture is to be an image over the copy (`texture/route.rs`).
+/// copy in memory the device allocates) at `pitch`, for the caller's pages, for texels that lie in
+/// lines as they lie in the copy and in the pages; and whether it passed for the runtime's pooled
+/// memory, which a `DRM_FORMAT_MOD_LINEAR` image over the copy takes too (`texture/route.rs`,
+/// `Device::copy_unplaced`).
 fn passed_over_copy(
     device: &Device,
     buffer: &Buffer,
     usage: metal2vulkan::metal::TextureUsage,
     pitch: usize,
-) -> bool {
+) -> (bool, bool) {
     use crate::in_place::{Access, PagesClass, RowEnds, Verdict};
     let layout = crate::linear_plan::BufferLayout {
         offset: 0,
@@ -1108,9 +1109,11 @@ fn passed_over_copy(
         device.in_place_verdict(class, access, rows) == Verdict::Passed
     };
     let policy = device.compile_device().policy().host_page_textures;
-    policy == metal2vulkan::device::HostPageTexturePolicy::InPlace
-        && passes(PagesClass::Pooled, copy)
-        && passes(PagesClass::Pointer, caller)
+    let in_place = policy == metal2vulkan::device::HostPageTexturePolicy::InPlace;
+    (
+        in_place && passes(PagesClass::Pointer, copy) && passes(PagesClass::Pointer, caller),
+        passes(PagesClass::Pooled, copy),
+    )
 }
 
 /// A 16 x 16 RGBA8 texture of `usage` over `buffer` at 0, its rows `pitch` apart, and whether it
@@ -1191,12 +1194,14 @@ fn clear_reaches_the_pages(
     );
 }
 
-/// A texture made over a copied buffer is an image over the copy where the device's check passed
-/// for the copy's memory and the caller's pages (`texture/route.rs`), sampled and rendered into
-/// alike; else a shadow. Either way it reads the caller's texels; a CPU write before a commit
-/// reaches it; a blit into it, and for one that renders a render pass's clear, reach the texels'
-/// bytes in the pages alone. Before textures took an image over a copy, each was a shadow: on a
-/// device whose check passed (lavapipe, the Iris Xe) the answer the verdicts give fails it.
+/// A texture made over a copied buffer (its copy in memory the device allocates) is an image over
+/// the copy where the device's check passed for the caller's pages and, where its image is the
+/// `DRM_FORMAT_MOD_LINEAR` one, for the runtime's pooled memory (`texture/route.rs`), sampled and
+/// rendered into alike; never where the first did not pass; else a shadow. Either way it reads
+/// the caller's texels; a CPU write before a commit reaches it; a blit into it, and for one that
+/// renders a render pass's clear, reach the texels' bytes in the pages alone. Before textures took
+/// an image over a copy, each was a shadow: on a device whose check passed both (lavapipe, the
+/// Iris Xe) the test fails.
 #[test]
 fn a_texture_over_a_copied_buffer_is_an_image_over_the_copy_where_the_check_passed() {
     use metal2vulkan::metal::TextureUsage;
@@ -1216,17 +1221,25 @@ fn a_texture_over_a_copied_buffer_is_an_image_over_the_copy_where_the_check_pass
         let asked: Arc<Mutex<Vec<ImportRequest>>> = Arc::default();
         let buffer = host.buffer(&device, Some(gate(&asked, false)));
         assert!(buffer.copied(), "the gate refused the import: a copy");
-        let expected = passed_over_copy(&device, &buffer, usage, PITCH);
+        let (pages, pooled) = passed_over_copy(&device, &buffer, usage, PITCH);
         let (texture, over_copy) = texture_over_copy(&device, &buffer, usage, PITCH);
         eprintln!(
-            "COPIED-TEXTURE {name} on {}: the check passed {expected}, an image over the copy \
-             {over_copy}",
+            "COPIED-TEXTURE {name} on {}: the check passed for the pages {pages} and the pooled \
+             memory {pooled}, an image over the copy {over_copy}",
             device.name()
         );
-        assert_eq!(
-            over_copy, expected,
-            "{name}: an image over the copy where the check passed"
-        );
+        if pages && pooled {
+            assert!(
+                over_copy,
+                "{name}: an image over the copy where the check passed"
+            );
+        }
+        if !pages {
+            assert!(
+                !over_copy,
+                "{name}: no image over the copy where the pages' check did not pass"
+            );
+        }
         // A CPU write before a commit reaches the texture.
         let pattern = host.pattern();
         assert_eq!(

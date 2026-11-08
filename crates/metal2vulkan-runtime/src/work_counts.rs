@@ -6306,8 +6306,9 @@ pub struct WorkCounts {
     pub fresh_page_textures_in_place: u64,
     /// Of `host_textures_in_place`, those over a copied host buffer (`copied.rs`): an image over
     /// the copy of the caller's pages the GPU uses in their stead, bound in the copy's memory where
-    /// the device's check passed for that memory's class (fresh pages the runtime imported, or its
-    /// pooled memory) and for the caller's pages', for the texture's accesses. Counted in neither
+    /// the device's check passed for the caller's pages and, for a copy in fresh pages the runtime
+    /// imported, for those (for a `DRM_FORMAT_MOD_LINEAR` image over a copy in memory the device
+    /// allocates, for its pooled memory), for the texture's accesses. Counted in neither
     /// `fresh_page_textures_in_place` nor `pitched_host_images`.
     pub copied_textures_in_place: u64,
     /// Of `host_textures_in_place`, those whose rows lie at Metal's pitch in a

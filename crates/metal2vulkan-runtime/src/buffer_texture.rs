@@ -1616,13 +1616,16 @@ impl Texels {
         self.texel_bytes
     }
 
-    /// How the texels lie in the device's lines of memory of `line` bytes over the caller's pages
-    /// themselves, from their address (`in_place::RowEnds::of`), and whether a shader's writes may
-    /// change their rows' padding there (`in_place::Padding::of`): as [`rows`](Self::rows) and
-    /// [`padding`](Self::padding) answer them over an import of the pages, which a copied host
-    /// buffer's rebind may make (`copied.rs`), where [`rows`](Self::rows) answers them in its copy.
-    /// `None` over no caller's pages.
+    /// Over a copied host buffer (`copied.rs`), how the texels lie in the device's lines of memory
+    /// of `line` bytes over the caller's pages themselves, from their address
+    /// (`in_place::RowEnds::of`), and whether a shader's writes may change their rows' padding
+    /// there (`in_place::Padding::of`): as [`rows`](Self::rows) and [`padding`](Self::padding)
+    /// answer them over an import of the pages, which the buffer's rebind may make, where
+    /// [`rows`](Self::rows) answers them in its copy. `None` over any other buffer.
     pub(super) fn over_caller_pages(&self, line: u64) -> Option<(RowEnds, Padding)> {
+        if !self.buffer.copied() {
+            return None;
+        }
         let start = self.buffer.contents()?.as_ptr().addr() as u64;
         let padding = Padding::of(start, &self.layout, line, self.padding_owned());
         Some((

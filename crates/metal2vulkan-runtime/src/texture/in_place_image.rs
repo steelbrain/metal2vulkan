@@ -458,12 +458,12 @@ impl Device {
         let writable = !Access::Writes.takes(usage) && self.writes_reach(texels, class);
         let line = self.shared().in_place.line();
         let rendered = Access::rendered(texels.padding(line));
-        let renders = (self.shared().in_place).verdict(class, rendered, texels.rows(line));
+        let renders = self.passes_over(texels, class, rendered);
         let own = texture_usage(usage, descriptor.swizzle);
         let lacking = [
             (TextureUsage::SHADER_WRITE, writable),
             (TextureUsage::SHADER_READ, true),
-            (TextureUsage::RENDER_TARGET, renders == Verdict::Passed),
+            (TextureUsage::RENDER_TARGET, renders),
         ];
         let lacking: Vec<TextureUsage> = (lacking.into_iter())
             .filter(|&(metal, takes)| takes && !own.contains(metal))
@@ -489,14 +489,28 @@ impl Device {
     /// of `class`, may reach them in place: they are of a width the device's check's kernel stores
     /// (`in_place::STORED_TEXEL_BYTES`), and its check passed for such writes over the class, of
     /// texels of their width that lie in lines as these do, those that let their rows' padding
-    /// change where it is free (`in_place::Access::written`, as `in_place::in_place` asks it).
+    /// change where it is free (`in_place::Access::written`, as `in_place::in_place` asks it)
+    /// ([`passes_over`](Self::passes_over)).
     fn writes_reach(&self, texels: &Texels, class: PagesClass) -> bool {
         let line = self.shared().in_place.line();
         let Some(written) = Access::written(texels.texel_bytes(), texels.padding(line)) else {
             return false;
         };
-        let rows = texels.rows(line);
-        self.shared().in_place.verdict(class, written, rows) == Verdict::Passed
+        self.passes_over(texels, class, written)
+    }
+
+    /// Whether the device's check passed for `access` over host pages of `class`, for texels that
+    /// lie in lines as `texels` do; over a copied host buffer's copy (`copied.rs`), for the
+    /// caller's pages too, for texels that lie in lines as they lie there, as the route asks
+    /// (`texture/route.rs`): a rebind may import the pages, and the image then lies over them
+    /// with the usage it was made with.
+    fn passes_over(&self, texels: &Texels, class: PagesClass, access: Access) -> bool {
+        let check = &self.shared().in_place;
+        let line = check.line();
+        let passes = |class, rows| check.verdict(class, access, rows) == Verdict::Passed;
+        let caller = texels.over_caller_pages(line);
+        passes(class, texels.rows(line))
+            && caller.is_none_or(|(rows, _)| passes(PagesClass::Pointer, rows))
     }
 
     /// The image in place of `plan` over `texels`, host pages of `class`, made and checked before
@@ -530,8 +544,12 @@ impl Device {
     /// (`copied.rs`), which the GPU uses in the stead of the pages: over a copy in fresh pages the
     /// runtime imported (`fresh_pages.rs`), the image made for host allocations, as over the
     /// caller's pages ([`host_unplaced`](Self::host_unplaced)); over one in memory the device
-    /// allocates, the image made for memory of its own ([`own_unbound`](Self::own_unbound)). Either
-    /// takes its place in the copy's memory, at the texels' offset ([`placed`]).
+    /// allocates, the image made for memory of its own ([`own_unbound`](Self::own_unbound)): the
+    /// driver's linear image, which keeps the copy's bytes at its first move, or else the
+    /// `DRM_FORMAT_MOD_LINEAR` one, made `UNDEFINED`, where the device's check passed for its
+    /// pooled memory and the image's accesses, as an image at Metal's pitch there takes it
+    /// (`Device::pooled_pitched_image`); refused for its pitch where it did not. Either takes its
+    /// place in the copy's memory, at the texels' offset ([`placed`]).
     fn copy_unplaced(
         &self,
         plan: &ImagePlan,
@@ -549,6 +567,24 @@ impl Device {
             Ok(made) => made,
             Err(refused) => return Ok(Err(refused)),
         };
+        let line = self.shared().in_place.line();
+        let lies = (
+            texels.rows(line),
+            texels.padding(line),
+            texels.texel_bytes(),
+        );
+        if pitched && !self.class_takes(PagesClass::Pooled, plan, lies) {
+            // SAFETY: the image is live and unbound, and no command uses it.
+            unsafe { release::object(self.shared().vk(), made.raw) };
+            let why = format!(
+                "the driver's linear image of the copy lays its rows otherwise than the texels' \
+                 {} bytes apart, and the device's check of its pooled memory, whose \
+                 DRM_FORMAT_MOD_LINEAR image at that pitch starts UNDEFINED, did not pass for the \
+                 image's accesses",
+                layout.row_pitch
+            );
+            return Ok(Err((Refusal::Pitch, why)));
+        }
         if let Err(refused) = placed(&made.requirements, at, room, type_index) {
             // SAFETY: the image is live and unbound, and no command uses it.
             unsafe { release::object(self.shared().vk(), made.raw) };
@@ -1138,7 +1174,7 @@ impl Device {
     pub(crate) fn fresh_pages_take_images(&self, watches: &[InPlaceWatch]) -> bool {
         watches.iter().all(|watch| {
             watched(watch).is_none_or(|image| {
-                self.class_takes(PagesClass::Fresh, &image, self.watched_rows(watch))
+                self.class_takes(PagesClass::Fresh, image.plan(), self.watched_rows(watch))
             })
         })
     }
@@ -1158,20 +1194,20 @@ impl Device {
     }
 
     /// Whether the device's check passed for `class` (fresh pages, or the runtime's pooled
-    /// memory), each of `image`'s accesses and texels of `texel` bytes that lie in lines as `rows`
-    /// says: an image of attachment usage renders, one of storage usage is written, one of neither
-    /// reads. The writes take the check of the texels' width (`in_place::Access::written`), and of
+    /// memory), each of the accesses of an image of `plan` and texels of `texel` bytes that lie in
+    /// lines as `rows` says: an image of attachment usage renders, one of storage usage is written,
+    /// one of neither reads. The writes take the check of the texels' width (`in_place::Access::written`), and of
     /// one that does not render whose rows' padding is free the form that lets it change
     /// (`in_place::in_place`); one that renders may hold the storage usage a render target takes
     /// where the form that keeps it passed (`in_place::storable`), which it asks.
     fn class_takes(
         &self,
         class: PagesClass,
-        image: &Image,
+        plan: &ImagePlan,
         (rows, padding, texel): (RowEnds, Padding, u64),
     ) -> bool {
         use metal2vulkan::vk::ImageUsageFlags;
-        let usage = image.plan().usage;
+        let usage = plan.usage;
         let renders = usage.contains(ImageUsageFlags::COLOR_ATTACHMENT);
         let writes = usage.contains(ImageUsageFlags::STORAGE);
         let padding = match renders {
@@ -1226,7 +1262,7 @@ impl Device {
             .facts(self.compile_device().profile());
         let made = match pages.over_own_pages() {
             true => {
-                if !self.class_takes(PagesClass::Fresh, &image, self.watched_rows(watch)) {
+                if !self.class_takes(PagesClass::Fresh, image.plan(), self.watched_rows(watch)) {
                     return Err(refused());
                 }
                 let Ok((made, _)) = self.in_place_unbound(image.plan(), layout, &facts)? else {
@@ -1242,7 +1278,7 @@ impl Device {
                 // passed for its pooled memory and the image's accesses, as an image at Metal's
                 // pitch there takes it (`Device::pooled_pitched_image`).
                 if pitched
-                    && !self.class_takes(PagesClass::Pooled, &image, self.watched_rows(watch))
+                    && !self.class_takes(PagesClass::Pooled, image.plan(), self.watched_rows(watch))
                 {
                     // SAFETY: the image is live and unbound, and no command uses it.
                     unsafe { release::object(raw_device, made.raw) };
