@@ -18,6 +18,17 @@
 //!   and pools go after its handlers. Before, its uploads went first, and on MoltenVK their
 //!   `vkDestroyBuffer` waited for the lock that making holds, so the handler ran as the making
 //!   ended, 20 to 27 ms after the command buffer completed.
+//! - The handler's time counts from the later of its command buffer's GPU end and its last
+//!   submission's return (`kernel_end_time`): the runtime watches a batch for its completion from
+//!   its `vkQueueSubmit`'s return on, and a driver may hold that return for the making. On the
+//!   RTX 5080 Laptop GPU (NVIDIA 615.71.09, Linux) a `vkQueueSubmit` the scheduler's thread
+//!   called while the making's `vkAllocateMemory` ran returned 0.01 to 0.25 ms after that did, in
+//!   25 of 40 rounds of a probe (allocations of a 254.7 MiB block, 3.1 to 35.7 ms, beside another
+//!   process's GPU work), twice after the GPU had ended the batch (23.9 ms into a 29.4 ms making,
+//!   and 0.3 ms into a 3.7 ms one); another thread's `vkWaitSemaphores`, semaphore reads and fence
+//!   reads took at most 0.03 ms during raw allocations of that size (1.9 to 213.6 ms). In the other 15 rounds the submission
+//!   returned before the allocation began and the handler ran during it; in all 40 the handler
+//!   ran 0.07 to 1.44 ms after the later of the two.
 
 use super::{
     buffer_with, layer_reported_nothing_at_all, validated_device_with, Messages, ScratchCache, WAIT,
@@ -41,6 +52,11 @@ const ROUNDS: usize = 6;
 /// The runtime's quiet period: a block no command buffer held this long goes as a later lease
 /// ends (`gpu_pools::QUIET`).
 const QUIET: Duration = Duration::from_secs(2);
+
+/// The rounds of a command buffer completing while another queue makes its block. A round tells
+/// only where its submission returned before the making's allocation took the driver (the module
+/// docs): about one round in four on the RTX 5080 under the validation layer.
+const MAKING_ROUNDS: usize = 12;
 
 /// The shortest making of a block that tells a handler that waited for it from one that did not
 /// (on the M3 Max a block took 24 to 39 ms; a handler that waits for nothing runs within a
@@ -229,9 +245,11 @@ fn a_pool_block_no_command_buffer_held_goes_after_the_quiet_period() {
 }
 
 /// A command buffer's completed handler runs while another queue's first command buffer makes
-/// that queue's block on this thread: where the making took long enough to tell and the command
-/// buffer completed in its first half, the handler ran less than half the making after the
-/// completion (the module docs).
+/// that queue's block on this thread, round after round, each with a queue of its own: where the
+/// making took long enough to tell and the command buffer both completed and returned from its
+/// submission in its first half, the handler ran less than half the making after the later of the
+/// two (the module docs). A submission the driver holds to the making's end tells nothing of the
+/// handler.
 #[test]
 fn a_completed_handler_waits_for_no_pool_block_made_meanwhile() {
     let cache = ScratchCache::new().unwrap();
@@ -239,49 +257,63 @@ fn a_completed_handler_waits_for_no_pool_block_made_meanwhile() {
     {
         let lane = Lane::new(&messages, &cache);
         let queue = lane.queue();
-        let other = lane.queue();
         // The pipeline's first draw, which makes the first queue's block.
         lane.drawn(&queue);
-        let first = lane.encoded(&queue);
-        let ran: Arc<Mutex<Option<f64>>> = Arc::default();
-        let log = Arc::clone(&ran);
-        first
-            .add_completed_handler(Box::new(move |_| {
-                *log.lock().unwrap() = Some(host_time());
-            }))
-            .unwrap();
-        let (made, _) = lane.blocks();
-        first.commit().unwrap();
-        let start = host_time();
-        let second = lane.encoded(&other);
-        let encoded = host_time();
-        assert_eq!(
-            lane.blocks().0 - made,
-            1,
-            "the second queue's command buffer made a block"
-        );
-        second.commit().unwrap();
-        completed(&first);
-        completed(&second);
-        let handled = ran.lock().unwrap().expect("the completed handler ran");
-        let seen = first.gpu_end_time().unwrap();
-        let making = encoded - start;
-        let lag = handled - seen;
-        eprintln!(
-            "making {:.3} ms, completion {:+.3} ms into it, handler {:.3} ms after the completion",
-            making * 1e3,
-            (seen - start) * 1e3,
-            lag * 1e3
-        );
-        if making >= MAKING_TELLS && seen < start + making / 2.0 {
-            assert!(
-                lag < making / 2.0,
-                "the completed handler ran {:.3} ms after its command buffer completed, during a \
-                 making of {:.3} ms",
-                lag * 1e3,
-                making * 1e3
+        let mut told = 0;
+        for round in 0..MAKING_ROUNDS {
+            let other = lane.queue();
+            let first = lane.encoded(&queue);
+            let ran: Arc<Mutex<Option<f64>>> = Arc::default();
+            let log = Arc::clone(&ran);
+            first
+                .add_completed_handler(Box::new(move |_| {
+                    *log.lock().unwrap() = Some(host_time());
+                }))
+                .unwrap();
+            let (made, _) = lane.blocks();
+            first.commit().unwrap();
+            let start = host_time();
+            let second = lane.encoded(&other);
+            let encoded = host_time();
+            assert_eq!(
+                lane.blocks().0 - made,
+                1,
+                "round {round}: the second queue's command buffer made a block"
             );
+            second.commit().unwrap();
+            completed(&first);
+            completed(&second);
+            let handled = ran.lock().unwrap().expect("the completed handler ran");
+            let seen = first.gpu_end_time().unwrap();
+            // Its last batch's `vkQueueSubmit` returned: from then on its queue's waiter watches
+            // for its completion.
+            let submitted = first.kernel_end_time();
+            let reached = seen.max(submitted);
+            let making = encoded - start;
+            let lag = handled - reached;
+            let tells = making >= MAKING_TELLS && reached < start + making / 2.0;
+            told += usize::from(tells);
+            eprintln!(
+                "round {round}: making {:.3} ms, completion {:+.3} ms and submission's return \
+                 {:+.3} ms into it, handler {:.3} ms after both{}",
+                making * 1e3,
+                (seen - start) * 1e3,
+                (submitted - start) * 1e3,
+                lag * 1e3,
+                if tells { "" } else { " (tells nothing)" }
+            );
+            if tells {
+                assert!(
+                    lag < making / 2.0,
+                    "round {round}: the completed handler ran {:.3} ms after its command buffer \
+                     completed and its submission returned, during a making of {:.3} ms",
+                    lag * 1e3,
+                    making * 1e3
+                );
+            }
+            drop((first, second, other));
         }
+        eprintln!("{told} of {MAKING_ROUNDS} rounds told");
     }
     layer_reported_nothing_at_all(&messages);
 }

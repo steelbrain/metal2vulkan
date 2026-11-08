@@ -893,6 +893,18 @@ driver's. Each is open work.
   GPU, once per cold cache; states that share the module then take 13 to 16 ms, and a warm cache
   2 ms. The module inlines a few sampling helpers five or six times each; keeping one copy of each
   would cut it. It is not built.
+- **On NVIDIA, a command buffer submitted while the runtime makes a queue's GPU pool block
+  completes as the making ends.** A queue's first lease of an index or mesh records pool makes its
+  block as the command buffer encodes (`gpu_pools.rs`), a sixty-fourth of the device-local heap.
+  On the RTX 5080 Laptop GPU (NVIDIA 615.71.09, Linux) a block of 254.7 MiB took 3.1 to 35.7 ms
+  beside another process's GPU work, nearly all of it in `vkAllocateMemory`, and a
+  `vkQueueSubmit` the scheduler's thread called meanwhile returned only 0.01 to 0.25 ms after
+  that did (25 of 40 rounds of a probe), twice after the GPU had already ended the batch. The
+  runtime watches a batch for its completion from its submission's return on, so another queue's
+  command buffer submitted then completes, and runs its completed handlers, as the making ends,
+  and the submissions behind it on the scheduler's thread wait as long; one whose submission
+  returned before the allocation began completed during it (15 of 15). Metal's command buffers
+  wait for no such making. Not announced.
 - **Making and releasing an event on NVIDIA take 0.1 to 0.6 ms of the calling thread.**
   `new_event` and `new_shared_event` each make one timeline semaphore (`vkCreateSemaphore`,
   `event.rs`), and an event's release destroys it where it goes. On the RTX 5080 Laptop GPU both

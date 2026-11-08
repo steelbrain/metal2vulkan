@@ -40,7 +40,11 @@
 //!   took 24 to 29 ms to make on the M3 Max (MoltenVK 1.4.1, macOS 27.0.1), 35 to 39 ms while the
 //!   GPU ran, all of it MoltenVK's commit of the block to its device's residency set inside
 //!   `vkBindBufferMemory`, under the lock its `vkDestroyBuffer` and `vkFreeMemory` take too, and
-//!   wired its 1 GiB of host memory whatever the GPU wrote of it.
+//!   wired its 1 GiB of host memory whatever the GPU wrote of it. A block of 254.7 MiB took 3.1 to
+//!   35.7 ms on the RTX 5080 Laptop GPU (NVIDIA 615.71.09, Linux) beside another process's GPU
+//!   work, nearly all of it in `vkAllocateMemory`, and a `vkQueueSubmit` another thread called
+//!   meanwhile returned only once that did, so another queue's command buffer submitted during a
+//!   making completes as the making ends (`docs/FAST-PATHS.md`, known gaps).
 //! - **Raw.** A block is a `VkBuffer` bound to private memory, outside the Metal address space,
 //!   not a `Buffer`, which would hold the device from the device's own blocks (as the mipmap
 //!   scratch's, `mipmap_scratch.rs`). The device releases the blocks left as it is destroyed. A
