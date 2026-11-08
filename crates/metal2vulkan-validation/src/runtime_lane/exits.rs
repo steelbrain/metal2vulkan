@@ -1274,22 +1274,31 @@ fn an_exit_while_a_host_step_waits_is_clean() {
 /// laptop beside the runtime suite, the part before the mark ended 8 to 41 ms after the last line,
 /// with the making ended by then, and the handlers after it took 1.5 to 5.9 s, printed and not
 /// bounded ([`exits_cleanly`]).
+///
+/// And the same exit with no making before the pool's (`first_making_exit`): the pool's making is
+/// the process's first of the kernel, so the driver's compiler makes its statics, and registers
+/// their destructors, while it runs, and the registrar registers the hook again after them
+/// (`exit_guard.rs`, "Registered again"). Measured on lavapipe before the registrar: in 1 of 3
+/// such exits, destructors LLVM registered 1 to 2 ms before the exit ran before the hook, the
+/// compile going on.
 #[test]
 fn an_exit_mid_making_is_clean() {
-    let exited = exits_cleanly(&["making_exit"]);
-    // Where the hook ended the process at once, no handler after it ran ([`AT_ONCE`]).
-    let marked = stdout_line(&exited[0], &format!("{REPORT}-MARK ")).is_some();
-    assert!(
-        marked || exited[0].at_once_ms.is_some(),
-        "making_exit: no mark between the hook's handlers and the driver's"
-    );
-    let line = stdout_line(&exited[0], &format!("{REPORT}-MAKING "))
-        .expect("making_exit: no line of its making");
-    println!("{line}");
-    assert!(
-        !line.contains("at_makings: 0,"),
-        "making_exit: no making registered the hook again: {line}"
-    );
+    let cases = ["making_exit", "first_making_exit"];
+    for (case, exited) in cases.into_iter().zip(exits_cleanly(&cases)) {
+        // Where the hook ended the process at once, no handler after it ran ([`AT_ONCE`]).
+        let marked = stdout_line(&exited, &format!("{REPORT}-MARK ")).is_some();
+        assert!(
+            marked || exited.at_once_ms.is_some(),
+            "{case}: no mark between the hook's handlers and the driver's"
+        );
+        let line = stdout_line(&exited, &format!("{REPORT}-MAKING "))
+            .unwrap_or_else(|| panic!("{case}: no line of its making"));
+        println!("{case}: {line}");
+        assert!(
+            case != "making_exit" || !line.contains("at_makings: 0,"),
+            "{case}: no making registered the hook again: {line}"
+        );
+    }
 }
 
 /// An exit while a CPU device runs work submitted before it (fills it runs for about
