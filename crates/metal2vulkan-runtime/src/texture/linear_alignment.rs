@@ -199,7 +199,7 @@ impl Device {
         format: PixelFormat,
     ) -> Result<u64, Error> {
         linear_alignment_rule(format)?;
-        Ok(self.linear_texture_alignment(format))
+        Ok(self.current().linear_texture_alignment(format))
     }
 
     /// The device's alignment of a texture of `pf`'s offset and rows in a buffer (the module
