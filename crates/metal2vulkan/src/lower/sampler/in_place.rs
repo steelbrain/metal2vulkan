@@ -1043,15 +1043,20 @@ impl Conversion {
         })?;
         let (mut kb, mut kr, mut offset) = (Vec::new(), Vec::new(), Vec::new());
         let mid = t.f(fb, -512.0)?;
-        for channel in 0..3 {
-            let side = |k: &[[(i32, i32); 3]; 3], kr: bool| {
-                k.map(|m| {
-                    let (b, r) = m[channel];
-                    (if kr { r } else { b }) as f32 * GRID
-                })
+        // Each channel's coefficients under the three matrices, of each range.
+        let channels = |[bt601, bt709, bt2020]: [[(i32, i32); 3]; 3]| {
+            bt601
+                .into_iter()
+                .zip(bt709)
+                .zip(bt2020)
+                .map(|((a, b), c)| [a, b, c])
+        };
+        for (video, full_range) in channels(video).zip(channels(full_range)) {
+            let side = |k: [(i32, i32); 3], kr: bool| {
+                k.map(|(b, r)| (if kr { r } else { b }) as f32 * GRID)
             };
-            let b = choose(fb, side(&video, false), side(&full_range, false))?;
-            let r = choose(fb, side(&video, true), side(&full_range, true))?;
+            let b = choose(fb, side(video, false), side(full_range, false))?;
+            let r = choose(fb, side(video, true), side(full_range, true))?;
             // The constant term: the black level's, and `-512 (kb + kr)` of the chroma's middle.
             let sum = fb.binary(BinOp::FAdd, b, r)?;
             let d = fb.glsl(GlslOp::Fma, &[sum, mid, black])?;
