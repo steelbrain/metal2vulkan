@@ -7904,7 +7904,7 @@ method	metal2vulkan-runtime::CommandQueue::device	pub fn device(&self) -> &Devic
 method	metal2vulkan-runtime::CommandQueue::label	pub fn label(&self) -> Option<String>
 method	metal2vulkan-runtime::CommandQueue::set_label	pub fn set_label(&self, label: &str)
 method	metal2vulkan-runtime::CommandQueue::vk_queue_sharing	pub fn vk_queue_sharing(&self) -> (usize, bool)
-method	metal2vulkan-runtime::CommandQueue::with_vk_queue	pub unsafe fn with_vk_queue<R>(&self, f: impl FnOnce(vk::Queue, u32) -> R) -> R
+method	metal2vulkan-runtime::CommandQueue::with_vk_queue	pub unsafe fn with_vk_queue<R>(&self, f: impl FnOnce(&ash::Device, vk::Queue, u32) -> R) -> R
 method	metal2vulkan-runtime::CommitFailure::new	pub fn new(code: u64) -> CommitFailure
 method	metal2vulkan-runtime::ComputeCommandEncoder::dispatch_threadgroups	pub fn dispatch_threadgroups(&mut self, groups: Size, threads: Size) -> Result<(), Error>
 method	metal2vulkan-runtime::ComputeCommandEncoder::dispatch_threadgroups_indirect	pub fn dispatch_threadgroups_indirect(&mut self, indirect_buffer: &Buffer, indirect_buffer_offset: u64, threads: Size) -> Result<(), Error>

@@ -168,7 +168,9 @@ impl Device {
     /// [`Device::recover_for_test`]), they stay valid until a later call of a root handle's
     /// returns the new one's; after that the caller uses them no more. The lost `VkDevice` stays
     /// alive until then, though the runtime's own objects made on it went, so the caller
-    /// destroys what it made with these handles (a swapchain, an import) before that call.
+    /// destroys what it made with these handles (a swapchain, an import) before that call. A
+    /// queue lent through [`CommandQueue::with_vk_queue`](super::super::CommandQueue::with_vk_queue)
+    /// comes with the `VkDevice` it belongs to: the new one from the recovery on.
     pub unsafe fn raw(&self) -> DeviceHandles<'_> {
         let shared = match &self.0 {
             super::Pin::Generation(shared) => &**shared,

@@ -296,7 +296,7 @@ fn pinned_and_presenting_queues_never_move_where_an_unpinned_one_does() {
             .unwrap();
         let pinned = device.new_command_queue().unwrap();
         // SAFETY: the closure keeps no handle and submits nothing.
-        unsafe { pinned.with_vk_queue(|_, _| {}) };
+        unsafe { pinned.with_vk_queue(|_, _, _| {}) };
         let presenting = device.new_command_queue_for_presenting().unwrap();
         let free = device.new_command_queue().unwrap();
         let (pinned_at, presenting_at) =

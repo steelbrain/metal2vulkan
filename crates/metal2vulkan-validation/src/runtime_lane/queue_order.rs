@@ -222,7 +222,7 @@ fn commits_made_while_the_vk_queue_is_held_return_at_once_and_run_in_commit_orde
                 // SAFETY: the closure keeps no handle and calls nothing of the runtime's; it waits
                 // only for this test's release.
                 unsafe {
-                    queue.with_vk_queue(|_, _| {
+                    queue.with_vk_queue(|_, _, _| {
                         held.send(()).unwrap();
                         let _ = released.recv_timeout(WAIT);
                     })
@@ -358,7 +358,7 @@ fn a_checked_command_buffer_committed_during_a_submission_is_taken_up_promptly()
                 // SAFETY: the closure keeps no handle and calls nothing of the runtime's; it waits
                 // only for this test's release.
                 unsafe {
-                    queue.with_vk_queue(|_, _| {
+                    queue.with_vk_queue(|_, _, _| {
                         held.send(()).unwrap();
                         let _ = released.recv_timeout(WAIT);
                     })
@@ -465,7 +465,7 @@ fn taken_up(device: &Device, queue: &CommandQueue) -> Round {
             // SAFETY: the closure keeps no handle and calls nothing of the runtime's; it waits
             // only for this round's release.
             unsafe {
-                queue.with_vk_queue(|_, _| {
+                queue.with_vk_queue(|_, _, _| {
                     held.send(()).unwrap();
                     let _ = released.recv_timeout(WAIT);
                 })

@@ -109,7 +109,7 @@ fn the_raw_handles_name_the_runtimes_objects() {
         // SAFETY: the queue is used only inside `f`, under the runtime's lock; the submission
         // has no work and signals the test's unsignaled fence.
         let (family, submitted) = unsafe {
-            queue.with_vk_queue(|vk_queue, family| {
+            queue.with_vk_queue(|_, vk_queue, family| {
                 (
                     family,
                     vk_device.queue_submit(vk_queue, &[vk::SubmitInfo::default()], fence),

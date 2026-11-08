@@ -489,12 +489,18 @@ impl SharedEvent {
 }
 
 impl CommandQueue {
-    /// `f` with the `VkQueue` this queue submits to and its family's index, under the runtime's
-    /// lock of that `VkQueue`, which every submission to it takes: the caller's own submissions
-    /// and presents (`vkQueuePresentKHR`) go there, externally synchronized as Vulkan requires.
+    /// `f` with the `VkDevice` this queue's `VkQueue` belongs to (with its device-level commands),
+    /// that `VkQueue` and its family's index, under the runtime's lock of that `VkQueue`, which
+    /// every submission to it takes: the caller's own submissions and presents
+    /// (`vkQueuePresentKHR`) go there, externally synchronized as Vulkan requires.
     /// From the first call on the queue keeps that `VkQueue` for its life: where the device
     /// shares `VkQueue`s among its command queues (`QueueSharingPolicy::Adaptive`), it moves no
-    /// more.
+    /// more. After a recovery (`Degradation::DeviceRecovered`) the queue lends the new
+    /// `VkDevice`'s `VkQueue`, and `f` gets the new `VkDevice` with it, read under the same lock:
+    /// a caller whose objects (a command pool, a fence) were made on another `VkDevice` than the
+    /// one `f` gets makes them again on it before it submits there. The handles
+    /// [`Device::raw`](crate::Device::raw) answered before the recovery name the lost one until a
+    /// later `raw` call answers the new one's.
     /// On MoltenVK, where the runtime relays the driver's command-buffer failures, it submits no
     /// work with a fence of its own after `f` under the same lock, so a failure of the caller's
     /// submissions stays the caller's. There the runtime's frees of its memory wait for the work
@@ -504,10 +510,10 @@ impl CommandQueue {
     ///
     /// # Safety
     ///
-    /// The caller does not keep the handle past `f`, and `f` makes no call into the runtime and
+    /// The caller does not keep the handles past `f`, and `f` makes no call into the runtime and
     /// waits for nothing that needs a later submission of the runtime's (the scheduler submits
     /// only under this lock).
-    pub unsafe fn with_vk_queue<R>(&self, f: impl FnOnce(vk::Queue, u32) -> R) -> R {
+    pub unsafe fn with_vk_queue<R>(&self, f: impl FnOnce(&ash::Device, vk::Queue, u32) -> R) -> R {
         // The queue's place on the generation that serves, which keeps its `VkQueue`
         // (`queue.rs`); a recovery that retires it has the queue take a new place, of its own.
         let place = self.serving();
@@ -528,7 +534,7 @@ impl CommandQueue {
         // of theirs the caller's (`device/relay.rs`); where freed memory waits for the work in
         // flight, it waits for that mark (`freed_memory.rs`).
         let used = shared.use_queue(vk_queue, By::Program, Uses::Unknown, |queue| {
-            f(queue, family)
+            f(shared.vk(), queue, family)
         });
         if let Some(parking) = shared.parking.get() {
             parking.watch(device);

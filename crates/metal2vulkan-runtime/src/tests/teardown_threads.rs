@@ -541,7 +541,7 @@ fn the_watch_of_the_program_s_marks_leaves_the_device_to_the_program_s_thread() 
     let queue = device.new_command_queue().unwrap();
     parking.held.hold();
     // SAFETY: the closure uses the queue for nothing.
-    unsafe { queue.with_vk_queue(|_, _| ()) };
+    unsafe { queue.with_vk_queue(|_, _, _| ()) };
     parking.held.until_waiting(1, WAIT);
     let releasing = let_go_once_torn_down(&device);
     drop(queue);
@@ -577,7 +577,7 @@ fn a_release_of_freed_memory_leaves_the_device_to_the_program_s_thread() {
     };
     parking.held.hold();
     // SAFETY: the closure uses the queue for nothing.
-    unsafe { queue.with_vk_queue(|_, _| ()) };
+    unsafe { queue.with_vk_queue(|_, _, _| ()) };
     parking.held.until_waiting(1, WAIT);
     drop(import);
     assert_eq!(

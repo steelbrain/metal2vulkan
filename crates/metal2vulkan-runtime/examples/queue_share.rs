@@ -540,7 +540,7 @@ fn rate_queues(kit: &Kit, threads: usize, one: bool) -> Vec<CommandQueue> {
         return (0..threads).map(|_| kit.queue(false)).collect();
     }
     // SAFETY: the closures keep the handle only to compare it; nothing is submitted.
-    let raw = |queue: &CommandQueue| unsafe { queue.with_vk_queue(|raw, _| raw) };
+    let raw = |queue: &CommandQueue| unsafe { queue.with_vk_queue(|_, raw, _| raw) };
     let first = kit.queue(false);
     let home = raw(&first);
     let mut queues = vec![first];

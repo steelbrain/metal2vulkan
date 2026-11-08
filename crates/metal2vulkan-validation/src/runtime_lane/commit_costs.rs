@@ -650,7 +650,9 @@ impl Bare {
         // SAFETY: the command buffer is executable, the fence unsignaled; the submission is
         // made under the runtime's lock of its `VkQueue`, and the call waits for nothing.
         unsafe {
-            queue.with_vk_queue(|raw, _| driver.queue_submit(raw, &[submit], self.fence).unwrap());
+            queue.with_vk_queue(|_, raw, _| {
+                driver.queue_submit(raw, &[submit], self.fence).unwrap()
+            });
         }
         // Bounded, as every wait of the crate's (`gpu/wait.rs`): one `vkWaitForFences` (or
         // `vkWaitSemaphores`) with the process's bound for a timeout, its result classified
@@ -700,7 +702,9 @@ impl Bare {
         let submit = vk::SubmitInfo::default().command_buffers(&buffers);
         // SAFETY: as `run`'s submission.
         unsafe {
-            queue.with_vk_queue(|raw, _| driver.queue_submit(raw, &[submit], self.fence).unwrap());
+            queue.with_vk_queue(|_, raw, _| {
+                driver.queue_submit(raw, &[submit], self.fence).unwrap()
+            });
         }
         let backend = SubmissionBackend::vulkan(TEST_DEVICE);
         wait::vulkan::wait_for_fence(driver, self.fence, backend, "the bare queries' reset")

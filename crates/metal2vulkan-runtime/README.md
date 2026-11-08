@@ -222,9 +222,9 @@ the record the pass is making.
   the consumer's work there uses the runtime's buffers and images with no ownership transfer
   (while they live, ordered against the runtime's work through semaphores, a runtime image left
   in `GENERAL`), and waits behind no command queue's command buffers.
-  `CommandQueue::with_vk_queue` lends a queue's `VkQueue` under the runtime's lock: the consumer's
-  submissions there sit in that command queue's order, and in that of any other command queue
-  sharing the `VkQueue`. From its first call the command queue keeps that `VkQueue` for its life.
+  `CommandQueue::with_vk_queue` lends a queue's `VkQueue`, with the `VkDevice` it belongs to and
+  its family, under the runtime's lock: the consumer's submissions there sit in that command
+  queue's order, and in that of any other command queue sharing the `VkQueue`. From its first call the command queue keeps that `VkQueue` for its life.
 - `Texture::vk_image`, `Buffer::vk_buffer`, `Event::vk_semaphore` and `SharedEvent::vk_semaphore`
   give an object's handle.
   A texture over a buffer's bytes that aliases them gives a linear image (the same one for textures
@@ -678,6 +678,10 @@ meanwhile wait for it.
 - `Device::raw` answers the new `VkDevice`'s handles once a later call asks; the handles it
   answered before stay valid until then, and the lost `VkDevice` stays alive until then, so the
   consumer destroys what it made with those handles (a swapchain, an import) first.
+- `CommandQueue::with_vk_queue` gives its closure the `VkDevice` the lent `VkQueue` belongs to,
+  read under the same lock: from the recovery on, the new one, whatever `Device::raw` answered
+  before. A consumer whose command pool, fence or semaphore was made on another `VkDevice` makes
+  it again on that one before it submits there.
 - A device the consumer made (`Device::from_raw`) is not made again: it answers `DeviceLost` from
   the loss on.
 

@@ -391,7 +391,7 @@ fn a_presenting_queue_s_lock_holds_no_other_queue_where_the_device_reserved_one(
             .collect();
         let presenting = device.new_command_queue_for_presenting().unwrap();
         // SAFETY: the handle is compared only, inside and after the call; nothing is submitted.
-        let raw = |queue: &CommandQueue| unsafe { queue.with_vk_queue(|raw, _| raw) };
+        let raw = |queue: &CommandQueue| unsafe { queue.with_vk_queue(|_, raw, _| raw) };
         let reserved = queues.iter().all(|queue| raw(queue) != raw(&presenting));
         let second = device.new_command_queue_for_presenting().unwrap();
         assert_eq!(
@@ -410,7 +410,7 @@ fn a_presenting_queue_s_lock_holds_no_other_queue_where_the_device_reserved_one(
                 // SAFETY: the closure keeps no handle and calls nothing of the runtime's; it waits
                 // only for this test's release.
                 unsafe {
-                    presenting.with_vk_queue(|_, _| {
+                    presenting.with_vk_queue(|_, _, _| {
                         held.send(()).unwrap();
                         let _ = released.recv_timeout(WAIT);
                     })

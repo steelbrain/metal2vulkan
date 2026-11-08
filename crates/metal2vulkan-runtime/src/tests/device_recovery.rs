@@ -405,6 +405,55 @@ fn a_later_recovery_announces_its_failure() {
     assert_eq!(device.work_counts().device_recoveries, 1);
 }
 
+/// A command queue's lent `VkQueue` comes with the `VkDevice` it belongs to, read under the same
+/// lock (`CommandQueue::with_vk_queue`): after a recovery the queue lends the new generation's
+/// `VkQueue`, and the device it names with it is the new `VkDevice`, which `Device::raw` answers
+/// at its next call. The handles `raw` answered before the recovery, the caller's one source of the
+/// device before `with_vk_queue` named it, still name the lost one: a caller that took its device
+/// from them would submit the new `VkQueue` work recorded on the lost `VkDevice`.
+#[test]
+fn a_lent_queue_names_the_vk_device_it_belongs_to_across_a_recovery() {
+    let scratch = Scratch::new();
+    let device = device(&scratch.0);
+    let queue = device.new_command_queue().unwrap();
+    // SAFETY: the handles are read and not kept; nothing is submitted.
+    let lent =
+        || unsafe { queue.with_vk_queue(|vk_device, vk_queue, _| (vk_device.handle(), vk_queue)) };
+    // SAFETY: as above.
+    let raw = || unsafe { device.raw() }.device.handle();
+    let (before, before_queue) = lent();
+    let raw_before = raw();
+    assert_eq!(
+        before, raw_before,
+        "the lent queue's device is the device's"
+    );
+    device.recover_for_test().unwrap();
+    let (after, after_queue) = lent();
+    assert_ne!(
+        after, before,
+        "the lent queue after the recovery names the lost VkDevice"
+    );
+    assert_ne!(
+        after_queue, before_queue,
+        "the queue lends the new VkDevice's VkQueue"
+    );
+    assert_eq!(
+        after,
+        raw(),
+        "the lent queue's device is the one Device::raw answers after the recovery"
+    );
+    assert_ne!(
+        after, raw_before,
+        "the handles answered before the recovery name the new VkDevice"
+    );
+    assert_eq!(device.work_counts().device_recoveries, 1);
+    eprintln!(
+        "LENT-QUEUE-DEVICE: {}: before the recovery {before:?} (raw {raw_before:?}), after it \
+         {after:?}, queue {before_queue:?} then {after_queue:?}",
+        device.name()
+    );
+}
+
 /// A device call whose generation is lost under it, refused for that, runs again on the generation
 /// serving next (`Device::at_serving`): the loss here comes inside the call's first run, as a
 /// recovery on another thread may, and the call answers with a buffer of the new generation.

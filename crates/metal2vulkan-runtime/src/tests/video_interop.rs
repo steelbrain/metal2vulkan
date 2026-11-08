@@ -218,7 +218,9 @@ impl RawQueue {
         match self {
             RawQueue::Extra(queue) => f(queue.queue, queue.family),
             // SAFETY: `f` submits and returns, keeping no handle and calling no runtime.
-            RawQueue::Lent(queue) => unsafe { queue.with_vk_queue(f) },
+            RawQueue::Lent(queue) => unsafe {
+                queue.with_vk_queue(|_, vk_queue, family| f(vk_queue, family))
+            },
         }
     }
 

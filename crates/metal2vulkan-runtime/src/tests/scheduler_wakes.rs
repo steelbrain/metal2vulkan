@@ -270,7 +270,7 @@ fn a_commit_returns_while_the_lock_a_submission_holds_is_held() {
             // SAFETY: the closure keeps no handle and calls nothing of the runtime's; it waits
             // only for this test's release, past the commit's bound.
             unsafe {
-                queue.with_vk_queue(|_, _| {
+                queue.with_vk_queue(|_, _, _| {
                     held.send(()).unwrap();
                     let _ = released.recv_timeout(2 * BOUND);
                 })

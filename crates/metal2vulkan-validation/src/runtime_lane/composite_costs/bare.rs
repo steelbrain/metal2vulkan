@@ -364,7 +364,7 @@ impl<'a> Bare<'a> {
                 .map(|&layout| pipeline(&device, modules, layout, passes[0]))
                 .collect();
             let (command_pool, command_buffer, fence) =
-                composite.queue.with_vk_queue(|_, family| {
+                composite.queue.with_vk_queue(|_, _, family| {
                     let info = vk::CommandPoolCreateInfo::default()
                         .flags(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER)
                         .queue_family_index(family);
@@ -507,7 +507,7 @@ impl<'a> Bare<'a> {
         // SAFETY: the caller's contract; the queue is the runtime's, submitted to through
         // `with_vk_queue`.
         unsafe {
-            self.composite.queue.with_vk_queue(|queue, _| {
+            self.composite.queue.with_vk_queue(|_, queue, _| {
                 device.queue_submit(queue, &submit, self.fence).unwrap();
             });
         }

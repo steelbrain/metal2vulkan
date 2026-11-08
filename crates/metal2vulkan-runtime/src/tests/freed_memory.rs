@@ -546,7 +546,7 @@ fn a_release_waits_for_the_program_s_own_submission_where_the_device_parks_freed
     // SAFETY: the queue is used only inside `f`, under the runtime's lock; the submission waits
     // for a value of the program's semaphore that the program signals below.
     unsafe {
-        queue.with_vk_queue(|vk_queue, _| {
+        queue.with_vk_queue(|_, vk_queue, _| {
             vk_device
                 .queue_submit(vk_queue, &[submit], vk::Fence::null())
                 .unwrap()

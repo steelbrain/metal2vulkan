@@ -3196,7 +3196,8 @@ bound.
   command buffers in flight failed, the oldest incomplete one as the hang (`GpuHang`, counted
   against its queue, so a queue's second revokes it) and the rest as its victims
   (`GpuRecoveryVictim`), and every later call of the device and of its command queues goes to the
-  new `VkDevice`. Announced at each recovery, by the call that made it; the reason names the hang's
+  new `VkDevice`; a queue's lent `VkQueue` (`CommandQueue::with_vk_queue`) comes with the
+  `VkDevice` it belongs to, the new one from then on. Announced at each recovery, by the call that made it; the reason names the hang's
   command buffer (an inference, said so, where two or more `VkQueue`s had work in flight) and how
   long the recovery took. Announced too, at most once each per recovery whatever an earlier
   recovery announced: where a call waited past 10 seconds for the recovery under way, where its

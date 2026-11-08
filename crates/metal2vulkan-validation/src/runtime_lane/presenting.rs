@@ -759,7 +759,7 @@ fn a_rendered_texture_presents_through_the_tests_swapchain() {
         // SAFETY: the queue is used only inside the closure, under the runtime's lock; the
         // semaphore's signal is submitted (the command buffer is scheduled).
         let shown = unsafe {
-            queue.with_vk_queue(|vk_queue, _| swapchain_fn.queue_present(vk_queue, &info))
+            queue.with_vk_queue(|_, vk_queue, _| swapchain_fn.queue_present(vk_queue, &info))
         };
         shown.unwrap();
         command_buffer.wait_until_completed_for(WAIT).unwrap();
@@ -775,7 +775,7 @@ fn a_rendered_texture_presents_through_the_tests_swapchain() {
     // SAFETY: under the runtime's lock; every submission there completed but the presents,
     // which a fence submitted after them orders.
     unsafe {
-        queue.with_vk_queue(|vk_queue, _| {
+        queue.with_vk_queue(|_, vk_queue, _| {
             wait::vulkan::drain_queue(
                 &adopted.device,
                 vk_queue,
@@ -1010,7 +1010,8 @@ fn the_callers_image_comes_home_for_its_own_submission() {
         .signal_semaphores(&signals);
     // SAFETY: under the runtime's lock of the queue; `rendered`'s signal is submitted (the
     // runtime's command buffer is scheduled); `copied` is unsignaled; the fence is the test's.
-    unsafe { first.with_vk_queue(|queue, _| vkd.queue_submit(queue, &[submit], fence)) }.unwrap();
+    unsafe { first.with_vk_queue(|_, queue, _| vkd.queue_submit(queue, &[submit], fence)) }
+        .unwrap();
     wait::vulkan::wait_for_fence(vkd, fence, backend, "the test's own copy").unwrap();
     // SAFETY: the mapping covers the buffer's bytes, which the completed copy wrote.
     let own_bytes = unsafe { std::slice::from_raw_parts(mapped.cast::<u8>(), size as usize) };
@@ -1127,7 +1128,7 @@ fn wrapped_images_order_across_queues() {
         let handles: BTreeSet<vk::Queue> = queues
             .iter()
             // SAFETY: the handle is only compared.
-            .map(|queue| unsafe { queue.with_vk_queue(|vk_queue, _| vk_queue) })
+            .map(|queue| unsafe { queue.with_vk_queue(|_, vk_queue, _| vk_queue) })
             .collect();
         let size = u64::from(SIDE * SIDE * 4);
         let readback = device.new_buffer(size, ResourceOptions::shared()).unwrap();

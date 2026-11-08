@@ -74,7 +74,7 @@ fn vk_queues(queues: &[CommandQueue]) -> Vec<vk::Queue> {
     let mut distinct: Vec<vk::Queue> = Vec::new();
     for queue in queues {
         // SAFETY: the handle is read and not kept; `f` calls no runtime and waits for nothing.
-        let vk_queue = unsafe { queue.with_vk_queue(|vk_queue, _| vk_queue) };
+        let vk_queue = unsafe { queue.with_vk_queue(|_, vk_queue, _| vk_queue) };
         if !distinct.contains(&vk_queue) {
             distinct.push(vk_queue);
         }
