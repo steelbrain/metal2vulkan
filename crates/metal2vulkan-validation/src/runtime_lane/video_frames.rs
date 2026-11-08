@@ -384,7 +384,7 @@ fn frame(
         .unwrap();
     for (index, (texture, _)) in textures.iter().enumerate() {
         encoder
-            .set_fragment_texture(Some(texture), index as u64)
+            .set_fragment_texture(Some(texture), index as u32)
             .unwrap();
     }
     encoder
