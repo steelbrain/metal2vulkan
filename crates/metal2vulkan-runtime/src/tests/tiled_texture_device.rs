@@ -723,7 +723,7 @@ fn a_render_pass_into_a_later_level_copies_nothing_of_the_first() {
         into_one.color_attachments[0].clear_color = ClearColor::new(1.0, 0.0, 1.0, 1.0);
         let copied = copies_of(&rig.device, || {
             rig.run(|command_buffer| {
-                let mut encoder = command_buffer.render_command_encoder(&into_one).unwrap();
+                let encoder = command_buffer.render_command_encoder(&into_one).unwrap();
                 encoder.end_encoding().unwrap();
             });
         });
