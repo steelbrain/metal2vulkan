@@ -1440,6 +1440,20 @@ impl Device {
         let size = (window.offset.checked_add(length))
             .and_then(|end| end.checked_next_multiple_of(16))
             .ok_or(Error::OutOfMemory(MemoryKind::Device))?;
+        // The caller's pages are read before the copy's memory is made, so no mapping made for the
+        // copy is among them as they are read (`CopiedBuffers::read`).
+        // SAFETY: the caller's bytes (the caller's contract).
+        let first = match unsafe { crate::copied::CopiedBuffers::read(pointer, bytes, read_only) } {
+            Ok(first) => first,
+            Err(why) => {
+                return Err(match why {
+                    NotCopied::Unreadable => failed
+                        .filter(|failed| !refused(failed))
+                        .unwrap_or_else(not_importable),
+                    NotCopied::OutOfHostMemory => Error::OutOfMemory(MemoryKind::Host),
+                });
+            }
+        };
         let fresh = match own_pages {
             true => self.fresh_page_buffer(window.size.max(size), MemoryClass::Shared)?,
             false => None,
@@ -1468,19 +1482,8 @@ impl Device {
         };
         // SAFETY: the copy is the placement's `length` bytes past the window's offset, mapped,
         // which nothing uses yet and which stay mapped while the import holds them; the caller's
-        // bytes stay mapped as long (the caller's contract).
-        let copied = match unsafe { shared.copied.add(pointer, copy, bytes, read_only) } {
-            Ok(copied) => copied,
-            Err(why) => {
-                discard(&memory);
-                return Err(match why {
-                    NotCopied::Unreadable => failed
-                        .filter(|failed| !refused(failed))
-                        .unwrap_or_else(not_importable),
-                    NotCopied::OutOfHostMemory => Error::OutOfMemory(MemoryKind::Host),
-                });
-            }
-        };
+        // bytes, which `first` read, stay mapped as long (the caller's contract).
+        let copied = unsafe { shared.copied.add(first, pointer, copy) };
         // The host address of the window's first byte, as an import's: `contents` is the
         // pointer, `window.offset` past it.
         let start = NonNull::new(pointer.as_ptr().wrapping_sub(window.offset as usize));
@@ -1681,6 +1684,18 @@ impl Device {
         let size = length
             .checked_next_multiple_of(16)
             .ok_or_else(|| nil(call, Problem::BufferLength { length }))?;
+        // The caller's pages are read before the copy's memory is made, so no mapping made for the
+        // copy is among them as they are read (`CopiedBuffers::read`).
+        // SAFETY: the caller's bytes (the caller's contract).
+        let first = match unsafe { crate::copied::CopiedBuffers::read(pointer, bytes, read_only) } {
+            Ok(first) => first,
+            Err(why) => {
+                return Err(match why {
+                    NotCopied::Unreadable => unreadable(failed),
+                    NotCopied::OutOfHostMemory => Error::OutOfMemory(MemoryKind::Host),
+                });
+            }
+        };
         let info = shared.sharing().buffer(
             vk::BufferCreateInfo::default()
                 .size(size)
@@ -1720,18 +1735,9 @@ impl Device {
             ));
         };
         // SAFETY: the copy is the placement's `length` bytes, mapped, which nothing uses yet and
-        // which stay mapped while the import holds them; the caller's bytes stay mapped as long
-        // (the caller's contract).
-        let copied = match unsafe { shared.copied.add(pointer, copy, bytes, read_only) } {
-            Ok(copied) => copied,
-            Err(why) => {
-                discard(&memory);
-                return Err(match why {
-                    NotCopied::Unreadable => unreadable(failed),
-                    NotCopied::OutOfHostMemory => Error::OutOfMemory(MemoryKind::Host),
-                });
-            }
-        };
+        // which stay mapped while the import holds them; the caller's bytes, which `first` read,
+        // stay mapped as long (the caller's contract).
+        let copied = unsafe { shared.copied.add(first, pointer, copy) };
         // Its `contents` is the caller's pointer, as a no-copy buffer's is.
         memory.mapped = Some(super::memory::Mapped::of_caller(pointer));
         let buffer = self.buffer_of(BufferParts {

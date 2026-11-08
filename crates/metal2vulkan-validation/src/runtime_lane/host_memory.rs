@@ -1918,11 +1918,14 @@ fn a_gpu_fault_fails_its_command_buffer_and_the_queue_runs_on() {
 /// (`REFUSED-AT-MAKING`). The driver may report each import it failed, as MoltenVK reports its
 /// failed `vkAllocateMemory`; nothing else is reported. A mapped page followed by one the test
 /// unmapped is made again over a fresh reservation where another thread's mapping took the
-/// unmapped page before the making looked (seen mapped once the buffer was made: 7 of 20 runs on
-/// the M3 Max at d65be37964, m3-max-5626), so the making is held to memory whose page is unmapped
-/// as it looks.
+/// unmapped page before the making looked (the page seen mapped once a buffer was made), so the
+/// making is held to memory whose page is unmapped as it looks. The copied host buffer's own
+/// mapping was such a one until it read the caller's pages before making its memory (7 of 20
+/// runs on the M3 Max at d65be37964, m3-max-5626).
 #[test]
 fn memory_metal_makes_no_buffer_over_is_refused_when_it_is_made() {
+    // The half-mapped case's tries made again, each one more failed import the driver may report.
+    let tries = AtomicUsize::new(0);
     let reported = on_device_reporting(|device| {
         let len = 2 * GUEST_PAGE;
         let reserve = || {
@@ -2010,6 +2013,7 @@ fn memory_metal_makes_no_buffer_over_is_refused_when_it_is_made() {
                     assert_eq!(tried.runs.load(Ordering::SeqCst), 0, "{what}: ran");
                     assert_eq!(tried.dropped.load(Ordering::SeqCst), 1, "{what}: kept");
                     answers.push(format!("{what}: {error:?} ({retried} tries made again)"));
+                    tries.store(retried, Ordering::SeqCst);
                     // SAFETY: the first page goes too, and with it the reservation.
                     assert_eq!(unsafe { libc::munmap(half.as_ptr().cast(), GUEST_PAGE) }, 0);
                     break;
@@ -2053,7 +2057,7 @@ fn memory_metal_makes_no_buffer_over_is_refused_when_it_is_made() {
         "the validation layer reported: {other:#?}"
     );
     assert!(
-        failed_imports.len() <= 3,
+        failed_imports.len() <= 3 + tries.load(Ordering::SeqCst),
         "more failed imports reported than made: {failed_imports:#?}"
     );
 }

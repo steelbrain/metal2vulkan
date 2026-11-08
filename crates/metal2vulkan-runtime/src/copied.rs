@@ -173,7 +173,43 @@ impl CopiesReached {
     }
 }
 
-/// Why a copy was not made ([`CopiedBuffers::add`]).
+/// The caller's bytes as a copy's first read of them took them ([`CopiedBuffers::read`]), before
+/// the copy's memory was made: the bytes the copy and the pages first agree on, and whether the
+/// GPU's writes to the copy are dropped.
+pub(crate) struct FirstRead {
+    snapshot: Box<[u8]>,
+    drops_writes: bool,
+}
+
+impl FirstRead {
+    /// `length` bytes at `pages`, read by `read`, which answers whether it read every one.
+    ///
+    /// # Safety
+    ///
+    /// `read` reads `pages` as [`CopiedBuffers::read`]'s contract lets it.
+    unsafe fn of(
+        pages: NonNull<u8>,
+        length: usize,
+        read: impl FnOnce(NonNull<u8>, &mut [u8]) -> bool,
+        drops_writes: bool,
+    ) -> Result<FirstRead, NotCopied> {
+        let mut snapshot = Vec::new();
+        if snapshot.try_reserve_exact(length).is_err() {
+            return Err(NotCopied::OutOfHostMemory);
+        }
+        snapshot.resize(length, 0u8);
+        let mut snapshot = snapshot.into_boxed_slice();
+        if !read(pages, &mut snapshot) {
+            return Err(NotCopied::Unreadable);
+        }
+        Ok(FirstRead {
+            snapshot,
+            drops_writes,
+        })
+    }
+}
+
+/// Why a copy was not made ([`CopiedBuffers::read`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum NotCopied {
     /// A page is not mapped, or mapped without read permission: memory Metal makes no buffer over.
@@ -346,26 +382,25 @@ impl CopiedBuffers {
         self.live.load(Ordering::Relaxed) > 0
     }
 
-    /// Register the copy at `copy` of the `length` bytes at `pages`, its bytes read from the pages
-    /// now ([`read_caller`]: through the kernel, or where it fails, with plain loads of pages
-    /// mapped readable). Where the process cannot write every page ([`mapped_writable`]), or
-    /// `read_only` (memory of Metal's private option bit 24), the GPU's writes to the copy are
-    /// dropped (the module docs). Refused, registering nothing, where the process cannot read
+    /// The first read of the `length` bytes at `pages` for a copy of them ([`read_caller`]:
+    /// through the kernel, or where it fails, with plain loads of pages mapped readable), made
+    /// before the copy's memory is: a mapping the runtime makes for the copy may land where a
+    /// page of the caller's is not mapped, and a read after it would find every byte mapped and
+    /// copy memory Metal makes no buffer over. Where the process cannot write every page
+    /// ([`mapped_writable`]), or `read_only` (memory of Metal's private option bit 24), the GPU's
+    /// writes to the copy are dropped (the module docs). Refused where the process cannot read
     /// every page, or the host has no memory for the bytes the copy and the pages last agreed on.
     ///
     /// # Safety
     ///
-    /// `copy` is `length` bytes of mapped memory nothing else uses yet, which stays mapped until
-    /// the answer is dropped; `pages` the caller's bytes, which stay mapped as long
+    /// `pages` are the caller's bytes, which stay mapped while their copy lives
     /// (`HostMemory::new`), and which the CPU reads without a fault wherever the process maps
     /// them with read permission.
-    pub(crate) unsafe fn add(
-        self: &Arc<Self>,
+    pub(crate) unsafe fn read(
         pages: NonNull<u8>,
-        copy: NonNull<u8>,
         length: usize,
         read_only: bool,
-    ) -> Result<Copied, NotCopied> {
+    ) -> Result<FirstRead, NotCopied> {
         let read = |pages: NonNull<u8>, into: &mut [u8]| {
             // SAFETY: the caller's bytes, read with plain loads only where the process maps them
             // readable (the caller's contract).
@@ -375,15 +410,16 @@ impl CopiedBuffers {
         let drops_writes =
             read_only || !mapped_writable(start, start.saturating_add(length as u64));
         // SAFETY: the caller's.
-        unsafe { self.add_reading(pages, copy, length, read, drops_writes) }
+        unsafe { FirstRead::of(pages, length, read, drops_writes) }
     }
 
-    /// [`CopiedBuffers::add`], the first bytes of the pages read by `read`, which answers whether
-    /// it read every one; the GPU's writes to the copy dropped where `drops_writes`.
+    /// [`CopiedBuffers::read`] and [`CopiedBuffers::add`] of the copy at `copy`, the first bytes
+    /// of the pages read by `read`, which answers whether it read every one; the GPU's writes to
+    /// the copy dropped where `drops_writes`.
     ///
     /// # Safety
     ///
-    /// As [`CopiedBuffers::add`]'s.
+    /// As [`CopiedBuffers::read`]'s and [`CopiedBuffers::add`]'s.
     pub(crate) unsafe fn add_reading(
         self: &Arc<Self>,
         pages: NonNull<u8>,
@@ -392,15 +428,31 @@ impl CopiedBuffers {
         read: impl FnOnce(NonNull<u8>, &mut [u8]) -> bool,
         drops_writes: bool,
     ) -> Result<Copied, NotCopied> {
-        let mut snapshot = Vec::new();
-        if snapshot.try_reserve_exact(length).is_err() {
-            return Err(NotCopied::OutOfHostMemory);
-        }
-        snapshot.resize(length, 0u8);
-        let mut snapshot = snapshot.into_boxed_slice();
-        if !read(pages, &mut snapshot) {
-            return Err(NotCopied::Unreadable);
-        }
+        // SAFETY: the caller's.
+        let first = unsafe { FirstRead::of(pages, length, read, drops_writes) }?;
+        // SAFETY: the caller's.
+        Ok(unsafe { self.add(first, pages, copy) })
+    }
+
+    /// Register the copy at `copy` of the caller's bytes at `pages` that `first` read, its bytes
+    /// those `first` took.
+    ///
+    /// # Safety
+    ///
+    /// `copy` is as many bytes as `first` read of mapped memory nothing else uses yet, which stays
+    /// mapped until the answer is dropped; `pages` are the bytes `first` read, which stay mapped
+    /// as long (`HostMemory::new`).
+    pub(crate) unsafe fn add(
+        self: &Arc<Self>,
+        first: FirstRead,
+        pages: NonNull<u8>,
+        copy: NonNull<u8>,
+    ) -> Copied {
+        let FirstRead {
+            snapshot,
+            drops_writes,
+        } = first;
+        let length = snapshot.len();
         // SAFETY: the copy is `length` bytes nothing else uses yet (the caller's).
         unsafe { std::ptr::copy_nonoverlapping(snapshot.as_ptr(), copy.as_ptr(), length) };
         let id = self.next.fetch_add(1, Ordering::Relaxed);
@@ -414,11 +466,11 @@ impl CopiedBuffers {
             keys: Vec::new(),
         });
         self.live.fetch_add(1, Ordering::Relaxed);
-        Ok(Copied {
+        Copied {
             buffers: Arc::clone(self),
             id,
             drops_writes,
-        })
+        }
     }
 
     /// At a commit: write into each copy the command buffer's commands may reach (`used`: the
