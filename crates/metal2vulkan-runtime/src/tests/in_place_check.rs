@@ -310,7 +310,8 @@ fn texture_ids_keep_metals_order_while_the_in_place_check_runs() {
 /// A no-copy buffer of `length` bytes over an allocation of `device`'s own exported as a dma-buf
 /// and mapped (`dma_buf::ExportedPages`, the check's dma-buf pages), with a source of that
 /// dma-buf, imported only as it where `only` (`HostMemory::dma_buf_only`), else as any no-copy
-/// buffer's pages are, the pointer first. `None` where the device exports no such pages.
+/// buffer's pages are, the pointer first. `None` where the device exports no such pages; pages it
+/// exports but refuses to import fail the test, as the check's class would stay unchecked.
 #[cfg(target_os = "linux")]
 fn exported_buffer(device: &Device, length: u64, only: bool) -> Option<Buffer> {
     let exported = crate::dma_buf::ExportedPages::make(device, length)?;
@@ -331,7 +332,14 @@ fn exported_buffer(device: &Device, length: u64, only: bool) -> Option<Buffer> {
     };
     let descriptor = BufferDescriptor::new(length, ResourceOptions::shared(), contents)
         .with_placement(AddressPlacement::Outside);
-    device.new_buffer_with_descriptor(descriptor).ok()
+    match device.new_buffer_with_descriptor(descriptor) {
+        Ok(buffer) => Some(buffer),
+        Err(error) => panic!(
+            "{}: the device exports dma-buf pages it refuses to import (dma-buf only {only}): \
+             {error:?}",
+            device.name()
+        ),
+    }
 }
 
 /// The device's check imports its dma-buf class's pages only as their dma-buf, never by their

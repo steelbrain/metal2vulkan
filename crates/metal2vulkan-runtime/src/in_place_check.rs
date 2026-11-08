@@ -127,10 +127,12 @@
 //!   waiter's `vkAllocateCommandBuffers` faulted on the magic (an M3 Max under MoltenVK 1.4.2,
 //!   one run of three), where the same work with no check running did not in 30 000 rounds.
 //! - **Its dma-bufs.** The runtime runs no `udmabuf` code, so the dma-buf class's pages are an
-//!   allocation of the device's own, host-visible and exported as a dma-buf, mapped, and imported
-//!   only as that dma-buf (`HostMemory::dma_buf_only`), never by their pointer, which a driver may
-//!   take too (ANV's own mapped allocation); the check's source answers each request over them
-//!   with that dma-buf. The buffer's import, the image and its first move are the product's.
+//!   allocation of the device's own, host-visible and exported as a dma-buf, mapped
+//!   (`dma_buf::ExportedPages`: host-cached where a type is, and with the device-address flag its
+//!   imports carry), and imported only as that dma-buf (`HostMemory::dma_buf_only`), never by
+//!   their pointer, which a driver may take too (lavapipe takes its own mapped allocation's; ANV
+//!   refuses it); the check's source answers each request over them with that dma-buf. The
+//!   buffer's import, the image and its first move are the product's.
 
 use crate::check_draw::CheckDraw;
 use crate::device::holds::Holder;

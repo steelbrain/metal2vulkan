@@ -2010,8 +2010,12 @@ impl Memory {
     /// Import the dma-buf `fd`, `size` bytes, as memory of the best type of `class` among
     /// `allowed` (the types both the dma-buf and what is bound in it take): the memory and its
     /// type, the caller's to free (`dma_buf.rs`'s `DmaBufPages`), in no block and never mapped.
-    /// For a buffer, allocated with the device-address flag where the device enables
-    /// `bufferDeviceAddress`; for `image`, its dedicated allocation (`size` its requirements').
+    /// Allocated with the device-address flag where the device enables `bufferDeviceAddress`, as
+    /// every block of the runtime's is (`BlockMaker::make_as`), and for `image` as its dedicated
+    /// allocation (`size` its requirements'): every import of one dma-buf, a buffer's and its
+    /// textures' images', and the device's own allocation of it agree, as ANV (Mesa 26.2.6)
+    /// refuses an import of memory it holds whose flag differs (`VK_ERROR_INVALID_EXTERNAL_HANDLE`,
+    /// of every memory type: `dma_buf::ExportedPages`).
     /// Refused when no type of `class` is among `allowed`, else with the failure of the last type
     /// tried.
     ///
@@ -2058,13 +2062,12 @@ impl Memory {
                 .allocation_size(size)
                 .memory_type_index(type_index)
                 .push_next(&mut import);
-            match image {
-                Some(image) => {
-                    dedicated = dedicated.image(image);
-                    info = info.push_next(&mut dedicated);
-                }
-                None if self.device_address => info = info.push_next(&mut flags),
-                None => {}
+            if let Some(image) = image {
+                dedicated = dedicated.image(image);
+                info = info.push_next(&mut dedicated);
+            }
+            if self.device_address {
+                info = info.push_next(&mut flags);
             }
             // SAFETY: `info` and its chain live for the call; the type index is the device's and
             // allows the dma-buf (and the image, unbound and made for dma-bufs, whose size this

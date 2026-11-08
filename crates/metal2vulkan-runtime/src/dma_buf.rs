@@ -1528,11 +1528,18 @@ unsafe impl Send for ExportedPages {}
 
 impl ExportedPages {
     /// `length` bytes of host-visible, host-coherent memory, exported as a dma-buf and mapped, of
-    /// the first such type that is host-cached and not device-local where one is (system memory as
-    /// the CPU caches it, as a guest's pages are; the check reads every byte back, which took 3.1 s
-    /// for a 3840x2160 surface's 33 MB through RADV's uncached type on the Radeon 780M, against
-    /// 7.2 ms cached), else not device-local; `None` where the device imports no dma-bufs, makes no
-    /// images over them, exports no such memory but as a dedicated allocation, or refuses it.
+    /// the first such type that is host-cached, one that is not device-local before one that is,
+    /// else the first that is not device-local, else the first: memory as the CPU caches it, as a
+    /// guest's pages are, which the check reads every byte of back. That took 3.1 s for a
+    /// 3840x2160 surface's 33 MB through RADV's uncached type on the Radeon 780M, against 7.2 ms
+    /// cached; and on the Iris Xe (ANV), whose host-visible types are all device-local, the whole
+    /// check took 19.0 s over its first type, which is uncached. Allocated with the device-address
+    /// flag where the device enables `bufferDeviceAddress`, as each of the runtime's allocations
+    /// and imports is: ANV (Mesa 26.2.6) refuses an import of a dma-buf of its own memory whose
+    /// flag differs from the allocation's (`VK_ERROR_INVALID_EXTERNAL_HANDLE`, of every memory
+    /// type), which left the check's class unchecked there. `None` where the device imports no
+    /// dma-bufs, makes no images over them, exports no such memory but as a dedicated allocation,
+    /// or refuses it.
     pub(super) fn make(device: &Device, length: u64) -> Option<ExportedPages> {
         let shared = device.shared();
         let importer = shared.host_import.as_ref().ok()?;
@@ -1570,23 +1577,27 @@ impl ExportedPages {
                 .map_while(|index| memory.type_flags(index).map(|flags| (index, flags)))
                 .filter(|(_, flags)| flags.contains(wanted))
                 .collect();
-            let system = |cached: bool| {
-                types.iter().find(|(_, flags)| {
-                    !flags.contains(vk::MemoryPropertyFlags::DEVICE_LOCAL)
-                        && (!cached || flags.contains(vk::MemoryPropertyFlags::HOST_CACHED))
+            // Host-cached first, then system memory first; the first of the best.
+            (types.iter())
+                .min_by_key(|(_, flags)| {
+                    (
+                        !flags.contains(vk::MemoryPropertyFlags::HOST_CACHED),
+                        flags.contains(vk::MemoryPropertyFlags::DEVICE_LOCAL),
+                    )
                 })
-            };
-            system(true)
-                .or(system(false))
-                .or(types.first())
                 .map(|&(index, _)| index)?
         };
         let raw_device = shared.vk();
         let mut export = vk::ExportMemoryAllocateInfo::default().handle_types(DMA_BUF);
-        let info = vk::MemoryAllocateInfo::default()
+        let mut flags =
+            vk::MemoryAllocateFlagsInfo::default().flags(vk::MemoryAllocateFlags::DEVICE_ADDRESS);
+        let mut info = vk::MemoryAllocateInfo::default()
             .allocation_size(length)
             .memory_type_index(type_index)
             .push_next(&mut export);
+        if shared.device_address {
+            info = info.push_next(&mut flags);
+        }
         // SAFETY: the device is live; the type exports dma-bufs of a buffer's memory (above).
         let memory = unsafe { crate::creation::allocate_memory(raw_device, &info) }.ok()?;
         let free = || {
