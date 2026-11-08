@@ -18,7 +18,7 @@
 //!   it (`heap_sets::bind`).
 //! - **A placement while a reader is pending**: a command buffer that bound a heap set and has not
 //!   committed, then the texture made: its view is placed in a set the command buffer may read, so
-//!   it announces as it is made (`heap_sets::SetEntry::twin`).
+//!   it announces as it is made (`heap_sets::SetEntry::pending_read`).
 //! - **A second twin**: an `ASTC_4x2_sRGB` texture, whose twin holds Metal's codes, read (nothing),
 //!   then viewed as `ASTC_4x2_LDR` (a second twin of 8-bit codes nearest Metal's values; nothing)
 //!   and read through the view.

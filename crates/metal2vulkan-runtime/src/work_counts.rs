@@ -135,6 +135,7 @@ pub(crate) struct Counters {
     detached_storage_reaches: AtomicU64,
     heap_slots_rewritten: AtomicU64,
     heap_slot_writes_deferred: AtomicU64,
+    heap_arrays_copied: AtomicU64,
     heap_textures_tiled: AtomicU64,
     heap_sample_move_images_made: AtomicU64,
     heap_sample_move_images_lent: AtomicU64,
@@ -3621,6 +3622,12 @@ impl Counters {
         (self.heap_slot_writes_deferred).fetch_add(1, Ordering::Relaxed);
     }
 
+    /// A new heap set's image array took its elements from a live set's array of its class
+    /// (`heap_sets::DeviceHeaps::copy_arrays`).
+    pub(crate) fn heap_array_copied(&self) {
+        (self.heap_arrays_copied).fetch_add(1, Ordering::Relaxed);
+    }
+
     /// A heap's texture was made tiled as Metal lays it out (`texture/heap_tiled.rs`).
     pub(crate) fn heap_texture_tiled(&self) {
         self.heap_textures_tiled.fetch_add(1, Ordering::Relaxed);
@@ -4436,6 +4443,11 @@ pub struct WorkCounts {
     /// submission. A device whose heap sets take no writes while a command buffer is pending
     /// defers none: there a texture's registration waits for the batch instead.
     pub heap_slot_writes_deferred: u64,
+    /// Image arrays of new heap sets that took their elements from a live heap set's array of
+    /// the same class and descriptor type, copied in runs of the resource IDs textures held, with
+    /// what that array noted of them: such a set takes no texture, and walks none of them. An
+    /// array of a class no live set holds writes each live texture's element instead.
+    pub heap_arrays_copied: u64,
     /// Uses of a buffer over host pages that looked up by address the ranges of host bytes their
     /// bytes meet (`host_aliases.rs`): a use of a range met by no more ranges than the classes of
     /// length that lookup visits reads those its range keeps instead.
@@ -6899,6 +6911,7 @@ impl Device {
             detached_storage_reaches: counters.detached_storage_reaches.load(Ordering::Relaxed),
             heap_slots_rewritten: counters.heap_slots_rewritten.load(Ordering::Relaxed),
             heap_slot_writes_deferred: counters.heap_slot_writes_deferred.load(Ordering::Relaxed),
+            heap_arrays_copied: counters.heap_arrays_copied.load(Ordering::Relaxed),
             host_range_lookups: self.shared().aliases.range_lookups(),
             host_alias_lookups: self.shared().aliases.lookups(),
             heap_textures_tiled: counters.heap_textures_tiled.load(Ordering::Relaxed),

@@ -2726,6 +2726,7 @@ field	metal2vulkan-runtime::WorkCounts.heads_held_for_event_values	pub heads_hel
 field	metal2vulkan-runtime::WorkCounts.heads_held_for_host_steps	pub heads_held_for_host_steps: u64
 field	metal2vulkan-runtime::WorkCounts.heads_held_for_reencodes	pub heads_held_for_reencodes: u64
 field	metal2vulkan-runtime::WorkCounts.heads_waiting_at_their_gate	pub heads_waiting_at_their_gate: u64
+field	metal2vulkan-runtime::WorkCounts.heap_arrays_copied	pub heap_arrays_copied: u64
 field	metal2vulkan-runtime::WorkCounts.heap_sample_move_images_lent	pub heap_sample_move_images_lent: u64
 field	metal2vulkan-runtime::WorkCounts.heap_sample_move_images_made	pub heap_sample_move_images_made: u64
 field	metal2vulkan-runtime::WorkCounts.heap_shadow_cpu_copies	pub heap_shadow_cpu_copies: u64
