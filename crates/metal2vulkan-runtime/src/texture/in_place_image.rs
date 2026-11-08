@@ -72,6 +72,59 @@ pub(super) type InPlace = Result<(Arc<Image>, bool), (Refusal, String)>;
 /// An unbound image in place, or why none is.
 type Unbound = Result<(LinearMade, bool), (Refusal, String)>;
 
+/// An image in place made and checked before any memory is bound to it
+/// ([`Device::unplaced`]), which [`Device::in_place_image`] binds and
+/// [`Device::in_place_image_made`] releases.
+enum Unplaced {
+    /// Over pages imported by their pointer: the image made for host allocations, whether it is
+    /// the `DRM_FORMAT_MOD_LINEAR` one, and the buffer's memory and the offset in it where its
+    /// requirements were checked to take it (`placed`).
+    Host {
+        made: LinearMade,
+        pitched: bool,
+        memory: vk::DeviceMemory,
+        at: u64,
+    },
+    /// Over pages imported as dma-bufs: the image over them, checked against their pages, before
+    /// the caller's source is asked; with the pages, their imports and memory type, and the host
+    /// address of the texels' first byte.
+    #[cfg(unix)]
+    DmaBuf {
+        unbound: crate::dma_buf::Unbound,
+        pages: Arc<crate::buffer::HostPages>,
+        imports: Arc<crate::dma_buf::DmaBufPages>,
+        type_index: u32,
+        at: u64,
+    },
+}
+
+/// Why no image in place holds texels laid out as `layout`, where their rows share bytes (an
+/// IOSurface plane's GPU rows): no image holds a texel twice.
+fn shared_rows(layout: &BufferLayout) -> Option<(Refusal, String)> {
+    let shared_bytes = layout.shared_bytes();
+    (shared_bytes != 0).then(|| {
+        (
+            Refusal::Rows,
+            format!(
+                "its rows lie {} bytes apart, {} bytes of texels each, so consecutive rows share \
+                 {shared_bytes} bytes: no image holds a texel twice",
+                layout.row_pitch, layout.row_bytes
+            ),
+        )
+    })
+}
+
+/// The refusal of an image in place over dma-buf pages of `kind` (`dma_buf.rs`).
+#[cfg(unix)]
+fn dma_buf_refusal(kind: crate::dma_buf::DmaBufRefusal) -> Refusal {
+    use crate::dma_buf::DmaBufRefusal as D;
+    match kind {
+        D::Pitch => Refusal::Pitch,
+        D::Source => Refusal::Source,
+        D::Image | D::Pages | D::Import => Refusal::DmaBuf,
+    }
+}
+
 impl Texture {
     /// Make the first move of the texture's image in place now, by an internal submission the
     /// call waits for (`Image::settle`): the device's check's round (`in_place_check.rs`). `None`
@@ -246,9 +299,12 @@ impl Texture {
 impl Device {
     /// The image in place of a texture of `plan` (its declared usage's, with the feedback loop
     /// usage where the device makes it so, and the storage usage too where `storable`: the module
-    /// docs) made with `descriptor` over `texels`, host pages of `class`, with whether it is a `DRM_FORMAT_MOD_LINEAR` image at Metal's pitch
-    /// made for host allocations; why not where the device makes none, the declared plan's
-    /// refusal (the module docs). Over a no-copy buffer's pages (or a no-copy heap's) it is noted
+    /// docs) made with `descriptor` over `texels`, host pages of `class`, with whether it is a
+    /// `DRM_FORMAT_MOD_LINEAR` image at Metal's pitch made for host allocations; why not where the
+    /// device makes none, the declared plan's refusal (the module docs). Each plan is made and
+    /// checked unbound ([`unplaced`](Self::unplaced)), as
+    /// [`in_place_image_made`](Self::in_place_image_made) asks it, then bound
+    /// ([`place`](Self::place)). Over a no-copy buffer's pages (or a no-copy heap's) it is noted
     /// for a rebind to make again. Its first move is noted, for the device's next submission that
     /// takes it (`texture/first_move.rs`).
     pub(super) fn in_place_image(
@@ -259,33 +315,15 @@ impl Device {
         facts: &ImageFacts<'_>,
     ) -> Result<InPlace, Error> {
         let layout = texels.layout;
-        let shared_bytes = layout.shared_bytes();
-        if shared_bytes != 0 {
-            return Ok(Err((
-                Refusal::Rows,
-                format!(
-                    "its rows lie {} bytes apart, {} bytes of texels each, so consecutive rows \
-                     share {shared_bytes} bytes: no image holds a texel twice",
-                    layout.row_pitch, layout.row_bytes
-                ),
-            )));
+        if let Some(refused) = shared_rows(&layout) {
+            return Ok(Err(refused));
         }
-        let make = |plan: &ImagePlan| match class {
-            PagesClass::DmaBuf => self.dma_buf_in_place(plan, descriptor, texels, facts),
-            PagesClass::Pointer | PagesClass::Fresh => {
-                self.host_in_place(plan, descriptor, texels, class, facts)
-            }
+        let make = |plan: &ImagePlan| match self.unplaced(plan, texels, class, facts)? {
+            Ok(unplaced) => self.place(unplaced, plan, descriptor, texels, class),
+            Err(refused) => Ok(Err(refused)),
         };
-        // The wider plans, widest first: the feedback loop usage, and with it the storage usage
-        // where `storable`.
-        let profile = self.compile_device().profile();
-        let feedback = feedback_candidate(plan, self);
-        let storage = feedback
-            .as_ref()
-            .filter(|_| storable)
-            .and_then(|feedback| storage_candidate(feedback, profile));
         let mut made = None;
-        for wider in storage.iter().chain(&feedback) {
+        for wider in &self.wider_in_place_plans(plan, storable) {
             if let Ok(image) = make(wider)? {
                 made = Some(image);
                 break;
@@ -314,17 +352,78 @@ impl Device {
         Ok(Ok((image, pitched)))
     }
 
-    /// [`in_place_image`](Self::in_place_image) over pages imported by their pointer: the image
-    /// made for host allocations, checked against the texels' place in the buffer's memory, and
-    /// bound there.
-    fn host_in_place(
+    /// Whether [`in_place_image`](Self::in_place_image) makes an image in place of the same
+    /// arguments, its declared plan's refusal where it makes none: the same steps up to the bind,
+    /// each image it makes released unbound. The declared plan is asked first, so where it is made
+    /// in place the answer costs its one or two images (the driver's linear image, and the
+    /// `DRM_FORMAT_MOD_LINEAR` one where the driver lays the first out otherwise); the wider plans
+    /// are asked only where it is refused, as the making takes the first plan made of them all.
+    /// Over pages imported as dma-bufs it asks no source of the caller's: the source's answer and
+    /// the driver's import of its dma-buf are known only at the bind.
+    pub(crate) fn in_place_image_made(
         &self,
         plan: &ImagePlan,
-        descriptor: &TextureDescriptor,
+        (texels, class, storable): (&Texels, PagesClass, bool),
+        facts: &ImageFacts<'_>,
+    ) -> Result<Result<(), (Refusal, String)>, Error> {
+        if let Some(refused) = shared_rows(&texels.layout) {
+            return Ok(Err(refused));
+        }
+        let refused = match self.unplaced(plan, texels, class, facts)? {
+            Ok(unplaced) => {
+                self.release_unplaced(unplaced);
+                return Ok(Ok(()));
+            }
+            Err(refused) => refused,
+        };
+        for wider in &self.wider_in_place_plans(plan, storable) {
+            if let Ok(unplaced) = self.unplaced(wider, texels, class, facts)? {
+                self.release_unplaced(unplaced);
+                return Ok(Ok(()));
+            }
+        }
+        Ok(Err(refused))
+    }
+
+    /// The plans wider than `plan` an image in place is tried with before it, widest first: the
+    /// feedback loop usage where the device makes it, and with it the storage usage where
+    /// `storable` (the module docs).
+    fn wider_in_place_plans(&self, plan: &ImagePlan, storable: bool) -> Vec<ImagePlan> {
+        let profile = self.compile_device().profile();
+        let feedback = feedback_candidate(plan, self);
+        let storage = feedback
+            .as_ref()
+            .filter(|_| storable)
+            .and_then(|feedback| storage_candidate(feedback, profile));
+        storage.into_iter().chain(feedback).collect()
+    }
+
+    /// The image in place of `plan` over `texels`, host pages of `class`, made and checked before
+    /// any memory is bound to it; why not. Over pages imported by their pointer, the image made
+    /// for host allocations ([`in_place_unbound`](Self::in_place_unbound)) whose requirements
+    /// take its place in the buffer's memory ([`placed`]); over pages imported as dma-bufs, the
+    /// `DRM_FORMAT_MOD_LINEAR` image over them, checked against their pages, before the caller's
+    /// source is asked (`dma_buf.rs`).
+    fn unplaced(
+        &self,
+        plan: &ImagePlan,
         texels: &Texels,
         class: PagesClass,
         facts: &ImageFacts<'_>,
-    ) -> Result<InPlace, Error> {
+    ) -> Result<Result<Unplaced, (Refusal, String)>, Error> {
+        match class {
+            PagesClass::DmaBuf => self.dma_buf_unplaced(plan, texels, facts),
+            PagesClass::Pointer | PagesClass::Fresh => self.host_unplaced(plan, texels, facts),
+        }
+    }
+
+    /// [`unplaced`](Self::unplaced) over pages imported by their pointer.
+    fn host_unplaced(
+        &self,
+        plan: &ImagePlan,
+        texels: &Texels,
+        facts: &ImageFacts<'_>,
+    ) -> Result<Result<Unplaced, (Refusal, String)>, Error> {
         let layout = texels.layout;
         let (memory, buffer_offset, type_index) = texels.buffer.memory();
         let at = buffer_offset + layout.offset;
@@ -333,50 +432,27 @@ impl Device {
             Ok(made) => made,
             Err(refused) => return Ok(Err(refused)),
         };
-        let raw = made.raw;
-        let raw_device = self.shared().vk();
         if let Err(refused) = placed(&made.requirements, at, room, type_index) {
             // SAFETY: the image is live and unbound, and no command uses it.
-            unsafe { release::object(raw_device, raw) };
+            unsafe { release::object(self.shared().vk(), made.raw) };
             return Ok(Err(refused));
         }
-        // SAFETY: the image is live and unbound, made for host allocations; the memory is the
-        // buffer's import of host pages (or its fresh pages'), which the image holds, in a type the
-        // image takes, at an offset that meets its alignment, its size inside the memory
-        // (`placed`).
-        if let Err(error) = unsafe { crate::creation::bind_image(raw_device, raw, memory, at) } {
-            // SAFETY: the image is live and unbound, and no command uses it.
-            unsafe { release::object(raw_device, raw) };
-            return Err(vulkan(error));
-        }
-        let image = self.in_place_of(Raw::new(raw), plan.clone(), descriptor, texels);
-        // Over a no-copy buffer's pages, its move notes them (a rebind may swap the image out of
-        // them); fresh pages are the buffer's for good.
-        let pages = match class {
-            PagesClass::Fresh => None,
-            _ => texels.buffer.host_pages(),
-        };
-        let first = FirstMove::new(
-            raw,
-            image.plan().format,
-            made.initial,
-            pages.as_ref().and_then(pages_hold),
-        );
-        *lock(&image.first_move) = Some(first);
-        Ok(Ok((image.shared(), pitched)))
+        Ok(Ok(Unplaced::Host {
+            made,
+            pitched,
+            memory,
+            at,
+        }))
     }
 
-    /// [`in_place_image`](Self::in_place_image) over pages imported as dma-bufs: the
-    /// `DRM_FORMAT_MOD_LINEAR` image at the texture's pitches over a dma-buf of its own pages,
-    /// which the pages' source makes (called with no lock of the runtime's held).
+    /// [`unplaced`](Self::unplaced) over pages imported as dma-bufs.
     #[cfg(unix)]
-    fn dma_buf_in_place(
+    fn dma_buf_unplaced(
         &self,
         plan: &ImagePlan,
-        descriptor: &TextureDescriptor,
         texels: &Texels,
         facts: &ImageFacts<'_>,
-    ) -> Result<InPlace, Error> {
+    ) -> Result<Result<Unplaced, (Refusal, String)>, Error> {
         let layout = texels.layout;
         let Some(pages) = texels.buffer.host_pages() else {
             return Ok(Err((
@@ -392,51 +468,139 @@ impl Device {
         };
         let base = pages.memory().1;
         let (_, buffer_offset, _) = texels.buffer.memory();
+        let at = start + (buffer_offset + layout.offset - base);
         let dma_texels = crate::dma_buf::DmaBufTexels {
             pages: &imports,
             type_index,
-            at: start + (buffer_offset + layout.offset - base),
+            at,
             row_pitch: layout.row_pitch,
             slice_pitch: layout.slice_pitch,
         };
-        let made = match self.dma_buf_image_or_why(plan, facts, &dma_texels)? {
-            Ok(made) => made,
-            Err((kind, why)) => {
-                use crate::dma_buf::DmaBufRefusal as D;
-                let kind = match kind {
-                    D::Pitch => Refusal::Pitch,
-                    D::Source => Refusal::Source,
-                    D::Image | D::Pages | D::Import => Refusal::DmaBuf,
-                };
-                return Ok(Err((kind, why)));
-            }
-        };
-        let owner = Owner::Buffer {
-            memory: Mutex::new(texels.buffer.memory_hold()),
-        };
-        let made_with = (texels.options(), descriptor.allow_gpu_optimized_contents);
-        let identity = crate::resource::Identity {
-            tracked: texels.tracked(),
-            ..texels.buffer.identity()
-        };
-        let image =
-            self.dma_buf_texture_image(made, plan.clone(), owner, made_with, identity, &pages);
-        Ok(Ok((image.shared(), false)))
+        match self.dma_buf_image_unbound(plan, facts, &dma_texels)? {
+            Ok(unbound) => Ok(Ok(Unplaced::DmaBuf {
+                unbound,
+                pages,
+                imports,
+                type_index,
+                at,
+            })),
+            Err((kind, why)) => Ok(Err((dma_buf_refusal(kind), why))),
+        }
     }
 
     /// No pages are imported as dma-bufs on this system.
     #[cfg(not(unix))]
-    fn dma_buf_in_place(
+    fn dma_buf_unplaced(
         &self,
         _plan: &ImagePlan,
-        _descriptor: &TextureDescriptor,
         _texels: &Texels,
         _facts: &ImageFacts<'_>,
-    ) -> Result<InPlace, Error> {
+    ) -> Result<Result<Unplaced, (Refusal, String)>, Error> {
         Ok(Err((
             Refusal::Image,
             "the system imports no dma-bufs".to_owned(),
         )))
+    }
+
+    /// `unplaced`, an image in place of `plan` over `texels` (host pages of `class`), bound: over
+    /// pages imported by their pointer, in the buffer's memory where it was checked to lie, its
+    /// first move noted; over pages imported as dma-bufs, to a dedicated import of the dma-buf the
+    /// caller's source makes of its pages (called with no lock of the runtime's held), which may
+    /// still refuse it. With whether it is a `DRM_FORMAT_MOD_LINEAR` image made for host
+    /// allocations.
+    fn place(
+        &self,
+        unplaced: Unplaced,
+        plan: &ImagePlan,
+        descriptor: &TextureDescriptor,
+        texels: &Texels,
+        class: PagesClass,
+    ) -> Result<InPlace, Error> {
+        match unplaced {
+            Unplaced::Host {
+                made,
+                pitched,
+                memory,
+                at,
+            } => {
+                let raw = made.raw;
+                let raw_device = self.shared().vk();
+                // SAFETY: the image is live and unbound, made for host allocations; the memory is
+                // the buffer's import of host pages (or its fresh pages'), which the image holds,
+                // in a type the image takes, at an offset that meets its alignment, its size inside
+                // the memory (`placed`).
+                if let Err(error) =
+                    unsafe { crate::creation::bind_image(raw_device, raw, memory, at) }
+                {
+                    // SAFETY: the image is live and unbound, and no command uses it.
+                    unsafe { release::object(raw_device, raw) };
+                    return Err(vulkan(error));
+                }
+                let image = self.in_place_of(Raw::new(raw), plan.clone(), descriptor, texels);
+                // Over a no-copy buffer's pages, its move notes them (a rebind may swap the image
+                // out of them); fresh pages are the buffer's for good.
+                let pages = match class {
+                    PagesClass::Fresh => None,
+                    _ => texels.buffer.host_pages(),
+                };
+                let first = FirstMove::new(
+                    raw,
+                    image.plan().format,
+                    made.initial,
+                    pages.as_ref().and_then(pages_hold),
+                );
+                *lock(&image.first_move) = Some(first);
+                Ok(Ok((image.shared(), pitched)))
+            }
+            #[cfg(unix)]
+            Unplaced::DmaBuf {
+                unbound,
+                pages,
+                imports,
+                type_index,
+                at,
+            } => {
+                let layout = texels.layout;
+                let dma_texels = crate::dma_buf::DmaBufTexels {
+                    pages: &imports,
+                    type_index,
+                    at,
+                    row_pitch: layout.row_pitch,
+                    slice_pitch: layout.slice_pitch,
+                };
+                let made = match self.bind_dma_buf_image(unbound, &dma_texels)? {
+                    Ok(made) => made,
+                    Err((kind, why)) => return Ok(Err((dma_buf_refusal(kind), why))),
+                };
+                let owner = Owner::Buffer {
+                    memory: Mutex::new(texels.buffer.memory_hold()),
+                };
+                let made_with = (texels.options(), descriptor.allow_gpu_optimized_contents);
+                let identity = crate::resource::Identity {
+                    tracked: texels.tracked(),
+                    ..texels.buffer.identity()
+                };
+                let image = self.dma_buf_texture_image(
+                    made,
+                    plan.clone(),
+                    owner,
+                    made_with,
+                    identity,
+                    &pages,
+                );
+                Ok(Ok((image.shared(), false)))
+            }
+        }
+    }
+
+    /// Release `unplaced`'s image, which no command uses and no memory is bound to.
+    fn release_unplaced(&self, unplaced: Unplaced) {
+        match unplaced {
+            // SAFETY: the image is live and unbound, and no command uses it.
+            Unplaced::Host { made, .. } => unsafe { release::object(self.shared().vk(), made.raw) },
+            #[cfg(unix)]
+            Unplaced::DmaBuf { unbound, .. } => unbound.release(self),
+        }
     }
 
     /// The image of `raw` over `texels`, bound to the buffer's memory, of `plan` and made with

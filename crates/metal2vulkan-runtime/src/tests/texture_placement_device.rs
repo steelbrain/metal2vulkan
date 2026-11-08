@@ -18,6 +18,15 @@
 //!   buffer's bytes are not reached here.
 //! - **Refusals** are the making's own: a pitch below the row, texels past the allocation, and an
 //!   IOSurface plane's client direction give the same error to both.
+//! - **Pitches the device lays no image at.** Once the check settled, `BGRA8Unorm` textures over a
+//!   no-copy buffer at pitches past their rows (a 61-texel row of 244 bytes at 256, 272, 320, 512
+//!   and 1024 bytes, `ShaderRead`; the consumer's 3664-texel surface of 14656 bytes a row at 14656,
+//!   14672 and 14848, `ShaderRead | RenderTarget`) each answer what the making takes, the image's
+//!   making up to its bind included: where the device lays no image at the pitch (its linear image
+//!   laid out at another, and no `DRM_FORMAT_MOD_LINEAR` image at it), `Shadow(Refused(Pitch))`,
+//!   counted in `host_texture_shadows_refused_pitch`. At least one is: 272 bytes, 16 past a
+//!   256-byte row, is a pitch no driver measured lays rows at (llvmpipe's linear images step by
+//!   64 bytes, MoltenVK lays them at their own pitch alone, RADV's modifier images step by 256).
 //!
 //! A device test: compiled only under the validation crate's GPU safety cfgs (`m2v_gpu`,
 //! `m2v_cpu_icd`), on the kind of device the cfg selects. Printed (`TEXTURE-PLACEMENT`): each
@@ -504,4 +513,53 @@ fn the_answer_is_the_route_the_texture_takes() {
         };
         assert_eq!(answer, TexturePlacement::Shadow(due), "{case}");
     }
+}
+
+#[test]
+fn a_pitch_the_device_lays_no_image_at_answers_its_shadow() {
+    // The pages, declared before the device that uses them, so dropped after it.
+    let host = Host::new();
+    let scratch = Scratch::new("texture-placement-pitch");
+    let device = device(&scratch.0);
+    let runs = Arc::new(AtomicUsize::new(0));
+    let Some(buffer) = over_host(&device, &host, &runs) else {
+        return;
+    };
+    assert!(device.settle_in_place_checks(SETTLE), "the check settled");
+    let options = buffer.resource_options();
+    let reads = TextureUsage::SHADER_READ;
+    let renders = TextureUsage::SHADER_READ | TextureUsage::RENDER_TARGET;
+    let cases = [
+        ((61, 16), reads, 256),
+        ((61, 16), reads, 272),
+        ((61, 16), reads, 320),
+        ((61, 16), reads, 512),
+        ((61, 16), reads, 1024),
+        ((3664, 16), renders, 14656),
+        ((3664, 16), renders, 14672),
+        ((3664, 16), renders, 14848),
+    ];
+    let mut refused = 0;
+    for (at, &(size, usage, bytes_per_row)) in cases.iter().enumerate() {
+        let shaped = descriptor(PixelFormat::BGRA8Unorm, size, usage, options);
+        let offset = at as u64 * (256 << 10);
+        let ask = || buffer.texture_placement(&shaped, offset, bytes_per_row);
+        let make = || buffer.new_texture(&shaped, offset, bytes_per_row);
+        let case = format!("{}x{} at {bytes_per_row} bytes a row", size.0, size.1);
+        let (answer, texture) = made_as_asked(&device, &case, ask, make);
+        let pitch = TextureShadowReason::Refused(InPlaceRefusal::Pitch);
+        if answer == TexturePlacement::Shadow(pitch) {
+            assert_eq!(path(&texture), "shadow", "{case}");
+            refused += 1;
+        }
+    }
+    eprintln!(
+        "TEXTURE-PLACEMENT on {}: {refused} of {} pitches refused",
+        device.name(),
+        cases.len()
+    );
+    assert!(
+        refused > 0,
+        "no pitch was refused: the test reached no refusal"
+    );
 }

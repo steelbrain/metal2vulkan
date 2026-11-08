@@ -655,19 +655,25 @@ impl Buffer {
     /// runtime extension: Metal has no such query, as a Mac's GPU works on a texture over the
     /// caller's pages in place.
     ///
-    /// The answer is the making's own decision, the same function's (the device's policy, the
+    /// The answer is the making's own decision, the same functions' (the device's policy, the
     /// texture's usage and texel size, the buffer's bytes detached, copied or past their length,
-    /// a discrete GPU's device copy, and the device's check's verdicts for the pages' kind, the
-    /// texture's accesses and how its texels lie in the device's lines of memory), taken after
-    /// every check the making runs before it makes anything: an argument `new_texture` refuses
-    /// is refused here alike, with the same error. Only what making the texture shows is not
-    /// known here: a `TexturePlacement::InPlace` texture whose image the device then refuses is
-    /// a shadow, and a making that runs out of memory or meets a lost device fails. The answer
-    /// is the buffer's and the device's state as the call reads them: a detach, a rebind, or the
-    /// check's verdicts after it may change what a texture made later takes. A pending verdict
-    /// starts the device's check, as the making's does
-    /// ([`Device::settle_in_place_checks`](crate::Device::settle_in_place_checks) says when its
-    /// verdicts are known). It makes and counts nothing, and announces nothing.
+    /// a discrete GPU's device copy, the device's check's verdicts for the pages' kind, the
+    /// texture's accesses and how its texels lie in the device's lines of memory, and the image
+    /// in place's making up to its bind: the driver's linear image at the texture's pitch, else
+    /// the `DRM_FORMAT_MOD_LINEAR` one, its requirements against the bytes' place and memory
+    /// type, rows that share bytes), taken after every check the making runs before it makes
+    /// anything: an argument `new_texture` refuses is refused here alike, with the same error.
+    /// Where the image in place is the answer, the query makes it unbound and releases it: one or
+    /// two `VkImage`s where the texture's declared plan is made in place, a pair more for each
+    /// wider plan the making would try first (the feedback loop usage, and the storage usage)
+    /// where it is refused; nothing is bound or submitted. What only the bind shows is not known
+    /// here: over pages imported as dma-bufs, the caller's source's dma-buf and the driver's
+    /// import of it ([`TexturePlacement::InPlace`]); and a making that runs out of memory or meets
+    /// a lost device fails, as this may making those images. The answer is the buffer's and the
+    /// device's state as the call reads them: a detach, a rebind, or the check's verdicts after it
+    /// may change what a texture made later takes. A pending verdict starts the device's check, as
+    /// the making's does ([`Device::settle_in_place_checks`](crate::Device::settle_in_place_checks)
+    /// says when its verdicts are known). It counts and announces nothing.
     pub fn texture_placement(
         &self,
         descriptor: &TextureDescriptor,

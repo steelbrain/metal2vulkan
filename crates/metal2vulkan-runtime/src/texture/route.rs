@@ -4,6 +4,9 @@
 //! [`Device::route_over_buffer`], so the answer is the making's own decision: texels past the
 //! buffer's length, a buffer of no host pages, a device copy, bytes detached or copied, and over
 //! host pages the in-place decision (`in_place::in_place`) against the device's check's verdicts.
+//! Where that takes the image in place, the query also runs the image's making up to the bind
+//! (`texture/in_place_image.rs`), so a pitch, an image, a placement or rows the device refuses
+//! answer the shadow the texture then is.
 
 use super::image_error;
 use crate::buffer::CallerMemory;
@@ -65,9 +68,11 @@ impl Device {
 
     /// Where a texture of `descriptor` (checked as `layout`) over `texels` lies if made now, for
     /// Metal's `call`: the route its making takes, `past` where its texels run past the buffer's
-    /// length (`Texels::runs_past`, where the making gives them their tail). Refused as the making
-    /// refuses the texture's declared plan. A pending verdict starts the device's check, as the
-    /// making's does; nothing is made or counted.
+    /// length (`Texels::runs_past`, where the making gives them their tail); and where that is the
+    /// image in place, whether the device makes it, by the making's own steps up to the bind
+    /// (`Device::in_place_image_made`), each image they make released unbound. Refused as the
+    /// making refuses the texture's declared plan or fails those steps. A pending verdict starts
+    /// the device's check, as the making's does; nothing is bound, submitted or counted.
     pub(crate) fn placement_over_buffer(
         &self,
         call: &'static str,
@@ -79,8 +84,23 @@ impl Device {
             .shared()
             .textures
             .facts(self.compile_device().profile());
-        let (usage, _) = self.declared_plan(call, descriptor, layout, &facts)?;
-        Ok(self.route_over_buffer(texels, usage, past).placement())
+        let (usage, plan) = self.declared_plan(call, descriptor, layout, &facts)?;
+        let route = match self.route_over_buffer(texels, usage, past) {
+            Route::Host {
+                class,
+                rows,
+                way: HostWay::InPlace { storable },
+            } => {
+                let made = (texels, class, storable);
+                let way = match self.in_place_image_made(&plan, made, &facts)? {
+                    Ok(()) => HostWay::InPlace { storable },
+                    Err((refusal, why)) => HostWay::Shadow(ShadowCause::Refused(refusal, why)),
+                };
+                Route::Host { class, rows, way }
+            }
+            route => route,
+        };
+        Ok(route.placement())
     }
 
     /// The route of a texture of Metal `usage` (as the image is planned for it) over `texels`,

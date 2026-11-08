@@ -506,7 +506,9 @@ Calls Metal does not have, for a consumer that emulates a Metal device:
   `new_texture_with_iosurface_plane` makes of the same arguments lies if made now: in place over
   host pages, a shadow pending the device's in-place check, a shadow and why, no host pages, or
   another shape. The making's own route answers it, after every check the making runs before it
-  makes anything, so the same arguments are refused with the same errors.
+  makes anything, so the same arguments are refused with the same errors; an answer in place runs
+  the image's making up to its bind (one or two unbound `VkImage`s, released), so a pitch or an
+  image the device refuses answers the shadow the texture then is.
   `Device::settle_in_place_checks` starts the check and says when its verdicts are known (a zero
   timeout waits for nothing).
 - `HostRam`, `Device::use_host_ram` (with `HostRamUse`) and `HostMemory::with_runs` (with

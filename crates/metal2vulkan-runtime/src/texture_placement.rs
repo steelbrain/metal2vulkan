@@ -16,11 +16,12 @@ use crate::texture::{HostWay, Route};
 pub enum TexturePlacement {
     /// A linear image aliasing the buffer's host pages, in place: the device's check passed for
     /// the pages' kind, for every access the texture's usage takes and for texels that lie in the
-    /// device's lines of memory as its own do. The image's making may still refuse (the device
-    /// makes no image of the texture's format, usage or pitch there, the image misses the bytes'
-    /// place or memory type, the texture's rows share bytes, or over dma-buf pages the caller's
-    /// source gives no one dma-buf of them): the texture is then a shadow, its notice
-    /// (`shadowed-texture`) naming why, counted in `WorkCounts::host_texture_shadows_refused_*`.
+    /// device's lines of memory as its own do, and the device made the image of the texture's
+    /// plan at its pitch, where its requirements take the bytes' place and memory type (the query
+    /// made it unbound and released it). Over pages imported as dma-bufs the image's making may
+    /// still refuse at the bind, where the caller's source gives no one dma-buf of the pages
+    /// ([`InPlaceRefusal::Source`]) or the driver refuses its import ([`InPlaceRefusal::DmaBuf`]):
+    /// the texture is then a shadow, its notice (`shadowed-texture`) naming why.
     InPlace,
     /// A shadow now, as the device's check has not answered for the pages' kind and the
     /// texture's accesses: once it does, at the commit of the device's only uncommitted command
@@ -129,9 +130,10 @@ pub enum InPlaceRowEnds {
 
 /// Why the device makes no image in place over a texture's texels
 /// ([`TextureShadowReason::Refused`]), as `WorkCounts::host_texture_shadows_refused_*` counts
-/// them. [`Buffer::texture_placement`](crate::Buffer::texture_placement) answers `Detached` and
-/// `Placement` (a copied buffer's bytes), which it knows before any image is made; the others only
-/// the image's making finds ([`TexturePlacement::InPlace`]). A runtime extension: Metal has none.
+/// them. [`Buffer::texture_placement`](crate::Buffer::texture_placement) answers each one the
+/// image's making decides before it binds memory, by the same steps: all but `Source`, and
+/// `DmaBuf` where the driver refuses the dma-buf's import, which only the bind finds over pages
+/// imported as dma-bufs ([`TexturePlacement::InPlace`]). A runtime extension: Metal has none.
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum InPlaceRefusal {
@@ -152,7 +154,8 @@ pub enum InPlaceRefusal {
     /// own pages.
     Source,
     /// Over pages imported as dma-bufs: no `DRM_FORMAT_MOD_LINEAR` image over one dma-buf of the
-    /// texture's own pages was made for another reason.
+    /// texture's own pages was made for another reason (the modifier's features or limits, the
+    /// image's memory past the pages or of another type, or the driver's import).
     DmaBuf,
 }
 

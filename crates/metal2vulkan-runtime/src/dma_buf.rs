@@ -858,10 +858,18 @@ pub(super) enum DmaBufRefusal {
 
 /// An image over dma-buf pages made and not yet bound: its requirements, and the request for
 /// its pages.
-struct Unbound {
+pub(super) struct Unbound {
     raw: vk::Image,
     requirements: vk::MemoryRequirements,
     request: DmaBufRequest,
+}
+
+impl Unbound {
+    /// Release the image, which no command uses and no memory is bound to, unbound.
+    pub(super) fn release(self, device: &Device) {
+        // SAFETY: the image is live and unbound, and no command uses it.
+        unsafe { release::object(device.shared().vk(), self.raw) };
+    }
 }
 
 impl Device {
@@ -920,7 +928,7 @@ impl Device {
 
     /// [`Device::dma_buf_image`]'s image made and checked, unbound, with the request for its
     /// pages; why not where the device makes none before the source is asked.
-    fn dma_buf_image_unbound(
+    pub(super) fn dma_buf_image_unbound(
         &self,
         plan: &ImagePlan,
         facts: &ImageFacts<'_>,
@@ -1034,7 +1042,7 @@ impl Device {
     /// `unbound`'s image bound to a dedicated import of the dma-buf the caller's source makes of
     /// its pages, of `texels`' memory type, and counted; why not, the image released, where the
     /// source fails or answers against its contract or the driver refuses the import or binding.
-    fn bind_dma_buf_image(
+    pub(super) fn bind_dma_buf_image(
         &self,
         unbound: Unbound,
         texels: &DmaBufTexels<'_>,

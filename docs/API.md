@@ -392,8 +392,16 @@ where the verdict passes; a shadow and why (`TextureShadowReason`: the policy, t
 check's failed or unchecked verdict with its access and row ends, a refusal, texels past the
 buffer's length, a device copy); no host pages; or a shape no image in place takes. The making's
 own route answers it (`texture/route.rs`), after every check the making runs before it makes
-anything, so the same arguments are refused with the same errors; what only making the texture
-shows (the device refusing the image in place, memory, a lost device) it does not know. A pending
+anything, so the same arguments are refused with the same errors; where the route is the image in
+place, the query runs the image's making up to the bind (`texture/in_place_image.rs`): it makes the
+driver's linear image, and the `DRM_FORMAT_MOD_LINEAR` one where the driver lays the first out at
+another pitch, checks their requirements against the bytes' place and memory type, and releases
+them unbound, so a pitch, an image, a placement or rows the device refuses answer
+`Shadow(Refused(..))`, the shadow the texture then is. That is one or two `VkImage`s where the
+declared plan is made in place, and a pair more for each wider plan the making tries first where it
+is refused; nothing is bound or submitted. Only the bind shows the rest: over pages imported as
+dma-bufs, the caller's source's dma-buf and the driver's import of it; and memory or a lost device,
+which fail the making. A pending
 verdict starts the check, as a texture's making does. `Device::settle_in_place_checks` starts the
 check and says when the verdicts are known (a zero timeout waits for nothing). They become known
 once per `VkDevice`: a GPU recovery's new one reads them from the record as it is made, or checks
