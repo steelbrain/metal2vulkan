@@ -549,11 +549,15 @@ pub(crate) enum ShadowCause {
 /// answer, and the bound chooses between two speeds: a shadow's copy per command buffer that
 /// writes the texture costs a fixed few microseconds, which a small texture's linear image saves,
 /// and a large texture's linear image renders and samples slower than the shadow's optimal one.
-/// Measured on an Iris Xe (ANV, Mesa 26.2.6), each frame a pass that clears and stores every
-/// texture and a draw that reads each whole: textures of 6-47 KB each saved 3.5-4.3 us a texture
-/// a frame in place (15 of 172x67 at 704-byte rows: 425.6 us a frame as shadows, 369.6 in place),
-/// and textures of 1.4 MB and more lost (4 of 820x410 at 3328: 564.1 us as shadows, 609.2 in
-/// place; 2 of 1640x820 at 6592: 826.2 and 977.1). The same bound on every device.
+/// Measured on an Iris Xe (ANV, Mesa 26.2.6), each frame a pass that clears and stores each of
+/// four `BGRA8Unorm` textures and a draw that reads each whole, a frame's GPU time as shadows
+/// against in place: 172x67 at 704-byte rows (47 KB) 111.5 us against 98.8; 250x125 at 1024
+/// (128 KB) 143.5 against 136.8; 200x200 at 832 (166 KB) 165.9 against 153.0; 250x250 at 1024
+/// (256 KB) 190.8 against 191.6; 360x360 at 1472 (530 KB) 288.7 against 302.4; 540x270 at 2176
+/// (588 KB) 309.0 against 320.4; 820x410 at 3328 (1.36 MB) 561.7 against 610.1. The crossover
+/// lies at the 256 KB textures, which run alike either way. A Radeon 780M (RADV) makes no such
+/// image at a pitch off a multiple of 256 bytes, at which its own linear image lays rows, so no
+/// texture there takes one. The same bound on every device.
 pub(crate) const POOLED_PITCHED_BYTES: u64 = 256 << 10;
 
 /// Why the device makes no image in place over a texture's texels.
