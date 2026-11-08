@@ -26,8 +26,8 @@ use crate::render::dynamic_compares;
 use crate::{
     BlitOption, Buffer, CommandBufferStatus, CommandQueue, Degradation, DegradeNotice, Device,
     DeviceKind, DeviceOptions, Error, MessageSink, Origin, PipelineOptions, Region,
-    RenderCommandEncoder, RenderPipelineState, ResourceOptions, SamplerState, ShaderCacheOptions,
-    Size, Texture, TextureDescriptor, WorkCounts,
+    RenderCommandEncoder, RenderPipelineState, ResourceOptions, SamplerState, ScissorRect,
+    ShaderCacheOptions, Size, Texture, TextureDescriptor, WorkCounts,
 };
 use metal2vulkan::bind::SamplerDescriptor;
 use metal2vulkan::metal::{
@@ -1353,4 +1353,91 @@ fn draws_after_a_state_set_or_a_barrier_set_what_every_step_sets() {
         each[2].0 > 0,
         "the draw after another blend color set none: {each:?}"
     );
+}
+
+/// Indexed draws after the gaps a compositor's draws come after (a guest's window server's): a
+/// vertex buffer offset alone, a scissor rectangle and the offset, or a switch to the other of
+/// two states of one function pair with another texture and the offset, in turn. Every draw but
+/// the pass's first and the second state's first is rebound (`WorkCounts::draws_rebound`): after
+/// the scissor rectangle restated (`render/draw_again/restated.rs`), after the switch from the
+/// state's own kept draw; with the same commands of every kind, state commands and pixels as the
+/// same draws each taking every step, after a call between each that changes nothing for them
+/// (`set_tessellation_factor_scale`, which no draw of their states reads). Only the pass's first
+/// draw keeps nothing (`WorkCounts::draws_unkept`), and no draw finds its kept draw unlike it or
+/// stops its rebind.
+#[test]
+fn draws_after_a_compositor_s_gaps_rebind_what_every_step_binds() {
+    let scratch = Scratch::new("draw-again-gaps");
+    let heard = Heard::default();
+    let device = device(&scratch.0, &[], &heard);
+    let sampling = || state(&device, "engine/tob_renders.ll", ("tob_rect", "tob_sample"));
+    let pair = [sampling(), sampling()];
+    let rectangles = rectangles_from_columns(&device);
+    let textures = textures(&device);
+    let sampler = sampler_addressing(&device, SamplerAddressMode::ClampToEdge, f32::MAX);
+    let indices = bytes_of(&[0u16, 1, 2, 3, 4, 5], u16::to_le_bytes);
+    let index = device
+        .new_buffer_with_bytes(&indices, ResourceOptions::shared())
+        .unwrap();
+    let half = |x| ScissorRect {
+        x,
+        y: 0,
+        width: SIDE / 2,
+        height: SIDE,
+    };
+    let halves = [half(0), half(SIDE / 2)];
+    let gaps = |encoder: &mut RenderCommandEncoder, between: &dyn Fn(&mut RenderCommandEncoder)| {
+        encoder.set_render_pipeline_state(&pair[0]).unwrap();
+        encoder.set_vertex_buffer(Some(&rectangles), 0, 0).unwrap();
+        encoder.set_fragment_texture(Some(&textures[0]), 0).unwrap();
+        encoder
+            .set_fragment_sampler_state(Some(&sampler), 0)
+            .unwrap();
+        let mut drawing = 0;
+        for at in 0..DRAWS {
+            if at > 0 {
+                encoder.set_vertex_buffer_offset(16 * at, 0).unwrap();
+                match at % 3 {
+                    1 => (encoder.set_scissor_rect(halves[(at / 3) as usize % 2])).unwrap(),
+                    2 => {
+                        drawing = 1 - drawing;
+                        encoder.set_render_pipeline_state(&pair[drawing]).unwrap();
+                        let texture = &textures[at as usize];
+                        encoder.set_fragment_texture(Some(texture), 0).unwrap();
+                    }
+                    _ => {}
+                }
+                between(encoder);
+            }
+            let drawn = encoder.draw_indexed_primitives(
+                PrimitiveType::Triangle,
+                6,
+                IndexType::UInt16,
+                &index,
+                0,
+                1,
+                0,
+                0,
+            );
+            assert_eq!(drawn, Ok(()));
+        }
+    };
+    let forgets = |encoder: &mut RenderCommandEncoder| encoder.set_tessellation_factor_scale(1.0);
+    warm(&device, |encoder| gaps(encoder, &|_| {}));
+    let rebound = run(&device, |encoder| gaps(encoder, &|_| {}));
+    let every = run(&device, |encoder| gaps(encoder, &forgets));
+    let rebound_count = |counts: &WorkCounts| counts.draws_rebound;
+    let states_recorded = |counts: &WorkCounts| counts.draw_states_recorded;
+    assert_eq!(rebound.counted(rebound_count), drawn_alone(DRAWS - 2));
+    assert_eq!(every.counted(rebound_count), 0);
+    assert_eq!(rebound.commands, every.commands);
+    assert_eq!(rebound.commands["cmd_draw_indexed"], DRAWS);
+    assert_eq!(
+        rebound.counted(states_recorded),
+        every.counted(states_recorded)
+    );
+    assert_eq!(rebound.words, every.words, "the pixels of the draws");
+    assert_eq!(rebound.counted(|counts| counts.draws_unkept), 1);
+    let missed = |counts: &WorkCounts| counts.draws_unlike_kept + counts.draws_rebind_stopped;
+    assert_eq!(rebound.counted(missed), 0);
 }
