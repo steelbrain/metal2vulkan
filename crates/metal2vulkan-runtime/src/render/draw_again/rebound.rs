@@ -15,8 +15,9 @@
 //! - **What it works out again.** Its commands, rebound at those slots
 //!   (`BindingPlan::rebind_draw_slots_into`: their descriptor ranges, push fields and vertex
 //!   buffers' offsets), by the plan's rebinds of them (`BindingPlan::slot_rebinds_into`), made
-//!   once for the kept draw, in the lists the state's settles before kept, and kept with it while
-//!   the draws change the same slots (`SettledHere::rebinds`);
+//!   once for the kept draw, in lists the state keeps from one settle and encoder to the next
+//!   (`LiveBind::rebinds`), and kept with it while the draws change the same slots
+//!   (`SettledHere::rebinds`);
 //!   set 0's writes of them with their dynamic offsets (`binding::rebind_into`:
 //!   a texture's view and a sampler state's `VkSampler` as every step makes them, through its
 //!   encoder's memo), and the set its encoder's last set or its command buffer's holds, else a new
@@ -445,7 +446,7 @@ impl RenderLowering {
         let kept = settles_kept(self, live)
             .then_some(live.settled.as_mut())
             .flatten();
-        let (settled, rebinds) = kept?.rebinds(slots);
+        let (settled, rebinds) = kept?.rebinds(slots, &mut live.rebinds);
         let Settled {
             variant,
             plan,

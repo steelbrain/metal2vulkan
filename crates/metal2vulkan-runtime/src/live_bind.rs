@@ -65,8 +65,9 @@
 //!   no object (its bindings are values, and its tables' drawing state is held weakly), so a kept
 //!   one holds nothing alive; the next encoder's tables are new, with stamps of their own.
 //! - **The draws' storage kept with it.** The vectors a draw fills and drops (its commands, push
-//!   writes, uses, descriptor writes, pushed set 0 and vertex buffers) are kept here too, each
-//!   draw's written over the last one's storage. Those hold values and raw handles, but for the
+//!   writes, uses, descriptor writes, pushed set 0 and vertex buffers, and a draw rebound's slot
+//!   rebinds, which outlast the settle they were made for) are kept here too, each draw's written
+//!   over the last one's storage. Those hold values and raw handles, but for the
 //!   descriptor writes, whose keepers hold samplers and function tables: those are emptied as
 //!   the draw is done with them ([`Emptied`]), so they hold nothing past it, as a new vector's did.
 //! - **The resident textures' shadows listed once per change.** The shadows' copies of the
@@ -233,6 +234,10 @@ pub(super) struct LiveBind {
     /// What the state's last recorded draw settled, while its encoder lasts ([`SettledHere`]):
     /// set by a draw that recorded, in place of what the state kept.
     pub(super) settled: Option<SettledHere>,
+    /// The lists the state's settles make their plans' slot rebinds in
+    /// ([`SettledHere::rebinds`]), kept with the state, so their room goes from one settle and
+    /// one encoder to the next.
+    pub(super) rebinds: SlotRebinds,
     /// The last draw its encoder noted apart (`noted_apart.rs`), kept here so its storage goes
     /// from one encoder to the next.
     pub(super) noted: NotedApart,
@@ -317,20 +322,20 @@ struct SetAside {
     listed_at: Option<u64>,
     read_from: ReadFrom,
     settled: Option<SettledHere>,
+    rebinds: SlotRebinds,
     /// [`LiveBind::asides`] as it went aside.
     at: u64,
 }
 
 /// What a recorded draw settled of its state's shape (`GraphicsState::settle_shape`): the variant
 /// and plan, the program it ran (named without being held) and the buffer forms it took; the shape
-/// is the state's kept one, compared by identity. With them, the plan's slot rebinds
-/// (`BindingPlan::slot_rebinds`) of the slots the last draw rebound changed, and whether the plan
-/// rebinds those slots so; `None` before one was made for this settle.
+/// is the state's kept one, compared by identity. With them, whether the plan rebinds the slots
+/// of the slot rebinds made in the state's lists ([`LiveBind::rebinds`]) for this settle; `None`
+/// before any were made for it.
 pub(super) struct SettledHere {
     program: ProgramName,
     forms: BufferForms,
     settled: Settled,
-    rebinds: SlotRebinds,
     made: Option<bool>,
 }
 
@@ -346,34 +351,29 @@ impl SettledHere {
             program: pipeline.program_name(),
             forms,
             settled,
-            rebinds: SlotRebinds::default(),
             made: None,
         }
     }
 
-    /// Take the place of `replaced`, the state's settle before: the slot rebinds are made in its,
-    /// whose lists keep their room (`BindingPlan::slot_rebinds_into`), so the state's draws
-    /// rebound after a new settle allocate none for them where those lists had room. None is made
-    /// for this settle yet.
-    pub(super) fn took_place_of(&mut self, replaced: SettledHere) {
-        self.rebinds = replaced.rebinds;
-        self.made = None;
-    }
-
     /// What the draw settled, and its plan's slot rebinds of `slots` (`None` where the plan reads
-    /// one of them some other way): made at the first draw rebound that changed those slots, in
-    /// place of those made before for other slots, and kept for each next one that changes the
-    /// same slots, as the plan is the same.
-    pub(super) fn rebinds(&mut self, slots: &[SlotRef]) -> (&Settled, Option<&SlotRebinds>) {
+    /// one of them some other way), in `lists`, the state's ([`LiveBind::rebinds`]): made there
+    /// at the first draw rebound that changed those slots (`BindingPlan::slot_rebinds_into`), in
+    /// place of those made before for other slots or settles, and kept for each next one that
+    /// changes the same slots, as the plan is the same.
+    pub(super) fn rebinds<'a>(
+        &'a mut self,
+        slots: &[SlotRef],
+        lists: &'a mut SlotRebinds,
+    ) -> (&'a Settled, Option<&'a SlotRebinds>) {
         let made = match self.made {
-            Some(made) if self.rebinds.slots() == slots => made,
+            Some(made) if lists.slots() == slots => made,
             _ => {
-                let made = (self.settled.plan).slot_rebinds_into(slots, &mut self.rebinds);
+                let made = (self.settled.plan).slot_rebinds_into(slots, lists);
                 self.made = Some(made);
                 made
             }
         };
-        (&self.settled, made.then_some(&self.rebinds))
+        (&self.settled, made.then_some(lists))
     }
 }
 
@@ -553,6 +553,7 @@ impl LiveBind {
         std::mem::swap(&mut self.listed_at, &mut aside.listed_at);
         std::mem::swap(&mut self.read_from, &mut aside.read_from);
         std::mem::swap(&mut self.settled, &mut aside.settled);
+        std::mem::swap(&mut self.rebinds, &mut aside.rebinds);
         aside.at = self.asides;
     }
 

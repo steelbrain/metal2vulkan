@@ -10788,10 +10788,7 @@ impl RenderLowering {
             self.core.retain(function_tables);
         }
         if let Some(here) = settled_here {
-            let replaced = live.settled.replace(here);
-            if let (Some(replaced), Some(here)) = (replaced, live.settled.as_mut()) {
-                here.took_place_of(replaced);
-            }
+            live.settled = Some(here);
         }
         Ok(())
     }
