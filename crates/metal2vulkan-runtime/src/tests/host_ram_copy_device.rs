@@ -1379,6 +1379,7 @@ fn a_copy_takes_its_chunks_as_an_object_does_and_the_window_ahead_moves_past_the
     let defect = metal2vulkan::error::RuntimeDriverDefect::AliasedImportBlitsUnordered;
     let a = u64::from(!device.properties().driver_defects.contains(&defect));
     let last_page = page_of(CHUNKS - 1);
+    let scattering = device.work_counts();
     blit(&device, |encoder| {
         encoder.copy_to_host_ram(&out, 0, &ram, &last_page).unwrap();
     });
@@ -1399,6 +1400,14 @@ fn a_copy_takes_its_chunks_as_an_object_does_and_the_window_ahead_moves_past_the
     assert_eq!(
         jumped.host_ram_chunks_live - before.host_ram_chunks_live,
         CHUNKS
+    );
+    assert_eq!(
+        (
+            jumped.run_imports_made - scattering.run_imports_made,
+            jumped.run_imports_live,
+        ),
+        (a, scattering.run_imports_live),
+        "the page's import alone counted made, and gone with the copy"
     );
     drop((used, ram));
 }

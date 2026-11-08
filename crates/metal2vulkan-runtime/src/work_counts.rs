@@ -370,6 +370,7 @@ pub(crate) struct Counters {
     host_ram_chunks_live: AtomicU64,
     chunk_bound_buffers_made: AtomicU64,
     run_bound_buffers_made: AtomicU64,
+    run_imports_made: AtomicU64,
     run_imports_live: AtomicU64,
     dma_buf_sparse_buffers: AtomicU64,
     dma_buf_images: AtomicU64,
@@ -2908,12 +2909,13 @@ impl Counters {
         (self.run_bound_buffers_made).fetch_add(1, Ordering::Relaxed);
     }
 
-    /// An import of one object's run of a guest RAM was made (`host_ram.rs`).
+    /// An import of runs of a guest RAM was made, an object's run alone or a copy's (`host_ram.rs`).
     pub(crate) fn run_import_made(&self) {
+        (self.run_imports_made).fetch_add(1, Ordering::Relaxed);
         (self.run_imports_live).fetch_add(1, Ordering::Relaxed);
     }
 
-    /// An import of one object's run of a guest RAM went, its last holder gone.
+    /// An import of runs of a guest RAM went, its last holder gone.
     pub(crate) fn run_import_freed(&self) {
         (self.run_imports_live).fetch_sub(1, Ordering::Relaxed);
     }
@@ -6208,6 +6210,13 @@ pub struct WorkCounts {
     /// no making waits for a chunk's import. The objects over the chunk after that are bound in
     /// it (`chunk_bound_buffers_made`).
     pub run_bound_buffers_made: u64,
+    /// Every import of runs of guest RAM made so far, those `run_imports_live` counts while they
+    /// live: an object's run alone (`run_bound_buffers_made`, and each import of it again after
+    /// a release while idle, `host_imports_reimported`), a copy's ranges alone, and a copy's
+    /// lists (`host_ram_run_list_imports`). With `run_imports_live`, the imports of runs freed so
+    /// far; with `host_ram_chunks_imported` and `host_ram_chunks_live`, those of chunks; the
+    /// rest of `memory_frees.host_import` are imports of objects' own pages.
+    pub run_imports_made: u64,
     /// The imports of runs of guest RAM those buffers were bound in, and of a copy's own runs
     /// (`BlitCommandEncoder::copy_from_host_ram`, `copy_to_host_ram`: alone, or as a list,
     /// `host_ram_run_list_imports`), that are not yet let go of (a gauge): each goes with its last
@@ -7673,6 +7682,7 @@ impl Device {
             host_ram_chunks_live: counters.host_ram_chunks_live.load(Ordering::Relaxed),
             chunk_bound_buffers_made: counters.chunk_bound_buffers_made.load(Ordering::Relaxed),
             run_bound_buffers_made: counters.run_bound_buffers_made.load(Ordering::Relaxed),
+            run_imports_made: counters.run_imports_made.load(Ordering::Relaxed),
             run_imports_live: counters.run_imports_live.load(Ordering::Relaxed),
             host_imports_lost: counters.host_imports_lost.load(Ordering::Relaxed),
             host_import_fds_kept: counters.host_import_fds_kept.load(Ordering::Relaxed),
