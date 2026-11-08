@@ -1616,27 +1616,39 @@ impl Texels {
         self.texel_bytes
     }
 
-    /// How the texels lie in the device's lines of memory of `line` bytes
-    /// (`in_place::RowEnds::of`): from their address in the buffer's bytes and where the GPU's
-    /// commands find them (`layout`). A buffer whose bytes the CPU does not address shares a line
-    /// as far as anything shows.
-    pub(super) fn rows(&self, line: u64) -> RowEnds {
+    /// Where the buffer's bytes start, for the device's lines of memory: their address, where the
+    /// CPU addresses them; else, in the runtime's own memory (a `Private` buffer's), their offset
+    /// in its memory object, from whose start the lines count (a `VkMappedMemoryRange`'s offset is
+    /// a multiple of `nonCoherentAtomSize` from it, and the runtime maps a block from its start);
+    /// `None` over the caller's `VkBuffer`.
+    fn line_start(&self) -> Option<u64> {
         match self.buffer.contents() {
-            Some(at) => RowEnds::of(at.as_ptr().addr() as u64, &self.layout, line),
+            Some(at) => Some(at.as_ptr().addr() as u64),
+            None if self.buffer.caller_memory().is_none() => Some(self.buffer.memory().1),
+            None => None,
+        }
+    }
+
+    /// How the texels lie in the device's lines of memory of `line` bytes
+    /// (`in_place::RowEnds::of`): from where the buffer's bytes start in them
+    /// ([`line_start`](Self::line_start)) and where the GPU's commands find the texels
+    /// (`layout`). Over the caller's `VkBuffer` they share a line as far as anything shows.
+    pub(super) fn rows(&self, line: u64) -> RowEnds {
+        match self.line_start() {
+            Some(start) => RowEnds::of(start, &self.layout, line),
             None => RowEnds::InLines,
         }
     }
 
     /// Whether a shader's writes may change the texels' rows' padding, in the device's lines of
-    /// memory of `line` bytes (`in_place::Padding::of`): rows over a buffer's bytes the CPU
-    /// addresses, no IOSurface plane's ([`Texels::padding_owned`]), whose rows, each to its
-    /// pitch, share no line with bytes past them; and a render pass's too, where the buffer
-    /// declares that padding unobserved (`in_place::Padding::Unobserved`,
-    /// `BufferDescriptor::padding_unobserved`).
+    /// memory of `line` bytes (`in_place::Padding::of`): rows over a buffer's bytes of the CPU's
+    /// or the runtime's memory ([`line_start`](Self::line_start)), no IOSurface plane's
+    /// ([`Texels::padding_owned`]), whose rows, each to its pitch, share no line with bytes past
+    /// them; and a render pass's too, where the buffer declares that padding unobserved
+    /// (`in_place::Padding::Unobserved`, `BufferDescriptor::padding_unobserved`).
     pub(super) fn padding(&self, line: u64) -> Padding {
-        match self.buffer.contents() {
-            Some(at) => {
-                let start = at.as_ptr().addr() as u64;
+        match self.line_start() {
+            Some(start) => {
                 let padding = Padding::of(start, &self.layout, line, self.padding_owned());
                 padding.declared(self.buffer.padding_unobserved())
             }
