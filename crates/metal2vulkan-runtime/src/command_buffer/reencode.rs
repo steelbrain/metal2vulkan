@@ -337,9 +337,10 @@ impl State {
     /// `VkCommandBuffer`s go with the pool unsubmitted. Refused, changing nothing and giving
     /// `replayed` back, where its place holds other parts than the encoding again's, or a segment
     /// but one whose pipelines are being made (which goes, the encoding again having left one of
-    /// its own in its place), work its commit recorded on the GPU alone, or a run's merge (which
-    /// goes, the encoding again merging after itself, `pass_runs.rs`), or its group was
-    /// submitted, or the command buffer completed.
+    /// its own in its place), work its commit recorded on the GPU alone, a run's merge (which
+    /// goes, the encoding again merging after itself, `pass_runs.rs`), or a staged gather (which
+    /// goes, the encoding again copying through the imports, `host_ram/copy.rs`), or its group
+    /// was submitted, or the command buffer completed.
     pub(super) fn splice_replay(
         &mut self,
         at: usize,
@@ -354,7 +355,10 @@ impl State {
             let recorded = &self.recorded[*part];
             recorded.sparse.is_empty()
                 && (recorded.segments.iter()).all(|segment| {
-                    segment.keeps_pipelines() || segment.gpu_alone || segment.work.joins_a_run()
+                    segment.keeps_pipelines()
+                        || segment.gpu_alone
+                        || segment.work.joins_a_run()
+                        || segment.work.recorded_by_an_encoding_again()
                 })
         };
         let unjudged = self.unjudged_parts();
@@ -400,7 +404,8 @@ impl State {
             recorded.raws = raws;
             recorded.summary = summary;
             // Its first segments go: the encoding again left a segment of its own in each
-            // pending dispatch's place, and its work on the GPU alone in segments of its own.
+            // pending dispatch's place, and its work on the GPU alone in segments of its own, and
+            // recorded each staged gather's copy at once.
             // What the commit recorded of one stays retained, never submitted, as the first
             // recording does.
             for segment in recorded.segments.drain(..) {

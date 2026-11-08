@@ -61,12 +61,16 @@
 //!   and a buffer over one of them reads them in a later encoder and in a command buffer of
 //!   another queue committed after it. So is one of few ranges, whose encoding imports nothing,
 //!   and the scatter after it, over the chunks the thread imported, goes through their imports.
+//!   No staged copy's encoding takes its staging of the command buffer's arena. A rebind before
+//!   the first submission of a no-copy buffer that a staged gather's encoder fills encodes that
+//!   encoder again, and the command buffer completes with both copies' bytes in place.
 //!
 //! Every other test holds the device's thread back (`Device::hold_host_ram_imports`).
 //!
 //! Device tests: compiled only under the GPU safety cfgs (`m2v_gpu`, `m2v_cpu_icd`), on the kind
 //! of device the cfg selects. A device that imports no host memory says so and passes.
 
+use super::rebind_behind_a_wait as rebind;
 use crate::host_ram::AHEAD_CHUNKS;
 use crate::{
     Buffer, CommandBuffer, CommandBufferStatus, Device, DeviceKind, DeviceOptions, DirtyPages,
@@ -1470,6 +1474,10 @@ fn a_first_gather_over_chunks_the_thread_imports_reads_its_pages_by_the_cpu_at_i
         .copy_from_buffer_to_buffer(&cache, 0, &back, 0, total)
         .unwrap();
     encoder.end_encoding().unwrap();
+    assert!(
+        command_buffer.state().uploads.bytes() < total,
+        "the encoding took the staging"
+    );
     // The CPU's writes after the encoding, before the commit: in the pages the copy reads.
     write_pattern(runs[5].clone(), 4);
     write_pattern(runs[30].clone(), 4);
@@ -1556,6 +1564,10 @@ fn a_first_gather_of_few_ranges_imports_nothing_on_the_encoding_thread() {
         .unwrap();
     encoder.end_encoding().unwrap();
     let encoded = device.work_counts();
+    assert!(
+        command_buffer.state().uploads.bytes() < total,
+        "the encoding took the staging"
+    );
     command_buffer.commit().unwrap();
     command_buffer.wait_until_completed_for(WAIT).unwrap();
     assert_eq!(command_buffer.status(), CommandBufferStatus::Completed);
@@ -1583,6 +1595,87 @@ fn a_first_gather_of_few_ranges_imports_nothing_on_the_encoding_thread() {
         "no wait for a chunk's import"
     );
     drop((used, ram));
+}
+
+/// A staged gather leaves its encoder's log in place (`Deferred::recorded_by_an_encoding_again`):
+/// a rebind, before the command buffer's first submission, of a no-copy buffer the same encoder
+/// fills encodes the encoder again, which copies the gather through the imports; the command
+/// buffer completes with the fill in the pages the buffer lies in now and the gather's bytes in
+/// its buffer.
+#[test]
+fn a_rebind_before_the_first_submission_encodes_a_staged_gather_s_encoder_again() {
+    // Declared before the device, so dropped after it.
+    let pages = [rebind::Page::new(), rebind::Page::new()];
+    let Some((device, used, ram, start, _)) = ahead_ram() else {
+        return;
+    };
+    let runs = scattered_pages(start);
+    for run in &runs {
+        write_pattern(run.clone(), 14);
+    }
+    let total: u64 = runs.iter().map(|run| run.end - run.start).sum();
+    let out = shared(&device, total, |_| 0);
+    let length = rebind::BYTES as u64;
+    // SAFETY: each page outlives every buffer over it (dropped after the device), and only the
+    // buffer's commands use it while it lives.
+    let made = unsafe {
+        device.new_buffer_with_bytes_no_copy(
+            pages[0].memory(),
+            length,
+            ResourceOptions::shared(),
+            None,
+        )
+    };
+    let over = match made {
+        Ok(buffer) => buffer,
+        Err(Error::Unsupported(gap)) => {
+            eprintln!("HOST-RAM-COPY: the device imports no such pages: {gap:?}");
+            return;
+        }
+        Err(error) => panic!("new_buffer_with_bytes_no_copy: {error:?}"),
+    };
+    // Its command buffer waits for an event only the host signals, below: the rebind comes
+    // before its first submission.
+    let gate = device.new_shared_event().unwrap();
+    let queue = device.new_command_queue().unwrap();
+    let command_buffer = queue.command_buffer().unwrap();
+    command_buffer
+        .encode_wait_for_event(EventRef::Shared(&gate), 1)
+        .unwrap();
+    let encoding = device.work_counts();
+    let mut encoder = command_buffer.blit_command_encoder().unwrap();
+    encoder.copy_from_host_ram(&ram, &runs, &out, 0).unwrap();
+    encoder.fill_buffer(&over, 0..length, 0x5a).unwrap();
+    encoder.end_encoding().unwrap();
+    let held = command_buffer.state().uploads.bytes();
+    command_buffer.commit().unwrap();
+    assert_eq!(over.detach_backing(), Ok(true));
+    // SAFETY: as above.
+    unsafe { over.rebind_bytes_no_copy(pages[1].memory(), None, None) }.unwrap();
+    let rebound = device.work_counts();
+    gate.set_signaled_value(1);
+    command_buffer.wait_until_completed_for(WAIT).unwrap();
+    assert_eq!(
+        (command_buffer.status(), command_buffer.error()),
+        (CommandBufferStatus::Completed, None)
+    );
+    assert!(held < total, "the first encoding took the staging");
+    assert_eq!(
+        rebound.host_ram_copies_staged - encoding.host_ram_copies_staged,
+        1,
+        "the first encoding staged the gather"
+    );
+    assert_eq!(
+        rebound.encoders_reencoded - encoding.encoders_reencoded,
+        1,
+        "the rebind encoded the encoder again"
+    );
+    assert!(
+        pages[1].written() && !pages[0].written(),
+        "the fill in the pages the buffer lies in now"
+    );
+    assert!(contents(&out) == gathered(&runs), "the gathered pages");
+    drop((over, used, ram));
 }
 
 #[test]
@@ -1685,6 +1778,10 @@ fn a_first_scatter_over_chunks_the_thread_imports_is_in_its_pages_once_it_comple
     encoder.copy_to_host_ram(&cache, 0, &ram, &runs).unwrap();
     encoder.end_encoding().unwrap();
     let encoded = device.work_counts();
+    assert!(
+        command_buffer.state().uploads.bytes() < total,
+        "the encoding took the staging"
+    );
     eprintln!(
         "HOST-RAM-FIRST-SCATTER {}: staged {}, run imports made once encoded {}, chunks imported \
          by copies {}, import waits {}",
@@ -1785,6 +1882,10 @@ fn a_first_scatter_of_few_ranges_imports_nothing_on_the_encoding_thread() {
     encoder.copy_to_host_ram(&source, 0, &ram, &runs).unwrap();
     encoder.end_encoding().unwrap();
     let encoded = device.work_counts();
+    assert!(
+        command_buffer.state().uploads.bytes() < total,
+        "the encoding took the staging"
+    );
     command_buffer.commit().unwrap();
     command_buffer.wait_until_completed_for(WAIT).unwrap();
     assert_eq!(command_buffer.status(), CommandBufferStatus::Completed);

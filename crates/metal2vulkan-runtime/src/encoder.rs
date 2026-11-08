@@ -241,9 +241,14 @@ impl Segment {
     /// pipelines were being made ([`pends`](Self::pends)), left as a segment again, work a
     /// commit may record on the GPU alone, recorded there again (`Deferred::record_on_gpu`), or a
     /// run's pass's merge, which the pass encoded again records after itself as a pass alone
-    /// does, leaving its run (`pass_runs.rs`). Its log is kept only where every segment does.
+    /// does, leaving its run (`pass_runs.rs`), or a staged gather, which the encoding again
+    /// copies through the imports in its place (`Deferred::recorded_by_an_encoding_again`). Its
+    /// log is kept only where every segment does.
     pub(super) fn records_again(&self) -> bool {
-        self.pends() || self.work.may_run_on_gpu_alone() || self.work.joins_a_run()
+        self.pends()
+            || self.work.may_run_on_gpu_alone()
+            || self.work.joins_a_run()
+            || self.work.recorded_by_an_encoding_again()
     }
 
     /// What its recording will use, on `device`, while `commit` left it to the host step for the
