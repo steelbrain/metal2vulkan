@@ -58,7 +58,9 @@ const COMMAND_BUFFERS: usize = 6;
 const ROUNDS: usize = 3;
 
 /// The passes into the small tile while the first command buffer waits: more than the 256 takes
-/// the queue keeps an image no encoder holds for.
+/// the queue keeps an image no encoder holds for. Each is a pass alone, which takes a kept image:
+/// an empty blit encoder after it ends its run (`pass_runs.rs`), whose later passes would take
+/// none.
 const OTHER_PASSES: usize = 300;
 
 impl Tile {
@@ -381,9 +383,9 @@ fn a_texture_made_each_frame_takes_the_last_frame_s_kept_image() {
 }
 
 /// The module docs' third case: the first command buffer waits for an event while
-/// [`OTHER_PASSES`] passes into a tile of another extent take the queue's images past its first
-/// one's last take; that image goes once the first command buffer completed, and the next pass
-/// into its texture makes one.
+/// [`OTHER_PASSES`] passes alone into a tile of another extent take the queue's images past its
+/// first one's last take; that image goes once the first command buffer completed, and the next
+/// pass into its texture makes one.
 #[test]
 fn a_kept_image_let_go_of_while_its_command_buffer_waits_goes_after_it() {
     on_device(None, |device| {
@@ -406,6 +408,11 @@ fn a_kept_image_let_go_of_while_its_command_buffer_waits_goes_after_it() {
         let others = queue.command_buffer().unwrap();
         for k in 0..OTHER_PASSES {
             drawing.pass(&others, &small, ScissorRect::new(k as u64 % 14, 0, 16, 32));
+            others
+                .blit_command_encoder()
+                .unwrap()
+                .end_encoding()
+                .unwrap();
         }
         others.commit().unwrap();
         // The tile's image left the queue's pool, but the waiting command buffer holds it.
