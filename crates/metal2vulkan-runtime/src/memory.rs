@@ -2334,7 +2334,7 @@ fn host_copy_image_types(device: &ash::Device, sharing: Sharing<'_>) -> Result<u
     let usage = vk::ImageUsageFlags::SAMPLED
         | vk::ImageUsageFlags::TRANSFER_SRC
         | vk::ImageUsageFlags::TRANSFER_DST
-        | vk::ImageUsageFlags::HOST_TRANSFER;
+        | vk::ImageUsageFlags::HOST_TRANSFER_EXT;
     image_types(device, sharing, usage)
 }
 
