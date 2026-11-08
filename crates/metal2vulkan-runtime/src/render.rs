@@ -353,6 +353,7 @@ use crate::device::functions::Vk;
 use crate::work_counts::Begun;
 use crate::work_counts::NotInline;
 use crate::work_counts::Split;
+use crate::work_counts::UnkeptDraw;
 use ash::vk;
 pub(crate) use draw_shape::KeptShapes;
 use draw_shape::{LayoutView, PipelineInputs, ShapeInputs, ShapeMemo, ShapeToken, ShapedState};
@@ -10799,6 +10800,26 @@ impl RenderLowering {
             .as_ref()
             .and_then(RenderPipelineState::downgrade);
         let keeps = plain && !self.replaying && self.core.noted_now(&live.noted);
+        // What kept a direct draw of its own from being kept (`WorkCounts::draws_unkept`).
+        if !keeps && !self.replaying && !self.rerouting && !empty && !culled {
+            let unkept = UnkeptDraw {
+                instance: !stepless,
+                barrier: barriered,
+                shadowed: !draw_shadows.is_empty()
+                    || snapshot.is_some()
+                    || !live.state.extended_shadows.is_empty(),
+                tables: heap.is_some()
+                    || texture_table.is_some()
+                    || sampler_table.is_some()
+                    || !commands.root_tables.is_empty()
+                    || !commands.push_holes.is_empty()
+                    || unlisted.is_some(),
+                index_copied: !index.is_none_or(DrawSource::in_place),
+                writing: !unwritten,
+                making: !matches!(draw_pipeline, DrawPipeline::Made(_)),
+            };
+            self.core.counts().draw_unkept(unkept);
+        }
         if let (true, Some(drawn_by)) = (keeps, drawn_by) {
             let execution = records.then(|| draw_again::KeptExecution {
                 pipeline: ExecutedPipeline::Render(Arc::clone(variant.shared_pipeline())),

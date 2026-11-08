@@ -349,14 +349,21 @@ impl RenderLowering {
             && kept.command_buffer == self.current.draws
             && kept.under == self.under();
         if !same {
+            if buffers.indirect.is_none() {
+                self.core.counts().draw_unlike_kept();
+            }
             return Again::No;
         }
         let stamps = self.table_stamps();
         if kept.stamps != stamps || kept.between {
-            return match kept.rebinds {
+            let again = match kept.rebinds {
                 true => self.draw_rebound(live, call, (assembly, draw), buffers, stamps, checked),
                 false => Again::No,
             };
+            if matches!(again, Again::No) {
+                self.core.counts().draw_rebind_stopped();
+            }
+            return again;
         }
         #[cfg(debug_assertions)]
         {

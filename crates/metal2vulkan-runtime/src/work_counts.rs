@@ -598,6 +598,38 @@ struct CommandCounters {
     ycbcr_planes_images_bound: AtomicU64,
     residual_form_draws: AtomicU64,
     residual_form_makings: AtomicU64,
+    draws_unkept: AtomicU64,
+    draws_unkept_instance: AtomicU64,
+    draws_unkept_barrier: AtomicU64,
+    draws_unkept_shadowed: AtomicU64,
+    draws_unkept_tables: AtomicU64,
+    draws_unkept_index_copied: AtomicU64,
+    draws_unkept_writing: AtomicU64,
+    draws_unkept_making: AtomicU64,
+    draws_unkept_other: AtomicU64,
+    draws_unlike_kept: AtomicU64,
+    draws_rebind_stopped: AtomicU64,
+}
+
+/// What kept a direct draw that recorded from being kept to draw again
+/// (`WorkCounts::draws_unkept`): each a group of the conditions a kept draw meets
+/// (`render/draw_again.rs`), any number of them at once.
+#[derive(Clone, Copy, Default)]
+pub(crate) struct UnkeptDraw {
+    /// A step of its own beside its Vulkan draw, or a new render pass instance.
+    pub(crate) instance: bool,
+    /// A barrier in its instance.
+    pub(crate) barrier: bool,
+    /// A shadowed texture among its uses, a snapshot or an extended-range shadow.
+    pub(crate) shadowed: bool,
+    /// A heap, texture or sampler table, a root table, a push hole, or argument samplers unlisted.
+    pub(crate) tables: bool,
+    /// Its index buffer read through a copy.
+    pub(crate) index_copied: bool,
+    /// A use that writes, or reads indirect arguments.
+    pub(crate) writing: bool,
+    /// Its `VkPipeline` still being made.
+    pub(crate) making: bool,
 }
 
 /// The command counts by who adds them ([`CommandCounters`]): open encoders' tallies, and
@@ -959,6 +991,44 @@ impl Counting<'_> {
             counts.add(|counts| &counts.set_zero_writes_pushed, writes);
         }
         Self::kept_draw(&counts, kept);
+    }
+
+    /// A render encoder's direct draw that recorded and kept nothing to draw again, for `why`
+    /// (`WorkCounts::draws_unkept`).
+    pub(crate) fn draw_unkept(&self, why: UnkeptDraw) {
+        let counts = self.0;
+        counts.add(|counts| &counts.draws_unkept, 1);
+        let groups: [(bool, fn(&CommandCounters) -> &AtomicU64); 7] = [
+            (why.instance, |c| &c.draws_unkept_instance),
+            (why.barrier, |c| &c.draws_unkept_barrier),
+            (why.shadowed, |c| &c.draws_unkept_shadowed),
+            (why.tables, |c| &c.draws_unkept_tables),
+            (why.index_copied, |c| &c.draws_unkept_index_copied),
+            (why.writing, |c| &c.draws_unkept_writing),
+            (why.making, |c| &c.draws_unkept_making),
+        ];
+        let mut any = false;
+        for (met, count) in groups {
+            if met {
+                counts.add(count, 1);
+                any = true;
+            }
+        }
+        if !any {
+            counts.add(|c| &c.draws_unkept_other, 1);
+        }
+    }
+
+    /// A render encoder's direct draw after its encoder kept a draw, of another call, arguments,
+    /// pipeline state, command buffer or `Under` (`WorkCounts::draws_unlike_kept`).
+    pub(crate) fn draw_unlike_kept(&self) {
+        self.0.add(|counts| &counts.draws_unlike_kept, 1);
+    }
+
+    /// A render encoder's direct draw of its kept draw again after calls, that took every step
+    /// (`WorkCounts::draws_rebind_stopped`).
+    pub(crate) fn draw_rebind_stopped(&self) {
+        self.0.add(|counts| &counts.draws_rebind_stopped, 1);
     }
 
     /// A render draw rebound that was moved (`WorkCounts::draws_moved`).
@@ -5808,6 +5878,44 @@ pub struct WorkCounts {
     /// instance's gathered uses, so the draw notes, adds and gathers none of them, comparing none
     /// (`uses_noted_covered` counts none of them).
     pub draws_moved_inside: u64,
+    /// Render encoders' direct draws that recorded a Vulkan draw and kept nothing to draw again
+    /// or rebind (`render/draw_again.rs`), so their encoder's next draw takes every step; with,
+    /// in the counts below, what kept each from being kept, a draw counted in every group it met
+    /// (the conditions `draws_as_before` lists). A draw replayed from an execution's commands is
+    /// not counted.
+    pub draws_unkept: u64,
+    /// Of `draws_unkept`, those that took a step of their own beside their Vulkan draw (a copy,
+    /// rewrite, index bounds, stand-in, mesh or tessellation work, a pipeline being made inline)
+    /// or recorded into a new render pass instance, as a pass's first draw does.
+    pub draws_unkept_instance: u64,
+    /// Of `draws_unkept`, those that recorded after a barrier in their render pass instance.
+    pub draws_unkept_barrier: u64,
+    /// Of `draws_unkept`, those with a shadowed texture among their uses, or that read through a
+    /// snapshot or an extended-range color's shadow.
+    pub draws_unkept_shadowed: u64,
+    /// Of `draws_unkept`, those that read a heap's set, a texture or sampler table, a root table
+    /// or a push hole, or whose argument samplers left states out.
+    pub draws_unkept_tables: u64,
+    /// Of `draws_unkept`, those that read their index buffer through a copy.
+    pub draws_unkept_index_copied: u64,
+    /// Of `draws_unkept`, those with a use that writes memory or reads indirect arguments.
+    pub draws_unkept_writing: u64,
+    /// Of `draws_unkept`, those that recorded against a `VkPipeline` still being made.
+    pub draws_unkept_making: u64,
+    /// Of `draws_unkept`, those that met none of the groups above (another condition a kept draw
+    /// meets: a split, a color group, an extended-range color, a rate map, a notice announced at
+    /// each occurrence, among others).
+    pub draws_unkept_other: u64,
+    /// Render encoders' direct draws whose encoder kept a draw, of another call, arguments,
+    /// index buffer or offset, pipeline state or command buffer, or after a no-copy buffer moved,
+    /// the residency, host aliases, parts or held images or the sampler IDs changed
+    /// (`render/draw_again.rs`): each takes every step.
+    pub draws_unlike_kept: u64,
+    /// Render encoders' direct draws of their kept draw again after calls, that took every step
+    /// rather than being rebound (`draws_rebound`): a kept draw that keeps nothing to rebind, or a
+    /// rebind that stopped (`render/draw_again/rebound.rs`'s stops). Builds with debug
+    /// assertions' checked draws are not counted.
+    pub draws_rebind_stopped: u64,
     /// The uses of resources a render encoder made resident (`useResource:usage:stages:`,
     /// `useHeap:stages:`) that its draws' binding plans list, as its draws worked them out for
     /// hazard tracking: a draw keeps the last draw's where its plan is the last draw's, or lists
@@ -7544,6 +7652,17 @@ impl Device {
             draws_rebound: commands(|counts| &counts.draws_rebound),
             draws_moved: commands(|counts| &counts.draws_moved),
             draws_moved_inside: commands(|counts| &counts.draws_moved_inside),
+            draws_unkept: commands(|counts| &counts.draws_unkept),
+            draws_unkept_instance: commands(|counts| &counts.draws_unkept_instance),
+            draws_unkept_barrier: commands(|counts| &counts.draws_unkept_barrier),
+            draws_unkept_shadowed: commands(|counts| &counts.draws_unkept_shadowed),
+            draws_unkept_tables: commands(|counts| &counts.draws_unkept_tables),
+            draws_unkept_index_copied: commands(|counts| &counts.draws_unkept_index_copied),
+            draws_unkept_writing: commands(|counts| &counts.draws_unkept_writing),
+            draws_unkept_making: commands(|counts| &counts.draws_unkept_making),
+            draws_unkept_other: commands(|counts| &counts.draws_unkept_other),
+            draws_unlike_kept: commands(|counts| &counts.draws_unlike_kept),
+            draws_rebind_stopped: commands(|counts| &counts.draws_rebind_stopped),
             resident_uses_made: commands(|counts| &counts.resident_uses_made),
             resident_keys_settled: commands(|counts| &counts.resident_keys_settled),
             resident_uses_gathered: commands(|counts| &counts.resident_uses_gathered),

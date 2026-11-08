@@ -759,8 +759,10 @@ fn switching_rectangles(
 /// (`WorkCounts::draws_rebound`), with the same commands of every kind, state commands and pixels
 /// as the same draws each taking every step, after a call between each that changes nothing for
 /// them (`set_blend_color` of the color the encoder holds), which forgets the kept draws of both
-/// states. And a draw that keeps nothing (one that writes memory, `cfb_dn_count`) forgets the
-/// other state's kept draw: draws switching with it take every step.
+/// states. Only the pass's first draw keeps nothing (`WorkCounts::draws_unkept`, as it begins
+/// the pass's instance), and no draw finds its kept draw unlike it or stops its rebind. And a draw
+/// that keeps nothing (one that writes memory, `cfb_dn_count`, counted so) forgets the other
+/// state's kept draw: draws switching with it take every step.
 #[test]
 fn draws_switching_pipeline_states_rebind_each_state_s_last_draw() {
     let scratch = Scratch::new("draw-again-states");
@@ -795,6 +797,10 @@ fn draws_switching_pipeline_states_rebind_each_state_s_last_draw() {
     assert_eq!(rebound.words, every.words, "the pixels of the draws");
     let last = SIDE as usize - 1;
     assert_ne!(rebound.words[0], rebound.words[last], "the draws' offsets");
+    assert_eq!(rebound.counted(|counts| counts.draws_unkept), 1);
+    assert_eq!(rebound.counted(|counts| counts.draws_unkept_instance), 1);
+    let missed = |counts: &WorkCounts| counts.draws_unlike_kept + counts.draws_rebind_stopped;
+    assert_eq!(rebound.counted(missed), 0);
     // Between the adding state's draws, draws that count their fragments in a buffer.
     let counting = state_counting(&device);
     let counter = device.new_buffer(4, ResourceOptions::shared()).unwrap();
@@ -817,6 +823,7 @@ fn draws_switching_pipeline_states_rebind_each_state_s_last_draw() {
     });
     assert_eq!(ran.counted(rebound_count), 0);
     assert_eq!(ran.counted(|counts| counts.draws_as_before), 0);
+    assert_eq!(ran.counted(|counts| counts.draws_unkept_writing), DRAWS / 2);
     let counted = DRAWS / 2 * SIDE * SIDE;
     assert_eq!(words_of(&counter), [counted as u32]);
 }
