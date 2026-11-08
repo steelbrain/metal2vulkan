@@ -204,10 +204,7 @@ fn a_burst_of_replace_regions_shares_one_staging_submission() {
                 (1, 1),
                 "{name}: the command buffer's batch carried the burst in one staging submission"
             );
-            assert!(
-                read.gpu_waits >= 1,
-                "{name}: the batch waited for the staging submission on the GPU"
-            );
+            staging_waits_bounded(&name, &read);
         }
     });
 }
@@ -639,12 +636,30 @@ fn a_burst_of_new_textures_makes_no_staging_submission() {
                 (1, 1),
                 "{name}: the command buffer's batch carried the 600 in one staging submission"
             );
-            assert!(
-                read.gpu_waits >= 1,
-                "{name}: the batch waited for the staging submission on the GPU"
-            );
+            staging_waits_bounded(&name, &read);
         }
     });
+}
+
+/// The batch that carried a burst's one staging submission waited for it on the GPU at most
+/// once, and only while the host had not seen it complete (`Device::staging_wait` in the
+/// runtime): a staging submission the copy engine ends before the scheduler's thread checks its
+/// wait needs none, which a fast device or a loaded host shows (the RTX 5080: 600 new textures'
+/// zeros). The wait itself is proved apart, with the staging submission held on the GPU until
+/// the batches were submitted (`tests::staging_waits` in the runtime).
+fn staging_waits_bounded(name: &str, read: &Path) {
+    assert!(
+        read.gpu_waits <= 1 + read.internal,
+        "{name}: the batch waited for the staging submission on the GPU at most once (internal \
+         submissions wait for it themselves): {} waits",
+        read.gpu_waits
+    );
+    if read.gpu_waits == 0 {
+        println!(
+            "STAGING-BATCH {name}: the host saw the staging submission complete before the batch \
+             was submitted; it did not wait for it"
+        );
+    }
 }
 
 /// A new texture's first write lands after its zeros, whichever first reads it: a
