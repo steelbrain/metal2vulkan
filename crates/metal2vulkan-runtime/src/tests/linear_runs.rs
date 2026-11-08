@@ -1042,7 +1042,7 @@ fn checked_frames_merge_once() {
     let chunk_bytes = (CHUNK_STRIDE * FRAME_PASSES as u64).next_multiple_of(64 << 10);
     let (host, chunk_pages) = (Host::new(row * H), Host::new(chunk_bytes));
     let cache = Scratch::new("linear-runs-checked");
-    let device = device(&cache.0);
+    let device = settled(device(&cache.0));
     let queue = device.new_command_queue().unwrap();
     let states = FrameStates::new(&device);
     let usage = TextureUsage::RENDER_TARGET | TextureUsage::SHADER_READ;
@@ -1090,8 +1090,8 @@ fn checked_frames_merge_once() {
             "the target is a linear image"
         );
         let forced = &device.shared().linear_rule_forced;
+        let before = counts_alone(&device);
         forced.store(true, Ordering::Relaxed);
-        let before = device.work_counts();
         let gpu = checked_frame(&queue, &texture, &states, shape, &chunk);
         let after = device.work_counts();
         forced.store(false, Ordering::Relaxed);
