@@ -2559,10 +2559,16 @@ fn announced(messages: &Messages, kind: Degradation) -> bool {
 /// texture counted for no layout lies in Metal's tiles.
 /// Kept uncompressed by `ShaderRead | ShaderWrite` usage: `RGBA8Unorm` of 64 x 64 and 37 x 5,
 /// `R8Unorm` of 100 x 70 and `RG16Float` of 300 x 200; by `allowGPUOptimizedContents` off:
-/// `RGBA8Unorm` of 64 x 64 of `ShaderRead` usage and of `ShaderRead | RenderTarget`; by a side
-/// shorter than 16: `RGBA8Unorm` of 8 x 8 of `ShaderRead` usage. Each is written by a blit naming
-/// each texel and found through a buffer over the heap; `HEAPTEX device-tiles` lines print the
-/// texels off the tiles.
+/// `RGBA8Unorm` of 64 x 64 of `ShaderRead` usage and of `ShaderRead | RenderTarget`, and of
+/// `ShaderRead` usage `ARGB8Unorm_sRGB`, `BGRA8Unorm_sRGB` and `RGBA8Unorm_sRGB` of 64 x 64, a
+/// 2-slice `ARGB8Unorm_sRGB` array of 64 x 64 and `RGBA16Float` of 4 x 4 (a consumer's report: on
+/// MoltenVK the `ARGB8Unorm_sRGB` texture's optimal image takes 16512 bytes, past Metal's 16384,
+/// where its linear image fits but lays its rows out otherwise than Metal's tiles); by a side
+/// shorter than 16: `RGBA8Unorm` of 8 x 8 and `RGBA16Float` of 1 x 1 of `ShaderRead` usage. Each
+/// slice is written by a blit naming each texel and found through a buffer over the heap, then
+/// the heap's bytes are written there through the buffer, naming each texel otherwise, and read
+/// back through a blit as those texels; `HEAPTEX device-tiles` lines print the texels off the
+/// tiles each way.
 #[test]
 fn device_heap_textures_lie_in_metal_s_tiles() {
     use super::heap_layouts::tiled_offset;
@@ -2579,75 +2585,150 @@ fn device_heap_textures_lie_in_metal_s_tiles() {
         let queue = device.new_command_queue().unwrap();
         let options = tracked(StorageMode::Private);
         let (read, written) = (TextureUsage::SHADER_READ, TextureUsage::SHADER_WRITE);
+        let target = read | TextureUsage::RENDER_TARGET;
+        let (rgba8, srgb) = (PixelFormat::RGBA8Unorm, PixelFormat::ARGB8UnormSRGB);
         let shapes = [
-            (PixelFormat::RGBA8Unorm, 4, [64, 64], read | written, true),
-            (PixelFormat::RGBA8Unorm, 4, [37, 5], read | written, true),
-            (PixelFormat::R8Unorm, 1, [100, 70], read | written, true),
-            (PixelFormat::RG16Float, 4, [300, 200], read | written, true),
-            (PixelFormat::RGBA8Unorm, 4, [64, 64], read, false),
+            (rgba8, 4, [64, 64], 1, read | written, true),
+            (rgba8, 4, [37, 5], 1, read | written, true),
+            (PixelFormat::R8Unorm, 1, [100, 70], 1, read | written, true),
             (
-                PixelFormat::RGBA8Unorm,
+                PixelFormat::RG16Float,
                 4,
-                [64, 64],
-                read | TextureUsage::RENDER_TARGET,
-                false,
+                [300, 200],
+                1,
+                read | written,
+                true,
             ),
-            (PixelFormat::RGBA8Unorm, 4, [8, 8], read, true),
+            (rgba8, 4, [64, 64], 1, read, false),
+            (rgba8, 4, [64, 64], 1, target, false),
+            (rgba8, 4, [8, 8], 1, read, true),
+            (srgb, 4, [64, 64], 1, read, false),
+            (PixelFormat::BGRA8UnormSRGB, 4, [64, 64], 1, read, false),
+            (PixelFormat::RGBA8UnormSRGB, 4, [64, 64], 1, read, false),
+            (srgb, 4, [64, 64], 2, read, false),
+            (PixelFormat::RGBA16Float, 8, [4, 4], 1, read, false),
+            (PixelFormat::RGBA16Float, 8, [1, 1], 1, read, true),
         ];
         let mut kept = Vec::new();
-        for (format, unit, [w, h], usage, optimized) in shapes {
-            let what = format!("{format:?} {w}x{h} {usage:?} optimized {optimized}");
+        for (format, unit, [w, h], slices, usage, optimized) in shapes {
+            let what = format!("{format:?} {w}x{h} x{slices} {usage:?} optimized {optimized}");
             let mut descriptor = TextureDescriptor::texture_2d(format, w, h, false);
+            if slices > 1 {
+                descriptor.texture_type = TextureType::Type2DArray;
+                descriptor.array_length = slices;
+            }
             descriptor.resource_options = options;
             descriptor.usage = usage;
             descriptor.allow_gpu_optimized_contents = optimized;
             let answer = device.heap_texture_size_and_align(&descriptor).unwrap();
+            // Each slice's chain lies at its stride from the one before.
+            let stride = answer.size / slices;
             let heap = heap(device, HeapType::Placement, 1 << 20, options);
             let made_before = device.degraded_objects(untiled).unwrap();
             let texture = heap.new_texture_at_offset(&descriptor, 0).unwrap();
             let announced = device.degraded_objects(untiled).unwrap() > made_before;
             let over = heap.new_buffer_at_offset(answer.size, options, 0).unwrap();
             gpu_fill(&queue, &over, 0..answer.size, 0);
-            // Texel `i`'s element, naming it: `unit` bytes of `i + 1`.
-            let element = |i: u64| (i + 1).to_le_bytes()[..unit as usize].to_vec();
             let count = w * h;
-            let named: Vec<u8> = (0..count).flat_map(element).collect();
+            // Texel `i` of `slice`'s element, naming both: `unit` bytes of a number, the second
+            // way's counted down from the first's.
+            let element = |slice: u64, i: u64, back: bool| {
+                let n = slice * count + i + 1;
+                let n = if back { 0xffff_ffff_ffff - n } else { n };
+                n.to_le_bytes()[..unit as usize].to_vec()
+            };
+            let at = |slice: u64, i: u64| {
+                (slice * stride + tiled_offset(unit, [w, h], i % w, i / w)) as usize
+            };
             let row = w * unit;
-            let source = staged(device, &named);
+            let size = Size::new(w, h, 1);
+            let origin = Origin::new(0, 0, 0);
+            let (mut off, mut read_off) = (0, 0);
+            for slice in 0..slices {
+                let named: Vec<u8> = (0..count).flat_map(|i| element(slice, i, false)).collect();
+                let source = staged(device, &named);
+                let command_buffer = queue.command_buffer().unwrap();
+                let mut blit = command_buffer.blit_command_encoder().unwrap();
+                blit.copy_from_buffer_to_texture(
+                    &source,
+                    0,
+                    row,
+                    row * h,
+                    size,
+                    &texture,
+                    slice,
+                    0,
+                    origin,
+                    BlitOption::None,
+                )
+                .unwrap();
+                blit.end_encoding().unwrap();
+                run(&command_buffer);
+            }
+            let mut bytes = gpu_read(&queue, &over, 0..answer.size);
+            for slice in 0..slices {
+                off += (0..count)
+                    .filter(|&i| {
+                        let at = at(slice, i);
+                        bytes.get(at..at + unit as usize) != Some(&element(slice, i, false)[..])
+                    })
+                    .count();
+            }
+            // The other way: the heap's bytes written through the buffer, read through the
+            // texture.
+            for slice in 0..slices {
+                for i in 0..count {
+                    let at = at(slice, i);
+                    if let Some(bytes) = bytes.get_mut(at..at + unit as usize) {
+                        bytes.copy_from_slice(&element(slice, i, true));
+                    }
+                }
+            }
+            let source = staged(device, &bytes);
             let command_buffer = queue.command_buffer().unwrap();
-            let mut blit = command_buffer.blit_command_encoder().unwrap();
-            blit.copy_from_buffer_to_texture(
-                &source,
-                0,
-                row,
-                row * h,
-                Size::new(w, h, 1),
-                &texture,
-                0,
-                0,
-                Origin::new(0, 0, 0),
-                BlitOption::None,
-            )
-            .unwrap();
-            blit.end_encoding().unwrap();
+            let mut copy = command_buffer.blit_command_encoder().unwrap();
+            copy.copy_from_buffer_to_buffer(&source, 0, &over, 0, answer.size)
+                .unwrap();
+            copy.end_encoding().unwrap();
             run(&command_buffer);
-            let bytes = gpu_read(&queue, &over, 0..answer.size);
-            let off = (0..count)
-                .filter(|&i| {
-                    let at = tiled_offset(unit, [w, h], i % w, i / w) as usize;
-                    bytes.get(at..at + unit as usize) != Some(&element(i)[..])
-                })
-                .count();
+            for slice in 0..slices {
+                let back = staged(device, &vec![0; (row * h) as usize]);
+                let command_buffer = queue.command_buffer().unwrap();
+                let mut blit = command_buffer.blit_command_encoder().unwrap();
+                blit.copy_from_texture_to_buffer(
+                    &texture,
+                    slice,
+                    0,
+                    origin,
+                    size,
+                    &back,
+                    0,
+                    row,
+                    row * h,
+                    BlitOption::None,
+                )
+                .unwrap();
+                blit.end_encoding().unwrap();
+                run(&command_buffer);
+                let back = read_buffer(&back, 0, row * h).unwrap();
+                read_off += (0..count)
+                    .filter(|&i| {
+                        let at = (i * unit) as usize;
+                        back[at..at + unit as usize] != element(slice, i, true)[..]
+                    })
+                    .count();
+            }
+            let total = count * slices;
             eprintln!(
-                "HEAPTEX device-tiles {what}: size {}, {off} of {count} texels off Metal's tiles \
-                 (fact {as_metal}, announced {announced})",
+                "HEAPTEX device-tiles {what}: size {}, of {total} texels {off} off Metal's tiles, \
+                 {read_off} read otherwise from them (fact {as_metal}, announced {announced})",
                 answer.size
             );
             if as_metal {
                 assert!(!announced, "{what}: counted untiled");
             }
             if !announced {
-                assert_eq!(off, 0, "{what}: texels off Metal's tiles");
+                assert_eq!((off, read_off), (0, 0), "{what}: texels off Metal's tiles");
             }
             kept.push((texture, over, heap));
         }
@@ -2656,7 +2737,7 @@ fn device_heap_textures_lie_in_metal_s_tiles() {
         (as_metal, counted)
     };
     // The textures not counted on a driver without the fact are shadows of Metal's tiles.
-    let tiled = 7 - counted;
+    let tiled = 13 - counted;
     let notices = counts(&messages.take_notices());
     let layouts: Vec<_> = (notices.iter())
         .filter(|(kind, _)| HEAP_LAYOUTS.contains(kind))
