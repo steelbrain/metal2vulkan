@@ -417,9 +417,10 @@ const HELD: [(&str, &str, f64); 46] = [
     ("end_render", "allocs", 24.0),
     ("end_compute", "allocs", 7.0),
     ("end_blit", "allocs", 7.0),
-    // A dispatch records one dispatch command, at the call (8.13 allocations measured).
+    // A dispatch records one dispatch command, at the call (6.13 allocations measured): its uses
+    // over the last dispatch's storage, and no group counts outside a predication unit.
     ("dispatch", "rt_dispatches_at_call", 1.0),
-    ("dispatch", "allocs", 8.2),
+    ("dispatch", "allocs", 6.2),
     // A heap texture's image takes its storage from the heap: one image and one binding, and no
     // allocation of memory of its own.
     ("heap_texture_256", "rt_vk_images_made_at_call", 1.0),
