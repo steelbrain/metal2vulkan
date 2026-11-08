@@ -519,7 +519,7 @@ impl RenderLowering {
         // Its uses: where only buffer slots changed, the kept draw's with those slots' patched in
         // place, which reads the stages' tables alone, else made again whole, those of what the
         // encoder made resident kept (`binding::command_uses_into`).
-        let patch = (&**plan, &command, &stages);
+        let patch = (&**plan, &command, &stages[..]);
         let moved_uses = (&mut live.kept.moved_at, &mut live.kept.moved);
         let patched = !images
             && binding::patch_buffer_uses(patch, slots, &mut live.uses, moved_uses) == Ok(true);
