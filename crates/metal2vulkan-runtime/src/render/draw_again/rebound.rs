@@ -786,6 +786,22 @@ impl RenderLowering {
             true => &mut self.held_bound,
             false => &mut self.current.bound,
         };
+        // Nothing recorded through the record since the kept draw, or the draw rebound before,
+        // set the pipeline and dynamic states this draw sets (`Kept::settled`); and where it
+        // pushes the kept draw's set-0 writes (`rebind`), the record holds them as pushed, so
+        // its push compares none.
+        let settled = settled == Some(bound.records());
+        let pushed = match settled && rebinding.writes_kept && !pushed.is_empty() {
+            true => {
+                #[cfg(debug_assertions)]
+                assert!(
+                    (bound.pushed_set(owned.layout, owned.shape, pushed).0).is_empty(),
+                    "a draw moved pushes writes its record does not hold"
+                );
+                &[]
+            }
+            false => pushed,
+        };
         let recording = Recording {
             raw: shared.vk(),
             command_buffer: self.current.draws,
@@ -803,9 +819,7 @@ impl RenderLowering {
             index: owned.index,
             indirect: None,
             dynamic: &live.kept.dynamic,
-            // Nothing recorded through the record since the kept draw, or the draw rebound
-            // before, set the pipeline and dynamic states this draw sets (`Kept::settled`).
-            settled: (settled == Some(bound.records())).then_some(&live.kept.unheld[..]),
+            settled: settled.then_some(&live.kept.unheld[..]),
             topology: owned.topology,
             primitive_restart: owned.primitive_restart,
             state: &owned.state,
