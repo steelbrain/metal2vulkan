@@ -110,7 +110,11 @@
 //!   holds its mapping's own lock, not the memory map lock, so no `mmap`, `munmap` or `mprotect`
 //!   of another thread (a driver's compiler growing its heap) waits behind it ([`pace`],
 //!   [`fault_in`]). Each import is made with the device's memory lock released
-//!   (`memory::import_host`), so the device's other placements wait for none of it.
+//!   (`memory::import_host`), so the device's other placements wait for none of it. A chunk the
+//!   device refuses whatever its pages hold (shared memory on a device that imports no pointer to
+//!   it, the RAM given no source of dma-bufs: [`ChunkSlot::refused`]) is not faulted in, and every
+//!   copy over it goes through the CPU (`copy.rs`). Counted:
+//!   `WorkCounts::host_ram_chunks_faulted_ahead`.
 //! - **Ended with the use.** The use's end (`HostRamUse`'s drop) stops the thread before its
 //!   fault-in's next 2 MiB step, or once an import under way returned, and waits for it, so that
 //!   once the drop returned the runtime reads, faults in and imports no page of the RAM, and the
@@ -556,6 +560,11 @@ struct ChunkSlot {
     /// The device's thread failed to import the chunk, or gave its import back: it does not try
     /// again, and the first object over it imports it, as it would have.
     tried: AtomicBool,
+    /// The device refuses the chunk's import whatever its pages hold, known from the RAM's use on:
+    /// its pages are shared memory ([`shared_memory`]) on a device whose plan says it refuses such
+    /// memory ([`Plan::shared_refused`]). The device's thread faults none of its pages in, and
+    /// every copy over it goes through the CPU ([`RamOnDevice::copy_take`]).
+    refused: bool,
     /// An object over the chunk found it not imported and was bound in its own run's import, on
     /// a device whose plan is [`Plan::listed`], or a copy was staged through the CPU while it
     /// was not imported ([`RamOnDevice::ask_for_copy`], any other plan): the device's thread
@@ -674,6 +683,10 @@ pub(crate) struct Plan {
     /// the device's imports count against that [`releases_idle_chunks`] keeps it in. Elsewhere
     /// every chunk stays imported while the device uses the RAM.
     pub(crate) releases: bool,
+    /// The device imports no pointer to shared memory (`Device::imports_shared_host_pointers`)
+    /// and the RAM has no source of dma-bufs: a chunk of shared memory is refused whatever its
+    /// pages hold ([`ChunkSlot::refused`]).
+    pub(crate) shared_refused: bool,
 }
 
 impl Plan {
@@ -682,6 +695,7 @@ impl Plan {
         bytes: CHUNK_BYTES,
         listed: false,
         releases: false,
+        shared_refused: false,
     };
 }
 
@@ -797,6 +811,7 @@ impl RamOnDevice {
     fn new(ram: &Arc<HostRam>, plan: Plan) -> RamOnDevice {
         let slots: Vec<ChunkSlot> = (chunk_spans(&ram.ranges, plan.bytes).into_iter())
             .map(|span| ChunkSlot {
+                refused: plan.shared_refused && shared_memory(span.clone()),
                 span,
                 import: Mutex::new(Import::None),
                 made: Condvar::new(),
@@ -1054,8 +1069,10 @@ impl RamOnDevice {
     /// make; else at once by such an import where the ranges take one ([`CopyTake::Now`]), or by
     /// waiting for the chunk's import, which no one else makes ([`CopyTake::Waits`]: the thread
     /// stopped, failed it or holds back for the allocation limit's margin, or the plan is
-    /// listed). The device's thread's window is not moved: [`RamOnDevice::take_for_copy`] moves
-    /// it.
+    /// listed). A chunk the device refuses whatever it holds ([`ChunkSlot::refused`]) is taken
+    /// through the CPU always, whether the thread runs, tried it or not: no import of it will be
+    /// made, and a copy Metal takes is never refused for when it came. The device's thread's
+    /// window is not moved: [`RamOnDevice::take_for_copy`] moves it.
     ///
     /// Why not alone. An import of a copy's ranges pins every page between them that lies
     /// less than 2 MiB from the next ([`copy::alone_ranges`]), on the encoding thread: a cache of
@@ -1074,6 +1091,9 @@ impl RamOnDevice {
         let span = &self.slots[slot];
         if self.made(slot).is_some() {
             return CopyTake::Now;
+        }
+        if span.refused {
+            return CopyTake::ThroughCpu;
         }
         let running = self.wake.running.load(Ordering::Relaxed)
             && !span.tried.load(Ordering::Relaxed)
@@ -1410,8 +1430,12 @@ fn import_ahead(device: WeakDevice, ram: Weak<RamOnDevice>, wake: Arc<Wake>) {
             continue;
         };
         // With no lock held: an object over the chunk meanwhile imports it itself, as before.
-        // The use's end stops the fault-in, and then the thread, before an import.
-        fault_in(&ram.slots[slot].span, &wake.ended);
+        // The use's end stops the fault-in, and then the thread, before an import. A chunk the
+        // device refuses is not faulted in: its import is refused at once, and its pages stay as
+        // the program left them.
+        if !ram.slots[slot].refused && fault_in(&ram.slots[slot].span, &wake.ended) {
+            shared.counts.host_ram_chunk_faulted_ahead();
+        }
         if wake.ended.load(Ordering::Acquire) {
             return;
         }
@@ -1550,8 +1574,11 @@ fn pace() {
 /// It stops before its next step once `ended` is set: the use's end ([`Wake::ended`]), which
 /// `HostRamUse`'s drop sets and then waits for the device's thread, so that no page is read past
 /// the drop's return, when the program may unmap them.
+///
+/// Whether it faulted the whole span in: not where `ended` stopped it, the kernel refused the
+/// advice, or (elsewhere) the import faults the pages in itself.
 #[cfg(target_os = "linux")]
-fn fault_in(span: &Range<u64>, ended: &AtomicBool) {
+fn fault_in(span: &Range<u64>, ended: &AtomicBool) -> bool {
     const STEP: u64 = 2 * 1024 * 1024;
     let reads = faults_by_reads(span);
     let page = host_page().unwrap_or(STEP);
@@ -1577,12 +1604,13 @@ fn fault_in(span: &Range<u64>, ended: &AtomicBool) {
                 )
             };
             if faulted != 0 {
-                return;
+                return false;
             }
         }
         std::thread::yield_now();
         at += length;
     }
+    at >= span.end
 }
 
 /// Whether [`fault_in`] faults `span`'s pages in by reading them: every mapping over it is shared
@@ -1594,7 +1622,23 @@ fn faults_by_reads(span: &Range<u64>) -> bool {
 
 /// Elsewhere the import faults the chunk's pages in itself.
 #[cfg(not(target_os = "linux"))]
-fn fault_in(_: &Range<u64>, _: &AtomicBool) {}
+fn fault_in(_: &Range<u64>, _: &AtomicBool) -> bool {
+    false
+}
+
+/// Whether every mapping over `span` is shared memory, as the kernel answers now: of the host's
+/// base pages (`host_memory::shared_base_pages`), as a VMM's `memfd` RAM is, which RADV's import
+/// refuses (`Device::imports_shared_host_pointers`).
+#[cfg(target_os = "linux")]
+fn shared_memory(span: Range<u64>) -> bool {
+    super::host_memory::shared_base_pages(span.start, span.end)
+}
+
+/// Elsewhere no device met refuses it: none is taken as shared memory.
+#[cfg(not(target_os = "linux"))]
+fn shared_memory(_: Range<u64>) -> bool {
+    false
+}
 
 impl Device {
     /// Give the chunks the device's thread imported ahead and no object took back once the
@@ -2135,12 +2179,21 @@ impl Device {
     /// How the device imports `ram`'s chunks (the module docs): [`Plan::listed`] where the RAM has
     /// a source of dma-bufs, the device imports dma-bufs and its held imports add to the cost of
     /// every submission (its submission checks' import tax, `submit_check.rs`), so that its
-    /// chunks are its dma-bufs; [`Plan::AHEAD`] elsewhere.
+    /// chunks are its dma-bufs; [`Plan::AHEAD`] elsewhere, its chunks of shared memory refused
+    /// where the RAM has no source and the device imports no pointer to shared memory
+    /// ([`Plan::shared_refused`]: asked of the device, by an import of one page released at once,
+    /// only where a range of the RAM is shared memory).
     fn ram_plan(&self, ram: &HostRam) -> Plan {
         let imports_dma_bufs =
             (self.shared().host_import.as_ref()).is_ok_and(|importer| importer.imports_dma_bufs());
         if ram.dma_buf.is_none() || !imports_dma_bufs || !self.pointer_imports_tax_submissions() {
-            return Plan::AHEAD;
+            let shared = ram.dma_buf.is_none()
+                && (ram.ranges.iter()).any(|range| shared_memory(range.start..range.end));
+            return Plan {
+                shared_refused: shared
+                    && matches!(self.imports_shared_host_pointers_now(), Ok(false)),
+                ..Plan::AHEAD
+            };
         }
         let storage = self
             .properties()
@@ -2173,6 +2226,7 @@ impl Device {
             ),
             listed: true,
             releases: releases_idle_chunks(ram_bytes, import_heaps, unified),
+            shared_refused: false,
         }
     }
 }
@@ -2897,6 +2951,7 @@ mod tests {
             bytes: CHUNK_BYTES,
             listed: true,
             releases: true,
+            shared_refused: false,
         };
         let on = RamOnDevice::new(&ram, plan);
         let ask = |slot: usize| on.slots[slot].asked.store(true, Ordering::Relaxed);

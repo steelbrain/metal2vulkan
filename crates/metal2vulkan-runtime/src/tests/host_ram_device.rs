@@ -58,7 +58,9 @@
 //!
 //! - **Shared RAM a device refuses.** On a device that refuses pointers to shared memory (RADV),
 //!   a RAM of a `memfd` mapped shared with no dma-buf source imports no chunk, and an object over
-//!   it is refused (`Unsupported`, `HostMemory`).
+//!   it is refused (`Unsupported`, `HostMemory`); the device's thread reaches its first chunk and
+//!   faults none of it in. Where the device imports such memory, the thread faults each chunk it
+//!   imports ahead in first (on Linux).
 //!
 //! Every other test holds the device's thread back (`Device::hold_host_ram_imports`), so that
 //! each chunk is imported by the first object over it, as one the thread has not reached is.
@@ -850,6 +852,56 @@ fn a_ram_of_shared_memory_a_device_refuses_imports_no_chunk_and_refuses_its_obje
     assert_eq!(dma_bufs, 0, "no dma-buf without a source");
     drop(used);
     drop(ram);
+    assert!(settles(&dropped), "the RAM's keep-alive dropped");
+}
+
+/// The device's thread faults a chunk of fresh RAM in before it imports it ahead of the objects,
+/// but none of a RAM of shared memory a device refuses whatever it holds (RADV, the RAM given no
+/// dma-buf source): it still tries the first chunk's import (`host_ram_pointer_imports_failed`),
+/// which shows it reached the chunk, and faults nothing in (`host_ram_chunks_faulted_ahead`), the
+/// pages left as the program left them. Where the device imports such memory, each chunk it
+/// imported ahead it faulted in first, on Linux; elsewhere the import faults the pages in itself,
+/// and none is counted.
+#[test]
+fn the_ahead_thread_faults_in_only_chunks_the_device_may_import() {
+    let Some(device) = ahead_device() else {
+        return;
+    };
+    let refuses = !device.imports_shared_host_pointers().unwrap();
+    let (ram, _, dropped) = fresh_ram_of(2 * 64 * MIB, true, RamPages::Small);
+    let before = device.work_counts();
+    let used = device.use_host_ram(&ram).unwrap();
+    // The RAM's first chunk, which the thread takes before any object takes one: imported, or its
+    // import refused.
+    let reached = |counts: &crate::WorkCounts| {
+        counts.host_ram_chunks_imported_ahead > before.host_ram_chunks_imported_ahead
+            || counts.host_ram_pointer_imports_failed > before.host_ram_pointer_imports_failed
+    };
+    let counts = counts_until(&device, reached);
+    assert!(
+        reached(&counts),
+        "the thread never reached the RAM's first chunk"
+    );
+    let faulted = counts.host_ram_chunks_faulted_ahead - before.host_ram_chunks_faulted_ahead;
+    let imported = counts.host_ram_chunks_imported_ahead - before.host_ram_chunks_imported_ahead;
+    eprintln!(
+        "HOST-RAM {}: shared RAM, no source, refused {refuses}: chunks faulted in ahead {faulted}, \
+         imported ahead {imported}",
+        device.name()
+    );
+    if refuses {
+        assert_eq!(imported, 0, "a chunk the device refuses imported");
+        assert_eq!(faulted, 0, "a chunk the device refuses faulted in");
+    } else if cfg!(target_os = "linux") {
+        assert!(imported >= 1, "the RAM's first chunk imported ahead");
+        assert!(
+            faulted >= imported,
+            "a chunk imported ahead not faulted in first"
+        );
+    } else {
+        assert_eq!(faulted, 0, "nothing faulted in here");
+    }
+    drop((used, ram));
     assert!(settles(&dropped), "the RAM's keep-alive dropped");
 }
 

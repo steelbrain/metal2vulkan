@@ -65,6 +65,12 @@
 //!   the first submission of a no-copy buffer that a staged gather's encoder fills encodes that
 //!   encoder again, and the command buffer completes with both copies' bytes in place.
 //!
+//! - **Shared RAM, whenever the copy comes**: on a device whose thread imports ahead, a gather
+//!   over a RAM of shared memory with no dma-buf source once the thread reached its chunk, a
+//!   scatter into it and a gather of the scatter's bytes each move the CPU's view of the pages; on
+//!   a device that refuses pointers to shared memory (RADV) each is staged through the CPU, the
+//!   chunk's import refused, so none is refused for coming after the thread tried the chunk.
+//!
 //! Every other test holds the device's thread back (`Device::hold_host_ram_imports`).
 //!
 //! Device tests: compiled only under the GPU safety cfgs (`m2v_gpu`, `m2v_cpu_icd`), on the kind
@@ -1978,5 +1984,116 @@ fn a_staged_gather_behind_a_shared_event_reads_the_cpu_s_writes_before_the_signa
         after.host_ram_copies_staged - before.host_ram_copies_staged,
         1
     );
+    drop((used, ram));
+}
+
+/// A RAM of `length` bytes of a `memfd` mapped shared, as a VMM's guest RAM is (anonymous shared
+/// memory off Linux), unmapped by its keep-alive, with no dma-buf source, and its first byte.
+fn shared_ram_of(length: u64) -> (Arc<HostRam>, u64) {
+    #[cfg(target_os = "linux")]
+    let (flags, fd) = {
+        // SAFETY: a name and flags the call takes.
+        let fd = unsafe { libc::memfd_create(c"m2v-shared-copy".as_ptr(), libc::MFD_CLOEXEC) };
+        assert!(fd >= 0);
+        // SAFETY: the descriptor was just made, and is closed below.
+        assert_eq!(unsafe { libc::ftruncate(fd, length as libc::off_t) }, 0);
+        (libc::MAP_SHARED, fd)
+    };
+    #[cfg(not(target_os = "linux"))]
+    let (flags, fd) = (libc::MAP_SHARED | libc::MAP_ANON, -1);
+    // SAFETY: a fresh mapping of the file's first `length` bytes (or of anonymous memory).
+    let start = unsafe {
+        libc::mmap(
+            std::ptr::null_mut(),
+            length as usize,
+            libc::PROT_READ | libc::PROT_WRITE,
+            flags,
+            fd,
+            0,
+        )
+    };
+    assert_ne!(start, libc::MAP_FAILED);
+    if fd >= 0 {
+        // SAFETY: the test's descriptor; the mapping keeps the file.
+        unsafe { libc::close(fd) };
+    }
+    let start = start as u64;
+    let keep: KeepAlive = Box::new(Mapping { start, length });
+    let at = NonNull::new(start as *mut u8).unwrap();
+    // SAFETY: the mapping is readable and writable until the keep-alive unmaps it.
+    let ram = unsafe { HostRam::new(&[(at, length)], Some(keep)) }.unwrap();
+    (Arc::new(ram), start)
+}
+
+/// A RAM of shared memory with no dma-buf source, on a device whose thread imports ahead: once
+/// the thread reached the RAM's first chunk (imported it, or met its refusal), a gather of runs of
+/// it, a scatter of other bytes into the same runs and a gather of those each move the bytes the
+/// CPU's view of the pages holds. On a device that refuses pointers to shared memory (RADV) the
+/// chunk's import is refused whatever it holds, and each copy is staged through the CPU
+/// (`host_ram_copies_staged`, `host_ram_scatters_staged`): none is refused for coming after the
+/// thread tried the chunk, and the gather after the scatter reads the bytes the scatter's CPU
+/// copy wrote. Elsewhere they go through the chunk's import.
+#[test]
+fn copies_over_shared_ram_move_their_bytes_after_the_thread_reached_its_chunk() {
+    let Some(device) = ahead_device() else {
+        return;
+    };
+    let refuses = !device.imports_shared_host_pointers().unwrap();
+    let (ram, start) = shared_ram_of(2 * 64 * MIB);
+    let before = device.work_counts();
+    let used = device.use_host_ram(&ram).unwrap();
+    let reached = |counts: &WorkCounts| {
+        counts.host_ram_chunks_imported_ahead > before.host_ram_chunks_imported_ahead
+            || counts.host_ram_pointer_imports_failed > before.host_ram_pointer_imports_failed
+    };
+    let at = settled(&device, reached);
+    assert!(
+        reached(&at),
+        "the thread never reached the RAM's first chunk"
+    );
+    let runs = [
+        start + PAGE..start + 3 * PAGE,
+        start + 5 * MIB..start + 5 * MIB + PAGE,
+        start + 9 * MIB + 2 * PAGE..start + 9 * MIB + 6 * PAGE,
+    ];
+    for run in &runs {
+        write_pattern(run.clone(), 11);
+    }
+    let total: u64 = runs.iter().map(|run| run.end - run.start).sum();
+    let first = shared(&device, total, |_| 0);
+    blit(&device, |encoder| {
+        encoder.copy_from_host_ram(&ram, &runs, &first, 0).unwrap();
+    });
+    assert!(contents(&first) == gathered(&runs), "the first gather");
+    let source = shared(&device, total, |at| (at * 7 + 3) as u8);
+    blit(&device, |encoder| {
+        encoder.copy_to_host_ram(&source, 0, &ram, &runs).unwrap();
+    });
+    assert!(
+        gathered(&runs) == contents(&source),
+        "the scatter's bytes in the pages"
+    );
+    let again = shared(&device, total, |_| 0);
+    blit(&device, |encoder| {
+        encoder.copy_from_host_ram(&ram, &runs, &again, 0).unwrap();
+    });
+    assert!(
+        contents(&again) == contents(&source),
+        "the gather after the scatter"
+    );
+    let after = device.work_counts();
+    let staged = after.host_ram_copies_staged - before.host_ram_copies_staged;
+    let scatters = after.host_ram_scatters_staged - before.host_ram_scatters_staged;
+    eprintln!(
+        "HOST-RAM-COPY {}: shared RAM, no source, refused {refuses}: gathers staged {staged}, \
+         scatters staged {scatters}, chunks imported {}, pointer imports refused {}",
+        device.name(),
+        after.host_ram_chunks_imported - before.host_ram_chunks_imported,
+        after.host_ram_pointer_imports_failed - before.host_ram_pointer_imports_failed,
+    );
+    if refuses {
+        assert_eq!(staged, 2, "both gathers through the CPU");
+        assert_eq!(scatters, 1, "the scatter through the CPU");
+    }
     drop((used, ram));
 }

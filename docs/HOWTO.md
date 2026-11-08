@@ -543,9 +543,10 @@ submission, can give the device the guest's RAM once instead:
   (`Device::imports_shared_host_pointers` false: RADV) imports each chunk of a RAM of shared memory
   (`memory-backend-memfd,share=on`) as a dma-buf where the RAM has a source of them
   (`HostRam::with_dma_buf`, below); with none, it imports no chunk and refuses each object over it
-  (`Unsupported`, `HostMemory`). From `use_host_ram` on, a thread of the device's imports chunks
-  ahead
-  of the objects over them (`host_ram_chunks_imported_ahead`): the chunk an object last took, then a
+  (`Unsupported`, `HostMemory`), each copy over it goes through the CPU, whenever it comes
+  (`copy_from_host_ram` and `copy_to_host_ram`, below), and the device's thread faults none of its
+  pages in (`host_ram_chunks_faulted_ahead` counts the chunks it faults in elsewhere). From
+  `use_host_ram` on, a thread of the device's imports chunks ahead of the objects over them (`host_ram_chunks_imported_ahead`): the chunk an object last took, then a
   window of chunks past it in the direction the takes go, up the RAM or down it, one chunk after a
   take that starts no run (and the RAM's first chunk before any take), four once a take lands inside
   the window or next to the chunk last taken. So a run of objects over consecutive RAM, up or down,

@@ -43,7 +43,12 @@
 //!   video clips at once took 1.4 to 2.1 s while chunks were being imported. No import is made or
 //!   waited for, and no page pinned for it; each chunk is taken as an object takes it, and asked
 //!   of the device's thread, which imports it before its window's next
-//!   (`RamOnDevice::ask_for_copy`), so the copies after it go through the chunks' imports.
+//!   (`RamOnDevice::ask_for_copy`), so the copies after it go through the chunks' imports. A
+//!   copy over a chunk the device refuses whatever it holds (shared memory on a device that
+//!   imports no pointer to it, the RAM given no source of dma-bufs: `ChunkSlot::refused`) is
+//!   staged always, whether the device's thread tried the chunk or not, so that a copy Metal
+//!   takes is never refused for when it came; a gather over bytes a scatter wrote there is
+//!   staged too, the scatter's bytes written by the CPU in a host step before the gather's.
 //!   - A gather leaves its work to the host step of its batch (`Deferred::GatherStage`), before
 //!     the batch is submitted: the step takes a region of the command buffer's arena as long as
 //!     the copy's bytes, host-visible memory of the runtime's own, so the region's memory is made
@@ -263,15 +268,18 @@ impl RamOnDevice {
     /// chunk): a copy into a chunk's bytes was recorded ([`RamOnDevice::copy_wrote`]), or a key
     /// lies over them other than the chunks' own keys, which only those copies' reads used
     /// (`HostAliases::others_over`): a buffer over host pages, made or rebound there, or a
-    /// heap's own, which lies there until every command buffer that used it let it go.
+    /// heap's own, which lies there until every command buffer that used it let it go. A copy
+    /// into a chunk the device refuses whatever it holds (`ChunkSlot::refused`) wrote by the CPU,
+    /// in a host step before every later copy's (a staged scatter's drain): the GPU writes none of
+    /// its pages.
     fn written_over(&self, device: &Device, touched: &[(usize, Range<u64>)]) -> bool {
         let aliases = &device.shared().aliases;
         (touched.iter()).any(|(slot, bytes)| {
+            let wrote = self.copies_wrote(*slot) && !self.slots[*slot].refused;
             let reads_only = |key: ResourceKey| {
-                !self.copies_wrote(*slot)
-                    && (self.copies.keys[*slot].get()).is_some_and(|made| made.key == key)
+                !wrote && (self.copies.keys[*slot].get()).is_some_and(|made| made.key == key)
             };
-            self.copies_wrote(*slot) || aliases.others_over(bytes.start, bytes.end, reads_only)
+            wrote || aliases.others_over(bytes.start, bytes.end, reads_only)
         })
     }
 }

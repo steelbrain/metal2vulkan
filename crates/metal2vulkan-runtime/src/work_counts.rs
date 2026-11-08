@@ -369,6 +369,7 @@ pub(crate) struct Counters {
     host_ram_run_list_import_nanos: AtomicU64,
     host_ram_pointer_imports_failed: AtomicU64,
     host_ram_chunks_imported_ahead: AtomicU64,
+    host_ram_chunks_faulted_ahead: AtomicU64,
     host_ram_chunks_given_back: AtomicU64,
     host_ram_chunks_released: AtomicU64,
     host_ram_chunk_bytes: AtomicU64,
@@ -2997,6 +2998,11 @@ impl Counters {
     /// (`host_ram.rs`), besides counting it as [`Counters::host_ram_chunk_imported`] does.
     pub(crate) fn host_ram_chunk_imported_ahead(&self) {
         (self.host_ram_chunks_imported_ahead).fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// The device's thread faulted a chunk of a guest RAM in before its import (`host_ram.rs`).
+    pub(crate) fn host_ram_chunk_faulted_ahead(&self) {
+        (self.host_ram_chunks_faulted_ahead).fetch_add(1, Ordering::Relaxed);
     }
 
     /// The device let go of a chunk of a guest RAM its thread imported ahead and no object took,
@@ -6417,6 +6423,11 @@ pub struct WorkCounts {
     /// an object last took. The thread imports while the device's allocations leave a quarter of
     /// its `maxMemoryAllocationCount`, and stops there.
     pub host_ram_chunks_imported_ahead: u64,
+    /// The chunks of guest RAM the device's thread faulted in, on Linux, before it imported them
+    /// ahead of the objects: none of a chunk the device refuses whatever its pages hold (shared
+    /// memory on a device that imports no pointer to it, the RAM given no source of dma-bufs:
+    /// RADV), whose pages stay as the program left them. Elsewhere the import faults them in.
+    pub host_ram_chunks_faulted_ahead: u64,
     /// Of `host_ram_chunks_imported_ahead`, those freed again before any object took them, as the
     /// device's other allocations came within that quarter of its limit, so that they are never
     /// what an allocation is refused for (`memory_allocations_refused_at_limit`). An object over
@@ -8037,6 +8048,9 @@ impl Device {
                 .load(Ordering::Relaxed),
             host_ram_chunks_imported_ahead: counters
                 .host_ram_chunks_imported_ahead
+                .load(Ordering::Relaxed),
+            host_ram_chunks_faulted_ahead: counters
+                .host_ram_chunks_faulted_ahead
                 .load(Ordering::Relaxed),
             host_ram_chunks_given_back: counters.host_ram_chunks_given_back.load(Ordering::Relaxed),
             host_ram_chunks_released: counters.host_ram_chunks_released.load(Ordering::Relaxed),
