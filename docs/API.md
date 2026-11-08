@@ -1167,6 +1167,14 @@ device address, an argument or root table, a vertex binding of a per-bind stride
 buffer's texel range, a YCbCr texture's planes, a mesh, patch or de-indexed draw) or a uniform
 view a written slot may alias; then instantiate the draw whole.
 
+What a plan alone decides of such a rebind, for a list of slots, `slot_rebinds` works out once:
+each changed buffer slot's place among the descriptor ranges, the push fields that read the slots
+and where they lie, and the vertex buffers they bind (`None` where `rebind_draw_slots_into`
+answers `Ok(false)` whatever the state). `rebind_draw_slots_with` then rebinds those slots by
+them, looking at the state and the commands alone, with the answers and commands
+`rebind_draw_slots_into` gives: keep the `SlotRebinds` beside the commands for draws that change
+the same slots of the same plan.
+
 A plan that reads handles (a texture's or sampler state's resource ID, a visible function table's)
 writes heap tables among its descriptor bytes, after the stage tables: its handle tables, sampler
 tables and function-table directories. Their bytes grow with the resources the state lists as

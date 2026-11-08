@@ -299,9 +299,9 @@ use std::collections::BTreeMap;
 
 use crate::bind::heap::{planner, HeapPlanner};
 use crate::bind::instantiate::{
-    bind_buffers, descriptor_range, put, slot_bind_offset, slot_field, slot_guest_base,
-    BufferExtent, BufferRange, DescriptorBytes, DescriptorRange, FieldBytes, IndexBufferRef,
-    IndirectRef, PushConstantWrite, PushHole, RangeError, RootTable,
+    bind_buffers, descriptor_range, put, slot_field, slot_guest_base, BufferExtent, BufferRange,
+    DescriptorBytes, DescriptorRange, FieldBytes, IndexBufferRef, IndirectRef, PushConstantWrite,
+    PushHole, RangeError, RootTable,
 };
 use crate::bind::mesh_arguments::{
     fold_object_grid, metal_mesh_grid_draws_nothing, metal_object_grid, MeshArguments,
@@ -2854,15 +2854,57 @@ impl BindingPlan {
     /// some other way (a device-address slot, an argument or root table, a fixed-function binding
     /// of a per-bind stride, a texture buffer's texel range, a YCbCr texture's planes, a mesh,
     /// patch or de-indexed draw, a uniform view a written slot may alias): `commands` then hold
-    /// no draw's commands, as after an error, and the caller instantiates whole. An error is one `instantiate_draw_into` may answer for `state`.
+    /// no draw's commands, as after an error, and the caller instantiates whole. An error is one
+    /// `instantiate_draw_into` may answer for `state`. It is [`slot_rebinds`](Self::slot_rebinds)
+    /// of `slots` (`Ok(false)` where that answers none), then
+    /// [`rebind_draw_slots_with`](Self::rebind_draw_slots_with) of them.
     pub fn rebind_draw_slots_into(
         &self,
         state: &BindState,
         slots: &[SlotRef],
         commands: &mut DrawCommands,
     ) -> Result<bool, BindError> {
+        match self.slot_rebinds(slots) {
+            Some(rebinds) => self.rebind_draw_slots_with(&rebinds, state, commands),
+            None => Ok(false),
+        }
+    }
+
+    /// What [`rebind_draw_slots_into`](Self::rebind_draw_slots_into) of the slots `slots` works
+    /// out of the plan alone, whatever the state and the commands: each changed buffer slot's
+    /// place among the descriptor ranges, the push fields that read the slots and where they lie,
+    /// and the fixed-function vertex buffers they bind. `None` where the plan reads one of them
+    /// some other way (a device-address slot, a stage's argument or root table, a fixed-function
+    /// binding of a per-bind stride, a texture buffer's texel range, a YCbCr texture's planes, a
+    /// mesh, patch or de-indexed draw, a uniform view a written slot may alias), where that method
+    /// answers `Ok(false)`. Made once, it serves every rebind of the same slots on this plan
+    /// ([`rebind_draw_slots_with`](Self::rebind_draw_slots_with)).
+    pub fn slot_rebinds(&self, slots: &[SlotRef]) -> Option<SlotRebinds> {
         match self.graphics.as_ref() {
-            Some(t) if !t.other_layer_variant => rebind_slots(t, state, slots, commands),
+            Some(t) if !t.other_layer_variant => rebinds_of(t, slots),
+            _ => None,
+        }
+    }
+
+    /// [`rebind_draw_slots_into`](Self::rebind_draw_slots_into) of the slots `rebinds` was made
+    /// for, by [`slot_rebinds`](Self::slot_rebinds) of this plan: the same commands, the same
+    /// answers, where only the state and the commands are looked at. `Ok(false)` also where the
+    /// commands read a slot some other way (an argument table's bytes or a root table), or a moved
+    /// fixed-function vertex buffer's offset cannot be fetched there. `rebinds` is this plan's, or
+    /// an equal plan's (checked in builds with debug assertions).
+    pub fn rebind_draw_slots_with(
+        &self,
+        rebinds: &SlotRebinds,
+        state: &BindState,
+        commands: &mut DrawCommands,
+    ) -> Result<bool, BindError> {
+        debug_assert_eq!(
+            Some(rebinds),
+            self.slot_rebinds(&rebinds.slots).as_ref(),
+            "slot rebinds another plan made"
+        );
+        match self.graphics.as_ref() {
+            Some(t) if !t.other_layer_variant => rebind_with(t, rebinds, state, commands),
             _ => Ok(false),
         }
     }
@@ -4796,22 +4838,67 @@ fn pulled_stride(
     Ok(FieldBytes::of(&stride.to_le_bytes()))
 }
 
-/// [`BindingPlan::rebind_draw_slots_into`] of a render plan's template `t`.
-fn rebind_slots(
-    t: &GraphicsTemplate,
-    state: &BindState,
-    slots: &[SlotRef],
-    out: &mut DrawCommands,
-) -> Result<bool, BindError> {
+/// Where a push field a slot rebind writes lies: its stage's push write among the commands'
+/// (`DrawCommands::push_constants`), that write's range start, and the field's place.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct FieldAt {
+    push: usize,
+    push_start: u32,
+    loc: PushLoc,
+}
+
+/// One changed buffer slot of a [`SlotRebinds`]: its place among the template's buffer slots, its
+/// descriptor range's place among the commands' and its `(set, binding)` where the plan binds it
+/// a descriptor-form buffer, and the push fields that read its residual (`SlotBindOffset`) and
+/// its guest address (`SlotGuestBase`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct SlotRebind {
+    buffer: usize,
+    place: Option<(usize, (u32, u32))>,
+    offsets: Vec<FieldAt>,
+    bases: Vec<FieldAt>,
+}
+
+/// A push field of a changed slot that no changed buffer slot of the template holds: its word is
+/// worked out apart.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum LooseWord {
+    /// `SlotBindOffset`: no residual, 0.
+    Offset,
+    /// `SlotGuestBase` of the slot.
+    Base(SlotRef),
+    /// `VertexBufferStride` of the pulled layout.
+    Stride(u32),
+}
+
+/// What [`BindingPlan::rebind_draw_slots_into`] of some slots works out of a render plan alone
+/// ([`BindingPlan::slot_rebinds`]): each changed buffer slot's descriptor range place, the push
+/// fields that read the slots and where they lie, and the fixed-function vertex buffers they bind.
+/// Made once for a plan and its slots, it serves each rebind of them
+/// ([`BindingPlan::rebind_draw_slots_with`]), which looks at the state and the commands alone.
+/// Opaque.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SlotRebinds {
+    /// The slots they were made for.
+    slots: Vec<SlotRef>,
+    /// Each changed buffer slot, in the template's order of buffer slots.
+    buffers: Vec<SlotRebind>,
+    /// The push fields of changed slots no entry of `buffers` holds, in placement order.
+    loose: Vec<(FieldAt, LooseWord)>,
+    /// Each changed fixed-function vertex buffer's place among the template's.
+    vertex: Vec<usize>,
+}
+
+/// [`BindingPlan::slot_rebinds`] of a render plan's template `t`.
+fn rebinds_of(t: &GraphicsTemplate, slots: &[SlotRef]) -> Option<SlotRebinds> {
     let changed = |slot: SlotRef| slot.class == SlotClass::Buffer && slots.contains(&slot);
-    // What the slots decide some other way than below: an argument table's bytes or a root
-    // table, a mesh or patch draw's own reads, a de-indexed draw's layout, and a uniform view a
-    // written slot may alias.
-    let other_reads = !out.descriptor_bytes.is_empty()
-        || !out.root_tables.is_empty()
-        || t.stages
-            .iter()
-            .any(|st| st.root_first.is_some() || st.table.is_some())
+    // What the slots decide some other way than below: a stage's argument or root table, a mesh
+    // or patch draw's own reads, a de-indexed draw's layout, and a uniform view a written slot
+    // may alias.
+    let other_reads = t
+        .stages
+        .iter()
+        .any(|st| st.root_first.is_some() || st.table.is_some())
         || t.mesh.is_some()
         || t.tessellation.is_some()
         || t.deindexed.is_some()
@@ -4822,60 +4909,39 @@ fn rebind_slots(
         .iter()
         .any(|slot| slot.class == SlotClass::Texture && texel_range(slot));
     if other_reads || texels {
-        return Ok(false);
+        return None;
     }
-    // Each changed descriptor-form slot's range, at its place among the bound ones' (in
-    // `bind_buffers`' order), and its residual.
-    let mut residuals = crate::bind::instantiate::Residuals::default();
+    // Each changed slot, with its descriptor-form range's place among the bound ones' (in
+    // `bind_buffers`' order). What the plan's shape binds at a slot is what the state binds there
+    // (`bound_buffer` holds the state to it): a bound descriptor-form slot takes its place.
+    let mut buffers = Vec::new();
     let mut at = 0;
-    for pb in &t.buffers {
-        // A slot no call changed binds what it bound, of the plan's shape, which says whether it
-        // binds anything (`bound_buffer` holds the state to it, checked in builds with debug
-        // assertions): a bound descriptor-form slot takes its place.
-        if !changed(pb.slot) {
-            #[cfg(debug_assertions)]
-            crate::bind::instantiate::bound_buffer(state, pb.slot, pb.bound)?;
-            let descriptor = matches!((pb.form, pb.binding), (BufferForm::Descriptor(_), Some(_)));
-            if descriptor && pb.bound != BoundKind::Unbound {
+    for (index, pb) in t.buffers.iter().enumerate() {
+        let descriptor = match (pb.form, pb.binding) {
+            (BufferForm::Descriptor(_), Some(key)) => Some(key),
+            _ => None,
+        };
+        let bound = pb.bound != BoundKind::Unbound;
+        let place = match (bound, descriptor) {
+            (true, Some(key)) => {
                 at += 1;
+                Some((at - 1, key))
             }
-            continue;
-        }
-        let bound = crate::bind::instantiate::bound_buffer(state, pb.slot, pb.bound)?;
-        let (bind_offset, length) = match bound {
-            Some(&BoundBuffer::Buffer { length, offset, .. }) => (offset, length),
-            Some(&BoundBuffer::Bytes { len, .. }) => (0, u64::from(len.max(1))),
-            None => continue,
-        };
-        let (set, binding) = match (pb.form, pb.binding) {
-            (BufferForm::Descriptor(_), Some(key)) => key,
             // A device-address slot's root entry.
-            _ => return Ok(false),
+            (true, None) if changed(pb.slot) => return None,
+            _ => None,
         };
-        let place = at;
-        at += 1;
-        let (range, residual) = crate::bind::instantiate::planned_range(pb, bind_offset, length)
-            .map_err(|e| match e {
-                RangeError::TooLarge { needed } => BindError::DescriptorRangeExceeded {
-                    slot: pb.slot,
-                    needed,
-                    limit: pb.max_range,
-                },
-                RangeError::Empty => {
-                    BindError::Unsupported(Unsupported::not_representable(Feature::BufferRange))
-                }
-            })?;
-        let Some(written) = out
-            .descriptor_ranges
-            .get_mut(place)
-            .filter(|r| (r.set, r.binding) == (set, binding))
-        else {
-            return Ok(false);
-        };
-        written.range = range;
-        residuals.push(pb.slot, residual);
+        if changed(pb.slot) {
+            buffers.push(SlotRebind {
+                buffer: index,
+                place,
+                offsets: Vec::new(),
+                bases: Vec::new(),
+            });
+        }
     }
     // The push fields that read them, in each stage's push write.
+    let mut loose = Vec::new();
     let mut pushes = 0;
     for st in &t.stages {
         let (push_start, push_size) = st.push_range.unwrap_or((0, 0));
@@ -4887,54 +4953,171 @@ fn rebind_slots(
             }
         };
         for f in &st.fields {
-            // A slot's word as `slot_field` makes it, written from where it is made.
-            let offset_word: [u8; 4];
-            let base_word: [u8; 8];
-            let stride: FieldBytes;
-            let bytes: &[u8] = match f.field {
-                PushField::SlotBindOffset(slot) if changed(slot) => {
-                    offset_word = slot_bind_offset(&residuals, slot);
-                    &offset_word
-                }
-                PushField::SlotGuestBase(slot) if changed(slot) => {
-                    base_word = slot_guest_base(state, slot);
-                    &base_word
-                }
-                PushField::VertexBufferStride(layout)
-                    if changed(SlotRef {
+            let word = match f.field {
+                PushField::SlotBindOffset(slot) if changed(slot) => (slot, LooseWord::Offset),
+                PushField::SlotGuestBase(slot) if changed(slot) => (slot, LooseWord::Base(slot)),
+                PushField::VertexBufferStride(layout) => {
+                    let slot = SlotRef {
                         stage: Stage::Vertex,
                         class: SlotClass::Buffer,
                         index: layout,
-                    }) =>
-                {
-                    stride = pulled_stride(t, state, layout)?;
-                    &stride
+                    };
+                    if !changed(slot) {
+                        continue;
+                    }
+                    (slot, LooseWord::Stride(layout))
                 }
                 // A changed texture's in-place planes.
-                PushField::YCbCrInPlace(slot) if slots.contains(&slot) => return Ok(false),
+                PushField::YCbCrInPlace(slot) if slots.contains(&slot) => return None,
                 _ => continue,
             };
-            let Some(write) = push.and_then(|at| out.push_constants.get_mut(at)) else {
-                return Ok(false);
+            let field = FieldAt {
+                push: push?,
+                push_start,
+                loc: f.loc,
             };
-            put(&mut write.bytes, push_start, &mut [], f.loc, bytes)?;
+            let entry = (buffers.iter_mut()).find(|e| t.buffers[e.buffer].slot == word.0);
+            match (word.1, entry) {
+                (LooseWord::Offset, Some(entry)) => entry.offsets.push(field),
+                (LooseWord::Base(_), Some(entry)) => entry.bases.push(field),
+                (loose_word, _) => loose.push((field, loose_word)),
+            }
         }
     }
-    // Each changed fixed-function vertex buffer's offset, at its binding's place (bound in
+    // Each changed fixed-function vertex buffer, at its binding's place (bound in
     // `t.vertex_buffers`' order); a per-bind stride's binding, whose extent and stride may move
     // with it, is written whole.
-    let vertex = state.stages.get(&Stage::Vertex);
+    let mut vertex = Vec::new();
     for (place, vb) in t.vertex_buffers.iter().enumerate() {
         if !changed(vb.slot) {
             continue;
         }
+        if matches!(vb.stride, VertexStride::PerBind) {
+            return None;
+        }
+        vertex.push(place);
+    }
+    Some(SlotRebinds {
+        slots: slots.to_vec(),
+        buffers,
+        loose,
+        vertex,
+    })
+}
+
+/// Write `word` at `field` of the commands' push writes: whether they hold its write.
+fn put_word<const N: usize>(
+    out: &mut DrawCommands,
+    field: FieldAt,
+    word: [u8; N],
+) -> Result<bool, BindError> {
+    let Some(write) = out.push_constants.get_mut(field.push) else {
+        return Ok(false);
+    };
+    put(
+        &mut write.bytes,
+        field.push_start,
+        &mut [],
+        field.loc,
+        &word,
+    )?;
+    Ok(true)
+}
+
+/// [`BindingPlan::rebind_draw_slots_with`] of a render plan's template `t`.
+fn rebind_with(
+    t: &GraphicsTemplate,
+    rebinds: &SlotRebinds,
+    state: &BindState,
+    out: &mut DrawCommands,
+) -> Result<bool, BindError> {
+    // An argument table's bytes or a root table: what the slots decide some other way.
+    if !out.descriptor_bytes.is_empty() || !out.root_tables.is_empty() {
+        return Ok(false);
+    }
+    let other_plan = || internal("slot rebinds another plan made");
+    // Each changed buffer slot's range and residual, and the push fields that read them.
+    for entry in &rebinds.buffers {
+        let pb = t.buffers.get(entry.buffer).ok_or_else(other_plan)?;
+        let bound = crate::bind::instantiate::bound_buffer(state, pb.slot, pb.bound)?;
+        let (bind_offset, length, base) = match bound {
+            Some(&BoundBuffer::Buffer {
+                length,
+                offset,
+                gpu_address,
+                ..
+            }) => (offset, length, gpu_address.wrapping_add(offset)),
+            Some(&BoundBuffer::Bytes { len, .. }) => (0, u64::from(len.max(1)), 0),
+            None => (0, 0, 0),
+        };
+        // An unbound slot has no residual: its `SlotBindOffset` reads 0.
+        let mut residual = 0;
+        if let (Some((place, key)), Some(_)) = (entry.place, bound) {
+            let (range, slot_residual) =
+                crate::bind::instantiate::planned_range(pb, bind_offset, length).map_err(|e| {
+                    match e {
+                        RangeError::TooLarge { needed } => BindError::DescriptorRangeExceeded {
+                            slot: pb.slot,
+                            needed,
+                            limit: pb.max_range,
+                        },
+                        RangeError::Empty => BindError::Unsupported(
+                            Unsupported::not_representable(Feature::BufferRange),
+                        ),
+                    }
+                })?;
+            let Some(written) =
+                (out.descriptor_ranges.get_mut(place)).filter(|r| (r.set, r.binding) == key)
+            else {
+                return Ok(false);
+            };
+            written.range = range;
+            residual = slot_residual;
+        }
+        for &field in &entry.offsets {
+            if !put_word(out, field, residual.to_le_bytes())? {
+                return Ok(false);
+            }
+        }
+        for &field in &entry.bases {
+            if !put_word(out, field, base.to_le_bytes())? {
+                return Ok(false);
+            }
+        }
+    }
+    for &(field, word) in &rebinds.loose {
+        let written = match word {
+            LooseWord::Offset => put_word(out, field, 0u32.to_le_bytes())?,
+            LooseWord::Base(slot) => put_word(out, field, slot_guest_base(state, slot))?,
+            LooseWord::Stride(layout) => {
+                let stride = pulled_stride(t, state, layout)?;
+                let Some(write) = out.push_constants.get_mut(field.push) else {
+                    return Ok(false);
+                };
+                put(
+                    &mut write.bytes,
+                    field.push_start,
+                    &mut [],
+                    field.loc,
+                    &stride,
+                )?;
+                true
+            }
+        };
+        if !written {
+            return Ok(false);
+        }
+    }
+    // Each changed fixed-function vertex buffer's offset, at its binding's place.
+    let vertex = state.stages.get(&Stage::Vertex);
+    for &place in &rebinds.vertex {
+        let vb = t.vertex_buffers.get(place).ok_or_else(other_plan)?;
         let offset = match vertex.and_then(|v| v.buffers.get(&vb.slot.index)) {
             Some(&BoundBuffer::Buffer { offset, .. }) => offset,
             Some(&BoundBuffer::Bytes { .. }) => 0,
             None => return Err(BindError::UnboundVertexBuffer { slot: vb.slot }),
         };
-        let fetched = fetchable(vb, &t.vertex_strides, offset_alignment(offset, 0), None);
-        if matches!(vb.stride, VertexStride::PerBind) || !fetched {
+        if !fetchable(vb, &t.vertex_strides, offset_alignment(offset, 0), None) {
             return Ok(false);
         }
         let Some(written) = out

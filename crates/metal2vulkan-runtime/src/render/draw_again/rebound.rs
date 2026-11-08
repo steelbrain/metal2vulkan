@@ -14,7 +14,9 @@
 //!   shape and of what no call changed.
 //! - **What it works out again.** Its commands, rebound at those slots
 //!   (`BindingPlan::rebind_draw_slots_into`: their descriptor ranges, push fields and vertex
-//!   buffers' offsets); set 0's writes of them with their dynamic offsets (`binding::rebind_into`:
+//!   buffers' offsets), by the plan's rebinds of them (`BindingPlan::slot_rebinds`), made once for
+//!   the kept draw and kept with it while the draws change the same slots (`SettledHere::rebinds`);
+//!   set 0's writes of them with their dynamic offsets (`binding::rebind_into`:
 //!   a texture's view and a sampler state's `VkSampler` as every step makes them, through its
 //!   encoder's memo), and the set its encoder's last set or its command buffer's holds, else a new
 //!   one (`EncoderCore::set_zero_of`); its push bytes and vertex buffers; and its uses, whole
@@ -436,16 +438,17 @@ impl RenderLowering {
         changed: &Changed,
         (draw, buffers): (&DrawCall, &DrawBuffers<'_>),
     ) -> Option<Rebinding> {
+        let slots = changed.list();
         let kept = settles_kept(self, live)
-            .then_some(live.settled.as_ref())
+            .then_some(live.settled.as_mut())
             .flatten();
+        let (settled, rebinds) = kept?.rebinds(slots);
         let Settled {
             variant,
             plan,
             facts,
             ..
-        } = kept?.settled();
-        let slots = changed.list();
+        } = settled;
         // A draw moved: its commands' descriptor ranges as the kept draw left them, which tell
         // whether its set-0 writes are the kept draw's (below).
         let moved = changed.moved;
@@ -453,7 +456,9 @@ impl RenderLowering {
             live.kept.ranges.clear();
             (live.kept.ranges).extend_from_slice(&live.commands.descriptor_ranges);
         }
-        if plan.rebind_draw_slots_into(&live.state, slots, &mut live.commands) != Ok(true) {
+        // What the slots decide of its commands, by the plan's rebinds of them, made once for the
+        // kept draw (`BindingPlan::rebind_draw_slots_into`).
+        if plan.rebind_draw_slots_with(rebinds?, &live.state, &mut live.commands) != Ok(true) {
             return None;
         }
         let compiled = variant.pipeline();

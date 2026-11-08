@@ -475,6 +475,7 @@ surface! {
         struct MeshDispatch N;
         enum MeshGroups N;
         enum MeshRecordsRegion N;
+        struct SlotRebinds O;
         struct TessellationDispatch N;
         enum TessellationRecords N;
         fn heap_classes;

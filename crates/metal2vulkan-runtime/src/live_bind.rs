@@ -83,8 +83,8 @@
 //!   go as the encoder ends ([`SpareLiveBinds::give`]).
 
 use ash::vk;
-use metal2vulkan::bind::{BindShape, BindState, DrawCommands};
-use metal2vulkan::pipeline::PipelineInterface;
+use metal2vulkan::bind::{BindShape, BindState, DrawCommands, SlotRebinds};
+use metal2vulkan::pipeline::{PipelineInterface, SlotRef};
 use std::any::Any;
 use std::collections::btree_map::Entry;
 use std::collections::BTreeMap;
@@ -323,11 +323,13 @@ struct SetAside {
 
 /// What a recorded draw settled of its state's shape (`GraphicsState::settle_shape`): the variant
 /// and plan, the program it ran (named without being held) and the buffer forms it took; the shape
-/// is the state's kept one, compared by identity.
+/// is the state's kept one, compared by identity. With them, the plan's slot rebinds
+/// (`BindingPlan::slot_rebinds`) of the slots the last draw rebound changed, with those slots.
 pub(super) struct SettledHere {
     program: ProgramName,
     forms: BufferForms,
     settled: Settled,
+    rebinds: Option<(Vec<SlotRef>, Option<SlotRebinds>)>,
 }
 
 impl SettledHere {
@@ -342,7 +344,22 @@ impl SettledHere {
             program: pipeline.program_name(),
             forms,
             settled,
+            rebinds: None,
         }
+    }
+
+    /// What the draw settled, and its plan's slot rebinds of `slots` (`None` where the plan reads
+    /// one of them some other way): made at the first draw rebound that changed those slots, and
+    /// kept for each next one that changes the same slots, as the plan is the same.
+    pub(super) fn rebinds(&mut self, slots: &[SlotRef]) -> (&Settled, Option<&SlotRebinds>) {
+        let made = match &mut self.rebinds {
+            Some((made_for, made)) if made_for[..] == *slots => made,
+            rebinds => {
+                let made = self.settled.plan.slot_rebinds(slots);
+                &mut rebinds.insert((slots.to_vec(), made)).1
+            }
+        };
+        (&self.settled, made.as_ref())
     }
 }
 

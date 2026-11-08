@@ -29,8 +29,8 @@ use std::path::Path;
 use crate::bind::{
     sampler_desc, AccessClass, BindState, BindingPlan, BoundBuffer, BoundSampler, BoundTexture,
     Dispatch, DrawCall, DrawCommands, FieldLocation, ImageSource, IndexBufferRef, IndexOverrun,
-    IndirectRef, NeutralResource, PlanDiagnostic, SamplerDescriptor, SamplerSource, StageTable,
-    TextureFacts, UseTarget, WriteSource,
+    IndirectRef, NeutralResource, PlanDiagnostic, SamplerDescriptor, SamplerSource, SlotRebinds,
+    StageTable, TextureFacts, UseTarget, WriteSource,
 };
 use crate::budget::Budget;
 use crate::device::profile::{Containment, Robustness};
@@ -973,7 +973,9 @@ fn a_per_bind_stride_comes_from_the_bind() {
 /// the new state writes: for each committed profile, each state of the vertex buffer and the
 /// constant buffer at other offsets and over other allocations that keeps the plan's shape, the
 /// commands of the first state rebound at the slots that changed are the new state's. Where the
-/// rebind writes nothing (`Ok(false)`), the plan reads a slot some other way.
+/// rebind writes nothing (`Ok(false)`), the plan reads a slot some other way. The slot rebinds made
+/// once for a plan and its slots (`slot_rebinds`) answer each of those rebinds as the whole rebind
+/// does.
 #[test]
 fn a_rebind_of_buffer_slots_writes_what_an_instantiation_writes() {
     let Some(bc) = fixture("stage_io") else {
@@ -1007,6 +1009,22 @@ fn a_rebind_of_buffer_slots_writes_what_an_instantiation_writes() {
         other => other,
     };
     let (mut rebound, mut pushed, mut whole, mut alone) = (0, 0, 0, 0);
+    // A rebind of the slots by the plan's rebinds of them, made once: the answer and the commands
+    // the whole rebind gives.
+    let by_rebinds = |plan: &BindingPlan,
+                      rebinds: Option<&SlotRebinds>,
+                      state: &BindState,
+                      before: &DrawCommands,
+                      whole: (&Result<bool, BindError>, &DrawCommands)| {
+        let mut cmds = before.clone();
+        let answer = rebinds.map_or(Ok(false), |r| {
+            plan.rebind_draw_slots_with(r, state, &mut cmds)
+        });
+        assert_eq!(&answer, whole.0, "the rebinds' answer");
+        if answer == Ok(true) {
+            assert_eq!(&cmds, whole.1, "the rebinds' commands");
+        }
+    };
     for (stem, dev) in devices() {
         let Ok(p) = render_pipeline(&dev, &bc) else {
             continue;
@@ -1018,6 +1036,10 @@ fn a_rebind_of_buffer_slots_writes_what_an_instantiation_writes() {
             };
             let scales = [0, 4, 16, 20, 36, 48, 100, 240, 256];
             let vertices = [0, 24, 48, 72, 96, 2400];
+            let (scale_alone, both) = (
+                plan.slot_rebinds(&[scale]),
+                plan.slot_rebinds(&[vertex, scale]),
+            );
             // The scale slot alone named, the vertex slot before it bound as before: its place
             // among the bound ones taken from the plan.
             for &s in &scales {
@@ -1027,7 +1049,15 @@ fn a_rebind_of_buffer_slots_writes_what_an_instantiation_writes() {
                 }
                 let before = plan.instantiate_draw(&first, &draw).expect("first draw");
                 let mut cmds = before.clone();
-                if plan.rebind_draw_slots_into(&state, &[scale], &mut cmds) == Ok(true) {
+                let answer = plan.rebind_draw_slots_into(&state, &[scale], &mut cmds);
+                by_rebinds(
+                    &plan,
+                    scale_alone.as_ref(),
+                    &state,
+                    &before,
+                    (&answer, &cmds),
+                );
+                if answer == Ok(true) {
                     alone += 1;
                     let expected = plan.instantiate_draw(&state, &draw);
                     assert_eq!(Ok(&cmds), expected.as_ref(), "{stem} {s}: the scale alone");
@@ -1050,7 +1080,9 @@ fn a_rebind_of_buffer_slots_writes_what_an_instantiation_writes() {
                 let before = plan.instantiate_draw(&first, &draw).expect("first draw");
                 let expected = plan.instantiate_draw(&state, &draw);
                 let mut cmds = before.clone();
-                match plan.rebind_draw_slots_into(&state, &[vertex, scale], &mut cmds) {
+                let answer = plan.rebind_draw_slots_into(&state, &[vertex, scale], &mut cmds);
+                by_rebinds(&plan, both.as_ref(), &state, &before, (&answer, &cmds));
+                match answer {
                     Ok(true) => {
                         rebound += 1;
                         pushed += usize::from(cmds.push_constants != before.push_constants);

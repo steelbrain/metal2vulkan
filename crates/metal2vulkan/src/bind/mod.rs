@@ -220,7 +220,7 @@ pub use extended_canonical::{
 };
 pub use extended_shadow::{extended_shadow_module, ExtendedShadowModule};
 pub use graphics::{
-    DrawCall, DrawCommands, IndexOverrun, MeshDispatch, MeshGroups, MeshRecordsRegion,
+    DrawCall, DrawCommands, IndexOverrun, MeshDispatch, MeshGroups, MeshRecordsRegion, SlotRebinds,
     TessellationDispatch, TessellationRecords,
 };
 pub use heap::{

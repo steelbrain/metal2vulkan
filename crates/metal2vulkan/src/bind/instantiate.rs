@@ -851,7 +851,7 @@ pub(crate) fn slot_field(
 
 /// The bytes of `PushField::SlotBindOffset(slot)` ([`slot_field`]): the slot's residual, 0
 /// unbound.
-pub(crate) fn slot_bind_offset(residuals: &Residuals, slot: SlotRef) -> [u8; 4] {
+fn slot_bind_offset(residuals: &Residuals, slot: SlotRef) -> [u8; 4] {
     residuals.of(slot).unwrap_or(0).to_le_bytes()
 }
 
@@ -875,6 +875,7 @@ pub(crate) fn slot_guest_base(state: &BindState, slot: SlotRef) -> [u8; 8] {
 
 /// A field's bytes at its placed location: the push bytes (relative to the push range's start
 /// `push_start`) or the argument table.
+#[inline]
 pub(crate) fn put(
     push: &mut [u8],
     push_start: u32,
