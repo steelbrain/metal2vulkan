@@ -22,10 +22,14 @@
 //! - **Never for a waiter.** A step steps aside for no one while a program's call waits for the
 //!   check's verdicts (`SubmitChecks::wait`, `InPlaceChecks::wait`), so such a wait is the check's
 //!   own run alone.
-//! - **Never for long.** A step waits at most [`MOST_ASIDE`]: a program whose allocations and
-//!   frees never pause for [`QUIET`] (one that allocates every few milliseconds) still sees each
-//!   check go on, a step at least each [`MOST_ASIDE`], so its verdicts come, its steps a short
-//!   share of that time.
+//! - **Never for long.** A step waits at most [`MOST_ASIDE`]. Under a program whose allocations
+//!   and frees never pause for [`QUIET`] (one that allocates every few milliseconds) each step
+//!   goes on only once its [`MOST_ASIDE`] is up, about ten steps a second, so a check's verdicts
+//!   come at the program's next [`QUIET`] or once its steps have gone through at that pace.
+//!   Measured the same way on the same GPU, over a fresh cache directory of the device's own: the
+//!   takes of 5 ms or more fell from 12 of 36 runs to 2 with the steps, and the submission checks'
+//!   verdicts, which came in 77 to 139 ms without them, had not come by the end of any set of 12
+//!   runs, after 10 steps aside (1 s) in each.
 //! - **What it costs.** A check's verdicts come later while the device's work goes on: until then
 //!   the device takes the forms a device without them takes (each check's module docs). Counted:
 //!   `WorkCounts::device_checks` (`steps_aside`, `aside_nanos`).
