@@ -192,7 +192,9 @@ pub enum InPlaceRefusal {
     Image,
     /// No image the device makes lays the rows (or slices) at the buffer's pitch.
     Pitch,
-    /// The image's alignment, size or memory type misses the bytes' place.
+    /// The image's alignment, size or memory type misses the bytes' place: among them a texture
+    /// whose buffer ends inside its last row's pitch, whose image's last row takes the whole pitch,
+    /// past the buffer's bytes (`docs/FAST-PATHS.md`, known gaps).
     Placement,
     /// Over pages imported as dma-bufs: the caller's source made no one dma-buf of the texture's
     /// own pages.

@@ -447,6 +447,14 @@ driver's. Each is open work.
   creation never fails because of a hang. Where a wait found the loss first, the call waits for
   the recovery and goes on.
 
+- **A texture over host pages whose buffer ends inside its last row's pitch is a shadow**
+  (`InPlaceRefusal::Placement`, `WorkCounts::host_texture_shadows_refused_placement`,
+  `shadowed-texture`), where Metal reads it in place: a linear image's last row takes the whole
+  pitch, so the image's memory requirements reach past the buffer's bytes, which are not the
+  runtime's to bind. So over the caller's pages imported by their pointer and over a copied host
+  buffer's copy alike, whose bytes are the buffer's length (ANV on the Iris Xe, RADV). The shadow
+  copies the texels in before each command buffer that uses the texture and merges them back
+  after each write.
 - **A copied host buffer costs O(its size) at every batch's completion that may have written
   it, and at every commit where its pages carry no log** (`copied.rs`, `copied-host-pages`): each
   compares every byte of the copy with the bytes the copy and the pages last agreed on, a page at
