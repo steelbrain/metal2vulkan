@@ -3,9 +3,11 @@
 //!
 //! Plain Metal writes a texture made without `ShaderWrite` and reads (or samples) one made without
 //! `ShaderRead`, as the texture with the usage (its validation stops each). A texture's image takes
-//! the usage its descriptor lacks where that costs it nothing (`Device::with_undeclared_usage`);
-//! elsewhere the image keeps the declared usage, so a valid program's texture keeps the driver's
-//! compression, and a slot binding that needs the usage takes an image of its own instead:
+//! the usage its descriptor lacks where that costs it nothing (`Device::with_undeclared_usage`),
+//! and an image in place over host pages where the device's check passed for what the usage lets
+//! reach the pages (`texture/in_place_image.rs`); elsewhere the image keeps the declared usage, so
+//! a valid program's texture keeps the driver's compression, and a slot binding that needs the
+//! usage takes an image of its own instead:
 //!
 //! - **The shadow** is an image of the texture's format and shape with both shader usages, made
 //!   at the first binding that needs it and kept with the texture object. Its truth is the

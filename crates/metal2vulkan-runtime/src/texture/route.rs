@@ -98,7 +98,7 @@ impl Device {
                 way: HostWay::InPlace { storable },
             } => {
                 let made = (texels, class, storable);
-                let way = match self.in_place_image_made(&plan, made, &facts)? {
+                let way = match self.in_place_image_made((&plan, descriptor), made, &facts)? {
                     Ok(()) => HostWay::InPlace { storable },
                     Err((refusal, why)) => HostWay::Shadow(ShadowCause::Refused(refusal, why)),
                 };

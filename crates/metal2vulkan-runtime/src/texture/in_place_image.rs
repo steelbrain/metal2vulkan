@@ -23,11 +23,19 @@
 //!   texels never reach them, and the check's bytes after its image are such bytes.
 //! - **Its usage** is the texture's declared plan's: one a shader writes (`ShaderWrite` or
 //!   `ShaderAtomic`) has storage usage, through which its kernels write its texels in place, as
-//!   the device's check of storage writes covers ([`Texture::store_in_place`]); a write beyond it
-//!   binds the texture's usage shadow (`texture/usage_shadow.rs`), and a render pass into one made
-//!   without `RenderTarget` renders through an attachment stand-in (`attachment_stand_in.rs`),
-//!   since the image has no attachment usage; their copies into it touch its texels alone. One that
-//!   renders also takes the feedback loop usage a draw takes that reads the texture its own pass
+//!   the device's check of storage writes covers ([`Texture::store_in_place`]). One that does not
+//!   render also takes the usages its descriptor lacks, each where the device's check passed for
+//!   what it lets reach the pages: the storage usage where the check passed for a shader's writes
+//!   over the class and the texels' row ends (those that let the rows' padding change where it is
+//!   free) and the texel is one its kernel stores, the attachment usage where it passed for
+//!   renders, and the sampled usage wherever (a read touches the texels alone), the first set of
+//!   them, the most first, the device makes the image in place with: plain Metal writes a texture
+//!   beyond its `ShaderWrite` and renders into one made without `RenderTarget`, and such a write
+//!   or pass then reaches the texels in place. A write or pass beyond what the image takes binds
+//!   the texture's usage shadow (`texture/usage_shadow.rs`), or renders through an attachment
+//!   stand-in (`attachment_stand_in.rs`), whose copies into it touch its texels alone. The usages
+//!   change neither the image's pitch nor its place: an image that would lie otherwise is not
+//!   made, and the next plan is tried. One that renders also takes the feedback loop usage a draw takes that reads the texture its own pass
 //!   renders through a snapshot (`texture::feedback_candidate`, `render/snapshot.rs`) where the
 //!   device makes the image with it, as an aliasing image over a buffer of the runtime's does,
 //!   and with it the storage usage the snapshot's fetch of the attachment in the pixel interlock
@@ -52,16 +60,17 @@ use crate::buffer_texture::Texels;
 use crate::device::lock;
 use crate::error::{vulkan, Error, RuntimeGap};
 use crate::framebuffer_fetch::storage_candidate;
-use crate::image_plan::{ImageFacts, ImagePlan};
-use crate::in_place::{Access, Padding, PagesClass, Refusal, RowEnds};
+use crate::image_plan::{plan_image, ImageFacts, ImagePlan};
+use crate::in_place::{self, Access, Padding, PagesClass, Refusal, RowEnds, Verdict};
 use crate::linear_plan::{check_linear_limits, linear_lack, BufferLayout, LinearLack};
 use crate::shadow_copy_back::WordView;
 use crate::shadow_copy_in::CopyIn;
-use crate::texture_descriptor::TextureDescriptor;
+use crate::texture_descriptor::{texture_usage, TextureDescriptor};
 use crate::{release, Device};
 use ash::vk;
 use metal2vulkan::bind::ShadowTexelView;
 use metal2vulkan::error::LinearNeed;
+use metal2vulkan::metal::TextureUsage;
 use std::any::Any;
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex, OnceLock, Weak};
@@ -297,9 +306,10 @@ impl Texture {
 }
 
 impl Device {
-    /// The image in place of a texture of `plan` (its declared usage's, with the feedback loop
-    /// usage where the device makes it so, and the storage usage too where `storable`: the module
-    /// docs) made with `descriptor` over `texels`, host pages of `class`, with whether it is a
+    /// The image in place of a texture of `plan` made with `descriptor` over `texels`, host pages
+    /// of `class` (one that renders taking the storage usage too where `storable`: the module
+    /// docs): of the first of its wider plans the device makes it with
+    /// ([`in_place_plans`](Self::in_place_plans)), else of `plan`, with whether it is a
     /// `DRM_FORMAT_MOD_LINEAR` image at Metal's pitch made for host allocations; why not where the
     /// device makes none, the declared plan's refusal (the module docs). Each plan is made and
     /// checked unbound ([`unplaced`](Self::unplaced)), as
@@ -323,7 +333,8 @@ impl Device {
             Err(refused) => Ok(Err(refused)),
         };
         let mut made = None;
-        for wider in &self.wider_in_place_plans(plan, storable) {
+        let pages = (texels, class, storable);
+        for wider in &self.in_place_plans(plan, descriptor, pages, facts) {
             if let Ok(image) = make(wider)? {
                 made = Some(image);
                 break;
@@ -353,7 +364,8 @@ impl Device {
     }
 
     /// Whether [`in_place_image`](Self::in_place_image) makes an image in place of the same
-    /// arguments, its declared plan's refusal where it makes none: the same steps up to the bind,
+    /// arguments (`plan` the texture's declared plan, made with `descriptor`), its declared plan's
+    /// refusal where it makes none: the same steps up to the bind,
     /// each image it makes released unbound. The declared plan is asked first, so where it is made
     /// in place the answer costs its one or two images (the driver's linear image, and the
     /// `DRM_FORMAT_MOD_LINEAR` one where the driver lays the first out otherwise); the wider plans
@@ -362,7 +374,7 @@ impl Device {
     /// the driver's import of its dma-buf are known only at the bind.
     pub(crate) fn in_place_image_made(
         &self,
-        plan: &ImagePlan,
+        (plan, descriptor): (&ImagePlan, &TextureDescriptor),
         (texels, class, storable): (&Texels, PagesClass, bool),
         facts: &ImageFacts<'_>,
     ) -> Result<Result<(), (Refusal, String)>, Error> {
@@ -376,7 +388,8 @@ impl Device {
             }
             Err(refused) => refused,
         };
-        for wider in &self.wider_in_place_plans(plan, storable) {
+        let pages = (texels, class, storable);
+        for wider in &self.in_place_plans(plan, descriptor, pages, facts) {
             if let Ok(unplaced) = self.unplaced(wider, texels, class, facts)? {
                 self.release_unplaced(unplaced);
                 return Ok(Ok(()));
@@ -385,9 +398,9 @@ impl Device {
         Ok(Err(refused))
     }
 
-    /// The plans wider than `plan` an image in place is tried with before it, widest first: the
-    /// feedback loop usage where the device makes it, and with it the storage usage where
-    /// `storable` (the module docs).
+    /// The plans wider than `plan`, of a texture that renders, an image in place is tried with
+    /// before it, widest first: the feedback loop usage where the device makes it, and with it the
+    /// storage usage where `storable` (the module docs, [`in_place_plans`](Self::in_place_plans)).
     fn wider_in_place_plans(&self, plan: &ImagePlan, storable: bool) -> Vec<ImagePlan> {
         let profile = self.compile_device().profile();
         let feedback = feedback_candidate(plan, self);
@@ -396,6 +409,87 @@ impl Device {
             .filter(|_| storable)
             .and_then(|feedback| storage_candidate(feedback, profile));
         storage.into_iter().chain(feedback).collect()
+    }
+
+    /// The wider plans an image in place of a texture of `plan` made with `descriptor` over
+    /// `texels`, host pages of `class`, is tried with before `plan`, widest first (the module
+    /// docs). For one that renders: the feedback loop usage, and with it the storage usage the
+    /// snapshot's fetch reads through where `storable` (the route's, `texture/route.rs`). For one
+    /// that does not: the usages its descriptor lacks, each where the device's check passed for
+    /// what it lets reach the pages (the storage usage where a shader's writes may reach the
+    /// texels in place, [`writes_reach`](Self::writes_reach), the attachment
+    /// usage where the check passed for renders over the class and the texels' row ends, and the
+    /// sampled usage, whose reads touch the texels alone, wherever), every set of them, the most
+    /// first: a write or a pass beyond the declared usage then reaches the texels in place, with
+    /// no usage shadow or attachment stand-in. Each plan's image lies at the texels' pitch in
+    /// their memory, or is not made ([`unplaced`](Self::unplaced)). The check's own
+    /// textures, which measure the images the product makes for each access, take only the
+    /// first.
+    fn in_place_plans(
+        &self,
+        plan: &ImagePlan,
+        descriptor: &TextureDescriptor,
+        (texels, class, storable): (&Texels, PagesClass, bool),
+        facts: &ImageFacts<'_>,
+    ) -> Vec<ImagePlan> {
+        let usage = descriptor.usage;
+        if Access::Renders.takes(usage) {
+            return self.wider_in_place_plans(plan, storable);
+        }
+        if in_place::checking() {
+            return Vec::new();
+        }
+        let Ok(layout) = descriptor.check(self.properties().texture_rules()) else {
+            return Vec::new();
+        };
+        let writable = !Access::Writes.takes(usage) && self.writes_reach(texels, class);
+        let line = self.shared().in_place.line();
+        let renders = self
+            .shared()
+            .in_place
+            .verdict(class, Access::Renders, texels.rows(line));
+        let own = texture_usage(usage, descriptor.swizzle);
+        let lacking = [
+            (TextureUsage::SHADER_WRITE, writable),
+            (TextureUsage::SHADER_READ, true),
+            (TextureUsage::RENDER_TARGET, renders == Verdict::Passed),
+        ];
+        let lacking: Vec<TextureUsage> = (lacking.into_iter())
+            .filter(|&(metal, takes)| takes && !own.contains(metal))
+            .map(|(metal, _)| metal)
+            .collect();
+        // Every set of the lacking usages but none, the most first.
+        let mut sets: Vec<TextureUsage> = (1..1u32 << lacking.len())
+            .map(|set| {
+                let each = lacking.iter().enumerate();
+                each.filter(|(at, _)| set & (1 << at) != 0)
+                    .fold(TextureUsage::empty(), |set, (_, &metal)| set | metal)
+            })
+            .collect();
+        sets.sort_by_key(|set| std::cmp::Reverse(set.bits().count_ones()));
+        sets.into_iter()
+            .filter_map(|set| plan_image(&layout, own | set, false, facts).ok())
+            .filter(|wider| wider.format == plan.format && wider.usage.contains(plan.usage))
+            .filter(|wider| wider.usage != plan.usage)
+            .collect()
+    }
+
+    /// Whether a shader's writes of `texels` of a texture that does not render, over host pages
+    /// of `class`, may reach them in place: they are of a width the device's check's kernel stores
+    /// (`in_place::STORED_TEXEL_BYTES`), and its check passed for such writes over the class, of
+    /// texels that lie in lines as these do, those that let their rows' padding change where it is
+    /// free (`in_place::in_place`).
+    fn writes_reach(&self, texels: &Texels, class: PagesClass) -> bool {
+        if !in_place::STORED_TEXEL_BYTES.contains(&texels.texel_bytes()) {
+            return false;
+        }
+        let line = self.shared().in_place.line();
+        let written = match texels.padding(line) {
+            Padding::Free => Access::BufferWrites,
+            Padding::Kept => Access::Writes,
+        };
+        let rows = texels.rows(line);
+        self.shared().in_place.verdict(class, written, rows) == Verdict::Passed
     }
 
     /// The image in place of `plan` over `texels`, host pages of `class`, made and checked before

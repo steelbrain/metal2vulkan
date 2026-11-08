@@ -32,13 +32,17 @@
 //!   pages holds the value, the bytes past the last row hold the pattern, and so do the bytes
 //!   between the rows but of a texture in place whose padding is free. Printed
 //!   (`IN-PLACE-WRITTEN`): each texture's path.
-//! - [`writes_and_passes_beyond_the_usage_take_their_shadows`], under the validation layer: an
-//!   in-place 64x64 `RGBA16Float` texture of `ShaderRead` usage alone, with padded rows and with
-//!   packed ones (where the device takes either in place), written by a kernel (no `ShaderWrite`)
-//!   and rendered into by a pass that clears and stores (no `RenderTarget`): each through its
-//!   shadow (`undeclared-usage-shadow`), never the aliasing image,
-//!   which stays the texture's (`vk_image` the same handle); every texel of the pages then holds the
-//!   value, and the bytes between the rows hold the pattern.
+//! - [`writes_and_passes_beyond_the_usage_reach_the_pages_where_their_checks_passed`], under the
+//!   validation layer: an in-place 64x64 `RGBA16Float` texture of `ShaderRead` usage alone, with
+//!   padded rows and with packed ones (where the device takes either in place), written by a
+//!   kernel (no `ShaderWrite`) and rendered into by a pass that clears and stores (no
+//!   `RenderTarget`): where the device's check passed for a shader's writes (`Pointer buffer
+//!   writes` where the rows' padding is free) or for renders over the class, the write or pass
+//!   reaches the image in place, which took the usage it lacks: no shadow announced
+//!   (`undeclared-usage-shadow`), no texel copied in (`shadow_texels_copied_in`); elsewhere through
+//!   its shadow (or stand-in), announced. The image stays the texture's (`vk_image` the same
+//!   handle); every texel of the pages then holds the value, and the bytes between the rows hold
+//!   the pattern but where a shader's writes in place may change rows' padding that is free.
 //! - [`textures_that_render_or_write_take_the_path_their_checks_answered`], under the validation
 //!   layer: a 64x64 `R32Uint` texture over a no-copy buffer of anonymous pages, of each usage that
 //!   renders or writes, once the device's check answered: each is in place where the check passed
@@ -780,7 +784,7 @@ fn written_textures_over_host_pages_take_the_path_their_checks_answered() {
 }
 
 #[test]
-fn writes_and_passes_beyond_the_usage_take_their_shadows() {
+fn writes_and_passes_beyond_the_usage_reach_the_pages_where_their_checks_passed() {
     let cache = ScratchCache::new().unwrap();
     let messages = Messages::default();
     {
@@ -836,9 +840,20 @@ fn writes_and_passes_beyond_the_usage_take_their_shadows() {
                 );
                 continue;
             };
+            // The image in place takes the usage the texture lacks where the device's check
+            // passed for what it lets reach the pages: a shader's writes (those that let the
+            // rows' padding change, where it is free), or renders.
+            let kernel = form.starts_with("kernel");
+            let reaches = match kernel {
+                true => writes_passed(&device, "Pointer", &buffer, (w * 8, h, bpr)),
+                false => passed(&device, "Pointer renders", &buffer, (w * 8, h, bpr)),
+            };
+            let first = buffer.contents().map_or(0, |at| at.as_ptr() as u64);
+            let free = kernel && in_place_rows::padding_free(&device, first, bpr, h, true);
+            let before = device.work_counts();
             messages.take_notices();
             let command_buffer = queue.command_buffer().unwrap();
-            match form.starts_with("kernel") {
+            match kernel {
                 true => {
                     let kernel = super::level_writes_by_usage::kernel(&device, "write_at_level");
                     let mut encoder = command_buffer.compute_command_encoder().unwrap();
@@ -865,10 +880,15 @@ fn writes_and_passes_beyond_the_usage_take_their_shadows() {
             command_buffer.wait_until_completed_for(WAIT).unwrap();
             assert_eq!(command_buffer.error(), None, "{form}");
             let notices = counts(&messages.take_notices());
-            assert!(
-                notices.contains_key(&Degradation::UndeclaredUsageShadow),
-                "{form}: {notices:?}"
-            );
+            let shadowed = notices.contains_key(&Degradation::UndeclaredUsageShadow);
+            let after = device.work_counts();
+            let copied = after.shadow_texels_copied_in - before.shadow_texels_copied_in;
+            // In place, the write or pass reaches the texels with no shadow and no copy; else it
+            // takes the shadow (or stand-in), announced.
+            assert_eq!(shadowed, !reaches, "{form}: {notices:?}");
+            if reaches {
+                assert_eq!(copied, 0, "{form}: texels copied in");
+            }
             // SAFETY: as above.
             assert_eq!(unsafe { texture.vk_image() }, Some(image), "{form}");
             let now = mapping.read(0..len);
@@ -877,15 +897,22 @@ fn writes_and_passes_beyond_the_usage_take_their_shadows() {
                     let at = (y * bpr + x * 8) as usize;
                     assert_eq!(now[at..at + 8], VALUE, "{form}: texel {x},{y}");
                 }
+                // A shader's writes in place may change rows' padding that is free.
                 let between = (y * bpr + w * 8) as usize..((y + 1) * bpr) as usize;
-                assert_eq!(
-                    now[between.clone()],
-                    pattern[between],
-                    "{form}: row {y}'s padding"
-                );
+                if !(reaches && free) {
+                    assert_eq!(
+                        now[between.clone()],
+                        pattern[between],
+                        "{form}: row {y}'s padding"
+                    );
+                }
             }
+            let path = match reaches {
+                true => "in place, no shadow",
+                false => "through its shadow",
+            };
             eprintln!(
-                "IN-PLACE-USAGE on {}: {form}: through its shadow",
+                "IN-PLACE-USAGE on {}: {form}: {path} (texels copied in {copied})",
                 device.name()
             );
             drop((texture, buffer));
