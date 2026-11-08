@@ -113,15 +113,31 @@ pub(super) const DELAYED_DEALLOCATORS: [Degradation; 1] = [Degradation::HostDeal
 /// device moves the tiles) lies as Metal lays it out at Metal's answer: it announces that shadow
 /// (`shadowed-texture`) and no route or layout of an image bound there. The lavapipe of the Linux
 /// gate's container takes that route for a `Private` heap's texture.
+///
+/// A texture the device made in place as an image that fits Metal's answer, where the image of
+/// its first route did not (`refit`: it moved `WorkCounts::heap_textures_refit`, the image's
+/// route [`refit_kind`] read) lies at Metal's answer as that route's image, in the driver's
+/// layout: it announces the route and `heap-texture-untiled-layout`.
 fn heap_texture_kinds(
     device: &Device,
     descriptor: &TextureDescriptor,
     tiled: bool,
+    refit: Option<Degradation>,
 ) -> BTreeSet<Degradation> {
     let answer = device.heap_texture_size_and_align(descriptor).unwrap();
     let metal = device
         .metal_heap_texture_size_and_align(descriptor)
         .unwrap();
+    if let Some(route) = refit {
+        return forced(&[
+            (
+                Degradation::HeapTextureLargerThanMetal,
+                metal.is_some_and(|metal| answer != metal),
+            ),
+            (route, true),
+            (Degradation::HeapTextureUntiledLayout, true),
+        ]);
+    }
     if tiled {
         return forced(&[
             (
@@ -167,6 +183,30 @@ fn heap_texture_kinds(
             hides || !facts.contains(&DriverFact::ColorImagesLieAsMetalHeapTextures),
         ),
     ])
+}
+
+/// The route a heap texture made in place as an image that fits Metal's answer announced
+/// (`WorkCounts::heap_textures_refit`, `texture/heap.rs`): host-transfer usage where that image
+/// fits, else linear. The device's image sizes decide which, so it is read off the notices since
+/// the last taken, or those taken before (a device announces each kind once): exactly one of the
+/// two.
+fn refit_kind(messages: &Messages) -> Degradation {
+    let pending = messages.take_notices();
+    messages.restore_notices(pending.clone());
+    let taken = messages.taken_kinds();
+    let announced = |kind: &Degradation| {
+        taken.contains(kind)
+            || (pending.iter())
+                .filter_map(|message| message.degradation.as_ref())
+                .any(|notice| notice.degradation == *kind)
+    };
+    let routes = [
+        Degradation::HeapTextureHostTransfer,
+        Degradation::HeapTextureLinear,
+    ];
+    let kinds: Vec<Degradation> = routes.into_iter().filter(announced).collect();
+    assert_eq!(kinds.len(), 1, "a refit heap texture's route: {kinds:?}");
+    kinds[0]
 }
 
 /// The kinds a texture over a buffer of [`RGBA8Uint`](PixelFormat::RGBA8Uint) rows
@@ -667,10 +707,12 @@ fn a_texture_made_in_a_used_heap_after_a_dispatch_is_reached() {
         let mut first = sampling.forced(device);
         let unplaced = descriptor;
         descriptor.placement = IdPlacement::At(id);
-        let made = device.work_counts().heap_textures_tiled;
+        let made = device.work_counts();
         let late = heap.new_texture(&descriptor).unwrap();
-        let tiled = device.work_counts().heap_textures_tiled > made;
-        first.extend(heap_texture_kinds(device, &unplaced, tiled));
+        let tiled = device.work_counts().heap_textures_tiled > made.heap_textures_tiled;
+        let refit = device.work_counts().heap_textures_refit > made.heap_textures_refit;
+        let refit = refit.then(|| refit_kind(messages));
+        first.extend(heap_texture_kinds(device, &unplaced, tiled, refit));
         let upload = sampling.queue.command_buffer().unwrap();
         sampling.upload(device, &upload, &late);
         upload.commit().unwrap();
@@ -1031,7 +1073,7 @@ fn a_heap_s_token_drops_at_its_release_whatever_keeps_its_textures_images() {
         let texture = sampling.texture();
         let mut d = texture_descriptor(&sampling.literal, sampling.usage).unwrap();
         d.resource_options = ResourceOptions::private();
-        let made = device.work_counts().heap_textures_tiled;
+        let made = device.work_counts();
         for heap_type in [HeapType::Automatic, HeapType::Placement] {
             for case in ["through its ID", "first move"] {
                 let dropped = Arc::new(AtomicBool::new(false));
@@ -1076,9 +1118,11 @@ fn a_heap_s_token_drops_at_its_release_whatever_keeps_its_textures_images() {
                 assert_eq!(&output, expected, "{what}");
             }
         }
-        let tiled = device.work_counts().heap_textures_tiled > made;
+        let tiled = device.work_counts().heap_textures_tiled > made.heap_textures_tiled;
+        let refit = device.work_counts().heap_textures_refit > made.heap_textures_refit;
+        let refit = refit.then(|| refit_kind(messages));
         let mut first = sampling.forced(device);
-        first.extend(heap_texture_kinds(device, &d, tiled));
+        first.extend(heap_texture_kinds(device, &d, tiled, refit));
         // A shadow is announced as its ID's holder once: the command that reaches it through its
         // ID alone binds the heap set holding it, neither naming it nor making it resident.
         if tiled {

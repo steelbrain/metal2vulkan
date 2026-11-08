@@ -1741,7 +1741,7 @@ impl Device {
         if descriptor.resource_options.storage_mode()? == StorageMode::Memoryless {
             return self.memoryless_answer(CALL, descriptor, &layout);
         }
-        match self.heap_plan(CALL, descriptor, layout) {
+        match self.heap_plan(CALL, descriptor, layout, false) {
             // A heap texture whose image the device decodes as it is placed is refused its making
             // (`heap_plan`: an ASTC carrier's decoded twin would decode what the heap's bytes
             // held, `astc.rs`), where plain Metal makes it. Its footprint is Metal's blocks,
@@ -1894,16 +1894,24 @@ impl Device {
             ..*descriptor
         };
         let layout = self.heap_layout(call, &private, Creator::SizeQuery)?;
-        Ok(self.heap_plan(call, &private, layout)?.size_and_align)
+        Ok(self
+            .heap_plan(call, &private, layout, false)?
+            .size_and_align)
     }
 
     /// The image a heap texture of `descriptor` (checked as `layout`, not a texture buffer)
-    /// takes and what it takes of a heap, for `call`.
+    /// takes and what it takes of a heap, for `call`. Where `refit`, an image that fits Metal's
+    /// answer replaces one that does not before any shadow of the heap's bytes
+    /// ([`Device::fitting_heap_image`]): a texture made in a heap over the device's memory. A size
+    /// query passes `false`, as the answer is Metal's either way (a refit replaces only a shadow,
+    /// which takes Metal's answer too), and so does a heap over host pages, whose images
+    /// [`Device::host_heap_plan`] decides from the plan without it.
     fn heap_plan(
         &self,
         call: &'static str,
         descriptor: &TextureDescriptor,
         layout: TextureLayout,
+        refit: bool,
     ) -> Result<HeapPlan, Error> {
         let facts = self
             .shared()
@@ -2012,7 +2020,7 @@ impl Device {
         let mut images = size_and_align;
         // What the image the device's route first took takes of the heap, where it did not fit
         // Metal's answer and an image that fits it replaced it in place (below).
-        let mut refit = None;
+        let mut first = None;
         // Metal's answer where it is not the answer the runtime models for every descriptor
         // (`metal_heap_answer`): a 4:2:2, one-plane YCbCr or two-plane extended-range texture's
         // planes, an `X32_Stencil8` or `BlockWritesOnly` texture as the descriptor Metal sizes it
@@ -2060,12 +2068,12 @@ impl Device {
             // answer gives way to one that does, in place, before any shadow of the heap's bytes
             // (`fitting_heap_image`).
             let in_place = held == HeldToMetal::Shadow && !shape.rows && !shape.multisample;
-            if in_place && colour(&image.plan) && !image.route.in_own_memory() {
+            if refit && in_place && colour(&image.plan) && !image.route.in_own_memory() {
                 let texture_type = layout.texture_type;
                 let fitting =
                     self.fitting_heap_image(&image, plan, texture_type, class, metal, placement)?;
                 if let Some(fitting) = fitting {
-                    refit = Some(images);
+                    first = Some(images);
                     images = heap_extent(&fitting.requirements, fitting.placement(placement));
                     image = fitting;
                     held = HeldToMetal::Images;
@@ -2149,7 +2157,7 @@ impl Device {
             image,
             size_and_align,
             images,
-            refit,
+            refit: first,
             metal_answer,
             metal_layout,
         })
@@ -2241,7 +2249,7 @@ impl Device {
             return Ok(None);
         };
         let other_layout = self.heap_layout(call, &other, Creator::SizeQuery)?;
-        let p = self.heap_plan(call, &other, other_layout)?;
+        let p = self.heap_plan(call, &other, other_layout, false)?;
         let metal_layout = match descriptor.pixel_format {
             PixelFormat::X32Stencil8 => {
                 let usage = effective_usage(descriptor.usage);
@@ -2603,7 +2611,10 @@ impl Device {
             heap.hold_texture(&texture);
             return Ok(texture);
         }
-        let p = self.heap_plan(call, descriptor, layout)?;
+        // A heap over host pages plans its images from the plan without a refit
+        // (`host_heap_plan`).
+        let host = bytes.caller_memory() == Some(CallerMemory::HostPages);
+        let p = self.heap_plan(call, descriptor, layout, !host)?;
         *planned = Some(Planned::of(&p));
         self.check_texture_placement(
             call,
@@ -2611,7 +2622,7 @@ impl Device {
             descriptor.usage,
             p.layout.texture_type,
         )?;
-        if bytes.caller_memory() == Some(CallerMemory::HostPages) {
+        if host {
             let p = self.host_heap_plan(call, p, descriptor, &bytes)?;
             *planned = Some(Planned::of(&p));
             let offset = heap_offset(heap, call, p.size_and_align, p.placement(), offset)?;
@@ -3012,9 +3023,10 @@ impl Device {
     /// measured: `metal`'s reason; `Untiled::LOSSLESS` for one whose uncompressed tiles a shadow
     /// would hold; `Untiled::LOSSLESS_BOUND_SAMPLES` for a multisample one Metal keeps
     /// compressed, its image in the heap's bytes), a multisample texture's samples
-    /// (`Untiled::MULTISAMPLE`), its image a shadow of the bytes in rows (`Untiled::ROWS`), or its
-    /// image bound there in the driver's layout (`Untiled::DRIVER`). Not a colour image bound there
-    /// on a driver whose such images lie as Metal's heap textures where Metal tiles the texture
+    /// (`Untiled::MULTISAMPLE`), its image a shadow of the bytes in rows (`Untiled::ROWS`), its
+    /// image bound there `linear` (`Untiled::LINEAR`), or bound there in the driver's layout
+    /// (`Untiled::DRIVER`). Not an optimal colour image bound there on a driver whose such images
+    /// lie as Metal's heap textures where Metal tiles the texture
     /// (`DriverFact::ColorImagesLieAsMetalHeapTextures` of one sample,
     /// `DriverFact::MultisampleColorImagesLieAsMetalHeapTextures` of more). `None` for a route
     /// whose own notice says where it lies (apart, a two-plane texture's planes) and a layout a
@@ -3023,6 +3035,7 @@ impl Device {
         &self,
         layout: &TextureLayout,
         route: AliasRoute,
+        linear: bool,
         metal: &HeapLayout,
     ) -> Option<Untiled> {
         if matches!(
@@ -3046,12 +3059,14 @@ impl Device {
             _ => DriverFact::MultisampleColorImagesLieAsMetalHeapTextures,
         };
         let as_metal = route == AliasRoute::Direct
+            && !linear
             && !is_depth_stencil(layout.pixel_format)
             && self.properties().driver_facts.contains(&fact);
         match route {
             _ if as_metal => None,
             _ if layout.samples > 1 => Some(Untiled::MULTISAMPLE),
             AliasRoute::Shadow | AliasRoute::MemoryShadow => Some(Untiled::ROWS),
+            _ if linear => Some(Untiled::LINEAR),
             _ => Some(Untiled::DRIVER),
         }
     }
@@ -3526,6 +3541,7 @@ impl Device {
             _ => None,
         };
         let route = p.image.route;
+        let linear = p.image.tiling == vk::ImageTiling::LINEAR;
         let host = binding.host;
         let metal_layout = p.metal_layout;
         let tiles = metal_layout.tiles().filter(|_| route == AliasRoute::Tiled);
@@ -3659,7 +3675,8 @@ impl Device {
         // Metal keeps compressed. In any other heap, a texture whose bytes there are not Metal's
         // layout (`device_heap_layout`).
         if !host && !matches!(route, AliasRoute::Lossless | AliasRoute::Tiled) {
-            if let Some(untiled) = self.device_heap_layout(&p.layout, route, &metal_layout) {
+            if let Some(untiled) = self.device_heap_layout(&p.layout, route, linear, &metal_layout)
+            {
                 self.degrade_heap_layout(untiled, texture.object_id());
             }
         } else {

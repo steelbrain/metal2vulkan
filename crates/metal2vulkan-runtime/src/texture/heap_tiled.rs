@@ -935,6 +935,11 @@ impl Untiled {
         "its image lies in the heap's bytes in the device driver's layout, which no driver fact \
          measures as Metal's tiles (DriverFact::ColorImagesLieAsMetalHeapTextures)",
     );
+    /// A texture of a heap over the device's memory whose image lies in the heap's bytes as a
+    /// linear image, its texels in the driver's rows (`heap-texture-untiled-layout`, `heap.rs`).
+    pub(crate) const LINEAR: Untiled = Untiled::other(
+        "its image is linear, its texels in rows in the heap's bytes, where Metal tiles them",
+    );
     /// A texture of a heap over the device's memory whose image is a shadow of the heap's bytes
     /// in rows, where Metal tiles its elements (`heap-texture-untiled-layout`, `heap.rs`).
     pub(crate) const ROWS: Untiled = Untiled::other(
