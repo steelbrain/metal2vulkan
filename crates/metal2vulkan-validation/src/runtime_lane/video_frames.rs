@@ -10,7 +10,9 @@
 //! then samples the frame into a 3840x2160 `BGRA8Unorm` target in one render pass, through one of
 //! two forms ([`Form`]): a `YCBCR10_420_2P` texture over plane 0 (the runtime's two-plane YCbCr
 //! path, `ycbcr.rs`), or an `R16Unorm` texture over plane 0 and an `RG16Unorm` one over plane 1,
-//! which its own shader converts.
+//! which its own shader converts. The second form also runs with both planes 256 bytes into their
+//! pages ([`Form::AlignedPlanes`]), where RADV lays a `DRM_FORMAT_MOD_LINEAR` plane: the same frame
+//! in place where CoreVideo's 32 bytes make shadows.
 //!
 //! Each frame here: the CPU writes a whole new frame into the next of [`POOL`] surfaces (the
 //! decoder's pool), then one command buffer of that pass, committed and waited for. Its surfaces'
@@ -23,8 +25,12 @@
 //! is made (`Buffer::texture_placement_with_iosurface_plane`), the medians and 90th percentiles of
 //! the frame's GPU time (`GPUEndTime` less `GPUStartTime`), its host times (the CPU's write of the
 //! frame, the textures' making, the encoding, and the commit to completion), and every work count
-//! the frames moved, per frame. Ignored by default: a measurement, not a check. Run it by name with
-//! `--run-ignored all`.
+//! the frames moved, per frame. Each device settles its in-place checks first, so the placements
+//! are those of a session whose verdicts are known. Printed by [`video_plane_placements`]
+//! (`VIDEO-PLACEMENT`): where single-plane textures over decoded planes of CoreVideo's 8-bit `420v`
+//! and 10-bit `x420` frames lie at each of several offsets into their page, sampled alone or written
+//! too, and the words of each `shadowed-texture` notice. Ignored by default: measurements, not
+//! checks. Run them by name with `--run-ignored all`.
 
 #[cfg(target_os = "linux")]
 use super::dma_buf_imports::{udmabuf_openable, Calls, Memfd, View};
@@ -53,12 +59,15 @@ const W: u64 = 3840;
 const H: u64 = 2160;
 /// Both planes' bytes per row.
 const ROW: u64 = 7680;
-/// The luma plane's first byte: 32 bytes into the surface's first page, CoreVideo's.
+/// The luma plane's first byte: 32 bytes into the surface's first page, CoreVideo's. The chroma
+/// plane's lies right after the luma plane's rows, 32 bytes into a page.
 const LUMA_AT: u64 = 32;
-/// The chroma plane's first byte: right after the luma plane's rows, 32 bytes into a page.
-const CHROMA_AT: u64 = LUMA_AT + ROW * H;
-/// The surface's bytes, its pages whole.
-const LEN: usize = ((CHROMA_AT + ROW * H / 2) as usize).next_multiple_of(GUEST_PAGE);
+/// The luma plane's first byte in [`Form::AlignedPlanes`]: 256 bytes into the first page, a
+/// multiple of RADV's step for a `DRM_FORMAT_MOD_LINEAR` plane's offset. The chroma plane, right
+/// after the luma plane's rows, lies 256 bytes into a page too.
+const ALIGNED_AT: u64 = 256;
+/// The surface's bytes, its pages whole, for either plane offset.
+const LEN: usize = ((ALIGNED_AT + ROW * H * 3 / 2) as usize).next_multiple_of(GUEST_PAGE);
 /// The decoder's surfaces, written in turn.
 const POOL: usize = 3;
 /// `'x420'`.
@@ -176,6 +185,19 @@ enum Form {
     /// An `R16Unorm` texture over plane 0 and an `RG16Unorm` one over plane 1, sampled and
     /// converted by `video_planes`.
     Planes,
+    /// As [`Form::Planes`], of a frame whose planes lie 256 bytes into their pages
+    /// ([`ALIGNED_AT`]).
+    AlignedPlanes,
+}
+
+impl Form {
+    /// The luma plane's first byte in the surface; the chroma plane's follows its rows.
+    fn luma_at(self) -> u64 {
+        match self {
+            Form::YCbCr | Form::YCbCrImage | Form::Planes => LUMA_AT,
+            Form::AlignedPlanes => ALIGNED_AT,
+        }
+    }
 }
 
 /// Where a case's surfaces' pages lie.
@@ -265,9 +287,10 @@ impl Surface {
     }
 }
 
-/// A frame's bytes, numbered `n`: each code in the high 10 bits of its word, the low 6 bits
-/// noise, which no form reads as Metal does not.
-fn frame_bytes(n: u32) -> Vec<u8> {
+/// A frame's bytes, numbered `n`, its luma plane `luma_at` bytes into the surface: each code in
+/// the high 10 bits of its word, the low 6 bits noise, which no form reads as Metal does not.
+fn frame_bytes(n: u32, luma_at: u64) -> Vec<u8> {
+    let chroma_at = luma_at + ROW * H;
     let mut bytes = vec![0u8; LEN];
     let mut state = 0x9e37_79b9_u32.wrapping_mul(n + 1);
     let mut word = |code: u32| {
@@ -279,7 +302,7 @@ fn frame_bytes(n: u32) -> Vec<u8> {
     for y in 0..H {
         for x in 0..W {
             let code = 64 + ((x + y + u64::from(n) * 7) % 876) as u32;
-            let at = (LUMA_AT + y * ROW + x * 2) as usize;
+            let at = (luma_at + y * ROW + x * 2) as usize;
             bytes[at..at + 2].copy_from_slice(&word(code).to_le_bytes());
         }
     }
@@ -287,7 +310,7 @@ fn frame_bytes(n: u32) -> Vec<u8> {
         for x in 0..W / 2 {
             let cb = 64 + ((x * 3 + u64::from(n)) % 896) as u32;
             let cr = 64 + ((y * 5 + u64::from(n)) % 896) as u32;
-            let at = (CHROMA_AT + y * ROW + x * 4) as usize;
+            let at = (chroma_at + y * ROW + x * 4) as usize;
             bytes[at..at + 2].copy_from_slice(&word(cb).to_le_bytes());
             bytes[at + 2..at + 4].copy_from_slice(&word(cr).to_le_bytes());
         }
@@ -298,25 +321,26 @@ fn frame_bytes(n: u32) -> Vec<u8> {
 /// The textures `form` samples over `buffer`, each with its placement as the runtime answered it
 /// before making it.
 fn textures(buffer: &Buffer, form: Form) -> Vec<(Texture, String)> {
+    let (luma_at, chroma_at) = (form.luma_at(), form.luma_at() + ROW * H);
     let planes: Vec<(PixelFormat, u64, u64, IoSurfacePlane)> = match form {
         Form::YCbCr | Form::YCbCrImage => {
-            let facts = IoSurfaceYCbCr::new(X420, 0, [W, H], CHROMA_AT, ROW)
+            let facts = IoSurfaceYCbCr::new(X420, 0, [W, H], chroma_at, ROW)
                 .with_matrix(SurfaceYCbCrMatrix::Itu2020);
-            let plane = IoSurfacePlane::new(LUMA_AT, ROW, true).with_ycbcr(facts);
+            let plane = IoSurfacePlane::new(luma_at, ROW, true).with_ycbcr(facts);
             vec![(PixelFormat::YCBCR104202P, W, H, plane)]
         }
-        Form::Planes => vec![
+        Form::Planes | Form::AlignedPlanes => vec![
             (
                 PixelFormat::R16Unorm,
                 W,
                 H,
-                IoSurfacePlane::new(LUMA_AT, ROW, true),
+                IoSurfacePlane::new(luma_at, ROW, true),
             ),
             (
                 PixelFormat::RG16Unorm,
                 W / 2,
                 H / 2,
-                IoSurfacePlane::new(CHROMA_AT, ROW, true),
+                IoSurfacePlane::new(chroma_at, ROW, true),
             ),
         ],
     };
@@ -344,7 +368,7 @@ fn textures(buffer: &Buffer, form: Form) -> Vec<(Texture, String)> {
 fn fragment(form: Form) -> &'static str {
     match form {
         Form::YCbCr | Form::YCbCrImage => "video_ycbcr",
-        Form::Planes => "video_planes",
+        Form::Planes | Form::AlignedPlanes => "video_planes",
     }
 }
 
@@ -487,8 +511,11 @@ fn moved_per_frame(before: &WorkCounts, after: &WorkCounts, frames: usize) -> St
         .join(", ")
 }
 
+/// The longest a device's in-place checks may take here.
+const SETTLE: std::time::Duration = std::time::Duration::from_secs(120);
+
 /// The device the cfg selects as a consumer makes it: the default policy, no layer and no
-/// execution records.
+/// execution records, its in-place checks settled.
 fn consumer_device(messages: &Messages, cache: &ScratchCache) -> Device {
     consumer_device_with(messages, cache, DevicePolicy::default())
 }
@@ -501,6 +528,11 @@ fn consumer_device_with(messages: &Messages, cache: &ScratchCache, policy: Devic
         options.record_executions = false;
     })
     .unwrap();
+    let settled = device.settle_in_place_checks(SETTLE);
+    println!(
+        "VIDEO-DEVICE {}: in-place checks settled {settled}",
+        device.name()
+    );
     messages.take_notices();
     device
 }
@@ -531,7 +563,6 @@ fn video_frame_costs() {
     let sampler = sampler(&device, SamplerMinMagFilter::Linear);
     let corners = whole_target(&device);
     let target = target(&device);
-    let frames = [frame_bytes(0), frame_bytes(1)];
     let pages_kinds = [
         Pages::Anonymous,
         #[cfg(target_os = "linux")]
@@ -554,7 +585,11 @@ fn video_frame_costs() {
         let surfaces: Vec<Surface> = (0..POOL)
             .map(|index| Surface::new(pages, memfd.as_ref(), index))
             .collect();
-        for form in [Form::YCbCr, Form::Planes] {
+        for form in [Form::YCbCr, Form::Planes, Form::AlignedPlanes] {
+            let frames = [
+                frame_bytes(0, form.luma_at()),
+                frame_bytes(1, form.luma_at()),
+            ];
             let pipeline = pipeline(&device, fragment(form));
             for making in [Making::Once, Making::EachFrame] {
                 let mut kept: Vec<Option<(Buffer, Vec<(Texture, String)>)>> =
@@ -642,7 +677,12 @@ fn video_frame_parts() {
     for (policy, forms) in [
         (
             DevicePolicy::default(),
-            &[Form::YCbCr, Form::YCbCrImage, Form::Planes][..],
+            &[
+                Form::YCbCr,
+                Form::YCbCrImage,
+                Form::Planes,
+                Form::AlignedPlanes,
+            ][..],
         ),
         (exact, &[Form::YCbCr][..]),
     ] {
@@ -656,11 +696,14 @@ fn parts(device: &Device, forms: &[Form], reads: metal2vulkan::device::YCbCrInPl
     let queue = device.new_command_queue().unwrap();
     let corners = whole_target(&device);
     let target = target(&device);
-    let frames = [frame_bytes(0), frame_bytes(1)];
     let surfaces: Vec<Surface> = (0..POOL)
         .map(|_| Surface::Anonymous(Mapping::anonymous(LEN)))
         .collect();
     for &form in forms {
+        let frames = [
+            frame_bytes(0, form.luma_at()),
+            frame_bytes(1, form.luma_at()),
+        ];
         let pipeline = pipeline(&device, fragment(form));
         let made: Vec<(Buffer, Vec<(Texture, String)>)> = surfaces
             .iter()
@@ -723,4 +766,90 @@ fn parts(device: &Device, forms: &[Form], reads: metal2vulkan::device::YCbCrInPl
         drop(made);
     }
     drop(surfaces);
+}
+
+/// Where single-plane textures over a decoded frame's planes lie (`VIDEO-PLACEMENT`), as the
+/// consumer's guest makes them: CoreVideo's 8-bit `420v` planes (`R8Unorm` 3840x2160 and `RG8Unorm`
+/// 1920x1080, rows 3840 bytes apart) and 10-bit `x420` planes (`R16Unorm` and `RG16Unorm`, rows
+/// 7680 apart), each at 0, 32 (CoreVideo's), 64, 128 and 256 bytes into its page, sampled alone
+/// (`ShaderRead`) and written too (`ShaderRead | ShaderWrite`), over anonymous pages and, on Linux,
+/// guest RAM's dma-buf pages: the placement the runtime answers before the making, and what the
+/// making took. Then the words of every distinct `shadowed-texture` notice, which name the
+/// driver's refusal.
+#[test]
+#[ignore = "a measurement: run by name"]
+fn video_plane_placements() {
+    let cache = ScratchCache::new().unwrap();
+    let messages = Messages::default();
+    let device = consumer_device(&messages, &cache);
+    let planes = [
+        (PixelFormat::R8Unorm, W, H, W),
+        (PixelFormat::RG8Unorm, W / 2, H / 2, W),
+        (PixelFormat::R16Unorm, W, H, ROW),
+        (PixelFormat::RG16Unorm, W / 2, H / 2, ROW),
+    ];
+    let usages = [
+        TextureUsage::SHADER_READ,
+        TextureUsage::SHADER_READ | TextureUsage::SHADER_WRITE,
+    ];
+    let pages_kinds = [
+        Pages::Anonymous,
+        #[cfg(target_os = "linux")]
+        Pages::GuestRam,
+    ];
+    for pages in pages_kinds {
+        #[cfg(target_os = "linux")]
+        let memfd = match pages {
+            Pages::GuestRam if !udmabuf_openable("video_plane_placements") => continue,
+            Pages::GuestRam => Some(std::rc::Rc::new(Memfd::new(LEN))),
+            Pages::Anonymous => None,
+        };
+        #[cfg(not(target_os = "linux"))]
+        let memfd = None;
+        let surface = Surface::new(pages, memfd.as_ref(), 0);
+        let buffer = surface.buffer(&device);
+        for (pf, w, h, row) in planes {
+            for at in [0, 32, 64, 128, 256] {
+                for usage in usages {
+                    let mut d = TextureDescriptor::texture_2d(pf, w, h, false);
+                    d.usage = usage;
+                    d.resource_options = buffer.resource_options();
+                    let plane = IoSurfacePlane::new(at, row, true);
+                    let placement = buffer.texture_placement_with_iosurface_plane(&d, plane);
+                    let before = device.work_counts();
+                    let made = buffer.new_texture_with_iosurface_plane(&d, plane);
+                    let after = device.work_counts();
+                    let took = match &made {
+                        Ok(_) if after.host_textures_in_place > before.host_textures_in_place => {
+                            "in place".to_owned()
+                        }
+                        Ok(_) => format!(
+                            "a shadow ({} refused for the pitch)",
+                            after.host_texture_shadows_refused_pitch
+                                - before.host_texture_shadows_refused_pitch
+                        ),
+                        Err(error) => format!("refused: {error}"),
+                    };
+                    println!(
+                        "VIDEO-PLACEMENT on {}: {pages:?} pages, {pf:?} {w}x{h}, rows {row}, at                          {at}, {usage:?}: answered {placement:?}, took {took}",
+                        device.name()
+                    );
+                    drop(made);
+                }
+            }
+        }
+        drop(buffer);
+        drop(surface);
+    }
+    let mut words: Vec<String> = messages
+        .take_notices()
+        .into_iter()
+        .filter(|message| message.id_name == "shadowed-texture")
+        .map(|message| message.text)
+        .collect();
+    words.sort();
+    words.dedup();
+    for text in words {
+        println!("VIDEO-PLACEMENT-NOTICE on {}: {text}", device.name());
+    }
 }
