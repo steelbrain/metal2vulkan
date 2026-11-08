@@ -3334,7 +3334,9 @@ impl CommandBuffer {
         // the log's publication.
         if shared.copied.any() {
             let mut used = CopiesReached::default();
-            match self.0.unnoted.load(Ordering::Relaxed) || self.state().reaches_unnamed {
+            // The state's lock goes before the dirty log's is taken.
+            let unnamed = self.0.unnoted.load(Ordering::Relaxed) || self.state().reaches_unnamed;
+            match unnamed {
                 true => used.reached_all(),
                 false => self.dirty().copies_used(&mut used),
             }
