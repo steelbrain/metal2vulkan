@@ -580,10 +580,10 @@ fn texels_share_no_line_exactly_where_each_gap_starts_and_ends_on_one() {
     assert_eq!(RowEnds::of(0, &slices(1056), 64), inside);
     // A line of a byte: every byte its own line.
     assert_eq!(RowEnds::of(3, &rows_of(5, 61, 67, 37), 1), on);
-    // The check's shapes at 64-byte lines: seven share none, six share one.
+    // The check's shapes at 64-byte lines: seven share none, nine share one.
     let rows = |line| SHAPES.map(|shape| shape.rows(line));
     let shared = rows(64).iter().filter(|&&rows| rows == inside).count();
-    assert_eq!((SHAPES.len() - shared, shared), (7, 8));
+    assert_eq!((SHAPES.len() - shared, shared), (7, 9));
     // A driver that makes no linear image with bytes between rows but at the next multiple of its
     // own (MoltenVK's 16 bytes, its line 16 bytes; llvmpipe's 64, its line 64; NVIDIA's 128 and
     // RADV's 256, their lines 64) has shapes at that pitch whose texels share a line, for each
