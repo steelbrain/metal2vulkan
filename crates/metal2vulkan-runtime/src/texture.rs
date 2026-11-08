@@ -5111,16 +5111,15 @@ impl Texture {
         if aspect != ImageAspectFlags::DEPTH || !self.float_depth_image() {
             return;
         }
-        let format = self.pixel_format();
+        let (device, format) = (self.device(), self.pixel_format());
         if self.depth_clamps() {
-            self.device()
-                .degrade(Degradation::RestrictedDepthUpload, || {
-                    let why = format!(
-                        "{call} wrote its depth image on a device without \
+            device.degrade(Degradation::RestrictedDepthUpload, || {
+                let why = format!(
+                    "{call} wrote its depth image on a device without \
                      VK_EXT_depth_range_unrestricted"
-                    );
-                    (format!("a {format:?} texture"), why)
-                });
+                );
+                (format!("a {format:?} texture"), why)
+            });
         } else if signed {
             self.degrade_signed_depth(call);
         }
@@ -5135,15 +5134,14 @@ impl Texture {
         if !self.float_depth_image() || !self.depth_clamps() {
             return;
         }
-        let format = self.pixel_format();
-        self.device()
-            .degrade(Degradation::RestrictedDepthUpload, || {
-                let why = format!(
-                    "`{call}`'s texture in a heap takes the depth its bytes hold into its depth \
+        let (device, format) = (self.device(), self.pixel_format());
+        device.degrade(Degradation::RestrictedDepthUpload, || {
+            let why = format!(
+                "`{call}`'s texture in a heap takes the depth its bytes hold into its depth \
                  image by copies, on a device without VK_EXT_depth_range_unrestricted"
-                );
-                (format!("a {format:?} texture"), why)
-            });
+            );
+            (format!("a {format:?} texture"), why)
+        });
     }
 
     /// Whether the texture's image holds a 32-bit float depth.
