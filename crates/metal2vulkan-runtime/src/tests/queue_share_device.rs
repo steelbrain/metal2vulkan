@@ -345,7 +345,19 @@ fn no_queue_joins_an_unshared_queue_s_vk_queue_and_one_placed_there_leaves() {
         // robin's next `VkQueue` (`Device::new_command_queue_unshared`), so every `round_robin`-th
         // queue after it is on its `VkQueue` (on a device of one queue, each), and no other.
         let round_robin = device.shared().round_robin();
-        for _ in 0..16 {
+        // A choice withholds a join from the unshared queue's `VkQueue` only while that
+        // `VkQueue` is busy and its oldest batch in flight young (`queue_share.rs`), as a choice
+        // right after a burst finds it, unless the host was slow to come back from the burst
+        // (its batches complete or seen complete long before): where the device shares, the
+        // bursts go on past the 16 until a choice withheld one, for at most `WAIT`.
+        let began = Instant::now();
+        let mut bursts = 0;
+        while bursts < 16
+            || (shares
+                && device.work_counts().joins_withheld_from_unshared == 0
+                && began.elapsed() < WAIT)
+        {
+            bursts += 1;
             let kept = burst(&unshared, &scratch, 24);
             for (after, queue) in others.iter().enumerate() {
                 let made = queue.command_buffer().unwrap();
@@ -365,8 +377,14 @@ fn no_queue_joins_an_unshared_queue_s_vk_queue_and_one_placed_there_leaves() {
             home,
             "the unshared queue moved"
         );
+        let counts = device.work_counts();
+        println!(
+            "{bursts} bursts: {} choices withheld a join from the unshared queue's VkQueue, {} \
+             found no other VkQueue busy",
+            counts.joins_withheld_from_unshared, counts.picks_with_none_busy
+        );
         if shares {
-            assert!(device.work_counts().joins_withheld_from_unshared > 0);
+            assert!(counts.joins_withheld_from_unshared > 0);
             // Every round robin's `VkQueue` holds a queue, so the next unshared queue shares
             // one with a queue, which leaves at its next idle point.
             let filled: Vec<CommandQueue> = (0..round_robin)
