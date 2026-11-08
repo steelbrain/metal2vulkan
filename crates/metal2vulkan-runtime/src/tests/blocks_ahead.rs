@@ -67,6 +67,12 @@ fn makings_ended(device: &Device) {
     }
 }
 
+/// The blocks the buffers' pool grew by from `before` to `after`, made ahead or in place.
+fn grown(before: &WorkCounts, after: &WorkCounts) -> u64 {
+    (after.buffer_blocks_made_ahead + after.buffer_blocks_made_in_place)
+        - (before.buffer_blocks_made_ahead + before.buffer_blocks_made_in_place)
+}
+
 /// Make a buffer on `device` into `held`, then wait for the makings it started: the counts after.
 fn make(device: &Device, held: &mut Vec<Buffer>) -> WorkCounts {
     assert!(held.len() < MOST, "the pool never grew as far");
@@ -81,27 +87,27 @@ fn a_growing_pool_s_new_blocks_are_made_ahead_and_none_in_place() {
     let scratch = Scratch::new("growth");
     let device = device(&scratch.0);
     let mut held = Vec::new();
-    // The first creation makes each pool's first block; the pool's first growth past it is made
-    // in place, as nothing grew before it.
+    // The first creation makes each pool's first block; the buffers' pool's first growth past it
+    // is made in place, as nothing grew before it. Other pools' blocks are not counted.
     let start = make(&device, &mut held);
     let mut counts = start;
-    while counts.pooled_memory_blocks_made == start.pooled_memory_blocks_made {
+    while grown(&start, &counts) == 0 {
         counts = make(&device, &mut held);
     }
     let before = counts;
-    while counts.pooled_memory_blocks_made - before.pooled_memory_blocks_made < GROWTH {
+    while grown(&before, &counts) < GROWTH {
         counts = make(&device, &mut held);
     }
     let in_place = counts.buffer_blocks_made_in_place - before.buffer_blocks_made_in_place;
     let ahead = counts.buffer_blocks_made_ahead - before.buffer_blocks_made_ahead;
     let waited_for = counts.blocks_ahead_waited_for - before.blocks_ahead_waited_for;
     println!(
-        "BLOCKS-AHEAD {}: {} buffers of {BUFFER_BYTES} bytes; over the last {} blocks made, \
-         {ahead} made ahead, {in_place} in place, {waited_for} waited for; the first growth made \
-         {} in place",
+        "BLOCKS-AHEAD {}: {} buffers of {BUFFER_BYTES} bytes; over the buffers' pool's last {} \
+         blocks, {ahead} made ahead, {in_place} in place, {waited_for} waited for; its first \
+         growth made {} in place",
         device.name(),
         held.len(),
-        counts.pooled_memory_blocks_made - before.pooled_memory_blocks_made,
+        grown(&before, &counts),
         before.buffer_blocks_made_in_place - start.buffer_blocks_made_in_place,
     );
     assert_eq!(
@@ -162,11 +168,11 @@ fn a_creation_that_needs_a_block_whose_making_waits_for_quiet_waits_for_its_allo
             held.push(buffer.unwrap());
             made.elapsed()
         };
-        // The pool's first growth, made in place; the next creation starts its next block's
-        // making, which waits for a pause the queues never make.
+        // The buffers' pool's first growth, made in place; the next creation starts its next
+        // block's making, which waits for a pause the queues never make.
         new_buffer(&mut held);
         let start = device.work_counts();
-        while device.work_counts().pooled_memory_blocks_made == start.pooled_memory_blocks_made {
+        while grown(&start, &device.work_counts()) == 0 {
             new_buffer(&mut held);
         }
         // Back to back until a creation call waited for a making its wait for quiet had not let
