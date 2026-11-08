@@ -401,9 +401,13 @@ fn a_tiled_texture_takes_levels_over_the_buffer_s_rows() {
             row_bytes: 32,
         })
     );
-    // A texture buffer has one level, at an offset of 16 bytes' multiple.
+    // A texture buffer has one level (the descriptor's check stops two before the buffer's plan
+    // here, which holds them to one), at an offset of 16 bytes' multiple.
+    let mut two = buffer_texture(tiled(1, texture_buffer(64, 0, 256, 4096)));
+    two.layout.levels = 2;
+    let facts = BufferFacts { length: 4096 };
     assert_eq!(
-        plan(tiled(2, texture_buffer(64, 0, 256, 4096))),
+        plan_buffer_texture(&two, &facts).map(|placed| placed.gpu),
         refused(Pr::MipmapLevelCount { count: 2 })
     );
     assert_eq!(
