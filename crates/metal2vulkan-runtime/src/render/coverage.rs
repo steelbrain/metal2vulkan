@@ -114,9 +114,15 @@ struct Measured {
 }
 
 /// One pass's readers: each one's place among its state's readers of its texture, and, where
-/// the device measures them, the pool its first measured reader made and the readers measured.
+/// the device measures them, the pool its first measured reader took and the readers measured.
+/// Nothing (and no allocation) in a pass without readers: a pass's lowering holds a pointer's
+/// width of it.
 #[derive(Default)]
-pub(super) struct Readers {
+pub(super) struct Readers(Option<Box<PassReaders>>);
+
+/// What a pass with readers keeps of them ([`Readers`]).
+#[derive(Default)]
+struct PassReaders {
     ordinals: Vec<((usize, usize), u32)>,
     /// The device measures readers: `None` until the pass's first reader asks.
     measures: Option<bool>,
@@ -129,14 +135,15 @@ impl Readers {
     /// The identity of the draw of the state at `state` reading `texture` (the one a view was
     /// made from) as the next of that state's readers of it in the pass.
     pub(super) fn next_key(&mut self, state: usize, texture: &Texture) -> ReaderKey {
+        let readers = self.0.get_or_insert_with(Box::default);
         let pair = (state, texture.root_address());
-        let ordinal = match self.ordinals.iter_mut().find(|(p, _)| *p == pair) {
+        let ordinal = match readers.ordinals.iter_mut().find(|(p, _)| *p == pair) {
             Some((_, next)) => {
                 *next += 1;
                 *next - 1
             }
             None => {
-                self.ordinals.push((pair, 1));
+                readers.ordinals.push((pair, 1));
                 0
             }
         };
@@ -152,7 +159,8 @@ impl Readers {
         texture: &Texture,
         key: ReaderKey,
     ) -> Result<Option<(vk::QueryPool, u32)>, Error> {
-        let measures = *self.measures.get_or_insert_with(|| {
+        let readers = self.0.get_or_insert_with(Box::default);
+        let measures = *readers.measures.get_or_insert_with(|| {
             let shared = device.shared();
             shared.timing.resets_on_host()
                 && device
@@ -160,16 +168,16 @@ impl Readers {
                     .description
                     .has(VkFeature::OcclusionQueryPrecise)
         });
-        if !measures || self.used == MEASURED {
+        if !measures || readers.used == MEASURED {
             return Ok(None);
         }
-        let pool = match &self.pool {
+        let pool = match &readers.pool {
             Some(pool) => pool.raw,
-            None => self.pool.insert(Pool::new(device)?).raw,
+            None => readers.pool.insert(Pool::new(device)?).raw,
         };
-        let query = self.used;
-        self.used += 1;
-        self.measured.push(Measured {
+        let query = readers.used;
+        readers.used += 1;
+        readers.measured.push(Measured {
             query,
             texture: texture.clone(),
             key,
@@ -180,10 +188,10 @@ impl Readers {
     /// What the pass's command buffer holds until it completes, to read its readers' counts
     /// then: `None` where the pass measured none.
     pub(super) fn readback(self) -> Option<Readback> {
-        let pool = self.pool?;
+        let readers = *self.0?;
         Some(Readback {
-            pool,
-            measured: self.measured,
+            pool: readers.pool?,
+            measured: readers.measured,
         })
     }
 }
