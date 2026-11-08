@@ -782,7 +782,36 @@ submission, can give the device the guest's RAM once instead:
   pass the buffer's length (`Invalid`, `Problem::RangeOutOfBounds`, the first such run's); a run
   at a byte of the buffer off a word is copied by regions, not refused.
 
-## 7. Check the integration
+## 7. Memory another API writes
+
+A video decoder or another driver that writes a runtime buffer in place imports the buffer's
+memory. Make the buffer with a descriptor's `exported_as`: `MemoryExport::DmaBuf` for VA-API or
+any dma-buf importer, `MemoryExport::OpaqueFd` for CUDA or another `VkDevice` of the same driver
+(`Device::new_exportable_buffer` makes the latter too). The descriptor's `aligned_byte` and
+`padding_unobserved` act as for any buffer, so a frame whose planes start 32 bytes into their
+surface keeps its textures in place:
+
+```rust,ignore
+let descriptor = BufferDescriptor::new(length, ResourceOptions::private(), BufferContents::Zero)
+    .with_aligned_byte(0x20)
+    .with_padding_unobserved()
+    .with_exported_as(MemoryExport::DmaBuf);
+let frame = device.new_buffer_with_descriptor(descriptor)?;
+let exported = frame.export_memory_dma_buf()?;
+// A DRM_PRIME_2 surface: the dma-buf `exported.fd` of `exported.allocation_size` bytes, each
+// plane at `exported.offset` plus its offset in the frame, DRM_FORMAT_MOD_LINEAR.
+```
+
+The export settles the zeros the buffer was made with first, so the decoder may write at once.
+After each of its writes, once the consumer waited for them (`vaSyncSurface`), call
+`frame.external_write_done()`: Vulkan leaves what another API wrote undefined until the device
+acquires the memory from the queue family reserved for it, and the device's next submission records
+that acquire before its commands, so the call waits for no GPU work. The decoder writes only while
+no command of the runtime's that uses the buffer is in flight, and the buffer outlives every import.
+A device that does not export a dma-buf refuses the making (`NotImplemented`,
+`RuntimeGap::DmaBufExport`); the consumer then decodes into its own memory and copies.
+
+## 8. Check the integration
 
 `spirv-val` checks structural validity, not agreement with Metal:
 

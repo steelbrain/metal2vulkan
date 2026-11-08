@@ -280,6 +280,26 @@ the record the pass is making.
   contents are lost for the imports too, and a device made again exports new allocations. A
   device without `VK_KHR_external_memory_fd`, or that exports no buffer's memory so, refuses it
   (`RuntimeGap::ExportableMemory`).
+- A buffer descriptor's `exported_as` (`MemoryExport::OpaqueFd` or `MemoryExport::DmaBuf`) makes
+  such a buffer of either handle type with the descriptor's other fields: `aligned_byte` lays that
+  byte on a multiple of 256 bytes of the exported memory, and `padding_unobserved` lets textures
+  over it alias it with rows apart. Dma-buf-exportable buffers share blocks of their own kind, or
+  take a dedicated allocation where the device needs or prefers one. `Buffer::export_memory_dma_buf`
+  answers a new dma-buf each call, with what `export_memory_fd` answers; its `offset` is the
+  buffer's first byte, so a VA-API `DRM_PRIME_2` surface's plane lies at `offset` plus the plane's
+  offset in the buffer. A device without `VK_KHR_external_memory_fd`,
+  `VK_EXT_external_memory_dma_buf` and `VK_EXT_queue_family_foreign`, which the runtime enables
+  wherever listed, or that exports no buffer's memory as a dma-buf, refuses it
+  (`RuntimeGap::DmaBufExport`). `NoCopy` contents with `exported_as` are refused
+  (`Problem::ExportedNoCopy`).
+- `Buffer::external_write_done` says the other API's writes to an exported buffer completed (the
+  consumer waited for them: `vaSyncSurface`, a CUDA stream's synchronize). Vulkan needs an acquire
+  from the queue family reserved for that API before the device reads them
+  (`VK_QUEUE_FAMILY_FOREIGN_EXT` for a dma-buf, `VK_QUEUE_FAMILY_EXTERNAL` for an opaque
+  descriptor): the device's next submission records it, of the whole `VkBuffer`, before any of its
+  commands, so the call waits for no GPU work; a host-visible buffer's acquire is made at once and
+  waited for alone. Call it once after each external write, while none of the runtime's commands
+  that use the buffer is in flight. Metal has no counterpart.
 - `Device::new_exportable_shared_event` makes a shared event whose timeline semaphore another API
   imports (CUDA's external semaphores, another `VkDevice`), made exportable as an opaque file
   descriptor; `SharedEvent::export_semaphore_fd` answers a new descriptor each call. Its counter

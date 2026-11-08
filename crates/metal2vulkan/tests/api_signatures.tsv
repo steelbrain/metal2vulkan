@@ -1286,6 +1286,7 @@ enum	metal2vulkan-runtime::LimitRow	#[derive(Clone, Copy, Debug, PartialEq, Eq, 
 enum	metal2vulkan-runtime::LoadAction	#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum LoadAction
 enum	metal2vulkan-runtime::MacClass	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum MacClass
 enum	metal2vulkan-runtime::MappedSampling	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum MappedSampling
+enum	metal2vulkan-runtime::MemoryExport	#[derive(Clone, Copy, Debug, PartialEq, Eq)] #[non_exhaustive] pub enum MemoryExport
 enum	metal2vulkan-runtime::MemoryKind	#[derive(Clone, Copy, Debug, PartialEq, Eq)] #[non_exhaustive] pub enum MemoryKind
 enum	metal2vulkan-runtime::MessageSeverity	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum MessageSeverity
 enum	metal2vulkan-runtime::MipmapProblem	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum MipmapProblem
@@ -2004,6 +2005,7 @@ field	metal2vulkan-runtime::BinaryArchiveMiss.function	pub function: String
 field	metal2vulkan-runtime::BinaryArchiveMiss.pipeline	pub pipeline: ArchivedPipeline
 field	metal2vulkan-runtime::BufferDescriptor.aligned_byte	pub aligned_byte: Option<u64>
 field	metal2vulkan-runtime::BufferDescriptor.contents	pub contents: BufferContents<'a>
+field	metal2vulkan-runtime::BufferDescriptor.exported_as	pub exported_as: Option<MemoryExport>
 field	metal2vulkan-runtime::BufferDescriptor.length	pub length: u64
 field	metal2vulkan-runtime::BufferDescriptor.padding_unobserved	pub padding_unobserved: bool
 field	metal2vulkan-runtime::BufferDescriptor.placement	pub placement: AddressPlacement
@@ -7850,7 +7852,9 @@ method	metal2vulkan-runtime::Buffer::cpu_cache_mode	pub fn cpu_cache_mode(&self)
 method	metal2vulkan-runtime::Buffer::detach_backing	pub fn detach_backing(&self) -> Result<bool, Error>
 method	metal2vulkan-runtime::Buffer::device	pub fn device(&self) -> &Device
 method	metal2vulkan-runtime::Buffer::did_modify_range	pub fn did_modify_range(&self, range: Range<u64>) -> Result<(), Error>
+method	metal2vulkan-runtime::Buffer::export_memory_dma_buf	pub fn export_memory_dma_buf(&self) -> Result<ExportedMemory, Error>
 method	metal2vulkan-runtime::Buffer::export_memory_fd	pub fn export_memory_fd(&self) -> Result<ExportedMemory, Error>
+method	metal2vulkan-runtime::Buffer::external_write_done	pub fn external_write_done(&self) -> Result<(), Error>
 method	metal2vulkan-runtime::Buffer::gpu_address	pub fn gpu_address(&self) -> GpuAddress
 method	metal2vulkan-runtime::Buffer::hazard_tracking_mode	pub fn hazard_tracking_mode(&self) -> HazardTrackingMode
 method	metal2vulkan-runtime::Buffer::heap	pub fn heap(&self) -> Option<&Heap>
@@ -7877,6 +7881,7 @@ method	metal2vulkan-runtime::Buffer::vk_buffer	pub unsafe fn vk_buffer(&self) ->
 method	metal2vulkan-runtime::Buffer::vk_host_memory	pub unsafe fn vk_host_memory(&self) -> Option<VkHostMemory>
 method	metal2vulkan-runtime::BufferDescriptor::new	pub fn new(length: u64, resource_options: ResourceOptions, contents: BufferContents<'a>) -> BufferDescriptor<'a>
 method	metal2vulkan-runtime::BufferDescriptor::with_aligned_byte	pub fn with_aligned_byte(self, byte: u64) -> BufferDescriptor<'a>
+method	metal2vulkan-runtime::BufferDescriptor::with_exported_as	pub fn with_exported_as(self, export: MemoryExport) -> BufferDescriptor<'a>
 method	metal2vulkan-runtime::BufferDescriptor::with_padding_unobserved	pub fn with_padding_unobserved(self) -> BufferDescriptor<'a>
 method	metal2vulkan-runtime::BufferDescriptor::with_placement	pub fn with_placement(self, placement: AddressPlacement) -> BufferDescriptor<'a>
 method	metal2vulkan-runtime::BufferDescriptor::with_pool_slot	pub fn with_pool_slot(self, pool: &'a AddressPool, offset: u64) -> BufferDescriptor<'a>
@@ -12077,6 +12082,8 @@ variant	metal2vulkan-runtime::MacClass::IntelOrAmd	IntelOrAmd
 variant	metal2vulkan-runtime::MappedSampling::ConstexprSampler	ConstexprSampler
 variant	metal2vulkan-runtime::MappedSampling::Handles	Handles
 variant	metal2vulkan-runtime::MappedSampling::SharedSamplerSlot	SharedSamplerSlot
+variant	metal2vulkan-runtime::MemoryExport::DmaBuf	DmaBuf
+variant	metal2vulkan-runtime::MemoryExport::OpaqueFd	OpaqueFd
 variant	metal2vulkan-runtime::MemoryKind::Device	Device
 variant	metal2vulkan-runtime::MemoryKind::Heap	Heap
 variant	metal2vulkan-runtime::MemoryKind::Host	Host
@@ -12172,6 +12179,7 @@ variant	metal2vulkan-runtime::Problem::DynamicLibraryFunction	DynamicLibraryFunc
 variant	metal2vulkan-runtime::Problem::EmptyThreadgroup	EmptyThreadgroup
 variant	metal2vulkan-runtime::Problem::EncoderAbandoned	EncoderAbandoned
 variant	metal2vulkan-runtime::Problem::EncoderOpen	EncoderOpen
+variant	metal2vulkan-runtime::Problem::ExportedNoCopy	ExportedNoCopy
 variant	metal2vulkan-runtime::Problem::ForeignObject	ForeignObject
 variant	metal2vulkan-runtime::Problem::FunctionTable	FunctionTable(FunctionTableProblem)
 variant	metal2vulkan-runtime::Problem::HandlerAfterCommit	HandlerAfterCommit
@@ -12323,6 +12331,7 @@ variant	metal2vulkan-runtime::RuntimeGap::DepthStencilResolve	DepthStencilResolv
 variant	metal2vulkan-runtime::RuntimeGap::DetachTextures	DetachTextures
 variant	metal2vulkan-runtime::RuntimeGap::DetachedTexelAccess	DetachedTexelAccess
 variant	metal2vulkan-runtime::RuntimeGap::DeviceNotifications	DeviceNotifications
+variant	metal2vulkan-runtime::RuntimeGap::DmaBufExport	DmaBufExport
 variant	metal2vulkan-runtime::RuntimeGap::EmptyFillPattern	EmptyFillPattern
 variant	metal2vulkan-runtime::RuntimeGap::ExecutionRangeOffFour	ExecutionRangeOffFour { offset: u64 }
 variant	metal2vulkan-runtime::RuntimeGap::ExecutionRangePastBuffer	ExecutionRangePastBuffer { offset: u64, length: u64 }
