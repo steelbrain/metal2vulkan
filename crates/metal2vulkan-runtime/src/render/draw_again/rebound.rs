@@ -173,6 +173,8 @@ struct Changed {
     /// Whether every call moved the offset of a buffer slot alone, keeping the buffer bound there
     /// (`argument_table::Changed::offset`): the draw is moved (the module docs).
     moved: bool,
+    /// Whether one of the slots is a texture or sampler slot.
+    images: bool,
 }
 
 impl Changed {
@@ -189,6 +191,7 @@ impl Changed {
             offsets: 0,
             whole: 0,
             moved: true,
+            images: false,
         }
     }
 
@@ -222,6 +225,7 @@ impl Changed {
         };
         *free = slot;
         self.count += 1;
+        self.images |= slot.class != SlotClass::Buffer;
         true
     }
 
@@ -231,9 +235,7 @@ impl Changed {
 
     /// Whether one is a texture or sampler slot.
     fn images(&self) -> bool {
-        self.list()
-            .iter()
-            .any(|slot| slot.class != SlotClass::Buffer)
+        self.images
     }
 }
 
@@ -397,8 +399,13 @@ impl RenderLowering {
             if stamps[at] == under {
                 continue;
             }
+            // The state holds the stage, as each changed table's (above).
+            let Some(state) = live.state.stages.get_mut(&stage) else {
+                live.reshaped(reshape);
+                return None;
+            };
             let maps = live.read_from.maps();
-            let from = (live.state.stages.entry(stage).or_default(), under);
+            let from = (state, under);
             if !table.refresh_changed(from, (stage, interface), (maps, views), &mut reshape) {
                 live.reshaped(reshape);
                 return None;
