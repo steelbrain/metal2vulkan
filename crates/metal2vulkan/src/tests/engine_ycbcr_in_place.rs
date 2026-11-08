@@ -1292,9 +1292,29 @@ fn a_slot_that_samples_and_gathers_reads_its_planes_in_place() {
             };
             assert!(!notes(&a).contains(&other), "{what}: {:?}", notes(&a));
             // The model's note holds only under the bound format and word, never outright.
-            assert!(!a.precision.contains(&filter), "{what}: {:?}", a.precision);
-            let noted = a.specialized.iter().any(|s| s.note == filter);
-            assert_eq!(noted, policy == "model", "{what}: {:?}", a.specialized);
+            let clauses: Vec<_> = a
+                .specialized
+                .iter()
+                .filter(|s| s.note == filter)
+                .flat_map(|s| &s.when)
+                .collect();
+            let word = |c: &&crate::pipeline::artifact::SpecClause| {
+                c.all
+                    .iter()
+                    .any(|t| matches!(t.key, SpecKey::BoundSamplerWord(_)))
+            };
+            assert_eq!(
+                !clauses.is_empty() && clauses.iter().all(word),
+                policy == "model",
+                "{what}: {:?}",
+                a.specialized
+            );
+            assert_eq!(
+                notes(&a).contains(&filter),
+                policy == "model",
+                "{what}: {:?}",
+                notes(&a)
+            );
         }
     }
 }

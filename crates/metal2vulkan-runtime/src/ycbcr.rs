@@ -954,7 +954,7 @@ impl YCbCrConversion {
         let state_at = made.shape_at + STATE_AT;
         let completed_at = made.shape_at + COMPLETED_AT;
         let word = |w: u32| w.to_le_bytes();
-        let refresh = self
+        let refresh = made
             .refresh
             .as_ref()
             .filter(|refresh| refresh.planes == source);
