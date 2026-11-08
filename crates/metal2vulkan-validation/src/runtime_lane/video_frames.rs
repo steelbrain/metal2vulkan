@@ -772,7 +772,9 @@ fn parts(device: &Device, forms: &[Form], reads: metal2vulkan::device::YCbCrInPl
 /// consumer's guest makes them: CoreVideo's 8-bit `420v` planes (`R8Unorm` 3840x2160 and `RG8Unorm`
 /// 1920x1080, rows 3840 bytes apart) and 10-bit `x420` planes (`R16Unorm` and `RG16Unorm`, rows
 /// 7680 apart), each at 0, 32 (CoreVideo's), 64, 128 and 256 bytes into its page, sampled alone
-/// (`ShaderRead`) and written too (`ShaderRead | ShaderWrite`), over anonymous pages and, on Linux,
+/// (`ShaderRead`) and written too (`ShaderRead | ShaderWrite`), over `Shared` and `Private` buffers
+/// of the runtime's own (each with its address, its contents' offset into a page and the device's
+/// linear texture alignments), anonymous pages and, on Linux,
 /// a `memfd`'s pages with a dma-buf source and a guest RAM's (`HostRam` over a `memfd`, its source
 /// asked for chunks as long as `udmabuf` takes, as the consumer's is), two buffers over it: the
 /// placement the runtime answers before the making, and what the making took. Then the words of
@@ -783,6 +785,41 @@ fn video_plane_placements() {
     let cache = ScratchCache::new().unwrap();
     let messages = Messages::default();
     let device = consumer_device(&messages, &cache);
+    for (options, what) in [
+        (
+            ResourceOptions::shared(),
+            "a Shared buffer of the runtime's",
+        ),
+        (
+            ResourceOptions::private(),
+            "a Private buffer of the runtime's",
+        ),
+    ] {
+        let buffer = device.new_buffer(LEN as u64, options).unwrap();
+        let linear: Vec<String> = [
+            PixelFormat::R8Unorm,
+            PixelFormat::RG8Unorm,
+            PixelFormat::R16Unorm,
+            PixelFormat::RG16Unorm,
+        ]
+        .into_iter()
+        .map(|pf| {
+            let alignment = device
+                .minimum_linear_texture_alignment_for_pixel_format(pf)
+                .unwrap();
+            format!("{pf:?} {alignment}")
+        })
+        .collect();
+        println!(
+            "VIDEO-PLACEMENT on {}: {what}: gpuAddress {:#x}, contents {:?}, linear texture \
+             alignments [{}]",
+            device.name(),
+            buffer.gpu_address().0,
+            buffer.contents().map(|at| at.as_ptr() as usize % 4096),
+            linear.join(", "),
+        );
+        probe_planes(&device, what, &buffer);
+    }
     let anonymous = Surface::new(Pages::Anonymous, None, 0);
     probe_planes(&device, "anonymous pages", &anonymous.buffer(&device));
     drop(anonymous);
@@ -887,6 +924,9 @@ fn probe_planes(device: &Device, what: &str, buffer: &Buffer) {
                 let took = match &made {
                     Ok(_) if after.host_textures_in_place > before.host_textures_in_place => {
                         "in place".to_owned()
+                    }
+                    Ok(_) if after.shadowed_textures == before.shadowed_textures => {
+                        "an image over the buffer's memory".to_owned()
                     }
                     Ok(_) => format!(
                         "a shadow ({} refused for the pitch)",
