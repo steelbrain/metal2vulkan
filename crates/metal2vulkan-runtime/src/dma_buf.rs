@@ -84,7 +84,7 @@ use super::host_memory::{based_size, import_refused, not_importable, ImportWindo
 use super::host_residency::Again;
 use super::image_plan::{ImageFacts, ImagePlan};
 use super::linear_plan::{check_linear_limits, tiling_lack, viewed_formats, LinearLack};
-use super::memory::{ImportFailure, MemoryClass, Placement};
+use super::memory::{self, ImportFailure, MemoryClass, Placement};
 use super::program_objects::ProgramObject;
 use super::Device;
 use crate::release;
@@ -822,12 +822,18 @@ impl Device {
             let types = unsafe { importer.dma_buf_types(raw_device, fd.as_fd()) }
                 .map_err(import_refused)?;
             let allowed = types & requirements.memory_type_bits;
-            let (memory, type_index) = lock(&shared.memory)
-                .import_dma_buf(raw_device, fd, length, (allowed, class), None)
-                .map_err(|failure| match failure {
-                    ImportFailure::NoMemoryType => not_importable(),
-                    ImportFailure::Vulkan(error) => import_refused(error),
-                })?;
+            let made = memory::import_dma_buf(
+                &shared.memory,
+                raw_device,
+                fd,
+                length,
+                (allowed, class),
+                None,
+            );
+            let (memory, type_index) = made.map_err(|failure| match failure {
+                ImportFailure::NoMemoryType => not_importable(),
+                ImportFailure::Vulkan(error) => import_refused(error),
+            })?;
             pages.hold(memory);
             imported.push((memory, type_index));
         }
@@ -1206,7 +1212,8 @@ impl Device {
         // the image at its requirements' size exactly
         // (`VUID-VkMemoryDedicatedAllocateInfo-image-01433`), within the dma-buf's pages.
         let allowed = (types & (1 << texels.type_index), MemoryClass::Shared);
-        let imported = lock(&shared.memory).import_dma_buf(
+        let imported = memory::import_dma_buf(
+            &shared.memory,
             raw_device,
             chunk.fd,
             requirements.size,

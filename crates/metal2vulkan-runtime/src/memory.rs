@@ -1256,6 +1256,10 @@ pub(super) struct Memory {
     /// The placements so far that lie past their class's own memory types, in one they
     /// overflowed into ([`overflow_candidates`], `WorkCounts::device_memory_overflows`).
     overflows: u64,
+    /// A test's stand-in for a driver slow to import a dma-buf ([`import_dma_buf`]), called with
+    /// the lock released where the driver's import runs.
+    #[cfg(test)]
+    pub(crate) import_hold: Option<Arc<dyn Fn() + Send + Sync>>,
     /// Blocks of images are allocated with `VK_MEMORY_ALLOCATE_ZERO_INITIALIZE_BIT_EXT`
     /// ([`Memory::zero_image_blocks`]).
     zero_images: bool,
@@ -1326,6 +1330,8 @@ impl Memory {
             host_copy_pool: None,
             readying: None,
             host_copy_blocks: HostCopyBlocks::default(),
+            #[cfg(test)]
+            import_hold: None,
         }
     }
 
@@ -2007,95 +2013,6 @@ impl Memory {
         self.placement((Holds::Buffers, type_index), index, 0, size, false)
     }
 
-    /// Import the dma-buf `fd`, `size` bytes, as memory of the best type of `class` among
-    /// `allowed` (the types both the dma-buf and what is bound in it take): the memory and its
-    /// type, the caller's to free (`dma_buf.rs`'s `DmaBufPages`), in no block and never mapped.
-    /// Allocated with the device-address flag where the device enables `bufferDeviceAddress`, as
-    /// every block of the runtime's is (`BlockMaker::make_as`), and for `image` as its dedicated
-    /// allocation (`size` its requirements'): every import of one dma-buf, a buffer's and its
-    /// textures' images', and the device's own allocation of it agree, as ANV (Mesa 26.2.6)
-    /// refuses an import of memory it holds whose flag differs (`VK_ERROR_INVALID_EXTERNAL_HANDLE`,
-    /// of every memory type: `dma_buf::ExportedPages`).
-    /// Refused when no type of `class` is among `allowed`, else with the failure of the last type
-    /// tried.
-    ///
-    /// Each attempt hands the driver a **clone** of `fd`, never `fd` itself, and never closes a
-    /// clone it has handed over. Vulkan takes a descriptor's ownership only on a successful
-    /// import ("Importing memory from a file descriptor transfers ownership of the file descriptor
-    /// from the application to the Vulkan implementation. The application must not perform any
-    /// operations on the file descriptor after a successful import", `VkImportMemoryFdInfoKHR`),
-    /// so on failure it is the application's to close -- but NVIDIA's 615.71.09 closes it anyway
-    /// (measured: `F_GETFD` on it reads `EBADF` the instant `vkAllocateMemory` returns
-    /// `ERROR_OUT_OF_DEVICE_MEMORY`), and closing it again aborts the process on Rust's I/O safety
-    /// check. Whether the number is still ours cannot be asked without a race, since the kernel
-    /// may have given it to another thread's `open` by then, so a handed-over clone is let go of
-    /// instead: one descriptor per failed import, in place of a process that dies. `fd` itself is
-    /// closed here as it always was, once, on the way out.
-    #[cfg(unix)]
-    pub(super) fn import_dma_buf(
-        &self,
-        device: &ash::Device,
-        fd: std::os::fd::OwnedFd,
-        size: u64,
-        (allowed, class): (u32, MemoryClass),
-        image: Option<vk::Image>,
-    ) -> Result<(vk::DeviceMemory, u32), ImportFailure> {
-        use std::os::fd::{AsRawFd, IntoRawFd};
-        let mut failure = ImportFailure::NoMemoryType;
-        for type_index in candidates(&self.types, allowed, class, self.unified) {
-            // The descriptor the driver takes, which it owns once the import succeeds and may
-            // close even when it fails (the doc above): never `fd`, and never closed here.
-            let handed = match fd.try_clone() {
-                Ok(handed) => handed,
-                Err(_) => {
-                    failure = ImportFailure::Vulkan(vk::Result::ERROR_TOO_MANY_OBJECTS);
-                    break;
-                }
-            };
-            let mut import = vk::ImportMemoryFdInfoKHR::default()
-                .handle_type(vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT)
-                .fd(handed.as_raw_fd());
-            let mut flags = vk::MemoryAllocateFlagsInfo::default()
-                .flags(vk::MemoryAllocateFlags::DEVICE_ADDRESS);
-            let mut dedicated = vk::MemoryDedicatedAllocateInfo::default();
-            let mut info = vk::MemoryAllocateInfo::default()
-                .allocation_size(size)
-                .memory_type_index(type_index)
-                .push_next(&mut import);
-            if let Some(image) = image {
-                dedicated = dedicated.image(image);
-                info = info.push_next(&mut dedicated);
-            }
-            if self.device_address {
-                info = info.push_next(&mut flags);
-            }
-            // SAFETY: `info` and its chain live for the call; the type index is the device's and
-            // allows the dma-buf (and the image, unbound and made for dma-bufs, whose size this
-            // is). The descriptor it takes is the clone, whose fate is the driver's either way.
-            match unsafe { crate::creation::allocate_memory(device, &info) } {
-                Ok(memory) => {
-                    // A successful import owns the descriptor: Vulkan closes it with the memory.
-                    let _ = handed.into_raw_fd();
-                    if let Some(log) = &self.log {
-                        let what = match image {
-                            Some(_) => "imported a dma-buf for an image",
-                            None => "imported a dma-buf",
-                        };
-                        log.say(what, memory, type_index, size, None);
-                    }
-                    return Ok((memory, type_index));
-                }
-                Err(error) => {
-                    // Let go of it rather than close it: a driver that took it on a failure has
-                    // closed it, and the number may be another thread's by now (the doc above).
-                    let _ = handed.into_raw_fd();
-                    failure = ImportFailure::Vulkan(error);
-                }
-            }
-        }
-        Err(failure)
-    }
-
     /// The property flags of memory type `index`, where the device has it.
     pub(super) fn type_flags(&self, index: u32) -> Option<vk::MemoryPropertyFlags> {
         self.types
@@ -2382,6 +2299,114 @@ fn image_types(
         release::object(device, raw);
         types
     })
+}
+
+/// Import the dma-buf `fd`, `size` bytes, as memory of `memory`'s best type of `class` among
+/// `allowed` (the types both the dma-buf and what is bound in it take): the memory and its type,
+/// the caller's to free (`dma_buf.rs`'s `DmaBufPages`), in no block and never mapped. Allocated
+/// with the device-address flag where the device enables `bufferDeviceAddress`, as every block of
+/// the runtime's is (`BlockMaker::make_as`), and for `image` as its dedicated allocation (`size`
+/// its requirements'): every import of one dma-buf, a buffer's and its textures' images', and the
+/// device's own allocation of it agree, as ANV (Mesa 26.2.6) refuses an import of memory it holds
+/// whose flag differs (`VK_ERROR_INVALID_EXTERNAL_HANDLE`, of every memory type:
+/// `dma_buf::ExportedPages`). The import is made with `memory`'s lock released, as
+/// [`import_host`]'s is: the types are chosen under it, and the import logged under it once made.
+/// A driver's import of a dma-buf maps its pages for the device, which may take long (a consumer
+/// measured no-copy buffers over dma-bufs on the Radeon 780M taking 120 to 273 ms to make), and
+/// the device's other placements, imports and frees, all under that lock, would wait for it.
+/// Refused when no type of `class` is among `allowed`, else with the failure of the last type
+/// tried.
+///
+/// Each attempt hands the driver a **clone** of `fd`, never `fd` itself, and never closes a
+/// clone it has handed over. Vulkan takes a descriptor's ownership only on a successful
+/// import ("Importing memory from a file descriptor transfers ownership of the file descriptor
+/// from the application to the Vulkan implementation. The application must not perform any
+/// operations on the file descriptor after a successful import", `VkImportMemoryFdInfoKHR`),
+/// so on failure it is the application's to close -- but NVIDIA's 615.71.09 closes it anyway
+/// (measured: `F_GETFD` on it reads `EBADF` the instant `vkAllocateMemory` returns
+/// `ERROR_OUT_OF_DEVICE_MEMORY`), and closing it again aborts the process on Rust's I/O safety
+/// check. Whether the number is still ours cannot be asked without a race, since the kernel
+/// may have given it to another thread's `open` by then, so a handed-over clone is let go of
+/// instead: one descriptor per failed import, in place of a process that dies. `fd` itself is
+/// closed here as it always was, once, on the way out.
+#[cfg(unix)]
+pub(super) fn import_dma_buf(
+    memory: &Mutex<Memory>,
+    device: &ash::Device,
+    fd: std::os::fd::OwnedFd,
+    size: u64,
+    (allowed, class): (u32, MemoryClass),
+    image: Option<vk::Image>,
+) -> Result<(vk::DeviceMemory, u32), ImportFailure> {
+    use std::os::fd::{AsRawFd, IntoRawFd};
+    let (types, device_address) = {
+        let memory = lock(memory);
+        (
+            candidates(&memory.types, allowed, class, memory.unified),
+            memory.device_address,
+        )
+    };
+    #[cfg(test)]
+    let hold = lock(memory).import_hold.clone();
+    let mut failure = ImportFailure::NoMemoryType;
+    for type_index in types {
+        // The descriptor the driver takes, which it owns once the import succeeds and may
+        // close even when it fails (the doc above): never `fd`, and never closed here.
+        let handed = match fd.try_clone() {
+            Ok(handed) => handed,
+            Err(_) => {
+                failure = ImportFailure::Vulkan(vk::Result::ERROR_TOO_MANY_OBJECTS);
+                break;
+            }
+        };
+        let mut import = vk::ImportMemoryFdInfoKHR::default()
+            .handle_type(vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT)
+            .fd(handed.as_raw_fd());
+        let mut flags =
+            vk::MemoryAllocateFlagsInfo::default().flags(vk::MemoryAllocateFlags::DEVICE_ADDRESS);
+        let mut dedicated = vk::MemoryDedicatedAllocateInfo::default();
+        let mut info = vk::MemoryAllocateInfo::default()
+            .allocation_size(size)
+            .memory_type_index(type_index)
+            .push_next(&mut import);
+        if let Some(image) = image {
+            dedicated = dedicated.image(image);
+            info = info.push_next(&mut dedicated);
+        }
+        if device_address {
+            info = info.push_next(&mut flags);
+        }
+        // A test's stand-in for a driver slow to import, where the driver's import runs
+        // (`tests::host_residency`).
+        #[cfg(test)]
+        if let Some(hold) = &hold {
+            hold();
+        }
+        // SAFETY: `info` and its chain live for the call; the type index is the device's and
+        // allows the dma-buf (and the image, unbound and made for dma-bufs, whose size this
+        // is). The descriptor it takes is the clone, whose fate is the driver's either way.
+        match unsafe { crate::creation::allocate_memory(device, &info) } {
+            Ok(raw) => {
+                // A successful import owns the descriptor: Vulkan closes it with the memory.
+                let _ = handed.into_raw_fd();
+                if let Some(log) = &lock(memory).log {
+                    let what = match image {
+                        Some(_) => "imported a dma-buf for an image",
+                        None => "imported a dma-buf",
+                    };
+                    log.say(what, raw, type_index, size, None);
+                }
+                return Ok((raw, type_index));
+            }
+            Err(error) => {
+                // Let go of it rather than close it: a driver that took it on a failure has
+                // closed it, and the number may be another thread's by now (the doc above).
+                let _ = handed.into_raw_fd();
+                failure = ImportFailure::Vulkan(error);
+            }
+        }
+    }
+    Err(failure)
 }
 
 /// Import the caller's host memory, `size` bytes at `pointer` (both multiples of the device's

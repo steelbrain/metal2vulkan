@@ -17,7 +17,11 @@
 //! - that a buffer whose Metal address was handed out stays imported;
 //! - that a buffer past the descriptors the device keeps (capped through
 //!   `Device::cap_kept_host_import_fds`) is made and stays imported, counted while it lives
-//!   (`host_imports_kept_for_fds`).
+//!   (`host_imports_kept_for_fds`);
+//! - that a placement and an import of a pointer made while a no-copy buffer's dma-buf import is
+//!   held where the driver's import runs (the memory's test stand-in, `Memory::import_hold`) wait
+//!   for none of it, and how long placements wait beside real imports of 256 MiB of dma-bufs
+//!   (`memory::import_dma_buf` makes them with the device's memory lock released).
 //!
 //! A device that imports the pointer (NVIDIA, lavapipe, ANV) runs none of it: each test says so
 //! and passes, and `tests/pointer_residency.rs` checks the residency of pointer imports. Where
@@ -777,6 +781,255 @@ fn a_buffer_past_the_kept_descriptors_stays_imported() {
         eprintln!(
             "{TEST}: on {}: the buffer past the cap stayed imported",
             device.name()
+        );
+    });
+}
+
+/// The making of a no-copy buffer over `len` bytes of `ram`'s view from 0, imported only as
+/// dma-bufs of `ram`'s source (`HostMemory::dma_buf_only`), on a thread of its own: its answer
+/// and how long the making took.
+fn dma_buf_making(
+    device: &Device,
+    ram: &Ram,
+    len: usize,
+) -> std::thread::JoinHandle<(Result<Buffer, crate::Error>, Duration)> {
+    let device = device.clone();
+    let at = ram.pointer(0).as_ptr() as usize;
+    let source = ram.source(&Arc::new(AtomicUsize::new(0)));
+    std::thread::spawn(move || {
+        let pointer = NonNull::new(at as *mut u8).unwrap();
+        let began = Instant::now();
+        // SAFETY: each test's view outlives the buffer, and the source makes dma-bufs of its
+        // pages.
+        let made = unsafe {
+            device.new_buffer_with_bytes_no_copy(
+                HostMemory::with_dma_buf(pointer, source).dma_buf_only(),
+                len as u64,
+                ResourceOptions::default(),
+                None,
+            )
+        };
+        (made, began.elapsed())
+    })
+}
+
+/// Pages of the process's own, `len` bytes from a fresh private mapping, for a no-copy buffer
+/// over them that imports their pointer; unmapped by [`Mapping`]'s drop.
+struct Mapping(NonNull<u8>, usize);
+
+impl Mapping {
+    fn new(len: usize) -> Mapping {
+        // SAFETY: a new private anonymous mapping.
+        let at = unsafe {
+            libc::mmap(
+                std::ptr::null_mut(),
+                len,
+                libc::PROT_READ | libc::PROT_WRITE,
+                libc::MAP_PRIVATE | libc::MAP_ANONYMOUS,
+                -1,
+                0,
+            )
+        };
+        assert_ne!(at, libc::MAP_FAILED, "mmap");
+        Mapping(NonNull::new(at.cast()).unwrap(), len)
+    }
+}
+
+impl Drop for Mapping {
+    fn drop(&mut self) {
+        // SAFETY: the mapping is this object's, and no buffer over it lives any more.
+        unsafe { libc::munmap(self.0.as_ptr().cast(), self.1) };
+    }
+}
+
+/// Makings beside a no-copy buffer's import of its dma-bufs while the driver's import runs: a
+/// buffer of the device's own memory (a placement) and a no-copy buffer over pages of the
+/// process's own (an import of their pointer) are made while the dma-buf import is held where the
+/// driver's import runs (the memory's test stand-in, `Memory::import_hold`), and the held import
+/// then makes its buffer, which reads the file's bytes. The device's memory lock is released
+/// across the driver's import (`memory::import_dma_buf`), so neither making waits for it: each
+/// is done within [`BESIDE`] while the import is held. Printed (`DMA-BUF-IMPORT-BESIDE`): each
+/// making's time. Where the device makes no import of dma-bufs (no source it takes), the test
+/// says so and passes.
+#[test]
+fn makings_beside_a_dma_buf_import_in_the_driver_wait_for_none_of_it() {
+    const TEST: &str = "makings beside a dma-buf import";
+    /// The longest a making beside the held import may take.
+    const BESIDE: Duration = Duration::from_secs(5);
+    on_device(TEST, |device| {
+        let page = host_page();
+        let len = 16 * page;
+        let queue = device.new_command_queue().unwrap();
+        let ram = Ram::new(len, 0, len);
+        let bytes = counting(len, 3);
+        ram.write_file(0, &bytes);
+        // The hold: the import's thread says it is in, and waits for the word to go on.
+        let (entered, at_hold) = std::sync::mpsc::channel::<()>();
+        let (go, gone_on) = std::sync::mpsc::channel::<()>();
+        let entered = std::sync::Mutex::new(entered);
+        let gone_on = std::sync::Mutex::new(gone_on);
+        let hold: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
+            let _ = entered.lock().unwrap().send(());
+            let _ = gone_on.lock().unwrap().recv_timeout(WAIT);
+        });
+        crate::device::lock(&device.shared().memory).import_hold = Some(hold);
+        let making = dma_buf_making(device, &ram, len);
+        if at_hold.recv_timeout(SETTLE).is_err() {
+            crate::device::lock(&device.shared().memory).import_hold = None;
+            let (made, _) = making.join().unwrap();
+            eprintln!(
+                "{TEST}: on {}: no import of dma-bufs here ({:?}): nothing to test",
+                device.name(),
+                made.map(|_| "made otherwise")
+            );
+            return;
+        }
+        // Beside it, on a thread of their own: a placement, then an import of a pointer.
+        let (done, beside) = std::sync::mpsc::channel();
+        let mapping = Mapping::new(4 * page);
+        let pointer = mapping.0.as_ptr() as usize;
+        let side = {
+            let device = device.clone();
+            std::thread::spawn(move || {
+                let began = Instant::now();
+                let placed = device.new_buffer(4 * page as u64, ResourceOptions::shared());
+                let _ = done.send(("placement", began.elapsed(), placed.is_ok()));
+                let began = Instant::now();
+                // SAFETY: the mapping's pages, readable and writable, which outlive the buffer:
+                // the thread drops it at once.
+                let imported = unsafe {
+                    let memory = HostMemory::new(NonNull::new(pointer as *mut u8).unwrap());
+                    device.new_buffer_with_bytes_no_copy(
+                        memory,
+                        4 * page as u64,
+                        ResourceOptions::default(),
+                        None,
+                    )
+                };
+                let _ = done.send(("pointer import", began.elapsed(), imported.is_ok()));
+                drop((placed, imported));
+            })
+        };
+        let mut failures = Vec::new();
+        for _ in 0..2 {
+            match beside.recv_timeout(BESIDE) {
+                Ok((what, took, made)) => {
+                    eprintln!(
+                        "DMA-BUF-IMPORT-BESIDE {}: {what} made ({made}) in {:.3} ms while a \
+                         dma-buf import was held in the driver",
+                        device.name(),
+                        took.as_secs_f64() * 1e3
+                    );
+                    if !made {
+                        failures.push(format!("{what}: refused"));
+                    }
+                }
+                Err(_) => {
+                    failures.push(format!(
+                        "a making waited past {BESIDE:?} for the held import"
+                    ));
+                    break;
+                }
+            }
+        }
+        // The import goes on, and makes its buffer.
+        let _ = go.send(());
+        let (made, took) = making.join().unwrap();
+        side.join().unwrap();
+        drop(mapping);
+        crate::device::lock(&device.shared().memory).import_hold = None;
+        let buffer = made.unwrap();
+        eprintln!(
+            "DMA-BUF-IMPORT-BESIDE {}: the held dma-buf making took {:.3} ms",
+            device.name(),
+            took.as_secs_f64() * 1e3
+        );
+        assert!(
+            read(&queue, &buffer, len) == bytes,
+            "{TEST}: the file's bytes"
+        );
+        assert!(failures.is_empty(), "{TEST}: {failures:#?}");
+    });
+}
+
+/// How long placements wait beside real imports of dma-bufs: a thread places buffers of the
+/// device's own memory one after another (each `new_buffer`, which takes the device's memory lock
+/// to place it) while another makes no-copy buffers over [`TIMED_BYTES`] of a file's pages,
+/// imported as dma-bufs of udmabuf, each dropped before the next. Printed (`DMA-BUF-IMPORT-TIMED`):
+/// each import's making, and the placements' count, median, slowest and those past 10 ms: the
+/// driver's import holds no lock a placement takes, so the slowest stays far below an import's
+/// time. No bound is asserted: the figure is the evidence for the memory lock released across the
+/// import (`memory::import_dma_buf`). Where the device makes no import of dma-bufs, the test says
+/// so and passes.
+#[test]
+fn placements_beside_dma_buf_imports_are_timed() {
+    const TEST: &str = "placements beside dma-buf imports";
+    /// The bytes of each no-copy buffer: a guest's surface view or more.
+    const TIMED_BYTES: usize = 256 << 20;
+    const IMPORTS: usize = 3;
+    on_device(TEST, |device| {
+        let ram = Ram::new(TIMED_BYTES, 0, TIMED_BYTES);
+        let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let placing = {
+            let device = device.clone();
+            let stop = Arc::clone(&stop);
+            std::thread::spawn(move || {
+                let mut took = Vec::new();
+                while !stop.load(Ordering::Acquire) {
+                    let began = Instant::now();
+                    let placed = device.new_buffer(4096, ResourceOptions::shared());
+                    took.push(began.elapsed());
+                    drop(placed);
+                }
+                took
+            })
+        };
+        let mut imports = Vec::new();
+        let mut refused = None;
+        for _ in 0..IMPORTS {
+            let (made, took) = dma_buf_making(device, &ram, TIMED_BYTES).join().unwrap();
+            match made {
+                Ok(buffer) => {
+                    imports.push(took);
+                    drop(buffer);
+                }
+                Err(error) => {
+                    refused = Some(error);
+                    break;
+                }
+            }
+        }
+        stop.store(true, Ordering::Release);
+        let mut took = placing.join().unwrap();
+        if let Some(error) = refused {
+            eprintln!(
+                "{TEST}: on {}: no import of dma-bufs here ({error:?}): nothing to time",
+                device.name()
+            );
+            return;
+        }
+        if took.is_empty() {
+            eprintln!(
+                "{TEST}: on {}: no placement beside the imports",
+                device.name()
+            );
+            return;
+        }
+        took.sort();
+        let ms = |duration: Duration| duration.as_secs_f64() * 1e3;
+        let past = took
+            .iter()
+            .filter(|took| **took > Duration::from_millis(10))
+            .count();
+        eprintln!(
+            "DMA-BUF-IMPORT-TIMED {}: {IMPORTS} makings of {} MiB over dma-bufs in {:?} ms; \
+             {} placements beside them: median {:.3} ms, slowest {:.3} ms, {past} past 10 ms",
+            device.name(),
+            TIMED_BYTES >> 20,
+            imports.iter().map(|took| ms(*took)).collect::<Vec<f64>>(),
+            took.len(),
+            ms(took[took.len() / 2]),
+            ms(took[took.len() - 1]),
         );
     });
 }
