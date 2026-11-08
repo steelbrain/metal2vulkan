@@ -187,8 +187,9 @@ fn narrow_written_textures_take_the_path_their_narrow_check_answered() {
         "NARROW-WRITES on {name}: the check took {:?}",
         device.in_place_check_took()
     );
-    // Three classes, two narrow accesses, two row ends; none pending.
-    assert_eq!(narrow.len(), 12, "{report:?}");
+    // Every class, two narrow accesses, two row ends; none pending.
+    let lines = crate::in_place::PagesClass::ALL.len() * 2 * crate::in_place::RowEnds::ALL.len();
+    assert_eq!(narrow.len(), lines, "{report:?}");
     assert!(
         narrow.iter().all(|line| !line.ends_with("Pending")),
         "{narrow:?}"
