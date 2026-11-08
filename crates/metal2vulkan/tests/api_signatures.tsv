@@ -2852,6 +2852,8 @@ field	metal2vulkan-runtime::WorkCounts.kept_contexts_made	pub kept_contexts_made
 field	metal2vulkan-runtime::WorkCounts.kept_resident_keys_compared	pub kept_resident_keys_compared: u64
 field	metal2vulkan-runtime::WorkCounts.kept_texels_passes	pub kept_texels_passes: u64
 field	metal2vulkan-runtime::WorkCounts.line_band_draws	pub line_band_draws: u64
+field	metal2vulkan-runtime::WorkCounts.linear_alignments_probed	pub linear_alignments_probed: u64
+field	metal2vulkan-runtime::WorkCounts.linear_alignments_recalled	pub linear_alignments_recalled: u64
 field	metal2vulkan-runtime::WorkCounts.linear_merge_scratches_made	pub linear_merge_scratches_made: u64
 field	metal2vulkan-runtime::WorkCounts.linear_merge_scratches_reused	pub linear_merge_scratches_reused: u64
 field	metal2vulkan-runtime::WorkCounts.linear_merges_recorded	pub linear_merges_recorded: u64
@@ -7944,6 +7946,7 @@ method	metal2vulkan-runtime::Device::imports_shared_host_pointers	pub fn imports
 method	metal2vulkan-runtime::Device::in_place_check_report	pub fn in_place_check_report(&self) -> Vec<String>
 method	metal2vulkan-runtime::Device::in_place_check_took	pub fn in_place_check_took(&self) -> Option<Duration>
 method	metal2vulkan-runtime::Device::metal_heap_texture_size_and_align	pub fn metal_heap_texture_size_and_align(&self, descriptor: &TextureDescriptor) -> Result<Option<SizeAndAlign>, Error>
+method	metal2vulkan-runtime::Device::minimum_linear_texture_alignment_for_pixel_format	pub fn minimum_linear_texture_alignment_for_pixel_format(&self, format: PixelFormat) -> Result<u64, Error>
 method	metal2vulkan-runtime::Device::name	pub fn name(&self) -> &str
 method	metal2vulkan-runtime::Device::new_argument_encoder_with_arguments	pub fn new_argument_encoder_with_arguments(&self, arguments: &[ArgumentDescriptor]) -> Result<ArgumentEncoder, Error>
 method	metal2vulkan-runtime::Device::new_argument_encoder_with_buffer_binding	pub fn new_argument_encoder_with_buffer_binding(&self, binding: &BufferBinding) -> Result<ArgumentEncoder, Error>
@@ -8037,7 +8040,6 @@ method	metal2vulkan-runtime::DeviceProperties::are_programmable_sample_positions
 method	metal2vulkan-runtime::DeviceProperties::are_raster_order_groups_supported	pub fn are_raster_order_groups_supported(&self) -> Result<bool, RuntimeGap>
 method	metal2vulkan-runtime::DeviceProperties::drops_gpu_writes_to_read_only_memory	pub fn drops_gpu_writes_to_read_only_memory(&self) -> bool
 method	metal2vulkan-runtime::DeviceProperties::is_depth24_stencil8_pixel_format_supported	pub fn is_depth24_stencil8_pixel_format_supported(&self) -> Result<bool, RuntimeGap>
-method	metal2vulkan-runtime::DeviceProperties::minimum_linear_texture_alignment_for_pixel_format	pub fn minimum_linear_texture_alignment_for_pixel_format(&self, format: PixelFormat) -> Result<u64, Error>
 method	metal2vulkan-runtime::DeviceProperties::supports_primitive_type	pub fn supports_primitive_type(&self, raw: u64) -> bool
 method	metal2vulkan-runtime::DeviceProperties::supports_pull_model_interpolation	pub fn supports_pull_model_interpolation(&self) -> Result<bool, RuntimeGap>
 method	metal2vulkan-runtime::DeviceProperties::supports_rasterization_rate_map_with_layer_count	pub fn supports_rasterization_rate_map_with_layer_count(&self, count: u64) -> Result<bool, RuntimeGap>

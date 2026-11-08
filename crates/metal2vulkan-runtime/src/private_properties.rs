@@ -98,16 +98,16 @@ pub enum PrivateCount {
     /// `supportsVertexAmplificationCount:` takes 1 to 8, so not the views a pipeline may draw). No
     /// Vulkan limit means it: on Apple's own GPUs MoltenVK reports `maxMultiviewViewCount` 32.
     MaxVertexAmplificationCount,
-    /// `deviceLinearTextureAlignmentBytes`: the device's: 16, the alignment the runtime takes a
-    /// linear texture's offset and rows in its buffer at on every device (`LINEAR_ALIGNMENT`,
-    /// `minimumLinearTextureAlignmentForPixelFormat:`), shadowing the image where the device's
-    /// own linear image would not sit there.
+    /// `deviceLinearTextureAlignmentBytes`: the device's: the largest of its
+    /// `minimumLinearTextureAlignmentForPixelFormat:` answers over the formats a buffer can back
+    /// ([`Device::minimum_linear_texture_alignment_for_pixel_format`]), at least the 16 bytes
+    /// Metal answers on an Apple GPU: 256 on Mesa's RADV, 64 on lavapipe.
     DeviceLinearTextureAlignmentBytes,
     /// `linearTextureAlignmentBytes`: as
     /// [`DeviceLinearTextureAlignmentBytes`](Self::DeviceLinearTextureAlignmentBytes).
     LinearTextureAlignmentBytes,
     /// `iosurfaceTextureAlignmentBytes`: the device's: 16, the alignment the runtime takes an
-    /// IOSurface plane's offset and rows at on every device (`LINEAR_ALIGNMENT`).
+    /// IOSurface plane's offset and rows at on every device.
     IosurfaceTextureAlignmentBytes,
     /// `iosurfaceReadOnlyTextureAlignmentBytes`: as
     /// [`IosurfaceTextureAlignmentBytes`](Self::IosurfaceTextureAlignmentBytes): a plane read
@@ -466,18 +466,20 @@ impl PrivateProperties {
 
     /// The answers on a device of `properties`, whose compile layer answers
     /// `metal`, and whose rows of [`MEASURED_FAMILY`] are `rows`, and the runtime gives a pixel
-    /// format the capabilities `formats` answers.
+    /// format the capabilities `formats` answers and a texture over a buffer the linear
+    /// alignment `linear_alignment` (`Device::device_linear_texture_alignment`).
     pub(crate) fn of(
         properties: &DeviceProperties,
         metal: &MetalDeviceProperties,
         rows: &[RowAudit],
-        formats: &dyn Fn(PixelFormat) -> FormatCapabilities,
+        (formats, linear_alignment): (&dyn Fn(PixelFormat) -> FormatCapabilities, u64),
     ) -> PrivateProperties {
         let answers = Answers {
             properties,
             metal,
             rows,
             formats,
+            linear_alignment,
         };
         PrivateProperties {
             counts: PrivateCount::ALL.map(|p| {
@@ -515,7 +517,10 @@ impl Device {
             self.properties(),
             compile.metal_properties(),
             &self.family_rows_now(MEASURED_FAMILY),
-            &|pf| self.pixel_format_capabilities_now(pf),
+            (
+                &|pf| self.pixel_format_capabilities_now(pf),
+                self.device_linear_texture_alignment(),
+            ),
         );
         // The properties the device has no answer for, announced once.
         let unknown = answers.unknown();
@@ -545,6 +550,8 @@ struct Answers<'a> {
     /// The texture capabilities the runtime gives a pixel format on the device
     /// ([`Device::pixel_format_capabilities`]).
     formats: &'a dyn Fn(PixelFormat) -> FormatCapabilities,
+    /// The device's linear texture alignment (`Device::device_linear_texture_alignment`).
+    linear_alignment: u64,
 }
 
 impl Answers<'_> {
@@ -591,10 +598,12 @@ impl Answers<'_> {
         Some(match property {
             C::GpuCoreCount => u64::from(self.properties.gpu_core_count?),
             C::MaxVertexAmplificationCount | C::MaxComputeThreadgroupMemory => return None,
-            C::DeviceLinearTextureAlignmentBytes
-            | C::LinearTextureAlignmentBytes
-            | C::IosurfaceTextureAlignmentBytes
-            | C::IosurfaceReadOnlyTextureAlignmentBytes => LINEAR_ALIGNMENT,
+            C::DeviceLinearTextureAlignmentBytes | C::LinearTextureAlignmentBytes => {
+                self.linear_alignment
+            }
+            C::IosurfaceTextureAlignmentBytes | C::IosurfaceReadOnlyTextureAlignmentBytes => {
+                LINEAR_ALIGNMENT
+            }
             C::MaxVertexBuffers
             | C::MaxFragmentBuffers
             | C::MaxComputeBuffers

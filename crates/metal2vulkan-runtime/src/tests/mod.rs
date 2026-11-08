@@ -236,6 +236,7 @@ mod kept_images;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod layer_claim;
 mod left;
+mod linear_alignment;
 mod linear_attachment;
 mod linear_plan;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]

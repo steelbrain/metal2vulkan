@@ -574,7 +574,7 @@ narrow refusal that the call's rustdoc describes.
 | `sample_counts` | `supportsTextureSampleCount:` | `DeviceProperties::supports_texture_sample_count` |
 | `families` | `supportsFamily:` | `Device::supports_family`; `Device::family_blockers` names what blocks a family |
 | `heap_buffer_page_private` | `heapBufferSizeAndAlignWithLength:options:` | `Device::heap_buffer_size_and_align` |
-| `min_linear_alignment_bgra8` | `minimumLinearTextureAlignmentForPixelFormat:` | `DeviceProperties::minimum_linear_texture_alignment_for_pixel_format` |
+| `min_linear_alignment_bgra8` | `minimumLinearTextureAlignmentForPixelFormat:` | `Device::minimum_linear_texture_alignment_for_pixel_format` |
 
 ### `IdentityCaps`: `MTLDevice` identity and size answers
 

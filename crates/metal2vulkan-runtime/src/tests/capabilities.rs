@@ -4,8 +4,8 @@
 use std::path::PathBuf;
 
 use crate::capabilities::{
-    amplification_count_supported, rate_map_layers_supported, sample_count_supported,
-    working_set_buffer_bound, DeviceIdentity, RATE_MAP_LAYERS,
+    amplification_count_supported, linear_alignment_rule, rate_map_layers_supported,
+    sample_count_supported, working_set_buffer_bound, DeviceIdentity, RATE_MAP_LAYERS,
 };
 use crate::{
     BufferTextureProblem, DeviceKind, DeviceProperties, Error, Invalid, MacClass, Problem, Query,
@@ -571,8 +571,9 @@ fn every_query_answers_the_device() {
             );
         }
         Query::MinimumLinearTextureAlignment => {
-            let answer =
-                p.minimum_linear_texture_alignment_for_pixel_format(PixelFormat::BGRA8Unorm);
+            // The device's answer is a probe of its images (`texture/linear_alignment.rs`), at
+            // least Metal's rule's.
+            let answer = linear_alignment_rule(PixelFormat::BGRA8Unorm);
             assert_eq!(answer, Ok(16));
         }
         Query::SamplerReductionMode => {
@@ -593,21 +594,16 @@ fn every_query_answers_the_device() {
 }
 
 /// `minimumLinearTextureAlignmentForPixelFormat:` asserts on a format no buffer can back, which
-/// the runtime refuses as `Invalid`.
+/// the runtime refuses as `Invalid`, before it asks the device anything.
 #[test]
 fn the_linear_alignment_of_a_compressed_or_depth_format_is_refused() {
-    let (_, desc) = committed_descriptions()
-        .into_iter()
-        .find(|(s, _)| s == "moltenvk-m3")
-        .unwrap();
-    let (_, p) = created("moltenvk-m3", &desc);
     for pf in [
         PixelFormat::BC1RGBA,
         PixelFormat::Depth32Float,
         PixelFormat::GBGR422,
     ] {
         assert_eq!(
-            p.minimum_linear_texture_alignment_for_pixel_format(pf),
+            linear_alignment_rule(pf),
             Err(Error::Invalid(Invalid::new(
                 "minimum_linear_texture_alignment_for_pixel_format",
                 Problem::BufferTexture(BufferTextureProblem::NotLinear { pixel_format: pf }),

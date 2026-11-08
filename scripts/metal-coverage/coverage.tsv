@@ -1110,7 +1110,7 @@ MTLDevice.h	MTLDevice	method	newFence		I	runtime	Device::new_fence
 MTLDevice.h	MTLDevice	method	supportsFeatureSet:	yes	M			deprecated feature sets; would answer from the family rows	S	queries
 MTLDevice.h	MTLDevice	method	supportsFamily:		I	runtime	Device::supports_family			
 MTLDevice.h	MTLDevice	method	supportsTextureSampleCount:		I	runtime	DeviceProperties::supports_texture_sample_count			
-MTLDevice.h	MTLDevice	method	minimumLinearTextureAlignmentForPixelFormat:		I	runtime	DeviceProperties::minimum_linear_texture_alignment_for_pixel_format			
+MTLDevice.h	MTLDevice	method	minimumLinearTextureAlignmentForPixelFormat:		I	runtime	Device::minimum_linear_texture_alignment_for_pixel_format			
 MTLDevice.h	MTLDevice	method	minimumTextureBufferAlignmentForPixelFormat:		M			the alignment `Buffer::new_texture` checks a texture buffer's offset against	S	queries
 MTLDevice.h	MTLDevice	method	newRenderPipelineStateWithTileDescriptor:options:reflection:error:		I	runtime	Device::new_tile_render_pipeline_state_with_reflection			
 MTLDevice.h	MTLDevice	method	newRenderPipelineStateWithTileDescriptor:options:completionHandler:		I	runtime	Device::new_tile_render_pipeline_state_with_reflection	handler form		

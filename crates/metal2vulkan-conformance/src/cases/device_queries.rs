@@ -19,8 +19,9 @@
 //! - **`device-rate-map-layer-counts`**: `supportsRasterizationRateMapWithLayerCount:` from 1 to 4,
 //!   where the runtime answers yes for 1 and 2 and no above;
 //! - **`device-linear-texture-alignments`**: `minimumLinearTextureAlignmentForPixelFormat:` over
-//!   sixteen colour formats from one byte a texel to sixteen. The runtime answers one number for
-//!   all of them, so a format whose alignment Metal makes the texel's would read wrong here;
+//!   sixteen colour formats from one byte a texel to sixteen. The runtime answers each from the
+//!   device's linear images, 16 for every one of them on the oracle's MoltenVK, so a format whose
+//!   alignment Metal makes the texel's, or a probe that answered more there, would read wrong here;
 //! - **`device-sparse-region-conversions`**: both of Metal's region conversions over the same
 //!   tables, each direction at three tile sizes, and the pixels-to-tiles direction in **both**
 //!   alignment modes. The rows are chosen so inward and outward differ: a region that starts and

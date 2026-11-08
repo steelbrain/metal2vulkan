@@ -24,7 +24,9 @@
 //!
 //! The fields are fixed when the device is made. An answer that changes while the device lives is
 //! a method of its object's step on `Device` instead: step 5's per-format mipmap verdict, settled
-//! by the first mipmap generation of each format.
+//! by the first mipmap generation of each format. So is one the device's images decide, worked out
+//! at each format's first query and fixed from there:
+//! `Device::minimum_linear_texture_alignment_for_pixel_format`.
 
 use super::device::argument_buffers::APPLE;
 use super::device::DeviceKind;
@@ -492,25 +494,20 @@ impl DeviceProperties {
     pub fn drops_gpu_writes_to_read_only_memory(&self) -> bool {
         crate::read_only_view::VIEWS_DROP_WRITES
     }
+}
 
-    /// `minimumLinearTextureAlignmentForPixelFormat:`: the alignment of a texture's offset and
-    /// rows in a buffer, 16 bytes for every format a buffer can back, as Metal answers on an M3 Max
-    /// and an M4. Refused, `Invalid` with
-    /// [`BufferTextureProblem::NotLinear`](crate::BufferTextureProblem::NotLinear), for a
-    /// compressed, depth or stencil format, on which Metal's query asserts, and for a format Metal
-    /// describes none of ([`Device::pixel_format_info`](crate::Device::pixel_format_info) answers
-    /// [`PixelFormatInfo::INVALID`](crate::PixelFormatInfo::INVALID)), on which it asserts too.
-    pub fn minimum_linear_texture_alignment_for_pixel_format(
-        &self,
-        format: PixelFormat,
-    ) -> Result<u64, Error> {
-        linear_alignment(format).map_err(|problem| {
-            invalid(
-                "minimum_linear_texture_alignment_for_pixel_format",
-                Problem::BufferTexture(problem),
-            )
-        })
-    }
+/// Metal's rule for `minimumLinearTextureAlignmentForPixelFormat:` of `format`: 16 bytes for every
+/// format a buffer can back, as Metal answers on an Apple M3 Max and an M4, the least the device
+/// answers (`Device::minimum_linear_texture_alignment_for_pixel_format`); refused, `Invalid` with
+/// `BufferTextureProblem::NotLinear`, for a compressed, depth or stencil format, on which Metal's
+/// query asserts, and for a format Metal describes none of, on which it asserts too.
+pub(crate) fn linear_alignment_rule(format: PixelFormat) -> Result<u64, Error> {
+    linear_alignment(format).map_err(|problem| {
+        invalid(
+            "minimum_linear_texture_alignment_for_pixel_format",
+            Problem::BufferTexture(problem),
+        )
+    })
 }
 
 /// Whether `count` samples is one of the Vulkan sample counts `flags` holds: a power of two whose

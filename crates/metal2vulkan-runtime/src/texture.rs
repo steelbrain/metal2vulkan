@@ -166,6 +166,7 @@ pub(crate) mod host_copy;
 pub(crate) mod host_shadow;
 mod in_place_image;
 pub(super) mod kept_image;
+pub(super) mod linear_alignment;
 pub(super) mod requirements;
 #[cfg(unix)]
 mod rotation;
@@ -228,6 +229,9 @@ pub(super) struct TextureState {
     /// per format at most.
     #[cfg(unix)]
     pub(super) modifier_features: Mutex<HashMap<Format, FormatFeatureFlags2>>,
+    /// Each pixel format's `minimumLinearTextureAlignmentForPixelFormat:` answer, its first, kept
+    /// for the device's life (`texture/linear_alignment.rs`).
+    pub(super) linear_alignments: Mutex<HashMap<PixelFormat, u64>>,
     /// The memory types a heap's buffer and its textures' images take, worked out at the first
     /// heap's (`texture/heap.rs`).
     pub(super) heap_types: std::sync::OnceLock<heap::HeapTypes>,
@@ -274,6 +278,7 @@ impl TextureState {
             format_answers: Mutex::new(HashMap::new()),
             #[cfg(unix)]
             modifier_features: Mutex::new(HashMap::new()),
+            linear_alignments: Mutex::new(HashMap::new()),
             heap_types: std::sync::OnceLock::new(),
             requirements: Mutex::new(requirements::RequirementAnswers::new(
                 description.has(VkFeature::Maintenance4),

@@ -1,7 +1,7 @@
 //! `metal_release`: the answers of the release every device answers as are what it measured, and
 //! the descriptor check and the alignment queries answer by them.
 
-use super::capabilities::{committed_descriptions, created};
+use crate::capabilities::linear_alignment_rule;
 use crate::metal_release::{DEPTH_STENCIL_RESOURCE_ID, MACOS_RELEASE};
 use crate::pixel_format_info::describes;
 use crate::texture::heap::no_texture_alignment;
@@ -162,20 +162,16 @@ fn textures_of_the_formats_metal_describes_none_of_are_stopped() {
     }
 }
 
-/// `minimumLinearTextureAlignmentForPixelFormat:` answers an Apple M3 Max's: an assertion for the
-/// formats from 630 to 645 ("MTLPixelFormatInvalid is not supported on this device"; an Apple M4
-/// under 27.0.1 answers 16), which the runtime refuses `Invalid`.
+/// `minimumLinearTextureAlignmentForPixelFormat:` follows an Apple M3 Max's rule: an assertion
+/// for the formats from 630 to 645 ("MTLPixelFormatInvalid is not supported on this device"; an
+/// Apple M4 under 27.0.1 answers 16), which the runtime refuses `Invalid`, and 16 bytes at least
+/// for the others (the device's answer is a probe of its images, `texture/linear_alignment.rs`).
 #[test]
 fn the_linear_alignment_answers_the_m3_max_s() {
-    let (_, desc) = committed_descriptions()
-        .into_iter()
-        .find(|(s, _)| s == "moltenvk-m3")
-        .unwrap();
-    let (_, p) = created("moltenvk-m3", &desc);
     let call = "minimum_linear_texture_alignment_for_pixel_format";
     for pf in FROM_630 {
         assert_eq!(
-            p.minimum_linear_texture_alignment_for_pixel_format(pf),
+            linear_alignment_rule(pf),
             Err(Error::Invalid(Invalid::new(
                 call,
                 Problem::BufferTexture(BufferTextureProblem::NotLinear { pixel_format: pf }),
@@ -184,10 +180,7 @@ fn the_linear_alignment_answers_the_m3_max_s() {
         );
     }
     for pf in [P::RGBA8Unorm, P::R10UnormX6, P::RGB10A82P] {
-        assert_eq!(
-            p.minimum_linear_texture_alignment_for_pixel_format(pf),
-            Ok(16)
-        );
+        assert_eq!(linear_alignment_rule(pf), Ok(16));
     }
 }
 

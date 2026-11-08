@@ -363,6 +363,8 @@ pub(crate) struct Counters {
     dma_buf_images: AtomicU64,
     dma_buf_image_fallbacks: AtomicU64,
     modifier_feature_queries: AtomicU64,
+    linear_alignments_probed: AtomicU64,
+    linear_alignments_recalled: AtomicU64,
     shadowed_textures: AtomicU64,
     shadows_zeroed: AtomicU64,
     shadows_over_fresh_pages: AtomicU64,
@@ -2943,6 +2945,18 @@ impl Counters {
     pub(crate) fn modifier_features_asked(&self) {
         self.modifier_feature_queries
             .fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A pixel format's linear texture alignment was probed of the driver
+    /// (`texture/linear_alignment.rs`).
+    pub(crate) fn linear_alignment_probed(&self) {
+        (self.linear_alignments_probed).fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A pixel format's linear texture alignment was read from the record of an earlier probe
+    /// (`texture/linear_alignment.rs`).
+    pub(crate) fn linear_alignment_recalled(&self) {
+        (self.linear_alignments_recalled).fetch_add(1, Ordering::Relaxed);
     }
 
     /// A texture over a buffer's bytes was made a shadow of them (`shadow.rs`), its image zeroed
@@ -5985,6 +5999,15 @@ pub struct WorkCounts {
     /// Formats whose `DRM_FORMAT_MOD_LINEAR` tiling features the driver was asked, for an image
     /// over dma-bufs: each format once at most, as the answer is kept.
     pub modifier_feature_queries: u64,
+    /// Pixel formats whose `minimumLinearTextureAlignmentForPixelFormat:` answer the device
+    /// probed of its driver, by making the images a texture over host pages takes in place at
+    /// each alignment it tries: each format once at most, as the answer is kept for the device's
+    /// life, and none whose answer a record of the same driver and runtime held.
+    pub linear_alignments_probed: u64,
+    /// Pixel formats whose `minimumLinearTextureAlignmentForPixelFormat:` answer the device read
+    /// from the record of an earlier probe of the same driver and runtime: it probed nothing for
+    /// them.
+    pub linear_alignments_recalled: u64,
     /// Textures over a buffer's bytes (a 2D texture or array over a buffer, a no-copy buffer or an
     /// IOSurface plane, or a view of another layout of one) that no image aliases, each an image
     /// of its own that the encoders copy the bytes into and back (`shadowed-texture`).
@@ -7306,6 +7329,8 @@ impl Device {
             dma_buf_images: counters.dma_buf_images.load(Ordering::Relaxed),
             dma_buf_image_fallbacks: counters.dma_buf_image_fallbacks.load(Ordering::Relaxed),
             modifier_feature_queries: counters.modifier_feature_queries.load(Ordering::Relaxed),
+            linear_alignments_probed: counters.linear_alignments_probed.load(Ordering::Relaxed),
+            linear_alignments_recalled: counters.linear_alignments_recalled.load(Ordering::Relaxed),
             shadowed_textures: counters.shadowed_textures.load(Ordering::Relaxed),
             shadows_over_fresh_pages: counters.shadows_over_fresh_pages.load(Ordering::Relaxed),
             host_textures_in_place: counters.host_textures_in_place.load(Ordering::Relaxed),

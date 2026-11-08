@@ -310,7 +310,7 @@ pub(super) enum TexelsHome {
 
 /// The bytes of one texel of `pf`, the block of its direct Vulkan format (the bytes Metal's
 /// format has, for every format the runtime holds exactly); `None` without one.
-fn texel_bytes(pf: PixelFormat) -> Option<u64> {
+pub(super) fn texel_bytes(pf: PixelFormat) -> Option<u64> {
     byte_format(pf)
         .and_then(|format| format.block())
         .map(|block| u64::from(block.size))

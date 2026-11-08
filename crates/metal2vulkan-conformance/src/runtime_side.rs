@@ -5049,7 +5049,6 @@ impl Side for RuntimeSide<'_> {
 
     fn minimum_linear_texture_alignment(&mut self, format: PixelFormat) -> Answer<u64> {
         self.device
-            .properties()
             .minimum_linear_texture_alignment_for_pixel_format(format)
             .map_err(Failure::from_error)
     }

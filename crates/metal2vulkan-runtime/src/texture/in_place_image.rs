@@ -450,7 +450,7 @@ impl Device {
     /// where it lays the rows (and slices) out at the texels' pitches from offset 0, else the
     /// `DRM_FORMAT_MOD_LINEAR` image at those pitches; why not, each attempt's refusal named,
     /// where the device makes neither.
-    fn in_place_unbound(
+    pub(super) fn in_place_unbound(
         &self,
         plan: &ImagePlan,
         layout: &BufferLayout,

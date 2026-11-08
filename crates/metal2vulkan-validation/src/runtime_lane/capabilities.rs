@@ -10,9 +10,8 @@ use metal2vulkan::error::{Capability, Feature, Unsupported};
 use metal2vulkan::metal::{PixelFormat, TextureType, TextureUsage};
 use metal2vulkan::vk::SampleCountFlags;
 use metal2vulkan_runtime::{
-    CommandBufferStatus, CopyProblem, Device, DeviceProperties, Error, Invalid, Nil, Problem,
-    Query, ResourceOptions, RuntimeGap, Size, Texture, TextureDescriptor, TextureProblem,
-    DEFAULT_PROTECTION_OPTIONS,
+    CommandBufferStatus, CopyProblem, Device, Error, Invalid, Nil, Problem, Query, ResourceOptions,
+    RuntimeGap, Size, Texture, TextureDescriptor, TextureProblem, DEFAULT_PROTECTION_OPTIONS,
 };
 use std::time::Duration;
 
@@ -49,10 +48,11 @@ const INTEGER_FORMATS: [PixelFormat; 19] = [
 /// refusal (`NotImplemented` naming the gap the query waits on).
 type Answer = (Option<u64>, Result<String, Error>);
 
-/// Each gated query's answers on `p`: the sample counts 0 to 64, the amplification counts 0 to 2,
-/// Metal's largest (8) and one above it, the rate-map layer counts 0 to 3, and the linear alignment
-/// of `RGBA8Unorm`.
-fn query_answers(p: &DeviceProperties) -> Vec<(Query, Vec<Answer>)> {
+/// Each gated query's answers on `device`: the sample counts 0 to 64, the amplification counts 0
+/// to 2, Metal's largest (8) and one above it, the rate-map layer counts 0 to 3, and the linear
+/// alignment of `RGBA8Unorm` (the device's own query).
+fn query_answers(device: &Device) -> Vec<(Query, Vec<Answer>)> {
+    let p = device.properties();
     fn one<T: std::fmt::Debug>(answer: Result<T, Error>) -> Vec<Answer> {
         vec![(None, answer.map(|value| format!("{value:?}")))]
     }
@@ -86,10 +86,8 @@ fn query_answers(p: &DeviceProperties) -> Vec<(Query, Vec<Answer>)> {
                 Query::RasterizationRateMapLayerCount => each(&[0, 1, 2, 3], |count| {
                     p.supports_rasterization_rate_map_with_layer_count(count)
                 }),
-                Query::MinimumLinearTextureAlignment => {
-                    one(p
-                        .minimum_linear_texture_alignment_for_pixel_format(PixelFormat::RGBA8Unorm))
-                }
+                Query::MinimumLinearTextureAlignment => one(device
+                    .minimum_linear_texture_alignment_for_pixel_format(PixelFormat::RGBA8Unorm)),
                 Query::SamplerReductionMode => gapped(p.supports_sampler_reduction_mode()),
                 Query::PullModelInterpolation => gapped(p.supports_pull_model_interpolation()),
                 other => panic!("{other:?}: a query this test does not ask"),
@@ -178,7 +176,7 @@ fn a_runtime_device_answers_its_queries_and_the_apple_only_calls() {
             d.has(VkFeature::Multiview),
             d.limits.max_multiview_view_count
         );
-        for (query, answers) in query_answers(p) {
+        for (query, answers) in query_answers(&device) {
             eprintln!("  {}: {answers:?}", query.selector());
             for (argument, answer) in answers {
                 match query.gap() {

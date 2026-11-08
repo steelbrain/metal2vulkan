@@ -1433,7 +1433,7 @@ Cheap items a plain app calls first, then medium pieces by how often a plain app
 | `MTLDevice.supportsFeatureSet:` (deprecated) | method | missing | S: deprecated feature sets; would answer from the family rows |
 | `MTLDevice.supportsFamily:` | method | implemented | `Device::supports_family` (runtime) |
 | `MTLDevice.supportsTextureSampleCount:` | method | implemented | `DeviceProperties::supports_texture_sample_count` (runtime) |
-| `MTLDevice.minimumLinearTextureAlignmentForPixelFormat:` | method | implemented | `DeviceProperties::minimum_linear_texture_alignment_for_pixel_format` (runtime) |
+| `MTLDevice.minimumLinearTextureAlignmentForPixelFormat:` | method | implemented | `Device::minimum_linear_texture_alignment_for_pixel_format` (runtime) |
 | `MTLDevice.minimumTextureBufferAlignmentForPixelFormat:` | method | missing | S: the alignment `Buffer::new_texture` checks a texture buffer's offset against |
 | `MTLDevice.newRenderPipelineStateWithTileDescriptor:options:reflection:error:` | method | implemented | `Device::new_tile_render_pipeline_state_with_reflection` (runtime) |
 | `MTLDevice.newRenderPipelineStateWithTileDescriptor:options:completionHandler:` | method | implemented | `Device::new_tile_render_pipeline_state_with_reflection` (runtime): handler form |

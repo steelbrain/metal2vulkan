@@ -15,8 +15,10 @@
 //!   27.0.1, alike" — a probe nobody kept;
 //! - `supportsRasterizationRateMapWithLayerCount:` answers yes for 1 and 2, "the layer counts
 //!   Apple's map compile was measured with and the compile layer reproduces on every device";
-//! - `minimumLinearTextureAlignmentForPixelFormat:` answers 16 "for every format a buffer can
-//!   back, as Metal answers on an M3 Max and an M4";
+//! - `minimumLinearTextureAlignmentForPixelFormat:` answers at least 16 "for every format a buffer
+//!   can back, as Metal answers on an M3 Max and an M4", and more only where the device's linear
+//!   images need more: a reading of the device, which on the oracle's MoltenVK answers 16, so the
+//!   family still holds it to Metal's;
 //! - `convertSparsePixelRegions:…` and `convertSparseTileRegions:…` are arithmetic over the
 //!   caller's regions and a tile size the caller states.
 //!

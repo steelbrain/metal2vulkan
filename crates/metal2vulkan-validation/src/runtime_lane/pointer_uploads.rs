@@ -31,7 +31,6 @@ fn texture(device: &Device, over_buffer: bool) -> Texture {
         return device.new_texture(&d).unwrap();
     }
     let align = device
-        .properties()
         .minimum_linear_texture_alignment_for_pixel_format(format)
         .unwrap();
     let row = (SIDE * 4).next_multiple_of(align.max(1));

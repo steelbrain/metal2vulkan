@@ -12,13 +12,23 @@ use crate::{PrivateAnswer, PrivateCount, PrivateFlag, PrivateProperties};
 use metal2vulkan::device::{Device, DevicePolicy};
 use metal2vulkan::metal::TextureType;
 
-/// The answers on the committed profile `stem`, as `Device::private_properties` reads them.
+/// The device linear texture alignment [`answers`] reads from, as a device whose images need 256
+/// bytes answers (`Device::device_linear_texture_alignment`, which only a device answers).
+const LINEAR: u64 = 256;
+
+/// The answers on the committed profile `stem`, as `Device::private_properties` reads them, its
+/// linear texture alignment [`LINEAR`].
 fn answers(stem: &str, desc: &metal2vulkan::device::DeviceDescription) -> PrivateProperties {
     let (enabled, properties) = created(stem, desc);
     let compile = Device::new(enabled.clone(), DevicePolicy::UNTRUSTED).unwrap();
     let rows = all_audits(stem, desc).remove(&MEASURED_FAMILY).unwrap();
     let formats = |pf| format_capabilities(&enabled, &compile, pf);
-    PrivateProperties::of(&properties, compile.metal_properties(), &rows, &formats)
+    PrivateProperties::of(
+        &properties,
+        compile.metal_properties(),
+        &rows,
+        (&formats, LINEAR),
+    )
 }
 
 /// `ALL` lists each property once, in declaration order, under a selector of its own.
@@ -233,7 +243,12 @@ fn the_core_count_and_fp16_are_the_devices() {
         let rows = all_audits(&stem, &desc).remove(&MEASURED_FAMILY).unwrap();
         let formats = |pf| format_capabilities(&enabled, &compile, pf);
         let of = |properties: &DeviceProperties| {
-            PrivateProperties::of(properties, compile.metal_properties(), &rows, &formats)
+            PrivateProperties::of(
+                properties,
+                compile.metal_properties(),
+                &rows,
+                (&formats, LINEAR),
+            )
         };
         let unknown = of(&properties).count(PrivateCount::GpuCoreCount);
         assert_eq!(unknown.value(), None, "{stem}");
@@ -255,8 +270,9 @@ fn the_core_count_and_fp16_are_the_devices() {
     }
 }
 
-/// The answers read from the device: the texture alignments are the 16 bytes the runtime takes a
-/// linear texture and an IOSurface plane at; ordered atomics follow the Vulkan memory model at
+/// The answers read from the device: the linear texture alignments are the device's
+/// (`Device::device_linear_texture_alignment`), and the IOSurface ones the 16 bytes the runtime
+/// takes a plane at; ordered atomics follow the Vulkan memory model at
 /// device scope; the XR10 formats and framebuffer reads follow their family rows (reads yes on
 /// MoltenVK and RADV); a half-float texture is filtered
 /// bicubically everywhere; and `RGB10A2Unorm_sRGB`, held as its raw word and filtered by the
@@ -270,18 +286,21 @@ fn the_alignments_atomics_and_formats_are_the_devices() {
     for (stem, desc) in committed_descriptions() {
         let (enabled, _) = created(&stem, &desc);
         let p = answers(&stem, &desc);
-        for c in [
-            C::DeviceLinearTextureAlignmentBytes,
-            C::LinearTextureAlignmentBytes,
-            C::IosurfaceTextureAlignmentBytes,
-            C::IosurfaceReadOnlyTextureAlignmentBytes,
+        for (c, answer) in [
+            (C::DeviceLinearTextureAlignmentBytes, LINEAR),
+            (C::LinearTextureAlignmentBytes, LINEAR),
+            (
+                C::IosurfaceTextureAlignmentBytes,
+                crate::linear_plan::LINEAR_ALIGNMENT,
+            ),
+            (
+                C::IosurfaceReadOnlyTextureAlignmentBytes,
+                crate::linear_plan::LINEAR_ALIGNMENT,
+            ),
         ] {
             assert_eq!(
                 p.count(c),
-                PrivateAnswer::Device {
-                    answer: crate::linear_plan::LINEAR_ALIGNMENT,
-                    metal: 16
-                },
+                PrivateAnswer::Device { answer, metal: 16 },
                 "{stem} {c:?}"
             );
         }
