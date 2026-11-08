@@ -9,13 +9,25 @@
 //!   command it recorded; and what its other steps did that a draw again repeats (its per-draw
 //!   counts, its execution record, whether its instance keeps it for recording again).
 //! - **Only a plain draw is kept.** One that recorded one Vulkan draw into the current instance as
-//!   it stood, through a pipeline made ahead, needing nothing before or around it: no split,
-//!   stand-in, shadow, snapshot, copy, index bounds or rewrite pass, mesh or tessellation work, rate
-//!   map, color groups, extended-range color, set 1 or handle table, root table or push hole,
-//!   barrier in its instance, and no write among its uses, which each change what the next draw
-//!   meets or are work of the draw's own. Its uses are noted as the next draw would note them
-//!   (`NotedApart`). A draw that met a notice its device announces or refuses at every occurrence
-//!   (`EachWatch`) keeps nothing: its next draw must meet it again.
+//!   it stood, through a pipeline made ahead, needing nothing before or around it of its own: no
+//!   split, stand-in, snapshot, copy, index bounds or rewrite pass, mesh or tessellation work, rate
+//!   map, color groups, extended-range color or its shadow, set 1 or handle table, root table or
+//!   push hole, barrier in its instance, read of a color its pass clears behind its load actions
+//!   (a copy cleared to the clear, `texture/attached_reads.rs`), and no write among its uses, which
+//!   each change what the next draw meets or are work of the draw's own. Its uses are noted as the
+//!   next draw would note them (`NotedApart`). A draw that met a notice its device announces or
+//!   refuses at every occurrence (`EachWatch`) keeps nothing: its next draw must meet it again.
+//! - **Shadowed textures gathered once.** A kept draw may use shadowed textures, a texture of its
+//!   pass's color attachment it reads through the texture's copy among them
+//!   (`texture/attached_reads.rs`): their copies go around its instance, which gathered them as
+//!   the draw took every step (`render/shadows.rs`), so a draw that uses the same shadowed
+//!   textures as the same uses into the same instance gathers nothing new (`shadow::join` of an
+//!   equal use changes nothing). A draw again uses them so, through the kept draw's bindings; a
+//!   draw rebound works out its own (`render.rs`'s `draw_shadows`, as every step does) and goes
+//!   on only where they are the kept draw's, each the same shadow used as it was
+//!   (`shadow::ShadowUse::used_as`), its reads' bounds included (`rebound.rs`). Each counts the
+//!   kept draw's reads through copies (`WorkCounts::attachment_reads_through_copies`,
+//!   `own_pixel_reads`) as it did.
 //! - **Forgotten at every call but a bind, a pipeline state set or a render state set.** Every
 //!   call of the encoder but the two direct draws, the vertex and fragment buffer, bytes, texture
 //!   and sampler state binds, `set_render_pipeline_state` and the sets of its render state (below)
@@ -152,6 +164,10 @@ pub(crate) struct Kept {
     /// provoking vertex.
     pub(super) pushes_set_zero: bool,
     pub(super) last_vertex: bool,
+    /// Whether it read the texture of a color attachment of its pass through its copy, and of
+    /// that, at its fragments' own pixels alone (`WorkCounts::attachment_reads_through_copies`,
+    /// `own_pixel_reads`), which a draw again counts as it did.
+    pub(super) through_copies: (bool, bool),
     /// Whether one of its uses reads an image other than as an attachment: its noting looks
     /// for fresh textures among them (`EncoderCore::note_again`).
     pub(super) reads_images: bool,
@@ -407,9 +423,14 @@ impl RenderLowering {
                 return Again::Check;
             }
         }
-        self.core
-            .counts()
-            .draw_drawn_again((kept.pushes_set_zero, kept.last_vertex));
+        let counts = self.core.counts();
+        counts.draw_drawn_again((kept.pushes_set_zero, kept.last_vertex));
+        if kept.through_copies.0 {
+            counts.attachment_read_through_copy();
+        }
+        if kept.through_copies.1 {
+            counts.own_pixel_read();
+        }
         // Its noting: its reads of fresh textures, where any texture is fresh, and what the
         // encoder made resident since (nothing: no call came).
         match kept.reads_images && self.core.observes_fresh() {

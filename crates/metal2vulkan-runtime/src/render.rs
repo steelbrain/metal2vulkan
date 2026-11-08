@@ -7234,6 +7234,33 @@ impl RenderLowering {
         }
     }
 
+    /// The shadowed textures a draw with `uses` uses, copied around its instance
+    /// (`render/shadows.rs`): those its tables bind, then those of `resident`, the copies of what
+    /// the encoder made resident (`LiveBind::shadows`). Where it reads the textures of the pass's
+    /// color attachments through copies (`reading`: its plan and pipeline), each read at its
+    /// fragments' own pixels alone is bounded to the texels around its scissors
+    /// ([`bound_own_pixel_reads`](Self::bound_own_pixel_reads)), and whether one was. A draw
+    /// that takes every step and a draw rebound (`render/draw_again/rebound.rs`) work them out
+    /// so alike.
+    fn draw_shadows(
+        &self,
+        resident: &[Arc<ShadowCopies>],
+        uses: &[Use<ResourceKey>],
+        reading: Option<(&BindingPlan, &metal2vulkan::pipeline::RenderPipeline)>,
+    ) -> (Vec<shadow::ShadowUse>, bool) {
+        let bound = (self.vertex.textures.values())
+            .chain(self.fragment.textures.values())
+            .chain(self.object.textures.values())
+            .chain(self.mesh.textures.values());
+        let mut shadows = shadow::shadow_uses_of(bound, resident, uses);
+        let own_pixel = reading.is_some_and(|(plan, compiled)| {
+            let selects =
+                compiled.graphics.writes_viewport_index || self.amplification.offsets_viewports();
+            self.bound_own_pixel_reads(plan, compiled, selects, &mut shadows)
+        });
+        (shadows, own_pixel)
+    }
+
     /// Bound the copy in of each shadow among `shadows` of a texture that presents a color
     /// attachment of the pass and that a draw of `plan` reads at its fragments' own pixels alone
     /// (`texture/attached_reads.rs`): every binding of the texture in its tables is a sampled one
@@ -8779,6 +8806,9 @@ impl RenderLowering {
             && self.samples_attachment(&facts, Texture::attached_in);
         let behind_loads =
             attached && self.loads_ordered && self.samples_attachment(&facts, Texture::cleared_in);
+        // Such a draw keeps nothing to draw again: its copy's clear, or its split, is its own
+        // (`render/draw_again.rs`).
+        let reads_clear = behind_loads;
         // Where each such color's copy can be cleared to the clear instead, before any draw of the
         // pass, the draw stays in its instance and reads it there (`texture/attached_reads.rs`).
         let copy_clears = behind_loads
@@ -8814,7 +8844,7 @@ impl RenderLowering {
             device.shared().counts.inline_memoryless_write_split();
         }
         if attached {
-            device.shared().counts.attachment_read_through_copy();
+            self.core.counts().attachment_read_through_copy();
         }
         if after_barrier && matches!(next, Next::New { split: true, .. }) {
             device.shared().counts.attachment_read_split();
@@ -9230,26 +9260,12 @@ impl RenderLowering {
             self.skipped_draw();
             return Ok(());
         }
-        // The shadowed textures the draw uses, copied around its instance (`render/shadows.rs`):
-        // those bound, then those made resident, as the encoder keeps their shadows listed
-        // (`LiveBind::shadows`).
-        let bound = self
-            .vertex
-            .textures
-            .values()
-            .chain(self.fragment.textures.values())
-            .chain(self.object.textures.values())
-            .chain(self.mesh.textures.values());
+        // The shadowed textures the draw uses, copied around its instance (`render/shadows.rs`).
         let resident = live.shadows.of(&device, &self.residency);
-        let mut draw_shadows = shadow::shadow_uses_of(bound, resident, uses);
-        // A draw that reads an attachment's texture at its fragments' own pixels alone copies in
-        // only the texels around its scissors (`texture/attached_reads.rs`).
-        if attached {
-            let selects = graphics.writes_viewport_index || self.amplification.offsets_viewports();
-            let compiled = variant.pipeline();
-            if self.bound_own_pixel_reads(&plan, compiled, selects, &mut draw_shadows) {
-                device.shared().counts.own_pixel_read();
-            }
+        let reading = attached.then(|| (&*plan, variant.pipeline()));
+        let (draw_shadows, own_pixel) = self.draw_shadows(resident, uses, reading);
+        if own_pixel {
+            self.core.counts().own_pixel_read();
         }
         if self.replaying && !self.gathered().covers(&draw_shadows) {
             return Err(Error::NotImplemented(RuntimeGap::IndirectRenderCommands));
@@ -10740,8 +10756,8 @@ impl RenderLowering {
             && pair_base.is_none()
             && matches!(draw_states, DrawStates::Whole(_))
             && snapshot.is_none()
-            && draw_shadows.is_empty()
-            && !attached
+            && !reads_clear
+            && (draw_shadows.is_empty() || !self.replaying)
             && stencil_use.is_none()
             && tests_use.is_none()
             && imageblock_use.is_none()
@@ -10815,7 +10831,7 @@ impl RenderLowering {
                 instance: !stepless,
                 instance_split: (begun, later_instance, own_steps),
                 barrier: barriered,
-                shadowed: !draw_shadows.is_empty()
+                shadowed: reads_clear
                     || snapshot.is_some()
                     || !live.state.extended_shadows.is_empty(),
                 tables: heap.is_some()
@@ -10864,7 +10880,7 @@ impl RenderLowering {
             let recorded = recorded.filter(|_| rebinds);
             let rebinds = recorded.is_some();
             if let Some(recorded) = recorded {
-                live.kept.keep(&writes, dynamic, recorded);
+                live.kept.keep(&writes, dynamic, recorded, &draw_shadows);
             }
             let kept = draw_again::Kept {
                 pipeline: drawn_by,
@@ -10882,6 +10898,7 @@ impl RenderLowering {
                 again,
                 pushes_set_zero: !pushed.is_empty(),
                 last_vertex: provoking == provoking::Provoking::Native,
+                through_copies: (attached, own_pixel),
                 reads_images,
                 execution,
                 reads: RenderStages::empty(),

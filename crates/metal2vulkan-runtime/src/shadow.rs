@@ -2745,6 +2745,36 @@ pub(super) struct ShadowUse {
     pub(super) cleared: Option<vk::ClearColorValue>,
 }
 
+/// A draw's use of a shadowed texture as a kept draw holds it (`render/draw_again.rs`): the
+/// shadow, by its key, whether the draw writes through it, and where it bounds its writes and
+/// reads, naming no object. A draw's use sets no other field ([`copies_used`], and the bounds of
+/// its reads at its own pixels, `render.rs`'s `bound_own_pixel_reads`). Two uses so equal join as
+/// one ([`join`]): a draw that uses the shadows a kept draw used, each as it used it, into the
+/// kept draw's instance, gathers nothing the kept draw did not.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct UsedAs {
+    shadow: ResourceKey,
+    writes: bool,
+    area: Option<[u32; 4]>,
+    loads: Option<[u32; 4]>,
+}
+
+impl ShadowUse {
+    /// A draw's use as a kept draw holds it ([`UsedAs`]).
+    pub(super) fn used_as(&self) -> UsedAs {
+        debug_assert!(
+            !self.overwrites && !self.kept && !self.tile_stores && self.cleared.is_none(),
+            "a draw's use of a shadowed texture set a field of a pass's attachment"
+        );
+        UsedAs {
+            shadow: self.copies.shadow_key,
+            writes: self.writes,
+            area: self.area,
+            loads: self.loads,
+        }
+    }
+}
+
 /// The rectangle bounding `a` and `b`, each `[x0, y0, x1, y1)`; `None` (anywhere) where either is.
 fn bounding(a: Option<[u32; 4]>, b: Option<[u32; 4]>) -> Option<[u32; 4]> {
     let ([a0, a1, a2, a3], [b0, b1, b2, b3]) = (a?, b?);

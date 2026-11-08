@@ -97,6 +97,7 @@ use crate::live_bind::{LiveBind, Reshape};
 use crate::pipeline::{RenderStateKind, Settled};
 use crate::render::{Assembly, Bound, DrawBuffers, DrawState, Recording};
 use crate::resource::ResourceKey;
+use crate::shadow::{ShadowUse, UsedAs};
 use crate::texture::Texture;
 use crate::tracker::Use;
 
@@ -118,6 +119,9 @@ pub(crate) struct KeptStorage {
     unheld: Vec<vk::DynamicState>,
     /// The rest of its recording.
     recording: Option<KeptRecording>,
+    /// Its uses of shadowed textures, as it gathered them into its instance
+    /// (`shadow::ShadowUse::used_as`): a draw rebound goes on only where it uses the same.
+    shadows: Vec<UsedAs>,
     /// A draw moved's storage, kept likewise: its commands' descriptor ranges before it worked
     /// them out, and the positions and uses of the moved slots' uses (the module docs).
     ranges: Vec<DescriptorRange>,
@@ -140,14 +144,17 @@ pub(in crate::render) struct KeptRecording {
 
 impl KeptStorage {
     /// Keep, over the storage it holds, what a draw rebound takes of the draw just kept: its set-0
-    /// `writes`, each of which holds no keeper, its `dynamic` states and the rest of its
-    /// `recording`.
+    /// `writes`, each of which holds no keeper, its `dynamic` states, the rest of its
+    /// `recording` and its uses of shadowed textures, `shadows`.
     pub(in crate::render) fn keep(
         &mut self,
         writes: &[Write],
         dynamic: &[vk::DynamicState],
         recording: KeptRecording,
+        shadows: &[ShadowUse],
     ) {
+        self.shadows.clear();
+        self.shadows.extend(shadows.iter().map(ShadowUse::used_as));
         self.writes.clear();
         self.writes.extend(writes.iter().filter_map(Write::unheld));
         self.dynamic.clear();
@@ -278,6 +285,9 @@ struct Rebinding {
     writes_kept: bool,
     narrowed: bool,
     inside: bool,
+    /// Whether it reads the texture of a color attachment of its pass through its copy, and of
+    /// that, at its fragments' own pixels alone, which it counts once recorded.
+    through_copies: (bool, bool),
 }
 
 impl RenderLowering {
@@ -347,6 +357,13 @@ impl RenderLowering {
             self.record_rebound(live, (call, assembly, draw), buffers, (counted, rebinding));
         if let Err(refused) = recorded {
             return Again::Refused(refused);
+        }
+        let counts = self.core.counts();
+        if rebinding.through_copies.0 {
+            counts.attachment_read_through_copy();
+        }
+        if rebinding.through_copies.1 {
+            counts.own_pixel_read();
         }
         if watch.met() {
             self.forget_again();
@@ -522,15 +539,19 @@ impl RenderLowering {
         if !checked || self.pass_start.fragments_wrote() {
             return None;
         }
-        // A changed texture: none its plan samples or writes is a color attachment's (a draw
-        // that reads one reads its copy, or a snapshot, or records apart), and no extended-range
-        // texture is bound through a shadow (`LiveBind`'s state), as for the kept draw.
+        // A draw that samples the texture of a color attachment of its pass reads the texture's
+        // copy (`texture/attached_reads.rs`), which its tables bind and its shadows hold (below),
+        // as every step's do; one that reads a color the pass clears behind its load actions
+        // keeps nothing (`render.rs`), so its every step decides it. A changed texture: none its
+        // plan writes is a color attachment's (a draw that does records apart), and no
+        // extended-range texture is bound through a shadow (`LiveBind`'s state), as for the kept
+        // draw.
+        let attached = self.samples_attachment(facts, Texture::attached_in);
+        if attached && self.loads_ordered && self.samples_attachment(facts, Texture::cleared_in) {
+            return None;
+        }
         let images = changed.images();
-        if images
-            && (self.samples_attachment(facts, Texture::attached_in)
-                || self.storage_colors(facts) != 0
-                || !live.state.extended_shadows.is_empty())
-        {
+        if images && (self.storage_colors(facts) != 0 || !live.state.extended_shadows.is_empty()) {
             return None;
         }
         let stages = [
@@ -575,6 +596,9 @@ impl RenderLowering {
             let mut tables = binding::Tables::new(&stages)
                 .with_pass(&self.layout, plan.views)
                 .with_residency(&self.residency);
+            if attached {
+                tables = tables.with_attachments(&self.layout);
+            }
             // Its runtime samplers' address modes: the kept draw's, as `bring_in` found them.
             if images {
                 tables = tables.with_sampler_maps(live.read_from.maps().clone());
@@ -653,32 +677,38 @@ impl RenderLowering {
             at.2 = start + offset;
             *kept_start = start;
         }
-        // No shadowed texture among its uses, no barrier its fragments need after an earlier
+        // Its shadowed textures the kept draw's, each used as it used it, gathered into the
+        // instance already (`render/draw_again.rs`), worked out as every step works them out
+        // (`RenderLowering::draw_shadows`); no barrier its fragments need after an earlier
         // draw's geometry writes, nor a detached buffer, a draw of which records nothing
         // (`EncoderCore::skips`). A draw moved binds the kept draw's textures, and its uses name
-        // the kept draw's keys, which met no shadow and no detached buffer, as no no-copy buffer
-        // moved since (`Under`): it looks at neither again. Of a draw narrowed, only the moved
-        // slots' uses meet the geometry writes anew: every other use is the kept draw's, which
-        // met none of them, and no draw added any since.
+        // the kept draw's keys, which met no detached buffer, as no no-copy buffer moved since
+        // (`Under`): it looks at none again, nor at shadows where the kept draw used none (its
+        // uses of shadows are of their images, not of the buffers whose offsets moved, but its
+        // reads' bounds follow a scissor restated). Of a draw narrowed, only the moved slots'
+        // uses meet the geometry writes anew: every other use is the kept draw's, which met none
+        // of them, and no draw added any since.
+        let resident = live.shadows.of(self.core.device(), &self.residency);
         let uses = &live.uses;
-        let textures = || {
-            (self.vertex.textures.values())
-                .chain(self.fragment.textures.values())
-                .chain(self.object.textures.values())
-                .chain(self.mesh.textures.values())
-                .chain(self.residency.textures())
+        let reading = attached.then(|| (&**plan, compiled));
+        let worked_out = !(moved && live.kept.shadows.is_empty());
+        let (shadows, own_pixel) = match worked_out {
+            true => self.draw_shadows(resident, uses, reading),
+            false => (Vec::new(), false),
         };
+        debug_assert!(
+            worked_out || self.draw_shadows(resident, uses, reading).0.is_empty(),
+            "a draw moved met a shadow its kept draw did not"
+        );
+        if !(shadows.iter().map(ShadowUse::used_as)).eq(live.kept.shadows.iter().copied()) {
+            return None;
+        }
         let named =
             || (uses.iter().map(|used| used.key)).filter(|key| !uses.resident().contains(key));
         debug_assert!(
-            !moved
-                || crate::shadow::shadow_uses(textures(), uses).is_empty()
-                    && !self.core.would_skip(named()),
-            "a draw moved met a shadow or a detached buffer its kept draw did not"
+            !moved || !self.core.would_skip(named()),
+            "a draw moved met a detached buffer its kept draw did not"
         );
-        if !moved && !crate::shadow::shadow_uses(textures(), uses).is_empty() {
-            return None;
-        }
         let counts = self.core.counts();
         let unbarriered = match (narrowed, uses.prefix()) {
             (true, _) => {
@@ -703,6 +733,7 @@ impl RenderLowering {
             writes_kept,
             narrowed,
             inside,
+            through_copies: (attached, own_pixel),
         };
         (unbarriered && (moved || !self.core.would_skip(named()))).then_some(rebinding)
     }

@@ -489,7 +489,6 @@ pub(crate) struct Counters {
     bounded_shadow_copies: AtomicU64,
     views_through_swizzle: AtomicU64,
     view_shadows: AtomicU64,
-    attachment_reads_through_copies: AtomicU64,
     attachment_read_splits: AtomicU64,
     attachment_read_clears: AtomicU64,
     reading_draws_snapshotted: AtomicU64,
@@ -509,7 +508,6 @@ pub(crate) struct Counters {
     depth_attachments_moved: AtomicU64,
     depth_instances_held: AtomicU64,
     held_depths_released: AtomicU64,
-    own_pixel_reads: AtomicU64,
     replay_logs_kept: AtomicU64,
     replay_log_bytes: AtomicU64,
     encoders_reencoded: AtomicU64,
@@ -556,6 +554,8 @@ struct CommandCounters {
     set_zero_writes_pushed: AtomicU64,
     draws_as_before: AtomicU64,
     draws_rebound: AtomicU64,
+    attachment_reads_through_copies: AtomicU64,
+    own_pixel_reads: AtomicU64,
     draws_moved: AtomicU64,
     draws_moved_inside: AtomicU64,
     resident_uses_made: AtomicU64,
@@ -903,6 +903,21 @@ impl Counting<'_> {
         counts.add(|counts| &counts.draws_as_before, 1);
         counts.add(|counts| &counts.commands_noted_as_before, 1);
         Self::kept_draw(&counts, kept);
+    }
+
+    /// A draw that samples, at a slot, a texture that presents a color attachment of its render
+    /// pass read the texture's copy, where its shadow is served (`texture/attached_reads.rs`): one
+    /// that takes every step, or a draw again or rebound of one (`render/draw_again.rs`).
+    pub(crate) fn attachment_read_through_copy(&self) {
+        self.0
+            .add(|counts| &counts.attachment_reads_through_copies, 1);
+    }
+
+    /// Of [`attachment_read_through_copy`](Self::attachment_read_through_copy), a draw that reads
+    /// the texture at its fragments' own pixels alone, whose copy in moves the texels around its
+    /// scissors alone (`texture/attached_reads.rs`).
+    pub(crate) fn own_pixel_read(&self) {
+        self.0.add(|counts| &counts.own_pixel_reads, 1);
     }
 
     /// `made` uses of what a render encoder made resident that a draw worked out
@@ -3654,13 +3669,6 @@ impl Counters {
         self.view_shadows.fetch_add(1, Ordering::Relaxed);
     }
 
-    /// A draw that samples, at a slot, a texture that presents a color attachment of its render
-    /// pass read the texture's copy, where its shadow is served (`texture/attached_reads.rs`).
-    pub(crate) fn attachment_read_through_copy(&self) {
-        self.attachment_reads_through_copies
-            .fetch_add(1, Ordering::Relaxed);
-    }
-
     /// A draw that samples a color attachment's texture after a memory barrier of its render
     /// pass recorded into a new instance (`texture/attached_reads.rs`).
     pub(crate) fn attachment_read_split(&self) {
@@ -3783,13 +3791,6 @@ impl Counters {
         if count > 0 {
             (self.held_depths_released).fetch_add(count as u64, Ordering::Relaxed);
         }
-    }
-
-    /// A draw that samples a color attachment's texture reads it at its fragments' own pixels
-    /// alone, and its copy in moves the texels around its scissors alone
-    /// (`texture/attached_reads.rs`).
-    pub(crate) fn own_pixel_read(&self) {
-        self.own_pixel_reads.fetch_add(1, Ordering::Relaxed);
     }
 
     /// A command buffer kept an ended encoder's log of `bytes` bytes (`replay.rs`).
@@ -7067,7 +7068,8 @@ pub struct WorkCounts {
     /// Draws that sample, at a slot, a texture that presents a color attachment of their own
     /// render pass, each reading the texture's copy, taken before its render pass instance, in
     /// the attachment's place where the texture's shadow is served (`texture/attached_reads.rs`;
-    /// the copies count in `shadow_copies`).
+    /// the copies count in `shadow_copies`). A draw again or rebound of one counts as it did
+    /// (`render/draw_again.rs`).
     pub attachment_reads_through_copies: u64,
     /// Draws that sample a color attachment's texture after a memory barrier of their render
     /// pass, each recorded into a new instance (a barrier inside an instance orders one pixel
@@ -7899,6 +7901,10 @@ impl Device {
             draw_shapes_carried: commands(|counts| &counts.draw_shapes_carried),
             draws_as_before: commands(|counts| &counts.draws_as_before),
             draws_rebound: commands(|counts| &counts.draws_rebound),
+            attachment_reads_through_copies: commands(|counts| {
+                &counts.attachment_reads_through_copies
+            }),
+            own_pixel_reads: commands(|counts| &counts.own_pixel_reads),
             draws_moved: commands(|counts| &counts.draws_moved),
             draws_moved_inside: commands(|counts| &counts.draws_moved_inside),
             draws_restated: commands(|counts| &counts.draws_restated),
@@ -8136,9 +8142,6 @@ impl Device {
             new_buffer_zero_fills: counters.new_buffer_zero_fills.load(Ordering::Relaxed),
             views_through_swizzle: counters.views_through_swizzle.load(Ordering::Relaxed),
             view_shadows: counters.view_shadows.load(Ordering::Relaxed),
-            attachment_reads_through_copies: counters
-                .attachment_reads_through_copies
-                .load(Ordering::Relaxed),
             attachment_read_splits: counters.attachment_read_splits.load(Ordering::Relaxed),
             attachment_read_clears: counters.attachment_read_clears.load(Ordering::Relaxed),
             reading_draws_snapshotted: counters.reading_draws_snapshotted.load(Ordering::Relaxed),
@@ -8177,7 +8180,6 @@ impl Device {
             depth_attachments_moved: counters.depth_attachments_moved.load(Ordering::Relaxed),
             depth_instances_held: counters.depth_instances_held.load(Ordering::Relaxed),
             held_depths_released: counters.held_depths_released.load(Ordering::Relaxed),
-            own_pixel_reads: counters.own_pixel_reads.load(Ordering::Relaxed),
             shadows_zeroed: counters.shadows_zeroed.load(Ordering::Relaxed),
             shadow_copies: counters.shadow_copies.load(Ordering::Relaxed),
             shadow_copies_in_against_standing: counters
