@@ -27,6 +27,9 @@
 //!   counted in `host_texture_shadows_refused_pitch`. At least one is: 272 bytes, 16 past a
 //!   256-byte row, is a pitch no driver measured lays rows at (llvmpipe's linear images step by
 //!   64 bytes, MoltenVK lays them at their own pitch alone, RADV's modifier images step by 256).
+//!   Each answer, asked before any texture is made, costs one or two `vkCreateImage` calls where
+//!   it is `InPlace` (more where refused, a pair per wider plan the making tries), no
+//!   `vkBindImageMemory` and no submission (`ObjectChurn`, `WorkCounts::queue_submissions`).
 //!
 //! A device test: compiled only under the validation crate's GPU safety cfgs (`m2v_gpu`,
 //! `m2v_cpu_icd`), on the kind of device the cfg selects. Printed (`TEXTURE-PLACEMENT`): each
@@ -539,6 +542,40 @@ fn a_pitch_the_device_lays_no_image_at_answers_its_shadow() {
         ((3664, 16), renders, 14672),
         ((3664, 16), renders, 14848),
     ];
+    // Each answer's cost, asked before any texture is made: the images the query made (a call the
+    // driver refuses is counted made and has nothing to release), none bound, nothing submitted.
+    for (at, &(size, usage, bytes_per_row)) in cases.iter().enumerate() {
+        let shaped = descriptor(PixelFormat::BGRA8Unorm, size, usage, options);
+        let offset = at as u64 * (256 << 10);
+        let case = format!("{}x{} at {bytes_per_row} bytes a row", size.0, size.1);
+        let before = device.work_counts();
+        let answer = buffer
+            .texture_placement(&shaped, offset, bytes_per_row)
+            .unwrap();
+        let after = device.work_counts();
+        let delta = |of: fn(&WorkCounts) -> u64| of(&after) - of(&before);
+        let made = delta(|c| c.object_churn.vk_images_made);
+        let released = delta(|c| c.object_churn.vk_images_destroyed);
+        assert!(
+            released <= made,
+            "{case}: {released} released of {made} made"
+        );
+        let bound = delta(|c| c.object_churn.vk_image_bindings);
+        assert_eq!(bound, 0, "{case}: the query bound an image");
+        let submitted = delta(|c| c.queue_submissions);
+        assert_eq!(submitted, 0, "{case}: the query submitted work");
+        if answer == TexturePlacement::InPlace {
+            assert!(
+                (1..=2).contains(&made),
+                "{case}: {made} images made for an image in place"
+            );
+        }
+        eprintln!(
+            "TEXTURE-PLACEMENT on {}: {case}: asked {answer:?}: {made} vkCreateImage, {released} \
+             vkDestroyImage, none bound, nothing submitted",
+            device.name()
+        );
+    }
     let mut refused = 0;
     for (at, &(size, usage, bytes_per_row)) in cases.iter().enumerate() {
         let shaped = descriptor(PixelFormat::BGRA8Unorm, size, usage, options);
