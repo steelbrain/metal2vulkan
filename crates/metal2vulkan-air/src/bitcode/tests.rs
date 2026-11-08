@@ -64,6 +64,21 @@ pub(super) fn stream(
     w.finish()
 }
 
+/// A module-version-1 stream: identification and a module whose body `body` writes after
+/// `VERSION = 1`, with no string table (version 1 names values in the module symbol table).
+pub(super) fn stream_v1(body: impl FnOnce(&mut Writer)) -> Vec<u8> {
+    let mut w = Writer::bitcode();
+    w.enter(u64::from(codes::IDENTIFICATION_BLOCK), 5);
+    w.unabbrev(1, &chars("test"));
+    w.unabbrev(2, &[0]);
+    w.end();
+    w.enter(u64::from(codes::MODULE_BLOCK), 3);
+    w.unabbrev(1, &[1]);
+    body(&mut w);
+    w.end();
+    w.finish()
+}
+
 pub(super) fn block(w: &mut Writer, id: u32, records: &[(u64, Vec<u64>)]) {
     w.enter(u64::from(id), 4);
     for (code, ops) in records {
@@ -126,13 +141,19 @@ fn good_types() -> Vec<(u64, Vec<u64>)> {
 /// The body of the valid synthetic module. Values: 0 `@g`, 1 `@f`, 2 the aggregate `[i32 7, i32
 /// 1]` (forward references to 3 and 4), 3 `i32 7`, 4 `i32 1`.
 fn good_body(w: &mut Writer) {
+    good_body_in(w, &[0, 1], &[1, 1]);
+}
+
+/// [`good_body`] with `g` and `f` the string-table fields of `@g` and `@f` (version 2), or none
+/// (version 1, which names them in the module symbol table).
+fn good_body_in(w: &mut Writer, g: &[u64], f: &[u64]) {
     block(w, codes::TYPE_BLOCK, &good_types());
     w.unabbrev(3, &chars("e-p:64:64:64-i32:32:32"));
     w.unabbrev(5, &chars("air.static_init"));
     // @g: [2 x i32] addrspace(2) constant, init value 2, internal, align 4, section 1.
-    w.unabbrev(7, &[0, 1, 5, 1 | 2 | (2 << 2), 3, 3, 3, 1]);
+    w.unabbrev(7, &[g, &[5, 1 | 2 | (2 << 2), 3, 3, 3, 1][..]].concat());
     // @f: declare void (%S addrspace(1)*).
-    w.unabbrev(8, &[1, 1, 4, 0, 1, 0, 0, 0, 0]);
+    w.unabbrev(8, &[f, &[4, 0, 1, 0, 0, 0, 0][..]].concat());
     block(
         w,
         codes::CONSTANTS_BLOCK,
@@ -164,6 +185,28 @@ fn good_body(w: &mut Writer) {
 
 fn good() -> Vec<u8> {
     stream(2, 0, b"gf", good_body)
+}
+
+/// A name record of a version-1 module symbol table: `code` (`VST_ENTRY` or `VST_FNENTRY`) with
+/// `ops` before the name's characters.
+pub(super) fn vst_name(code: u32, ops: &[u64], name: &str) -> (u64, Vec<u64>) {
+    (u64::from(code), [ops, chars(name).as_slice()].concat())
+}
+
+/// [`good`] in module version 1, its symbol table `names` (after the module's other blocks).
+fn good_v1(names: &[(u64, Vec<u64>)]) -> Vec<u8> {
+    stream_v1(|w| {
+        good_body_in(w, &[], &[]);
+        block(w, codes::VALUE_SYMTAB_BLOCK, names);
+    })
+}
+
+/// [`good`]'s names in its version-1 symbol table.
+fn good_names() -> Vec<(u64, Vec<u64>)> {
+    vec![
+        vst_name(codes::VST_ENTRY, &[1], "f"),
+        vst_name(codes::VST_ENTRY, &[0], "g"),
+    ]
 }
 
 /// Decode as translation does ([`DecodeOptions::default`]).
@@ -320,6 +363,92 @@ fn decoding_is_deterministic() {
     assert_eq!(decode(&bytes).unwrap(), decode(&bytes).unwrap());
 }
 
+/// Module version 1 names globals and functions in the module symbol table instead of the string
+/// table, and its records hold no name fields: the same module decodes to the same tables, and an
+/// entry may come in any order.
+#[test]
+fn a_version_1_module_decodes_as_its_version_2_twin() {
+    let v2 = decode(&good()).unwrap();
+    assert_eq!(decode(&good_v1(&good_names())).unwrap(), v2);
+    let mut reversed = good_names();
+    reversed.reverse();
+    assert_eq!(decode(&good_v1(&reversed)).unwrap(), v2);
+    // A symbol table ahead of the records it names (where LLVM before 3.8 wrote it, ahead of the
+    // function blocks) reads the same.
+    let early = stream_v1(|w| {
+        block(w, codes::VALUE_SYMTAB_BLOCK, &good_names());
+        good_body_in(w, &[], &[]);
+    });
+    assert_eq!(decode(&early).unwrap(), v2);
+    // A value the table does not name is unnamed, as an empty string-table name leaves it.
+    let unnamed = decode(&good_v1(&good_names()[..1])).unwrap();
+    let g = unnamed.parts.globals.values().next().unwrap();
+    assert_eq!(unnamed.parts.symbols.get(g.name), Some(&b""[..]));
+    let t = decode(&stream(2, 0, b"gf", |w| good_body_in(w, &[0, 0], &[1, 1]))).unwrap();
+    assert_eq!(unnamed, t);
+}
+
+/// Each malformed version-1 symbol table, refused by its record.
+#[test]
+fn version_1_symbol_table_errors_are_typed() {
+    let vst = |code| BitcodeError::MalformedRecord {
+        block: codes::VALUE_SYMTAB_BLOCK,
+        code,
+    };
+    let err = |names: &[(u64, Vec<u64>)]| decode(&good_v1(names)).unwrap_err();
+    let names = |extra: (u64, Vec<u64>)| [good_names(), vec![extra]].concat();
+    // Two names for one value, a name for a constant or a value that does not exist, a block name
+    // in the module's table, and a NUL in a name.
+    for (extra, code) in [
+        (vst_name(codes::VST_ENTRY, &[0], "h"), codes::VST_ENTRY),
+        (vst_name(codes::VST_ENTRY, &[3], "c"), codes::VST_ENTRY),
+        (vst_name(codes::VST_ENTRY, &[99], "x"), codes::VST_ENTRY),
+        (vst_name(codes::VST_BBENTRY, &[0], "bb"), codes::VST_BBENTRY),
+        ((1, vec![2, u64::from(b'a'), 0]), codes::VST_ENTRY),
+        ((1, vec![2, 300]), codes::VST_ENTRY),
+    ] {
+        let e = err(&names(extra.clone()));
+        assert_eq!(bitcode_kind(&e), Some(&vst(code)), "{extra:?}: {e}");
+    }
+    // A function offset on a global (`@f` is a declaration: see `function_tests`).
+    let e = err(&[
+        vst_name(codes::VST_FNENTRY, &[0, 7], "g"),
+        vst_name(codes::VST_ENTRY, &[1], "f"),
+    ]);
+    assert_eq!(bitcode_kind(&e), Some(&vst(codes::VST_FNENTRY)));
+    // A record with no value id.
+    let e = err(&[(u64::from(codes::VST_ENTRY), vec![])]);
+    assert_eq!(bitcode_kind(&e), Some(&vst(codes::VST_ENTRY)));
+    // A summary-index entry LLVM defines, and a code it does not.
+    let e = err(&names((u64::from(codes::VST_COMBINED_ENTRY), vec![2, 0])));
+    assert_eq!(
+        unsupported_feature(&e),
+        Some(&Feature::BitcodeRecord {
+            block: codes::VALUE_SYMTAB_BLOCK,
+            code: codes::VST_COMBINED_ENTRY
+        })
+    );
+    let e = err(&names((9, vec![2])));
+    assert_eq!(
+        bitcode_kind(&e),
+        Some(&BitcodeError::UnknownRecord {
+            block: codes::VALUE_SYMTAB_BLOCK,
+            code: 9
+        })
+    );
+    // Two module symbol tables.
+    let e = decode(&stream_v1(|w| {
+        good_body_in(w, &[], &[]);
+        block(w, codes::VALUE_SYMTAB_BLOCK, &good_names());
+        block(w, codes::VALUE_SYMTAB_BLOCK, &[]);
+    }))
+    .unwrap_err();
+    assert_eq!(bitcode_kind(&e), Some(&vst(0)));
+    // Version 2 names nothing in its module symbol table.
+    let e = with_body(|w| block(w, codes::VALUE_SYMTAB_BLOCK, &good_names())).unwrap_err();
+    assert_eq!(bitcode_kind(&e), Some(&vst(codes::VST_ENTRY)));
+}
+
 fn with_body(extra: impl FnOnce(&mut Writer)) -> Result<ModuleTables, Error> {
     decode(&stream(2, 0, b"gf", |w| {
         good_body(w);
@@ -329,11 +458,14 @@ fn with_body(extra: impl FnOnce(&mut Writer)) -> Result<ModuleTables, Error> {
 
 #[test]
 fn version_and_identification_are_checked() {
-    let e = decode(&stream(1, 0, b"", |_| {})).unwrap_err();
-    assert_eq!(
-        bitcode_kind(&e),
-        Some(&BitcodeError::UnsupportedBitcodeVersion { version: 1 })
-    );
+    // Version 0 numbers values absolutely, which the reader does not; 3 is past LLVM's.
+    for version in [0, 3] {
+        let e = decode(&stream(version, 0, b"", |_| {})).unwrap_err();
+        assert_eq!(
+            bitcode_kind(&e),
+            Some(&BitcodeError::UnsupportedBitcodeVersion { version })
+        );
+    }
     let e = decode(&stream(2, 1, b"", |_| {})).unwrap_err();
     assert_eq!(bitcode_kind(&e), Some(&BitcodeError::BadIdentification));
     // A module record before VERSION.
@@ -1370,6 +1502,7 @@ pub(super) fn mutate(bytes: &[u8]) {
 #[test]
 fn mutated_synthetic_modules_never_panic() {
     mutate(&good());
+    mutate(&good_v1(&good_names()));
 }
 
 // ---- Public fixtures, assembled at test time ----

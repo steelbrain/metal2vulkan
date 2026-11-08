@@ -103,7 +103,7 @@ fn assemble(path: &Path) -> Result<Vec<u8>, AssembleError> {
 }
 
 /// The inventory cell of a refusal; `None` for an outcome that is a translator bug.
-fn refusal(e: &Error) -> Option<String> {
+pub(super) fn refusal(e: &Error) -> Option<String> {
     Some(match e {
         Error::Unsupported(u) => {
             let needs = match &u.needs {

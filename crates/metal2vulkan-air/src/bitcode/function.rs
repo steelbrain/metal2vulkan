@@ -6,8 +6,8 @@
 //! local `CONSTANTS` block, then one value per non-void instruction in record order. Void
 //! instructions (stores, fences, terminators, void calls) take no value number, but every
 //! instruction takes the next [`InstId`], so an [`InstId`] is its record index less the dropped
-//! markers before it (see *Calls*). Module version 2
-//! encodes most operands relative to the next value number (32-bit wrapping, as LLVM's reader
+//! markers before it (see *Calls*). Module versions 1 and 2
+//! encode most operands relative to the next value number (32-bit wrapping, as LLVM's reader
 //! does), PHI operands as signed relative values, and switch case values and alloca sizes as
 //! absolute ids.
 //!

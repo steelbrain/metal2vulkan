@@ -5,8 +5,8 @@ use std::cell::Cell;
 
 use super::codes;
 use super::tests::{
-    bitcode_kind, block, chars, decode, decode_compared, md_strings, mutate, stream,
-    unsupported_feature, verify_module_level,
+    bitcode_kind, block, chars, decode, decode_compared, md_strings, mutate, stream, stream_v1,
+    unsupported_feature, verify_module_level, vst_name,
 };
 use super::ModuleTables;
 use crate::bitstream::writer::Writer;
@@ -29,6 +29,13 @@ const fn rel(next: u64, id: u64) -> u64 {
 /// `llvm.loop.mustprogress`, 1 `i32 0`, 2 `i32 7`, 3 `!{i32 0, i32 7}`, 4 `!{!0}`, 5 `distinct
 /// !{!5, !4}`. Kinds: 0 `range`, 1 `llvm.loop`.
 fn prefix(w: &mut Writer, k_defined: bool) {
+    prefix_in(w, k_defined, true);
+}
+
+/// [`prefix`], the function records with their string-table fields (version 2) or without
+/// (version 1).
+fn prefix_in(w: &mut Writer, k_defined: bool, strtab: bool) {
+    let name = |offset: u64, size: u64| if strtab { vec![offset, size] } else { vec![] };
     block(
         w,
         codes::TYPE_BLOCK,
@@ -42,8 +49,11 @@ fn prefix(w: &mut Writer, k_defined: bool) {
             (21, vec![0, 0, 0]),
         ],
     );
-    w.unabbrev(8, &[0, 1, 4, 0, u64::from(!k_defined), 0, 0, 0, 0]);
-    w.unabbrev(8, &[1, 5, 5, 0, 1, 0, 0, 0, 0]);
+    w.unabbrev(
+        8,
+        &[name(0, 1), vec![4, 0, u64::from(!k_defined), 0, 0, 0, 0]].concat(),
+    );
+    w.unabbrev(8, &[name(1, 5), vec![5, 0, 1, 0, 0, 0, 0]].concat());
     block(
         w,
         codes::CONSTANTS_BLOCK,
@@ -580,9 +590,141 @@ fn the_module_symbol_table_locates_every_body() {
     );
 }
 
+/// The module `build(vst, entry)` writes at the fixed point where `VSTOFFSET = vst` and `@k`'s
+/// offset `entry` name the words its symbol table and function block are written at; `build`
+/// returns the bytes and the bit positions of the function block and the symbol table.
+fn located(build: impl Fn(u64, u64) -> (Vec<u8>, u64, u64)) -> (Vec<u8>, u64, u64) {
+    let (mut vst, mut entry) = (0, 0);
+    for _ in 0..8 {
+        let (_, f, v) = build(vst, entry);
+        if (vst, entry) == (v / 32, f / 32) {
+            break;
+        }
+        (vst, entry) = (v / 32, f / 32);
+    }
+    let (bytes, f, v) = build(vst, entry);
+    assert_eq!((f % 32, v % 32), (0, 0));
+    assert_eq!((vst, entry), (v / 32, f / 32));
+    (bytes, vst, entry)
+}
+
+/// [`good`] in module version 1: `VSTOFFSET = vst` when given, the function records without
+/// name fields, `@k`'s body, then the module symbol table `names(entry)`; with the bit positions
+/// of the function block and the symbol table.
+fn v1_module(
+    vst: Option<u64>,
+    entry: u64,
+    names: &dyn Fn(u64) -> Vec<(u64, Vec<u64>)>,
+) -> (Vec<u8>, u64, u64) {
+    let at = Cell::new((0, 0));
+    let bytes = stream_v1(|w| {
+        if let Some(v) = vst {
+            w.unabbrev(13, &[v]);
+        }
+        prefix_in(w, true, false);
+        let f = w.bit();
+        function_block(w, &good_records(), good_tail);
+        let v = w.bit();
+        block(w, codes::VALUE_SYMTAB_BLOCK, &names(entry));
+        at.set((f, v));
+    });
+    let (f, v) = at.get();
+    (bytes, f, v)
+}
+
+/// What LLVM 3.8 and later write in version 1: `@k`'s name with its block's offset, and the
+/// declaration's name.
+fn v1_names(entry: u64) -> Vec<(u64, Vec<u64>)> {
+    vec![
+        vst_name(codes::VST_FNENTRY, &[0, entry], "k"),
+        vst_name(codes::VST_ENTRY, &[1], "air.x"),
+    ]
+}
+
+fn v1_good() -> (Vec<u8>, u64) {
+    let (bytes, _, entry) = located(|vst, entry| v1_module(Some(vst), entry, &v1_names));
+    (bytes, entry)
+}
+
+fn decoded(bytes: &[u8]) -> super::Decoded {
+    super::decoded::decode(bytes, &mut super::tests::meter()).unwrap()
+}
+
+/// A version-1 module (names in the module symbol table, which LLVM writes after the function
+/// blocks) decodes to the module its version-2 twin does: the declaration's name, read ahead of
+/// the body that calls it, classifies it as the version-2 name does. So does the layout before
+/// LLVM 3.8 (no `VSTOFFSET`, the symbol table ahead of the bodies, which follow record order).
+#[test]
+fn a_version_1_body_decodes_as_its_version_2_twin() {
+    let (v2, _, _) = located(|vst, entry| with_vst(Some(vst), entry));
+    let (v1, entry) = v1_good();
+    let t = decode(&v1).unwrap();
+    assert_eq!(t.fn_entries, vec![(FuncId::new(0), entry)]);
+    assert_eq!(t.parts, decode(&v2).unwrap().parts);
+    assert_eq!(decoded(&v1), decoded(&v2));
+
+    let early = stream_v1(|w| {
+        prefix_in(w, true, false);
+        block(
+            w,
+            codes::VALUE_SYMTAB_BLOCK,
+            &[
+                vst_name(codes::VST_ENTRY, &[0], "k"),
+                vst_name(codes::VST_ENTRY, &[1], "air.x"),
+            ],
+        );
+        function_block(w, &good_records(), good_tail);
+    });
+    assert!(decode(&early).unwrap().fn_entries.is_empty());
+    assert_eq!(decoded(&early), decoded(&v2));
+
+    // LLVM's version-1 writer names only named values: an unnamed function has no entry, and its
+    // body is found by record order.
+    let (unnamed, _, _) = located(|vst, entry| {
+        v1_module(Some(vst), entry, &|_| {
+            vec![vst_name(codes::VST_ENTRY, &[1], "air.x")]
+        })
+    });
+    let t = decode(&unnamed).unwrap();
+    assert!(t.fn_entries.is_empty());
+    let k = t.parts.funcs.get(FuncId::new(0)).unwrap();
+    assert_eq!(t.parts.symbols.get(k.name), Some(&b""[..]));
+    assert!(k.body.is_some());
+}
+
+#[test]
+fn a_version_1_symbol_table_locates_every_body() {
+    let err = |bytes: Vec<u8>| bitcode_kind(&decode(&bytes).unwrap_err()).cloned();
+    let vst_err = Some(BitcodeError::MalformedRecord {
+        block: codes::MODULE_BLOCK,
+        code: codes::MODULE_VSTOFFSET,
+    });
+    let entry_err = Some(BitcodeError::MalformedRecord {
+        block: codes::VALUE_SYMTAB_BLOCK,
+        code: codes::VST_FNENTRY,
+    });
+    let (_, vst, entry) = located(|vst, entry| v1_module(Some(vst), entry, &v1_names));
+    // A wrong table offset, a function offset with no table offset, a wrong function offset.
+    assert_eq!(err(v1_module(Some(vst + 1), entry, &v1_names).0), vst_err);
+    assert_eq!(err(v1_module(None, entry, &v1_names).0), vst_err);
+    assert_eq!(err(v1_module(Some(vst), entry + 1, &v1_names).0), entry_err);
+    // A function offset for a declaration.
+    let on_declaration = |entry| {
+        vec![
+            vst_name(codes::VST_FNENTRY, &[0, entry], "k"),
+            vst_name(codes::VST_FNENTRY, &[1, entry], "air.x"),
+        ]
+    };
+    assert_eq!(
+        err(v1_module(Some(vst), entry, &on_declaration).0),
+        entry_err
+    );
+}
+
 #[test]
 fn mutated_bodies_never_panic() {
     mutate(&good());
+    mutate(&v1_good().0);
 }
 
 #[test]

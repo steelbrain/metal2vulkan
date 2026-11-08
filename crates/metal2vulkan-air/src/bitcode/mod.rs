@@ -1,9 +1,9 @@
-//! Module-version-2 bitcode records to `air::ir`.
+//! Bitcode records of module versions 1 and 2 (relative value ids) to `air::ir`.
 //!
 //! [`decode`] turns one bitcode module (raw, or in the `0x0B17C0DE` wrapper that metallib
 //! function entries carry) into a verified [`Decoded`] module plus its AIR metadata ABI
 //! (`air::abi`) and its decode-only [`PointeeTable`]. [`decode_module`] returns the undecorated [`ModuleTables`]: identification,
-//! the string table, the type table (typed pointers kept by bitcode index, erased in the IR),
+//! the names (version 2's string table, version 1's module symbol table), the type table (typed pointers kept by bitcode index, erased in the IR),
 //! attribute groups and lists, globals, function records, module constants, metadata and
 //! metadata kinds, sync-scope names, the module value numbering, and every function body.
 //!

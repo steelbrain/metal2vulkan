@@ -1,9 +1,18 @@
 //! The top level and the `MODULE` block: identification, string table, module records, and the
 //! module-level sub-blocks.
 //!
-//! Module version 2 keeps global and function names in the `STRTAB` block after the module, so
-//! decoding makes two passes over the top level: the first reads `IDENTIFICATION` and `STRTAB`
-//! and skips the module by its length word, the second decodes the module. Both are linear.
+//! Both module versions with relative value ids are read. Version 2 keeps global and function
+//! names in the `STRTAB` block after the module, and its `GLOBALVAR` and `FUNCTION` records start
+//! with each name's offset and size there. Version 1 has no string table: its records carry no
+//! name fields, and the module-level `VALUE_SYMTAB` names each global and function by value id
+//! (`VST_ENTRY`, and `VST_FNENTRY` with the word offset of a defined function's block). LLVM writes
+//! that table after the function blocks (with `VSTOFFSET`) or, before LLVM 3.8, ahead of them.
+//! Version 0 (absolute value ids) is refused.
+//!
+//! Decoding makes two passes over the top level: the first reads `IDENTIFICATION` and `STRTAB`,
+//! and in a version-1 module the module-level records and that symbol table, skipping every other
+//! block by its length word; the second decodes the module, its records named as they are read.
+//! Both are linear.
 //!
 //! Records that identify symbols to LLVM's own tooling rather than describe the program are
 //! checked and dropped: `HASH`, and LLVM 23's `GUIDLIST`.
@@ -29,7 +38,9 @@ use crate::ir::{
     GlobalId, Linkage, ModuleParts, Param, Section, SyncScope, Type, UnnamedAddr, Visibility,
 };
 
-/// The only module version accepted (relative value ids, string table).
+/// Relative value ids, names in the module-level `VALUE_SYMTAB`.
+const MODULE_VERSION_1: u64 = 1;
+/// Relative value ids, names in `STRTAB`.
 const MODULE_VERSION_2: u64 = 2;
 /// `CallingConv::C` and `CallingConv::Fast`.
 const CC_C: u64 = 0;
@@ -39,6 +50,87 @@ const CC_FAST: u64 = 8;
 struct TopLevel<'a> {
     producer: Option<Vec<u8>>,
     strtab: Option<&'a [u8]>,
+    /// A version-1 module's symbol table (empty for any other module).
+    names: Names,
+}
+
+/// A version-1 module's names: the entries of its module-level `VALUE_SYMTAB`.
+#[derive(Debug, Default)]
+struct Names {
+    /// Every name's bytes, back to back.
+    bytes: Vec<u8>,
+    /// The entries, sorted by value id (each value id at most once).
+    entries: Vec<NameEntry>,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct NameEntry {
+    /// The module value id the entry names.
+    value: u64,
+    /// `VST_FNENTRY`'s word offset of the function's block; `None` for `VST_ENTRY`.
+    offset: Option<u64>,
+    /// The name's range in [`Names::bytes`].
+    start: usize,
+    end: usize,
+}
+
+impl Names {
+    /// Read the module-level `VALUE_SYMTAB` just entered: `VST_ENTRY: [valueid, namechar x N]`
+    /// and `VST_FNENTRY: [valueid, offset, namechar x N]`. A name holds no NUL (LLVM's reader
+    /// refuses one), and a value is named once.
+    fn read(s: &mut Stream<'_>, m: &mut Meter) -> Result<Names, Error> {
+        const B: u32 = VALUE_SYMTAB_BLOCK;
+        let mut names = Names::default();
+        let Names { bytes, entries } = &mut names;
+        s.records(m, B, |s, code, _, m| {
+            let (offset, first) = match code {
+                VST_ENTRY => (None, 1),
+                VST_FNENTRY => (Some(s.op(B, code, 1)?), 2),
+                // Block names belong to a function's symbol table.
+                VST_BBENTRY => return Err(s.malformed(B, code)),
+                VST_COMBINED_ENTRY => {
+                    return Err(s.unsupported(Feature::BitcodeRecord { block: B, code }))
+                }
+                _ => return Err(s.err(BitcodeError::UnknownRecord { block: B, code })),
+            };
+            let value = s.op(B, code, 0)?;
+            let chars = s.ops().get(first..).unwrap_or(&[]);
+            let start = bytes.len();
+            m.grow(bytes, chars.len())?;
+            for &c in chars {
+                match u8::try_from(c) {
+                    Ok(b) if b != 0 => bytes.push(b),
+                    _ => return Err(s.malformed(B, code)),
+                }
+            }
+            grow(m, entries)?;
+            entries.push(NameEntry {
+                value,
+                offset,
+                start,
+                end: bytes.len(),
+            });
+            Ok(())
+        })?;
+        entries.sort_unstable_by_key(|e| e.value);
+        if entries
+            .windows(2)
+            .any(|w| matches!(w, [a, b] if a.value == b.value))
+        {
+            return Err(s.malformed(B, VST_ENTRY));
+        }
+        Ok(names)
+    }
+
+    /// The entry naming module value `value`.
+    fn get(&self, value: u64) -> Option<(NameEntry, &[u8])> {
+        let i = self
+            .entries
+            .binary_search_by_key(&value, |e| e.value)
+            .ok()?;
+        let e = *self.entries.get(i)?;
+        Some((e, self.bytes.get(e.start..e.end)?))
+    }
 }
 
 /// Decode the module-level tables of a bitcode stream (starting with `BC 0xC0DE`), keeping what
@@ -68,6 +160,8 @@ pub(crate) fn decode(
         enum_attrs: EnumAttrTable::default(),
         parts: ModuleParts::default(),
         strtab: top.strtab,
+        names: top.names,
+        named: 0,
         version: None,
         bc_types: None,
         groups: Groups::default(),
@@ -110,6 +204,7 @@ fn top_level<'a>(stream: &'a [u8], m: &mut Meter) -> Result<TopLevel<'a>, Error>
     let mut top = TopLevel {
         producer: None,
         strtab: None,
+        names: Names::default(),
     };
     let mut modules = 0u32;
     loop {
@@ -127,7 +222,7 @@ fn top_level<'a>(stream: &'a [u8], m: &mut Meter) -> Result<TopLevel<'a>, Error>
                         block: MODULE_BLOCK,
                     }));
                 }
-                s.skip_block(m)?;
+                top.names = module_names(&mut s, m)?;
             }
             Item::SubBlock(STRTAB_BLOCK) => {
                 if top.strtab.is_some() {
@@ -158,6 +253,45 @@ fn top_level<'a>(stream: &'a [u8], m: &mut Meter) -> Result<TopLevel<'a>, Error>
         .into());
     }
     Ok(top)
+}
+
+/// The first pass over the module block just entered: a version-1 module's symbol table, read
+/// ahead of the records it names (LLVM writes it after the function blocks). The module-level
+/// records are read past and every other block skipped by its length word; a module that does not
+/// open with `VERSION = 1` is skipped whole, and the second pass checks its version.
+fn module_names(s: &mut Stream<'_>, m: &mut Meter) -> Result<Names, Error> {
+    match s.next(m)? {
+        Item::Record {
+            code: MODULE_VERSION,
+            ..
+        } if s.ops().first() == Some(&MODULE_VERSION_1) => {}
+        Item::SubBlock(_) => {
+            s.skip_block(m)?;
+            s.skip_block(m)?;
+            return Ok(Names::default());
+        }
+        Item::Record { .. } => {
+            s.skip_block(m)?;
+            return Ok(Names::default());
+        }
+        Item::EndBlock => return Ok(Names::default()),
+        Item::End => return Err(s.malformed(MODULE_BLOCK, 0)),
+    }
+    let mut names = None;
+    loop {
+        match s.next(m)? {
+            Item::SubBlock(VALUE_SYMTAB_BLOCK) => {
+                if names.is_some() {
+                    return Err(s.malformed(VALUE_SYMTAB_BLOCK, 0));
+                }
+                names = Some(Names::read(s, m)?);
+            }
+            Item::SubBlock(_) => s.skip_block(m)?,
+            Item::Record { .. } => {}
+            Item::EndBlock => return Ok(names.unwrap_or_default()),
+            Item::End => return Err(s.malformed(MODULE_BLOCK, 0)),
+        }
+    }
 }
 
 /// `IDENTIFICATION`: the producer string and an epoch that must be 0.
@@ -199,6 +333,10 @@ struct ModuleDecoder<'a> {
     enum_attrs: EnumAttrTable,
     parts: ModuleParts,
     strtab: Option<&'a [u8]>,
+    /// A version-1 module's symbol table, read by the first pass.
+    names: Names,
+    /// The entries of `names` a global or function took.
+    named: usize,
     version: Option<u64>,
     bc_types: Option<BitcodeTypes>,
     groups: Groups,
@@ -228,6 +366,15 @@ struct ModuleDecoder<'a> {
     guid_entries: u64,
     /// The value ids a `GUIDLIST` assigns a non-zero GUID, checked by `finish`.
     guid_values: Vec<u64>,
+}
+
+/// What [`ModuleDecoder::name`] reads of a `GLOBALVAR` or `FUNCTION` record.
+struct Named {
+    name: crate::ir::Sym,
+    /// The operand index of the record's `type` field.
+    base: usize,
+    /// A version-1 `VST_FNENTRY`'s word offset of the function's block.
+    offset: Option<u64>,
 }
 
 impl<'a> ModuleDecoder<'a> {
@@ -277,7 +424,12 @@ impl<'a> ModuleDecoder<'a> {
                     return Err(s.malformed(VALUE_SYMTAB_BLOCK, 0));
                 }
                 self.vst_bit = Some(s.entry_bit());
-                self.symtab(s, m)?
+                if self.version == Some(MODULE_VERSION_1) {
+                    // Read by the first pass.
+                    s.skip_block(m)?
+                } else {
+                    self.symtab(s, m)?
+                }
             }
             SYNC_SCOPE_NAMES_BLOCK => self.sync_scopes(s, m)?,
             FUNCTION_BLOCK => self.function_block(s, m)?,
@@ -296,7 +448,7 @@ impl<'a> ModuleDecoder<'a> {
                 if self.version.is_some() {
                     return Err(s.malformed(B, code));
                 }
-                if v != MODULE_VERSION_2 {
+                if v != MODULE_VERSION_1 && v != MODULE_VERSION_2 {
                     return Err(s.err(BitcodeError::UnsupportedBitcodeVersion { version: v }));
                 }
                 self.version = Some(v);
@@ -353,8 +505,28 @@ impl<'a> ModuleDecoder<'a> {
             .ok_or_else(|| s.err(BitcodeError::BadType))
     }
 
-    /// The name at `(offset, size)` of the string table.
-    fn name(&mut self, s: &Stream<'_>, code: u32, m: &mut Meter) -> Result<crate::ir::Sym, Error> {
+    /// The name of the global or function a `GLOBALVAR` or `FUNCTION` record declares, the index
+    /// of its first field after the name, and the word offset of its block that a version-1
+    /// `VST_FNENTRY` gives. Version 2 starts the record with the name's `(offset, size)` in the
+    /// string table. Version 1 names the record's value id (the next module value) in the symbol
+    /// table, or leaves the value unnamed, as version 2's empty name does.
+    fn name(&mut self, s: &Stream<'_>, code: u32, m: &mut Meter) -> Result<Named, Error> {
+        if self.version == Some(MODULE_VERSION_1) {
+            let value = self.values.len() as u64;
+            let (offset, bytes): (_, &[u8]) = match self.names.get(value) {
+                Some((e, bytes)) => {
+                    self.named += 1;
+                    (e.offset, bytes)
+                }
+                None => (None, b""),
+            };
+            let name = self.parts.symbols.intern(bytes, m)?;
+            return Ok(Named {
+                name,
+                base: 0,
+                offset,
+            });
+        }
         let offset = s.op(MODULE_BLOCK, code, 0)?;
         let size = s.op(MODULE_BLOCK, code, 1)?;
         let bytes = self
@@ -365,7 +537,11 @@ impl<'a> ModuleDecoder<'a> {
                 t.get(start..end)
             })
             .ok_or_else(|| s.err(BitcodeError::BadStringTable))?;
-        self.parts.symbols.intern(bytes, m)
+        Ok(Named {
+            name: self.parts.symbols.intern(bytes, m)?,
+            base: 2,
+            offset: None,
+        })
     }
 
     fn section(&self, s: &Stream<'_>, code: u32, raw: u64) -> Result<Option<Section>, Error> {
@@ -397,14 +573,19 @@ impl<'a> ModuleDecoder<'a> {
         Ok(id)
     }
 
-    /// `GLOBALVAR: [strtab offset, size, type, isconst|explicit<<1|addrspace<<2, initid, linkage,
-    /// alignment, section, visibility, threadlocal, unnamed_addr, externally_initialized, ...]`.
+    /// `GLOBALVAR: [strtab offset, size (version 2), type, isconst|explicit<<1|addrspace<<2,
+    /// initid, linkage, alignment, section, visibility, threadlocal, unnamed_addr,
+    /// externally_initialized, ...]`. Fields are indexed from `type`.
     fn global(&mut self, s: &Stream<'_>, m: &mut Meter) -> Result<(), Error> {
         const C: u32 = MODULE_GLOBALVAR;
-        let op = |i| s.op(MODULE_BLOCK, C, i);
-        let name = self.name(s, C, m)?;
-        let ty_idx = op(2)?;
-        let flags = op(3)?;
+        let Named { name, base, offset } = self.name(s, C, m)?;
+        if offset.is_some() {
+            // `VST_FNENTRY` names a function.
+            return Err(s.malformed(VALUE_SYMTAB_BLOCK, VST_FNENTRY));
+        }
+        let op = |i| s.op(MODULE_BLOCK, C, base + i);
+        let ty_idx = op(0)?;
+        let flags = op(1)?;
         let types = self.types(s)?;
         let bad_type = || s.err(BitcodeError::BadType);
         let (value_ty, space, bc_type, object_bc_type) = if flags & 2 != 0 {
@@ -425,13 +606,13 @@ impl<'a> ModuleDecoder<'a> {
                 .ok_or_else(bad_type)?;
             (pointee, space, Some(own), object)
         };
-        let init = op(4)?;
-        let linkage = linkage(op(5)?).ok_or_else(|| s.malformed(MODULE_BLOCK, C))?;
-        let align = align(op(6)?).ok_or_else(|| s.malformed(MODULE_BLOCK, C))?;
-        let section = self.section(s, C, op(7)?)?;
-        let opt = |i: usize| s.ops().get(i).copied().unwrap_or(0);
+        let init = op(2)?;
+        let linkage = linkage(op(3)?).ok_or_else(|| s.malformed(MODULE_BLOCK, C))?;
+        let align = align(op(4)?).ok_or_else(|| s.malformed(MODULE_BLOCK, C))?;
+        let section = self.section(s, C, op(5)?)?;
+        let opt = |i: usize| s.ops().get(base + i).copied().unwrap_or(0);
         // Thread-local storage and comdats are rejected at decode.
-        if opt(9) != 0 || opt(13) != 0 {
+        if opt(7) != 0 || opt(11) != 0 {
             return Err(s.unsupported(Feature::ModuleRecord { code: C }));
         }
         let global = Global {
@@ -440,10 +621,10 @@ impl<'a> ModuleDecoder<'a> {
             space,
             constant: flags & 1 != 0,
             init: None,
-            externally_initialized: opt(11) != 0,
+            externally_initialized: opt(9) != 0,
             linkage,
-            visibility: visibility(linkage, opt(8)),
-            unnamed_addr: unnamed_addr(opt(10)),
+            visibility: visibility(linkage, opt(6)),
+            unnamed_addr: unnamed_addr(opt(8)),
             align,
             section,
         };
@@ -465,17 +646,17 @@ impl<'a> ModuleDecoder<'a> {
         Ok(())
     }
 
-    /// `FUNCTION: [strtab offset, size, type, callingconv, isproto, linkage, paramattrs,
-    /// alignment, section, visibility, gc, unnamed_addr, prologuedata, dllstorageclass, comdat,
-    /// prefixdata, personalityfn, preemption, addrspace, partition offset, partition size,
-    /// prefalign]`.
+    /// `FUNCTION: [strtab offset, size (version 2), type, callingconv, isproto, linkage,
+    /// paramattrs, alignment, section, visibility, gc, unnamed_addr, prologuedata,
+    /// dllstorageclass, comdat, prefixdata, personalityfn, preemption, addrspace, partition offset,
+    /// partition size, prefalign]`. Fields are indexed from `type`.
     fn function(&mut self, s: &Stream<'_>, m: &mut Meter) -> Result<(), Error> {
         const C: u32 = MODULE_FUNCTION;
-        let op = |i| s.op(MODULE_BLOCK, C, i);
-        let opt = |i: usize| s.ops().get(i).copied().unwrap_or(0);
-        let name = self.name(s, C, m)?;
+        let Named { name, base, offset } = self.name(s, C, m)?;
+        let op = |i| s.op(MODULE_BLOCK, C, base + i);
+        let opt = |i: usize| s.ops().get(base + i).copied().unwrap_or(0);
         let types = self.types(s)?;
-        let record_ty = op(2)?;
+        let record_ty = op(0)?;
         let record_idx = u32::try_from(record_ty).map_err(|_| s.err(BitcodeError::BadType))?;
         // The oldest spelling names a pointer to the function type: that pointer is the value's
         // own type, and its pointee the function type.
@@ -491,7 +672,7 @@ impl<'a> ModuleDecoder<'a> {
             Some(Type::Function { params, .. }) => params.len(),
             _ => return Err(s.err(BitcodeError::BadType)),
         };
-        let cconv = match op(3)? {
+        let cconv = match op(1)? {
             CC_C => CallConv::C,
             CC_FAST => CallConv::Fast,
             other => {
@@ -499,22 +680,26 @@ impl<'a> ModuleDecoder<'a> {
                 return Err(s.unsupported(Feature::CallingConvention(cc)));
             }
         };
-        let is_proto = op(4)? != 0;
-        let linkage = linkage(op(5)?).ok_or_else(|| s.malformed(MODULE_BLOCK, C))?;
-        let attr_list = op(6)?;
+        let is_proto = op(2)? != 0;
+        if is_proto && offset.is_some() {
+            // `VST_FNENTRY` locates a body, which a declaration has none of.
+            return Err(s.malformed(VALUE_SYMTAB_BLOCK, VST_FNENTRY));
+        }
+        let linkage = linkage(op(3)?).ok_or_else(|| s.malformed(MODULE_BLOCK, C))?;
+        let attr_list = op(4)?;
         // LLVM 23's preferred alignment is a code-placement hint ("treated as a hint" by LangRef),
         // which a shader has no use for: checked like `align` and dropped.
-        if let Some(&raw) = s.ops().get(21) {
+        if let Some(&raw) = s.ops().get(base + 19) {
             align(raw).ok_or_else(|| s.malformed(MODULE_BLOCK, C))?;
         }
-        let align = align(op(7)?).ok_or_else(|| s.malformed(MODULE_BLOCK, C))?;
-        let section = self.section(s, C, op(8)?)?;
+        let align = align(op(5)?).ok_or_else(|| s.malformed(MODULE_BLOCK, C))?;
+        let section = self.section(s, C, op(6)?)?;
         // GC names, prologue/prefix data, comdats, and personality functions are rejected.
-        if opt(10) != 0 || opt(12) != 0 || opt(14) != 0 || opt(15) != 0 || opt(16) != 0 {
+        if opt(8) != 0 || opt(10) != 0 || opt(12) != 0 || opt(13) != 0 || opt(14) != 0 {
             return Err(s.unsupported(Feature::ModuleRecord { code: C }));
         }
         let program = self.parts.data_layout.program_space;
-        let raw_space = match s.ops().get(18) {
+        let raw_space = match s.ops().get(base + 16) {
             Some(&v) => u32::try_from(v).map_err(|_| s.malformed(MODULE_BLOCK, C))?,
             None => program,
         };
@@ -554,8 +739,8 @@ impl<'a> ModuleDecoder<'a> {
                 name,
                 ty,
                 linkage,
-                visibility: visibility(linkage, opt(9)),
-                unnamed_addr: unnamed_addr(opt(11)),
+                visibility: visibility(linkage, opt(7)),
+                unnamed_addr: unnamed_addr(opt(9)),
                 cconv,
                 attrs,
                 ret_attrs,
@@ -569,6 +754,10 @@ impl<'a> ModuleDecoder<'a> {
         if !enums.is_empty() {
             m.charge(std::mem::size_of_val(&enums))?;
             self.enum_attrs.set_func(f, enums);
+        }
+        if let Some(words) = offset {
+            grow(m, &mut self.fn_entries)?;
+            self.fn_entries.push((f, words));
         }
         if !is_proto {
             grow(m, &mut self.defined)?;
@@ -663,7 +852,12 @@ impl<'a> ModuleDecoder<'a> {
     /// symbol table at that word offset naming each defined function's block by its word
     /// offset. LLVM associates bodies with functions by those offsets and writes them in record
     /// order; a module that orders them otherwise is refused rather than misread.
+    ///
+    /// Version 2 gives every defined function an offset. Version 1 gives one to each named
+    /// defined function when it declares `VSTOFFSET` (LLVM 3.8 on) and none before; a function it
+    /// gives none is found by record order alone, as LLVM's reader finds it.
     fn check_bodies(&self, m: &mut Meter) -> Result<(), Error> {
+        let legacy = self.version == Some(MODULE_VERSION_1);
         let at = |kind| -> Error {
             InputError::new(InputErrorKind::Bitcode(kind), Location::module()).into()
         };
@@ -687,6 +881,13 @@ impl<'a> ModuleDecoder<'a> {
                     Err(vst_malformed())
                 }
             }
+            (None, Some(_)) if legacy => {
+                return if self.fn_entries.is_empty() {
+                    Ok(())
+                } else {
+                    Err(vst_malformed())
+                }
+            }
             (Some(words), Some(bit)) if words.checked_mul(32) == Some(bit) => {}
             _ => return Err(vst_malformed()),
         }
@@ -696,7 +897,12 @@ impl<'a> ModuleDecoder<'a> {
                 code: VST_FNENTRY,
             })
         };
-        if self.fn_entries.len() != self.defined.len() {
+        let entries_fit = if legacy {
+            self.fn_entries.len() <= self.defined.len()
+        } else {
+            self.fn_entries.len() == self.defined.len()
+        };
+        if !entries_fit {
             return Err(entry_malformed());
         }
         // Sorted copies keep the check O(n log n) in the number of functions.
@@ -712,14 +918,20 @@ impl<'a> ModuleDecoder<'a> {
         }
         // Blocks are recorded in stream order, so their positions increase.
         let blocks = &self.block_bits;
+        let mut matched = 0;
         for (&f, &bit) in self.defined.iter().zip(blocks) {
             m.tick(1)?;
             let words = entries
                 .binary_search_by_key(&f, |&(g, _)| g)
                 .ok()
                 .and_then(|i| entries.get(i))
-                .map(|&(_, w)| w)
-                .ok_or_else(entry_malformed)?;
+                .map(|&(_, w)| w);
+            let words = match words {
+                Some(w) => w,
+                None if legacy => continue,
+                None => return Err(entry_malformed()),
+            };
+            matched += 1;
             match words.checked_mul(32) {
                 Some(b) if b == bit => {}
                 Some(b) if blocks.binary_search(&b).is_ok() => {
@@ -734,6 +946,9 @@ impl<'a> ModuleDecoder<'a> {
                 }
                 _ => return Err(entry_malformed()),
             }
+        }
+        if matched != entries.len() {
+            return Err(entry_malformed());
         }
         Ok(())
     }
@@ -845,7 +1060,8 @@ impl<'a> ModuleDecoder<'a> {
         metadata::decode(s, &mut cx, &value, &global_object, m)
     }
 
-    /// The module-level `VALUE_SYMTAB`: with a string table it holds only function offsets.
+    /// Version 2's module-level `VALUE_SYMTAB`: with a string table it holds only function
+    /// offsets.
     fn symtab(&mut self, s: &mut Stream<'a>, m: &mut Meter) -> Result<(), Error> {
         const B: u32 = VALUE_SYMTAB_BLOCK;
         let values = &self.values;
@@ -895,6 +1111,17 @@ impl<'a> ModuleDecoder<'a> {
     }
 
     fn finish(mut self, m: &mut Meter) -> Result<ModuleTables, Error> {
+        if self.named != self.names.entries.len() {
+            // A version-1 symbol-table entry that names no global or function.
+            return Err(InputError::new(
+                InputErrorKind::Bitcode(BitcodeError::MalformedRecord {
+                    block: VALUE_SYMTAB_BLOCK,
+                    code: VST_ENTRY,
+                }),
+                Location::module(),
+            )
+            .into());
+        }
         self.check_bodies(m)?;
         self.check_guids(m)?;
         let bad = || -> Error {

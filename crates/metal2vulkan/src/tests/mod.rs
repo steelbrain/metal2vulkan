@@ -186,6 +186,7 @@ mod fuzz_interp;
 mod fuzz_soak;
 mod golden_hashes;
 mod library_entries_decode_once;
+mod module_version_1;
 mod owned_divisions;
 mod profile_fingerprint_derived;
 mod public_fixtures_engine;
