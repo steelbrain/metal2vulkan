@@ -4406,9 +4406,9 @@ pub struct WorkCounts {
     /// program's queued GPU work (`memory/ready.rs`; on RADV after runtime suspend, a new
     /// block's clear). None on a device that copies no color texture on the host.
     pub host_copy_blocks_readied: u64,
-    /// The blocks of that pool a placement made itself, finding no room and none made ready:
-    /// their pages untouched, a host copy's first touch there may wait for the memory's kernel
-    /// work (`memory/ready.rs`).
+    /// The blocks of that pool a placement made itself, finding no room and no block made ready
+    /// (none held, or its making still under way): their pages untouched, a host copy's first
+    /// touch there may wait for the memory's kernel work (`memory/ready.rs`).
     pub host_copy_blocks_made_in_place: u64,
     /// Every block its allocator freed so far, by what made it go (`MemoryFrees`): one
     /// `vkFreeMemory` each, and the allocator's whole share of

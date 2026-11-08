@@ -1263,7 +1263,8 @@ pub(super) struct Memory {
     /// the device copies no color texture on the host ([`Memory::host_copy_pool`]).
     host_copy_pool: Option<Option<(Holds, u32)>>,
     /// The block of that pool being made ready, or made ready and not yet in it: it enters the
-    /// pool at the first placement there that finds no room (`memory/ready.rs`).
+    /// pool at the first placement there that finds no room once its making ended
+    /// (`memory/ready.rs`).
     readying: Option<ready::Readying>,
     /// Its blocks made ready ahead and added to it, and the blocks a placement in it made itself,
     /// finding none ready (`WorkCounts`).
@@ -1276,7 +1277,7 @@ pub(super) struct HostCopyBlocks {
     /// Made ready ahead off the program's thread and added to the pool by a placement that found
     /// no room (`memory/ready.rs`).
     pub(super) readied: u64,
-    /// Blocks a placement made itself, finding no room and none being made ready.
+    /// Blocks a placement made itself, finding no room and none made ready.
     pub(super) made_in_place: u64,
 }
 
@@ -1574,6 +1575,13 @@ impl Memory {
     /// The counts of the blocks of the pool host copies place in ([`HostCopyBlocks`]).
     pub(super) fn host_copy_blocks(&self) -> HostCopyBlocks {
         self.host_copy_blocks
+    }
+
+    /// Whether no block is being made ready for host copies: none is held, or its making ended
+    /// (`memory/ready.rs`).
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(super) fn readying_ended(&self) -> bool {
+        (self.readying.as_ref()).is_none_or(ready::Readying::finished)
     }
 
     /// The memory types of `class` among those `allowed` names, as bits.
@@ -2704,13 +2712,14 @@ fn place(
             {
                 return Ok(guard.mark_overflowed(placement, overflowing));
             }
-            // The pool host copies place in, without room: the block made ready for it (waited
-            // for where its making is still under way) rather than one of the placement's own,
-            // whose first touch would wait instead (`memory/ready.rs`). Where another placement
-            // took it meanwhile, the block it added may hold this one.
-            let readying = (guard.readying.as_ref()).is_some_and(|ready| ready.pool() == pool);
-            drop(guard);
-            if readying {
+            // The pool host copies place in, without room: the block made ready for it, where
+            // its making ended, rather than one of the placement's own, whose first touch may
+            // wait instead (`memory/ready.rs`). A making still under way is not waited for: it
+            // may itself wait behind the program's GPU work, which no making waits for.
+            if (guard.readying.as_ref())
+                .is_some_and(|ready| ready.pool() == pool && ready.finished())
+            {
+                drop(guard);
                 adopt_ready(memory);
                 let mut guard = lock(memory);
                 if let Some(placement) =
@@ -2777,8 +2786,8 @@ fn make_room(memory: &Mutex<Memory>, device: &ash::Device, type_index: u32) -> b
 /// is left to the placement that needs it. The pool host copies place in, where `copies` says the
 /// device copies color textures on the host, keeps its room in a block made ready off this thread
 /// through `functions` (`memory/ready.rs`), started where the pool lacks room and none is held:
-/// the first placement there that finds no room adds it, so that the pool's blocks change only
-/// at its placements, never as a making off the thread ends.
+/// the first placement there that finds no room once its making ended adds it, so that the pool's
+/// blocks change only at its placements, never as a making off the thread ends.
 pub(super) fn keep_room(
     memory: &Mutex<Memory>,
     device: &ash::Device,
@@ -2844,8 +2853,8 @@ fn ready_ahead(
 }
 
 /// Add the block made ready for the pool host copies place in to it (`memory/ready.rs`), its
-/// making waited for with `memory`'s lock released where it is still under way. Nothing where
-/// another placement took it first, or its making failed.
+/// making, which ended, joined with `memory`'s lock released. Nothing where another placement
+/// took it first, or its making failed.
 fn adopt_ready(memory: &Mutex<Memory>) {
     let Some(readying) = lock(memory).readying.take() else {
         return;

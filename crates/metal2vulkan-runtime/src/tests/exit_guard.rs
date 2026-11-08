@@ -1765,7 +1765,7 @@ fn the_device_s_functions_are_reached_through_checked_accessors() {
 /// tuple field, a type argument or a by-value parameter) fails
 /// `only_the_listed_modules_keep_the_device_s_functions`; so does a listed module that keeps none
 /// any more.
-const KEEPERS: [(&str, &str); 29] = [
+const KEEPERS: [(&str, &str); 31] = [
     (
         "binding.rs",
         "the push command (vkCmdPushDescriptorSet), a call's parameter (`push_set`) and the \
@@ -1844,6 +1844,16 @@ const KEEPERS: [(&str, &str); 29] = [
     (
         "index_rewrite.rs",
         "a draw's recording (vkCmd*), held by what holds its command buffer",
+    ),
+    (
+        "memory.rs",
+        "a creation call's parameter, handed to the making of a block ready for host copies \
+         (`keep_room`)",
+    ),
+    (
+        "memory/ready.rs",
+        "a block's making ready for host copies, on a thread of its own inside a section; the \
+         teardown joins it as it destroys the memory (`Memory::destroy`), before vkDestroyDevice",
     ),
     (
         "pipeline/creation_log.rs",

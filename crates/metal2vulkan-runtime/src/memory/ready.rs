@@ -19,10 +19,12 @@
 //!   the first is started by the device's first creation call, before the program queued work.
 //!   No image is placed in the block before every page was read, so its host copies fault on none
 //!   of them, whatever kernel work is pending then (a later block's clear included).
-//! - **Added at a placement.** The first placement in the pool that finds no room adds the block,
-//!   waiting for its making where it is still under way, rather than making one whose first touch
-//!   would wait instead (`memory::place`, `WorkCounts::host_copy_blocks_readied`); where none is
-//!   held it makes one as before (`WorkCounts::host_copy_blocks_made_in_place`). The pool's blocks
+//! - **Added at a placement.** The first placement in the pool that finds no room once the
+//!   block's making ended adds it, rather than making one whose first touch may wait instead
+//!   (`memory::place`, `WorkCounts::host_copy_blocks_readied`). Where the making is still under
+//!   way, or none is held, the placement makes its own block as before
+//!   (`WorkCounts::host_copy_blocks_made_in_place`): it waits for no making here, which may itself
+//!   wait behind the program's GPU work, as no making waits for that work. The pool's blocks
 //!   change only at its placements, never as a making here ends.
 //! - **One at a time,** on a thread of its own that ends with the block; the device's teardown
 //!   joins it and frees its block. Its Vulkan calls run in a section of the exit guard
@@ -70,6 +72,12 @@ impl Readying {
     /// The pool it is for.
     pub(super) fn pool(&self) -> (Holds, u32) {
         self.pool
+    }
+
+    /// Whether its making ended, its block ready or its making failed: [`take`](Self::take) waits
+    /// for nothing.
+    pub(super) fn finished(&self) -> bool {
+        self.thread.is_finished()
     }
 
     /// Its block, waited for: `None` where it could not be made.

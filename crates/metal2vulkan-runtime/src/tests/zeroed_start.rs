@@ -53,6 +53,16 @@ fn a_shared_texture_made_while_the_gpu_is_busy_waits_for_none_of_it_and_reads_ze
     probe.wait_until_completed().unwrap();
     let each = at.elapsed() / 8;
     let count = (BUSY.as_secs_f64() / each.as_secs_f64().max(1e-6)).clamp(8.0, 20_000.0) as u32;
+    // The block the device's first creation call started making ready for host copies is ready
+    // before the busy work is queued (`memory/ready.rs`): what this holds is that the textures
+    // made behind that work lie in it, not how soon a making ends.
+    while !crate::device::lock(&device.shared().memory).readying_ended() {
+        assert!(
+            at.elapsed() < Duration::from_secs(30),
+            "no block was made ready"
+        );
+        std::thread::yield_now();
+    }
     let busy = fill(count);
     let before = device.work_counts();
     busy.commit().unwrap();
