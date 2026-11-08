@@ -10,7 +10,10 @@
 //! - The command buffers of one queue share its block, two in flight at once round after round,
 //!   and the queue makes it once (`WorkCounts::gpu_pool_blocks_made`); another queue makes its
 //!   own; a block no command buffer held for two seconds goes as a later one's lease ends, and a
-//!   queue's goes with the queue (`WorkCounts::gpu_pool_blocks_released`). Before, each command
+//!   queue's goes with the queue: to the device's spare where it has none, which the next queue
+//!   that needs a block takes instead of making one, else it is released
+//!   (`WorkCounts::gpu_pool_blocks_released`). Before, a block that went was released, and the
+//!   next queue to need one made one again. Before that, each command
 //!   buffer in flight held a block of its own, made where none was spare: on the M3 Max (MoltenVK
 //!   1.4.1, macOS 27.0.1) a block is 1 GiB, whose making took 24 to 39 ms inside
 //!   `vkBindBufferMemory`, and wired its 1 GiB.
@@ -226,8 +229,9 @@ fn command_buffers_of_one_queue_share_one_pool_block() {
     layer_reported_nothing_at_all(&messages);
 }
 
-/// A second queue's command buffer makes a block of its own, which goes as the queue goes; the
-/// first queue's block stays.
+/// A second queue's command buffer makes a block of its own; the first queue's block stays. Two
+/// queues that go let their blocks go, the first to the device's spare and the next released,
+/// and a queue made later takes the spare rather than make a block.
 #[test]
 fn a_second_queue_takes_its_own_pool_block() {
     let cache = ScratchCache::new().unwrap();
@@ -242,24 +246,44 @@ fn a_second_queue_takes_its_own_pool_block() {
         assert_eq!(lane.blocks(), (2, 0), "the second queue's own block");
         lane.drawn(&queue);
         assert_eq!(lane.blocks(), (2, 0), "the first queue's block again");
-        // The queue goes once its last command buffer's hold goes, which may be on a handler
-        // thread just after the wait returned.
-        drop(other);
-        let deadline = Instant::now() + Duration::from_secs(5);
-        while lane.blocks().1 == 0 && Instant::now() < deadline {
-            std::thread::sleep(Duration::from_millis(1));
-        }
+        let third = lane.queue();
+        lane.drawn(&third);
+        assert_eq!(lane.blocks(), (3, 0), "the third queue's own block");
+        drop((other, third));
+        gone(&lane, 1);
         assert_eq!(
             lane.blocks(),
-            (2, 1),
-            "the second queue's block went with it"
+            (3, 1),
+            "one of the two blocks went, the other is the spare"
         );
+        let later = lane.queue();
+        lane.drawn(&later);
+        assert_eq!(lane.blocks(), (3, 1), "the later queue took the spare");
+        lane.drawn(&queue);
+        assert_eq!(lane.blocks(), (3, 1), "the first queue's block again");
     }
     layer_reported_nothing_at_all(&messages);
 }
 
-/// A queue's block that no command buffer held for the quiet period goes as another queue's
-/// command buffer's lease ends; that queue's block, just held, stays.
+/// The blocks the lane's device holds, its spare's included.
+fn live(lane: &Lane) -> u64 {
+    let (made, released) = lane.blocks();
+    made - released
+}
+
+/// Wait until `released` of the lane's blocks were released: a queue goes once its last command
+/// buffer's hold goes, which may be on a handler thread just after the wait returned.
+fn gone(lane: &Lane, released: u64) {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while lane.blocks().1 < released && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(1));
+    }
+}
+
+/// Two queues' blocks that no command buffer held for the quiet period go as another queue's
+/// command buffer's lease ends, the first to the device's spare and the next released; that
+/// queue's block, just held, stays. Of the two queues that rested, the first to draw again takes
+/// the spare, and the next makes a block.
 #[test]
 fn a_pool_block_no_command_buffer_held_goes_after_the_quiet_period() {
     let cache = ScratchCache::new().unwrap();
@@ -267,23 +291,32 @@ fn a_pool_block_no_command_buffer_held_goes_after_the_quiet_period() {
     {
         let lane = Lane::new(&messages, &cache);
         let idle = lane.queue();
+        let rested = lane.queue();
         let busy = lane.queue();
         lane.drawn(&idle);
+        lane.drawn(&rested);
         lane.drawn(&busy);
-        assert_eq!(lane.blocks(), (2, 0));
+        assert_eq!(lane.blocks(), (3, 0));
         std::thread::sleep(QUIET + Duration::from_millis(200));
         lane.drawn(&busy);
-        assert_eq!(lane.blocks(), (2, 1), "the idle queue's block went");
+        assert_eq!(
+            lane.blocks(),
+            (3, 1),
+            "the idle queues' blocks went, one to the spare"
+        );
         lane.drawn(&busy);
-        assert_eq!(lane.blocks(), (2, 1), "the busy queue's block stayed");
+        assert_eq!(lane.blocks(), (3, 1), "the busy queue's block stayed");
+        lane.drawn(&rested);
+        assert_eq!(lane.blocks(), (3, 1), "a queue that rested took the spare");
         lane.drawn(&idle);
-        assert_eq!(lane.blocks(), (3, 1), "the idle queue makes one again");
+        assert_eq!(lane.blocks(), (4, 1), "the other makes one again");
     }
     layer_reported_nothing_at_all(&messages);
 }
 
 /// A command buffer's completed handler runs while another queue's first command buffer makes
-/// that queue's block on this thread, round after round, each with a queue of its own. The
+/// that queue's block on this thread, round after round, each with a queue of its own (and a
+/// queue that takes the device's spare first, so the other makes one). The
 /// command buffer returned from its submission before the making began, and draws for about
 /// `WORK` of GPU time: where the making took long enough to tell and the command buffer completed
 /// in its first half, the handler ran less than half the making after the later of its completion
@@ -301,6 +334,9 @@ fn a_completed_handler_waits_for_no_pool_block_made_meanwhile() {
         let mut told = 0;
         for round in 0..MAKING_ROUNDS {
             let other = lane.queue();
+            // Takes the block the round before let go to the device's spare, or makes one.
+            let holder = lane.queue();
+            let held = lane.encoded(&holder);
             let first = lane.encoded_with(&queue, &working);
             let ran: Arc<Mutex<Option<f64>>> = Arc::default();
             let log = Arc::clone(&ran);
@@ -352,7 +388,14 @@ fn a_completed_handler_waits_for_no_pool_block_made_meanwhile() {
                     making * 1e3
                 );
             }
-            drop((first, second, other));
+            drop((first, second, held, other, holder));
+            // The first queue's block and the spare stay; the round's two queues went (the
+            // module docs).
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while live(&lane) > 2 && Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            assert_eq!(live(&lane), 2, "round {round}: the blocks left");
         }
         eprintln!("{told} of {MAKING_ROUNDS} rounds told");
     }

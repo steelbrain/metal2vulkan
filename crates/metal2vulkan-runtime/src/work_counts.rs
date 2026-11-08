@@ -1753,8 +1753,8 @@ impl Counters {
             .fetch_add(count, Ordering::Relaxed);
     }
 
-    /// A command buffer's lease made its queue's block of a GPU pool: the queue held none
-    /// (`gpu_pools.rs`).
+    /// A command buffer's lease made its queue's block of a GPU pool: the queue held none, and the
+    /// device had no spare (`gpu_pools.rs`).
     pub(crate) fn gpu_pool_block_made(&self) {
         self.gpu_pool_blocks_made.fetch_add(1, Ordering::Relaxed);
     }
@@ -1766,8 +1766,9 @@ impl Counters {
             .fetch_max(leased, Ordering::Relaxed);
     }
 
-    /// A queue's block of a GPU pool was released before the device's teardown: no lease held it
-    /// for too long, or its queue went (`gpu_pools.rs`).
+    /// A block of a GPU pool was released before the device's teardown: a queue's that no lease
+    /// held for too long, or whose queue went, or one made while another lease of its queue made
+    /// one, where the device held a spare of its kind already (`gpu_pools.rs`).
     pub(crate) fn gpu_pool_block_released(&self) {
         self.gpu_pool_blocks_released
             .fetch_add(1, Ordering::Relaxed);
@@ -4764,14 +4765,17 @@ pub struct WorkCounts {
     pub merged_draw_commands: u64,
     /// Blocks of the GPU pools made: a queue's index pool block (for its index bounds passes and
     /// index rewrites) or its mesh records pool block, made by the first command buffer of the
-    /// queue that needs one where the queue holds none. A queue's command buffers share its block
-    /// of each kind, so a queue makes one while it keeps using them. Each block is a sixty-fourth
-    /// of the device's largest device-local heap. Those made less those released are the blocks
-    /// the device holds.
+    /// queue that needs one where the queue holds none and the device has no spare of its kind (a
+    /// block another queue let go). A queue's command buffers share its block of each kind, so a
+    /// queue makes one while it keeps using them, and a device makes no more of a kind than the
+    /// most queues that held one at once. Each block is a sixty-fourth of the device's largest
+    /// device-local heap. Those made less those released are the blocks the device holds, its
+    /// spares included.
     pub gpu_pool_blocks_made: u64,
     /// Blocks of the GPU pools released before the device's teardown: a queue's block no command
     /// buffer held for two seconds, released as another lease of its kind ended, or the block of
-    /// a queue that went.
+    /// a queue that went, where the device held a spare of its kind already (else the block
+    /// became the spare, for the next queue that needs one).
     pub gpu_pool_blocks_released: u64,
     /// The most command buffers that held one queue's block of a GPU pool at once: between each
     /// one's first pass that needs it and its completion.

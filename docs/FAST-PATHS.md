@@ -895,7 +895,10 @@ driver's. Each is open work.
   would cut it. It is not built.
 - **On NVIDIA, a command buffer submitted while the runtime makes a queue's GPU pool block
   completes as the making ends.** A queue's first lease of an index or mesh records pool makes its
-  block as the command buffer encodes (`gpu_pools.rs`), a sixty-fourth of the device-local heap.
+  block as the command buffer encodes where the device holds no spare of that kind, a block
+  another queue let go (`gpu_pools.rs`): a device makes no more blocks of a kind than the most
+  queues that held one at once, and none as queues come and go or rest. A block is a sixty-fourth
+  of the device-local heap.
   On the RTX 5080 Laptop GPU (NVIDIA 615.71.09, Linux) a block of 254.7 MiB took 3.1 to 35.7 ms
   beside another process's GPU work, nearly all of it in `vkAllocateMemory`, and a
   `vkQueueSubmit` the scheduler's thread called meanwhile returned only 0.01 to 0.25 ms after

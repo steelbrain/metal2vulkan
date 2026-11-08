@@ -34,9 +34,19 @@
 //!     logical queues), so a block is the queue's, not the `VkQueue`'s.
 //!
 //!   A queue's block goes once no lease held it for [`QUIET`] or longer, as a later lease of its
-//!   kind ends on any queue, or as the queue goes. Before, each command buffer in flight had a
-//!   block of its own: two in flight at once made and released one a round, and keeping them made
-//!   none but held as many as were in flight. A block of 1 GiB (a sixty-fourth of a 64 GiB heap)
+//!   kind ends on any queue, or as the queue goes: it becomes the device's spare of its kind where
+//!   the device has none, else it is released. A queue that holds none takes the spare at its
+//!   first lease before it makes a block. So a device makes no more blocks of a kind than the
+//!   most queues that held one at once, however queues come and go or rest: a queue made later,
+//!   or one that rested, takes a block another let go. The spare costs one block of each kind
+//!   beyond the queues' own until a queue takes it or the device goes: 254.7 MiB of device memory
+//!   on the RTX 5080 Laptop GPU, and on the M3 Max, whose GPU shares the host's memory, 1 GiB of
+//!   host memory that stays wired while the spare waits. Before, a block let go was released,
+//!   and the next queue to need one made one again.
+//!
+//!   Before that, each command buffer in flight had a block of its own: two in flight at once
+//!   made and released one a round, and keeping them made none but held as many as were in
+//!   flight. A block of 1 GiB (a sixty-fourth of a 64 GiB heap)
 //!   took 24 to 29 ms to make on the M3 Max (MoltenVK 1.4.1, macOS 27.0.1), 35 to 39 ms while the
 //!   GPU ran, all of it MoltenVK's commit of the block to its device's residency set inside
 //!   `vkBindBufferMemory`, under the lock its `vkDestroyBuffer` and `vkFreeMemory` take too, and
@@ -152,37 +162,56 @@ struct Slot<T> {
     idle_since: Instant,
 }
 
-/// The blocks of one kind, one for each queue that leased one, the decisions pure so that the
-/// CPU tests cover them (the module docs).
+/// The blocks of one kind, one for each queue that leased one, and the device's spare, the
+/// decisions pure so that the CPU tests cover them (the module docs).
 #[derive(Debug)]
 pub(super) struct QueueBlocks<T> {
     /// By the queue's identity (`CommandQueue::id`).
     slots: BTreeMap<u64, Slot<T>>,
+    /// A block no queue holds, kept for the next queue's first lease: one a queue let go, or one
+    /// made for a lease that another lease's made meanwhile.
+    spare: Option<T>,
 }
 
 impl<T> Default for QueueBlocks<T> {
     fn default() -> QueueBlocks<T> {
         QueueBlocks {
             slots: BTreeMap::new(),
+            spare: None,
         }
     }
 }
 
 impl<T> QueueBlocks<T> {
     /// A lease of `queue`'s block: what `raw` reads of it, and the leases holding it now, this
-    /// one's included; `None` where the queue holds none, and the lease makes one ([`made`]).
+    /// one's included. A queue that holds none takes the spare where there is one; `None` where
+    /// there is none either, and the lease makes one ([`made`]).
     ///
     /// [`made`]: Self::made
-    pub(super) fn take<R>(&mut self, queue: u64, raw: impl FnOnce(&T) -> R) -> Option<(R, usize)> {
-        let slot = self.slots.get_mut(&queue)?;
-        let block = slot.block.as_ref()?;
+    pub(super) fn take<R>(
+        &mut self,
+        queue: u64,
+        now: Instant,
+        raw: impl FnOnce(&T) -> R,
+    ) -> Option<(R, usize)> {
+        let slot = self.slots.entry(queue).or_insert(Slot {
+            block: None,
+            leases: 0,
+            idle_since: now,
+        });
+        let block = match &mut slot.block {
+            Some(block) => block,
+            empty => empty.insert(self.spare.take()?),
+        };
+        let read = raw(block);
         slot.leases += 1;
-        Some((raw(block), slot.leases))
+        Some((read, slot.leases))
     }
 
     /// `block`, made for a lease of `queue`, which held none: what `raw` reads of the queue's
-    /// block, the leases holding it now, and the block to release, `block` itself where another
-    /// lease of the queue made one meanwhile.
+    /// block, the leases holding it now, and the block to release: `block` itself where another
+    /// lease of the queue made one or took the spare meanwhile and the device holds a spare
+    /// already, else none (it is the spare).
     pub(super) fn made<R>(
         &mut self,
         queue: u64,
@@ -200,11 +229,24 @@ impl<T> QueueBlocks<T> {
             None => (raw(slot.block.insert(block)), None),
         };
         slot.leases += 1;
-        (read, slot.leases, extra)
+        let leases = slot.leases;
+        (read, leases, extra.and_then(|extra| self.keep(extra)))
+    }
+
+    /// `block`, which no queue holds: the spare where the device has none, else to release.
+    fn keep(&mut self, block: T) -> Option<T> {
+        match self.spare {
+            Some(_) => Some(block),
+            None => {
+                self.spare = Some(block);
+                None
+            }
+        }
     }
 
     /// A lease of `queue`'s block ended at `now`: the blocks to release, each queue's that no
-    /// lease held for [`QUIET`] or longer.
+    /// lease held for [`QUIET`] or longer, but the one that becomes the spare where the device
+    /// has none.
     pub(super) fn give(&mut self, queue: u64, now: Instant) -> Vec<T> {
         if let Some(slot) = self.slots.get_mut(&queue) {
             slot.leases = slot.leases.saturating_sub(1);
@@ -221,27 +263,39 @@ impl<T> QueueBlocks<T> {
         quiet
             .into_iter()
             .filter_map(|queue| self.slots.remove(&queue).and_then(|slot| slot.block))
+            .filter_map(|block| self.keep(block))
             .collect()
     }
 
-    /// `queue` went, so no lease holds its block: the block, to release.
+    /// `queue` went, so no lease holds its block: the block, to release, where the device holds a
+    /// spare already; else it is the spare.
     pub(super) fn forget(&mut self, queue: u64) -> Option<T> {
-        self.slots.remove(&queue).and_then(|slot| slot.block)
+        let block = self.slots.remove(&queue).and_then(|slot| slot.block)?;
+        self.keep(block)
     }
 
-    /// Every block, as the device is destroyed.
+    /// Every block, the spare's included, as the device is destroyed.
     pub(super) fn drain(&mut self) -> Vec<T> {
-        let slots = std::mem::take(&mut self.slots);
-        slots.into_values().filter_map(|slot| slot.block).collect()
+        let mut blocks: Vec<T> = std::iter::from_fn(|| self.slots.pop_first())
+            .filter_map(|(_, slot)| slot.block)
+            .collect();
+        blocks.extend(self.spare.take());
+        blocks
     }
 
-    /// The blocks held.
+    /// The blocks the queues hold.
     #[cfg(test)]
     pub(super) fn blocks(&self) -> usize {
         self.slots
             .values()
             .filter(|slot| slot.block.is_some())
             .count()
+    }
+
+    /// Whether the device holds a spare.
+    #[cfg(test)]
+    pub(super) fn spare(&self) -> bool {
+        self.spare.is_some()
     }
 }
 
@@ -384,13 +438,13 @@ impl IndexPool {
 
 impl Device {
     /// A lease of `queue`'s block of `kind` for a command buffer of that queue (its
-    /// `CommandQueue::id`), which the queue's first lease makes (the module docs). Refused as
-    /// memory is.
+    /// `CommandQueue::id`), which the queue's first lease takes from the device's spare or makes
+    /// (the module docs). Refused as memory is.
     pub(super) fn lease_pool(&self, kind: PoolKind, queue: u64) -> Result<PoolLease, Error> {
         let shared = self.shared();
         let bytes = shared.gpu_pools.block_bytes(kind);
         let read = |block: &Block| (block.raw(), block.address());
-        let taken = lock(shared.gpu_pools.blocks(kind)).take(queue, read);
+        let taken = lock(shared.gpu_pools.blocks(kind)).take(queue, Instant::now(), read);
         let ((raw, address), leases) = match taken {
             Some(taken) => taken,
             None => {
@@ -420,7 +474,8 @@ impl Device {
         })
     }
 
-    /// `queue` went: no lease holds its blocks, which are released (the module docs).
+    /// `queue` went: no lease holds its blocks, which become the device's spares or are released
+    /// (the module docs).
     pub(super) fn forget_queue_pools(&self, queue: u64) {
         let shared = self.shared();
         for kind in [PoolKind::Index, PoolKind::MeshRecords] {
