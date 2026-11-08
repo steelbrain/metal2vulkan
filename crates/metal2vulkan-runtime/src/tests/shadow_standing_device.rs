@@ -200,13 +200,16 @@ impl Plane {
 
 /// The standing's counts between two snapshots of a device's: the copies in decided against it,
 /// those it skipped and their texels, and the texels of those that moved them by where each was
-/// decided and by what the standing held (`WorkCounts::shadow_texels_unskipped_*`).
+/// decided and by what the standing held (`WorkCounts::shadow_texels_unskipped_*`); of those whose
+/// standing never stood, by what last kept a command buffer's end from leaving it standing
+/// (`WorkCounts::shadow_texels_never_stood_*`).
 struct Stood {
     against: u64,
     skipped: u64,
     texels: u64,
     at: [u64; 6],
     standing: [u64; 5],
+    never: [u64; 5],
 }
 
 /// Where an unskipped copy in was decided, as `Stood::at` orders them.
@@ -250,6 +253,13 @@ fn stood(before: &WorkCounts, after: &WorkCounts) -> Stood {
         delta(|c| c.shadow_texels_unskipped_truth_written),
         delta(|c| c.shadow_texels_unskipped_image_written),
     ];
+    let never = [
+        delta(|c| c.shadow_texels_never_stood_unmet),
+        delta(|c| c.shadow_texels_never_stood_not_current),
+        delta(|c| c.shadow_texels_never_stood_dropped),
+        delta(|c| c.shadow_texels_never_stood_partial),
+        delta(|c| c.shadow_texels_never_stood_end),
+    ];
     let skipped_texels = delta(|c| c.shadow_texels_skipped_by_standing);
     // Every first copy in of a private truth is skipped or counted where it was decided; and every
     // one of a shadow that may stand that moved its texels, by what its standing held.
@@ -265,12 +275,18 @@ fn stood(before: &WorkCounts, after: &WorkCounts) -> Stood {
         standing.iter().sum::<u64>(),
         "where {at:?}, standing {standing:?}"
     );
+    assert_eq!(
+        standing[NEVER_STOOD],
+        never.iter().sum::<u64>(),
+        "never stood {never:?}"
+    );
     Stood {
         against: delta(|c| c.shadow_copies_in_against_standing),
         skipped: delta(|c| c.shadow_copies_in_skipped_by_standing),
         texels: skipped_texels,
         at,
         standing,
+        never,
     }
 }
 
@@ -306,6 +322,11 @@ fn a_private_plane_s_image_stands_until_a_command_writes_the_buffer_or_the_textu
         moved(&counts, LET_GO, Some(NEVER_STOOD)),
         texels,
         "never stood"
+    );
+    assert_eq!(
+        counts.never,
+        [texels, 0, 0, 0, 0],
+        "no command buffer's end had met it"
     );
     let (second, counts) = plane.texels();
     assert!(inverted(&second, 0x11));

@@ -242,17 +242,23 @@ impl Device {
             (None, None),
         )?;
         copies.drops_writes = true;
+        let reason = || {
+            format!(
+                "its functions read an image of the plane's {stored_width}x{stored_height} stored \
+                 frame, copied in before each command that uses it, whose writes are dropped as \
+                 Metal drops them"
+            )
+        };
+        if crate::shadow_log::enabled() {
+            let why = format!("a texture of rotation {rotation}: {}", reason());
+            crate::shadow_log::made(self, call, (descriptor, &frame), stored, &why);
+        }
         self.degrade(Degradation::ShadowedTexture, || {
             let object = format!(
                 "a {width}x{height} {:?} texture of rotation {rotation} over an IOSurface plane",
                 layout.pixel_format
             );
-            let reason = format!(
-                "its functions read an image of the plane's {stored_width}x{stored_height} stored \
-                 frame, copied in before each command that uses it, whose writes are dropped as \
-                 Metal drops them"
-            );
-            (object, reason)
+            (object, reason())
         });
         Ok(Storage::Shadow {
             image: image.shared(),
@@ -278,18 +284,24 @@ impl Device {
         let [width, height, _] = layout.extent;
         let copies =
             turned.rotated_copies(image.raw.get(), image.identity, rotation, [width, height])?;
+        let reason = || {
+            let [stored_width, stored_height] = rotated::stored_extent(rotation, [width, height]);
+            format!(
+                "it renders through an image of its pass's frame, whose texels are turned into \
+                 the plane's {stored_width}x{stored_height} rows after each pass that stores it \
+                 and back before each that uses it"
+            )
+        };
+        if crate::shadow_log::enabled() {
+            let why = format!("a twin of a texture of rotation {rotation}: {}", reason());
+            crate::shadow_log::made(self, call, (descriptor, layout), &turned, &why);
+        }
         self.degrade(Degradation::ShadowedTexture, || {
             let object = format!(
                 "a {width}x{height} {:?} texture of rotation {rotation} over an IOSurface plane",
                 layout.pixel_format
             );
-            let [stored_width, stored_height] = rotated::stored_extent(rotation, [width, height]);
-            let reason = format!(
-                "it renders through an image of its pass's frame, whose texels are turned into \
-                 the plane's {stored_width}x{stored_height} rows after each pass that stores it \
-                 and back before each that uses it"
-            );
-            (object, reason)
+            (object, reason())
         });
         Ok(Storage::Shadow {
             image: image.shared(),

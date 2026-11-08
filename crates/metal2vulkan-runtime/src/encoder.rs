@@ -2219,7 +2219,8 @@ impl EncoderCore {
             Unskipped::Unstanding => None,
             _ => shared.standings.let_go(&copy.copies),
         };
-        (shared.counts).shadow_copy_in_unskipped(at, let_go, copy.texels_copied_in());
+        let missed = copy.copies.standing.last_missed();
+        (shared.counts).shadow_copy_in_unskipped(at, let_go, missed, copy.texels_copied_in());
     }
 
     /// The `VkCommandBuffer` a render pass holds ([`hold_pass`](Self::hold_pass)), until its

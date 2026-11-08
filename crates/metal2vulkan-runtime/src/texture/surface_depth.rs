@@ -171,6 +171,17 @@ impl Texture {
                 stood: AtomicU64::new(0),
                 standing: Default::default(),
             };
+            let why = "a depth or stencil texture's tiled twin over a surface plane: Metal lays \
+                       the plane's elements in its tiles, which no image's memory holds, so its \
+                       passes render into an image of their own that the encoders move into the \
+                       tiles and back";
+            crate::shadow_log::made(
+                device,
+                "render_command_encoder",
+                (&descriptor, &layout),
+                texels,
+                why,
+            );
             let storage = Storage::Shadow {
                 image: image.shared(),
                 texels: Arc::new(texels.tiled_span(base..end, bytes)),

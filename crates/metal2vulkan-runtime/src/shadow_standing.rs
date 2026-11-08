@@ -36,6 +36,11 @@
 //!   ([`Unskipped`]) and, for a shadow that may stand, by what its standing held then
 //!   ([`LetGo`], or none where it stood): `WorkCounts::shadow_texels_unskipped_*`. A copy
 //!   decided as its encoder recorded it reads the standing by the batches submitted so far.
+//! - **Why it never stood.** A shadow that may stand but never stood keeps what last kept a
+//!   command buffer's end from leaving it standing ([`Missed`]): an encoder that ended with its
+//!   image not holding the truth, a drop from what the command buffer carries to its later
+//!   encoders, an end that held it stale or in part, or an end that records no standing. Its
+//!   unskipped copies count by it (`WorkCounts::shadow_texels_never_stood_*`).
 
 use super::buffer::Buffer;
 use super::key_hash::KeyMap;
@@ -43,7 +48,7 @@ use super::resource::ResourceKey;
 use super::shadow::ShadowCopies;
 use super::tracker::Summary;
 use super::values::{HazardTrackingMode, StorageMode};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, Weak};
 
 /// Where a command buffer's first copy in of a shadow whose truth only the runtime's commands
@@ -82,6 +87,39 @@ pub(super) enum LetGo {
     ImageWritten,
 }
 
+/// What last kept a command buffer's end from leaving a shadow standing, of one that never stood
+/// (the module docs).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u8)]
+pub(super) enum Missed {
+    /// No command buffer's end met it: none ended with it among what its encoders carried.
+    Unmet,
+    /// An encoder that used it ended with its image not holding the truth: a command wrote the
+    /// truth another way after its copy in, another shadow's copy back or merge wrote the bytes,
+    /// or nothing copied it in.
+    NotCurrent,
+    /// What the command buffer carried to its later encoders let it go: a later command wrote its
+    /// truth another way, another shadow's copy back or merge wrote the bytes, work recorded apart
+    /// stood between, or an encoder started after a wait, a signal or a host step.
+    Dropped,
+    /// The command buffer's end carried its image holding part of the truth, or some of it stale.
+    Partial,
+    /// The command buffer's end records no standing: a failure, a rebind, memory no use names, or
+    /// a last batch without its last encoder.
+    End,
+}
+
+impl Missed {
+    /// Every one, in the order `WorkCounts::shadow_texels_never_stood_*` counts them.
+    pub(super) const ALL: [Missed; 5] = [
+        Missed::Unmet,
+        Missed::NotCurrent,
+        Missed::Dropped,
+        Missed::Partial,
+        Missed::End,
+    ];
+}
+
 /// The device's count of the writes that let go of its shadows' standings.
 #[derive(Default)]
 pub(super) struct Standings(Mutex<Watched>);
@@ -110,6 +148,8 @@ struct Key {
 pub(super) struct StandingAcross {
     stood: Mutex<Option<Stood>>,
     handed_out: Option<Arc<AtomicBool>>,
+    /// What last kept a command buffer's end from leaving it standing ([`Missed`], as its `u8`).
+    missed: AtomicU8,
 }
 
 /// The writes counted against each of a shadow's keys, and the unnamed ones, as it stood.
@@ -132,6 +172,7 @@ impl StandingAcross {
         StandingAcross {
             stood: Mutex::new(None),
             handed_out: (private && own && tracked).then(|| buffer.handed_out()),
+            missed: AtomicU8::new(Missed::Unmet as u8),
         }
     }
 
@@ -142,6 +183,22 @@ impl StandingAcross {
 
     fn stood(&self) -> MutexGuard<'_, Option<Stood>> {
         self.stood.lock().unwrap_or_else(|p| p.into_inner())
+    }
+
+    /// Note `why` a command buffer's end did not leave the shadow standing, where it may stand
+    /// (the module docs).
+    pub(super) fn missed(&self, why: Missed) {
+        if self.handed_out.is_some() {
+            self.missed.store(why as u8, Ordering::Relaxed);
+        }
+    }
+
+    /// What last kept a command buffer's end from leaving the shadow standing.
+    pub(super) fn last_missed(&self) -> Missed {
+        let at = self.missed.load(Ordering::Relaxed);
+        (Missed::ALL.into_iter())
+            .find(|why| *why as u8 == at)
+            .unwrap_or(Missed::Unmet)
     }
 }
 

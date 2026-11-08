@@ -218,7 +218,7 @@ use crate::release;
 use crate::resource::ResourceKey;
 use crate::scheduler;
 use crate::shadow::ShadowCopies;
-use crate::shadow_standing::{LetGo, Unskipped};
+use crate::shadow_standing::{LetGo, Missed, Unskipped};
 use crate::sparse::bind::{bind_batch, BindFailure, Bound};
 use crate::sparse::encoder::SparseUpdate;
 use crate::texture::decoded_twin::{SecondDecode, TwinWrite};
@@ -1171,8 +1171,10 @@ impl CommandBufferShared {
             && state.hang.is_none()
             && !rebound;
         let ends = last && start < end && end == state.recorded.len() && clean && !unnamed;
-        let held = match (ends, &state.shadow_carry) {
-            (true, Some(carry)) => carry.held_whole(),
+        // Each shadow the end carries that it leaves no standing notes why
+        // (`shadow_standing::Missed`).
+        let held = match (last, &state.shadow_carry) {
+            (true, Some(carry)) => carry.standing_at_end(ends),
             _ => Vec::new(),
         };
         let summaries = (state.recorded[start..end].iter()).map(|recorded| &recorded.summary);
@@ -1479,8 +1481,8 @@ impl CommandBufferShared {
             if let (Some(decided), Deferred::GatedCopyIn(copy)) = (decided, &work) {
                 let counts = &device.shared().counts;
                 counts.shadow_copy_in_against_standing(stands, copy.texels());
-                if let Err((at, let_go)) = decided {
-                    counts.shadow_copy_in_unskipped(at, let_go, copy.texels());
+                if let Err((at, let_go, missed)) = decided {
+                    counts.shadow_copy_in_unskipped(at, let_go, missed, copy.texels());
                 }
             }
         }
@@ -1490,16 +1492,18 @@ impl CommandBufferShared {
     /// Whether `copies`' image stands across command buffers (`shadow_standing.rs`) for a copy
     /// in of encoder `encoder`, submitted now: it stands, no earlier encoder of the command
     /// buffer wrote the truth or the image, and none of its commands may reach memory no use
-    /// names. Where not, where that was decided and what its standing held
-    /// (`shadow_standing::Unskipped`, `LetGo`; none where it stood).
+    /// names. Where not, where that was decided, what its standing held
+    /// (`shadow_standing::Unskipped`, `LetGo`; none where it stood) and what last kept a command
+    /// buffer's end from leaving it standing (`Missed`).
     fn stands(
         &self,
         state: &State,
         encoder: usize,
         copies: &ShadowCopies,
-    ) -> Result<(), (Unskipped, Option<LetGo>)> {
+    ) -> Result<(), (Unskipped, Option<LetGo>, Missed)> {
+        let missed = copies.standing.last_missed();
         if !copies.stands_across() {
-            return Err((Unskipped::Unstanding, None));
+            return Err((Unskipped::Unstanding, None, missed));
         }
         let keys = copies.standing_keys();
         let wrote =
@@ -1507,8 +1511,8 @@ impl CommandBufferShared {
         let let_go = self.device.shared().standings.let_go(copies);
         match (state.reaches_unnamed || wrote, let_go) {
             (false, None) => Ok(()),
-            (true, let_go) => Err((Unskipped::CommandBuffer, let_go)),
-            (false, let_go) => Err((Unskipped::LetGo, let_go)),
+            (true, let_go) => Err((Unskipped::CommandBuffer, let_go, missed)),
+            (false, let_go) => Err((Unskipped::LetGo, let_go, missed)),
         }
     }
 

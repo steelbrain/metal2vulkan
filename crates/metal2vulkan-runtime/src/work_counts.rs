@@ -15,7 +15,7 @@ use super::memory::FreeCause;
 use super::recorder::CommandsRecorded;
 use super::scheduler::HeldFor;
 use super::shadow::{Backing, CarryTally, CopyCause, Lost, ShadowCopy, ShadowSource};
-use super::shadow_standing::{LetGo, Unskipped};
+use super::shadow_standing::{LetGo, Missed, Unskipped};
 use super::Device;
 use crate::shards::{Mine, Sharded, Tallies, Tally};
 use ash::vk;
@@ -417,6 +417,7 @@ pub(crate) struct Counters {
     shadow_texels_skipped_by_standing: AtomicU64,
     shadow_texels_unskipped: [AtomicU64; 6],
     shadow_texels_unskipped_standing: [AtomicU64; 5],
+    shadow_texels_never_stood: [AtomicU64; 5],
     shadow_texels_copied_in: AtomicU64,
     shadow_texels_first_copied_in: AtomicU64,
     shadow_texels_first_copied_in_images: AtomicU64,
@@ -3331,11 +3332,13 @@ impl Counters {
 
     /// A command buffer's first copy in of a shadow whose truth only the runtime's commands write
     /// moved its `texels`, decided `at`; of a shadow that may stand, its standing let go as
-    /// `let_go` says, `None` where it stood (`shadow_standing.rs`).
+    /// `let_go` says, `None` where it stood, and of one that never stood, what last kept a
+    /// command buffer's end from leaving it standing, `missed` (`shadow_standing.rs`).
     pub(crate) fn shadow_copy_in_unskipped(
         &self,
         at: Unskipped,
         let_go: Option<LetGo>,
+        missed: Missed,
         texels: u64,
     ) {
         (self.shadow_texels_unskipped[at as usize]).fetch_add(texels, Ordering::Relaxed);
@@ -3345,6 +3348,9 @@ impl Counters {
         // Where it stood first, then each cause in order.
         let standing = let_go.map_or(0, |let_go| let_go as usize + 1);
         (self.shadow_texels_unskipped_standing[standing]).fetch_add(texels, Ordering::Relaxed);
+        if let_go == Some(LetGo::NeverStood) {
+            (self.shadow_texels_never_stood[missed as usize]).fetch_add(texels, Ordering::Relaxed);
+        }
     }
 
     /// An encoder planned `copy`, a copy in of a shadowed texture: its texels
@@ -6697,6 +6703,24 @@ pub struct WorkCounts {
     pub shadow_texels_unskipped_stood: u64,
     /// No command buffer's end left its image standing since it was made.
     pub shadow_texels_unskipped_never_stood: u64,
+    /// Of `shadow_texels_unskipped_never_stood`, by what last kept a command buffer's end from
+    /// leaving the image standing (`shadow_standing::Missed`; the five sum to them). This one: no
+    /// command buffer's end met it, none ending with it among what its encoders carried.
+    pub shadow_texels_never_stood_unmet: u64,
+    /// An encoder that used it ended with its image not holding the truth: a command wrote the
+    /// truth another way after its copy in (a pass rendering the texture's image in place, which
+    /// an attached read's shadow copies), another shadow's copy back or merge wrote the bytes, or
+    /// nothing copied it in.
+    pub shadow_texels_never_stood_not_current: u64,
+    /// What the command buffer carried to its later encoders let it go: a later command wrote its
+    /// truth another way, another shadow's copy back or merge wrote the bytes, work recorded
+    /// apart stood between, or an encoder started after a wait, a signal or a host step.
+    pub shadow_texels_never_stood_dropped: u64,
+    /// The command buffer's end carried its image holding part of the truth, or some of it stale.
+    pub shadow_texels_never_stood_partial: u64,
+    /// The command buffer's end records no standing: a failure, a rebind, memory no use names,
+    /// or a last batch without its last encoder.
+    pub shadow_texels_never_stood_end: u64,
     /// A batch that may reach memory no use names was submitted since it stood.
     pub shadow_texels_unskipped_unnamed_since: u64,
     /// A batch submitted since it stood wrote its truth: another shadow's copy back or merge over
@@ -7240,6 +7264,9 @@ impl Device {
         let standing = |let_go: Option<LetGo>| {
             let at = let_go.map_or(0, |let_go| let_go as usize + 1);
             counters.shadow_texels_unskipped_standing[at].load(Ordering::Relaxed)
+        };
+        let never_stood = |missed: Missed| {
+            counters.shadow_texels_never_stood[missed as usize].load(Ordering::Relaxed)
         };
         let (sleeps, [by_commit, by_completion, by_host, by_slice], scheduler_spared, gpu_waits) =
             self.shared().scheduler.sleeps_and_wakings();
@@ -8091,6 +8118,11 @@ impl Device {
             shadow_texels_unskipped_let_go: unskipped(Unskipped::LetGo),
             shadow_texels_unskipped_stood: standing(None),
             shadow_texels_unskipped_never_stood: standing(Some(LetGo::NeverStood)),
+            shadow_texels_never_stood_unmet: never_stood(Missed::Unmet),
+            shadow_texels_never_stood_not_current: never_stood(Missed::NotCurrent),
+            shadow_texels_never_stood_dropped: never_stood(Missed::Dropped),
+            shadow_texels_never_stood_partial: never_stood(Missed::Partial),
+            shadow_texels_never_stood_end: never_stood(Missed::End),
             shadow_texels_unskipped_unnamed_since: standing(Some(LetGo::UnnamedSince)),
             shadow_texels_unskipped_truth_written: standing(Some(LetGo::TruthWritten)),
             shadow_texels_unskipped_image_written: standing(Some(LetGo::ImageWritten)),

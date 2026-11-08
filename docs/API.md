@@ -1591,11 +1591,19 @@ log makes no Vulkan object to ask one). On NVIDIA that range is the GPU virtual 
 report names. It
 also logs each placement of 4 MiB or more in a pooled block as it is placed and returned: an image
 or a buffer, its memory class where placed, its bytes, its offset and its block's handle and type.
-With `METAL2VULKAN_LOG_SHADOWS` set, a device logs one line per shadow it makes of a texture over a
-buffer's bytes (id name `metal2vulkan-shadows`, `Info` severity): the call (an IOSurface plane's
-among them), the texture's format, size, levels and usage, the buffer's storage mode, length and
-object ID, the texels' offset and row pitch, and why no image over the bytes serves, as the
-texture's `shadowed-texture` notice says it.
+With `METAL2VULKAN_LOG_SHADOWS` set, a device logs one line per shadow it makes of a texture (id
+name `metal2vulkan-shadows`, `Info` severity): the call (an IOSurface plane's among them, or the
+binding's or pass's call for a shadow made at its first use), the texture's format, size, levels
+and usage, its truth (a buffer's storage mode, length and object ID with the texels' offset and row
+pitch, or the texture's own image), and what made it a shadow. The shadows it names are a texture's
+over a buffer's bytes where no image over them serves (as its `shadowed-texture` notice says it), a
+usage shadow (a binding beyond the texture's usage, a draw that samples a color attachment of its
+own pass, or a YCbCr texture's writes, with what the texture's own image is: an aliasing image over
+the bytes with or without the feedback loop usage, a shadow, or an image of its own), a rotated
+texture's image of its stored frame and its twin, a two-plane extended-range texture's image, a
+depth or stencil texture's tiled twin over a surface plane, and a YCbCr texture's converted image
+and render shadow. A heap texture's shadow, a view's shadow of an image and a texture buffer's
+staging are not logged.
 Whatever the variables, a placement heap's `newTextureWithDescriptor:offset:` that makes no texture
 (`Nil` or `OutOfMemory`) at an offset inside the heap says so (id name
 `metal2vulkan-heap-texture-refused`, `Info` severity): the descriptor, the offset, the heap's size,

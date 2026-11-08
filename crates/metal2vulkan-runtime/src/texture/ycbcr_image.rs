@@ -391,6 +391,10 @@ impl Device {
             stood: AtomicU64::new(0),
             standing: Default::default(),
         };
+        let why = "a YCbCr texture's converted image: Metal samples the surface's two planes \
+                   converted, which an image of the converted texels holds, made from the planes \
+                   by its copy in";
+        crate::shadow_log::made(self, call, (descriptor, layout), &texels, why);
         Ok(Storage::Shadow {
             image: image.shared(),
             texels,
@@ -872,6 +876,9 @@ impl Texture {
             stood: AtomicU64::new(0),
             standing: Default::default(),
         };
+        let why = "a YCbCr texture's render shadow: a pass renders into an image of floats, and \
+                   the encoders store each stored texel's codes into the surface's planes";
+        crate::shadow_log::made(device, call, (&descriptor, &layout), texels, why);
         let storage = Storage::Shadow {
             image: image.shared(),
             texels: Arc::clone(texels),

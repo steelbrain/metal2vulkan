@@ -241,17 +241,17 @@ impl Device {
             stood: AtomicU64::new(0),
             standing: Default::default(),
         };
+        let why = "its image holds each texel's colour word and alpha byte side by side, where \
+                   Metal keeps two planes in the surface's bytes: its image is a shadow of those \
+                   planes, which the encoders move into it and back";
+        crate::shadow_log::made(self, call, (descriptor, layout), &texels, why);
         self.degrade(Degradation::ShadowedTexture, || {
             let [width, height, _] = layout.extent;
             let object = format!(
                 "a {} texture of {width}x{height} over a surface's two planes",
                 pf.name()
             );
-            let why = "its image holds each texel's colour word and alpha byte side by side, \
-                       where Metal keeps two planes in the surface's bytes: its image is a shadow \
-                       of those planes, which the encoders move into it and back"
-                .to_owned();
-            (object, why)
+            (object, why.to_owned())
         });
         let storage = Storage::Shadow {
             image: image.shared(),

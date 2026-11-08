@@ -233,7 +233,7 @@ use super::rotated::{RotatedCopies, Turn};
 use super::row_copies::RowCopies;
 use super::shadow_copy_back::{CopyBack, WordView};
 use super::shadow_merge::{ScratchSpares, ShadowMerge, UnormView};
-use super::shadow_standing::StandingAcross;
+use super::shadow_standing::{Missed, StandingAcross};
 use super::texture::copy_images::UseMaker;
 use super::texture::heap_tiled::{HeapTiledCopies, SampleMoves};
 use super::texture::heap_two_planes::{HeapPlaneCopies, TwoPlaneHeapLayout};
@@ -2843,7 +2843,7 @@ impl<M> ShadowSync<M> {
         let writes = |carried: &Carried| {
             (uses.iter()).any(|used| !used.write.is_empty() && carried.copies.meets(used))
         };
-        self.carry.entries.retain(|carried| !writes(carried));
+        self.carry.drop_where(writes);
     }
 
     /// What the encoder leaves its command buffer's later encoders: every texture whose image
@@ -2857,6 +2857,7 @@ impl<M> ShadowSync<M> {
         carry.entries.append(&mut self.carry.entries);
         for entry in &self.entries {
             if entry.standing != Standing::Current {
+                entry.copies.standing.missed(Missed::NotCurrent);
                 continue;
             }
             // The image holds the truth as this command buffer's commands left it.
@@ -2960,7 +2961,37 @@ impl ShadowCarry {
     /// Carry nothing, under the same identity: every shadowed texture copies in again at its
     /// next use, and a first copy in of one this command buffer stood behind still reads as that.
     pub(super) fn clear(&mut self) {
-        self.entries.clear();
+        self.drop_where(|_| true);
+    }
+
+    /// Carry no further the images `drops` picks (`shadow_standing::Missed::Dropped`).
+    fn drop_where(&mut self, drops: impl Fn(&Carried) -> bool) {
+        self.entries.retain(|carried| {
+            let dropped = drops(carried);
+            if dropped {
+                carried.copies.standing.missed(Missed::Dropped);
+            }
+            !dropped
+        });
+    }
+
+    /// At the command buffer's last batch: where its end may leave shadows standing (`ends`),
+    /// those it carries holding every texel of the truth, none stale ([`held_whole`]), each other
+    /// one noted as held in part; else none, each noted as met by an end that records no standing
+    /// (`shadow_standing::Missed`).
+    ///
+    /// [`held_whole`]: Self::held_whole
+    pub(super) fn standing_at_end(&self, ends: bool) -> Vec<Arc<ShadowCopies>> {
+        let mut held = Vec::new();
+        for carried in &self.entries {
+            let whole = carried.stale.is_none() && carried.copies.covers(carried.held);
+            match (ends, whole) {
+                (true, true) => held.push(Arc::clone(&carried.copies)),
+                (true, false) => carried.copies.standing.missed(Missed::Partial),
+                (false, _) => carried.copies.standing.missed(Missed::End),
+            }
+        }
+        held
     }
 
     /// The shadowed textures whose images it carries holding every texel of the truth, none
@@ -3101,7 +3132,7 @@ impl<M: Clone + KeptArea> ShadowSync<M> {
             }
         }
         // A carried image holds the bytes as they were before this write.
-        (self.carry.entries).retain(|carried| !carried.copies.shares_truth(&written));
+        (self.carry).drop_where(|carried| carried.copies.shares_truth(&written));
     }
 
     /// Go on with a run of passes over the texture of `copies` (`pass_runs.rs`): its image, which
@@ -3521,7 +3552,7 @@ impl<M: Clone + KeptArea> ShadowSync<M> {
     /// that work may have written.
     pub(super) fn leave(&mut self) -> Vec<ShadowCopy<M>> {
         let copies = self.finish();
-        self.entries.clear();
+        self.drop_entries();
         self.carry.clear();
         copies
     }
@@ -3531,8 +3562,16 @@ impl<M: Clone + KeptArea> ShadowSync<M> {
     /// copy in there moved, and nothing written through one there ran. A later command copies in
     /// again.
     pub(super) fn forget(&mut self) {
-        self.entries.clear();
+        self.drop_entries();
         self.carry.clear();
+    }
+
+    /// Let every texture the encoder met go, none of them carried on
+    /// (`shadow_standing::Missed::Dropped`).
+    fn drop_entries(&mut self) {
+        for entry in self.entries.drain(..) {
+            entry.copies.standing.missed(Missed::Dropped);
+        }
     }
 
     /// The copies back at the end of the encoder: every texture written through since its last
