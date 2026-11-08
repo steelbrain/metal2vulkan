@@ -83,6 +83,9 @@ struct Builder {
     inclusive_md_size: bool,
     /// Every function's bitcode is the first function's, written once (a dynamic library).
     shared_bitcode: bool,
+    /// Every function's private-metadata record is the first function's, written once (macOS 11's
+    /// Core Image libraries, where it is empty).
+    shared_private: bool,
     /// Extended-header tags holding the `(offset, size)` of a region written after the trailer,
     /// with the region's bytes (`HDYN`, `ILST`).
     regions: Vec<([u8; 4], Vec<u8>)>,
@@ -98,6 +101,7 @@ impl Builder {
             trailer: vec![],
             inclusive_md_size: false,
             shared_bitcode: false,
+            shared_private: false,
             regions: vec![],
         }
     }
@@ -119,9 +123,16 @@ impl Builder {
                 out.extend(list);
                 out
             };
-            let (pub_at, priv_at) = (public.len(), private.len());
+            let pub_at = public.len();
             public.extend(md(&f.public));
-            private.extend(md(&f.private));
+            let priv_at = match (self.shared_private, private.is_empty()) {
+                (true, false) => 0,
+                _ => {
+                    let at = private.len();
+                    private.extend(md(&f.private));
+                    at
+                }
+            };
             let bc_at = match (self.shared_bitcode, bitcode.is_empty()) {
                 (true, false) => 0,
                 _ => {
@@ -690,6 +701,45 @@ fn a_core_image_library_hash_is_kept_as_read() {
         container_kind(&err),
         ContainerError::HashMismatch,
         "{err:?}"
+    );
+}
+
+/// macOS 11's own Core Image libraries (format 2.5) name one empty private-metadata record (its
+/// size word and `ENDT`) from every function, over the one module they share. That shared empty
+/// record is read as no tags; a shared record holding a tag, or one shared in an executable
+/// library, stays refused.
+#[test]
+fn a_shared_module_library_shares_one_empty_metadata_record() {
+    let names = ["tint", "shift", "invert"];
+    let module = FnSpec::new("m", 5, 4).bitcode;
+    let mut b = core_image(&names, sha256(&module));
+    b.version = (2, 5);
+    b.shared_private = true;
+    let bytes = b.build();
+    let lib = metallib(&bytes);
+    let read: Vec<_> = lib.functions.iter().map(|f| f.name).collect();
+    assert_eq!(read, names);
+    for f in &lib.functions {
+        assert!(f.private.is_empty(), "{}: no private tags", f.name);
+        assert_eq!(f.bitcode, module.as_slice());
+    }
+    let refused = |b: &Builder, what: &str| {
+        let err = parse(&b.build()).unwrap_err();
+        assert_eq!(
+            container_kind(&err),
+            ContainerError::BadOffset,
+            "{what}: {err:?}"
+        );
+    };
+    let mut tagged = b.clone();
+    tagged.functions[0].private.push((*b"PRIV", vec![9]));
+    refused(&tagged, "a shared record holding a tag");
+    let mut executable = b.clone();
+    executable.file_type = 0;
+    executable.shared_bitcode = false;
+    refused(
+        &executable,
+        "a shared empty record in an executable library",
     );
 }
 

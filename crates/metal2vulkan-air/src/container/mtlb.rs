@@ -32,7 +32,10 @@
 //!   toolchain lists as the symbols it exports (`TYPE` 3, each as `NAME`) over the library's one
 //!   module, and a Core Image kernel library (`metallib -cikernel`), whose kernels it lists as
 //!   extern functions (`TYPE` 5) over the one module `metal -fcikernel` compiled: their functions
-//!   may share exactly one bitcode range, hashed once.
+//!   may share exactly one bitcode range, hashed once. Their functions may also share one empty
+//!   metadata record (its size word and `ENDT`, no tags), as macOS 11's own Core Image libraries
+//!   (format 2.5) share one 8-byte private-metadata record among all their functions. A shared
+//!   record holding any tag stays refused, so the result stays linear in the file size.
 //! - The extended header's `HDYN` and `ILST` tags each hold an `(offset, size)` of a region of
 //!   the file. `HDYN`'s is a tag list: `NAME`, the library's install name (a dynamic library's
 //!   `installName`; an executable's file name), and one `DYNL` per dynamic library it was linked
@@ -397,17 +400,19 @@ pub(super) fn parse(bytes: &[u8]) -> Result<Metallib<'_>, Error> {
         }
     }
 
-    // Metadata records are parsed only after their offsets are known to be disjoint, so each
-    // record's bytes are read (and its tags held) once.
+    // Metadata records are parsed only after their offsets are known to be disjoint (or one
+    // shared empty record), so each record's bytes are read (and its tags held) once.
     let public = records(
         file,
         header.public_metadata,
         parsed.iter().map(|p| (p.public_at, p.entry)),
+        shared,
     )?;
     let private = records(
         file,
         header.private_metadata,
         parsed.iter().map(|p| (p.private_at, p.entry)),
+        shared,
     )?;
     let mut functions = Vec::with_capacity(parsed.len());
     for ((p, public), private) in parsed.into_iter().zip(public).zip(private) {
@@ -620,12 +625,15 @@ fn function<'a>(
 
 /// The metadata records in `section` at the given `(offset, entry)` pairs, one per function and in
 /// the same order. Records are read in file order, and one that starts before the previous record
-/// ends (including a shared record) is `BadOffset` at the later function's entry. The records are
-/// therefore disjoint, and the total work and the returned tags are linear in the section size.
+/// ends (including a shared record) is `BadOffset` at the later function's entry, except that
+/// where `share_empty` (a library whose functions share one module) a function may name exactly
+/// the record the previous one did when that record holds no tags. The records are therefore
+/// disjoint or empty, and the total work and the returned tags are linear in the section size.
 fn records<'a>(
     file: &'a [u8],
     section: Section,
     offsets: impl Iterator<Item = (u64, u64)>,
+    share_empty: bool,
 ) -> Result<Vec<Vec<Tag<'a>>>, Error> {
     let mut order: Vec<(u64, u64, usize)> = offsets
         .enumerate()
@@ -634,12 +642,18 @@ fn records<'a>(
     order.sort_unstable();
     let mut out: Vec<Option<Vec<Tag<'a>>>> = vec![None; order.len()];
     let mut end = 0;
+    // The start of the last record read, where it held no tags.
+    let mut empty_at = None;
     for (at, entry, i) in order {
+        if share_empty && empty_at == Some(at) {
+            continue; // The shared empty record: this function's metadata is no tags.
+        }
         if at < end {
             return Err(container_error(ContainerError::BadOffset, entry));
         }
         let (list, list_end) = metadata(file, section, at, entry)?;
         end = list_end - section.offset;
+        empty_at = list.is_empty().then_some(at);
         if let Some(slot) = out.get_mut(i) {
             *slot = Some(list);
         }
