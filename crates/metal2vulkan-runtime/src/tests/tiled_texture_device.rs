@@ -24,6 +24,19 @@
 //!   `WorkCounts::shadowed_textures` and `shadows_zeroed`, and its placement query answers
 //!   `Shadow(Mipmapped)`; its copies in move its first level's texels alone
 //!   (`WorkCounts::shadow_texels_copied_in`, a multiple of them).
+//! - **The later levels alone copy nothing.** A blit into level 1 and a render pass into it take
+//!   no copy of the first level (`WorkCounts::shadow_copies`), and `generate_mipmaps` copies the
+//!   first level in, which it reads, and nothing back, keeps nothing and merges nothing, as its
+//!   writes are the later levels'.
+//! - **Merges fetch.** A blit into part of the first level over a `Shared` buffer merges back
+//!   through a view of the first level (`WorkCounts::shadow_merges_fetched`), the bytes outside
+//!   the part kept.
+//! - **Detached.** Over a no-copy buffer's pages, detached (`detach_backing`), the texture keeps
+//!   its own image (its `VkImage` the same): `get_bytes` of the first level reads the bytes the
+//!   CPU last wrote before the detach (after the last copy in), the later levels read and take
+//!   writes, and a write of the first level is refused (`NotImplemented(DetachedTexelAccess)`), as
+//!   a one-level texture's CPU access is. A rebind to new pages gives the first level their bytes
+//!   and leaves the later levels as written.
 //!
 //! Device tests: compiled only under the validation crate's GPU safety cfgs (`m2v_gpu`,
 //! `m2v_cpu_icd`), on the kind of device the cfg selects. Printed (`TILED-TEXTURE`): each
@@ -31,11 +44,12 @@
 
 use super::blit_holds::{device, over_host, Host, Scratch, WAIT};
 use super::draw_again::{device as hearing_device, Heard};
-use super::encoder_holds::library;
+use super::encoder_holds::{library, pass};
 use crate::{
-    BlitOption, Buffer, CommandQueue, ComputePipelineState, CpuCacheMode, Degradation, Device,
-    HazardTrackingMode, Origin, PipelineOptions, Region, ResourceOptions, SamplerState, Size,
-    StorageMode, Texture, TextureDescriptor, TexturePlacement, TextureShadowReason,
+    BlitOption, Buffer, ClearColor, CommandQueue, ComputePipelineState, CpuCacheMode, Degradation,
+    Device, Error, HazardTrackingMode, Origin, PipelineOptions, Region, ResourceOptions,
+    RuntimeGap, SamplerState, Size, StorageMode, Texture, TextureDescriptor, TexturePlacement,
+    TextureShadowReason,
 };
 use metal2vulkan::bind::SamplerDescriptor;
 use metal2vulkan::metal::{PixelFormat, SamplerMipFilter, TextureUsage};
@@ -567,4 +581,331 @@ fn each_tiled_texture_is_announced_and_counted() {
         );
         drop(texture);
     }
+}
+
+/// What a run of commands copied of a shadow (`WorkCounts`, after less before).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Copies {
+    /// `shadow_copies`: every copy in, copy back, keep and merge.
+    copies: u64,
+    /// `shadow_texels_copied_in`.
+    texels_in: u64,
+    /// `shadow_texels_copied_back`.
+    texels_back: u64,
+    /// `shadow_texels_kept`.
+    texels_kept: u64,
+    /// `shadow_merges_fetched`.
+    fetched: u64,
+}
+
+/// What `run` copied of the device's shadows.
+fn copies_of(device: &Device, run: impl FnOnce()) -> Copies {
+    let before = device.work_counts();
+    run();
+    let after = device.work_counts();
+    Copies {
+        copies: after.shadow_copies - before.shadow_copies,
+        texels_in: after.shadow_texels_copied_in - before.shadow_texels_copied_in,
+        texels_back: after.shadow_texels_copied_back - before.shadow_texels_copied_back,
+        texels_kept: after.shadow_texels_kept - before.shadow_texels_kept,
+        fetched: after.shadow_merges_fetched - before.shadow_merges_fetched,
+    }
+}
+
+/// `level`'s texels of `texture` (of the level-0 extent `(width, height)`), read on the CPU.
+fn level_bytes(texture: &Texture, (width, height): (u64, u64), level: u64) -> Vec<u8> {
+    let (w, h) = ((width >> level).max(1), (height >> level).max(1));
+    let mut bytes = vec![0u8; (w * h * 4) as usize];
+    let region = Region::new_2d(0, 0, w, h);
+    (texture.get_bytes(&mut bytes, w * 4, 0, region, level, 0)).unwrap();
+    bytes
+}
+
+/// Encode a blit of `source`'s packed rows into `size` of `texture`'s `level` at `origin`.
+fn blit_into(
+    command_buffer: &crate::CommandBuffer,
+    (source, texture): (&Buffer, &Texture),
+    level: u64,
+    (origin, size): (Origin, Size),
+) {
+    let mut blit = command_buffer.blit_command_encoder().unwrap();
+    let row = size.width * 4;
+    blit.copy_from_buffer_to_texture(
+        source,
+        0,
+        row,
+        0,
+        size,
+        texture,
+        0,
+        level,
+        origin,
+        BlitOption::None,
+    )
+    .unwrap();
+    blit.end_encoding().unwrap();
+}
+
+#[test]
+fn uses_of_the_later_levels_alone_copy_nothing_of_the_first() {
+    let scratch = Scratch::new("tiled-texture-later-levels-alone");
+    let rig = rig(&scratch);
+    for shape in SHAPES {
+        let ((width, height), levels) = shape;
+        let case = format!("{width}x{height} of {levels} levels");
+        let target = buffer(&rig.device);
+        let texture = target
+            .new_tiled_texture(&descriptor(shape), 0, PITCH)
+            .unwrap();
+        write_rows(&target, (width, height), checker);
+        let kept = read(&target);
+        // A blit into level 1 alone: no copy of level 0 in, back, kept or merged.
+        let (w, h) = (width / 2, height / 2);
+        let pattern = packed((w, h), |x, y| texel(6, x, y));
+        let source = holding(&rig.device, w * h * 4, &pattern);
+        let at = (Origin::new(0, 0, 0), Size::new(w, h, 1));
+        let one = copies_of(&rig.device, || {
+            rig.run(|command_buffer| blit_into(command_buffer, (&source, &texture), 1, at));
+        });
+        eprintln!("TILED-TEXTURE: {case}: a level-1 blit {one:?}");
+        assert_eq!(level_bytes(&texture, (width, height), 1), pattern, "{case}");
+        let none = Copies {
+            copies: 0,
+            texels_in: 0,
+            texels_back: 0,
+            texels_kept: 0,
+            fetched: 0,
+        };
+        assert_eq!(one, none, "{case}: the level-1 blit");
+        // `generate_mipmaps` reads level 0, copied in, and writes the later levels alone: nothing
+        // back, kept or merged.
+        let mips = copies_of(&rig.device, || {
+            rig.run(|command_buffer| {
+                let mut blit = command_buffer.blit_command_encoder().unwrap();
+                blit.generate_mipmaps(&texture).unwrap();
+                blit.end_encoding().unwrap();
+            });
+        });
+        eprintln!("TILED-TEXTURE: {case}: generate_mipmaps {mips:?}");
+        let first = width * height;
+        assert!(
+            mips.texels_in > 0 && mips.texels_in.is_multiple_of(first),
+            "{case}: generate_mipmaps copied in {mips:?}"
+        );
+        assert_eq!(
+            (mips.texels_back, mips.texels_kept, mips.fetched),
+            (0, 0, 0),
+            "{case}: generate_mipmaps {mips:?}"
+        );
+        // Level 1 as `generate_mipmaps` left it: its first texel's blue the checkerboard's 2x2
+        // average.
+        let blue = level_bytes(&texture, (width, height), 1)[0];
+        assert!((127..=128).contains(&blue), "{case}: level 1 blue {blue}");
+        assert_eq!(read(&target), kept, "{case}: the buffer's bytes");
+    }
+}
+
+#[test]
+fn a_render_pass_into_a_later_level_copies_nothing_of_the_first() {
+    let scratch = Scratch::new("tiled-texture-later-level-pass");
+    let rig = rig(&scratch);
+    for shape in SHAPES {
+        let ((width, height), levels) = shape;
+        let case = format!("{width}x{height} of {levels} levels");
+        let target = buffer(&rig.device);
+        let mut d = descriptor(shape);
+        d.usage = TextureUsage::SHADER_READ | TextureUsage::RENDER_TARGET;
+        let texture = target.new_tiled_texture(&d, 0, PITCH).unwrap();
+        write_rows(&target, (width, height), |x, y| texel(7, x, y));
+        let kept = read(&target);
+        let mut into_one = pass(&texture);
+        into_one.color_attachments[0].level = 1;
+        into_one.color_attachments[0].clear_color = ClearColor::new(1.0, 0.0, 1.0, 1.0);
+        let copied = copies_of(&rig.device, || {
+            rig.run(|command_buffer| {
+                let mut encoder = command_buffer.render_command_encoder(&into_one).unwrap();
+                encoder.end_encoding().unwrap();
+            });
+        });
+        eprintln!("TILED-TEXTURE: {case}: a pass into level 1 {copied:?}");
+        assert_eq!(copied.copies, 0, "{case}: the pass into level 1 {copied:?}");
+        let level_one = level_bytes(&texture, (width, height), 1);
+        assert!(
+            level_one.chunks(4).all(|t| t == [0xff, 0, 0xff, 0xff]),
+            "{case}: level 1 cleared"
+        );
+        assert_eq!(read(&target), kept, "{case}: the buffer's bytes");
+    }
+}
+
+#[test]
+fn a_merge_of_the_first_level_fetches_through_its_view() {
+    let scratch = Scratch::new("tiled-texture-merge-fetches");
+    let rig = rig(&scratch);
+    for shape in SHAPES {
+        let ((width, height), levels) = shape;
+        let case = format!("{width}x{height} of {levels} levels");
+        let target = buffer(&rig.device);
+        let texture = target
+            .new_tiled_texture(&descriptor(shape), 0, PITCH)
+            .unwrap();
+        write_rows(&target, (width, height), |x, y| texel(8, x, y));
+        // A blit into an 8x8 part of level 0: kept and merged back, the `Shared` buffer's bytes
+        // being another writer's (`shadow.rs`, **Merged back**).
+        let (x0, y0, side) = (4, 6, 8);
+        let pattern = packed((side, side), |x, y| texel(9, x, y));
+        let source = holding(&rig.device, side * side * 4, &pattern);
+        let at = (Origin::new(x0, y0, 0), Size::new(side, side, 1));
+        let merged = copies_of(&rig.device, || {
+            rig.run(|command_buffer| blit_into(command_buffer, (&source, &texture), 0, at));
+        });
+        eprintln!("TILED-TEXTURE: {case}: a blit into part of level 0 {merged:?}");
+        assert_eq!(merged.fetched, 1, "{case}: {merged:?}");
+        let got = read(&target);
+        for y in 0..height {
+            for x in 0..PITCH / 4 {
+                let byte = (y * PITCH + x * 4) as usize;
+                let inside = (x0..x0 + side).contains(&x) && (y0..y0 + side).contains(&y);
+                let expected = match (x < width, inside) {
+                    (true, true) => texel(9, x - x0, y - y0),
+                    (true, false) => texel(8, x, y),
+                    (false, _) => [BETWEEN; 4],
+                };
+                assert_eq!(got[byte..byte + 4], expected, "{case}: bytes {byte}");
+            }
+        }
+    }
+}
+
+#[test]
+fn detached_bytes_leave_the_first_level_s_last_texels_and_the_later_levels() {
+    // The pages, declared before the device that uses them, so dropped after it.
+    let (host, other) = (Host::new(), Host::new());
+    let scratch = Scratch::new("tiled-texture-detached");
+    let rig = rig(&scratch);
+    let runs = Arc::new(AtomicUsize::new(0));
+    let Some(no_copy) = over_host(&rig.device, &host, &runs) else {
+        return;
+    };
+    let shape = SHAPES[0];
+    let ((width, height), levels) = shape;
+    let mut d = descriptor(shape);
+    d.resource_options = no_copy.resource_options();
+    let texture = no_copy.new_tiled_texture(&d, 0, PITCH).unwrap();
+    // A one-level texture over the same bytes, whose CPU access a detach refuses.
+    let mut one = descriptor(((width, height), 1));
+    one.resource_options = no_copy.resource_options();
+    let plain = no_copy.new_texture(&one, 0, PITCH).unwrap();
+    // The later levels, written on the CPU; level 0 copied in by a blit out of it, then written
+    // again on the CPU: its last texels are those.
+    for level in 1..levels {
+        let (w, h) = ((width >> level).max(1), (height >> level).max(1));
+        let pattern = packed((w, h), |x, y| texel(0x20 + level as u8, x, y));
+        let region = Region::new_2d(0, 0, w, h);
+        (texture.replace_region(region, level, 0, &pattern, w * 4, 0)).unwrap();
+    }
+    write_rows(&no_copy, (width, height), |x, y| texel(10, x, y));
+    let row = width * 4;
+    let read_back = (rig
+        .device
+        .new_buffer(row * height, ResourceOptions::shared()))
+    .unwrap();
+    rig.run(|command_buffer| {
+        let mut blit = command_buffer.blit_command_encoder().unwrap();
+        blit.copy_from_texture_to_buffer(
+            &texture,
+            0,
+            0,
+            Origin::new(0, 0, 0),
+            Size::new(width, height, 1),
+            &read_back,
+            0,
+            row,
+            0,
+            BlitOption::None,
+        )
+        .unwrap();
+        blit.end_encoding().unwrap();
+    });
+    assert_eq!(
+        read(&read_back),
+        packed((width, height), |x, y| texel(10, x, y))
+    );
+    let last = packed((width, height), |x, y| texel(11, x, y));
+    write_rows(&no_copy, (width, height), |x, y| texel(11, x, y));
+    let image = texture.raw_image().unwrap();
+    assert_eq!(no_copy.detach_backing(), Ok(true), "the detach");
+    assert_eq!(
+        texture.raw_image().unwrap(),
+        image,
+        "its own image, no stand-in"
+    );
+    assert_eq!(
+        level_bytes(&texture, (width, height), 0),
+        last,
+        "level 0's last texels"
+    );
+    let refused = Err(Error::NotImplemented(RuntimeGap::DetachedTexelAccess));
+    let whole = Region::new_2d(0, 0, width, height);
+    assert_eq!(
+        texture.replace_region(whole, 0, 0, &last, row, 0),
+        refused,
+        "a write of level 0"
+    );
+    let mut plain_bytes = vec![0u8; last.len()];
+    assert_eq!(
+        plain.get_bytes(&mut plain_bytes, row, 0, whole, 0, 0),
+        refused,
+        "the one-level texture"
+    );
+    for level in 1..levels {
+        let (w, h) = ((width >> level).max(1), (height >> level).max(1));
+        let pattern = packed((w, h), |x, y| texel(0x20 + level as u8, x, y));
+        let got = level_bytes(&texture, (width, height), level);
+        assert_eq!(got, pattern, "level {level} kept");
+        let written: Vec<u8> = pattern.iter().map(|b| !b).collect();
+        let region = Region::new_2d(0, 0, w, h);
+        (texture.replace_region(region, level, 0, &written, w * 4, 0)).unwrap();
+        let got = level_bytes(&texture, (width, height), level);
+        assert_eq!(got, written, "level {level} written while detached");
+    }
+    // Pages again: level 0 their bytes, the later levels as written.
+    let moved = packed((width, height), |x, y| texel(12, x, y));
+    // SAFETY: `other` outlives the buffer (dropped after the device), which alone uses it.
+    unsafe { no_copy.rebind_bytes_no_copy(other.memory(), None, None) }.unwrap();
+    write_rows(&no_copy, (width, height), |x, y| texel(12, x, y));
+    let level_one = (width / 2, height / 2);
+    let one_back = (rig.device)
+        .new_buffer(level_one.0 * level_one.1 * 4, ResourceOptions::shared())
+        .unwrap();
+    rig.run(|command_buffer| {
+        let mut blit = command_buffer.blit_command_encoder().unwrap();
+        for (level, (w, h), out) in [(0, (width, height), &read_back), (1, level_one, &one_back)] {
+            blit.copy_from_texture_to_buffer(
+                &texture,
+                0,
+                level,
+                Origin::new(0, 0, 0),
+                Size::new(w, h, 1),
+                out,
+                0,
+                w * 4,
+                0,
+                BlitOption::None,
+            )
+            .unwrap();
+        }
+        blit.end_encoding().unwrap();
+    });
+    assert_eq!(read(&read_back), moved, "level 0 over the new pages");
+    let one_pattern = packed(level_one, |x, y| texel(0x21, x, y));
+    let one_written: Vec<u8> = one_pattern.iter().map(|b| !b).collect();
+    assert_eq!(read(&one_back), one_written, "level 1 through the rebind");
+    eprintln!(
+        "TILED-TEXTURE on {}: detached, level 0 read its last texels and levels 1 to {} kept",
+        rig.device.name(),
+        levels - 1
+    );
+    drop((texture, plain, no_copy));
+    drop(rig);
 }
