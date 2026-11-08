@@ -1,6 +1,6 @@
 use crate::enables::{
-    host_image_copy_names, linear_color_attachment_names, names_of, Enables, Promotion, CORE_1_3,
-    MEMBERS,
+    host_image_copy_names, linear_color_attachment_names, names_of, Enables, Promotion,
+    ZeroInitializeDeviceMemoryFeatures, CORE_1_3, MEMBERS,
 };
 use crate::error::{Error, RuntimeGap};
 use ash::vk;
@@ -469,6 +469,53 @@ fn linear_color_attachment_is_enabled_in_its_own_structure() {
     .iter()
     .map(|&name| name.to_owned())
     .collect();
+    assert_eq!(read(&mut enables), (Some(vk::TRUE), names));
+}
+
+/// The runtime's own `zeroInitializeDeviceMemory` is set in its own structure, of the registry's
+/// structure type, chained into the create info only once enabled, with
+/// `VK_EXT_zero_initialize_device_memory` after host image copy's names.
+#[test]
+fn zero_initialize_device_memory_is_enabled_in_its_own_structure() {
+    let read = |enables: &mut Enables| {
+        enables.with_create_info(&[], |info| {
+            let mut member = None;
+            let mut next = info.p_next.cast::<vk::BaseInStructure>();
+            while !next.is_null() {
+                // SAFETY: every structure of the chain lives for the call, and each begins with
+                // `sType` and `pNext`.
+                let base = unsafe { &*next };
+                if base.s_type
+                    == <ZeroInitializeDeviceMemoryFeatures as vk::TaggedStructure>::STRUCTURE_TYPE
+                {
+                    // SAFETY: a structure of this type is the zero initialize features'.
+                    let zero = unsafe { &*next.cast::<ZeroInitializeDeviceMemoryFeatures>() };
+                    member = Some(zero.zero_initialize_device_memory);
+                }
+                next = base.p_next;
+            }
+            let names: Vec<CString> = (0..info.enabled_extension_count as usize)
+                // SAFETY: the create info's names are its count of live C strings.
+                .map(|i| unsafe { CStr::from_ptr(*info.pp_enabled_extension_names.add(i)) })
+                .map(CStr::to_owned)
+                .collect();
+            (member, names)
+        })
+    };
+    // The registry's `VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ZERO_INITIALIZE_DEVICE_MEMORY_FEATURES_EXT`.
+    assert_eq!(
+        <ZeroInitializeDeviceMemoryFeatures as vk::TaggedStructure>::STRUCTURE_TYPE.as_raw(),
+        1_000_620_000
+    );
+    let api = ApiVersion::V1_3;
+    let mut enables = Enables::of(&EnableSet::new(), api, &BTreeSet::new(), &[]).unwrap();
+    assert_eq!(read(&mut enables), (None, Vec::new()));
+    enables.enable_host_image_copy(host_image_copy_names(api));
+    enables.enable_zero_initialize_device_memory();
+    let names = vec![
+        c"VK_EXT_host_image_copy".to_owned(),
+        c"VK_EXT_zero_initialize_device_memory".to_owned(),
+    ];
     assert_eq!(read(&mut enables), (Some(vk::TRUE), names));
 }
 

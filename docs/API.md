@@ -308,7 +308,11 @@ the device refuses (`HostMemory::with_dma_buf`), `VK_EXT_external_memory_dma_buf
 `VK_EXT_queue_family_foreign` beside them, wherever a device lists them, and
 `VK_EXT_pageable_device_local_memory` with `VK_EXT_memory_priority`, where a device lists both and
 has `pageableDeviceLocalMemory`: its driver may then move device-local memory to host-local memory
-to make room rather than fail an allocation, every allocation at the default priority.
+to make room rather than fail an allocation, every allocation at the default priority; and
+`VK_EXT_zero_initialize_device_memory`, where a device the runtime made lists it, has
+`zeroInitializeDeviceMemory` and copies textures on the host: a `Shared` or `Managed` texture's
+image that copies on the host then starts in memory of its own the driver zeroed, with no write of
+the host's (`WorkCounts::images_started_zeroed`).
 
 A texture over host pages is one over a no-copy buffer's (imported by their pointer or as
 dma-bufs), or over a host-visible buffer of the runtime's own longer than 32 MiB where the device
