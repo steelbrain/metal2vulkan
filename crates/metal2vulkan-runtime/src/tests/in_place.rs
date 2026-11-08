@@ -612,14 +612,14 @@ fn a_change_beside_texels_that_share_no_line_fails_both_row_ends() {
 /// a store failure of a class whose reads failed, and one at a texel carry nowhere.
 #[test]
 fn a_store_failure_fails_the_other_classes_passes_and_nothing_else_carries() {
-    use Access::{BufferWrites, Reads, Renders, Writes};
+    use Access::{BufferWrites, NarrowBufferWrites, NarrowWrites, Reads, Renders, Writes};
     use PagesClass::{DmaBuf, Fresh, Pointer};
     use RowEnds::{InLines, OnLines};
     use Verdict::{Failed, Passed, Unchecked};
     let mut found: Vec<Found> = Vec::new();
     for class in [Pointer, Fresh, DmaBuf] {
         for rows in [InLines, OnLines] {
-            for access in [Reads, Renders, Writes, BufferWrites] {
+            for access in Access::ALL {
                 found.push(Found::new(class, access, rows, Passed));
             }
         }
@@ -695,6 +695,20 @@ fn a_store_failure_fails_the_other_classes_passes_and_nothing_else_carries() {
         [
             (Fresh, Writes, InLines, Pointer),
             (DmaBuf, Writes, InLines, Pointer)
+        ]
+    );
+    // The narrow rounds' stores carry as the others' do: storage writes of 1- and 2-byte texels,
+    // and their buffer writes.
+    set(&mut found, Pointer, Writes, InLines, Passed);
+    set(&mut found, Fresh, NarrowWrites, InLines, Failed);
+    set(&mut found, DmaBuf, NarrowBufferWrites, OnLines, Failed);
+    assert_eq!(
+        carried_store_failures(&found),
+        [
+            (Pointer, NarrowWrites, InLines, Fresh),
+            (Pointer, NarrowBufferWrites, OnLines, DmaBuf),
+            (Fresh, NarrowBufferWrites, OnLines, DmaBuf),
+            (DmaBuf, NarrowWrites, InLines, Fresh)
         ]
     );
 }

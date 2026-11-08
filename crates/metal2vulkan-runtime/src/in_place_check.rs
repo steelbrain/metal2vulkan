@@ -741,7 +741,8 @@ impl Found {
 
 /// The passes of `found` a store failure fails, each with the class whose failure it is: a
 /// class's pass of an access whose rounds store (renders: a pass's clear and store, and a draw;
-/// storage writes and buffer writes: a kernel's stores) for texels whose rows end as another
+/// storage writes and buffer writes, of narrow texels too: a kernel's stores) for texels whose
+/// rows end as another
 /// class's failure of that access did, where every byte that class's rounds found changed lay
 /// beside the texels and its reads of those row ends passed, so that its failure was the
 /// stores' and not the first move's.
@@ -765,7 +766,11 @@ pub(crate) fn carried_store_failures(
     let stores = |access| {
         matches!(
             access,
-            Access::Renders | Access::Writes | Access::BufferWrites
+            Access::Renders
+                | Access::Writes
+                | Access::BufferWrites
+                | Access::NarrowWrites
+                | Access::NarrowBufferWrites
         )
     };
     let of = |at| (found.iter()).find(|f| f.at() == at).map(|f| f.verdict);
