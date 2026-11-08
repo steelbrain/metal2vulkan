@@ -486,9 +486,9 @@ impl Device {
             return false;
         }
         let line = self.shared().in_place.line();
-        let written = match (texels.padding(line), renders) {
-            (Padding::Free, false) => Access::BufferWrites,
-            _ => Access::Writes,
+        let written = match texels.padding(line) {
+            Padding::Free => Access::BufferWrites,
+            Padding::Kept => Access::Writes,
         };
         let rows = texels.rows(line);
         self.shared().in_place.verdict(class, written, rows) == Verdict::Passed
