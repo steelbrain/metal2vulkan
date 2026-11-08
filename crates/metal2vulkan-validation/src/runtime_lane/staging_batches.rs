@@ -204,7 +204,7 @@ fn a_burst_of_replace_regions_shares_one_staging_submission() {
                 (1, 1),
                 "{name}: the command buffer's batch carried the burst in one staging submission"
             );
-            staging_waits_bounded(&name, &read);
+            staging_waits_bounded(name, &read);
         }
     });
 }
@@ -636,7 +636,7 @@ fn a_burst_of_new_textures_makes_no_staging_submission() {
                 (1, 1),
                 "{name}: the command buffer's batch carried the 600 in one staging submission"
             );
-            staging_waits_bounded(&name, &read);
+            staging_waits_bounded(name, &read);
         }
     });
 }
