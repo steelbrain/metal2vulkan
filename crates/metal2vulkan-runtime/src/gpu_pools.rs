@@ -385,8 +385,6 @@ impl Device {
     pub(super) fn lease_pool(&self, kind: PoolKind, queue: u64) -> Result<PoolLease, Error> {
         let shared = self.shared();
         let bytes = shared.gpu_pools.block_bytes(kind);
-        #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
-        crate::command_buffer::completion::trace::mark("lease: start");
         let read = |block: &Block| (block.raw(), block.address());
         let taken = lock(shared.gpu_pools.blocks(kind)).take(queue, read);
         let ((raw, address), leases) = match taken {
@@ -395,8 +393,6 @@ impl Device {
                 // Made without the lock: a lease of another queue, or one ending, waits for no
                 // making.
                 let block = self.make_block(bytes, kind.usage(), kind.addressed())?;
-                #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
-                crate::command_buffer::completion::trace::mark("lease: made");
                 shared.counts.gpu_pool_block_made();
                 let (raw, leases, extra) =
                     lock(shared.gpu_pools.blocks(kind)).made(queue, block, Instant::now(), read);
@@ -410,8 +406,6 @@ impl Device {
             }
         };
         shared.counts.gpu_pool_leased(leases as u64);
-        #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
-        crate::command_buffer::completion::trace::mark("lease: end");
         Ok(PoolLease {
             device: self.clone(),
             kind,

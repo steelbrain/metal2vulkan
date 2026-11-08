@@ -2213,8 +2213,6 @@ impl BlockMaker {
         export: Option<(vk::Buffer, Exported)>,
         zeroed: bool,
     ) -> Result<Block, Error> {
-        #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
-        crate::command_buffer::completion::trace::mark("make: start");
         let addresses = if addressed.is_some() && self.device_address {
             Some(address_buffer(device, size, Sharing::new(&self.families))?)
         } else {
@@ -2263,8 +2261,6 @@ impl BlockMaker {
                 return Err(vulkan(error));
             }
         };
-        #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
-        crate::command_buffer::completion::trace::mark("make: allocated");
         let host_visible = self.host_visible & 1 << type_index != 0;
         let mapped = if host_visible {
             // SAFETY: the memory is host-visible, unmapped, and mapped whole once.
@@ -2300,8 +2296,6 @@ impl BlockMaker {
             },
             None => None,
         };
-        #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
-        crate::command_buffer::completion::trace::mark("make: addresses bound");
         Ok(Block {
             memory,
             size,
@@ -2744,8 +2738,6 @@ fn place(
         if let Some(frees) = before {
             frees.wait();
         }
-        #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
-        crate::command_buffer::completion::trace::mark("place: frees waited");
         // The type's kept empty blocks go, and the frees posted complete, before a block of it
         // fails to be made.
         let make = || maker.make(device, pool, block_size, addressed);
@@ -2753,8 +2745,6 @@ fn place(
             Err(Error::OutOfMemory(_)) if make_room(memory, device, type_index) => make(),
             made => made,
         };
-        #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
-        crate::command_buffer::completion::trace::mark("place: block made");
         match made {
             Ok(block) => {
                 let mut memory = lock(memory);

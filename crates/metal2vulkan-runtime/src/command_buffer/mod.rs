@@ -5265,8 +5265,6 @@ impl CommandBufferShared {
         let submitted_holds;
         // No rebind encodes it again from here: a group that was never submitted runs nothing.
         self.device.shared().rebinds.no_replays(self);
-        #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
-        crate::command_buffer::completion::trace::mark("complete: no replays");
         {
             let mut state = lock(&self.state);
             // Every trail of the work it waited for (a pipeline's making, a twin's decode) was
@@ -5445,14 +5443,10 @@ impl CommandBufferShared {
             state.unplaced();
             parked = state.parked > 0;
         }
-        #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
-        crate::command_buffer::completion::trace::mark("complete: status final");
         // The holds taken above go here, with no lock of the command buffer's held, before any
         // handler of its runs: a detach from one of them detaches (`detach.rs`).
         drop(submitted_holds);
         self.wake_parked(parked);
-        #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
-        crate::command_buffer::completion::trace::mark("complete: holds dropped");
         let buffer = CommandBuffer(Arc::clone(self));
         // Its completion-seen handlers first, on this thread, its status final: the thread that
         // saw it complete where this transition runs there, else its queue's handler thread
@@ -5496,8 +5490,6 @@ impl CommandBufferShared {
             }
             follow.release(&self.device.shared().contexts);
         }
-        #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
-        crate::command_buffer::completion::trace::mark("complete: handlers next");
         // Each handler leaves the queue under the lock and runs without it, in the order added
         // (a handler may query the command buffer).
         {
@@ -5511,8 +5503,6 @@ impl CommandBufferShared {
         }
         let handled = Instant::now();
         drop(buffer);
-        #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
-        crate::command_buffer::completion::trace::mark("complete: handlers ran");
         // Its queue's slot comes back as its last completed handler returns, as Metal's does: a
         // make blocked on its full queue returns then, never while a completed handler runs, nor
         // from one on its own full queue, and does not wait for what the commands used to be
@@ -5681,8 +5671,6 @@ impl Transition {
 
     fn run(self) -> Kept {
         let on_handler_thread = contexts::on_handler_thread();
-        #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
-        crate::command_buffer::completion::trace::mark("transition: runs");
         let Transition { buffer, to, .. } = self;
         match to {
             To::Scheduled => buffer.run_scheduled(),

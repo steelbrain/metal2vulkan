@@ -1196,30 +1196,10 @@ pub(super) fn shared_draw_locks() -> u64 {
 
 /// `mutex`'s guard; a lock poisoned by a panicking holder is taken over (the runtime's state is
 /// updated before any call that can panic).
-#[cfg(not(all(test, any(m2v_gpu, m2v_cpu_icd))))]
 pub(super) fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
-}
-
-/// [`lock`], and a probe: a lock that waited, with its caller (`completion::trace::waited_lock`).
-#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
-#[track_caller]
-pub(super) fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    match mutex.try_lock() {
-        Ok(guard) => guard,
-        Err(std::sync::TryLockError::Poisoned(poisoned)) => poisoned.into_inner(),
-        Err(std::sync::TryLockError::WouldBlock) => {
-            let caller = std::panic::Location::caller();
-            let entered = crate::gpu_time::host_nanos();
-            let guard = mutex
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            crate::command_buffer::completion::trace::waited_lock(caller, entered);
-            guard
-        }
-    }
 }
 
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]

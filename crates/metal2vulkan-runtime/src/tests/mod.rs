@@ -323,8 +323,6 @@ mod pixel_format_info;
 mod point_size_notices;
 #[cfg(all(any(m2v_gpu, m2v_cpu_icd), target_os = "linux"))]
 mod pointer_residency;
-#[cfg(any(m2v_gpu, m2v_cpu_icd))]
-mod pool_making_probe;
 mod pool_room;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod pool_room_creations;
