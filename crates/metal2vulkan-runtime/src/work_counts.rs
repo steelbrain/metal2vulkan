@@ -138,6 +138,7 @@ pub(crate) struct Counters {
     heap_slot_writes_deferred: AtomicU64,
     heap_arrays_copied: AtomicU64,
     heap_textures_tiled: AtomicU64,
+    heap_textures_refit: AtomicU64,
     heap_sample_move_images_made: AtomicU64,
     heap_sample_move_images_lent: AtomicU64,
     requirement_images_made: AtomicU64,
@@ -3881,6 +3882,12 @@ impl Counters {
         self.heap_textures_tiled.fetch_add(1, Ordering::Relaxed);
     }
 
+    /// A heap's texture was made in place as an image that fits Metal's answer, where the image
+    /// of the route the device first took did not (`texture/heap.rs`).
+    pub(crate) fn heap_texture_refit(&self) {
+        self.heap_textures_refit.fetch_add(1, Ordering::Relaxed);
+    }
+
     /// A heap's multisample texture's moves took an image for a copy (`texture/copy_images.rs`):
     /// `lent` one their queue kept, else made one.
     pub(crate) fn heap_sample_move_image(&self, lent: bool) {
@@ -4729,6 +4736,13 @@ pub struct WorkCounts {
     /// bytes or a coarser alignment than Metal's answer where none of them that fits it binds
     /// there (`texture/heap.rs`, `Device::fitting_heap_image`).
     pub heap_textures_tiled: u64,
+    /// Textures made in heaps whose image of the route the device first took (a compressed
+    /// optimal image, say) takes more bytes or a coarser alignment of the heap than Metal's
+    /// answer, bound in the heap's memory in place as an image of them that fits it instead: its
+    /// optimal image of host-transfer usage, or its linear image (`heap-texture-host-transfer`,
+    /// `heap-texture-linear`; `texture/heap.rs`). Each would else be a shadow of the heap's bytes
+    /// (`heap_textures_tiled`).
+    pub heap_textures_refit: u64,
     /// The images a heap's multisample texture's moves between its image and Metal's tiles made
     /// for a copy, as an encoder records it: each a wide, scratch or draw image of a band of one
     /// aspect and slice, which the copy's later bands, aspects and slices of its shape take again,
@@ -7393,6 +7407,7 @@ impl Device {
             host_range_lookups: self.shared().aliases.range_lookups(),
             host_alias_lookups: self.shared().aliases.lookups(),
             heap_textures_tiled: counters.heap_textures_tiled.load(Ordering::Relaxed),
+            heap_textures_refit: counters.heap_textures_refit.load(Ordering::Relaxed),
             heap_sample_move_images_made: counters
                 .heap_sample_move_images_made
                 .load(Ordering::Relaxed),

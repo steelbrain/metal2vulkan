@@ -3628,6 +3628,9 @@ impl Device {
             tiles.know_samples(self, call, &texture, inexact);
         }
         heap.hold_texture(&texture);
+        if making.refit.is_some() {
+            self.shared().counts.heap_texture_refit();
+        }
         // Over host pages, each texture laid out otherwise than Metal tiles it is announced, in
         // the program's call that made it, with its ID; and in any heap a multisample texture whose
         // image lies in memory of its own, and a shadow of the uncompressed tiles of a texture

@@ -2764,6 +2764,7 @@ field	metal2vulkan-runtime::WorkCounts.heap_tables_worked_out	pub heap_tables_wo
 field	metal2vulkan-runtime::WorkCounts.heap_texture_block_compressed_layouts	pub heap_texture_block_compressed_layouts: u64
 field	metal2vulkan-runtime::WorkCounts.heap_texture_lossless_layouts	pub heap_texture_lossless_layouts: u64
 field	metal2vulkan-runtime::WorkCounts.heap_texture_untiled_layouts	pub heap_texture_untiled_layouts: u64
+field	metal2vulkan-runtime::WorkCounts.heap_textures_refit	pub heap_textures_refit: u64
 field	metal2vulkan-runtime::WorkCounts.heap_textures_tiled	pub heap_textures_tiled: u64
 field	metal2vulkan-runtime::WorkCounts.held_depths_released	pub held_depths_released: u64
 field	metal2vulkan-runtime::WorkCounts.host_alias_lookups	pub host_alias_lookups: u64
