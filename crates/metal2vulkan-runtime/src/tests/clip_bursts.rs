@@ -17,9 +17,15 @@
 //! and 34 decoded 4K NV12 pictures in `Private` exportable buffers (`exported_memory.rs`), as many
 //! as a guest's decoder pool grew by over a clip.
 //!
-//! The check: the clips after the first allocate no `VkDeviceMemory`, the first one's blocks kept
-//! for them as it ended (`memory.rs`). Before, each made 38 to 42 allocations again on lavapipe:
-//! the pooled blocks freed past the two a pool kept, and an allocation of its own per picture.
+//! The check: each clip after the first allocates no more `VkDeviceMemory` than was freed since
+//! the clip before it was made, the first one's blocks kept for it as that clip ended
+//! (`memory.rs`) within each heap's budget for kept blocks; where nothing was freed, none. A
+//! heap's budget is an eighth of it, at most `KEPT_EMPTY_BYTES`: it held the clip's 1 GiB of
+//! blocks on lavapipe and a Radeon 780M, whose later clips allocated none, but not on a Radeon RX
+//! 550 (RADV POLARIS12), whose releases freed 5 blocks past its budget and whose later clips
+//! allocated 6 each, as many as the release and the making freed. Before the blocks were kept,
+//! the later clips made 42 and 38 allocations on lavapipe, where 40 and 39 were freed since: the
+//! pooled blocks freed past the two a pool kept, and an allocation of its own per picture.
 //!
 //! A device test: compiled only under the GPU safety cfgs (`m2v_gpu`, `m2v_cpu_icd`).
 
@@ -209,9 +215,10 @@ fn churn(before: &WorkCounts, after: &WorkCounts) -> String {
 
 /// The clips, made, held and released [`PAUSE`] apart while the compositor runs, each clip's
 /// burst and release printed with the compositor's held frames: the clips after the first
-/// allocate no memory.
+/// allocate no more memory than was freed since the clip before was made, and none where nothing
+/// was.
 #[test]
-fn later_clips_allocate_no_memory_beside_a_compositor() {
+fn later_clips_allocate_only_what_was_freed_beside_a_compositor() {
     let scratch = Scratch::new("clip-bursts");
     let device = device(&scratch.0);
     let name = device.name().to_owned();
@@ -232,6 +239,8 @@ fn later_clips_allocate_no_memory_beside_a_compositor() {
         scope.spawn(|| composite(&device, start, &stop, &frames));
         std::thread::sleep(PAUSE);
         let mut made_again = Vec::new();
+        // The frees since the clip before was made.
+        let mut freed = 0;
         for clip in 0..CLIPS {
             let before = device.work_counts();
             let began = start.elapsed();
@@ -250,9 +259,11 @@ fn later_clips_allocate_no_memory_beside_a_compositor() {
             );
             let allocated = after.object_churn.vk_memory_allocations
                 - before.object_churn.vk_memory_allocations;
+            freed += after.object_churn.vk_memory_freed - before.object_churn.vk_memory_freed;
             if clip > 0 {
-                made_again.push(allocated);
+                made_again.push((allocated, freed));
             }
+            freed = 0;
             std::thread::sleep(HOLD);
             let before = device.work_counts();
             let began = start.elapsed();
@@ -260,6 +271,7 @@ fn later_clips_allocate_no_memory_beside_a_compositor() {
             let released = start.elapsed();
             std::thread::sleep(PAUSE);
             let after = device.work_counts();
+            freed += after.object_churn.vk_memory_freed - before.object_churn.vk_memory_freed;
             eprintln!(
                 "CLIP-BURSTS on {name}: clip {clip} released in {:.1} ms, then a pause of {:.0} \
                  ms: {} | release: {} | pause: {}",
@@ -273,10 +285,14 @@ fn later_clips_allocate_no_memory_beside_a_compositor() {
         stop.store(true, Ordering::Relaxed);
         made_again
     });
-    eprintln!("CLIP-BURSTS on {name}: allocations of the clips after the first: {made_again:?}");
-    // The first clip's blocks, kept as it ended, hold every later one (`memory.rs`).
+    eprintln!(
+        "CLIP-BURSTS on {name}: allocations of the clips after the first, and the frees since the \
+         clip before was made: {made_again:?}"
+    );
+    // The first clip's blocks, kept as it ended within each heap's budget, hold every later one
+    // but those freed past it (`memory.rs`).
     assert!(
-        made_again.iter().all(|&allocated| allocated == 0),
-        "{name}: the clips after the first allocated {made_again:?}"
+        (made_again.iter()).all(|&(allocated, freed)| allocated <= freed),
+        "{name}: the clips after the first allocated past what was freed: {made_again:?}"
     );
 }
