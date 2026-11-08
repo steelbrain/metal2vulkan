@@ -1032,7 +1032,7 @@ fn check_round(
     // whether or when the check runs.
     let texture = match (pages.buffer).new_runtime_texture(&descriptor, 0, shape.bytes_per_row) {
         Ok(texture) => texture,
-        Err(error) => return Round::NotMade(Unmade::of_error("its making failed", &error)),
+        Err(error) => return Round::NotMade(unmade(pages, &descriptor, shape, &error)),
     };
     let stop = AtomicBool::new(false);
     let started = Barrier::new(2);
@@ -1067,6 +1067,24 @@ fn check_round(
     drop(texture);
     let texels = texels.map(|shape| (shape, Due::Zero));
     bytes.compare(&pattern, (texels, free), written)
+}
+
+/// Why the check's texture of `shape` over `pages`, made with `descriptor`, was not made, its
+/// making's `error` given: on the check's thread a making whose route takes no image in place
+/// refuses the texture with an internal error (`texture.rs`), which says nothing of the cause, so
+/// the placement's answer decides where it names a cause that lasts ([`unplaced`]); the error
+/// does where it does not.
+fn unmade(
+    pages: &ClassPages,
+    descriptor: &TextureDescriptor,
+    shape: Shape,
+    error: &crate::Error,
+) -> Unmade {
+    let placed = unplaced(pages, descriptor, shape);
+    match placed.lasting {
+        true => Unmade::lasting(format!("its making failed: {error}; {}", placed.why)),
+        false => Unmade::of_error(&format!("{}; its making failed", placed.why), error),
+    }
 }
 
 /// Why the check's texture of `shape` over `pages`, made with `descriptor`, took no image in
@@ -1197,7 +1215,7 @@ fn store_round(
     descriptor.usage = TextureUsage::SHADER_READ | TextureUsage::SHADER_WRITE;
     let texture = match (pages.buffer).new_runtime_texture(&descriptor, 0, shape.bytes_per_row) {
         Ok(texture) => texture,
-        Err(error) => return Round::NotMade(Unmade::of_error("its making failed", &error)),
+        Err(error) => return Round::NotMade(unmade(pages, &descriptor, shape, &error)),
     };
     // The bytes the kernel stores, row after row, and the part it keeps them in too: buffers
     // outside the Metal address space, as the check's are (the module docs). A texel takes the
