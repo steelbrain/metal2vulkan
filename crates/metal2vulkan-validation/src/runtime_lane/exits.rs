@@ -36,6 +36,7 @@ use super::indirect_host_steps::Setup;
 use super::{
     layer_reported_nothing_at_all, run_queue_waits, validated_device, Messages, ScratchCache,
 };
+use crate::air_library::AirLibrary;
 use crate::gpu::{DeviceType, TEST_DEVICE};
 use metal2vulkan::library::{FunctionConstantValue, FunctionConstantValues};
 use metal2vulkan::metal::DataType;
