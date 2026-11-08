@@ -4720,7 +4720,9 @@ each item named states the rule in full.
   exit handlers registered before the runtime's run, as Metal's exit runs them. Past those bounds
   they do not run (a terminal's restore, say), where Metal's exit runs them. Once the wait passed
   half its bound, one line on standard error names where the runtime's work still in progress
-  began.
+  began. A device's teardown that the exit finds in progress (its last reference let go on
+  another thread) leaves the device to the process's end at its next step, so the exit waits for
+  that step alone.
 
 **Two-plane YCbCr textures**
 

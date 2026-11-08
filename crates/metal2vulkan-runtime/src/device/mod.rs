@@ -845,7 +845,8 @@ impl Drop for DeviceShared {
     fn drop(&mut self) {
         // The whole teardown is one section of the exit guard: once the process is exiting, the
         // device, its threads and its objects are left to its end, and an exit that begins
-        // meanwhile waits for the teardown (`exit_guard`).
+        // meanwhile waits for the teardown, which leaves the rest at its next step (below,
+        // `exit_guard`).
         let Some(_busy) = exit_guard::enter() else {
             return;
         };
@@ -884,6 +885,14 @@ impl Drop for DeviceShared {
         self.residency.stop();
         self.completion.stop();
         self.contexts.stop();
+        // An exit that began meanwhile waits for this teardown (`exit_guard`): from here on the
+        // device, its objects and its memory are left to the process's end, as where the exit
+        // began first, so that the exit waits for no more of the teardown than its step in
+        // progress (the wait for idle, and `vkDestroyDevice` above all, take long beside other
+        // processes' work on the GPU).
+        if exit_guard::closed() {
+            return;
+        }
         // SAFETY: the device is live; waiting for idle covers any work the consumer of an
         // adopted device did not wait for before dropping the runtime's last handle. No batch is
         // pending then, so no timeline is in use.
@@ -961,6 +970,12 @@ impl Drop for DeviceShared {
         // layouts that baked them are gone.
         let sampler_sets = lock(&self.sampler_sets).drain();
         sampler_sets.destroy(&*self);
+        // Likewise once the exit began: the caches' records stay unwritten, and the memory's
+        // blocks stay with their deallocators unrun, as a release after the exit leaves them
+        // (`exit_guard`).
+        if exit_guard::closed() {
+            return;
+        }
         // Every other pipeline was destroyed with its state (each holds this device), so the
         // `VkPipelineCache` the cache keeps for each record goes, and the cache thread stops.
         // SAFETY: the device is live and no making is left to be handed a cache.
@@ -971,6 +986,10 @@ impl Drop for DeviceShared {
         drop(after);
         // Every free posted to the free thread runs, and the thread ends (`free_thread.rs`).
         self.frees.stop();
+        // And the device itself.
+        if exit_guard::closed() {
+            return;
+        }
         // The device's record of pipeline makings goes, before `vkDestroyDevice`: in builds with
         // debug assertions, no making is in progress (`compiles.rs`).
         compiles::unregister(self.vk().handle());

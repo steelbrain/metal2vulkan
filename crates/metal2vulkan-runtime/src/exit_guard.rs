@@ -144,11 +144,15 @@
 //!   is pending stays pending, as Metal's does. A release skips its Vulkan calls (the process's
 //!   end frees what they would), and a no-copy buffer released then keeps its deallocator unrun,
 //!   with its pages imported; a release inside a section in progress (a whole drop's, a pool
-//!   piece's) runs, within the hook's wait. The handler threads, listeners and the shader cache's
-//!   thread go on. A driver's making then calls the driver for its pipelines alone
-//!   (`shader_cache/driver.rs`): one in progress (a pool piece's or a host step's section runs on
-//!   past the close) neither reads its cache for a record nor releases it, and one begun after
-//!   makes no cache.
+//!   piece's) runs, within the hook's wait. A device's teardown in progress, one section, leaves
+//!   the device to the process's end at its next step once the guard closed: before its wait for
+//!   idle, before its pipeline caches and memory go, and before `vkDestroyDevice`, which on the
+//!   RTX 5080 Laptop GPU took 0.3 to 2.6 s beside other processes' work on the GPU (the exits
+//!   lane's `handler_learns_exit`, whose teardown runs on a handler thread as the program exits).
+//!   The handler threads, listeners and the shader cache's thread go on. A driver's making then
+//!   calls the driver for its pipelines alone (`shader_cache/driver.rs`): one in progress (a pool
+//!   piece's or a host step's section runs on past the close) neither reads its cache for a
+//!   record nor releases it, and one begun after makes no cache.
 //! - **A CPU device's work.** A device whose queues run in this process (`DeviceKind::Cpu`:
 //!   lavapipe, SwiftShader) runs what was submitted to it on the process's own threads, so the
 //!   destructors would run under its execution. Once the sections ended, the hook's first run waits
@@ -192,9 +196,9 @@ use std::time::{Duration, Instant};
 
 /// The longest the hook waits for the sections in progress, and then for a CPU device's
 /// submitted work ([`InProcess`]). A section is one submission, one poll (at most 100 ms), one
-/// counter read, one save's read, or one object's release (a device's: its threads' stops,
-/// `vkDeviceWaitIdle`, its destruction); it outlasts this only when a driver or a message sink
-/// blocks.
+/// counter read, one save's read, or one object's release (a device's: its threads' stops, then,
+/// unless the guard closed meanwhile, `vkDeviceWaitIdle` and its destruction); it outlasts this
+/// only when a driver or a message sink blocks.
 pub(crate) const BOUND: Duration = Duration::from_secs(2);
 
 /// The longest the hook waits while a driver's making of a `VkPipeline` is in progress in a
