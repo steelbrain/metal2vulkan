@@ -20,9 +20,14 @@
 //!   XTX 13.4 against 35.0 (0.38), the RX 550 11.6 against 35.1 (0.33); ANV on the Iris Xe of
 //!   RPL-P 5.1 against 13.1 (0.39); MoltenVK 1.4.2 on the M3 Max 4.5 against 4.6 (0.98).
 //! - **Import tax.** [`TAX_IMPORTS`] imports of [`TAX_BYTES`] of anonymous pages in all, each of
-//!   pages of its own the check maps and writes, by their pointer, held through every other of
-//!   [`TAX_PHASES`] phases of [`TAX_SUBMITS`] submissions of one empty command buffer with a
-//!   fence, none held through the rest; the time inside each call. Where, in both halves of the
+//!   pages of its own the check maps and writes, by their pointer, held through the middle half
+//!   of [`TAX_PHASES`] phases of [`TAX_SUBMITS`] submissions of one empty command buffer with a
+//!   fence ([`tax_holds`]), none held through the quarters before and after it; the time inside
+//!   each call. Each half of the phases so holds as many phases with the imports as without, and
+//!   one set of imports, made before the first phase that holds them and released after the last,
+//!   serves the try: each import and its release holds back every other thread's submission on
+//!   some drivers (NVIDIA's), which a set made and released for each phase that holds them did
+//!   four times over. Where, in both halves of the
 //!   phases, the floor of the submissions with the imports held passes that of those without by
 //!   more than [`TAX_FLOOR`] or an eighth of it, whichever is more, a held import costs every
 //!   submission (`Holds`), and where it passes in neither, it does not (`Fails`). Several imports,
@@ -82,8 +87,8 @@
 //!   the same forms.
 //! - **Its cost**: [`ROUNDS`] rounds of each merge form and [`TAX_PHASES`] phases of
 //!   [`TAX_SUBMITS`] submissions, each waited for, every command buffer empty; the
-//!   [`TAX_IMPORTS`] imports of [`TAX_BYTES`] in all made and freed [`TAX_PHASES`] times over
-//!   pages written once; and on Linux three copies of 256 bytes; each timed check again, at most
+//!   [`TAX_IMPORTS`] imports of [`TAX_BYTES`] in all made and freed once a try, over pages
+//!   written once; and on Linux three copies of 256 bytes; each timed check again, at most
 //!   [`TRIES`] times in all, where its halves disagree, and the import tax's [`TAX_REPEATS`]
 //!   tries more where it answers `Holds` past its margin. The probe's rounds took 3 to 12 ms on
 //!   those devices.
@@ -167,8 +172,18 @@ pub(crate) const TAX_BYTES: u64 = 16 << 20;
 /// desktop holds a hundred imports and more).
 pub(crate) const TAX_IMPORTS: u64 = 32;
 
-/// The tax check's phases, every other one with the import held (the first without).
+/// The tax check's phases, the middle half of them with the imports held ([`tax_holds`]).
 pub(crate) const TAX_PHASES: usize = 8;
+
+/// Whether the tax check's phase `at` holds the imports: the middle half of the phases, so that
+/// each half of them holds as many phases with the imports as without, the first and the last
+/// without, and the phases that hold them run one after another, served by one set of imports.
+/// A drift of the load beside the check over a try lengthens one form in one half as much as the
+/// other form in the other half: it splits the halves (no verdict) rather than moving both one
+/// way.
+pub(crate) fn tax_holds(at: usize) -> bool {
+    (TAX_PHASES / 4..TAX_PHASES - TAX_PHASES / 4).contains(&at)
+}
 
 /// The submissions timed in each phase, after one untimed.
 pub(crate) const TAX_SUBMITS: usize = 8;
@@ -275,6 +290,9 @@ pub(crate) struct SubmitChecks {
     split: AtomicU64,
     /// The import tax answered `Holds` short of its record, in this process ([`tax_tried`]).
     unearned: AtomicBool,
+    /// The import tax's tries, in this process: each makes and releases [`TAX_IMPORTS`] imports
+    /// once ([`tax_holds`]).
+    pub(crate) tax_tries: AtomicU64,
     /// The device's teardown stopped the checks ([`SubmitChecks::stop`]): read between steps.
     stopping: AtomicBool,
     /// The calls waiting for the verdicts ([`SubmitChecks::wait`]), for which no step steps
@@ -301,6 +319,7 @@ impl SubmitChecks {
             took: AtomicU64::new(0),
             split: AtomicU64::new(0),
             unearned: AtomicBool::new(false),
+            tax_tries: AtomicU64::new(0),
             stopping: AtomicBool::new(false),
             waiters: AtomicU32::new(0),
             running: Mutex::new(false),
@@ -491,14 +510,14 @@ pub(crate) fn merge_try(merged: &[i64], apart: &[i64]) -> Timed {
     }
 }
 
-/// One import tax try's answer from its phases' submission times, in nanoseconds, the first
-/// phase without the import and every other one with it held: in each half of the phases, the
-/// floor of those with it held against that of those without ([`tax_verdict`]).
+/// One import tax try's answer from its phases' submission times, in nanoseconds, those
+/// [`tax_holds`] names with the imports held: in each half of the phases, the floor of those with
+/// them held against that of those without ([`tax_verdict`]).
 pub(crate) fn tax_try(phases: &[Vec<i64>]) -> Timed {
     // The floor of the phases of `phases` with the import held (`held`) or without, by their
     // place among all the phases.
     let of = |phases: &[(usize, &Vec<i64>)], held: bool| {
-        let times = phases.iter().filter(|(at, _)| (at % 2 == 1) == held);
+        let times = phases.iter().filter(|&&(at, _)| tax_holds(at) == held);
         times.map(|(_, times)| floor(times)).min().unwrap_or(0)
     };
     let placed: Vec<(usize, &Vec<i64>)> = phases.iter().enumerate().collect();
@@ -523,7 +542,7 @@ fn floor(times: &[i64]) -> i64 {
 /// The version of what the checks measure, of what earns a record and of how it is named and
 /// framed: a change to any bumps it, and a record of another version is never read (one of 3 may
 /// hold an import tax `Holds` short of [`TAX_MARGIN`]).
-pub(crate) const CHECK_VERSION: u32 = 4;
+pub(crate) const CHECK_VERSION: u32 = 5;
 
 /// A record's first bytes.
 const MAGIC: [u8; 8] = *b"M2VSUBC\0";
@@ -789,11 +808,15 @@ impl Device {
             true => ", its import tax Holds short of a record",
             false => "",
         };
+        let tax_tries = match checks.tax_tries.load(Ordering::Relaxed) {
+            0 => String::new(),
+            tries => format!(", {tries} import tax tries"),
+        };
         format!(
             "merge {:?} ({:.1} us in one call of {MERGED} against {:.1} us apart), import tax \
              {:?} ({:.1} us a submission with {} imports of {} MiB in all held against {:.1} us), \
              follows {:?}, \
-             {took}{split}{unearned} (floors)",
+             {took}{split}{unearned}{tax_tries} (floors)",
             checks.verdict(Check::Merge),
             us(m.merged),
             us(m.apart),
@@ -1006,7 +1029,10 @@ fn measure(parts: &Parts, objects: &Objects) -> Option<(Measured, bool)> {
     let checks = &parts.checks;
     let (merges, (merged, apart), merge_kept) = tried(checks, || merge(parts, objects))?;
     checks.set(Check::Merge, merges);
-    let (taxed, (held, bare), tax_kept) = tax_tried(checks, || tax(parts, objects))?;
+    let (taxed, (held, bare), tax_kept) = tax_tried(checks, || {
+        checks.tax_tries.fetch_add(1, Ordering::Relaxed);
+        tax(parts, objects)
+    })?;
     checks.set(Check::ImportTax, taxed);
     checks.set(Check::Follows, follows(parts, objects)?);
     let measured = Measured {
@@ -1112,23 +1138,19 @@ fn tax(parts: &Parts, objects: &Objects) -> Option<Option<Timed>> {
         pages.fill(0x5a);
     }
     let mut phases = Vec::with_capacity(TAX_PHASES);
+    // One set of imports, made before the first phase that holds them and released after the
+    // last ([`tax_holds`]).
+    let mut imports = Vec::new();
     for phase in 0..TAX_PHASES {
-        let holding = phase % 2 == 1;
         if !parts.goes_on() {
-            return None;
+            return release_all(parts, imports.drain(..)).and(None);
         }
-        let mut imports = Vec::new();
-        if holding {
+        if tax_holds(phase) && imports.is_empty() {
             for pages in &pieces {
                 parts.step();
                 match Import::make(parts, pages, false) {
                     Some(Some(import)) => imports.push(import),
-                    made => {
-                        for import in imports {
-                            import.release(parts)?;
-                        }
-                        return made.map(|_| None);
-                    }
+                    made => return release_all(parts, imports.drain(..)).and(made.map(|_| None)),
                 }
             }
         }
@@ -1145,9 +1167,8 @@ fn tax(parts: &Parts, objects: &Objects) -> Option<Option<Timed>> {
                 }
             }
         }
-        for import in imports {
-            parts.step();
-            import.release(parts)?;
+        if refused || !tax_holds(phase + 1) {
+            release_all(parts, imports.drain(..))?;
         }
         if refused {
             return Some(None);
@@ -1155,6 +1176,16 @@ fn tax(parts: &Parts, objects: &Objects) -> Option<Option<Timed>> {
         phases.push(times);
     }
     Some(Some(tax_try(&phases)))
+}
+
+/// Release the tax check's `imports` in order, each step stepping aside first: `None` where the
+/// process is exiting, the rest then left to its end.
+fn release_all<'p>(parts: &Parts, imports: impl IntoIterator<Item = Import<'p>>) -> Option<()> {
+    for import in imports {
+        parts.step();
+        import.release(parts)?;
+    }
+    Some(())
 }
 
 /// The follows check's verdict (the module docs); `None` where the check stops.

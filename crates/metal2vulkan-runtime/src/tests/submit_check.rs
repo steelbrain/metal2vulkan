@@ -3,9 +3,9 @@
 
 use crate::in_place::DriverIdentity;
 use crate::submit_check::{
-    decode, encode, merge_try, merge_verdict, record_name, tax_clear, tax_tried, tax_try,
-    tax_verdict, tried, Measured, SubmitChecks, Timed, Verdict, MERGE_RATIO, ROUNDS, TAX_FLOOR,
-    TAX_MARGIN, TAX_PHASES, TAX_REPEATS, TAX_SUBMITS, TRIES,
+    decode, encode, merge_try, merge_verdict, record_name, tax_clear, tax_holds, tax_tried,
+    tax_try, tax_verdict, tried, Measured, SubmitChecks, Timed, Verdict, MERGE_RATIO, ROUNDS,
+    TAX_FLOOR, TAX_MARGIN, TAX_PHASES, TAX_REPEATS, TAX_SUBMITS, TRIES,
 };
 
 /// The probe's medians (2026-11-07, Mesa 26.2.6 under Linux 7.3.1, MoltenVK 1.4.2 under macOS
@@ -52,8 +52,8 @@ fn the_verdicts_meet_their_bounds() {
     assert_eq!(tax_verdict(slow + slow / 8 + 1, slow), Verdict::Holds);
 }
 
-/// The import tax's phases, without the import first: each `(floor, rest)`, a phase's least
-/// submission and its others.
+/// The import tax's phases, those [`tax_holds`] names with the imports held: each
+/// `(floor, rest)`, a phase's least submission and its others.
 fn phases(each: [(i64, i64); TAX_PHASES]) -> Vec<Vec<i64>> {
     (each.iter())
         .map(|&(floor, rest)| {
@@ -79,16 +79,16 @@ fn median(times: &[i64]) -> i64 {
 fn a_taxed_device_under_load_answers_from_its_floors() {
     let loaded = phases([
         (8_600, 25_000),
-        (14_300, 15_000),
         (8_700, 25_000),
+        (14_300, 15_000),
         (14_200, 15_000),
-        (8_500, 25_000),
         (14_400, 15_000),
-        (8_800, 25_000),
         (14_500, 15_000),
+        (8_500, 25_000),
+        (8_800, 25_000),
     ]);
     let (held, bare): (Vec<_>, Vec<_>) =
-        (loaded.iter().enumerate()).partition(|(at, _)| at % 2 == 1);
+        (loaded.iter().enumerate()).partition(|&(at, _)| tax_holds(at));
     let all = |phases: Vec<(usize, &Vec<i64>)>| -> Vec<i64> {
         phases
             .into_iter()
@@ -125,24 +125,24 @@ fn a_taxed_device_under_load_answers_from_its_floors() {
 fn a_try_answers_only_where_its_halves_agree() {
     let one_slow = phases([
         (8_600, 9_000),
-        (14_300, 15_000),
         (30_000, 31_000),
+        (14_300, 15_000),
         (14_200, 15_000),
-        (8_500, 9_000),
         (14_400, 15_000),
-        (8_700, 9_000),
         (14_100, 15_000),
+        (8_500, 9_000),
+        (8_700, 9_000),
     ]);
     assert_eq!(tax_try(&one_slow).verdict, Some(Verdict::Holds));
     let half_slow = phases([
         (8_600, 9_000),
-        (14_300, 15_000),
         (8_700, 9_000),
+        (14_300, 15_000),
         (14_200, 15_000),
-        (30_000, 31_000),
         (14_400, 15_000),
-        (29_000, 31_000),
         (14_100, 15_000),
+        (30_000, 31_000),
+        (29_000, 31_000),
     ]);
     assert_eq!(tax_try(&half_slow).verdict, None);
     let apart = vec![35_000; ROUNDS];
@@ -152,6 +152,24 @@ fn a_try_answers_only_where_its_halves_agree() {
     assert_eq!(merge_try(&merged, &apart).verdict, Some(Verdict::Holds));
     merged[..ROUNDS / 2].fill(34_000);
     assert_eq!(merge_try(&merged, &apart).verdict, None);
+}
+
+/// The import tax's phases that hold the imports run one after another, so a try makes and
+/// releases one set of [`TAX_IMPORTS`](crate::submit_check::TAX_IMPORTS) imports (each import and
+/// release holds back every other thread's submission on NVIDIA's driver); each half of the
+/// phases holds as many with the imports as without; the first and the last hold none.
+#[test]
+fn a_tax_try_holds_one_set_of_imports_through_half_its_phases() {
+    let held: Vec<bool> = (0..TAX_PHASES).map(tax_holds).collect();
+    let sets = (0..TAX_PHASES)
+        .filter(|&at| held[at] && (at == 0 || !held[at - 1]))
+        .count();
+    assert_eq!(sets, 1, "the sets of imports a try makes: {held:?}");
+    for half in held.chunks(TAX_PHASES / 2) {
+        let holding = half.iter().filter(|&&holds| holds).count();
+        assert_eq!(holding, half.len() / 2, "{held:?}");
+    }
+    assert!(!held[0] && !held[TAX_PHASES - 1], "{held:?}");
 }
 
 /// The tries: the first that agrees answers, recorded; a refused call answers `Unchecked`,

@@ -24,7 +24,7 @@
 
 use super::blit_holds::{Scratch, WAIT};
 use crate::fresh_pages::FRESH_PAGES_PAST;
-use crate::submit_check::{record_name, Check, Verdict};
+use crate::submit_check::{record_name, Check, Verdict, TAX_IMPORTS};
 use crate::tests::SETTLE;
 use crate::{
     CommandBufferStatus, Device, DeviceKind, DeviceOptions, EventRef, LayerSetting,
@@ -106,6 +106,22 @@ fn the_checks_answer_once_and_a_second_device_recalls_them() {
         counts.device_checks.vk_memory_allocations > 0,
         "the checks' allocations were not counted apart"
     );
+    // Each import tax try makes its imports once and releases them once (`tax_holds`); the
+    // follows check imports one page pair a pass, two passes, on Linux.
+    let tries = (first.shared().submit_checks.tax_tries).load(std::sync::atomic::Ordering::Relaxed);
+    let checks = &counts.device_checks;
+    println!(
+        "the checks' allocations {}, frees {}, over {tries} import tax tries",
+        checks.vk_memory_allocations, checks.vk_memory_freed,
+    );
+    if imports {
+        let follows = if cfg!(target_os = "linux") { 2 } else { 0 };
+        assert!(
+            checks.vk_memory_allocations <= tries * TAX_IMPORTS + follows,
+            "{} allocations over {tries} tries of {TAX_IMPORTS} imports",
+            checks.vk_memory_allocations,
+        );
+    }
     // A live device with equal options is what `system_default_with` returns again: the first
     // goes before the second is made, its cache thread writing what it queued (the record among
     // it) as it goes, so the second is a new device over the same directory, as a later
