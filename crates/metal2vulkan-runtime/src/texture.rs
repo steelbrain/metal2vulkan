@@ -3099,9 +3099,11 @@ impl Device {
         self.placed_image_starting(plan, texture_type, class, sharing, false)
     }
 
-    /// [`placed_image`](Self::placed_image), made in `VK_IMAGE_LAYOUT_ZERO_INITIALIZED_EXT` in a
-    /// block of its own whose memory reads zero until written where `zeroed`
-    /// (`memory::allocate_image_zeroed`; a device that enabled `zeroInitializeDeviceMemory`).
+    /// [`placed_image`](Self::placed_image), made in `VK_IMAGE_LAYOUT_ZERO_INITIALIZED_EXT` where
+    /// `zeroed` (a device that enabled `zeroInitializeDeviceMemory`, whose blocks of images are
+    /// allocated zero-initialized, `Memory::zero_image_blocks`): its placement says whether its
+    /// bytes read zero (`Placement::fresh`), where it may move out of that layout keeping them;
+    /// elsewhere it moves out of `UNDEFINED` instead, which any image may, and is zeroed.
     fn placed_image_starting(
         &self,
         plan: &ImagePlan,
@@ -3150,18 +3152,15 @@ impl Device {
             }
             None => class,
         };
-        let allocate = match zeroed {
-            true => crate::memory::allocate_image_zeroed,
-            false => crate::memory::allocate_image,
-        };
-        let placement = match allocate(&shared.memory, raw_device, &requirements, class) {
-            Ok(placement) => placement,
-            Err(error) => {
-                // SAFETY: the image is unused.
-                unsafe { release::object(raw_device, raw) };
-                return Err(error);
-            }
-        };
+        let placement =
+            match crate::memory::allocate_image(&shared.memory, raw_device, &requirements, class) {
+                Ok(placement) => placement,
+                Err(error) => {
+                    // SAFETY: the image is unused.
+                    unsafe { release::object(raw_device, raw) };
+                    return Err(error);
+                }
+            };
         // SAFETY: the placement meets the image's requirements and is not bound elsewhere.
         if let Err(error) = unsafe {
             crate::creation::bind_image(raw_device, raw, placement.memory, placement.offset)
@@ -3322,16 +3321,16 @@ impl Device {
         // multisample texture: such an image takes neither path, and a clear writes its zeros.
         let one_sample = layout.samples == 1;
         let staged = !held && !private && one_sample && self.stages(&plan, layout.pixel_format);
-        // Its zeros, where the device enabled `zeroInitializeDeviceMemory`, are the driver's: the
-        // image starts in `VK_IMAGE_LAYOUT_ZERO_INITIALIZED_EXT` in memory of its own that reads
-        // zero, and no write of the host's touches that memory as it is made
-        // (`texture/host_copy.rs`).
+        // Its zeros, where the device enabled `zeroInitializeDeviceMemory` and the image lies in
+        // bytes of a block allocated zero-initialized that no resource used, are the driver's:
+        // the image is made in `VK_IMAGE_LAYOUT_ZERO_INITIALIZED_EXT` and moves out of it, and no
+        // write of the host's touches its memory as it is made (`texture/host_copy.rs`).
         let zeroed = !moved && self.shared().zero_initialize_device_memory;
         let hosted = match held || private || !one_sample || is_pvrtc(descriptor.pixel_format) {
             true => None,
             false => self.host_placed_image(&plan, layout.texture_type, class, staged, zeroed),
         };
-        let zeroed = zeroed && hosted.is_some();
+        let zeroed = zeroed && (hosted.as_ref()).is_some_and(|(_, _, placement)| placement.fresh());
         let (plan, raw, placement, host_copies) = match hosted {
             Some((plan, raw, placement)) => (plan, raw, placement, true),
             None => {
@@ -3401,8 +3400,8 @@ impl Device {
         // Dropping `image` on failure releases everything above.
         if let (true, Some(functions)) = (zeroed, self.shared().host_copies.as_ref()) {
             // SAFETY: the image is live, made with host-transfer usage in
-            // `VK_IMAGE_LAYOUT_ZERO_INITIALIZED_EXT` and bound to memory of its own allocated
-            // zero-initialized, which nothing used yet.
+            // `VK_IMAGE_LAYOUT_ZERO_INITIALIZED_EXT` and bound to bytes of a block allocated
+            // zero-initialized that no resource used (`Placement::fresh`).
             unsafe {
                 host_copy::transition_from(
                     functions,
@@ -3421,8 +3420,10 @@ impl Device {
         {
             let zeros = vec![0; *length as usize];
             let copies: Vec<vk::BufferImageCopy> = copies.iter().map(buffer_image_copy).collect();
-            // SAFETY: the image is live, made with host-transfer usage and bound to memory of its
-            // own, which nothing used yet; every copy lies within it and reads within `zeros`.
+            // SAFETY: the image is live, made with host-transfer usage (in `UNDEFINED`, or in
+            // `VK_IMAGE_LAYOUT_ZERO_INITIALIZED_EXT` over bytes that may not read zero, which the
+            // move out of `UNDEFINED` takes as any layout) and bound to memory of its own, which
+            // nothing used yet; every copy lies within it and reads within `zeros`.
             unsafe {
                 host_copy::start(
                     functions,

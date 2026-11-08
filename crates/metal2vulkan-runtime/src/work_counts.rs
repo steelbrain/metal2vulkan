@@ -3488,7 +3488,7 @@ impl Counters {
             .fetch_add(1, Ordering::Relaxed);
     }
 
-    /// Of those, one started in memory the driver zeroed, moved out of
+    /// Of those, one started in the driver's zeros, in bytes no resource used, moved out of
     /// `VK_IMAGE_LAYOUT_ZERO_INITIALIZED_EXT` with no write of the host's (`texture/host_copy.rs`).
     pub(crate) fn image_started_zeroed(&self) {
         self.images_started_zeroed.fetch_add(1, Ordering::Relaxed);
@@ -5173,9 +5173,11 @@ pub struct WorkCounts {
     /// New `Shared` and `Managed` textures' images moved to `GENERAL` and zeroed on the host, with
     /// no submission (`texture/host_copy.rs`).
     pub images_started_on_the_host: u64,
-    /// Of those, the images that started in memory the driver zeroed, moved to `GENERAL` out of
+    /// Of those, the images that started in the driver's zeros, in bytes of a block allocated
+    /// zero-initialized that no resource used, moved to `GENERAL` out of
     /// `VK_IMAGE_LAYOUT_ZERO_INITIALIZED_EXT` with no write of the host's, on a device that
-    /// enabled `zeroInitializeDeviceMemory` (`texture/host_copy.rs`).
+    /// enabled `zeroInitializeDeviceMemory` (`texture/host_copy.rs`). The rest of those started
+    /// on the host were zeroed there.
     pub images_started_zeroed: u64,
     /// New `Private` textures the program made on a device that presents a Mac keeping no texture
     /// compressed (`DeviceProperties::lossless_compression` false, `MacClass::IntelOrAmd`) on a GPU

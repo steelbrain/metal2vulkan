@@ -383,6 +383,10 @@ recorded here.
 Open differences from Metal that no note announces yet, and runtime costs still above the
 driver's. Each is open work.
 
+- **On RADV after the GPU idled into runtime suspend, a new `Shared` or `Managed` texture's first
+  CPU write waits until the program's queued GPU work ends**: 442 to 572 ms behind about 1.5 s of
+  fills on the RX 7900 XTX (Mesa 26.2.6; `tests::zeroed_start`), 71 us with the GPU awake.
+
 - **A draw that reads and writes a color in the pixel interlock after an earlier draw of its
   instance wrote it begins a render pass instance of its own on MoltenVK on Apple's GPUs**
   (`DriverFact::InterlockedDrawsRaceUnderLoad`, `WorkCounts::instance_splits_interlocked_writes`,

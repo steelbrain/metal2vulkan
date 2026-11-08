@@ -1,17 +1,18 @@
 //! A new `Shared` texture that copies on the host waits for no GPU work as it is made, and reads
 //! zero (`texture/host_copy.rs`): on a device that enabled `zeroInitializeDeviceMemory` its image
-//! starts in memory the driver zeroed, moved out of `VK_IMAGE_LAYOUT_ZERO_INITIALIZED_EXT` with
-//! no write of the host's (`WorkCounts::images_started_zeroed`).
+//! lies in bytes of a block allocated zero-initialized that no resource used, and moves out of
+//! `VK_IMAGE_LAYOUT_ZERO_INITIALIZED_EXT` with no write of the host's
+//! (`WorkCounts::images_started_zeroed`); and many made in turn take pooled blocks, as without it.
 //!
-//! The host's write of zeros was the CPU's first touch of the image's new memory, which on an RX
-//! 7900 XTX (RADV, Mesa 26.2.6) whose GPU had idled into runtime suspend waited for the program's
-//! queued GPU work: 2.08 s behind 2 s of fills, and 1.2 ms with the GPU awake. Run as a process's
+//! The host's write of zeros into new memory waited for the program's queued GPU work on an RX
+//! 7900 XTX (RADV, Mesa 26.2.6): 0.2 to 1.1 s behind about 1.5 s of fills. Where the GPU had
+//! idled into runtime suspend, the texture's first CPU write waits so instead; run as a process's
 //! first device work after the GPU idled 5 s (its autosuspend delay there) to see that case.
 //!
 //! Device tests: compiled only under the GPU safety cfgs (`m2v_gpu`, `m2v_cpu_icd`).
 
 use super::blit_holds::{device, Scratch};
-use crate::{CommandBufferStatus, Region, ResourceOptions, TextureDescriptor};
+use crate::{CommandBufferStatus, Region, ResourceOptions, Texture, TextureDescriptor};
 use metal2vulkan::metal::{PixelFormat, TextureUsage};
 use std::time::{Duration, Instant};
 
@@ -99,4 +100,78 @@ fn a_shared_texture_made_while_the_gpu_is_busy_waits_for_none_of_it_and_reads_ze
     texture.get_bytes(&mut read, row, 0, whole, 0, 0).unwrap();
     assert!(read.iter().all(|&byte| byte == 0), "a texel read nonzero");
     busy.wait_until_completed().unwrap();
+}
+
+/// The side of each texture [`many_shared_textures_made_in_turn_take_pooled_blocks`] makes.
+const MANY_SIDE: u64 = 128;
+
+/// How many it makes in each round.
+const MANY: usize = 1000;
+
+/// `MANY` `Shared` textures made in turn with the GPU idle, kept, then let go and `MANY` made
+/// again: the first round's lie past every range placed before, the second's in ranges the first
+/// used. Each making's time, and the blocks they take, are printed (`ZEROED-MAKES`): on a device
+/// that starts them zeroed, as many pooled blocks as on one that writes their zeros, and no block
+/// of its own each. Every texture read reads zero.
+#[test]
+fn many_shared_textures_made_in_turn_take_pooled_blocks() {
+    let scratch = Scratch::new("zeroed-makes");
+    let device = device(&scratch.0);
+    let mut descriptor =
+        TextureDescriptor::texture_2d(PixelFormat::RGBA8Unorm, MANY_SIDE, MANY_SIDE, false);
+    descriptor.usage = TextureUsage::SHADER_READ;
+    descriptor.resource_options = ResourceOptions::shared();
+    let row = MANY_SIDE * 4;
+    let whole = Region::new_2d(0, 0, MANY_SIDE, MANY_SIDE);
+    let reads_zero = |texture: &Texture| {
+        let mut read = vec![0xa5u8; (row * MANY_SIDE) as usize];
+        texture.get_bytes(&mut read, row, 0, whole, 0, 0).unwrap();
+        read.iter().all(|&byte| byte == 0)
+    };
+    let shared = device.shared();
+    let zeroed = shared.zero_initialize_device_memory && shared.host_copies.is_some();
+    let first = device.work_counts();
+    for round in ["past every range", "in ranges used"] {
+        let before = device.work_counts();
+        let mut times = Vec::with_capacity(MANY);
+        let mut made = Vec::with_capacity(MANY);
+        for _ in 0..MANY {
+            let at = Instant::now();
+            made.push(device.new_texture(&descriptor).unwrap());
+            times.push(at.elapsed());
+        }
+        let after = device.work_counts();
+        let total: Duration = times.iter().sum();
+        times.sort_unstable();
+        println!(
+            "ZEROED-MAKES {} {round}: {MANY} new_texture (Shared, {MANY_SIDE} x {MANY_SIDE}) took \
+             {:?} each on average, median {:?}, 99th percentile {:?}, longest {:?}; started on \
+             the host {}, zeroed {}; pooled blocks made {}, live {}, dedicated live {}; \
+             zeroInitializeDeviceMemory {zeroed}",
+            device.name(),
+            total / MANY as u32,
+            times[MANY / 2],
+            times[MANY * 99 / 100],
+            times[MANY - 1],
+            after.images_started_on_the_host - before.images_started_on_the_host,
+            after.images_started_zeroed - before.images_started_zeroed,
+            after.pooled_memory_blocks_made - before.pooled_memory_blocks_made,
+            after.memory_blocks_live,
+            after.dedicated_memory_blocks_live,
+        );
+        assert!(
+            after.dedicated_memory_blocks_live <= first.dedicated_memory_blocks_live,
+            "the textures took blocks of their own"
+        );
+        for texture in [&made[0], &made[MANY / 2], &made[MANY - 1]] {
+            assert!(reads_zero(texture), "a texel read nonzero ({round})");
+        }
+        if zeroed && round == "past every range" {
+            assert_eq!(
+                after.images_started_zeroed - before.images_started_zeroed,
+                MANY as u64,
+                "a texture past every range placed did not start zeroed"
+            );
+        }
+    }
 }

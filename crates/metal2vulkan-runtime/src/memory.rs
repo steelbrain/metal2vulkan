@@ -151,15 +151,10 @@ pub(super) const ZERO_INITIALIZE: vk::MemoryAllocateFlags = vk::MemoryAllocateFl
 /// in every round, as with a fresh block. There ([`binds_wait`]) such an image shares a pooled
 /// block ([`allocate_image_while_queued`]), and every submission names one buffer object fewer
 /// to the kernel for each.
-///
-/// `Zeroed` is `Apart` in memory allocated with `VK_MEMORY_ALLOCATE_ZERO_INITIALIZE_BIT_EXT`
-/// (`zeroInitializeDeviceMemory`), which reads zero until written: no range of a block of its own
-/// held anything before ([`allocate_image_zeroed`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Fit {
     Pooled,
     Apart,
-    Zeroed,
 }
 
 /// Why [`import_host`] imported nothing.
@@ -402,6 +397,13 @@ struct PoolBlock<T> {
     /// and held until its ranges or that alignment change ([`Pool::room`]); `None` to derive
     /// again.
     longest: Option<u64>,
+    /// Its memory was allocated with `VK_MEMORY_ALLOCATE_ZERO_INITIALIZE_BIT_EXT`, which reads
+    /// zero until written ([`Memory::zero_image_blocks`]).
+    zeroed: bool,
+    /// The end of the furthest range ever placed in it: past it nothing was placed since the
+    /// block was made, so that where the block is `zeroed` those bytes read zero
+    /// ([`Pool::place_fresh`]).
+    placed_to: u64,
 }
 
 impl<T> PoolBlock<T> {
@@ -428,7 +430,15 @@ impl<T> Default for Pool<T> {
 impl<T> Pool<T> {
     /// A place for `size` bytes aligned to `align` in a pooled block that has room: (block,
     /// offset).
+    #[cfg(test)]
     pub(super) fn place(&mut self, size: u64, align: u64) -> Option<(usize, u64)> {
+        (self.place_fresh(size, align)).map(|(index, offset, _)| (index, offset))
+    }
+
+    /// [`Pool::place`]'s (block, offset), with whether the place reads zero: it lies in a block
+    /// allocated zero-initialized, past every range placed in that block before, so that no
+    /// resource used its bytes since the driver zeroed them.
+    pub(super) fn place_fresh(&mut self, size: u64, align: u64) -> Option<(usize, u64, bool)> {
         if align > self.align {
             // Every block's longest free range was derived at the smaller alignment.
             self.align = align;
@@ -443,7 +453,9 @@ impl<T> Pool<T> {
                 let offset = block.ranges.allocate(size, align)?;
                 block.emptied = None;
                 block.longest = None;
-                Some((index, offset))
+                let fresh = block.zeroed && offset >= block.placed_to;
+                block.placed_to = block.placed_to.max(offset + size);
+                Some((index, offset, fresh))
             });
         if placed.is_some() {
             self.room = None;
@@ -462,6 +474,19 @@ impl<T> Pool<T> {
     /// Add a block of `size` bytes holding `payload`, and place `used` bytes at its start when
     /// given: the block's index.
     pub(super) fn add(&mut self, size: u64, dedicated: bool, payload: T, used: u64) -> usize {
+        self.add_as(size, dedicated, payload, used, false)
+    }
+
+    /// [`Pool::add`] of a block whose memory reads zero until written where `zeroed`: allocated
+    /// with `VK_MEMORY_ALLOCATE_ZERO_INITIALIZE_BIT_EXT` ([`Pool::place_fresh`]).
+    pub(super) fn add_as(
+        &mut self,
+        size: u64,
+        dedicated: bool,
+        payload: T,
+        used: u64,
+        zeroed: bool,
+    ) -> usize {
         let mut ranges = RangeAllocator::new(0, size);
         if used > 0 {
             let at = ranges.allocate(used, 1);
@@ -473,6 +498,8 @@ impl<T> Pool<T> {
             payload,
             emptied: None,
             longest: None,
+            zeroed,
+            placed_to: used,
         });
         self.made += u64::from(!dedicated);
         self.room = None;
@@ -781,6 +808,9 @@ pub(super) struct Block {
     type_index: u32,
     /// What it was allocated exportable as, where it was ([`allocate_exported`]).
     exported: Option<Exported>,
+    /// It was allocated with `VK_MEMORY_ALLOCATE_ZERO_INITIALIZE_BIT_EXT`, which reads zero until
+    /// written ([`Memory::zero_image_blocks`]).
+    zeroed: bool,
 }
 
 /// What a block's memory was allocated exportable as (`VkExportMemoryAllocateInfo`), for the one
@@ -941,6 +971,10 @@ pub(super) struct Placement {
     /// It lies past its class's own memory types, in one it overflowed into where none of them
     /// had room ([`overflow_candidates`]).
     overflowed: bool,
+    /// It lies in a block allocated zero-initialized, past every range placed in that block
+    /// before: its bytes read zero, as no resource used them since the driver zeroed them
+    /// ([`Memory::zero_image_blocks`], [`Placement::fresh`]).
+    fresh: bool,
     /// The imports of the caller's dma-bufs the placement lies in, with the source that made them
     /// (`dma_buf.rs`), which no block of the runtime's holds: kept until the placement goes, and
     /// freed, the source dropped, when their last holder goes.
@@ -974,6 +1008,7 @@ impl Placement {
             own_pages: false,
             read_only_view: false,
             overflowed: false,
+            fresh: false,
             #[cfg(unix)]
             dma_buf: None,
             ram_chunk: None,
@@ -1006,6 +1041,7 @@ impl Placement {
             own_pages: false,
             read_only_view: false,
             overflowed: false,
+            fresh: false,
             #[cfg(unix)]
             dma_buf,
             ram_chunk: Some(chunk),
@@ -1038,6 +1074,7 @@ impl Placement {
             own_pages: false,
             read_only_view: false,
             overflowed: false,
+            fresh: false,
             dma_buf: Some(pages),
             ram_chunk: None,
         }
@@ -1088,6 +1125,12 @@ impl Placement {
     /// drops the GPU's writes to them (`read_only_view.rs`).
     pub(super) fn over_read_only_view(&self) -> bool {
         self.read_only_view
+    }
+
+    /// Whether the placement's bytes read zero: it lies in a block allocated zero-initialized,
+    /// past every range placed in that block before ([`Memory::zero_image_blocks`]).
+    pub(super) fn fresh(&self) -> bool {
+        self.fresh
     }
 
     /// Whether the placement lies past its class's own memory types, in one it overflowed into
@@ -1149,6 +1192,7 @@ impl Placement {
             own_pages: self.own_pages,
             read_only_view: self.read_only_view,
             overflowed: self.overflowed,
+            fresh: self.fresh,
             #[cfg(unix)]
             dma_buf: self.dma_buf.clone(),
             ram_chunk: self.ram_chunk.clone(),
@@ -1203,6 +1247,9 @@ pub(super) struct Memory {
     /// The placements so far that lie past their class's own memory types, in one they
     /// overflowed into ([`overflow_candidates`], `WorkCounts::device_memory_overflows`).
     overflows: u64,
+    /// Blocks of images are allocated with `VK_MEMORY_ALLOCATE_ZERO_INITIALIZE_BIT_EXT`
+    /// ([`Memory::zero_image_blocks`]).
+    zero_images: bool,
 }
 
 impl Memory {
@@ -1246,7 +1293,19 @@ impl Memory {
             heaps,
             binds_wait: binds_wait(driver),
             overflows: 0,
+            zero_images: false,
         }
+    }
+
+    /// Allocate every block of images from now on with
+    /// `VK_MEMORY_ALLOCATE_ZERO_INITIALIZE_BIT_EXT`, for a device that enabled
+    /// `zeroInitializeDeviceMemory`: a placement in such a block past
+    /// every range placed in it before reads zero ([`Placement::fresh`]), which an image made in
+    /// `VK_IMAGE_LAYOUT_ZERO_INITIALIZED_EXT` keeps as it moves out of it
+    /// (`texture/host_copy.rs`). The blocks are as many as without it: only ranges no placement
+    /// used read zero, and an image placed in any other starts as before.
+    pub(super) fn zero_image_blocks(&mut self) {
+        self.zero_images = true;
     }
 
     /// Log each `VkDeviceMemory` allocated, imported or freed from now on to `log`
@@ -1486,7 +1545,8 @@ impl Memory {
         addressed: Option<&Counters>,
         class: MemoryClass,
     ) -> Result<Option<Placement>, Error> {
-        let Some((block, offset)) = self.pool(holds, type_index).place(size, align) else {
+        let Some((block, offset, fresh)) = self.pool(holds, type_index).place_fresh(size, align)
+        else {
             return Ok(None);
         };
         if let Some(counts) = addressed {
@@ -1496,7 +1556,8 @@ impl Memory {
             }
         }
         let addressed = addressed.is_some();
-        let placement = self.placement((holds, type_index), block, offset, size, addressed);
+        let mut placement = self.placement((holds, type_index), block, offset, size, addressed);
+        placement.fresh = fresh;
         self.say_placement("placed", &placement, Some(class));
         Ok(Some(placement))
     }
@@ -1525,8 +1586,9 @@ impl Memory {
         if let Some((_, live)) = self.heaps.get_mut(heap) {
             *live += size;
         }
+        let zeroed = block.zeroed;
         self.pool(holds, type_index)
-            .add(size, dedicated, block, used)
+            .add_as(size, dedicated, block, used, zeroed)
     }
 
     /// What making a block takes, copied out so that the block is made with the memory's lock
@@ -1540,6 +1602,7 @@ impl Memory {
             host_visible,
             device_address: self.device_address,
             families: self.families.clone(),
+            zero_images: self.zero_images,
         }
     }
 
@@ -1616,6 +1679,7 @@ impl Memory {
             own_pages: payload.pages.is_some(),
             read_only_view: payload.view.is_some(),
             overflowed: false,
+            fresh: false,
             #[cfg(unix)]
             dma_buf: None,
             ram_chunk: None,
@@ -2025,37 +2089,29 @@ struct BlockMaker {
     device_address: bool,
     /// As [`Memory`]'s.
     families: Vec<u32>,
+    /// As [`Memory`]'s.
+    zero_images: bool,
 }
 
 impl BlockMaker {
-    /// A new block of `size` bytes of memory type `type_index`, with a buffer of addresses where
-    /// `addressed` gives the counts of such buffers made (its memory then as long as that buffer
-    /// requires, if longer).
+    /// A new block of `size` bytes of memory type `type_index` that holds `holds`, with a buffer
+    /// of addresses where `addressed` gives the counts of such buffers made (its memory then as
+    /// long as that buffer requires, if longer), allocated zero-initialized where it holds images
+    /// on a device whose blocks of images are ([`Memory::zero_image_blocks`]).
     fn make(
         &self,
         device: &ash::Device,
-        type_index: u32,
+        (holds, type_index): (Holds, u32),
         size: u64,
         addressed: Option<&Counters>,
     ) -> Result<Block, Error> {
-        self.make_as(device, type_index, size, addressed, None, false)
-    }
-
-    /// [`make`](Self::make) of a block of images alone, its memory allocated with
-    /// `VK_MEMORY_ALLOCATE_ZERO_INITIALIZE_BIT_EXT`, which reads zero until written: for a device
-    /// that enabled `zeroInitializeDeviceMemory` ([`allocate_image_zeroed`]).
-    fn make_zeroed(
-        &self,
-        device: &ash::Device,
-        type_index: u32,
-        size: u64,
-    ) -> Result<Block, Error> {
-        self.make_as(device, type_index, size, None, None, true)
+        let zeroed = holds == Holds::Images && self.zero_images;
+        self.make_as(device, type_index, size, addressed, None, zeroed)
     }
 
     /// [`make`](Self::make), its memory allocated exportable as `export` says where given, for its
     /// buffer, the dedicated allocation of that buffer where it says so ([`allocate_exported`]),
-    /// and zero-initialized where `zeroed` ([`make_zeroed`](Self::make_zeroed)).
+    /// and with `VK_MEMORY_ALLOCATE_ZERO_INITIALIZE_BIT_EXT` where `zeroed`.
     fn make_as(
         &self,
         device: &ash::Device,
@@ -2158,6 +2214,7 @@ impl BlockMaker {
             view: None,
             type_index,
             exported: export.map(|(_, exported)| exported),
+            zeroed,
         })
     }
 }
@@ -2256,6 +2313,7 @@ pub(super) unsafe fn import_host(
         view,
         type_index,
         exported: None,
+        zeroed: false,
     };
     let host = pointer.as_ptr() as usize;
     let mut memory = lock(memory);
@@ -2290,6 +2348,7 @@ pub(super) fn import_own_pages(
         view: None,
         type_index,
         exported: None,
+        zeroed: false,
     };
     let mut memory = lock(memory);
     memory.say_block("imported fresh pages for a buffer", &block);
@@ -2371,27 +2430,6 @@ pub(super) fn allocate_image(
         None,
         Holds::Images,
         Fit::Pooled,
-    )
-}
-
-/// [`allocate_image`] in a block of its own whose memory reads zero until written (`Fit::Zeroed`),
-/// for an image that starts in `VK_IMAGE_LAYOUT_ZERO_INITIALIZED_EXT` on a device that enabled
-/// `zeroInitializeDeviceMemory` (`texture/host_copy.rs`): nothing touches its memory before its
-/// first use, as a write of the host's zeros would.
-pub(super) fn allocate_image_zeroed(
-    memory: &Mutex<Memory>,
-    device: &ash::Device,
-    requirements: &vk::MemoryRequirements,
-    class: MemoryClass,
-) -> Result<Placement, Error> {
-    place(
-        memory,
-        device,
-        requirements,
-        class,
-        None,
-        Holds::Images,
-        Fit::Zeroed,
     )
 }
 
@@ -2547,7 +2585,7 @@ fn place(
     if candidates.is_empty() && overflow.is_empty() {
         return Err(Error::OutOfMemory(MemoryKind::Device));
     }
-    let dedicated = fit != Fit::Pooled || size > maker.block_bytes / 2;
+    let dedicated = fit == Fit::Apart || size > maker.block_bytes / 2;
     let block_size = if dedicated { size } else { maker.block_bytes };
     let mut failure = Error::OutOfMemory(MemoryKind::Device);
     // The class's own types first, then those it overflows into where none of them has room.
@@ -2571,10 +2609,7 @@ fn place(
         }
         // The type's kept empty blocks go, and the frees posted complete, before a block of it
         // fails to be made.
-        let make = || match fit {
-            Fit::Zeroed => maker.make_zeroed(device, type_index, block_size),
-            Fit::Pooled | Fit::Apart => maker.make(device, type_index, block_size, addressed),
-        };
+        let make = || maker.make(device, pool, block_size, addressed);
         let made = match make() {
             Err(Error::OutOfMemory(_)) if make_room(memory, device, type_index) => make(),
             made => made,
@@ -2582,8 +2617,10 @@ fn place(
         match made {
             Ok(block) => {
                 let mut memory = lock(memory);
+                let fresh = block.zeroed;
                 let index = memory.add_block(pool, block, block_size, dedicated, size);
-                let placement = memory.placement(pool, index, 0, size, addressed.is_some());
+                let mut placement = memory.placement(pool, index, 0, size, addressed.is_some());
+                placement.fresh = fresh;
                 memory.say_placement("placed", &placement, Some(class));
                 return Ok(memory.mark_overflowed(placement, overflowing));
             }
@@ -2630,7 +2667,7 @@ pub(super) fn keep_room(memory: &Mutex<Memory>, device: &ash::Device, counts: &C
     };
     for pool in lacking {
         let addressed = (pool.0 == Holds::Buffers).then_some(counts);
-        let Ok(block) = maker.make(device, pool.1, maker.block_bytes, addressed) else {
+        let Ok(block) = maker.make(device, pool, maker.block_bytes, addressed) else {
             continue;
         };
         let mut memory = lock(memory);

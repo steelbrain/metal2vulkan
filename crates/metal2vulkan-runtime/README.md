@@ -299,7 +299,8 @@ the record the pass is making.
   anonymous pages imported by their pointer, zero as mapped, so that nothing writes its zeros; a
   recycled one is set to zero on the host. A new `Shared` or `Managed` texture reads zero: where
   it copies on the host, its image is zeroed on the host as it is made, or, where the device has
-  `VK_EXT_zero_initialize_device_memory`, starts in memory of its own the driver zeroed. A new
+  `VK_EXT_zero_initialize_device_memory` and the image lies in memory no resource used, starts in
+  the driver's zeros. A new
   `Private` texture answers as the Mac the device presents (`MacClass`, which
   `DeviceOptions::mac_class` declares, by default the class of the device's GPU: an Apple silicon
   Mac on an Apple GPU, a Mac with an Intel or AMD GPU on every other;

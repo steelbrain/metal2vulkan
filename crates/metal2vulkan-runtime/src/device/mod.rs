@@ -1937,6 +1937,9 @@ impl Device {
             properties.description.driver_id,
         );
         memory.log_to(MemoryLog::new(instance.sink()));
+        if zero_initialize_device_memory {
+            memory.zero_image_blocks();
+        }
         // SAFETY: as above.
         let physical_properties = unsafe { instance.raw.get_physical_device_properties(physical) };
         let limits = physical_properties.limits;

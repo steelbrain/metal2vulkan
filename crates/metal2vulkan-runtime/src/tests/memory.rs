@@ -359,6 +359,35 @@ fn pooled_blocks_place_until_full_and_two_empty_blocks_are_kept() {
     assert_eq!(pool.blocks(), 0);
 }
 
+/// A place reads zero only in a block allocated zero-initialized and only past every range
+/// placed in that block before: the bytes no resource used since the driver zeroed them. A
+/// range given back and placed again, or a gap below the furthest range placed, is not fresh,
+/// however long the block stays; a block that emptied keeps what was placed in it.
+#[test]
+fn a_place_reads_zero_only_past_every_range_placed_in_a_zeroed_block() {
+    let now = Instant::now();
+    let mut pool: Pool<&str> = Pool::default();
+    let zeroed = pool.add_as(256, false, "zeroed", 64, true);
+    assert_eq!(pool.place_fresh(64, 64), Some((zeroed, 64, true)));
+    assert_eq!(pool.place_fresh(32, 1), Some((zeroed, 128, true)));
+    // The first range back, and placed again: it held a resource.
+    assert_eq!(pool.release(zeroed, 0, 64, now), None);
+    assert_eq!(pool.place_fresh(16, 1), Some((zeroed, 0, false)));
+    // Past the furthest range placed, fresh again; the gap left below it is not.
+    assert_eq!(pool.place_fresh(32, 64), Some((zeroed, 192, true)));
+    assert_eq!(pool.place_fresh(16, 1), Some((zeroed, 16, false)));
+    assert_eq!(pool.place_fresh(16, 1), Some((zeroed, 32, false)));
+    // Emptied whole and kept, the block keeps what was placed in it.
+    for (offset, size) in [(16, 16), (32, 16), (64, 64), (128, 32), (192, 32), (0, 16)] {
+        assert_eq!(pool.release(zeroed, offset, size, now), None);
+    }
+    assert_eq!(pool.place_fresh(224, 1), Some((zeroed, 0, false)));
+    assert_eq!(pool.place_fresh(32, 1), Some((zeroed, 224, true)));
+    // A block not allocated zero-initialized holds no fresh place.
+    let plain = pool.add(256, false, "plain", 0);
+    assert_eq!(pool.place_fresh(64, 1), Some((plain, 0, false)));
+}
+
 /// A kept empty block beyond its pool's one goes once it stayed empty for `KEPT_EMPTY_FOR`, the
 /// one emptied earliest first, and never the last kept one; a placement in a kept block makes it
 /// a block in use again. Every kept block goes where the caller takes them (a block of the type
