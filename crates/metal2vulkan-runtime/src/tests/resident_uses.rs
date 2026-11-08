@@ -27,7 +27,7 @@
 
 use super::blit_holds::{Scratch, WAIT};
 use super::draw_again::{device, Heard};
-use super::encoder_holds::{pass, render_state};
+use super::encoder_holds::{pass, render_state, words_of};
 use crate::binding::kept_resident_checks;
 use crate::render::{kept_heap_checks, plan_facts_made};
 use crate::{
@@ -334,21 +334,27 @@ fn draws_keep_the_uses_of_what_their_encoder_made_resident_until_it_or_their_pla
     }
 }
 
-/// Draws of the entry shape, which read through a root table and a handle table, under a residency
-/// that holds a buffer made resident for writing: each keeps nothing to draw again, counted for its
-/// tables (a heap's set) and for a write among the uses of what its encoder made resident, both
-/// at once (`WorkCounts::draws_unkept_tables_writing`). The same draws with every resource
-/// resident for reading are counted for their tables alone.
+/// Why draws through tables keep nothing to draw again (`WorkCounts::draws_unkept`), each counted
+/// in every group it met. The entry shape's, which read through a root table and a handle table
+/// (a heap's set) and write nothing, are counted for their tables alone, a buffer their encoder
+/// made resident for writing among their uses or not: a use writes where the function writes
+/// through it, not where its usage says it may. The tally shape's, whose fragments count
+/// themselves into the word their tally's pointer names, a buffer their encoder made resident,
+/// are counted for their tables (a root table, no heap's set), for a write among the uses of
+/// what their encoder made resident, and for both at once (`draws_unkept_tables_writing`).
 #[test]
-fn draws_through_tables_beside_a_resident_write_keep_nothing_for_both_at_once() {
+fn draws_through_tables_keep_nothing_for_their_tables_and_their_resident_writes() {
     let scratch = Scratch::new("resident-writes");
     let device = device(&scratch.0, &[], &Heard::default());
     let scene = Scene::new(&device);
     let resources = Resources::new(&scene, -0.9);
-    for usage in [
-        ResourceUsage::READ | ResourceUsage::WRITE,
-        ResourceUsage::READ,
-    ] {
+    let tally = render_state(&device, FIXTURE, "rd_slot_vertex", "rd_tally_fragment");
+    let count = scene.buffer(&[0; 4]);
+    let names = scene.buffer(&count.gpu_address().0.to_le_bytes());
+    let both = RenderStages::VERTEX | RenderStages::FRAGMENT;
+    let writable = ResourceUsage::READ | ResourceUsage::WRITE;
+    // Each shape's draws: [`POSITIONS`] of them, and what they were counted for.
+    let counted_for = |tallies: bool, usage: ResourceUsage| {
         let queue = device.new_command_queue().unwrap();
         let command_buffer = queue.command_buffer().unwrap();
         let mut encoder = command_buffer
@@ -356,15 +362,25 @@ fn draws_through_tables_beside_a_resident_write_keep_nothing_for_both_at_once() 
             .unwrap();
         resources.resident(&scene, &mut encoder);
         let later = resources.later.as_resource();
-        let both = RenderStages::VERTEX | RenderStages::FRAGMENT;
         (encoder.use_resource(later, usage, both)).unwrap();
-        encoder.set_render_pipeline_state(&scene.entry).unwrap();
+        let state = if tallies { &tally } else { &scene.entry };
+        if tallies {
+            let counted = count.as_resource();
+            (encoder.use_resource(counted, writable, RenderStages::FRAGMENT)).unwrap();
+        }
+        encoder.set_render_pipeline_state(state).unwrap();
         let before = device.work_counts();
         for at in 0..POSITIONS {
-            let table = &resources.tables[(at % 2) as usize];
-            let offset = ENTRY * (1 + at % POSITIONS);
-            (encoder.set_vertex_buffer(Some(table), offset, 0)).unwrap();
-            (encoder.set_fragment_buffer(Some(table), offset, 0)).unwrap();
+            if tallies {
+                let position = &resources.positions[at as usize];
+                (encoder.set_vertex_buffer(Some(position), 0, 0)).unwrap();
+                (encoder.set_fragment_buffer(Some(&names), 0, 0)).unwrap();
+            } else {
+                let table = &resources.tables[(at % 2) as usize];
+                let offset = ENTRY * (1 + at % POSITIONS);
+                (encoder.set_vertex_buffer(Some(table), offset, 0)).unwrap();
+                (encoder.set_fragment_buffer(Some(table), offset, 0)).unwrap();
+            }
             (encoder.draw_primitives(PrimitiveType::Triangle, 0, 3, 1, 0)).unwrap();
         }
         let after = device.work_counts();
@@ -373,20 +389,27 @@ fn draws_through_tables_beside_a_resident_write_keep_nothing_for_both_at_once() 
         command_buffer.wait_until_completed_for(WAIT).unwrap();
         assert_eq!(command_buffer.status(), CommandBufferStatus::Completed);
         let counted = |count: fn(&crate::WorkCounts) -> u64| count(&after) - count(&before);
-        let unkept = [
+        [
             counted(|counts| counts.draws_unkept),
             counted(|counts| counts.draws_unkept_tables),
             counted(|counts| counts.draws_unkept_tables_heap),
             counted(|counts| counts.draws_unkept_writing),
             counted(|counts| counts.draws_unkept_writing_resident),
             counted(|counts| counts.draws_unkept_tables_writing),
-        ];
-        let writes = usage.contains(ResourceUsage::WRITE);
-        let written = if writes { POSITIONS } else { 0 };
-        let expected = [POSITIONS, POSITIONS, POSITIONS, written, written, written];
-        assert_eq!(unkept, expected, "made resident {usage:?}");
+        ]
+    };
+    let n = POSITIONS;
+    for usage in [writable, ResourceUsage::READ] {
+        let entry = counted_for(false, usage);
+        assert_eq!(entry, [n, n, n, 0, 0, 0], "the entry shape's, {usage:?}");
     }
-    assert!(scene.covered() > 0, "the draws drew nothing");
+    assert!(scene.covered() > 0, "the entry shape's draws drew nothing");
+    let tallied = counted_for(true, ResourceUsage::READ);
+    assert_eq!(tallied, [n, n, 0, n, n, n], "the tally shape's");
+    assert!(
+        words_of(&count)[0] > 0,
+        "the tally shape's fragments counted nothing"
+    );
 }
 
 /// The two encoders of the test above: within each, a draw works out its heap part (its plan's

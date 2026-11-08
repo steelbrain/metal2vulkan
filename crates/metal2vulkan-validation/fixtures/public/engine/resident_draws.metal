@@ -3,10 +3,12 @@
 // (`rd_slot_vertex`), or one the pointer of its argument-table entry points to
 // (`rd_entry_vertex`). The fragment returns one colour (`rd_color_fragment`), or the texel at
 // the centre of the texture its entry names, through the sampler its entry names
-// (`rd_entry_fragment`). An entry is 24 bytes: the position's address, the texture's resource ID
-// and the sampler's. `rd_touch` counts its threads into a word. `rd_encode` counts too, and may
-// reset render command 0 of the indirect command buffer its table names, past a count no frame
-// reaches, so it writes no record. No function writes memory but `rd_touch` and `rd_encode`.
+// (`rd_entry_fragment`), or counts itself into the word its tally's pointer names and returns one
+// colour (`rd_tally_fragment`). An entry is 24 bytes: the position's address, the texture's
+// resource ID and the sampler's; a tally is 8, the word's address. `rd_touch` counts its threads
+// into a word. `rd_encode` counts too, and may reset render command 0 of the indirect command
+// buffer its table names, past a count no frame reaches, so it writes no record. No function
+// writes memory but `rd_tally_fragment`, `rd_touch` and `rd_encode`.
 // Written for this repository; no third-party source. Loop-free.
 #include <metal_stdlib>
 using namespace metal;
@@ -48,6 +50,16 @@ vertex Dot rd_entry_vertex(uint vid [[vertex_id]], constant Entry &entry [[buffe
 fragment float4 rd_entry_fragment(constant Entry &entry [[buffer(0)]])
 {
     return entry.texture.sample(entry.texels, float2(0.5, 0.5));
+}
+
+struct Tally {
+    device atomic_uint *count;
+};
+
+fragment half4 rd_tally_fragment(constant Tally &tally [[buffer(0)]])
+{
+    atomic_fetch_add_explicit(tally.count, 1, memory_order_relaxed);
+    return half4(1.0, 0.5, 0.0, 1.0);
 }
 
 kernel void rd_touch(device atomic_uint *count [[buffer(0)]])
