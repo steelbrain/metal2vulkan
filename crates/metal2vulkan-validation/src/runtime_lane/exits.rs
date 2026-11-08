@@ -461,7 +461,17 @@ fn child() {
         unsafe { libc::atexit(read_the_marker) };
     }
     let messages = Messages::default();
-    let device = validated_device(TEST_DEVICE, &messages, &cache).unwrap();
+    // Probe: a case named with `@bare` runs without the validation layer.
+    let (case, bare) = match case.strip_suffix("@bare") {
+        Some(case) => (case.to_owned(), true),
+        None => (case, false),
+    };
+    let device = super::validated_device_with(TEST_DEVICE, &messages, &cache, |options| {
+        if bare {
+            options.layers.clear();
+        }
+    })
+    .unwrap();
     let case = case.as_str();
     match case {
         "pending_held_exit" => {
