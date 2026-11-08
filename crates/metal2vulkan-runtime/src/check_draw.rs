@@ -7,7 +7,7 @@
 
 use crate::device::device_error;
 use crate::error::{internal, vulkan, Error};
-use crate::{release, Device};
+use crate::{exit_guard, release, Device};
 use ash::vk;
 use metal2vulkan::bind::check_draw_modules;
 
@@ -204,6 +204,12 @@ impl CheckDraw {
 
 impl Drop for CheckDraw {
     fn drop(&mut self) {
+        // The Vulkan teardown is a section of the exit guard: the check's thread drops it after
+        // its rounds' sections.
+        let Some(_busy) = exit_guard::enter() else {
+            // The process is exiting: the objects are left to its end.
+            return;
+        };
         let raw: &ash::Device = self.device.shared().vk();
         // SAFETY: every draw's submission completed (the check waits for each); a null handle is
         // a no-op.
@@ -270,6 +276,11 @@ impl CheckTarget<'_> {
 
 impl Drop for CheckTarget<'_> {
     fn drop(&mut self) {
+        // The Vulkan teardown is a section of the exit guard.
+        let Some(_busy) = exit_guard::enter() else {
+            // The process is exiting: the objects are left to its end.
+            return;
+        };
         let raw: &ash::Device = self.draw.device.shared().vk();
         // SAFETY: the draw's submission completed (the check waits for it).
         unsafe {
