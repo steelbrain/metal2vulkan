@@ -109,10 +109,11 @@ const MANY_SIDE: u64 = 128;
 const MANY: usize = 1000;
 
 /// `MANY` `Shared` textures made in turn with the GPU idle, kept, then let go and `MANY` made
-/// again: the first round's lie past every range placed before, the second's in ranges the first
-/// used. Each making's time, and the blocks they take, are printed (`ZEROED-MAKES`): on a device
-/// that starts them zeroed, as many pooled blocks as on one that writes their zeros, and no block
-/// of its own each. Every texture read reads zero.
+/// again, twice: the first round's lie past every range placed before, the others' in ranges the
+/// first used, the third's in memory the host already wrote on any device. Each making's time,
+/// and the blocks they take, are printed (`ZEROED-MAKES`): on a device that starts them zeroed,
+/// as many pooled blocks as on one that writes their zeros, and no block of its own each. Every
+/// texture read reads zero.
 #[test]
 fn many_shared_textures_made_in_turn_take_pooled_blocks() {
     let scratch = Scratch::new("zeroed-makes");
@@ -131,7 +132,7 @@ fn many_shared_textures_made_in_turn_take_pooled_blocks() {
     let shared = device.shared();
     let zeroed = shared.zero_initialize_device_memory && shared.host_copies.is_some();
     let first = device.work_counts();
-    for round in ["past every range", "in ranges used"] {
+    for round in ["past every range", "in ranges used", "in ranges used again"] {
         let before = device.work_counts();
         let mut times = Vec::with_capacity(MANY);
         let mut made = Vec::with_capacity(MANY);
