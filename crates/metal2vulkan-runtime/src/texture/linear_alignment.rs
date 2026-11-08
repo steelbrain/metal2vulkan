@@ -129,7 +129,7 @@ pub(crate) fn encode(identity: &DriverIdentity, answers: &HashMap<PixelFormat, u
 /// buffer backs once and nothing else, each a power of two from 16 to [`MOST`].
 pub(crate) fn decode(identity: &DriverIdentity, bytes: &[u8]) -> Option<HashMap<PixelFormat, u64>> {
     let body_len = bytes.len().checked_sub(32)?;
-    if body_len < HEAD_BYTES || (body_len - HEAD_BYTES) % ANSWER_BYTES != 0 {
+    if body_len < HEAD_BYTES || !(body_len - HEAD_BYTES).is_multiple_of(ANSWER_BYTES) {
         return None;
     }
     let (body, checksum) = bytes.split_at(body_len);
@@ -153,7 +153,7 @@ pub(crate) fn decode(identity: &DriverIdentity, bytes: &[u8]) -> Option<HashMap<
     }
     let backed: HashMap<u32, PixelFormat> = backed_formats().map(|pf| (pf.as_raw(), pf)).collect();
     let mut answers = HashMap::new();
-    for entry in rest.chunks_exact(ANSWER_BYTES) {
+    for entry in rest.as_chunks::<ANSWER_BYTES>().0 {
         let (raw, answer) = entry.split_at(4);
         let pf = *backed.get(&word(raw))?;
         let answer = u64::from_le_bytes(answer.try_into().ok()?);
