@@ -615,16 +615,16 @@ driver's. Each is open work.
   compute encoder its unit of command predication reaches past, which is one whose unit laid a
   step before it opened or one of its own that the unit's later encoders read, and one whose unit
   laid a loop or left work out; work on the GPU alone) fail `EncodedUseRebound` (announced).
-- **A copied rebind under a texture in place, where the device's check gave fresh pages no
-  verdict and its own linear image lies at another pitch, is refused**
-  (`NotImplemented(RebindTextures)`). A rebind whose pages the gate refuses, or whose bytes moved in
-  their page, copies them, and the texture's image is made again over the copy: in fresh pages for
-  host allocations, at the texels' pitch, where the check passed for fresh pages; else a linear
-  image of the driver's own over memory the device allocates, which must lie at the texels'
-  pitch. On RADV the check gives fresh pages no verdict, as no new buffer lies in them where each
-  held pointer import costs every submission, so a texture whose rows lie at another pitch than
-  RADV's linear image's is refused there (a 16 x 16 `RGBA8Unorm` texture at 256 bytes a row is
-  not). Metal accepts the rebind.
+- **A copied rebind under a texture in place, where the device's check did not pass fresh pages
+  and its own linear image lies at another pitch, is refused** (`NotImplemented(RebindTextures)`).
+  A rebind whose pages the gate refuses, or whose bytes moved in their page, copies them, and the
+  texture's image is made again over the copy: in fresh pages for host allocations, at the texels'
+  pitch, where the check passed for fresh pages (it checks them wherever the device takes them,
+  also where each held pointer import costs every submission, as on RADV); else a linear image of
+  the driver's own over memory the device allocates, which must lie at the texels' pitch. So on a
+  device whose check failed fresh pages, or that takes none (it imports no host pointer), a texture
+  whose rows lie at another pitch than the driver's linear image's is refused. Metal accepts the
+  rebind.
 - **A packed 16-bit attachment's blend on a device that does not render the format**
   (`A1BGR5Unorm`, `ABGR4Unorm` on the RTX 5080). Its word view (`WordAttachment`) takes writes
   (blended and partly masked ones through the pixel interlock, the row above), color inputs and
