@@ -25,8 +25,9 @@
 
 use super::blit_holds::{device, Scratch, WAIT};
 use super::encoder_holds::{bytes_of, library};
-use super::merge_scratch::{blending, blit, bytes, drawn, first_bytes, staged, target, texels};
+use super::merge_scratch::{blending, blending_beside, blit, bytes, drawn, first_bytes};
 use super::merge_scratch::{counts_alone, settled};
+use super::merge_scratch::{staged, target, texels};
 use super::merge_scratch::{Host, Over, H, TEXEL};
 use crate::{
     BlitOption, Buffer, CommandBuffer, CommandQueue, Device, EventRef, LoadAction, Origin,
@@ -883,4 +884,224 @@ fn a_pass_of_a_run_encoded_again_alone_reloads_the_run() {
     // second run's last.
     assert_eq!(recorded, 5, "the merges recorded");
     drop((texture, buffer, chunk));
+}
+
+/// The passes of a checked frame after its clear.
+const FRAME_PASSES: usize = 64;
+
+/// What a checked frame's passes hold beside their target (`checked_frame`).
+#[derive(Clone, Copy, Debug)]
+struct Shape {
+    /// A `Depth32FloatStencil8` attachment, its stencil loaded and stored by each pass after
+    /// the clear; else a `Depth32Float` one.
+    stencil: bool,
+    /// A 1x1 encoder of no attachment before each pass, one draw of a state that rasterizes
+    /// nothing (a WebGPU frame's index check).
+    checks: bool,
+    /// Each pass's rectangle and color from a no-copy buffer over host pages; else its own bytes.
+    chunk: bool,
+}
+
+/// The states of a checked frame: the blending one beside each depth format, the check's, and
+/// its depth and stencil state.
+struct FrameStates {
+    depth: RenderPipelineState,
+    stencil: RenderPipelineState,
+    check: RenderPipelineState,
+    depth_stencil: crate::DepthStencilState,
+}
+
+impl FrameStates {
+    fn new(device: &Device) -> FrameStates {
+        let library = library(device, "engine/ob3_index_buffer.ll");
+        let function = library.new_function_with_name("ob3_index_buffer").unwrap();
+        let mut descriptor =
+            RenderPipelineDescriptor::new(StageSource::Function(function.function_descriptor()));
+        descriptor.rasterization_enabled = false;
+        let check = device
+            .new_render_pipeline_state(&descriptor, &PipelineOptions::default())
+            .unwrap();
+        let combined = PixelFormat::Depth32FloatStencil8;
+        let mut descriptor = metal2vulkan::metal::state::DepthStencilDescriptor::default();
+        descriptor.depth_write_enabled = true;
+        FrameStates {
+            depth: blending_beside(device, PixelFormat::Depth32Float, None),
+            stencil: blending_beside(device, combined, Some(combined)),
+            check,
+            depth_stencil: device.new_depth_stencil_state(&descriptor).unwrap(),
+        }
+    }
+}
+
+/// One command buffer over `texture` of `shape`: a pass clearing it and its depth (and stencil),
+/// then [`FRAME_PASSES`] passes each loading and storing it (and the stencil), clearing and
+/// storing the depth, and blending rectangle `i` (`drawn`), from `chunk` at `i` strides where
+/// `shape.chunk`; committed and completed.
+fn checked_frame(
+    queue: &CommandQueue,
+    texture: &Texture,
+    states: &FrameStates,
+    shape: Shape,
+    chunk: &Buffer,
+) {
+    let device = queue.device();
+    let format = match shape.stencil {
+        true => PixelFormat::Depth32FloatStencil8,
+        false => PixelFormat::Depth32Float,
+    };
+    let depth = private_texture(device, format, texture.width(), TextureUsage::RENDER_TARGET);
+    let checked = staged(device, &[0; 32]);
+    let descriptor = |load: LoadAction| {
+        let mut descriptor = RenderPassDescriptor::new();
+        let color = &mut descriptor.color_attachments[0];
+        color.texture = Some(texture.clone());
+        color.load_action = load;
+        color.store_action = StoreAction::Store;
+        color.clear_color = crate::ClearColor::new(0.0, 0.0, 0.0, 1.0);
+        descriptor.depth_attachment.texture = Some(depth.clone());
+        descriptor.depth_attachment.load_action = LoadAction::Clear;
+        descriptor.depth_attachment.store_action = StoreAction::Store;
+        if shape.stencil {
+            descriptor.stencil_attachment.texture = Some(depth.clone());
+            descriptor.stencil_attachment.load_action = load;
+            descriptor.stencil_attachment.store_action = StoreAction::Store;
+        }
+        descriptor
+    };
+    let state = match shape.stencil {
+        true => &states.stencil,
+        false => &states.depth,
+    };
+    let command_buffer = queue.command_buffer().unwrap();
+    let encoder = command_buffer
+        .render_command_encoder(&descriptor(LoadAction::Clear))
+        .unwrap();
+    encoder.end_encoding().unwrap();
+    let mut check = RenderPassDescriptor::new();
+    check.render_target_width = 1;
+    check.render_target_height = 1;
+    check.default_raster_sample_count = 1;
+    for i in 0..FRAME_PASSES {
+        if shape.checks {
+            let mut encoder = command_buffer.render_command_encoder(&check).unwrap();
+            encoder.set_render_pipeline_state(&states.check).unwrap();
+            encoder.set_vertex_buffer(Some(&checked), 0, 0).unwrap();
+            (encoder.draw_primitives(PrimitiveType::Triangle, 0, 3, 1, 0)).unwrap();
+            encoder.end_encoding().unwrap();
+        }
+        let mut encoder = command_buffer
+            .render_command_encoder(&descriptor(LoadAction::Load))
+            .unwrap();
+        encoder.set_render_pipeline_state(state).unwrap();
+        encoder
+            .set_depth_stencil_state(&states.depth_stencil)
+            .unwrap();
+        match shape.chunk {
+            true => {
+                let at = i as u64 * CHUNK_STRIDE;
+                encoder.set_vertex_buffer(Some(chunk), at, 0).unwrap();
+                encoder
+                    .set_fragment_buffer(Some(chunk), at + 16, 0)
+                    .unwrap();
+            }
+            false => {
+                let (corners, rgba) = drawn(i);
+                (encoder.set_vertex_bytes(&bytes_of(&corners, f32::to_le_bytes), 0)).unwrap();
+                (encoder.set_fragment_bytes(&bytes_of(&rgba, f32::to_le_bytes), 0)).unwrap();
+            }
+        }
+        (encoder.draw_primitives(PrimitiveType::Triangle, 0, 6, 1, 0)).unwrap();
+        encoder.end_encoding().unwrap();
+    }
+    command_buffer.commit().unwrap();
+    command_buffer.wait_until_completed_for(WAIT).unwrap();
+    assert_eq!(command_buffer.error(), None);
+}
+
+/// Checked frames of each shape over a target over a `Private` buffer (rows of 2048 bytes), the
+/// rule forced: the merges each records, and the texels against a private texture's.
+#[test]
+fn checked_frames_form_runs() {
+    let (width, row) = (512, 2048);
+    let (host, chunk_pages) = (
+        Host::new(row * H),
+        Host::new(CHUNK_STRIDE * FRAME_PASSES as u64),
+    );
+    let cache = Scratch::new("linear-runs-checked");
+    let device = device(&cache.0);
+    let queue = device.new_command_queue().unwrap();
+    let states = FrameStates::new(&device);
+    let usage = TextureUsage::RENDER_TARGET | TextureUsage::SHADER_READ;
+    let mut data = vec![0u8; (CHUNK_STRIDE * FRAME_PASSES as u64) as usize];
+    for i in 0..FRAME_PASSES {
+        let (corners, rgba) = drawn(i);
+        let at = i * CHUNK_STRIDE as usize;
+        data[at..at + 16].copy_from_slice(&bytes_of(&corners, f32::to_le_bytes));
+        data[at + 16..at + 32].copy_from_slice(&bytes_of(&rgba, f32::to_le_bytes));
+    }
+    chunk_pages.write(&data);
+    // SAFETY: the pages outlive the buffer, which alone uses them while it lives.
+    let made = unsafe {
+        device.new_buffer_with_bytes_no_copy(
+            chunk_pages.memory(),
+            (CHUNK_STRIDE * FRAME_PASSES as u64).next_multiple_of(64 << 10),
+            ResourceOptions::default(),
+            None,
+        )
+    };
+    let chunk = match made {
+        Ok(chunk) => chunk,
+        Err(crate::Error::Unsupported(gap)) => {
+            println!("LINEAR-RUNS checked: the device imports no host memory: {gap:?}");
+            return;
+        }
+        Err(error) => panic!("new_buffer_with_bytes_no_copy: {error:?}"),
+    };
+    let reference = private_texture(&device, PixelFormat::RGBA8Unorm, width, usage);
+    let mut wrong = Vec::new();
+    for bits in 0..8u8 {
+        let shape = Shape {
+            stencil: bits & 1 != 0,
+            checks: bits & 2 != 0,
+            chunk: bits & 4 != 0,
+        };
+        checked_frame(&queue, &reference, &states, shape, &chunk);
+        let left = texels_of(&queue, &reference);
+        let Some((buffer, texture)) = target(&queue, Over::Private, (width, row), &host) else {
+            return;
+        };
+        assert!(
+            texture.linear_image().unwrap(),
+            "the target is a linear image"
+        );
+        let forced = &device.shared().linear_rule_forced;
+        forced.store(true, Ordering::Relaxed);
+        let before = device.work_counts();
+        let started = std::time::Instant::now();
+        checked_frame(&queue, &texture, &states, shape, &chunk);
+        let took = started.elapsed();
+        let after = device.work_counts();
+        forced.store(false, Ordering::Relaxed);
+        let delta = |of: fn(&WorkCounts) -> u64| of(&after) - of(&before);
+        let through = delta(|c| c.linear_passes_through_copies);
+        let recorded = delta(|c| c.linear_merges_recorded);
+        let taken_over = delta(|c| c.linear_merges_taken_over);
+        let got = texels(&bytes(&queue, Over::Private, &buffer, row * H), width, row);
+        let differ = (0..got.len()).filter(|&i| got[i] != left[i]).count();
+        println!(
+            "LINEAR-RUNS checked on {}: {shape:?}: {through} passes through copies, linear \
+             merges {recorded} recorded and {taken_over} taken over; {differ} texel bytes \
+             differ; {took:?}",
+            device.name()
+        );
+        if differ != 0 {
+            wrong.push(shape);
+        }
+        drop((texture, buffer));
+    }
+    assert!(
+        wrong.is_empty(),
+        "the texels differ from the private texture's: {wrong:?}"
+    );
+    drop(chunk);
 }

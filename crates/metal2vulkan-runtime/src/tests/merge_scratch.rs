@@ -61,6 +61,16 @@ const BETWEEN: u8 = 0xa5;
 /// of the color in fragment buffer 0 (`tob_solid`) over an `RGBA8Unorm` color, beside a
 /// `Depth32Float` depth attachment it does not test.
 pub(super) fn blending(device: &Device) -> RenderPipelineState {
+    blending_beside(device, PixelFormat::Depth32Float, None)
+}
+
+/// [`blending`]'s state beside a depth attachment of `depth` and a stencil attachment of
+/// `stencil`, where it has one.
+pub(super) fn blending_beside(
+    device: &Device,
+    depth: PixelFormat,
+    stencil: Option<PixelFormat>,
+) -> RenderPipelineState {
     let library = library(device, "engine/tob_renders.ll");
     let function = |name: &str| {
         let function = library.new_function_with_name(name).unwrap();
@@ -75,7 +85,8 @@ pub(super) fn blending(device: &Device) -> RenderPipelineState {
     color.source_alpha_blend_factor = BlendFactor::One;
     color.destination_alpha_blend_factor = BlendFactor::Zero;
     descriptor.color_attachments[0] = Some(color);
-    descriptor.depth_format = Some(PixelFormat::Depth32Float);
+    descriptor.depth_format = Some(depth);
+    descriptor.stencil_format = stencil;
     device
         .new_render_pipeline_state(&descriptor, &PipelineOptions::default())
         .unwrap()
