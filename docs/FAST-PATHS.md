@@ -901,21 +901,29 @@ driver's. Each is open work.
   GPU, once per cold cache; states that share the module then take 13 to 16 ms, and a warm cache
   2 ms. The module inlines a few sampling helpers five or six times each; keeping one copy of each
   would cut it. It is not built.
-- **On NVIDIA, a command buffer submitted while the runtime makes a queue's GPU pool block
-  completes as the making ends.** A queue's first lease of an index or mesh records pool makes its
+- **On NVIDIA, a command buffer submitted while the runtime makes or frees a GPU pool block
+  completes as that call ends.** A queue's first lease of an index or mesh records pool makes its
   block as the command buffer encodes where the device holds no spare of that kind, a block
   another queue let go (`gpu_pools.rs`): a device makes no more blocks of a kind than the most
   queues that held one at once, and none as queues come and go or rest. A block is a sixty-fourth
-  of the device-local heap.
-  On the RTX 5080 Laptop GPU (NVIDIA 615.71.09, Linux) a block of 254.7 MiB took 3.1 to 35.7 ms
-  beside another process's GPU work, nearly all of it in `vkAllocateMemory`, and a
-  `vkQueueSubmit` the scheduler's thread called meanwhile returned only 0.01 to 0.25 ms after
-  that did (25 of 40 rounds of a probe), twice after the GPU had already ended the batch. The
-  runtime watches a batch for its completion from its submission's return on, so another queue's
-  command buffer submitted then completes, and runs its completed handlers, as the making ends,
-  and the submissions behind it on the scheduler's thread wait as long; one whose submission
-  returned before the allocation began completed during it (15 of 15). Metal's command buffers
-  wait for no such making. Not announced.
+  of the device-local heap. On the RTX 5080 Laptop GPU (NVIDIA 615.71.09, Linux), measured with a
+  Vulkan device of its own, `vkAllocateMemory` of such a block's memory takes about 0.16 ms a MiB
+  whether the GPU is idle or another process's work runs (medians of 12: 5.5 ms for 32 MiB, 11.0
+  for 64, 20.4 for 128 and 40.6 for the block's 254.7 MiB; beside the other work 5.5, 10.8, 21.7
+  and 41.4) and `vkFreeMemory` about 0.035 ms a MiB (1.5, 2.6, 4.5 and 9.0 ms), and a
+  `vkQueueSubmit` another thread calls during either returns only once it does (12 of 12 at each
+  size). In the runtime a block's making took 3.1 to 35.7 ms beside another process's GPU work,
+  and a `vkQueueSubmit` the scheduler's thread called meanwhile returned 0.01 to 0.25 ms after the
+  allocation did (25 of 40 rounds of a probe). The runtime watches a batch for its completion from
+  its submission's return on, so a command buffer submitted then completes, and runs its completed
+  handlers, as the making ends, and the submissions behind it on the scheduler's thread wait as
+  long. Frames submitted every 16.7 ms were late at each making of 254.7 MiB by 28.6 to 48.6 ms
+  with the making on the frame's own thread before its submission (23 of 23 over 1 ms, alone and
+  beside the other work), and still by up to 67.5 ms with it on another thread at a moment spread
+  over the frame or right after a frame's submission (11 of 23 over 1 ms either way): a block made
+  ahead of its lease on a thread of the device's own would hold the frames it meets as long, so
+  none is. A smaller block would shorten the wait in proportion and hold fewer indices and records
+  for each command buffer. Metal's command buffers wait for no such making. Not announced.
 - **Making and releasing an event on NVIDIA take 0.1 to 0.6 ms of the calling thread.**
   `new_event` and `new_shared_event` each make one timeline semaphore (`vkCreateSemaphore`,
   `event.rs`), and an event's release destroys it where it goes. On the RTX 5080 Laptop GPU both
