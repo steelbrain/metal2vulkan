@@ -139,13 +139,22 @@ impl Reshape {
                 entry.insert(value);
                 self.0 = true;
             }
-            Entry::Occupied(mut entry) => {
-                if !self.0 && *entry.get() != value && shape(entry.get()) != shape(&value) {
-                    self.0 = true;
-                }
-                entry.insert(value);
-            }
+            Entry::Occupied(mut entry) => self.replace(entry.get_mut(), value, shape),
         }
+    }
+
+    /// Store `value` in `slot`, a bound slot of a kept stage table: its shape may change where the
+    /// binding's `shape` changes.
+    pub(super) fn replace<V: PartialEq, S: PartialEq>(
+        &mut self,
+        slot: &mut V,
+        value: V,
+        shape: impl Fn(&V) -> S,
+    ) {
+        if !self.0 && *slot != value && shape(&*slot) != shape(&value) {
+            self.0 = true;
+        }
+        *slot = value;
     }
 
     /// A slot of a kept stage table unbound.

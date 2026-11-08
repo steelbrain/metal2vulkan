@@ -1507,7 +1507,11 @@ impl ArgumentTable {
     /// addresses are as `kept` read them, as no no-copy buffer moved since (the callers' reads
     /// stand only while none did: `live_bind::ReadFrom`), so the buffer is not looked at
     /// (`WorkCounts::bound_offsets_moved`; checked against [`refresh_buffer`](Self::refresh_buffer)'s
-    /// binding in builds with debug assertions). Else as `refresh_buffer`.
+    /// binding in builds with debug assertions). The function reads the slot bound as `kept` was
+    /// read: a buffer `kept` binds there was read bound, and no call since bound a visible-function
+    /// table there, which changes the slot otherwise than by its offset
+    /// ([`binds_buffer`](Self::binds_buffer)), through the same interface (checked in builds with
+    /// debug assertions). Else as `refresh_buffer`.
     fn refresh_offset(
         &self,
         (kept, index): (&mut StageTable, u32),
@@ -1515,23 +1519,24 @@ impl ArgumentTable {
         alignment: u32,
         reshape: &mut Reshape,
     ) {
-        let held = match (self.buffers.get(&index), kept.buffers.get(&index)) {
-            (
-                Some((buffer, offset)),
-                Some(&BoundBuffer::Buffer {
-                    length,
-                    gpu_address,
-                    device_address,
-                    ..
-                }),
-            ) if !self.reads_unbound(read, index) && *offset <= buffer.length() => {
-                Some((buffer, *offset, (length, gpu_address, device_address)))
-            }
-            _ => None,
-        };
-        let Some((buffer, offset, (length, gpu_address, device_address))) = held else {
+        let a = kept.class_alignment(index, alignment);
+        let held = (self.buffers.get(&index)).filter(|(buffer, offset)| *offset <= buffer.length());
+        let (Some((buffer, offset)), Some(slot)) = (held, kept.buffers.get_mut(&index)) else {
             return self.refresh_buffer((kept, index), read, alignment, reshape);
         };
+        let BoundBuffer::Buffer {
+            length,
+            gpu_address,
+            device_address,
+            ..
+        } = *slot
+        else {
+            return self.refresh_buffer((kept, index), read, alignment, reshape);
+        };
+        debug_assert!(
+            !self.reads_unbound(read, index),
+            "a buffer slot whose offset alone moved is read unbound"
+        );
         let stride = self.attribute_strides.get(&index).copied();
         // The space's start before the buffer's byte 0, as `bound_buffer` states it.
         let base = length - buffer.length();
@@ -1545,7 +1550,7 @@ impl ArgumentTable {
         #[cfg(debug_assertions)]
         assert_eq!(
             Some(bound),
-            bound_buffer(buffer, offset, stride),
+            bound_buffer(buffer, *offset, stride),
             "a buffer slot whose offset alone moved brought in otherwise than read whole"
         );
         buffer
@@ -1554,8 +1559,7 @@ impl ArgumentTable {
             .counts
             .thread()
             .bound_offset_moved();
-        let a = kept.class_alignment(index, alignment);
-        reshape.slot(&mut kept.buffers, index, bound, |b| b.shape(a));
+        reshape.replace(slot, bound, |b| b.shape(a));
     }
 
     /// Buffer slot `index` of `kept` brought in place as [`refresh_reading`](Self::refresh_reading)
