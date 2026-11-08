@@ -149,19 +149,13 @@ mod tests {
         assert_eq!(activity.step_aside(|| true), None, "told to go on");
     }
 
+    /// The test's own thread is marked, for the rest of its life: each test has a thread of its
+    /// own, and threads start only through the exit guard (`tests::exit_guard`).
     #[test]
     fn a_check_s_own_allocations_count_for_nothing() {
         let activity = Activity::new();
-        let counted = std::thread::scope(|scope| {
-            scope
-                .spawn(|| {
-                    mark_a_check_s_thread();
-                    activity.begin()
-                })
-                .join()
-                .unwrap()
-        });
-        assert!(!counted);
+        mark_a_check_s_thread();
+        assert!(!activity.begin());
         assert_eq!(activity.left(), Duration::ZERO);
     }
 }
