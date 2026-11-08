@@ -1106,8 +1106,10 @@ fn an_exit_while_a_host_step_waits_is_clean() {
 #[test]
 fn an_exit_mid_making_is_clean() {
     let exited = exits_cleanly(&["making_exit"]);
+    // Where the hook ended the process at once, no handler after it ran ([`AT_ONCE`]).
+    let marked = stdout_line(&exited[0], &format!("{REPORT}-MARK ")).is_some();
     assert!(
-        stdout_line(&exited[0], &format!("{REPORT}-MARK ")).is_some(),
+        marked || exited[0].at_once_ms.is_some(),
         "making_exit: no mark between the hook's handlers and the driver's"
     );
     let line = stdout_line(&exited[0], &format!("{REPORT}-MAKING "))
