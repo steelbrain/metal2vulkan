@@ -53,7 +53,7 @@
 //!   alone): where nothing recorded through the record since the kept draw, the record holds that
 //!   set 0 as pushed or bound, so the draw pushes or binds none. One whose uses were patched in
 //!   place, none of them of what the encoder made resident, is narrowed: its uses differ from the
-//!   kept draw's only at the moved slots' uses (`CommandUses::slot_uses_into`), which alone it
+//!   kept draw's only at the moved slots' uses (`binding::patch_buffer_uses`), which alone it
 //!   checks against the attachments and the geometry writes, adds to the pass's reads and gathers
 //!   (`InstanceShadows::add_moved`), and
 //!   compares and records where the last command noted is the kept draw (`EncoderCore::note_moved`);
@@ -519,9 +519,10 @@ impl RenderLowering {
         // Its uses: where only buffer slots changed, the kept draw's with those slots' patched in
         // place, which reads the stages' tables alone, else made again whole, those of what the
         // encoder made resident kept (`binding::command_uses_into`).
+        let patch = (&**plan, &command, &stages);
+        let moved_uses = (&mut live.kept.moved_at, &mut live.kept.moved);
         let patched = !images
-            && binding::patch_buffer_uses((&**plan, &command, &stages), slots, &mut live.uses)
-                == Ok(true);
+            && binding::patch_buffer_uses(patch, slots, &mut live.uses, moved_uses) == Ok(true);
         // The tables a step that works the draw out again reads (its set-0 writes where they are
         // not the kept draw's, its uses where they were not patched), made only for one.
         let mut rebound = true;
@@ -564,13 +565,10 @@ impl RenderLowering {
             counts.resident_keys_settled(live.uses.settled() as u64);
         }
         // A draw moved whose uses were patched, none of them of what the encoder made resident
-        // (whose trackers take them by their identity): the moved slots' uses, every use that
-        // differs from the kept draw's, each of the kept use's key and access types.
+        // (whose trackers take them by their identity): the moved slots' uses, as the patch
+        // listed them, every use that differs from the kept draw's, each of the kept use's key and
+        // access types.
         let narrowed = moved && patched && live.uses.prefix().is_none();
-        if narrowed {
-            let moved = (&mut live.kept.moved_at, &mut live.kept.moved);
-            live.uses.slot_uses_into(slots, moved);
-        }
         // Its fixed-function vertex buffers at the changed slots, in the plan's order. A slot
         // whose offset alone moved binds the buffer the kept draw bound there, whose space starts
         // where it did, as no no-copy buffer moved since (`bring_in`): it is not looked at again

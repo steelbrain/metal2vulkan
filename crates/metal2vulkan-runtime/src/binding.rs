@@ -2818,8 +2818,10 @@ fn bytes_use(
 }
 
 /// Patch in `into`, as [`command_uses_into`] made it of `plan`'s and `command`'s uses, the uses
-/// of the buffer slots `changed`, as the `stages`' tables now bind them, found by `into`'s list of its uses of
-/// buffer slots (`CommandUses::slots`), looking at no other use: whether it did, which it does
+/// of the buffer slots `changed`, as the `stages`' tables now bind them, found by `into`'s list of
+/// its uses of buffer slots (`CommandUses::slots`), looking at no other use, their positions into
+/// `moved.0` and the uses into `moved.1`, both emptied first, in the list's order (every use a call
+/// that changed those slots changed): whether it did, which it does
 /// where each such slot binds the buffer it bound (its offset may have moved) and `into` holds the
 /// uses that function made alone. Its uses are then those `command_uses_into` makes: every other
 /// use is of a slot, buffer or texture no call changed, and the keys, so the resident ones, are
@@ -2831,7 +2833,10 @@ pub(super) fn patch_buffer_uses(
     (plan, command, stages): (&BindingPlan, &Command<'_>, &[(Stage, &ArgumentTable)]),
     changed: &[SlotRef],
     into: &mut CommandUses,
+    (moved_at, moved): (&mut Vec<usize>, &mut Vec<Use<ResourceKey>>),
 ) -> Result<bool, Error> {
+    moved_at.clear();
+    moved.clear();
     if into.sources.len() != into.uses.len() {
         return Ok(false);
     }
@@ -2875,6 +2880,8 @@ pub(super) fn patch_buffer_uses(
         if now.key != used.key {
             return Ok(false);
         }
+        moved_at.push(at);
+        moved.push(now.clone());
         *used = now;
     }
     Ok(true)
@@ -3160,27 +3167,6 @@ impl CommandUses {
     /// The keys the command reaches through the resident set alone.
     pub(super) fn resident(&self) -> &BTreeSet<ResourceKey> {
         &self.resident
-    }
-
-    /// Of its uses that [`patch_buffer_uses`] patched for the buffer slots `changed` (those of
-    /// its list of uses of buffer slots, `CommandUses::slots`), the positions into `at` and the
-    /// uses into `uses`, both emptied first, in the list's order: every use a call that changed
-    /// those slots changed. Call it after a patch that patched them.
-    pub(super) fn slot_uses_into(
-        &self,
-        changed: &[SlotRef],
-        (at, uses): (&mut Vec<usize>, &mut Vec<Use<ResourceKey>>),
-    ) {
-        debug_assert!(self.slots_listed, "a command's patched uses read unlisted");
-        at.clear();
-        uses.clear();
-        for &(slot, place) in &self.slots {
-            if changed.contains(&slot) {
-                let place = place as usize;
-                at.push(place);
-                uses.push(self.uses[place].clone());
-            }
-        }
     }
 }
 
