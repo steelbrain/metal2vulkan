@@ -109,6 +109,66 @@ pub(super) fn udmabuf(memfd: &OwnedFd, offset: u64, size: u64) -> std::io::Resul
     Ok(unsafe { OwnedFd::from_raw_fd(fd) })
 }
 
+/// `struct udmabuf_create_list`'s head, of Linux's `include/uapi/linux/udmabuf.h`: its items
+/// follow it.
+#[repr(C)]
+struct ListHead {
+    flags: u32,
+    count: u32,
+}
+
+/// `struct udmabuf_create_item`.
+#[repr(C)]
+struct ListItem {
+    memfd: u32,
+    pad: u32,
+    offset: u64,
+    size: u64,
+}
+
+const _: () = assert!(size_of::<ListHead>() == 8 && size_of::<ListItem>() == 24);
+
+/// `UDMABUF_CREATE_LIST`, `_IOW('u', 0x43, struct udmabuf_create_list)` in the generic ioctl
+/// encoding: the size is the head's alone.
+const UDMABUF_CREATE_LIST: u64 =
+    (1 << 30) | ((size_of::<ListHead>() as u64) << 16) | ((b'u' as u64) << 8) | 0x43;
+
+/// One dma-buf of `memfd`'s `runs` (each a first byte and a length), their pages one after
+/// another, in order: udmabuf's list.
+pub(super) fn udmabuf_list(memfd: &OwnedFd, runs: &[(u64, u64)]) -> std::io::Result<OwnedFd> {
+    let device = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(UDMABUF)?;
+    let count = u32::try_from(runs.len()).map_err(std::io::Error::other)?;
+    // The head, then each item, in 8-byte words: the head one, an item three.
+    let mut list = vec![0u64; 1 + 3 * runs.len()];
+    let base = list.as_mut_ptr();
+    // SAFETY: the head lies in the first word and each item in the three after the items before
+    // it, inside the list, which holds as many and is aligned for both.
+    unsafe {
+        base.cast::<ListHead>().write(ListHead {
+            flags: UDMABUF_FLAGS_CLOEXEC,
+            count,
+        });
+        for (index, &(offset, size)) in runs.iter().enumerate() {
+            base.add(1 + 3 * index).cast::<ListItem>().write(ListItem {
+                memfd: memfd.as_raw_fd() as u32,
+                pad: 0,
+                offset,
+                size,
+            });
+        }
+    }
+    // SAFETY: the ioctl reads the list, a valid `udmabuf_create_list` and its items.
+    let fd = unsafe { libc::ioctl(device.as_raw_fd(), UDMABUF_CREATE_LIST as _, list.as_ptr()) };
+    if fd < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    // SAFETY: a new descriptor the ioctl returned, owned at once.
+    Ok(unsafe { OwnedFd::from_raw_fd(fd) })
+}
+
 /// A scratch directory for the device's shader cache, removed when dropped.
 pub(super) struct Scratch(pub(super) PathBuf);
 

@@ -125,7 +125,11 @@
 //! - **The dirty log** ([`HostRam::with_dirty_pages`]): one log for the whole RAM, its offsets
 //!   host addresses, so one stamp per commit serves every copy over the RAM.
 //! - **Copies by the GPU** between runs of the RAM and a buffer, from the chunks' imports
-//!   (`BlitCommandEncoder::copy_from_host_ram`, `copy_to_host_ram`): `host_ram/copy.rs`.
+//!   (`BlitCommandEncoder::copy_from_host_ram`, `copy_to_host_ram`): `host_ram/copy.rs`. Where
+//!   each listed import costs every submission ([`Plan::listed`]) and the RAM came with a source
+//!   of run lists ([`HostRam::with_dma_buf_of_runs`]), a copy over a chunk not imported takes
+//!   lists of its own pages, one dma-buf each, for as long as it runs, and neither imports the
+//!   chunk nor asks for it ([`RamOnDevice::run_lists`]).
 //!
 //! [`Device::use_host_ram`]: crate::Device::use_host_ram
 
@@ -146,7 +150,7 @@ use super::memory::{ImportFailure, Mapped, MemoryClass, Placement};
 use super::program_objects::ProgramObject;
 use super::Device;
 use crate::device::WeakDevice;
-use crate::dma_buf::DmaBufSource;
+use crate::dma_buf::{DmaBufRunsSource, DmaBufSource};
 use crate::release;
 use ash::vk;
 use metal2vulkan::error::{Feature, RuntimeDriverDefect, Unsupported};
@@ -183,6 +187,9 @@ pub struct HostRam {
     dma_buf: Option<DmaBufSource>,
     /// The most bytes one dma-buf of that source holds ([`HostRam::with_largest_dma_buf`]).
     largest_dma_buf: u64,
+    /// The caller's source of one dma-buf of a list of runs of the RAM's pages, and the most runs
+    /// one list holds ([`HostRam::with_dma_buf_of_runs`]).
+    dma_buf_runs: Option<(DmaBufRunsSource, usize)>,
 }
 
 impl std::fmt::Debug for HostRam {
@@ -192,6 +199,10 @@ impl std::fmt::Debug for HostRam {
             .field("dirty_pages", &self.dirty.is_some())
             .field("dma_buf", &self.dma_buf.is_some())
             .field("largest_dma_buf", &self.largest_dma_buf)
+            .field(
+                "dma_buf_runs",
+                &self.dma_buf_runs.as_ref().map(|(_, most)| most),
+            )
             .finish()
     }
 }
@@ -229,6 +240,7 @@ impl HostRam {
             keep_alive: Mutex::new(keep_alive.map(ProgramObject::new)),
             dma_buf: None,
             largest_dma_buf: CHUNK_BYTES,
+            dma_buf_runs: None,
         })
     }
 
@@ -257,13 +269,13 @@ impl HostRam {
     /// one held import of 64 MiB by pointer added 24.1 us to every submission). Each request is
     /// for whole host pages inside one chunk of the RAM (a chunk: 64 MiB, or as long as
     /// [`HostRam::with_largest_dma_buf`] allows where the device's held imports add to the cost of
-    /// every submission, or the rest of its range; an object's run inside one; a texture's pages
-    /// inside one), its `granule` its `length`: the source answers one dma-buf of exactly those
-    /// pages. The source is called on
-    /// the thread importing the chunk (the device's, or one making an object over it), with no
-    /// lock of the runtime's held, and is kept with each import it made until that import is
-    /// freed. A source that fails, or answers otherwise, leaves the chunk to its pointer. No Metal
-    /// counterpart.
+    /// every submission, or the rest of its range; an object's run inside one; a copy's range
+    /// inside one, but in lists of the source of [`HostRam::with_dma_buf_of_runs`] where it
+    /// takes those; a texture's pages inside one), its `granule` its `length`: the source answers
+    /// one dma-buf of exactly those pages. The source is called on the thread importing the chunk
+    /// (the device's, or one making an object over it), with no lock of the runtime's held, and
+    /// is kept with each import it made until that import is freed. A source that fails, or
+    /// answers otherwise, leaves the chunk to its pointer. No Metal counterpart.
     pub fn with_dma_buf(mut self, source: DmaBufSource) -> HostRam {
         self.dma_buf = Some(source);
         self
@@ -277,6 +289,35 @@ impl HostRam {
     /// one per 64 MiB. Without this call, 64 MiB, the udmabuf default. No Metal counterpart.
     pub fn with_largest_dma_buf(mut self, bytes: u64) -> HostRam {
         self.largest_dma_buf = bytes;
+        self
+    }
+
+    /// This RAM, with the caller's source of one dma-buf of a list of runs of its pages (a runtime
+    /// extension, [`DmaBufRunsSource`]), of at most `most_runs` runs a list: on Linux, udmabuf's
+    /// `UDMABUF_CREATE_LIST`, whose list holds at most its `list_limit` (a module parameter, 1024
+    /// by default), and whose dma-buf at most [`HostRam::with_largest_dma_buf`]'s bytes. Only the
+    /// copies by runs ([`BlitCommandEncoder::copy_from_host_ram`], `copy_to_host_ram`) call it,
+    /// and only on a device whose held imports add to the cost of
+    /// every submission, where the RAM's chunks are that device's dma-bufs of the RAM's source
+    /// ([`HostRam::with_dma_buf`]; RADV's, [`Device::use_host_ram`]): there a copy over a chunk
+    /// not imported yet imports its own pages of the chunk as one dma-buf of this source for each
+    /// list of up to `most_runs` of them (its runs by address, those that share a host page one),
+    /// held until its command buffer completed, then freed, and asks for the chunk's import of
+    /// nothing. Without the source, the copy imports the chunk there, or waits for its import
+    /// under way, and keeps it: that pins every page of the chunk (up to 512 MiB), and the RAM's
+    /// source of dma-bufs allocates each page of the guest's file the guest never touched, for
+    /// good, where a list pins the copy's own pages, for as long as the copy runs. The chunk costs
+    /// one import, then nothing a copy; a list costs each copy its own import
+    /// (`WorkCounts::host_ram_run_list_imports`). Each request of a list is whole host pages
+    /// inside one chunk, its `granule` its `length`, by start, sharing no page with another. The
+    /// source is called on the thread encoding the copy, with no lock of the runtime's held, and
+    /// kept with the RAM. A source that fails, or answers otherwise, leaves the copy to the chunk,
+    /// as without it. Elsewhere (a device whose held imports cost no submission, or that imports
+    /// the RAM's pointer) it is never called. No Metal counterpart.
+    ///
+    /// [`BlitCommandEncoder::copy_from_host_ram`]: crate::BlitCommandEncoder::copy_from_host_ram
+    pub fn with_dma_buf_of_runs(mut self, source: DmaBufRunsSource, most_runs: usize) -> HostRam {
+        self.dma_buf_runs = Some((source, most_runs.max(1)));
         self
     }
 
@@ -567,12 +608,16 @@ enum By {
 }
 
 /// What an import of a RAM's pages ([`RamChunk`]) is: one of its chunks, kept in its slot while
-/// the device uses the RAM, or the run of one object over a chunk not imported yet
-/// ([`RamOnDevice::for_object`]), held by that object's placement alone.
+/// the device uses the RAM; the run of one object over a chunk not imported yet
+/// ([`RamOnDevice::for_object`]), held by that object's placement alone (or a copy's range of
+/// one alone, held by its command buffer); or a list of a copy's runs inside a chunk not
+/// imported yet, one dma-buf of the RAM's source of run lists ([`RamOnDevice::run_lists`]), held
+/// by the copy's command buffer alone.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Imported {
     Chunk,
     Run,
+    Runs,
 }
 
 /// How a device imports a RAM's chunks ([`Device::use_host_ram`]).
@@ -824,17 +869,20 @@ impl RamOnDevice {
     }
 
     /// The imports a copy over chunk `slot` reads or writes its bytes `ranges` (offsets in the
-    /// chunk, by start, apart) through (`host_ram/copy.rs`), never waiting for the chunk's, as an
-    /// object over it is bound ([`RamOnDevice::for_object`]), the device's thread's window moved
-    /// to the chunk as an object's take moves it: the chunk's import where it is
-    /// made; else, where an object's run would be imported alone and the ranges are at most
-    /// `copy::MOST_ALONE`, an import of each range alone, widened to whole host pages within the
-    /// chunk ([`RamOnDevice::run_alone`]: the device's thread asked for the chunk), held by the
-    /// copy's command buffer until it completed; else the chunk's, made here or waited for
-    /// ([`RamOnDevice::chunk`]). Each import's span lies in the
-    /// chunk's and holds every range it is given for. With them, the time this thread waited for
-    /// the chunk's import (`WorkCounts::host_ram_copy_import_wait_nanos`): zero where it was made,
-    /// or the ranges were imported alone.
+    /// chunk, by start, apart) through (`host_ram/copy.rs`), never waiting for the chunk's: the
+    /// chunk's import where it is made; else, on a device whose plan is [`Plan::listed`], of a RAM
+    /// with a source of run lists, the copy's own pages as lists of them
+    /// ([`RamOnDevice::run_lists`]), the chunk asked for nothing; else as an object over it is
+    /// bound ([`RamOnDevice::for_object`]), the device's thread's window moved to the chunk as an
+    /// object's take moves it: where an object's run would be imported alone and the ranges (those
+    /// less than 2 MiB apart one, [`copy::alone_ranges`]) are at most `copy::MOST_ALONE`, an
+    /// import of each range alone, widened to whole host pages within the chunk
+    /// ([`RamOnDevice::run_alone`]: the device's thread asked for the chunk), held by the copy's
+    /// command buffer until it completed; else the chunk's, made here or waited for
+    /// ([`RamOnDevice::chunk`]). Each import holds every range it is given for, in order
+    /// (`RamChunk::offset_of`). With them, the time this thread waited for the chunk's import
+    /// (`WorkCounts::host_ram_copy_import_wait_nanos`): zero where it was made, or the ranges
+    /// were imported alone or in lists.
     pub(crate) fn for_copy(
         &self,
         device: &Device,
@@ -857,11 +905,18 @@ impl RamOnDevice {
         };
         let page = importer.page.max(1);
         let unordered = RuntimeDriverDefect::AliasedImportBlitsUnordered;
+        let room = device.shared().allocations.allocations.room_ahead();
+        let ordered = !device.properties().driver_defects.contains(&unordered);
+        if self.plan.listed && room && ordered {
+            if let Some(lists) = self.run_lists(device, importer, slot, ranges) {
+                return Ok((lists, Duration::ZERO));
+            }
+        }
         let alone = self.wake.running.load(Ordering::Relaxed)
             && !span.tried.load(Ordering::Relaxed)
-            && device.shared().allocations.allocations.room_ahead()
-            && !device.properties().driver_defects.contains(&unordered);
-        let runs: Vec<Range<u64>> = (ranges.iter())
+            && room
+            && ordered;
+        let runs: Vec<Range<u64>> = (copy::alone_ranges(ranges).iter())
             .map(|range| {
                 let start = span.span.start + range.start / page * page;
                 let end = span.span.start + range.end.div_ceil(page) * page;
@@ -963,6 +1018,41 @@ impl RamOnDevice {
     /// Whether a copy into chunk `slot`'s bytes was ever recorded ([`RamOnDevice::copy_wrote`]).
     pub(crate) fn copies_wrote(&self, slot: usize) -> bool {
         self.slots[slot].scattered.load(Ordering::Relaxed)
+    }
+
+    /// The imports of a copy's bytes `ranges` of chunk `slot` (offsets in the chunk, by start,
+    /// apart), its chunk not imported, as lists of their pages, each one dma-buf of the RAM's
+    /// source of run lists ([`HostRam::with_dma_buf_of_runs`], [`Imported::Runs`]): the ranges
+    /// widened to whole host pages, those that then share or touch a page one
+    /// ([`copy::page_runs`]), in lists of at most the source's count of runs and the bytes of one
+    /// dma-buf of the RAM ([`copy::run_lists`]), each made now on this thread with no lock held.
+    /// Nothing is asked of the device's thread: the copy pins its own pages, until its command
+    /// buffer completed, and no more. `None` where the RAM has no such source, a run is the whole
+    /// chunk, a run alone passes the bytes of one dma-buf, or a list's import fails (the copy
+    /// then takes what it takes without the source).
+    fn run_lists(
+        &self,
+        device: &Device,
+        importer: &Importer,
+        slot: usize,
+        ranges: &[Range<u64>],
+    ) -> Option<Vec<Arc<RamChunk>>> {
+        let (source, most_runs) = self.ram.dma_buf_runs.as_ref()?;
+        let span = &self.slots[slot].span;
+        let runs = copy::page_runs(ranges, span, importer.page.max(1));
+        if runs.contains(span) {
+            return None;
+        }
+        let lists = copy::run_lists(&runs, *most_runs, self.ram.largest_dma_buf)?;
+        let mut imports = Vec::with_capacity(lists.len());
+        for list in lists {
+            // SAFETY: the runs are pages of the RAM's ranges inside the chunk, which stay mapped,
+            // readable and writable, while an import holds the RAM (`HostRam::new`), and the
+            // source's dma-buf holds exactly those pages (`HostRam::with_dma_buf_of_runs`).
+            let made = unsafe { device.import_runs(importer, &self.ram, &runs[list], source) };
+            imports.push(Arc::new(made.ok()?));
+        }
+        Some(imports)
     }
 
     /// Chunk `slot`'s import where it is made; else an import of `run` (host pages inside it)
@@ -1325,11 +1415,15 @@ fn give_back_untaken(device: WeakDevice) {
 /// the process's end while it exits.
 pub(crate) struct RamChunk {
     device: Device,
-    /// The host bytes imported.
+    /// The host bytes imported; of a list ([`Imported::Runs`]), from its first run's first byte to
+    /// its last run's end, the bytes between not imported.
     span: Range<u64>,
-    /// A chunk, or one object's run alone.
+    /// A chunk, one object's run alone, or a list of a copy's runs.
     of: Imported,
-    /// The `VkBuffer` over the whole chunk.
+    /// Of a list, each run's host bytes, by start, and the byte of the `VkBuffer` it starts at:
+    /// the runs one after another. Empty for any other import, whose bytes are its span's.
+    runs: Box<[(Range<u64>, u64)]>,
+    /// The `VkBuffer` over the whole chunk, or the whole list.
     raw: vk::Buffer,
     /// The import's placement: a dedicated block of the device's memory (`memory::import_host`),
     /// or the import of the RAM's dma-buf of the span, which the placement keeps
@@ -1357,6 +1451,26 @@ impl RamChunk {
     /// Whether it is one object's run alone ([`Imported::Run`]), not a chunk.
     pub(crate) fn is_run(&self) -> bool {
         self.of == Imported::Run
+    }
+
+    /// The bytes of its `VkBuffer`: its span's, or a list's runs' together.
+    pub(crate) fn bytes(&self) -> u64 {
+        match self.runs.last() {
+            Some((run, at)) => at + (run.end - run.start),
+            None => self.span.end - self.span.start,
+        }
+    }
+
+    /// The byte of its `VkBuffer` the host bytes `host` start at, where it holds them all, in
+    /// order: inside its span, or, of a list, inside one of its runs.
+    pub(crate) fn offset_of(&self, host: &Range<u64>) -> Option<u64> {
+        if self.runs.is_empty() {
+            let inside = self.span.start <= host.start && host.end <= self.span.end;
+            return inside.then(|| host.start - self.span.start);
+        }
+        let after = (self.runs).partition_point(|(run, _)| run.start <= host.start);
+        let (run, at) = self.runs.get(after.checked_sub(1)?)?;
+        (host.end <= run.end).then(|| at + (host.start - run.start))
     }
 
     /// The index of the memory's type.
@@ -1417,7 +1531,7 @@ impl Drop for RamChunk {
         };
         match self.of {
             Imported::Chunk => shared.counts.host_ram_chunk_freed(),
-            Imported::Run => shared.counts.run_import_freed(),
+            Imported::Run | Imported::Runs => shared.counts.run_import_freed(),
         }
         drop(busy);
         drop(after);
@@ -1654,7 +1768,13 @@ impl Device {
     /// 692 ms for 2.7 GiB on a Radeon 780M), and that object and those over the chunk meanwhile are
     /// bound in imports of their own runs alone, as above; a buffer's is released while idle, the
     /// buffer bound in the chunk at its next use, and a heap's, or a buffer's whose address was
-    /// handed out, stays while it lives. A chunk stays imported once imported, as the first
+    /// handed out, stays while it lives. A copy by runs over a chunk not imported
+    /// (`BlitCommandEncoder::copy_from_host_ram`, `copy_to_host_ram`) takes the chunk as an
+    /// object does, or, of a RAM with a source of run lists ([`HostRam::with_dma_buf_of_runs`]),
+    /// asks for nothing: it imports its own pages, one dma-buf of that source for each list of up
+    /// to its count of runs, held until its command buffer completed, so copies alone make no
+    /// page of the guest's RAM resident but those they copy. A chunk stays imported once
+    /// imported, as the first
     /// submission after a chunk's import waits while the kernel writes its page tables (hundreds of
     /// milliseconds for a chunk of 4 GiB in 4 KiB pages on a Radeon 780M), where the whole RAM fits
     /// in half the device's memory heaps with unified memory, else in three quarters of those that
@@ -1890,9 +2010,10 @@ impl Device {
         let chunk = ram.for_object(self, importer, *slot, run).ok()?;
         // SAFETY: the caller's.
         let bound = unsafe { self.bind_in(&chunk, *start, window, length) }?;
+        // An object's import is never a list: those are a copy's alone (`RamOnDevice::run_lists`).
         match chunk.of {
             Imported::Chunk => self.shared().counts.chunk_bound_buffer_made(),
-            Imported::Run => self.shared().counts.run_bound_buffer_made(),
+            Imported::Run | Imported::Runs => self.shared().counts.run_bound_buffer_made(),
         }
         Some(bound)
     }
@@ -1996,6 +2117,41 @@ impl Device {
         }
     }
 
+    /// Import `runs`, host pages of `ram` inside one chunk (by start, sharing no page), for a copy,
+    /// as the one dma-buf of them, their pages one after another, that `source`, the RAM's source
+    /// of run lists, makes (`Device::ram_runs_as_dma_buf`): a list ([`Imported::Runs`]), whose
+    /// `VkBuffer` holds each run's bytes from where the runs before it end. Counted:
+    /// `WorkCounts::host_ram_run_list_imports`.
+    ///
+    /// # Safety
+    ///
+    /// The runs are pages of `ram`'s ranges, which stay mapped while the import holds `ram`, and
+    /// the source's dma-buf holds exactly those pages, in order.
+    unsafe fn import_runs(
+        &self,
+        importer: &Importer,
+        ram: &Arc<HostRam>,
+        runs: &[Range<u64>],
+        source: &DmaBufRunsSource,
+    ) -> Result<RamChunk, Error> {
+        let (first, last) = (runs.first(), runs.last());
+        let span = first.zip(last).map(|(first, last)| first.start..last.end);
+        let span = span.ok_or_else(|| internal("a copy's list of no runs of host RAM"))?;
+        // SAFETY: the caller's.
+        let (raw, placement) = unsafe { self.ram_runs_as_dma_buf(importer, runs, source) }?;
+        self.shared().counts.host_ram_run_list_imported();
+        let mut list = self.ram_chunk(ram, span, Imported::Runs, raw, placement);
+        let mut at = 0;
+        list.runs = (runs.iter())
+            .map(|run| {
+                let here = at;
+                at += run.end - run.start;
+                (run.clone(), here)
+            })
+            .collect();
+        Ok(list)
+    }
+
     /// The chunk of `span`, as `of`, whose `VkBuffer` `raw` over the whole of it is bound in
     /// `placement`, holding `ram`; counted made.
     fn ram_chunk(
@@ -2009,12 +2165,13 @@ impl Device {
         let counts = &self.shared().counts;
         match of {
             Imported::Chunk => counts.host_ram_chunk_imported(span.end - span.start),
-            Imported::Run => counts.run_import_made(),
+            Imported::Run | Imported::Runs => counts.run_import_made(),
         }
         RamChunk {
             device: self.clone(),
             span,
             of,
+            runs: Box::default(),
             raw,
             placement,
             ram: Some(Arc::clone(ram)),

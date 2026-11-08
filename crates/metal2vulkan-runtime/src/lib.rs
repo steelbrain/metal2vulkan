@@ -284,7 +284,7 @@ pub use device::{
 };
 pub use dirty_pages::{DirtyPages, DirtyStamp};
 #[cfg(unix)]
-pub use dma_buf::{DmaBufChunk, DmaBufRequest, DmaBufSource};
+pub use dma_buf::{DmaBufChunk, DmaBufRequest, DmaBufRunsSource, DmaBufSource};
 pub use dynamic_library::DynamicLibrary;
 pub use error::DynamicLibraryError;
 pub use error::ExtensionFeature;

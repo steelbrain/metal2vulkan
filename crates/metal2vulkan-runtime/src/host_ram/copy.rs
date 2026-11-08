@@ -58,16 +58,33 @@
 //!   no memory for. Counted:
 //!   `WorkCounts::host_ram_copies_staged`, `host_ram_staged_fills_gated`,
 //!   `host_ram_staged_fill_nanos`.
+//! - **Lists of runs.** Where each listed import costs every submission and the RAM's chunks are
+//!   the device's dma-bufs of the RAM's source (RADV's: `host_ram.rs`'s `Plan::listed`), and the
+//!   RAM came with a source of run lists (`HostRam::with_dma_buf_of_runs`), a copy neither
+//!   imports a chunk not imported yet nor asks for it: its ranges of the chunk, widened to whole
+//!   host pages, those that then share or touch a page one ([`page_runs`]), are imported as one
+//!   dma-buf of that source for each list of at most the source's count of runs and one
+//!   dma-buf's bytes ([`run_lists`]), made on the encoding thread, each run's bytes in the
+//!   list's `VkBuffer` from where the runs before it end (`RamChunk::offset_of`), held by the
+//!   command buffer until it completed, then freed (`WorkCounts::host_ram_run_list_imports`,
+//!   `run_imports_live`). So a copy pins its own pages while it runs, and none of the chunk's
+//!   others, where the chunk's import pins every page of it and the source's dma-buf allocates
+//!   the pages of the guest's file the guest never touched, for good. Where that cannot be (the
+//!   allocation limit's margin, `RuntimeDriverDefect::AliasedImportBlitsUnordered`, a run that is
+//!   the whole chunk or passes one dma-buf's bytes, a list's import that fails) the copy takes
+//!   the chunk as above.
 //! - **Runs of words: one dispatch per chunk.** Where every run also ends on a word, and lies at a
 //!   word of the buffer's memory ([`in_words`]: a surface's whole pages, or the rows of one of
 //!   4-byte texels), the pieces become a table of runs of at most a 4 KiB page each, each its first
 //!   word in the chunk's import, its first word in the buffer and its words ([`plan`]: whole pages
 //!   an entry a page), uploaded into the command buffer's arena, and the runs of each chunk one
 //!   dispatch of `bind::pages_copy_module` (a gather or a scatter) over the chunk's whole
-//!   `VkBuffer`, the buffer's bytes and the table: as many dispatches as chunks the runs touch,
-//!   never one region per run, and no other word of the runs' pages read or written. A copy whose
-//!   bytes pass the device's storage range, or whose runs of one chunk pass its workgroup count,
-//!   takes more (each window of the buffer's bytes, each part of the runs). Counted:
+//!   `VkBuffer` (or over each import the copy took of its own pages: a range's alone, a list's),
+//!   the buffer's bytes and the table: as many dispatches as chunks the runs touch (or such
+//!   imports), never one region per run, and no other word of the runs' pages read or written. A
+//!   copy whose bytes pass the device's storage range, or whose runs of one chunk pass its
+//!   workgroup count, takes more (each window of the buffer's bytes, each part of the runs).
+//!   Counted:
 //!   `WorkCounts::host_ram_copies`, `host_ram_copy_bytes` and `host_ram_copy_dispatches`.
 //! - **Other runs: regions.** Where a run ends off a word (a row of 1- or 2-byte texels) or lies at
 //!   a byte of the buffer off a word, or the runs write a destination byte twice (a scatter's that
@@ -511,29 +528,67 @@ pub(crate) fn chunk_ranges(pieces: &[Piece], most: usize) -> BTreeMap<usize, Vec
         .collect()
 }
 
-/// The bytes of each chunk `pieces` touch, by chunk, as a copy imports them alone where the chunk
-/// is not imported yet (`RamOnDevice::for_copy`): sorted, those less than [`JOIN_GAP`] apart as
-/// one, never joined further.
-pub(crate) fn alone_ranges(pieces: &[Piece]) -> BTreeMap<usize, Vec<Range<u64>>> {
-    let mut by_chunk: BTreeMap<usize, Vec<Range<u64>>> = BTreeMap::new();
-    for piece in pieces {
-        let bytes = piece.offset..piece.offset + piece.length;
-        by_chunk.entry(piece.slot).or_default().push(bytes);
+/// One chunk's bytes `ranges` (by start, those that meet or touch as one: [`chunk_ranges`]) as a
+/// copy imports them alone where the chunk is not imported yet (`RamOnDevice::for_copy`): those
+/// less than [`JOIN_GAP`] apart as one, never joined further.
+pub(crate) fn alone_ranges(ranges: &[Range<u64>]) -> Vec<Range<u64>> {
+    let mut out: Vec<Range<u64>> = Vec::with_capacity(ranges.len());
+    for range in ranges {
+        match out.last_mut() {
+            Some(last) if range.start <= last.end.saturating_add(JOIN_GAP - 1) => {
+                last.end = last.end.max(range.end);
+            }
+            _ => out.push(range.clone()),
+        }
     }
-    for ranges in by_chunk.values_mut() {
-        ranges.sort_by_key(|range| range.start);
-        let mut out: Vec<Range<u64>> = Vec::with_capacity(ranges.len());
-        for range in ranges.drain(..) {
-            match out.last_mut() {
-                Some(last) if range.start <= last.end.saturating_add(JOIN_GAP - 1) => {
-                    last.end = last.end.max(range.end);
-                }
-                _ => out.push(range),
+    out
+}
+
+/// One chunk's bytes `ranges` (offsets in the chunk `span`, by start, apart) as the host pages
+/// they lie in, `page` bytes each, for a list of them (`RamOnDevice::run_lists`): each widened
+/// to whole pages within the span, those that then share or touch a page one.
+pub(crate) fn page_runs(ranges: &[Range<u64>], span: &Range<u64>, page: u64) -> Vec<Range<u64>> {
+    let mut out: Vec<Range<u64>> = Vec::with_capacity(ranges.len());
+    for range in ranges {
+        let start = span.start + range.start / page * page;
+        let end = (span.start + range.end.div_ceil(page) * page).min(span.end);
+        match out.last_mut() {
+            Some(last) if start <= last.end => last.end = last.end.max(end),
+            _ => out.push(start..end),
+        }
+    }
+    out
+}
+
+/// `runs` (host pages, by start, apart) as the lists a copy imports them in, each one dma-buf of
+/// the RAM's source of run lists (`RamOnDevice::run_lists`): the runs in order, at most
+/// `most_runs` and `most_bytes` bytes a list, each list the indices of its runs. `None` where a
+/// run alone passes `most_bytes`.
+pub(crate) fn run_lists(
+    runs: &[Range<u64>],
+    most_runs: usize,
+    most_bytes: u64,
+) -> Option<Vec<Range<usize>>> {
+    let most_runs = most_runs.max(1);
+    let mut lists: Vec<Range<usize>> = Vec::new();
+    let mut bytes = 0u64;
+    for (index, run) in runs.iter().enumerate() {
+        let length = run.end - run.start;
+        if length > most_bytes {
+            return None;
+        }
+        match lists.last_mut() {
+            Some(list) if list.len() < most_runs && bytes.saturating_add(length) <= most_bytes => {
+                list.end = index + 1;
+                bytes += length;
+            }
+            _ => {
+                lists.push(index..index + 1);
+                bytes = length;
             }
         }
-        *ranges = out;
     }
-    by_chunk
+    Some(lists)
 }
 
 /// `ranges` sorted, those that meet or touch as one, then the closest joined until at most
@@ -651,9 +706,16 @@ impl BlitCommandEncoder {
     /// RAM's own addresses), and `destination` is written as by any blit. An object over another
     /// mapping of the same pages is ordered against it only as the program orders it, as two
     /// no-copy buffers over two mappings of one page are. Where a chunk is not imported yet, the
-    /// runs' pages in it are imported alone for the copy while the device imports the chunk
-    /// (`WorkCounts::run_imports_live`), as an object over it is bound in its own run's import;
-    /// where that cannot be, the chunk is imported first, or its import waited for.
+    /// runs' pages in it are imported for the copy alone, held until its command buffer
+    /// completed (`WorkCounts::run_imports_live`): on a device whose held imports add to the cost
+    /// of every submission, of a RAM whose chunks are its dma-bufs and that came with a source of
+    /// run lists ([`HostRam::with_dma_buf_of_runs`]; RADV's, `Device::use_host_ram`), as one
+    /// dma-buf of that source for each list of up to its count of runs
+    /// (`WorkCounts::host_ram_run_list_imports`), the chunk neither imported nor asked for, so
+    /// the copy makes no page of the guest's RAM resident but its own; elsewhere, for up to 16
+    /// ranges of the chunk, each range alone while the device imports the chunk, as an object
+    /// over it is bound in its own run's import. Where that cannot be, the chunk is imported
+    /// first, or its import waited for.
     ///
     /// No runs copy nothing.
     ///
@@ -864,19 +926,17 @@ impl BlitCommandEncoder {
         }
         // The bytes of each chunk the pieces touch, and the imports they are read or written
         // through, held until the command buffer completes: the chunk's, or, where it is not
-        // imported yet, one of each of those bytes alone while the device's thread imports it
-        // (`RamOnDevice::for_copy`). Each piece is then counted in its import.
+        // imported yet, lists of those bytes' pages, or one of each of those bytes alone while
+        // the device's thread imports it (`RamOnDevice::for_copy`). Each piece is then counted
+        // in its import.
         let touched = chunk_ranges(&pieces, MOST_RANGES);
         let mut imports: Vec<Arc<RamChunk>> = Vec::new();
         let mut of_chunk: BTreeMap<usize, Range<usize>> = BTreeMap::new();
         let mut waited = Duration::ZERO;
-        for (slot, ranges) in alone_ranges(&pieces) {
+        for (slot, ranges) in chunk_ranges(&pieces, usize::MAX) {
             let (made, took) = ram.for_copy(&device, importer, slot, &ranges)?;
             waited += took;
-            if made
-                .iter()
-                .any(|import| import.span.end - import.span.start > range)
-            {
+            if made.iter().any(|import| import.bytes() > range) {
                 return Err(crate::error::internal(
                     "a chunk of host RAM past the device's storage range",
                 ));
@@ -891,15 +951,14 @@ impl BlitCommandEncoder {
         }
         let in_imports: Option<Vec<Piece>> = (pieces.iter())
             .map(|piece| {
-                let host = spans[piece.slot].start + piece.offset;
-                let holds = |&index: &usize| {
-                    let span = &imports[index].span;
-                    span.start <= host && host + piece.length <= span.end
-                };
-                let index = of_chunk.get(&piece.slot)?.clone().find(holds)?;
+                let start = spans[piece.slot].start + piece.offset;
+                let host = start..start + piece.length;
+                let mut found = (of_chunk.get(&piece.slot)?.clone())
+                    .filter_map(|index| Some((index, imports[index].offset_of(&host)?)));
+                let (index, offset) = found.next()?;
                 Some(Piece {
                     slot: index,
-                    offset: host - imports[index].span.start,
+                    offset,
                     ..*piece
                 })
             })
@@ -942,7 +1001,7 @@ impl BlitCommandEncoder {
                 let length =
                     (span.end - span.start - dispatch.window * window_bytes).min(window_bytes);
                 let buffers = vec![
-                    (chunk.raw, 0, chunk.span.end - chunk.span.start),
+                    (chunk.raw, 0, chunk.bytes()),
                     (raw, offset, first - offset + length),
                     (upload.raw(), upload.offset(), table.len() as u64),
                 ];
@@ -1042,8 +1101,8 @@ impl BlitCommandEncoder {
         }
         let device = self.core().device().clone();
         let mut through_cpu = false;
-        for (slot, ranges) in alone_ranges(pieces) {
-            match ram.copy_take(&device, importer, slot, &ranges) {
+        for (slot, ranges) in chunk_ranges(pieces, usize::MAX) {
+            match ram.copy_take(&device, importer, slot, &alone_ranges(&ranges)) {
                 CopyTake::Now => {}
                 CopyTake::ThroughCpu => through_cpu = true,
                 CopyTake::Waits => return false,
@@ -1149,9 +1208,9 @@ impl BlitCommandEncoder {
         let call_name = call.name();
         let device = self.core().device().clone();
         // Each piece's host bytes.
-        let host: Vec<Range<u64>> = (in_imports.iter())
+        let host: Vec<Range<u64>> = (pieces.iter())
             .map(|piece| {
-                let start = imports[piece.slot].span.start + piece.offset;
+                let start = ram.slots[piece.slot].span.start + piece.offset;
                 start..start + piece.length
             })
             .collect();
@@ -1575,14 +1634,53 @@ mod tests {
             piece(1, 0),
             piece(0, 3 * MIB + PAGE + 2 * MIB),
         ];
-        let ranges = alone_ranges(&pieces);
+        let ranges = chunk_ranges(&pieces, usize::MAX);
         assert_eq!(
-            ranges[&0],
+            alone_ranges(&ranges[&0]),
             vec![
                 0..3 * MIB + PAGE,
                 3 * MIB + PAGE + 2 * MIB..3 * MIB + 2 * PAGE + 2 * MIB
             ]
         );
-        assert_eq!(ranges[&1], vec![0..PAGE]);
+        assert_eq!(alone_ranges(&ranges[&1]), vec![0..PAGE]);
+    }
+
+    #[test]
+    fn a_copy_s_lists_take_its_pages_alone_by_address_and_split_at_their_most() {
+        // A chunk of 16 KiB pages from host address 1 GiB: a row inside one page, two rows that
+        // share a page, a run that ends where the next page starts and one that starts there,
+        // a run past the chunk's end cut at it, and a page apart.
+        const HOST_PAGE: u64 = 4 * PAGE;
+        let span = (1 << 30)..(1 << 30) + 8 * HOST_PAGE;
+        let ranges = [
+            16..16 + 854,
+            HOST_PAGE + 8..HOST_PAGE + 100,
+            HOST_PAGE + 200..HOST_PAGE + 300,
+            2 * HOST_PAGE + 4..3 * HOST_PAGE,
+            3 * HOST_PAGE..3 * HOST_PAGE + 4,
+            6 * HOST_PAGE + 4..6 * HOST_PAGE + 8,
+        ];
+        let at = |page: u64| span.start + page * HOST_PAGE;
+        let runs = page_runs(&ranges, &span, HOST_PAGE);
+        // Pages that share or touch are one run; a page between keeps two apart.
+        assert_eq!(runs, vec![at(0)..at(4), at(6)..at(7)]);
+        let wide = page_runs(&[7 * HOST_PAGE..9 * HOST_PAGE], &span, HOST_PAGE);
+        assert_eq!(wide, vec![at(7)..at(8)], "cut at the chunk's end");
+        // 1,500 runs of a page each, 1,024 a list: two lists, in order.
+        let many: Vec<Range<u64>> = (0..1500u64)
+            .map(|index| at(2 * index)..at(2 * index + 1))
+            .collect();
+        let lists = run_lists(&many, 1024, u64::MAX).expect("lists");
+        assert_eq!(lists, vec![0..1024, 1024..1500]);
+        // At most three pages a list: a run of two starts the next list where it would pass.
+        let pages = [at(0)..at(1), at(2)..at(4), at(5)..at(6), at(7)..at(8)];
+        let by_bytes = run_lists(&pages, 1024, 3 * HOST_PAGE).expect("lists");
+        assert_eq!(by_bytes, vec![0..2, 2..4]);
+        assert_eq!(
+            run_lists(&pages, 1024, HOST_PAGE),
+            None,
+            "a run past a list"
+        );
+        assert_eq!(run_lists(&[], 1024, HOST_PAGE), Some(vec![]));
     }
 }

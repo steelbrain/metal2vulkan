@@ -360,6 +360,7 @@ pub(crate) struct Counters {
     host_ram_staged_fills_gated: AtomicU64,
     host_ram_staged_fill_nanos: AtomicU64,
     host_ram_dma_buf_imports: AtomicU64,
+    host_ram_run_list_imports: AtomicU64,
     host_ram_pointer_imports_failed: AtomicU64,
     host_ram_chunks_imported_ahead: AtomicU64,
     host_ram_chunks_given_back: AtomicU64,
@@ -2848,6 +2849,12 @@ impl Counters {
     /// of the RAM's source (`host_ram.rs`), besides counting it as a chunk or a run.
     pub(crate) fn host_ram_dma_buf_imported(&self) {
         (self.host_ram_dma_buf_imports).fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// The device imported a list of a copy's runs of a guest RAM as one dma-buf of the RAM's
+    /// source of run lists (`host_ram.rs`), besides counting it live as a run's import.
+    pub(crate) fn host_ram_run_list_imported(&self) {
+        (self.host_ram_run_list_imports).fetch_add(1, Ordering::Relaxed);
     }
 
     /// An import of a chunk of a guest RAM, or of an object's run inside one, by its pointer
@@ -6129,6 +6136,12 @@ pub struct WorkCounts {
     /// RAM's source (`HostRam::with_dma_buf`), not by their pointer: where the device's held
     /// pointer imports add to every submission's cost, or it refused the pointer.
     pub host_ram_dma_buf_imports: u64,
+    /// The imports of a copy's runs of guest RAM, each list of up to the count the RAM was given
+    /// as one dma-buf of its source of run lists (`HostRam::with_dma_buf_of_runs`): a copy by
+    /// runs over a chunk not imported, on a device whose held imports add to every submission's
+    /// cost and whose chunks of the RAM are its dma-bufs (RADV's). Each is live in
+    /// `run_imports_live` until the copy's command buffer completed.
+    pub host_ram_run_list_imports: u64,
     /// The imports of guest RAM, chunks and objects' runs alike, by their pointer that failed:
     /// the driver or the runtime refused the pages (RADV refuses any shared mapping's), or memory
     /// ran out. For a RAM with a source of dma-bufs each was then tried as one dma-buf where the
@@ -6170,11 +6183,12 @@ pub struct WorkCounts {
     /// no making waits for a chunk's import. The objects over the chunk after that are bound in
     /// it (`chunk_bound_buffers_made`).
     pub run_bound_buffers_made: u64,
-    /// The imports of runs of guest RAM those buffers were bound in that are not yet let go of
-    /// (a gauge): each goes with its last holder, the buffer or a command buffer that used it,
-    /// whatever became of the chunk, or, a buffer's (not a heap's) whose address was never
-    /// handed out, once released while idle, the buffer bound in the chunk's import at its next
-    /// use where that is made by then.
+    /// The imports of runs of guest RAM those buffers were bound in, and of a copy's own runs
+    /// (`BlitCommandEncoder::copy_from_host_ram`, `copy_to_host_ram`: alone, or as a list,
+    /// `host_ram_run_list_imports`), that are not yet let go of (a gauge): each goes with its last
+    /// holder, the buffer or a command buffer that used it, whatever became of the chunk, or, a
+    /// buffer's (not a heap's) whose address was never handed out, once released while idle, the
+    /// buffer bound in the chunk's import at its next use where that is made by then.
     pub run_imports_live: u64,
     /// The live host imports the device never releases while idle as a heap's own import (a
     /// no-copy heap's). With the next three and `host_imports_kept_for_fds`, they are every live
@@ -7603,6 +7617,7 @@ impl Device {
                 .load(Ordering::Relaxed),
             host_ram_staged_fill_nanos: counters.host_ram_staged_fill_nanos.load(Ordering::Relaxed),
             host_ram_dma_buf_imports: counters.host_ram_dma_buf_imports.load(Ordering::Relaxed),
+            host_ram_run_list_imports: counters.host_ram_run_list_imports.load(Ordering::Relaxed),
             host_ram_pointer_imports_failed: counters
                 .host_ram_pointer_imports_failed
                 .load(Ordering::Relaxed),

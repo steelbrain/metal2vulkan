@@ -32,16 +32,17 @@
 //!   which the first one over it makes. Where the RAM does not fit in the memory the device's
 //!   imports count against (made so by the test), the device's thread releases it once none did for
 //!   its idle window (`WorkCounts::host_ram_chunks_released`), and a copy over it then imports its
-//!   run alone and asks for nothing (or, on such a driver, imports the chunk), the next object over
-//!   it asking for it again; where the RAM fits, the chunks stay imported past their objects and the
-//!   window, and the next object lies in its chunk with no import. Elsewhere the RAM keeps its
-//!   64 MiB chunks.
+//!   run alone and asks for the chunk again (or, on such a driver, imports the chunk); where the
+//!   RAM fits, the chunks stay imported past their objects and the window, and the next object lies
+//!   in its chunk with no import. Elsewhere the RAM keeps its 64 MiB chunks.
 //! - **A guest's tile copied by runs.** 1,800 scattered pages gathered and scattered back, over
 //!   chunks not imported and imported, byte for byte. Where each listed import costs every
-//!   submission and runs are imported alone (RADV), a copy over a chunk not imported imports its
-//!   ranges alone as dma-bufs, joined only across pages in memory, takes no chunk and asks for
-//!   none, so over a RAM of which the guest wrote the tile's pages alone it makes no other page of
-//!   the file resident (`mincore`).
+//!   submission and the device's barriers order blits through two imports of the same pages
+//!   (RADV), a copy over a chunk not imported, of a RAM with a source of run lists
+//!   (`HostRam::with_dma_buf_of_runs`, udmabuf's `UDMABUF_CREATE_LIST` here), takes lists of its
+//!   runs, at most 1,024 a list, takes no chunk and asks for none, so over a RAM of which the
+//!   guest wrote the tile's pages alone it makes no other page of the file resident (`mincore`);
+//!   of a RAM without one, it imports the chunk. Elsewhere the source of run lists is never asked.
 //!
 //! Each run prints the device's verdict and the route its chunk took: the evidence of which path
 //! ran. Where `/dev/udmabuf` cannot be opened, or the device imports no host memory, the test says
@@ -50,12 +51,12 @@
 //! A device test: compiled only under the GPU safety cfgs (`m2v_gpu`, `m2v_cpu_icd`), on Linux.
 
 use super::host_ram_device::runs_alone;
-use super::host_residency::{device, udmabuf, Scratch};
+use super::host_residency::{device, udmabuf, udmabuf_list, Scratch};
 use crate::submit_check::{Check, Verdict};
 use crate::{
-    Buffer, CommandBufferStatus, Device, DmaBufChunk, DmaBufRequest, DmaBufSource, Error,
-    HostBacking, HostMemory, HostRam, KeepAlive, Origin, ResourceOptions, RunResolver, Size,
-    TextureDescriptor,
+    Buffer, CommandBufferStatus, Device, DmaBufChunk, DmaBufRequest, DmaBufRunsSource,
+    DmaBufSource, Error, HostBacking, HostMemory, HostRam, KeepAlive, Origin, ResourceOptions,
+    RunResolver, Size, TextureDescriptor,
 };
 use metal2vulkan::metal::{PixelFormat, TextureUsage};
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
@@ -96,16 +97,27 @@ impl Drop for Mappings {
 }
 
 /// What the source was asked: each request's first byte, length and granule, and those it
-/// refused as lying outside the RAM.
+/// refused as lying outside the RAM; and what the source of run lists was asked, each list's
+/// requests.
 #[derive(Default)]
 struct Asked {
     requests: Vec<(u64, u64, u64)>,
     outside: Vec<(u64, u64)>,
+    lists: Vec<Vec<(u64, u64, u64)>>,
 }
 
 /// The RAM over a new sealed `memfd`, with a source of dma-bufs of it where `sourced`; the RAM's
 /// first byte, the view's, what the source was asked, and whether the keep-alive was dropped.
 fn ram(sourced: bool) -> (Arc<HostRam>, u64, u64, Arc<Mutex<Asked>>, Arc<AtomicBool>) {
+    listed_ram(sourced, None)
+}
+
+/// [`ram`], with a source of run lists too where `lists` gives their most runs
+/// (`HostRam::with_dma_buf_of_runs`): udmabuf's list of the runs asked for.
+fn listed_ram(
+    sourced: bool,
+    lists: Option<usize>,
+) -> (Arc<HostRam>, u64, u64, Arc<Mutex<Asked>>, Arc<AtomicBool>) {
     // SAFETY: a new anonymous file, owned at once, then sized and sealed.
     let fd = unsafe {
         let fd = libc::memfd_create(
@@ -147,6 +159,7 @@ fn ram(sourced: bool) -> (Arc<HostRam>, u64, u64, Arc<Mutex<Asked>>, Arc<AtomicB
     let memfd = Arc::new(fd);
     let source: DmaBufSource = {
         let asked = Arc::clone(&asked);
+        let memfd = Arc::clone(&memfd);
         Arc::new(move |request: DmaBufRequest| {
             let first = request.start.as_ptr() as u64;
             let mut asked = asked.lock().unwrap();
@@ -165,12 +178,40 @@ fn ram(sourced: bool) -> (Arc<HostRam>, u64, u64, Arc<Mutex<Asked>>, Arc<AtomicB
             }])
         })
     };
+    let listing: DmaBufRunsSource = {
+        let asked = Arc::clone(&asked);
+        Arc::new(move |requests: &[DmaBufRequest]| {
+            let list: Vec<(u64, u64, u64)> = (requests.iter())
+                .map(|request| {
+                    let first = request.start.as_ptr() as u64;
+                    (first, request.length, request.granule)
+                })
+                .collect();
+            asked.lock().unwrap().lists.push(list.clone());
+            let inside = (list.iter()).all(|&(first, length, _)| {
+                first >= start && first.saturating_add(length) <= start + RAM_BYTES
+            });
+            if !inside {
+                return Err(std::io::Error::other("pages outside the RAM"));
+            }
+            let runs: Vec<(u64, u64)> = (list.iter())
+                .map(|&(first, length, _)| (first - start, length))
+                .collect();
+            let fd = udmabuf_list(&memfd, &runs)?;
+            let length = runs.iter().map(|&(_, length)| length).sum();
+            Ok(DmaBufChunk { fd, length })
+        })
+    };
     let at = NonNull::new(start as *mut u8).unwrap();
     // SAFETY: the mapping is readable and writable until the keep-alive unmaps it.
     let ram = unsafe { HostRam::new(&[(at, RAM_BYTES)], Some(keep)) }.unwrap();
     let ram = match sourced {
         true => ram.with_dma_buf(source),
         false => ram,
+    };
+    let ram = match lists {
+        Some(most) => ram.with_dma_buf_of_runs(listing, most),
+        None => ram,
     };
     (Arc::new(ram), start, view, asked, dropped)
 }
@@ -740,9 +781,8 @@ fn where_each_listed_import_costs_a_submission_the_ram_is_long_chunks_released_o
         released.host_ram_chunks_live,
         before_freed.get(),
     );
-    // A copy over a released chunk: its run imported alone for it, and the chunk not asked for
-    // (a copy pins its own pages alone); where no run is imported alone, the chunk imported for
-    // it.
+    // A copy over a released chunk: its run imported alone for it, the chunk asked for again;
+    // where no run is imported alone, the chunk imported for it.
     let run = start + filled..start + filled + LENGTH;
     let gathered = read_back(&device, LENGTH, |encoder, own| {
         (encoder.copy_from_host_ram(&ram, std::slice::from_ref(&run), own, 0)).unwrap();
@@ -750,39 +790,19 @@ fn where_each_listed_import_costs_a_submission_the_ram_is_long_chunks_released_o
     assert!(gathered.iter().all(|&b| b == 0x3c), "the copy's gather");
     let copied = until(
         &|counts| {
-            imported(counts) == imported(&released) + 1 - alone
-                && runs_live(counts) == runs_live(&before)
+            imported(counts) == imported(&released) + 1 && runs_live(counts) == runs_live(&before)
         },
-        "the copy's run's import outlived it, or its chunk was never imported where no run is \
-         imported alone",
+        "the copy's chunk was never imported again, or its run's import outlived it",
     );
     assert_eq!(
         copied.host_ram_dma_buf_imports - released.host_ram_dma_buf_imports,
-        1,
-        "the copy's run alone where runs are imported alone, else its chunk"
+        1 + alone,
+        "the copy's run alone where runs are imported alone, and its chunk"
     );
-    // Past a tick of the device's thread: the copy asked for no chunk.
-    std::thread::sleep(Duration::from_secs(1));
-    assert_eq!(
-        imported(&device.work_counts()),
-        imported(&copied),
-        "the copy asked for its chunk"
-    );
-    // The next object over that chunk lies in it where the copy imported it; else in its run's
-    // import, asking for the chunk, which the device's thread imports. It reads the GPU's bytes.
+    // The next object over that chunk lies in it, and reads the GPU's bytes.
     let again = buffer(&device, view, start, filled, LENGTH);
     let after = device.work_counts();
-    assert_eq!(
-        (
-            chunk_bound(&after) - chunk_bound(&copied),
-            run_bound(&after) - run_bound(&copied)
-        ),
-        (1 - alone, alone)
-    );
-    until(
-        &|counts| imported(counts) == imported(&released) + 1,
-        "the object's chunk was never imported again",
-    );
+    assert_eq!(chunk_bound(&after) - chunk_bound(&copied), 1);
     let read = read_back(&device, LENGTH, |encoder, own| {
         (encoder.copy_from_buffer_to_buffer(&again, 0, own, 0, LENGTH)).unwrap();
     });
@@ -959,26 +979,41 @@ fn tile_runs(start: u64, tile: Tile) -> Vec<std::ops::Range<u64>> {
         .collect()
 }
 
-/// The ranges a copy of `runs` imports alone on a device whose plan is listed, where every page
-/// of the RAM is in memory (the RAM's pages joined across less than 2 MiB) or only the runs'
-/// own are (`resident`, joined only where they meet): the copy's dma-buf imports.
-fn alone_imports(runs: &[std::ops::Range<u64>], resident: bool) -> u64 {
+/// The runs a copy of `runs` (whole 4 KiB pages) lists on a device whose plan is listed: by
+/// address, those that meet one (`copy::page_runs`).
+fn sorted_runs(runs: &[std::ops::Range<u64>]) -> u64 {
     let mut sorted: Vec<(u64, u64)> = runs.iter().map(|run| (run.start, run.end)).collect();
     sorted.sort_unstable();
-    // A range starts where a run lies this far or more past the bytes before it.
-    let apart = match resident {
-        true => 2 * MIB,
-        false => 1,
-    };
     let mut count = 0;
     let mut end: Option<u64> = None;
     for (start, run_end) in sorted {
-        if end.is_none_or(|end| start >= end + apart) {
+        if end.is_none_or(|end| start > end) {
             count += 1;
         }
         end = Some(end.map_or(run_end, |end| end.max(run_end)));
     }
     count
+}
+
+/// The lists a copy of `runs` takes over the chunks `spans` not imported, at most `most` runs a
+/// list: each chunk's runs by address, those that meet one ([`sorted_runs`]), `most` a list.
+fn lists_of(runs: &[std::ops::Range<u64>], spans: &[std::ops::Range<u64>], most: usize) -> u64 {
+    (spans.iter())
+        .map(|span| {
+            let inside: Vec<std::ops::Range<u64>> = (runs.iter())
+                .filter(|run| span.contains(&run.start))
+                .cloned()
+                .collect();
+            sorted_runs(&inside).div_ceil(most as u64)
+        })
+        .sum()
+}
+
+/// The chunks of `spans` any of `runs` lies in.
+fn chunks_of(runs: &[std::ops::Range<u64>], spans: &[std::ops::Range<u64>]) -> u64 {
+    (spans.iter())
+        .filter(|span| runs.iter().any(|run| span.contains(&run.start)))
+        .count() as u64
 }
 
 /// The bytes of the RAM's file in memory (`mincore` over its mapping from `start`): the pages
@@ -1023,11 +1058,14 @@ fn tile_copy(
     (copied, encoded, began.elapsed())
 }
 
-/// What one copy of a tile took: the chunks and the dma-bufs it imported.
+/// What one copy of a tile took: the chunks it imported, the dma-bufs of the RAM's source
+/// (`host_ram_dma_buf_imports`: chunks and ranges alone) and the lists of its runs, each a
+/// dma-buf of the RAM's source of run lists (`host_ram_run_list_imports`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Took {
     chunks: u64,
     dma_bufs: u64,
+    lists: u64,
 }
 
 /// A tile's copies, both ways: a gather into `own`, which reads the RAM's bytes page by page
@@ -1060,6 +1098,7 @@ impl TileRound<'_> {
         let mut took = [Took {
             chunks: 0,
             dma_bufs: 0,
+            lists: 0,
         }; 2];
         for (way, gather) in [true, false].into_iter().enumerate() {
             let before = self.device.work_counts();
@@ -1083,7 +1122,7 @@ impl TileRound<'_> {
             println!(
                 "HOST-RAM-TILE {}: {}, {name}: {copied:?} in {:.2} ms encoding, {:.2} ms in all; \
                  copies {}, dispatches {}, regions {}, chunks imported {}, dma-buf imports {}, \
-                 pointer imports failed {}, run imports live {}",
+                 run lists imported {}, pointer imports failed {}, run imports live {}",
                 self.device.name(),
                 self.what,
                 encoded.as_secs_f64() * 1e3,
@@ -1093,12 +1132,14 @@ impl TileRound<'_> {
                 delta(|c| c.host_ram_copy_regions),
                 delta(|c| c.host_ram_chunks_imported),
                 delta(|c| c.host_ram_dma_buf_imports),
+                delta(|c| c.host_ram_run_list_imports),
                 delta(|c| c.host_ram_pointer_imports_failed),
                 after.run_imports_live,
             );
             took[way] = Took {
                 chunks: delta(|c| c.host_ram_chunks_imported),
                 dma_bufs: delta(|c| c.host_ram_dma_buf_imports),
+                lists: delta(|c| c.host_ram_run_list_imports),
             };
             let what = format!("{}, {name}", self.what);
             if let Err(error) = &copied {
@@ -1139,26 +1180,45 @@ impl TileRound<'_> {
     }
 }
 
-/// Whether the device imports a RAM with a source as each listed import costing every
-/// submission (`Plan::listed`, RADV's) and imports a copy's runs alone there (no
-/// `AliasedImportBlitsUnordered`): where a copy over a chunk not imported takes no chunk.
-fn copies_alone_listed(device: &Device) -> bool {
+/// Whether a copy over a chunk not imported takes lists of its runs, given the RAM's source of
+/// them: the device imports a RAM with a source as each listed import costing every submission
+/// (`Plan::listed`, RADV's), and its barriers order blits through two imports of the same pages
+/// (no `AliasedImportBlitsUnordered`, [`runs_alone`]).
+fn copies_by_lists(device: &Device) -> bool {
     device.pointer_imports_tax_submissions() && imports_dma_bufs(device) && runs_alone(device) == 1
 }
 
 /// Past a tick of the device's thread, which imports a chunk asked for at once.
 const ASK_WAIT: Duration = Duration::from_secs(1);
 
+/// The most runs a list of the tests' sources holds: udmabuf's default `list_limit`.
+const LIST_RUNS: usize = 1024;
+
+/// Whether every list `asked` asked for held at most [`LIST_RUNS`] runs, each whole pages with a
+/// granule of its length, by start, sharing no page: the source's contract.
+fn lists_kept_the_contract(asked: &Asked) -> bool {
+    (asked.lists.iter()).all(|list| {
+        let whole = (list.iter()).all(|&(first, length, granule)| {
+            first % 4096 == 0 && length % 4096 == 0 && length > 0 && granule == length
+        });
+        let apart = list
+            .windows(2)
+            .all(|pair| pair[0].0 + pair[0].1 < pair[1].0);
+        !list.is_empty() && list.len() <= LIST_RUNS && whole && apart
+    })
+}
+
 /// A guest's tile of [`TILE_PAGES`] scattered pages copied both ways over a RAM of shared pages
 /// (QEMU's `memory-backend-memfd,share=on`) with a source of dma-bufs, as a consumer's cache asks
 /// copy it: first with its chunks not imported, then with them imported by objects over them.
 /// Each gather reads the RAM's bytes page by page, each scatter writes each page and leaves the
-/// page above it alone. Where each listed import costs every submission and runs are imported
-/// alone (RADV), a copy over a chunk not imported imports its ranges alone, as dma-bufs (one
-/// range for the near tile, its pages between in memory; one a group for the spread one), and
-/// takes no chunk, nor asks the device's thread for one; over chunks imported, no import. Printed
-/// (`HOST-RAM-TILE`): each copy's answer, its encoding's time and the whole copy's, and the
-/// imports it took.
+/// page above it alone. Where each listed import costs every submission and the device's barriers
+/// order blits through two imports of the same pages (RADV), a copy over a chunk not imported,
+/// of a RAM with a source of run lists, takes lists of its runs (1,800 runs, two lists of at most
+/// 1,024), no chunk and no other dma-buf, and asks the device's thread for none; of a RAM without
+/// one, it imports the chunk, as before. Elsewhere the source of run lists is never asked. Over
+/// chunks imported, no import. Printed (`HOST-RAM-TILE`): each copy's answer, its encoding's time
+/// and the whole copy's, and the imports it took.
 #[test]
 fn a_tile_of_scattered_pages_copies_both_ways_over_a_ram_of_shared_pages() {
     let scratch = Scratch::new();
@@ -1170,14 +1230,18 @@ fn a_tile_of_scattered_pages_copies_both_ways_over_a_ram_of_shared_pages() {
         eprintln!("HOST-RAM-TILE: the device imports no host memory here; nothing to test");
         return;
     }
-    let alone = copies_alone_listed(&device);
+    let by_lists = copies_by_lists(&device);
     let own = device
         .new_buffer(TILE_PAGES * 4096, ResourceOptions::shared())
         .unwrap();
     let mut failures = Vec::new();
-    for tile in [Tile::Near, Tile::Spread] {
+    for (tile, lists) in [
+        (Tile::Near, Some(LIST_RUNS)),
+        (Tile::Spread, Some(LIST_RUNS)),
+        (Tile::Spread, None),
+    ] {
         // A RAM of its own, none of its chunks imported.
-        let (ram, start, view, _asked, _dropped) = ram(true);
+        let (ram, start, view, asked, _dropped) = listed_ram(true, lists);
         let ram = Arc::into_inner(ram).expect("the test's RAM");
         let ram = Arc::new(ram.with_largest_dma_buf(udmabuf_size_limit()));
         fill_pattern(view, RAM_BYTES);
@@ -1185,10 +1249,16 @@ fn a_tile_of_scattered_pages_copies_both_ways_over_a_ram_of_shared_pages() {
         let first = device.work_counts();
         let used = device.use_host_ram(&ram).unwrap();
         let chunks = device.host_ram_chunks();
+        let [(_, spans)] = &chunks[..] else {
+            panic!("one RAM: {chunks:?}");
+        };
         let runs = tile_runs(start, tile);
-        let expected = alone_imports(&runs, true);
         let imported = |counts: &crate::WorkCounts| {
             counts.host_ram_chunks_imported - first.host_ram_chunks_imported
+        };
+        let named = match lists {
+            Some(_) => "lists",
+            None => "no lists",
         };
         let round = TileRound {
             device: &device,
@@ -1196,35 +1266,67 @@ fn a_tile_of_scattered_pages_copies_both_ways_over_a_ram_of_shared_pages() {
             runs: &runs,
             own: &own,
             start,
-            what: format!("{tile:?} over chunks {chunks:?}, not imported"),
+            what: format!("{tile:?}, {named}, over chunks {chunks:?}, not imported"),
         };
         // The scatter's bytes stay for the next round's gather.
         let (took, failed) = round.run(0, |_, at| pattern(at), Some(&pattern));
         failures.extend(failed);
-        if alone {
-            let each = Took {
-                chunks: 0,
-                dma_bufs: expected,
-            };
-            assert_eq!(
-                took, [each; 2],
-                "{tile:?}: a copy over chunks not imported took its range(s) alone, no chunk"
-            );
-            std::thread::sleep(ASK_WAIT);
-            assert_eq!(
-                imported(&device.work_counts()),
-                0,
-                "{tile:?}: a copy asked the device's thread for a chunk"
-            );
-            assert_eq!(
-                device.work_counts().run_imports_live,
-                first.run_imports_live
-            );
+        match (by_lists, lists) {
+            (true, Some(most)) => {
+                let each = Took {
+                    chunks: 0,
+                    dma_bufs: 0,
+                    lists: lists_of(&runs, spans, most),
+                };
+                assert_eq!(
+                    took, [each; 2],
+                    "{tile:?}: a copy over chunks not imported took lists of its runs alone"
+                );
+                std::thread::sleep(ASK_WAIT);
+                assert_eq!(
+                    imported(&device.work_counts()),
+                    0,
+                    "{tile:?}: a copy asked the device's thread for a chunk"
+                );
+                assert_eq!(
+                    device.work_counts().run_imports_live,
+                    first.run_imports_live,
+                    "{tile:?}: a list outlived its copy"
+                );
+                let asked = asked.lock().unwrap();
+                assert!(
+                    lists_kept_the_contract(&asked),
+                    "{tile:?}: a list's requests"
+                );
+                assert_eq!(asked.lists.len() as u64, 2 * each.lists);
+            }
+            (true, None) => {
+                // The chunks, imported for the gather and kept for the scatter.
+                let gather = Took {
+                    chunks: chunks_of(&runs, spans),
+                    dma_bufs: chunks_of(&runs, spans),
+                    lists: 0,
+                };
+                let scatter = Took {
+                    chunks: 0,
+                    dma_bufs: 0,
+                    lists: 0,
+                };
+                assert_eq!(
+                    took,
+                    [gather, scatter],
+                    "{tile:?}: without lists, the chunk"
+                );
+            }
+            (false, _) => {
+                assert!(
+                    asked.lock().unwrap().lists.is_empty(),
+                    "{tile:?}: the source of run lists asked where copies take none"
+                );
+                assert_eq!(took.map(|took| took.lists), [0; 2]);
+            }
         }
         // An object over each chunk: the chunks asked for, and imported.
-        let [(_, spans)] = &chunks[..] else {
-            panic!("one RAM: {chunks:?}");
-        };
         let holders: Vec<Buffer> = (spans.iter())
             .map(|span| buffer(&device, view, start, span.start - start + AT, LENGTH))
             .collect();
@@ -1237,7 +1339,7 @@ fn a_tile_of_scattered_pages_copies_both_ways_over_a_ram_of_shared_pages() {
             std::thread::sleep(Duration::from_millis(20));
         }
         let round = TileRound {
-            what: format!("{tile:?} over chunks {chunks:?}, imported"),
+            what: format!("{tile:?}, {named}, over chunks {chunks:?}, imported"),
             ..round
         };
         // The gather reads the first round's scatter.
@@ -1246,6 +1348,7 @@ fn a_tile_of_scattered_pages_copies_both_ways_over_a_ram_of_shared_pages() {
         let none = Took {
             chunks: 0,
             dma_bufs: 0,
+            lists: 0,
         };
         assert_eq!(
             took, [none; 2],
@@ -1258,12 +1361,12 @@ fn a_tile_of_scattered_pages_copies_both_ways_over_a_ram_of_shared_pages() {
 }
 
 /// A tile copied both ways over a RAM of which the guest wrote the tile's pages alone, the rest
-/// of its file never touched: where each listed import costs every submission and runs are
-/// imported alone (RADV), the copies make no page of the file resident but the tile's own
-/// (`mincore` over the RAM's mapping), however its ranges lie: each range imported alone, none
-/// joined across pages not in memory, no chunk imported, none asked for. A chunk's import would
-/// make all of the chunk resident. Elsewhere the copies' bytes are checked and the resident bytes
-/// printed. Printed: `HOST-RAM-TILE` per copy, `HOST-RAM-RESIDENT` per tile.
+/// of its file never touched, with a source of run lists: where copies take lists (RADV,
+/// [`copies_by_lists`]), the copies make no page of the file resident but the tile's own
+/// (`mincore` over the RAM's mapping), however its pages lie: lists of its runs, no chunk
+/// imported, none asked for. A chunk's import would make all of the chunk resident. Elsewhere the
+/// copies' bytes are checked and the resident bytes printed. Printed: `HOST-RAM-TILE` per copy,
+/// `HOST-RAM-RESIDENT` per tile.
 #[test]
 fn copies_over_a_listed_ram_make_no_untouched_page_of_it_resident() {
     let scratch = Scratch::new();
@@ -1275,13 +1378,13 @@ fn copies_over_a_listed_ram_make_no_untouched_page_of_it_resident() {
         eprintln!("HOST-RAM-RESIDENT: the device imports no host memory here; nothing to test");
         return;
     }
-    let alone = copies_alone_listed(&device);
+    let by_lists = copies_by_lists(&device);
     let own = device
         .new_buffer(TILE_PAGES * 4096, ResourceOptions::shared())
         .unwrap();
     let mut failures = Vec::new();
     for tile in [Tile::Clusters, Tile::Near] {
-        let (ram, start, view, _asked, _dropped) = ram(true);
+        let (ram, start, view, _asked, _dropped) = listed_ram(true, Some(LIST_RUNS));
         let ram = Arc::into_inner(ram).expect("the test's RAM");
         let ram = Arc::new(ram.with_largest_dma_buf(udmabuf_size_limit()));
         let runs = tile_runs(start, tile);
@@ -1298,6 +1401,10 @@ fn copies_over_a_listed_ram_make_no_untouched_page_of_it_resident() {
         let touched = resident_bytes(start);
         let used = device.use_host_ram(&ram).unwrap();
         let first = device.work_counts();
+        let chunks = device.host_ram_chunks();
+        let [(_, spans)] = &chunks[..] else {
+            panic!("one RAM: {chunks:?}");
+        };
         let round = TileRound {
             device: &device,
             ram: &ram,
@@ -1321,15 +1428,13 @@ fn copies_over_a_listed_ram_make_no_untouched_page_of_it_resident() {
             after >> 10,
             counts.host_ram_chunks_imported - first.host_ram_chunks_imported,
         );
-        if alone {
+        if by_lists {
             let each = Took {
                 chunks: 0,
-                dma_bufs: alone_imports(&runs, false),
+                dma_bufs: 0,
+                lists: lists_of(&runs, spans, LIST_RUNS),
             };
-            assert_eq!(
-                took, [each; 2],
-                "{tile:?}: each range alone, none joined across pages not in memory"
-            );
+            assert_eq!(took, [each; 2], "{tile:?}: lists of the runs alone");
             assert_eq!(
                 counts.host_ram_chunks_imported, first.host_ram_chunks_imported,
                 "{tile:?}: a chunk imported or asked for"

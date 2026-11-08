@@ -152,6 +152,21 @@ unsafe impl Send for DmaBufRequest {}
 // SAFETY: as above.
 unsafe impl Sync for DmaBufRequest {}
 
+/// A runtime extension (Metal has none): makes one dma-buf of a list of runs of a guest RAM's
+/// host pages, for a copy by runs over them
+/// ([`HostRam::with_dma_buf_of_runs`](crate::HostRam::with_dma_buf_of_runs)); on Linux, udmabuf's
+/// `UDMABUF_CREATE_LIST`.
+///
+/// Each request of the list is whole host pages ([`DmaBufRequest`]: `start` and `length`
+/// multiples of the host page, its `granule` its `length`); the requests are by start and share
+/// no page, all inside one chunk of the RAM, and at most as many as the RAM was given. It returns
+/// one [`DmaBufChunk`]: a dma-buf whose bytes are the requests' pages one after another, in
+/// order, its `length` their total. The descriptor is the runtime's from then on: Vulkan's once
+/// imported, closed otherwise. An `Err`, or a chunk of another length or no dma-buf, leaves the
+/// copy to what it takes without the source.
+pub type DmaBufRunsSource =
+    Arc<dyn Fn(&[DmaBufRequest]) -> std::io::Result<DmaBufChunk> + Send + Sync + 'static>;
+
 /// One chunk of a [`DmaBufSource`]'s answer: a dma-buf whose bytes `0..length` are the requested
 /// pages from where the chunks before it end.
 #[derive(Debug)]
@@ -260,6 +275,25 @@ impl DmaBufPages {
             source: Some(ProgramObject::new(source)),
             start: request.start.as_ptr() as u64,
             length: request.length,
+            bound: None,
+            kept_for_fds: false,
+            after_free: Mutex::new(Vec::new()),
+        }
+    }
+
+    /// The imports of one dma-buf of a list of runs of a guest RAM's pages, the first from host
+    /// address `start` ([`Device::ram_runs_as_dma_buf`]), none imported yet: a buffer's, with no
+    /// source kept (the RAM keeps its source of run lists, and the import holds the RAM until it
+    /// is freed: `host_ram.rs`'s `RamChunk`) and no bytes held in host order (the runs lie apart),
+    /// so no texture's request is ever over them.
+    fn of_runs(device: &Device, start: NonNull<u8>) -> DmaBufPages {
+        DmaBufPages {
+            device: device.clone(),
+            memories: Vec::new(),
+            of_image: false,
+            source: None,
+            start: start.as_ptr() as u64,
+            length: 0,
             bound: None,
             kept_for_fds: false,
             after_free: Mutex::new(Vec::new()),
@@ -515,6 +549,75 @@ impl Device {
             self.chunks_buffer(
                 importer,
                 chunks,
+                &mut pages,
+                length,
+                &window,
+                MemoryClass::Shared,
+            )
+        }?;
+        self.shared().counts.dma_buf_imported(pages.memories.len());
+        let placement = Placement::dma_buf(Arc::new(pages), memory, type_index, length, start);
+        Ok((buffer.raw, placement))
+    }
+
+    /// `runs`, host pages of a guest RAM (`host_ram.rs`: by start, sharing no page, inside one
+    /// chunk), imported as the one dma-buf of them, their pages one after another, that the RAM's
+    /// `source` of run lists makes (`HostRam::with_dma_buf_of_runs`): the `VkBuffer` over all
+    /// their bytes, made for dma-bufs and bound to the import at its start, and its placement,
+    /// which keeps the import. Only a copy's commands name the buffer: no object is placed in it.
+    /// Refused, everything made released, as [`Device::ram_span_as_dma_buf`] is, where the device
+    /// makes no such buffer, the source fails or answers a chunk of another length, or the driver
+    /// refuses the dma-buf.
+    ///
+    /// # Safety
+    ///
+    /// The runs are pages of the RAM's ranges, which stay mapped while the placement holds the
+    /// import, and the source's dma-buf holds exactly those pages, in order.
+    pub(super) unsafe fn ram_runs_as_dma_buf(
+        &self,
+        importer: &Importer,
+        runs: &[Range<u64>],
+        source: &DmaBufRunsSource,
+    ) -> Result<(vk::Buffer, Placement), Error> {
+        if !importer.imports_dma_bufs()
+            || !self.imports_dma_buf_buffers(vk::BufferCreateFlags::empty())
+        {
+            return Err(not_importable());
+        }
+        let requests: Option<Vec<DmaBufRequest>> = (runs.iter())
+            .map(|run| {
+                let start = NonNull::new(run.start as *mut u8)?;
+                let length = run.end.checked_sub(run.start)?;
+                Some(DmaBufRequest {
+                    start,
+                    length,
+                    granule: length,
+                })
+            })
+            .collect();
+        let requests = requests.ok_or_else(not_importable)?;
+        let start = requests.first().ok_or_else(not_importable)?.start;
+        let length: u64 = requests.iter().map(|request| request.length).sum();
+        let chunk = source(&requests).map_err(|_| not_importable())?;
+        let whole = DmaBufRequest {
+            start,
+            length,
+            granule: length,
+        };
+        if !answers(std::slice::from_ref(&chunk), &whole, importer.page) {
+            return Err(invalid("use_host_ram", Problem::DmaBuf));
+        }
+        let window = ImportWindow {
+            start: start.as_ptr() as u64,
+            size: length,
+            offset: 0,
+        };
+        let mut pages = DmaBufPages::of_runs(self, start);
+        // SAFETY: the caller's.
+        let (buffer, memory, type_index) = unsafe {
+            self.chunks_buffer(
+                importer,
+                vec![chunk],
                 &mut pages,
                 length,
                 &window,

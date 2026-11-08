@@ -2804,6 +2804,7 @@ field	metal2vulkan-runtime::WorkCounts.host_ram_copy_import_waits	pub host_ram_c
 field	metal2vulkan-runtime::WorkCounts.host_ram_copy_regions	pub host_ram_copy_regions: u64
 field	metal2vulkan-runtime::WorkCounts.host_ram_dma_buf_imports	pub host_ram_dma_buf_imports: u64
 field	metal2vulkan-runtime::WorkCounts.host_ram_pointer_imports_failed	pub host_ram_pointer_imports_failed: u64
+field	metal2vulkan-runtime::WorkCounts.host_ram_run_list_imports	pub host_ram_run_list_imports: u64
 field	metal2vulkan-runtime::WorkCounts.host_ram_staged_fill_nanos	pub host_ram_staged_fill_nanos: u64
 field	metal2vulkan-runtime::WorkCounts.host_ram_staged_fills_gated	pub host_ram_staged_fills_gated: u64
 field	metal2vulkan-runtime::WorkCounts.host_range_lookups	pub host_range_lookups: u64
@@ -8192,6 +8193,7 @@ method	metal2vulkan-runtime::HostMemory::with_runs	pub fn with_runs(self, resolv
 method	metal2vulkan-runtime::HostRam::new	pub unsafe fn new(ranges: &[(NonNull<u8>, u64)], keep_alive: Option<KeepAlive>) -> Result<HostRam, Error>
 method	metal2vulkan-runtime::HostRam::with_dirty_pages	pub fn with_dirty_pages<D>(mut self, source: Arc<D>) -> HostRam where D: DirtyPages + ?Sized + 'static, D::Watch: 'static,
 method	metal2vulkan-runtime::HostRam::with_dma_buf	pub fn with_dma_buf(mut self, source: DmaBufSource) -> HostRam
+method	metal2vulkan-runtime::HostRam::with_dma_buf_of_runs	pub fn with_dma_buf_of_runs(mut self, source: DmaBufRunsSource, most_runs: usize) -> HostRam
 method	metal2vulkan-runtime::HostRam::with_largest_dma_buf	pub fn with_largest_dma_buf(mut self, bytes: u64) -> HostRam
 method	metal2vulkan-runtime::IndirectBufferBinding::new	pub fn new(address: GpuAddress, attribute_stride: Option<u64>) -> IndirectBufferBinding
 method	metal2vulkan-runtime::IndirectCommandBuffer::allocated_size	pub fn allocated_size(&self) -> u64
@@ -10394,6 +10396,7 @@ trait-item	metal2vulkan::cache::PipelineArtifact::to_bytes	fn to_bytes(&self) ->
 trait-item	metal2vulkan::cache::PipelineArtifact::write_to	fn write_to(&self, out: &mut dyn std::io::Write) -> std::io::Result<()>
 type	metal2vulkan-air::container::Hash256	pub type Hash256 = [u8; 32]
 type	metal2vulkan-runtime::Deallocator	pub type Deallocator = Box<dyn FnOnce(NonNull<u8>, u64) + Send + 'static>
+type	metal2vulkan-runtime::DmaBufRunsSource	pub type DmaBufRunsSource = Arc<dyn Fn(&[DmaBufRequest]) -> std::io::Result<DmaBufChunk> + Send + Sync + 'static>
 type	metal2vulkan-runtime::DmaBufSource	pub type DmaBufSource = Arc<dyn Fn(DmaBufRequest) -> std::io::Result<Vec<DmaBufChunk>> + Send + Sync + 'static>
 type	metal2vulkan-runtime::ExecutedCommandsHandler	pub type ExecutedCommandsHandler = Arc<dyn Fn(&ExecutedCommands) + Send + Sync + 'static>
 type	metal2vulkan-runtime::Handler	pub type Handler = Box<dyn FnOnce(&CommandBuffer) + Send + 'static>
