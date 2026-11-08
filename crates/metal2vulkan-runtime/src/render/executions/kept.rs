@@ -135,7 +135,7 @@ use metal2vulkan::metal::IndirectCommandType;
 use std::collections::BTreeSet;
 use std::ops::Range;
 use std::sync::atomic::Ordering;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Instant;
 
 /// What a chunk of an execution's draws is recorded from beside its records (the module docs).
@@ -231,7 +231,7 @@ pub(super) struct Keeping {
 /// the note of them its pass's core takes for the chunks (`EncoderCore::capture_apart`).
 struct Carried {
     /// The bind state (`live_bind.rs`), its heap parts kept (`LiveBind::end_chunk`).
-    live: Arc<Mutex<LiveBind>>,
+    live: Box<LiveBind>,
     /// The bind memo (`binding::BindMemo`).
     memo: BindMemo,
     residency: Residency,
@@ -252,7 +252,7 @@ struct Carried {
 
 impl Carried {
     /// What the first chunk starts from: `live` and `memo`, a copy of `residency`.
-    fn first((live, memo): (Arc<Mutex<LiveBind>>, BindMemo), residency: &Residency) -> Carried {
+    fn first((live, memo): (Box<LiveBind>, BindMemo), residency: &Residency) -> Carried {
         Carried {
             live,
             memo,
@@ -265,11 +265,13 @@ impl Carried {
     }
 }
 
-/// A chunk recorded apart: its encoder after its commands, the addresses they named and what
-/// they resolved to, the no-copy buffers' moves before it read its records, whether a command
-/// of it named a released state, and for a host step the bytes of its records.
+/// A chunk recorded apart: its encoder after its commands, with the bind state its draws brought
+/// in place, the addresses they named and what they resolved to, the no-copy buffers' moves
+/// before it read its records, whether a command of it named a released state, and for a host
+/// step the bytes of its records.
 struct Apart {
     encoder: RenderLowering,
+    live: Box<LiveBind>,
     resolved: Vec<Resolution>,
     moved: u64,
     released: bool,
@@ -697,6 +699,7 @@ impl RenderExecution {
             }
             let Apart {
                 encoder,
+                live,
                 resolved,
                 moved,
                 released,
@@ -709,12 +712,12 @@ impl RenderExecution {
             if !plain {
                 self.keep_chunk(chunk, None, read_at);
                 reads_back.push((chunk, records));
-                rest = Some((encoder, covered.end, chunk_found));
+                rest = Some((encoder, live, covered.end, chunk_found));
                 break;
             }
             let raw = encoder.current.draws;
             let heaps = encoder.replayed_heaps.clone();
-            let (capture, back) = self.end_apart(encoder, &device)?;
+            let (capture, back) = self.end_apart((encoder, live), &device)?;
             carried = Some(back);
             let captured = capture.finish_capture()?;
             let held = captured.retained.all_shared();
@@ -756,7 +759,7 @@ impl RenderExecution {
             shared.live_binds.give(live);
             shared.bind_memos.give(memo);
         }
-        let Some((mut encoder, from, chunk_found)) = rest else {
+        let Some((mut encoder, mut live, from, chunk_found)) = rest else {
             self.read_back(reads_back);
             let run = Run {
                 draws,
@@ -794,14 +797,15 @@ impl RenderExecution {
                     let (commands, faults, _) =
                         self.named_commands(&device, covered.start, written);
                     found.faults = ReplayFaults(found.faults.0 | faults.0);
-                    self.replay(&mut encoder, commands.iter().flatten(), residency, found)?;
+                    let replaying = (&mut encoder, &mut *live);
+                    self.replay(replaying, commands.iter().flatten(), residency, found)?;
                 }
             }
             false => {
                 for piece in kept_commands::pieces(from..range.end, false) {
                     let (commands, released) = self.icb.render_records(piece, Reader::Commit)?;
                     self.icb.degrade_released(&released);
-                    self.replay(&mut encoder, &commands, residency, found)?;
+                    self.replay((&mut encoder, &mut *live), &commands, residency, found)?;
                 }
             }
         }
@@ -872,7 +876,7 @@ impl RenderExecution {
         let raw = command_buffer.device().shared().vk();
         let visibility = Visibility::borrowing(None, None, raw, draws);
         let Carried {
-            live,
+            mut live,
             memo,
             residency: carried,
             gathered,
@@ -886,14 +890,15 @@ impl RenderExecution {
             (storage.clone(), layout.clone(), carried),
             forms,
         );
-        (encoder.live, encoder.bind_memo) = (live, memo);
+        encoder.bind_memo = memo;
         (encoder.unreadable, encoder.resident_again) = (unreadable, resident_again);
         if let Some(gathered) = gathered {
             encoder.current.shadows = gathered;
         }
-        self.replay(&mut encoder, commands(), residency, found)?;
+        self.replay((&mut encoder, &mut *live), commands(), residency, found)?;
         Ok(Apart {
             encoder,
+            live,
             resolved,
             moved,
             released,
@@ -926,7 +931,7 @@ impl RenderExecution {
     /// starts from ([`Carried`]), its encoder ended (`LiveBind::end_chunk`).
     fn end_apart(
         &self,
-        encoder: RenderLowering,
+        (encoder, mut live): (RenderLowering, Box<LiveBind>),
         device: &crate::Device,
     ) -> Result<(EncoderCore, Carried), Error> {
         let raw = device.shared().vk();
@@ -934,7 +939,6 @@ impl RenderExecution {
             core,
             current,
             mut visibility,
-            mut live,
             bind_memo,
             residency,
             unreadable,
@@ -945,12 +949,8 @@ impl RenderExecution {
         visibility.close_spares(raw, current.draws);
         // SAFETY: only this recording records the secondary command buffer.
         unsafe { core.command_buffer().end_raw(current.draws) }.map_err(vulkan)?;
-        // No draw holds it once its encoder ended; one that did leaves the next chunk a new one.
         // Its heap parts stay for the next chunk's draws (`LiveBind::end_chunk`).
-        match Arc::get_mut(&mut live).map(Mutex::get_mut) {
-            Some(Ok(state)) => state.end_chunk(),
-            Some(Err(_)) | None => live = Arc::default(),
-        }
+        live.end_chunk();
         let resident = core.resident_part();
         let carried = Carried {
             live,

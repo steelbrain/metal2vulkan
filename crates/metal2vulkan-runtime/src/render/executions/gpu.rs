@@ -70,7 +70,6 @@
 //!   states why (`bind::ReplayFaults`), as the host step's; the others draw.
 
 use std::ops::Range;
-use std::sync::Arc;
 
 use super::super::bound::{Bound, Recorded};
 use super::super::line_width::LineRoute;
@@ -81,12 +80,12 @@ use super::{HostStepCause, PassStorage, RenderExecution, Rendered, CALL};
 use crate::binding::PushWrite;
 use crate::blit::{reads_by, writes_by};
 use crate::command_buffer::{CommandBuffer, ReplayTable};
-use crate::device::lock;
 use crate::draw_source::DrawSource;
 use crate::encoder::EncoderCore;
 use crate::error::{internal, Error};
 use crate::executed_commands::RecordsRead;
 use crate::indirect_execute::ExecutionRange;
+use crate::live_bind::LiveBind;
 use crate::owned_kernel::OwnedModule;
 use crate::pipeline::{BufferForms, GraphicsState, RenderStateKind, Settled};
 use crate::residency::Residency;
@@ -350,7 +349,7 @@ impl RenderExecution {
             .check_pipeline(CALL, pipeline, &encoder.layout)
             .and_then(|()| {
                 encoder.pipeline = Some(pipeline.clone());
-                encoder.replay_draw_of(state, primitive_type)
+                encoder.replay_draw_of(&mut LiveBind::default(), state, primitive_type)
             });
         let RenderLowering { core, .. } = encoder;
         let form = match slots {
@@ -620,7 +619,15 @@ impl RenderExecution {
             ..DrawBuffers::default()
         };
         let assembly = Assembly::Primitives(form.primitive_type);
-        encoder.draw(CALL, assembly, draw, buffers, false)?;
+        // Its draw starts from an empty bind state, as an encoder's first draw may.
+        encoder.draw(
+            &mut LiveBind::default(),
+            CALL,
+            assembly,
+            draw,
+            buffers,
+            false,
+        )?;
         encoder.replayed = None;
         let counts = &device.shared().counts;
         counts.gpu_form_commands(u64::from(pre.layout.commands));
@@ -673,6 +680,7 @@ impl RenderLowering {
     /// nothing: it draws nothing.
     fn replay_draw_of(
         &self,
+        live: &mut LiveBind,
         state: &crate::pipeline::GraphicsState,
         primitive_type: PrimitiveType,
     ) -> Result<Result<(u32, u32), HostStepCause>, Error> {
@@ -725,12 +733,10 @@ impl RenderLowering {
         }
         let mut argument_samplers = ArgumentSamplers::taken(self.core.device());
         let function_tables = state.function_tables();
-        let live = Arc::clone(&self.live);
         let pass_start = PassStartTables::default();
         let sampler_maps = self.sampler_maps(state, &pass_start)?;
-        let mut live = lock(&live);
         let (Settled { variant, plan, .. }, _) = self.settle_draw(
-            &mut live,
+            live,
             (
                 state,
                 &settings,

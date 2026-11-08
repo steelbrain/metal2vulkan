@@ -41,6 +41,7 @@ use crate::amplification::Amplification;
 use crate::argument_table::ArgumentTable;
 use crate::draw_source::{DrawSource, KeptSource};
 use crate::error::Error;
+use crate::live_bind::LiveBind;
 use crate::pipeline::{GraphicsState as DrawingState, RenderPipelineState};
 use crate::render_state::EncoderState;
 use crate::render_target::PassShape;
@@ -117,9 +118,10 @@ impl RenderLowering {
     /// where its shape is the current one's; nothing where it would follow the current one (the
     /// pass's first instance leaving out a color it cannot clear before the pass, among others)
     /// or the draws cannot record so, which leaves the instance and the pass's layout as they
-    /// were.
+    /// were. The draws bring the encoder's bind state `live` in place.
     pub(super) fn record_leaving_out(
         &mut self,
+        live: &mut LiveBind,
         colors: Vec<u32>,
         by: &DrawingState,
     ) -> Result<bool, Error> {
@@ -191,7 +193,7 @@ impl RenderLowering {
         let mut again = Ok(());
         if let Some(draws) = previous.rerecord.as_mut() {
             for kept in draws.iter_mut() {
-                again = self.record_again(kept);
+                again = self.record_again(live, kept);
                 if again.is_err() {
                     break;
                 }
@@ -226,15 +228,20 @@ impl RenderLowering {
         }
     }
 
-    /// Record `kept` again into the current instance, with the encoder's state at it.
-    pub(super) fn record_again(&mut self, kept: &mut Rerecord) -> Result<(), Error> {
+    /// Record `kept` again into the current instance, with the encoder's state at it and its
+    /// bind state `live`.
+    pub(super) fn record_again(
+        &mut self,
+        live: &mut LiveBind,
+        kept: &mut Rerecord,
+    ) -> Result<(), Error> {
         let index = kept.index.as_ref().map(KeptSource::source).transpose()?;
         let buffers = DrawBuffers {
             index,
             ..DrawBuffers::default()
         };
         self.swap_held(&mut kept.held);
-        let drawn = self.draw_resident(kept.call, kept.assembly, kept.draw, buffers, false);
+        let drawn = self.draw_resident(live, kept.call, kept.assembly, kept.draw, buffers, false);
         self.swap_held(&mut kept.held);
         drawn
     }

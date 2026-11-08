@@ -61,6 +61,7 @@ use crate::device::functions::Vk;
 use crate::error::{internal, Error};
 use crate::framebuffer_fetch;
 use crate::image_plan::ImagePlan;
+use crate::live_bind::LiveBind;
 use crate::owned_kernel::{OwnedKernel, OwnedModule};
 use crate::pipeline::GraphicsState as DrawingState;
 use crate::render_pass::{PassLayout, RenderPassDescriptor, Target};
@@ -484,8 +485,12 @@ impl RenderLowering {
     /// an earlier draw of the pass wrote or whose clear their codes cannot hold (the module
     /// docs), in a multisampled pass every color it blends into or reads: those no earlier
     /// instance wrote, the current instance's draws recorded again first into one that leaves
-    /// them out where they wrote them.
-    pub(super) fn start_extended_shadows(&mut self, pipeline: &DrawingState) -> Result<(), Error> {
+    /// them out where they wrote them, with the encoder's bind state `live`.
+    pub(super) fn start_extended_shadows(
+        &mut self,
+        live: &mut LiveBind,
+        pipeline: &DrawingState,
+    ) -> Result<(), Error> {
         if !self.extended.holds
             || self.replaying
             || self.rerouting
@@ -550,7 +555,7 @@ impl RenderLowering {
         colors.extend(starting.iter().copied());
         colors.sort_unstable();
         colors.dedup();
-        match self.record_leaving_out(colors, pipeline)? {
+        match self.record_leaving_out(live, colors, pipeline)? {
             true => self
                 .extended
                 .fills

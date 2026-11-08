@@ -77,7 +77,7 @@
 
 use super::extended_shadow::ExtendedShadows;
 use super::{
-    reads_handles, DrawingState, Opening, RenderLog, RenderLowering, RenderPipelineState,
+    reads_handles, DrawingState, Lowering, Opening, RenderLog, RenderLowering, RenderPipelineState,
     RenderStateKind,
 };
 use crate::attachment_stand_in::{self, StandInCopies};
@@ -455,7 +455,7 @@ impl RenderLowering {
         later: &Later,
         group: u32,
         log: &RenderLog,
-    ) -> Result<Box<RenderLowering>, Error> {
+    ) -> Result<Lowering, Error> {
         const CALL: &str = "end_encoding";
         let grouping = ColorGroup::of(later.group.present.clone(), later.group.width, group)
             .ok_or_else(|| internal("a later color group of a pass in one"))?;

@@ -259,10 +259,12 @@ struct Rebinding {
 
 impl RenderLowering {
     /// The kept draw again after calls that bound other buffers, offsets, textures or samplers in
-    /// its tables, whose stamps are now `stamps` (the module docs): recorded, refused, or
-    /// [`Again::No`] where it takes every step (its check left in `checked` where it is checked).
+    /// its tables, whose stamps are now `stamps` (the module docs), with the encoder's bind state
+    /// `live`: recorded, refused, or [`Again::No`] where it takes every step (its check left in
+    /// `checked` where it is checked).
     pub(super) fn draw_rebound(
         &mut self,
+        live: &mut LiveBind,
         call: &'static str,
         (assembly, draw): (Assembly, &DrawCall),
         buffers: &DrawBuffers<'_>,
@@ -271,9 +273,6 @@ impl RenderLowering {
     ) -> Again {
         // A notice met at each occurrence forgets the draw once recorded, as its every step does.
         let watch = crate::degradation::EachWatch::start();
-        let live = Arc::clone(&self.live);
-        let mut held = crate::device::lock(&live);
-        let live = &mut *held;
         let Some(changed) = self.bring_in(live, stamps) else {
             return Again::No;
         };
@@ -286,7 +285,6 @@ impl RenderLowering {
             self.again.hits += 1;
             if hits.is_multiple_of(2) {
                 let rebound = super::Expected::Rebound(super::Rebound::of(live));
-                drop(held);
                 *checked = Some(super::Checked::of(self, rebound));
                 return Again::Check;
             }

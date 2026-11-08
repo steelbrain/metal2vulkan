@@ -287,7 +287,7 @@ use super::depth_stand_in::DepthStandIn;
 use super::depth_stencil::{DepthStencilState, FailingDraw};
 use super::depth_stencil_resolve::DrawnResolve;
 use super::depth_stencil_scratch::{ScratchCopy, Separate};
-use super::device::{lock, Device};
+use super::device::Device;
 use super::draw_source::{CopySteps, DrawSource, IndexBind};
 use super::dynamic_state::ExtendedDynamicState;
 use super::encoder::{EncoderCore, Replayed};
@@ -1659,10 +1659,6 @@ pub(crate) struct RenderLowering {
     /// strips restart (`render/restart.rs`); `None` before any, where they restart at the index
     /// type's all-ones index.
     restart: Option<u64>,
-    /// The bind state the encoder's last draw bound, with its shape, which each draw brings to
-    /// its own in place (`live_bind.rs`). Shared only so that a draw holds it while it calls the
-    /// encoder's other methods.
-    live: Arc<Mutex<LiveBind>>,
     /// Its pass's descriptor and its calls so far, where the device had a buffer over host pages
     /// as it opened (`render/replay.rs`): `None` where it logs nothing, as when it is encoded
     /// again. Boxed where it is taken (`SpareLogs::render`), the box its end hands the command
@@ -1908,6 +1904,66 @@ impl std::fmt::Debug for RenderLowering {
     }
 }
 
+/// A render encoder's lowering beside the bind state its last draw bound, with its shape, which
+/// each draw brings to its own in place (`live_bind.rs`): held apart from the lowering, so a draw
+/// holds both, the bind state while it calls the lowering's other methods, as two borrows
+/// ([`parts`](Self::parts)), with no lock and no count. Each in its box, so the encoder's return
+/// and moves copy neither one's state. Every other call reaches the lowering through it.
+pub(crate) struct Lowering {
+    lowering: Box<RenderLowering>,
+    live: Box<LiveBind>,
+}
+
+impl std::ops::Deref for Lowering {
+    type Target = RenderLowering;
+
+    fn deref(&self) -> &RenderLowering {
+        &self.lowering
+    }
+}
+
+impl std::ops::DerefMut for Lowering {
+    fn deref_mut(&mut self) -> &mut RenderLowering {
+        &mut self.lowering
+    }
+}
+
+impl std::fmt::Debug for Lowering {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Debug::fmt(&self.lowering, f)
+    }
+}
+
+impl Lowering {
+    /// The lowering and the bind state, which a draw takes together.
+    pub(super) fn parts(&mut self) -> (&mut RenderLowering, &mut LiveBind) {
+        (&mut self.lowering, &mut self.live)
+    }
+
+    /// The lowering, its bind state given to the device for its next render encoder to start
+    /// from (`live_bind.rs`): no draw holds it once the encoder ends.
+    fn ending(self) -> Box<RenderLowering> {
+        let Lowering { lowering, live } = self;
+        lowering.core.device().shared().live_binds.give(live);
+        lowering
+    }
+
+    /// The lowering of [`RenderCommandEncoder::end_encoding`] (`RenderLowering::end_encoding`).
+    pub(crate) fn end_encoding(self) -> Result<(), Error> {
+        self.ending().end_encoding()
+    }
+
+    /// `RenderLowering::finish_replay`, its bind state given back first.
+    pub(super) fn finish_replay(self) -> Result<(Replayed, Option<Residency>), Error> {
+        self.ending().finish_replay()
+    }
+
+    /// `RenderLowering::end_pass`, its bind state given back first.
+    fn end_pass(self) -> Result<color_groups::Ended, Error> {
+        self.ending().end_pass()
+    }
+}
+
 impl CommandBuffer {
     /// `renderCommandEncoderWithDescriptor:`: an encoder of the pass `descriptor` describes.
     /// Refused as Metal's validation refuses the descriptor (`render_pass.rs`), and as
@@ -1938,7 +1994,7 @@ impl CommandBuffer {
         given: &RenderPassDescriptor,
         again: Option<Residency>,
         screen: Option<[u32; 2]>,
-    ) -> Result<Box<RenderLowering>, Error> {
+    ) -> Result<Lowering, Error> {
         const CALL: &str = "render_command_encoder";
         let device = self.device();
         let screen = screen.or_else(|| {
@@ -2117,7 +2173,7 @@ impl RenderLowering {
     /// recording into `draws` (null where it records inline), made in its box: the box is
     /// allocated first and the lowering written into it, where `Box::new` of a lowering makes it
     /// on the stack and copies its thousands of bytes in.
-    fn assemble(core: Box<EncoderCore>, draws: vk::CommandBuffer, opening: Opening) -> Box<Self> {
+    fn assemble(core: Box<EncoderCore>, draws: vk::CommandBuffer, opening: Opening) -> Lowering {
         let Opening {
             layout,
             render_target_array_length,
@@ -2143,7 +2199,7 @@ impl RenderLowering {
         let area = rate_map
             .as_ref()
             .map_or(layout.extent, RateMappedPass::area);
-        Box::write(
+        let lowering = Box::write(
             Box::new_uninit(),
             RenderLowering {
                 core,
@@ -2246,7 +2302,6 @@ impl RenderLowering {
                 extended,
                 pass_start: room.pass_start,
                 restart: None,
-                live,
                 log,
                 quiet_bound_values: QuietKept::default(),
                 attached: render_target::AttachedMemo::default(),
@@ -2266,7 +2321,8 @@ impl RenderLowering {
                 pinned_through: 0,
                 pins_frozen: false,
             },
-        )
+        );
+        Lowering { lowering, live }
     }
 }
 
@@ -3415,6 +3471,7 @@ impl RenderLowering {
     /// The lowering of [`RenderCommandEncoder::draw_primitives`].
     pub(crate) fn draw_primitives(
         &mut self,
+        live: &mut LiveBind,
         primitive_type: DrawPrimitiveType,
         vertex_start: u32,
         vertex_count: u32,
@@ -3444,12 +3501,13 @@ impl RenderLowering {
             let hangs = vertex_count >= 3 && !empty;
             return self.draw_nine(CALL, empty, hangs.then_some(NineFailure::Hang));
         };
-        self.draw(CALL, assembly, draw, buffers, empty)
+        self.draw(live, CALL, assembly, draw, buffers, empty)
     }
 
     /// The lowering of [`RenderCommandEncoder::draw_indexed_primitives`].
     pub(crate) fn draw_indexed_primitives(
         &mut self,
+        live: &mut LiveBind,
         primitive_type: DrawPrimitiveType,
         index_count: u32,
         index_type: IndexType,
@@ -3483,7 +3541,7 @@ impl RenderLowering {
             base_vertex,
             base_instance,
         };
-        self.draw_indexed(CALL, draw, index_buffer, index_buffer_offset)
+        self.draw_indexed(live, CALL, draw, index_buffer, index_buffer_offset)
     }
 
     /// Draw `draw`'s indices from `index_buffer_offset` of `index_buffer`, a multiple of the index
@@ -3492,6 +3550,7 @@ impl RenderLowering {
     /// indirect render commands takes too (`render/executions.rs`).
     fn draw_indexed(
         &mut self,
+        live: &mut LiveBind,
         call: &'static str,
         draw: IndexedDraw,
         index_buffer: &Buffer,
@@ -3534,12 +3593,13 @@ impl RenderLowering {
             let fault = NineFailure::Fault(CommandBufferError::PageFault);
             return self.draw_nine(call, empty, Some(fault));
         };
-        self.draw(call, assembly, draw, buffers, empty)
+        self.draw(live, call, assembly, draw, buffers, empty)
     }
 
     /// The lowering of [`RenderCommandEncoder::draw_primitives_indirect`].
     pub(crate) fn draw_primitives_indirect(
         &mut self,
+        live: &mut LiveBind,
         primitive_type: DrawPrimitiveType,
         indirect_buffer: &Buffer,
         indirect_buffer_offset: u64,
@@ -3570,12 +3630,13 @@ impl RenderLowering {
             let victim = NineFailure::Fault(CommandBufferError::GpuRecoveryVictim);
             return self.draw_nine(CALL, false, Some(victim));
         };
-        self.draw(CALL, assembly, draw, buffers, false)
+        self.draw(live, CALL, assembly, draw, buffers, false)
     }
 
     /// The lowering of [`RenderCommandEncoder::draw_indexed_primitives_indirect`].
     pub(crate) fn draw_indexed_primitives_indirect(
         &mut self,
+        live: &mut LiveBind,
         primitive_type: DrawPrimitiveType,
         index_type: IndexType,
         index_buffer: &Buffer,
@@ -3667,12 +3728,13 @@ impl RenderLowering {
             let victim = NineFailure::Fault(CommandBufferError::GpuRecoveryVictim);
             return self.draw_nine(CALL, false, Some(victim));
         };
-        self.draw(CALL, assembly, draw, buffers, false)
+        self.draw(live, CALL, assembly, draw, buffers, false)
     }
 
     /// The lowering of [`RenderCommandEncoder::draw_patches`].
     pub(crate) fn draw_patches(
         &mut self,
+        live: &mut LiveBind,
         number_of_patch_control_points: u32,
         patch_start: u32,
         patch_count: u32,
@@ -3715,7 +3777,7 @@ impl RenderLowering {
             None => None,
         };
         let points = zeros.as_ref().map(|zeros| (zeros, 0));
-        self.draw_patch_range(CALL, draw, patch_indices, points)
+        self.draw_patch_range(live, CALL, draw, patch_indices, points)
     }
 
     /// Draw `draw`'s patches, each patch's index from `patch_indices` (a buffer and an offset
@@ -3727,6 +3789,7 @@ impl RenderLowering {
     /// commands takes too (`render/executions.rs`).
     fn draw_patch_range(
         &mut self,
+        live: &mut LiveBind,
         call: &'static str,
         draw: PatchDraw,
         patch_indices: Option<(&Buffer, u64)>,
@@ -3754,12 +3817,13 @@ impl RenderLowering {
             ..DrawBuffers::default()
         };
         let empty = patch_count == 0 || instance_count == 0;
-        self.draw(call, Assembly::Patches, draw, buffers, empty)
+        self.draw(live, call, Assembly::Patches, draw, buffers, empty)
     }
 
     /// The lowering of [`RenderCommandEncoder::draw_patches_indirect`].
     pub(crate) fn draw_patches_indirect(
         &mut self,
+        live: &mut LiveBind,
         number_of_patch_control_points: u32,
         patch_index_buffer: Option<&Buffer>,
         patch_index_buffer_offset: u64,
@@ -3799,12 +3863,13 @@ impl RenderLowering {
             control_point_indices: zeros.as_ref().map(|zeros| (zeros, 0)),
             ..DrawBuffers::default()
         };
-        self.draw(CALL, Assembly::Patches, draw, buffers, false)
+        self.draw(live, CALL, Assembly::Patches, draw, buffers, false)
     }
 
     /// The lowering of [`RenderCommandEncoder::draw_indexed_patches`].
     pub(crate) fn draw_indexed_patches(
         &mut self,
+        live: &mut LiveBind,
         number_of_patch_control_points: u32,
         patch_start: u32,
         patch_count: u32,
@@ -3861,6 +3926,7 @@ impl RenderLowering {
             )
         });
         self.draw_patch_range(
+            live,
             CALL,
             draw,
             patch_index_buffer.map(|b| (b, patch_index_buffer_offset)),
@@ -3871,6 +3937,7 @@ impl RenderLowering {
     /// The lowering of [`RenderCommandEncoder::draw_indexed_patches_indirect`].
     pub(crate) fn draw_indexed_patches_indirect(
         &mut self,
+        live: &mut LiveBind,
         number_of_patch_control_points: u32,
         patch_index_buffer: Option<&Buffer>,
         patch_index_buffer_offset: u64,
@@ -3922,7 +3989,7 @@ impl RenderLowering {
             control_point_indices: points,
             ..DrawBuffers::default()
         };
-        self.draw(CALL, Assembly::Patches, draw, buffers, false)
+        self.draw(live, CALL, Assembly::Patches, draw, buffers, false)
     }
 
     /// A patch draw's patch index buffer (`None` for `nil`) at `offset`: the offset the draw reads
@@ -4175,7 +4242,7 @@ impl RenderLowering {
         descriptor: &RenderPassDescriptor,
         residency: Residency,
         screen: Option<[u32; 2]>,
-    ) -> Result<Box<RenderLowering>, Error> {
+    ) -> Result<Lowering, Error> {
         command_buffer.open_render(descriptor, Some(residency), screen)
     }
 
@@ -4265,7 +4332,6 @@ impl RenderLowering {
             drew_depth_writes,
             inline,
             grouped,
-            live,
             bind_memo,
             pass_start,
             pinned_through,
@@ -4274,9 +4340,6 @@ impl RenderLowering {
         // The views and sampler descriptions its binds made or found, which the device's next
         // render encoder takes (`binding::BindMemo`).
         core.device().shared().bind_memos.give(bind_memo);
-        // The bind state its last draw left, which the device's next render encoder starts from
-        // (`live_bind.rs`): no draw holds it once the encoder ends.
-        core.device().shared().live_binds.give(live);
         // The pass's measured readers, whose counts their textures take as the command buffer
         // completes (`render/coverage.rs`): held with its pool until then.
         if let Some(readback) = readers.readback() {
@@ -7781,6 +7844,7 @@ impl RenderLowering {
     /// draw passed (the module docs). Every texture the encoder's heaps hold is resident.
     fn draw(
         &mut self,
+        live: &mut LiveBind,
         call: &'static str,
         assembly: Assembly,
         draw: DrawCall,
@@ -7791,7 +7855,7 @@ impl RenderLowering {
         // The encoder's kept draw again, which no call came between: its Vulkan draw alone
         // (`render/draw_again.rs`). Any other draw forgets it, and keeps itself where it can.
         let mut checked = None;
-        match self.draw_again(call, assembly, &draw, &buffers, &mut checked) {
+        match self.draw_again(live, call, assembly, &draw, &buffers, &mut checked) {
             draw_again::Again::Drawn => return Ok(()),
             #[cfg(debug_assertions)]
             draw_again::Again::Check => {}
@@ -7822,7 +7886,7 @@ impl RenderLowering {
             color_groups::Turn::Later(true) if self.group_skips() => self.group_skipped(),
             _ => {
                 self.plain_drawn = false;
-                let drawn = self.draw_resident(call, assembly, draw, buffers, empty);
+                let drawn = self.draw_resident(live, call, assembly, draw, buffers, empty);
                 self.replay_plain &= self.plain_drawn;
                 self.group_outcome(turn, drawn.is_ok());
                 if drawn.is_err() {
@@ -7889,7 +7953,12 @@ impl RenderLowering {
         }
         // A replayed draw that met a notice announced at every occurrence must meet it again.
         self.replay_plain &= !watch.met();
-        self.kept_again(&watch, (reads, !empty && rasterizes, depth_writes), checked);
+        self.kept_again(
+            live,
+            &watch,
+            (reads, !empty && rasterizes, depth_writes),
+            checked,
+        );
         Ok(())
     }
 
@@ -7918,6 +7987,7 @@ impl RenderLowering {
     /// [`draw`](Self::draw) with the heaps' textures resident.
     fn draw_resident(
         &mut self,
+        live: &mut LiveBind,
         call: &'static str,
         assembly: Assembly,
         mut draw: DrawCall,
@@ -7994,7 +8064,7 @@ impl RenderLowering {
         // A draw that blends into or reads an extended-range color an earlier draw of the pass
         // wrote, or whose clear its codes cannot hold, starts the color's `half` shadow where it
         // can (`render/extended_shadow.rs`).
-        self.start_extended_shadows(&pipeline)?;
+        self.start_extended_shadows(live, &pipeline)?;
         // What the draw settles from the encoder's state, as an execution's precompile at commit
         // settles it (`draw_settings`).
         // An indexed strip the encoder's call restarts at another index than Vulkan's, and a draw
@@ -8037,9 +8107,6 @@ impl RenderLowering {
         }
         // The encoder's kept bind state, brought to the draw's (`live_bind.rs`), held for the
         // draw: no draw of the encoder runs inside another past here.
-        let live = Arc::clone(&self.live);
-        let mut held = lock(&live);
-        let live = &mut *held;
         // A draw that reads its pass's texture after a barrier inside its instance reads it
         // through a snapshot where it can (`render/snapshot.rs`): asked of the plan, kept where
         // the plan reads so, else `None` and the split.
@@ -11774,8 +11841,9 @@ impl RenderCommandEncoder {
     ) -> Result<(), Error> {
         let primitive_type = primitive_type.into();
         match self.lowers_at_call() {
-            true => self.at_call(|lowering| {
+            true => self.draw_at_call(|lowering, live| {
                 lowering.draw_primitives(
+                    live,
                     primitive_type,
                     vertex_start,
                     vertex_count,
@@ -11817,8 +11885,9 @@ impl RenderCommandEncoder {
     ) -> Result<(), Error> {
         let primitive_type = primitive_type.into();
         match self.lowers_at_call() {
-            true => self.at_call(|lowering| {
+            true => self.draw_at_call(|lowering, live| {
                 lowering.draw_indexed_primitives(
+                    live,
                     primitive_type,
                     index_count,
                     index_type,
@@ -11855,8 +11924,9 @@ impl RenderCommandEncoder {
     ) -> Result<(), Error> {
         let primitive_type = primitive_type.into();
         match self.lowers_at_call() {
-            true => self.at_call(|lowering| {
+            true => self.draw_at_call(|lowering, live| {
                 lowering.draw_primitives_indirect(
+                    live,
                     primitive_type,
                     indirect_buffer,
                     indirect_buffer_offset,
@@ -11891,8 +11961,9 @@ impl RenderCommandEncoder {
     ) -> Result<(), Error> {
         let primitive_type = primitive_type.into();
         match self.lowers_at_call() {
-            true => self.at_call(|lowering| {
+            true => self.draw_at_call(|lowering, live| {
                 lowering.draw_indexed_primitives_indirect(
+                    live,
                     primitive_type,
                     index_type,
                     index_buffer,
@@ -11936,8 +12007,9 @@ impl RenderCommandEncoder {
         base_instance: u32,
     ) -> Result<(), Error> {
         match self.lowers_at_call() {
-            true => self.at_call(|lowering| {
+            true => self.draw_at_call(|lowering, live| {
                 lowering.draw_patches(
+                    live,
                     number_of_patch_control_points,
                     patch_start,
                     patch_count,
@@ -11979,8 +12051,9 @@ impl RenderCommandEncoder {
         indirect_buffer_offset: u64,
     ) -> Result<(), Error> {
         match self.lowers_at_call() {
-            true => self.at_call(|lowering| {
+            true => self.draw_at_call(|lowering, live| {
                 lowering.draw_patches_indirect(
+                    live,
                     number_of_patch_control_points,
                     patch_index_buffer,
                     patch_index_buffer_offset,
@@ -12026,8 +12099,9 @@ impl RenderCommandEncoder {
         base_instance: u32,
     ) -> Result<(), Error> {
         match self.lowers_at_call() {
-            true => self.at_call(|lowering| {
+            true => self.draw_at_call(|lowering, live| {
                 lowering.draw_indexed_patches(
+                    live,
                     number_of_patch_control_points,
                     patch_start,
                     patch_count,
@@ -12076,8 +12150,9 @@ impl RenderCommandEncoder {
         indirect_buffer_offset: u64,
     ) -> Result<(), Error> {
         match self.lowers_at_call() {
-            true => self.at_call(|lowering| {
+            true => self.draw_at_call(|lowering, live| {
                 lowering.draw_indexed_patches_indirect(
+                    live,
                     number_of_patch_control_points,
                     patch_index_buffer,
                     patch_index_buffer_offset,

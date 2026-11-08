@@ -71,11 +71,12 @@ use super::call_checks::{CallChecks, Checked};
 use super::lowering_worker::{self, LoweringWorker};
 use super::queued_commits::QueuedCommits;
 use super::replay::{render, DrawIndexed};
-use super::{RenderCall, RenderCommandEncoder, RenderLowering};
+use super::{Lowering, RenderCall, RenderCommandEncoder, RenderLowering};
 use crate::command_buffer::{CommandBuffer, WeakCommandBuffer};
 use crate::device::{lock, Device};
 use crate::error::{internal, EncoderCall, Error};
 use crate::exit_guard;
+use crate::live_bind::LiveBind;
 use crate::replay::CallLog;
 use metal2vulkan::device::RenderLoweringPolicy;
 use std::collections::VecDeque;
@@ -199,12 +200,12 @@ const _: () = {
     sent::<Lowerer>();
 };
 
-/// An encoder's own lowering (`RenderLoweringPolicy::AtCall`), boxed where it is made
-/// ([`RenderLowering::assemble`]).
-pub(super) struct OwnLowering(Box<RenderLowering>);
+/// An encoder's own lowering (`RenderLoweringPolicy::AtCall`), with its bind state, each boxed
+/// where it is made ([`RenderLowering::assemble`]).
+pub(super) struct OwnLowering(Lowering);
 
-// SAFETY: an `OwnLowering` is `Send` exactly when `RenderLowering` is, its one field being a box of
-// one; the constant below makes the compiler prove that. Written out, as `LoweringSlot`'s are, the
+// SAFETY: an `OwnLowering` is `Send` exactly when `Lowering` is, its one field being one; the
+// constant below makes the compiler prove that. Written out, as `LoweringSlot`'s are, the
 // impl ends a program's crate's walk of an encoder's fields there: the walk from a
 // `RenderCommandEncoder` through its own lowering ran past rustc's default recursion limit
 // (`tests/consumer_auto_traits.rs`).
@@ -213,27 +214,28 @@ unsafe impl Send for OwnLowering {}
 // The compiler's proof of what `OwnLowering`'s `Send` impl rests on.
 const _: () = {
     const fn sent<T: Send>() {}
-    sent::<RenderLowering>();
+    sent::<Lowering>();
 };
 
 impl std::ops::Deref for OwnLowering {
-    type Target = RenderLowering;
+    type Target = Lowering;
 
-    fn deref(&self) -> &RenderLowering {
+    fn deref(&self) -> &Lowering {
         &self.0
     }
 }
 
 impl std::ops::DerefMut for OwnLowering {
-    fn deref_mut(&mut self) -> &mut RenderLowering {
+    fn deref_mut(&mut self) -> &mut Lowering {
         &mut self.0
     }
 }
 
 /// A slot's lowering, and whether it refused a call.
 struct Lowerer {
-    /// Its encoder's lowering: `None` once the encoder ended, and in a slot not taken.
-    lowering: Option<Box<RenderLowering>>,
+    /// Its encoder's lowering, with its bind state: `None` once the encoder ended, and in a slot
+    /// not taken.
+    lowering: Option<Lowering>,
     /// A call was refused as it was lowered: no later call is lowered.
     refused: bool,
 }
@@ -535,7 +537,7 @@ pub(crate) struct DeferredEncoders {
 impl DeferredEncoders {
     /// A slot for `lowering`'s encoder, which logs its calls, with its checks at the call: one
     /// kept, its checks' room reused, else a new one.
-    fn take(&self, lowering: Box<RenderLowering>) -> Arc<LoweringSlot> {
+    fn take(&self, lowering: Lowering) -> Arc<LoweringSlot> {
         let mut slots = lock(&self.slots);
         let kept = slots.iter().find(|slot| !lock(&slot.state).taken).cloned();
         let slot = match kept {
@@ -710,7 +712,7 @@ impl EndInFlight {
 impl RenderCommandEncoder {
     /// The program's encoder over `lowering`, which lowers its calls as the device's policy says
     /// (the module docs).
-    pub(super) fn new(lowering: Box<RenderLowering>) -> RenderCommandEncoder {
+    pub(super) fn new(lowering: Lowering) -> RenderCommandEncoder {
         let device = lowering.core.device();
         let logs = device.compile_device().policy().render_lowering == RenderLoweringPolicy::Worker
             && lowering.grouped.is_none()
@@ -748,7 +750,7 @@ impl RenderCommandEncoder {
     /// as it began lowering its calls at the call.
     pub(crate) fn at_call<T>(
         &mut self,
-        f: impl FnOnce(&mut RenderLowering) -> Result<T, Error>,
+        f: impl FnOnce(&mut Lowering) -> Result<T, Error>,
     ) -> Result<T, Error> {
         self.next += 1;
         match (&mut self.own, &self.logged) {
@@ -763,9 +765,21 @@ impl RenderCommandEncoder {
         }
     }
 
+    /// Run `f`, a draw, on the lowering now, as [`at_call`](Self::at_call) does, with the bind
+    /// state its draws bring in place beside it (`Lowering::parts`).
+    pub(crate) fn draw_at_call(
+        &mut self,
+        f: impl FnOnce(&mut RenderLowering, &mut LiveBind) -> Result<(), Error>,
+    ) -> Result<(), Error> {
+        self.at_call(|lowering| {
+            let (lowering, live) = lowering.parts();
+            f(lowering, live)
+        })
+    }
+
     /// Run `f`, a call that returns nothing, on the lowering now, as [`at_call`](Self::at_call)
     /// does.
-    pub(crate) fn at_call_unit(&mut self, f: impl FnOnce(&mut RenderLowering)) {
+    pub(crate) fn at_call_unit(&mut self, f: impl FnOnce(&mut Lowering)) {
         self.next += 1;
         match (&mut self.own, &self.logged) {
             (Some(lowering), _) => f(lowering),

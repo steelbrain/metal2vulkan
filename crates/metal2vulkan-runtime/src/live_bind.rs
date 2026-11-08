@@ -683,30 +683,23 @@ impl<T> Drop for Emptied<'_, T> {
 
 /// A device's bind states that ended render encoders left, which the render encoders it opens
 /// next start from (the module docs): at most [`SPARE_LIVE_BINDS`], the latest given taken first.
-/// Each is kept in the shared cell its encoder held it in, so an encoder's open and end move and
-/// allocate none.
+/// Each is kept in the box its encoder held it in, so an encoder's open and end move and allocate
+/// none.
 #[derive(Default)]
-pub(super) struct SpareLiveBinds(Mutex<Vec<Arc<Mutex<LiveBind>>>>);
+pub(super) struct SpareLiveBinds(Mutex<Vec<Box<LiveBind>>>);
 
 impl SpareLiveBinds {
     /// The state a render encoder opening starts from: the latest an encoder gave back, else an
     /// empty one.
-    pub(super) fn take(&self) -> Arc<Mutex<LiveBind>> {
+    pub(super) fn take(&self) -> Box<LiveBind> {
         lock(&self.0).pop().unwrap_or_default()
     }
 
     /// Keep `live`, an ended render encoder's state, for the next encoder to start from, where
-    /// nothing else holds it (no draw does once its encoder ended) and fewer than
-    /// [`SPARE_LIVE_BINDS`] are kept; else it goes. A draw that panicked holding it left it as
-    /// far as it got, which the next draw brings in place as any.
-    pub(super) fn give(&self, mut live: Arc<Mutex<LiveBind>>) {
-        let Some(cell) = Arc::get_mut(&mut live) else {
-            return;
-        };
-        cell.clear_poison();
-        if let Ok(state) = cell.get_mut() {
-            state.end_encoder();
-        }
+    /// fewer than [`SPARE_LIVE_BINDS`] are kept; else it goes. A draw that panicked left it as far
+    /// as it got, which the next draw brings in place as any.
+    pub(super) fn give(&self, mut live: Box<LiveBind>) {
+        live.end_encoder();
         let mut spare = lock(&self.0);
         if spare.len() < SPARE_LIVE_BINDS {
             spare.push(live);

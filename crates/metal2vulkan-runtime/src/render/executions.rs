@@ -305,6 +305,7 @@ use crate::indirect_command_buffer::{
 use crate::indirect_dispatch;
 use crate::indirect_execute::{self, unstrided_stride, ExecutionRange};
 use crate::kept_commands;
+use crate::live_bind::LiveBind;
 use crate::pipeline::budget::Urgency;
 use crate::pipeline::RenderPipelineState;
 use crate::pipeline::Settled;
@@ -1820,8 +1821,14 @@ impl RenderLowering {
     /// class), the variant in the large-buffer form and the `VkPipeline` of the draw in the
     /// execution's instance, an indexed draw's alike ([`settle_draw_of`](Self::settle_draw_of)).
     /// A tessellation or mesh pipeline's draws, and a state the pass refuses, are left to the
-    /// step, which meets them as they are then. Announces nothing: it draws nothing.
-    fn settle_draws(&mut self, pipeline: &RenderPipelineState, made: &mut Vec<SettledDraw>) {
+    /// step, which meets them as they are then. Announces nothing: it draws nothing. The draws
+    /// settle with the bind state `live`.
+    fn settle_draws(
+        &mut self,
+        live: &mut LiveBind,
+        pipeline: &RenderPipelineState,
+        made: &mut Vec<SettledDraw>,
+    ) {
         let RenderStateKind::Graphics(state) = pipeline.kind() else {
             return;
         };
@@ -1851,7 +1858,7 @@ impl RenderLowering {
         // The encoder's pipeline state, which its bind state reads, as a command's draw sets it.
         self.pipeline = Some(pipeline.clone());
         for &primitive_type in types {
-            if let Ok(settled) = self.settle_draw_of(state, primitive_type) {
+            if let Ok(settled) = self.settle_draw_of(live, state, primitive_type) {
                 made.push(settled);
             }
         }
@@ -1871,6 +1878,7 @@ impl RenderLowering {
     /// (a layout of per-bind strides that are not dynamic state).
     fn settle_draw_of(
         &self,
+        live: &mut LiveBind,
         state: &DrawingState,
         primitive_type: PrimitiveType,
     ) -> Result<SettledDraw, Error> {
@@ -1880,11 +1888,10 @@ impl RenderLowering {
         let settings = self.draw_settings(CALL, state, assembly, false)?;
         let mut argument_samplers = ArgumentSamplers::taken(self.core.device());
         let function_tables = state.function_tables();
-        let live = Arc::clone(&self.live);
         let pass_start = PassStartTables::default();
         let sampler_maps = self.sampler_maps(state, &pass_start)?;
         let settled = self.settle_draw(
-            &mut lock(&live),
+            live,
             (
                 state,
                 &settings,
@@ -2093,6 +2100,8 @@ impl RenderExecution {
             (storage, layout, residency.clone()),
             forms,
         );
+        // The commands' draws start from an empty bind state, as an encoder's first draw may.
+        let mut live = LiveBind::default();
         if !step {
             // Counted before the records are read: a write meanwhile records it again.
             self.read_at.store(self.icb.cpu_writes(), Ordering::Release);
@@ -2104,7 +2113,8 @@ impl RenderExecution {
             let (written, copies) = reads.read(&self.icb)?;
             let (commands, written, _) = self.named_commands(&device, range.start, written);
             found.faults = ReplayFaults(found.faults.0 | written.0);
-            self.replay(&mut encoder, commands.iter().flatten(), residency, found)?;
+            let replaying = (&mut encoder, &mut live);
+            self.replay(replaying, commands.iter().flatten(), residency, found)?;
             copies.keep(&self.icb);
             return self.finish(encoder, found, rendered, &device);
         }
@@ -2119,7 +2129,7 @@ impl RenderExecution {
                     self.report(command_buffer, read, start, executed);
                 }
                 let commands = commands.iter().flatten();
-                self.replay(&mut encoder, commands, residency, found)?;
+                self.replay((&mut encoder, &mut live), commands, residency, found)?;
                 continue;
             }
             let (commands, released) = self.icb.render_records(piece, Reader::Commit)?;
@@ -2135,7 +2145,7 @@ impl RenderExecution {
                 let read = (RecordsRead::Commit, residency);
                 self.report(command_buffer, read, start, executed);
             }
-            self.replay(&mut encoder, &commands, residency, found)?;
+            self.replay((&mut encoder, &mut live), &commands, residency, found)?;
         }
         self.finish(encoder, found, rendered, &device)
     }
@@ -2174,7 +2184,7 @@ impl RenderExecution {
     /// plain draw (`RenderLowering::replay_plain`).
     fn replay<'c>(
         &self,
-        encoder: &mut RenderLowering,
+        (encoder, live): (&mut RenderLowering, &mut LiveBind),
         commands: impl IntoIterator<Item = &'c Command>,
         residency: &Residency,
         found: &mut Found,
@@ -2273,14 +2283,14 @@ impl RenderExecution {
             }
             match draw {
                 Draw::Primitives(assembly, draw) => {
-                    encoder.draw(CALL, assembly, draw, DrawBuffers::default(), false)?
+                    encoder.draw(live, CALL, assembly, draw, DrawBuffers::default(), false)?
                 }
                 Draw::Indexed(draw, (buffer, offset)) => {
-                    encoder.draw_indexed(CALL, draw, &buffer, offset)?;
+                    encoder.draw_indexed(live, CALL, draw, &buffer, offset)?;
                 }
                 Draw::Mesh(grid, object, mesh) => {
                     encoder.replay_plain = false;
-                    encoder.draw_mesh(CALL, grid, object, mesh)?
+                    encoder.draw_mesh(live, CALL, grid, object, mesh)?
                 }
                 Draw::Patches {
                     mut draw,
@@ -2311,7 +2321,7 @@ impl RenderExecution {
                         PointIndices::Zero => zeros.as_ref().map(|zero| (zero, 0)),
                         PointIndices::Buffer((b, offset)) => Some((b, *offset)),
                     };
-                    encoder.draw_patch_range(CALL, draw, patch_indices, points)?;
+                    encoder.draw_patch_range(live, CALL, draw, patch_indices, points)?;
                 }
             }
         }
@@ -2559,7 +2569,6 @@ impl RenderExecution {
             pass_start: snapshot.pass_start.notes(),
             // An execution's draws restart at the all-ones index whatever the encoder's call.
             restart: None,
-            live: Arc::default(),
             log: None,
             quiet_bound_values: Default::default(),
             attached: Default::default(),
@@ -2626,8 +2635,9 @@ impl RenderExecution {
             (storage, snapshot.layout.clone(), residency.clone()),
             BufferForms::Large,
         );
+        let mut live = LiveBind::default();
         for pipeline in named {
-            encoder.settle_draws(pipeline, made);
+            encoder.settle_draws(&mut live, pipeline, made);
         }
         let RenderLowering { core, .. } = encoder;
         EncoderCore::unboxed(core)

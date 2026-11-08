@@ -72,6 +72,7 @@ use crate::degradation::EachWatch;
 use crate::draw_source::DrawSource;
 use crate::error::Error;
 use crate::execution::{ExecutedPipeline, Execution};
+use crate::live_bind::LiveBind;
 use crate::noted_apart::NotedInto;
 use crate::resource::ResourceKey;
 use crate::tracker::{Use, UseRange};
@@ -250,9 +251,11 @@ impl RenderLowering {
 
     /// Whether the draw of `call` assembling `assembly`, `draw` with `buffers`, is the kept draw
     /// again (the module docs): then, but where it is checked (its check left in `checked`), it
-    /// is recorded. Call it once the draw made the heaps' new textures resident.
+    /// is recorded, with the encoder's bind state `live`. Call it once the draw made the heaps'
+    /// new textures resident.
     pub(super) fn draw_again(
         &mut self,
+        live: &mut LiveBind,
         call: &'static str,
         assembly: Assembly,
         draw: &DrawCall,
@@ -279,7 +282,7 @@ impl RenderLowering {
         let stamps = self.table_stamps();
         if kept.stamps != stamps {
             return match kept.rebinds {
-                true => self.draw_rebound(call, (assembly, draw), buffers, stamps, checked),
+                true => self.draw_rebound(live, call, (assembly, draw), buffers, stamps, checked),
                 false => Again::No,
             };
         }
@@ -288,7 +291,7 @@ impl RenderLowering {
             let hits = self.again.hits;
             self.again.hits += 1;
             if hits.is_multiple_of(2) {
-                let held = Held::of(self);
+                let held = Held::of(self, live);
                 *checked = Some(Checked::of(self, Expected::Plain(held)));
                 return Again::Check;
             }
@@ -299,7 +302,7 @@ impl RenderLowering {
         // Its noting: its reads of fresh textures, where any texture is fresh, and what the
         // encoder made resident since (nothing: no call came).
         match kept.reads_images && self.core.observes_fresh() {
-            true => self.core.note_again(super::lock(&self.live).noted.uses()),
+            true => self.core.note_again(live.noted.uses()),
             false => self.core.note_again(&[]),
         }
         // SAFETY: the kept draw recorded this command into this command buffer, which records
@@ -334,6 +337,7 @@ impl RenderLowering {
     /// `checked`, a kept draw again that took every step, check it (the module docs).
     pub(super) fn kept_again(
         &mut self,
+        live: &LiveBind,
         watch: &EachWatch,
         (reads, rasterizes, depth_writes): (RenderStages, bool, bool),
         checked: Option<Checked>,
@@ -345,10 +349,10 @@ impl RenderLowering {
         }
         #[cfg(debug_assertions)]
         if let Some(checked) = checked {
-            checked.check(self, watch.met());
+            checked.check(self, live, watch.met());
         }
         #[cfg(not(debug_assertions))]
-        let _: Option<Checked> = checked;
+        let _: (&LiveBind, Option<Checked>) = (live, checked);
         if watch.met() {
             self.forget_again();
         }
@@ -484,7 +488,7 @@ impl Held {
         "pass",
     ];
 
-    fn of(encoder: &RenderLowering) -> Held {
+    fn of(encoder: &RenderLowering, live: &LiveBind) -> Held {
         let current = &encoder.current;
         let pass = (
             &encoder.inputs_read,
@@ -498,7 +502,7 @@ impl Held {
                 digest(&encoder.coverage),
                 digest(encoder.pass_start.held()),
                 digest(current.shadows.gathered()),
-                digest(&super::lock(&encoder.live).noted),
+                digest(&live.noted),
                 digest(pass),
             ],
             instance: (
@@ -552,7 +556,7 @@ impl Checked {
 
     /// Check the draw that took every step, which `met` a notice met at each occurrence or not,
     /// against the kept one (the module docs).
-    fn check(self, encoder: &mut RenderLowering, met: bool) {
+    fn check(self, encoder: &mut RenderLowering, live: &LiveBind, met: bool) {
         let Checked {
             kept,
             hits,
@@ -562,7 +566,7 @@ impl Checked {
         let rebound = matches!(expected, Expected::Rebound(_));
         match &expected {
             // Its uses differ from the kept draw's: what noting them adds is every step's own.
-            Expected::Rebound(rebound) => rebound.assert_as(&crate::device::lock(&encoder.live)),
+            Expected::Rebound(rebound) => rebound.assert_as(live),
             Expected::Plain(held) => {
                 assert_eq!(
                     crate::degradation::announced_here(),
@@ -571,7 +575,7 @@ impl Checked {
                 );
                 assert!(!met, "a draw again met a notice met at each occurrence");
                 let executed = kept.execution.is_some();
-                Held::of(encoder).assert_as(held, (kept.index.is_some(), executed));
+                Held::of(encoder, live).assert_as(held, (kept.index.is_some(), executed));
             }
         }
         let again = encoder.again.kept.as_mut();
