@@ -11127,7 +11127,7 @@ impl RenderLowering {
         // reads and writes beside the codes (`render/extended_shadow.rs`).
         let mut shadows = self.extended_shadows_bound();
         // From the state the pipeline state's last draw left, where the encoder set it aside.
-        live.select(&pipeline.base().interface);
+        live.select(pipeline);
         loop {
             let mut reshape = self.refresh_bind_state(
                 live,

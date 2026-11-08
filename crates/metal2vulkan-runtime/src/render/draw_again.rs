@@ -46,8 +46,8 @@
 //!   tables' stamps (`rebound.rs`), the changes of its tables since it read them brought in, its
 //!   uses noted, added to the pass's reads and gathered whole, and every state command its
 //!   record does not hold recorded; it takes no shortcut of a draw moved, which reads what the
-//!   encoder's last draw left. Two states of one interface share a bind state: the draw kept of
-//!   one is not the other's.
+//!   encoder's last draw left. Each state's bind state is its own, though states of one function
+//!   pair share an interface, so the draw kept of one is never the other's.
 //! - **What a kept draw left holds for the next.** Each of its steps adds to what the encoder
 //!   holds, and adding the same again changes nothing: its drawn area and coverage (rectangles
 //!   and boxes, `clear_reach::DrawnArea`, `linear_attachment::Coverage`), the pass's reads
@@ -301,14 +301,14 @@ impl RenderLowering {
         else {
             return;
         };
-        let interface = &pipeline.base().interface;
-        if live.reads_through(interface) {
+        if live.draws(pipeline) {
             return;
         }
         live.set_aside_kept(self.again.kept.take());
-        live.select(interface);
+        live.select(pipeline);
         let epoch = self.again.epoch;
-        self.again.kept = live.take_kept().filter(|kept| kept.epoch == epoch);
+        self.again.kept =
+            (live.take_kept()).filter(|kept| kept.epoch == epoch && kept.pipeline.is(pipeline));
         if let Some(kept) = self.again.kept.as_mut() {
             kept.between = true;
         }

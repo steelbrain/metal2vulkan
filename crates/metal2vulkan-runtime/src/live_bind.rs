@@ -36,9 +36,13 @@
 //!   makes none; else it is made again, whole.
 //! - **One per pipeline state lately drawn.** Beside the state its last draw brought in place, the
 //!   encoder sets aside the states of up to [`SET_ASIDE`] pipeline states it drew before that one
-//!   ([`LiveBind::select`]), and a draw starts from its pipeline state's, where one is set aside:
-//!   draws that switch between pipeline states each find their own state's shape kept, and their
-//!   stage tables read through their own interface, where no slot of theirs changed its shape.
+//!   ([`LiveBind::select`]), each under the pipeline state whose draw left it, and a draw starts
+//!   from its pipeline state's, where one is set aside, though another state's draws share its
+//!   interface (states of one function pair, blending apart): draws that switch between pipeline
+//!   states each find their own state's shape kept, their stage tables read through their own
+//!   interface, where no slot of theirs changed its shape, and their own state's last draw kept
+//!   (`render/draw_again.rs`). Where none is, it starts from one no live state's draw left, else
+//!   from the latest read through its interface, else from the one set aside longest.
 //!   Exact for the reason a draw's is: whichever state a draw starts from, it brings every field
 //!   in place, and the starting state decides only whether the shape is kept.
 //! - **The settle kept with the state.** Beside each state, the variant and plan its last recorded
@@ -99,7 +103,7 @@ use super::argument_table::Stamp;
 use super::binding::{CommandUses, PushWrite, SetWrite, Write};
 use super::device::lock;
 use super::noted_apart::NotedApart;
-use super::pipeline::{BufferForms, GraphicsState, ProgramName, Settled};
+use super::pipeline::{BufferForms, GraphicsState, ProgramName, Settled, WeakRenderPipelineState};
 use super::render::{DrawKept, KeptHeap, KeptStorage};
 use super::sampler::OwnedSampler;
 use super::shadow::ResidentShadows;
@@ -111,7 +115,7 @@ const SPARE_LIVE_BINDS: usize = 4;
 
 /// The most states a [`LiveBind`] sets aside, of the pipeline states its draws drew through before
 /// the last draw's ([`LiveBind::select`]): a draw of one of more pipeline states in turn than
-/// this starts from the state set aside longest.
+/// this starts from one another state's draw left, read through its interface where one is.
 const SET_ASIDE: usize = 7;
 
 /// The most shapes a state keeps of those it took lately ([`RecentShapes`]): one per primitive
@@ -238,6 +242,9 @@ pub(super) struct LiveBind {
     pub(super) listed_at: Option<u64>,
     /// What the state's stage tables were read from ([`ReadFrom`]).
     pub(super) read_from: ReadFrom,
+    /// The pipeline state whose draw last brought the state in place ([`select`](Self::select)),
+    /// named without holding it; `None` before any did.
+    drawn: Option<WeakRenderPipelineState>,
     /// The states the encoder's draws of other pipeline states brought in place, each as its
     /// pipeline state's last draw left it ([`select`](Self::select)).
     set_aside: [SetAside; SET_ASIDE],
@@ -338,6 +345,7 @@ struct SetAside {
     recent: RecentShapes,
     listed_at: Option<u64>,
     read_from: ReadFrom,
+    drawn: Option<WeakRenderPipelineState>,
     settled: Option<SettledHere>,
     rebinds: SlotRebinds,
     /// Its last draw's storage and kept draw, as [`LiveBind`] holds them for its last draw's
@@ -553,26 +561,52 @@ impl LiveBind {
         self.forget_settles();
     }
 
-    /// Start a draw through `interface` from the state that pipeline state's last draw left, where
-    /// one is set aside: it and the state in place change places. Where none is, the state in
-    /// place changes places with the one set aside longest, which the draw starts from. Both are
-    /// states as draws left them (or empty, as a new encoder's): exact whichever a draw starts
-    /// from, as it brings every field of the state in place (the module docs), so this chooses
-    /// only whether the shape may be kept, and which reads the draw skips.
-    pub(super) fn select(&mut self, interface: &PipelineInterface) {
-        if self.read_from.through(interface) {
+    /// Start a draw of `pipeline` from the state that pipeline state's last draw left, where one
+    /// is set aside: it and the state in place change places. Where none is, the draw starts from
+    /// a state no live pipeline state's draw left, the one in place first; else from the one in
+    /// place where its tables were read through `pipeline`'s interface (so the draw reads only
+    /// what changed since), else from the one last set aside of those so read, else from the one
+    /// set aside longest, which it takes as `pipeline`'s. Each is a state as draws left it (or
+    /// empty, as a new encoder's): exact whichever a draw starts from, as it brings every field of
+    /// the state in place (the module docs), so this chooses only whether the shape and the draw
+    /// may be kept, and which reads the draw skips.
+    pub(super) fn select(&mut self, pipeline: &GraphicsState) {
+        if self.draws(pipeline) {
             return;
         }
-        let set_aside = self.set_aside.iter();
-        let at = match set_aside
-            .clone()
-            .position(|aside| aside.read_from.through(interface))
-        {
-            Some(at) => at,
-            None => (set_aside.enumerate())
-                .min_by_key(|(_, aside)| aside.at)
-                .map_or(0, |(at, _)| at),
+        let interface = &pipeline.base().interface;
+        let lives = |drawn: &Option<WeakRenderPipelineState>| {
+            (drawn.as_ref()).is_some_and(WeakRenderPipelineState::lives)
         };
+        let set_aside = self.set_aside.iter().enumerate();
+        let own = (set_aside.clone())
+            .find(|(_, aside)| (aside.drawn.as_ref()).is_some_and(|drawn| drawn.is(pipeline)));
+        // `None` starts from the state in place.
+        let at = if let Some((at, _)) = own {
+            Some(at)
+        } else if !lives(&self.drawn) {
+            None
+        } else if let Some((at, _)) = set_aside.clone().find(|(_, aside)| !lives(&aside.drawn)) {
+            Some(at)
+        } else if self.read_from.through(interface) {
+            None
+        } else {
+            let through = (set_aside.clone())
+                .filter(|(_, aside)| aside.read_from.through(interface))
+                .max_by_key(|(_, aside)| aside.at);
+            let longest = || set_aside.clone().min_by_key(|(_, aside)| aside.at);
+            through.or_else(longest).map(|(at, _)| at)
+        };
+        if let Some(at) = at {
+            self.swap_aside(at);
+        }
+        if !self.draws(pipeline) {
+            self.drawn = Some(pipeline.downgrade());
+        }
+    }
+
+    /// Change the state in place for the one set aside at `at`.
+    fn swap_aside(&mut self, at: usize) {
         self.asides += 1;
         let aside = &mut self.set_aside[at];
         std::mem::swap(&mut self.state, &mut aside.state);
@@ -580,6 +614,7 @@ impl LiveBind {
         std::mem::swap(&mut self.recent, &mut aside.recent);
         std::mem::swap(&mut self.listed_at, &mut aside.listed_at);
         std::mem::swap(&mut self.read_from, &mut aside.read_from);
+        std::mem::swap(&mut self.drawn, &mut aside.drawn);
         std::mem::swap(&mut self.settled, &mut aside.settled);
         std::mem::swap(&mut self.rebinds, &mut aside.rebinds);
         std::mem::swap(&mut self.commands, &mut aside.commands);
@@ -594,10 +629,10 @@ impl LiveBind {
         aside.at = self.asides;
     }
 
-    /// Whether the state in place is the one a draw through `interface` starts from
-    /// ([`select`](Self::select) keeps it).
-    pub(super) fn reads_through(&self, interface: &PipelineInterface) -> bool {
-        self.read_from.through(interface)
+    /// Whether the state in place is the one `pipeline`'s last draw left, which a draw of it
+    /// starts from ([`select`](Self::select) keeps it).
+    pub(super) fn draws(&self, pipeline: &GraphicsState) -> bool {
+        (self.drawn.as_ref()).is_some_and(|drawn| drawn.is(pipeline))
     }
 
     /// Set `kept` aside with the state in place, its pipeline state's (the field's docs).

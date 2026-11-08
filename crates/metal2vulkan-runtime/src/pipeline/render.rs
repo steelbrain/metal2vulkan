@@ -131,9 +131,19 @@ impl WeakRenderPipelineState {
     /// state lies at its address while it is kept.
     pub(crate) fn names(&self, state: &RenderPipelineState) -> bool {
         match &state.0 {
-            Kind::Graphics(graphics) => std::ptr::eq(self.0.as_ptr(), Arc::as_ptr(&graphics.0)),
+            Kind::Graphics(graphics) => self.is(graphics),
             Kind::Tile(_) => false,
         }
+    }
+
+    /// Whether it names `state` ([`names`](Self::names) of a drawing state).
+    pub(crate) fn is(&self, state: &GraphicsState) -> bool {
+        std::ptr::eq(self.0.as_ptr(), Arc::as_ptr(&state.0))
+    }
+
+    /// Whether the state it names lives still.
+    pub(crate) fn lives(&self) -> bool {
+        self.0.strong_count() > 0
     }
 }
 
@@ -2215,6 +2225,12 @@ impl GraphicsState {
     /// (`GraphicsState::function_tables`).
     pub(crate) fn made_tables(&self) -> bool {
         self.0.made_tables.load(Ordering::Acquire)
+    }
+
+    /// It, named without holding it: what a draw's encoder keeps the bind state its last draw
+    /// left under (`live_bind.rs`), which [`WeakRenderPipelineState::is`] tells apart.
+    pub(crate) fn downgrade(&self) -> WeakRenderPipelineState {
+        WeakRenderPipelineState(Arc::downgrade(&self.0))
     }
 
     /// Its program, named without holding it: what a draw's encoder keeps the state's last
