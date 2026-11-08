@@ -84,10 +84,8 @@ fn fill(host: &Host, texel: u64) -> Vec<u8> {
             },
         )
         .collect();
-    let words: Vec<u32> = bytes
-        .chunks_exact(4)
-        .map(|word| u32::from_le_bytes([word[0], word[1], word[2], word[3]]))
-        .collect();
+    let (words, _) = bytes.as_chunks::<4>();
+    let words: Vec<u32> = words.iter().map(|&word| u32::from_le_bytes(word)).collect();
     host.set(0, &words);
     bytes
 }
