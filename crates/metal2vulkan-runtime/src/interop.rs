@@ -210,14 +210,21 @@ impl Buffer {
     /// its address from its memory block's buffer), so the caller asks it for no device address.
     /// Once it was handed out, a shadowed texture over a `Private` buffer's bytes copies them in
     /// at each command buffer's first use, as one over the CPU's bytes does: the caller's own
-    /// work may write them.
+    /// work may write them. Handing it out first makes the work that still waits on its bytes
+    /// (a new `Private` buffer's zeros or bytes, a `Managed` buffer's upload, which the device's
+    /// next submission would make before its commands), by an internal submission waited for,
+    /// as [`Texture::vk_image`](crate::Texture::vk_image) makes its texture's: so the caller's
+    /// work on the handle comes after it. Nothing is submitted where no such work waits. Where
+    /// that submission fails (the device lost, or out of memory), the work waits for the next.
     ///
     /// # Safety
     ///
     /// The `VkBuffer` stays the runtime's: the caller does not destroy it, and uses it only while
     /// the buffer lives, ordered against the runtime's work on it.
     pub unsafe fn vk_buffer(&self) -> (vk::Buffer, u64) {
-        self.hand_out();
+        // A failed submission gives the work back, to the device's next submission; the caller
+        // sees the failure at its next call (a lost device refuses it).
+        let _ = self.hand_out();
         self.at_for(0, ReadApart::VkBuffer)
     }
 

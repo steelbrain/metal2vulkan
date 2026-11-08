@@ -104,7 +104,11 @@
 //! - **Failure.** A submission that fails gives its work back, still to be done.
 //! - **Out of reach of a submission.** A texture's `VkImage` handed out (`Texture::vk_image`)
 //!   rests in `GENERAL` as its contract says: handing it out does its work first, by an internal
-//!   submission waited for.
+//!   submission waited for, which makes every buffer's fill waiting too (that of the buffer an
+//!   image in place lies in among them). So does a buffer's `VkBuffer` handed out
+//!   (`Buffer::vk_buffer`) or its memory exported (`Buffer::export_memory_fd`) where a fill
+//!   waits on that `VkBuffer` ([`FirstMoves::fills_wait`]): the caller's own work may write the
+//!   bytes at once, and a fill made after it would wipe them.
 
 use super::super::creation;
 use super::super::device::lock;
@@ -1137,6 +1141,15 @@ impl FirstMoves {
             matches!(entry, Waiting::Texels(weak, copy)
                 if weak.as_ptr().cast::<()>() == keeper && !copy.copies.is_empty())
         })
+    }
+
+    /// Whether first work waits on `buffer` (a `VkBuffer`): a new buffer's fill with zeros or
+    /// its staged bytes, or a `Managed` buffer's upload, which the device's next submission makes
+    /// before its commands, over whatever another writer wrote there meanwhile.
+    pub(crate) fn fills_wait(&self, buffer: vk::Buffer) -> bool {
+        lock(&self.waiting)
+            .iter()
+            .any(|entry| matches!(entry, Waiting::Fill(_, fill) if fill.buffer == buffer))
     }
 
     /// The points a submission on `VkQueue` `queue` waits for: of the last batch on each other

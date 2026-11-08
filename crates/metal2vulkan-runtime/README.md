@@ -226,7 +226,9 @@ the record the pass is making.
   its family, under the runtime's lock: the consumer's submissions there sit in that command
   queue's order, and in that of any other command queue sharing the `VkQueue`. From its first call the command queue keeps that `VkQueue` for its life.
 - `Texture::vk_image`, `Buffer::vk_buffer`, `Event::vk_semaphore` and `SharedEvent::vk_semaphore`
-  give an object's handle.
+  give an object's handle. Handing out a texture's image, or a buffer's `VkBuffer` whose zeros or
+  bytes still wait for the device's next submission (a new `Private` buffer's), first makes that
+  work, by a submission it waits for, so the consumer's own work on the handle comes after it.
   A texture over a buffer's bytes that aliases them gives a linear image (the same one for textures
   of one image over the same bytes of one import of host pages, which share it), which over a
   no-copy buffer's or dma-buf host pages may be of `VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT`
