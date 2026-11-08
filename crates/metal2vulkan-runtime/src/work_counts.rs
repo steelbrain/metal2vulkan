@@ -477,6 +477,7 @@ pub(crate) struct Counters {
     reading_draws_pinned: AtomicU64,
     stand_ins_after_pins: AtomicU64,
     feedback_loop_alias_images: AtomicU64,
+    unobserved_padding_aliases: AtomicU64,
     feedback_loop_shadow_images: AtomicU64,
     depth_attachments_moved: AtomicU64,
     depth_instances_held: AtomicU64,
@@ -3472,6 +3473,14 @@ impl Counters {
     /// (`Device::storage_over_buffer`, `texture::feedback_candidate`).
     pub(crate) fn feedback_loop_alias_image(&self) {
         self.feedback_loop_alias_images
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// The device made a linear image aliasing a buffer's bytes that holds the bytes between the
+    /// texture's rows or slices, which the buffer declared unobserved
+    /// (`BufferDescriptor::padding_unobserved`, `Device::storage_over_buffer`).
+    pub(crate) fn unobserved_padding_alias(&self) {
+        self.unobserved_padding_aliases
             .fetch_add(1, Ordering::Relaxed);
     }
 
@@ -6607,6 +6616,12 @@ pub struct WorkCounts {
     /// its pass renders it (`render/snapshot.rs`): one per image made. Where the device makes no
     /// such image with the usage, it makes one without, and the texture's readers split.
     pub feedback_loop_alias_images: u64,
+    /// Linear images aliasing a buffer of the device's own memory, of textures whose rows or
+    /// slices lie with bytes between them that the buffer declares unobserved
+    /// (`BufferDescriptor::padding_unobserved`): each image holds those bytes, where without the
+    /// declaration the texture is a shadow (`shadowed_textures`). One per image made. A runtime
+    /// extension: Metal has none.
+    pub unobserved_padding_aliases: u64,
     /// Images of textures over a buffer's bytes that the encoders copy them into and back (the
     /// texture's shadow, `shadow.rs`: a texture over host pages that renders, among others) that
     /// the device made with feedback loop usage where it cost them nothing
@@ -7509,6 +7524,7 @@ impl Device {
             reading_draws_pinned: counters.reading_draws_pinned.load(Ordering::Relaxed),
             stand_ins_after_pins: counters.stand_ins_after_pins.load(Ordering::Relaxed),
             feedback_loop_alias_images: counters.feedback_loop_alias_images.load(Ordering::Relaxed),
+            unobserved_padding_aliases: counters.unobserved_padding_aliases.load(Ordering::Relaxed),
             feedback_loop_shadow_images: counters
                 .feedback_loop_shadow_images
                 .load(Ordering::Relaxed),

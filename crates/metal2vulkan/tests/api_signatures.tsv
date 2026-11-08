@@ -2001,6 +2001,7 @@ field	metal2vulkan-runtime::BinaryArchiveMiss.function	pub function: String
 field	metal2vulkan-runtime::BinaryArchiveMiss.pipeline	pub pipeline: ArchivedPipeline
 field	metal2vulkan-runtime::BufferDescriptor.contents	pub contents: BufferContents<'a>
 field	metal2vulkan-runtime::BufferDescriptor.length	pub length: u64
+field	metal2vulkan-runtime::BufferDescriptor.padding_unobserved	pub padding_unobserved: bool
 field	metal2vulkan-runtime::BufferDescriptor.placement	pub placement: AddressPlacement
 field	metal2vulkan-runtime::BufferDescriptor.pool_slot	pub pool_slot: Option<(&'a AddressPool, u64)>
 field	metal2vulkan-runtime::BufferDescriptor.range_of	pub range_of: Option<&'a Buffer>
@@ -3131,6 +3132,7 @@ field	metal2vulkan-runtime::WorkCounts.trail_waits_blocked	pub trail_waits_block
 field	metal2vulkan-runtime::WorkCounts.two_plane_draws	pub two_plane_draws: u64
 field	metal2vulkan-runtime::WorkCounts.uncached_host_images	pub uncached_host_images: u64
 field	metal2vulkan-runtime::WorkCounts.unlisted_argument_sampler_buffers	pub unlisted_argument_sampler_buffers: u64
+field	metal2vulkan-runtime::WorkCounts.unobserved_padding_aliases	pub unobserved_padding_aliases: u64
 field	metal2vulkan-runtime::WorkCounts.unrun_instances_ended	pub unrun_instances_ended: u64
 field	metal2vulkan-runtime::WorkCounts.untouched_passes_skipped	pub untouched_passes_skipped: u64
 field	metal2vulkan-runtime::WorkCounts.upload_chunks_in_device_memory	pub upload_chunks_in_device_memory: u64
@@ -7818,6 +7820,7 @@ method	metal2vulkan-runtime::Buffer::tiled_texture_placement	pub fn tiled_textur
 method	metal2vulkan-runtime::Buffer::vk_buffer	pub unsafe fn vk_buffer(&self) -> (vk::Buffer, u64)
 method	metal2vulkan-runtime::Buffer::vk_host_memory	pub unsafe fn vk_host_memory(&self) -> Option<VkHostMemory>
 method	metal2vulkan-runtime::BufferDescriptor::new	pub fn new(length: u64, resource_options: ResourceOptions, contents: BufferContents<'a>) -> BufferDescriptor<'a>
+method	metal2vulkan-runtime::BufferDescriptor::with_padding_unobserved	pub fn with_padding_unobserved(self) -> BufferDescriptor<'a>
 method	metal2vulkan-runtime::BufferDescriptor::with_placement	pub fn with_placement(self, placement: AddressPlacement) -> BufferDescriptor<'a>
 method	metal2vulkan-runtime::BufferDescriptor::with_pool_slot	pub fn with_pool_slot(self, pool: &'a AddressPool, offset: u64) -> BufferDescriptor<'a>
 method	metal2vulkan-runtime::BufferDescriptor::with_range_of	pub fn with_range_of(self, buffer: &'a Buffer) -> BufferDescriptor<'a>
@@ -12129,6 +12132,7 @@ variant	metal2vulkan-runtime::Problem::NotExportable	NotExportable
 variant	metal2vulkan-runtime::Problem::NotShareable	NotShareable
 variant	metal2vulkan-runtime::Problem::OffsetOutOfRange	OffsetOutOfRange { offset: u64, length: u64 }
 variant	metal2vulkan-runtime::Problem::OutsidePlacement	OutsidePlacement
+variant	metal2vulkan-runtime::Problem::PaddingUnobservedNoCopy	PaddingUnobservedNoCopy
 variant	metal2vulkan-runtime::Problem::PointSizeTopology	PointSizeTopology
 variant	metal2vulkan-runtime::Problem::ProtectedEncoder	ProtectedEncoder { options: u64 }
 variant	metal2vulkan-runtime::Problem::RangeOutOfBounds	RangeOutOfBounds { offset: u64, size: u64, length: u64 }
@@ -12374,6 +12378,7 @@ variant	metal2vulkan-runtime::TextureProblem::Unspecialized	Unspecialized
 variant	metal2vulkan-runtime::TextureProblem::UsageForFormat	UsageForFormat
 variant	metal2vulkan-runtime::TextureProblem::ViewOnlyFormat	ViewOnlyFormat
 variant	metal2vulkan-runtime::TextureProblem::ZeroExtent	ZeroExtent
+variant	metal2vulkan-runtime::TextureShadowReason::BytesBetweenRows	BytesBetweenRows
 variant	metal2vulkan-runtime::TextureShadowReason::CheckFailed	CheckFailed { access: InPlaceAccess, row_ends: InPlaceRowEnds }
 variant	metal2vulkan-runtime::TextureShadowReason::DeviceCopy	DeviceCopy
 variant	metal2vulkan-runtime::TextureShadowReason::Mipmapped	Mipmapped { levels: u32 }

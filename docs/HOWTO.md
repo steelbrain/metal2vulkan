@@ -338,7 +338,15 @@ includes any extra memory that is required based on rowPitch"), which its layout
 render pass's load and store operations ("read and write back any memory locations within the image
 subresource bound for that attachment"; lavapipe writes back the bytes its 4-texel blocks reach
 past a row, a signaling NaN's bits quieted) may write, where Metal leaves them as the program writes
-them.
+them. A consumer that owns every read of such a buffer's bytes (a cache it fills and reads back by
+rows of texels, say) may make it with `BufferDescriptor::with_padding_unobserved()`: a runtime
+extension, no Metal counterpart, refused over the caller's memory (`NoCopy` contents). A texture
+over it is then a linear image at its pitch wherever the device lays one out so, its subresources
+holding each row's bytes after its texels to its pitch (the last row's included) and nothing past
+the last row's pitch; those bytes and the bytes between slices may change whenever the texture is
+made or used, and no other byte does (`WorkCounts::unobserved_padding_aliases` counts such images;
+`Buffer::texture_placement` answers `NotHostPages` for it, and
+`Shadow(TextureShadowReason::BytesBetweenRows)` without the declaration).
 
 A blit that names a texture over a buffer runs on the buffers' bytes, a region per row where its
 rows lie apart, and a buffer-texture copy in a layout Vulkan cannot state moves its rows through a

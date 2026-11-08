@@ -108,10 +108,10 @@ use crate::gpu::TEST_DEVICE;
 use metal2vulkan::device::HostPageTexturePolicy;
 use metal2vulkan::metal::{PixelFormat, PrimitiveType, TextureUsage};
 use metal2vulkan_runtime::{
-    BlitOption, Buffer, ClearColor, CommandBuffer, CommandQueue, ComputePipelineState, Degradation,
-    Device, DeviceOptions, EventRef, LoadAction, Origin, RenderPassDescriptor, RenderPipelineState,
-    ResourceOptions, ScissorRect, SharedEvent, Size, StoreAction, Texture, TextureDescriptor,
-    WorkCounts,
+    BlitOption, Buffer, BufferContents, BufferDescriptor, ClearColor, CommandBuffer, CommandQueue,
+    ComputePipelineState, Degradation, Device, DeviceOptions, EventRef, LoadAction, Origin,
+    RenderPassDescriptor, RenderPipelineState, ResourceOptions, ScissorRect, SharedEvent, Size,
+    StoreAction, Texture, TextureDescriptor, WorkCounts,
 };
 
 /// The bytes of a buffer of the runtime's own that lies in fresh pages (past half a pooled block).
@@ -1367,7 +1367,6 @@ fn surface_costs(
     rows: u64,
     passes: usize,
 ) -> bool {
-    const FRAMES: usize = 40;
     let len = ((bpr * h) as usize).next_multiple_of(GUEST_PAGE);
     let mapping = Mapping::anonymous(len);
     mapping.write(0, &counting(len, 5));
@@ -1393,14 +1392,53 @@ fn surface_costs(
         Some(_) => "in place",
         None => "shadow",
     };
+    // The CPU writes a row each frame, as a guest's surface changes.
+    let write =
+        |frame: usize| mapping.write(((frame as u64 % h) * bpr) as usize, &[frame as u8; 64]);
+    let times = frame_times(
+        device,
+        queue,
+        (reads, corners),
+        &texture,
+        write,
+        rows,
+        passes,
+    );
+    eprintln!(
+        "IN-PLACE-COST on {}: {policy:?} ({form}): a frame's GPU time median {:.1} us, fastest \
+         {:.1} us, over {} frames of {passes} pass(es) each reading the top {rows} rows of a \
+         {w}x{h} surface",
+        device.name(),
+        times[times.len() / 2] * 1e6,
+        times[0] * 1e6,
+        times.len(),
+    );
+    drop((texture, buffer));
+    drop(mapping);
+    true
+}
+
+/// The GPU times of [`FRAMES`] frames, fastest first, each frame `write(frame)` by the CPU and one
+/// command buffer of `queue` that renders `passes` passes, each reading the top `rows` rows of the
+/// `BGRA8Unorm` `texture` through `reads` (a fragment function's `read`, over `corners`) into a
+/// private target of its size.
+fn frame_times(
+    device: &Device,
+    queue: &CommandQueue,
+    (reads, corners): (&RenderPipelineState, &Buffer),
+    texture: &Texture,
+    mut write: impl FnMut(usize),
+    rows: u64,
+    passes: usize,
+) -> Vec<f64> {
+    let (w, h) = (texture.width(), texture.height());
     let mut d = TextureDescriptor::texture_2d(PixelFormat::BGRA8Unorm, w, h, false);
     d.usage = TextureUsage::RENDER_TARGET;
     d.resource_options = ResourceOptions::private();
     let target = device.new_texture(&d).unwrap();
     let mut times = Vec::with_capacity(FRAMES);
     for frame in 0..FRAMES {
-        // The CPU writes a row each frame, as a guest's surface changes.
-        mapping.write(((frame as u64 % h) * bpr) as usize, &[frame as u8; 64]);
+        write(frame);
         let command_buffer = queue.command_buffer().unwrap();
         for _ in 0..passes {
             let mut pass = RenderPassDescriptor::new();
@@ -1414,7 +1452,7 @@ fn surface_costs(
                 .set_scissor_rect(ScissorRect::new(0, 0, w, rows))
                 .unwrap();
             encoder.set_vertex_buffer(Some(corners), 0, 0).unwrap();
-            encoder.set_fragment_texture(Some(&texture), 0).unwrap();
+            encoder.set_fragment_texture(Some(texture), 0).unwrap();
             encoder
                 .draw_primitives(PrimitiveType::Triangle, 0, 6, 1, 0)
                 .unwrap();
@@ -1427,15 +1465,77 @@ fn surface_costs(
         times.push(gpu);
     }
     times.sort_by(f64::total_cmp);
-    eprintln!(
-        "IN-PLACE-COST on {}: {policy:?} ({form}): a frame's GPU time median {:.1} us, fastest \
-         {:.1} us, over {FRAMES} frames of {passes} pass(es) each reading the top {rows} rows of \
-         a {w}x{h} surface",
-        device.name(),
-        times[FRAMES / 2] * 1e6,
-        times[0] * 1e6,
-    );
-    drop((texture, buffer, target));
-    drop(mapping);
-    true
+    times
+}
+
+/// The frames [`frame_times`] times.
+const FRAMES: usize = 40;
+
+/// The consumer's desktop surface over a buffer of the runtime's own memory: 3662x2038
+/// `BGRA8Unorm`, rows 14848 bytes apart (14648 bytes of texels, the pitch rounded up to 256).
+const OWN_SURFACE: (u64, u64, u64) = (3662, 2038, 14848);
+
+/// A texture over a buffer of the runtime's own memory whose rows lie apart, the consumer's
+/// desktop surface's shape ([`OWN_SURFACE`]): over a buffer that declares the bytes between rows
+/// unobserved (`BufferDescriptor::padding_unobserved`) and over one that does not. The undeclared
+/// one is a shadow (`shadowed_textures`); the declared one a linear image aliasing the buffer
+/// wherever the device lays one at the pitch (`unobserved_padding_aliases`), else a shadow. Each
+/// frame the CPU writes a row of the buffer, and one command buffer reads the whole surface
+/// through a fragment function's `read` (the in-place cost lane's frame). Printed
+/// (`UNOBSERVED-PADDING-COST`): each form's median and fastest GPU time of a frame.
+#[test]
+fn unobserved_padding_costs() {
+    let cache = ScratchCache::new().unwrap();
+    let messages = Messages::default();
+    let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), |options| {
+        options.layers.clear();
+    })
+    .unwrap();
+    let queue = device.new_command_queue().unwrap();
+    let reads = reading(&device, PixelFormat::BGRA8Unorm, "tob_read");
+    let corners = staged(&device, &floats([-1.0, -1.0, 1.0, 1.0]));
+    let (w, h, bpr) = OWN_SURFACE;
+    for declared in [false, true] {
+        let descriptor =
+            BufferDescriptor::new(bpr * h, ResourceOptions::shared(), BufferContents::Zero);
+        let descriptor = match declared {
+            true => descriptor.with_padding_unobserved(),
+            false => descriptor,
+        };
+        let buffer = device.new_buffer_with_descriptor(descriptor).unwrap();
+        let contents = buffer.contents().unwrap();
+        let before = device.work_counts();
+        let texture = sampled(&buffer, PixelFormat::BGRA8Unorm, (w, h, bpr));
+        let after = device.work_counts();
+        let aliases = after.unobserved_padding_aliases - before.unobserved_padding_aliases;
+        let shadows = after.shadowed_textures - before.shadowed_textures;
+        assert_eq!(
+            aliases + shadows,
+            1,
+            "declared {declared}: one form, counted"
+        );
+        assert!(declared || shadows == 1, "undeclared: a shadow");
+        let form = match aliases {
+            1 => "an aliasing image",
+            _ => "a shadow",
+        };
+        let write = |frame: usize| {
+            let at = (frame as u64 % h) * bpr;
+            // SAFETY: 64 of the buffer's mapped bytes, inside it, which no command uses between
+            // frames.
+            unsafe { std::ptr::write_bytes(contents.as_ptr().add(at as usize), frame as u8, 64) };
+        };
+        let times = frame_times(&device, &queue, (&reads, &corners), &texture, write, h, 1);
+        eprintln!(
+            "UNOBSERVED-PADDING-COST on {}: declared {declared} ({form}): a frame's GPU time \
+             median {:.1} us, fastest {:.1} us, over {} frames each reading a {w}x{h} surface \
+             with rows {bpr} bytes apart",
+            device.name(),
+            times[times.len() / 2] * 1e6,
+            times[0] * 1e6,
+            times.len(),
+        );
+    }
+    messages.take_notices();
+    layer_reported_nothing_at_all(&messages);
 }

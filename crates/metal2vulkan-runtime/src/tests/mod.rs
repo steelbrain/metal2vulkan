@@ -295,6 +295,8 @@ mod owned_kernel_builds;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod owned_pushes;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod padding_unobserved;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod pass_end_tiles;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod passing_holds;

@@ -390,10 +390,12 @@ arguments of `new_texture` and `new_texture_with_iosurface_plane`, where the tex
 then (`TexturePlacement`): in place; `Pending`, a shadow made before its verdict that moves in place
 where the verdict passes; a shadow and why (`TextureShadowReason`: the policy, the texel width, the
 check's failed or unchecked verdict with its access and row ends, a refusal, a tiled texture's
-levels, texels past the buffer's length, a device copy); no host pages; or a shape no image in place
-takes; `Buffer::tiled_texture_placement` answers it for `new_tiled_texture`'s. The making's
-own route answers it (`texture/route.rs`), after every check the making runs before it makes
-anything, so the same arguments are refused with the same errors; where the route is the image in
+levels, texels past the buffer's length, a device copy, and over the device's own memory rows with
+bytes between them the buffer does not declare unobserved, `BytesBetweenRows`); no host pages (an
+image aliasing the buffer's memory where the device lays one out as Metal does); or a shape no
+image in place takes; `Buffer::tiled_texture_placement` answers it for `new_tiled_texture`'s. The
+making's own route answers it (`texture/route.rs`), after every check the making runs before it
+makes anything, so the same arguments are refused with the same errors; where the route is the image in
 place, the query runs the image's making up to the bind (`texture/in_place_image.rs`): it makes the
 driver's linear image, and the `DRM_FORMAT_MOD_LINEAR` one where the driver lays the first out at
 another pitch, checks their requirements against the bytes' place and memory type, and releases
@@ -1584,7 +1586,9 @@ bound.
   which an image over them would hold in its subresource, where Vulkan lets the image's layout
   transitions read and write any byte of its subresources, and a render pass's load and store
   operations read and write back any byte of an attachment's image subresource, and Metal leaves
-  them as the program writes them; or no linear image of the device lays its texels out as Metal
+  them as the program writes them, unless the buffer, of the runtime's own memory, declares them
+  unobserved (`BufferDescriptor::padding_unobserved`, a runtime extension: they may then change,
+  and no other byte does); or no linear image of the device lays its texels out as Metal
   does in the buffer's memory, holding no byte past them; or the buffer is over the caller's
   `VkBuffer`, whose memory backs no image of the runtime's; or it is a tiled texture of more than
   one level (`Buffer::new_tiled_texture`), over any buffer: no image over the buffer's memory holds

@@ -98,6 +98,10 @@ struct BufferShared {
     /// bytes, so no shadow over them keeps a standing across command buffers
     /// (`shadow_standing.rs`).
     handed_out: Arc<AtomicBool>,
+    /// Its maker declared that nothing reads the bytes between a texture's rows and slices over
+    /// it (`BufferDescriptor::padding_unobserved`), set as it is made: an image over such a
+    /// texture's memory may hold them (`linear_plan::holding`).
+    padding_unobserved: AtomicBool,
 }
 
 /// Where a buffer's bytes are.
@@ -2755,6 +2759,7 @@ impl Device {
             bytes: Bytes::Own(own),
             held_by: HeldBy::default(),
             handed_out: Arc::default(),
+            padding_unobserved: AtomicBool::new(false),
         }))
     }
 
@@ -2975,6 +2980,7 @@ impl Heap {
             }),
             held_by: HeldBy::default(),
             handed_out: Arc::default(),
+            padding_unobserved: AtomicBool::new(false),
         }))
     }
 }
@@ -3171,6 +3177,18 @@ impl Buffer {
     /// Note that its `VkBuffer` was handed out (`Buffer::vk_buffer`).
     pub(super) fn hand_out(&self) {
         self.0.handed_out.store(true, Ordering::Release);
+    }
+
+    /// Note, as it is made, that its maker declared the bytes between a texture's rows and slices
+    /// over it unobserved (`BufferDescriptor::padding_unobserved`).
+    pub(super) fn declare_padding_unobserved(&self) {
+        self.0.padding_unobserved.store(true, Ordering::Release);
+    }
+
+    /// Whether its maker declared the bytes between a texture's rows and slices over it
+    /// unobserved (`BufferDescriptor::padding_unobserved`).
+    pub(super) fn padding_unobserved(&self) -> bool {
+        self.0.padding_unobserved.load(Ordering::Acquire)
     }
 
     /// [`Buffer::at`] for `reason`, which a no-copy buffer's import counts its read apart for

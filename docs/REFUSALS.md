@@ -34,7 +34,7 @@ Columns:
 | Translation caps | 14 | 14 | 0 | 0 | 7 | 7 | 0 |
 | Rate maps the compile layer does not compile | 5 | 5 | 0 | 0 | 4 | 1 | 0 |
 | The translation deadline | 1 | 1 | 0 | 0 | 0 | 1 | 0 |
-| What a call did wrong | 67 | 67 | 0 | 0 | 0 | 0 | 0 |
+| What a call did wrong | 68 | 68 | 0 | 0 | 0 | 0 | 0 |
 | What a call did wrong, in detail | 167 | 150 | 0 | 0 | 0 | 0 | 0 |
 
 ## Totals by basis
@@ -48,7 +48,7 @@ Columns:
 | Translation caps | 0 | 0 | 0 | 0 | 14 | 0 | 0 | 0 |
 | Rate maps the compile layer does not compile | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 5 |
 | The translation deadline | 0 | 0 | 0 | 0 | 1 | 0 | 0 | 0 |
-| What a call did wrong | 22 | 3 | 5 | 0 | 12 | 8 | 17 | 0 |
+| What a call did wrong | 22 | 3 | 5 | 0 | 13 | 8 | 17 | 0 |
 | What a call did wrong, in detail | 59 | 26 | 23 | 0 | 33 | 26 | 0 | 0 |
 
 ## 1. Translator and front-end refusals (`Unsupported`: a `Feature` and its `Needs`)
@@ -352,6 +352,7 @@ Columns:
 | `StorageMode` | A storage mode this call does not take (`Memoryless` for a buffer, for one) | every device (a public call's own check of its arguments) | `metal-measured`: an Apple M3 Max: a buffer of the Memoryless mode asserts "Invalid storageMode", the API validation layer off | 15: `crates/metal2vulkan-runtime/src/argument_encoder.rs (target)`, `crates/metal2vulkan-runtime/src/buffer.rs (buffer_class)` (+13) | `-` |
 | `HandlerAfterCommit` | A handler added after the command buffer was committed | every device (a public call's own check of its arguments) | `metal-documented`: Metal asserts "Completed handler provided after commit call" | 5: `crates/metal2vulkan-runtime/src/command_buffer/mod.rs (add_completed_handler)`, `crates/metal2vulkan-runtime/src/command_buffer/mod.rs (add_completion_seen_handler)` (+3) | `-` |
 | `LengthMismatch` | The given slices' lengths differ | every device (a public call's own check of its arguments) | `ours`: this crate's paired slices: Metal's calls take a count | 8: `crates/metal2vulkan-runtime/src/argument_encoder.rs (set_buffers)`, `crates/metal2vulkan-runtime/src/argument_table.rs (set_buffers_with_strides)` (+5) | `-` |
+| `PaddingUnobservedNoCopy` | A buffer descriptor that declares the bytes between a texture's rows unobserved (`BufferDescriptor::padding_unobserved`) with `NoCopy` contents | every device (a public call's own check of its arguments) | `ours`: a runtime extension: Metal has no such declaration | 1: `crates/metal2vulkan-runtime/src/buffer_descriptor.rs (new_buffer_with_descriptor_now)` | `-` |
 | `LongTextureBufferFillPattern` | A texture buffer's fill given a pattern of more than 32752 bytes (`fillTexture:...:bytes:length:`) | every device (a public call's own check of its arguments) | `metal-measured`: an Apple M3 Max, macOS 27.0.1: Metal's process ends in the call | 1: `crates/metal2vulkan-runtime/src/blit_fill.rs (check_pattern)` | `-` |
 | `RangeOutOfBounds` | `offset..offset + size` runs past a resource of `length` bytes | every device (a public call's own check of its arguments) | `metal-takes`: an Apple M3 Max, macOS 27.0.1: didModifyRange of 0+512 and of 240+64 on a buffer of 256 bytes both return; Metal's API validation alone refuses them | 4: `crates/metal2vulkan-runtime/src/argument_encoder.rs (target_offset)`, `crates/metal2vulkan-runtime/src/blit.rs (out_of_bounds)` (+2) | `-` |
 | `ShaderCacheCapacity` | A shader cache capacity, on disk or in memory, of zero | every device (a public call's own check of its arguments) | `ours`: this crate's shader caches: Metal exposes no capacity | 1: `crates/metal2vulkan-runtime/src/shader_cache/mod.rs (of)` | `-` |
@@ -834,6 +835,7 @@ Each refusal's sites, with the function that builds it.
 - `invalid::StorageMode`: `crates/metal2vulkan-runtime/src/argument_encoder.rs (target)`; `crates/metal2vulkan-runtime/src/buffer.rs (buffer_class)`; `crates/metal2vulkan-runtime/src/buffer_descriptor.rs (buffer_over_host_memory)`; `crates/metal2vulkan-runtime/src/heap.rs (heap_with_token)`; `crates/metal2vulkan-runtime/src/heap.rs (new_sparse_heap)`; `crates/metal2vulkan-runtime/src/heap.rs (no_copy_heap_with_token)`; `crates/metal2vulkan-runtime/src/indirect_command_buffer.rs (new_indirect_command_buffer_now)`; `crates/metal2vulkan-runtime/src/rate_map.rs (copy_parameter_data_to_buffer)`; `crates/metal2vulkan-runtime/src/texture.rs (check_viewable)`; `crates/metal2vulkan-runtime/src/texture.rs (host_copy)`; `crates/metal2vulkan-runtime/src/texture/heap.rs (heap_layout)`; `crates/metal2vulkan-runtime/src/texture/shared.rs (new_shared_texture_now)`; `crates/metal2vulkan-runtime/src/texture/wrapped.rs (new_texture_with_vk_image)`; `crates/metal2vulkan-runtime/src/texture/wrapped.rs (new_texture_with_vk_image_plane)`; `crates/metal2vulkan-runtime/src/wrapped_buffer.rs (new_buffer_with_vk_buffer)`
 - `invalid::HandlerAfterCommit`: `crates/metal2vulkan-runtime/src/command_buffer/mod.rs (add_completed_handler)`; `crates/metal2vulkan-runtime/src/command_buffer/mod.rs (add_completion_seen_handler)`; `crates/metal2vulkan-runtime/src/command_buffer/mod.rs (add_scheduled_handler)`; `crates/metal2vulkan-runtime/src/command_buffer/mod.rs (add_submission_handler)`; `crates/metal2vulkan-runtime/src/executed_commands.rs (add_executed_commands_handler)`
 - `invalid::LengthMismatch`: `crates/metal2vulkan-runtime/src/argument_encoder.rs (set_buffers)`; `crates/metal2vulkan-runtime/src/argument_table.rs (set_buffers_with_strides)`; `crates/metal2vulkan-runtime/src/argument_table.rs (set_samplers)`; `crates/metal2vulkan-runtime/src/buffer_descriptor.rs (new_buffer_with_descriptor_now, 2 sites)`; `crates/metal2vulkan-runtime/src/render/table_facts.rs (check_samplers)`; `crates/metal2vulkan-runtime/src/render/table_facts.rs (set_buffers)`; `crates/metal2vulkan-runtime/src/sparse/mod.rs (convert_sparse_pixel_regions_now)`
+- `invalid::PaddingUnobservedNoCopy`: `crates/metal2vulkan-runtime/src/buffer_descriptor.rs (new_buffer_with_descriptor_now)`
 - `invalid::LongTextureBufferFillPattern`: `crates/metal2vulkan-runtime/src/blit_fill.rs (check_pattern)`
 - `invalid::RangeOutOfBounds`: `crates/metal2vulkan-runtime/src/argument_encoder.rs (target_offset)`; `crates/metal2vulkan-runtime/src/blit.rs (out_of_bounds)`; `crates/metal2vulkan-runtime/src/managed.rs (did_modify_range)`; `crates/metal2vulkan-runtime/src/rate_map.rs (copy_parameter_data_to_buffer)`
 - `invalid::ShaderCacheCapacity`: `crates/metal2vulkan-runtime/src/shader_cache/mod.rs (of)`

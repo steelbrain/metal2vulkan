@@ -14,6 +14,7 @@ use crate::buffer::CallerMemory;
 use crate::buffer_texture::Texels;
 use crate::image_plan::{plan_image, ImageFacts, ImagePlan};
 use crate::in_place::{self, Access, Padding, PagesClass, Refusal, RowEnds, ShadowCause, Verdict};
+use crate::linear_plan::holding;
 use crate::texture_descriptor::{texture_usage, TextureDescriptor, TextureLayout};
 use crate::texture_placement::TexturePlacement;
 use crate::{Device, Error};
@@ -29,9 +30,12 @@ pub(crate) enum Route {
     /// Its texels run past the buffer's length, which no image over the buffer's memory reaches:
     /// the shadow, its tail holding them.
     Past,
-    /// The buffer's bytes are no host pages: an image aliasing the buffer's memory where the
-    /// device makes one on Metal's layout, else the shadow.
-    Device,
+    /// The buffer's bytes are no host pages: an image aliasing the buffer's memory where `holds`
+    /// (an image over the texels may hold them, `linear_plan::holding`: their rows lie one after
+    /// another, or the buffer declares the bytes between them unobserved,
+    /// `BufferDescriptor::padding_unobserved`) and the device makes one on Metal's layout, else
+    /// the shadow; `holds` says why not where it does not.
+    Device { holds: Result<(), String> },
     /// Over host pages of `class`, its texels lying in the device's lines as `rows` says, and
     /// `padding` saying whether a shader's writes may change their rows' padding.
     Host {
@@ -140,7 +144,14 @@ impl Device {
             Some(CallerMemory::HostPages) if texels.buffer.over_dma_buf() => PagesClass::DmaBuf,
             Some(CallerMemory::HostPages) => PagesClass::Pointer,
             None if texels.buffer.in_fresh_pages() => PagesClass::Fresh,
-            _ => return Route::Device,
+            _ => {
+                // Whether an image may hold the texels: none where their rows (or slices) lie
+                // with the buffer's bytes between them, unless the buffer declares those bytes
+                // unobserved (`linear_plan::holding`), and else why.
+                let unobserved = texels.buffer.padding_unobserved();
+                let holds = holding(&texels.layout, usage, unobserved);
+                return Route::Device { holds };
+            }
         };
         // How the texels lie in the device's lines of memory, each checked apart
         // (`in_place::RowEnds`), and whether a shader's writes may change their rows' padding

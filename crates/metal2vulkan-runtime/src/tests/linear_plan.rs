@@ -797,7 +797,7 @@ fn a_linear_image_aliases_only_metals_layout() {
         row_pitch: 80,
         array_pitch: 320,
     };
-    assert!(aliases(&single, 4096 + 256, 320, &image));
+    assert!(aliases(&single, 4096 + 256, 320, &image, false));
     // The binding off the image's alignment (RADV's 256 at a 16-byte offset).
     assert!(!aliases(
         &single,
@@ -806,7 +806,8 @@ fn a_linear_image_aliases_only_metals_layout() {
         &LinearImage {
             alignment: 256,
             ..image
-        }
+        },
+        false
     ));
     // The driver's own pitch where another was asked for (NVIDIA's explicit layouts).
     assert!(!aliases(
@@ -816,7 +817,8 @@ fn a_linear_image_aliases_only_metals_layout() {
         &LinearImage {
             row_pitch: 128,
             ..image
-        }
+        },
+        false
     ));
     // Texels not at the binding, or memory past the buffer's.
     assert!(!aliases(
@@ -826,9 +828,10 @@ fn a_linear_image_aliases_only_metals_layout() {
         &LinearImage {
             offset: 64,
             ..image
-        }
+        },
+        false
     ));
-    assert!(!aliases(&single, 4096, 319, &image));
+    assert!(!aliases(&single, 4096, 319, &image, false));
     // Memory past the subresource, within the buffer's: no write through the image reaches it.
     assert!(aliases(
         &single,
@@ -837,11 +840,12 @@ fn a_linear_image_aliases_only_metals_layout() {
         &LinearImage {
             size: 4096,
             ..image
-        }
+        },
+        false
     ));
     // A subresource past the texels (lavapipe's rows rounded up to 4, of a texture of 3).
     let three = BufferLayout { rows: 3, ..single };
-    assert!(!aliases(&three, 4096, 320, &image));
+    assert!(!aliases(&three, 4096, 320, &image, false));
     assert!(aliases(
         &three,
         4096,
@@ -849,21 +853,22 @@ fn a_linear_image_aliases_only_metals_layout() {
         &LinearImage {
             subresource: 240,
             ..image
-        }
+        },
+        false
     ));
     // Rows with the buffer's bytes between them, at Metal's pitch and the image's alike.
     let padded = BufferLayout {
         row_bytes: 68,
         ..single
     };
-    assert!(!aliases(&padded, 4096, 320, &image));
+    assert!(!aliases(&padded, 4096, 320, &image, false));
     // Whatever its usage: a texture that only reads takes a first move over them too.
     for usage in [
         TextureUsage::RENDER_TARGET | TextureUsage::SHADER_READ,
         TextureUsage::SHADER_READ,
     ] {
-        assert!(holding(&padded, usage).is_err(), "{usage:?}");
-        assert_eq!(holding(&single, usage), Ok(()), "{usage:?}");
+        assert!(holding(&padded, usage, false).is_err(), "{usage:?}");
+        assert_eq!(holding(&single, usage, false), Ok(()), "{usage:?}");
     }
     // One row has nothing between rows, but its pitch's padding past the texels.
     let row = BufferLayout {
@@ -871,7 +876,7 @@ fn a_linear_image_aliases_only_metals_layout() {
         slice_pitch: 80,
         ..padded
     };
-    assert_eq!(holding(&row, TextureUsage::SHADER_READ), Ok(()));
+    assert_eq!(holding(&row, TextureUsage::SHADER_READ, false), Ok(()));
     assert!(!aliases(
         &row,
         4096,
@@ -880,7 +885,8 @@ fn a_linear_image_aliases_only_metals_layout() {
             size: 80,
             subresource: 80,
             ..image
-        }
+        },
+        false
     ));
     assert!(aliases(
         &row,
@@ -890,7 +896,8 @@ fn a_linear_image_aliases_only_metals_layout() {
             size: 80,
             subresource: 68,
             ..image
-        }
+        },
+        false
     ));
     // An array's slices at Metal's stride, and at no other.
     let slices = BufferLayout {
@@ -898,7 +905,7 @@ fn a_linear_image_aliases_only_metals_layout() {
         ..single
     };
     let stacked = LinearImage { size: 960, ..image };
-    assert!(aliases(&slices, 4096, 960, &stacked));
+    assert!(aliases(&slices, 4096, 960, &stacked, false));
     assert!(!aliases(
         &slices,
         4096,
@@ -906,7 +913,8 @@ fn a_linear_image_aliases_only_metals_layout() {
         &LinearImage {
             array_pitch: 384,
             ..stacked
-        }
+        },
+        false
     ));
     // Slices with the buffer's bytes between them (an array's slices rounded up to 128).
     let apart = BufferLayout {
@@ -917,7 +925,7 @@ fn a_linear_image_aliases_only_metals_layout() {
         TextureUsage::RENDER_TARGET | TextureUsage::SHADER_READ,
         TextureUsage::SHADER_READ,
     ] {
-        assert!(holding(&apart, usage).is_err(), "{usage:?}");
+        assert!(holding(&apart, usage, false).is_err(), "{usage:?}");
     }
     assert!(!aliases(
         &apart,
@@ -927,7 +935,8 @@ fn a_linear_image_aliases_only_metals_layout() {
             size: 1088,
             array_pitch: 384,
             ..image
-        }
+        },
+        false
     ));
     // A driver that reports the array's whole bytes as its first subresource's.
     assert!(!aliases(
@@ -937,7 +946,8 @@ fn a_linear_image_aliases_only_metals_layout() {
         &LinearImage {
             subresource: 960,
             ..stacked
-        }
+        },
+        false
     ));
     // A single slice ignores the array pitch a driver reports.
     assert!(aliases(
@@ -947,8 +957,87 @@ fn a_linear_image_aliases_only_metals_layout() {
         &LinearImage {
             array_pitch: 0,
             ..image
-        }
+        },
+        false
     ));
+}
+
+/// Over a buffer whose maker declares the bytes between rows and slices unobserved
+/// (`BufferDescriptor::padding_unobserved`), an image may hold each row's bytes after its texels
+/// to its pitch, the last row's included, and the bytes between slices, and nothing past the last
+/// row's pitch or the buffer's memory; rows that share bytes stay refused.
+#[test]
+fn unobserved_padding_lets_an_image_hold_the_bytes_between_rows_alone() {
+    let padded = BufferLayout {
+        offset: 256,
+        row_pitch: 80,
+        slice_pitch: 320,
+        row_bytes: 68,
+        rows: 4,
+        slices: 1,
+    };
+    let image = LinearImage {
+        alignment: 16,
+        size: 320,
+        offset: 0,
+        subresource: 320,
+        row_pitch: 80,
+        array_pitch: 320,
+    };
+    for usage in [
+        TextureUsage::RENDER_TARGET | TextureUsage::SHADER_READ,
+        TextureUsage::SHADER_READ,
+        TextureUsage::SHADER_WRITE,
+    ] {
+        assert_eq!(holding(&padded, usage, true), Ok(()), "{usage:?}");
+    }
+    // The subresource to the last row's pitch, and one that stops at its texels.
+    assert!(aliases(&padded, 4096, 320, &image, true));
+    let to_texels = LinearImage {
+        subresource: 308,
+        ..image
+    };
+    assert!(aliases(&padded, 4096, 320, &to_texels, true));
+    assert!(!aliases(&padded, 4096, 320, &image, false));
+    // Past the last row's pitch (lavapipe's rows rounded up to 4, of a texture of 3).
+    let three = BufferLayout {
+        rows: 3,
+        slice_pitch: 240,
+        ..padded
+    };
+    assert!(!aliases(&three, 4096, 320, &image, true));
+    let three_rows = LinearImage {
+        subresource: 240,
+        ..image
+    };
+    assert!(aliases(&three, 4096, 320, &three_rows, true));
+    // Memory past the buffer's.
+    assert!(!aliases(&padded, 4096, 319, &image, true));
+    // Slices with the buffer's bytes between them, at Metal's stride and at no other.
+    let apart = BufferLayout {
+        slices: 3,
+        slice_pitch: 384,
+        ..padded
+    };
+    assert_eq!(holding(&apart, TextureUsage::SHADER_READ, true), Ok(()));
+    let stacked = LinearImage {
+        size: 1088,
+        array_pitch: 384,
+        ..image
+    };
+    assert!(aliases(&apart, 4096, 1088, &stacked, true));
+    let other_stride = LinearImage {
+        array_pitch: 320,
+        ..stacked
+    };
+    assert!(!aliases(&apart, 4096, 1088, &other_stride, true));
+    // Rows that share bytes (an IOSurface plane's): no image holds a texel twice.
+    let shared = BufferLayout {
+        row_bytes: 96,
+        ..padded
+    };
+    assert!(holding(&shared, TextureUsage::SHADER_READ, true).is_err());
+    assert!(!aliases(&shared, 4096, 320, &image, true));
 }
 
 /// A texture over padded rows is a shadow, whatever its usage, naming the operations Vulkan lets
@@ -981,7 +1070,7 @@ fn a_padded_texture_s_shadow_names_what_may_write_its_padding() {
         TextureUsage::BLOCK_WRITES_ONLY,
     ] {
         assert_eq!(
-            holding(&padded, usage),
+            holding(&padded, usage, false),
             Err(transitions.to_owned()),
             "{usage:?}"
         );
@@ -991,7 +1080,11 @@ fn a_padded_texture_s_shadow_names_what_may_write_its_padding() {
         TextureUsage::RENDER_TARGET | TextureUsage::SHADER_READ,
         effective_usage(TextureUsage::UNKNOWN),
     ] {
-        assert_eq!(holding(&padded, usage), Err(passes.to_owned()), "{usage:?}");
+        assert_eq!(
+            holding(&padded, usage, false),
+            Err(passes.to_owned()),
+            "{usage:?}"
+        );
     }
 }
 

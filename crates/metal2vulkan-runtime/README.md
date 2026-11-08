@@ -361,7 +361,8 @@ the record the pass is making.
   naming why) for every other texture there (under `HostPageTexturePolicy::Shadow`, one a shader
   writes of 1- or 2-byte texels, one made before the check answered or whose check did not
   pass), where the device's linear images cannot hold Metal's layout, and where the rows lie with
-  bytes between them. On a discrete GPU, a `Managed` texture
+  bytes between them (but over a buffer whose maker declared them unobserved,
+  `BufferDescriptor::padding_unobserved`, below). On a discrete GPU, a `Managed` texture
   over a no-copy buffer's bytes (not an IOSurface plane's) that only samples or reads, whose
   policy takes the image in place, over memory that carries a log of its writes
   (`HostMemory::with_dirty_pages`), tracked and laid out as one copy, is instead such a copy in
@@ -501,6 +502,13 @@ Calls Metal does not have, for a consumer that emulates a Metal device:
   or a no-copy heap's buffer's: the caller's pages, imported by their pointer, as dma-bufs or in a
   guest RAM's chunk, or a copy of them (`copied-host-pages`), which Metal never makes; a rebind
   may change it ([HOWTO](../../docs/HOWTO.md#copied-host-buffers)).
+- `BufferDescriptor::padding_unobserved` (`with_padding_unobserved`): the maker of a buffer of
+  the runtime's own memory declares that nothing reads the bytes between a texture's rows over it
+  (each row's after its texels to its pitch, the last row's included) or between its slices, so
+  such a texture is a linear image aliasing the buffer where the device lays one out at its
+  pitches, not a shadow, and those bytes may change whenever it is made or used; no other byte
+  does (`WorkCounts::unobserved_padding_aliases`). No Metal counterpart; refused
+  (`PaddingUnobservedNoCopy`) with `NoCopy` contents.
 - `Buffer::texture_placement` and `texture_placement_with_iosurface_plane` (with
   `TexturePlacement` and `TextureShadowReason`): where a texture `new_texture` or
   `new_texture_with_iosurface_plane` makes of the same arguments lies if made now: in place over

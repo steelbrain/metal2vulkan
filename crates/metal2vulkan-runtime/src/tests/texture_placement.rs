@@ -25,7 +25,14 @@ fn each_route_answers_its_own_placement() {
         P::Shadow(R::Mipmapped { levels: 6 })
     );
     assert_eq!(Route::Past.placement(), P::Shadow(R::PastLength));
-    assert_eq!(Route::Device.placement(), P::NotHostPages);
+    assert_eq!(Route::Device { holds: Ok(()) }.placement(), P::NotHostPages);
+    assert_eq!(
+        Route::Device {
+            holds: Err("its rows lie apart".to_owned())
+        }
+        .placement(),
+        P::Shadow(R::BytesBetweenRows)
+    );
     assert_eq!(
         host(HostWay::DeviceCopy).placement(),
         P::Shadow(R::DeviceCopy)

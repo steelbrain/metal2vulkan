@@ -83,9 +83,7 @@ use super::image_plan::{
 };
 use super::in_place::{self, PagesClass, ShadowCause};
 use super::key_hash::KeyMap;
-use super::linear_plan::{
-    aliases, check_linear_limits, holding, linear_lack, LinearImage, LinearLack,
-};
+use super::linear_plan::{aliases, check_linear_limits, linear_lack, LinearImage, LinearLack};
 use super::memory::{MemoryClass, Placement};
 use super::nan_clear;
 use super::neutral::Neutrals;
@@ -2390,10 +2388,7 @@ impl Device {
                 let shadowed = (class, (rows, padding), cause);
                 self.host_shadowed(shadowed, (usage, &plan), descriptor, pending)?
             }
-            Route::Device => {
-                // Whether an image may hold the texels: none where their rows (or slices) lie
-                // with the buffer's bytes between them (`linear_plan::holding`), and else why.
-                let holds = holding(&texels.layout, usage);
+            Route::Device { holds } => {
                 // The usage the texture lacks, as for a texture of its own: plain Metal writes a
                 // texture over a buffer made without `ShaderWrite` and reads one made without
                 // `ShaderRead`. A linear image aliasing the buffer's memory takes it where one
@@ -2778,7 +2773,10 @@ impl Device {
     /// an image bound to it would have to be made for (a texture over the caller's host pages
     /// takes the image in place or a shadow: `storage_over_buffer`, `in_place.rs`). It starts `PREINITIALIZED`, which its move to
     /// `GENERAL` keeps. The image's hazard tracking is the buffer's. `holds`: whether an image may
-    /// hold the texels (`linear_plan::holding`), or why not.
+    /// hold the texels (`linear_plan::holding`), or why not. Over a buffer that declares the bytes
+    /// between rows and slices unobserved (`BufferDescriptor::padding_unobserved`), the image may
+    /// hold those bytes too (`linear_plan::within_padding`), counted where its rows or slices lie
+    /// apart (`WorkCounts::unobserved_padding_aliases`).
     fn alias_image(
         &self,
         plan: ImagePlan,
@@ -2833,7 +2831,8 @@ impl Device {
             row_pitch: report.row_pitch,
             array_pitch: report.array_pitch,
         };
-        let why = if !aliases(&texels.layout, memory_offset, room, &image) {
+        let unobserved = texels.buffer.padding_unobserved();
+        let why = if !aliases(&texels.layout, memory_offset, room, &image, unobserved) {
             Some(format!(
                 "the device's linear image of the texture lays its texels out otherwise than \
                  Metal at the texels' offset and row pitch, or holds other bytes than its texels \
@@ -2897,6 +2896,9 @@ impl Device {
         // Leaving `PREINITIALIZED` keeps the bytes the image holds: the buffer's.
         let first = FirstMove::new(raw, image.plan().format, initial, None);
         *lock(&image.first_move) = Some(first);
+        if unobserved && texels.layout.padded() {
+            self.shared().counts.unobserved_padding_alias();
+        }
         Ok(Ok(image.shared()))
     }
 

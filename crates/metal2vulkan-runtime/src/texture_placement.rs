@@ -38,7 +38,11 @@ pub enum TexturePlacement {
     Shadow(TextureShadowReason),
     /// The buffer's bytes are no host pages (a buffer of the device's own memory, or the caller's
     /// `VkBuffer`): the texture is a linear image aliasing the buffer's memory where the device
-    /// lays one out as Metal does, else a shadow. The device's check does not decide it.
+    /// lays one out as Metal does, else a shadow. The device's check does not decide it. Its rows
+    /// (and slices) lie one after another, or the buffer declares the bytes between them
+    /// unobserved ([`BufferDescriptor::padding_unobserved`](crate::BufferDescriptor::padding_unobserved)),
+    /// which the image then holds; else the answer is
+    /// [`TextureShadowReason::BytesBetweenRows`].
     NotHostPages,
     /// A texture of a shape no image in place takes, over any buffer: a texture buffer (its
     /// functions view the buffer's bytes, or a staging copy of them), a rotated texture, a
@@ -95,6 +99,14 @@ pub enum TextureShadowReason {
     /// The texels run past the buffer's length, which no image over the buffer's memory reaches:
     /// the texture's tail holds those past it, zero when made.
     PastLength,
+    /// Over a buffer of the device's own memory ([`TexturePlacement::NotHostPages`]'s): its rows
+    /// (or slices) lie with bytes of the buffer between them that are not its texels, or share
+    /// bytes, which an image over the memory would hold, and Vulkan lets an image's layout moves
+    /// and a render pass's load and store write the bytes it holds; the buffer does not declare
+    /// the bytes between rows unobserved
+    /// ([`BufferDescriptor::padding_unobserved`](crate::BufferDescriptor::padding_unobserved),
+    /// which no rows that share bytes take).
+    BytesBetweenRows,
     /// On a discrete GPU, a `Managed` texture over a no-copy buffer's bytes (not an IOSurface
     /// plane's) that only samples or reads, over memory that carries a log of its writes, tracked,
     /// one slice laid out as one copy: a copy in the device's memory whose copies in take only the
@@ -213,7 +225,10 @@ impl Route {
                 return TexturePlacement::Shadow(TextureShadowReason::Mipmapped { levels });
             }
             Route::Past => return TexturePlacement::Shadow(TextureShadowReason::PastLength),
-            Route::Device => return TexturePlacement::NotHostPages,
+            Route::Device { holds: Ok(()) } => return TexturePlacement::NotHostPages,
+            Route::Device { holds: Err(_) } => {
+                return TexturePlacement::Shadow(TextureShadowReason::BytesBetweenRows)
+            }
             Route::Host { way, .. } => match way {
                 HostWay::InPlace { .. } => return TexturePlacement::InPlace,
                 HostWay::DeviceCopy => {

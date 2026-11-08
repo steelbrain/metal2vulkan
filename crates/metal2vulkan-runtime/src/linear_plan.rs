@@ -537,6 +537,11 @@ impl BufferLayout {
         }
     }
 
+    /// Whether its rows, or its slices, lie with bytes between them that are not texels.
+    pub(super) fn padded(&self) -> bool {
+        apart(self) != (false, false)
+    }
+
     /// One past the texture's last texel byte in the buffer.
     pub(super) fn end(&self) -> u64 {
         self.offset
@@ -1249,21 +1254,29 @@ pub(super) struct LinearImage {
 /// memory block), holds exactly Metal's texels in the `room` bytes from there to the end of the
 /// buffer's memory: the binding is a multiple of the image's alignment, its texels start at the
 /// binding, its row pitch is Metal's and so is its slice pitch where it has several slices, its
-/// subresources hold no byte but the texture's texels ([`texels_alone`]), and its memory stays in
-/// the buffer's. A driver may report a pitch other than the one asked of it (NVIDIA does for
-/// explicit layouts it does not support), so the image's own report decides.
+/// subresources hold no byte but the texture's texels ([`texels_alone`]), or, where the buffer
+/// declares the bytes between rows and slices unobserved (`padding_unobserved`,
+/// `BufferDescriptor::padding_unobserved`), none but its texels and those bytes
+/// ([`within_padding`]), and its memory stays in the buffer's. A driver may report a pitch other
+/// than the one asked of it (NVIDIA does for explicit layouts it does not support), so the image's
+/// own report decides.
 pub(super) fn aliases(
     layout: &BufferLayout,
     memory_offset: u64,
     room: u64,
     image: &LinearImage,
+    padding_unobserved: bool,
 ) -> bool {
+    let held = match padding_unobserved {
+        true => within_padding(layout, image.subresource, image.array_pitch),
+        false => texels_alone(layout, image.subresource, image.array_pitch),
+    };
     image.alignment != 0
         && memory_offset.is_multiple_of(image.alignment)
         && image.offset == 0
         && image.row_pitch == layout.row_pitch
         && (layout.slices == 1 || image.array_pitch == layout.slice_pitch)
-        && texels_alone(layout, image.subresource, image.array_pitch)
+        && held
         && image.size <= room
 }
 
@@ -1298,8 +1311,14 @@ pub(super) fn aliases(
 /// `Keep`), undoing a CPU write made to them meanwhile, where Metal keeps every one; and lavapipe's
 /// shader writes read the bytes its 4-texel blocks reach past a row's texels and write them back, a
 /// signaling NaN's bits quieted. So such a texture is a shadow, whose copies address its texels
-/// alone.
-pub(super) fn holding(layout: &BufferLayout, usage: TextureUsage) -> Result<(), String> {
+/// alone; but where `padding_unobserved` (the buffer, of the runtime's own memory, declares that
+/// nothing reads those bytes: `BufferDescriptor::padding_unobserved`), an image over its rows and
+/// slices may hold the bytes between them, which those operations may then change.
+pub(super) fn holding(
+    layout: &BufferLayout,
+    usage: TextureUsage,
+    padding_unobserved: bool,
+) -> Result<(), String> {
     // An IOSurface plane's rows that overlap: no image holds them, whatever its usage.
     let shared = layout.shared_bytes();
     if shared != 0 {
@@ -1310,6 +1329,9 @@ pub(super) fn holding(layout: &BufferLayout, usage: TextureUsage) -> Result<(), 
         ));
     }
     let (rows, slices) = apart(layout);
+    if padding_unobserved {
+        return Ok(());
+    }
     let apart = if rows {
         format!(
             "its rows lie {} bytes apart, {} bytes of texels each",
@@ -1348,6 +1370,22 @@ pub(super) fn texels_alone(layout: &BufferLayout, size: u64, array_pitch: u64) -
     let texels = layout.end() - layout.offset;
     let last = array_pitch.saturating_mul(layout.slices - 1);
     apart(layout) == (false, false) && last.saturating_add(size) <= texels
+}
+
+/// Whether a linear image over `layout`'s texels, whose subresources take `size` bytes each from
+/// the first texel of their slice, `array_pitch` apart, holds no byte but the texture's texels and
+/// the bytes between its rows and its slices, those of a buffer that declares them unobserved
+/// (`BufferDescriptor::padding_unobserved`): its rows share no byte, its slices lie its slice
+/// pitch apart (where it has several), each at or past the end of the one before's last row to
+/// its pitch, and each subresource ends at its slice's last row's pitch or before. Each row's
+/// bytes after its texels to its pitch, the last row's included, are such bytes; a byte past the
+/// last row's pitch is not, so a driver that lays rows out past the texture's (lavapipe rounds the
+/// height up to 4) has the texture refused. A byte of the image's memory past every subresource
+/// is no texel's and no padding's, and no operation on the image reaches it ([`texels_alone`]).
+pub(super) fn within_padding(layout: &BufferLayout, size: u64, array_pitch: u64) -> bool {
+    let rows = layout.row_pitch.saturating_mul(layout.rows);
+    let slices = layout.slices == 1 || (array_pitch == layout.slice_pitch && array_pitch >= rows);
+    layout.shared_bytes() == 0 && slices && size <= rows
 }
 
 /// Whether `layout`'s rows, and its slices, lie with bytes between them that are not texels.

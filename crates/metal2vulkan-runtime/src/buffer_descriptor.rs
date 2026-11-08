@@ -123,6 +123,23 @@ pub struct BufferDescriptor<'a> {
     /// of the pool; `None` for a range of the space. A runtime extension: Metal places a buffer
     /// shorter than a page in a slot of a pool of its own, which its API does not name.
     pub pool_slot: Option<(&'a AddressPool, u64)>,
+    /// The maker declares that nothing reads the bytes between the rows of a texture over the
+    /// buffer, nor between its slices: each row's bytes after its last texel to its pitch, the
+    /// last row's included, and the bytes from a slice's last row's pitch to the next slice. A
+    /// texture over the buffer whose rows (or slices) lie apart is then a linear image aliasing
+    /// the buffer's memory where the device lays one out at its pitches, as one whose rows lie one
+    /// after another is, not a shadow: its image holds those bytes, and Vulkan lets the image's
+    /// layout moves and a render pass's load and store operations write them, so they may change
+    /// to any value whenever the texture is made or used. No other byte changes: one past the
+    /// image's subresources is reached by no operation on it, and a texel's bytes are the
+    /// texture's. Only for a buffer of the runtime's own memory (`Zero`, `Copy` or `CopyHost`
+    /// contents); refused (`Invalid`, `PaddingUnobservedNoCopy`) with `NoCopy` contents. A buffer
+    /// the runtime lays in fresh pages it imports (a long one on a device whose pointer imports
+    /// cost submissions nothing, `WorkCounts::fresh_page_buffers_made`) takes its textures in place
+    /// where the device's check of such pages passed, which keeps every byte, so there the
+    /// declaration lets nothing more. A runtime extension with no Metal counterpart, for a consumer
+    /// that owns every read of the buffer's bytes; `false` by default, as Metal keeps every byte.
+    pub padding_unobserved: bool,
 }
 
 impl<'a> BufferDescriptor<'a> {
@@ -140,6 +157,7 @@ impl<'a> BufferDescriptor<'a> {
             range_token: None,
             range_of: None,
             pool_slot: None,
+            padding_unobserved: false,
         }
     }
 
@@ -171,6 +189,15 @@ impl<'a> BufferDescriptor<'a> {
             ..self
         }
     }
+
+    /// This descriptor declaring the bytes between a texture's rows and slices over the buffer
+    /// unobserved (`padding_unobserved`).
+    pub fn with_padding_unobserved(self) -> BufferDescriptor<'a> {
+        BufferDescriptor {
+            padding_unobserved: true,
+            ..self
+        }
+    }
 }
 
 impl Device {
@@ -197,6 +224,10 @@ impl Device {
     /// `PlacementConflict::OffSlot` for an offset that is not a multiple of 256 or a placement
     /// other than `Any` or that address; `OutsidePool` for bytes past the pool's end; `Held` for
     /// bytes a live buffer in the pool holds; `Unshared` with `range_of`.
+    ///
+    /// With `padding_unobserved`, a texture over the buffer may hold the bytes between its rows
+    /// and slices in its image (the field's docs). Refused: `Invalid` (`PaddingUnobservedNoCopy`)
+    /// with `NoCopy` contents.
     pub fn new_buffer_with_descriptor(
         &self,
         descriptor: BufferDescriptor<'_>,
@@ -221,7 +252,11 @@ impl Device {
             range_token,
             range_of,
             pool_slot,
+            padding_unobserved,
         } = descriptor;
+        if padding_unobserved && matches!(contents, BufferContents::NoCopy { .. }) {
+            return Err(invalid(CALL, Problem::PaddingUnobservedNoCopy));
+        }
         let place = match (range_of, pool_slot) {
             (Some(other), slot) => {
                 let in_pool = slot.is_some();
@@ -279,6 +314,9 @@ impl Device {
         }?;
         if let Some(token) = range_token {
             buffer.keep_range_token(token)?;
+        }
+        if padding_unobserved {
+            buffer.declare_padding_unobserved();
         }
         Ok(self.visible(buffer))
     }

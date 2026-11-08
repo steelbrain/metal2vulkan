@@ -690,6 +690,13 @@ pub enum Problem {
     ///
     /// Basis: ours (this crate's paired slices: Metal's calls take a count).
     LengthMismatch,
+    /// A buffer descriptor that declares the bytes between a texture's rows unobserved
+    /// (`BufferDescriptor::padding_unobserved`) with `NoCopy` contents: the declaration is for a
+    /// buffer of the runtime's own memory, whose every reader the caller owns, never the caller's
+    /// pages, which others may read.
+    ///
+    /// Basis: ours (a runtime extension: Metal has no such declaration).
+    PaddingUnobservedNoCopy,
     /// A texture buffer's fill given a pattern of more than 32752 bytes
     /// (`fillTexture:...:bytes:length:`): Metal's process ends in the call, in the blit's
     /// dispatch, whatever the region, of no texels or past the buffer too (an Apple M3 Max under
