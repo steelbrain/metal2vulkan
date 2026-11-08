@@ -296,8 +296,9 @@ fn resources_past_device_local_memory_are_made_used_and_read_back() {
     let shared = device.shared();
     let view = lock(&shared.memory).type_view(shared.vk()).unwrap();
     let unified = device.properties().has_unified_memory;
-    let buffer_types = overflow_candidates(&view.types, view.buffers, MemoryClass::Private);
-    let image_types = overflow_candidates(&view.types, view.images, MemoryClass::Private);
+    let buffer_types =
+        overflow_candidates(&view.types, view.buffers, MemoryClass::Private, unified);
+    let image_types = overflow_candidates(&view.types, view.images, MemoryClass::Private, unified);
     let own = candidates(&view.types, view.buffers, MemoryClass::Private, unified);
     let heap = own
         .first()

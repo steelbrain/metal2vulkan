@@ -77,18 +77,18 @@ fn device_local_classes_overflow_into_system_memory() {
     let all = (1 << types.len()) - 1;
     for class in [MemoryClass::Private, MemoryClass::Memoryless] {
         assert_eq!(
-            overflow_candidates(&types, all, class),
+            overflow_candidates(&types, all, class, false),
             [3, 0, 2],
             "{class:?}"
         );
         // Only the types the resource takes.
         assert_eq!(
-            overflow_candidates(&types, 0b0101, class),
+            overflow_candidates(&types, 0b0101, class, false),
             [0, 2],
             "{class:?}"
         );
         assert!(
-            overflow_candidates(&types, 0b111_0010, class).is_empty(),
+            overflow_candidates(&types, 0b111_0010, class, false).is_empty(),
             "{class:?}"
         );
     }
@@ -98,7 +98,7 @@ fn device_local_classes_overflow_into_system_memory() {
         MemoryClass::Managed,
     ] {
         assert!(
-            overflow_candidates(&types, all, class).is_empty(),
+            overflow_candidates(&types, all, class, false).is_empty(),
             "{class:?}"
         );
     }
@@ -109,7 +109,7 @@ fn device_local_classes_overflow_into_system_memory() {
     ];
     for class in [MemoryClass::Private, MemoryClass::Memoryless] {
         assert!(
-            overflow_candidates(&unified, 0b111, class).is_empty(),
+            overflow_candidates(&unified, 0b111, class, true).is_empty(),
             "{class:?}"
         );
     }
@@ -167,18 +167,75 @@ fn shared_memory_follows_the_cpu_cache_mode_and_unified_memory() {
             assert_eq!(candidates(&incoherent, 0b11, class, unified), [0]);
         }
     }
-    // The other classes do not depend on unified memory.
-    for class in [
-        MemoryClass::Private,
-        MemoryClass::Managed,
-        MemoryClass::Memoryless,
-    ] {
+    // `Managed` does not depend on unified memory; `Private` and `Memoryless` do where a type is
+    // not device-local (`unified_private_memory_takes_the_system_heap_first`).
+    assert_eq!(
+        candidates(&radv, 0b1111, MemoryClass::Managed, true),
+        candidates(&radv, 0b1111, MemoryClass::Managed, false),
+    );
+}
+
+/// With unified memory, `Private` and `Memoryless` memory take the types that are not
+/// device-local first, host-invisible, then uncached, then cached, and the device-local ones after
+/// (`Memoryless` a lazily allocated one before all), never a protected or AMD device-coherent one;
+/// without unified memory, or where every type the resource takes is device-local, as before.
+#[test]
+fn unified_private_memory_takes_the_system_heap_first() {
+    use vk::MemoryPropertyFlags as P;
+    let (private, memoryless) = (MemoryClass::Private, MemoryClass::Memoryless);
+    // RADV (Mesa 26.2.4) on a Radeon 780M: device-local 0, 1, 3 and 4 (3 and 4 host-visible),
+    // system memory 2 (uncached) and 5 and 6 (cached), protected 7 to 12 (11 and 12 not
+    // device-local), AMD device-coherent 13 to 16.
+    let radv: Vec<vk::MemoryType> = [
+        0x1, 0x1, 0x6, 0x7, 0x7, 0xe, 0xe, 0x21, 0x21, 0x21, 0x21, 0x20, 0x20, 0xc1, 0xc6, 0xc7,
+        0xce,
+    ]
+    .iter()
+    .map(|&flags| ty(P::from_raw(flags)))
+    .collect();
+    let all = (1 << radv.len()) - 1;
+    for class in [private, memoryless] {
         assert_eq!(
-            candidates(&radv, 0b1111, class, true),
-            candidates(&radv, 0b1111, class, false),
+            candidates(&radv, all, class, true),
+            [2, 5, 6, 0, 1, 3, 4],
+            "{class:?}"
+        );
+        // Only the types the resource takes: device-local alone, as before.
+        assert_eq!(
+            candidates(&radv, 0b1_1011, class, true),
+            [0, 1, 3, 4],
+            "{class:?}"
+        );
+        assert_eq!(
+            candidates(&radv, 0b10_0001, class, true),
+            [5, 0],
+            "{class:?}"
+        );
+        assert!(
+            overflow_candidates(&radv, all, class, true).is_empty(),
             "{class:?}"
         );
     }
+    // Without unified memory, device-local first and system memory as overflow.
+    assert_eq!(candidates(&radv, 0b111_1111, private, false), [0, 1, 3, 4]);
+    assert_eq!(
+        overflow_candidates(&radv, 0b111_1111, private, false),
+        [2, 5, 6]
+    );
+    // A lazily allocated type before all for `Memoryless`, never for `Private`.
+    let tiler = [
+        ty(P::DEVICE_LOCAL),
+        ty(P::DEVICE_LOCAL | P::LAZILY_ALLOCATED),
+        ty(P::HOST_VISIBLE | P::HOST_COHERENT),
+    ];
+    assert_eq!(candidates(&tiler, 0b111, memoryless, true), [1, 2, 0]);
+    assert_eq!(candidates(&tiler, 0b111, private, true), [2, 0]);
+    // Every type device-local (ANV, MoltenVK, lavapipe): as before.
+    let anv = [
+        ty(P::DEVICE_LOCAL),
+        ty(P::DEVICE_LOCAL | P::HOST_VISIBLE | P::HOST_COHERENT),
+    ];
+    assert_eq!(candidates(&anv, 0b11, private, true), [0, 1]);
 }
 
 /// No class takes a device-coherent or device-uncached type of `VK_AMD_device_coherent_memory`,
@@ -264,7 +321,7 @@ fn host_transfer_images_prefer_host_cached_memory() {
         0xce,
     ]);
     let allowed = 0b1_1100_0000_0010_1100;
-    assert_eq!(picked(&radv, allowed, true), (MemoryClass::Shared, vec![5]));
+    assert_eq!(picked(&radv, allowed, true), (private, vec![5]));
     // The same memory on a device without unified memory: its device-local uncached type.
     assert_eq!(host_cached_placement(&radv, allowed, private, false), None);
     assert_eq!(picked(&radv, allowed, false), (private, vec![3]));

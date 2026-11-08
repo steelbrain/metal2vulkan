@@ -148,7 +148,8 @@ pub(super) enum MemoryClass {
     /// (resizable BAR), else as `Shared`; with unified memory as `Shared` ([`candidates`]).
     WriteCombined,
     /// Device-local (`Private` storage), host-invisible where the device has a choice; where no
-    /// device-local type has room, system memory ([`overflow_candidates`]).
+    /// device-local type has room, system memory ([`overflow_candidates`]). With unified memory
+    /// and a heap that is not device-local, that heap's memory first ([`candidates`]).
     Private,
     /// Host-visible and coherent (`Managed` storage), host-cached where the device has such
     /// memory: a managed resource is there for the CPU to read back. On a device with unified
@@ -339,6 +340,18 @@ pub(super) fn host_cached_placement(
 /// GPU uses a shared resource; `Device::new_buffer` announces it
 /// (`Degradation::SharedInSystemMemory`). So without unified memory `WriteCombined` memory, which
 /// the host does not read, prefers a device-local type; with unified memory it is `Shared` memory.
+///
+/// With unified memory, a heap that is not device-local is the same memory as the device-local
+/// one, and the device-local heap may be a carve-out the kernel reserves from it for every
+/// process's GPU memory. So `Private` and `Memoryless` memory, where the resource takes a type
+/// that is neither device-local nor lazily allocated, takes those types first (host-invisible,
+/// then uncached), and device-local ones after (`Memoryless` its lazily allocated ones before
+/// all). RADV lists a Radeon 780M's 2 GiB carve-out and its system memory as one device-local heap
+/// of 11.05 GiB with the system memory's types beside it in a heap of 5.53 GiB that is not
+/// device-local, and the kernel backs its device-local types from the carve-out first, evicting
+/// to make room once the carve-out is full, during the submissions of every process that holds
+/// memory there; `VK_EXT_memory_budget` reports that heap's budget, not the carve-out's, so no
+/// budget keeps the runtime's placements within it.
 pub(super) fn candidates(
     types: &[vk::MemoryType],
     allowed: u32,
@@ -347,6 +360,39 @@ pub(super) fn candidates(
 ) -> Vec<u32> {
     use vk::MemoryPropertyFlags as P;
     let usable = |index: usize| allowed & (1 << index) != 0;
+    if unified && matches!(class, MemoryClass::Private | MemoryClass::Memoryless) {
+        let fits = |index: usize, flags: P| {
+            usable(index)
+                && allocatable(flags)
+                && !flags.contains(P::PROTECTED)
+                && (class == MemoryClass::Memoryless || !flags.contains(P::LAZILY_ALLOCATED))
+        };
+        let system = (types.iter().enumerate()).any(|(index, ty)| {
+            fits(index, ty.property_flags)
+                && !ty
+                    .property_flags
+                    .intersects(P::DEVICE_LOCAL | P::LAZILY_ALLOCATED)
+        });
+        if system {
+            let has = |flags: P, bit: P| u8::from(flags.contains(bit));
+            let mut ranked: Vec<((u8, u8, u8, u8), u32)> = (types.iter().enumerate())
+                .filter(|&(index, ty)| fits(index, ty.property_flags))
+                .map(|(index, ty)| {
+                    let flags = ty.property_flags;
+                    let rank = (
+                        1 - has(flags, P::LAZILY_ALLOCATED),
+                        has(flags, P::DEVICE_LOCAL),
+                        has(flags, P::HOST_CACHED),
+                        has(flags, P::HOST_VISIBLE),
+                    );
+                    (rank, index as u32)
+                })
+                .collect();
+            // Vulkan lists memory types best first within equal properties; the sort is stable.
+            ranked.sort_by_key(|&(rank, _)| rank);
+            return ranked.into_iter().map(|(_, index)| index).collect();
+        }
+    }
     // The flags required; those preferred, the first outweighing the second; those avoided,
     // weighed as the first preference.
     let (required, preferred, avoided) = match class {
@@ -406,14 +452,17 @@ pub(super) fn candidates(
 /// Laptop GPU (Linux), a buffer the runtime places overflows into its types 0, 2 and 3 (system
 /// memory the host does not map, then the uncached and cached kinds it maps), and an optimal color
 /// image into type 0. None for the other classes, whose candidates already take every host-visible
-/// coherent type, nor on a device whose every type is device-local (MoltenVK on an M3 Max).
+/// coherent type, nor on a device whose every type is device-local (MoltenVK on an M3 Max), nor on
+/// one with unified memory (`unified`), whose candidates already take every type that is not
+/// device-local ([`candidates`]).
 pub(super) fn overflow_candidates(
     types: &[vk::MemoryType],
     allowed: u32,
     class: MemoryClass,
+    unified: bool,
 ) -> Vec<u32> {
     use vk::MemoryPropertyFlags as P;
-    if !matches!(class, MemoryClass::Private | MemoryClass::Memoryless) {
+    if unified || !matches!(class, MemoryClass::Private | MemoryClass::Memoryless) {
         return Vec::new();
     }
     let mut ranked: Vec<(bool, u32)> = types
@@ -2911,7 +2960,7 @@ pub(super) fn allocate_exported(
         let bits = requirements.memory_type_bits;
         (
             candidates(&memory.types, bits, class, memory.unified),
-            overflow_candidates(&memory.types, bits, class),
+            overflow_candidates(&memory.types, bits, class, memory.unified),
             memory.maker(),
         )
     };
@@ -2970,7 +3019,7 @@ fn place(
         let bits = requirements.memory_type_bits;
         (
             candidates(&memory.types, bits, class, memory.unified),
-            overflow_candidates(&memory.types, bits, class),
+            overflow_candidates(&memory.types, bits, class, memory.unified),
             memory.maker(),
         )
     };
