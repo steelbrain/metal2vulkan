@@ -35,7 +35,10 @@ use crate::air_library::AirLibrary;
 use crate::gpu::TEST_DEVICE;
 use metal2vulkan::bind::SamplerDescriptor;
 use metal2vulkan::device::DevicePolicy;
-use metal2vulkan::metal::{PixelFormat, PrimitiveType, SamplerMinMagFilter, TextureUsage};
+use metal2vulkan::metal::{
+    PixelFormat, PrimitiveType, SamplerMinMagFilter, TextureSwizzle, TextureSwizzleChannels,
+    TextureUsage,
+};
 use metal2vulkan::pipeline::{ColorAttachmentDescriptor, RenderPipelineDescriptor, StageSource};
 use metal2vulkan_devtools::llvm_assemble_text;
 use metal2vulkan_runtime::{
@@ -165,6 +168,11 @@ enum Form {
     /// A `YCBCR10_420_2P` texture over plane 0, the surface's facts given, sampled by
     /// `video_ycbcr`.
     YCbCr,
+    /// As [`Form::YCbCr`], with a swizzle that swaps red and blue: a swizzled two-plane YCbCr
+    /// texture keeps its image of converted texels on every device (`ycbcr_images_kept_swizzle`),
+    /// so this is the image's route for the same frame, the conversion before the pass and the
+    /// device's filter of the converted texels.
+    YCbCrImage,
     /// An `R16Unorm` texture over plane 0 and an `RG16Unorm` one over plane 1, sampled and
     /// converted by `video_planes`.
     Planes,
@@ -291,7 +299,7 @@ fn frame_bytes(n: u32) -> Vec<u8> {
 /// before making it.
 fn textures(buffer: &Buffer, form: Form) -> Vec<(Texture, String)> {
     let planes: Vec<(PixelFormat, u64, u64, IoSurfacePlane)> = match form {
-        Form::YCbCr => {
+        Form::YCbCr | Form::YCbCrImage => {
             let facts = IoSurfaceYCbCr::new(X420, 0, [W, H], CHROMA_AT, ROW)
                 .with_matrix(SurfaceYCbCrMatrix::Itu2020);
             let plane = IoSurfacePlane::new(LUMA_AT, ROW, true).with_ycbcr(facts);
@@ -318,11 +326,26 @@ fn textures(buffer: &Buffer, form: Form) -> Vec<(Texture, String)> {
             let mut d = TextureDescriptor::texture_2d(pf, w, h, false);
             d.usage = TextureUsage::SHADER_READ;
             d.resource_options = buffer.resource_options();
+            if form == Form::YCbCrImage {
+                d.swizzle = TextureSwizzleChannels {
+                    red: TextureSwizzle::Blue,
+                    blue: TextureSwizzle::Red,
+                    ..TextureSwizzleChannels::DEFAULT
+                };
+            }
             let placement = buffer.texture_placement_with_iosurface_plane(&d, plane);
             let texture = buffer.new_texture_with_iosurface_plane(&d, plane).unwrap();
             (texture, format!("{pf:?} {placement:?}"))
         })
         .collect()
+}
+
+/// The fragment function that samples `form`.
+fn fragment(form: Form) -> &'static str {
+    match form {
+        Form::YCbCr | Form::YCbCrImage => "video_ycbcr",
+        Form::Planes => "video_planes",
+    }
 }
 
 /// The pipeline drawing `fragment` into a `BGRA8Unorm` target.
@@ -527,13 +550,7 @@ fn video_frame_costs() {
             .map(|index| Surface::new(pages, memfd.as_ref(), index))
             .collect();
         for form in [Form::YCbCr, Form::Planes] {
-            let pipeline = pipeline(
-                &device,
-                match form {
-                    Form::YCbCr => "video_ycbcr",
-                    Form::Planes => "video_planes",
-                },
-            );
+            let pipeline = pipeline(&device, fragment(form));
             for making in [Making::Once, Making::EachFrame] {
                 let mut kept: Vec<Option<(Buffer, Vec<(Texture, String)>)>> =
                     (0..POOL).map(|_| None).collect();
@@ -621,14 +638,8 @@ fn video_frame_parts() {
     let surfaces: Vec<Surface> = (0..POOL)
         .map(|_| Surface::Anonymous(Mapping::anonymous(LEN)))
         .collect();
-    for form in [Form::YCbCr, Form::Planes] {
-        let pipeline = pipeline(
-            &device,
-            match form {
-                Form::YCbCr => "video_ycbcr",
-                Form::Planes => "video_planes",
-            },
-        );
+    for form in [Form::YCbCr, Form::YCbCrImage, Form::Planes] {
+        let pipeline = pipeline(&device, fragment(form));
         let made: Vec<(Buffer, Vec<(Texture, String)>)> = surfaces
             .iter()
             .map(|surface| {
@@ -660,13 +671,29 @@ fn video_frame_parts() {
                 }
                 let after = device.work_counts();
                 let (gpu, gpu90) = median_p90(gpus);
-                let copied = (after.shadow_texels_copied_in - before.shadow_texels_copied_in)
-                    as f64
-                    / (WARM + FRAMES) as f64;
+                let per = |a: u64, b: u64| (a - b) as f64 / (WARM + FRAMES) as f64;
                 println!(
-                    "VIDEO-PART on {}: {form:?}, {filter:?}, frame written each time {written}: \
-                     GPU {gpu:.0} us (p90 {gpu90:.0}); shadow texels copied in a frame {copied:.0}",
+                    "VIDEO-PART on {}: {form:?} [{}], {filter:?}, frame written each time \
+                     {written}: GPU {gpu:.0} us (p90 {gpu90:.0}); per frame: shadow texels \
+                     copied in {:.0}, planes bound in place {:.2}, refreshes {:.2}, whole \
+                     conversions {:.2}",
                     device.name(),
+                    made[0]
+                        .1
+                        .iter()
+                        .map(|(_, placement)| placement.as_str())
+                        .collect::<Vec<_>>()
+                        .join("; "),
+                    per(
+                        after.shadow_texels_copied_in,
+                        before.shadow_texels_copied_in
+                    ),
+                    per(after.ycbcr_planes_bound, before.ycbcr_planes_bound),
+                    per(after.ycbcr_refreshes, before.ycbcr_refreshes),
+                    per(
+                        after.ycbcr_whole_conversions,
+                        before.ycbcr_whole_conversions
+                    ),
                 );
             }
         }
