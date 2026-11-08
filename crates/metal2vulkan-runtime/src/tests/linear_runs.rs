@@ -523,3 +523,169 @@ fn a_rebound_run_over_host_pages_is_encoded_again_whole() {
     );
     drop(buffer);
 }
+
+/// The passes of [`passes_reading_host_pages_form_one_run`]: a WebGPU frame split at every
+/// indexed draw (the `stencilMask` sample's first: 706).
+const CHUNK_PASSES: usize = 706;
+
+/// The bytes between two passes' data in [`passes_reading_host_pages_form_one_run`]'s chunk.
+const CHUNK_STRIDE: u64 = 256;
+
+/// Encode a pass over `texture` beside `depth`, loading and storing it, that blends with `state`
+/// the rectangle and the color `chunk` holds at `at` and 16 bytes after (as a consumer's
+/// `setVertexBytes` and `setFragmentBytes` land in an upload chunk of its own).
+fn pass_from(
+    command_buffer: &CommandBuffer,
+    (texture, depth): (&Texture, &Texture),
+    state: &RenderPipelineState,
+    (chunk, at): (&Buffer, u64),
+) {
+    let mut descriptor = RenderPassDescriptor::new();
+    let color = &mut descriptor.color_attachments[0];
+    color.texture = Some(texture.clone());
+    color.load_action = LoadAction::Load;
+    color.store_action = StoreAction::Store;
+    descriptor.depth_attachment.texture = Some(depth.clone());
+    descriptor.depth_attachment.load_action = LoadAction::Clear;
+    descriptor.depth_attachment.store_action = StoreAction::Store;
+    let mut encoder = command_buffer.render_command_encoder(&descriptor).unwrap();
+    encoder.set_render_pipeline_state(state).unwrap();
+    encoder.set_vertex_buffer(Some(chunk), at, 0).unwrap();
+    encoder
+        .set_fragment_buffer(Some(chunk), at + 16, 0)
+        .unwrap();
+    (encoder.draw_primitives(PrimitiveType::Triangle, 0, 6, 1, 0)).unwrap();
+    encoder.end_encoding().unwrap();
+}
+
+/// [`CHUNK_PASSES`] passes in one command buffer over a target over a `Private` buffer (rows of
+/// 2048 bytes), the rule forced, each reading its rectangle and color from a no-copy buffer over
+/// host pages, at an offset of its own (a consumer's upload chunk in its guest RAM): one run,
+/// merged once (`pass_runs.rs`), every later pass taking its merge over; the texels those a
+/// private texture of the same first texels holds after the same passes.
+#[test]
+fn passes_reading_host_pages_form_one_run() {
+    let (width, row) = (512, 2048);
+    let packed = width * TEXEL;
+    let (host, chunk_pages) = (
+        Host::new(row * H),
+        Host::new(CHUNK_STRIDE * CHUNK_PASSES as u64),
+    );
+    let cache = Scratch::new("linear-runs-chunk");
+    let device = device(&cache.0);
+    let queue = device.new_command_queue().unwrap();
+    let blending = blending(&device);
+    let usage = TextureUsage::RENDER_TARGET | TextureUsage::SHADER_READ;
+    let depth = private_texture(
+        &device,
+        PixelFormat::Depth32Float,
+        width,
+        TextureUsage::RENDER_TARGET,
+    );
+    let mut data = vec![0u8; (CHUNK_STRIDE * CHUNK_PASSES as u64) as usize];
+    for i in 0..CHUNK_PASSES {
+        let (corners, rgba) = drawn(i);
+        let at = i * CHUNK_STRIDE as usize;
+        data[at..at + 16].copy_from_slice(&bytes_of(&corners, f32::to_le_bytes));
+        data[at + 16..at + 32].copy_from_slice(&bytes_of(&rgba, f32::to_le_bytes));
+    }
+    chunk_pages.write(&data);
+    // SAFETY: the pages outlive the buffer, which alone uses them while it lives.
+    let made = unsafe {
+        device.new_buffer_with_bytes_no_copy(
+            chunk_pages.memory(),
+            (CHUNK_STRIDE * CHUNK_PASSES as u64).next_multiple_of(64 << 10),
+            ResourceOptions::default(),
+            None,
+        )
+    };
+    let chunk = match made {
+        Ok(chunk) => chunk,
+        Err(crate::Error::Unsupported(gap)) => {
+            println!("LINEAR-RUNS chunk: the device imports no host memory: {gap:?}");
+            return;
+        }
+        Err(error) => panic!("new_buffer_with_bytes_no_copy: {error:?}"),
+    };
+    let encode = |texture: &Texture| {
+        let command_buffer = queue.command_buffer().unwrap();
+        let started = std::time::Instant::now();
+        for i in 0..CHUNK_PASSES {
+            let at = (i as u64) * CHUNK_STRIDE;
+            pass_from(&command_buffer, (texture, &depth), &blending, (&chunk, at));
+        }
+        let encoding = started.elapsed();
+        command_buffer.commit().unwrap();
+        command_buffer.wait_until_completed_for(WAIT).unwrap();
+        assert_eq!(command_buffer.error(), None);
+        let gpu = command_buffer.gpu_end_time().unwrap() - command_buffer.gpu_start_time().unwrap();
+        (encoding, started.elapsed(), gpu)
+    };
+    let reference = private_texture(&device, PixelFormat::RGBA8Unorm, width, usage);
+    let source = staged(&device, &first_bytes(width, packed));
+    blit(&queue, |b| {
+        (b.copy_from_buffer_to_texture(
+            &source,
+            0,
+            packed,
+            packed * H,
+            Size::new(width, H, 1),
+            &reference,
+            0,
+            0,
+            Origin::new(0, 0, 0),
+            BlitOption::None,
+        ))
+        .unwrap()
+    });
+    let (encoding, whole, gpu) = encode(&reference);
+    println!(
+        "LINEAR-RUNS chunk on {}: private texture, {CHUNK_PASSES} passes: encoding {encoding:?}, \
+         commit to completed {whole:?}, GPU {:.3} ms",
+        device.name(),
+        gpu * 1e3
+    );
+    let left = texels_of(&queue, &reference);
+    let Some((buffer, texture)) = target(&queue, Over::Private, (width, row), &host) else {
+        return;
+    };
+    assert!(
+        texture.linear_image().unwrap(),
+        "the target is a linear image"
+    );
+    let forced = &device.shared().linear_rule_forced;
+    forced.store(true, Ordering::Relaxed);
+    let before = device.work_counts();
+    let (encoding, whole, gpu) = encode(&texture);
+    let after = device.work_counts();
+    forced.store(false, Ordering::Relaxed);
+    let delta = |of: fn(&WorkCounts) -> u64| of(&after) - of(&before);
+    let through = delta(|c| c.linear_passes_through_copies);
+    let recorded = delta(|c| c.linear_merges_recorded);
+    let taken_over = delta(|c| c.linear_merges_taken_over);
+    let reused = delta(|c| c.linear_merge_scratches_reused);
+    println!(
+        "LINEAR-RUNS chunk on {}: {CHUNK_PASSES} passes, {through} through copies, linear merges \
+         {recorded} recorded and {taken_over} taken over, scratches {reused} reused: encoding \
+         {encoding:?}, commit to completed {whole:?}, GPU {:.3} ms",
+        device.name(),
+        gpu * 1e3
+    );
+    let got = texels(&bytes(&queue, Over::Private, &buffer, row * H), width, row);
+    let differ = (0..got.len()).filter(|&i| got[i] != left[i]).count();
+    assert_eq!(differ, 0, "the texels differ from the private texture's");
+    assert_eq!(
+        through, CHUNK_PASSES as u64,
+        "every pass renders the target apart"
+    );
+    assert!(
+        recorded <= 2,
+        "the passes merge once a run: {recorded} merges"
+    );
+    assert_eq!(
+        recorded + taken_over,
+        CHUNK_PASSES as u64,
+        "every later pass takes its run's merge over"
+    );
+    drop((texture, buffer, chunk));
+}
