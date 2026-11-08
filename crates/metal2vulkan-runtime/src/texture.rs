@@ -5108,31 +5108,60 @@ impl Texture {
         aspect: ImageAspectFlags,
         signed: bool,
     ) {
-        let Ok(image) = self.image() else {
-            return;
-        };
-        let float_depth = matches!(
-            image.plan().format,
-            Format::D32_SFLOAT | Format::D32_SFLOAT_S8_UINT
-        );
-        if aspect != ImageAspectFlags::DEPTH || !float_depth {
+        if aspect != ImageAspectFlags::DEPTH || !self.float_depth_image() {
             return;
         }
-        let device = self.device();
-        let profile = device.compile_device().profile();
-        let restricted = device.shared().textures.facts(profile).depth_clamps();
         let format = self.pixel_format();
-        if restricted {
-            device.degrade(Degradation::RestrictedDepthUpload, || {
-                let why = format!(
-                    "{call} wrote its depth image on a device without \
+        if self.depth_clamps() {
+            self.device()
+                .degrade(Degradation::RestrictedDepthUpload, || {
+                    let why = format!(
+                        "{call} wrote its depth image on a device without \
                      VK_EXT_depth_range_unrestricted"
-                );
-                (format!("a {format:?} texture"), why)
-            });
+                    );
+                    (format!("a {format:?} texture"), why)
+                });
         } else if signed {
             self.degrade_signed_depth(call);
         }
+    }
+
+    /// Announce `restricted-depth-upload` for a heap's texture made by `call` whose shadow's
+    /// copies in move the heap's bytes into its 32-bit float depth image (`texture/heap.rs`,
+    /// `shadowed-texture`), on a device that may store a value outside `[0, 1]` there clamped
+    /// (`ImageFacts::depth_clamps`): the bytes may hold any `float`, which Metal's texture keeps,
+    /// and the copies back write the stored value (`texture/heap_tiled.rs`).
+    pub(super) fn degrade_shadowed_depth(&self, call: &'static str) {
+        if !self.float_depth_image() || !self.depth_clamps() {
+            return;
+        }
+        let format = self.pixel_format();
+        self.device()
+            .degrade(Degradation::RestrictedDepthUpload, || {
+                let why = format!(
+                    "`{call}`'s texture in a heap takes the depth its bytes hold into its depth \
+                 image by copies, on a device without VK_EXT_depth_range_unrestricted"
+                );
+                (format!("a {format:?} texture"), why)
+            });
+    }
+
+    /// Whether the texture's image holds a 32-bit float depth.
+    fn float_depth_image(&self) -> bool {
+        self.image().is_ok_and(|image| {
+            matches!(
+                image.plan().format,
+                Format::D32_SFLOAT | Format::D32_SFLOAT_S8_UINT
+            )
+        })
+    }
+
+    /// Whether the device may store a value outside `[0, 1]` that a copy writes into a
+    /// `D32_SFLOAT` image clamped (`ImageFacts::depth_clamps`).
+    fn depth_clamps(&self) -> bool {
+        let device = self.device();
+        let profile = device.compile_device().profile();
+        device.shared().textures.facts(profile).depth_clamps()
     }
 
     /// Announce `signed-depth-test` for `call`'s write into the texture, which may store a negative

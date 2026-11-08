@@ -3665,6 +3665,10 @@ impl Device {
             };
             tiles.know_samples(self, call, &texture, inexact);
         }
+        // A shadow's copies in hand its depth image whatever float the heap's bytes hold.
+        if texture.shadow().is_some() {
+            texture.degrade_shadowed_depth(call);
+        }
         heap.hold_texture(&texture);
         if making.refit.is_some() {
             self.shared().counts.heap_texture_refit();

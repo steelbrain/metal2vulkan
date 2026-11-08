@@ -2354,6 +2354,9 @@ fn heap_multisample_textures_keep_their_samples_in_metal_s_tiles() {
         let facts = &device.properties().driver_facts;
         let tiled = facts.contains(&DriverFact::DepthStencilImagesLieApart)
             || facts.contains(&DriverFact::DepthStencilImagesStayGpuOptimized);
+        // A device that may store a depth outside `[0, 1]` copied into a depth image clamped.
+        let clamps = !device.enables_extension(ash::ext::depth_range_unrestricted::NAME)
+            && !facts.contains(&DriverFact::DepthImageKeepsValuesOutsideUnitRange);
         let queue = device.new_command_queue().unwrap();
         let options = tracked(StorageMode::Shared);
         let ds = PixelFormat::Depth32FloatStencil8;
@@ -2465,6 +2468,15 @@ fn heap_multisample_textures_keep_their_samples_in_metal_s_tiles() {
             let before = device.work_counts().heap_textures_tiled;
             let texture = heap.new_texture_at_offset(&descriptor, 0).unwrap();
             let counted = device.work_counts().heap_textures_tiled - before == 1;
+            let float_depth = format == d32 || format == ds;
+            if counted && float_depth {
+                // Its shadow's copies in hand its image whatever the heap's bytes hold.
+                let upload = announced(&messages, Degradation::RestrictedDepthUpload);
+                assert_eq!(
+                    upload, clamps,
+                    "{what}: restricted-depth-upload as it is made"
+                );
+            }
             let over = heap.new_buffer_at_offset(answer.size, options, 0).unwrap();
             gpu_fill(&queue, &over, 0..answer.size, 0xee);
             let read = || gpu_read(&queue, &over, 0..answer.size);
@@ -2478,6 +2490,7 @@ fn heap_multisample_textures_keep_their_samples_in_metal_s_tiles() {
                 run(&command_buffer);
             };
             let shape = ([w, h], samples);
+            let staged = device.work_counts().shadow_keeps_from_staging;
             let Some((off, read_off)) =
                 sample_round_trip(&queue, &texture, shape, &aspects, &read, &write)
             else {
@@ -2485,16 +2498,22 @@ fn heap_multisample_textures_keep_their_samples_in_metal_s_tiles() {
                 assert!(!counted, "{what}: tiled, but its blits refused");
                 continue;
             };
+            let staged = device.work_counts().shadow_keeps_from_staging - staged;
             let total = w * h * samples * aspects.len() as u64;
             eprintln!(
                 "HEAPTEX samples {what}: size {} align {}, Metal's {metal:?}; counted tiled \
                  {counted}; {off} of {total} samples off Metal's tiles, {read_off} read otherwise \
-                 from them",
+                 from them; {staged} keeps from staging",
                 answer.size, answer.align
             );
             if counted {
                 assert_eq!((answer.size, answer.align), metal, "{what}");
                 assert_eq!((off, read_off), (0, 0), "{what}: samples off Metal's tiles");
+                // A blit into one slice or aspect of a depth leaves texels its merge keeps: the
+                // heap's bytes its copy in took, not its image's, which the copy in may change.
+                if float_depth && aspects.len() > 1 {
+                    assert!(staged > 0, "{what}: a depth's keep of its image");
+                }
             }
             let moved = matches!(
                 format,
@@ -2518,6 +2537,16 @@ fn heap_multisample_textures_keep_their_samples_in_metal_s_tiles() {
         assert_eq!(count(APART[0]), 0);
     }
     layer_reported_nothing_at_all(&messages);
+}
+
+/// Whether `messages` took or holds a notice of `kind`, left pending.
+fn announced(messages: &Messages, kind: Degradation) -> bool {
+    let pending = messages.take_notices();
+    messages.restore_notices(pending.clone());
+    messages.taken_kinds().contains(&kind)
+        || (pending.iter())
+            .filter_map(|message| message.degradation.as_ref())
+            .any(|notice| notice.degradation == kind)
 }
 
 /// A heap's colour textures that Metal keeps uncompressed, in a `Private` placement heap over the

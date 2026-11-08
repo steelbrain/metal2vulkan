@@ -6829,7 +6829,8 @@ pub struct WorkCounts {
     /// Of the keeps of merged shadowed textures, those of a heap's tiled texture recorded right
     /// after its copy in as one copy of the staging buffer that copy filled with the heap's
     /// bytes, in place of a move of the shadow's texels back into Metal's tiles: the same bytes
-    /// either way (`shadow.rs`).
+    /// either way, but a depth's, whose keep holds the heap's bytes where its image's may differ
+    /// (`shadow.rs`).
     pub shadow_keeps_from_staging: u64,
     /// The copies in of shadows over host pages a consumer logs whose regions the log decided as
     /// their batch was submitted (`dirty_pages.rs`).

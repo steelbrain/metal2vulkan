@@ -1023,22 +1023,24 @@ impl ShadowCopies {
     /// Whether a merge's keep right after this shadow's copy in, with no copy of the shadow
     /// between, may copy the staging buffer that copy in filled
     /// ([`record_kept_from_staging`](Self::record_kept_from_staging)): a heap's tiled texture's
-    /// whose moves give back each byte they took (`HeapTiledCopies::moves_bits`).
+    /// whose moves give back each byte they took (`HeapTiledCopies::moves_bits`), or whose keep
+    /// holds the heap's bytes, a depth's (`HeapTiledCopies::takes_depth`).
     pub(super) fn keeps_from_staging(&self) -> bool {
         matches!(
             &self.source,
             ShadowSource::Bytes {
                 target: ShadowTarget::Tiled { tiles, .. },
                 ..
-            } if tiles.moves_bits()
+            } if tiles.moves_bits() || tiles.takes_depth()
         )
     }
 
     /// Record a merge's keep into `to` from `at` as a copy of the staging buffer, right after the
     /// shadow's copy in filled it with the heap's bytes and moved them into the image
-    /// ([`keeps_from_staging`](Self::keeps_from_staging)): the bytes a keep's move out of the
-    /// image would leave there ([`record_kept`](Self::record_kept)), the texture's bytes from its
-    /// first, without the move. Nothing for any other shadow.
+    /// ([`keeps_from_staging`](Self::keeps_from_staging)): the texture's bytes from its first as
+    /// the copy in took them, which a keep's move out of the image would leave there where the
+    /// moves give back each byte they took, without the move, and which a depth's keep holds
+    /// ([`record_kept`](Self::record_kept)). Nothing for any other shadow.
     ///
     /// # Safety
     ///
@@ -1069,12 +1071,14 @@ impl ShadowCopies {
 
     /// Record a merge's keep of the shadow's texels into `to` from `at`, laid out as in the
     /// buffer from the texture's first byte (`shadow_merge.rs`): as
-    /// [`record_out`](Self::record_out) copies them; but where a heap's tiled texture's image
-    /// takes the bytes inexactly (`HeapTiledCopies::takes_inexactly`: a multisample depth the
-    /// driver's fragment depth changes), the heap's bytes themselves, so the merge writes each
+    /// [`record_out`](Self::record_out) copies them; but where a heap's tiled texture has a
+    /// depth aspect, whose moves into its image may change a value
+    /// (`HeapTiledCopies::takes_depth`: one outside `[0, 1]`, `restricted-depth-upload`, and
+    /// those `drawn-depth-copy` names), the heap's bytes themselves, so the merge writes each
     /// byte the image holds otherwise than the heap: every byte a command wrote, and the values
-    /// the copy in changed (the announced `drawn-depth-copy`), never a byte of the heap's in a
-    /// value a command wrote.
+    /// the copy in changed (both announced), never a byte of the heap's in a value a command
+    /// wrote. A keep of the image would hold the changed value, and keep the heap's byte in each
+    /// byte a command wrote that equals it.
     ///
     /// # Safety
     ///
@@ -1092,7 +1096,7 @@ impl ShadowCopies {
             ..
         } = &self.source
         {
-            if tiles.takes_inexactly() {
+            if tiles.takes_depth() {
                 let region = vk::BufferCopy {
                     src_offset: staging.into.src_offset,
                     dst_offset: at,
@@ -1333,7 +1337,9 @@ impl<M> ShadowCopy<M> {
     /// The moves between a heap's multisample texture's image and Metal's tiles that the copy's
     /// record takes (`texture/heap_tiled.rs`), planned now through `maker`: into the image for a
     /// copy in, out of it for every other step (a copy back, a merge's keep and its copy of what
-    /// changed). `None` for every other texture. Refused as their images are made.
+    /// changed) but a depth's keep, which holds the heap's bytes
+    /// ([`ShadowCopies::record_kept`]). `None` for every other texture. Refused as their images
+    /// are made.
     pub(super) fn plan_moves(&self, maker: &UseMaker) -> Result<Option<SampleMoves>, Error> {
         if !self.moves_samples() {
             return Ok(None);
@@ -1341,6 +1347,9 @@ impl<M> ShadowCopy<M> {
         let Some(ShadowTarget::Tiled { tiles, .. }) = self.copies.target() else {
             return Ok(None);
         };
+        if matches!(self.step, Step::Keep(_)) && tiles.takes_depth() {
+            return Ok(None);
+        }
         tiles.sample_moves(maker, matches!(self.step, Step::Into))
     }
 

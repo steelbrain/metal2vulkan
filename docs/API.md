@@ -2218,9 +2218,11 @@ bound.
   on a device without `VK_EXT_depth_range_unrestricted` enabled, where Vulkan leaves a value outside
   `[0, 1]` undefined, whose driver is not measured to keep one
   (`DriverFact::DepthImageKeepsValuesOutsideUnitRange`). And a render pass's NaN clear depth on such
-  a device, which Metal stores as `0x7fc00000`, cleared to 1.0. Cost: a value outside [0, 1] may be
-  stored clamped to [0, 1], where Metal's keeps it, so reads, samples, comparisons and depth tests
-  of it can differ.
+  a device, which Metal stores as `0x7fc00000`, cleared to 1.0. And a heap's texture of such a depth
+  whose shadow's copies in move the heap's bytes into its image, announced as it is made: its
+  copies back write each value as the image stored it, one no command wrote too. Cost: a value
+  outside [0, 1] may be stored clamped to [0, 1], where Metal's keeps it, so reads, samples,
+  comparisons and depth tests of it can differ.
 - `metal2vulkan-degrade-host-read-dispatch-arguments` (performance). `HostReadDispatchArguments`: An
   indirect dispatch, or a dispatch after `setStageInRegionWithIndirectBuffer:indirectBufferOffset:`:
   its arguments or its stage-in region are GPU memory the work before it may write, so they are

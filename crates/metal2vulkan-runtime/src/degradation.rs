@@ -884,7 +884,9 @@ degradations! {
         /// where Vulkan leaves a value outside `[0, 1]` undefined, whose driver is not measured to
         /// keep one (`DriverFact::DepthImageKeepsValuesOutsideUnitRange`). And a render pass's NaN
         /// clear depth on such a device, which Metal stores as `0x7fc00000`, cleared to 1.0
-        /// (`nan_clear.rs`).
+        /// (`nan_clear.rs`). And a heap's texture of such a depth whose shadow's copies in move the
+        /// heap's bytes into its image, announced as it is made: its copies back write each value
+        /// as the image stored it, one no command wrote too (`texture/heap_tiled.rs`).
         RestrictedDepthUpload = "restricted-depth-upload", Precision,
             "a value outside [0, 1] may be stored clamped to [0, 1], where Metal's keeps it, so \
              reads, samples, comparisons and depth tests of it can differ";

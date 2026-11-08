@@ -152,10 +152,18 @@
 //! (`copy_images.rs`); the encoder's command buffer holds them until it completes. The texture
 //! holds none: before, it planned them as it was made and held their images for its life. Where
 //! they write a 32-bit float depth by the `FragDepth` draw on a driver measured to change some
-//! values, the texture announces `drawn-depth-copy` once, as it is made, and a merge's keep holds
-//! the heap's bytes, not the image's (`ShadowCopies::record_kept`), so a byte the image holds
-//! otherwise than the heap is written back: every byte a command wrote, and the values the copy
-//! in changed.
+//! values, the texture announces `drawn-depth-copy` once, as it is made.
+//!
+//! A texture with a **depth** aspect, of any sample count, takes the heap's bytes into its image
+//! by moves that may change a value: Vulkan leaves a depth outside `[0, 1]` that a copy or a draw
+//! writes undefined without `VK_EXT_depth_range_unrestricted` (ANV on the Iris Xe of RPL-P stores
+//! a 32-bit float one clamped: `restricted-depth-upload`, announced as the texture is made), and
+//! the drivers that `drawn-depth-copy` names change values inside it too. So a merge's keep holds
+//! the heap's bytes, not the image's (`ShadowCopies::record_kept`): the staging buffer right after
+//! the copy in filled it, else the heap's bytes themselves, and no move out of the image. A keep
+//! of the image would hold the changed value, and the merge would keep the heap's byte in each
+//! byte a command wrote that equals it. A byte the image holds otherwise than the heap is written
+//! back: every byte a command wrote, and the values the copy in changed.
 
 use super::super::blit_plan::BufferLayout;
 use super::super::buffer::Buffer;
@@ -1523,8 +1531,8 @@ pub(crate) struct HeapTiledCopies {
     /// The tight buffer's copies to and from the image, one a level: a single-sample image's
     /// copies; a multisample image's region, which its [`SampleMoves`] move.
     regions: Vec<vk::BufferImageCopy>,
-    /// A multisample image's texture and what its moves into it change, known once the texture
-    /// is made ([`know_samples`](Self::know_samples)); `None` for a single-sample image.
+    /// A multisample image's texture, known once the texture is made
+    /// ([`know_samples`](Self::know_samples)); `None` for a single-sample image.
     samples: Option<OnceLock<MovedTexture>>,
     /// The tight buffer's planes and where it lies in its `VkBuffer`, which a multisample image's
     /// moves are planned over.
@@ -1553,11 +1561,9 @@ pub(crate) struct SampleMoves {
 
 /// A multisample heap texture whose moves are planned as its copies are recorded
 /// ([`HeapTiledCopies::sample_moves`]): the texture, which holds the moves' tiles and so is held
-/// weakly, and what the moves into its image change (`drawn-depth-copy`), `None` where they are
-/// exact.
+/// weakly.
 struct MovedTexture {
     texture: Weak<TextureShared>,
-    inexact: Option<&'static str>,
 }
 
 impl HeapTiledCopies {
@@ -1826,7 +1832,6 @@ impl HeapTiledCopies {
         }
         let known = MovedTexture {
             texture: texture.downgrade(),
-            inexact,
         };
         // A texture is known once, as it is made, before any command records its copies.
         drop(slot.set(known));
@@ -1877,12 +1882,15 @@ impl HeapTiledCopies {
                 .all(|region| region.image_subresource.aspect_mask == vk::ImageAspectFlags::COLOR)
     }
 
-    /// Whether the image takes the heap's bytes inexactly: a multisample depth whose moves into
-    /// it draw values the driver's fragment depth changes (`drawn-depth-copy`), which a merge's
-    /// keep then reads from the heap's bytes (`ShadowCopies::record_kept`).
-    pub(crate) fn takes_inexactly(&self) -> bool {
-        let known = self.samples.as_ref().and_then(OnceLock::get);
-        known.is_some_and(|known| known.inexact.is_some())
+    /// Whether the image has a depth aspect, whose moves into it may change a value the heap's
+    /// bytes hold (the module docs: a 32-bit float depth outside `[0, 1]`, which Vulkan leaves
+    /// undefined without `VK_EXT_depth_range_unrestricted`, and the values `drawn-depth-copy`
+    /// names), so that a merge's keep holds the heap's bytes and moves nothing out of the image
+    /// (`ShadowCopies::record_kept`). Of a depth whose moves change none, the same bytes.
+    pub(crate) fn takes_depth(&self) -> bool {
+        (self.regions.iter()).any(|region| {
+            (region.image_subresource.aspect_mask).contains(vk::ImageAspectFlags::DEPTH)
+        })
     }
 
     /// Record the move of the image's elements into the tight buffer: a single-sample image's

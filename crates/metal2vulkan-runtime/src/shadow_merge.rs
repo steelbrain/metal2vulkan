@@ -20,6 +20,9 @@
 //!   with no copy of its shadow between, copies the staging buffer that copy filled with the
 //!   heap's bytes: the bytes a move of its texels out of the image would leave there, without
 //!   the move (`ShadowCopies::record_kept_from_staging`, `WorkCounts::shadow_keeps_from_staging`).
+//!   A heap's tiled texture with a depth aspect, of any sample count, keeps the heap's bytes, not
+//!   its image's, which the copy in may have changed (`texture/heap_tiled.rs`): that staging
+//!   buffer right after its copy in, else the heap's bytes themselves.
 //! - **Merged in place**, where the texture's first byte is a whole word of its buffer, its last
 //!   byte's word lies in the buffer, none of its bytes lie in its tail, and the bytes lie in pages
 //!   when the merge is planned (not detached, `detach.rs`): the shadow's texels are copied into the
