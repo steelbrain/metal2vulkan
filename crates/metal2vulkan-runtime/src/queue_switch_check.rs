@@ -41,6 +41,15 @@
 //!   wait of at most [`WAIT_SLICE`], and the releases. Once the process is exiting it ends,
 //!   unrecorded, and leaves its objects to the process's end. A submission refused still opens its
 //!   round's gate, so no batch submitted waits for good.
+//! - **Its queues held to the gate.** A round takes the lock of each of its `VkQueue`s, in index
+//!   order, before its first submission, and lets them go once it signalled the gate
+//!   (`QueueUses::use_queues_kept`): no other thread takes one of them while a batch there waits
+//!   for the gate, so every submission on a `VkQueue` whose lock is free completes with no more
+//!   work of the host's. A wait for a queue to idle under its lock (`Device::drain_queues`, after
+//!   a failed wait; a submission check's after a refused call) then waits for work that completes.
+//!   Were a round's queue let go between its submissions, such a wait taken meanwhile would wait
+//!   under that lock for the round's first batch, which waits for the gate, which the check
+//!   signals only after its next submission, which waits for that lock.
 //! - **Holding nothing of the device.** The check holds only the parts of the device it works
 //!   with ([`Parts`]), never a handle: a check that held one for its run would hold the device's
 //!   last once the program dropped its own while the check ran (the first moments of a device
@@ -488,8 +497,8 @@ impl Objects {
         // completes, after the timelines are signalled. It signals each fence as the batch's
         // Metal command buffer completes, as the submission checks' own fences end their steps;
         // where the queue's failures are not relayed (an adopted device, whose instance has no
-        // relay), no mark follows them. Taken with no queue's lock held: each batch's submission
-        // takes its queue's lock and then the word, and lets both go.
+        // relay), no mark follows them. Taken inside the round's queues' locks, as each batch's
+        // submission takes the word inside its queue's, and kept once they go.
         let hold = parts.overwritten();
         let (submitted, refused, step, marks) = match self.submit(parts, batches, gate, hold) {
             Some(answer) => answer,
@@ -517,10 +526,12 @@ impl Objects {
     }
 
     /// Submit `batches`, each alone on its `VkQueue`, in order until one is refused, then signal
-    /// the gate to `gate` from the host, inside one section: how many were submitted, the
-    /// refusal, the hold of the device's loader word the signal was made under where the round is
-    /// held (`hold`, each batch then signalling its fence of the check's own), and the relay's
-    /// marks after the batches, kept; `None` where the process is exiting.
+    /// the gate to `gate` from the host, inside one section, with each of the round's `VkQueue`s
+    /// under its lock from before the first submission until after the signal (the module docs):
+    /// how many were submitted, the refusal, the hold of the device's loader word the signal was
+    /// made under where the round is held (`hold`, each batch then signalling its fence of the
+    /// check's own), and the relay's marks after the batches, kept; `None` where the process is
+    /// exiting.
     fn submit<'p>(
         &self,
         parts: &'p Parts,
@@ -531,70 +542,78 @@ impl Objects {
         let _busy = exit_guard::enter()?;
         let raw = parts.vk();
         let uses = parts.queue_uses();
-        let mut submitted = 0;
-        let mut refused = None;
-        let mut marks = Vec::new();
-        for (batch, &own) in batches.iter().zip(&self.fences) {
-            let fence = match hold {
-                true => own,
-                false => vk::Fence::null(),
-            };
-            let buffers = [batch.buffer];
-            let waits = [batch.wait.0];
-            let wait_values = [batch.wait.1];
-            let stages = [vk::PipelineStageFlags::ALL_COMMANDS];
-            let signals = [batch.signal.0];
-            let signal_values = [batch.signal.1];
-            let mut values = vk::TimelineSemaphoreSubmitInfo::default()
-                .wait_semaphore_values(&wait_values)
-                .signal_semaphore_values(&signal_values);
-            let submit = vk::SubmitInfo::default()
-                .wait_semaphores(&waits)
-                .wait_dst_stage_mask(&stages)
-                .command_buffers(&buffers)
-                .signal_semaphores(&signals)
-                .push_next(&mut values);
-            // SAFETY: the queue is used under its lock, inside a section; the command buffer is
-            // recorded, ended and in no other submission; each timeline's signals rise in the order
-            // they run (each lane's batches run in its queue's order); the gate's wait is signalled
-            // below; the fence, where there is one, is unsignaled (made so, or reset once the round
-            // before signalled it) and in no pending submission. The device's loader word is held
-            // across the call and the relay's mark after it (MoltenVK names the device as it logs
-            // each, `loader_word.rs`), taken inside the queue's lock. None of the round's batches
-            // runs before the gate's signal, which the caller makes under the word where it was
-            // found overwritten, so none completes while the word is let go between them, nor does
-            // the mark after it, which is kept, for the round to wait for.
-            let ((held, made), mark) = uses.use_queue_kept(
-                batch.queue,
-                By::Runtime,
-                Uses::OneSignalling,
-                true,
-                |queue| unsafe {
-                    let held = parts.loader_word.held();
-                    parts.counts.queue_submitted(1, 1);
-                    (held, raw.queue_submit(queue, &[submit], fence))
-                },
-            );
-            drop(held);
-            marks.extend(mark);
-            exit_guard::called(Call::QueueSubmit);
-            if let Err(error) = made {
-                refused = Some(error);
-                break;
+        let mut queues: Vec<usize> = batches.iter().map(|batch| batch.queue).collect();
+        queues.sort_unstable();
+        queues.dedup();
+        let submitted = uses.use_queues_kept(&queues, By::Runtime, |held| {
+            let mut submitted = 0;
+            let mut refused = None;
+            let mut marks = Vec::new();
+            for (batch, &own) in batches.iter().zip(&self.fences) {
+                // The crate's device tests' hold of a round on one `VkQueue` between its two
+                // submissions (`tests::device_recovery`).
+                #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+                if !std::ptr::eq(batch, &batches[0]) && batch.queue == batches[0].queue {
+                    parts.switch.between.pass();
+                }
+                let fence = match hold {
+                    true => own,
+                    false => vk::Fence::null(),
+                };
+                let buffers = [batch.buffer];
+                let waits = [batch.wait.0];
+                let wait_values = [batch.wait.1];
+                let stages = [vk::PipelineStageFlags::ALL_COMMANDS];
+                let signals = [batch.signal.0];
+                let signal_values = [batch.signal.1];
+                let mut values = vk::TimelineSemaphoreSubmitInfo::default()
+                    .wait_semaphore_values(&wait_values)
+                    .signal_semaphore_values(&signal_values);
+                let submit = vk::SubmitInfo::default()
+                    .wait_semaphores(&waits)
+                    .wait_dst_stage_mask(&stages)
+                    .command_buffers(&buffers)
+                    .signal_semaphores(&signals)
+                    .push_next(&mut values);
+                // SAFETY: the queue is used under its lock, inside a section; the command buffer
+                // is recorded, ended and in no other submission; each timeline's signals rise in
+                // the order they run (each lane's batches run in its queue's order); the gate's
+                // wait is signalled below, before the queue's lock goes; the fence, where there
+                // is one, is unsignaled (made so, or reset once the round before signalled it) and
+                // in no pending submission. The device's loader word is held across the call and
+                // the relay's mark after it (MoltenVK names the device as it logs each,
+                // `loader_word.rs`), taken inside the queue's lock. None of the round's batches
+                // runs before the gate's signal, which is made under the word where it was found
+                // overwritten, so none completes while the word is let go between them, nor does
+                // the mark after it, which is kept, for the round to wait for.
+                let ((word, made), mark) =
+                    held.use_queue_kept(batch.queue, Uses::OneSignalling, true, |queue| unsafe {
+                        let word = parts.loader_word.held();
+                        parts.counts.queue_submitted(1, 1);
+                        (word, raw.queue_submit(queue, &[submit], fence))
+                    });
+                drop(word);
+                marks.extend(mark);
+                exit_guard::called(Call::QueueSubmit);
+                if let Err(error) = made {
+                    refused = Some(error);
+                    break;
+                }
+                submitted += 1;
             }
-            submitted += 1;
-        }
-        let signal = vk::SemaphoreSignalInfo::default()
-            .semaphore(self.gate)
-            .value(gate);
-        let step = match hold {
-            true => parts.step_held(),
-            false => None,
-        };
-        // SAFETY: the gate's value rises with each signal, its only signaller the host.
-        let signalled = unsafe { raw.signal_semaphore(&signal) };
-        exit_guard::called(Call::SignalSemaphore);
-        Some((submitted, refused.or(signalled.err()), step, marks))
+            let signal = vk::SemaphoreSignalInfo::default()
+                .semaphore(self.gate)
+                .value(gate);
+            let step = match hold {
+                true => parts.step_held(),
+                false => None,
+            };
+            // SAFETY: the gate's value rises with each signal, its only signaller the host.
+            let signalled = unsafe { raw.signal_semaphore(&signal) };
+            exit_guard::called(Call::SignalSemaphore);
+            (submitted, refused.or(signalled.err()), step, marks)
+        });
+        Some(submitted)
     }
 
     /// Wait for each `VkQueue`'s timeline to reach its value of `done`, a slice at a time, each a

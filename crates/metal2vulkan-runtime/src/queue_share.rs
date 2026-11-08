@@ -370,6 +370,10 @@ pub(crate) struct QueueSwitch {
     /// (`tests/teardown_threads.rs`).
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     pub(crate) held: crate::freed_memory::held::Held,
+    /// The crate's device tests' hold of the check between the two submissions of a round on one
+    /// `VkQueue`, its queue's lock held (`tests/device_recovery.rs`).
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) between: crate::freed_memory::held::Held,
     /// The crate's device tests' timings of the check's last two steps, in nanoseconds: the
     /// release of its Vulkan objects, and the drop of its shares of the device's parts.
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
@@ -398,6 +402,8 @@ impl QueueSwitch {
             stop_waited: AtomicU64::new(0),
             #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
             held: Default::default(),
+            #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+            between: Default::default(),
             #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
             last_steps: Default::default(),
             #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]

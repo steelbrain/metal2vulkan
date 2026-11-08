@@ -49,8 +49,8 @@
 //! the device is lost), and a device whose instance lacks `VK_EXT_debug_utils` (the same).
 
 use super::functions::Functions;
-use super::lock;
 use super::submit_stalls::{Caller, Uses};
+use super::{lock, SlotHold};
 use crate::exit_guard::{self, Call};
 use crate::loader_word::LoaderWord;
 use ash::vk::{self, Handle};
@@ -567,33 +567,44 @@ impl<'a> QueueUses<'a> {
         keep: bool,
         f: impl FnOnce(vk::Queue) -> R,
     ) -> (R, Option<Mark<'a>>) {
-        let queues: &'a [super::QueueSlot] = self.queues;
-        let slot = &queues[queue];
-        let flights = slot.flights.get();
-        let parking = self.parking.filter(|_| matches!(by, By::Program));
-        let checks = matches!(by, By::Checks);
-        if flights.is_none() && parking.is_none() {
-            let used = match uses {
-                Uses::Unknown => slot.with(f),
-                Uses::OneSignalling => {
-                    let (used, behind) = slot.with_counted(Caller::Work, |vk_queue, period| {
-                        let entered = crate::gpu_time::host_nanos();
-                        let used = f(vk_queue);
-                        let end = crate::gpu_time::host_nanos();
-                        if period.called(Caller::Work, end.saturating_sub(entered), end) {
-                            self.counts.submit_stall_on_work();
-                        }
-                        used
-                    });
-                    if let Some(waited) = behind {
-                        self.counts.submit_behind_idle_stall(waited);
-                    }
-                    used
-                }
-            };
-            return (used, None);
-        }
-        let fence = flights.and_then(|flights| {
+        let fence = self.mark_fence(queue);
+        let mut hold = self.queues[queue].hold();
+        self.use_held(&mut hold, (queue, by), (uses, keep), fence, f)
+    }
+
+    /// [`use_queue_kept`](Self::use_queue_kept) for each use `f` makes through the [`Together`]
+    /// it is given, each `by`'s, with each of `queues` (each once, in index order) under its lock
+    /// from before `f` begins until after it returns: no other use of those queues comes between
+    /// two of `f`'s, nor between its last and what it does after it. The queue-switch check
+    /// submits each round so, its batches waiting for a gate it then signals from the host
+    /// (`queue_switch_check.rs`).
+    pub(crate) fn use_queues_kept<T>(
+        &self,
+        queues: &[usize],
+        by: By,
+        f: impl FnOnce(&mut Together<'_, 'a>) -> T,
+    ) -> T {
+        debug_assert!(
+            queues.windows(2).all(|pair| pair[0] < pair[1]),
+            "the queues are held each once, in index order"
+        );
+        let queue_slots: &'a [super::QueueSlot] = self.queues;
+        let holds = (queues.iter())
+            .map(|&queue| (queue, queue_slots[queue].hold()))
+            .collect();
+        f(&mut Together {
+            uses: self,
+            by,
+            holds,
+        })
+    }
+
+    /// The fence of the relay's mark after a use of `queue`, where its failures are relayed
+    /// (none elsewhere, or once the process is exiting), taken before the use takes the queue's
+    /// lock: the marks before it whose fences are signaled go back first.
+    fn mark_fence(&self, queue: usize) -> Option<vk::Fence> {
+        let flights = self.queues[queue].flights.get();
+        flights.and_then(|flights| {
             exit_guard::enter().and_then(|_busy| {
                 let raw = self.functions.get();
                 let mut done = flights.done_marks();
@@ -613,8 +624,46 @@ impl<'a> QueueUses<'a> {
                 // SAFETY: the device's fences, inside a section.
                 unsafe { self.fences.take(raw) }.ok()
             })
-        });
-        slot.with(|vk_queue| {
+        })
+    }
+
+    /// [`use_queue_kept`](Self::use_queue_kept) of `queue`, `by`'s, under `hold`, the queue's
+    /// lock, `fence` the relay's mark's ([`mark_fence`](Self::mark_fence)).
+    fn use_held<R>(
+        &self,
+        hold: &mut SlotHold<'_>,
+        (queue, by): (usize, By),
+        (uses, keep): (Uses, bool),
+        fence: Option<vk::Fence>,
+        f: impl FnOnce(vk::Queue) -> R,
+    ) -> (R, Option<Mark<'a>>) {
+        let queues: &'a [super::QueueSlot] = self.queues;
+        let slot = &queues[queue];
+        let flights = slot.flights.get();
+        let parking = self.parking.filter(|_| matches!(by, By::Program));
+        let checks = matches!(by, By::Checks);
+        if flights.is_none() && parking.is_none() {
+            let used = match uses {
+                Uses::Unknown => hold.with(f),
+                Uses::OneSignalling => {
+                    let (used, behind) = hold.with_counted(Caller::Work, |vk_queue, period| {
+                        let entered = crate::gpu_time::host_nanos();
+                        let used = f(vk_queue);
+                        let end = crate::gpu_time::host_nanos();
+                        if period.called(Caller::Work, end.saturating_sub(entered), end) {
+                            self.counts.submit_stall_on_work();
+                        }
+                        used
+                    });
+                    if let Some(waited) = behind {
+                        self.counts.submit_behind_idle_stall(waited);
+                    }
+                    used
+                }
+            };
+            return (used, None);
+        }
+        hold.with(|vk_queue| {
             // Taken before `f` submits: a block that goes meanwhile waits for the mark.
             let mark = parking.and_then(|parking| {
                 let _busy = exit_guard::enter()?;
@@ -679,6 +728,30 @@ impl<'a> QueueUses<'a> {
             }
             (used, None)
         })
+    }
+}
+
+/// The queues a use of several holds, each under its lock ([`QueueUses::use_queues_kept`]).
+pub(crate) struct Together<'u, 'a> {
+    uses: &'u QueueUses<'a>,
+    by: By,
+    holds: Vec<(usize, SlotHold<'a>)>,
+}
+
+impl<'a> Together<'_, 'a> {
+    /// [`QueueUses::use_queue_kept`] of `queue`, one of the queues held, under its hold.
+    pub(crate) fn use_queue_kept<R>(
+        &mut self,
+        queue: usize,
+        uses: Uses,
+        keep: bool,
+        f: impl FnOnce(vk::Queue) -> R,
+    ) -> (R, Option<Mark<'a>>) {
+        let fence = self.uses.mark_fence(queue);
+        let (_, hold) = (self.holds.iter_mut())
+            .find(|(held, _)| *held == queue)
+            .expect("a use of a queue the use of several holds");
+        (self.uses).use_held(hold, (queue, self.by.clone()), (uses, keep), fence, f)
     }
 }
 

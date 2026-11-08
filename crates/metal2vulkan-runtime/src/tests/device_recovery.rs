@@ -274,6 +274,44 @@ fn work_that_completed_before_a_failed_wait_completes() {
     assert_eq!(device.work_counts().device_recoveries, 1);
 }
 
+/// A failed wait's drain of the device's queues (`Device::drain_queues`), taken while the
+/// device's queue-switch check is between the two submissions of a round on one `VkQueue`
+/// (`queue_switch_check.rs`), completes once the round goes on: the round holds its queue's lock
+/// until it signalled its gate, so the drain never waits under that lock for the round's first
+/// batch, held at the gate, while the check waits for that lock to make its second submission.
+#[test]
+fn a_drain_beside_the_queue_switch_check_s_round_completes() {
+    let scratch = Scratch::new();
+    let device = device(&scratch.0);
+    let switch = Arc::clone(&device.shared().queue_switch);
+    if switch.verdict() != crate::queue_share::Verdict::Pending {
+        println!(
+            "SKIPPED {}: the device runs no queue-switch check",
+            device.name()
+        );
+        return;
+    }
+    switch.between.hold();
+    // The device's first command queue starts its check.
+    let queue = device.new_command_queue().unwrap();
+    switch.between.until_waiting(1, WAIT);
+    let (drained, drain) = std::sync::mpsc::channel();
+    let draining = device.clone();
+    std::thread::spawn(move || {
+        draining.drain_queues();
+        let _ = drained.send(());
+    });
+    // The drain reaches the round's `VkQueue` meanwhile.
+    std::thread::sleep(Duration::from_millis(200));
+    switch.between.release();
+    let answer = drain.recv_timeout(WAIT);
+    drop(queue);
+    assert!(
+        answer.is_ok(),
+        "the drain did not complete in {WAIT:?} once the check's round went on"
+    );
+}
+
 /// The threads that call the device while it recovers ([`each_recovery_announces_its_own_wait`]).
 const WAITERS: usize = 3;
 

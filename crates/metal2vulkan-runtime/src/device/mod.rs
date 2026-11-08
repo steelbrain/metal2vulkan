@@ -1021,12 +1021,7 @@ impl QueueSlot {
     /// signalling calls are not counted, so its place in its driver's period is forgotten
     /// (`submit_stalls.rs`).
     pub(super) fn with<R>(&self, f: impl FnOnce(vk::Queue) -> R) -> R {
-        let mut held = lock(&self.raw);
-        held.1.forget();
-        self.stall_due.store(false, Ordering::Relaxed);
-        // SAFETY: the queue lives while its slot does.
-        unsafe { self.word.restore() };
-        f(held.0)
+        self.hold().with(f)
     }
 
     /// `f` with the queue and its place in its driver's period, under its lock, its loader word
@@ -1038,21 +1033,22 @@ impl QueueSlot {
         caller: submit_stalls::Caller,
         f: impl FnOnce(vk::Queue, &mut submit_stalls::Period) -> R,
     ) -> (R, Option<u64>) {
+        self.hold().with_counted(caller, f)
+    }
+
+    /// The queue's lock, held until the hold drops, the wait for it timed: each use under it is
+    /// made through the hold ([`SlotHold::with`], [`SlotHold::with_counted`]). A caller that
+    /// holds several queues at once (`QueueUses::use_queues_kept`) takes their locks in index
+    /// order.
+    pub(super) fn hold(&self) -> SlotHold<'_> {
         let asked = gpu_time::host_nanos();
-        let mut held = lock(&self.raw);
-        let behind = match caller {
-            submit_stalls::Caller::Work => {
-                let waited = gpu_time::host_nanos().saturating_sub(asked);
-                held.1.entered(waited)
-            }
-            submit_stalls::Caller::Empty => None,
-        };
-        // SAFETY: the queue lives while its slot does.
-        unsafe { self.word.restore() };
-        let (queue, period) = &mut *held;
-        let used = f(*queue, period);
-        self.stall_due.store(period.may_be_due(), Ordering::Relaxed);
-        (used, behind)
+        let raw = lock(&self.raw);
+        let waited = gpu_time::host_nanos().saturating_sub(asked);
+        SlotHold {
+            slot: self,
+            raw,
+            waited,
+        }
     }
 
     /// `f` with the queue's place in its driver's period alone, under the queue's lock.
@@ -1105,6 +1101,50 @@ impl QueueSlot {
     /// The value of the last batch submitted here; 0 before the first.
     pub(super) fn submitted_value(&self) -> u64 {
         self.submitted.load(Ordering::Acquire)
+    }
+}
+
+/// A hold of a [`QueueSlot`]'s lock ([`QueueSlot::hold`]), let go as it drops.
+pub(super) struct SlotHold<'a> {
+    slot: &'a QueueSlot,
+    raw: MutexGuard<'a, (vk::Queue, submit_stalls::Period)>,
+    /// How long the hold waited for the lock, in nanoseconds: the first counted use's wait
+    /// (`Period::entered`), 0 for the later ones.
+    waited: u64,
+}
+
+impl SlotHold<'_> {
+    /// [`QueueSlot::with`], under this hold.
+    pub(super) fn with<R>(&mut self, f: impl FnOnce(vk::Queue) -> R) -> R {
+        self.raw.1.forget();
+        self.slot.stall_due.store(false, Ordering::Relaxed);
+        // SAFETY: the queue lives while its slot does.
+        unsafe { self.slot.word.restore() };
+        f(self.raw.0)
+    }
+
+    /// [`QueueSlot::with_counted`], under this hold.
+    pub(super) fn with_counted<R>(
+        &mut self,
+        caller: submit_stalls::Caller,
+        f: impl FnOnce(vk::Queue, &mut submit_stalls::Period) -> R,
+    ) -> (R, Option<u64>) {
+        let behind = match caller {
+            submit_stalls::Caller::Work => {
+                let waited = self.waited;
+                self.waited = 0;
+                self.raw.1.entered(waited)
+            }
+            submit_stalls::Caller::Empty => None,
+        };
+        // SAFETY: the queue lives while its slot does.
+        unsafe { self.slot.word.restore() };
+        let (queue, period) = &mut *self.raw;
+        let used = f(*queue, period);
+        self.slot
+            .stall_due
+            .store(period.may_be_due(), Ordering::Relaxed);
+        (used, behind)
     }
 }
 
@@ -1330,7 +1370,10 @@ impl Device {
     /// `vkQueueWaitIdle` commits an empty Metal command buffer to the queue and waits for it,
     /// lost or not, and Metal completes a queue's command buffers in order, so the earlier
     /// ones' handlers have run when it returns. Another driver's returns at once on a lost
-    /// device, and waits for the work on a device that is not.
+    /// device, and waits for the work on a device that is not: work that completes with no more
+    /// work of the host's, since none of the runtime's waits on a queue whose lock is free for a
+    /// signal the host has yet to make (the queue-switch check holds its round's queues until it
+    /// signalled the round's gate, `queue_switch_check.rs`).
     pub(super) fn drain_queues(&self) {
         let Some(_busy) = exit_guard::enter() else {
             return;
