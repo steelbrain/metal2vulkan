@@ -26,6 +26,19 @@
 //! mapped here ([`mapped_word`]). A border tap reads the border color through the format's
 //! channels, alpha 1.
 //!
+//! **The model** (`YCbCrInPlacePolicy::Model`, the default): a linear sample that addresses no
+//! border on either plane axis and whose texel offset no parent's size places is Vulkan's Y′CbCr
+//! model of the codes, as the device's own conversion with a linear chroma filter computes it:
+//! the four luma codes around the sample's point (in luma texels, its offset added) blended
+//! bilinearly, the four chroma pairs around the same point of the chroma plane (half the luma
+//! coordinate, Metal's midpoint siting) blended bilinearly, each index clamped to its plane's
+//! edge; then the surface's range and matrix, Metal's coefficients
+//! (`bind::ycbcr_convert::coefficients`) over `2^23` in `float`, each channel clamped into
+//! `[0, 1]`, alpha 1. Eight fetches, where Metal's sum takes twenty. A constexpr sampler's state
+//! decides it as the module is made; a runtime sampler's word as the function runs, a word that
+//! filters nearest or addresses a border taking Metal's sample. Recorded
+//! `PrecisionNote::HalfSampleFilter` or `FloatSampleFilter` (`select`'s `model_note`).
+//!
 //! **The device's sampler** (`LoweringInputs::ycbcr_planes_sampled`): where the consumer holds
 //! the planes as an image of the multi-planar 4:2:0 format over their bytes and every sample of the
 //! slot is one the device's own sampler Y′CbCr conversion takes (no border address mode, no texel
@@ -72,6 +85,11 @@ pub struct Sample {
     pub half: bool,
     /// A gather of this component (0 to 3, red first) instead of a sample (module docs).
     pub gather: Option<u32>,
+    /// The sample follows Vulkan's Y′CbCr model (`YCbCrInPlacePolicy::Model`, the module docs'
+    /// **The model**) where its sampler addresses no border: a constexpr sampler's modes decide
+    /// now, a runtime sampler's word as the function runs. A gather and a sample whose offset a
+    /// parent's size places never do.
+    pub model: bool,
     /// The lowered type of the result (`{T, i8}`, its status word 0).
     pub result: DemoteTy,
 }
@@ -82,12 +100,24 @@ const PREPARE_WORDS: u32 = 192;
 const TAP_WORDS: u32 = 224;
 /// The census words of a runtime sampler's mapped word.
 const WORD_WORDS: u32 = 96;
+/// The census words of the model's constants: the push field's words, the conversion's factors,
+/// and the coordinate in texels.
+const MODEL_PREPARE_WORDS: u32 = 192;
+/// The census words of the model's linear sample: four luma fetches and their blend, four chroma
+/// fetches and theirs, and the conversion.
+const MODEL_LINEAR_WORDS: u32 = 320;
 
 impl Sample {
     /// The census name of the sample's form.
     pub(crate) fn name(&self) -> &'static str {
         if self.gather.is_some() {
             return "sampler.ycbcr_in_place.gather";
+        }
+        if self.model {
+            return match self.state {
+                State::Constant { .. } => "sampler.ycbcr_in_place.model",
+                State::Slot { .. } => "sampler.ycbcr_in_place.model.runtime",
+            };
         }
         match self.state {
             State::Constant { linear: true, .. } => "sampler.ycbcr_in_place.linear",
@@ -99,7 +129,8 @@ impl Sample {
     /// The estimated words of the sample: the slot's constants, a linear filter's four taps and
     /// its footprint (a runtime sampler's nearest tap and its own footprint besides, the word and
     /// its branch; a gather's four taps and footprint alone, a runtime sampler's word besides), and
-    /// Metal's offset rule on each lane of an offset.
+    /// Metal's offset rule on each lane of an offset; the model's constants and its eight fetches
+    /// in place of Metal's linear sample, and beside it under a runtime sampler.
     pub(crate) fn words(&self) -> u32 {
         let position = 2 * super::position::POSITION_WORDS;
         let linear = super::linear::PLANE_WORDS + 4 * TAP_WORDS + position;
@@ -118,6 +149,16 @@ impl Sample {
                 linear + nearest + WORD_WORDS + super::extended::BRANCH_WORDS
             }
         };
+        let model = MODEL_PREPARE_WORDS + MODEL_LINEAR_WORDS + offset;
+        match (self.model, &self.state) {
+            (false, _) => {}
+            (true, State::Constant { .. }) => return model + 16,
+            // The word's test and branch, and Metal's sample it takes besides.
+            (true, State::Slot { .. }) => {
+                let test = WORD_WORDS + super::extended::BRANCH_WORDS;
+                return model + test + PREPARE_WORDS + filters + offset + 16;
+            }
+        }
         PREPARE_WORDS + filters + offset + 16
     }
 }
@@ -603,6 +644,50 @@ pub(crate) fn emit(
         let x = device_sample(cx, fb, s, slot, (coord, img))?;
         return crate::lower::texture::with_word(cx, fb, &s.result, x, None);
     }
+    let texel = decl.texel;
+    let x = match (s.model, &s.state) {
+        (false, _) => exact(cx, fb, s, slot, (coord, img), texel)?,
+        (true, State::Constant { pixel, .. }) => {
+            model(cx, fb, s, slot, (coord, img), Known::Fixed(*pixel))?
+        }
+        // A runtime sampler's word: the model's sample where it filters linearly and addresses no
+        // border on either plane axis, else Metal's.
+        (true, State::Slot { sampler }) => {
+            let t = T::new(fb)?;
+            let word = super::emit::sampler_word(cx, fb, Pixel::Spec(*sampler))?;
+            let linear = super::extended::word_linear(fb, &Tys::new(fb)?, word)?;
+            let edges = edges(fb, &t, word)?;
+            let takes = fb.binary(BinOp::LogicalAnd, linear, edges)?;
+            let pixel = word_pixel(fb, &t, word)?;
+            let model_arm: ArmFn<'_, EmitCx<'_>> = Box::new(move |fb, cx| {
+                let x = model(cx, fb, s, slot, (coord, img), Known::Run(pixel))?;
+                Ok(ArmEnd::FallThrough(vec![x]))
+            });
+            let exact_arm: ArmFn<'_, EmitCx<'_>> = Box::new(move |fb, cx| {
+                let x = exact(cx, fb, s, slot, (coord, img), texel)?;
+                Ok(ArmEnd::FallThrough(vec![x]))
+            });
+            let Merged(merged) = fb.if_(cx, takes, model_arm, Some(exact_arm))?;
+            match merged[..] {
+                [x] => x,
+                _ => return Err(cx.fail("an in-place sample's model branch without its texel")),
+            }
+        }
+    };
+    crate::lower::texture::with_word(cx, fb, &s.result, x, None)
+}
+
+/// Metal's texel of in-place sample `s` (`YCbCrInPlacePolicy::Exact`, and a sample the model
+/// does not take), in the open block: each tap Metal's texel of the codes, and a linear sample
+/// Metal's exact sum of the four taps (module docs). Its status word is the caller's.
+fn exact(
+    cx: &mut EmitCx<'_>,
+    fb: &mut FunctionBuilder<'_>,
+    s: &Sample,
+    slot: SlotRef,
+    (coord, img): (SValue, SValue),
+    texel: crate::lower::texture::TexelClass,
+) -> BResult<SValue> {
     let (planes, size) = prepare(cx, fb, slot)?;
     let t = Tys::new(fb)?;
     let tt = T::new(fb)?;
@@ -631,7 +716,7 @@ pub(crate) fn emit(
         image: CombinedImage {
             plane: 2,
             arrayed: false,
-            texel: decl.texel,
+            texel,
         },
         decode: Decode::InPlace(planes),
         flags,
@@ -665,8 +750,7 @@ pub(crate) fn emit(
                 Addressing::Word { word, axes: 2 }
             }
         };
-        let x = super::extended::gathered(cx, fb, &t, &at, &tex, addressing, component)?;
-        return crate::lower::texture::with_word(cx, fb, &s.result, x, None);
+        return super::extended::gathered(cx, fb, &t, &at, &tex, addressing, component);
     }
     let x = match &s.state {
         State::Constant { .. } => super::extended::filters(cx, fb, &t, &at, &tex, &s.state)?,
@@ -691,7 +775,293 @@ pub(crate) fn emit(
             }
         }
     };
-    crate::lower::texture::with_word(cx, fb, &s.result, x, None)
+    Ok(x)
+}
+
+/// Whether runtime sampler word `word` addresses neither plane axis by a border (a `bool`):
+/// clamp-to-zero (4) and clamp-to-border (5) are the modes from 4 on.
+fn edges(fb: &mut FunctionBuilder<'_>, t: &T, word: SValue) -> BResult<SValue> {
+    use crate::metal::sampler::SamplerWord;
+    let (four, seven) = (t.u(fb, 4)?, t.u(fb, 7)?);
+    let [s, t_, _] = SamplerWord::ADDRESS_SHIFT;
+    let mut edge = |shift: u32| -> BResult<SValue> {
+        let shift = t.u(fb, shift)?;
+        let mode = fb.binary(BinOp::ShiftRightLogical, word, shift)?;
+        let mode = fb.binary(BinOp::BitwiseAnd, mode, seven)?;
+        fb.binary(BinOp::ULessThan, mode, four)
+    };
+    let (s, t_) = (edge(s)?, edge(t_)?);
+    fb.binary(BinOp::LogicalAnd, s, t_)
+}
+
+/// Whether runtime sampler word `word` reads pixel coordinates (a `bool`).
+fn word_pixel(fb: &mut FunctionBuilder<'_>, t: &T, word: SValue) -> BResult<SValue> {
+    let bit = t.u(fb, crate::metal::sampler::SamplerWord::PIXEL_COORDINATES)?;
+    let set = fb.binary(BinOp::BitwiseAnd, word, bit)?;
+    fb.binary(BinOp::IEqual, set, bit)
+}
+
+/// The model's linear sample of in-place sample `s` (the module docs' **The model**), whose
+/// sampler reads pixel coordinates where `pixel` holds, in the open block: a `vec4`, a `half`
+/// result rounded as every sampled texel's is. Its status word is the caller's.
+fn model(
+    cx: &mut EmitCx<'_>,
+    fb: &mut FunctionBuilder<'_>,
+    s: &Sample,
+    slot: SlotRef,
+    (coord, img): (SValue, SValue),
+    pixel: Known,
+) -> BResult<SValue> {
+    let t = T::new(fb)?;
+    let w = words(cx, fb, slot)?;
+    let m = fb.module();
+    let vec2 = m.ty(SType::Vector {
+        elem: t.f32_,
+        len: 2,
+    })?;
+    let ivec2 = m.ty(SType::Vector {
+        elem: t.i32_,
+        len: 2,
+    })?;
+    let vec3 = m.ty(SType::Vector {
+        elem: t.f32_,
+        len: 3,
+    })?;
+    let size = fb.composite_construct(t.uvec2, &w.size)?;
+    let size_f = fb.convert(ConvOp::ConvertUToF, size, vec2)?;
+    // The coordinate in luma texels, its texel offset placed.
+    let scaled = fb.binary(BinOp::FMul, coord, size_f)?;
+    let mut texels = match pixel {
+        Known::Fixed(true) => coord,
+        Known::Fixed(false) => scaled,
+        Known::Run(pixel) => {
+            let b2 = bvec2(fb)?;
+            let pixel2 = fb.composite_construct(b2, &[pixel, pixel])?;
+            fb.select(pixel2, coord, scaled)?
+        }
+    };
+    if let Some(offset) = s.offset.as_deref() {
+        let lanes: Vec<SValue> = offset
+            .iter()
+            .map(|&k| t.f(fb, k as f32))
+            .collect::<BResult<_>>()?;
+        let k = fb.composite_construct(vec2, &lanes)?;
+        texels = fb.binary(BinOp::FAdd, texels, k)?;
+    }
+    let splat2 = |fb: &mut FunctionBuilder<'_>, v: SValue, ty: TypeId| -> BResult<SValue> {
+        fb.composite_construct(ty, &[v, v])
+    };
+    let (half, one_i, zero_i) = (t.f(fb, 0.5)?, t.i(fb, 1)?, t.i(fb, 0)?);
+    let half2 = splat2(fb, half, vec2)?;
+    let one2 = splat2(fb, one_i, ivec2)?;
+    let zero2 = splat2(fb, zero_i, ivec2)?;
+    // The four texels around `at` (a `vec2` in a plane's texels) clamped into `[0, last]`, as
+    // `uvec2`s (x0, y0) and (x1, y1), and the weights of the second of each axis.
+    let footprint = |fb: &mut FunctionBuilder<'_>,
+                     at: SValue,
+                     last: SValue|
+     -> BResult<([SValue; 2], SValue)> {
+        let p = fb.binary(BinOp::FSub, at, half2)?;
+        let floor = fb.glsl(GlslOp::Floor, &[p])?;
+        let weight = fb.binary(BinOp::FSub, p, floor)?;
+        let first = fb.convert(ConvOp::ConvertFToS, floor, ivec2)?;
+        let second = fb.binary(BinOp::IAdd, first, one2)?;
+        let first = fb.glsl(GlslOp::SClamp, &[first, zero2, last])?;
+        let second = fb.glsl(GlslOp::SClamp, &[second, zero2, last])?;
+        let first = fb.convert(ConvOp::Bitcast, first, t.uvec2)?;
+        let second = fb.convert(ConvOp::Bitcast, second, t.uvec2)?;
+        Ok(([first, second], weight))
+    };
+    // The bilinear blend of the four values `[v00, v10, v01, v11]` by the weights `k` (a `vec2`).
+    let blend = |fb: &mut FunctionBuilder<'_>, [v00, v10, v01, v11]: [SValue; 4], k: SValue| {
+        let kx = fb.composite_extract(k, &[0])?;
+        let ky = fb.composite_extract(k, &[1])?;
+        let low = fb.glsl(GlslOp::FMix, &[v00, v10, kx])?;
+        let high = fb.glsl(GlslOp::FMix, &[v01, v11, kx])?;
+        fb.glsl(GlslOp::FMix, &[low, high, ky])
+    };
+    let corners =
+        |fb: &mut FunctionBuilder<'_>, [a, b]: [SValue; 2]| -> BResult<[[SValue; 2]; 4]> {
+            let (x0, y0) = (
+                fb.composite_extract(a, &[0])?,
+                fb.composite_extract(a, &[1])?,
+            );
+            let (x1, y1) = (
+                fb.composite_extract(b, &[0])?,
+                fb.composite_extract(b, &[1])?,
+            );
+            Ok([[x0, y0], [x1, y0], [x0, y1], [x1, y1]])
+        };
+    let conversion = Conversion::of(fb, &t, w.conversion)?;
+    let (zero, one) = (t.u(fb, 0)?, t.u(fb, 1)?);
+    // Luma: its four texels, each lane `x & 1` of element `⌊x / 2⌋` of its row.
+    let last = fb.binary(BinOp::ISub, size, splat2(fb, one, t.uvec2)?)?;
+    let last = fb.convert(ConvOp::Bitcast, last, ivec2)?;
+    let (luma_at, luma_k) = footprint(fb, texels, last)?;
+    let mut luma = [zero; 4];
+    for (out, [x, y]) in luma.iter_mut().zip(corners(fb, luma_at)?) {
+        let pair = fb.binary(BinOp::ShiftRightLogical, x, one)?;
+        let v = element(fb, img, w.luma, [pair, y])?;
+        let odd = fb.binary(BinOp::BitwiseAnd, x, one)?;
+        let odd = fb.binary(BinOp::INotEqual, odd, zero)?;
+        let l0 = fb.composite_extract(v, &[0])?;
+        let l1 = fb.composite_extract(v, &[1])?;
+        let code = fb.select(odd, l1, l0)?;
+        let code = fb.binary(BinOp::ShiftRightLogical, code, conversion.code_shift)?;
+        *out = fb.convert(ConvOp::ConvertUToF, code, t.f32_)?;
+    }
+    let y = blend(fb, luma, luma_k)?;
+    // Chroma: its plane's four texels around the same point, sited at their luma pairs'
+    // midpoints, each pair one element.
+    let chroma_at = fb.binary(BinOp::FMul, texels, half2)?;
+    let two = t.u(fb, 2)?;
+    let up = fb.binary(BinOp::IAdd, size, splat2(fb, one, t.uvec2)?)?;
+    let halves = fb.binary(BinOp::UDiv, up, splat2(fb, two, t.uvec2)?)?;
+    let last = fb.binary(BinOp::ISub, halves, splat2(fb, one, t.uvec2)?)?;
+    let last = fb.convert(ConvOp::Bitcast, last, ivec2)?;
+    let (chroma_at, chroma_k) = footprint(fb, chroma_at, last)?;
+    let mut pairs = [zero; 4];
+    for (out, site) in pairs.iter_mut().zip(corners(fb, chroma_at)?) {
+        let v = element(fb, img, w.chroma, site)?;
+        let v = fb.vector_shuffle(v, v, &[0, 1])?;
+        let shift = splat2(fb, conversion.code_shift, t.uvec2)?;
+        let v = fb.binary(BinOp::ShiftRightLogical, v, shift)?;
+        *out = fb.convert(ConvOp::ConvertUToF, v, vec2)?;
+    }
+    let c = blend(fb, pairs, chroma_k)?;
+    let cb = fb.composite_extract(c, &[0])?;
+    let cr = fb.composite_extract(c, &[1])?;
+    // Each channel `clamp(a Y + kb Cb + kr Cr + d, 0, 1)` in the codes counted as 10-bit ones.
+    let y = fb.binary(BinOp::FMul, y, conversion.scale)?;
+    let cb = fb.binary(BinOp::FMul, cb, conversion.scale)?;
+    let cr = fb.binary(BinOp::FMul, cr, conversion.scale)?;
+    let ys = fb.composite_construct(vec3, &[y, y, y])?;
+    let cbs = fb.composite_construct(vec3, &[cb, cb, cb])?;
+    let crs = fb.composite_construct(vec3, &[cr, cr, cr])?;
+    let rgb = fb.binary(BinOp::FMul, ys, conversion.luma)?;
+    let rgb = fb.glsl(GlslOp::Fma, &[cbs, conversion.kb, rgb])?;
+    let rgb = fb.glsl(GlslOp::Fma, &[crs, conversion.kr, rgb])?;
+    let rgb = fb.binary(BinOp::FAdd, rgb, conversion.offset)?;
+    let (low, high) = (t.f(fb, 0.0)?, t.f(fb, 1.0)?);
+    let lows = fb.composite_construct(vec3, &[low, low, low])?;
+    let highs = fb.composite_construct(vec3, &[high, high, high])?;
+    let rgb = fb.glsl(GlslOp::FClamp, &[rgb, lows, highs])?;
+    let x = fb.composite_construct(t.vec4, &[rgb, high])?;
+    match s.half {
+        false => Ok(x),
+        true => {
+            let half = crate::lower::arith::Form {
+                held: crate::lower::arith::Held::Float(crate::lower::arith::FloatFmt::Half),
+                lanes: 4,
+            };
+            crate::lower::arith::narrow::round_texel(fb, half, x)
+        }
+    }
+}
+
+/// The model's conversion of a surface's codes (the module docs' **The model**), chosen as the
+/// function runs by the push field's conversion word: Metal's coefficients of the range and the
+/// matrix (`bind::ycbcr_convert::coefficients`), in floats.
+struct Conversion {
+    /// The shift that takes an element's lane to its code: 6 of 10-bit codes, 0 of 8-bit ones.
+    code_shift: SValue,
+    /// The factor that counts a code as a 10-bit one: 1 of 10-bit codes, 4 of 8-bit ones.
+    scale: SValue,
+    /// Each channel's factor of the luma code (a `vec3`).
+    luma: SValue,
+    /// Each channel's factors of the Cb and Cr codes (`vec3`s).
+    kb: SValue,
+    kr: SValue,
+    /// Each channel's constant term (a `vec3`).
+    offset: SValue,
+}
+
+impl Conversion {
+    fn of(fb: &mut FunctionBuilder<'_>, t: &T, word: SValue) -> BResult<Conversion> {
+        use crate::bind::{YCbCrMatrix as M, YCbCrRange as R};
+        let one = t.u(fb, 1)?;
+        let field_at = |fb: &mut FunctionBuilder<'_>, shift: u32, mask: u32| -> BResult<SValue> {
+            let shift = t.u(fb, shift)?;
+            let mask = t.u(fb, mask)?;
+            let v = fb.binary(BinOp::ShiftRightLogical, word, shift)?;
+            fb.binary(BinOp::BitwiseAnd, v, mask)
+        };
+        let bits = field_at(fb, 0, 0xff)?;
+        let ten = t.u(fb, 10)?;
+        let ten = fb.binary(BinOp::IEqual, bits, ten)?;
+        let full = field_at(fb, 8, 1)?;
+        let full = fb.binary(BinOp::IEqual, full, one)?;
+        let matrix = field_at(fb, 9, 3)?;
+        let bt709 = fb.binary(BinOp::IEqual, matrix, one)?;
+        let two = t.u(fb, 2)?;
+        let bt2020 = fb.binary(BinOp::IEqual, matrix, two)?;
+        let pick_u = |fb: &mut FunctionBuilder<'_>, a: u32, b: u32| -> BResult<SValue> {
+            let (a, b) = (t.u(fb, a)?, t.u(fb, b)?);
+            fb.select(ten, a, b)
+        };
+        let code_shift = pick_u(fb, 6, 0)?;
+        let (one_f, four_f) = (t.f(fb, 1.0)?, t.f(fb, 4.0)?);
+        let scale = fb.select(ten, one_f, four_f)?;
+        // Metal's fixed point: a channel is `(L + kb Cb' + kr Cr') / 2^23` of the 10-bit codes,
+        // with `Cb' = Cb - 512`, video range's `L = 9576 (Y - 64)` and full range's
+        // `L = 2^23 Y / m` (`m` the largest code counted as a 10-bit one: 1023, or 4 · 255).
+        const GRID: f32 = 1.0 / 8_388_608.0;
+        let video_luma = t.f(fb, 9576.0 * GRID)?;
+        let full_ten = t.f(fb, 1.0 / 1023.0)?;
+        let full_eight = t.f(fb, 1.0 / 1020.0)?;
+        let full_luma = fb.select(ten, full_ten, full_eight)?;
+        let luma = fb.select(full, full_luma, video_luma)?;
+        let video_black = t.f(fb, -9576.0 * 64.0 * GRID)?;
+        let zero_f = t.f(fb, 0.0)?;
+        let black = fb.select(full, zero_f, video_black)?;
+        // A coefficient of each matrix (BT.601, BT.709, BT.2020), chosen by the matrix and the
+        // range.
+        let choose = |fb: &mut FunctionBuilder<'_>, video: [f32; 3], full_range: [f32; 3]| {
+            let mut sides = [zero_f; 2];
+            for (side, k) in sides.iter_mut().zip([video, full_range]) {
+                let [a, b, c] = [t.f(fb, k[0])?, t.f(fb, k[1])?, t.f(fb, k[2])?];
+                let low = fb.select(bt709, b, a)?;
+                *side = fb.select(bt2020, c, low)?;
+            }
+            fb.select(full, sides[1], sides[0])
+        };
+        let of = |range| {
+            [M::Bt601, M::Bt709, M::Bt2020]
+                .map(|m| crate::bind::ycbcr_convert::coefficients(range, m))
+        };
+        let (video, full_range) = (of(R::Video), of(R::Full));
+        let vec3 = fb.module().ty(SType::Vector {
+            elem: t.f32_,
+            len: 3,
+        })?;
+        let (mut kb, mut kr, mut offset) = (Vec::new(), Vec::new(), Vec::new());
+        let mid = t.f(fb, -512.0)?;
+        for channel in 0..3 {
+            let side = |k: &[[(i32, i32); 3]; 3], kr: bool| {
+                k.map(|m| {
+                    let (b, r) = m[channel];
+                    (if kr { r } else { b }) as f32 * GRID
+                })
+            };
+            let b = choose(fb, side(&video, false), side(&full_range, false))?;
+            let r = choose(fb, side(&video, true), side(&full_range, true))?;
+            // The constant term: the black level's, and `-512 (kb + kr)` of the chroma's middle.
+            let sum = fb.binary(BinOp::FAdd, b, r)?;
+            let d = fb.glsl(GlslOp::Fma, &[sum, mid, black])?;
+            kb.push(b);
+            kr.push(r);
+            offset.push(d);
+        }
+        let lumas = fb.composite_construct(vec3, &[luma, luma, luma])?;
+        Ok(Conversion {
+            code_shift,
+            scale,
+            luma: lumas,
+            kb: fb.composite_construct(vec3, &kb)?,
+            kr: fb.composite_construct(vec3, &kr)?,
+            offset: fb.composite_construct(vec3, &offset)?,
+        })
+    }
 }
 
 #[cfg(test)]

@@ -8,7 +8,9 @@
 //! (`bind::YCbCrInPlace::words`). Each texel the samples read is Metal's (`ycbcr_convert`'s module
 //! docs: the luma code, the chroma pairs' 9/3/3/1 filter, the range's and the matrix's
 //! conversion), and a linear sample is Metal's filter of those steps on the grid `2048`
-//! (`metal_step`); a nearest sample is the texel at Metal's position. The texel buffer
+//! (`metal_step`) under `YCbCrInPlacePolicy::Exact`; a nearest sample is the texel at Metal's
+//! position. Under `YCbCrInPlacePolicy::Model` (the default) a linear sample is Vulkan's Y′CbCr
+//! model of the codes (`model`), within the `float` arithmetic's rounding. The texel buffer
 //! traps every fetch outside it, so each tap's elements lie within the planes.
 
 use std::collections::BTreeMap;
@@ -17,7 +19,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use crate::bind::ycbcr_convert::{ycbcr_read, YCbCrCodes, YCbCrMatrix, YCbCrPlanes, YCbCrRange};
 use crate::bind::YCbCrInPlace;
 use crate::device::profile::DeviceProfile;
-use crate::device::DevicePolicy;
+use crate::device::{DevicePolicy, YCbCrInPlacePolicy};
 use crate::lower::select::{LowerInputs, Plan};
 use crate::metal::format::ycbcr_format;
 use crate::metal::sampler::SamplerWord;
@@ -65,6 +67,15 @@ fn lavapipe() -> DeviceProfile {
 
 fn m3() -> DeviceProfile {
     profile("moltenvk-m3", DevicePolicy::default()).expect("profile")
+}
+
+/// Profile `stem` under `YCbCrInPlacePolicy::Exact`, the default policy's every other field.
+fn exact(stem: &str) -> DeviceProfile {
+    let policy = DevicePolicy {
+        ycbcr_in_place_reads: YCbCrInPlacePolicy::Exact,
+        ..DevicePolicy::default()
+    };
+    profile(stem, policy).expect("profile")
 }
 
 /// The words of `constexpr sampler(filter::linear, ...)`: minification and magnification
@@ -631,10 +642,11 @@ fn metal(planes: &Planes, linear: bool, (qx, qy): (i64, i64), offset: (i64, i64)
     std::array::from_fn(|c| metal_step(taps.map(|t| t[c]), a, b))
 }
 
-/// Every sample of each format's random planes under each conversion, through constexpr and
-/// runtime samplers (nearest and linear; a runtime sampler's repeat sampled as clamp-to-edge, as
-/// a 4:2:0 texture's), with a constant offset or none, `float` and `half` results, on lavapipe and
-/// on MoltenVK, is Metal's: a quarter of the positions past an edge.
+/// Under `YCbCrInPlacePolicy::Exact` every sample of each format's random planes under each
+/// conversion, through constexpr and runtime samplers (nearest and linear; a runtime sampler's
+/// repeat sampled as clamp-to-edge, as a 4:2:0 texture's), with a constant offset or none, `float`
+/// and `half` results, on lavapipe and on MoltenVK, is Metal's: a quarter of the positions past an
+/// edge.
 #[test]
 fn in_place_samples_are_metals() {
     let conversions = [
@@ -731,18 +743,21 @@ fn in_place_samples_are_metals() {
             let Some(bc) = assemble(name, &kernel_of(sampler, form, !half)) else {
                 return;
             };
-            for (stem, p) in [("lavapipe", lavapipe()), ("moltenvk-m3", m3())] {
+            for stem in ["lavapipe", "moltenvk-m3"] {
+                let p = exact(stem);
                 let what = format!("{name} half={half} on {stem}");
                 let a = compile_with(&bc, "k", &p, &inputs(true))
                     .unwrap_or_else(|e| panic!("{what}: {e}"));
                 link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{what}: {e}"));
+                let forms: Vec<&String> = a.strategies.entries.keys().collect();
                 assert!(
-                    a.strategies
-                        .entries
-                        .keys()
-                        .any(|k| k.starts_with("sampler.ycbcr_in_place.")),
-                    "{what}: {:?}",
-                    a.strategies.entries.keys().collect::<Vec<_>>()
+                    forms
+                        .iter()
+                        .any(|k| k.starts_with("sampler.ycbcr_in_place."))
+                        && !forms
+                            .iter()
+                            .any(|k| k.starts_with("sampler.ycbcr_in_place.model")),
+                    "{what}: {forms:?}"
                 );
                 let (plan, m) = typed_module_with(&bc, "k", &p, &inputs(true))
                     .unwrap_or_else(|e| panic!("{what}: {e}"));
@@ -772,6 +787,292 @@ fn in_place_samples_are_metals() {
                 }
             }
         }
+    }
+}
+
+/// The model's sample (`in_place`'s **The model**) of `planes` at texel coordinate `(x, y)`, in
+/// `f64`: each channel's value. The luma codes around the point blended bilinearly, the chroma
+/// pairs around half the point blended bilinearly, each index clamped to its plane, then Metal's
+/// coefficients over `2^23`, each channel clamped into `[0, 1]`.
+fn model(planes: &Planes, (x, y): (f64, f64)) -> [f64; 3] {
+    let p = &planes.planes;
+    let [cw, ch] = [W.div_ceil(2), H.div_ceil(2)];
+    let blend = |(x, y): (f64, f64), [w, h]: [u32; 2], v: &dyn Fn(usize) -> f64| -> f64 {
+        let (px, py) = (x - 0.5, y - 0.5);
+        let (fx, fy) = (px.floor(), py.floor());
+        let (kx, ky) = (px - fx, py - fy);
+        let edge = |i: f64, n: u32| (i as i64).clamp(0, i64::from(n) - 1) as usize;
+        let (x0, x1) = (edge(fx, w), edge(fx + 1.0, w));
+        let (y0, y1) = (edge(fy, h), edge(fy + 1.0, h));
+        let at = |x: usize, y: usize| v(y * w as usize + x);
+        let low = at(x0, y0) * (1.0 - kx) + at(x1, y0) * kx;
+        let high = at(x0, y1) * (1.0 - kx) + at(x1, y1) * kx;
+        low * (1.0 - ky) + high * ky
+    };
+    let luma = blend((x, y), [W, H], &|i| f64::from(planes.luma[i]));
+    let chroma = |c: usize| {
+        blend((x / 2.0, y / 2.0), [cw, ch], &|i| {
+            f64::from(planes.chroma[i][c])
+        })
+    };
+    let bits = p.codes.bits;
+    let scale = f64::from(1u32 << (10 - bits));
+    let (l, cb, cr) = (luma * scale, chroma(0) * scale, chroma(1) * scale);
+    let grid = f64::from(1u32 << 23);
+    let term = match p.range {
+        YCbCrRange::Video => 9576.0 * (l - 64.0) / grid,
+        YCbCrRange::Full => l / (scale * f64::from((1u32 << bits) - 1)),
+    };
+    crate::bind::ycbcr_convert::coefficients(p.range, p.matrix).map(|(kb, kr)| {
+        let c = f64::from(kb) * (cb - 512.0) + f64::from(kr) * (cr - 512.0);
+        (term + c / grid).clamp(0.0, 1.0)
+    })
+}
+
+/// The value of `half` bits `h` (a finite value).
+fn half_value(h: u32) -> f64 {
+    let sign = if h & 0x8000 != 0 { -1.0 } else { 1.0 };
+    let (e, m) = ((h >> 10) & 0x1f, f64::from(h & 0x3ff));
+    sign * match e {
+        0 => m * 2f64.powi(-24),
+        _ => (1.0 + m / 1024.0) * 2f64.powi(e as i32 - 15),
+    }
+}
+
+/// Under `YCbCrInPlacePolicy::Model` (the default) a linear sample of each format's random planes
+/// under each conversion, through a constexpr sampler (normalized and pixel coordinates, with a
+/// texel offset on edge axes) and a runtime one (clamp-to-edge, and repeat sampled as
+/// clamp-to-edge), `float` and `half` results, on lavapipe and on MoltenVK, is the model's within
+/// the `float` arithmetic's rounding (and a `half`'s), alpha 1, and its compile records the filter
+/// note under the bound format (and the bound word's linear filter that addresses no border);
+/// a runtime sampler's nearest word takes Metal's sample, bit for bit. A constexpr nearest or
+/// border sampler takes Metal's sample under either value.
+#[test]
+fn in_place_linear_samples_are_the_model_s() {
+    use crate::pipeline::artifact::PrecisionNote;
+    let conversions = [
+        (YCbCrRange::Video, YCbCrMatrix::Bt601),
+        (YCbCrRange::Video, YCbCrMatrix::Bt709),
+        (YCbCrRange::Video, YCbCrMatrix::Bt2020),
+        (YCbCrRange::Full, YCbCrMatrix::Bt601),
+        (YCbCrRange::Full, YCbCrMatrix::Bt709),
+        (YCbCrRange::Full, YCbCrMatrix::Bt2020),
+    ];
+    let mut rng = Lcg(0x3d_e1_5a);
+    let planes: Vec<Planes> = [PixelFormat::YCBCR84202P, PixelFormat::YCBCR104202P]
+        .into_iter()
+        .flat_map(|pf| conversions.map(|c| (pf, c)))
+        .map(|(pf, c)| Planes::random(pf, c, &mut rng))
+        .collect();
+    // Footprint positions as `in_place_samples_are_metals` takes them.
+    let positions: Vec<(i64, i64)> = (0..64)
+        .map(|_| {
+            let mut q = |n: u32| {
+                let q = (rng.next() % (256 * u64::from(n) + 768)) as i64 - 384;
+                match (q + 128) & 255 {
+                    0..8 => q + 8,
+                    248.. => q - 8,
+                    _ => q,
+                }
+            };
+            (q(W), q(H))
+        })
+        .collect();
+    let coords = |pixel: bool| -> Vec<u8> {
+        positions
+            .iter()
+            .flat_map(|&(qx, qy)| {
+                let n = |q: i64, n: u32| match pixel {
+                    true => (q + 128) as f32 / 256.0,
+                    false => (q + 128) as f32 / (256 * i64::from(n)) as f32,
+                };
+                [n(qx, W).to_le_bytes(), n(qy, H).to_le_bytes()]
+            })
+            .flatten()
+            .collect()
+    };
+    let edge = SamplerAddressMode::ClampToEdge;
+    // Each case: its sampler, its coordinates in pixels, its offset, and whether the model takes
+    // it (else Metal's nearest sample).
+    let cases = [
+        (
+            "constexpr",
+            Through::Constexpr(linear(1, false, 0)),
+            false,
+            (0, 0),
+            true,
+        ),
+        (
+            "constexpr pixel",
+            Through::Constexpr(linear(1, true, 0)),
+            true,
+            (0, 0),
+            true,
+        ),
+        (
+            "constexpr offset",
+            Through::Constexpr(linear(1, false, 0)),
+            false,
+            (2, -1),
+            true,
+        ),
+        (
+            "runtime",
+            Through::Runtime(word(true, edge)),
+            false,
+            (0, 0),
+            true,
+        ),
+        (
+            "runtime repeat",
+            Through::Runtime(word(true, SamplerAddressMode::Repeat)),
+            false,
+            (0, 0),
+            true,
+        ),
+        (
+            "runtime nearest",
+            Through::Runtime(word(false, edge)),
+            false,
+            (0, 0),
+            false,
+        ),
+    ];
+    for (name, through, pixel, offset, takes) in cases {
+        for half in [false, true] {
+            let sampler = match through {
+                Through::Constexpr(w) => Some(w),
+                Through::Runtime(_) => None,
+            };
+            let form = Form::Plain {
+                offset: (offset.0 as i32, offset.1 as i32),
+            };
+            let Some(bc) = assemble(name, &kernel_of(sampler, form, !half)) else {
+                return;
+            };
+            let note = match half {
+                true => PrecisionNote::HalfSampleFilter,
+                false => PrecisionNote::FloatSampleFilter,
+            };
+            for (stem, p) in [("lavapipe", lavapipe()), ("moltenvk-m3", m3())] {
+                let what = format!("{name} half={half} on {stem}");
+                let a = compile_with(&bc, "k", &p, &inputs(true))
+                    .unwrap_or_else(|e| panic!("{what}: {e}"));
+                link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{what}: {e}"));
+                let form = match through {
+                    Through::Constexpr(_) => "sampler.ycbcr_in_place.model",
+                    Through::Runtime(_) => "sampler.ycbcr_in_place.model.runtime",
+                };
+                assert!(
+                    a.strategies.entries.contains_key(form),
+                    "{what}: {:?}",
+                    a.strategies.entries.keys().collect::<Vec<_>>()
+                );
+                let noted: Vec<_> = a
+                    .specialized
+                    .iter()
+                    .filter(|s| s.note == note)
+                    .flat_map(|s| &s.when)
+                    .collect();
+                let words = match through {
+                    Through::Constexpr(_) => 0,
+                    Through::Runtime(_) => 3,
+                };
+                assert!(
+                    noted.len() == 1
+                        && noted[0].all.len() == 1 + words
+                        && noted[0]
+                            .all
+                            .iter()
+                            .any(|t| t.key == SpecKey::BoundTexelFormat(TEXTURE)),
+                    "{what}: {:?}",
+                    a.specialized
+                );
+                let exact_form = compile_with(&bc, "k", &exact(stem), &inputs(true))
+                    .unwrap_or_else(|e| panic!("{what}, exact: {e}"));
+                assert!(
+                    !exact_form.specialized.iter().any(|s| s.note == note)
+                        && !exact_form.precision.contains(&note),
+                    "{what}, exact: {:?}",
+                    exact_form.specialized
+                );
+                let (plan, m) = typed_module_with(&bc, "k", &p, &inputs(true))
+                    .unwrap_or_else(|e| panic!("{what}: {e}"));
+                let slot = texel_buffer(&m);
+                let n = positions.len();
+                let size = if half { 8 } else { 16 };
+                for planes in &planes {
+                    let init = [coords(pixel), vec![0xab; size * n]];
+                    let res = resources(&plan, &init, &planes.words);
+                    let word = match through {
+                        Through::Runtime(w) => Some(w),
+                        Through::Constexpr(_) => None,
+                    };
+                    let res = with_word(res, &a, word);
+                    let got = run(&m, &res, &planes.image(slot), n as u32, half);
+                    let pl = &planes.planes;
+                    let conversion = ((pl.range, pl.matrix), pl.codes.bits);
+                    for (&(qx, qy), g) in positions.iter().zip(got) {
+                        if !takes {
+                            let want = metal(planes, false, (qx, qy), offset);
+                            assert_eq!(
+                                g,
+                                result_bits(want, half, 2048),
+                                "{what} {conversion:?} q {:?}",
+                                (qx, qy)
+                            );
+                            continue;
+                        }
+                        let x = (qx + 128) as f64 / 256.0 + offset.0 as f64;
+                        let y = (qy + 128) as f64 / 256.0 + offset.1 as f64;
+                        let want = model(planes, (x, y));
+                        let (value, within) = match half {
+                            true => (half_value as fn(u32) -> f64, 3e-4),
+                            false => ((|b| f64::from(f32::from_bits(b))) as fn(u32) -> f64, 2e-5),
+                        };
+                        for c in 0..3 {
+                            let v = value(g[c]);
+                            assert!(
+                                (v - want[c]).abs() <= within,
+                                "{what} {conversion:?} q {:?} channel {c}: {v} against {}",
+                                (qx, qy),
+                                want[c]
+                            );
+                        }
+                        assert_eq!(value(g[3]), 1.0, "{what}: alpha");
+                    }
+                }
+            }
+        }
+    }
+    // A constexpr nearest sampler and a border one take Metal's sample under the model too.
+    for (name, words, form) in [
+        (
+            "nearest",
+            sampler_words(0, 0, 1, false, 0),
+            "sampler.ycbcr_in_place.nearest",
+        ),
+        (
+            "border",
+            linear(0, false, 0),
+            "sampler.ycbcr_in_place.linear",
+        ),
+    ] {
+        let Some(bc) = assemble(name, &kernel(Some(words), Form::Float)) else {
+            return;
+        };
+        let a = compile_with(&bc, "k", &lavapipe(), &inputs(true))
+            .unwrap_or_else(|e| panic!("{name}: {e}"));
+        assert!(
+            a.strategies.entries.contains_key(form)
+                && !a
+                    .specialized
+                    .iter()
+                    .any(|s| s.note == PrecisionNote::FloatSampleFilter),
+            "{name}: {:?} {:?}",
+            a.strategies.entries.keys().collect::<Vec<_>>(),
+            a.specialized
+        );
     }
 }
 
@@ -925,8 +1226,10 @@ fn in_place_gathers_are_metals() {
 /// samples or gathers as each lane asks: its compile on MoltenVK on the M3 binds the texture's
 /// image and notes the device's filter of the format there (`PrecisionNote::HalfSampleFilter` and
 /// `FloatSampleFilter`, announced `ycbcr-filter-not-exact`), and states the in-place form with
-/// the sampler, whose compile reads the planes for both, Metal's filter and Metal's taps, noting
-/// neither that filter nor a pixel sampler's scaling.
+/// the sampler, whose compile reads the planes for both and notes no pixel sampler's scaling:
+/// under `YCbCrInPlacePolicy::Exact` Metal's filter and Metal's taps, noting no filter; under the
+/// model (the default) the model's sample where the bound word filters linearly and addresses no
+/// border, noting the filter there alone, and Metal's taps.
 #[test]
 fn a_slot_that_samples_and_gathers_reads_its_planes_in_place() {
     use crate::pipeline::artifact::PrecisionNote;
@@ -960,29 +1263,38 @@ fn a_slot_that_samples_and_gathers_reads_its_planes_in_place() {
             "{what}: {:?}",
             image.facts
         );
-        let a = compile_with(&bc, "k", &p, &inputs(true))
-            .unwrap_or_else(|e| panic!("{what}, in place: {e}"));
-        link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{what}, in place: {e}"));
-        for form in [
-            "sampler.ycbcr_in_place.runtime",
-            "sampler.ycbcr_in_place.gather",
+        for (policy, p, sample) in [
+            (
+                "exact",
+                exact("moltenvk-m3"),
+                "sampler.ycbcr_in_place.runtime",
+            ),
+            ("model", m3(), "sampler.ycbcr_in_place.model.runtime"),
         ] {
+            let what = format!("{what}, in place, {policy}");
+            let a =
+                compile_with(&bc, "k", &p, &inputs(true)).unwrap_or_else(|e| panic!("{what}: {e}"));
+            link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{what}: {e}"));
+            for form in [sample, "sampler.ycbcr_in_place.gather"] {
+                assert!(
+                    a.strategies.entries.contains_key(form),
+                    "{what}: {:?}",
+                    a.strategies.entries.keys().collect::<Vec<_>>()
+                );
+            }
             assert!(
-                a.strategies.entries.contains_key(form),
-                "{what}, in place: {:?}",
-                a.strategies.entries.keys().collect::<Vec<_>>()
+                !notes(&a).contains(&PrecisionNote::PixelSamplerScaling),
+                "{what}"
             );
-        }
-        for note in [
-            PrecisionNote::HalfSampleFilter,
-            PrecisionNote::FloatSampleFilter,
-            PrecisionNote::PixelSamplerScaling,
-        ] {
-            assert!(
-                !notes(&a).contains(&note),
-                "{what}, in place: {:?}",
-                notes(&a)
-            );
+            let other = match half {
+                true => PrecisionNote::FloatSampleFilter,
+                false => PrecisionNote::HalfSampleFilter,
+            };
+            assert!(!notes(&a).contains(&other), "{what}: {:?}", notes(&a));
+            // The model's note holds only under the bound format and word, never outright.
+            assert!(!a.precision.contains(&filter), "{what}: {:?}", a.precision);
+            let noted = a.specialized.iter().any(|s| s.note == filter);
+            assert_eq!(noted, policy == "model", "{what}: {:?}", a.specialized);
         }
     }
 }

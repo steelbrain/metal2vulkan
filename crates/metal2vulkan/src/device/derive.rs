@@ -346,6 +346,7 @@ fn derive_fields(
             desc.device_type,
             Some(vk::PhysicalDeviceType::INTEGRATED_GPU | vk::PhysicalDeviceType::CPU)
         ),
+        ycbcr_in_place_reads: policy.ycbcr_in_place_reads,
         // The device's measured value, keyed on its identity as the workarounds are, or the floor.
         function_storage: function_storage::of(desc),
         // The measured deviations, one per pipeline kind; unmeasured, Vulkan's rule, the device's

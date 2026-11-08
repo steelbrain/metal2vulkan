@@ -8,7 +8,7 @@
 use crate::device::{
     BatchOrderPolicy, CompletionPolicy, DevicePolicy, DontCareColorPolicy, ExtendedRangeBlitPolicy,
     HalfChainPolicy, HeapCompressionPolicy, HostPageTexturePolicy, PipelineWaitPolicy,
-    QueueSharingPolicy, RenderLoweringPolicy, WideLinePolicy,
+    QueueSharingPolicy, RenderLoweringPolicy, WideLinePolicy, YCbCrInPlacePolicy,
 };
 use crate::pipeline::PrecisionNote;
 use std::collections::BTreeSet;
@@ -77,8 +77,10 @@ fn choices() -> Vec<Choice> {
         extended_range_blits: _,
         queue_sharing: _,
         dont_care_colors: _,
-        // The translator's: how a `half` chain rounds without `shaderFloat16`.
+        // The translator's: how a `half` chain rounds without `shaderFloat16`, and how planes of a
+        // two-plane YCbCr texture read in place are sampled.
         half_chains: _,
+        ycbcr_in_place_reads: _,
     } = p;
     vec![
         choice!(p.heap_compression: HeapCompressionPolicy { Compressed, Uncompressed }),
@@ -87,6 +89,7 @@ fn choices() -> Vec<Choice> {
         choice!(p.render_lowering: RenderLoweringPolicy { AtCall, Worker }),
         choice!(p.host_page_textures: HostPageTexturePolicy { InPlace, Shadow }),
         choice!(p.half_chains: HalfChainPolicy { AtExits, EachOperation }),
+        choice!(p.ycbcr_in_place_reads: YCbCrInPlacePolicy { Model, Exact }),
         choice!(p.pipeline_waits: PipelineWaitPolicy { Bounded, Exact }),
         choice!(p.wide_lines: WideLinePolicy { Device, Exact }),
         choice!(p.extended_range_blits: ExtendedRangeBlitPolicy { Kept, Canonical }),
@@ -656,4 +659,37 @@ fn the_ledger_states_the_pipeline_wait_bounds() {
             "docs/FAST-PATHS.md does not state `{named}`, the default's bound"
         );
     }
+}
+
+/// The translator's choice of how a function samples planes read in place
+/// (`ycbcr_in_place_reads`) moves every committed profile's fingerprint: the profile carries it,
+/// so its translations follow it.
+#[test]
+fn the_translator_s_ycbcr_in_place_reads_choice_keys_every_profile() {
+    use crate::spirv::testing::committed_profiles_with;
+    let model = committed_profiles_with(DevicePolicy::UNTRUSTED).expect("profiles");
+    let exact = committed_profiles_with(DevicePolicy {
+        ycbcr_in_place_reads: YCbCrInPlacePolicy::Exact,
+        ..DevicePolicy::UNTRUSTED
+    })
+    .expect("profiles");
+    assert_eq!(model.len(), exact.len());
+    for ((stem, m), (other, e)) in model.iter().zip(&exact) {
+        assert_eq!(stem, other);
+        assert_ne!(m.fingerprint(), e.fingerprint(), "{stem}");
+    }
+}
+
+/// `DevicePolicy::exact_answers()` samples planes read in place as Metal converts and filters
+/// them, and the default by Vulkan's Y′CbCr model.
+#[test]
+fn exact_answers_read_planes_in_place_as_metal() {
+    assert_eq!(
+        DevicePolicy::UNTRUSTED.ycbcr_in_place_reads,
+        YCbCrInPlacePolicy::Model
+    );
+    assert_eq!(
+        DevicePolicy::UNTRUSTED.exact_answers().ycbcr_in_place_reads,
+        YCbCrInPlacePolicy::Exact
+    );
 }

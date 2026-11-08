@@ -217,8 +217,9 @@ impl DeviceProfile {
     /// Whether a function reads a two-plane YCbCr texture's planes in place where its slot reads
     /// the texture only so (`bind::YCbCrInPlace`): on an integrated GPU or a CPU device, which
     /// reads host memory with no bus between; elsewhere every such texture's image of converted
-    /// texels is read. Both forms read Metal's texels exactly. The runtime reads it to state a
-    /// texture's planes (`TextureFacts::ycbcr_in_place`).
+    /// texels is read. The image holds Metal's texels exactly; the planes read in place are
+    /// sampled as `DevicePolicy::ycbcr_in_place_reads` says. The runtime reads it
+    /// to state a texture's planes (`TextureFacts::ycbcr_in_place`).
     pub fn reads_ycbcr_planes_in_place(&self) -> bool {
         self.fields.ycbcr_in_place
     }
@@ -543,6 +544,9 @@ pub struct ProfileFields {
     /// which its refresh reads across the bus once per encoder where the in-place form would read
     /// the planes there at every pass. Both forms read Metal's texels exactly.
     pub ycbcr_in_place: bool,
+    /// How a sample of planes read in place converts and filters them
+    /// (`DevicePolicy::ycbcr_in_place_reads`).
+    pub ycbcr_in_place_reads: crate::device::YCbCrInPlacePolicy,
     /// The Function storage a thread holds correctly (`device::function_storage`): a stage's
     /// private memory, its call stacks included, may take this much a thread
     /// (`VkLimit::FunctionStorageBytesPerThread`), and a vertex or fragment function on a device

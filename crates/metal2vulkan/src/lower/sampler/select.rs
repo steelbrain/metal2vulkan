@@ -1051,7 +1051,7 @@ fn select_slot(
         }
         _ => sampler,
     };
-    if let Some(sample) = select_in_place(cx, call, index, &sampler, arm)? {
+    if let Some(sample) = select_in_place(cx, call, index, &sampler, arm, m)? {
         return Ok(TextureStrategy::InPlaceSample(Box::new(sample)));
     }
     match crate::lower::texture::extended_range(cx, ImageRef::Slot(index))? {
@@ -1072,6 +1072,7 @@ fn select_in_place(
     index: u32,
     sampler: &SamplerArg,
     arm: Option<bool>,
+    m: &mut Meter,
 ) -> Result<Option<super::in_place::Sample>, Error> {
     let variant = crate::lower::texture::ycbcr_in_place(cx, index)?;
     let Some((sample, samplers)) = in_place_sample(cx, call, index, sampler, arm)? else {
@@ -1090,6 +1091,11 @@ fn select_in_place(
     s.observe(call.t.image, Some(TexelClass::Float))?;
     s.uses.read = true;
     s.offset_base |= sample.offset_base;
+    // The device's own conversion samples a planes image's slot (`in_place`'s **The device's
+    // sampler**), whose answers the runtime announces where it binds one: the model is the
+    // texel buffer's.
+    let mut sample = sample;
+    sample.model &= !cx.inputs.ycbcr_planes_sampled.contains_key(&s.slot);
     // A runtime sampler's word states the filter, the coordinates, the address modes and the
     // border color.
     if let super::extended::State::Slot { sampler: n } = sample.state {
@@ -1098,19 +1104,57 @@ fn select_in_place(
         };
         r.linear = true;
     }
-    // A linear filter's exact sum (a gather sums nothing).
-    if sample.gather.is_none()
-        && !matches!(
-            sample.state,
-            super::extended::State::Constant { linear: false, .. }
-        )
-    {
+    // A linear filter's exact sum (a gather sums nothing, and the model's linear sample blends the
+    // codes; a runtime sampler's word may still take Metal's).
+    let sums = match sample.state {
+        super::extended::State::Constant { linear, .. } => linear && !sample.model,
+        super::extended::State::Slot { .. } => true,
+    };
+    if sample.gather.is_none() && sums {
         cx.families
             .sampler
             .bicubic_routines
             .insert(super::bicubic::routines::Routine::Quad);
     }
+    if sample.model {
+        model_note(cx, &sample, m)?;
+    }
     Ok(Some(sample))
+}
+
+/// The note of the model's sample `s` (`super::in_place`'s **The model**): the codes' blend, not
+/// Metal's exact filter of the format, `PrecisionNote::HalfSampleFilter` for a `half` result and
+/// `FloatSampleFilter` for a `float` one, under the clause that the slot binds a converted 4:2:0
+/// format (`SpecKey::BoundTexelFormat`, which the runtime reads at each draw or dispatch and
+/// announces as `ycbcr-filter-not-exact`), and through a runtime sampler slot that the word bound
+/// there filters linearly and addresses no border on either plane axis
+/// (`SpecKey::BoundSamplerWord`), where the sample takes the model.
+fn model_note(
+    cx: &mut SelectCx<'_>,
+    s: &super::in_place::Sample,
+    m: &mut Meter,
+) -> Result<(), Error> {
+    use crate::metal::texel_format::{PackedTexels, TexelFormat};
+    let note = match s.half {
+        true => PrecisionNote::HalfSampleFilter,
+        false => PrecisionNote::FloatSampleFilter,
+    };
+    let format = NoteTest::equal(
+        NoteOn::Bound(s.texture),
+        TexelFormat::PACKED_MASK,
+        PackedTexels::YCbCr2048.class().0,
+    );
+    let mut clause = crate::lower::select::NoteClause::from([format]);
+    if let super::extended::State::Slot { sampler: n } = s.state {
+        let on = NoteOn::BoundSampler(n);
+        let filter = SamplerWord::MIN_LINEAR | SamplerWord::MAG_LINEAR;
+        clause.insert(NoteTest::equal(on, filter, SamplerWord::LINEAR));
+        // A mode from 4 on (clamp-to-zero, clamp-to-border) addresses a border.
+        for shift in SamplerWord::ADDRESS_SHIFT.into_iter().take(2) {
+            clause.insert(NoteTest::equal(on, 4 << shift, 0));
+        }
+    }
+    cx.note_when(note, vec![clause], m)
 }
 
 /// Whether the device's own sampler Y′CbCr conversion of a planes image takes in-place sample `s`
@@ -1250,6 +1294,18 @@ fn in_place_sample(
     let coord = ops
         .get(TexRole::Coord)
         .ok_or_else(|| cx.invariant("a sampling call without a coordinate"))?;
+    // The model takes a linear sample that addresses no border and whose offset no parent's size
+    // places: a constexpr sampler's state decides now, a runtime sampler's word as it runs.
+    let model = cx.profile.fields().ycbcr_in_place_reads
+        == crate::device::YCbCrInPlacePolicy::Model
+        && gather.is_none()
+        && !offset_base
+        && match &state {
+            State::Constant {
+                linear, address, ..
+            } => *linear && !address.iter().any(|m| matches!(m, TapAddress::Border)),
+            State::Slot { .. } => true,
+        };
     let sample = super::in_place::Sample {
         texture: index,
         state,
@@ -1258,6 +1314,7 @@ fn in_place_sample(
         coord: id(cx, coord)?,
         half,
         gather,
+        model,
         result: cx.lowered_repr(Value::Inst(at), inst.ty)?,
     };
     Ok(Some((sample, samplers)))

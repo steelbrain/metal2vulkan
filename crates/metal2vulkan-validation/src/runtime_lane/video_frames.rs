@@ -490,9 +490,14 @@ fn moved_per_frame(before: &WorkCounts, after: &WorkCounts, frames: usize) -> St
 /// The device the cfg selects as a consumer makes it: the default policy, no layer and no
 /// execution records.
 fn consumer_device(messages: &Messages, cache: &ScratchCache) -> Device {
+    consumer_device_with(messages, cache, DevicePolicy::default())
+}
+
+/// [`consumer_device`] under `policy`.
+fn consumer_device_with(messages: &Messages, cache: &ScratchCache, policy: DevicePolicy) -> Device {
     let device = validated_device_with(TEST_DEVICE, messages, cache.path(), |options| {
         options.layers.clear();
-        options.policy = DevicePolicy::default();
+        options.policy = policy;
         options.record_executions = false;
     })
     .unwrap();
@@ -624,13 +629,32 @@ fn video_frame_costs() {
 /// [`video_frame_costs`]' frame taken apart over anonymous pages, textures made once: each form
 /// sampled linear and nearest, with the CPU writing a new frame each time and with the frame left
 /// as written (the GPU reading pages the CPU has not touched since), so the sampling's own cost
-/// shows apart from the pages' (`VIDEO-PART`).
+/// shows apart from the pages' (`VIDEO-PART`); the planes read in place under each
+/// `YCbCrInPlacePolicy`, the other forms under the default policy alone.
 #[test]
 #[ignore = "a release-mode measurement: run by name"]
 fn video_frame_parts() {
+    use metal2vulkan::device::YCbCrInPlacePolicy;
     let cache = ScratchCache::new().unwrap();
     let messages = Messages::default();
-    let device = consumer_device(&messages, &cache);
+    let exact = DevicePolicy {
+        ycbcr_in_place_reads: YCbCrInPlacePolicy::Exact,
+        ..DevicePolicy::default()
+    };
+    for (policy, forms) in [
+        (
+            DevicePolicy::default(),
+            &[Form::YCbCr, Form::YCbCrImage, Form::Planes][..],
+        ),
+        (exact, &[Form::YCbCr][..]),
+    ] {
+        let device = consumer_device_with(&messages, &cache, policy);
+        parts(&device, forms, policy.ycbcr_in_place_reads);
+    }
+}
+
+/// [`video_frame_parts`] on `device`, whose planes read in place follow `reads`, of `forms`.
+fn parts(device: &Device, forms: &[Form], reads: metal2vulkan::device::YCbCrInPlacePolicy) {
     let queue = device.new_command_queue().unwrap();
     let corners = whole_target(&device);
     let target = target(&device);
@@ -638,7 +662,7 @@ fn video_frame_parts() {
     let surfaces: Vec<Surface> = (0..POOL)
         .map(|_| Surface::Anonymous(Mapping::anonymous(LEN)))
         .collect();
-    for form in [Form::YCbCr, Form::YCbCrImage, Form::Planes] {
+    for &form in forms {
         let pipeline = pipeline(&device, fragment(form));
         let made: Vec<(Buffer, Vec<(Texture, String)>)> = surfaces
             .iter()
@@ -673,8 +697,9 @@ fn video_frame_parts() {
                 let (gpu, gpu90) = median_p90(gpus);
                 let per = |a: u64, b: u64| (a - b) as f64 / (WARM + FRAMES) as f64;
                 println!(
-                    "VIDEO-PART on {}: {form:?} [{}], {filter:?}, frame written each time \
-                     {written}: GPU {gpu:.0} us (p90 {gpu90:.0}); per frame: shadow texels \
+                    "VIDEO-PART on {}: {form:?} (in-place reads {reads:?}) [{}], {filter:?}, \
+                     frame written each time {written}: GPU {gpu:.0} us (p90 {gpu90:.0}); per \
+                     frame: shadow texels \
                      copied in {:.0}, planes bound in place {:.2}, refreshes {:.2}, whole \
                      conversions {:.2}",
                     device.name(),

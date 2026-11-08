@@ -58,6 +58,12 @@ pub struct DevicePolicy {
     /// without `shaderFloat16`, rounds where a value leaves it (the default) or at each operation.
     /// Changes emitted code: the profile carries it.
     pub half_chains: HalfChainPolicy,
+    /// Whether a function that reads a two-plane YCbCr texture's planes in place (a uniform
+    /// texel buffer over their codes, on a device whose memory is the host's) samples them by
+    /// Vulkan's Y′CbCr model in the device's arithmetic, as the device's own conversion would
+    /// (the default), or converts and filters every tap as Metal does, exactly. Changes emitted
+    /// code: the profile carries it.
+    pub ycbcr_in_place_reads: YCbCrInPlacePolicy,
     /// Whether a render or compute state's creation, and a committed command buffer, wait a
     /// bound for a pipeline the driver is still making, the command buffer then dropping the
     /// draws and dispatches whose pipeline is not made (the default), or until it is made. The
@@ -121,6 +127,7 @@ impl DevicePolicy {
         render_lowering: RenderLoweringPolicy::AtCall,
         host_page_textures: HostPageTexturePolicy::InPlace,
         half_chains: HalfChainPolicy::AtExits,
+        ycbcr_in_place_reads: YCbCrInPlacePolicy::Model,
         pipeline_waits: PipelineWaitPolicy::Bounded,
         pipeline_creation_wait: Duration::from_millis(4500),
         pipeline_commit_wait: Duration::from_millis(4500),
@@ -140,6 +147,8 @@ impl DevicePolicy {
     /// ([`RenderLoweringPolicy::AtCall`]), every texture over host pages a shadow, whose
     /// copies touch its texels alone ([`HostPageTexturePolicy::Shadow`]), each `half`
     /// operation rounded on a device without `shaderFloat16` ([`HalfChainPolicy::EachOperation`]),
+    /// every two-plane YCbCr sample of planes read in place Metal's conversion and filter of its
+    /// taps ([`YCbCrInPlacePolicy::Exact`]),
     /// a render state's predicted pipeline made at its creation, each draw's pipeline waited
     /// for until it is made ([`PipelineWaitPolicy::Exact`]), every wide line Metal's
     /// parallelogram where the device's own line differs ([`WideLinePolicy::Exact`]), and every
@@ -156,6 +165,7 @@ impl DevicePolicy {
             render_lowering: RenderLoweringPolicy::AtCall,
             host_page_textures: HostPageTexturePolicy::Shadow,
             half_chains: HalfChainPolicy::EachOperation,
+            ycbcr_in_place_reads: YCbCrInPlacePolicy::Exact,
             pipeline_waits: PipelineWaitPolicy::Exact,
             wide_lines: WideLinePolicy::Exact,
             extended_range_blits: ExtendedRangeBlitPolicy::Canonical,
@@ -337,6 +347,37 @@ pub enum HalfChainPolicy {
     AtExits,
     /// Every operation's result rounded to `half`, as the AIR computes it.
     EachOperation,
+}
+
+/// How a function samples a two-plane YCbCr texture (`YCBCR8_420_2P`, `YCBCR10_420_2P`) whose
+/// planes it reads in place: a uniform texel buffer over the planes' codes, on a device whose
+/// memory is the host's (an integrated GPU, a CPU device), where no image of the device's samples
+/// them (`bind::YCbCrInPlace`). No sampler of the device reads a texel buffer, so the function
+/// filters and converts the codes itself either way. Changes emitted code: the profile carries
+/// it.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub enum YCbCrInPlacePolicy {
+    /// A linear sample by Vulkan's Y′CbCr model, as the device's own sampler Y′CbCr conversion of
+    /// the planes' multi-planar format with a linear chroma filter computes it (the default): the
+    /// luma codes blended bilinearly at the sample's point, the chroma pairs blended bilinearly at
+    /// the same point of the chroma plane (Metal's midpoint siting), then the surface's range and
+    /// matrix (Metal's coefficients) in `float`, each channel clamped into `[0, 1]`, alpha 1:
+    /// eight fetches. Metal converts each of the four taps (its chroma weighted 9/3/3/1 and
+    /// rounded to a code, each channel clamped) and sums their steps of `1/2048`: the answers
+    /// differ by the chroma the taps reconstruct, by those roundings, and where a tap's channel
+    /// leaves `[0, 1]`, recorded `PrecisionNote::HalfSampleFilter` or `FloatSampleFilter` and
+    /// announced `ycbcr-filter-not-exact`. A nearest sample (one tap), a sample through a border
+    /// address mode, one whose texel offset Metal places by a parent's size, and a gather are
+    /// Metal's under either value.
+    #[default]
+    Model,
+    /// Every tap Metal's texel (its luma code, its chroma pairs weighted 9/3/3/1 and rounded to a
+    /// code, the range's and the matrix's fixed-point conversion), and a linear sample Metal's sum
+    /// of the four taps' steps on the grid `2048`, exactly: twenty fetches and four conversions a
+    /// linear sample.
+    Exact,
 }
 
 /// How long the runtime waits for a draw's `VkPipeline` the driver is still making. Metal makes a
