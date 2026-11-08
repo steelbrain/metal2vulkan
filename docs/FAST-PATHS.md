@@ -954,6 +954,23 @@ driver's. Each is open work.
   `vkAllocateMemory` holds every submission, and a block made ahead of its placements, on a thread
   of the device's own, would hold the frames it meets as long (the row above), so none is. Metal's
   command buffers wait for no allocation. Not announced.
+- **With unified memory, `Private` memory lies in the system heap's types before the device-local
+  ones; no cost measured.** Where the device has unified memory and a heap that is not
+  device-local, `Private` and `Memoryless` placements take that heap's types first (`memory.rs`'s
+  `candidates`; `Memoryless` its lazily allocated types before all): RADV backs a Radeon 780M's
+  device-local types from the 2 GiB carve-out the kernel reserves for every process's GPU memory,
+  and once that is full the kernel evicts to make room during the submissions of every process
+  holding memory there (the consumer's scroll: the submitting thread 2.28 s in
+  `drm_exec_lock_obj` over 39 episodes), while `VK_EXT_memory_budget` reports the heap's budget of
+  11 GiB, not the carve-out's, so no budget keeps placements within it. On a Radeon 780M (RADV
+  PHOENIX, Linux), with 1.6 GiB of the carve-out held by other processes: copies of 256 MiB ran at
+  23.9 and 28.8 GB/s (medians of two rounds) in the device-local type and 28.5 and 29.0 GB/s in
+  the system heap's; a scroll of 259 tiles (2.3 GiB of the runtime's blocks) beside 1 GiB of
+  another allocation's device-local memory held median frames of 1.31 and 1.29 ms (frames 300 and
+  600) with its placements device-local and 1.87 and 1.30 ms in the system heap's types, and the
+  same scroll alone 2.87 and 4.87 ms against 1.33 and 1.31 ms; no eviction traced in any
+  (`amdgpu_bo_move`). Devices whose every type is device-local (ANV, MoltenVK, lavapipe) and those
+  without unified memory place as before. No switch: no answer of Metal's changes. Not announced.
 - **Making and releasing an event on NVIDIA take 0.1 to 0.6 ms of the calling thread.**
   `new_event` and `new_shared_event` each make one timeline semaphore (`vkCreateSemaphore`,
   `event.rs`), and an event's release destroys it where it goes. On the RTX 5080 Laptop GPU both
