@@ -974,7 +974,8 @@ driver's. Each is open work.
   kept empty blocks per heap, its eighth (707 MiB) kept all but 3 of a video clip's 16 blocks
   (`tests::clip_bursts`): each later clip made 4 again and took 237 and 245 ms to make where it
   had taken 132 and 126 ms with the placements device-local; with unified memory the heaps keep
-  one budget of an eighth of them all (the row above), which keeps every block. Devices whose
+  one budget of an eighth of them all (the row above), which keeps every block: the later clips
+  made none and took 122 and 119 ms. Devices whose
   every type is device-local (ANV, MoltenVK, lavapipe) and those without unified memory place as
   before. No switch: no answer of Metal's changes. Not announced.
 - **Making and releasing an event on NVIDIA take 0.1 to 0.6 ms of the calling thread.**
