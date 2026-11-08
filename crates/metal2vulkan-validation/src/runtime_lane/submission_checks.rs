@@ -376,8 +376,11 @@ fn a_buffer_reached_only_through_an_indirect_command_fails_its_submission() {
 const FILL: u64 = 64 << 20;
 
 /// How many times a GPU-signal test tries, the signaller's fills doubling each time, for the
-/// signaller still to run when the host acts.
-const ATTEMPTS: u32 = 7;
+/// signaller still to run when the host acts. The last try's 1024 fills of [`FILL`] bytes outlast
+/// a host acting 145 ms after a commit, as an RTX 5080 laptop's did beside a lane run at `-j 6`,
+/// where 7 tries (256 fills) all finished first. A try past the first that catches it costs only
+/// where the earlier ones did not.
+const ATTEMPTS: u32 = 9;
 
 /// The event a waiting command buffer waits for, by its kind.
 enum Waited {
