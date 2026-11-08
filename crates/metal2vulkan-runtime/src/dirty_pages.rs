@@ -568,6 +568,11 @@ struct LogOf {
     /// one's first byte of the object (ascending), and the source's offsets of it.
     firsts: Box<[u64]>,
     offsets: Box<[Range<u64>]>,
+    /// The runs' indices in the order of their first offsets in the source, and the longest
+    /// run's length: [`bytes_of`](Self::bytes_of) finds the runs a few changed pages meet from
+    /// them, with no walk over every run.
+    by_offset: Box<[u32]>,
+    longest: u64,
 }
 
 impl LogOf {
@@ -575,10 +580,18 @@ impl LogOf {
     /// object and the source's offsets of it, in the object's order, apart.
     fn new(source: &Arc<DirtySource>, runs: impl IntoIterator<Item = (u64, Range<u64>)>) -> LogOf {
         let (firsts, offsets): (Vec<u64>, Vec<Range<u64>>) = runs.into_iter().unzip();
+        let mut by_offset: Vec<u32> = (0..offsets.len() as u32).collect();
+        by_offset.sort_unstable_by_key(|&index| offsets[index as usize].start);
+        let longest = (offsets.iter())
+            .map(|run| run.end.saturating_sub(run.start))
+            .max()
+            .unwrap_or(0);
         LogOf {
             source: Arc::clone(source),
             firsts: firsts.into_boxed_slice(),
             offsets: offsets.into_boxed_slice(),
+            by_offset: by_offset.into_boxed_slice(),
+            longest,
         }
     }
 
@@ -595,8 +608,32 @@ impl LogOf {
     }
 
     /// Each run of the object's bytes that `changed` (the source's offsets, sorted by start and
-    /// apart) meets, to `each`, in the object's order.
+    /// apart) meets, to `each`: in the object's order where `changed` holds as many runs as the
+    /// object's bytes take or more, walking every run of them; else in `changed`'s order, each
+    /// changed run finding the runs it meets by their first offsets (`by_offset`), so a commit
+    /// that changed a few pages of a copy stitched from thousands of runs costs those pages alone.
     fn bytes_of(&self, changed: &[Range<u64>], mut each: impl FnMut(Range<u64>)) {
+        if changed.len() < self.offsets.len() {
+            for run in changed {
+                // A run whose first offset lies below this, at most the longest run's length
+                // long, ends by the changed run's start.
+                let low = run.start.saturating_sub(self.longest);
+                let from = (self.by_offset)
+                    .partition_point(|&index| self.offsets[index as usize].start < low);
+                for &index in self.by_offset[from..]
+                    .iter()
+                    .take_while(|&&index| self.offsets[index as usize].start < run.end)
+                {
+                    let (first, offsets) =
+                        (self.firsts[index as usize], &self.offsets[index as usize]);
+                    let (start, stop) = (run.start.max(offsets.start), run.end.min(offsets.end));
+                    if start < stop {
+                        each(first + (start - offsets.start)..first + (stop - offsets.start));
+                    }
+                }
+            }
+            return;
+        }
         for (first, offsets) in self.runs() {
             let from = changed.partition_point(|run| run.end <= offsets.start);
             for run in changed[from..]
