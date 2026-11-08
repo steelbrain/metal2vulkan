@@ -13,10 +13,15 @@
 //! ([`AT_ONCE`]), as the parent reads it: the kernel's teardown of the process after it is
 //! printed, not counted. Each child reports the validation
 //! layer's messages until then, which must be none. The parent prints each exit's time, with its
-//! wall time, that wait, and how long the process took to end after its handlers. Each test that
-//! checks that time runs alone in the suite (`.config/nextest.toml`): an exit's time holds the
-//! drivers' exit handlers, which other processes' GPU work slows (NVIDIA's `vkDestroyDevice` took
-//! 54 ms alone and up to 2 s beside other lanes on an RTX 3090).
+//! wall time, that wait, and how long the process took to end after its handlers. Where the hook
+//! ran before the mark each child registers right after its first device
+//! ([`after_the_later_devices`]), the exit's time ends at the mark: the handlers registered as
+//! that device was made, its driver's and the layer's, run after it, and their time is printed,
+//! not counted (on an RTX 5080 laptop beside other GPU work, 0.5 to 7 s). Each test that checks
+//! that time runs alone in the suite (`.config/nextest.toml`): an exit's time holds the drivers'
+//! calls the hook waits for, and, where the hook ran after the mark, the drivers' exit handlers,
+//! which other processes' GPU work slows (NVIDIA's `vkDestroyDevice` took 54 ms alone and up to
+//! 2 s beside other lanes on an RTX 3090).
 //!
 //! Metal's answers (an M4 with macOS 27.0.1, each case without and with
 //! `MTL_DEBUG_LAYER=1`): every such exit was clean, in 15 to 45 ms, but one: a dropped command
@@ -60,7 +65,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 /// The longest an exit may take, from the child's last line to the end of its last exit handler
 /// ([`exit_end`]; the runtime's notice where it ended the process at once and that handler did not
 /// run, [`AT_ONCE`]; the mark before the first device's driver's and layer's handlers where the
-/// child made one, [`after_the_later_devices`]), or,
+/// hook ran before it, [`after_the_later_devices`]), or,
 /// where the exit waits for a CPU device's work that ends later, from that work's end: the
 /// work runs for as long as the host's load lets it ([`CPU_WORK_TIME`]), and the exit's own part
 /// does not. Less the time the exiting thread waited for a CPU meanwhile, which is the host's
@@ -234,17 +239,19 @@ extern "C" fn drop_the_held_device() {
     unsafe { libc::write(1, line.as_ptr().cast(), line.len()) };
 }
 
-/// An exit handler the cases `instance_after_handler_exit` and `making_exit` register right after
-/// the child's first device, so that it runs after every handler registered since (the later
-/// instances' and devices', the hook's later registrations, [`drop_the_held_device`], the
-/// destructors the driver's compiler registered in a making) and before those registered as the
-/// first device was made (its driver's and layer's): print when it ran (`at_ms`), and the exiting
-/// thread's wait for a CPU until then (`queued_us`, as [`exit_end`]'s), where the exit's own part
-/// ends ([`exits_cleanly`]).
+/// An exit handler every child registers right after its first device, so that it runs after
+/// every handler registered since (the case's own, the later instances' and devices', the hook's
+/// later registrations, [`drop_the_held_device`], the destructors the driver's compiler registered
+/// in a making) and before those registered as the first device was made (its driver's and
+/// layer's): print whether the hook ran by then (`hook_ran`), when it ran (`at_ms`), and the
+/// exiting thread's wait for a CPU until then (`queued_us`, as [`exit_end`]'s), where the exit's
+/// own part ends once the hook ran ([`exits_cleanly`]).
 extern "C" fn after_the_later_devices() {
+    let hook_ran = metal2vulkan_runtime::process_exiting();
     let queued = exit_thread_queued().unwrap_or_default();
     let line = format!(
-        "{REPORT}-MARK at_ms={} queued_us={}\n",
+        "{REPORT}-MARK hook_ran={} at_ms={} queued_us={}\n",
+        u8::from(hook_ran),
         now_ms(),
         queued.as_micros()
     );
@@ -472,6 +479,10 @@ fn child() {
         }
     })
     .unwrap();
+    // Right after the device: the hook's later registrations, and every handler a case registers,
+    // run before it, and the device's driver's and layer's handlers after it.
+    // SAFETY: a handler with no arguments that never unwinds.
+    unsafe { libc::atexit(after_the_later_devices) };
     let case = case.as_str();
     match case {
         "pending_held_exit" => {
@@ -518,11 +529,6 @@ fn child() {
             exit_now(case, &messages);
         }
         "making_exit" | "first_making_exit" => {
-            // Before the makings: the hook's registrations after their driver calls, and the
-            // destructors the driver's compiler registers in them, run before it, and the
-            // driver's and layer's handlers of the device after it.
-            // SAFETY: a handler with no arguments that never unwinds.
-            unsafe { libc::atexit(after_the_later_devices) };
             // A state whose creation makes its pipeline to its end on this thread: the making's
             // driver call, the driver's compile, returns before the exit. `first_making_exit`
             // makes none, so the pool's making below is the process's first of the kernel, and
@@ -619,8 +625,6 @@ fn child() {
             // device made and dropped first: its making's sections register the hook again after
             // each entry point's first call since the first device's, which the last one's then
             // do not.
-            // SAFETY: a handler with no arguments that never unwinds.
-            unsafe { libc::atexit(after_the_later_devices) };
             drop(validated_device(TEST_DEVICE, &messages, &cache).unwrap());
             // SAFETY: a handler with no arguments that never unwinds.
             unsafe { libc::atexit(drop_the_held_device) };
@@ -1077,12 +1081,12 @@ fn stdout_line<'a>(exited: &'a Exited, start: &str) -> Option<&'a str> {
 /// the CPU device's work the exit waits for where that is later (the marker's `seen_ms`), less the
 /// time the exiting thread waited for a CPU since (`queued_us`; none where the child gave no
 /// count). Where the child marked the end of the handlers registered since its first device
-/// ([`after_the_later_devices`]), the exit's part ends at the mark: the handlers after it are those
-/// registered as the first device was made, its driver's and the layer's, and the hook's first
-/// registration, whose run finds no device and makes no Vulkan call (`exit_guard::hook`), so their
-/// time is the driver's and the layer's (on an RTX 5080 laptop beside other GPU work, 454 to
-/// 997 ms where the rest of the exit took 2 ms), printed and not bounded. What each child did, in
-/// order.
+/// ([`after_the_later_devices`]) and the hook ran before the mark, the exit's part ends at the
+/// mark: the handlers after it are those registered as the first device was made, its driver's and
+/// the layer's, and the hook's first registration, whose run finds no device and makes no Vulkan
+/// call (`exit_guard::hook`), so their time is the driver's and the layer's (on an RTX 5080 laptop
+/// beside other GPU work, 454 to 997 ms where the rest of the exit took 2 ms, and 1.5 to 5.9 s
+/// beside the runtime suite), printed and not bounded. What each child did, in order.
 fn exits_cleanly(cases: &[&str]) -> Vec<Exited> {
     let mut all = Vec::new();
     for &case in cases {
@@ -1139,10 +1143,11 @@ fn exits_cleanly(cases: &[&str]) -> Vec<Exited> {
                 .parse()
                 .ok()
         };
-        // Where the child marked the end of the handlers registered since its first device,
-        // the exit's part ends at the mark: its first device's driver's and layer's handlers
-        // after it are printed, not counted.
-        let mark = stdout_line(&exited, &format!("{REPORT}-MARK "));
+        // Where the child marked the end of the handlers registered since its first device, the
+        // hook's run among them, the exit's part ends at the mark: its first device's driver's and
+        // layer's handlers after it are printed, not counted.
+        let mark = stdout_line(&exited, &format!("{REPORT}-MARK "))
+            .filter(|mark| mark.split_whitespace().any(|pair| pair == "hook_ran=1"));
         let mark_field = |name: &str| -> Option<u128> {
             mark?
                 .split_whitespace()
