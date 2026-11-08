@@ -649,7 +649,7 @@ impl Device {
     ) -> Result<T, Error> {
         loop {
             let device = self.current();
-            match call(&*device) {
+            match call(&device) {
                 Err(refused) if device.lost_under(&refused) => continue,
                 answer => return answer,
             }
@@ -680,7 +680,7 @@ impl Device {
                 return Err(refused);
             }
             let _runs = RunsOn::enter(device.shared());
-            return call(&*device, taken);
+            return call(&device, taken);
         }
     }
 
