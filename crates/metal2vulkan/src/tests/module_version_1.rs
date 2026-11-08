@@ -458,7 +458,7 @@ fn symbol_table(w: &mut BitWriter, values: &Values, blocks: &[u64]) {
         assert_eq!(w.abbrev(ops), 8 + i as u64, "after the four of BLOCKINFO");
     }
     let mut bodies = blocks.iter();
-    let mut entries = Vec::new();
+    let mut entries: Vec<(u32, Vec<u64>)> = Vec::new();
     for (id, (name, defined)) in values.iter().enumerate() {
         let body = (*defined == Some(true)).then(|| *bodies.next().expect("a block per body"));
         if name.is_empty() {
