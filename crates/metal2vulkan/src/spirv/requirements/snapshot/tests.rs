@@ -2,7 +2,7 @@
 //! arithmetic and an output qualifies, directly, through a variable or through a call; one that
 //! reaches a derivative, a branch, an implicit sample, an integer divisor or a dynamic index, or a
 //! store elsewhere, directly, through a variable, or into and out of a callee, does not; nor does a
-//! module with an interlock.
+//! module with an interlock. A branch around a demote alone qualifies.
 
 use super::snapshot_textures;
 use crate::budget::{Budget, Meter};
@@ -54,13 +54,27 @@ enum Sink {
     DynamicIndex,
     /// The vector of a dynamic extract at a constant index.
     DynamicVector,
+    /// Compared, and the invocation demoted where the comparison holds.
+    DemoteGuard,
+    /// Compared, and the invocation demoted in the else arm of the comparison.
+    DemoteInElse,
+    /// Compared, and the invocation demoted and the output written where the comparison holds.
+    DemoteAndStore,
+    /// Compared, the invocation demoted where the comparison holds, and the arms' different values
+    /// merged.
+    DemoteMergingValues,
+}
+
+/// Whether lane 0 of `v` is above one half.
+fn above_half(f: &mut FunctionBuilder<'_>, v: Value, f32_: TypeId) -> Value {
+    let x = f.composite_extract(v, &[0]).expect("x");
+    let half = scalar(f, f32_, u64::from(0.5f32.to_bits()));
+    f.binary(BinOp::FOrdGreaterThan, x, half).expect("compare")
 }
 
 /// Branch on whether lane 0 of `v` is above one half.
 fn branch_on(f: &mut FunctionBuilder<'_>, v: Value, f32_: TypeId) {
-    let x = f.composite_extract(v, &[0]).expect("x");
-    let half = scalar(f, f32_, u64::from(0.5f32.to_bits()));
-    let c = f.binary(BinOp::FOrdGreaterThan, x, half).expect("compare");
+    let c = above_half(f, v, f32_);
     let arm: crate::spirv::builder::constructs::ArmFn<'_, ()> =
         Box::new(|_, _| Ok(ArmEnd::FallThrough(Vec::new())));
     f.if_(&mut (), c, arm, None).expect("if");
@@ -276,6 +290,40 @@ fn module(sink: Sink) -> TypedModule {
             f.vector_extract_dynamic(texel, index).expect("lane");
             texel
         }
+        Sink::DemoteGuard | Sink::DemoteAndStore => {
+            let c = above_half(&mut f, texel, f32_);
+            let store = sink == Sink::DemoteAndStore;
+            let arm: crate::spirv::builder::constructs::ArmFn<'_, ()> = Box::new(move |f, _| {
+                f.demote()?;
+                if store {
+                    f.store(cv, texel, MemAccess::default())?;
+                }
+                Ok(ArmEnd::FallThrough(Vec::new()))
+            });
+            f.if_(&mut (), c, arm, None).expect("if");
+            texel
+        }
+        Sink::DemoteInElse | Sink::DemoteMergingValues => {
+            let c = above_half(&mut f, texel, f32_);
+            let merging = sink == Sink::DemoteMergingValues;
+            let other = f.binary(BinOp::FAdd, texel, texel).expect("sum");
+            let kept: crate::spirv::builder::constructs::ArmFn<'_, ()> = Box::new(move |_, _| {
+                Ok(ArmEnd::FallThrough(match merging {
+                    true => vec![other],
+                    false => Vec::new(),
+                }))
+            });
+            let demoted: crate::spirv::builder::constructs::ArmFn<'_, ()> =
+                Box::new(move |f, _| {
+                    f.demote()?;
+                    Ok(ArmEnd::FallThrough(match merging {
+                        true => vec![texel],
+                        false => Vec::new(),
+                    }))
+                });
+            let merged = f.if_(&mut (), c, kept, Some(demoted)).expect("if");
+            merged.0.first().copied().unwrap_or(texel)
+        }
         Sink::SampleCoordinate => {
             let si = f.load(uv, MemAccess::default()).expect("u");
             let xy = f.vector_shuffle(texel, texel, &[0, 1]).expect("xy");
@@ -301,7 +349,9 @@ fn module(sink: Sink) -> TypedModule {
 /// directly, through a variable or of a call's result, a branch on it, in the entry or in a callee
 /// it reaches as an argument, through a pointer argument's memory or back out of it, an implicit
 /// sample at it, a divisor, a signed dividend beside `-1`, or a dynamic index leaves the slot out,
-/// as does an interlock anywhere in the module. The analysis releases every charge.
+/// as does an interlock anywhere in the module. A branch on it that only decides whether the
+/// invocation demotes itself, in either arm, qualifies; one whose arm also writes, or whose arms'
+/// values merge apart, does not. The analysis releases every charge.
 #[test]
 fn only_values_no_helper_can_pass_on_qualify() {
     for (sink, qualifies) in [
@@ -323,6 +373,10 @@ fn only_values_no_helper_can_pass_on_qualify() {
         (Sink::SignedDividendByMinusOne, false),
         (Sink::DynamicIndex, false),
         (Sink::DynamicVector, true),
+        (Sink::DemoteGuard, true),
+        (Sink::DemoteInElse, true),
+        (Sink::DemoteAndStore, false),
+        (Sink::DemoteMergingValues, false),
     ] {
         let mut meter = Meter::new(&Budget::default());
         let slots = snapshot_textures(&module(sink), &[0], &mut meter).expect("analysis");

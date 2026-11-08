@@ -67,7 +67,8 @@
 //!   executed" (Memory Model): the second draw executes no copy, and the first no read of `S`. A
 //!   helper invocation copies nothing and reads nothing; its codes of the slot are 0, which reaches
 //!   no fragment's result, since no value read from the slot reaches a derivative, a quad or
-//!   subgroup operation or a branch, nor an integer divisor or a dynamic component index, whose
+//!   subgroup operation or a branch (but one that only decides whether the invocation demotes
+//!   itself, which a helper already is), nor an integer divisor or a dynamic component index, whose
 //!   behavior SPIR-V leaves undefined at some values (`spirv::requirements::snapshot_textures`):
 //!   "Stores and atomics performed by helper invocations must not have any effect on memory except
 //!   for the Function, Private and Output storage classes" (Helper Invocations).

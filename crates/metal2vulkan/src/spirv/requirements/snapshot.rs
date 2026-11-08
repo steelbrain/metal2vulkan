@@ -31,7 +31,12 @@
 //! - a derivative, a sample, gather or level-of-detail query of any image, a subgroup or quad
 //!   operation, an atomic, an image write or texel pointer, a ray query, a mesh output count, or a
 //!   store to any other storage class;
-//! - a conditional branch, a switch, or the entry's returned value;
+//! - a conditional branch, a switch, or the entry's returned value, but for a branch that only
+//!   decides whether the invocation demotes itself (`if (c) discard_fragment();` at MSL 2.3 or
+//!   later on a profile with demote): one arm holds `OpDemoteToHelperInvocation` alone and goes on
+//!   to the other, where both paths meet with the same values, so a helper, which is one already,
+//!   takes either path to the same state ("is not considered a flow control instruction",
+//!   `OpDemoteToHelperInvocation`);
 //! - the divisor of an integer division or remainder, the dividend of a signed one whose divisor
 //!   is not a constant without a `-1` lane, or a dynamic vector component index.
 //!
@@ -53,9 +58,9 @@
 use crate::budget::Meter;
 use crate::error::Error;
 use crate::pipeline::sym::ResourceKind;
-use crate::spirv::ids::Value;
+use crate::spirv::ids::{BlockId, Value};
 use crate::spirv::ir::{
-    BinOp, ConstKind, Constant, ExecModel, GlobalKind, Inst, StorageClass, Terminator, Type,
+    BinOp, ConstKind, Constant, ExecModel, GlobalKind, Inst, Phi, StorageClass, Terminator, Type,
     TypedModule, UnOp, ValueOrigin,
 };
 
@@ -279,6 +284,9 @@ fn reach(m: &TypedModule, own: &[u32], n: usize) -> Result<Vec<u32>, Error> {
                 }
             }
             match &b.term {
+                // A branch whose only effect is whether the invocation demotes itself reaches
+                // nothing a helper's value can change.
+                Terminator::CondBranch { t, f, .. } if demote_guard(m, at, *t, *f) => {}
                 Terminator::CondBranch { cond: v, .. } | Terminator::Switch { sel: v, .. } => {
                     bad |= get(&mask, *v)
                 }
@@ -411,6 +419,47 @@ fn copies_alone(m: &TypedModule, slots: &[u32], n: usize) -> Result<bool, Error>
         }
     }
     Ok(!elsewhere && fetches.iter().all(|&f| f == 1))
+}
+
+/// Whether a conditional branch of block `from` to `t` or `f` only decides whether the invocation
+/// demotes itself (`if (c) discard_fragment();` at MSL 2.3 or later on a profile with demote,
+/// `lower::fragment::discard`): each target is the block both paths meet at, or a block with no
+/// phi that branches on to it holding nothing or `OpDemoteToHelperInvocation` alone, at least one
+/// of them the demote, and every phi of the meeting block takes the same value from both paths.
+/// Both paths then meet with the same values, and a helper invocation, which is one already, is
+/// no different for the demote: "Demote this fragment shader invocation to a helper invocation",
+/// which "is not considered a flow control instruction" (`OpDemoteToHelperInvocation`). Neither
+/// arm holds a derivative, quad or subgroup operation, loop or undefined behavior a helper's path
+/// could reach.
+fn demote_guard(m: &TypedModule, from: usize, t: BlockId, f: BlockId) -> bool {
+    let blocks = m.blocks();
+    // Where a path through `arm` meets the other: the block it reaches, the block it reaches it
+    // from, and whether it demotes on the way.
+    let path = |arm: BlockId| -> Option<(usize, usize, bool)> {
+        let block = blocks.get(arm.index())?;
+        let demotes_alone =
+            (block.insts.iter()).all(|n| matches!(n.inst, Inst::DemoteToHelperInvocation));
+        let forwards = block.phis.is_empty() && block.merge.is_none() && demotes_alone;
+        match block.term {
+            Terminator::Branch(to) if forwards => {
+                Some((to.index(), arm.index(), !block.insts.is_empty()))
+            }
+            _ => Some((arm.index(), from, false)),
+        }
+    };
+    let (Some((to, a, demotes_a)), Some((other, b, demotes_b))) = (path(t), path(f)) else {
+        return false;
+    };
+    let edge = |phi: &Phi, p: usize| {
+        (phi.incoming.iter())
+            .find(|(_, at)| at.index() == p)
+            .map(|(v, _)| *v)
+    };
+    to == other
+        && a != b
+        && (demotes_a || demotes_b)
+        && (blocks.get(to))
+            .is_some_and(|meet| (meet.phis.iter()).all(|phi| edge(phi, a) == edge(phi, b)))
 }
 
 /// Add `reach` to `table[v]`; whether it grew.
