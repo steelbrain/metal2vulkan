@@ -939,8 +939,9 @@ driver's. Each is open work.
   creation call, and every kept block of a memory type goes before a block of that type fails to be
   made. The cost is that memory, held from a working set's dip until 10 s after it, which other
   processes cannot use meanwhile: up to 2 GiB in each of the RTX 5080 Laptop GPU's heaps (its 16
-  GiB of VRAM and its system heap), 512 MiB on a card of 4 GiB, about 1.4 GiB and 700 MiB in a
-  Radeon 780M's heaps of 11 and 5.5 GiB (RADV), and 2 GiB, wired, in the M3 Max's one heap. No
+  GiB of VRAM and its system heap), 512 MiB on a card of 4 GiB, 2 GiB across a Radeon 780M's
+  heaps of 11 and 5.5 GiB (RADV), whose unified memory makes them one budget (`memory.rs`'s
+  `kept_budget`), and 2 GiB, wired, in the M3 Max's one heap. No
   switch: no answer of Metal's changes. On the RTX 5080 Laptop GPU (NVIDIA 615.71.09), a clip
   start's burst (`tests::clip_bursts`: 3062 buffers, 1175 textures and 34 `Private` exportable 4K
   NV12 pictures made at once while another thread commits a fill every 2 ms, three clips 3 s apart,
@@ -969,8 +970,13 @@ driver's. Each is open work.
   another allocation's device-local memory held median frames of 1.31 and 1.29 ms (frames 300 and
   600) with its placements device-local and 1.87 and 1.30 ms in the system heap's types, and the
   same scroll alone 2.87 and 4.87 ms against 1.33 and 1.31 ms; no eviction traced in any
-  (`amdgpu_bo_move`). Devices whose every type is device-local (ANV, MoltenVK, lavapipe) and those
-  without unified memory place as before. No switch: no answer of Metal's changes. Not announced.
+  (`amdgpu_bo_move`). The system heap is the smaller of the two (5.53 GiB), and with a budget of
+  kept empty blocks per heap, its eighth (707 MiB) kept all but 3 of a video clip's 16 blocks
+  (`tests::clip_bursts`): each later clip made 4 again and took 237 and 245 ms to make where it
+  had taken 132 and 126 ms with the placements device-local; with unified memory the heaps keep
+  one budget of an eighth of them all (the row above), which keeps every block. Devices whose
+  every type is device-local (ANV, MoltenVK, lavapipe) and those without unified memory place as
+  before. No switch: no answer of Metal's changes. Not announced.
 - **Making and releasing an event on NVIDIA take 0.1 to 0.6 ms of the calling thread.**
   `new_event` and `new_shared_event` each make one timeline semaphore (`vkCreateSemaphore`,
   `event.rs`), and an event's release destroys it where it goes. On the RTX 5080 Laptop GPU both

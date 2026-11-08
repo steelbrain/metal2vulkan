@@ -1,6 +1,6 @@
 use crate::memory::{
-    candidates, host_cached, host_cached_placement, host_incoherent, overflow_candidates,
-    MemoryClass, Pool, KEPT_EMPTY_BLOCKS, KEPT_EMPTY_FOR,
+    candidates, host_cached, host_cached_placement, host_incoherent, kept_budget,
+    overflow_candidates, MemoryClass, Pool, KEPT_EMPTY_BLOCKS, KEPT_EMPTY_BYTES, KEPT_EMPTY_FOR,
 };
 use ash::vk;
 use std::time::Instant;
@@ -546,6 +546,26 @@ fn a_block_past_the_two_is_kept_where_the_heap_s_budget_spares_its_bytes() {
     taken.sort_unstable();
     assert_eq!(taken, ["fifth", "second", "third"]);
     assert_eq!(pool.kept_bytes(), 0);
+}
+
+/// A heap's budget of kept empty blocks is an eighth of it, at most `KEPT_EMPTY_BYTES`; with
+/// unified memory, one budget of an eighth of every heap: a Radeon 780M's (RADV) two heaps of
+/// system memory, 5660 and 11319 MiB, keep 707 and 1414 MiB apart, and 2 GiB as one.
+#[test]
+fn unified_memory_keeps_one_budget_for_its_heaps() {
+    const MIB: u64 = 1 << 20;
+    let radeon = [5660 * MIB, 11319 * MIB];
+    assert_eq!(kept_budget(&radeon, 0, false), 5660 * MIB / 8);
+    assert_eq!(kept_budget(&radeon, 1, false), 11319 * MIB / 8);
+    for heap in 0..2 {
+        assert_eq!(kept_budget(&radeon, heap, true), KEPT_EMPTY_BYTES);
+    }
+    // A discrete card's heaps are apart: an RTX 5080 Laptop GPU's 16 GiB of VRAM keeps the cap.
+    let discrete = [16 << 30, 47 << 30];
+    assert_eq!(kept_budget(&discrete, 0, false), KEPT_EMPTY_BYTES);
+    // One heap of 4 GiB, unified or not: an eighth.
+    assert_eq!(kept_budget(&[4 << 30], 0, true), 512 * MIB);
+    assert_eq!(kept_budget(&[4 << 30], 0, false), 512 * MIB);
 }
 
 /// A dedicated block that empties is kept where its bytes fit in the heap's spare and its memory

@@ -11,7 +11,8 @@
 //!   a pooled one while fewer than [`KEPT_EMPTY_BLOCKS`] empty ones are kept in its pool, and
 //!   past that, as a dedicated one of the runtime's own memory, while the empty blocks kept in its
 //!   heap stay within the heap's budget ([`Memory::kept_budget`]: an eighth of the heap, at most
-//!   [`KEPT_EMPTY_BYTES`]); else it is freed. A kept dedicated block takes the next dedicated
+//!   [`KEPT_EMPTY_BYTES`]; with unified memory, where every heap is the same memory, an eighth of
+//!   them all, which the empty blocks of every heap count against); else it is freed. A kept dedicated block takes the next dedicated
 //!   placement of its pool that its size fits ([`Pool::place_dedicated`]). So a working set that
 //!   dips and comes back makes and frees no block for it: a frame's buffers, returned as its
 //!   command buffer completes, and a video clip's buffers, textures and decoded pictures, released
@@ -113,6 +114,22 @@ pub(super) const KEPT_EMPTY_BYTES: u64 = 2 << 30;
 /// The share of its heap's size a heap keeps of empty blocks, at most [`KEPT_EMPTY_BYTES`]: an
 /// eighth ([`Memory::kept_budget`]).
 const KEPT_EMPTY_SHARE: u64 = 8;
+
+/// The most bytes of empty blocks heap `heap` of heaps of `sizes` keeps for reuse: an eighth of the
+/// heap, at most [`KEPT_EMPTY_BYTES`]. With unified memory (`unified`) every heap is the same
+/// memory, and the budget is one: an eighth of all of them, at most [`KEPT_EMPTY_BYTES`], which the
+/// empty blocks of every heap count against ([`Memory::kept_budget`]). A Radeon 780M (RADV) lists
+/// its system memory as two heaps, 11.05 GiB device-local and 5.53 GiB not: an eighth of the
+/// second, 707 MiB, which its `Private` placements take first (`candidates`), left 3 of a video
+/// clip's 16 blocks of 64 MiB to be freed at each clip's end and each later clip made 4 again
+/// (`tests::clip_bursts`), where one budget of 2 GiB keeps them all.
+pub(super) fn kept_budget(sizes: &[u64], heap: usize, unified: bool) -> u64 {
+    let size = match unified {
+        true => sizes.iter().sum(),
+        false => sizes.get(heap).copied().unwrap_or(0),
+    };
+    (size / KEPT_EMPTY_SHARE).min(KEPT_EMPTY_BYTES)
+}
 
 /// How long a kept empty block stays empty before it is freed, but its pool's last pooled one
 /// ([`Pool::stale`]): a frame's dip comes back well within it, and a guest's next video clip
@@ -1603,23 +1620,24 @@ impl Memory {
         placement
     }
 
-    /// The most bytes of empty blocks heap `heap` keeps for reuse ([`Pool::release`]): an eighth
-    /// of the heap, at most [`KEPT_EMPTY_BYTES`]. Its pools' first [`KEPT_EMPTY_BLOCKS`] empty
-    /// pooled blocks are kept whatever it says, and count against it.
+    /// The most bytes of empty blocks heap `heap` keeps for reuse ([`Pool::release`],
+    /// [`kept_budget`]). Its pools' first [`KEPT_EMPTY_BLOCKS`] empty pooled blocks are kept
+    /// whatever it says, and count against it.
     fn kept_budget(&self, heap: usize) -> u64 {
         #[cfg(test)]
         if let Some(budget) = self.kept_budget_stand_in {
             return budget;
         }
-        let size = self.heaps.get(heap).map_or(0, |&(size, _)| size);
-        (size / KEPT_EMPTY_SHARE).min(KEPT_EMPTY_BYTES)
+        let sizes: Vec<u64> = self.heaps.iter().map(|&(size, _)| size).collect();
+        kept_budget(&sizes, heap, self.unified)
     }
 
-    /// The bytes of the empty blocks heap `heap`'s pools keep.
+    /// The bytes of the empty blocks kept against heap `heap`'s budget: those of its pools, and
+    /// with unified memory those of every heap's ([`kept_budget`]).
     fn kept_in_heap(&self, heap: usize) -> u64 {
         let count = self.types.len();
         (self.pools.iter().enumerate())
-            .filter(|&(at, _)| self.types[at % count].heap_index as usize == heap)
+            .filter(|&(at, _)| self.unified || self.types[at % count].heap_index as usize == heap)
             .map(|(_, pool)| pool.kept_bytes())
             .sum()
     }
