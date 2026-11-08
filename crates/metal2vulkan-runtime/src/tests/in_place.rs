@@ -254,6 +254,8 @@ fn every_shadow_cause_names_itself() {
         ShadowCause::CheckFailed(PagesClass::Pointer, Access::NarrowWrites, inside),
         ShadowCause::Unchecked(PagesClass::DmaBuf, Access::NarrowBufferWrites, on),
         ShadowCause::StoreWidth(3),
+        ShadowCause::Unchecked(PagesClass::Pooled, Access::Renders, inside),
+        ShadowCause::LinearCost(1 << 20),
     ];
     let words: Vec<String> = causes.iter().map(ShadowCause::words).collect();
     for (at, word) in words.iter().enumerate() {
@@ -275,6 +277,8 @@ fn every_shadow_cause_names_itself() {
     assert!(words[12].contains("share a line") && words[13].contains("share no line"));
     assert!(words[14].contains("over a buffer's rows, beside their padding"));
     assert!(words[15].contains("not answered") && words[15].contains("over a buffer's rows"));
+    assert!(words[19].contains("pooled memory"));
+    assert!(words[20].contains("1048576 bytes") && words[20].contains("slower"));
 }
 
 /// A driver identity, every field set.

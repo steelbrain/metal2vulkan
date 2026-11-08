@@ -12386,6 +12386,7 @@ variant	metal2vulkan-runtime::TextureProblem::ZeroExtent	ZeroExtent
 variant	metal2vulkan-runtime::TextureShadowReason::BytesBetweenRows	BytesBetweenRows
 variant	metal2vulkan-runtime::TextureShadowReason::CheckFailed	CheckFailed { access: InPlaceAccess, row_ends: InPlaceRowEnds }
 variant	metal2vulkan-runtime::TextureShadowReason::DeviceCopy	DeviceCopy
+variant	metal2vulkan-runtime::TextureShadowReason::LinearCost	LinearCost { bytes: u64 }
 variant	metal2vulkan-runtime::TextureShadowReason::Mipmapped	Mipmapped { levels: u32 }
 variant	metal2vulkan-runtime::TextureShadowReason::PastLength	PastLength
 variant	metal2vulkan-runtime::TextureShadowReason::Policy	Policy

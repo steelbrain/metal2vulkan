@@ -3056,6 +3056,9 @@ impl Counters {
             C::CheckFailed(..) => &self.host_texture_shadows_check_failed,
             C::Unchecked(..) => &self.host_texture_shadows_unchecked,
             C::Refused(refusal, _) => &self.host_texture_shadows_refused[refusal.index()],
+            // A texture over the runtime's pooled memory, no texture over host pages: counted as
+            // a shadow (`shadowed_textures`) alone.
+            C::LinearCost(_) => return,
         };
         counter.fetch_add(1, Ordering::Relaxed);
         if renders {

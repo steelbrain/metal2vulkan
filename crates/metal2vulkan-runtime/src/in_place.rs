@@ -486,7 +486,25 @@ pub(crate) enum ShadowCause {
     Unchecked(PagesClass, Access, RowEnds),
     /// The device makes no image over its texels as Metal lays them out: why, and the words.
     Refused(Refusal, String),
+    /// Over the runtime's pooled memory ([`PagesClass::Pooled`]), its rows to their pitch take
+    /// this many bytes, past [`POOLED_PITCHED_BYTES`]: a `DRM_FORMAT_MOD_LINEAR` image of them
+    /// renders and samples slower than the shadow's own image with its copies.
+    LinearCost(u64),
 }
+
+/// The most bytes (a texture's rows to their pitch) a texture over the runtime's pooled memory
+/// takes a `DRM_FORMAT_MOD_LINEAR` image at Metal's pitch for ([`PagesClass::Pooled`]); past it
+/// the texture is a shadow ([`ShadowCause::LinearCost`]). Over `Private` memory no CPU reads the
+/// bytes and the device's check judges the image's first move, so both forms give the same
+/// answer, and the bound chooses between two speeds: a shadow's copy per command buffer that
+/// writes the texture costs a fixed few microseconds, which a small texture's linear image saves,
+/// and a large texture's linear image renders and samples slower than the shadow's optimal one.
+/// Measured on an Iris Xe (ANV, Mesa 26.2.6), each frame a pass that clears and stores every
+/// texture and a draw that reads each whole: textures of 6-47 KB each saved 3.5-4.3 us a texture
+/// a frame in place (15 of 172x67 at 704-byte rows: 425.6 us a frame as shadows, 369.6 in place),
+/// and textures of 1.4 MB and more lost (4 of 820x410 at 3328: 564.1 us as shadows, 609.2 in
+/// place; 2 of 1640x820 at 6592: 826.2 and 977.1). The same bound on every device.
+pub(crate) const POOLED_PITCHED_BYTES: u64 = 256 << 10;
 
 /// Why the device makes no image in place over a texture's texels.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -575,6 +593,11 @@ impl ShadowCause {
                 rows.words()
             ),
             ShadowCause::Refused(_, why) => why.clone(),
+            ShadowCause::LinearCost(bytes) => format!(
+                "its rows take {bytes} bytes to their pitch, past the {POOLED_PITCHED_BYTES} past \
+                 which a DRM_FORMAT_MOD_LINEAR image at Metal's pitch renders and samples slower \
+                 than the shadow's own image with its copies"
+            ),
         }
     }
 }

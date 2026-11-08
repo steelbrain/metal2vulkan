@@ -2887,8 +2887,10 @@ impl Device {
     /// one plane at Metal's pitch (`VkImageDrmFormatModifierExplicitCreateInfoEXT`), no external
     /// memory (`dma_buf::ModifierMemory::Own`), unbound and made `UNDEFINED`
     /// (`Device::pitched_image`), for a texture of Metal `usage` whose texels the device's own
-    /// linear image lays out otherwise: where the device makes such images, and its policy and
-    /// its check of the pooled class ([`PagesClass::Pooled`]) take each access the usage takes
+    /// linear image lays out otherwise: where the device makes such images, the texture's rows to
+    /// their pitch take no more than `in_place::POOLED_PITCHED_BYTES` (past it, a linear image
+    /// renders and samples slower than the shadow), and its policy and its check of the pooled
+    /// class ([`PagesClass::Pooled`]) take each access the usage takes
     /// for texels that lie in its lines as these do (`in_place::in_place`; a pending verdict
     /// starts the check, and the texture is a shadow meanwhile); the check's own textures whatever
     /// the verdicts. Why not.
@@ -2921,6 +2923,11 @@ impl Device {
             )));
         }
         if !in_place::checking() {
+            let layout = &texels.layout;
+            let bytes = layout.slice_pitch * (layout.slices - 1) + layout.row_pitch * layout.rows;
+            if bytes > in_place::POOLED_PITCHED_BYTES {
+                return Ok(Err(ShadowCause::LinearCost(bytes)));
+            }
             let line = self.shared().in_place.line();
             let pages = (
                 PagesClass::Pooled,

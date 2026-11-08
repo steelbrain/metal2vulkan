@@ -1610,7 +1610,11 @@ bound.
   does in the buffer's memory, holding no byte past them, and no `DRM_FORMAT_MOD_LINEAR` image at
   Metal's pitch serves (the device makes none, its policy is `HostPageTexturePolicy::Shadow`, or
   its check of such images over its pooled memory has not passed for the texture's accesses:
-  pending, failed or unchecked, as over host pages); or the buffer is over the caller's
+  pending, failed or unchecked, as over host pages); past a bound in bytes of its rows to their
+  pitch, the same on every device, such a texture stays a shadow too
+  (`TextureShadowReason::LinearCost`): there a linear image renders and samples slower than the
+  shadow's own image with its copies, and over the device's own memory both give the same answer;
+  or the buffer is over the caller's
   `VkBuffer`, whose memory backs no image of the runtime's; or it is a tiled texture of more than
   one level (`Buffer::new_tiled_texture`), over any buffer: no image over the buffer's memory holds
   levels past the first, so one image of its own holds every level, its first level's texels
