@@ -137,8 +137,8 @@ fn frames(device: &Device, queue: &CommandQueue, encode: &dyn Fn(&CommandBuffer)
 
 /// A command buffer's frame over `texture`: a pass that clears it and stores, where `write`, then
 /// a blit of it into `copy`.
-fn frame(texture: &Texture, copy: &Texture, write: bool) -> impl Fn(&CommandBuffer) + '_ {
-    let copy = copy.clone();
+fn frame(texture: &Texture, copy: &Texture, write: bool) -> impl Fn(&CommandBuffer) {
+    let (texture, copy) = (texture.clone(), copy.clone());
     move |command_buffer: &CommandBuffer| {
         if write {
             let mut pass = RenderPassDescriptor::new();
@@ -150,7 +150,7 @@ fn frame(texture: &Texture, copy: &Texture, write: bool) -> impl Fn(&CommandBuff
             encoder.end_encoding().unwrap();
         }
         let mut blit = command_buffer.blit_command_encoder().unwrap();
-        blit.copy_texture(texture, &copy).unwrap();
+        blit.copy_texture(&texture, &copy).unwrap();
         blit.end_encoding().unwrap();
     }
 }
