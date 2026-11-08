@@ -27,9 +27,11 @@
 //! A second bench runs the consumer's three orders over RAM in 2 MiB pages on a device made with
 //! the options a consumer (a VMM) makes its device with ([`consumer_device`]), in whichever build
 //! it is compiled in, a debug build's checks included: each slow making also lists the driver's
-//! messages that reached the sink while it ran, and each order the messages of all its makings.
-//! Both are ignored: run them with `cargo test -p metal2vulkan-runtime --lib host_ram_window_bench
-//! -- --ignored --nocapture` under `--cfg m2v_gpu`, in release (`--release`) and in debug.
+//! messages that reached the sink while it ran, and each order the messages of all its makings. A
+//! third runs the same on a device made with none of those options, with each alone, and with all
+//! of them, so that a wait the consumer's device shows names the option it follows. All three are
+//! ignored: run them with `cargo test -p metal2vulkan-runtime --lib host_ram_window_bench --
+//! --ignored --nocapture` under `--cfg m2v_gpu`, in release (`--release`) and in debug.
 
 use super::blit_holds::Scratch;
 use super::host_ram_device::{ahead_device, fresh_ram_in, gate, itself, resolver, RamPages};
@@ -219,15 +221,46 @@ fn delivery_time(count: u32) -> Duration {
     took
 }
 
-/// A device of the cfg's kind made with the options a consumer (a VMM) makes its device with, its
-/// shader cache in `cache`; `None` where it imports no host memory. The options: a message sink at
-/// `Info`, which turns on `VK_EXT_debug_utils` (whose messenger asks the driver for its warnings
-/// and errors; the sink's severity filters the runtime's own messages) and keeps each message it
-/// hears in `heard` ([`hearing`]); GPU times from the host's clock; a shader cache on disk; a
-/// video-decode queue beside the device's own, one queue held back, and the video-decode extensions
-/// where the device has them. The consumer also asks for its windows' instance extensions, which
-/// this device leaves out.
-fn consumer_device(cache: &Path, heard: &Heard) -> Option<Device> {
+/// Which of a consumer's device options a device is made with ([`consumer_device`]).
+#[derive(Clone, Copy, Debug)]
+struct Parts {
+    /// A message sink at `Info`, which turns on `VK_EXT_debug_utils`.
+    sink: bool,
+    /// GPU times from the host's clock.
+    gpu_times_from_host: bool,
+    /// A video-decode queue beside the device's own, and one queue held back.
+    queues: bool,
+    /// The video-decode extensions where the device has them.
+    video_extensions: bool,
+}
+
+impl Parts {
+    /// Every option the consumer makes its device with.
+    const ALL: Parts = Parts {
+        sink: true,
+        gpu_times_from_host: true,
+        queues: true,
+        video_extensions: true,
+    };
+    /// None of them.
+    const NONE: Parts = Parts {
+        sink: false,
+        gpu_times_from_host: false,
+        queues: false,
+        video_extensions: false,
+    };
+}
+
+/// A device of the cfg's kind made with the options a consumer (a VMM) makes its device with, of
+/// them those `parts` names, its shader cache in `cache` (the default options keep one on disk
+/// too, in the per-user cache); `None` where it imports no host memory. The options: a message
+/// sink at `Info`, which turns on `VK_EXT_debug_utils` (whose messenger asks the driver for its
+/// warnings and errors; the sink's severity filters the runtime's own messages) and keeps each
+/// message it hears in `heard` ([`hearing`]); GPU times from the host's clock; a video-decode queue
+/// beside the device's own and one queue held back; and the video-decode extensions where the
+/// device has them. The consumer also asks for its windows' instance extensions, which this
+/// device leaves out.
+fn consumer_device(cache: &Path, heard: &Heard, parts: Parts) -> Option<Device> {
     let sink = MessageSink::new(hearing(heard));
     let video = [
         "VK_KHR_video_queue",
@@ -246,14 +279,20 @@ fn consumer_device(cache: &Path, heard: &Heard) -> Option<Device> {
                 DeviceKind::Virtual,
             ],
         },
-        messages: Some(sink.with_least_severity(MessageSeverity::Info)),
-        gpu_times_from_host: true,
+        messages: (parts.sink).then(|| sink.with_least_severity(MessageSeverity::Info)),
+        gpu_times_from_host: parts.gpu_times_from_host,
         shader_cache: ShaderCacheOptions::in_directory(cache),
-        extra_queues: vec![ash::vk::QueueFlags::VIDEO_DECODE_KHR],
-        reserved_queues: 1,
-        optional_device_extensions: (video.iter())
-            .map(|&name| CString::new(name).unwrap())
-            .collect(),
+        extra_queues: match parts.queues {
+            true => vec![ash::vk::QueueFlags::VIDEO_DECODE_KHR],
+            false => Vec::new(),
+        },
+        reserved_queues: u32::from(parts.queues),
+        optional_device_extensions: match parts.video_extensions {
+            true => (video.iter())
+                .map(|&name| CString::new(name).unwrap())
+                .collect(),
+            false => Vec::new(),
+        },
         ..DeviceOptions::default()
     };
     let device = Device::system_default_with(&options).unwrap();
@@ -416,7 +455,7 @@ fn host_ram_window_bench_with_a_consumer_s_options() {
     let scratch = Scratch::new("window-bench");
     let heard = Heard::default();
     let made = Instant::now();
-    let Some(device) = consumer_device(&scratch.0, &heard) else {
+    let Some(device) = consumer_device(&scratch.0, &heard, Parts::ALL) else {
         return;
     };
     eprintln!(
@@ -441,4 +480,56 @@ fn host_ram_window_bench_with_a_consumer_s_options() {
         }
     }
     drop(device);
+}
+
+/// The consumer's orders over RAM in 2 MiB pages, [`REPEATS`] times each, on a device made with
+/// none of a consumer's options, with each alone ([`Parts`]; the video-decode queues and the
+/// video-decode extensions apart), and with all of them, each device dropped before the next is
+/// made, in the build it is compiled in: which option the takes that wait at a chunk's first
+/// import follow.
+#[test]
+#[ignore = "a benchmark"]
+fn host_ram_window_bench_by_consumer_option() {
+    let alone = |set: fn(&mut Parts)| {
+        let mut parts = Parts::NONE;
+        set(&mut parts);
+        parts
+    };
+    let variants = [
+        ("none", Parts::NONE),
+        ("sink", alone(|parts| parts.sink = true)),
+        (
+            "gpu times from host",
+            alone(|parts| parts.gpu_times_from_host = true),
+        ),
+        ("video queues", alone(|parts| parts.queues = true)),
+        (
+            "video extensions",
+            alone(|parts| parts.video_extensions = true),
+        ),
+        ("all", Parts::ALL),
+    ];
+    for (name, parts) in variants {
+        let scratch = Scratch::new("window-bench-option");
+        let heard = Heard::default();
+        let Some(device) = consumer_device(&scratch.0, &heard, parts) else {
+            return;
+        };
+        eprintln!(
+            "HOST-RAM-WINDOW-OPTION {name}: {parts:?} on {}, debug assertions {}",
+            device.name(),
+            cfg!(debug_assertions)
+        );
+        for repeat in 0..REPEATS {
+            for order in orders().into_iter().filter(|order| order.consumer) {
+                eprintln!(
+                    "HOST-RAM-WINDOW-OPTION {name}: {} in {:?} pages, repeat {repeat}",
+                    order.name,
+                    RamPages::Huge
+                );
+                run(&device, &order, RamPages::Huge, Some(&heard));
+            }
+        }
+        drop(device);
+    }
 }
