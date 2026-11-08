@@ -738,10 +738,14 @@ impl RamOnDevice {
             slot: span,
             ended: false,
         };
+        let started = Instant::now();
         // SAFETY: the span is pages of the RAM's ranges, which stay mapped, readable and
         // writable, while a chunk holds the RAM (`HostRam::new`).
         let made =
             unsafe { device.import_chunk(importer, &self.ram, span.span.clone(), Imported::Chunk) };
+        let took = started.elapsed().as_nanos();
+        (device.shared().counts)
+            .host_ram_chunk_import_took(u64::try_from(took).unwrap_or(u64::MAX));
         let chunk = match made {
             Ok(chunk) => Arc::new(chunk),
             Err(error) => {
@@ -808,21 +812,29 @@ impl RamOnDevice {
     /// chunk ([`RamOnDevice::run_alone`]: the device's thread asked for the chunk), held by the
     /// copy's command buffer until it completed; else the chunk's, made here or waited for
     /// ([`RamOnDevice::chunk`]). Each import's span lies in the
-    /// chunk's and holds every range it is given for.
+    /// chunk's and holds every range it is given for. With them, the time this thread waited for
+    /// the chunk's import (`WorkCounts::host_ram_copy_import_wait_nanos`): zero where it was made,
+    /// or the ranges were imported alone.
     pub(crate) fn for_copy(
         &self,
         device: &Device,
         importer: &Importer,
         slot: usize,
         ranges: &[Range<u64>],
-    ) -> Result<Vec<Arc<RamChunk>>, Error> {
+    ) -> Result<(Vec<Arc<RamChunk>>, Duration), Error> {
         let span = &self.slots[slot];
         if !self.plan.listed && self.take(slot) {
             self.wake.notify();
         }
         if let Some(chunk) = self.made(slot) {
-            return Ok(vec![chunk]);
+            return Ok((vec![chunk], Duration::ZERO));
         }
+        // The chunk's import, made here or waited for, and how long that took.
+        let waited = || {
+            let started = Instant::now();
+            let chunk = self.chunk(device, importer, slot, By::Object)?;
+            Ok((vec![chunk], started.elapsed()))
+        };
         let page = importer.page.max(1);
         let unordered = RuntimeDriverDefect::AliasedImportBlitsUnordered;
         let alone = self.wake.running.load(Ordering::Relaxed)
@@ -838,7 +850,7 @@ impl RamOnDevice {
             .collect();
         let few = runs.len() <= copy::MOST_ALONE;
         if !alone || !few || runs.contains(&span.span) {
-            return Ok(vec![self.chunk(device, importer, slot, By::Object)?]);
+            return waited();
         }
         let mut imports: Vec<Arc<RamChunk>> = Vec::with_capacity(runs.len());
         for run in runs {
@@ -849,12 +861,12 @@ impl RamOnDevice {
                 continue;
             }
             match self.run_alone(device, importer, slot, run) {
-                Ok(import) if !import.is_run() => return Ok(vec![import]),
+                Ok(import) if !import.is_run() => return Ok((vec![import], Duration::ZERO)),
                 Ok(import) => imports.push(import),
-                Err(_) => return Ok(vec![self.chunk(device, importer, slot, By::Object)?]),
+                Err(_) => return waited(),
             }
         }
-        Ok(imports)
+        Ok((imports, Duration::ZERO))
     }
 
     /// Chunk `slot`'s import where it is made; else an import of `run` (host pages inside it)

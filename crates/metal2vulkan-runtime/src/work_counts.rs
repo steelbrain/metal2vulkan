@@ -353,6 +353,9 @@ pub(crate) struct Counters {
     host_ram_copy_dispatches: AtomicU64,
     host_ram_copy_regions: AtomicU64,
     host_ram_chunks_imported: AtomicU64,
+    host_ram_chunk_import_nanos: AtomicU64,
+    host_ram_copy_import_waits: AtomicU64,
+    host_ram_copy_import_wait_nanos: AtomicU64,
     host_ram_dma_buf_imports: AtomicU64,
     host_ram_pointer_imports_failed: AtomicU64,
     host_ram_chunks_imported_ahead: AtomicU64,
@@ -2809,6 +2812,19 @@ impl Counters {
         (self.host_ram_chunks_imported).fetch_add(1, Ordering::Relaxed);
         (self.host_ram_chunk_bytes).fetch_add(bytes, Ordering::Relaxed);
         (self.host_ram_chunks_live).fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// The import of a chunk of a guest RAM took `nanos` nanoseconds, made or failed, by whoever
+    /// made it (`host_ram.rs`).
+    pub(crate) fn host_ram_chunk_import_took(&self, nanos: u64) {
+        (self.host_ram_chunk_import_nanos).fetch_add(nanos, Ordering::Relaxed);
+    }
+
+    /// A copy between a guest RAM and a buffer waited `nanos` nanoseconds on its encoding thread
+    /// for chunks' imports, made there or under way (`host_ram/copy.rs`).
+    pub(crate) fn host_ram_copy_waited(&self, nanos: u64) {
+        (self.host_ram_copy_import_waits).fetch_add(1, Ordering::Relaxed);
+        (self.host_ram_copy_import_wait_nanos).fetch_add(nanos, Ordering::Relaxed);
     }
 
     /// The device imported a chunk of a guest RAM, or an object's run inside one, as a dma-buf
@@ -6071,6 +6087,15 @@ pub struct WorkCounts {
     /// range each (its last fewer), each once, by the device's own thread ahead of the objects
     /// over it or by the first object made over it where that thread had not imported it.
     pub host_ram_chunks_imported: u64,
+    /// The nanoseconds those imports took, whoever made them (the device's thread, an object, a
+    /// copy), failed imports' included: each pins its chunk's pages for the device.
+    pub host_ram_chunk_import_nanos: u64,
+    /// Copies between a guest RAM and a buffer (`BlitCommandEncoder::copy_from_host_ram` and its
+    /// kin) whose encoding waited for a chunk's import: one it made, or one under way on another
+    /// thread, where the chunk was not imported and its bytes could not be imported alone.
+    pub host_ram_copy_import_waits: u64,
+    /// The nanoseconds those copies' encodings waited so.
+    pub host_ram_copy_import_wait_nanos: u64,
     /// The imports of guest RAM, chunks and objects' runs alike, made as one dma-buf each of the
     /// RAM's source (`HostRam::with_dma_buf`), not by their pointer: where the device's held
     /// pointer imports add to every submission's cost, or it refused the pointer.
@@ -7536,6 +7561,13 @@ impl Device {
             host_ram_copy_dispatches: counters.host_ram_copy_dispatches.load(Ordering::Relaxed),
             host_ram_copy_regions: counters.host_ram_copy_regions.load(Ordering::Relaxed),
             host_ram_chunks_imported: counters.host_ram_chunks_imported.load(Ordering::Relaxed),
+            host_ram_chunk_import_nanos: counters
+                .host_ram_chunk_import_nanos
+                .load(Ordering::Relaxed),
+            host_ram_copy_import_waits: counters.host_ram_copy_import_waits.load(Ordering::Relaxed),
+            host_ram_copy_import_wait_nanos: counters
+                .host_ram_copy_import_wait_nanos
+                .load(Ordering::Relaxed),
             host_ram_dma_buf_imports: counters.host_ram_dma_buf_imports.load(Ordering::Relaxed),
             host_ram_pointer_imports_failed: counters
                 .host_ram_pointer_imports_failed

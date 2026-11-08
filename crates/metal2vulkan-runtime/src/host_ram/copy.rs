@@ -94,6 +94,7 @@ use metal2vulkan::bind::{PagesCopy, PagesCopyModule};
 use std::collections::BTreeMap;
 use std::ops::Range;
 use std::sync::{Arc, OnceLock};
+use std::time::Duration;
 
 /// The unit of a copy's runs: whole 4 KiB pages at 4 KiB-aligned host addresses (a guest's page;
 /// every host page and every chunk is whole such pages).
@@ -727,8 +728,10 @@ impl BlitCommandEncoder {
         let touched = chunk_ranges(&pieces, MOST_RANGES);
         let mut imports: Vec<Arc<RamChunk>> = Vec::new();
         let mut of_chunk: BTreeMap<usize, Range<usize>> = BTreeMap::new();
+        let mut waited = Duration::ZERO;
         for (slot, ranges) in alone_ranges(&pieces) {
-            let made = ram.for_copy(&device, importer, slot, &ranges)?;
+            let (made, took) = ram.for_copy(&device, importer, slot, &ranges)?;
+            waited += took;
             if made
                 .iter()
                 .any(|import| import.span.end - import.span.start > range)
@@ -740,6 +743,10 @@ impl BlitCommandEncoder {
             let first = imports.len();
             imports.extend(made);
             of_chunk.insert(slot, first..imports.len());
+        }
+        if !waited.is_zero() {
+            let nanos = u64::try_from(waited.as_nanos()).unwrap_or(u64::MAX);
+            shared.counts.host_ram_copy_waited(nanos);
         }
         let in_imports: Option<Vec<Piece>> = (pieces.iter())
             .map(|piece| {

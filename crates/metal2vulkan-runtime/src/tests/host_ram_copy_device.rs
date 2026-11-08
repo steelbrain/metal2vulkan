@@ -6,7 +6,8 @@
 //!   lands in a `Shared` and a `Private` buffer as the CPU's view of the pages reads; a scatter
 //!   back writes each run's bytes and no other byte of the RAM. One dispatch per chunk the runs
 //!   touch, and each chunk imported by the copy where no object imported it (the device's
-//!   thread held back).
+//!   thread held back), the copy's encoding counted as waiting for those imports once, and a
+//!   copy over the imported chunks as waiting for none.
 //! - **The CPU's writes before the commit** are in a gather encoded before them, and a scatter's
 //!   bytes are in the pages once the command buffer completed.
 //! - **Ordered against a no-copy buffer over the same pages**, in one command buffer: a buffer
@@ -335,11 +336,24 @@ fn a_gather_and_a_scatter_move_every_runs_bytes_in_order() {
         2,
         "the copy imported the chunks no object had"
     );
+    // The copy's encoding waited for those imports, which it made itself (the thread held back),
+    // and the wait is counted once for the copy, with their time.
+    assert_eq!(
+        after.host_ram_copy_import_waits - before.host_ram_copy_import_waits,
+        1
+    );
+    let waited = after.host_ram_copy_import_wait_nanos - before.host_ram_copy_import_wait_nanos;
+    let took = after.host_ram_chunk_import_nanos - before.host_ram_chunk_import_nanos;
+    assert!(
+        took > 0 && waited >= took,
+        "{waited} ns waited, {took} ns importing"
+    );
     // Into a `Private` buffer, read back by a blit.
     let private = device
         .new_buffer(total, ResourceOptions::private())
         .unwrap();
     let back = shared(&device, total, |_| 0);
+    let before = device.work_counts();
     blit(&device, |encoder| {
         encoder
             .copy_from_host_ram(&ram, &twice, &private, 0)
@@ -351,6 +365,16 @@ fn a_gather_and_a_scatter_move_every_runs_bytes_in_order() {
     assert!(
         contents(&back) == gathered(&twice),
         "through a private buffer"
+    );
+    // The chunks imported, the copy waited for none.
+    let after = device.work_counts();
+    assert_eq!(
+        after.host_ram_copy_import_waits - before.host_ram_copy_import_waits,
+        0
+    );
+    assert_eq!(
+        after.host_ram_chunk_import_nanos - before.host_ram_chunk_import_nanos,
+        0
     );
     // A scatter back of new bytes, from byte 64 of its source: each run takes its bytes in
     // order, and no other byte of the RAM changes.
