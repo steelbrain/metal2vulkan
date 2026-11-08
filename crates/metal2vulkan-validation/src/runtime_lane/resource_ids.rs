@@ -116,8 +116,11 @@ pub(super) const DELAYED_DEALLOCATORS: [Degradation; 1] = [Degradation::HostDeal
 ///
 /// A texture the device made in place as an image that fits Metal's answer, where the image of
 /// its first route did not (`refit`: it moved `WorkCounts::heap_textures_refit`, the image's
-/// route [`refit_kind`] read) lies at Metal's answer as that route's image, in the driver's
-/// layout: it announces the route and `heap-texture-untiled-layout`.
+/// route [`refit_kind`] read) lies at Metal's answer as that route's image, and announces the
+/// route. These tests' textures are 2 x 2 texels, whose shorter side under 16 Metal keeps
+/// uncompressed in its tiles; `texture/heap.rs` refits such a texture only into a linear image
+/// that puts every element where those tiles do (`lies_in_metal_tiles`), so the heap's bytes are
+/// Metal's layout and no layout notice is announced.
 fn heap_texture_kinds(
     device: &Device,
     descriptor: &TextureDescriptor,
@@ -129,13 +132,16 @@ fn heap_texture_kinds(
         .metal_heap_texture_size_and_align(descriptor)
         .unwrap();
     if let Some(route) = refit {
+        assert!(
+            descriptor.width.min(descriptor.height) < 16,
+            "a refit texture Metal keeps uncompressed: {descriptor:?}"
+        );
         return forced(&[
             (
                 Degradation::HeapTextureLargerThanMetal,
                 metal.is_some_and(|metal| answer != metal),
             ),
             (route, true),
-            (Degradation::HeapTextureUntiledLayout, true),
         ]);
     }
     if tiled {
