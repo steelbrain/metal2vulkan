@@ -1041,7 +1041,7 @@ pub(super) struct Block {
 
 /// The external memory a placement's memory is, as an image bound in it names it
 /// ([`Memory::bound_memory`]).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum BoundMemory {
     /// Memory the device allocated with no export: an image bound in it names no handle type.
     Own,
@@ -1061,6 +1061,16 @@ pub(super) enum NoImage {
     /// It is memory the caller made and keeps (`Device::new_buffer_with_vk_buffer`), whose handle
     /// types the runtime does not know.
     Caller,
+}
+
+impl std::fmt::Debug for BoundMemory {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            BoundMemory::Own => f.write_str("Own"),
+            BoundMemory::External(handle) => write!(f, "External({:#x})", handle.as_raw()),
+            BoundMemory::NoImage(no) => write!(f, "NoImage({no:?})"),
+        }
+    }
 }
 
 impl NoImage {

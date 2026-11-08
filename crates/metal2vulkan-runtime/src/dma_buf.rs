@@ -1584,10 +1584,10 @@ impl Device {
         if !features.contains(memory.needs()) || dedicated_only {
             return Err(format!(
                 "its image format query refuses {} to a DRM_FORMAT_MOD_LINEAR image of {:?}, \
-                 or takes them in a dedicated allocation alone (features {:?})",
+                 or takes them in a dedicated allocation alone (features {:#x})",
                 memory.words(),
                 plan.format,
-                features
+                features.as_raw()
             ));
         }
         Ok(limits)
@@ -1626,12 +1626,23 @@ impl Device {
 /// the runtime's own, where a texture over the buffer lays its rows out at Metal's pitch
 /// (`texture.rs`'s `alias_image`): with no external memory, or exported as the handle type its
 /// record names (`memory.rs`'s `Memory::bound_memory`, `exported_memory.rs`).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum ModifierMemory {
     DmaBuf,
     Host,
     Own,
     Exported(vk::ExternalMemoryHandleTypeFlags),
+}
+
+impl std::fmt::Debug for ModifierMemory {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ModifierMemory::DmaBuf => f.write_str("DmaBuf"),
+            ModifierMemory::Host => f.write_str("Host"),
+            ModifierMemory::Own => f.write_str("Own"),
+            ModifierMemory::Exported(handle) => write!(f, "Exported({:#x})", handle.as_raw()),
+        }
+    }
 }
 
 impl ModifierMemory {
