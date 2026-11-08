@@ -219,7 +219,12 @@ dma-bufs of exactly the pages asked for, in order, split only at multiples of it
 the granule is less than the length (64 KiB on RADV of Mesa 26.2.4, 4 KiB on 26.0.8), several
 chunks are bound to one sparse buffer and must total the length rounded up to the granule: pad the
 last with a scratch page of your own, repeated. A texture's request takes one chunk, of the same
-file pieces the buffer's chunks hold there.
+file pieces the buffer's chunks hold there. A device that imports a dma-buf for a plain buffer but
+reports none for a sparse one asks with a granule of the whole length: one chunk, which one
+udmabuf must hold, else the object is refused. ANV of Mesa 26.2.6 on i915 is such a device: it
+takes a view of up to `list_limit` runs through its dma-buf, and refuses the pointer of a mapping
+of dma-bufs (`VK_ERROR_INVALID_EXTERNAL_HANDLE`), so a view of more runs, mapped through dma-bufs,
+is refused there; mapped from its files, its pointer is imported.
 
 On Linux, `udmabuf` makes such a dma-buf of the file pieces behind the pages: open `/dev/udmabuf`
 (the process needs read and write access to it) and issue `UDMABUF_CREATE_LIST` with one item per

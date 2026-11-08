@@ -284,7 +284,12 @@ impl HostMemory {
     /// (`Unsupported`, `HostMemory`) where the device imports no chunk or the source fails; chunks
     /// that break the source's contract are misuse (`Invalid`, `Problem::DmaBuf`). Measured: RADV
     /// refuses the pointer of `memfd` and other shared mappings and imports `udmabuf`s of their
-    /// pages; NVIDIA and lavapipe import the pointer and never call the source.
+    /// pages; NVIDIA and lavapipe import the pointer and never call the source. ANV (Mesa 26.2.6 on
+    /// i915) imports the pointer of a `memfd`'s mapping and refuses that of a dma-buf's mapping
+    /// (`VK_ERROR_INVALID_EXTERNAL_HANDLE`), and imports a dma-buf for a plain buffer but reports
+    /// none for a sparse one, so it takes the pages only as one chunk: the source is asked for one
+    /// (a `granule` of the request's `length`), and pages that one dma-buf cannot hold (more runs
+    /// than one `udmabuf` takes) are refused.
     ///
     /// A no-copy buffer's own import of the chunks (not a heap's or a rebind's) may be released
     /// while idle, because RADV lists every import in every submission. The release frees its

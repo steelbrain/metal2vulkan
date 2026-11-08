@@ -18,8 +18,10 @@
 //! asks the source for nothing; a texture placed in a no-copy heap over them is an image of
 //! `DRM_FORMAT_MOD_LINEAR` over a dma-buf of its own pages, which it asks the source for too
 //! (`dma_buf_images`), or its shadow where it makes none (`dma_buf_image_fallbacks`). NVIDIA and
-//! lavapipe import the pointer, never call the source and count nothing. A driver not measured
-//! has its answers printed. Where `/dev/udmabuf` cannot be opened each test says so and passes
+//! lavapipe import the pointer, never call the source and count nothing. ANV imports the pointer
+//! of a file's mapping, refuses that of a udmabuf's mapping, and imports one dma-buf for a plain
+//! buffer but none for a sparse one (`view_route`). A driver not measured has its answers
+//! printed. Where `/dev/udmabuf` cannot be opened each test says so and passes
 //! without running.
 
 use super::degrade_notices;
@@ -2383,15 +2385,55 @@ fn process_mappings() -> usize {
     std::fs::read_to_string("/proc/self/maps").map_or(0, |maps| maps.lines().count())
 }
 
+/// How a device makes a no-copy buffer over a view of single file pages ([`view_route`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ViewRoute {
+    /// Its pointer imported; the source never called.
+    Pointer,
+    /// Through this many dma-bufs its source made, asked for once.
+    DmaBufs(usize),
+    /// Refused (`Unsupported`, `HostMemory`): the pointer refused, and the source, asked once
+    /// for one dma-buf of the whole view, answered none.
+    Refused,
+}
+
+/// How `device` makes a no-copy buffer over a view of `runs` single pages of a file mapped in
+/// reverse, through udmabufs of them where `through` (`VM_PFNMAP`), else from the file: for a
+/// driver measured, `None` for any other, whose answers are printed only. RADV refuses every
+/// such pointer and assembles a sparse buffer of the source's dma-bufs, one where one udmabuf
+/// takes the pages and two past its `list_limit` (Mesa 26.2.6). ANV imports the pointer of the
+/// file's mapping, refuses the pointer of a udmabuf's (`VK_ERROR_INVALID_EXTERNAL_HANDLE`), and
+/// imports one dma-buf for a plain buffer but reports none for a sparse one, so it takes such a
+/// view only where one udmabuf holds it (Mesa 26.2.6 on i915). lavapipe imports every pointer.
+fn view_route(device: &Device, runs: usize, through: bool) -> Option<ViewRoute> {
+    let one_dma_buf = runs <= Limits::of_host().items;
+    match device.properties().description.driver_id {
+        Some(DriverId::MESA_RADV) => Some(ViewRoute::DmaBufs(match one_dma_buf {
+            true => 1,
+            false => 2,
+        })),
+        Some(DriverId::INTEL_OPEN_SOURCE_MESA) => Some(match (through, one_dma_buf) {
+            (false, _) => ViewRoute::Pointer,
+            (true, true) => ViewRoute::DmaBufs(1),
+            (true, false) => ViewRoute::Refused,
+        }),
+        Some(DriverId::MESA_LLVMPIPE) => Some(ViewRoute::Pointer),
+        _ => None,
+    }
+}
+
 /// A view of guest pages as a consumer's probe makes one: single pages of the file mapped in
 /// reverse order, from the file (a mapping a page) or through udmabufs of them (a mapping per
-/// udmabuf, `VM_PFNMAP`), a no-copy `Shared` buffer over the whole view placed outside the
-/// guest's address range (`AddressPlacement::Outside`), with a dma-buf source of its pages. Made
-/// over 64 pages, which one udmabuf takes, and over `list_limit + 1`, which take two. Printed
-/// (`VIEW-IMPORT`): the making's answer, the source's calls, and the counts of imports, copies
-/// and mappings it took; the GPU reads the CPU's bytes where it is made.
+/// udmabuf, `VM_PFNMAP`, as a consumer maps a view of several runs), a no-copy `Shared` buffer
+/// over the whole view placed outside the guest's address range (`AddressPlacement::Outside`),
+/// with a dma-buf source of its pages. Made over 64 pages, which one udmabuf takes, and over
+/// `list_limit + 1`, which take two. Each takes the route its measured driver answers
+/// ([`view_route`]), counted (`dma_buf_imports`, `dma_buf_sparse_buffers`,
+/// `host_pointer_imports_made`), and none is a copy (`copied_host_buffers_made`); the GPU reads the
+/// CPU's bytes where it is made. Printed (`VIEW-IMPORT`): the making's answer, the source's calls,
+/// the counts, and the mappings the view and the import took.
 #[test]
-fn a_reversed_view_of_single_pages_imports_through_its_dma_bufs() {
+fn a_reversed_view_of_single_pages_takes_the_route_its_device_answers() {
     const TEST: &str = "dma-buf reversed view";
     if !udmabuf_openable(TEST) {
         return;
@@ -2406,14 +2448,19 @@ fn a_reversed_view_of_single_pages_imports_through_its_dma_bufs() {
             let ram = Memfd::new(runs * page);
             let pieces: Vec<(usize, usize)> =
                 (0..runs).map(|i| ((runs - 1 - i) * page, page)).collect();
+            let unviewed = process_mappings();
             let view = match through {
                 true => ram.view_through_dma_bufs(&pieces),
                 false => ram.view(&pieces),
             };
-            let mapped_as = match through {
-                true => "through udmabufs",
-                false => "from the file",
-            };
+            let view_mappings = process_mappings() as i64 - unviewed as i64;
+            let shape = format!(
+                "{runs} single pages in reverse, mapped {}",
+                match through {
+                    true => "through udmabufs",
+                    false => "from the file",
+                }
+            );
             let mut expected = Vec::with_capacity(runs * page);
             for i in 0..runs {
                 let bytes = counting(page, i);
@@ -2438,30 +2485,64 @@ fn a_reversed_view_of_single_pages_imports_through_its_dma_bufs() {
             let added = process_mappings() as i64 - mapped as i64;
             let after = device.work_counts();
             let calls = calls.lock().unwrap().clone();
+            let counted = (
+                after.dma_buf_imports - before.dma_buf_imports,
+                after.dma_buf_sparse_buffers - before.dma_buf_sparse_buffers,
+                after.host_pointer_imports_made - before.host_pointer_imports_made,
+                after.copied_host_buffers_made - before.copied_host_buffers_made,
+            );
             eprintln!(
-                "VIEW-IMPORT on {}: {runs} single pages in reverse, mapped {mapped_as}: {}; source \
-                 calls {calls:?}; \
-                 dma-buf imports {}, sparse buffers {}, pointer imports {}, copied {} (degraded \
-                 {}, refused {}), unpinnable {}, mappings queried {}, process mappings added \
-                 {added}",
+                "VIEW-IMPORT on {}: {shape} ({view_mappings} mappings): {}; source calls \
+                 {calls:?}; dma-buf imports, sparse buffers, pointer imports and copies \
+                 {counted:?}; mappings queried {}, process mappings the making added {added}",
                 device.name(),
                 match &made {
                     Ok(_) => "made".to_string(),
                     Err(error) => format!("refused: {error:?}"),
                 },
-                after.dma_buf_imports - before.dma_buf_imports,
-                after.dma_buf_sparse_buffers - before.dma_buf_sparse_buffers,
-                after.host_pointer_imports_made - before.host_pointer_imports_made,
-                after.copied_host_buffers_made - before.copied_host_buffers_made,
-                after.copied_host_buffers_degraded - before.copied_host_buffers_degraded,
-                after.copied_host_buffers_refused - before.copied_host_buffers_refused,
-                after.host_imports_unpinnable - before.host_imports_unpinnable,
                 after.host_mappings_queried - before.host_mappings_queried,
             );
+            let route = view_route(device, runs, through);
+            let asked_once = |calls: &[(DmaBufRequest, usize)]| {
+                assert_eq!(calls.len(), 1, "{TEST}: {shape}: the source's calls");
+                let (request, answered) = calls[0];
+                assert_eq!(
+                    (request.start, request.length),
+                    (view.pointer(0), length),
+                    "{TEST}: {shape}: {request:?}"
+                );
+                (request, answered)
+            };
+            match route {
+                Some(ViewRoute::Pointer) => {
+                    assert!(calls.is_empty(), "{TEST}: {shape}: called {calls:?}");
+                    assert_eq!(counted, (0, 0, 1, 0), "{TEST}: {shape}: counted");
+                }
+                Some(ViewRoute::DmaBufs(chunks)) => {
+                    let (_, answered) = asked_once(&calls);
+                    assert_eq!(answered, chunks, "{TEST}: {shape}: chunks answered");
+                    let sparse = u64::from(chunks > 1);
+                    let expected = (chunks as u64, sparse, 0, 0);
+                    assert_eq!(counted, expected, "{TEST}: {shape}: counted");
+                }
+                Some(ViewRoute::Refused) => {
+                    let (request, answered) = asked_once(&calls);
+                    // One dma-buf of the whole view: the device assembles no buffer of several.
+                    assert_eq!(request.granule, length, "{TEST}: {shape}: {request:?}");
+                    assert_eq!(answered, 0, "{TEST}: {shape}: chunks answered");
+                    assert!(
+                        made.as_ref().is_err_and(not_importable),
+                        "{TEST}: {shape}: {:?}",
+                        made.as_ref().err()
+                    );
+                    assert_eq!(counted, (0, 0, 0, 0), "{TEST}: {shape}: counted");
+                }
+                None => {}
+            }
             if let Ok(buffer) = &made {
                 assert!(
                     gpu_read(&queue, buffer, 0..length) == expected,
-                    "{TEST}: {runs} pages: the GPU's read"
+                    "{TEST}: {shape}: the GPU's read"
                 );
             }
             drop(made);
