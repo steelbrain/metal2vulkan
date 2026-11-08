@@ -326,7 +326,12 @@ fn a_record_reads_back_for_its_identity_alone() {
     let verdicts: [Verdict; VERDICTS] =
         std::array::from_fn(|at| [Verdict::Passed, Verdict::Failed, Verdict::Unchecked][at % 3]);
     let bytes = encode(&identity, verdicts);
-    assert_eq!(decode(&identity, &bytes), Some(verdicts));
+    // An unchecked verdict is no measurement: it reads back pending, for the next device's check.
+    let measured = verdicts.map(|verdict| match verdict {
+        Verdict::Unchecked => Verdict::Pending,
+        verdict => verdict,
+    });
+    assert_eq!(decode(&identity, &bytes), Some(measured));
 
     // Cut short at every length, or grown.
     for length in 0..bytes.len() {
@@ -348,9 +353,10 @@ fn a_record_reads_back_for_its_identity_alone() {
     version[8..12].copy_from_slice(&(CHECK_VERSION + 1).to_le_bytes());
     assert_eq!(decode(&identity, &rechecked(version)), None);
 
-    // A pending or unknown verdict, at any of their places, with a checksum that holds.
+    // An unchecked or unknown verdict, at any of their places, with a checksum that holds: never
+    // written.
     for at in 44..44 + VERDICTS {
-        for byte in [0u8, 4, 0xff] {
+        for byte in [3u8, 4, 0xff] {
             let mut verdict = bytes.clone();
             verdict[at] = byte;
             assert_eq!(

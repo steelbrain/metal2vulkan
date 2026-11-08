@@ -220,6 +220,91 @@ fn the_in_place_check_checks_fresh_pages_where_held_imports_cost_submissions() {
     }
 }
 
+/// A class whose pages the device's check could not make answers unchecked on that device, its
+/// reason noted, and is no measurement: its record keeps it unmeasured (`in_place::encode`), so
+/// the next device of the same driver and check version recalls every verdict its check
+/// measured, finds that class's pending, and checks it again; the device after that recalls its
+/// answer too. The pointer class's first buffer, of the check's reads, is refused here as an
+/// import of the pages that fails (`Device::fail_next_host_imports`), which the device answers
+/// with a copy of them (`copied.rs`), no pages of the class. Printed (`IN-PLACE-UNMADE`): the
+/// note, and the verdicts each device gave the class's reads.
+#[test]
+fn a_class_whose_pages_the_check_could_not_make_is_checked_again_by_the_next_device() {
+    let scratch = Scratch::new("in-place-check-unmade-pages");
+    let record = AnswersRecord::new(ANSWERS);
+    let pointer_reads = |device: &Device| {
+        let checks = &device.shared().in_place;
+        RowEnds::ALL.map(|rows| checks.verdict(PagesClass::Pointer, Access::Reads, rows))
+    };
+    let measured = |device: &Device| {
+        let verdicts = device.shared().in_place.verdicts();
+        let measured = [InPlaceVerdict::Passed, InPlaceVerdict::Failed];
+        verdicts.iter().filter(|v| measured.contains(v)).count() as u64
+    };
+    let (first_reads, first_measured, note) = {
+        let device = answering(&scratch, &record);
+        device.fail_next_host_imports(1);
+        assert!(
+            device.settle_in_place_checks(WAIT),
+            "the first check answered"
+        );
+        let report = device.in_place_check_report();
+        let note = (report.iter())
+            .find(|line| line.starts_with("Pointer reads: no pages to check: "))
+            .cloned();
+        assert!(
+            note.is_some(),
+            "the refused pages' reason noted: {report:?}"
+        );
+        (pointer_reads(&device), measured(&device), note)
+    };
+    assert_eq!(
+        first_reads,
+        [InPlaceVerdict::Unchecked; 2],
+        "the pointer class's reads, whose pages were refused"
+    );
+    let second_reads = {
+        let device = answering(&scratch, &record);
+        assert_eq!(
+            device.work_counts().in_place_checks_recalled,
+            first_measured,
+            "every verdict the first check measured recalled"
+        );
+        assert_eq!(
+            pointer_reads(&device),
+            [InPlaceVerdict::Pending; 2],
+            "the unchecked reads not recalled"
+        );
+        assert!(
+            device.settle_in_place_checks(WAIT),
+            "the second check answered"
+        );
+        assert!(
+            device.work_counts().in_place_checks_run > 0,
+            "the second device checked"
+        );
+        let reads = pointer_reads(&device);
+        assert!(
+            !reads.contains(&InPlaceVerdict::Unchecked),
+            "the pointer class's reads checked again: {reads:?}, {:?}",
+            device.in_place_check_report()
+        );
+        reads
+    };
+    let device = answering(&scratch, &record);
+    assert_eq!(
+        pointer_reads(&device),
+        second_reads,
+        "the third device recalls the reads the second measured"
+    );
+    eprintln!(
+        "IN-PLACE-UNMADE on {}: {note:?}; Pointer reads {first_reads:?}, then {second_reads:?}; \
+         recalled by the third device {}",
+        device.name(),
+        device.work_counts().in_place_checks_recalled
+    );
+}
+
 /// A private 4x4 `RGBA8Unorm` texture of the program's, at a plain ID.
 fn texture(device: &Device) -> Texture {
     let mut descriptor = TextureDescriptor::texture_2d(PixelFormat::RGBA8Unorm, 4, 4, false);
@@ -314,7 +399,16 @@ fn texture_ids_keep_metals_order_while_the_in_place_check_runs() {
 /// exports but refuses to import fail the test, as the check's class would stay unchecked.
 #[cfg(target_os = "linux")]
 fn exported_buffer(device: &Device, length: u64, only: bool) -> Option<Buffer> {
-    let exported = crate::dma_buf::ExportedPages::make(device, length)?;
+    let exported = match crate::dma_buf::ExportedPages::make(device, length) {
+        Ok(exported) => exported,
+        Err(why) => {
+            eprintln!(
+                "IN-PLACE-DMA-BUF on {}: no pages exported: {why}",
+                device.name()
+            );
+            return None;
+        }
+    };
     let start = exported.start();
     let source = exported.source();
     // SAFETY: the pages are the device's mapped allocation, readable and writable, which stays

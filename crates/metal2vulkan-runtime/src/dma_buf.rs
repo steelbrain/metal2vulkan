@@ -1678,14 +1678,15 @@ impl ExportedPages {
     /// flag where the device enables `bufferDeviceAddress`, as each of the runtime's allocations
     /// and imports is: ANV (Mesa 26.2.6) refuses an import of a dma-buf of its own memory whose
     /// flag differs from the allocation's (`VK_ERROR_INVALID_EXTERNAL_HANDLE`, of every memory
-    /// type), which left the check's class unchecked there. `None` where the device imports no
+    /// type), which left the check's class unchecked there. Why not, where the device imports no
     /// dma-bufs, makes no images over them, exports no such memory but as a dedicated allocation,
-    /// or refuses it.
-    pub(super) fn make(device: &Device, length: u64) -> Option<ExportedPages> {
+    /// or refuses it (the check's note).
+    pub(super) fn make(device: &Device, length: u64) -> Result<ExportedPages, String> {
         let shared = device.shared();
-        let importer = shared.host_import.as_ref().ok()?;
+        let importer = (shared.host_import.as_ref())
+            .map_err(|_| "the device imports no host memory".to_owned())?;
         if !importer.makes_dma_buf_images() {
-            return None;
+            return Err("the device makes no images over dma-bufs".to_owned());
         }
         // The device exports a buffer's memory as a dma-buf, not only a dedicated allocation.
         let query = vk::PhysicalDeviceExternalBufferInfo::default()
@@ -1709,7 +1710,11 @@ impl ExportedPages {
         if !features.contains(vk::ExternalMemoryFeatureFlags::EXPORTABLE)
             || features.contains(vk::ExternalMemoryFeatureFlags::DEDICATED_ONLY)
         {
-            return None;
+            return Err(format!(
+                "the device exports a buffer's memory as a dma-buf only as a dedicated \
+                 allocation, or not at all (external memory features {:#x})",
+                features.as_raw()
+            ));
         }
         let wanted = vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT;
         let type_index = {
@@ -1726,7 +1731,8 @@ impl ExportedPages {
                         flags.contains(vk::MemoryPropertyFlags::DEVICE_LOCAL),
                     )
                 })
-                .map(|&(index, _)| index)?
+                .map(|&(index, _)| index)
+                .ok_or_else(|| "the device has no host-visible, host-coherent memory".to_owned())?
         };
         let raw_device = shared.vk();
         let mut export = vk::ExportMemoryAllocateInfo::default().handle_types(DMA_BUF);
@@ -1740,7 +1746,13 @@ impl ExportedPages {
             info = info.push_next(&mut flags);
         }
         // SAFETY: the device is live; the type exports dma-bufs of a buffer's memory (above).
-        let memory = unsafe { crate::creation::allocate_memory(raw_device, &info) }.ok()?;
+        let memory =
+            unsafe { crate::creation::allocate_memory(raw_device, &info) }.map_err(|error| {
+                format!(
+                    "its exportable allocation of {length} bytes of type {type_index} failed: \
+                     {error:?}"
+                )
+            })?;
         let free = || {
             // SAFETY: the allocation is unused.
             unsafe { release::object(raw_device, memory) };
@@ -1755,14 +1767,21 @@ impl ExportedPages {
             .and_then(|mapped| NonNull::new(mapped.cast::<u8>()))
         else {
             free();
-            return None;
+            return Err(format!(
+                "its allocation of type {type_index} was not mapped"
+            ));
         };
         // SAFETY: the importer is this device's; the allocation was made exportable as a dma-buf.
-        let Ok(fd) = (unsafe { importer.exported_dma_buf(raw_device, memory) }) else {
-            free();
-            return None;
+        let fd = match unsafe { importer.exported_dma_buf(raw_device, memory) } {
+            Ok(fd) => fd,
+            Err(error) => {
+                free();
+                return Err(format!(
+                    "its allocation's dma-buf was not exported: {error:?}"
+                ));
+            }
         };
-        Some(ExportedPages {
+        Ok(ExportedPages {
             device: device.clone(),
             memory,
             start,

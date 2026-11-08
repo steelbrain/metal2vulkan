@@ -90,8 +90,9 @@
 //!   to fail its check (`DeviceOptions::fail_in_place_check`) answers failed or unchecked for every
 //!   class and makes such a texture a shadow counted as the failed check's, never in place, and
 //!   keeps no record: the next device on the same shader cache recalls nothing and runs the check,
-//!   whose record the device after it recalls for every class (`in_place_checks_recalled`), with
-//!   the same verdicts and no check run.
+//!   whose record the device after it recalls (`in_place_checks_recalled`): every verdict it
+//!   measured, passed or failed, with no check run where it measured all; one it could not check
+//!   (unchecked) is no measurement, which that device checks again, answering as before.
 //! - [`in_place_and_shadow_costs`], without the validation layer, report only (built in release for
 //!   the numbers): a `BGRA8Unorm` surface over a no-copy buffer of anonymous pages, read by a
 //!   fragment function each frame, under each setting: a 3840x2160 one through a 3840x32 strip,
@@ -1323,19 +1324,34 @@ fn a_failed_check_keeps_the_shadow_and_no_record() {
         report.truncate(VERDICTS);
         report
     };
-    // Its record is recalled whole by the device after it, which checks nothing.
+    // Its record is recalled by the device after it: each verdict it measured, which that device
+    // checks no more; one it could not check is no measurement, checked again.
     {
         let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), in_place).unwrap();
         let counts = device.work_counts();
         // Each class's verdicts, for a texture that reads, one that renders and one a shader
         // writes (of 4-, 8- or 16-byte texels and of 1- or 2-byte ones, each with its padding
         // kept or free), each for texels that share a line with bytes beside them and for texels
-        // that share none.
-        assert_eq!(counts.in_place_checks_recalled, VERDICTS as u64);
-        assert_eq!(counts.in_place_checks_run, 0);
-        assert!(device.settle_in_place_checks(std::time::Duration::ZERO));
-        assert_eq!(device.in_place_check_took(), None);
-        assert_eq!(device.in_place_check_report(), verdicts);
+        // that share none: those the check measured.
+        let measured = (verdicts.iter())
+            .filter(|line| line.ends_with(": Passed") || line.ends_with(": Failed"))
+            .count();
+        assert_eq!(counts.in_place_checks_recalled, measured as u64);
+        let report = match measured == VERDICTS {
+            true => {
+                assert_eq!(counts.in_place_checks_run, 0);
+                assert!(device.settle_in_place_checks(std::time::Duration::ZERO));
+                assert_eq!(device.in_place_check_took(), None);
+                device.in_place_check_report()
+            }
+            false => {
+                settled(&device);
+                let mut report = device.in_place_check_report();
+                report.truncate(VERDICTS);
+                report
+            }
+        };
+        assert_eq!(report, verdicts);
         eprintln!(
             "IN-PLACE-RECORD on {}: recalled {verdicts:?}",
             device.name()

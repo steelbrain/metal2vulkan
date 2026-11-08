@@ -92,7 +92,11 @@
 //!   check: the check's rounds take seconds on some devices and builds (1.8 s for the first
 //!   texture, waited for, on a Radeon 780M in a debug build), past what a program's first texture
 //!   may take, a guest's message that makes one among them. A device whose record holds the
-//!   verdicts knows them as it is made, and starts none; a program that will make such textures
+//!   verdicts knows them as it is made, and starts none: those its driver's earlier check
+//!   measured (passed or failed); one that check could not give (unchecked: it made no pages of
+//!   the class, or no image of its rounds, which a refusal in that one process may cause as well
+//!   as the driver) is no measurement, so the record keeps it pending and the next device's check
+//!   runs that class and access again (`encode`). A program that will make such textures
 //!   starts the check earlier, where it likes, through `Device::settle_in_place_checks` (with no
 //!   wait: a zero timeout).
 //! - **Visibility.** A command reads the image's texels in the memory a buffer over the same pages
@@ -880,7 +884,7 @@ impl Drop for Waiting<'_> {
 /// differs, and so does the version it holds). The runtime's own version is not in the record: a
 /// release that changes none of these keeps the verdicts the driver gave, so a device made after
 /// it reads them again rather than checking anew.
-pub(crate) const CHECK_VERSION: u32 = 11;
+pub(crate) const CHECK_VERSION: u32 = 12;
 
 /// A record's first bytes.
 const MAGIC: [u8; 8] = *b"M2VINPL\0";
@@ -961,13 +965,21 @@ pub(crate) fn record_name(identity: &DriverIdentity) -> String {
 /// checksum       32 bytes  SHA-256 of every byte before it
 /// ```
 ///
-/// Integers are little-endian.
+/// Integers are little-endian. A record holds what the check measured: a verdict passed or
+/// failed. An unchecked one (the check made no pages of its class, or no image of its rounds,
+/// which a transient refusal or the device's setup in one process may cause as well as the
+/// driver) is written as unmeasured, a pending one's byte, so the device made after it checks
+/// that class, access and row ends again ([`Device::recall_in_place_checks`]).
 pub(crate) fn encode(identity: &DriverIdentity, verdicts: [Verdict; VERDICTS]) -> Vec<u8> {
     let mut bytes = Vec::with_capacity(RECORD_BYTES);
     bytes.extend_from_slice(&MAGIC);
     bytes.extend_from_slice(&CHECK_VERSION.to_le_bytes());
     bytes.extend_from_slice(&identity.digest());
-    bytes.extend(verdicts.map(Verdict::byte));
+    let measured = |verdict| match verdict {
+        Verdict::Unchecked => Verdict::Pending,
+        verdict => verdict,
+    };
+    bytes.extend(verdicts.map(|verdict| measured(verdict).byte()));
     let checksum: [u8; 32] = Sha256::digest(&bytes).into();
     bytes.extend_from_slice(&checksum);
     bytes
@@ -977,8 +989,9 @@ pub(crate) fn encode(identity: &DriverIdentity, verdicts: [Verdict; VERDICTS]) -
 const RECORD_BYTES: usize = 8 + 4 + 32 + VERDICTS + 32;
 
 /// The verdicts `bytes` record for `identity`: `None` for anything but a whole record of this
-/// version and runtime, for this identity, whose checksum holds and whose every verdict is an
-/// answer (a pending one is never written).
+/// version and runtime, for this identity, whose checksum holds and whose every verdict is
+/// measured (passed or failed) or unmeasured (pending, [`encode`]), the latter answered pending:
+/// an unchecked verdict is never written.
 pub(crate) fn decode(identity: &DriverIdentity, bytes: &[u8]) -> Option<[Verdict; VERDICTS]> {
     if bytes.len() != RECORD_BYTES {
         return None;
@@ -997,7 +1010,7 @@ pub(crate) fn decode(identity: &DriverIdentity, bytes: &[u8]) -> Option<[Verdict
     }
     let mut verdicts = [Verdict::Pending; VERDICTS];
     for (verdict, &byte) in verdicts.iter_mut().zip(rest) {
-        *verdict = Verdict::of_byte(byte).filter(|&known| known != Verdict::Pending)?;
+        *verdict = Verdict::of_byte(byte).filter(|&known| known != Verdict::Unchecked)?;
     }
     Some(verdicts)
 }
@@ -1040,10 +1053,11 @@ impl Device {
     }
 
     /// As the device is made: where its policy takes textures over host pages in place, its
-    /// verdicts from the record of its driver's identity where one holds them (counted as
-    /// recalled), settling them; else they wait for the check, which the first texture that asks
-    /// starts. A record that does not decode is no record: the check runs, and its verdicts
-    /// replace it.
+    /// verdicts from the record of its driver's identity where one holds them (each measured one
+    /// counted as recalled), settling them where none is unmeasured; else they wait for the check,
+    /// which the first texture that asks starts. The check then runs only the classes and accesses
+    /// whose verdicts are pending: of a record, those it could not measure ([`encode`]). A record
+    /// that does not decode is no record: the check runs, and its verdicts replace it.
     pub(crate) fn recall_in_place_checks(&self) {
         let shared = self.shared();
         if self.compile_device().policy().host_page_textures != HostPageTexturePolicy::InPlace {
@@ -1063,12 +1077,17 @@ impl Device {
                 for access in Access::ALL {
                     for rows in RowEnds::ALL {
                         let verdict = verdicts[verdict_index(class, access, rows)];
+                        if verdict == Verdict::Pending {
+                            continue;
+                        }
                         shared.in_place.set(class, access, rows, verdict);
                         shared.counts.in_place_check_recalled();
                     }
                 }
             }
-            shared.in_place.settle(None);
+            if !verdicts.contains(&Verdict::Pending) {
+                shared.in_place.settle(None);
+            }
         }
     }
 
@@ -1104,12 +1123,15 @@ impl Device {
     /// check before it makes such textures and ask again later. Under
     /// `HostPageTexturePolicy::Shadow` no check runs and no verdict is known: `false` at once.
     ///
-    /// The verdicts go from pending to known once for each `VkDevice` behind the device. A GPU
-    /// recovery's new one (`Degradation::DeviceRecovered`) reads them again from the record the
-    /// check kept in the shader cache's directory as it is made, known at once, where the check
-    /// ended and wrote it; where the lost one's check had not ended, or the device keeps no record
-    /// (no shader cache directory, or `DeviceOptions::fail_in_place_check`), they are pending
-    /// again, and this answers `false` until the new one's check ends. Buffers made before a
+    /// The verdicts go from pending to known once for each `VkDevice` behind the device. A device
+    /// of a driver whose check ran before reads them from the record the check kept in the
+    /// shader cache's directory as it is made, known at once, where the check ended and wrote it:
+    /// the verdicts it measured (passed or failed), not those it could not check (no pages or no
+    /// image of their kind made), which stay pending until the new device's check answers them
+    /// again. A GPU recovery's new one (`Degradation::DeviceRecovered`) reads the record so too;
+    /// where the lost one's check had not ended, or the device keeps no record (no shader cache
+    /// directory, or `DeviceOptions::fail_in_place_check`), they are pending again, and this
+    /// answers `false` until the new one's check ends. Buffers made before a
     /// recovery are refused on the new device (`RuntimeGap::MadeBeforeRecovery`), so a program
     /// makes its textures over host pages again after one, and asks again.
     pub fn settle_in_place_checks(&self, timeout: Duration) -> bool {

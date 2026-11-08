@@ -389,7 +389,9 @@ says which commits). It runs once per driver and driver version: its
 verdicts are kept in the shader cache's
 directory, named by the driver and the check's own version, not the runtime's (a device without
 one checks once per process), and recalled as the next device is made
-(`WorkCounts::in_place_checks_run`, `_passed`, `_failed`, `_unchecked`, `_recalled`). Such a
+(`WorkCounts::in_place_checks_run`, `_passed`, `_failed`, `_unchecked`, `_recalled`): those it
+measured, passed or failed. A class it could not check (no pages or no image of its kind made,
+its reason noted) is checked again by the next device. Such a
 texture's commands read and write the texels in the memory the buffer's commands read, so a CPU
 write reaches them as it reaches the buffer's.
 

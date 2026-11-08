@@ -116,8 +116,13 @@
 //!   version and the device's UUID among it) and the check's version ([`record_name`]), not the
 //!   runtime's: a device of the same driver and version reads them as it is made and runs no
 //!   check, whatever runtime release made it, until the check itself changes
-//!   (`in_place::CHECK_VERSION`). A failed write leaves the verdicts for the device's life. A
-//!   forced failure is kept nowhere.
+//!   (`in_place::CHECK_VERSION`). The record keeps what the check measured: an unchecked verdict
+//!   (no pages of the class made, or no image of its rounds) is written unmeasured, so the next
+//!   device checks that class and access again, the rest recalled (`in_place::encode`); a page
+//!   or image refused once in one process, or by the setup of one device, then answers for no
+//!   later device. Each such refusal is noted with why (the report's lines after the verdicts).
+//!   A failed write leaves the verdicts for the device's life. A forced failure is kept
+//!   nowhere.
 //! - **Out of the device's way.** Before each round the thread steps aside for the device's
 //!   allocations and frees on other threads (`step_aside.rs`): it goes on once none is in
 //!   progress and none ended for `step_aside::QUIET`, at once while a call waits for its verdicts
@@ -621,8 +626,15 @@ fn check_class(
     let line = device.shared().in_place.line();
     let unchecked = || (vec![[Verdict::Unchecked; 2]; access.answered().len()], true);
     let length = class_bytes(class);
-    let Some(pages) = ClassPages::make(device, class, length) else {
-        return Some(unchecked());
+    let pages = match ClassPages::make(device, class, length) {
+        Ok(pages) => pages,
+        Err(why) => {
+            device.shared().in_place.note(format!(
+                "{class:?} {}: no pages to check: {why}",
+                label(access)
+            ));
+            return Some(unchecked());
+        }
     };
     // The command queue an image that renders takes its passes on, the check's own, and the
     // draw it takes after them.
@@ -662,6 +674,8 @@ fn check_class(
     let mut tally = Tally::default();
     // The texel sizes of the shapes whose texels share a line made so far (`Shape::runs`).
     let mut made_sharing = Vec::new();
+    // Whether a round that made no image was noted: the first is, with why.
+    let mut unmade_noted = false;
     for (shape, texel) in shapes {
         if shape.window(page) > length || !shape.runs(line, &made_sharing) {
             continue;
@@ -696,7 +710,25 @@ fn check_class(
                     made(&mut made_sharing);
                     continue;
                 }
-                Round::NotMade => break,
+                Round::NotMade(why) => {
+                    if !unmade_noted {
+                        unmade_noted = true;
+                        let lines = match rows {
+                            RowEnds::InLines => "",
+                            RowEnds::OnLines => ", rows on lines",
+                        };
+                        device.shared().in_place.note(format!(
+                            "{class:?} {}{lines}: no {:?} image of {}x{} with rows {} bytes \
+                             apart: {why}",
+                            label(access),
+                            shape.format,
+                            shape.width,
+                            shape.height,
+                            shape.bytes_per_row
+                        ));
+                    }
+                    break;
+                }
                 Round::Padded(changed) => {
                     made(&mut made_sharing);
                     // The first such round is noted; the rounds go on.
@@ -747,6 +779,19 @@ fn check_class(
         }
     }
     Some((tally.verdicts(access, None, forced), true))
+}
+
+/// `access` in a note's words, as the report names its verdicts (`in_place_check_report`).
+fn label(access: Access) -> &'static str {
+    match access {
+        Access::Reads => "reads",
+        Access::Renders => "renders",
+        Access::UnobservedRenders => "unobserved renders",
+        Access::Writes => "writes",
+        Access::BufferWrites => "buffer writes",
+        Access::NarrowWrites => "narrow writes",
+        Access::NarrowBufferWrites => "narrow buffer writes",
+    }
 }
 
 /// One verdict of the check: its class, access, row ends and answer, and whether every byte
@@ -901,8 +946,8 @@ pub(crate) fn verdicts(made: [u32; 2], changed: Option<RowEnds>, forced: bool) -
 pub(crate) enum Round {
     /// The image's move kept every byte.
     Kept,
-    /// The texture took no image in place (the device makes none of the shape there).
-    NotMade,
+    /// The texture took no image in place (the device makes none of the shape there), why.
+    NotMade(String),
     /// A byte of its shape's rows' padding read other than the CPU left it, where a round of
     /// storage writes or renders tells that padding apart ([`Shape::padding`]), and every other
     /// byte read right (each past the last row's pitch among them): where the first was, what was
@@ -941,11 +986,9 @@ fn check_round(
     let texels = renders.as_ref().map(|_| shape);
     // The runtime's own texture: it takes no resource ID, so the program's IDs are Metal's
     // whether or when the check runs.
-    let Ok(texture) = pages
-        .buffer
-        .new_runtime_texture(&descriptor, 0, shape.bytes_per_row)
-    else {
-        return Round::NotMade;
+    let texture = match (pages.buffer).new_runtime_texture(&descriptor, 0, shape.bytes_per_row) {
+        Ok(texture) => texture,
+        Err(error) => return Round::NotMade(format!("its making failed: {error}")),
     };
     let stop = AtomicBool::new(false);
     let started = Barrier::new(2);
@@ -968,12 +1011,27 @@ fn check_round(
         drop(stopping);
         Some((settled, writer.join().ok()?))
     });
-    let Some((Some(Ok(())), written)) = outcome else {
-        return Round::NotMade;
+    let written = match outcome {
+        Some((Some(Ok(())), written)) => written,
+        Some((Some(Err(error)), _)) => {
+            return Round::NotMade(format!("its first move or pass failed: {error}"));
+        }
+        Some((None, _)) => return Round::NotMade(unplaced(pages, &descriptor, shape)),
+        None => return Round::NotMade("the round's writer did not run".to_owned()),
     };
     drop(texture);
     let texels = texels.map(|shape| (shape, Due::Zero));
     bytes.compare(&pattern, (texels, free), written)
+}
+
+/// Why the check's texture of `shape` over `pages`, made with `descriptor`, took no image in
+/// place: its placement's answer (`Buffer::texture_placement`), asked on the check's thread, as
+/// its making asked the route.
+fn unplaced(pages: &ClassPages, descriptor: &TextureDescriptor, shape: Shape) -> String {
+    match (pages.buffer).texture_placement(descriptor, 0, shape.bytes_per_row) {
+        Ok(placement) => format!("it took no image in place: {placement:?}"),
+        Err(error) => format!("it took no image in place, its placement refused: {error}"),
+    }
 }
 
 /// Stops the round's writer as it goes: once the round's step returned, or where it unwinds.
@@ -1008,11 +1066,9 @@ fn store_round(
     let mut descriptor =
         TextureDescriptor::texture_2d(shape.format, shape.width, shape.height, false);
     descriptor.usage = TextureUsage::SHADER_READ | TextureUsage::SHADER_WRITE;
-    let Ok(texture) = pages
-        .buffer
-        .new_runtime_texture(&descriptor, 0, shape.bytes_per_row)
-    else {
-        return Round::NotMade;
+    let texture = match (pages.buffer).new_runtime_texture(&descriptor, 0, shape.bytes_per_row) {
+        Ok(texture) => texture,
+        Err(error) => return Round::NotMade(format!("its making failed: {error}")),
     };
     // The bytes the kernel stores, row after row, and the part it keeps them in too: buffers
     // outside the Metal address space, as the check's are (the module docs). A texel takes the
@@ -1022,11 +1078,14 @@ fn store_round(
     let length = row * shape.height;
     let buffer =
         || device.new_buffer_placed(length, ResourceOptions::shared(), AddressPlacement::Outside);
-    let (Ok(source), Ok(kept)) = (buffer(), buffer()) else {
-        return Round::NotMade;
+    let (source, kept) = match (buffer(), buffer()) {
+        (Ok(source), Ok(kept)) => (source, kept),
+        (Err(error), _) | (_, Err(error)) => {
+            return Round::NotMade(format!("the kernel's buffers were refused: {error}"));
+        }
     };
     let Some(words) = source.contents() else {
-        return Round::NotMade;
+        return Round::NotMade("the kernel's buffer has no contents".to_owned());
     };
     for y in 0..shape.height {
         let from = y * shape.bytes_per_row;
@@ -1064,8 +1123,15 @@ fn store_round(
         drop(stopping);
         Some((done, writer.join().ok()?))
     });
-    let Some((Some(Ok(())), written)) = outcome else {
-        return Round::NotMade;
+    let written = match outcome {
+        Some((Some(Ok(())), written)) => written,
+        Some((Some(Err(error)), _)) => {
+            return Round::NotMade(format!(
+                "its first move or the kernel's stores failed: {error}"
+            ));
+        }
+        Some((None, _)) => return Round::NotMade(unplaced(pages, &descriptor, shape)),
+        None => return Round::NotMade("the round's writer did not run".to_owned()),
     };
     drop(texture);
     bytes.compare(&pattern, (Some((shape, Due::Stored)), free), written)
@@ -1123,9 +1189,11 @@ struct ClassPages {
 
 impl ClassPages {
     /// A buffer of `length` bytes in pages of `class` on `device`, where the device makes one
-    /// there; inside a section of its own.
-    fn make(device: &Device, class: PagesClass, length: u64) -> Option<ClassPages> {
-        let _busy = exit_guard::enter()?;
+    /// there; inside a section of its own. Why not, where it does not (the check's note).
+    fn make(device: &Device, class: PagesClass, length: u64) -> Result<ClassPages, String> {
+        let Some(_busy) = exit_guard::enter() else {
+            return Err("the process is exiting".to_owned());
+        };
         match class {
             PagesClass::Pointer => pointer_pages(device, length),
             // In fresh pages wherever the device takes them, whatever its submission checks
@@ -1133,12 +1201,13 @@ impl ClassPages {
             // where this class passed (`buffer_descriptor.rs`'s `copied_pages`), the product's
             // long buffers where that cost is none (`fresh_pages.rs`).
             PagesClass::Fresh => {
-                let buffer = device.fresh_pages_check_buffer(length).ok()?;
+                let buffer = (device.fresh_pages_check_buffer(length))
+                    .map_err(|error| format!("its buffer was refused: {error}"))?;
                 if !buffer.in_fresh_pages() {
-                    return None;
+                    return Err("its buffer lies in no fresh pages".to_owned());
                 }
-                let start = buffer.contents()?;
-                Some(ClassPages { buffer, start })
+                let start = contents(&buffer)?;
+                Ok(ClassPages { buffer, start })
             }
             PagesClass::DmaBuf => dma_buf_pages(device, length),
             // A buffer of the runtime's own in its pooled memory that declares the bytes between
@@ -1147,50 +1216,60 @@ impl ClassPages {
             // `DRM_FORMAT_MOD_LINEAR` images.
             PagesClass::Pooled => {
                 if !device.makes_modifier_images() {
-                    return None;
+                    return Err("the device makes no DRM_FORMAT_MOD_LINEAR images".to_owned());
                 }
                 let shared = ResourceOptions::shared();
                 let outside = AddressPlacement::Outside;
-                let buffer = device.new_buffer_placed(length, shared, outside).ok()?;
+                let buffer = (device.new_buffer_placed(length, shared, outside))
+                    .map_err(|error| format!("its buffer was refused: {error}"))?;
                 if buffer.in_fresh_pages() {
-                    return None;
+                    return Err("its buffer lies in fresh pages, not pooled memory".to_owned());
                 }
                 buffer.declare_padding_unobserved();
-                let start = buffer.contents()?;
-                Some(ClassPages { buffer, start })
+                let start = contents(&buffer)?;
+                Ok(ClassPages { buffer, start })
             }
         }
     }
 }
 
+/// Where `buffer`'s byte 0 lies for the CPU; why not, where it has no contents.
+fn contents(buffer: &Buffer) -> Result<NonNull<u8>, String> {
+    (buffer.contents()).ok_or_else(|| "its buffer has no contents".to_owned())
+}
+
 /// A no-copy buffer of `length` bytes over anonymous pages mapped for it, imported by their
-/// pointer, which its keep-alive unmaps ([`Anonymous`]). `None` where the device makes none, or
-/// does not import the pointer (dma-bufs, or a copied host buffer, `copied.rs`).
+/// pointer, which its keep-alive unmaps ([`Anonymous`]). Why not, where the device makes none,
+/// or does not import the pointer (dma-bufs, or a copied host buffer, `copied.rs`).
 #[cfg(unix)]
-fn pointer_pages(device: &Device, length: u64) -> Option<ClassPages> {
-    let start = map_anonymous(length)?;
+fn pointer_pages(device: &Device, length: u64) -> Result<ClassPages, String> {
+    let start = map_anonymous(length)
+        .ok_or_else(|| format!("no anonymous mapping of {length} bytes was made"))?;
     let pages: crate::KeepAlive = Box::new(Anonymous { start, length });
     // SAFETY: the pages are this process's private anonymous mapping, readable and writable,
     // which stays until the keep-alive unmaps it, and which nothing else maps or frees.
     let memory = unsafe { HostMemory::new(start) };
     let buffer = no_copy_kept(device, memory, length, pages)?;
-    if buffer.over_dma_buf() || buffer.copied() {
-        return None;
+    if buffer.over_dma_buf() {
+        return Err("the device imported its pages as dma-bufs, not by their pointer".to_owned());
     }
-    Some(ClassPages { buffer, start })
+    if buffer.copied() {
+        return Err("the device copied its pages, which it did not import".to_owned());
+    }
+    Ok(ClassPages { buffer, start })
 }
 
 /// A no-copy buffer of `length` bytes over `memory`, whose pages `pages` keeps mapped: a
 /// keep-alive, not a deallocator, so the buffer's release runs at Metal's moment and waits for no
 /// batch submitted before it (`HostPages`'s release), and `pages` goes once the import is freed
-/// (`KeepAlive`). `None` where the device refuses the buffer, `pages` dropped with the refusal.
+/// (`KeepAlive`). Why not, where the device refuses the buffer, `pages` dropped with the refusal.
 #[cfg(unix)]
 fn no_copy_kept(
     device: &Device,
     memory: HostMemory,
     length: u64,
     pages: crate::KeepAlive,
-) -> Option<Buffer> {
+) -> Result<Buffer, String> {
     let contents = BufferContents::NoCopy {
         memory,
         deallocator: None,
@@ -1198,7 +1277,8 @@ fn no_copy_kept(
     };
     let descriptor = BufferDescriptor::new(length, ResourceOptions::shared(), contents)
         .with_placement(AddressPlacement::Outside);
-    device.new_buffer_with_descriptor_now(descriptor).ok()
+    (device.new_buffer_with_descriptor_now(descriptor))
+        .map_err(|error| format!("its no-copy buffer was refused: {error}"))
 }
 
 /// Anonymous pages [`map_anonymous`] mapped, unmapped as this goes: a check buffer's keep-alive.
@@ -1248,21 +1328,21 @@ fn unmap(pointer: NonNull<u8>, length: u64) {
 
 /// No anonymous pages are mapped on this system: the class is unchecked.
 #[cfg(not(unix))]
-fn pointer_pages(_device: &Device, _length: u64) -> Option<ClassPages> {
-    None
+fn pointer_pages(_device: &Device, _length: u64) -> Result<ClassPages, String> {
+    Err("the system maps no anonymous pages for the check".to_owned())
 }
 
 /// No dma-bufs on this system: the class is unchecked.
 #[cfg(not(unix))]
-fn dma_buf_pages(_device: &Device, _length: u64) -> Option<ClassPages> {
-    None
+fn dma_buf_pages(_device: &Device, _length: u64) -> Result<ClassPages, String> {
+    Err("the system has no dma-bufs".to_owned())
 }
 
 /// A no-copy buffer of `length` bytes over pages the device refuses by their pointer, imported
 /// as dma-bufs: an allocation of the device's own, host-visible and exported as a dma-buf, mapped
 /// (the module docs).
 #[cfg(unix)]
-fn dma_buf_pages(device: &Device, length: u64) -> Option<ClassPages> {
+fn dma_buf_pages(device: &Device, length: u64) -> Result<ClassPages, String> {
     let exported = crate::dma_buf::ExportedPages::make(device, length)?;
     let start = exported.start();
     let source = exported.source();
@@ -1276,9 +1356,13 @@ fn dma_buf_pages(device: &Device, length: u64) -> Option<ClassPages> {
     let memory = unsafe { HostMemory::with_dma_buf(start, source) }.dma_buf_only();
     let buffer = no_copy_kept(device, memory, length, pages)?;
     if !buffer.over_dma_buf() {
-        return None;
+        let how = match buffer.copied() {
+            true => "copied them",
+            false => "imported them otherwise",
+        };
+        return Err(format!("the device {how}, not as their dma-buf"));
     }
-    Some(ClassPages { buffer, start })
+    Ok(ClassPages { buffer, start })
 }
 
 /// A window of a class's pages, from its byte 0.
