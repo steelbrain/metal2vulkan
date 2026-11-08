@@ -831,7 +831,7 @@ fn video_plane_placements() {
                         Err(error) => format!("refused: {error}"),
                     };
                     println!(
-                        "VIDEO-PLACEMENT on {}: {pages:?} pages, {pf:?} {w}x{h}, rows {row}, at                          {at}, {usage:?}: answered {placement:?}, took {took}",
+                        "VIDEO-PLACEMENT on {}: {pages:?} pages, {pf:?} {w}x{h}, rows {row}, at {at}, {usage:?}: answered {placement:?}, took {took}",
                         device.name()
                     );
                     drop(made);

@@ -215,8 +215,8 @@ impl Surface {
     /// surface over `bytes` whose planes are read in place under `YCbCrInPlacePolicy::Model`, the
     /// runtime's default (`metal2vulkan::lower::sampler`): the four luma codes around the point and
     /// the four chroma pairs around half of it blended bilinearly, each index clamped to its
-    /// plane, then Vulkan's conversion of them ([`vulkan_read`]), each channel clamped into
-    /// `[0, 1]`.
+    /// plane, then the conversion of them with Metal's coefficients ([`model_read`]), each
+    /// channel clamped into `[0, 1]`.
     fn linear_model(&self, bytes: &[u8], (x, y): (f64, f64)) -> [f64; 3] {
         let blend = |(x, y): (f64, f64), [w, h]: [u64; 2], at: &dyn Fn(u64, u64) -> f64| -> f64 {
             let (px, py) = (x - 0.5, y - 0.5);
@@ -239,7 +239,7 @@ impl Surface {
                 f64::from(self.code(bytes, at))
             })
         };
-        let rgb = vulkan_read(self.codes(), self.conversion, [luma, chroma(0), chroma(1)]);
+        let rgb = model_read(self.codes(), self.conversion, [luma, chroma(0), chroma(1)]);
         rgb.map(|v| v.clamp(0.0, 1.0))
     }
 
@@ -490,6 +490,28 @@ pub(super) fn reads_in_place(device: &Device) -> bool {
     in_place
 }
 
+/// The conversion under `YCbCrInPlacePolicy::Model` of luma code `y` and chroma `cb` and `cr`
+/// (blended, unrounded) of `codes` under `conversion`, with Metal's coefficients
+/// (`bind::ycbcr_convert`): Vulkan's ([`vulkan_read`]) but for full-range chroma, which Metal
+/// centres and scales over `2^n` where Vulkan scales over `2^n - 1` (each coefficient within
+/// 1e-6 of a code of that).
+fn model_read(
+    codes: YCbCrCodes,
+    conversion: (YCbCrRange, YCbCrMatrix),
+    [y, cb, cr]: [f64; 3],
+) -> [f64; 3] {
+    let chroma = match conversion.0 {
+        YCbCrRange::Full => {
+            let n = codes.bits;
+            let mid = f64::from(1u32 << (n - 1));
+            let scale = f64::from((1u32 << n) - 1) / f64::from(1u32 << n);
+            [cb, cr].map(|c| mid + (c - mid) * scale)
+        }
+        _ => [cb, cr],
+    };
+    vulkan_read(codes, conversion, [y, chroma[0], chroma[1]])
+}
+
 /// The samples of each surface, then of new codes the CPU wrote into its planes, and a `read()`:
 /// each texel Metal's (or, where the device converted the texture itself, the device's conversion
 /// of the planes, [`Surface::assert_texels`]), and on a device whose memory is the host's the
@@ -548,9 +570,9 @@ fn samples_read_the_planes(device: &Device, exact: bool) -> u64 {
                     assert_eq!(*got, want, "{what} round {round}: texel {at:?}");
                 }
             }
-            // Under the model a linear sample is Vulkan's model of the codes, within the
-            // coefficients' difference from Metal's (up to 1.6e-6 a code) and the arithmetic's
-            // rounding, and a `half` result's.
+            // Under the model a linear sample is Vulkan's model of the codes with Metal's
+            // coefficients ([`model_read`]), within the arithmetic's rounding and a `half`
+            // result's.
             if in_place && !exact {
                 let half = raw_texels(
                     device,
