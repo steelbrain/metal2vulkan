@@ -2235,8 +2235,9 @@ fn heap_depth_textures_keep_their_texels_in_metal_s_tiles() {
 /// keep holds the bytes the copy in read. A `HEAPTEX keep after copy in` line prints whether the
 /// write fell between: after the spin began (its ticket seen, where the device shows the host a
 /// running kernel's store, or the command buffer's GPU start time 2 ms before it), and before the
-/// release ended the spin rather than its cap (a device that shows a running kernel no host
-/// store leaves it unordered, and the writes are kept all the same). Where the device makes the
+/// spin ended, by its release or by its cap of 250 ms of GPU time (ANV on the Iris Xe showed the
+/// host no ticket and the spin no release, and its cap ended it); elsewhere the writes are kept
+/// all the same. Where the device makes the
 /// texture a shadow of Metal's tiles (`WorkCounts::heap_textures_tiled`), the merge is counted
 /// (`WorkCounts::shadow_merge_dispatches_planned`), and its keep not as one right after its copy
 /// in (`WorkCounts::shadow_keeps_from_staging`): the first encoder's is the only copy in.
@@ -2354,10 +2355,13 @@ fn a_heap_depth_texture_keeps_a_cpu_write_made_after_its_copy_in() {
             .unwrap();
         assert_eq!(command_buffer.error(), None);
         // Between the copy in and the keep: after the spin started (its ticket seen, or the
-        // command buffer begun on the GPU 2 ms before), and before its release ended it.
+        // command buffer begun on the GPU 2 ms before), and before the spin ended, by its release
+        // or by its cap, 250 ms of the GPU's time at the fastest rate its calibration measured
+        // (`Busy::new`), from its start, which runs after the command buffer's.
         let started = command_buffer.gpu_start_time().unwrap_or(f64::MAX);
         let begun = seen || started + 0.002 < written_at;
         let released = word(&words, 1) == 5;
+        let before_cap = written_at < started + 0.2;
         let after = device.work_counts();
         let merges =
             after.shadow_merge_dispatches_planned - counted.shadow_merge_dispatches_planned;
@@ -2367,7 +2371,7 @@ fn a_heap_depth_texture_keeps_a_cpu_write_made_after_its_copy_in() {
              the keep {} (the ticket seen {seen}, the GPU began {:.1} ms before the write, the \
              spin released {released}), {merges} merge dispatches, {staged_keeps} keeps from \
              staging right after a copy in",
-            begun && released,
+            begun && (released || before_cap),
             (written_at - started) * 1e3
         );
         if tiled {
@@ -2433,8 +2437,8 @@ fn a_heap_depth_texture_keeps_a_cpu_write_made_after_its_copy_in() {
 /// heap's 37x5 one, its bytes written through a buffer over them where Metal's tiles place each
 /// texel (`heap_layouts::tiled_offset`). `HEAPTEX depth range` prints whether it was a shadow of
 /// Metal's tiles (`WorkCounts::heap_textures_tiled`), the route that copies it in, and the
-/// layer's other messages; of those, only the GPU-assisted check's warnings about its own
-/// settings pass.
+/// layer's other messages; of those, only the layer's warnings about the settings the check
+/// takes pass (`VALIDATION-SETTINGS`, `WARNING-Setting-Limit-Adjusted`).
 #[test]
 fn a_heap_depth_texture_s_copy_in_takes_no_depth_outside_0_1() {
     use super::heap_layouts::tiled_offset;
@@ -2543,11 +2547,13 @@ fn a_heap_depth_texture_s_copy_in_takes_no_depth_outside_0_1() {
         range.is_empty(),
         "a copy of a depth outside [0, 1]: {range:#?}"
     );
-    // The GPU-assisted check's own warnings about its settings aside, nothing else.
+    // The layer's warnings about the settings the GPU-assisted check takes aside (that it runs
+    // beside the core checks, and the descriptor limits it lowers for its own), nothing else.
+    let settings = ["VALIDATION-SETTINGS", "WARNING-Setting-Limit-Adjusted"];
     let unexpected: Vec<_> = (other.iter())
         .filter(|message| {
-            let gpuav = message.text.contains("GPU-AV") || message.text.contains("gpuav");
-            !(message.severity == MessageSeverity::Warning && gpuav)
+            let setting = settings.contains(&message.id_name.as_str());
+            !(message.severity == MessageSeverity::Warning && setting)
         })
         .collect();
     assert!(unexpected.is_empty(), "reported: {unexpected:#?}");
