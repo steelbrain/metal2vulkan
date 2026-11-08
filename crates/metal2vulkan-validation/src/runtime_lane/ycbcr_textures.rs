@@ -460,8 +460,11 @@ struct Kernels {
     /// a read's `float` texel of a format's codes is then Metal's conversion, elsewhere the
     /// device's (`device-texel-conversion`, [`converted_holds`]).
     exact: bool,
-    /// Whether `read_half`'s stage rounds a `half` by the device's conversion
-    /// (`PrecisionNote::NativeHalfConversion`), not as Metal does.
+    /// Whether `read_half`'s stage rounds a `half` by the device's conversion, not as Metal does:
+    /// `PrecisionNote::NativeHalfConversion`, or `PrecisionNote::HalfTexelConversion`, which every
+    /// access with a `half` result records off Metal's own texture unit, the device's `float`
+    /// texel rounded to nearest even (within one `half` ulp of Metal's, which rounds a two-plane
+    /// YCbCr texel's step on the grid `8192` with ties away from zero).
     native_half: bool,
     /// Whether `write_masked_half`'s stage records `PrecisionNote::NativeNanEncoding`, announced
     /// as its state is made: not where the device's moves of a `half` NaN are Metal's
@@ -500,8 +503,12 @@ impl Kernels {
             read_array: state("read_array"),
             sample_array: state("sample_array_between"),
             exact: metal_sampler(device),
-            native_half: stage_notes(device, &bitcode, "read_half")
-                .contains(&PrecisionNote::NativeHalfConversion),
+            native_half: [
+                PrecisionNote::NativeHalfConversion,
+                PrecisionNote::HalfTexelConversion,
+            ]
+            .iter()
+            .any(|note| stage_notes(device, &bitcode, "read_half").contains(note)),
             half_write_nans: stage_notes(device, &bitcode, "write_masked_half")
                 .contains(&PrecisionNote::NativeNanEncoding),
         }
@@ -3898,9 +3905,9 @@ fn assert_half_samples(texels: &[u8], want: &[[u16; 3]], case: &str) -> usize {
 
 /// A `half` read's `float4`s `texels` against `want`'s steps of `1 / grid`, alpha 1: each step's
 /// `half`, rounded with ties away from zero on the grid `8192` ([`half_away`]) and exact on the
-/// grid `2048`. Where the read's stage rounds by the device's conversion (`Kernels::native_half`,
-/// `PrecisionNote::NativeHalfConversion`: rounded otherwise or not at all) the channels that differ
-/// are counted and printed, with the largest difference.
+/// grid `2048`. Where the read's stage rounds by the device's conversion (`Kernels::native_half`:
+/// rounded otherwise, as to nearest even at a tie) each channel lies within one `half` ulp of it,
+/// and the channels that differ are counted and printed, with the largest difference.
 fn assert_half_steps(kernels: &Kernels, texels: &[u8], want: &[[u16; 3]], grid: u32, case: &str) {
     let metal = |w: u16| match grid {
         8192 => half_away(w),
@@ -3918,6 +3925,12 @@ fn assert_half_steps(kernels: &Kernels, texels: &[u8], want: &[[u16; 3]], grid: 
         }
         for (g, m) in got.iter().zip(&want) {
             if g.to_bits() != m.to_bits() {
+                // The value's binade's `half` ulp: the device's rounding lies within one.
+                let ulp = 2f32.powi(m.abs().max(2f32.powi(-14)).log2().floor() as i32 - 10);
+                assert!(
+                    (g - m).abs() <= ulp,
+                    "{case}: texel {i} ({w:?}): {g} against Metal's {m}"
+                );
                 differ += 1;
                 most = most.max((g - m).abs());
             }
@@ -5075,8 +5088,9 @@ fn is_half_tie(step: u16) -> bool {
 /// with BT.2020, `YCBCR10_420_2P_sRGB` over `x420`, the 4:2:2 and 4:4:4 twins, the packed 4:2:0 and
 /// 4:4:4 twins, and `YCBCR8_420_2P`, at every texel corner under clamp-to-edge, clamp-to-zero and
 /// clamp-to-border-color: each lane the `float` gather's step of `1/8192` rounded so, ties among
-/// them. Where the stage rounds a `half` by the device's conversion (`Kernels::native_half`) the
-/// lanes that differ are counted and printed. A texture the device converts itself lies off
+/// them. Where the stage rounds a `half` by the device's conversion (`Kernels::native_half`, as off
+/// Metal's own texture unit, to nearest even at a tie) each lane lies within one `half` ulp of
+/// that, and the lanes that differ are counted and printed. A texture the device converts itself lies off
 /// Metal's steps (`ycbcr_device_reads`): each `half` lane is its `float` lane's `half`, within one
 /// unit in the last place.
 #[test]
@@ -5168,9 +5182,18 @@ fn ycbcr_half_gathers_round_ties_away() {
                             "{case}: {f}"
                         );
                         let step = step as u16;
+                        let metal = half_away(step);
                         if !kernels.native_half {
-                            assert_eq!(h, half_away(step), "{case}: step {step}");
-                        } else if h != half_away(step) {
+                            assert_eq!(h, metal, "{case}: step {step}");
+                        } else if h != metal {
+                            // The device's rounding, within one `half` ulp of Metal's.
+                            let v = f64::from(metal).max(2f64.powi(-14));
+                            let ulp = 2f64.powi(v.log2().floor() as i32 - 10);
+                            let off = (f64::from(h) - f64::from(metal)).abs();
+                            assert!(
+                                off <= ulp,
+                                "{case}: step {step}: {h} against Metal's {metal}"
+                            );
                             rounded += 1;
                         }
                         ties += usize::from(is_half_tie(step));
