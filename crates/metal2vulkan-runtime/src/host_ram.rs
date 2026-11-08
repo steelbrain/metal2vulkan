@@ -111,6 +111,11 @@
 //!   of another thread (a driver's compiler growing its heap) waits behind it ([`pace`],
 //!   [`fault_in`]). Each import is made with the device's memory lock released
 //!   (`memory::import_host`), so the device's other placements wait for none of it.
+//! - **Ended with the use.** The use's end (`HostRamUse`'s drop) stops the thread before its
+//!   fault-in's next 2 MiB step, or once an import under way returned, and waits for it, so that
+//!   once the drop returned the runtime reads, faults in and imports no page of the RAM, and the
+//!   program may unmap the pages no buffer or pending command buffer holds an import of
+//!   ([`Wake::ended`]).
 //! - **Short of the allocation limit.** The thread stops where one more import would leave the
 //!   device less than a quarter of its `maxMemoryAllocationCount` (`allocations.rs`), the rest
 //!   left to the objects over them. Once the device's allocations come within that quarter, the
@@ -382,12 +387,18 @@ fn checked_ranges(
 /// A device's use of a [`HostRam`] ([`Device::use_host_ram`]): while it lives, the device imports
 /// the RAM's chunks as objects over them are made, and keeps them. Dropping it lets go of the
 /// use: each chunk is freed once nothing holds it (no buffer bound in it, no command buffer that
-/// used one), and the RAM's keep-alive goes after the last. It holds the device. No Metal
-/// counterpart.
+/// used one), and the RAM's keep-alive goes after the last. The drop returns once the device's
+/// thread for the RAM ended, which stops within one 2 MiB step of faulting pages in and after an
+/// import under way: past it the runtime reads, faults in and imports no page of the RAM, and only
+/// the imports a buffer or a pending command buffer still holds keep pages pinned, until the
+/// keep-alive goes. It holds the device. No Metal counterpart.
 #[must_use = "dropping the use lets go of the RAM at once"]
 pub struct HostRamUse {
     device: Device,
     ram: Arc<RamOnDevice>,
+    /// The device's thread for the RAM ([`import_ahead`], [`listed_chunks`]), joined by the drop;
+    /// `None` where none was started.
+    thread: Option<std::thread::JoinHandle<()>>,
 }
 
 impl std::fmt::Debug for HostRamUse {
@@ -402,8 +413,13 @@ impl Drop for HostRamUse {
     fn drop(&mut self) {
         self.ram.copies.unplace(&self.device);
         let gone = self.device.shared().host_ram.remove(&self.ram);
-        // The device's thread sees the use ended, and ends.
+        // The device's thread sees the use ended, and ends, waited for: once this returns it
+        // reads no page of the RAM (a fault-in under way stops at its next step) and imports none.
+        self.ram.wake.ended.store(true, Ordering::Release);
         self.ram.wake.notify();
+        if let Some(thread) = self.thread.take() {
+            drop(thread.join());
+        }
         // The lists kept past their copies go with the use, those no command buffer holds now.
         let kept = lock(&self.ram.kept).all();
         // The chunks no object holds are freed here, with no lock of the source held.
@@ -487,6 +503,9 @@ struct Wake {
     condvar: Condvar,
     /// Whether the thread runs: set as it is started, cleared as it ends ([`Ends`]).
     running: AtomicBool,
+    /// The use ended (`HostRamUse`'s drop, which then waits for the thread): the thread ends at
+    /// its next look, and a [`fault_in`] under way stops before its next step.
+    ended: AtomicBool,
 }
 
 /// Clears [`Wake::running`] as the device's thread ends, however it ends.
@@ -1230,7 +1249,7 @@ impl RamOnDevice {
         if ask {
             self.wake.notify();
         }
-        fault_in(&run);
+        fault_in(&run, &self.wake.ended);
         // SAFETY: the run is pages of the RAM's ranges inside the chunk, which stay mapped,
         // readable and writable, while an import holds the RAM (`HostRam::new`).
         let alone = unsafe { device.import_chunk(importer, &self.ram, run, Imported::Run) };
@@ -1355,10 +1374,12 @@ impl RamOnDevice {
 /// holds none to import, it waits for an object to move the window ([`Wake`]). It ends once the
 /// use ended, the device went or was lost, the process exits, or one more import would leave the
 /// device less than a quarter of its `maxMemoryAllocationCount` (`allocations.rs`), the rest then
-/// left to the objects over them. It holds the device and the RAM weakly between chunks and while it waits,
-/// so neither outlives its last holder for it by more than one import. A chunk it fails to
-/// import (out of memory, pages the driver or the runtime refuses) is left to the first object
-/// over it, which meets the same answer on its own thread, as without this thread.
+/// left to the objects over them; the use's end waits for it (`HostRamUse`'s drop,
+/// [`Wake::ended`]), which stops it before its fault-in's next step. It holds the device and the
+/// RAM weakly between chunks and while it waits, so neither outlives its last holder for it by
+/// more than one import. A chunk it fails to import (out of memory, pages the driver or the
+/// runtime refuses) is left to the first object over it, which meets the same answer on its own
+/// thread, as without this thread.
 ///
 /// Paced ([`pace`], [`fault_in`]): it runs as the system's batch work, yields between chunks,
 /// and on Linux faults a chunk's pages in 2 MiB at a time before its import, so that the
@@ -1367,6 +1388,9 @@ fn import_ahead(device: WeakDevice, ram: Weak<RamOnDevice>, wake: Arc<Wake>) {
     let _ends = Ends(Arc::clone(&wake));
     pace();
     loop {
+        if wake.ended.load(Ordering::Acquire) {
+            return;
+        }
         let (Some(device), Some(ram)) = (device.upgrade(), ram.upgrade()) else {
             return;
         };
@@ -1386,7 +1410,11 @@ fn import_ahead(device: WeakDevice, ram: Weak<RamOnDevice>, wake: Arc<Wake>) {
             continue;
         };
         // With no lock held: an object over the chunk meanwhile imports it itself, as before.
-        fault_in(&ram.slots[slot].span);
+        // The use's end stops the fault-in, and then the thread, before an import.
+        fault_in(&ram.slots[slot].span, &wake.ended);
+        if wake.ended.load(Ordering::Acquire) {
+            return;
+        }
         let Some(busy) = exit_guard::enter() else {
             return;
         };
@@ -1417,6 +1445,9 @@ fn listed_chunks(device: WeakDevice, ram: Weak<RamOnDevice>, wake: Arc<Wake>) {
     let _ends = Ends(Arc::clone(&wake));
     pace();
     loop {
+        if wake.ended.load(Ordering::Acquire) {
+            return;
+        }
         let (Some(device), Some(ram)) = (device.upgrade(), ram.upgrade()) else {
             return;
         };
@@ -1430,7 +1461,11 @@ fn listed_chunks(device: WeakDevice, ram: Weak<RamOnDevice>, wake: Arc<Wake>) {
         let asked = (ram.next_asked()).filter(|_| shared.allocations.allocations.room_ahead());
         if let Some(slot) = asked {
             // With no lock held: an object over the chunk meanwhile is bound in its run's import.
-            fault_in(&ram.slots[slot].span);
+            // The use's end stops the fault-in, and then the thread, before an import.
+            fault_in(&ram.slots[slot].span, &wake.ended);
+            if wake.ended.load(Ordering::Acquire) {
+                return;
+            }
             let Some(busy) = exit_guard::enter() else {
                 return;
             };
@@ -1511,18 +1546,25 @@ fn pace() {
 ///   an error; and a kernel that does not answer for its mappings (before Linux 6.11). Each step
 ///   holds the memory map lock for one huge page's fault. A kernel that refuses the advice (an
 ///   older one) leaves the faults to the import, as before.
+///
+/// It stops before its next step once `ended` is set: the use's end ([`Wake::ended`]), which
+/// `HostRamUse`'s drop sets and then waits for the device's thread, so that no page is read past
+/// the drop's return, when the program may unmap them.
 #[cfg(target_os = "linux")]
-fn fault_in(span: &Range<u64>) {
+fn fault_in(span: &Range<u64>, ended: &AtomicBool) {
     const STEP: u64 = 2 * 1024 * 1024;
     let reads = faults_by_reads(span);
     let page = host_page().unwrap_or(STEP);
     let mut at = span.start;
-    while at < span.end {
+    while at < span.end && !ended.load(Ordering::Acquire) {
         let length = STEP.min(span.end - at);
         if reads {
             for byte in (at..at + length).step_by(page as usize) {
                 // SAFETY: the span is pages of the RAM's ranges, mapped readable and writable
-                // while the RAM lives (`HostRam::new`), which the caller holds.
+                // while the program's use of the RAM lasts (`HostRam::new`): the device's thread
+                // runs this step only before the use's end was set, which waits for the thread
+                // (`HostRamUse`'s drop), and an object's making over the run is the program's own
+                // call, during which it keeps the use.
                 unsafe { std::ptr::read_volatile(byte as *const u8) };
             }
         } else {
@@ -1552,7 +1594,7 @@ fn faults_by_reads(span: &Range<u64>) -> bool {
 
 /// Elsewhere the import faults the chunk's pages in itself.
 #[cfg(not(target_os = "linux"))]
-fn fault_in(_: &Range<u64>) {}
+fn fault_in(_: &Range<u64>, _: &AtomicBool) {}
 
 impl Device {
     /// Give the chunks the device's thread imported ahead and no object took back once the
@@ -2008,6 +2050,7 @@ impl Device {
         let held = shared.host_ram.held.load(Ordering::Relaxed);
         #[cfg(not(test))]
         let held = false;
+        let mut thread = None;
         if !held {
             let (device, ram) = (self.downgrade(), Arc::downgrade(&used));
             let wake = Arc::clone(&used.wake);
@@ -2019,13 +2062,15 @@ impl Device {
                 true => exit_guard::spawn(builder, move || listed_chunks(device, ram, wake)),
                 false => exit_guard::spawn(builder, move || import_ahead(device, ram, wake)),
             };
-            if started.is_err() {
-                used.wake.running.store(false, Ordering::Relaxed);
+            match started {
+                Ok(started) => thread = Some(started),
+                Err(_) => used.wake.running.store(false, Ordering::Relaxed),
             }
         }
         Ok(HostRamUse {
             device: self.clone(),
             ram: used,
+            thread,
         })
     }
 }
@@ -2990,7 +3035,7 @@ mod tests {
             // SAFETY: the test's mapping, readable and writable.
             unsafe { std::ptr::write_volatile((start as usize + n * page) as *mut u8, 0x5a) };
         }
-        fault_in(&span);
+        fault_in(&span, &AtomicBool::new(false));
         let mut resident = vec![0u8; length / page];
         // SAFETY: the test's mapping, and a vector of one byte per page of it.
         let rc =

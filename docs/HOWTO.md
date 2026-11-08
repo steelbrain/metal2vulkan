@@ -523,9 +523,12 @@ submission, can give the device the guest's RAM once instead:
 
 - `unsafe HostRam::new(ranges, keep_alive)` takes the RAM's ranges of host memory (whole host pages,
   mapped readable and writable until the keep-alive goes) and `Device::use_host_ram(&ram)` uses it
-  on a device, until the returned `HostRamUse` is dropped. A device may use several RAMs whose
-  ranges are apart, and a new one over the same ranges once the earlier use ended; ranges that
-  meet a used RAM's are misuse (`Invalid`, `Problem::HostRam`).
+  on a device, until the returned `HostRamUse` is dropped. The drop waits for the device's thread
+  for the RAM (below), which stops within one 2 MiB step of faulting pages in: once it returned,
+  the runtime reads, faults in and imports no page of the RAM, and only an import a buffer or a
+  pending command buffer still holds keeps pages, until the keep-alive goes. A device may use
+  several RAMs whose ranges are apart, and a new one over the same ranges once the earlier use
+  ended; ranges that meet a used RAM's are misuse (`Invalid`, `Problem::HostRam`).
 - `HostMemory::with_runs(resolver)` gives each no-copy object a `RunResolver`: asked once, at the
   object's making and at each `rebind_bytes_no_copy` to new memory, on the calling thread with no lock of the runtime's held and before the import
   gate, with the object's import window (whole host pages), it answers the host addresses of the

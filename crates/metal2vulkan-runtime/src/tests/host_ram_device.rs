@@ -25,7 +25,8 @@
 //! - **The use.** Dropping the use while a command buffer still holds a chunk frees the chunk
 //!   after that command buffer completed, and the RAM's keep-alive goes after it; the same RAM
 //!   used twice is refused, a RAM apart from it taken; a new RAM over the same ranges is taken once
-//!   the first use ended.
+//!   the first use ended. A use of shared memory dropped while the device's thread may be faulting
+//!   it in waits for the thread, so its pages may be unmapped once the drop returned.
 //! - **Ahead of the objects.** The device's thread imports chunks of fresh RAM (advised for huge
 //!   pages, as QEMU's RAM is: a `memfd` mapped shared, or private anonymous memory on a device
 //!   that refuses pointers to shared memory) ahead of the objects: the RAM's first chunk once
@@ -850,6 +851,102 @@ fn a_ram_of_shared_memory_a_device_refuses_imports_no_chunk_and_refuses_its_obje
     drop(used);
     drop(ram);
     assert!(settles(&dropped), "the RAM's keep-alive dropped");
+}
+
+/// A fresh mapping of `length` bytes of a `memfd` mapped shared, as a VMM's guest RAM is
+/// (anonymous shared memory off Linux), never touched: its first byte. The caller unmaps it.
+fn shared_mapping(length: u64) -> u64 {
+    #[cfg(target_os = "linux")]
+    let (flags, fd) = {
+        // SAFETY: a name and flags the call takes.
+        let fd = unsafe { libc::memfd_create(c"m2v-released-ram".as_ptr(), libc::MFD_CLOEXEC) };
+        assert!(fd >= 0);
+        // SAFETY: the descriptor was just made, and is closed below.
+        assert_eq!(unsafe { libc::ftruncate(fd, length as libc::off_t) }, 0);
+        (libc::MAP_SHARED, fd)
+    };
+    #[cfg(not(target_os = "linux"))]
+    let (flags, fd) = (libc::MAP_SHARED | libc::MAP_ANON, -1);
+    // SAFETY: a fresh mapping of the file's first `length` bytes (or of anonymous memory).
+    let start = unsafe {
+        libc::mmap(
+            std::ptr::null_mut(),
+            length as usize,
+            libc::PROT_READ | libc::PROT_WRITE,
+            flags,
+            fd,
+            0,
+        )
+    };
+    assert_ne!(start, libc::MAP_FAILED);
+    if fd >= 0 {
+        // SAFETY: the test's descriptor; the mapping keeps the file.
+        unsafe { libc::close(fd) };
+    }
+    start as u64
+}
+
+/// A use of a RAM of shared memory whose keep-alive does not unmap it, dropped and its pages
+/// unmapped at once, as a VMM's teardown unmaps its guest RAM: again and again, the drop coming
+/// at once or up to 5 ms after the use began, while the device's thread may be faulting the RAM's
+/// first chunk in or importing it. The drop waits for the thread, which stops before its
+/// fault-in's next step (`HostRamUse`, `host_ram.rs`'s `Wake::ended`), so no read of the thread's
+/// meets an unmapped page, and the keep-alive has gone once the program dropped the RAM too;
+/// without that wait a read ends the process (`SIGSEGV`), as a consumer's test did on an RTX 5080
+/// and this one on a Radeon 780M. No copy is made: an import a command buffer still held would
+/// keep pages the test unmaps, where the drop frees every import of the thread's. The slowest
+/// drop is printed (`HOST-RAM-RELEASE`).
+#[test]
+fn a_use_s_drop_waits_out_the_thread_so_its_pages_may_be_unmapped_at_once() {
+    let Some(device) = ahead_device() else {
+        return;
+    };
+    const ROUNDS: u64 = 32;
+    const LENGTH: u64 = 64 * MIB;
+    let before = device.work_counts();
+    let (mut slowest, mut kept) = (Duration::ZERO, 0);
+    for round in 0..ROUNDS {
+        let start = shared_mapping(LENGTH);
+        let gone = Arc::new(AtomicBool::new(false));
+        let keep: KeepAlive = Box::new(Gone(Arc::clone(&gone)));
+        let at = NonNull::new(start as *mut u8).unwrap();
+        // SAFETY: the mapping is readable and writable until the keep-alive goes, which the
+        // round checks before it unmaps the pages.
+        let ram = Arc::new(unsafe { HostRam::new(&[(at, LENGTH)], Some(keep)) }.unwrap());
+        let used = device.use_host_ram(&ram).unwrap();
+        std::thread::sleep(Duration::from_micros(round % 4 * 1600));
+        let dropped = Instant::now();
+        drop(used);
+        slowest = slowest.max(dropped.elapsed());
+        drop(ram);
+        kept += u64::from(!gone.load(Ordering::SeqCst));
+        // SAFETY: the test's mapping, which the runtime reads, faults in and imports no page of
+        // once the use's drop returned; a keep-alive still held fails the test below.
+        unsafe { libc::munmap(start as *mut libc::c_void, LENGTH as usize) };
+    }
+    let after = device.work_counts();
+    eprintln!(
+        "HOST-RAM-RELEASE {}: {ROUNDS} uses of {} MiB of shared memory dropped and unmapped at \
+         once, the slowest drop {slowest:?}; chunks imported {}, pointer imports refused {}",
+        device.name(),
+        LENGTH / MIB,
+        after.host_ram_chunks_imported - before.host_ram_chunks_imported,
+        after.host_ram_pointer_imports_failed - before.host_ram_pointer_imports_failed,
+    );
+    assert_eq!(kept, 0, "a round's keep-alive outlived the use and the RAM");
+    assert_eq!(
+        after.host_ram_chunks_live, before.host_ram_chunks_live,
+        "every chunk freed"
+    );
+}
+
+/// A keep-alive that says it went.
+struct Gone(Arc<AtomicBool>);
+
+impl Drop for Gone {
+    fn drop(&mut self) {
+        self.0.store(true, Ordering::SeqCst);
+    }
 }
 
 /// An object over a chunk the device's thread imported, made while the chunk's state is looked at
