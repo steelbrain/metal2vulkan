@@ -25,7 +25,9 @@
 //!   no texture (`WorkCounts::heap_arrays_copied`): what the source's writes announced (a
 //!   texture it cannot view, one past its count) was announced as they were made, and the copy
 //!   announces only an ID past its own count. It writes an array of a class no live set holds
-//!   for each texture that lives then. A batch holds those writes from its first work's take
+//!   for each texture that lives then. A new set's layout and pool are made with no lock held,
+//!   a texture made meanwhile placed in the sets that live then, and the set is placed after,
+//!   holding it ([`heap_set`]). A batch holds those writes from its first work's take
 //!   until its submission was made ([`hold`]): one asked meanwhile is made then, before the next
 //!   submission takes its first work, so no texture registered after the take, whose move is
 //!   not the batch's, is in its sets or table in `UNDEFINED` (`texture/first_move.rs`), and its
@@ -201,6 +203,10 @@ pub(super) struct DeviceHeaps {
     /// last (`tests/passing_holds.rs`).
     #[cfg(test)]
     pub(crate) pause_holding: Option<Arc<dyn Fn() + Send + Sync>>,
+    /// Run by a thread making a new heap set once it made the set's layout and version, with no
+    /// lock held, before it places the set (`tests/heap_set_unlocked.rs`).
+    #[cfg(test)]
+    pub(crate) pause_making: Option<Arc<dyn Fn() + Send + Sync>>,
 }
 
 /// A sampler state every heap set holds at its element: its hold serial and the state (not
@@ -603,32 +609,26 @@ impl DeviceHeaps {
         Ok(())
     }
 
-    /// A new heap set of `layout`, holding every live texture and sampler state: each image array
-    /// copied from a live set's array of its class ([`copy_arrays`](Self::copy_arrays)), else
-    /// written for each live texture. The textures and states it upgrades go to `held` and
-    /// `held_samplers`, to let go of once the lock is free, inside `passing`, the passing hold it
-    /// takes before its first upgrade, where it upgrades any (`resource_ids.rs`).
+    /// A new heap set of `layout` of what `unplaced` made, placed among the sets, holding every
+    /// live texture and sampler state: each image array copied from a live set's array of its
+    /// class ([`copy_arrays`](Self::copy_arrays)), else written for each live texture. The
+    /// textures and states it upgrades go to `held` and `held_samplers`, to let go of once the
+    /// lock is free, inside `passing`, the passing hold it takes before its first upgrade, where
+    /// it upgrades any (`resource_ids.rs`).
     fn made_set<'d>(
         &mut self,
         device: &'d Device,
         layout: &DescriptorSetLayout,
+        unplaced: Unplaced,
         (held, held_samplers): (&mut Vec<Texture>, &mut Vec<SamplerState>),
         (notes, passing): (&mut Notes, &mut Option<PassingHold<'d>>),
     ) -> Result<Arc<HeapSet>, Error> {
-        let needs = set_needs(layout)?;
-        let raw_layout = Arc::new(RawLayout::create(device, layout)?);
-        let key = self.next_set;
-        // The one version every command binds, where the device lets a pending one's set be
-        // written; else each command buffer makes its own ([`bind`]).
-        let shared = match unused_while_pending(device) {
-            true => Some(Arc::new(SetVersion::allocate(
-                device,
-                &raw_layout,
-                &needs,
-                key,
-            )?)),
-            false => None,
-        };
+        let Unplaced {
+            key,
+            needs,
+            raw_layout,
+            shared,
+        } = unplaced;
         let null_words = self.table(device)?.null_words();
         let mut images = Vec::new();
         let mut samplers = Vec::new();
@@ -719,7 +719,6 @@ impl DeviceHeaps {
             }
         }
         entry.write(device, writes)?;
-        self.next_set += 1;
         let set = Arc::new(HeapSet {
             device: device.clone(),
             key,
@@ -732,6 +731,11 @@ impl DeviceHeaps {
 }
 
 impl DeviceHeaps {
+    /// The live heap set of `layout`, if one is.
+    fn live_set(&self, layout: &DescriptorSetLayout) -> Option<Arc<HeapSet>> {
+        (self.by_layout.get(layout)).and_then(|(_, set)| set.upgrade())
+    }
+
     /// Give `entry`, a new set, each of its image arrays' elements from a live set's array that
     /// holds every texture as it does ([`ImageArray::holds_as`]), with what that array notes of
     /// them: copied (`vkUpdateDescriptorSets`' copies, or a command buffer's own versions' writes
@@ -1905,38 +1909,94 @@ impl Drop for HeapSet {
 }
 
 /// The heap set of set-1 layout `layout` on `device`: the live one, else a new one holding every
-/// live texture (the module docs).
+/// live texture (the module docs), its layout and version made with no lock held ([`Unplaced`]).
 pub(crate) fn heap_set(
     device: &Device,
     layout: &DescriptorSetLayout,
 ) -> Result<Arc<HeapSet>, Error> {
-    // A new set takes every live holder once it is made: a passing hold from then
+    let key = {
+        let mut heaps = lock(&device.shared().heaps);
+        if let Some(set) = heaps.live_set(layout) {
+            return Ok(set);
+        }
+        heaps.next_set += 1;
+        heaps.next_set - 1
+    };
+    let unplaced = Unplaced::make(device, layout, key)?;
+    #[cfg(test)]
+    {
+        // Taken, then run with the lock let go.
+        let pause = lock(&device.shared().heaps).pause_making.clone();
+        if let Some(pause) = pause {
+            pause();
+        }
+    }
+    // A new set takes every live holder once it is placed: a passing hold from then
     // (`resource_ids.rs`).
     let mut passing = None;
     let mut held = Vec::new();
     let mut held_samplers = Vec::new();
     let mut notes = Notes::default();
-    let set = {
+    let (set, unused) = {
         let mut heaps = lock(&device.shared().heaps);
-        match heaps
-            .by_layout
-            .get(layout)
-            .and_then(|(_, set)| set.upgrade())
-        {
-            Some(set) => Ok(set),
-            None => heaps.made_set(
-                device,
-                layout,
-                (&mut held, &mut held_samplers),
-                (&mut notes, &mut passing),
-            ),
+        match heaps.live_set(layout) {
+            // Another thread placed the layout's set meanwhile: this one goes unused.
+            Some(set) => (Ok(set), Some(unplaced)),
+            None => {
+                let holders = (&mut held, &mut held_samplers);
+                let set = heaps.made_set(
+                    device,
+                    layout,
+                    unplaced,
+                    holders,
+                    (&mut notes, &mut passing),
+                );
+                (set, None)
+            }
         }
     };
+    // An unused set's pool and layout go with no lock held.
+    drop(unused);
     // The holders go inside the passing hold, if it took one.
     drop((held, held_samplers));
     drop(passing);
     notes.announce(device);
     set
+}
+
+/// A new heap set's `VkDescriptorSetLayout` and its one version, where the device has one, of
+/// heap set `key`, with what the layout's pools take ([`SetNeeds`]): made before the set is placed
+/// among the device's sets, with no lock held ([`heap_set`]). A driver may clear every element of
+/// a pool as it makes it, each array of up to 65536 (lavapipe takes milliseconds to), while a
+/// texture made meanwhile takes the `heaps` lock to place itself; the set, placed after, holds it.
+struct Unplaced {
+    key: u64,
+    needs: SetNeeds,
+    raw_layout: Arc<RawLayout>,
+    shared: Option<Arc<SetVersion>>,
+}
+
+impl Unplaced {
+    /// The layout and version of a new set of `layout`, heap set `key`.
+    fn make(device: &Device, layout: &DescriptorSetLayout, key: u64) -> Result<Unplaced, Error> {
+        let needs = set_needs(layout)?;
+        let raw_layout = Arc::new(RawLayout::create(device, layout)?);
+        // The one version every command binds, where the device lets a pending one's set be
+        // written; else each command buffer makes its own ([`bind`]).
+        let shared = match unused_while_pending(device) {
+            true => {
+                let version = SetVersion::allocate(device, &raw_layout, &needs, key)?;
+                Some(Arc::new(version))
+            }
+            false => None,
+        };
+        Ok(Unplaced {
+            key,
+            needs,
+            raw_layout,
+            shared,
+        })
+    }
 }
 
 /// Place `texture`, a program's texture that just took its ID's slot, into the table and every
