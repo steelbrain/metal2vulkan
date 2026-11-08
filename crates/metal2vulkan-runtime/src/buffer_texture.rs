@@ -56,7 +56,7 @@ use super::degradation::Degradation;
 use super::device::lock;
 use super::error::{internal, invalid, nil, vulkan, Error, Problem, RuntimeGap};
 use super::exit_guard;
-use super::in_place::RowEnds;
+use super::in_place::{Padding, RowEnds};
 use super::key_hash::KeyMap;
 use super::linear_plan::{
     apart_from_plane, is_linear, plan_buffer_texture, plane_rows_share_bytes, BufferFacts,
@@ -1539,6 +1539,31 @@ impl Texels {
             Some(at) => RowEnds::of(at.as_ptr().addr() as u64, &self.layout, line),
             None => RowEnds::InLines,
         }
+    }
+
+    /// Whether a shader's writes may change the texels' rows' padding, in the device's lines of
+    /// memory of `line` bytes (`in_place::Padding::of`): rows over a buffer's bytes the CPU
+    /// addresses, no IOSurface plane's ([`Texels::padding_owned`]), whose rows, each to its
+    /// pitch, share no line with bytes past them.
+    pub(super) fn padding(&self, line: u64) -> Padding {
+        match self.buffer.contents() {
+            Some(at) => {
+                let start = at.as_ptr().addr() as u64;
+                Padding::of(start, &self.layout, line, self.padding_owned())
+            }
+            None => Padding::Kept,
+        }
+    }
+
+    /// Whether the texels' rows' padding is their buffer's own (`in_place::Padding`): they lie
+    /// over a buffer's rows, no IOSurface plane's, and the buffer holds their last row to its
+    /// pitch.
+    pub(super) fn padding_owned(&self) -> bool {
+        let to_pitch = BufferLayout {
+            row_bytes: self.layout.row_pitch,
+            ..self.layout
+        };
+        !self.surface && to_pitch.end() <= self.buffer.length()
     }
 
     /// The texture's resource options (the `options` field), its hazard tracking mode resolved.

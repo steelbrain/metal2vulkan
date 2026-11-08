@@ -124,7 +124,7 @@ use crate::framebuffer_fetch::storage_candidate;
 use crate::heap_sets;
 use crate::image_barrier::{image_barrier, ImageDst};
 use crate::image_plan::ImagePlan;
-use crate::in_place::{self, Access as InPlaceAccess, PagesClass, RowEnds, Verdict};
+use crate::in_place::{self, Access as InPlaceAccess, Padding, PagesClass, RowEnds, Verdict};
 use crate::memory::Placement;
 use crate::tracker::Access;
 use crate::values::StorageMode;
@@ -176,6 +176,8 @@ struct MoveWait {
     class: PagesClass,
     /// How its texels lie in the device's lines of memory (`in_place::RowEnds`).
     rows: RowEnds,
+    /// Whether a shader's writes may change its rows' padding (`in_place::Padding`).
+    padding: Padding,
     usage: TextureUsage,
     /// The bytes of one of its texels.
     texel: u64,
@@ -193,7 +195,7 @@ impl MoveWait {
             return None;
         }
         let policy = device.compile_device().policy().host_page_textures;
-        let pages = (self.class, self.rows, self.texel);
+        let pages = (self.class, self.rows, self.texel, self.padding);
         Some(in_place::in_place(policy, self.usage, pages, verdict).is_ok())
     }
 }
@@ -588,7 +590,12 @@ impl Texture {
             let checks = &image.device.shared().in_place;
             let verdict = |class, access, rows| checks.verdict(class, access, rows);
             let policy = image.device.compile_device().policy().host_page_textures;
-            let pages = (pending.class, pending.rows, texels.texel_bytes());
+            let pages = (
+                pending.class,
+                pending.rows,
+                texels.texel_bytes(),
+                pending.padding,
+            );
             if texels.buffer.detached() || texels.buffer.copied() {
                 return None;
             }
@@ -767,6 +774,7 @@ impl Texture {
             texture: self.downgrade(),
             class: pending.class,
             rows: pending.rows,
+            padding: pending.padding,
             usage: pending.usage,
             texel: texels.texel_bytes(),
         };

@@ -9,7 +9,13 @@
 //!   for each access it takes (one that renders, `RenderTarget`, its render check; one a shader
 //!   writes, its storage check; one that does neither, its read check), asked in that order until
 //!   one did not pass, else a shadow naming that check's answer (pending, failed, unchecked), its
-//!   access and its row ends.
+//!   access and its row ends. A texture a shader writes whose rows' padding is free asks the
+//!   check of writes that lets that padding change in the stead of the one that keeps it.
+//! - **The padding rule.** Rows' padding is free exactly over a buffer's own rows whose every row,
+//!   to its pitch, shares no line with bytes past them; a round of storage writes that changed
+//!   bytes of that padding alone (any row's, the last's included) fails the check of writes that
+//!   keeps it and counts for the one that lets it change, while a change past the last row's
+//!   pitch, of a texel, or of padding that is not free fails both.
 //! - **Row ends.** Texels share no line with bytes beside them exactly where their first byte,
 //!   their end and, with bytes between rows (or slices), each row's (or slice's) start and end lie
 //!   on a line; and the check's verdicts by row ends fail both where texels that share none
@@ -23,13 +29,17 @@
 
 use crate::in_place::{
     decode, encode, in_place, record_name, verdict_index, Access, DriverIdentity, InPlaceChecks,
-    PagesClass, RowEnds, ShadowCause, Verdict, CHECK_VERSION, STORED_TEXEL_BYTES, VERDICTS,
+    Padding, PagesClass, RowEnds, ShadowCause, Verdict, CHECK_VERSION, STORED_TEXEL_BYTES,
+    VERDICTS,
 };
-use crate::in_place_check::{verdicts, Shape, SHAPES, STORE_SHAPES};
+use crate::in_place_check::{
+    verdicts, Bytes, Due, Pattern, Round, Shape, Tally, Written, SHAPES, STORE_SHAPES,
+};
 use crate::linear_plan::BufferLayout;
 use metal2vulkan::device::HostPageTexturePolicy;
 use metal2vulkan::metal::TextureUsage;
 use sha2::{Digest, Sha256};
+use std::ptr::NonNull;
 use std::time::Duration;
 
 const ANSWERS: [Verdict; 4] = [
@@ -61,10 +71,11 @@ fn unchecked_width(usage: TextureUsage, texel: u64) -> Option<ShadowCause> {
     }
 }
 
-/// The accesses whose checks `usage` asks, in their order: renders where it holds
-/// `RenderTarget`, writes where it holds `ShaderWrite` or `ShaderAtomic`, reads where it holds
+/// The accesses whose checks `usage` asks of a texture whose rows' padding is as `padding` says,
+/// in their order: renders where it holds `RenderTarget`, writes where it holds `ShaderWrite` or
+/// `ShaderAtomic` (those that let the padding change where it is free), reads where it holds
 /// neither.
-fn accesses_of(usage: TextureUsage) -> Vec<Access> {
+fn accesses_of(usage: TextureUsage, padding: Padding) -> Vec<Access> {
     let renders = usage.contains(TextureUsage::RENDER_TARGET);
     let writes = usage.intersects(TextureUsage::SHADER_WRITE | TextureUsage::SHADER_ATOMIC);
     let mut accesses = Vec::new();
@@ -75,7 +86,10 @@ fn accesses_of(usage: TextureUsage) -> Vec<Access> {
         accesses.push(Access::Renders);
     }
     if writes {
-        accesses.push(Access::Writes);
+        accesses.push(match padding {
+            Padding::Free => Access::BufferWrites,
+            Padding::Kept => Access::Writes,
+        });
     }
     accesses
 }
@@ -103,21 +117,25 @@ fn the_decision_takes_a_texture_whose_class_passed_each_of_its_accesses() {
     for reads in ANSWERS {
         for renders in ANSWERS {
             for writes in ANSWERS {
-                answers.push([reads, renders, writes]);
+                for buffer_writes in ANSWERS {
+                    answers.push([reads, renders, writes, buffer_writes]);
+                }
             }
         }
     }
-    for (class, rows) in PagesClass::ALL
-        .into_iter()
-        .flat_map(|class| RowEnds::ALL.map(|rows| (class, rows)))
-    {
+    let each = PagesClass::ALL.into_iter().flat_map(|class| {
+        RowEnds::ALL.into_iter().flat_map(move |rows| {
+            [Padding::Kept, Padding::Free].map(|padding| (class, rows, padding))
+        })
+    });
+    for (class, rows, padding) in each {
         for &usage in &usages {
             for texel in [1u64, 2, 4, 8, 16] {
                 for answer in &answers {
                     let of = |access: Access| answer[access.index()];
                     // Shadow: always the exact form, the check never asked.
                     let asked = std::cell::RefCell::new(Vec::new());
-                    let pages = (class, rows, texel);
+                    let pages = (class, rows, texel, padding);
                     let policy = HostPageTexturePolicy::Shadow;
                     let decided = in_place(policy, usage, pages, |_, access, _| {
                         asked.borrow_mut().push(access);
@@ -138,7 +156,7 @@ fn the_decision_takes_a_texture_whose_class_passed_each_of_its_accesses() {
                     let (expected, due) = match unchecked_width(usage, texel) {
                         Some(cause) => (Err(cause), Vec::new()),
                         None => {
-                            let accesses = accesses_of(usage);
+                            let accesses = accesses_of(usage, padding);
                             let first = accesses.iter().position(|&a| of(a) != Verdict::Passed);
                             match first {
                                 None => (Ok(()), accesses),
@@ -155,7 +173,8 @@ fn the_decision_takes_a_texture_whose_class_passed_each_of_its_accesses() {
                             }
                         }
                     };
-                    let case = format!("{class:?} {rows:?} {usage:?} {texel} {answer:?}");
+                    let case =
+                        format!("{class:?} {rows:?} {padding:?} {usage:?} {texel} {answer:?}");
                     assert_eq!(decided, expected, "{case}");
                     assert_eq!(*asked.borrow(), due, "{case}");
                 }
@@ -182,6 +201,8 @@ fn every_shadow_cause_names_itself() {
         ShadowCause::StoreWidth(1),
         ShadowCause::CheckFailed(PagesClass::Pointer, Access::Renders, inside),
         ShadowCause::CheckFailed(PagesClass::Pointer, Access::Renders, on),
+        ShadowCause::CheckFailed(PagesClass::Pointer, Access::BufferWrites, inside),
+        ShadowCause::CheckPending(PagesClass::Fresh, Access::BufferWrites, on),
     ];
     let words: Vec<String> = causes.iter().map(ShadowCause::words).collect();
     for (at, word) in words.iter().enumerate() {
@@ -198,6 +219,8 @@ fn every_shadow_cause_names_itself() {
     assert!(words[4].contains("dma-bufs"));
     assert!(words[8].contains("not answered") && words[8].contains("storage writes"));
     assert!(words[12].contains("share a line") && words[13].contains("share no line"));
+    assert!(words[14].contains("over a buffer's rows, beside their padding"));
+    assert!(words[15].contains("not answered") && words[15].contains("over a buffer's rows"));
 }
 
 /// A driver identity, every field set.
@@ -519,4 +542,191 @@ fn a_change_beside_texels_that_share_no_line_fails_both_row_ends() {
     // Row ends no round kept every byte for are unchecked.
     assert_eq!(verdicts([0, 21], None, false), [Unchecked, Passed]);
     assert_eq!(verdicts([9, 0], None, false), [Passed, Unchecked]);
+}
+
+#[test]
+fn rows_padding_is_free_over_a_buffer_s_own_rows_that_end_on_lines() {
+    let (kept, free) = (Padding::Kept, Padding::Free);
+    // The guest's surface: 3662 BGRA8 texels a row at a 14656-byte pitch, 2039 rows. Its texels
+    // share a line with its padding; its rows, each to its pitch, share none with bytes past them.
+    let surface = rows_of(0, 14648, 14656, 2039);
+    assert_eq!(RowEnds::of(0, &surface, 64), RowEnds::InLines);
+    assert_eq!(Padding::of(0, &surface, 64, true), free);
+    // Not the buffer's own rows (an IOSurface plane's, or a buffer that ends before the last
+    // row's pitch): kept.
+    assert_eq!(Padding::of(0, &surface, 64, false), kept);
+    // The last row's pitch ends inside a line: kept. 416 x 51 bytes end 32 bytes into a 64-byte
+    // line, and on a 16-byte one.
+    let tight = rows_of(0, 404, 416, 51);
+    assert_eq!(Padding::of(0, &tight, 64, true), kept);
+    assert_eq!(Padding::of(0, &tight, 16, true), free);
+    // The first texel off a line, by the buffer's address or by the texture's offset: kept; both
+    // together back on one: free.
+    assert_eq!(Padding::of(16, &surface, 64, true), kept);
+    assert_eq!(
+        Padding::of(0, &rows_of(16, 14648, 14656, 2039), 64, true),
+        kept
+    );
+    assert_eq!(
+        Padding::of(16, &rows_of(48, 14648, 14656, 2039), 64, true),
+        free
+    );
+    // A pitch off a line: a line between two rows holds one's padding and the next one's texels
+    // alone, so the padding is free where the rows start and end on lines.
+    assert_eq!(Padding::of(0, &rows_of(0, 256, 288, 16), 64, true), free);
+    // Bytes between slices are no row's padding: slices apart must each start and end on lines.
+    let slices = |slice_pitch| BufferLayout {
+        offset: 0,
+        row_pitch: 288,
+        slice_pitch,
+        row_bytes: 256,
+        rows: 4,
+        slices: 3,
+    };
+    assert_eq!(Padding::of(0, &slices(1152), 64, true), free);
+    assert_eq!(Padding::of(0, &slices(1216), 64, true), free);
+    assert_eq!(Padding::of(0, &slices(1184), 64, true), kept);
+    // The check's storage shapes: free at 16-byte lines, and at 64-byte ones but for the pair at
+    // the 16-byte pitch of a driver that lays rows tight, whose rows end inside such a line.
+    for (shape, _) in STORE_SHAPES {
+        assert_eq!(shape.padding(16), free, "{shape:?}");
+        let tight16 = shape.tight && shape.bytes_per_row % 64 != 0;
+        let due = match tight16 {
+            true => kept,
+            false => free,
+        };
+        assert_eq!(shape.padding(64), due, "{shape:?}");
+    }
+}
+
+#[test]
+fn a_round_of_storage_writes_tells_a_change_of_free_padding_apart() {
+    // A 101x51 shape of 4-byte texels at a 512-byte pitch, of the check's storage shapes: 404
+    // bytes of texels a row, then 108 of padding, and the window's bytes after the image.
+    let (shape, _) = STORE_SHAPES[3];
+    assert_eq!(
+        (shape.width, shape.height, shape.texel, shape.bytes_per_row),
+        (101, 51, 4, 512)
+    );
+    assert_eq!(shape.padding(64), Padding::Free);
+    let (pitch, row) = (shape.bytes_per_row, shape.width * shape.texel);
+    let image = pitch * shape.height;
+    let length = image + 4096;
+    let pattern = Pattern::new(7);
+    // A round's compare of the window as it leaves it: the pattern, every texel zero (as after a
+    // pass's clear), the byte at `change` flipped where one is named, and `written` the writer's.
+    let compare = |change: Option<u64>, free: bool, written: Written| {
+        let mut window: Vec<u8> = (0..length).map(|offset| pattern.at(offset)).collect();
+        for y in 0..shape.height {
+            window[(y * pitch) as usize..(y * pitch + row) as usize].fill(0);
+        }
+        if let Some(at) = change {
+            window[at as usize] ^= 0x01;
+        }
+        let bytes = Bytes {
+            start: NonNull::new(window.as_mut_ptr()).unwrap(),
+            length,
+        };
+        bytes.compare(&pattern, (Some((shape, Due::Zero)), free), written)
+    };
+    // The writer wrote nothing (its first sweep reached no byte) and found nothing.
+    let idle = || Written {
+        sweep: 1,
+        reached: 0,
+        changed: None,
+        padding: None,
+    };
+    let flipped = |at: u64, base: u8| (at, base, base ^ 0x01);
+    assert_eq!(compare(None, true, idle()), Round::Kept);
+    // A byte of a row's padding, the first row's, the last row's and the last row's last before
+    // its pitch: padding alone where it is free, a change where it is not.
+    let last = (shape.height - 1) * pitch;
+    for at in [row, pitch + row + 50, last + row, image - 1] {
+        let changed = flipped(at, pattern.at(at));
+        assert_eq!(
+            compare(Some(at), true, idle()),
+            Round::Padded(changed),
+            "{at}"
+        );
+        assert_eq!(
+            compare(Some(at), false, idle()),
+            Round::Changed(changed),
+            "{at}"
+        );
+    }
+    // The first byte past the last row's pitch, and a texel: a change either way.
+    let past = flipped(image, pattern.at(image));
+    assert_eq!(compare(Some(image), true, idle()), Round::Changed(past));
+    assert_eq!(
+        compare(Some(last + 4), true, idle()),
+        Round::Changed(flipped(last + 4, 0))
+    );
+    // What the writer found: a byte of the padding, kept to the end; another byte, a change.
+    let found = (row + 3, 0x11, 0x22);
+    let padded = || Written {
+        padding: Some(found),
+        ..idle()
+    };
+    assert_eq!(compare(None, true, padded()), Round::Padded(found));
+    assert_eq!(compare(Some(image), true, padded()), Round::Changed(past));
+    let changed = Written {
+        changed: Some((image + 9, 0x11, 0x22)),
+        ..padded()
+    };
+    assert_eq!(
+        compare(None, true, changed),
+        Round::Changed((image + 9, 0x11, 0x22))
+    );
+}
+
+#[test]
+fn a_round_that_changed_padding_alone_fails_only_the_check_of_writes_that_keeps_it() {
+    use Verdict::{Failed, Passed, Unchecked};
+    let (inside, on) = (RowEnds::InLines, RowEnds::OnLines);
+    // The Iris Xe's walk: shapes whose texels share no line keep every byte; those that share
+    // one change their rows' padding alone (the line of a row's last texels, written back whole).
+    let mut tally = Tally::default();
+    for _ in 0..12 {
+        assert!(!tally.kept(on, false));
+    }
+    assert!(tally.kept(inside, true), "the first such round is noted");
+    assert!(!tally.kept(inside, true));
+    assert_eq!(
+        tally.verdicts(Access::Writes, None, false),
+        vec![[Failed, Passed], [Passed, Passed]]
+    );
+    // The other accesses' rounds answer their own verdicts alone.
+    assert_eq!(
+        tally.verdicts(Access::Renders, None, false),
+        vec![[Failed, Passed]]
+    );
+    // A byte past the padding changed too: both fail for its row ends.
+    assert_eq!(
+        tally.verdicts(Access::Writes, Some(inside), false),
+        vec![[Failed, Passed], [Failed, Passed]]
+    );
+    // Padding changed beside texels that share no line: the check that keeps it fails for both
+    // row ends, the other passes.
+    let mut tally = Tally::default();
+    assert!(tally.kept(on, true));
+    assert!(!tally.kept(inside, false));
+    assert_eq!(
+        tally.verdicts(Access::Writes, None, false),
+        vec![[Failed, Failed], [Passed, Passed]]
+    );
+    assert_eq!(
+        tally.verdicts(Access::Writes, Some(on), false),
+        vec![[Failed, Failed], [Failed, Failed]]
+    );
+    // Row ends no round kept are unchecked, and a forced failure fails the rest.
+    let mut tally = Tally::default();
+    tally.kept(on, false);
+    assert_eq!(
+        tally.verdicts(Access::Writes, None, false),
+        vec![[Unchecked, Passed], [Unchecked, Passed]]
+    );
+    assert_eq!(
+        tally.verdicts(Access::Writes, None, true),
+        vec![[Unchecked, Failed], [Unchecked, Failed]]
+    );
 }

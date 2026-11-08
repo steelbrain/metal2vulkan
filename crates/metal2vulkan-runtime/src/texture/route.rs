@@ -9,7 +9,7 @@ use super::image_error;
 use crate::buffer::CallerMemory;
 use crate::buffer_texture::Texels;
 use crate::image_plan::{plan_image, ImageFacts, ImagePlan};
-use crate::in_place::{self, Access, PagesClass, Refusal, RowEnds, ShadowCause, Verdict};
+use crate::in_place::{self, Access, Padding, PagesClass, Refusal, RowEnds, ShadowCause, Verdict};
 use crate::texture_descriptor::{texture_usage, TextureDescriptor, TextureLayout};
 use crate::texture_placement::TexturePlacement;
 use crate::{Device, Error};
@@ -24,10 +24,12 @@ pub(crate) enum Route {
     /// The buffer's bytes are no host pages: an image aliasing the buffer's memory where the
     /// device makes one on Metal's layout, else the shadow.
     Device,
-    /// Over host pages of `class`, its texels lying in the device's lines as `rows` says.
+    /// Over host pages of `class`, its texels lying in the device's lines as `rows` says, and
+    /// `padding` saying whether a shader's writes may change their rows' padding.
     Host {
         class: PagesClass,
         rows: RowEnds,
+        padding: Padding,
         way: HostWay,
     },
 }
@@ -106,10 +108,17 @@ impl Device {
             _ => return Route::Device,
         };
         // How the texels lie in the device's lines of memory, each checked apart
-        // (`in_place::RowEnds`).
-        let rows = texels.rows(self.shared().in_place.line());
-        let host = |way| Route::Host { class, rows, way };
-        let pages = (class, rows, texels.texel_bytes());
+        // (`in_place::RowEnds`), and whether a shader's writes may change their rows' padding
+        // (`in_place::Padding`).
+        let line = self.shared().in_place.line();
+        let (rows, padding) = (texels.rows(line), texels.padding(line));
+        let host = |way| Route::Host {
+            class,
+            rows,
+            padding,
+            way,
+        };
+        let pages = (class, rows, texels.texel_bytes(), padding);
         let checking = in_place::checking();
         let detached = texels.buffer.detached();
         let policy = self.compile_device().policy().host_page_textures;

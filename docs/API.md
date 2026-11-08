@@ -354,7 +354,12 @@ that share none (their first byte, their end and, with bytes between rows, each 
 end on a line): a device that writes back a texel's line whole puts an older value back over a
 CPU write in the first alone, as the Iris Xe's clear and store and draws do, so its render targets
 and written textures whose rows end on a line, a 3840x2160 `BGRA8Unorm` surface's among them,
-take the image in place where the others keep the shadow. It runs
+take the image in place where the others keep the shadow. A kernel's writes of a texture over a
+buffer's rows (no IOSurface plane's) whose rows, each to its pitch, start and end on a line, its
+buffer holding the last row to its pitch, may change the rows' padding (section 10, **Kernels**):
+the same rounds give a second verdict for such textures, which a round that changed only bytes of
+its rows' padding passes, so the Iris Xe's written textures over a buffer take the image in place
+whatever their rows' ends. It runs
 on a thread of its own, which the first such texture starts; a texture made before its kind of
 pages and access has its verdict is a shadow, made without waiting for the check
 (`WorkCounts::host_texture_shadows_check_pending`), and moves in place, with no copy, at a quiet
@@ -1545,7 +1550,9 @@ bound.
   (`HostPageTexturePolicy::Shadow`), a shader writes the texture's texels of 1 or 2 bytes, which
   the device's check stores none of, the device's check that the operations of an access of the
   texture (the first move; a render pass's load and store; a kernel's storage writes) keep every
-  byte over that kind of pages, for texels that share a line of the device's memory
+  byte (but, for a kernel's writes of a texture over a buffer's rows whose padding is free, that
+  padding: section 10, **Kernels**) over that kind of pages, for texels that share a line of the
+  device's memory
   (`nonCoherentAtomSize`) with bytes beside them or not as the texture's do, has not answered yet,
   found a byte changed or made no image, or no
   image in place serves the texels (its rows share bytes, the device lays no linear image's rows at
@@ -4567,6 +4574,22 @@ each item named states the rule in full.
 
 **Kernels**
 
+- **A kernel's writes of a texture over a buffer may change its rows' padding** (each row's bytes
+  after its last texel to its pitch, the last row's included), where the texture is an image in
+  place over host pages whose rows, each to its pitch, start and end on a line of the device's
+  memory (`nonCoherentAtomSize`), its buffer holding the last row to its pitch, and the device's
+  check found its kernel's storage writes changing no byte but of such padding (the check
+  report's `buffer writes` verdicts). Metal leaves those bytes to the GPU, and the rule follows
+  the x86 Macs' envelope. Measured over 100 rounds of each operation, the CPU writing the padding
+  while the GPU ran, `BGRA8Unorm` textures of 3662x64 and 61x64 over a buffer (14848 and 256-byte
+  pitches) and over an IOSurface (14656 and 256): an Intel UHD Graphics 630 (macOS 26.7.1) wrote
+  older values back over the CPU's writes to the padding of the textures over a buffer under a
+  kernel's writes (10,197 and 28,162 bytes, 304 and 307 of them in the last row), and over the
+  IOSurfaces and under a pass's clear and store or a draw kept every byte; an M3 Max (macOS
+  27.0.1, arm64 and x86_64) kept every byte under each; a Radeon Pro 5300M (macOS 26.7.1), its
+  rows read once each operation completed, with no CPU write meanwhile, kept every byte under
+  each. A render target's rows, an IOSurface plane's, and the bytes past the last row's pitch or
+  between slices keep every byte (`crates/metal2vulkan-conformance/probes/row_padding_writes.m`).
 - **An imageblock's length rounds its cell as an M4 does**
   (`ComputePipelineState::imageblock_memory_length_for_dimensions`), never less than what a
   dispatch counts against the device's threadgroup memory.

@@ -26,10 +26,12 @@
 //!   passed for an image a shader writes over the class (`Pointer writes: Passed`), each is in
 //!   place (`vk_image` answers one; `host_textures_in_place`, `host_textures_in_place_written`) or
 //!   a shadow its refusal counts; where it did not, a shadow counted by the check's answer, on a
-//!   discrete GPU as on any other. A kernel then writes every texel, with no usage shadow
-//!   (`undeclared-usage-shadow`): every texel of the pages holds the value, and the bytes between
-//!   the rows and past the last hold the pattern. Printed (`IN-PLACE-WRITTEN`): each texture's
-//!   path.
+//!   discrete GPU as on any other; where the rows' padding is free (`in_place::Padding`), the
+//!   verdict is the one that lets it change (`Pointer buffer writes: Passed`). A kernel then
+//!   writes every texel, with no usage shadow (`undeclared-usage-shadow`): every texel of the
+//!   pages holds the value, the bytes past the last row hold the pattern, and so do the bytes
+//!   between the rows but of a texture in place whose padding is free. Printed
+//!   (`IN-PLACE-WRITTEN`): each texture's path.
 //! - [`writes_and_passes_beyond_the_usage_take_their_shadows`], under the validation layer: an
 //!   in-place 64x64 `RGBA16Float` texture of `ShaderRead` usage alone, with padded rows and with
 //!   packed ones (where the device takes either in place), written by a kernel (no `ShaderWrite`)
@@ -41,9 +43,9 @@
 //!   layer: a 64x64 `R32Uint` texture over a no-copy buffer of anonymous pages, of each usage that
 //!   renders or writes, once the device's check answered: each is in place where the check passed
 //!   over the class for each of its accesses (`Pointer renders: Passed` for one that renders,
-//!   `Pointer writes: Passed` for one a shader writes, `ShaderWrite` or `ShaderAtomic`; `vk_image`
-//!   answers one, `host_textures_in_place`, and `host_textures_in_place_written` for one a shader
-//!   writes), else a shadow counted by the check's answer or the device's refusal; under
+//!   `Pointer buffer writes: Passed` for one a shader writes, `ShaderWrite` or `ShaderAtomic`, its
+//!   rows' padding free; `vk_image` answers one, `host_textures_in_place`, and
+//!   `host_textures_in_place_written` for one a shader writes), else a shadow counted by the check's answer or the device's refusal; under
 //!   `HostPageTexturePolicy::Shadow` every one is the exact form's (`host_texture_shadows_exact`).
 //!   Each shadow that renders also counts in `host_texture_shadows_render_target`, and each one a
 //!   shader writes in `host_texture_shadows_shader_write`.
@@ -113,12 +115,33 @@ pub(super) fn passed(device: &Device, what: &str, buffer: &Buffer, (w, h, bpr): 
     in_place_rows::passed(device, what, on_lines)
 }
 
+/// Whether the device's check passed for a shader's writes over `class` (`Pointer`, ...) of a 2D
+/// texture of `(w, h, bpr)` bytes at the start of `buffer`, which holds no IOSurface plane: those
+/// that let its rows' padding change where it is free (`in_place_rows::padding_free`), else those
+/// that keep it.
+pub(super) fn writes_passed(
+    device: &Device,
+    class: &str,
+    buffer: &Buffer,
+    (w, h, bpr): Rows,
+) -> bool {
+    let first = buffer.contents().map_or(0, |at| at.as_ptr() as u64);
+    let held = buffer.length() >= h * bpr;
+    let free = in_place_rows::padding_free(device, first, bpr, h, held);
+    passed(
+        device,
+        &in_place_rows::writes(class, free),
+        buffer,
+        (w, h, bpr),
+    )
+}
+
 /// A 2D texture's rows: the bytes of a row's texels, its rows, and their pitch.
 pub(super) type Rows = (u64, u64, u64);
 
 /// The verdicts the device's check gives, each a line of its report before what it found
-/// changed: three classes, three accesses, two row ends.
-const VERDICTS: usize = 18;
+/// changed: three classes, four accesses, two row ends.
+const VERDICTS: usize = 24;
 
 /// The devices made again where load beside the submission checks split their import tax's tries
 /// ([`answered_device`]).
@@ -676,7 +699,11 @@ fn written_textures_over_host_pages_take_the_path_their_checks_answered() {
                 }
                 Err(error) => panic!("new_buffer_with_bytes_no_copy: {error:?}"),
             };
-            let checked = passed(&device, "Pointer writes", &buffer, (w * 8, h, bpr));
+            let checked = writes_passed(&device, "Pointer", &buffer, (w * 8, h, bpr));
+            // Rows whose padding is free (`in_place::Padding`): in place, a shader's writes may
+            // change it, as Metal's do on an x86 Mac's GPU.
+            let first = buffer.contents().map_or(0, |at| at.as_ptr() as u64);
+            let free = in_place_rows::padding_free(&device, first, bpr, h, true);
             let before = device.work_counts();
             let texture = written(&buffer, PixelFormat::RGBA16Float, (w, h, bpr));
             let after = device.work_counts();
@@ -735,7 +762,8 @@ fn written_textures_over_host_pages_take_the_path_their_checks_answered() {
                     }
                 }
                 let between = (y * bpr + w * 8) as usize..((y + 1) * bpr) as usize;
-                if now[between.clone()] != pattern[between] {
+                let kept = !(free && path == "in place");
+                if kept && now[between.clone()] != pattern[between] {
                     lapses.push(format!("{what}: row {y}'s padding"));
                 }
             }
@@ -915,7 +943,7 @@ fn textures_that_render_or_write_take_the_path_their_checks_answered() {
         // The verdicts its `R32Uint` texels take.
         let rows = (w * 4, h, bpr);
         let renders_in_place = passed(&device, "Pointer renders", &buffer, rows);
-        let writes_in_place = passed(&device, "Pointer writes", &buffer, rows);
+        let writes_in_place = writes_passed(&device, "Pointer", &buffer, rows);
         for usage in usages {
             let mut d = TextureDescriptor::texture_2d(PixelFormat::R32Uint, w, h, false);
             d.usage = usage;

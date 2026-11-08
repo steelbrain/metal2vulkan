@@ -1,7 +1,7 @@
 //! Where a texture over a buffer's bytes lies (`texture_placement.rs`): each route the making
 //! takes (`texture/route.rs`) answers its own placement, and every shadow cause its own reason.
 
-use crate::in_place::{Access, PagesClass, Refusal, RowEnds, ShadowCause};
+use crate::in_place::{Access, Padding, PagesClass, Refusal, RowEnds, ShadowCause};
 use crate::texture::{HostWay, Route};
 use crate::{InPlaceAccess, InPlaceRefusal, InPlaceRowEnds, TexturePlacement, TextureShadowReason};
 
@@ -10,6 +10,7 @@ fn host(way: HostWay) -> Route {
     Route::Host {
         class: PagesClass::Pointer,
         rows: RowEnds::InLines,
+        padding: Padding::Kept,
         way,
     }
 }
@@ -37,6 +38,7 @@ fn each_route_answers_its_own_placement() {
         (Access::Reads, InPlaceAccess::Reads),
         (Access::Renders, InPlaceAccess::Renders),
         (Access::Writes, InPlaceAccess::Writes),
+        (Access::BufferWrites, InPlaceAccess::Writes),
     ];
     let rows = [
         (RowEnds::InLines, InPlaceRowEnds::InLines),

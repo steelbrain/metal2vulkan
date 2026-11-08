@@ -105,7 +105,10 @@ pub enum InPlaceAccess {
     /// store operations and the feedback loop moves.
     Renders,
     /// Its usage writes it through a shader (`ShaderWrite` or `ShaderAtomic`): its image also
-    /// takes kernels' storage writes of its texels.
+    /// takes kernels' storage writes of its texels. Of a texture over a buffer's rows whose rows,
+    /// each to its pitch, start and end on a line, its buffer holding the last row to its pitch,
+    /// the check that lets those writes change the bytes between a row's texels and its pitch,
+    /// which Metal's GPUs differ on; else the one that keeps every byte beside the texels.
     Writes,
 }
 
@@ -159,7 +162,7 @@ impl InPlaceAccess {
         match access {
             in_place::Access::Reads => InPlaceAccess::Reads,
             in_place::Access::Renders => InPlaceAccess::Renders,
-            in_place::Access::Writes => InPlaceAccess::Writes,
+            in_place::Access::Writes | in_place::Access::BufferWrites => InPlaceAccess::Writes,
         }
     }
 }

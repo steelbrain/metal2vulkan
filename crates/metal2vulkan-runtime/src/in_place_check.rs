@@ -52,7 +52,14 @@
 //!   a driver's write of a block wider than a texel past a row's or the image's end shows, or one
 //!   after another, and 1920x1080 at 4 bytes) [`ROUNDS`] times. Its rounds are stores: a program's
 //!   atomics on such a texture are kernels' storage writes of its texels too, but none is among
-//!   the rounds.
+//!   the rounds. The same rounds give the verdicts of a shader's writes of a texture over a
+//!   buffer's rows whose padding is free ([`Access::BufferWrites`], `in_place::Padding`): a round
+//!   whose texels all read the kernel's bytes, and every byte but of its rows' padding (after a
+//!   row's last texel, before its pitch, the last row's included) the CPU's or the pattern, where
+//!   the shape's padding is free ([`Shape::padding`]), fails the one and keeps the other
+//!   ([`Round::Padded`]): its writer writes on past such a byte, and the rounds go on through
+//!   every shape for those verdicts. No round of its own runs for them, so the check takes no
+//!   longer than on a device whose every round kept every byte.
 //! - **Its buffers' addresses** lie outside the Metal address space (`AddressPlacement::Outside`,
 //!   `address.rs`), each made as the product makes its class's otherwise: the check runs while
 //!   the program makes its resources, so a range of the space it took would refuse a pin of the
@@ -123,7 +130,9 @@ use crate::check_draw::CheckDraw;
 use crate::device::holds::Holder;
 use crate::exit_guard;
 use crate::host_memory::HostMemory;
-use crate::in_place::{encode, mark_checking, record_name, Access, PagesClass, RowEnds, Verdict};
+use crate::in_place::{
+    encode, mark_checking, record_name, Access, Padding, PagesClass, RowEnds, Verdict,
+};
 use crate::linear_plan::BufferLayout;
 use crate::values::ResourceOptions;
 use crate::{
@@ -279,18 +288,35 @@ impl Shape {
             && offset % self.bytes_per_row < self.width * self.texel
     }
 
-    /// How its texels lie in lines of `line` bytes ([`RowEnds::of`]): its texture starts the
-    /// window, which starts on a page.
-    pub(crate) fn rows(&self, line: u64) -> RowEnds {
-        let layout = BufferLayout {
+    /// Whether the window's byte at `offset` is one of its rows' padding: after a row's last
+    /// texel, before its pitch (the last row's included).
+    fn in_padding(&self, offset: u64) -> bool {
+        offset < self.bytes_per_row * self.height
+            && offset % self.bytes_per_row >= self.width * self.texel
+    }
+
+    /// Its texels' layout in the window, which its texture starts.
+    fn layout(&self) -> BufferLayout {
+        BufferLayout {
             offset: 0,
             row_pitch: self.bytes_per_row,
             slice_pitch: self.bytes_per_row * self.height,
             row_bytes: self.width * self.texel,
             rows: self.height,
             slices: 1,
-        };
-        RowEnds::of(0, &layout, line)
+        }
+    }
+
+    /// How its texels lie in lines of `line` bytes ([`RowEnds::of`]): its texture starts the
+    /// window, which starts on a page.
+    pub(crate) fn rows(&self, line: u64) -> RowEnds {
+        RowEnds::of(0, &self.layout(), line)
+    }
+
+    /// Whether its rows' padding is free in lines of `line` bytes ([`Padding::of`]): its texture
+    /// lies over a buffer's rows, whose window holds them to their pitch.
+    pub(crate) fn padding(&self, line: u64) -> Padding {
+        Padding::of(0, &self.layout(), line, true)
     }
 
     /// Whether a class's rounds take it, in lines of `line` bytes, after shapes whose texels share
@@ -365,17 +391,24 @@ fn run(weak: crate::device::WeakDevice) {
     let mut stopped = false;
     for class in PagesClass::ALL {
         for access in Access::ALL {
+            // The accesses this one's rounds answer: none of an access with no rounds of its own.
+            let answered = access.answered();
+            if answered.is_empty() {
+                continue;
+            }
             let Some(device) = weak.hold() else {
                 return;
             };
             let checks = &device.shared().in_place;
-            let pending = |rows| checks.verdict(class, access, rows) == Verdict::Pending;
-            if !RowEnds::ALL.into_iter().any(pending) {
+            let pending = |(access, rows)| checks.verdict(class, access, rows) == Verdict::Pending;
+            let each =
+                || (answered.iter()).flat_map(|&access| RowEnds::ALL.map(|rows| (access, rows)));
+            if !each().any(pending) {
                 continue;
             }
             if stopped || word_overwritten(&device) {
                 stopped = true;
-                for rows in RowEnds::ALL {
+                for (access, rows) in each() {
                     checks.set(class, access, rows, Verdict::Unchecked);
                 }
                 continue;
@@ -384,10 +417,12 @@ fn run(weak: crate::device::WeakDevice) {
                 // The process is exiting, or the program let the device go: nothing is kept.
                 return;
             };
-            for rows in RowEnds::ALL {
-                let verdict = verdicts[rows.index()];
-                checks.set(class, access, rows, verdict);
-                device.shared().counts.in_place_check_ran(verdict);
+            for (&access, verdicts) in answered.iter().zip(verdicts) {
+                for rows in RowEnds::ALL {
+                    let verdict = verdicts[rows.index()];
+                    checks.set(class, access, rows, verdict);
+                    device.shared().counts.in_place_check_ran(verdict);
+                }
             }
             // Shadows made before their verdicts that know them now may move in place.
             device.in_place_verdicts_given();
@@ -427,23 +462,27 @@ fn word_overwritten(device: &Device) -> bool {
     unsafe { device.shared().loader_word.overwritten() }
 }
 
-/// The verdicts of `class` for `access` on `device`, by row ends ([`RowEnds::ALL`]'s order):
-/// every shape's rounds, those of shapes whose texels share no line with bytes beside them first
-/// ([`Shape::rows`]), until one fails, or until the device's loader word is found overwritten
-/// (unchecked then where no round ran); [`verdicts`] gives them. `None` where the process is
-/// exiting, or the program's last drop stopped the device's holds before a round
+/// The verdicts of `class` on `device` for each access `access`'s rounds answer
+/// ([`Access::answered`]), in that order, each by row ends ([`RowEnds::ALL`]'s order): every
+/// shape's rounds, those of shapes whose texels share no line with bytes beside them first
+/// ([`Shape::rows`]), until one changes a byte, or until the device's loader word is found
+/// overwritten (unchecked then where no round ran); [`Tally::verdicts`] gives them. A round of
+/// storage writes that changed no byte but of its shape's rows' padding, where that padding is
+/// free ([`Shape::padding`]), fails [`Access::Writes`] for its row ends and counts for
+/// [`Access::BufferWrites`] as a round that kept every byte, and the rounds go on. `None` where
+/// the process is exiting, or the program's last drop stopped the device's holds before a round
 /// (`device/holds.rs`).
-fn check_class(device: &Device, class: PagesClass, access: Access) -> Option<[Verdict; 2]> {
+fn check_class(device: &Device, class: PagesClass, access: Access) -> Option<Vec<[Verdict; 2]>> {
     let page = host_page();
     let line = device.shared().in_place.line();
-    let unchecked = [Verdict::Unchecked; 2];
+    let unchecked = || vec![[Verdict::Unchecked; 2]; access.answered().len()];
     let Some(pages) = ClassPages::make(device, class, BUFFER_BYTES) else {
-        return Some(unchecked);
+        return Some(unchecked());
     };
     // The command queue an image that renders takes its passes on, the check's own, and the
     // draw it takes after them.
     let mut renders = match access {
-        Access::Reads | Access::Writes => None,
+        Access::Reads | Access::Writes | Access::BufferWrites => None,
         Access::Renders => {
             let made = exit_guard::enter().map(|_busy| {
                 let queue = device.new_command_queue_now()?;
@@ -451,20 +490,21 @@ fn check_class(device: &Device, class: PagesClass, access: Access) -> Option<[Ve
             });
             match made? {
                 Ok(renders) => Some(renders),
-                Err(_) => return Some(unchecked),
+                Err(_) => return Some(unchecked()),
             }
         }
     };
     // An image a shader writes takes the shapes its kernel stores, each with its view; those
     // whose texels share no line with bytes beside them first.
     let mut shapes: Vec<(Shape, Option<ShadowTexelView>)> = match access {
-        Access::Writes => STORE_SHAPES
+        Access::Writes | Access::BufferWrites => STORE_SHAPES
             .map(|(shape, texel)| (shape, Some(texel)))
             .to_vec(),
         Access::Reads | Access::Renders => SHAPES.map(|shape| (shape, None)).to_vec(),
     };
     shapes.sort_by_key(|(shape, _)| shape.rows(line) != RowEnds::OnLines);
-    let mut made = [0; 2];
+    let forced = device.shared().in_place.forced_failure();
+    let mut tally = Tally::default();
     // The texel sizes of the shapes whose texels share a line made so far (`Shape::runs`).
     let mut made_sharing = Vec::new();
     for (shape, texel) in shapes {
@@ -472,62 +512,127 @@ fn check_class(device: &Device, class: PagesClass, access: Access) -> Option<[Ve
             continue;
         }
         let rows = shape.rows(line);
+        // A round of storage writes over a shape whose rows' padding is free tells a change
+        // there apart.
+        let free = texel.is_some() && shape.padding(line) == Padding::Free;
         for round in 0..ROUNDS {
             if !device.holds_go_on(Holder::InPlaceCheck) {
                 return None;
             }
             step_aside(device);
             if word_overwritten(device) {
-                return Some(unchecked);
+                return Some(unchecked());
             }
             let outcome = {
                 let _busy = exit_guard::enter()?;
                 match texel {
-                    Some(texel) => store_round(device, &pages, (shape, texel), round, page),
+                    Some(texel) => store_round(device, &pages, (shape, texel, free), round, page),
                     None => check_round(&pages, shape, round, page, renders.as_mut()),
                 }
             };
-            match outcome {
+            let made = |made_sharing: &mut Vec<u64>| {
+                if rows == RowEnds::InLines && !made_sharing.contains(&shape.texel) {
+                    made_sharing.push(shape.texel);
+                }
+            };
+            let ((offset, due, read), padding) = match outcome {
                 Round::Kept => {
-                    made[rows.index()] += 1;
-                    if rows == RowEnds::InLines && !made_sharing.contains(&shape.texel) {
-                        made_sharing.push(shape.texel);
-                    }
+                    tally.kept(rows, false);
+                    made(&mut made_sharing);
+                    continue;
                 }
                 Round::NotMade => break,
-                Round::Changed((offset, due, read)) => {
-                    let image = shape.bytes_per_row * shape.height;
-                    let place = match offset.checked_rem(shape.bytes_per_row) {
-                        _ if offset >= image => "after the image",
-                        Some(column) if column >= shape.width * shape.texel => "between two rows",
-                        _ => "a texel",
-                    };
-                    let operations = match access {
-                        Access::Reads => "the first move",
-                        Access::Renders => {
-                            "the first move, feedback loop moves, a pass's clear and store or a \
-                             draw"
-                        }
-                        Access::Writes => "the first move or a kernel's storage writes",
-                    };
-                    let lines = match rows {
-                        RowEnds::InLines => "",
-                        RowEnds::OnLines => ", rows on lines",
-                    };
-                    device.shared().in_place.note(format!(
-                        "{class:?}{lines}: {operations} of a {:?} image of {}x{} with rows {} \
-                         bytes apart changed byte {offset} ({place}) from {due:#04x} to \
-                         {read:#04x} in round {round}",
-                        shape.format, shape.width, shape.height, shape.bytes_per_row
-                    ));
-                    let forced = device.shared().in_place.forced_failure();
-                    return Some(verdicts(made, Some(rows), forced));
+                Round::Padded(changed) => {
+                    made(&mut made_sharing);
+                    // The first such round is noted; the rounds go on.
+                    if !tally.kept(rows, true) {
+                        continue;
+                    }
+                    (changed, true)
                 }
+                Round::Changed(changed) => (changed, false),
+            };
+            let image = shape.bytes_per_row * shape.height;
+            let place = match offset.checked_rem(shape.bytes_per_row) {
+                _ if offset >= image => "after the image",
+                Some(column) if column >= shape.width * shape.texel => "after a row's texels",
+                _ => "a texel",
+            };
+            let operations = match access {
+                Access::Reads => "the first move",
+                Access::Renders => {
+                    "the first move, feedback loop moves, a pass's clear and store or a draw"
+                }
+                Access::Writes | Access::BufferWrites => {
+                    "the first move or a kernel's storage writes"
+                }
+            };
+            let lines = match rows {
+                RowEnds::InLines => "",
+                RowEnds::OnLines => ", rows on lines",
+            };
+            let alone = match padding {
+                true => ", and no byte but of its rows' padding",
+                false => "",
+            };
+            device.shared().in_place.note(format!(
+                "{class:?}{lines}: {operations} of a {:?} image of {}x{} with rows {} bytes apart \
+                 changed byte {offset} ({place}) from {due:#04x} to {read:#04x} in round \
+                 {round}{alone}",
+                shape.format, shape.width, shape.height, shape.bytes_per_row
+            ));
+            if !padding {
+                return Some(tally.verdicts(access, Some(rows), forced));
             }
         }
     }
-    let forced = device.shared().in_place.forced_failure();
-    Some(verdicts(made, None, forced))
+    Some(tally.verdicts(access, None, forced))
+}
+
+/// A class's rounds for an access so far (`check_class`): those that kept every byte, by row ends
+/// ([`RowEnds::ALL`]'s order); those that changed no byte but of their shape's free padding
+/// ([`Shape::padding`]) or none at all, by row ends; and the row ends of the first round that
+/// changed a byte of that padding.
+#[derive(Default)]
+pub(crate) struct Tally {
+    kept: [u32; 2],
+    beside: [u32; 2],
+    padding: Option<RowEnds>,
+}
+
+impl Tally {
+    /// Count a round of shapes of `rows` row ends that kept every byte, or, where `padded`, that
+    /// changed none but of its shape's free padding: whether it is the first that changed one
+    /// there.
+    pub(crate) fn kept(&mut self, rows: RowEnds, padded: bool) -> bool {
+        self.beside[rows.index()] += 1;
+        if !padded {
+            self.kept[rows.index()] += 1;
+            return false;
+        }
+        let first = self.padding.is_none();
+        self.padding.get_or_insert(rows);
+        first
+    }
+
+    /// The verdicts of each access `access`'s rounds answer, in [`Access::answered`]'s order, on
+    /// a device made to fail its check where `forced`, where `changed` names the row ends of the
+    /// round that changed a byte but of its shape's free padding, where one did (which ends the
+    /// class's rounds): the access's own ([`verdicts`]), of its rounds that kept every byte, the
+    /// row ends of the first that changed any byte failed; then, of [`Access::Writes`], those of
+    /// [`Access::BufferWrites`], of its rounds that changed no byte but of that padding, those
+    /// of `changed` failed.
+    pub(crate) fn verdicts(
+        &self,
+        access: Access,
+        changed: Option<RowEnds>,
+        forced: bool,
+    ) -> Vec<[Verdict; 2]> {
+        let own = verdicts(self.kept, self.padding.or(changed), forced);
+        let beside = verdicts(self.beside, changed, forced);
+        let answered = access.answered().len();
+        [own, beside].into_iter().take(answered).collect()
+    }
 }
 
 /// The verdicts, by row ends ([`RowEnds::ALL`]'s order), of a class and access whose rounds kept
@@ -547,11 +652,16 @@ pub(crate) fn verdicts(made: [u32; 2], changed: Option<RowEnds>, forced: bool) -
 }
 
 /// What one round found.
-enum Round {
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum Round {
     /// The image's move kept every byte.
     Kept,
     /// The texture took no image in place (the device makes none of the shape there).
     NotMade,
+    /// A byte of its shape's rows' padding read other than the CPU left it, where a round of
+    /// storage writes tells that padding apart ([`Shape::padding`]), and every other byte read
+    /// right: where the first was, what was due, what was read.
+    Padded((u64, u8, u8)),
     /// A byte read other than the CPU left it: where, what was due, what was read.
     Changed((u64, u8, u8)),
 }
@@ -595,7 +705,7 @@ fn check_round(
     let outcome = std::thread::scope(|scope| {
         let builder = std::thread::Builder::new().name("m2v-in-place-writes".to_owned());
         let Ok(writer) = exit_guard::spawn_scoped(scope, builder, || {
-            bytes.write_until(&pattern, texels, (&stop, &started))
+            bytes.write_until(&pattern, (texels, false), (&stop, &started))
         }) else {
             return None;
         };
@@ -616,10 +726,7 @@ fn check_round(
     };
     drop(texture);
     let texels = texels.map(|shape| (shape, Due::Zero));
-    match bytes.compare(&pattern, texels, written) {
-        None => Round::Kept,
-        Some(changed) => Round::Changed(changed),
-    }
+    bytes.compare(&pattern, (texels, false), written)
 }
 
 /// Stops the round's writer as it goes: once the round's step returned, or where it unwinds.
@@ -635,11 +742,12 @@ impl Drop for Stopping<'_> {
 /// caller's section: the pattern; a texture of shader write usage over it; the bytes of a buffer
 /// of `device`'s stored into its texels by a kernel, while the CPU writes the bytes beside them
 /// (between rows and after the image) and the image takes its first move; and the bytes
-/// compared: each texel's the kernel's, each other byte the CPU's or the pattern.
+/// compared: each texel's the kernel's, each other byte the CPU's or the pattern, a change of a
+/// byte of the rows' padding told apart where `free` ([`Round::Padded`]).
 fn store_round(
     device: &Device,
     pages: &ClassPages,
-    (shape, texel): (Shape, ShadowTexelView),
+    (shape, texel, free): (Shape, ShadowTexelView, bool),
     round: usize,
     page: u64,
 ) -> Round {
@@ -692,7 +800,7 @@ fn store_round(
     let outcome = std::thread::scope(|scope| {
         let builder = std::thread::Builder::new().name("m2v-in-place-writes".to_owned());
         let Ok(writer) = exit_guard::spawn_scoped(scope, builder, || {
-            bytes.write_until(&pattern, Some(shape), (&stop, &started))
+            bytes.write_until(&pattern, (Some(shape), free), (&stop, &started))
         }) else {
             return None;
         };
@@ -706,17 +814,13 @@ fn store_round(
         return Round::NotMade;
     };
     drop(texture);
-    let texels = Some((shape, Due::Stored));
-    match bytes.compare(&pattern, texels, written) {
-        None => Round::Kept,
-        Some(changed) => Round::Changed(changed),
-    }
+    bytes.compare(&pattern, (Some((shape, Due::Stored)), free), written)
 }
 
 /// What a round's texels must read once it ended, where the writer passed them over: zero (a
 /// pass cleared them) or the bytes a kernel stored (`Pattern::stored`).
 #[derive(Clone, Copy)]
-enum Due {
+pub(crate) enum Due {
     Zero,
     Stored,
 }
@@ -905,9 +1009,9 @@ fn dma_buf_pages(device: &Device, length: u64) -> Option<ClassPages> {
 
 /// A window of a class's pages, from its byte 0.
 #[derive(Clone, Copy)]
-struct Bytes {
-    start: NonNull<u8>,
-    length: u64,
+pub(crate) struct Bytes {
+    pub(crate) start: NonNull<u8>,
+    pub(crate) length: u64,
 }
 
 // SAFETY: the window's pages stay mapped while the round uses them (its buffer holds them), and
@@ -929,7 +1033,7 @@ const PERIOD: usize = 4099;
 
 /// A round's pattern: [`PERIOD`] bytes of a hash of their place and the round, repeated over the
 /// window. A byte the writer wrote holds it changed by its last sweep's [`mark`].
-struct Pattern {
+pub(crate) struct Pattern {
     bytes: Vec<u8>,
     /// The bytes a kernel of a round of storage writes stores, by their place in the period: the
     /// pattern's, changed in four bits, so that each differs from the pattern.
@@ -938,7 +1042,7 @@ struct Pattern {
 
 impl Pattern {
     /// The pattern of round `salt`.
-    fn new(salt: u64) -> Pattern {
+    pub(crate) fn new(salt: u64) -> Pattern {
         let bytes = (0..PERIOD as u64)
             .map(|offset| {
                 let mixed = (offset ^ salt.rotate_left(17)).wrapping_mul(0x9E37_79B9_7F4A_7C15);
@@ -950,7 +1054,7 @@ impl Pattern {
     }
 
     /// Its byte at `offset` of the window.
-    fn at(&self, offset: u64) -> u8 {
+    pub(crate) fn at(&self, offset: u64) -> u8 {
         self.bytes[(offset % PERIOD as u64) as usize]
     }
 
@@ -973,12 +1077,14 @@ impl Pattern {
 
 /// What a round's writer wrote ([`Bytes::write_until`]): the sweep it was in as it stopped, how
 /// many of the stride's bytes that sweep reached (each byte before that one written by it, each
-/// after by the sweep before), and the first byte it found other than it left it, where it found
-/// one: its offset, what was due and what was read.
-struct Written {
-    sweep: u64,
-    reached: u64,
-    changed: Option<(u64, u8, u8)>,
+/// after by the sweep before), the first byte it found other than it left it, where it found one
+/// (its offset, what was due and what was read), and the first of its shape's rows' padding it
+/// found so, where it told that padding apart.
+pub(crate) struct Written {
+    pub(crate) sweep: u64,
+    pub(crate) reached: u64,
+    pub(crate) changed: Option<(u64, u8, u8)>,
+    pub(crate) padding: Option<(u64, u8, u8)>,
 }
 
 /// What sweep `sweep` of a round's writer changes the pattern by: nothing before the first
@@ -1039,7 +1145,8 @@ impl Bytes {
     /// pattern changed by [`mark`]`(k)`, and reads each byte before it writes it, which must still
     /// hold what the sweep before left there (the pattern before the first). `started` once the
     /// first byte is written. What it wrote, and the first byte it found otherwise, where it found
-    /// one (then it stops there).
+    /// one (then it stops there); but where `free`, a byte of the shape's rows' padding it found
+    /// otherwise is noted apart, the first of them, and written on as any other.
     ///
     /// A device that writes back bytes it read beside the texels (a whole line of a cache, say, of
     /// which the texels hold part) leaves there what they held when it read them. Where the writer
@@ -1054,7 +1161,7 @@ impl Bytes {
     fn write_until(
         &self,
         pattern: &Pattern,
-        texels: Option<Shape>,
+        (texels, free): (Option<Shape>, bool),
         (stop, started): (&AtomicBool, &Barrier),
     ) -> Written {
         let stride = self.stride();
@@ -1065,6 +1172,8 @@ impl Bytes {
                 started.wait();
             }
         };
+        let in_padding = |offset| free && texels.is_some_and(|shape| shape.in_padding(offset));
+        let mut padding = None;
         let mut sweep = 1;
         loop {
             let (before, now) = (mark(sweep - 1), mark(sweep));
@@ -1078,13 +1187,16 @@ impl Bytes {
                 // SAFETY: as in `fill`; the round's thread does not touch the bytes meanwhile.
                 let read = unsafe { byte.read_volatile() };
                 if read != due {
-                    started_once();
-                    let changed = Some((offset, due, read));
-                    return Written {
-                        sweep,
-                        reached: n,
-                        changed,
-                    };
+                    if !in_padding(offset) {
+                        started_once();
+                        return Written {
+                            sweep,
+                            reached: n,
+                            changed: Some((offset, due, read)),
+                            padding,
+                        };
+                    }
+                    padding.get_or_insert((offset, due, read));
                 }
                 // SAFETY: as above.
                 unsafe { byte.write_volatile(pattern.at(offset) ^ now) };
@@ -1094,6 +1206,7 @@ impl Bytes {
                         sweep,
                         reached: n + 1,
                         changed: None,
+                        padding,
                     };
                 }
             }
@@ -1101,23 +1214,27 @@ impl Bytes {
         }
     }
 
-    /// The first byte that reads other than the writer and the round left it, after `written`:
-    /// its offset, what was due and what was read; `None` where every byte reads right. The first
-    /// byte the writer found changed, where it found one; else each byte it wrote must read what
-    /// its last sweep over it wrote (the stride's first `written.reached` bytes that sweep's, the
+    /// What the round found after `written` ([`Round`]): the first byte that reads other than
+    /// the writer and the round left it, its offset, what was due and what was read, where one
+    /// does ([`Round::Changed`]); else, where `free`, the first byte of the rows' padding of the
+    /// shape `texels` names that does ([`Round::Padded`]); else [`Round::Kept`]. The first byte
+    /// the writer found changed, where it found one; else each byte it wrote must read what its
+    /// last sweep over it wrote (the stride's first `written.reached` bytes that sweep's, the
     /// rest the sweep's before, where there was one), and is set back to the pattern as it is
     /// read; then every byte must read the pattern, compared a period at a time, but, where
     /// `texels` names the shape a pass cleared or a kernel stored, its texels, which must read
     /// what is due of them.
-    fn compare(
+    pub(crate) fn compare(
         &self,
         pattern: &Pattern,
-        texels: Option<(Shape, Due)>,
+        (texels, free): (Option<(Shape, Due)>, bool),
         written: Written,
-    ) -> Option<(u64, u8, u8)> {
-        if written.changed.is_some() {
-            return written.changed;
+    ) -> Round {
+        if let Some(changed) = written.changed {
+            return Round::Changed(changed);
         }
+        let in_padding = |offset| free && texels.is_some_and(|(shape, _)| shape.in_padding(offset));
+        let mut padding = written.padding;
         let stride = self.stride();
         let reached = match written.sweep {
             1 => written.reached,
@@ -1136,13 +1253,19 @@ impl Bytes {
             // SAFETY: as in `fill`; the writer was joined.
             let read = unsafe { self.byte(offset).read_volatile() };
             if read != due {
-                return Some((offset, due, read));
+                if !in_padding(offset) {
+                    return Round::Changed((offset, due, read));
+                }
+                padding.get_or_insert((offset, due, read));
             }
             // SAFETY: as above.
             unsafe { self.byte(offset).write_volatile(pattern.at(offset)) };
         }
         let Some((shape, due)) = texels else {
-            return self.matches(&pattern.bytes, 0, self.length);
+            return match self.matches(&pattern.bytes, 0, self.length) {
+                Some(changed) => Round::Changed(changed),
+                None => Round::Kept,
+            };
         };
         // Each row's texels read what is due, and the bytes after them to the next row the
         // pattern.
@@ -1159,19 +1282,25 @@ impl Bytes {
                 }
                 Due::Stored => self.matches(&pattern.stored, start, start + row_bytes),
             };
-            if changed.is_some() {
-                return changed;
+            if let Some(changed) = changed {
+                return Round::Changed(changed);
             }
             let next = start + shape.bytes_per_row;
             if let Some(changed) = self.matches(&pattern.bytes, start + row_bytes, next) {
-                return Some(changed);
+                if !free {
+                    return Round::Changed(changed);
+                }
+                padding.get_or_insert(changed);
             }
         }
-        self.matches(
-            &pattern.bytes,
-            shape.bytes_per_row * shape.height,
-            self.length,
-        )
+        let after = shape.bytes_per_row * shape.height;
+        if let Some(changed) = self.matches(&pattern.bytes, after, self.length) {
+            return Round::Changed(changed);
+        }
+        match padding {
+            Some(changed) => Round::Padded(changed),
+            None => Round::Kept,
+        }
     }
 
     /// The first byte from `from` to `to` that does not read `period` (a period's bytes, by their

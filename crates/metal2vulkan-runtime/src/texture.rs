@@ -2360,6 +2360,7 @@ impl Device {
             Route::Host {
                 class,
                 rows,
+                padding,
                 way: HostWay::InPlace { storable },
             } => {
                 let checking = in_place::checking();
@@ -2379,14 +2380,18 @@ impl Device {
                     }
                     Err((refusal, why)) => ShadowCause::Refused(refusal, why),
                 };
-                let shadowed = (class, rows, cause);
+                let shadowed = (class, (rows, padding), cause);
                 self.host_shadowed(shadowed, (usage, &plan), descriptor, pending)?
             }
             Route::Host {
                 class,
                 rows,
+                padding,
                 way: HostWay::Shadow(cause),
-            } => self.host_shadowed((class, rows, cause), (usage, &plan), descriptor, pending)?,
+            } => {
+                let shadowed = (class, (rows, padding), cause);
+                self.host_shadowed(shadowed, (usage, &plan), descriptor, pending)?
+            }
             Route::Device => {
                 // Whether an image may hold the texels: none where their rows (or slices) lie
                 // with the buffer's bytes between them (`linear_plan::holding`), and else why.
@@ -2562,14 +2567,19 @@ impl Device {
     }
 
     /// A texture over host pages of `class`, its texels lying in the device's lines as `rows`
-    /// says, of `usage` and declared plan `plan` (`texture`), made with `descriptor`, is a shadow
+    /// says and its rows' padding as `padding` says (`in_place::Padding`), of `usage` and declared
+    /// plan `plan` (`texture`), made with `descriptor`, is a shadow
     /// for `cause`: counted by why, and where made before its class's verdict for its access,
     /// `pending` set to what it needs to move in place once the verdict passes. The shadow's
     /// notice's reason. Refused (internal) on the device's check's own thread, whose textures take
     /// the image in place.
     fn host_shadowed(
         &self,
-        (class, rows, cause): (PagesClass, in_place::RowEnds, ShadowCause),
+        (class, (rows, padding), cause): (
+            PagesClass,
+            (in_place::RowEnds, in_place::Padding),
+            ShadowCause,
+        ),
         (usage, plan): (TextureUsage, &ImagePlan),
         descriptor: &TextureDescriptor,
         pending: &mut Option<in_place::PendingMove>,
@@ -2583,6 +2593,7 @@ impl Device {
             *pending = Some(in_place::PendingMove {
                 class,
                 rows,
+                padding,
                 usage,
                 plan: plan.clone(),
                 descriptor: *descriptor,

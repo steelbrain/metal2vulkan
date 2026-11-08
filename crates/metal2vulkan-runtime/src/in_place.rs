@@ -48,11 +48,16 @@
 //!   the texels' address, offset and pitches), for each access the texture's declared usage (as
 //!   Metal reports it, an `Unknown` one every usage) takes ([`Access::takes`]): it renders (`RenderTarget`), a shader
 //!   writes it (`ShaderWrite` or `ShaderAtomic`, of texels of 4, 8 or 16 bytes, the widths the
-//!   check's kernel stores: [`STORED_TEXEL_BYTES`]), or it is sampled or read alone. Plain Metal
-//!   also writes through a texture beyond its declared usage, and renders into one made without
-//!   `RenderTarget`: such a write binds the texture's usage shadow (`texture/usage_shadow.rs`), and
-//!   such a pass renders through an attachment stand-in (`attachment_stand_in.rs`), since the
-//!   image has neither storage nor attachment usage; the copies of both touch texels alone.
+//!   check's kernel stores: [`STORED_TEXEL_BYTES`]), or it is sampled or read alone. Of a texture
+//!   a shader writes over a buffer's rows whose padding is free ([`Padding`]: real Macs' GPUs
+//!   disagree on those bytes under a kernel's writes, and the owner's ruling of 2026-11-07 takes
+//!   the x86 Macs' envelope), the check of writes is the one that lets a byte of the rows'
+//!   padding change ([`Access::BufferWrites`]); renders, and an IOSurface plane's rows, keep
+//!   every byte. Plain Metal also writes through a texture beyond its declared usage, and renders
+//!   into one made without `RenderTarget`: such a write binds the texture's usage shadow
+//!   (`texture/usage_shadow.rs`), and such a pass renders through an attachment stand-in
+//!   (`attachment_stand_in.rs`), since the image has neither storage nor attachment usage; the
+//!   copies of both touch texels alone.
 //!   Elsewhere the texture is a shadow (`shadow.rs`), its notice naming why ([`ShadowCause`]) and
 //!   counted by cause (`WorkCounts::host_texture_shadows_*`, and those that render apart).
 //! - **Before the verdict.** A texture made before its class's verdict for its access is known
@@ -142,6 +147,12 @@ pub(crate) enum Access {
     /// Its usage writes it through a shader (`ShaderWrite` or `ShaderAtomic`, whatever else it
     /// holds): its image takes its first move and kernels' storage writes of its texels.
     Writes,
+    /// As [`Writes`](Self::Writes), of a texture whose rows' padding is free ([`Padding::Free`]):
+    /// its rounds are those of [`Writes`](Self::Writes), but a byte of its rows' padding (each
+    /// row's bytes after its last texel to its pitch, the last row's included) may change. A
+    /// usage never takes it alone: [`in_place`] asks it in the stead of
+    /// [`Writes`](Self::Writes) for such a texture.
+    BufferWrites,
 }
 
 /// The bytes of the texels a texture a shader writes may have to be in place: those the check's
@@ -150,11 +161,17 @@ pub(crate) const STORED_TEXEL_BYTES: [u64; 3] = [4, 8, 16];
 
 impl Access {
     /// Every access, in the order the check runs them and the record holds their verdicts.
-    pub(crate) const ALL: [Access; 3] = [Access::Reads, Access::Renders, Access::Writes];
+    pub(crate) const ALL: [Access; 4] = [
+        Access::Reads,
+        Access::Renders,
+        Access::Writes,
+        Access::BufferWrites,
+    ];
 
     /// Whether a texture of Metal `usage` (as Metal reports it) takes this access: one that
     /// renders, one a shader writes (both, where it does both), or one that only samples or
-    /// reads. Each of its accesses' checks covers its first move.
+    /// reads. Each of its accesses' checks covers its first move. None takes
+    /// [`BufferWrites`](Self::BufferWrites) alone ([`in_place`]).
     pub(crate) fn takes(self, usage: TextureUsage) -> bool {
         let renders = usage.contains(TextureUsage::RENDER_TARGET);
         let writes = usage.intersects(TextureUsage::SHADER_WRITE | TextureUsage::SHADER_ATOMIC);
@@ -162,6 +179,19 @@ impl Access {
             Access::Reads => !renders && !writes,
             Access::Renders => renders,
             Access::Writes => writes,
+            Access::BufferWrites => false,
+        }
+    }
+
+    /// The accesses the check's rounds of this one give verdicts of, in [`ALL`](Self::ALL)'s
+    /// order: its own, and of [`Writes`](Self::Writes) those of
+    /// [`BufferWrites`](Self::BufferWrites) too, which has no rounds of its own.
+    pub(crate) fn answered(self) -> &'static [Access] {
+        match self {
+            Access::Reads => &[Access::Reads],
+            Access::Renders => &[Access::Renders],
+            Access::Writes => &[Access::Writes, Access::BufferWrites],
+            Access::BufferWrites => &[],
         }
     }
 
@@ -171,6 +201,7 @@ impl Access {
             Access::Reads => 0,
             Access::Renders => 1,
             Access::Writes => 2,
+            Access::BufferWrites => 3,
         }
     }
 
@@ -185,6 +216,10 @@ impl Access {
             Access::Writes => {
                 "the first move and a kernel's storage writes of the texels of an image a shader \
                  writes"
+            }
+            Access::BufferWrites => {
+                "the first move and a kernel's storage writes of the texels of an image a shader \
+                 writes over a buffer's rows, beside their padding"
             }
         }
     }
@@ -252,6 +287,49 @@ impl RowEnds {
     }
 }
 
+/// Whether a shader's writes of a texture's texels may change its rows' padding: each row's bytes
+/// after its last texel to its pitch, the last row's included (the bytes between slices are no
+/// row's). Metal leaves them to its GPU under a kernel's writes of a texture over a buffer: an
+/// Intel UHD Graphics 630 (macOS 26.7.1) wrote back older values over the CPU's writes to them,
+/// the last row's included, under such writes, where an M3 Max (macOS 27.0.1) and a Radeon Pro
+/// 5300M kept them (`crates/metal2vulkan-conformance/probes/row_padding_writes.m`); every GPU
+/// kept them under its draws, clears and stores, and an IOSurface plane's under kernels too. The
+/// rule follows the x86 Macs' envelope: what one of them does to those bytes, a texture over a
+/// buffer may do ([`Access::BufferWrites`]; docs/API.md, section 10, **Kernels**).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Padding {
+    /// Its rows' padding is kept, as every byte beside its texels is: an IOSurface plane's rows,
+    /// a texture whose buffer ends before its last row's pitch, or one whose texels and padding
+    /// share a line of the device's memory with bytes past them ([`Padding::of`]).
+    Kept,
+    /// A texture over a buffer's rows, its buffer holding its last row to its pitch, whose
+    /// texels and padding share no line with bytes past them: a shader's writes may change its
+    /// padding.
+    Free,
+}
+
+impl Padding {
+    /// The padding of texels laid out as `layout` in a buffer whose first byte lies `start`
+    /// bytes past a multiple of `line` ([`RowEnds::of`]), where `owned` (they lie over a
+    /// buffer's rows, no IOSurface plane's, and the buffer holds their last row to its pitch):
+    /// free where the rows, each to its pitch, share no line with bytes past them.
+    pub(crate) fn of(
+        start: u64,
+        layout: &crate::linear_plan::BufferLayout,
+        line: u64,
+        owned: bool,
+    ) -> Padding {
+        let padded = crate::linear_plan::BufferLayout {
+            row_bytes: layout.row_pitch,
+            ..*layout
+        };
+        match owned && RowEnds::of(start, &padded, line) == RowEnds::OnLines {
+            true => Padding::Free,
+            false => Padding::Kept,
+        }
+    }
+}
+
 /// The verdicts a device's check gives: one for each class, access and row ends, those of
 /// [`RowEnds::InLines`] first, then those of [`RowEnds::OnLines`], each class by class
 /// ([`PagesClass::ALL`]), each class's accesses in [`Access::ALL`]'s order.
@@ -307,6 +385,7 @@ impl Verdict {
 pub(crate) struct PendingMove {
     pub(crate) class: PagesClass,
     pub(crate) rows: RowEnds,
+    pub(crate) padding: Padding,
     pub(crate) usage: TextureUsage,
     pub(crate) plan: crate::image_plan::ImagePlan,
     pub(crate) descriptor: crate::texture_descriptor::TextureDescriptor,
@@ -424,15 +503,18 @@ impl ShadowCause {
 }
 
 /// Whether a texture over host pages of `class`, its texels lying in the device's lines as `rows`
-/// says, of Metal `usage` (as Metal reports it) and texels of `texel` bytes, on a device of
-/// `policy`, is tried as an image in place; else why it is a shadow (the module docs). `verdict`
-/// answers the device's check for the class, each access the texture takes ([`Access::takes`]),
-/// in [`Access::ALL`]'s order, and the row ends, asked only of a texture the policy and texel
-/// width let through (a pending one starts the check), until one did not pass.
+/// says, its rows' padding as `padding` says, of Metal `usage` (as Metal reports it) and texels
+/// of `texel` bytes, on a device of `policy`, is tried as an image in place; else why it is a
+/// shadow (the module docs). `verdict` answers the device's check for the class, each access the
+/// texture takes ([`Access::takes`]), in [`Access::ALL`]'s order, and the row ends, asked only of
+/// a texture the policy and texel width let through (a pending one starts the check), until one
+/// did not pass: for a shader's writes of a texture whose padding is free, the verdict of
+/// [`Access::BufferWrites`], which passes wherever that of [`Access::Writes`] does (the same
+/// rounds give both, and it lets more change).
 pub(crate) fn in_place(
     policy: HostPageTexturePolicy,
     usage: TextureUsage,
-    (class, rows, texel): (PagesClass, RowEnds, u64),
+    (class, rows, texel, padding): (PagesClass, RowEnds, u64, Padding),
     mut verdict: impl FnMut(PagesClass, Access, RowEnds) -> Verdict,
 ) -> Result<(), ShadowCause> {
     if policy == HostPageTexturePolicy::Shadow {
@@ -442,6 +524,10 @@ pub(crate) fn in_place(
         return Err(ShadowCause::StoreWidth(texel));
     }
     for access in Access::ALL.into_iter().filter(|access| access.takes(usage)) {
+        let access = match (access, padding) {
+            (Access::Writes, Padding::Free) => Access::BufferWrites,
+            (access, _) => access,
+        };
         match verdict(class, access, rows) {
             Verdict::Passed => {}
             Verdict::Pending => return Err(ShadowCause::CheckPending(class, access, rows)),
@@ -591,7 +677,7 @@ impl Drop for Waiting<'_> {
 /// differs, and so does the version it holds). The runtime's own version is not in the record: a
 /// release that changes none of these keeps the verdicts the driver gave, so a device made after
 /// it reads them again rather than checking anew.
-pub(crate) const CHECK_VERSION: u32 = 6;
+pub(crate) const CHECK_VERSION: u32 = 7;
 
 /// A record's first bytes.
 const MAGIC: [u8; 8] = *b"M2VINPL\0";
@@ -668,7 +754,7 @@ pub(crate) fn record_name(identity: &DriverIdentity) -> String {
 /// magic          8 bytes   "M2VINPL\0"
 /// version        u32       CHECK_VERSION
 /// identity       32 bytes  DriverIdentity::digest
-/// verdicts       18 bytes  one per class, access and row ends, VERDICTS' order (verdict_index)
+/// verdicts       24 bytes  one per class, access and row ends, VERDICTS' order (verdict_index)
 /// checksum       32 bytes  SHA-256 of every byte before it
 /// ```
 ///
@@ -863,11 +949,14 @@ impl Device {
 
     /// The device's check's verdicts now, one line per class for a texture that reads
     /// (`Pointer: Passed`), then one per class for one that renders (`Pointer renders: Passed`),
-    /// then one per class for one a shader writes (`Pointer writes: Passed`), each for texels that
-    /// share a line with bytes beside them (`RowEnds::InLines`); then the same nine for texels
-    /// that share none (`Pointer, rows on lines: Passed`, `Pointer renders, rows on lines:
-    /// Passed`, `Pointer writes, rows on lines: Passed`); and what it found changed where one
-    /// failed. A runtime extension for the lanes that report it.
+    /// then one per class for one a shader writes (`Pointer writes: Passed`), then one per class
+    /// for one a shader writes over a buffer's rows whose padding may change (`Pointer buffer
+    /// writes: Passed`, `in_place::Padding`), each for texels that share a line with bytes beside
+    /// them (`RowEnds::InLines`); then the same twelve for texels that share none (`Pointer, rows
+    /// on lines: Passed`, `Pointer renders, rows on lines: Passed`, `Pointer writes, rows on
+    /// lines: Passed`, `Pointer buffer writes, rows on lines: Passed`); and what it found changed
+    /// where one failed (or where only a row's padding changed). A runtime extension for the
+    /// lanes that report it.
     #[doc(hidden)]
     pub fn in_place_check_report(&self) -> Vec<String> {
         self.current().in_place_check_report_now()
@@ -886,6 +975,7 @@ impl Device {
                 Access::Reads => format!("{class:?}{lines}: {verdict:?}"),
                 Access::Renders => format!("{class:?} renders{lines}: {verdict:?}"),
                 Access::Writes => format!("{class:?} writes{lines}: {verdict:?}"),
+                Access::BufferWrites => format!("{class:?} buffer writes{lines}: {verdict:?}"),
             }
         };
         let line = &line;

@@ -53,7 +53,7 @@ use crate::device::lock;
 use crate::error::{vulkan, Error, RuntimeGap};
 use crate::framebuffer_fetch::storage_candidate;
 use crate::image_plan::{ImageFacts, ImagePlan};
-use crate::in_place::{Access, PagesClass, Refusal, RowEnds};
+use crate::in_place::{Access, Padding, PagesClass, Refusal, RowEnds};
 use crate::linear_plan::{check_linear_limits, linear_lack, BufferLayout, LinearLack};
 use crate::shadow_copy_back::WordView;
 use crate::shadow_copy_in::CopyIn;
@@ -307,6 +307,7 @@ impl Device {
                     image: Arc::downgrade(&image_any),
                     from_base: buffer_offset + layout.offset - base,
                     layout,
+                    padding_owned: texels.padding_owned(),
                 });
             }
         }
@@ -794,25 +795,35 @@ impl Device {
         })
     }
 
-    /// How the texels `watch` notes lie in the device's lines of memory (`in_place::RowEnds`):
+    /// How the texels `watch` notes lie in the device's lines of memory (`in_place::RowEnds`),
+    /// and whether a shader's writes may change their rows' padding (`in_place::Padding`):
     /// `from_base` past the pages' first byte, which starts a page.
-    fn watched_rows(&self, watch: &InPlaceWatch) -> RowEnds {
+    fn watched_rows(&self, watch: &InPlaceWatch) -> (RowEnds, Padding) {
         let start = watch.from_base - watch.layout.offset;
-        RowEnds::of(start, &watch.layout, self.shared().in_place.line())
+        let line = self.shared().in_place.line();
+        let padding = Padding::of(start, &watch.layout, line, watch.padding_owned);
+        (RowEnds::of(start, &watch.layout, line), padding)
     }
 
     /// Whether the device's check passed for fresh pages, each of `image`'s accesses and texels
     /// that lie in lines as `rows` says: an image of attachment usage renders, one of storage
-    /// usage is written, one of neither reads.
-    fn fresh_pages_take(&self, image: &Image, rows: RowEnds) -> bool {
+    /// usage is written, one of neither reads. The writes of one that does not render whose
+    /// rows' padding is free take the check that lets it change (`in_place::in_place`); one that
+    /// renders may hold the storage usage a render target takes where the check that keeps it
+    /// passed (`Device::storage_over_buffer`'s `storable`), which it asks.
+    fn fresh_pages_take(&self, image: &Image, (rows, padding): (RowEnds, Padding)) -> bool {
         use metal2vulkan::vk::ImageUsageFlags;
         let usage = image.plan().usage;
         let renders = usage.contains(ImageUsageFlags::COLOR_ATTACHMENT);
         let writes = usage.contains(ImageUsageFlags::STORAGE);
+        let written = match (padding, renders) {
+            (Padding::Free, false) => Access::BufferWrites,
+            _ => Access::Writes,
+        };
         let accesses = [
             (Access::Reads, !renders && !writes),
             (Access::Renders, renders),
-            (Access::Writes, writes),
+            (written, writes),
         ];
         accesses.into_iter().all(|(access, takes)| {
             !takes
