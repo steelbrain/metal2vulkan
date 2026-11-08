@@ -1591,6 +1591,11 @@ log makes no Vulkan object to ask one). On NVIDIA that range is the GPU virtual 
 report names. It
 also logs each placement of 4 MiB or more in a pooled block as it is placed and returned: an image
 or a buffer, its memory class where placed, its bytes, its offset and its block's handle and type.
+With `METAL2VULKAN_LOG_SHADOWS` set, a device logs one line per shadow it makes of a texture over a
+buffer's bytes (id name `metal2vulkan-shadows`, `Info` severity): the call (an IOSurface plane's
+among them), the texture's format, size, levels and usage, the buffer's storage mode, length and
+object ID, the texels' offset and row pitch, and why no image over the bytes serves, as the
+texture's `shadowed-texture` notice says it.
 Whatever the variables, a placement heap's `newTextureWithDescriptor:offset:` that makes no texture
 (`Nil` or `OutOfMemory`) at an offset inside the heap says so (id name
 `metal2vulkan-heap-texture-refused`, `Info` severity): the descriptor, the offset, the heap's size,

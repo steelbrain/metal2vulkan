@@ -3025,8 +3025,8 @@ field	metal2vulkan-runtime::WorkCounts.row_copies_dispatched	pub row_copies_disp
 field	metal2vulkan-runtime::WorkCounts.row_copy_regions	pub row_copy_regions: u64
 field	metal2vulkan-runtime::WorkCounts.row_copy_regions_most	pub row_copy_regions_most: u64
 field	metal2vulkan-runtime::WorkCounts.run_bound_buffers_made	pub run_bound_buffers_made: u64
-field	metal2vulkan-runtime::WorkCounts.run_imports_made	pub run_imports_made: u64
 field	metal2vulkan-runtime::WorkCounts.run_imports_live	pub run_imports_live: u64
+field	metal2vulkan-runtime::WorkCounts.run_imports_made	pub run_imports_made: u64
 field	metal2vulkan-runtime::WorkCounts.sampler_sets_destroyed	pub sampler_sets_destroyed: u64
 field	metal2vulkan-runtime::WorkCounts.sampler_sets_made	pub sampler_sets_made: u64
 field	metal2vulkan-runtime::WorkCounts.sampler_sets_shared	pub sampler_sets_shared: u64
@@ -3117,6 +3117,17 @@ field	metal2vulkan-runtime::WorkCounts.shadow_texels_recopied_in_mapped_buffers	
 field	metal2vulkan-runtime::WorkCounts.shadow_texels_recopied_in_private_buffers	pub shadow_texels_recopied_in_private_buffers: u64
 field	metal2vulkan-runtime::WorkCounts.shadow_texels_recopied_in_surfaces	pub shadow_texels_recopied_in_surfaces: u64
 field	metal2vulkan-runtime::WorkCounts.shadow_texels_skipped_by_standing	pub shadow_texels_skipped_by_standing: u64
+field	metal2vulkan-runtime::WorkCounts.shadow_texels_unskipped_after_encoder_writes	pub shadow_texels_unskipped_after_encoder_writes: u64
+field	metal2vulkan-runtime::WorkCounts.shadow_texels_unskipped_between_instances	pub shadow_texels_unskipped_between_instances: u64
+field	metal2vulkan-runtime::WorkCounts.shadow_texels_unskipped_command_buffer	pub shadow_texels_unskipped_command_buffer: u64
+field	metal2vulkan-runtime::WorkCounts.shadow_texels_unskipped_image_written	pub shadow_texels_unskipped_image_written: u64
+field	metal2vulkan-runtime::WorkCounts.shadow_texels_unskipped_let_go	pub shadow_texels_unskipped_let_go: u64
+field	metal2vulkan-runtime::WorkCounts.shadow_texels_unskipped_never_stood	pub shadow_texels_unskipped_never_stood: u64
+field	metal2vulkan-runtime::WorkCounts.shadow_texels_unskipped_recorded_whole	pub shadow_texels_unskipped_recorded_whole: u64
+field	metal2vulkan-runtime::WorkCounts.shadow_texels_unskipped_stood	pub shadow_texels_unskipped_stood: u64
+field	metal2vulkan-runtime::WorkCounts.shadow_texels_unskipped_truth_written	pub shadow_texels_unskipped_truth_written: u64
+field	metal2vulkan-runtime::WorkCounts.shadow_texels_unskipped_unnamed_since	pub shadow_texels_unskipped_unnamed_since: u64
+field	metal2vulkan-runtime::WorkCounts.shadow_texels_unskipped_unstanding	pub shadow_texels_unskipped_unstanding: u64
 field	metal2vulkan-runtime::WorkCounts.shadowed_textures	pub shadowed_textures: u64
 field	metal2vulkan-runtime::WorkCounts.shadows_over_fresh_pages	pub shadows_over_fresh_pages: u64
 field	metal2vulkan-runtime::WorkCounts.shadows_sharing_truth	pub shadows_sharing_truth: u64

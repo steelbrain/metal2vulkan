@@ -15,6 +15,7 @@ use super::memory::FreeCause;
 use super::recorder::CommandsRecorded;
 use super::scheduler::HeldFor;
 use super::shadow::{Backing, CarryTally, CopyCause, Lost, ShadowCopy, ShadowSource};
+use super::shadow_standing::{LetGo, Unskipped};
 use super::Device;
 use crate::shards::{Mine, Sharded, Tallies, Tally};
 use ash::vk;
@@ -413,6 +414,8 @@ pub(crate) struct Counters {
     shadow_copies_in_against_standing: AtomicU64,
     shadow_copies_in_skipped_by_standing: AtomicU64,
     shadow_texels_skipped_by_standing: AtomicU64,
+    shadow_texels_unskipped: [AtomicU64; 6],
+    shadow_texels_unskipped_standing: [AtomicU64; 5],
     shadow_texels_copied_in: AtomicU64,
     shadow_texels_first_copied_in: AtomicU64,
     shadow_texels_first_copied_in_images: AtomicU64,
@@ -3301,6 +3304,24 @@ impl Counters {
             (self.shadow_copies_in_skipped_by_standing).fetch_add(1, Ordering::Relaxed);
             (self.shadow_texels_skipped_by_standing).fetch_add(texels, Ordering::Relaxed);
         }
+    }
+
+    /// A command buffer's first copy in of a shadow whose truth only the runtime's commands write
+    /// moved its `texels`, decided `at`; of a shadow that may stand, its standing let go as
+    /// `let_go` says, `None` where it stood (`shadow_standing.rs`).
+    pub(crate) fn shadow_copy_in_unskipped(
+        &self,
+        at: Unskipped,
+        let_go: Option<LetGo>,
+        texels: u64,
+    ) {
+        (self.shadow_texels_unskipped[at as usize]).fetch_add(texels, Ordering::Relaxed);
+        if at == Unskipped::Unstanding {
+            return;
+        }
+        // Where it stood first, then each cause in order.
+        let standing = let_go.map_or(0, |let_go| let_go as usize + 1);
+        (self.shadow_texels_unskipped_standing[standing]).fetch_add(texels, Ordering::Relaxed);
     }
 
     /// An encoder planned `copy`, a copy in of a shadowed texture: its texels
@@ -6594,6 +6615,40 @@ pub struct WorkCounts {
     /// The texels those would have moved; they are among `shadow_texels_copied_in` and its
     /// split, which count every copy in as it is planned.
     pub shadow_texels_skipped_by_standing: u64,
+    /// The texels of a command buffer's first copies in of a shadow whose truth only the runtime's
+    /// commands write (`shadow_texels_first_copied_in_private_buffers` and
+    /// `shadow_texels_first_copied_in_private_surfaces`) that moved them, by where each was
+    /// decided (`shadow_standing.rs`): with `shadow_texels_skipped_by_standing`, the six sum to
+    /// those first copies in. This one: of a shadow that never stands (its buffer untracked, a
+    /// heap's or over the caller's memory, its `VkBuffer` handed out, or its writes dropped).
+    pub shadow_texels_unskipped_unstanding: u64,
+    /// Recorded between two render pass instances of a pass its encoder holds, which no batch's
+    /// submission decides.
+    pub shadow_texels_unskipped_between_instances: u64,
+    /// After a command of its encoder wrote what it reads.
+    pub shadow_texels_unskipped_after_encoder_writes: u64,
+    /// Recorded whole as its encoder recorded it: inside a predicated loop's laying, or where no
+    /// new `VkCommandBuffer` could be made.
+    pub shadow_texels_unskipped_recorded_whole: u64,
+    /// At its batch's submission, where its command buffer may reach memory no use names, or an
+    /// earlier encoder of it wrote the truth or the image.
+    pub shadow_texels_unskipped_command_buffer: u64,
+    /// At its batch's submission, where its standing was let go of.
+    pub shadow_texels_unskipped_let_go: u64,
+    /// The same texels but `shadow_texels_unskipped_unstanding`'s, by what the shadow's standing
+    /// held as each copy was decided (as its encoder recorded it, by the batches submitted
+    /// then, for the first three of where): the five sum to them. This one: it stood, so where
+    /// it was decided alone moved them.
+    pub shadow_texels_unskipped_stood: u64,
+    /// No command buffer's end left its image standing since it was made.
+    pub shadow_texels_unskipped_never_stood: u64,
+    /// A batch that may reach memory no use names was submitted since it stood.
+    pub shadow_texels_unskipped_unnamed_since: u64,
+    /// A batch submitted since it stood wrote its truth: another shadow's copy back or merge over
+    /// the same bytes, a blit's, a pass's or a kernel's write.
+    pub shadow_texels_unskipped_truth_written: u64,
+    /// A batch submitted since it stood wrote its image.
+    pub shadow_texels_unskipped_image_written: u64,
     /// The texels those copies in move from a 2D texture's buffer's bytes to its image (a texture
     /// over a buffer, a no-copy buffer or an IOSurface plane): every texel, or those inside the
     /// rectangle bounding a pass's draws' scissors over an attachment it loads and takes in no
@@ -7124,6 +7179,12 @@ impl Device {
             |at: PassBegun| counters.render_passes_begun_by[at as usize].load(Ordering::Relaxed);
         let split =
             |cause: Split| counters.instance_splits_by[cause as usize].load(Ordering::Relaxed);
+        let unskipped =
+            |at: Unskipped| counters.shadow_texels_unskipped[at as usize].load(Ordering::Relaxed);
+        let standing = |let_go: Option<LetGo>| {
+            let at = let_go.map_or(0, |let_go| let_go as usize + 1);
+            counters.shadow_texels_unskipped_standing[at].load(Ordering::Relaxed)
+        };
         let (sleeps, [by_commit, by_completion, by_host, by_slice], scheduler_spared, gpu_waits) =
             self.shared().scheduler.sleeps_and_wakings();
         let idle_stalls = self.shared().scheduler.idle_stall_counts();
@@ -7959,6 +8020,17 @@ impl Device {
             shadow_texels_skipped_by_standing: counters
                 .shadow_texels_skipped_by_standing
                 .load(Ordering::Relaxed),
+            shadow_texels_unskipped_unstanding: unskipped(Unskipped::Unstanding),
+            shadow_texels_unskipped_between_instances: unskipped(Unskipped::BetweenInstances),
+            shadow_texels_unskipped_after_encoder_writes: unskipped(Unskipped::AfterEncoderWrites),
+            shadow_texels_unskipped_recorded_whole: unskipped(Unskipped::RecordedWhole),
+            shadow_texels_unskipped_command_buffer: unskipped(Unskipped::CommandBuffer),
+            shadow_texels_unskipped_let_go: unskipped(Unskipped::LetGo),
+            shadow_texels_unskipped_stood: standing(None),
+            shadow_texels_unskipped_never_stood: standing(Some(LetGo::NeverStood)),
+            shadow_texels_unskipped_unnamed_since: standing(Some(LetGo::UnnamedSince)),
+            shadow_texels_unskipped_truth_written: standing(Some(LetGo::TruthWritten)),
+            shadow_texels_unskipped_image_written: standing(Some(LetGo::ImageWritten)),
             shadow_texels_copied_in: counters.shadow_texels_copied_in.load(Ordering::Relaxed),
             shadow_texels_first_copied_in: counters
                 .shadow_texels_first_copied_in

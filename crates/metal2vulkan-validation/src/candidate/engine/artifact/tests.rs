@@ -145,7 +145,7 @@ fn the_runtime_sources_are_the_committed_ones() {
         ("metal2vulkan-air/src/lib.rs", compile),
         ("metal2vulkan/src/cache/digest.rs", "the content digest, which defines the artifact rather than acting on it"),
         ("metal2vulkan/src/cache/mod.rs", "the plan's specialization and variant keys, whose values the plan digest holds, and RUNTIME_VERSION itself, which cannot be among the sources it versions"),
-        ("metal2vulkan/src/env_vars.rs", "the operational variables' accessors: the runtime reads only METAL2VULKAN_LOG_PIPELINES and METAL2VULKAN_LOG_MEMORY, default-off diagnostics that print and change no run"),
+        ("metal2vulkan/src/env_vars.rs", "the operational variables' accessors: the runtime reads only METAL2VULKAN_LOG_PIPELINES, METAL2VULKAN_LOG_MEMORY and METAL2VULKAN_LOG_SHADOWS, default-off diagnostics that print and change no run"),
         ("metal2vulkan/src/error/mod.rs", "the error vocabulary: the runtime's code decides which error a run reports, and a record keeps the error as reported"),
         ("metal2vulkan/src/library/mod.rs", compile),
         ("metal2vulkan/src/lower/access/imageblock.rs", compile),

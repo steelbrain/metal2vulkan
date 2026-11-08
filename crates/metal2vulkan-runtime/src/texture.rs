@@ -2607,6 +2607,7 @@ impl Device {
             });
         }
         let (offset, bytes_per_row) = (texels.layout.offset, texels.layout.row_pitch);
+        crate::shadow_log::made(self, call, (descriptor, layout), &texels, &why);
         self.degrade(Degradation::ShadowedTexture, || {
             let format = descriptor.pixel_format;
             let [width, height, _] = layout.extent;

@@ -60,6 +60,16 @@ pub const REGISTRY: &[EnvVar] = &[
                  its memory class (placed), bytes, offset and block, to show what makes and \
                  frees blocks; set to anything but empty or 0",
     },
+    EnvVar {
+        name: "METAL2VULKAN_LOG_SHADOWS",
+        default: "unset (off)",
+        effect: "metal2vulkan-runtime's diagnostics: one line per shadow a device makes of a \
+                 texture over a buffer's bytes (an IOSurface plane's among them), through the \
+                 device's message sink or on stderr: the call, the texture's format, size, \
+                 levels and usage, the buffer's storage mode, length and object ID, the texels' \
+                 offset and row pitch, and why no image over the bytes serves; set to anything \
+                 but empty or 0",
+    },
 ];
 
 /// Multi-line `--help` block listing every registry var.
@@ -99,6 +109,14 @@ pub fn log_pipelines() -> bool {
 /// allocation, only what is printed.
 pub fn log_memory() -> bool {
     std::env::var_os("METAL2VULKAN_LOG_MEMORY")
+        .is_some_and(|value| !value.is_empty() && value != "0")
+}
+
+/// Whether metal2vulkan-runtime logs each shadow a device makes of a texture over a buffer's
+/// bytes (`REGISTRY`): set, and neither empty nor `0`. A default-off diagnostic: it changes no
+/// texture, only what is printed.
+pub fn log_shadows() -> bool {
+    std::env::var_os("METAL2VULKAN_LOG_SHADOWS")
         .is_some_and(|value| !value.is_empty() && value != "0")
 }
 

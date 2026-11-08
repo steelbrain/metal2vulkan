@@ -218,6 +218,7 @@ use crate::release;
 use crate::resource::ResourceKey;
 use crate::scheduler;
 use crate::shadow::ShadowCopies;
+use crate::shadow_standing::{LetGo, Unskipped};
 use crate::sparse::bind::{bind_batch, BindFailure, Bound};
 use crate::sparse::encoder::SparseUpdate;
 use crate::texture::decoded_twin::{SecondDecode, TwinWrite};
@@ -1439,7 +1440,8 @@ impl CommandBufferShared {
                 Deferred::GatedCopyIn(copy) => copy.standing(),
                 _ => None,
             };
-            let stands = standing.is_some_and(|copies| self.stands(state, encoder, copies));
+            let decided = standing.map(|copies| self.stands(state, encoder, copies));
+            let stands = decided.is_some_and(|decided| decided.is_ok());
             let raw = self.record_raw(state, |state, buffer| {
                 match &work {
                     // SAFETY: the command buffer is recording; the texture is live (its encoder's
@@ -1474,8 +1476,12 @@ impl CommandBufferShared {
             })?;
             state.recorded[encoder].segments[at].recorded =
                 Some(RecordedSegment::submitted(vec![raw]));
-            if let (Some(_), Deferred::GatedCopyIn(copy)) = (standing, &work) {
-                (device.shared().counts).shadow_copy_in_against_standing(stands, copy.texels());
+            if let (Some(decided), Deferred::GatedCopyIn(copy)) = (decided, &work) {
+                let counts = &device.shared().counts;
+                counts.shadow_copy_in_against_standing(stands, copy.texels());
+                if let Err((at, let_go)) = decided {
+                    counts.shadow_copy_in_unskipped(at, let_go, copy.texels());
+                }
             }
         }
         Ok(())
@@ -1484,12 +1490,26 @@ impl CommandBufferShared {
     /// Whether `copies`' image stands across command buffers (`shadow_standing.rs`) for a copy
     /// in of encoder `encoder`, submitted now: it stands, no earlier encoder of the command
     /// buffer wrote the truth or the image, and none of its commands may reach memory no use
-    /// names.
-    fn stands(&self, state: &State, encoder: usize, copies: &ShadowCopies) -> bool {
+    /// names. Where not, where that was decided and what its standing held
+    /// (`shadow_standing::Unskipped`, `LetGo`; none where it stood).
+    fn stands(
+        &self,
+        state: &State,
+        encoder: usize,
+        copies: &ShadowCopies,
+    ) -> Result<(), (Unskipped, Option<LetGo>)> {
+        if !copies.stands_across() {
+            return Err((Unskipped::Unstanding, None));
+        }
         let keys = copies.standing_keys();
         let wrote =
             (state.recorded[..encoder].iter()).any(|recorded| recorded.summary.writes_any(&keys));
-        !state.reaches_unnamed && !wrote && self.device.shared().standings.stands(copies)
+        let let_go = self.device.shared().standings.let_go(copies);
+        match (state.reaches_unnamed || wrote, let_go) {
+            (false, None) => Ok(()),
+            (true, let_go) => Err((Unskipped::CommandBuffer, let_go)),
+            (false, let_go) => Err((Unskipped::LetGo, let_go)),
+        }
     }
 
     /// Record the decodes into ASTC carriers' second decoded twins (`texture/decoded_twin.rs`) of

@@ -31,6 +31,11 @@
 //!   (`shadow::GatedCopyIn`), and copies nothing there where the shadow stands and no earlier
 //!   encoder of the command buffer wrote the truth or the image, and the command buffer reaches
 //!   nothing unnamed. Every other copy is as the module `shadow.rs` states.
+//! - **Why a copy moved its texels.** Each command buffer's first copy in of a shadow whose truth
+//!   only the runtime's commands write that moved its texels is counted by where it was decided
+//!   ([`Unskipped`]) and, for a shadow that may stand, by what its standing held then
+//!   ([`LetGo`], or none where it stood): `WorkCounts::shadow_texels_unskipped_*`. A copy
+//!   decided as its encoder recorded it reads the standing by the batches submitted so far.
 
 use super::buffer::Buffer;
 use super::key_hash::KeyMap;
@@ -40,6 +45,42 @@ use super::tracker::Summary;
 use super::values::{HazardTrackingMode, StorageMode};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, Weak};
+
+/// Where a command buffer's first copy in of a shadow whose truth only the runtime's commands
+/// write was decided, of one that moved its texels (the module docs).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Unskipped {
+    /// The shadow never stands: its buffer is untracked, a heap's or over the caller's memory, its
+    /// `VkBuffer` was handed out, or Metal drops its writes.
+    Unstanding,
+    /// Recorded between two render pass instances of a pass its encoder holds
+    /// (`render/inline_splits.rs`), which no batch's submission decides.
+    BetweenInstances,
+    /// A command of its encoder wrote what it reads before it.
+    AfterEncoderWrites,
+    /// Recorded whole as its encoder recorded it: inside a predicated loop's laying, or where no
+    /// new `VkCommandBuffer` could be made.
+    RecordedWhole,
+    /// At its batch's submission, where its command buffer may reach memory no use names, or an
+    /// earlier encoder of it wrote the truth or the image.
+    CommandBuffer,
+    /// At its batch's submission, where its standing was let go of ([`LetGo`]).
+    LetGo,
+}
+
+/// What let go of a shadow's standing, or left it none (the module docs).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum LetGo {
+    /// No command buffer's end left its image standing since it was made.
+    NeverStood,
+    /// A batch that may reach memory no use names was submitted since it stood.
+    UnnamedSince,
+    /// A batch submitted since it stood wrote its truth (or the host memory it joined): another
+    /// shadow's copy back or merge over the same bytes, a blit's, a pass's or a kernel's write.
+    TruthWritten,
+    /// A batch submitted since it stood wrote its image: a copy in its standing did not leave.
+    ImageWritten,
+}
 
 /// The device's count of the writes that let go of its shadows' standings.
 #[derive(Default)]
@@ -109,21 +150,26 @@ impl Standings {
         self.0.lock().unwrap_or_else(|p| p.into_inner())
     }
 
-    /// Whether `copies`' image holds every texel of its truth at a copy in submitted now: it
-    /// stood, and no write counted since let go of it (the module docs).
-    pub(super) fn stands(&self, copies: &ShadowCopies) -> bool {
-        if !copies.stands_across() {
-            return false;
-        }
+    /// What let go of the standing of `copies`, a shadow that may stand, by the writes counted
+    /// now, or left it none; `None` where it stands: its image holds every texel of its truth at a
+    /// copy in submitted now, as it stood, and no write counted since let go of it (the module
+    /// docs).
+    pub(super) fn let_go(&self, copies: &ShadowCopies) -> Option<LetGo> {
         let watched = self.watched();
         let stood = copies.standing.stood();
         let Some(stood) = stood.as_ref() else {
-            return false;
+            return Some(LetGo::NeverStood);
         };
-        stood.unnamed == watched.unnamed
-            && (stood.written.iter()).all(|(key, written)| {
-                (watched.keys.get(key)).is_some_and(|known| known.written == *written)
-            })
+        if stood.unnamed != watched.unnamed {
+            return Some(LetGo::UnnamedSince);
+        }
+        let written = (stood.written.iter()).find(|(key, written)| {
+            (watched.keys.get(key)).is_none_or(|known| known.written != *written)
+        });
+        written.map(|&(key, _)| match key == copies.shadow_key {
+            true => LetGo::ImageWritten,
+            false => LetGo::TruthWritten,
+        })
     }
 
     /// A batch whose encoders' `summaries` these are was submitted: each key its tracked uses

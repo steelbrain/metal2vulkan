@@ -1441,6 +1441,20 @@ impl ShadowCopy {
         matches!(self.step, Step::Into) && first && moves && self.copies.stands_across()
     }
 
+    /// Whether the copy is an encoder's first copy in of the bytes of a buffer of private or
+    /// memoryless storage the device made (an IOSurface plane's among them), moving texels (no
+    /// clear): as `WorkCounts::shadow_texels_first_copied_in_private_buffers` and
+    /// `shadow_texels_first_copied_in_private_surfaces` count it, and where it moves them, as
+    /// `shadow_texels_unskipped_*` count why (`shadow_standing::Unskipped`).
+    pub(super) fn first_from_private_truth(&self) -> bool {
+        let first = matches!(self.cause, Some(CopyCause::First));
+        let private = matches!(
+            self.copies.backing,
+            Backing::PrivateBuffer | Backing::PrivateSurface
+        );
+        matches!(self.step, Step::Into) && first && self.clear.is_none() && private
+    }
+
     /// The log of a copy in of every texel of a tracked 2D texture's image straight from a
     /// buffer over host pages a consumer logs (`dirty_pages.rs`), made or kept by `device`, and
     /// the bytes of one texel: what may decide the copy's regions as its batch is submitted

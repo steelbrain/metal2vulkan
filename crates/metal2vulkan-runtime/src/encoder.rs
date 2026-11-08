@@ -60,6 +60,7 @@ use super::shadow::{
 };
 use super::shadow_copy_in::CopyIn;
 use super::shadow_merge::{MergeLease, ShadowMerge};
+use super::shadow_standing::Unskipped;
 use super::sparse::encoder::SparseUpdate;
 use super::texture::decoded_twin::TwinWrite;
 use super::tracker::{Barrier, EncoderUses, Reach, Summary, Use};
@@ -2082,6 +2083,15 @@ impl EncoderCore {
                         .then_some(CopyGate::Standing),
                 },
             };
+            // An encoder's first copy in of a shadow whose truth only the runtime's commands write
+            // that no batch's submission decides moves the texels: counted by why.
+            if gate.is_none() && copy.first_from_private_truth() {
+                let at = match copy.left_to_standing() {
+                    true => Unskipped::AfterEncoderWrites,
+                    false => Unskipped::Unstanding,
+                };
+                self.copy_in_unskipped(copy, at);
+            }
             // A keep may copy the staging buffer its copy in filled only where that copy in
             // copies the texture's bytes whole: recorded here, ungated.
             if dispatched.is_none() && gate.is_none() {
@@ -2182,6 +2192,9 @@ impl EncoderCore {
             false => self.continuation().ok(),
         };
         let Some(next) = next else {
+            if matches!(gate, CopyGate::Standing) {
+                self.copy_in_unskipped(copy, Unskipped::RecordedWhole);
+            }
             if let Some(raw) = self.recording() {
                 // SAFETY: the encoder's command buffer is recording outside a render pass; its
                 // commands retain the shadowed texture until it completes, and its image rests in
@@ -2194,6 +2207,19 @@ impl EncoderCore {
         // Refused only where the current `VkCommandBuffer` does not end, which abandons the
         // command buffer.
         let _abandoned = self.defer_into(next, work);
+    }
+
+    /// Count `copy`, an encoder's first copy in of a shadow whose truth only the runtime's
+    /// commands write, as moving its texels, decided `at` as the encoder records it
+    /// (`shadow_standing.rs`): of one that may stand, by what its standing held by the batches
+    /// submitted so far.
+    fn copy_in_unskipped(&self, copy: &ShadowCopy, at: Unskipped) {
+        let shared = self.device().shared();
+        let let_go = match at {
+            Unskipped::Unstanding => None,
+            _ => shared.standings.let_go(&copy.copies),
+        };
+        (shared.counts).shadow_copy_in_unskipped(at, let_go, copy.texels_copied_in());
     }
 
     /// The `VkCommandBuffer` a render pass holds ([`hold_pass`](Self::hold_pass)), until its
@@ -2221,6 +2247,15 @@ impl EncoderCore {
             let uses = copy.uses_with(rows.as_ref());
             if self.skips(uses.iter().map(|used| used.key)) {
                 continue;
+            }
+            // An encoder's first copy in of a shadow whose truth only the runtime's commands write
+            // moves the texels here, decided by no batch's submission: counted by why.
+            if copy.first_from_private_truth() {
+                let at = match copy.left_to_standing() {
+                    true => Unskipped::BetweenInstances,
+                    false => Unskipped::Unstanding,
+                };
+                self.copy_in_unskipped(copy, at);
             }
             let aliased = self.aliased(&uses);
             let tracked = aliased.as_deref().unwrap_or(&uses);
