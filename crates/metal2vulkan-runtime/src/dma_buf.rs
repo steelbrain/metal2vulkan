@@ -83,6 +83,7 @@ use super::exit_guard::{self, Call};
 use super::host_memory::{based_size, import_refused, not_importable, ImportWindow, Importer};
 use super::host_residency::Again;
 use super::image_plan::{ImageFacts, ImagePlan};
+use super::in_place_check::Unmade;
 use super::linear_plan::{check_linear_limits, tiling_lack, viewed_formats, LinearLack};
 use super::memory::{self, ImportFailure, MemoryClass, Placement};
 use super::program_objects::ProgramObject;
@@ -1680,13 +1681,13 @@ impl ExportedPages {
     /// flag differs from the allocation's (`VK_ERROR_INVALID_EXTERNAL_HANDLE`, of every memory
     /// type), which left the check's class unchecked there. Why not, where the device imports no
     /// dma-bufs, makes no images over them, exports no such memory but as a dedicated allocation,
-    /// or refuses it (the check's note).
-    pub(super) fn make(device: &Device, length: u64) -> Result<ExportedPages, String> {
+    /// each a cause that lasts, or refuses it, one that may pass (the check's note).
+    pub(super) fn make(device: &Device, length: u64) -> Result<ExportedPages, Unmade> {
         let shared = device.shared();
         let importer = (shared.host_import.as_ref())
-            .map_err(|_| "the device imports no host memory".to_owned())?;
+            .map_err(|_| Unmade::lasting("the device imports no host memory"))?;
         if !importer.makes_dma_buf_images() {
-            return Err("the device makes no images over dma-bufs".to_owned());
+            return Err(Unmade::lasting("the device makes no images over dma-bufs"));
         }
         // The device exports a buffer's memory as a dma-buf, not only a dedicated allocation.
         let query = vk::PhysicalDeviceExternalBufferInfo::default()
@@ -1710,11 +1711,11 @@ impl ExportedPages {
         if !features.contains(vk::ExternalMemoryFeatureFlags::EXPORTABLE)
             || features.contains(vk::ExternalMemoryFeatureFlags::DEDICATED_ONLY)
         {
-            return Err(format!(
+            return Err(Unmade::lasting(format!(
                 "the device exports a buffer's memory as a dma-buf only as a dedicated \
                  allocation, or not at all (external memory features {:#x})",
                 features.as_raw()
-            ));
+            )));
         }
         let wanted = vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT;
         let type_index = {
@@ -1732,7 +1733,9 @@ impl ExportedPages {
                     )
                 })
                 .map(|&(index, _)| index)
-                .ok_or_else(|| "the device has no host-visible, host-coherent memory".to_owned())?
+                .ok_or_else(|| {
+                    Unmade::lasting("the device has no host-visible, host-coherent memory")
+                })?
         };
         let raw_device = shared.vk();
         let mut export = vk::ExportMemoryAllocateInfo::default().handle_types(DMA_BUF);
@@ -1748,10 +1751,10 @@ impl ExportedPages {
         // SAFETY: the device is live; the type exports dma-bufs of a buffer's memory (above).
         let memory =
             unsafe { crate::creation::allocate_memory(raw_device, &info) }.map_err(|error| {
-                format!(
+                Unmade::passing(format!(
                     "its exportable allocation of {length} bytes of type {type_index} failed: \
                      {error:?}"
-                )
+                ))
             })?;
         let free = || {
             // SAFETY: the allocation is unused.
@@ -1767,18 +1770,18 @@ impl ExportedPages {
             .and_then(|mapped| NonNull::new(mapped.cast::<u8>()))
         else {
             free();
-            return Err(format!(
+            return Err(Unmade::passing(format!(
                 "its allocation of type {type_index} was not mapped"
-            ));
+            )));
         };
         // SAFETY: the importer is this device's; the allocation was made exportable as a dma-buf.
         let fd = match unsafe { importer.exported_dma_buf(raw_device, memory) } {
             Ok(fd) => fd,
             Err(error) => {
                 free();
-                return Err(format!(
+                return Err(Unmade::passing(format!(
                     "its allocation's dma-buf was not exported: {error:?}"
-                ));
+                )));
             }
         };
         Ok(ExportedPages {

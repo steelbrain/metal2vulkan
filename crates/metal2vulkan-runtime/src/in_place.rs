@@ -93,10 +93,13 @@
 //!   texture, waited for, on a Radeon 780M in a debug build), past what a program's first texture
 //!   may take, a guest's message that makes one among them. A device whose record holds the
 //!   verdicts knows them as it is made, and starts none: those its driver's earlier check
-//!   measured (passed or failed); one that check could not give (unchecked: it made no pages of
-//!   the class, or no image of its rounds, which a refusal in that one process may cause as well
-//!   as the driver) is no measurement, so the record keeps it pending and the next device's check
-//!   runs that class and access again (`encode`). A program that will make such textures
+//!   measured (passed or failed), and those it could not check for a cause that lasts for the
+//!   driver's identity (unchecked: the device lacks an extension, a feature, an import, a format
+//!   or an image of the shape). One it could not check for a cause that may pass in another run
+//!   (pages or memory not made, an import refused, the writer thread not started, a first move,
+//!   pass or kernel's stores that failed) is no measurement, so the record keeps it pending and
+//!   the next device's check runs that class and access again (`encode`), its note saying which
+//!   the cause was. A program that will make such textures
 //!   starts the check earlier, where it likes, through `Device::settle_in_place_checks` (with no
 //!   wait: a zero timeout).
 //! - **Visibility.** A command reads the image's texels in the memory a buffer over the same pages
@@ -965,21 +968,20 @@ pub(crate) fn record_name(identity: &DriverIdentity) -> String {
 /// checksum       32 bytes  SHA-256 of every byte before it
 /// ```
 ///
-/// Integers are little-endian. A record holds what the check measured: a verdict passed or
-/// failed. An unchecked one (the check made no pages of its class, or no image of its rounds,
-/// which a transient refusal or the device's setup in one process may cause as well as the
-/// driver) is written as unmeasured, a pending one's byte, so the device made after it checks
-/// that class, access and row ends again ([`Device::recall_in_place_checks`]).
+/// Integers are little-endian. A record holds what the check measured, a verdict passed or
+/// failed, and what is as lasting for the driver's identity: a verdict unchecked for a cause that
+/// lasts (the device lacks an extension, a feature, an import, a format or an image of the
+/// shape: `in_place_check.rs`'s `Unmade`). The check gives one unchecked for a cause that may
+/// pass in another run (pages or memory not made, an import refused, the writer thread not
+/// started, a first move, pass or kernel's stores that failed) as unmeasured, a pending one's
+/// byte, so the device made after it checks that class, access and row ends again
+/// ([`Device::recall_in_place_checks`]).
 pub(crate) fn encode(identity: &DriverIdentity, verdicts: [Verdict; VERDICTS]) -> Vec<u8> {
     let mut bytes = Vec::with_capacity(RECORD_BYTES);
     bytes.extend_from_slice(&MAGIC);
     bytes.extend_from_slice(&CHECK_VERSION.to_le_bytes());
     bytes.extend_from_slice(&identity.digest());
-    let measured = |verdict| match verdict {
-        Verdict::Unchecked => Verdict::Pending,
-        verdict => verdict,
-    };
-    bytes.extend(verdicts.map(|verdict| measured(verdict).byte()));
+    bytes.extend(verdicts.map(Verdict::byte));
     let checksum: [u8; 32] = Sha256::digest(&bytes).into();
     bytes.extend_from_slice(&checksum);
     bytes
@@ -989,9 +991,8 @@ pub(crate) fn encode(identity: &DriverIdentity, verdicts: [Verdict; VERDICTS]) -
 const RECORD_BYTES: usize = 8 + 4 + 32 + VERDICTS + 32;
 
 /// The verdicts `bytes` record for `identity`: `None` for anything but a whole record of this
-/// version and runtime, for this identity, whose checksum holds and whose every verdict is
-/// measured (passed or failed) or unmeasured (pending, [`encode`]), the latter answered pending:
-/// an unchecked verdict is never written.
+/// version and runtime, for this identity, whose checksum holds and whose every verdict is one
+/// ([`encode`]): passed, failed, unchecked for a cause that lasts, or unmeasured (pending).
 pub(crate) fn decode(identity: &DriverIdentity, bytes: &[u8]) -> Option<[Verdict; VERDICTS]> {
     if bytes.len() != RECORD_BYTES {
         return None;
@@ -1010,7 +1011,7 @@ pub(crate) fn decode(identity: &DriverIdentity, bytes: &[u8]) -> Option<[Verdict
     }
     let mut verdicts = [Verdict::Pending; VERDICTS];
     for (verdict, &byte) in verdicts.iter_mut().zip(rest) {
-        *verdict = Verdict::of_byte(byte).filter(|&known| known != Verdict::Unchecked)?;
+        *verdict = Verdict::of_byte(byte)?;
     }
     Some(verdicts)
 }
@@ -1053,11 +1054,12 @@ impl Device {
     }
 
     /// As the device is made: where its policy takes textures over host pages in place, its
-    /// verdicts from the record of its driver's identity where one holds them (each measured one
+    /// verdicts from the record of its driver's identity where one holds them (each one it holds
     /// counted as recalled), settling them where none is unmeasured; else they wait for the check,
     /// which the first texture that asks starts. The check then runs only the classes and accesses
-    /// whose verdicts are pending: of a record, those it could not measure ([`encode`]). A record
-    /// that does not decode is no record: the check runs, and its verdicts replace it.
+    /// whose verdicts are pending: of a record, those it could not check for a cause that may pass
+    /// ([`encode`]). A record that does not decode is no record: the check runs, and its verdicts
+    /// replace it.
     pub(crate) fn recall_in_place_checks(&self) {
         let shared = self.shared();
         if self.compile_device().policy().host_page_textures != HostPageTexturePolicy::InPlace {
@@ -1126,9 +1128,12 @@ impl Device {
     /// The verdicts go from pending to known once for each `VkDevice` behind the device. A device
     /// of a driver whose check ran before reads them from the record the check kept in the
     /// shader cache's directory as it is made, known at once, where the check ended and wrote it:
-    /// the verdicts it measured (passed or failed), not those it could not check (no pages or no
-    /// image of their kind made), which stay pending until the new device's check answers them
-    /// again. A GPU recovery's new one (`Degradation::DeviceRecovered`) reads the record so too;
+    /// the verdicts it measured (passed or failed) and those it could not check for a cause that
+    /// lasts for the driver (the device lacks an extension, a feature, an import, a format or an
+    /// image of the shape), not those it could not check for a cause that may pass (pages or
+    /// memory not made, an import refused, its writer thread not started, a move or the stores
+    /// that failed), which stay pending until the new device's check answers them again. A GPU
+    /// recovery's new one (`Degradation::DeviceRecovered`) reads the record so too;
     /// where the lost one's check had not ended, or the device keeps no record (no shader cache
     /// directory, or `DeviceOptions::fail_in_place_check`), they are pending again, and this
     /// answers `false` until the new one's check ends. Buffers made before a

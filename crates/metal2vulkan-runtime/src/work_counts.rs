@@ -6541,9 +6541,11 @@ pub struct WorkCounts {
     /// Of `in_place_checks_run`, those that made no image of the class for the access.
     pub in_place_checks_unchecked: u64,
     /// Classes, accesses and row ends whose verdict was read from the record of an earlier check
-    /// of the same driver, device and check: no check ran for them. Only measured verdicts
-    /// (passed or failed) are recalled: one the earlier check could not give (unchecked: no pages
-    /// or no image of its kind made) is checked again.
+    /// of the same driver, device and check: no check ran for them. Measured verdicts (passed or
+    /// failed) are recalled, and those unchecked for a cause that lasts for the driver (the device
+    /// lacks an extension, a feature, an import, a format or an image of the shape); one the
+    /// earlier check could not give for a cause that may pass (pages or memory not made, an import
+    /// refused, a move or the stores that failed) is checked again.
     pub in_place_checks_recalled: u64,
     /// Textures over host pages made shadows before their pages' in-place verdicts (counted in
     /// `host_texture_shadows_check_pending`) that moved in place once the verdicts passed, at

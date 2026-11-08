@@ -176,8 +176,10 @@ fn narrow_written_textures_take_the_path_their_narrow_check_answered() {
     let name = device.name();
     assert!(device.settle_in_place_checks(SETTLE), "the check settled");
     let report = device.in_place_check_report();
+    // The verdicts' lines, before the check's notes.
     let narrow: Vec<&String> = report
         .iter()
+        .take(crate::in_place::VERDICTS)
         .filter(|line| line.contains("narrow"))
         .collect();
     for line in &narrow {

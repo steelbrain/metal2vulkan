@@ -91,8 +91,9 @@
 //!   class and makes such a texture a shadow counted as the failed check's, never in place, and
 //!   keeps no record: the next device on the same shader cache recalls nothing and runs the check,
 //!   whose record the device after it recalls (`in_place_checks_recalled`): every verdict it
-//!   measured, passed or failed, with no check run where it measured all; one it could not check
-//!   (unchecked) is no measurement, which that device checks again, answering as before.
+//!   measured, passed or failed, and those it could not check for a cause that lasts for the
+//!   driver, with no check run where it recalls all; one it could not check for a cause that may
+//!   pass is no measurement, which that device checks again, answering as before.
 //! - [`in_place_and_shadow_costs`], without the validation layer, report only (built in release for
 //!   the numbers): a `BGRA8Unorm` surface over a no-copy buffer of anonymous pages, read by a
 //!   fragment function each frame, under each setting: a 3840x2160 one through a 3840x32 strip,
@@ -1324,20 +1325,26 @@ fn a_failed_check_keeps_the_shadow_and_no_record() {
         report.truncate(VERDICTS);
         report
     };
-    // Its record is recalled by the device after it: each verdict it measured, which that device
-    // checks no more; one it could not check is no measurement, checked again.
+    // Its record is recalled by the device after it: each verdict it measured, and each it could
+    // not check for a cause that lasts, which that device checks no more; one it could not check
+    // for a cause that may pass is no measurement, checked again.
     {
         let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), in_place).unwrap();
         let counts = device.work_counts();
         // Each class's verdicts, for a texture that reads, one that renders and one a shader
         // writes (of 4-, 8- or 16-byte texels and of 1- or 2-byte ones, each with its padding
         // kept or free), each for texels that share a line with bytes beside them and for texels
-        // that share none: those the check measured.
+        // that share none: those the check measured, and of those it could not check, the ones
+        // whose cause lasts.
         let measured = (verdicts.iter())
             .filter(|line| line.ends_with(": Passed") || line.ends_with(": Failed"))
-            .count();
-        assert_eq!(counts.in_place_checks_recalled, measured as u64);
-        let report = match measured == VERDICTS {
+            .count() as u64;
+        let recalled = counts.in_place_checks_recalled;
+        assert!(
+            (measured..=VERDICTS as u64).contains(&recalled),
+            "{recalled} recalled, {measured} measured: {verdicts:?}"
+        );
+        let report = match recalled == VERDICTS as u64 {
             true => {
                 assert_eq!(counts.in_place_checks_run, 0);
                 assert!(device.settle_in_place_checks(std::time::Duration::ZERO));
@@ -1353,7 +1360,7 @@ fn a_failed_check_keeps_the_shadow_and_no_record() {
         };
         assert_eq!(report, verdicts);
         eprintln!(
-            "IN-PLACE-RECORD on {}: recalled {verdicts:?}",
+            "IN-PLACE-RECORD on {}: recalled {recalled} of {measured} measured: {verdicts:?}",
             device.name()
         );
     }

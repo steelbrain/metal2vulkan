@@ -14,7 +14,7 @@
 use super::blit_holds::{device, Scratch};
 use crate::address::{PAGE, SPACE_BASE, SPACE_END};
 use crate::fresh_pages::FRESH_PAGES_PAST;
-use crate::in_place::{Access, PagesClass, RowEnds, Verdict as InPlaceVerdict};
+use crate::in_place::{verdict_index, Access, PagesClass, RowEnds, Verdict as InPlaceVerdict};
 use crate::submit_check::{encode, record_name, Check, Measured, Verdict};
 use crate::{
     AddressPlacement, Buffer, BufferContents, BufferDescriptor, Device, Error, GpuAddress,
@@ -220,28 +220,29 @@ fn the_in_place_check_checks_fresh_pages_where_held_imports_cost_submissions() {
     }
 }
 
-/// A class whose pages the device's check could not make answers unchecked on that device, its
-/// reason noted, and is no measurement: its record keeps it unmeasured (`in_place::encode`), so
-/// the next device of the same driver and check version recalls every verdict its check
-/// measured, finds that class's pending, and checks it again; the device after that recalls its
-/// answer too. The pointer class's first buffer, of the check's reads, is refused here as an
-/// import of the pages that fails (`Device::fail_next_host_imports`), which the device answers
-/// with a copy of them (`copied.rs`), no pages of the class. Printed (`IN-PLACE-UNMADE`): the
-/// note, and the verdicts each device gave the class's reads.
+/// A class whose pages the device's check could not make for a cause that may pass answers
+/// unchecked on that device, its reason noted as such, and is no measurement: its record keeps it
+/// unmeasured (`in_place::encode`), so the next device of the same driver and check version
+/// recalls every other verdict its check gave, finds that class's pending, and checks it again;
+/// the device after that recalls its answer too. The pointer class's first buffer, of the
+/// check's reads, is refused here as an import of the pages that fails
+/// (`Device::fail_next_host_imports`), which the device answers with a copy of them
+/// (`copied.rs`), no pages of the class. A verdict unchecked for a cause that lasts for the
+/// driver is recalled as unchecked: on a driver that renders an explicit plane's rows past its
+/// height (`RuntimeDriverDefect::ExplicitPlaneRowsPastHeight`, lavapipe), the dma-buf class's
+/// reads of rows that end inside lines, of which the device makes no image (no shape of the
+/// check whose rows end inside lines has a height that is a multiple of 4). Printed
+/// (`IN-PLACE-UNMADE`): the note, the verdicts each device gave the pointer class's reads, and
+/// how many each device after the first recalled, unchecked among them.
 #[test]
-fn a_class_whose_pages_the_check_could_not_make_is_checked_again_by_the_next_device() {
+fn an_unchecked_verdict_is_checked_again_where_its_cause_may_pass_and_kept_where_it_lasts() {
     let scratch = Scratch::new("in-place-check-unmade-pages");
     let record = AnswersRecord::new(ANSWERS);
     let pointer_reads = |device: &Device| {
         let checks = &device.shared().in_place;
         RowEnds::ALL.map(|rows| checks.verdict(PagesClass::Pointer, Access::Reads, rows))
     };
-    let measured = |device: &Device| {
-        let verdicts = device.shared().in_place.verdicts();
-        let measured = [InPlaceVerdict::Passed, InPlaceVerdict::Failed];
-        verdicts.iter().filter(|v| measured.contains(v)).count() as u64
-    };
-    let (first_reads, first_measured, note) = {
+    let (first, note) = {
         let device = answering(&scratch, &record);
         device.fail_next_host_imports(1);
         assert!(
@@ -253,28 +254,61 @@ fn a_class_whose_pages_the_check_could_not_make_is_checked_again_by_the_next_dev
             .find(|line| line.starts_with("Pointer reads: no pages to check: "))
             .cloned();
         assert!(
-            note.is_some(),
-            "the refused pages' reason noted: {report:?}"
+            note.as_ref()
+                .is_some_and(|note| note.ends_with("(a cause that may pass, checked again)")),
+            "the refused pages' reason noted, a cause that may pass: {report:?}"
         );
-        (pointer_reads(&device), measured(&device), note)
+        (device.shared().in_place.verdicts(), note)
     };
+    let first_reads =
+        RowEnds::ALL.map(|rows| first[verdict_index(PagesClass::Pointer, Access::Reads, rows)]);
     assert_eq!(
         first_reads,
         [InPlaceVerdict::Unchecked; 2],
         "the pointer class's reads, whose pages were refused"
     );
-    let second_reads = {
+    let past_height = |device: &Device| {
+        (device.properties().driver_defects)
+            .contains(&metal2vulkan::error::RuntimeDriverDefect::ExplicitPlaneRowsPastHeight)
+    };
+    let dma_buf_reads = verdict_index(PagesClass::DmaBuf, Access::Reads, RowEnds::InLines);
+    let (second_reads, second_recalled) = {
         let device = answering(&scratch, &record);
+        let recalled = device.shared().in_place.verdicts();
+        let held = recalled
+            .iter()
+            .filter(|&&v| v != InPlaceVerdict::Pending)
+            .count() as u64;
         assert_eq!(
             device.work_counts().in_place_checks_recalled,
-            first_measured,
-            "every verdict the first check measured recalled"
+            held,
+            "each verdict the record held counted as recalled"
         );
+        for (at, (&was, &now)) in first.iter().zip(&recalled).enumerate() {
+            match was {
+                InPlaceVerdict::Passed | InPlaceVerdict::Failed => {
+                    assert_eq!(now, was, "verdict {at}, measured, recalled")
+                }
+                InPlaceVerdict::Unchecked => assert!(
+                    matches!(now, InPlaceVerdict::Unchecked | InPlaceVerdict::Pending),
+                    "verdict {at}, unchecked, recalled so or checked again: {now:?}"
+                ),
+                InPlaceVerdict::Pending => panic!("verdict {at} pending after the first check"),
+            }
+        }
         assert_eq!(
             pointer_reads(&device),
             [InPlaceVerdict::Pending; 2],
-            "the unchecked reads not recalled"
+            "the reads unchecked for a cause that may pass not recalled"
         );
+        if past_height(&device) {
+            assert_eq!(
+                recalled[dma_buf_reads],
+                InPlaceVerdict::Unchecked,
+                "the dma-buf class's reads of rows inside lines, of which the driver makes no \
+                 image, recalled unchecked"
+            );
+        }
         assert!(
             device.settle_in_place_checks(WAIT),
             "the second check answered"
@@ -289,7 +323,11 @@ fn a_class_whose_pages_the_check_could_not_make_is_checked_again_by_the_next_dev
             "the pointer class's reads checked again: {reads:?}, {:?}",
             device.in_place_check_report()
         );
-        reads
+        let unchecked = recalled
+            .iter()
+            .filter(|&&v| v == InPlaceVerdict::Unchecked)
+            .count();
+        (reads, (held, unchecked))
     };
     let device = answering(&scratch, &record);
     assert_eq!(
@@ -299,9 +337,11 @@ fn a_class_whose_pages_the_check_could_not_make_is_checked_again_by_the_next_dev
     );
     eprintln!(
         "IN-PLACE-UNMADE on {}: {note:?}; Pointer reads {first_reads:?}, then {second_reads:?}; \
-         recalled by the third device {}",
+         recalled by the second device {second_recalled:?} (verdicts, unchecked among them), by \
+         the third {}; the dma-buf class's reads of rows inside lines recalled {:?}",
         device.name(),
-        device.work_counts().in_place_checks_recalled
+        device.work_counts().in_place_checks_recalled,
+        device.shared().in_place.verdicts()[dma_buf_reads]
     );
 }
 

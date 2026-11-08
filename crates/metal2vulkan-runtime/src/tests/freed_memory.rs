@@ -851,8 +851,10 @@ fn the_in_place_check_s_buffers_delay_no_deallocator_behind_batches_in_flight() 
         "IN-PLACE-CHECK-RELEASES: {report:?}: posted {posted}, parked {parked}, delayed {delayed}, \
          longest step {longest:?}"
     );
+    // Of the verdicts' lines, before the check's notes.
     let checked = |class: &str| {
-        (report.iter()).any(|line| line.starts_with(class) && !line.ends_with("Unchecked"))
+        (report.iter().take(crate::in_place::VERDICTS))
+            .any(|line| line.starts_with(class) && !line.ends_with("Unchecked"))
     };
     if !checked("Pointer") && !checked("DmaBuf") {
         eprintln!("IN-PLACE-CHECK-RELEASES: the check made no no-copy buffer");
