@@ -299,9 +299,9 @@ use std::collections::BTreeMap;
 
 use crate::bind::heap::{planner, HeapPlanner};
 use crate::bind::instantiate::{
-    bind_buffers, descriptor_range, put, slot_field, BufferExtent, BufferRange, DescriptorBytes,
-    DescriptorRange, FieldBytes, IndexBufferRef, IndirectRef, PushConstantWrite, PushHole,
-    RangeError, RootTable,
+    bind_buffers, descriptor_range, put, slot_bind_offset, slot_field, slot_guest_base,
+    BufferExtent, BufferRange, DescriptorBytes, DescriptorRange, FieldBytes, IndexBufferRef,
+    IndirectRef, PushConstantWrite, PushHole, RangeError, RootTable,
 };
 use crate::bind::mesh_arguments::{
     fold_object_grid, metal_mesh_grid_draws_nothing, metal_object_grid, MeshArguments,
@@ -4887,12 +4887,18 @@ fn rebind_slots(
             }
         };
         for f in &st.fields {
-            let bytes = match f.field {
-                PushField::SlotBindOffset(slot) | PushField::SlotGuestBase(slot)
-                    if changed(slot) =>
-                {
-                    slot_field(f.field, &residuals, &t.resources, state)
-                        .ok_or_else(|| internal(format!("a render push field {:?}", f.field)))?
+            // A slot's word as `slot_field` makes it, written from where it is made.
+            let offset_word: [u8; 4];
+            let base_word: [u8; 8];
+            let stride: FieldBytes;
+            let bytes: &[u8] = match f.field {
+                PushField::SlotBindOffset(slot) if changed(slot) => {
+                    offset_word = slot_bind_offset(&residuals, slot);
+                    &offset_word
+                }
+                PushField::SlotGuestBase(slot) if changed(slot) => {
+                    base_word = slot_guest_base(state, slot);
+                    &base_word
                 }
                 PushField::VertexBufferStride(layout)
                     if changed(SlotRef {
@@ -4901,7 +4907,8 @@ fn rebind_slots(
                         index: layout,
                     }) =>
                 {
-                    pulled_stride(t, state, layout)?
+                    stride = pulled_stride(t, state, layout)?;
+                    &stride
                 }
                 // A changed texture's in-place planes.
                 PushField::YCbCrInPlace(slot) if slots.contains(&slot) => return Ok(false),
@@ -4910,7 +4917,7 @@ fn rebind_slots(
             let Some(write) = push.and_then(|at| out.push_constants.get_mut(at)) else {
                 return Ok(false);
             };
-            put(&mut write.bytes, push_start, &mut [], f.loc, &bytes)?;
+            put(&mut write.bytes, push_start, &mut [], f.loc, bytes)?;
         }
     }
     // Each changed fixed-function vertex buffer's offset, at its binding's place (bound in

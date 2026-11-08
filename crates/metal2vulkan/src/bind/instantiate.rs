@@ -843,27 +843,34 @@ pub(crate) fn slot_field(
             .iter()
             .find(|(s, _)| *s == slot)
             .map(|(_, word)| FieldBytes::of(&word.to_le_bytes())),
-        PushField::SlotBindOffset(slot) => {
-            let r = residuals.of(slot).unwrap_or(0);
-            Some(FieldBytes::of(&r.to_le_bytes()))
-        }
-        PushField::SlotGuestBase(slot) => {
-            let base = match state
-                .stages
-                .get(&slot.stage)
-                .and_then(|t| t.buffers.get(&slot.index))
-            {
-                Some(&BoundBuffer::Buffer {
-                    gpu_address,
-                    offset,
-                    ..
-                }) => gpu_address.wrapping_add(offset),
-                _ => 0,
-            };
-            Some(FieldBytes::of(&base.to_le_bytes()))
-        }
+        PushField::SlotBindOffset(slot) => Some(FieldBytes::of(&slot_bind_offset(residuals, slot))),
+        PushField::SlotGuestBase(slot) => Some(FieldBytes::of(&slot_guest_base(state, slot))),
         _ => None,
     }
+}
+
+/// The bytes of `PushField::SlotBindOffset(slot)` ([`slot_field`]): the slot's residual, 0
+/// unbound.
+pub(crate) fn slot_bind_offset(residuals: &Residuals, slot: SlotRef) -> [u8; 4] {
+    residuals.of(slot).unwrap_or(0).to_le_bytes()
+}
+
+/// The bytes of `PushField::SlotGuestBase(slot)` ([`slot_field`]): the slot's `gpu_address +
+/// offset`, 0 (Metal's `nil`) where it binds no buffer.
+pub(crate) fn slot_guest_base(state: &BindState, slot: SlotRef) -> [u8; 8] {
+    let base = match state
+        .stages
+        .get(&slot.stage)
+        .and_then(|t| t.buffers.get(&slot.index))
+    {
+        Some(&BoundBuffer::Buffer {
+            gpu_address,
+            offset,
+            ..
+        }) => gpu_address.wrapping_add(offset),
+        _ => 0,
+    };
+    base.to_le_bytes()
 }
 
 /// A field's bytes at its placed location: the push bytes (relative to the push range's start
