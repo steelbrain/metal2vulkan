@@ -1510,9 +1510,10 @@ impl ArgumentTable {
     /// addresses are as `kept` read them, as no no-copy buffer moved since (the callers' reads
     /// stand only while none did: `live_bind::ReadFrom`), so the buffer is not looked at
     /// (`WorkCounts::bound_offsets_moved`; checked against [`refresh_buffer`](Self::refresh_buffer)'s
-    /// binding in builds with debug assertions). The function reads the slot bound as `kept` was
-    /// read: a buffer `kept` binds there was read bound, and no call since bound a visible-function
-    /// table there, which changes the slot otherwise than by its offset
+    /// binding in builds with debug assertions), and the length the two bindings share is not
+    /// classed to compare their shapes ([`BoundBuffer::same_shape`]). The function reads the slot
+    /// bound as `kept` was read: a buffer `kept` binds there was read bound, and no call since
+    /// bound a visible-function table there, which changes the slot otherwise than by its offset
     /// ([`binds_buffer`](Self::binds_buffer)), through the same interface (checked in builds with
     /// debug assertions). Else as `refresh_buffer`.
     fn refresh_offset(
@@ -1557,7 +1558,7 @@ impl ArgumentTable {
             "a buffer slot whose offset alone moved brought in otherwise than read whole"
         );
         counts.bound_offset_moved();
-        reshape.replace(slot, bound, |b| b.shape(a));
+        reshape.replace_by(slot, bound, |was, now| was.same_shape(now, a));
     }
 
     /// Buffer slot `index` of `kept` brought in place as [`refresh_reading`](Self::refresh_reading)

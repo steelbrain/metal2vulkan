@@ -152,7 +152,18 @@ impl Reshape {
         value: V,
         shape: impl Fn(&V) -> S,
     ) {
-        if !self.0 && *slot != value && shape(&*slot) != shape(&value) {
+        self.replace_by(slot, value, |was, now| shape(was) == shape(now));
+    }
+
+    /// Store `value` in `slot` as [`replace`](Self::replace) does, where `same_shape` tells
+    /// whether two bindings have one shape without making either's.
+    pub(super) fn replace_by<V: PartialEq>(
+        &mut self,
+        slot: &mut V,
+        value: V,
+        same_shape: impl FnOnce(&V, &V) -> bool,
+    ) {
+        if !self.0 && *slot != value && !same_shape(&*slot, &value) {
             self.0 = true;
         }
         *slot = value;

@@ -8670,6 +8670,7 @@ method	metal2vulkan::bind::BindingPlan::slot_rebinds_into	pub fn slot_rebinds_in
 method	metal2vulkan::bind::BindingPlan::specialized_value	pub fn specialized_value(&self, key: SpecKey) -> Option<u64>
 method	metal2vulkan::bind::BlockDecodeModule::shape	pub fn shape([width, height, depth]: [u32; 3]) -> [u8; Self::SHAPE_WORDS as usize * 4]
 method	metal2vulkan::bind::BoundAccelerationStructure::new	pub fn new(instance_count: u32) -> BoundAccelerationStructure
+method	metal2vulkan::bind::BoundBuffer::same_shape	pub fn same_shape(&self, other: &BoundBuffer, view_base_alignment: u32) -> bool
 method	metal2vulkan::bind::BoundBuffer::shape	pub fn shape(&self, view_base_alignment: u32) -> BufferShape
 method	metal2vulkan::bind::BoundSampler::new	pub fn new(desc: SamplerDescriptor) -> BoundSampler
 method	metal2vulkan::bind::BoundSampler::shape	pub fn shape(&self) -> BoundSamplerShape

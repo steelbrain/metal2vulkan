@@ -1132,6 +1132,48 @@ impl BoundBuffer {
             } => BufferShape::Bytes { attribute_stride },
         }
     }
+
+    /// Whether this binding and `other` have one shape under `view_base_alignment`, as their
+    /// [`shape`](Self::shape)s compare: a length or bind offset the two share is not classed.
+    pub fn same_shape(&self, other: &BoundBuffer, view_base_alignment: u32) -> bool {
+        match (*self, *other) {
+            (
+                BoundBuffer::Buffer {
+                    length,
+                    offset,
+                    device_address,
+                    attribute_stride,
+                    ..
+                },
+                BoundBuffer::Buffer {
+                    length: other_length,
+                    offset: other_offset,
+                    device_address: other_address,
+                    attribute_stride: other_stride,
+                    ..
+                },
+            ) => {
+                attribute_stride == other_stride
+                    && device_address.is_some() == other_address.is_some()
+                    && (length == other_length
+                        || length_class(length) == length_class(other_length))
+                    && (offset == other_offset
+                        || offset_alignment(offset, view_base_alignment)
+                            == offset_alignment(other_offset, view_base_alignment))
+            }
+            (
+                BoundBuffer::Bytes {
+                    attribute_stride, ..
+                },
+                BoundBuffer::Bytes {
+                    attribute_stride: other_stride,
+                    ..
+                },
+            ) => attribute_stride == other_stride,
+            (BoundBuffer::Buffer { .. }, BoundBuffer::Bytes { .. })
+            | (BoundBuffer::Bytes { .. }, BoundBuffer::Buffer { .. }) => false,
+        }
+    }
 }
 
 /// The alignment class of bind offset `offset` (a buffer's,

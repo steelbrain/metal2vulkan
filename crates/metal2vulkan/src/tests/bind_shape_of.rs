@@ -1,6 +1,7 @@
 //! `BindState::has_shape` answers `state.shape() == *shape` without making the shape: over states
 //! that each differ from a base in one field of the shape (and some in fields the shape leaves
-//! out, or in two ways that give one shape), for every pair of them.
+//! out, or in two ways that give one shape), for every pair of them. `BoundBuffer::same_shape`
+//! answers as two bindings' shapes compare, over every pair of a set of bindings.
 
 use crate::bind::{
     ArgumentFunctionTable, ArgumentSampler, BindState, BoundBuffer, BoundSampler, BoundTexture,
@@ -435,4 +436,52 @@ fn a_state_listed_in_token_order_compares_its_used_resources_in_place() {
     // listed again with a vertex write, as a buffer or as a texture, is the one listed once that
     // reads and writes it in both stages (three of one shape).
     assert_eq!(same, 2 + 3 * 2, "pairs of one shape");
+}
+
+/// `BoundBuffer::same_shape` answers `a.shape(x) == b.shape(x)` for every pair of bindings over
+/// lengths of one length class and of others, bind offsets of one alignment class and of others,
+/// with and without a device address and a stride, and inline bytes, at view base alignments that
+/// tell no offset class past the vertex fetch's apart and one that does.
+#[test]
+fn a_buffer_binding_has_the_shape_of_another_exactly_where_their_shapes_compare_equal() {
+    let mut bindings = Vec::new();
+    for length in [1, 16, 17, 4096, u64::MAX] {
+        for offset in [0, 2, 4, 6, 64, 96] {
+            for device_address in [None, Some(0x2000)] {
+                for attribute_stride in [None, Some(4), Some(6)] {
+                    bindings.push(BoundBuffer::Buffer {
+                        length,
+                        offset,
+                        gpu_address: 0x1000,
+                        device_address,
+                        attribute_stride,
+                    });
+                }
+            }
+        }
+    }
+    for len in [4, 8] {
+        for attribute_stride in [None, Some(4)] {
+            bindings.push(BoundBuffer::Bytes {
+                len,
+                attribute_stride,
+            });
+        }
+    }
+    let (mut alike, mut apart) = (0, 0);
+    for alignment in [0, 4, 64] {
+        for (at, binding) in bindings.iter().enumerate() {
+            for (of, other) in bindings.iter().enumerate() {
+                let equal = binding.shape(alignment) == other.shape(alignment);
+                assert_eq!(
+                    binding.same_shape(other, alignment),
+                    equal,
+                    "binding {at} against binding {of} at alignment {alignment}"
+                );
+                alike += usize::from(equal && at != of);
+                apart += usize::from(!equal);
+            }
+        }
+    }
+    assert!(alike > 0 && apart > 0, "{alike} pairs alike, {apart} apart");
 }
