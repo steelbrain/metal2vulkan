@@ -28,8 +28,19 @@
 //!   image in place is the buffer's bytes, whose uses hazard tracking orders after the shadow's
 //!   copies back and merges of every command buffer committed before (both name the buffer's
 //!   bytes). A view made of the texture before the move keeps the shadow, which goes on copying
-//!   in and back as a shadow over the same bytes beside an image in place does. The shadow's
-//!   image stays with the texture until it goes.
+//!   in and back as a shadow over the same bytes beside an image in place does.
+//! - **The shadow goes after the move.** The switch's last part writes the shadow's image, a
+//!   tracked write of every level and layer, so hazard tracking orders the committing command
+//!   buffer after every use of the shadow committed before, on any queue, and that command buffer
+//!   holds a [`ShadowAfterMove`]: once it completed, where the texture moved in and no view of it
+//!   made before the move presents the shadow, the shadow's `VkImage`, views and memory go
+//!   (`Image::let_go_unused`), and its merges' kept scratch buffers, counted
+//!   (`WorkCounts::host_texture_shadows_freed_after_move`). Nothing names the shadow by then:
+//!   every later command presents the image in place, and the commit bound no heap set. A view
+//!   of the texture made before the move, or a shadow made over the shadow's image (a slot
+//!   binding's usage shadow, a view's, which holds it as its truth, `shadow::ImageTruth`), keeps
+//!   it until that and the texture went, as does an untracked texture, whose uses on other queues
+//!   the program orders itself.
 //!
 //! - **Which textures.** A texture's own image (not a view's), the runtime's in memory of its own
 //!   (not shareable, not a heap's, a buffer's or the caller's), `Private`, its hazards tracked,
@@ -253,6 +264,42 @@ impl Drop for Freed {
     }
 }
 
+/// A shadow over host pages that may move in place at a commit (the module docs), held by the
+/// committing command buffer, which wrote its image last of every command buffer committed
+/// before it: as that command buffer completed, or went, where the texture moved in place and
+/// it and this alone hold the shadow's image (no view of the texture made before the move
+/// presents it, and no shadow made over it holds it as its truth), the image's `VkImage`, views
+/// and memory go, and its merges' kept scratch buffers, counted
+/// (`WorkCounts::host_texture_shadows_freed_after_move`). Else nothing: what else holds it keeps
+/// the shadow until that and the texture went.
+struct ShadowAfterMove {
+    /// The texture, held weakly: whether it lives is read, never taken.
+    texture: Weak<TextureShared>,
+    image: Arc<Image>,
+    copies: Arc<crate::shadow::ShadowCopies>,
+    /// Set where the shadow moved in place ([`Prepared::move_in`]).
+    moved: Arc<AtomicBool>,
+}
+
+impl Drop for ShadowAfterMove {
+    fn drop(&mut self) {
+        if !self.moved.load(Ordering::Acquire) {
+            return;
+        }
+        // The texture's storage and this hold the image, and nothing else: no view made before
+        // the move presents it, and no shadow made over it holds it as its truth, which alone
+        // could hold it again. Gone, the texture's storage holds it no more, and the image goes
+        // as this drops.
+        if self.texture.strong_count() == 0 || Arc::strong_count(&self.image) != 2 {
+            return;
+        }
+        self.copies.merge_scratch.let_go();
+        self.image.let_go_unused();
+        let shared = self.image.device.shared();
+        shared.counts.host_texture_shadow_freed_after_move();
+    }
+}
+
 /// A texture's storage form, made and its copy recorded into the committing command buffer's
 /// last part, or a shadow's image in place, made, to swap in once the commit submitted it. The
 /// texture is held weakly while the switch rides: its end takes it again inside a passing hold
@@ -270,11 +317,13 @@ enum Kind {
         swapped: Arc<Mutex<Swapped>>,
     },
     /// A shadow's move in place (the module docs): the aliasing image's storage, until it moves
-    /// in, and what its count takes (the pages' class, whether the image is pitched, whether a
-    /// shader writes the texture).
+    /// in, what its count takes (the pages' class, whether the image is pitched, whether a
+    /// shader writes the texture), and whether it moved in, which lets the shadow go
+    /// ([`ShadowAfterMove`]).
     Move {
         storage: Mutex<Option<Storage>>,
         counted: (PagesClass, bool, bool),
+        moved: Arc<AtomicBool>,
     },
 }
 
@@ -582,6 +631,7 @@ impl Texture {
                 moves.then(|| Kind::Move {
                     storage: Mutex::new(Some(storage)),
                     counted,
+                    moved: self.shadow_goes_after_move(core),
                 })
             }
             Made::Refused => {
@@ -666,6 +716,36 @@ impl Texture {
         );
         core.retain(Arc::clone(swapped));
         true
+    }
+
+    /// Where the texture's shadow moves in place at the commit whose last part `core` is (the
+    /// module docs), let its image go once that command buffer completed: a tracked write of
+    /// every level and layer of it, which orders the command buffer after every use of the
+    /// shadow committed before, on any queue, and the command buffer's hold on what lets it go
+    /// then ([`ShadowAfterMove`]). The flag the switch sets where the shadow moved in. Nothing
+    /// is written or held for an untracked texture, whose shadow stays until it goes: the
+    /// program orders its uses on other queues with its own fences and events.
+    fn shadow_goes_after_move(&self, core: &mut EncoderCore) -> Arc<AtomicBool> {
+        let moved = Arc::new(AtomicBool::new(false));
+        let Storage::Shadow { image, copies, .. } = &self.0.storage else {
+            return moved;
+        };
+        if !image.identity.tracked {
+            return moved;
+        }
+        let plan = image.plan();
+        let access = Access::new(crate::blit::TRANSFER, vk::AccessFlags2::TRANSFER_WRITE);
+        let Ok(written) = self.image_use(0..plan.levels, 0..plan.layers, access, true) else {
+            return moved;
+        };
+        core.command(crate::blit::TRANSFER, &[written], |_, _| {});
+        core.retain(ShadowAfterMove {
+            texture: self.downgrade(),
+            image: Arc::clone(image),
+            copies: Arc::clone(copies),
+            moved: Arc::clone(&moved),
+        });
+        moved
     }
 
     /// Whether a binding or a pass took an image of the texture's other than its shadow, made
@@ -772,7 +852,7 @@ impl Prepared {
     /// a pass took another image of it meanwhile, the image made then going with the command
     /// buffer.
     fn move_in(&self, texture: &Texture) -> bool {
-        let Kind::Move { storage, .. } = &self.kind else {
+        let Kind::Move { storage, moved, .. } = &self.kind else {
             return false;
         };
         if texture.shadowed_again() {
@@ -782,7 +862,9 @@ impl Prepared {
             return false;
         };
         *lock(&texture.0.pending_move) = None;
-        texture.0.moved.set(storage).is_ok()
+        let swapped = texture.0.moved.set(storage).is_ok();
+        moved.store(swapped, Ordering::Release);
+        swapped
     }
 }
 

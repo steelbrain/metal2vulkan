@@ -55,8 +55,10 @@
 //!   (a blit that reads the first texture, committed while no other is open) the first has moved
 //!   to it: where the second is in place, the first is in place, moved at that commit or at one
 //!   of the check's own passes, each committed while no other command buffer was open
-//!   (`host_textures_moved_in_place`, `host_textures_in_place`; `vk_image` answers one); a blit
-//!   then reads a CPU write made after
+//!   (`host_textures_moved_in_place`, `host_textures_in_place`; `vk_image` answers one), and
+//!   its shadow's image went once the command buffer that took the move completed
+//!   (`host_texture_shadows_freed_after_move`, one per move, the in-place counts as before); a
+//!   blit then reads a CPU write made after
 //!   its commit and before it runs with no shadow copy (`shadow_copies`), and a pass that clears
 //!   and stores it writes the clear into the pages, every byte past its texels kept; else it stays
 //!   a shadow, no move counted. Printed (`IN-PLACE-MOVE`): each texture's path and the counts.
@@ -402,6 +404,21 @@ fn sampled_textures_over_host_pages_take_the_path_their_check_answered() {
     assert!(lapses.is_empty(), "{}", lapses.join("\n"));
 }
 
+/// The shadow images of moved textures freed since `before` once they reach `moved`, or [`WAIT`]
+/// passed: freed as the command buffer that took a move is let go, which another thread may do
+/// (the check's own commits).
+fn freed_shadows(device: &Device, before: &WorkCounts, moved: u64) -> u64 {
+    let started = std::time::Instant::now();
+    loop {
+        let freed = device.work_counts().host_texture_shadows_freed_after_move
+            - before.host_texture_shadows_freed_after_move;
+        if freed >= moved || started.elapsed() > WAIT {
+            return freed;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+}
+
 /// The path of a texture over host pages: its image in place (`vk_image` answers one) or a shadow.
 fn path_of(texture: &Texture) -> &'static str {
     // SAFETY: the handle is only compared, while the texture lives.
@@ -516,12 +533,21 @@ fn a_texture_made_before_its_verdict_moves_in_place_once_it_passes() {
         let late_in_place = u64::from(late_path == "in place");
         let in_place = after.host_textures_in_place - before.host_textures_in_place - late_in_place;
         let path = path_of(&early);
+        // Its shadow's image goes once the command buffer that took the move completed, on the
+        // thread that lets that command buffer go: by the read's wait where its commit took it.
+        let freed = freed_shadows(&device, &before, moved);
         eprintln!(
             "IN-PLACE-MOVE on {}: made before its verdict: {early_path} (pending {pending}); one \
              made after it: {late_path}; the first after the next commit: {path} (moved {moved}, \
-             {moved_by_the_check} of them at the check's commits, in place {in_place})",
+             {moved_by_the_check} of them at the check's commits, in place {in_place}, shadows \
+             freed {freed})",
             device.name()
         );
+        if freed != moved {
+            lapses.push(format!(
+                "after the move: {freed} shadow images freed, where {moved} moved"
+            ));
+        }
         if moved_read != texels_of(&first, shape, bpr) {
             lapses.push("at the move: a blit read other than the pages".to_owned());
         }

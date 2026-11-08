@@ -467,6 +467,7 @@ impl Device {
             second: OnceLock::new(),
             form: Default::default(),
             kept_outside: AtomicBool::new(false),
+            released: AtomicBool::new(false),
             host_shadow: Mutex::default(),
             between: OnceLock::new(),
             detached: Mutex::new(None),

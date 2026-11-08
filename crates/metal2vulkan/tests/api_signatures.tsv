@@ -2800,6 +2800,7 @@ field	metal2vulkan-runtime::WorkCounts.host_texel_copies	pub host_texel_copies: 
 field	metal2vulkan-runtime::WorkCounts.host_texture_shadows_check_failed	pub host_texture_shadows_check_failed: u64
 field	metal2vulkan-runtime::WorkCounts.host_texture_shadows_check_pending	pub host_texture_shadows_check_pending: u64
 field	metal2vulkan-runtime::WorkCounts.host_texture_shadows_exact	pub host_texture_shadows_exact: u64
+field	metal2vulkan-runtime::WorkCounts.host_texture_shadows_freed_after_move	pub host_texture_shadows_freed_after_move: u64
 field	metal2vulkan-runtime::WorkCounts.host_texture_shadows_refused_detached	pub host_texture_shadows_refused_detached: u64
 field	metal2vulkan-runtime::WorkCounts.host_texture_shadows_refused_dma_buf	pub host_texture_shadows_refused_dma_buf: u64
 field	metal2vulkan-runtime::WorkCounts.host_texture_shadows_refused_image	pub host_texture_shadows_refused_image: u64

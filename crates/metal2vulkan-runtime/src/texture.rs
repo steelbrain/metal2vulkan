@@ -626,6 +626,9 @@ struct Image {
     /// (`Device::new_texture_with_range_token`), set once as the texture is made: dropped as the
     /// last of them goes (`TextureShared`'s drop), whatever keeps the image after that.
     objects: ObjectsToken,
+    /// Its `VkImage`, views and memory went ([`Image::release`]): as it dropped, or before, a
+    /// moved shadow's ([`Image::let_go_unused`]).
+    released: AtomicBool,
 }
 
 /// An image presenting its stand-in while its texture's bytes are detached (`Image::detached`).
@@ -1276,6 +1279,21 @@ impl Drop for Image {
         let Some(_busy) = exit_guard::enter() else {
             return;
         };
+        self.release();
+        // A heap's range went back as the last texture object over the image went, or goes
+        // back as the `HeapPlace` drops.
+    }
+}
+
+impl Image {
+    /// Let go of the image's `VkImage`, views and memory, and its entries in the device's books,
+    /// once: as it drops, or before, where no texture object presents it any more and no command
+    /// buffer may use it ([`let_go_unused`](Self::let_go_unused)). The caller is in a section of
+    /// the exit guard.
+    fn release(&self) {
+        if self.released.swap(true, Ordering::AcqRel) {
+            return;
+        }
         let shared = self.device.shared();
         // A held image's scheduler state goes with it (`texture/held_depth.rs`).
         shared.textures.held.remove(self.identity.key);
@@ -1295,19 +1313,24 @@ impl Drop for Image {
         // buffer holds every texture it uses until it completes. The views are the runtime's
         // own; the image only where it made it.
         // An image presenting a stand-in destroys its own `VkImage` where it kept one, and
-        // never the stand-in's.
-        let (raw, detached) = match &*lock(&self.detached) {
-            Some(detached) => (detached.own, true),
-            None => (Some(self.raw.get()), false),
+        // never the stand-in's. Either is taken: the image holds no `VkImage` from here on, and
+        // what kept it beside the image (a dedicated import) goes after it is destroyed.
+        let kept = (lock(&self.detached).as_mut()).map(|detached| detached.own.take());
+        let (raw, import, detached) = match kept {
+            Some(own) => (own, None, true),
+            None => {
+                let (raw, import) = self.raw.swap(vk::Image::null(), None);
+                (Some(raw), import, false)
+            }
         };
         // The kept resolve objects go before the views they were made of.
         self.resolves.clear();
         // SAFETY: as above.
         unsafe {
-            for &view in lock(&self.views).values() {
+            for (_, view) in lock(&self.views).drain() {
                 release::object(shared.vk(), view);
             }
-            for &view in lock(&self.own_views).values() {
+            for (_, view) in lock(&self.own_views).drain() {
                 release::object(shared.vk(), view);
             }
         }
@@ -1357,12 +1380,22 @@ impl Drop for Image {
                 }
             }
         }
+        drop(import);
         if let Owner::Caller(wrapped) = &self.owner {
             shared.interop.wrapped.forget(wrapped);
         }
         shared.fresh.forget(self.identity.key);
-        // A heap's range went back as the last texture object over the image went, or goes
-        // back as the `HeapPlace` drops.
+    }
+
+    /// Let go of the image's `VkImage`, views and memory now, though the image lives on: a
+    /// shadow no texture object presents any more since its texture moved in place, which no
+    /// command buffer may use (`texture/storage_form.rs`). Its drop releases nothing more. Left
+    /// to the process's end once it is exiting.
+    pub(super) fn let_go_unused(&self) {
+        let Some(_busy) = exit_guard::enter() else {
+            return;
+        };
+        self.release();
     }
 }
 
@@ -1957,6 +1990,7 @@ impl Device {
             second: OnceLock::new(),
             form: Default::default(),
             kept_outside: AtomicBool::new(false),
+            released: AtomicBool::new(false),
             host_shadow: Mutex::default(),
             between: OnceLock::new(),
             detached: Mutex::new(None),
@@ -2085,6 +2119,7 @@ impl Device {
             second: OnceLock::new(),
             form: Default::default(),
             kept_outside: AtomicBool::new(false),
+            released: AtomicBool::new(false),
             host_shadow: Mutex::default(),
             between: OnceLock::new(),
             detached: Mutex::new(None),
@@ -2873,6 +2908,7 @@ impl Device {
             second: OnceLock::new(),
             form: Default::default(),
             kept_outside: AtomicBool::new(false),
+            released: AtomicBool::new(false),
             host_shadow: Mutex::default(),
             between: OnceLock::new(),
             detached: Mutex::new(None),
@@ -2920,6 +2956,7 @@ impl Device {
             second: OnceLock::new(),
             form: Default::default(),
             kept_outside: AtomicBool::new(false),
+            released: AtomicBool::new(false),
             host_shadow: Mutex::default(),
             between: OnceLock::new(),
             detached: Mutex::new(None),
@@ -3395,6 +3432,7 @@ impl Device {
             second: OnceLock::new(),
             form: Default::default(),
             kept_outside: AtomicBool::new(false),
+            released: AtomicBool::new(false),
             host_shadow: Mutex::default(),
             between: OnceLock::new(),
             detached: Mutex::new(None),

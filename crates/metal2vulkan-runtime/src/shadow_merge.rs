@@ -189,6 +189,11 @@ impl ScratchSpares {
         Some(spares.swap_remove(at))
     }
 
+    /// Let go of every kept buffer: the shadow merges no more (`texture/storage_form.rs`).
+    pub(super) fn let_go(&self) {
+        lock(&self.0).clear();
+    }
+
     /// Keep `buffer` for a later merge, the smallest kept going past [`KEPT_SCRATCHES`].
     pub(super) fn give(&self, buffer: Buffer) {
         let mut buffers = lock(&self.0);

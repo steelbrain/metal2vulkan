@@ -307,7 +307,8 @@ driver version; with a shader-cache directory its verdicts are kept there, named
 the check's own version (not the runtime release), and recalled as the next device is made, else
 it runs once per process. A texture made before its verdict is a shadow, made without waiting for
 the check (`WorkCounts::host_texture_shadows_check_pending`), and moves in place once its kind's
-verdicts pass, with no copy (`WorkCounts::host_textures_moved_in_place`), at a quiet commit: one
+verdicts pass, with no copy (`WorkCounts::host_textures_moved_in_place`; its shadow's image goes
+once that commit's command buffer completed, `WorkCounts::host_texture_shadows_freed_after_move`), at a quiet commit: one
 made while no other command buffer of the device is uncommitted, that waits for no event and binds
 no texture by its ID, while none that does is still running (a program that never commits so
 keeps them shadows). A program that makes such textures as it starts (a compositor's
