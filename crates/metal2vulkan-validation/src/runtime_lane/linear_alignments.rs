@@ -62,13 +62,13 @@ struct Over {
     mapping: Mapping,
 }
 
-/// A `ShaderRead` texture of `pf`, `w` x `h` texels of `texel` bytes, at `offset` with rows
+/// A `ShaderRead` texture of `pf`, `w` x `h` texels, at `offset` with rows
 /// `bpr` apart in a no-copy buffer of anonymous pages holding [`counting`] bytes, with room for 4
 /// rows past its last (lavapipe's linear image takes its height rounded up to 4, and an image in
 /// place lies inside the buffer's memory); `None` where the device imports no host pages.
 fn over_pages(
     device: &Device,
-    (pf, texel): (PixelFormat, u64),
+    pf: PixelFormat,
     (w, h): (u64, u64),
     (offset, bpr): (u64, u64),
 ) -> Option<Over> {
@@ -213,7 +213,7 @@ fn a_texture_at_the_answered_alignment_is_in_place() {
             for w in WIDTHS {
                 let at = (answer, (w * texel).next_multiple_of(answer));
                 let before = device.work_counts();
-                let Some(over) = over_pages(device, (pf, texel), (w, ROWS), at) else {
+                let Some(over) = over_pages(device, pf, (w, ROWS), at) else {
                     eprintln!(
                         "LINEAR-ALIGNMENT on {}: the device imports no host memory",
                         device.name()
@@ -263,7 +263,7 @@ fn a_row_under_the_answer_is_made() {
         assert!(device.settle_in_place_checks(CHECK_WAIT));
         // Over host pages.
         let before = device.work_counts();
-        if let Some(over) = over_pages(device, (pf, texel), (w, ROWS), at) {
+        if let Some(over) = over_pages(device, pf, (w, ROWS), at) {
             let shadowed = device.work_counts().shadowed_textures - before.shadowed_textures;
             // SAFETY: the handle is only compared, while the texture lives.
             let aliased = unsafe { over.texture.vk_image() }.is_some();
