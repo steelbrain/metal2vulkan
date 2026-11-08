@@ -283,7 +283,13 @@ the record the pass is making.
 - A buffer descriptor's `exported_as` (`MemoryExport::OpaqueFd` or `MemoryExport::DmaBuf`) makes
   such a buffer of either handle type with the descriptor's other fields: `aligned_byte` lays that
   byte on a multiple of 256 bytes of the exported memory, and `padding_unobserved` lets textures
-  over it alias it with rows apart. Dma-buf-exportable buffers share blocks of their own kind, or
+  over it alias it with rows apart. A texture over such a buffer is a linear image made for the
+  memory's handle type, as Vulkan requires of an image bound in exported memory; such an image
+  starts `UNDEFINED`, so it takes the memory in place where the device's in-place check of that
+  exported memory passed, and a texture made before the check answered is a shadow that moves in
+  place at a later commit (docs/HOWTO.md, section 7, says where each plane must lie). Memory the
+  driver exports only as the buffer's dedicated allocation takes no image: its textures are
+  shadows, announced. Dma-buf-exportable buffers share blocks of their own kind, or
   take a dedicated allocation where the device needs or prefers one. `Buffer::export_memory_dma_buf`
   answers a new dma-buf each call, with what `export_memory_fd` answers; its `offset` is the
   buffer's first byte, so a VA-API `DRM_PRIME_2` surface's plane lies at `offset` plus the plane's
