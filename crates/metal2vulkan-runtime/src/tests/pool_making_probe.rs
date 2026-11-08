@@ -23,7 +23,7 @@ use ash::vk;
 use metal2vulkan::device::VkFeature;
 use metal2vulkan::metal::{IndexType, PrimitiveType};
 use metal2vulkan::pipeline::{RenderPipelineDescriptor, StageSource};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -179,7 +179,7 @@ fn runtime(lane: &Lane, layered: bool) {
         let steps = trace::stop();
         let (handled, handler) = ran.lock().unwrap().expect("the completed handler ran");
         let gpu_end = (first.gpu_end_time().unwrap() * 1e9) as u64;
-        let mut threads: BTreeMap<ThreadId, String> = BTreeMap::new();
+        let mut threads: HashMap<ThreadId, String> = HashMap::new();
         threads.insert(program, "P".into());
         threads.insert(handler, "H".into());
         let mut name = |thread: ThreadId| {
