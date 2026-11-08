@@ -2228,7 +2228,9 @@ fn heap_depth_textures_keep_their_texels_in_metal_s_tiles() {
 /// publishes, so the keep before its next copy, which writes texel `(3, 1)`, runs after the
 /// spin. The CPU writes texel `(3, 0)` where Metal's tiles place it, in a buffer over the heap's
 /// bytes (`heap_layouts::tiled_offset`), once the spin raised its ticket, and then releases the
-/// spin. The texture's image holds the copied texels between, so a keep of the heap's bytes as
+/// spin. The CPU's bytes are kept, and a blit reads the blit's texel; where the texture is a
+/// shadow of Metal's tiles, the heap's bytes hold that texel where they place it and every other
+/// texel as it was (one in place lays its texels out as its driver does). The texture's image holds the copied texels between, so a keep of the heap's bytes as
 /// it runs would hold the CPU's write, and the merge would undo it with the image's value; the
 /// keep holds the bytes the copy in read. A `HEAPTEX keep after copy in` line prints whether the
 /// write fell between: after the spin began (its ticket seen, where the device shows the host a
@@ -2375,11 +2377,43 @@ fn a_heap_depth_texture_keeps_a_cpu_write_made_after_its_copy_in() {
         let bytes = gpu_read(&queue, &over, 0..answer.size);
         let texel = |i: u64| &bytes[at(i)..at(i) + 4];
         assert_eq!(texel(cpu_texel), cpu, "the CPU's write since the copy in");
-        assert_eq!(texel(gpu_texel), written, "the blit's write");
-        let off: Vec<u64> = (0..w * h)
-            .filter(|&i| i != cpu_texel && i != gpu_texel && texel(i) != depth(i))
-            .collect();
-        assert!(off.is_empty(), "texels no write touched: {off:?}");
+        let read = staged(device, &[0; 4]);
+        let command_buffer = queue.command_buffer().unwrap();
+        let mut blit = command_buffer.blit_command_encoder().unwrap();
+        let origin = Origin::new(gpu_texel % w, gpu_texel / w, 0);
+        blit.copy_from_texture_to_buffer(
+            &texture,
+            0,
+            0,
+            origin,
+            one,
+            &read,
+            0,
+            4,
+            4,
+            BlitOption::None,
+        )
+        .unwrap();
+        blit.end_encoding().unwrap();
+        run(&command_buffer);
+        assert_eq!(
+            read_buffer(&read, 0, 4).unwrap(),
+            written,
+            "the blit's write"
+        );
+        // A texture in place lays its texels out as its driver does: where Metal's tiles hold
+        // them, each lies where they place it.
+        if tiled {
+            assert_eq!(
+                texel(gpu_texel),
+                written,
+                "the blit's write in the heap's bytes"
+            );
+            let off: Vec<u64> = (0..w * h)
+                .filter(|&i| i != cpu_texel && i != gpu_texel && texel(i) != depth(i))
+                .collect();
+            assert!(off.is_empty(), "texels no write touched: {off:?}");
+        }
     }
     layer_reported_nothing_at_all(&messages);
 }
@@ -2393,7 +2427,9 @@ fn a_heap_depth_texture_keeps_a_cpu_write_made_after_its_copy_in() {
 /// (`ImageFacts::depth_clamps`: no such extension enabled, and no
 /// `DriverFact::DepthImageKeepsValuesOutsideUnitRange`), its shadow's copy in clamps each into
 /// `[0, 1]`, a NaN to 1.0 and `-0.0` kept, and a blit of the texture into a buffer reads the
-/// clamped values; elsewhere it reads the bytes as they are. The texture is a `Shared` placement
+/// clamped values; elsewhere it reads the bytes as they are. Both where the texture is a shadow of
+/// Metal's tiles, as on ANV and MoltenVK; one in place (lavapipe) lays its texels out as its
+/// driver does and copies nothing in. The texture is a `Shared` placement
 /// heap's 37x5 one, its bytes written through a buffer over them where Metal's tiles place each
 /// texel (`heap_layouts::tiled_offset`). `HEAPTEX depth range` prints whether it was a shadow of
 /// Metal's tiles (`WorkCounts::heap_textures_tiled`), the route that copies it in, and the
@@ -2516,7 +2552,10 @@ fn a_heap_depth_texture_s_copy_in_takes_no_depth_outside_0_1() {
         .collect();
     assert!(unexpected.is_empty(), "reported: {unexpected:#?}");
     layer_reported_nothing_at_all(&messages);
+    // A texture in place lays its texels out as its driver does, and copies nothing in: only a
+    // shadow of Metal's tiles reads each texel where they place it.
     let off: Vec<(u64, u32, u32)> = (0..37 * 5)
+        .filter(|_| tiled)
         .filter_map(|i| {
             let at = (4 * i) as usize;
             let got = u32::from_le_bytes(read[at..at + 4].try_into().unwrap());
