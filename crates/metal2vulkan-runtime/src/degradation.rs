@@ -1499,8 +1499,9 @@ degradations! {
         /// and off Metal's fixed-point read (lavapipe, Mesa 26.0.8, its 8-bit 4:4:4 layout,
         /// random planes, every texel: within 0.04/2048 of Vulkan's conversion past the `half`
         /// its image stores, and of Metal's within 6/2048 where the result lies in `[0, 1]`;
-        /// outside it by what Metal's clamp takes off). Announced where the texture is made,
-        /// naming its layout. So do the samples of a texture whose planes are read in place
+        /// outside it by what Metal's clamp takes off). Announced at the texture's first
+        /// conversion, naming its layout: a texture whose planes every function reads in place
+        /// converts none, and announces nothing. So do the samples of a texture whose planes are read in place
         /// through the device's conversion of a linear image of them (`texture/ycbcr_planes.rs`),
         /// the device's filter of the codes too: announced where the image is made.
         ///

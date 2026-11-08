@@ -1,9 +1,12 @@
 //! The device's own Y′CbCr conversion of a two-plane YCbCr texture, as the YCbCr lanes check it
 //! (the runtime's `ycbcr_device.rs`). Where the device converts a texture's planes itself
-//! ([`device_conversions`] counts it as the texture is made), each texel is Vulkan's conversion
-//! of them ([`vulkan_read`]) within [`DEVICE_BOUND`], announced (`ycbcr-filter-not-exact`), and
-//! not Metal's fixed-point read: a lane that holds such a texture to Metal's steps holds it to
-//! these instead. The runtime takes the device's conversion of a 4:2:0 or 4:2:2 format only at
+//! ([`device_conversions`] counts it as the texture is made), each texel of its image is Vulkan's
+//! conversion of them ([`vulkan_read`]) within [`DEVICE_BOUND`], and not Metal's fixed-point read:
+//! a lane that holds such a texture's image to Metal's steps holds it to these instead. It is
+//! announced (`ycbcr-filter-not-exact`) at the texture's first conversion, the first sampling of
+//! its planes through the device's conversion ([`device_samples`] grows): a texture whose planes
+//! every function reads in place, whose samples are the function's own and not its image's,
+//! announces nothing. The runtime takes the device's conversion of a 4:2:0 or 4:2:2 format only at
 //! Metal's midpoint through a linear chroma filter, whose weights Vulkan states as Metal's (3 and
 //! 1 along a halved axis), so a lane's reconstruction is Metal's sum of weighted codes over 16,
 //! unrounded.
@@ -22,6 +25,13 @@ pub(super) const DEVICE_BOUND: f64 = 0.04;
 /// (`WorkCounts::ycbcr_device_conversions`): a texture made while it grows is the device's.
 pub(super) fn device_conversions(device: &Device) -> u64 {
     device.work_counts().ycbcr_device_conversions
+}
+
+/// The samplings of planes' images through the device's own conversion so far
+/// (`WorkCounts::ycbcr_device_samples`): one grows while the device converts a texture, which
+/// announces `ycbcr-filter-not-exact` at the texture's first conversion.
+pub(super) fn device_samples(device: &Device) -> u64 {
+    device.work_counts().ycbcr_device_samples
 }
 
 /// Vulkan's conversion of a texel of luma code `y` and chroma `cb` and `cr` (codes, reconstructed

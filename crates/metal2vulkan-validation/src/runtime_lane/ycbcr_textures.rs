@@ -36,7 +36,7 @@ use super::extended_range_targets::half_bits;
 use super::host_memory::{self, host_page, Mapping};
 use super::pixel_samplers::{metal_sampler, own_sampler};
 use super::ycbcr_device_reads::{
-    assert_device_reads, device_conversions, vulkan_read, DEVICE_BOUND,
+    assert_device_reads, device_conversions, device_samples, vulkan_read, DEVICE_BOUND,
 };
 use super::{buffer_with, converted_holds, half_within, read_buffer};
 use crate::air_library::AirLibrary;
@@ -827,8 +827,8 @@ fn grid_of(texels: &[u8], d: u32) -> Vec<[u16; 3]> {
         .collect()
 }
 
-/// `make`'s texture, and whether the device converted it itself as it was made
-/// ([`device_conversions`]).
+/// `make`'s texture, and whether the device converts it itself, counted as it was made
+/// ([`device_conversions`]): its image holds the device's conversion.
 fn made_by_device(device: &Device, make: impl FnOnce() -> Texture) -> (Texture, bool) {
     let converted = device_conversions(device);
     let texture = make();
@@ -888,12 +888,40 @@ impl Texels {
         read
     }
 
+    /// The texels a texture's samples read: where its planes are read in place (`in_place`),
+    /// Metal's steps `metal` of their codes on the grid `2048`, as a function that reads the planes
+    /// converts them under the lane's policy (`YCbCrInPlacePolicy::Exact`, `ycbcr_in_place.rs`)
+    /// whatever the texture's image holds; elsewhere its image's, the `read()` `texels`
+    /// ([`Texels::of`], the device's values where it converted the texture, `by_device`).
+    fn sampled(
+        texels: &[u8],
+        metal: impl FnOnce() -> Vec<[u16; 3]>,
+        (by_device, in_place): (bool, bool),
+    ) -> Texels {
+        match in_place {
+            true => Texels::Metal {
+                steps: metal(),
+                grid: 2048,
+            },
+            false => Texels::of(texels, 2048, by_device),
+        }
+    }
+
     /// Texel `i`'s red, green and blue.
     fn value(&self, i: usize) -> [f32; 3] {
         match self {
             Texels::Metal { steps, grid } => steps[i].map(|k| f32::from(k) / *grid as f32),
             Texels::Device(values) => values[i],
         }
+    }
+
+    /// Whether the `float4`s `got` are these texels exactly, alpha 1.
+    fn are(&self, got: &[u8]) -> bool {
+        (0..).zip(got.as_chunks::<16>().0).all(|(i, t)| {
+            let c = |k: usize| f32::from_le_bytes(t[4 * k..4 * k + 4].try_into().unwrap());
+            let v = self.value(i);
+            c(3) == 1.0 && (0..3).all(|k| c(k).to_bits() == v[k].to_bits())
+        })
     }
 
     /// The `half` bits of texel `i`'s red, green, blue and alpha 1, which a `half` holds exactly:
@@ -1047,7 +1075,8 @@ fn linear_samplers(device: &Device) -> Vec<(SamplerMipFilter, SamplerState)> {
 /// A kernel's `read()` and a nearest sample of every texel are the conversion of the surface's
 /// planes, Metal's for the measured surface, for both ranges and each matrix (BT.601, BT.709 and
 /// BT.2020), with no generic filter notice; where the device converts the planes itself, its
-/// conversion of them (`ycbcr_device_reads`).
+/// conversion of them (`ycbcr_device_reads`), but for a sample of planes read in place, Metal's
+/// whatever the image holds ([`Texels::sampled`]).
 #[test]
 fn ycbcr_textures_read_the_texels_metal_converts() {
     on_device(|device, messages| {
@@ -1089,6 +1118,7 @@ fn ycbcr_textures_read_the_texels_metal_converts() {
         for (seed, (ostype, matrix, range, model_matrix)) in (5..).zip(conversions) {
             let bytes = surface_bytes(seed);
             let surface = buffer_with(device, &bytes).unwrap();
+            let before = made_in_place(device);
             let (texture, by_device) = made_by_device(device, || {
                 ycbcr_texture(
                     &surface,
@@ -1097,11 +1127,13 @@ fn ycbcr_textures_read_the_texels_metal_converts() {
                 )
                 .unwrap()
             });
+            let in_place = made_in_place(device) > before;
             let texels = texels_of(device, &kernels.read, &texture, None);
             let models = (
                 modelled(&bytes, range, model_matrix),
                 &vulkan_modelled(&bytes, range, model_matrix)[..],
             );
+            let metal = models.0.clone();
             let case = format!("{range:?} {matrix:?}");
             let read = Texels::checked(
                 &texels,
@@ -1115,7 +1147,11 @@ fn ycbcr_textures_read_the_texels_metal_converts() {
                 }
             }
             let sampled = texels_of(device, &kernels.sample, &texture, Some(&nearest));
-            assert!(sampled == texels, "{case}: a nearest sample is the texel");
+            let samples = Texels::sampled(&texels, || metal, (by_device, in_place));
+            assert!(
+                samples.are(&sampled),
+                "{case}: a nearest sample is the texel"
+            );
         }
         let notices = counts(&messages.take_notices());
         assert_eq!(
@@ -1164,7 +1200,9 @@ fn half_of_step(k: u16) -> u16 {
 /// A linear sample of the converted texels: at each texel's centre it is the texel, and between
 /// texels Metal's step where the planes are read in place (a device whose memory is the host's),
 /// and elsewhere the filter of the kept image ([`Between`]), announced as
-/// [`assert_filter_notices`] states.
+/// [`assert_filter_notices`] states. Read in place, the samples are Metal's conversion of the codes
+/// whatever the image holds ([`Texels::sampled`]), so a device that converts the texture itself
+/// keeps its own texels for its `read()`.
 #[test]
 fn a_linear_sample_of_a_ycbcr_texture_is_metals() {
     on_device(|device, messages| {
@@ -1177,10 +1215,11 @@ fn a_linear_sample_of_a_ycbcr_texture_is_metals() {
         let (texture, by_device) = made_by_device(device, || video_texture(&surface));
         let in_place = made_in_place(device) > before;
         let texels = texels_of(device, &kernels.read, &texture, None);
-        let read = Texels::of(&texels, 2048, by_device);
+        let metal = || modelled(&bytes, YCbCrRange::Video, YCbCrMatrix::Bt601);
+        let read = Texels::sampled(&texels, metal, (by_device, in_place));
         let sampled = texels_of(device, &kernels.sample, &texture, Some(&linear));
         assert!(
-            sampled == texels,
+            read.are(&sampled),
             "a linear sample at a texel's centre is the texel"
         );
         let between = texels_of(device, &kernels.between, &texture, Some(&linear));
@@ -1200,15 +1239,16 @@ fn a_linear_sample_of_a_ycbcr_texture_is_metals() {
 fn a_linear_sample_is_metals_through_each_sampler_and_result() {
     on_device(|device, messages| {
         let kernels = Kernels::new(device);
-        let surface = buffer_with(device, &surface_bytes(9)).unwrap();
+        let bytes = surface_bytes(9);
+        let surface = buffer_with(device, &bytes).unwrap();
         let mut steps = Between::new(device);
         let before = made_in_place(device);
         let (texture, by_device) = made_by_device(device, || video_texture(&surface));
         let in_place = made_in_place(device) > before;
-        let read = Texels::of(
+        let read = Texels::sampled(
             &texels_of(device, &kernels.read, &texture, None),
-            2048,
-            by_device,
+            || modelled(&bytes, YCbCrRange::Video, YCbCrMatrix::Bt601),
+            (by_device, in_place),
         );
         let at = |p: u64, f: u32, n: u64| (p as f32 + 0.5 + f as f32 / 256.0) / n as f32;
         let jobs: Vec<[f32; 4]> = (0..W * H)
@@ -1456,15 +1496,16 @@ fn drawn_with(
 fn a_fragments_linear_sample_is_metals_through_each_sampler_and_result() {
     on_device(|device, messages| {
         let kernels = Kernels::new(device);
-        let surface = buffer_with(device, &surface_bytes(9)).unwrap();
+        let bytes = surface_bytes(9);
+        let surface = buffer_with(device, &bytes).unwrap();
         let mut steps = Between::new(device);
         let before = made_in_place(device);
         let (texture, by_device) = made_by_device(device, || video_texture(&surface));
         let in_place = made_in_place(device) > before;
-        let read = Texels::of(
+        let read = Texels::sampled(
             &texels_of(device, &kernels.read, &texture, None),
-            2048,
-            by_device,
+            || modelled(&bytes, YCbCrRange::Video, YCbCrMatrix::Bt601),
+            (by_device, in_place),
         );
         let library = device
             .new_library_with_air(&llvm_assemble_text(&fragments()).unwrap())
@@ -1527,11 +1568,11 @@ fn made_in_place(device: &Device) -> u64 {
 /// filter, within [`DEVICE_FILTER_BOUND`] of the weighted sum of the texels (`device-sampling`),
 /// the texels Metal's or, where the device converted the texture, the device's. The values off
 /// Metal's step are counted, with the largest distance in codes of `1/255` (from the weighted sum,
-/// off Metal's sampler). The textures the device converts itself while it runs are counted too
-/// (`ycbcr_device_reads`), each announced as `ycbcr-filter-not-exact`.
+/// off Metal's sampler). The conversions the device makes itself while it runs are counted too
+/// (`ycbcr_device_reads`), announced as `ycbcr-filter-not-exact`.
 struct Between {
     metal: bool,
-    /// The device's conversions before the run ([`device_conversions`]).
+    /// The device's samplings of planes' images before the run ([`device_samples`]).
     converted: u64,
     /// Samples of textures that keep their image.
     kept: usize,
@@ -1544,7 +1585,7 @@ impl Between {
     fn new(device: &Device) -> Between {
         Between {
             metal: metal_sampler(device),
-            converted: device_conversions(device),
+            converted: device_samples(device),
             kept: 0,
             checked: 0,
             differ: 0,
@@ -1618,14 +1659,14 @@ impl Between {
                 self.most
             );
         }
-        let by_device = device_conversions(device) > self.converted;
+        let by_device = device_samples(device) > self.converted;
         assert_filter_notices(device, announced, (self.kept > 0, by_device));
     }
 }
 
 /// The filter notices `announced` of a run on `device` whose samples of converted two-plane
-/// YCbCr textures read a texture that keeps its image where `kept`, and that made a texture the
-/// device converts itself where `by_device`: `ycbcr-filter-not-exact` once where one did on a
+/// YCbCr textures read a texture that keeps its image where `kept`, and in which the device
+/// converted a texture itself where `by_device`: `ycbcr-filter-not-exact` once where one did on a
 /// device that samples through Metal's own sampler (a runtime sampler's slot bound to such a
 /// texture holds its filter note where the bound sampler filters, as the runs' linear samplers
 /// do, `lower::sampler::linear`), or
@@ -1670,13 +1711,11 @@ fn assert_filter_notices(
 fn a_ycbcr_slot_takes_the_devices_filter_in_the_pipeline_its_creation_made() {
     on_device(|device, messages| {
         let kernels = Kernels::new(device);
-        let surface = buffer_with(device, &surface_bytes(9)).unwrap();
+        let bytes = surface_bytes(9);
+        let surface = buffer_with(device, &bytes).unwrap();
         let (texture, by_device) = made_by_device(device, || video_texture(&surface));
-        let read = Texels::of(
-            &texels_of(device, &kernels.read, &texture, None),
-            2048,
-            by_device,
-        );
+        let texels = texels_of(device, &kernels.read, &texture, None);
+        let read = Texels::of(&texels, 2048, by_device);
         let d = TextureDescriptor::texture_2d(PixelFormat::RGBA16Float, W, H, false);
         let twin = device.new_texture(&d).unwrap();
         let bytes: Vec<u8> = (0..(W * H) as usize)
@@ -1691,9 +1730,12 @@ fn a_ycbcr_slot_takes_the_devices_filter_in_the_pipeline_its_creation_made() {
             .enabled()
             .properties
             .contains(&VkProperty::MetalSampler);
-        // A device whose memory is the host's reads the planes in place, Metal's filter exactly,
-        // in the slot's in-place variant.
+        // A device whose memory is the host's reads the planes in place, Metal's filter of Metal's
+        // conversion of the codes exactly, in the slot's in-place variant, whatever the image
+        // holds.
         let exact = super::ycbcr_in_place::reads_in_place(device);
+        let metal = || modelled(&bytes, YCbCrRange::Video, YCbCrMatrix::Bt601);
+        let samples = Texels::sampled(&texels, metal, (by_device, exact));
         let linear = sampler(device, SamplerMinMagFilter::Linear);
         let library = device
             .new_library_with_air(&llvm_assemble_text(&fragments()).unwrap())
@@ -1718,7 +1760,7 @@ fn a_ycbcr_slot_takes_the_devices_filter_in_the_pipeline_its_creation_made() {
             for (i, texel) in (0..W * H).zip(&got) {
                 let at = (i % W, i / W);
                 for (c, &value) in texel.iter().enumerate().take(3) {
-                    let want = read.between(at, c);
+                    let want = samples.between(at, c);
                     match exact {
                         true => {
                             assert_eq!(
@@ -1809,7 +1851,7 @@ fn a_ycbcr_sample_the_exact_filter_does_not_reach_is_announced() {
         d.resource_options = ResourceOptions::shared();
         d.swizzle = swizzle;
         let plane = IoSurfacePlane::new(0, ROW, true).with_ycbcr(facts(VIDEO, None));
-        let converted = device_conversions(device);
+        let converted = device_samples(device);
         let texture = surface.new_texture_with_iosurface_plane(&d, plane).unwrap();
         let linear = sampler(device, SamplerMinMagFilter::Linear);
         let sampled = texels_of(device, &kernels.between, &texture, Some(&linear));
@@ -1879,7 +1921,7 @@ fn a_ycbcr_sample_the_exact_filter_does_not_reach_is_announced() {
         }
         if !metal {
             // Announced where the device converted a texture itself (`ycbcr_device_reads`).
-            let by_device = device_conversions(device) > converted;
+            let by_device = device_samples(device) > converted;
             assert_eq!(
                 counts.get(&YCBCR_FILTERS[0]),
                 by_device.then_some(&1),
@@ -2063,7 +2105,7 @@ fn a_runtime_sampler_announces_the_ycbcr_filter_only_where_it_filters() {
             adjust(&mut d);
             let state = device.new_sampler_state(&d).unwrap();
             let metal = metal_sampler(device);
-            let converted = device_conversions(device);
+            let converted = device_samples(device);
             let (in_place, kept) = (
                 made_in_place(device),
                 device.work_counts().ycbcr_images_kept_layout,
@@ -2093,7 +2135,7 @@ fn a_runtime_sampler_announces_the_ycbcr_filter_only_where_it_filters() {
             // Where the device would read 4:2:0 planes in place, each keeps its image for its
             // layout.
             let kept = device.work_counts().ycbcr_images_kept_layout - kept;
-            let by_device = device_conversions(device) > converted;
+            let by_device = device_samples(device) > converted;
             let notices = messages.take_notices();
             let counts = counts(&notices);
             println!(
@@ -2214,7 +2256,7 @@ fn a_ycbcr_texture_through_an_argument_buffer_announces_its_filter_only_where_it
                         pipeline_of(device, &llvm_assemble_text(&source).unwrap(), "k")
                     })
                     .into();
-                // From here: a texture the device converts itself is announced as it is made.
+                // From here: a texture the device converts itself is announced at its first conversion.
                 messages.take_notices();
                 let (texture, by_device) = match ycbcr {
                     true => {
@@ -2556,9 +2598,9 @@ fn ycbcr_textures_follow_writes_of_their_planes() {
 /// function's linear sample of a `YCBCR8_420_2P` texture over a Shared buffer, and over a no-copy
 /// buffer of the caller's memory, reads the conversion of codes written by kernels in an earlier
 /// command buffer and in an earlier encoder of its own, by a blit, and by the CPU before the
-/// commit ([`assert_uniform`]). The planes hold one code each, so every sample is that texel. No
-/// YCbCr filter notice is announced but where the device converted a texture itself
-/// (`ycbcr_device_reads`).
+/// commit ([`assert_uniform`]): Metal's conversion where the planes are read in place, whatever
+/// the image holds. The planes hold one code each, so every sample is that texel. No YCbCr filter
+/// notice is announced but where the device converted a texture itself (`ycbcr_device_reads`).
 #[test]
 fn a_draw_samples_the_planes_as_written_before_it() {
     on_device(|device, messages| {
@@ -2566,7 +2608,7 @@ fn a_draw_samples_the_planes_as_written_before_it() {
         let library = device
             .new_library_with_air(&llvm_assemble_text(&fragments()).unwrap())
             .unwrap();
-        let converted = device_conversions(device);
+        let converted = device_samples(device);
         for no_copy in [false, true] {
             let zeroed = uniform(0, 0, 0);
             let surface = match no_copy {
@@ -2596,7 +2638,11 @@ fn a_draw_samples_the_planes_as_written_before_it() {
                     }
                 }
             };
+            let before = made_in_place(device);
             let (texture, by_device) = made_by_device(device, || video_texture(&surface));
+            // Read in place, the draw's samples are Metal's conversion of the codes, whatever
+            // the image holds.
+            let image = by_device && made_in_place(device) == before;
             let luma = plane_texture(&surface, PixelFormat::R8Unorm, [W, H], 0);
             let chroma = plane_texture(&surface, PixelFormat::RG8Unorm, [CW, CH], CHROMA_AT);
             for (round, writer) in [
@@ -2680,13 +2726,13 @@ fn a_draw_samples_the_planes_as_written_before_it() {
                     "{writer:?}, no-copy {no_copy}: the new codes' ({:?})",
                     got[0]
                 );
-                assert_uniform(&pixels, [y, cb, cr], by_device, &case);
+                assert_uniform(&pixels, [y, cb, cr], image, &case);
             }
         }
         let notices = counts(&messages.take_notices());
         assert_eq!(
             notices.get(&Degradation::YCbCrFilterNotExact),
-            (device_conversions(device) > converted).then_some(&1),
+            (device_samples(device) > converted).then_some(&1),
             "{notices:?}"
         );
     });
@@ -4454,7 +4500,7 @@ fn eight_bit_codes_read_what_metal_reads() {
         let pf = PixelFormat::RGB84202P;
         let codes = ycbcr_format(pf).and_then(YCbCrCodes::of).unwrap();
         let usage = TextureUsage::SHADER_READ;
-        let converted = device_conversions(device);
+        let converted = device_samples(device);
         for (seed, ostype, matrix) in [
             (41, VIDEO, None),
             (42, FULL, Some(SurfaceYCbCrMatrix::Itu601)),
@@ -4501,7 +4547,7 @@ fn eight_bit_codes_read_what_metal_reads() {
         );
         assert_eq!(
             notices.get(&Degradation::YCbCrFilterNotExact),
-            (device_conversions(device) > converted).then_some(&1),
+            (device_samples(device) > converted).then_some(&1),
             "{notices:?}"
         );
     });
@@ -5117,14 +5163,14 @@ fn ycbcr_half_gathers_round_ties_away() {
 /// linear sample at each texel's centre. No filter notice but where the device converted a texture
 /// itself (`ycbcr_device_reads`), which reads the nearest codes to its reconstruction instead
 /// ([`assert_device_codes`]). Over a surface whose chroma plane theirs does not fit in, their
-/// pairs at the surface's rows, past the plane.
+/// pairs at the surface's rows, past the plane, the device's reconstruction of them likewise.
 #[test]
 fn four_two_two_and_four_four_four_codes_read_what_metal_reads() {
     on_device(|device, messages| {
         let kernels = Kernels::new(device);
         let nearest = sampler(device, SamplerMinMagFilter::Nearest);
         let linear = sampler(device, SamplerMinMagFilter::Linear);
-        let converted = device_conversions(device);
+        let converted = device_samples(device);
         let mut seed = 160;
         for (pf, ostypes) in [
             (PixelFormat::RGB84222P, &["422v", "422f", "444v"][..]),
@@ -5181,7 +5227,7 @@ fn four_two_two_and_four_four_four_codes_read_what_metal_reads() {
         );
         assert_eq!(
             notices.get(&Degradation::YCbCrFilterNotExact),
-            (device_conversions(device) > converted).then_some(&1),
+            (device_samples(device) > converted).then_some(&1),
             "{notices:?}"
         );
         // Over a surface whose chroma plane theirs does not fit in: their pairs at the surface's
@@ -5195,8 +5241,10 @@ fn four_two_two_and_four_four_four_codes_read_what_metal_reads() {
             let codes = ycbcr_format(pf).and_then(YCbCrCodes::of).unwrap();
             let bytes = family_bytes(1, codes);
             let surface = buffer_with(device, &bytes).unwrap();
-            let texture = family_texture(&surface, pf, ostype, None)
-                .unwrap_or_else(|e| panic!("{pf:?} over {ostype}: {e:?}"));
+            let (texture, by_device) = made_by_device(device, || {
+                family_texture(&surface, pf, ostype, None)
+                    .unwrap_or_else(|e| panic!("{pf:?} over {ostype}: {e:?}"))
+            });
             let max = (1u16 << codes.bits) - 1;
             let read = code_grid(
                 &kernels,
@@ -5204,7 +5252,9 @@ fn four_two_two_and_four_four_four_codes_read_what_metal_reads() {
                 max,
             );
             let want = family_modelled(&bytes, codes, (YCbCrRange::Video, YCbCrMatrix::Bt601));
-            assert_eq!(read, want, "{pf:?} over {ostype}");
+            let device_codes = by_device.then(|| vulkan_codes_of_sums(family_sums(&bytes, codes)));
+            let case = format!("{pf:?} over {ostype}");
+            assert_read_codes(&read, &want, device_codes.as_deref(), max, &case);
         }
     });
 }
@@ -5553,12 +5603,12 @@ fn packed_views_read_their_twins_texels() {
 /// view's bindings present the code-reading format, whose texels the device's sampler filters as
 /// it filters that format's (`Texture::luma_view`), so the view's samples announce no filter
 /// notice, through Metal's own sampler too: only a texture the device converted itself announces
-/// `ycbcr-filter-not-exact`, where it is made (`ycbcr_device_reads`).
+/// `ycbcr-filter-not-exact`, at its first conversion (`ycbcr_device_reads`).
 #[test]
 fn retyped_views_read_their_luma_codes() {
     use metal2vulkan::metal::TextureSwizzle as S;
     on_device(|device, messages| {
-        let converted = device_conversions(device);
+        let converted = device_samples(device);
         let kernels = Kernels::new(device);
         let linear = sampler(device, SamplerMinMagFilter::Linear);
         let array = |t: &Texture, swizzle: Option<TextureSwizzleChannels>| {
@@ -5658,7 +5708,7 @@ fn retyped_views_read_their_luma_codes() {
         let announced = counts(&messages.take_notices());
         assert_eq!(
             announced.get(&Degradation::YCbCrFilterNotExact),
-            (device_conversions(device) > converted).then_some(&1),
+            (device_samples(device) > converted).then_some(&1),
             "{announced:?}"
         );
         // Over plane 1, not measured: refused.

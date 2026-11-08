@@ -2653,7 +2653,8 @@ bound.
   codes aside, on a device that reports the format's conversion features, Metal's midpoint chroma
   through a linear chroma filter among them for a 4:2:0 or 4:2:2 one, and has no defect in it:
   MoltenVK's 4:2:0 and 4:2:2 formats and lavapipe's, RADV's and NVIDIA's 10-bit ones aside) reads the device's conversion
-  of its planes, announced where the texture is made; so do the samples of a texture whose planes
+  of its planes, announced at the texture's first conversion (a texture whose planes every
+  function reads in place converts none, and announces nothing); so do the samples of a texture whose planes
   are read in place through the device's conversion of a linear image of them (where the device's
   linear tiling of the 4:2:0 format has Metal's reconstruction), the device's filter of the codes
   too, announced where the image is made; and a pipeline stage's filtered sample of a

@@ -48,7 +48,7 @@
 //!   store, ours (`bind::ycbcr_store`), inverts Metal's read, not the device's, so the device's
 //!   load would move the codes of texels the pass does not draw (lavapipe: by a code, over an
 //!   8-bit 4:4:4 surface).
-//! - **What it reads** is the device's answer, announced where the texture is made
+//! - **What it reads** is the device's answer, announced at the texture's first conversion
 //!   (`ycbcr-filter-not-exact`): Vulkan states the reconstruction's weights and the model's
 //!   matrices, and leaves each step's precision at least the format's and the clamp of the result
 //!   into `[0, 1]` the implementation's ("An implementation may clamp the R′G′B′ results of these
