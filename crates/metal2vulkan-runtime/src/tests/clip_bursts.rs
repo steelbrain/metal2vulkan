@@ -13,8 +13,8 @@
 //! and the compositor's command buffers that took [`HELD`] or longer to be scheduled.
 //!
 //! The mix is the counts' (3062 buffers, 1175 textures) at sizes of a guest's small resources,
-//! and 34 decoded 4K NV12 pictures in exportable buffers (`exported_memory.rs`), as many as a
-//! guest's decoder pool grew by over a clip.
+//! and 34 decoded 4K NV12 pictures in `Private` exportable buffers (`exported_memory.rs`), as many
+//! as a guest's decoder pool grew by over a clip.
 //!
 //! A device test: compiled only under the GPU safety cfgs (`m2v_gpu`, `m2v_cpu_icd`).
 
@@ -34,7 +34,8 @@ const BUFFER_LENGTHS: [u64; 5] = [256, 4 << 10, 16 << 10, 64 << 10, 256 << 10];
 const TEXTURES: usize = 1175;
 const TEXTURE_SIDES: [u64; 4] = [32, 128, 256, 512];
 
-/// The decoded pictures, `Shared` exportable buffers of a 3840 x 2160 NV12 picture's bytes.
+/// The decoded pictures, `Private` exportable buffers of a 3840 x 2160 NV12 picture's bytes, as
+/// the consumer's decoder writes its pictures into.
 const PICTURES: usize = 34;
 const PICTURE: u64 = 3840 * 2160 * 3 / 2;
 
@@ -118,7 +119,7 @@ fn make_clip(device: &Device, exports: bool) -> (Clip, [Times; 3]) {
         true => (0..PICTURES)
             .map(|_| {
                 times[2].timed(|| {
-                    (device.new_exportable_buffer(PICTURE, ResourceOptions::shared())).unwrap()
+                    (device.new_exportable_buffer(PICTURE, ResourceOptions::private())).unwrap()
                 })
             })
             .collect(),
@@ -209,7 +210,7 @@ fn a_clip_start_s_makings_beside_a_compositor() {
     let scratch = Scratch::new("clip-bursts");
     let device = device(&scratch.0);
     let name = device.name().to_owned();
-    let exports = match device.new_exportable_buffer(PICTURE, ResourceOptions::shared()) {
+    let exports = match device.new_exportable_buffer(PICTURE, ResourceOptions::private()) {
         Ok(_) => true,
         Err(Error::NotImplemented(RuntimeGap::ExportableMemory)) => {
             eprintln!("CLIP-BURSTS on {name}: no exportable buffers; pictures left out");
