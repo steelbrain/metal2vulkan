@@ -904,7 +904,7 @@ impl Device {
 
     /// [`Device::dma_buf_image`], with the kind of each refusal ([`DmaBufRefusal`]), which a
     /// texture in place over a buffer's dma-buf pages is counted by (`in_place.rs`).
-    pub(super) fn dma_buf_image_or_why(
+    fn dma_buf_image_or_why(
         &self,
         plan: &ImagePlan,
         facts: &ImageFacts<'_>,

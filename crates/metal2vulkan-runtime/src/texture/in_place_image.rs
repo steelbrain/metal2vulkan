@@ -596,8 +596,10 @@ impl Device {
     /// Release `unplaced`'s image, which no command uses and no memory is bound to.
     fn release_unplaced(&self, unplaced: Unplaced) {
         match unplaced {
-            // SAFETY: the image is live and unbound, and no command uses it.
-            Unplaced::Host { made, .. } => unsafe { release::object(self.shared().vk(), made.raw) },
+            Unplaced::Host { made, .. } => {
+                // SAFETY: the image is live and unbound, and no command uses it.
+                unsafe { release::object(self.shared().vk(), made.raw) };
+            }
             #[cfg(unix)]
             Unplaced::DmaBuf { unbound, .. } => unbound.release(self),
         }
