@@ -46,10 +46,10 @@ use metal2vulkan::device::HostPageTexturePolicy;
 use metal2vulkan::metal::{PixelFormat, SamplerMinMagFilter, TextureUsage};
 use metal2vulkan::vk::DriverId;
 use metal2vulkan_runtime::{
-    BlitOption, Buffer, BufferContents, BufferDescriptor, CommandBuffer, CommandQueue,
-    DebugMessage, Degradation, Device, DmaBufChunk, DmaBufRequest, DmaBufSource, Error, EventRef,
-    Heap, HeapDescriptor, HeapType, HostBacking, HostMemory, KeepAlive, Origin, Problem,
-    ResourceOptions, RuntimeGap, Size, TextureDescriptor,
+    AddressPlacement, BlitOption, Buffer, BufferContents, BufferDescriptor, CommandBuffer,
+    CommandQueue, DebugMessage, Degradation, Device, DmaBufChunk, DmaBufRequest, DmaBufSource,
+    Error, EventRef, Heap, HeapDescriptor, HeapType, HostBacking, HostMemory, KeepAlive, Origin,
+    Problem, ResourceOptions, RuntimeGap, Size, TextureDescriptor,
 };
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd, OwnedFd};
 use std::ptr::NonNull;
@@ -2310,5 +2310,84 @@ fn a_rebind_between_one_chunk_and_several_keeps_a_texture_s_texels() {
             device.name()
         );
         drop((texture, buffer));
+    });
+}
+
+/// The mappings this process holds now: the lines of `/proc/self/maps`.
+fn process_mappings() -> usize {
+    std::fs::read_to_string("/proc/self/maps").map_or(0, |maps| maps.lines().count())
+}
+
+/// A view of guest pages as a consumer's probe makes one: single pages of the file mapped in
+/// reverse order, a no-copy `Shared` buffer over the whole view placed outside the guest's
+/// address range (`AddressPlacement::Outside`), with a dma-buf source of its pages. Made over 64
+/// pages, which one udmabuf takes, and over `list_limit + 1`, which take two. Printed
+/// (`VIEW-IMPORT`): the making's answer, the source's calls, and the counts of imports, copies
+/// and mappings it took; the GPU reads the CPU's bytes where it is made.
+#[test]
+fn a_reversed_view_of_single_pages_imports_through_its_dma_bufs() {
+    const TEST: &str = "dma-buf reversed view";
+    if !udmabuf_openable(TEST) {
+        return;
+    }
+    on_device(|device| {
+        let page = host_page();
+        let queue = device.new_command_queue().unwrap();
+        for runs in [64, Limits::of_host().items + 1] {
+            let ram = Memfd::new(runs * page);
+            let pieces: Vec<(usize, usize)> =
+                (0..runs).map(|i| ((runs - 1 - i) * page, page)).collect();
+            let view = ram.view(&pieces);
+            let mut expected = Vec::with_capacity(runs * page);
+            for i in 0..runs {
+                let bytes = counting(page, i);
+                ram.whole.write((runs - 1 - i) * page, &bytes);
+                expected.extend(bytes);
+            }
+            let calls = Calls::default();
+            let before = device.work_counts();
+            let mapped = process_mappings();
+            // SAFETY: the view outlives the buffer, and the source makes dma-bufs of its pages.
+            let memory =
+                unsafe { HostMemory::with_dma_buf(view.pointer(0), ram.source(&view, &calls)) };
+            let contents = BufferContents::NoCopy {
+                memory,
+                deallocator: None,
+                keep_alive: None,
+            };
+            let length = (runs * page) as u64;
+            let descriptor = BufferDescriptor::new(length, ResourceOptions::shared(), contents)
+                .with_placement(AddressPlacement::Outside);
+            let made = device.new_buffer_with_descriptor(descriptor);
+            let added = process_mappings() as i64 - mapped as i64;
+            let after = device.work_counts();
+            let calls = calls.lock().unwrap().clone();
+            eprintln!(
+                "VIEW-IMPORT on {}: {runs} single pages in reverse: {}; source calls {calls:?}; \
+                 dma-buf imports {}, sparse buffers {}, pointer imports {}, copied {} (degraded \
+                 {}, refused {}), unpinnable {}, mappings queried {}, process mappings added \
+                 {added}",
+                device.name(),
+                match &made {
+                    Ok(_) => "made".to_string(),
+                    Err(error) => format!("refused: {error:?}"),
+                },
+                after.dma_buf_imports - before.dma_buf_imports,
+                after.dma_buf_sparse_buffers - before.dma_buf_sparse_buffers,
+                after.host_pointer_imports_made - before.host_pointer_imports_made,
+                after.copied_host_buffers_made - before.copied_host_buffers_made,
+                after.copied_host_buffers_degraded - before.copied_host_buffers_degraded,
+                after.copied_host_buffers_refused - before.copied_host_buffers_refused,
+                after.host_imports_unpinnable - before.host_imports_unpinnable,
+                after.host_mappings_queried - before.host_mappings_queried,
+            );
+            if let Ok(buffer) = &made {
+                assert!(
+                    gpu_read(&queue, buffer, 0..length) == expected,
+                    "{TEST}: {runs} pages: the GPU's read"
+                );
+            }
+            drop(made);
+        }
     });
 }
