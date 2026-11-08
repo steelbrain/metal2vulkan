@@ -252,6 +252,7 @@ impl CommandBuffer {
         call: &'static str,
         dispatch_type: DispatchType,
     ) -> Result<ComputeCommandEncoder, Error> {
+        let _for = self.notices_for();
         // Metal's process ends here under some protection options (`command_buffer/protection.rs`).
         self.refuse_protected_encoder(call)?;
         let core = EncoderCore::open(
@@ -351,6 +352,7 @@ impl ComputeCommandEncoder {
         call: impl FnOnce(&mut CallLog<ComputeCall>) -> ComputeCall,
         run: impl FnOnce(&mut Self) -> Result<T, Error>,
     ) -> Result<T, Error> {
+        let _for = self.core.notices_for();
         let at = self.log(call);
         let ran = run(self);
         if let (Err(_), Some(at), Some(log)) = (&ran, at, &mut self.log) {
@@ -1166,6 +1168,7 @@ impl ComputeCommandEncoder {
     /// `RENDER_TARGETS` records nothing. On a serial encoder, which orders its dispatches anyway,
     /// it adds nothing Metal would not do.
     pub fn memory_barrier_with_scope(&mut self, scope: BarrierScope) {
+        let _for = self.core.notices_for();
         self.log(|_| ComputeCall::BarrierWithScope(scope));
         if !scope.intersects(BarrierScope::BUFFERS.union(BarrierScope::TEXTURES)) {
             return;
@@ -1600,6 +1603,7 @@ impl ComputeCommandEncoder {
     /// `endEncoding`. What it binds is held until the command buffer completes, as Metal holds
     /// what an encoder was handed.
     pub fn end_encoding(mut self) -> Result<(), Error> {
+        let _for = self.core.notices_for();
         // Its unit of command predication takes what it encoded (`predication.rs`).
         self.end_predication()?;
         self.table.let_go_all(&mut self.core);

@@ -96,6 +96,7 @@ impl CommandBufferShared {
     /// first recording, which its group's submission fails. A command buffer that completed
     /// encodes nothing again.
     pub(crate) fn reencode(self: &Arc<Self>) {
+        let _for = self.notices_for();
         let turn = lock(&self.reencoding);
         let marked = self.reencode.load(Ordering::Acquire);
         if marked == 0 {

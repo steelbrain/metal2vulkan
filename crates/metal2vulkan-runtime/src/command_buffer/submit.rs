@@ -422,6 +422,7 @@ impl CommandBufferShared {
         alone: bool,
         scheduler: &mut scheduler::State,
     ) -> Result<Submitting, CommandBufferError> {
+        let _for = self.notices_for();
         let device = &self.device;
         if device.is_lost() {
             return Err(CommandBufferError::DeviceLost);

@@ -283,6 +283,8 @@ mod neutral_zeros_shared;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod no_copy_lies;
 mod noted_apart;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod notice_command_buffers;
 mod numbered_samplers;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod opencl_kernels;

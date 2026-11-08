@@ -83,7 +83,7 @@
 
 use super::submit::Submission;
 use super::{submission_error, CommandBufferShared};
-use crate::degradation::Degradation;
+use crate::degradation::{Degradation, NoticesFor};
 use crate::device::relay::Relayed;
 use crate::error::CommandBufferError;
 use crate::exit_guard::{self, Call};
@@ -547,6 +547,8 @@ impl Group {
         };
         if several && outcome.is_ok() {
             let batches = count + usize::from(!alone);
+            // Several command buffers' batches: none of them named.
+            let _several = NoticesFor::none();
             device.degrade_once(Degradation::GroupedCompletion, || {
                 (
                     format!("{batches} batches of command buffers on one queue"),

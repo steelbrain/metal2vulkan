@@ -113,6 +113,7 @@ impl CommandBufferShared {
     /// ran (no check failed a submission of it, and its submission did not fail). Whether one
     /// rode on it.
     pub(crate) fn settle_storage_forms(&self) -> bool {
+        let _for = self.notices_for();
         let state = lock(&self.state);
         let Some(riding) = &state.storage_form else {
             return false;

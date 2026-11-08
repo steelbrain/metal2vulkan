@@ -142,6 +142,7 @@ impl Batch {
         if self.calls.calls.is_empty() || *refused {
             return;
         }
+        let _for = lowering.core.notices_for();
         let counts = &lowering.core.device().shared().counts;
         counts.render_log_batch_lowered(by_thread);
         lowering.core.judges_unattached(true);
@@ -781,11 +782,15 @@ impl RenderCommandEncoder {
     /// does.
     pub(crate) fn at_call_unit(&mut self, f: impl FnOnce(&mut Lowering)) {
         self.next += 1;
+        let lowered = |lowering: &mut Lowering| {
+            let _for = lowering.core.notices_for();
+            f(lowering);
+        };
         match (&mut self.own, &self.logged) {
-            (Some(lowering), _) => f(lowering),
+            (Some(lowering), _) => lowered(lowering),
             (None, Some(logged)) => {
                 if let Some(lowering) = lock(&logged.slot.lowerer).lowering.as_mut() {
-                    f(lowering);
+                    lowered(lowering);
                 }
             }
             (None, None) => {}

@@ -1950,6 +1950,7 @@ impl Lowering {
 
     /// The lowering of [`RenderCommandEncoder::end_encoding`] (`RenderLowering::end_encoding`).
     pub(crate) fn end_encoding(self) -> Result<(), Error> {
+        let _for = self.core.notices_for();
         self.ending().end_encoding()
     }
 
@@ -1973,6 +1974,7 @@ impl CommandBuffer {
         &self,
         descriptor: &RenderPassDescriptor,
     ) -> Result<RenderCommandEncoder, Error> {
+        let _for = self.notices_for();
         // The last render encoder's end, where its call left it to the device's lowering thread.
         self.settle_end();
         // Metal's process ends here under some protection options (`command_buffer/protection.rs`).

@@ -373,8 +373,9 @@ const POINTS: EncoderCall = EncoderCall {
 };
 
 /// A notice announced while a call is lowered names it under `Worker`, and none under `AtCall`,
-/// where the call lowers itself; with no kind refused (the default) it reaches the sink and the
-/// command buffer runs.
+/// where the call lowers itself, and names the call's command buffer under both
+/// (`DegradeNotice::command_buffer`); with no kind refused (the default) it reaches the sink and
+/// the command buffer runs.
 #[test]
 fn a_notice_announced_as_a_call_is_lowered_names_it() {
     let scratch = Scratch::new("deferred-notice");
@@ -403,7 +404,81 @@ fn a_notice_announced_as_a_call_is_lowered_names_it() {
             _ => None,
         };
         assert_eq!(notice.call, named, "{policy:?}");
+        assert_eq!(
+            notice.command_buffer,
+            Some(command_buffer.object_id()),
+            "{policy:?}"
+        );
     }
+}
+
+/// Under `Worker`, a notice the device's lowering thread announces as it lowers a logged call,
+/// after the encoder's end returned and before the program makes any other call, names the call
+/// and its command buffer (`DegradeNotice::command_buffer`), not another command buffer the program
+/// holds; a notice the device announces between two calls of the encoder, for a resource it makes
+/// (`private-resource-option`, an indirect command buffer of Metal's private option bit), names
+/// none.
+#[test]
+fn a_notice_the_lowering_thread_announces_names_its_command_buffer() {
+    let scratch = Scratch::new("deferred-notice-thread");
+    let heard: Arc<Mutex<Vec<(DegradeNotice, Option<String>)>>> = Arc::default();
+    let device = device_with(&scratch.0, &Heard::default(), |options| {
+        options.policy.render_lowering = RenderLoweringPolicy::Worker;
+        let heard = Arc::clone(&heard);
+        options.messages = Some(MessageSink::new(move |message| {
+            if let Some(notice) = &message.degradation {
+                heard.lock().unwrap().push((notice.clone(), thread_name()));
+            }
+        }));
+    });
+    let state = rectangle_state(&device);
+    let queue = device.new_command_queue().unwrap();
+    let other = queue.command_buffer().unwrap();
+    let command_buffer = queue.command_buffer().unwrap();
+    assert_ne!(other.object_id(), command_buffer.object_id());
+    let target = target(&device);
+    let mut encoder = command_buffer
+        .render_command_encoder(&pass(&target))
+        .unwrap();
+    rectangle(&state, &mut encoder);
+    // A resource made between the encoder's calls: the device's notice, no command buffer's.
+    let options = ResourceOptions::shared().raw() | ResourceOptions::PRIVATE_BIT;
+    let mut commands = crate::IndirectCommandBufferDescriptor::new();
+    commands.command_types = metal2vulkan::metal::IndirectCommandType::CONCURRENT_DISPATCH_THREADS;
+    commands.max_kernel_buffer_bind_count = 1;
+    let _private = device
+        .new_indirect_command_buffer(&commands, 1, ResourceOptions::from_raw(options).unwrap())
+        .unwrap();
+    let color = bytes_of(&COLOR, f32::to_le_bytes);
+    encoder.set_fragment_bytes(&color, 0).unwrap();
+    encoder
+        .draw_primitives(PrimitiveType::Point, 0, 4, 1, 0)
+        .unwrap();
+    encoder.end_encoding().unwrap();
+    // No call of the program's lowers the draw: the lowering thread does.
+    let find = |kind: Degradation| {
+        let heard = heard.lock().unwrap();
+        (heard.iter())
+            .find(|(notice, _)| notice.degradation == kind)
+            .cloned()
+    };
+    let deadline = Instant::now() + WAIT;
+    let (points, on) = loop {
+        if let Some(found) = find(Degradation::UnsizedPoints) {
+            break found;
+        }
+        assert!(Instant::now() < deadline, "no notice of unsized points");
+        std::thread::sleep(Duration::from_millis(1));
+    };
+    assert_eq!(on.as_deref(), Some("metal2vulkan-lowering"));
+    assert_eq!(points.call, Some(POINTS));
+    assert_eq!(points.command_buffer, Some(command_buffer.object_id()));
+    let (private, _) = find(Degradation::PrivateResourceOption).expect("private-resource-option");
+    assert_eq!(private.command_buffer, None);
+    command_buffer.commit().unwrap();
+    command_buffer.wait_until_completed_for(WAIT).unwrap();
+    assert_eq!(command_buffer.status(), CommandBufferStatus::Completed);
+    drop(other);
 }
 
 /// A kind the device refuses while lowering (`lowering_refuses`) refuses the call it is announced

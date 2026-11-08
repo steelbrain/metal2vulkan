@@ -184,6 +184,7 @@ impl CommandBuffer {
     /// `blitCommandEncoder`. Refused while another encoder of this command buffer is open,
     /// after one was abandoned, and after commit.
     pub fn blit_command_encoder(&self) -> Result<BlitCommandEncoder, Error> {
+        let _for = self.notices_for();
         let core = EncoderCore::open(self, "blit_command_encoder", EncoderKind::Blit, true)?;
         Ok(BlitCommandEncoder {
             core,
@@ -232,6 +233,7 @@ impl BlitCommandEncoder {
         call: impl FnOnce(&mut CallLog<BlitCall>) -> BlitCall,
         run: impl FnOnce(&mut Self) -> Result<T, Error>,
     ) -> Result<T, Error> {
+        let _for = self.core.notices_for();
         self.refuse_aborted()?;
         let at = match self.log.as_mut().filter(|log| !log.muted()) {
             Some(log) => {
@@ -648,6 +650,7 @@ impl BlitCommandEncoder {
 
     /// `endEncoding`.
     pub fn end_encoding(self) -> Result<(), Error> {
+        let _for = self.core.notices_for();
         // The core's shadows copy back what the blits wrote through heap shadows. The fill tiles
         // are their command buffer's, which holds them until it completes.
         let BlitCommandEncoder {

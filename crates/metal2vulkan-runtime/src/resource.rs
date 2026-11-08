@@ -23,13 +23,13 @@ impl ResourceKey {
     }
 }
 
-/// A buffer's, texture's or heap's identity (`Buffer::object_id`, `Texture::object_id`,
-/// `Heap::object_id`): a runtime extension, no Metal type. Metal names an object by its pointer
-/// (`id`), which another object may take once it is freed, and by nothing else where it has no
-/// address (a sparse heap's `gpuAddress` is 0). This number is unique among the process's
-/// buffers, textures and heaps, is the object's for its whole life (a clone is the same object),
-/// and is never given to another, so a program can key what it knows of an object by it without
-/// holding the object.
+/// A buffer's, texture's, heap's or command buffer's identity (`Buffer::object_id`,
+/// `Texture::object_id`, `Heap::object_id`, `CommandBuffer::object_id`): a runtime extension, no
+/// Metal type. Metal names an object by its pointer (`id`), which another object may take once it
+/// is freed, and by nothing else where it has no address (a sparse heap's `gpuAddress` is 0).
+/// This number is unique among the process's buffers, textures, heaps and command buffers, is the
+/// object's for its whole life (a clone is the same object), and is never given to another, so a
+/// program can key what it knows of an object by it without holding the object.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ObjectId(u64);
 

@@ -1252,10 +1252,11 @@ pub(crate) fn at_least_user_initiated() -> bool {
 
 /// Run the program's code `f` (a handler, a notification, a deallocator, a message sink) on
 /// this thread, catching a panic: what it calls is the program's, as on the program's own
-/// threads. Every call of the program's code goes through here. In builds with debug assertions
-/// (every test run), end the process where this thread is inside a passing hold of a device's
-/// resources, which a making on another thread may wait for (`resource_ids.rs`): `f` may wait
-/// for that making.
+/// threads, and no command buffer's work of the runtime's (`degradation::NoticesFor::none`) but
+/// where it calls an encoder. Every call of the program's code goes through here. In builds with
+/// debug assertions (every test run), end the process where this thread is inside a passing hold
+/// of a device's resources, which a making on another thread may wait for (`resource_ids.rs`):
+/// `f` may wait for that making.
 pub(crate) fn program(f: impl FnOnce()) {
     if cfg!(debug_assertions) && crate::resource_ids::inside_passing_hold() {
         let name = std::thread::current().name().map(str::to_owned);
@@ -1268,7 +1269,9 @@ pub(crate) fn program(f: impl FnOnce()) {
     }
     PROGRAM.with(|program| program.set(program.get() + 1));
     let base = BASE.with(|base| base.replace(OWN.with(Cell::get)));
+    let program = crate::degradation::NoticesFor::none();
     let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));
+    drop(program);
     BASE.with(|outer| outer.set(base));
     PROGRAM.with(|program| program.set(program.get() - 1));
 }

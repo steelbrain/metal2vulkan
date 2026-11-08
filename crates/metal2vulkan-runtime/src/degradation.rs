@@ -2694,6 +2694,30 @@ pub struct DegradeNotice {
     /// its place among the encoder's calls. `None` for a notice announced inside the program's
     /// call itself, and for every other notice.
     pub call: Option<EncoderCall>,
+    /// The command buffer whose work announced it: its ID
+    /// ([`CommandBuffer::object_id`](crate::CommandBuffer::object_id)). A runtime extension;
+    /// Metal has no notices, and reports a command buffer's errors on the command buffer
+    /// (`MTLCommandBuffer.error`). Set for a notice announced while the runtime
+    /// does one command buffer's work on the announcing thread: a call of one of its encoders,
+    /// that call's lowering after it returned (`RenderLoweringPolicy::Worker`, on whichever
+    /// thread lowers it), the opening of an encoder of it, its commit (at the call, or once a
+    /// render encoder's end it waited for was lowered), the submission of a batch of it and the
+    /// settling of what rode on that batch, a host step of it on the scheduler's steps thread (an
+    /// indirect command buffer's execution recorded there among them), an encoding again of its
+    /// encoders at a rebind, and a read of its GPU times once it completed
+    /// ([`CommandBuffer::gpu_start_time`](crate::CommandBuffer::gpu_start_time),
+    /// [`CommandBuffer::gpu_end_time`](crate::CommandBuffer::gpu_end_time)). A notice a bind
+    /// announces at every occurrence (`DeviceOptions::announce_each`) names the command buffer of
+    /// that bind, not of the bind that first made it. `None` for every other notice: one
+    /// announced by the device, a library, a pipeline state, a resource or a queue outside any
+    /// command buffer's work (making, releasing, rebinding or detaching one, and the pages of a
+    /// detached or released no-copy buffer); one about several command buffers' batches together
+    /// ([`Degradation::GroupedCompletion`]); and one of a recovery of the device
+    /// ([`Degradation::DeviceRecovered`]), whichever call met it. The program's code the runtime
+    /// calls (a handler, a submission check, an indirect command check, a message sink) is no
+    /// command buffer's work: what its calls announce names none, but a call of an encoder, which
+    /// names the encoder's command buffer.
+    pub command_buffer: Option<ObjectId>,
 }
 
 /// A notice announced where the runtime's rule announces none
@@ -2756,7 +2780,23 @@ impl DegradeNotice {
             object_id: None,
             misplaced: None,
             call: crate::render::lowering::current(),
+            command_buffer: NoticesFor::current(),
         }
+    }
+
+    /// The notice as announced now, by a bind that announces it again as made by an earlier bind
+    /// (`Device::announce_bound`): the call being lowered and the command buffer whose work runs
+    /// on this thread now, in place of the earlier bind's.
+    fn announced_here(&self) -> Option<DegradeNotice> {
+        let (call, command_buffer) = (crate::render::lowering::current(), NoticesFor::current());
+        if self.call == call && self.command_buffer == command_buffer {
+            return None;
+        }
+        Some(DegradeNotice {
+            call,
+            command_buffer,
+            ..self.clone()
+        })
     }
 
     /// The notice as a message: a warning of the performance kind (a performance degradation)
@@ -2861,6 +2901,53 @@ impl Announced {
             .iter()
             .zip(&kinds.0)
             .any(|(each, kinds)| each & kinds != 0)
+    }
+}
+
+thread_local! {
+    /// The command buffer whose work this thread does now ([`NoticesFor`]).
+    static NOTICES_FOR: Cell<Option<ObjectId>> = const { Cell::new(None) };
+}
+
+/// This thread doing one command buffer's work, from its making until it is dropped: every notice
+/// announced meanwhile names that command buffer ([`DegradeNotice::command_buffer`]). Made where
+/// the runtime holds the command buffer, at each place that does its work
+/// (`CommandBuffer::notices_for`); one made inside another names its own command buffer until it
+/// goes, then the other's again, and [`NoticesFor::none`] names none meanwhile. Neither `Send` nor
+/// `Sync`: it is this thread's.
+pub(crate) struct NoticesFor {
+    outer: Option<ObjectId>,
+    _thread: std::marker::PhantomData<*const ()>,
+}
+
+impl NoticesFor {
+    /// The work of the command buffer of ID `command_buffer`, from now.
+    pub(crate) fn new(command_buffer: ObjectId) -> NoticesFor {
+        NoticesFor::of(Some(command_buffer))
+    }
+
+    /// Work for no command buffer, from now, inside one's: what is announced about several
+    /// command buffers, or about the device.
+    pub(crate) fn none() -> NoticesFor {
+        NoticesFor::of(None)
+    }
+
+    fn of(command_buffer: Option<ObjectId>) -> NoticesFor {
+        NoticesFor {
+            outer: NOTICES_FOR.with(|current| current.replace(command_buffer)),
+            _thread: std::marker::PhantomData,
+        }
+    }
+
+    /// The command buffer whose work this thread does now, if any.
+    pub(crate) fn current() -> Option<ObjectId> {
+        NOTICES_FOR.with(Cell::get)
+    }
+}
+
+impl Drop for NoticesFor {
+    fn drop(&mut self) {
+        NOTICES_FOR.with(|current| current.set(self.outer));
     }
 }
 
@@ -3284,6 +3371,8 @@ impl Device {
         let degradation = Degradation::DeviceRecovered;
         let misplaced = check_announcement(degradation, true);
         let (object, reason) = describe();
+        // The device's, whichever command buffer's work met it.
+        let _device = NoticesFor::none();
         let message = DegradeNotice::new(degradation, object, reason).message();
         self.deliver_placed(degradation, message, misplaced);
     }
@@ -3298,6 +3387,8 @@ impl Device {
         let degradation = Degradation::DeviceRecovered;
         let misplaced = check_announcement(degradation, false);
         let (object, reason) = describe();
+        // The device's, whichever command buffer's work met it.
+        let _device = NoticesFor::none();
         let message = DegradeNotice::new(degradation, object, reason).message();
         self.deliver_placed(degradation, message, misplaced);
     }
@@ -3502,6 +3593,14 @@ impl Device {
         }
         for (degradation, message) in notices {
             met_each();
+            // Made by an earlier bind: named as this one's.
+            let here = (message.degradation.as_ref())
+                .and_then(DegradeNotice::announced_here)
+                .map(|notice| DebugMessage {
+                    degradation: Some(notice),
+                    ..message.clone()
+                });
+            let message = here.as_ref().unwrap_or(message);
             match check_announcement(*degradation, true) {
                 None => self.deliver(message),
                 misplaced => self.deliver_placed(*degradation, message.clone(), misplaced),

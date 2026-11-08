@@ -2029,6 +2029,7 @@ field	metal2vulkan-runtime::DebugMessage.kind	pub kind: MessageKind
 field	metal2vulkan-runtime::DebugMessage.severity	pub severity: MessageSeverity
 field	metal2vulkan-runtime::DebugMessage.text	pub text: String
 field	metal2vulkan-runtime::DegradeNotice.call	pub call: Option<EncoderCall>
+field	metal2vulkan-runtime::DegradeNotice.command_buffer	pub command_buffer: Option<ObjectId>
 field	metal2vulkan-runtime::DegradeNotice.cost	pub cost: &'static str
 field	metal2vulkan-runtime::DegradeNotice.degradation	pub degradation: Degradation
 field	metal2vulkan-runtime::DegradeNotice.misplaced	pub misplaced: Option<MisplacedNotice>
@@ -7862,6 +7863,7 @@ method	metal2vulkan-runtime::CommandBuffer::gpu_end_time	pub fn gpu_end_time(&se
 method	metal2vulkan-runtime::CommandBuffer::gpu_start_time	pub fn gpu_start_time(&self) -> Result<f64, Error>
 method	metal2vulkan-runtime::CommandBuffer::kernel_end_time	pub fn kernel_end_time(&self) -> f64
 method	metal2vulkan-runtime::CommandBuffer::kernel_start_time	pub fn kernel_start_time(&self) -> f64
+method	metal2vulkan-runtime::CommandBuffer::object_id	pub fn object_id(&self) -> ObjectId
 method	metal2vulkan-runtime::CommandBuffer::refusal	pub fn refusal(&self) -> Option<Error>
 method	metal2vulkan-runtime::CommandBuffer::render_command_encoder	pub fn render_command_encoder(&self, descriptor: &RenderPassDescriptor) -> Result<RenderCommandEncoder, Error>
 method	metal2vulkan-runtime::CommandBuffer::resource_state_command_encoder	pub fn resource_state_command_encoder(&self) -> Result<ResourceStateCommandEncoder, Error>

@@ -65,7 +65,7 @@
 
 use super::address::{AddressPlacement, Place, RecordsId};
 use super::buffer::{Buffer, Modes};
-use super::degradation::Degradation;
+use super::degradation::{Degradation, NoticesFor};
 use super::depth_stencil::DepthStencilState;
 use super::device::lock;
 use super::error::{internal, invalid, Error, MemoryKind, Problem, RuntimeGap};
@@ -2325,6 +2325,8 @@ impl IndirectCommandBuffer {
             .map(|(&(index, record), set)| (index, record, set.as_ref()));
         let commands = self.getter_commands(read);
         let mut check = lock(check);
+        // The program's code: no command buffer's work of the runtime's.
+        let _program = NoticesFor::none();
         for (&(index, _), command) in held.iter().zip(&commands) {
             check(u64::from(index), command);
         }

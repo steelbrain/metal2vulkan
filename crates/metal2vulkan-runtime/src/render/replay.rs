@@ -681,6 +681,7 @@ impl Lowering {
         &mut self,
         run: impl FnOnce(&mut Lowering) -> Result<T, Error>,
     ) -> Result<T, Error> {
+        let _for = self.core.notices_for();
         let at = self.log.as_ref().map(|log| log.calls.calls.len());
         let ran = run(self);
         if let (Err(_), Some(at), Some(log)) = (&ran, at, &mut self.log) {

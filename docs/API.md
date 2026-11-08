@@ -1537,6 +1537,16 @@ How a notice reaches you:
 - A notice announced while a render encoder lowers a call it logged names that call
   (`DegradeNotice::call`: its Metal selector and its index among the encoder's calls); `None`
   elsewhere.
+- A notice announced while the runtime does one command buffer's work names that command buffer
+  (`DegradeNotice::command_buffer`, its `CommandBuffer::object_id`), so a program can fail that
+  command buffer rather than end the process: its encoders' calls and their lowering on the
+  lowering thread, an encoder's opening, its commit (at the call, or once a render encoder's end
+  it waited for was lowered), the submission of its batches, its host steps on the scheduler's
+  steps thread (an indirect command buffer's execution recorded there among them), its encoders
+  encoded again at a rebind, and a read of its GPU times. `None` for the rest: the device's, a
+  library's, a pipeline state's, a resource's or a queue's notices outside a command buffer's
+  work, one about several command buffers' batches together (`grouped-completion`), and a
+  recovery of the device's (`device-recovered`).
 - Decode a notice by its `Degradation` or its code, never its text. The codes are a contract: none
   is renamed.
 - `Degradation::exactness()` says whether the program still gets Metal's answer: `Exact` (most

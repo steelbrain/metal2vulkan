@@ -63,7 +63,7 @@ use super::compute::EncoderState;
 use super::contexts::{self, Run};
 use super::copied::CopiesReached;
 use super::deferred::{Deferred, Prepared, StepInputs};
-use super::degradation::Degradation;
+use super::degradation::{Degradation, NoticesFor};
 use super::descriptor_arena::DescriptorArena;
 use super::device::relay::Relayed;
 use super::device::{lock, DeviceShared};
@@ -221,6 +221,8 @@ impl WeakCommandBuffer {
 }
 
 pub(super) struct CommandBufferShared {
+    /// Its ID ([`CommandBuffer::object_id`]), which the notices announced for its work name.
+    id: ObjectId,
     /// The generation of its device it was made on (`device/line.rs`), taken once at its making:
     /// its encoders' commands reach the device's state through it, at one load, with no kind of
     /// handle to tell apart. Declared before `device`, so it goes first.
@@ -2104,6 +2106,7 @@ impl CommandBuffer {
     pub(super) fn new(queue: &QueueGen, root: &CommandQueue, slot: Slot) -> CommandBuffer {
         let footprints = Footprints::default();
         CommandBuffer(Arc::new(CommandBufferShared {
+            id: ObjectId::new(),
             generation: Arc::clone(queue.device().shared_arc()),
             device: queue.device().clone(),
             queue: queue.clone(),
@@ -2235,6 +2238,24 @@ impl CommandBuffer {
     /// `device`.
     pub fn device(&self) -> &Device {
         &self.0.device
+    }
+
+    /// The command buffer's ID: a runtime extension, no Metal property. Metal names a command
+    /// buffer by its pointer, which another object may take once it is freed. This number is one
+    /// of the process's object IDs (as a buffer's, texture's or heap's, never another object's),
+    /// the command buffer's for its whole life (a clone is the same command buffer): what a degrade
+    /// notice announced for its work names ([`DegradeNotice::command_buffer`]), so a program can
+    /// fail the one command buffer a notice was about.
+    ///
+    /// [`DegradeNotice::command_buffer`]: crate::DegradeNotice::command_buffer
+    pub fn object_id(&self) -> ObjectId {
+        self.0.id
+    }
+
+    /// This thread doing the command buffer's work until the guard goes: the notices announced
+    /// meanwhile name it ([`NoticesFor`]).
+    pub(crate) fn notices_for(&self) -> NoticesFor {
+        self.0.notices_for()
     }
 
     /// The state of the generation of its device it was made on, its device's
@@ -3080,6 +3101,7 @@ impl CommandBuffer {
         run: CommitRun,
         hand: Hand,
     ) -> Result<(), Error> {
+        let _for = self.notices_for();
         // The waiting fetched render targets take their storage form at this commit where it
         // allows (`storage_form.rs`): one atomic read where none waits. The scheduler's thread
         // ends the switch once it submitted the command buffer. None where nothing of it runs.
@@ -3851,6 +3873,7 @@ impl CommandBuffer {
     /// does not answer from the host), and for a command buffer that found no slot of the
     /// device's timestamp pools free at its commit, and no pool more.
     fn gpu_times(&self) -> Result<(u64, u64), Error> {
+        let _for = self.notices_for();
         let device = &self.0.device;
         let shared = device.shared();
         let untimed = || Error::Unsupported(Unsupported::not_representable(Feature::GpuTimes));
@@ -4096,6 +4119,12 @@ impl CommandBufferShared {
         &self.device
     }
 
+    /// This thread doing the command buffer's work until the guard goes
+    /// ([`CommandBuffer::notices_for`]).
+    pub(super) fn notices_for(&self) -> NoticesFor {
+        NoticesFor::new(self.id)
+    }
+
     /// This command buffer's address, which names it to [`own`]'s marker.
     fn address(&self) -> usize {
         self as *const CommandBufferShared as usize
@@ -4325,6 +4354,7 @@ impl CommandBufferShared {
     /// any, is dropped. A failure is kept for the batch's submission, which fails the command
     /// buffer with it.
     pub(crate) fn host_step(self: &Arc<Self>, index: usize) {
+        let _for = self.notices_for();
         // A rebind's encoding again of its encoders records into its pool too: one at a time.
         let _turn = lock(&self.reencoding);
         // Its instances numbered from its commit's place among the program's calls.

@@ -81,6 +81,7 @@ impl CommandBuffer {
     /// Refused as every encoder is: the command buffer committed, or an encoder open or abandoned
     /// (`Invalid`).
     pub fn resource_state_command_encoder(&self) -> Result<ResourceStateCommandEncoder, Error> {
+        let _for = self.notices_for();
         // The last render encoder's end, where its call left it to the device's lowering thread.
         self.settle_end();
         self.refuse_protected_state_encoder()?;
@@ -147,6 +148,7 @@ impl ResourceStateCommandEncoder {
         level: u64,
         slice: u64,
     ) -> Result<(), Error> {
+        let _for = self.open.command_buffer.notices_for();
         self.update_texture_mappings(texture, mode, &[region], &[level], &[slice])
     }
 
@@ -163,6 +165,7 @@ impl ResourceStateCommandEncoder {
         levels: &[u64],
         slices: &[u64],
     ) -> Result<(), Error> {
+        let _for = self.open.command_buffer.notices_for();
         const CALL: &str = "update_texture_mappings";
         if levels.len() != regions.len() || slices.len() != regions.len() {
             return Err(invalid(CALL, Problem::Sparse(SparseProblem::Lengths)));
@@ -227,6 +230,7 @@ impl ResourceStateCommandEncoder {
         indirect_buffer: &Buffer,
         indirect_buffer_offset: u64,
     ) -> Result<(), Error> {
+        let _for = self.open.command_buffer.notices_for();
         const CALL: &str = "update_texture_mapping_indirect";
         let offset = indirect_buffer_offset - indirect_buffer_offset % 4;
         if !indirect_buffer
@@ -329,6 +333,7 @@ impl ResourceStateCommandEncoder {
         destination_level: u64,
         destination_origin: Origin,
     ) -> Result<(), Error> {
+        let _for = self.open.command_buffer.notices_for();
         const CALL: &str = "move_texture_mappings";
         let (from, to) = match (self.sparse(CALL, source)?, self.sparse(CALL, destination)?) {
             (Some(from), Some(to)) => (from, to),
@@ -365,6 +370,7 @@ impl ResourceStateCommandEncoder {
     ///
     /// Refused (`Invalid`): a fence of another device.
     pub fn update_fence(&mut self, fence: &Fence) -> Result<(), Error> {
+        let _for = self.open.command_buffer.notices_for();
         if !fence.device().same(self.open.command_buffer.device()) {
             return Err(fence
                 .device()
@@ -385,6 +391,7 @@ impl ResourceStateCommandEncoder {
     ///
     /// Refused (`Invalid`): a fence of another device.
     pub fn wait_for_fence(&mut self, fence: &Fence) -> Result<(), Error> {
+        let _for = self.open.command_buffer.notices_for();
         const CALL: &str = "wait_for_fence";
         if !fence.device().same(self.open.command_buffer.device()) {
             return Err(fence
@@ -404,6 +411,7 @@ impl ResourceStateCommandEncoder {
     /// `endEncoding`: the updates go to the command buffer, in a batch that binds them before
     /// the encoders after this one.
     pub fn end_encoding(self) -> Result<(), Error> {
+        let _for = self.open.command_buffer.notices_for();
         let ResourceStateCommandEncoder {
             mut open,
             updates,

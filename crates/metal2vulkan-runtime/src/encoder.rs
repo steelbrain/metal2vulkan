@@ -33,6 +33,7 @@ use super::churn_counts::KeepBy;
 use super::command_buffer::rebound_use::Unlogged;
 use super::command_buffer::{recording_error, CommandBuffer};
 use super::deferred::{Deferred, StepInputs};
+use super::degradation::NoticesFor;
 use super::error::{internal, invalid, vulkan, CommandBufferError, Error};
 use super::execution::Execution;
 use super::fresh_unwritten::{FreshRead, FreshUnwritten};
@@ -899,6 +900,12 @@ impl EncoderCore {
     /// The command buffer the encoder records into.
     pub(super) fn command_buffer(&self) -> &CommandBuffer {
         &self.open.command_buffer
+    }
+
+    /// This thread doing the work of the command buffer the encoder records into until the guard
+    /// goes: the notices announced meanwhile name it (`CommandBuffer::notices_for`).
+    pub(super) fn notices_for(&self) -> NoticesFor {
+        self.open.command_buffer.notices_for()
     }
 
     /// Refuse an object of `device` in Metal's `call` unless `device` is the encoder's.

@@ -19,6 +19,7 @@
 //!   execution read; with one, the facts are gathered from what the reading resolved already.
 
 use super::command_buffer::CommandBuffer;
+use super::degradation::NoticesFor;
 use super::error::{invalid, Error, Problem};
 use super::indirect_command_buffer::IndirectCommandBuffer;
 use super::residency::Residency;
@@ -127,6 +128,8 @@ impl CommandBuffer {
             unread_states_can_encode,
             writable: residency.writable_indirect_command_buffers(),
         };
+        // The program's code: no command buffer's work of the runtime's.
+        let _program = NoticesFor::none();
         for handler in &handlers {
             handler(&executed);
         }

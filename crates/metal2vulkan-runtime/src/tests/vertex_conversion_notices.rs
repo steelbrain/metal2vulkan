@@ -21,10 +21,11 @@
 use super::blit_holds::{Scratch, WAIT};
 use super::encoder_holds::{library, words_of};
 use crate::{
-    CommandBufferStatus, Degradation, DegradeNotice, Device, DeviceKind, DeviceOptions, Library,
-    MessageSink, PipelineOptions, RenderPassDescriptor, RenderPipelineState, ResourceOptions,
-    ShaderCacheOptions,
+    CommandBufferStatus, Degradation, DegradeNotice, Device, DeviceKind, DeviceOptions,
+    EncoderCall, Library, MessageSink, PipelineOptions, RenderPassDescriptor, RenderPipelineState,
+    ResourceOptions, ShaderCacheOptions,
 };
+use metal2vulkan::device::RenderLoweringPolicy;
 use metal2vulkan::error::DriverDeviation;
 use metal2vulkan::metal::{PrimitiveType, VertexFormat};
 use metal2vulkan::pipeline::{
@@ -46,6 +47,11 @@ type Heard = Arc<Mutex<Vec<DegradeNotice>>>;
 /// A device of the kind the cfg selects, with an empty shader cache of its own, that announces
 /// [`NOTES`] at every occurrence, its notices into `heard`.
 fn device(cache: &Path, heard: &Heard) -> Device {
+    device_lowering(cache, heard, RenderLoweringPolicy::AtCall)
+}
+
+/// [`device`], lowering render calls as `lowering` says.
+fn device_lowering(cache: &Path, heard: &Heard, lowering: RenderLoweringPolicy) -> Device {
     let heard = Arc::clone(heard);
     let options = DeviceOptions {
         kinds: match cfg!(m2v_cpu_icd) {
@@ -68,6 +74,8 @@ fn device(cache: &Path, heard: &Heard) -> Device {
         announce_each: NOTES.into_iter().collect(),
         ..DeviceOptions::default()
     };
+    let mut options = options;
+    options.policy.render_lowering = lowering;
     Device::system_default_with(&options).unwrap()
 }
 
@@ -189,4 +197,65 @@ fn a_state_announces_its_formats_conversions_from_one_translation() {
         eprintln!("VERTEX-CONVERSION: {format:?} stored {words:08x?}, announced {kinds:?}");
         assert_eq!(&kinds, want, "{format:?}");
     }
+}
+
+/// A bind's notice made once and announced at each later bind of the same variant (the
+/// variant's `half` attribute's `device-nan-encoding`, asked for at every occurrence) names, at
+/// each, the command buffer and the logged call of that bind, under `Worker`: a second command
+/// buffer's draw, a call later in its encoder than the first's, is named as its own though its
+/// notice was made at the first's bind.
+#[test]
+fn a_bind_s_notice_names_its_own_command_buffer_and_call() {
+    let scratch = Scratch::new("vertex-conversion-binds");
+    let heard = Heard::default();
+    let device = device_lowering(&scratch.0, &heard, RenderLoweringPolicy::Worker);
+    let library = library(&device, "engine/dsx_int_attributes.ll");
+    let state = state(&device, &library, VertexFormat::Half4);
+    let out = device.new_buffer(16, ResourceOptions::default()).unwrap();
+    let mut pass = RenderPassDescriptor::new();
+    pass.render_target_width = 1;
+    pass.render_target_height = 1;
+    pass.default_raster_sample_count = 1;
+    let queue = device.new_command_queue().unwrap();
+    // The draw of each command buffer, after `extra` repeated binds of buffer 0.
+    let drawn = |extra: usize| {
+        let command_buffer = queue.command_buffer().unwrap();
+        let mut encoder = command_buffer.render_command_encoder(&pass).unwrap();
+        encoder.set_render_pipeline_state(&state).unwrap();
+        encoder.set_vertex_bytes(&[0x7f; 16], 1).unwrap();
+        for _ in 0..=extra {
+            encoder.set_vertex_buffer(Some(&out), 0, 0).unwrap();
+        }
+        encoder
+            .draw_primitives(PrimitiveType::Point, 0, 1, 1, 0)
+            .unwrap();
+        encoder.end_encoding().unwrap();
+        command_buffer.commit().unwrap();
+        command_buffer.wait_until_completed_for(WAIT).unwrap();
+        assert_eq!(command_buffer.status(), CommandBufferStatus::Completed);
+        let call = EncoderCall {
+            selector: "drawPrimitives:vertexStart:vertexCount:instanceCount:baseInstance:",
+            index: 3 + extra as u32,
+        };
+        (command_buffer, call)
+    };
+    let first = drawn(0);
+    let made = device.work_counts().bound_notices_made;
+    let second = drawn(1);
+    assert_eq!(
+        device.work_counts().bound_notices_made,
+        made,
+        "the second bind made its notices again: the naming below proves nothing"
+    );
+    let mut named: Vec<_> = (heard.lock().unwrap().iter())
+        .filter(|notice| notice.degradation == Degradation::DeviceNanEncoding)
+        .map(|notice| (notice.command_buffer, notice.call))
+        .collect();
+    // A bind may take a variant's pipeline twice; each names its own draw.
+    named.dedup();
+    let expected: Vec<_> = [&first, &second]
+        .iter()
+        .map(|(command_buffer, call)| (Some(command_buffer.object_id()), Some(*call)))
+        .collect();
+    assert_eq!(named, expected);
 }
