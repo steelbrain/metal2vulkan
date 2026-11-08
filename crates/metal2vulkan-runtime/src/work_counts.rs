@@ -7227,8 +7227,10 @@ pub struct WorkCounts {
     /// in `shadowed_textures`) that moved to their `DRM_FORMAT_MOD_LINEAR` image at Metal's pitch
     /// once the check passed for their accesses, at the commit of the device's only uncommitted
     /// command buffer, with no copy (`texture/storage_form.rs`, as `host_textures_moved_in_place`
-    /// over host pages): each is counted in `pooled_pitched_images` too from then on. A runtime
-    /// extension: Metal has none.
+    /// over host pages): each is counted in `pooled_pitched_images` too from then on. Over memory
+    /// the runtime exports (`MemoryExport`), likewise once the check of that exported memory
+    /// passed, to the linear image or the `DRM_FORMAT_MOD_LINEAR` one made for its handle type
+    /// (the latter counted in `pooled_pitched_images`). A runtime extension: Metal has none.
     pub pooled_textures_moved_in_place: u64,
     /// Shadow images of textures that moved in place over the device's pooled memory
     /// (`pooled_textures_moved_in_place`) let go of once the command buffer that took the move

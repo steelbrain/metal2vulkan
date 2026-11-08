@@ -1751,8 +1751,9 @@ impl RamChunk {
     }
 
     /// The external memory the import is, which a `VkBuffer` bound in it is made for
-    /// (`VUID-vkBindBufferMemory-memory-02985`).
-    fn handle_type(&self) -> vk::ExternalMemoryHandleTypeFlags {
+    /// (`VUID-vkBindBufferMemory-memory-02985`), and an image bound in it
+    /// (`VUID-vkBindImageMemory-memory-02989`, `memory.rs`'s `Memory::bound_memory`).
+    pub(crate) fn handle_type(&self) -> vk::ExternalMemoryHandleTypeFlags {
         match self.placement.over_dma_buf() {
             true => vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT,
             false => vk::ExternalMemoryHandleTypeFlags::HOST_ALLOCATION_EXT,

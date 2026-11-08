@@ -70,6 +70,7 @@ use super::copy_plan::{
 };
 use super::degradation::Degradation;
 use super::device::lock;
+use super::dma_buf::ModifierMemory;
 use super::error::{internal, invalid, nil, vulkan, Error, MemoryKind, Problem, RuntimeGap};
 use super::exit_guard;
 use super::families::FormatAnswers;
@@ -84,7 +85,7 @@ use super::image_plan::{
 use super::in_place::{self, PagesClass, Refusal, ShadowCause};
 use super::key_hash::KeyMap;
 use super::linear_plan::{aliases, check_linear_limits, linear_lack, LinearImage, LinearLack};
-use super::memory::{MemoryClass, Placement};
+use super::memory::{BoundMemory, MemoryClass, Placement};
 use super::nan_clear;
 use super::neutral::Neutrals;
 use super::pvrtc::{
@@ -804,9 +805,10 @@ pub(super) enum LinearRefusal {
     /// What the device's linear images lack ([`LinearNeed`]): a feature of the format's
     /// tiling, any such image (the format query refuses it), or a limit.
     Need(LinearNeed),
-    /// For host allocations: the device imports none for such an image, or only a dedicated
-    /// one (its external memory features).
-    NotImportable(vk::ExternalMemoryFeatureFlags),
+    /// For external memory (host allocations, or the runtime's memory exported as a handle
+    /// type): the device's image format query takes none of that memory for such an image, or
+    /// only a dedicated allocation (its external memory features).
+    External(ModifierMemory, vk::ExternalMemoryFeatureFlags),
 }
 
 impl LinearRefusal {
@@ -845,10 +847,16 @@ impl LinearRefusal {
                  {available}"
             ),
             LinearRefusal::Need(need) => format!("{need:?} of its linear images"),
-            LinearRefusal::NotImportable(features) => format!(
-                "it imports no host allocation for a linear image of {format:?}, usage \
-                 {usage:?}, but with a dedicated allocation (importable {}, dedicated only {})",
-                features.contains(vk::ExternalMemoryFeatureFlags::IMPORTABLE),
+            LinearRefusal::External(memory, features) => format!(
+                "its image format query refuses {} to a linear image of {format:?}, usage \
+                 {usage:?}, or takes them in a dedicated allocation alone ({} {}, dedicated only \
+                 {})",
+                memory.words(),
+                match memory.needs() {
+                    vk::ExternalMemoryFeatureFlags::EXPORTABLE => "exportable",
+                    _ => "importable",
+                },
+                features.contains(memory.needs()),
                 features.contains(vk::ExternalMemoryFeatureFlags::DEDICATED_ONLY)
             ),
         }
@@ -2484,18 +2492,19 @@ impl Device {
                             }
                             return Ok(Storage::Alias { image, texels });
                         }
-                        // The device's check of its pooled memory makes no shadow: its round is
-                        // not made.
+                        // The device's check of its pooled or exported memory makes no shadow:
+                        // its round is not made.
                         Err(_) if in_place::checking() => return Err(internal(
-                            "the in-place check's texture takes no image over its pooled memory",
+                            "the in-place check's texture takes no image over the runtime's memory",
                         )),
-                        // Made before its pooled class's verdict for an image at Metal's pitch: the
-                        // shadow moves to that image once the verdict passes, as the texture would
-                        // have been made then (`texture/storage_form.rs`).
-                        Err((why, Some(ShadowCause::CheckPending(_, _, rows)))) => {
+                        // Made before its class's verdict (the pooled memory's, for an image at
+                        // Metal's pitch; the exported memory's, for any image there): the shadow
+                        // moves to that image once the verdict passes, as the texture would have
+                        // been made then (`texture/storage_form.rs`).
+                        Err((why, Some(ShadowCause::CheckPending(class, _, rows)))) => {
                             let line = self.shared().in_place.line();
                             *pending = Some(in_place::PendingMove {
-                                class: PagesClass::Pooled,
+                                class,
                                 rows,
                                 padding: texels.padding(line),
                                 usage,
@@ -2798,19 +2807,23 @@ impl Device {
         }
     }
 
-    /// The device's limits for an image of `info` (with `view_formats`) made for host
-    /// allocations (`VK_EXT_external_memory_host`), where it imports host memory for such an
-    /// image without a dedicated allocation; why not where it does not, or makes no such image
-    /// (The refusal named).
-    pub(super) fn host_image_limits(
+    /// The device's limits for an image of `info` (with `view_formats`) made for `memory`'s
+    /// handle type (host allocations, `VK_EXT_external_memory_host`, or the runtime's memory
+    /// exported as an opaque file descriptor or a dma-buf), where its image format query
+    /// (`VkPhysicalDeviceExternalImageFormatInfo`) takes that memory for such an image (importable,
+    /// or exportable for memory the runtime exports) without a dedicated allocation; why not where
+    /// it does not, or makes no such image (the refusal named).
+    pub(super) fn external_image_limits(
         &self,
         info: &vk::ImageCreateInfo<'_>,
         view_formats: &[vk::Format],
+        memory: ModifierMemory,
     ) -> Result<Result<vk::ImageFormatProperties, LinearRefusal>, Error> {
         let shared = self.shared();
         let mut query_list = vk::ImageFormatListCreateInfo::default().view_formats(view_formats);
-        let mut host = vk::PhysicalDeviceExternalImageFormatInfo::default()
-            .handle_type(vk::ExternalMemoryHandleTypeFlags::HOST_ALLOCATION_EXT);
+        let handle = (memory.handle_type())
+            .ok_or_else(|| internal("an external image's limits for memory of no handle type"))?;
+        let mut host = vk::PhysicalDeviceExternalImageFormatInfo::default().handle_type(handle);
         let mut query = vk::PhysicalDeviceImageFormatInfo2::default()
             .format(info.format)
             .ty(info.image_type)
@@ -2839,11 +2852,11 @@ impl Device {
         let features = external.external_memory_properties.external_memory_features;
         match queried {
             Ok(()) => {
-                let importable = features.contains(vk::ExternalMemoryFeatureFlags::IMPORTABLE)
+                let takes = features.contains(memory.needs())
                     && !features.contains(vk::ExternalMemoryFeatureFlags::DEDICATED_ONLY);
-                match importable {
+                match takes {
                     true => Ok(Ok(limits)),
-                    false => Ok(Err(LinearRefusal::NotImportable(features))),
+                    false => Ok(Err(LinearRefusal::External(memory, features))),
                 }
             }
             Err(vk::Result::ERROR_FORMAT_NOT_SUPPORTED) => {
@@ -2854,21 +2867,69 @@ impl Device {
     }
 
     /// The image [`alias_image`](Self::alias_image) binds over `texels` (of a texture of Metal
-    /// `usage`) in their buffer's memory, unbound: the device's own linear image, made
-    /// `PREINITIALIZED`, where it holds exactly Metal's texels there (`linear_plan::aliases`) in
-    /// memory of the buffer's type; else a `DRM_FORMAT_MOD_LINEAR` image at Metal's pitch, made
-    /// `UNDEFINED`, where the device makes one so and its check passed for its pooled memory
-    /// ([`Device::pooled_pitched_image`]). Why not: why the linear image is not, and why the
-    /// pitched image is not, its cause (a refused pitch, image or placement, or the policy and
-    /// the device's check), which the placement query answers. The device's check of its pooled
-    /// memory makes no linear image: it measures the pitched one.
+    /// `usage`) in their buffer's memory, unbound, made for that memory as its own record says
+    /// (`memory.rs`'s `Memory::bound_memory`), with whether it is the `DRM_FORMAT_MOD_LINEAR` one:
+    ///
+    /// - In memory the device allocated with no export: the device's own linear image, made
+    ///   `PREINITIALIZED`, where it holds exactly Metal's texels there (`linear_plan::aliases`) in
+    ///   memory of the buffer's type; else a `DRM_FORMAT_MOD_LINEAR` image at Metal's pitch, made
+    ///   `UNDEFINED`, where the device makes one so and its check passed for its pooled memory
+    ///   ([`Device::pooled_pitched_image`]). The device's check of its pooled memory makes no
+    ///   linear image: it measures the pitched one.
+    /// - In a block exported as an opaque file descriptor or a dma-buf (`exported_memory.rs`):
+    ///   the same two images, each made for that handle type, which an image bound there must name
+    ///   (`VUID-vkBindImageMemory-memory-02728`), and so made `UNDEFINED`
+    ///   (`VUID-VkImageCreateInfo-pNext-01443`), whose first move may discard the bytes: where the
+    ///   device's policy and its check of that exported memory ([`PagesClass::ExportedFd`],
+    ///   [`PagesClass::ExportedDmaBuf`]) take each access the usage takes for texels that lie in
+    ///   its lines as these do (a pending verdict starts the check, and the texture is a shadow
+    ///   meanwhile), and where the device's image format query takes the handle type for the
+    ///   image without a dedicated allocation. The check's own textures take them whatever the
+    ///   verdicts.
+    /// - In a buffer's dedicated allocation (an exportable buffer's where the driver exports
+    ///   such memory only so, or prefers or requires it), no image
+    ///   (`VUID-vkBindImageMemory-memory-10926`).
+    ///
+    /// Why not: why the linear image is not, and why the pitched image is not, its cause (a
+    /// refused pitch, image or placement, or the policy and the device's check), which the
+    /// placement query answers.
     fn alias_unbound(
         &self,
         plan: &ImagePlan,
         texels: &Texels,
         usage: TextureUsage,
         facts: &ImageFacts<'_>,
-    ) -> Result<Result<LinearMade, (String, ShadowCause)>, Error> {
+    ) -> Result<Result<(LinearMade, bool), (String, ShadowCause)>, Error> {
+        let memory = match texels.buffer.bound_memory() {
+            BoundMemory::Own => ModifierMemory::Own,
+            BoundMemory::External(handle) => {
+                let Some(class) = PagesClass::exported(handle) else {
+                    let why = format!(
+                        "the buffer's memory is external memory of handle type {:#x}, which no \
+                         texture over a buffer of the runtime's own takes",
+                        handle.as_raw()
+                    );
+                    let cause = ShadowCause::Refused(Refusal::Image, why.clone());
+                    return Ok(Err((why, cause)));
+                };
+                if let Err(cause) = self.exported_takes(class, texels, usage) {
+                    let why = format!(
+                        "an image over {} names its handle type and starts UNDEFINED, whose first \
+                         move the device's check of that memory covers",
+                        class.words()
+                    );
+                    return Ok(Err((why, cause)));
+                }
+                ModifierMemory::Exported(handle)
+            }
+            BoundMemory::NoImage(no) => {
+                let cause = ShadowCause::Refused(Refusal::Placement, no.words().to_owned());
+                return Ok(Err((
+                    "no image is bound in the buffer's memory".to_owned(),
+                    cause,
+                )));
+            }
+        };
         let (_, buffer_offset, type_index) = texels.buffer.memory();
         let memory_offset = buffer_offset + texels.layout.offset;
         let raw_device = self.shared().vk();
@@ -2891,9 +2952,12 @@ impl Device {
                 format!(
                     "it lays the texels out otherwise than Metal at their offset and row pitch, \
                      holds other bytes than them or takes no memory of the buffer's type (rows \
-                     {} bytes apart, a subresource of {} bytes, aligned to {}, of the buffer's \
-                     type {typed})",
-                    made.report.row_pitch, made.report.size, made.requirements.alignment
+                     {} bytes apart, a subresource of {} bytes, aligned to {}, at offset {} of \
+                     the memory, of the buffer's type {typed})",
+                    made.report.row_pitch,
+                    made.report.size,
+                    made.requirements.alignment,
+                    memory_offset
                 )
             })
         };
@@ -2901,17 +2965,20 @@ impl Device {
             // SAFETY: the image is live and unbound, and no command uses it.
             unsafe { release::object(raw_device, made.raw) };
         };
-        let linear = if in_place::checking() {
+        let linear = if in_place::checking() && memory == ModifierMemory::Own {
             Err("the device's check of its pooled memory makes no linear image".to_owned())
         } else if let Some(LinearLack { format, features }) = linear_lack(plan, facts) {
             Err(LinearRefusal::Need(LinearNeed::Features { format, features }).describe(plan))
         } else {
-            self.linear_image(plan)?
-                .map_err(|refusal| refusal.describe(plan))
+            let made = match memory {
+                ModifierMemory::Own => self.linear_image(plan)?,
+                _ => self.external_linear_image(plan, memory)?,
+            };
+            made.map_err(|refusal| refusal.describe(plan))
         };
         let linear = match linear {
             Ok(made) => match elsewhere(&made) {
-                None => return Ok(Ok(made)),
+                None => return Ok(Ok((made, false))),
                 Some(why) => {
                     release_unbound(made);
                     format!("the device's linear image of the texture: {why}")
@@ -2919,20 +2986,50 @@ impl Device {
             },
             Err(why) => format!("the device makes no linear image of the texture: {why}"),
         };
-        Ok(
-            match self.pooled_pitched_image(plan, texels, usage, facts)? {
-                Ok(made) => match elsewhere(&made) {
-                    None => Ok(made),
-                    Some(why) => {
-                        release_unbound(made);
-                        let why =
-                            format!("its DRM_FORMAT_MOD_LINEAR image at Metal's pitch: {why}");
-                        Err((linear, ShadowCause::Refused(Refusal::Pitch, why)))
-                    }
-                },
-                Err(cause) => Err((linear, cause)),
+        let pitched = match memory {
+            ModifierMemory::Own => self.pooled_pitched_image(plan, texels, usage, facts)?,
+            _ => (self.pitched_image(plan, &texels.layout, facts, memory)?)
+                .map_err(|(refusal, why)| ShadowCause::Refused(refusal, why)),
+        };
+        Ok(match pitched {
+            Ok(made) => match elsewhere(&made) {
+                None => Ok((made, true)),
+                Some(why) => {
+                    release_unbound(made);
+                    let why = format!("its DRM_FORMAT_MOD_LINEAR image at Metal's pitch: {why}");
+                    Err((linear, ShadowCause::Refused(Refusal::Pitch, why)))
+                }
             },
-        )
+            Err(cause) => Err((linear, cause)),
+        })
+    }
+
+    /// Whether the device's policy and its check of the runtime's memory exported as `class`
+    /// says ([`PagesClass::ExportedFd`], [`PagesClass::ExportedDmaBuf`]) take an image over
+    /// `texels` there for a texture of Metal `usage`: each access the usage takes, for texels that
+    /// lie in the device's lines as these do (`in_place::in_place`; a pending verdict starts the
+    /// check). Its first move leaves `UNDEFINED`, as an image bound in exported memory is made in
+    /// (`alias_unbound`). Whatever the verdicts for the check's own textures. Else the cause of
+    /// the shadow.
+    fn exported_takes(
+        &self,
+        class: PagesClass,
+        texels: &Texels,
+        usage: TextureUsage,
+    ) -> Result<(), ShadowCause> {
+        if in_place::checking() {
+            return Ok(());
+        }
+        let line = self.shared().in_place.line();
+        let pages = (
+            class,
+            texels.rows(line),
+            texels.texel_bytes(),
+            texels.padding(line),
+        );
+        let policy = self.compile_device().policy().host_page_textures;
+        let verdict = |class, access, rows| self.in_place_verdict(class, access, rows);
+        in_place::in_place(policy, usage, pages, verdict)
     }
 
     /// Whether [`alias_image`](Self::alias_image) makes an image over `texels` (of a texture of
@@ -2946,7 +3043,7 @@ impl Device {
         facts: &ImageFacts<'_>,
     ) -> Result<Result<(), ShadowCause>, Error> {
         Ok(match self.alias_unbound(plan, texels, usage, facts)? {
-            Ok(made) => {
+            Ok((made, _)) => {
                 // SAFETY: the image is live and unbound, and no command uses it.
                 unsafe { release::object(self.shared().vk(), made.raw) };
                 Ok(())
@@ -3061,7 +3158,7 @@ impl Device {
         let (memory, buffer_offset, _) = texels.buffer.memory();
         let memory_offset = buffer_offset + texels.layout.offset;
         let raw_device = self.shared().vk();
-        let made = match self.alias_unbound(&plan, texels, usage, facts)? {
+        let (made, pitched) = match self.alias_unbound(&plan, texels, usage, facts)? {
             Ok(made) => made,
             Err((linear, cause)) => {
                 let why = format!("{linear}; and {}", cause.words());
@@ -3111,12 +3208,12 @@ impl Device {
             objects: ObjectsToken::default(),
         };
         // Leaving `PREINITIALIZED` keeps the bytes the image holds: the buffer's; leaving
-        // `UNDEFINED`, as a `DRM_FORMAT_MOD_LINEAR` image does, keeps them where the device's
-        // check of its pooled memory showed it (`Device::pooled_pitched_image`).
+        // `UNDEFINED`, as a `DRM_FORMAT_MOD_LINEAR` image and one over exported memory do, keeps
+        // them where the device's check of that memory showed it (`Device::alias_unbound`).
         let first = FirstMove::new(raw, image.plan().format, initial, None);
         *lock(&image.first_move) = Some(first);
         let count = AliasCount {
-            pitched: initial == vk::ImageLayout::UNDEFINED,
+            pitched,
             unobserved: texels.buffer.padding_unobserved() && texels.layout.padded(),
             feedback: (image.plan().usage).contains(ImageUsageFlags::ATTACHMENT_FEEDBACK_LOOP_EXT),
         };

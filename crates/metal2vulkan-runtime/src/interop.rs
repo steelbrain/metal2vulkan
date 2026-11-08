@@ -175,9 +175,11 @@ impl Texture {
     /// pages imported by their pointer, the driver's linear image where it lays the rows out at the
     /// texture's pitch, else an image of `VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT` with
     /// `DRM_FORMAT_MOD_LINEAR` at those pitches; over pages imported as dma-bufs, the latter. The
-    /// bytes between rows that lie apart are in its subresource. A shadow over host pages (or over
-    /// the device's pooled memory, at Metal's pitch) made before the device's check answered gives
-    /// none until it moves in place, at a commit once the check passed for it
+    /// bytes between rows that lie apart are in its subresource. Over memory the runtime exports
+    /// (`MemoryExport`), either image names the memory's handle type
+    /// (`VkExternalMemoryImageCreateInfo`). A shadow over host pages (or over the device's pooled
+    /// memory at Metal's pitch, or over its exported memory) made before the device's check
+    /// answered gives none until it moves in place, at a commit once the check passed for it
     /// (`texture/storage_form.rs`). A
     /// texture placed in a heap over host pages imported as dma-bufs (`HostMemory::with_dma_buf`)
     /// gives an image of `VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT` with `DRM_FORMAT_MOD_LINEAR`:

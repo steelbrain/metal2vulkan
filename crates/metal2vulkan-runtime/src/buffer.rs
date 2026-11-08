@@ -37,7 +37,7 @@ use super::host_memory::{HeldBack, KeepAlive, Release};
 use super::host_ram::RamOnDevice;
 #[cfg(unix)]
 use super::host_residency::{Again, Residency};
-use super::memory::{Mapped, MemoryClass, Placement, BLOCK_BYTES};
+use super::memory::{BoundMemory, Mapped, MemoryClass, Placement, BLOCK_BYTES};
 use super::program_objects::ProgramObject;
 use super::rebind::{ImportHold, Unexact};
 use super::recycle::{self, BufferMaking};
@@ -3398,6 +3398,17 @@ impl Buffer {
                 0,
                 (bytes.bytes.device_address()).map(|address| address + bytes.offset),
             ),
+        }
+    }
+
+    /// The external memory the buffer's bytes lie in, from that memory's record, which an image
+    /// bound there names (`Memory::bound_memory`): a heap's buffer's, its heap's.
+    pub(super) fn bound_memory(&self) -> BoundMemory {
+        match &self.0.bytes {
+            Bytes::Own(own) => own.with(ReadApart::Texture, |pages| {
+                lock(&self.0.device.shared().memory).bound_memory(&pages.memory.placement)
+            }),
+            Bytes::Heap(bytes) => bytes.bytes.bound_memory(),
         }
     }
 

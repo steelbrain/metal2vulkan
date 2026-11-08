@@ -1039,6 +1039,46 @@ pub(super) struct Block {
     zeroed: bool,
 }
 
+/// The external memory a placement's memory is, as an image bound in it names it
+/// ([`Memory::bound_memory`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum BoundMemory {
+    /// Memory the device allocated with no export: an image bound in it names no handle type.
+    Own,
+    /// Memory exported or imported as this handle type, which an image bound in it names.
+    External(vk::ExternalMemoryHandleTypeFlags),
+    /// Memory no image of the runtime's is bound in.
+    NoImage(NoImage),
+}
+
+/// Why no image of the runtime's is bound in a placement's memory ([`BoundMemory::NoImage`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum NoImage {
+    /// It is a buffer's dedicated allocation (`VkMemoryDedicatedAllocateInfo::buffer`), to which
+    /// no image may be bound (`VUID-vkBindImageMemory-memory-10926`): an exportable buffer's where
+    /// the driver exports such memory only so, or prefers or requires it (`exported_memory.rs`).
+    Dedicated,
+    /// It is memory the caller made and keeps (`Device::new_buffer_with_vk_buffer`), whose handle
+    /// types the runtime does not know.
+    Caller,
+}
+
+impl NoImage {
+    /// Why, in words, for a notice.
+    pub(super) fn words(self) -> &'static str {
+        match self {
+            NoImage::Dedicated => {
+                "the buffer's memory is its dedicated allocation, the driver's for memory exported \
+                 so, to which no image may be bound (VUID-vkBindImageMemory-memory-10926)"
+            }
+            NoImage::Caller => {
+                "the buffer's memory is the caller's, whose external handle types the runtime does \
+                 not know"
+            }
+        }
+    }
+}
+
 /// What a block's memory was allocated exportable as (`VkExportMemoryAllocateInfo`), for the
 /// buffers placed in it (`exported_memory.rs`): one, where it is that buffer's dedicated
 /// allocation.
@@ -2472,6 +2512,42 @@ impl Memory {
         let block =
             (self.pool_ref(placement.holds, placement.type_index)).payload(placement.block?)?;
         block.exported.map(|exported| (exported, block.size))
+    }
+
+    /// The external memory `placement`'s memory is, from its own record, which an image bound in
+    /// it names (`VkExternalMemoryImageCreateInfo::handleTypes`): an exported block's handle type
+    /// (`VUID-vkBindImageMemory-memory-02728`), an import's (`VUID-vkBindImageMemory-memory-02989`:
+    /// host allocations for the caller's pages imported by their pointer, a read-only view of them,
+    /// pages the runtime mapped and imported, and a guest RAM's chunk imported so; dma-bufs for the
+    /// caller's dma-bufs and a chunk imported as one); none for a block the device allocated
+    /// with no export. No image at all in a buffer's dedicated allocation
+    /// (`VUID-vkBindImageMemory-memory-10926`) or in memory the caller made and keeps, whose
+    /// handle types the runtime does not know.
+    pub(super) fn bound_memory(&self, placement: &Placement) -> BoundMemory {
+        #[cfg(unix)]
+        if placement.dma_buf.is_some() {
+            return BoundMemory::External(DMA_BUF_HANDLE);
+        }
+        if let Some(chunk) = &placement.ram_chunk {
+            return BoundMemory::External(chunk.handle_type());
+        }
+        let Some(index) = placement.block else {
+            return BoundMemory::NoImage(NoImage::Caller);
+        };
+        let pool = self.pool_ref(placement.holds, placement.type_index);
+        let Some(block) = pool.payload(index) else {
+            return BoundMemory::NoImage(NoImage::Caller);
+        };
+        match block.exported {
+            Some(Exported {
+                dedicated: true, ..
+            }) => BoundMemory::NoImage(NoImage::Dedicated),
+            Some(exported) => BoundMemory::External(exported.handle),
+            None if block.imported || block.pages.is_some() || block.view.is_some() => {
+                BoundMemory::External(vk::ExternalMemoryHandleTypeFlags::HOST_ALLOCATION_EXT)
+            }
+            None => BoundMemory::Own,
+        }
     }
 
     /// Whether `placement` lies in device-local memory.

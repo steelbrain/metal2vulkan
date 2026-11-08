@@ -532,11 +532,11 @@ impl Device {
         match class {
             PagesClass::DmaBuf => self.dma_buf_unplaced(plan, texels, facts),
             PagesClass::Pointer | PagesClass::Fresh => self.host_unplaced(plan, texels, facts),
-            // A texture over the runtime's pooled memory takes its image there
+            // A texture over the runtime's pooled or exported memory takes its image there
             // (`Device::alias_image`), never over host pages.
-            PagesClass::Pooled => Err(internal(
-                "an image in place over the runtime's pooled memory",
-            )),
+            PagesClass::Pooled | PagesClass::ExportedFd | PagesClass::ExportedDmaBuf => Err(
+                internal("an image in place over the runtime's pooled or exported memory"),
+            ),
         }
     }
 
@@ -878,7 +878,7 @@ impl Device {
             }
             None => match memory {
                 crate::dma_buf::ModifierMemory::Own => self.linear_image(plan)?,
-                _ => self.host_linear_image(plan)?,
+                _ => self.external_linear_image(plan, memory)?,
             },
         };
         // Whether the driver made its linear image and laid it out otherwise.
@@ -912,25 +912,30 @@ impl Device {
         })
     }
 
-    /// A linear image of `plan` made for host allocations, unbound, in the `UNDEFINED` layout
-    /// Vulkan makes it in (`VUID-VkImageCreateInfo-pNext-01443`), with its memory requirements
-    /// and its first subresource's layout; why not where the device imports no host allocation
-    /// for such an image but a dedicated one, or makes none within its limits.
-    fn host_linear_image(
+    /// A linear image of `plan` made for `memory`'s handle type (host allocations, or the
+    /// runtime's memory exported as an opaque file descriptor or a dma-buf, which an image bound
+    /// in it names: `VUID-vkBindImageMemory-memory-02989`, `-02728`), unbound, in the `UNDEFINED`
+    /// layout Vulkan makes such an image in (`VUID-VkImageCreateInfo-pNext-01443`), with its
+    /// memory requirements and its first subresource's layout; why not where the device's image
+    /// format query takes no such memory for such an image but a dedicated allocation, the image
+    /// asks one, or the device makes none within its limits.
+    pub(super) fn external_linear_image(
         &self,
         plan: &ImagePlan,
+        memory: crate::dma_buf::ModifierMemory,
     ) -> Result<Result<LinearMade, LinearRefusal>, Error> {
         let raw_device = self.shared().vk();
         let view_formats = plan.ash_view_formats();
         let mut list = vk::ImageFormatListCreateInfo::default();
-        let mut external = vk::ExternalMemoryImageCreateInfo::default()
-            .handle_types(vk::ExternalMemoryHandleTypeFlags::HOST_ALLOCATION_EXT);
+        let handle = (memory.handle_type())
+            .ok_or_else(|| internal("an external linear image for memory of no handle type"))?;
+        let mut external = vk::ExternalMemoryImageCreateInfo::default().handle_types(handle);
         let info = plan
             .create_info(self.shared().sharing(), &view_formats, &mut list)
             .tiling(vk::ImageTiling::LINEAR)
             .initial_layout(vk::ImageLayout::UNDEFINED)
             .push_next(&mut external);
-        let limits = match self.host_image_limits(&info, &view_formats)? {
+        let limits = match self.external_image_limits(&info, &view_formats, memory)? {
             Ok(limits) => limits,
             Err(refusal) => return Ok(Err(refusal)),
         };
@@ -938,13 +943,14 @@ impl Device {
             return Ok(Err(LinearRefusal::Need(need)));
         }
         // SAFETY: the device is live and `info` (with its chain) valid and within the device's
-        // limits for an image of host allocations.
+        // limits for an image of that memory.
         let raw = unsafe { crate::creation::image(raw_device, &info) }?;
         let (requirements, dedicated) = requirements_of(raw_device, raw);
         if dedicated {
             // SAFETY: the image is live and unbound, and no command uses it.
             unsafe { release::object(raw_device, raw) };
-            return Ok(Err(LinearRefusal::NotImportable(
+            return Ok(Err(LinearRefusal::External(
+                memory,
                 vk::ExternalMemoryFeatureFlags::DEDICATED_ONLY,
             )));
         }

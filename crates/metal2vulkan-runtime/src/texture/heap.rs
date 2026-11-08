@@ -3307,7 +3307,8 @@ impl Device {
             .tiling(vk::ImageTiling::LINEAR)
             .initial_layout(vk::ImageLayout::UNDEFINED)
             .push_next(&mut external);
-        let Ok(limits) = self.host_image_limits(&info, &view_formats)? else {
+        let host = crate::dma_buf::ModifierMemory::Host;
+        let Ok(limits) = self.external_image_limits(&info, &view_formats, host)? else {
             return Ok(None);
         };
         if check_linear_limits(plan, &limits).is_err() {

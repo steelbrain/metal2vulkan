@@ -13,7 +13,8 @@
 //!   (`FirstMoves::fills_wait`), which takes it; the `Shared` frame's is made at once.
 //! - **The read.** The planes' textures over the buffer (`R8Unorm` 1024x64 at `0x20`, `RG8Unorm`
 //!   512x32 after it, rows 1024 bytes apart) are each the linear image aliasing the buffer's
-//!   memory (no `shadowed_textures`) wherever the same texture at offset 0 of a plain buffer is
+//!   memory (no `shadowed_textures`), made for its dma-buf handle type once the device's check of
+//!   that exported memory answered, wherever the same texture at offset 0 of a plain buffer is
 //!   one, and a blit of each reads the second device's bytes.
 //! - **Refusals.** A device without the export refuses the making
 //!   (`NotImplemented(RuntimeGap::DmaBufExport)`) only where it lacks an extension or the export;
@@ -434,6 +435,13 @@ fn a_frame_a_second_device_writes_through_its_dma_buf_reads_in_the_runtime_s_tex
             }
         }
         let plain = frame(&device, options, None).unwrap();
+        // An image over exported memory starts `UNDEFINED`, as one that names a handle type does:
+        // the device's check of that memory decides it (`in_place.rs`, "The runtime's exported
+        // memory"), so its verdicts are known first.
+        assert!(
+            device.settle_in_place_checks(WAIT),
+            "{name}: the check answered"
+        );
         for plane in PLANES {
             let (texture, aliases) = plane_texture(&device, &buffer, (plane, plane.at));
             let (_, plain_aliases) = plane_texture(&device, &plain, (plane, plane.at));

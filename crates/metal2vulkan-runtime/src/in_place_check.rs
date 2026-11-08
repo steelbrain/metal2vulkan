@@ -10,7 +10,14 @@
 //!   memory, under half a block, that declares the bytes between a texture's rows unobserved, where
 //!   the device makes `DRM_FORMAT_MOD_LINEAR` images, its textures taking such an image at Metal's
 //!   pitch alone, `texture.rs`'s `alias_image`; a shape whose window passes that buffer, the
-//!   3840x2160 surface's, is skipped there), fills a window of it with a pattern, and
+//!   3840x2160 surface's, is skipped there; and, for each handle type the runtime exports a
+//!   buffer's memory as, an opaque file descriptor and a dma-buf, an exportable buffer of the
+//!   runtime's own that declares those bytes unobserved too, in a block that such buffers share,
+//!   its textures taking the device's linear image made for that handle type, else the
+//!   `DRM_FORMAT_MOD_LINEAR` one at Metal's pitch made for it, both made `UNDEFINED` as an image
+//!   that names a handle type is; unchecked where the device exports no such memory or only as a
+//!   buffer's dedicated allocation, to which no image is bound), fills a window of it with a
+//!   pattern, and
 //!   makes a texture over it as the program does (`Buffer::new_runtime_texture`): the texture takes
 //!   the image in place exactly as the product's would ([`checking`](crate::in_place::checking)
 //!   lets it whatever the verdict); the fresh-pages class's buffer in fresh pages wherever the
@@ -159,6 +166,7 @@
 //!   refuses it); the check's source answers each request over them with that dma-buf. The
 //!   buffer's import, the image and its first move are the product's.
 
+use crate::buffer_descriptor::MemoryExport;
 use crate::check_draw::CheckDraw;
 use crate::device::holds::Holder;
 use crate::exit_guard;
@@ -168,6 +176,7 @@ use crate::in_place::{
     Verdict,
 };
 use crate::linear_plan::BufferLayout;
+use crate::memory::BoundMemory;
 use crate::values::ResourceOptions;
 use crate::{
     AddressPlacement, Buffer, BufferContents, BufferDescriptor, ClearColor, CommandQueue, Device,
@@ -441,7 +450,11 @@ const POOLED_BYTES: u64 = 24 << 20;
 fn class_bytes(class: PagesClass) -> u64 {
     match class {
         PagesClass::Pooled => POOLED_BYTES,
-        PagesClass::Pointer | PagesClass::Fresh | PagesClass::DmaBuf => BUFFER_BYTES,
+        PagesClass::Pointer
+        | PagesClass::Fresh
+        | PagesClass::DmaBuf
+        | PagesClass::ExportedFd
+        | PagesClass::ExportedDmaBuf => BUFFER_BYTES,
     }
 }
 
@@ -1378,8 +1391,43 @@ impl ClassPages {
                 let start = contents(&buffer)?;
                 Ok(ClassPages { buffer, start })
             }
+            PagesClass::ExportedFd => exported_pages(device, MemoryExport::OpaqueFd, length),
+            PagesClass::ExportedDmaBuf => exported_pages(device, MemoryExport::DmaBuf, length),
         }
     }
+}
+
+/// An exportable buffer of the runtime's own of `length` bytes, `Shared`, whose memory it exports
+/// as `export`'s handle type, outside the Metal address space, that declares the bytes between a
+/// texture's rows unobserved, as the product's buffers whose textures take an image there may
+/// (`exported_memory.rs`, `texture.rs`'s `alias_image`). Why not: a cause that lasts where the
+/// device exports no such memory, or only as a buffer's dedicated allocation, to which no image
+/// is bound.
+fn exported_pages(
+    device: &Device,
+    export: MemoryExport,
+    length: u64,
+) -> Result<ClassPages, Unmade> {
+    let shared = ResourceOptions::shared();
+    let place = (AddressPlacement::Outside.into(), None);
+    let made = device.exportable_buffer("in-place check", length, shared, place, export);
+    let buffer = match made {
+        Ok(buffer) => device.visible(buffer),
+        Err(error @ crate::Error::NotImplemented(_)) => {
+            return Err(Unmade::lasting(format!(
+                "the device exports no such memory: {error}"
+            )));
+        }
+        Err(error) => return Err(Unmade::of_error("its buffer was refused", &error)),
+    };
+    match buffer.bound_memory() {
+        BoundMemory::External(_) => {}
+        BoundMemory::NoImage(no) => return Err(Unmade::lasting(no.words())),
+        BoundMemory::Own => return Err(Unmade::passing("its buffer's memory is not exported")),
+    }
+    buffer.declare_padding_unobserved();
+    let start = contents(&buffer)?;
+    Ok(ClassPages { buffer, start })
 }
 
 /// Where `buffer`'s byte 0 lies for the CPU; why not, where it has no contents.

@@ -157,6 +157,8 @@ mod exit_guard;
 mod exported_memory;
 #[cfg(all(unix, any(m2v_gpu, m2v_cpu_icd)))]
 mod exported_semaphore;
+#[cfg(all(unix, any(m2v_gpu, m2v_cpu_icd)))]
+mod exported_textures;
 mod families;
 mod fences;
 mod fill_value;

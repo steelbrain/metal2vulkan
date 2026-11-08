@@ -48,8 +48,11 @@ pub enum TexturePlacement {
     /// where it lays one out as Metal does, else, over the device's own memory, a
     /// `DRM_FORMAT_MOD_LINEAR` image at Metal's pitch where the device makes one and its check of
     /// such images over its pooled memory passed for the texture's accesses (the query made it
-    /// unbound and released it); a texture over the device's own memory that takes neither answers
-    /// its shadow's cause ([`TexturePlacement::Pending`] while that check has not answered). Its
+    /// unbound and released it); over memory the runtime exports
+    /// ([`MemoryExport`](crate::MemoryExport)), either image made for the memory's handle type,
+    /// where the device's check of that exported memory passed for the texture's accesses; a
+    /// texture over the device's own memory that takes neither answers its shadow's cause
+    /// ([`TexturePlacement::Pending`] while that check has not answered). Its
     /// rows (and slices) lie one after another, or the buffer declares the bytes between them
     /// unobserved ([`BufferDescriptor::padding_unobserved`](crate::BufferDescriptor::padding_unobserved)),
     /// which the image then holds; else the answer is

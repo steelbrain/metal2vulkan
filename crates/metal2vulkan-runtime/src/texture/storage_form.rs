@@ -434,9 +434,9 @@ impl Wanted {
                 storable,
             } => {
                 let facts = (device.shared().textures).facts(device.compile_device().profile());
-                // Over the device's pooled memory, the image at Metal's pitch there, as the
+                // Over the device's own memory (pooled, or exported), the image there, as the
                 // texture's making makes it (`Device::pooled_move_image`).
-                if pending.class == PagesClass::Pooled {
+                if pending.class.over_own_memory() {
                     let made = device.pooled_move_image(&pending, &texels, &facts);
                     let Ok(Some((image, count))) = made else {
                         return Some(Made::Refused);

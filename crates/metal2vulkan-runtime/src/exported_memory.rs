@@ -53,8 +53,13 @@
 //!   (`texture/first_move.rs`'s `FirstFill::acquired`), so it waits for nothing; a host-visible
 //!   buffer, whose host may read its contents at once, has it made then and waits for it alone. A
 //!   texture over the buffer is a linear image of its memory in `GENERAL` (or a shadow of its
-//!   bytes, which copies them), a host-accessible alias that reads what the buffer holds: the call
-//!   lets go of every shadow's standing over the bytes (`shadow_standing.rs`), so a shadow's next
+//!   bytes, which copies them), a host-accessible alias that reads what the buffer holds, made
+//!   for the memory's handle type, which an image bound in exported memory names
+//!   (`VUID-vkBindImageMemory-memory-02728`), so made `UNDEFINED`, and taken where the device's
+//!   check of that exported memory passed (`in_place.rs`, "The runtime's exported memory"); a
+//!   shadow over a dedicated allocation, to which no image may be bound
+//!   (`VUID-vkBindImageMemory-memory-10926`). The call lets go of every shadow's standing over the
+//!   bytes (`shadow_standing.rs`), so a shadow's next
 //!   copy in, in the next command buffer that uses it, moves what the other API wrote. A write the
 //!   caller does not announce so is not the device's to read: a shadow whose image a command
 //!   buffer's end left standing keeps reading what the buffer held then. Nothing

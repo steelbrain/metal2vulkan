@@ -1577,18 +1577,17 @@ impl Device {
             return Ok(limits);
         }
         let features = imported.external_memory_properties.external_memory_features;
-        // An image for host allocations is bound at an offset of a buffer's import, which is no
-        // dedicated allocation.
-        let dedicated_only = memory == ModifierMemory::Host
+        // An image for host allocations is bound at an offset of a buffer's import, and one for
+        // exported memory at an offset of an exported block: neither is a dedicated allocation.
+        let dedicated_only = memory.shared_memory()
             && features.contains(vk::ExternalMemoryFeatureFlags::DEDICATED_ONLY);
-        if !features.contains(vk::ExternalMemoryFeatureFlags::IMPORTABLE) || dedicated_only {
+        if !features.contains(memory.needs()) || dedicated_only {
             return Err(format!(
-                "it imports no {} for a DRM_FORMAT_MOD_LINEAR image of {:?} (importable {}, \
-                 dedicated only {})",
+                "its image format query refuses {} to a DRM_FORMAT_MOD_LINEAR image of {:?}, \
+                 or takes them in a dedicated allocation alone (features {:?})",
                 memory.words(),
                 plan.format,
-                features.contains(vk::ExternalMemoryFeatureFlags::IMPORTABLE),
-                features.contains(vk::ExternalMemoryFeatureFlags::DEDICATED_ONLY)
+                features
             ));
         }
         Ok(limits)
@@ -1624,22 +1623,26 @@ impl Device {
 /// The memory a `DRM_FORMAT_MOD_LINEAR` image is made for: a dma-buf of its own pages
 /// ([`Device::dma_buf_image`]); host pages imported by their pointer, where a texture's image in
 /// place lays its rows out at Metal's pitch (`texture/in_place_image.rs`); or a buffer's memory of
-/// the runtime's own, no external memory, where a texture over the buffer lays its rows out at
-/// Metal's pitch (`texture.rs`'s `alias_image`).
+/// the runtime's own, where a texture over the buffer lays its rows out at Metal's pitch
+/// (`texture.rs`'s `alias_image`): with no external memory, or exported as the handle type its
+/// record names (`memory.rs`'s `Memory::bound_memory`, `exported_memory.rs`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum ModifierMemory {
     DmaBuf,
     Host,
     Own,
+    Exported(vk::ExternalMemoryHandleTypeFlags),
 }
 
 impl ModifierMemory {
-    /// The external memory handle type the image is made for; none for the runtime's own memory.
-    fn handle_type(self) -> Option<vk::ExternalMemoryHandleTypeFlags> {
+    /// The external memory handle type the image is made for; none for the runtime's own memory
+    /// of no export.
+    pub(super) fn handle_type(self) -> Option<vk::ExternalMemoryHandleTypeFlags> {
         match self {
             ModifierMemory::DmaBuf => Some(DMA_BUF),
             ModifierMemory::Host => Some(vk::ExternalMemoryHandleTypeFlags::HOST_ALLOCATION_EXT),
             ModifierMemory::Own => None,
+            ModifierMemory::Exported(handle) => Some(handle),
         }
     }
 
@@ -1649,6 +1652,33 @@ impl ModifierMemory {
             ModifierMemory::DmaBuf => "dma-bufs",
             ModifierMemory::Host => "host allocations",
             ModifierMemory::Own => "the runtime's own memory",
+            ModifierMemory::Exported(DMA_BUF) => "the runtime's memory exported as dma-bufs",
+            ModifierMemory::Exported(_) => {
+                "the runtime's memory exported as opaque file descriptors"
+            }
+        }
+    }
+
+    /// The external memory features the image's handle type must have
+    /// (`VkExternalImageFormatProperties`): exportable for memory the runtime exports, importable
+    /// for an import.
+    pub(super) fn needs(self) -> vk::ExternalMemoryFeatureFlags {
+        match self {
+            ModifierMemory::Exported(_) => vk::ExternalMemoryFeatureFlags::EXPORTABLE,
+            ModifierMemory::DmaBuf | ModifierMemory::Host | ModifierMemory::Own => {
+                vk::ExternalMemoryFeatureFlags::IMPORTABLE
+            }
+        }
+    }
+
+    /// Whether the image is bound at an offset of memory it shares, which a handle type that
+    /// takes only a dedicated allocation (`VK_EXTERNAL_MEMORY_FEATURE_DEDICATED_ONLY_BIT`) does
+    /// not: host allocations (a buffer's import) and the runtime's exported blocks; a dma-buf of
+    /// the image's own pages is its dedicated import.
+    pub(super) fn shared_memory(self) -> bool {
+        match self {
+            ModifierMemory::Host | ModifierMemory::Exported(_) => true,
+            ModifierMemory::DmaBuf | ModifierMemory::Own => false,
         }
     }
 }

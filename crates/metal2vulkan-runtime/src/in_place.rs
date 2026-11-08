@@ -83,6 +83,28 @@
 //!   texture made there before the class's verdicts are known is a shadow that moves to that image
 //!   once they pass, as one over host pages does (below;
 //!   `WorkCounts::pooled_textures_moved_in_place`).
+//! - **The runtime's exported memory.** A texture over a buffer whose memory the runtime exports
+//!   (`exported_memory.rs`: a block that exportable buffers of one handle type share) takes the
+//!   device's linear image, else the `DRM_FORMAT_MOD_LINEAR` one at Metal's pitch, each made for
+//!   the handle type the memory's own record names (`memory.rs`'s `Memory::bound_memory`), as an
+//!   image bound in exported memory must name it (`VUID-vkBindImageMemory-memory-02728`): so it
+//!   starts `UNDEFINED` (`VUID-VkImageCreateInfo-pNext-01443`) whichever it is, and the same rule
+//!   takes it, under the check of that handle type's exported memory
+//!   ([`PagesClass::ExportedFd`], [`PagesClass::ExportedDmaBuf`]), moving in place once the
+//!   verdicts pass as over the pooled memory. Where the device's image format query
+//!   (`VkPhysicalDeviceExternalImageFormatInfo`) takes the handle type for no such image of the
+//!   texture's format, usage and tiling but with a dedicated allocation, or where the memory is
+//!   the buffer's dedicated allocation (`VUID-vkBindImageMemory-memory-10926`), the texture is a
+//!   shadow, its notice naming why. Where such an image lies is decided as for any texture over a
+//!   buffer (`linear_plan::aliases`), of the image made for the handle type, for each texture (each
+//!   plane of a picture) apart: the texels' offset in the memory (the buffer's first byte lies at
+//!   a multiple of 256 bytes there, or its `aligned_byte` does, `BufferDescriptor::aligned_byte`;
+//!   plus the texture's offset in the buffer) is a multiple of the
+//!   `alignment` that `vkGetImageMemoryRequirements` answers for that image of the texture's
+//!   format, extent and usage; its first subresource (`vkGetImageSubresourceLayout`) starts at
+//!   offset 0 with Metal's `rowPitch`; and its `size` stays inside the buffer. The device's
+//!   linear image is tried first, then the `DRM_FORMAT_MOD_LINEAR` one at Metal's pitch, whose
+//!   own alignment decides.
 //! - **Before the verdict.** A texture made before its class's verdict for its access is known
 //!   waits for nothing: it is a shadow ([`ShadowCause::CheckPending`], counted apart), and the
 //!   first such texture starts the check on a thread of its own. Once its class's verdicts are
@@ -145,15 +167,26 @@ pub(crate) enum PagesClass {
     /// (`VUID-VkImageCreateInfo-initialLayout-12478`: `PREINITIALIZED`, whose move keeps the
     /// bytes, is for linear tiling alone).
     Pooled,
+    /// A buffer of the runtime's own whose memory it exports as an opaque file descriptor
+    /// (`exported_memory.rs`, a block that such buffers share): the device's linear image made
+    /// for that handle type, else a `DRM_FORMAT_MOD_LINEAR` one at Metal's pitch made for it,
+    /// bound in the buffer's memory (`texture.rs`'s `alias_image`). Either names the handle type
+    /// (`VUID-vkBindImageMemory-memory-02728`), so it is made `UNDEFINED`
+    /// (`VUID-VkImageCreateInfo-pNext-01443`), and its first move leaves that layout.
+    ExportedFd,
+    /// As [`ExportedFd`](Self::ExportedFd), of memory the runtime exports as a dma-buf.
+    ExportedDmaBuf,
 }
 
 impl PagesClass {
     /// Every class, in the order the check runs them and the record holds their verdicts.
-    pub(crate) const ALL: [PagesClass; 4] = [
+    pub(crate) const ALL: [PagesClass; 6] = [
         PagesClass::Pointer,
         PagesClass::Fresh,
         PagesClass::DmaBuf,
         PagesClass::Pooled,
+        PagesClass::ExportedFd,
+        PagesClass::ExportedDmaBuf,
     ];
 
     /// Its place in [`ALL`](Self::ALL).
@@ -163,6 +196,8 @@ impl PagesClass {
             PagesClass::Fresh => 1,
             PagesClass::DmaBuf => 2,
             PagesClass::Pooled => 3,
+            PagesClass::ExportedFd => 4,
+            PagesClass::ExportedDmaBuf => 5,
         }
     }
 
@@ -173,6 +208,28 @@ impl PagesClass {
             PagesClass::DmaBuf => "host pages imported as dma-bufs",
             PagesClass::Fresh => "fresh host pages the runtime imported for the buffer",
             PagesClass::Pooled => "the runtime's pooled memory at Metal's pitch",
+            PagesClass::ExportedFd => "the runtime's memory exported as opaque file descriptors",
+            PagesClass::ExportedDmaBuf => "the runtime's memory exported as dma-bufs",
+        }
+    }
+
+    /// The class of the runtime's memory exported as `handle` (`memory.rs`'s
+    /// `Memory::bound_memory`): `None` for a handle type the runtime exports no memory as.
+    pub(crate) fn exported(handle: vk::ExternalMemoryHandleTypeFlags) -> Option<PagesClass> {
+        match handle {
+            vk::ExternalMemoryHandleTypeFlags::OPAQUE_FD => Some(PagesClass::ExportedFd),
+            vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT => Some(PagesClass::ExportedDmaBuf),
+            _ => None,
+        }
+    }
+
+    /// Whether its textures' images lie in a buffer's memory of the runtime's own
+    /// (`texture.rs`'s `alias_image`), which a shadow made before its verdicts moves to as such a
+    /// texture's making makes it (`Device::pooled_move_image`), not over host pages.
+    pub(crate) fn over_own_memory(self) -> bool {
+        match self {
+            PagesClass::Pooled | PagesClass::ExportedFd | PagesClass::ExportedDmaBuf => true,
+            PagesClass::Pointer | PagesClass::Fresh | PagesClass::DmaBuf => false,
         }
     }
 }
@@ -887,7 +944,7 @@ impl Drop for Waiting<'_> {
 /// differs, and so does the version it holds). The runtime's own version is not in the record: a
 /// release that changes none of these keeps the verdicts the driver gave, so a device made after
 /// it reads them again rather than checking anew.
-pub(crate) const CHECK_VERSION: u32 = 12;
+pub(crate) const CHECK_VERSION: u32 = 13;
 
 /// A record's first bytes.
 const MAGIC: [u8; 8] = *b"M2VINPL\0";

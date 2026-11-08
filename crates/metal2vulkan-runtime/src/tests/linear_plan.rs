@@ -3,6 +3,7 @@
 //! probes 9 to 9f measured them on an Apple M3 Max (macOS 26.7) and an M4 (27.0.1).
 
 use super::super::buffer_texture::{plane_copy_regions, staged_rows_back, Blocks};
+use super::super::dma_buf::ModifierMemory;
 use super::super::image_plan::plan_image;
 use super::super::linear_plan::{
     aliases, apart_from_plane, check_linear_limits, holding, is_linear, linear_alignment,
@@ -1429,12 +1430,23 @@ fn a_refused_linear_image_names_the_need_that_failed() {
             && layers.ends_with("hold 1"),
         "{layers}"
     );
-    let import = describe(LinearRefusal::NotImportable(
+    let import = describe(LinearRefusal::External(
+        ModifierMemory::Host,
         vk::ExternalMemoryFeatureFlags::DEDICATED_ONLY,
     ));
     assert!(
-        import.contains("importable false, dedicated only true"),
+        import.contains("refuses host allocations to a linear image")
+            && import.contains("importable false, dedicated only true"),
         "{import}"
+    );
+    let export = describe(LinearRefusal::External(
+        ModifierMemory::Exported(vk::ExternalMemoryHandleTypeFlags::OPAQUE_FD),
+        vk::ExternalMemoryFeatureFlags::EXPORTABLE | vk::ExternalMemoryFeatureFlags::DEDICATED_ONLY,
+    ));
+    assert!(
+        export.contains("refuses the runtime's memory exported as opaque file descriptors")
+            && export.contains("exportable true, dedicated only true"),
+        "{export}"
     );
 }
 
