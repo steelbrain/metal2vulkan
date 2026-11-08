@@ -785,9 +785,12 @@ fn a_buffer_past_the_kept_descriptors_stays_imported() {
     });
 }
 
+/// The name of the thread [`dma_buf_making`] makes its buffer on.
+const MAKING: &str = "m2v-test-dma-buf-making";
+
 /// The making of a no-copy buffer over `len` bytes of `ram`'s view from 0, imported only as
-/// dma-bufs of `ram`'s source (`HostMemory::dma_buf_only`), on a thread of its own: its answer
-/// and how long the making took.
+/// dma-bufs of `ram`'s source (`HostMemory::dma_buf_only`), on a thread of its own ([`MAKING`]):
+/// its answer and how long the making took.
 fn dma_buf_making(
     device: &Device,
     ram: &Ram,
@@ -796,7 +799,8 @@ fn dma_buf_making(
     let device = device.clone();
     let at = ram.pointer(0).as_ptr() as usize;
     let source = ram.source(&Arc::new(AtomicUsize::new(0)));
-    std::thread::spawn(move || {
+    let thread = std::thread::Builder::new().name(MAKING.to_owned());
+    let spawned = thread.spawn(move || {
         let pointer = NonNull::new(at as *mut u8).unwrap();
         let began = Instant::now();
         // SAFETY: each test's view outlives the buffer, and the source makes dma-bufs of its
@@ -810,7 +814,8 @@ fn dma_buf_making(
             )
         };
         (made, began.elapsed())
-    })
+    });
+    spawned.unwrap()
 }
 
 /// Pages of the process's own, `len` bytes from a fresh private mapping, for a no-copy buffer
@@ -863,12 +868,16 @@ fn makings_beside_a_dma_buf_import_in_the_driver_wait_for_none_of_it() {
         let ram = Ram::new(len, 0, len);
         let bytes = counting(len, 3);
         ram.write_file(0, &bytes);
-        // The hold: the import's thread says it is in, and waits for the word to go on.
+        // The hold: the making's import says it is in, and waits for the word to go on. The
+        // device's own imports meanwhile (its checks') go on at once.
         let (entered, at_hold) = std::sync::mpsc::channel::<()>();
         let (go, gone_on) = std::sync::mpsc::channel::<()>();
         let entered = std::sync::Mutex::new(entered);
         let gone_on = std::sync::Mutex::new(gone_on);
         let hold: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
+            if std::thread::current().name() != Some(MAKING) {
+                return;
+            }
             let _ = entered.lock().unwrap().send(());
             let _ = gone_on.lock().unwrap().recv_timeout(WAIT);
         });
