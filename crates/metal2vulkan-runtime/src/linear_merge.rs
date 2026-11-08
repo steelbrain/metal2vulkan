@@ -43,7 +43,9 @@
 //!   (`WorkCounts::linear_merge_scratches_made`, `linear_merge_scratches_reused`).
 //! - **Runs.** Passes over one attachment one after another, with nothing between them that may
 //!   touch its bytes or the kept image, keep once and merge once, after the last
-//!   (`pass_runs.rs`): one copy in, keep and merge a run, not one a pass.
+//!   (`pass_runs.rs`): one copy in, keep and merge a run, not one a pass. A pass of a run that a
+//!   rebind encodes again alone copies the run's box in again and keeps it after its own merge,
+//!   for the run's later passes ([`LinearMerge::record_reload`]).
 //!
 //! - **Reloaded at a barrier.** A draw after a memory barrier inside the pass may read the
 //!   surface's bytes (a sampled texture over them, a buffer): before the render pass instance that
@@ -368,6 +370,34 @@ impl LinearMerge {
         core.barrier(Barrier::everything());
         core.device().shared().counts.linear_merge_recorded();
         self.lend();
+    }
+
+    /// Record in `core`'s command buffer, after a pass of the merge's run encoded again alone that
+    /// a later pass of the run went on over (`pass_runs.rs`'s **Encoded again**), the box's copy in
+    /// from the surface, whose bytes that pass's merge and the merge before it left holding what
+    /// every pass before wrote, and its keep, between barriers: the run's later passes render
+    /// over what Metal's would load, and its merge writes only what they change. Its uses are
+    /// that pass's own copy in's, keep's and merge's: the same images.
+    pub(super) fn record_reload(&self, core: &mut EncoderCore) {
+        core.barrier(Barrier::everything());
+        core.command(vk::PipelineStageFlags2::COPY, &[], |device, raw| {
+            // SAFETY: the encoder's command buffer is recording outside a render pass; the copy's
+            // region lies in both images (the box, inside the render area), which rest in
+            // `GENERAL` with the transfer usage the copies in take, and which the merge's run
+            // retains until it completes.
+            unsafe {
+                device.cmd_copy_image(
+                    raw,
+                    self.surface,
+                    vk::ImageLayout::GENERAL,
+                    self.backing,
+                    vk::ImageLayout::GENERAL,
+                    &[self.copy_in],
+                );
+            }
+        });
+        self.record_keep(core);
+        core.device().shared().counts.linear_run_reloaded();
     }
 
     /// Lend the scratch to the command buffer's later merges, once: the last command that

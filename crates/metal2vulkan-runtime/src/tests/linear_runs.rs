@@ -689,3 +689,159 @@ fn passes_reading_host_pages_form_one_run() {
     );
     drop((texture, buffer, chunk));
 }
+
+/// The rectangles ([`drawn`]) of [`a_pass_of_a_run_encoded_again_alone_reloads_the_run`]'s
+/// passes, and whether each reads them from the chunk over host pages the test rebinds.
+const RELOADED: [(usize, bool); 6] = [
+    (0, false),
+    (5, true),
+    (1, false),
+    (2, true),
+    (3, false),
+    (6, false),
+];
+
+/// Six passes over a target over a `Private` buffer (rows of 1024 bytes), the rule forced, behind
+/// a wait for a shared event only the host signals: the first opens a run over its rectangle, the
+/// second's reaches past it and opens one over the whole target (`pass_runs.rs`'s **A run**),
+/// which the other four go on with. The second and the fourth read their rectangle and color
+/// from a no-copy buffer over host pages, rebound over other pages holding the same bytes before
+/// the signal: the rebind encodes those two again alone (`command_buffer/reencode.rs`), each
+/// leaving its run, merging after itself and copying the run's box in again and keeping it for
+/// the passes after it (`pass_runs.rs`'s **Encoded again**); the texels are those a private
+/// texture holds after the same passes. Without the copy in again, the third pass would blend
+/// over texels no copy in wrote, outside the second's rectangle.
+#[test]
+fn a_pass_of_a_run_encoded_again_alone_reloads_the_run() {
+    let (width, row) = (256, 1024);
+    let packed = width * TEXEL;
+    let chunk_bytes = (2 * CHUNK_STRIDE).next_multiple_of(64 << 10);
+    let (host, chunk_pages, moved_to) = (
+        Host::new(row * H),
+        Host::new(chunk_bytes),
+        Host::new(chunk_bytes),
+    );
+    let cache = Scratch::new("linear-runs-reloaded");
+    let device = device(&cache.0);
+    let queue = device.new_command_queue().unwrap();
+    let blending = blending(&device);
+    let usage = TextureUsage::RENDER_TARGET | TextureUsage::SHADER_READ;
+    let depth_usage = TextureUsage::RENDER_TARGET;
+    let depth = private_texture(&device, PixelFormat::Depth32Float, width, depth_usage);
+    // The chunk: the readers' rectangles and colors, one stride apart, in their order.
+    let mut data = vec![0u8; chunk_bytes as usize];
+    let readers = RELOADED.iter().filter(|(_, reads)| *reads);
+    for (at, &(i, _)) in readers.enumerate() {
+        let (corners, rgba) = drawn(i);
+        let at = at * CHUNK_STRIDE as usize;
+        data[at..at + 16].copy_from_slice(&bytes_of(&corners, f32::to_le_bytes));
+        data[at + 16..at + 32].copy_from_slice(&bytes_of(&rgba, f32::to_le_bytes));
+    }
+    chunk_pages.write(&data);
+    moved_to.write(&data);
+    // SAFETY: the pages outlive the buffer, which alone uses them while it lives.
+    let made = unsafe {
+        device.new_buffer_with_bytes_no_copy(
+            chunk_pages.memory(),
+            chunk_bytes,
+            ResourceOptions::default(),
+            None,
+        )
+    };
+    let chunk = match made {
+        Ok(chunk) => chunk,
+        Err(crate::Error::Unsupported(gap)) => {
+            println!("LINEAR-RUNS reloaded: the device imports no host memory: {gap:?}");
+            return;
+        }
+        Err(error) => panic!("new_buffer_with_bytes_no_copy: {error:?}"),
+    };
+    // The passes over `texture`: from the chunk where they read it, else their own bytes.
+    let encode = |command_buffer: &CommandBuffer, texture: &Texture| {
+        let mut read = 0;
+        for &(i, reads) in &RELOADED {
+            if reads {
+                let at = read * CHUNK_STRIDE;
+                pass_from(command_buffer, (texture, &depth), &blending, (&chunk, at));
+                read += 1;
+            } else {
+                pass(command_buffer, (texture, &depth), &blending, drawn(i), None);
+            }
+        }
+    };
+    let reference = private_texture(&device, PixelFormat::RGBA8Unorm, width, usage);
+    let source = staged(&device, &first_bytes(width, packed));
+    blit(&queue, |b| {
+        (b.copy_from_buffer_to_texture(
+            &source,
+            0,
+            packed,
+            packed * H,
+            Size::new(width, H, 1),
+            &reference,
+            0,
+            0,
+            Origin::new(0, 0, 0),
+            BlitOption::None,
+        ))
+        .unwrap()
+    });
+    let command_buffer = queue.command_buffer().unwrap();
+    encode(&command_buffer, &reference);
+    command_buffer.commit().unwrap();
+    command_buffer.wait_until_completed_for(WAIT).unwrap();
+    assert_eq!(command_buffer.error(), None);
+    let left = texels_of(&queue, &reference);
+    let Some((buffer, texture)) = target(&queue, Over::Private, (width, row), &host) else {
+        return;
+    };
+    assert!(
+        texture.linear_image().unwrap(),
+        "the target is a linear image"
+    );
+    let gate = device.new_shared_event().unwrap();
+    let forced = &device.shared().linear_rule_forced;
+    forced.store(true, Ordering::Relaxed);
+    let before = device.work_counts();
+    let command_buffer = queue.command_buffer().unwrap();
+    (command_buffer.encode_wait_for_event(EventRef::Shared(&gate), 1)).unwrap();
+    encode(&command_buffer, &texture);
+    command_buffer.commit().unwrap();
+    let encoded = device.work_counts();
+    assert_eq!(chunk.detach_backing(), Ok(true), "the detach");
+    // SAFETY: the pages outlive every buffer over them, which alone uses them while it lives.
+    unsafe { chunk.rebind_bytes_no_copy(moved_to.memory(), None, None) }.unwrap();
+    let rebound = device.work_counts();
+    gate.set_signaled_value(1);
+    command_buffer.wait_until_completed_for(WAIT).unwrap();
+    let after = device.work_counts();
+    forced.store(false, Ordering::Relaxed);
+    let delta = |of: fn(&WorkCounts) -> u64, (a, b): (&WorkCounts, &WorkCounts)| of(b) - of(a);
+    let first_taken = delta(|c| c.linear_merges_taken_over, (&before, &encoded));
+    let again = delta(|c| c.encoders_reencoded, (&encoded, &rebound));
+    let refused = delta(|c| c.reencodes_refused, (&encoded, &rebound));
+    let reloaded = delta(|c| c.linear_runs_reloaded, (&encoded, &rebound));
+    let recorded = delta(|c| c.linear_merges_recorded, (&before, &after));
+    println!(
+        "LINEAR-RUNS reloaded on {}: {:?} {:?}; first encoding's merges taken over \
+         {first_taken}; encoders encoded again {again}, refused {refused}, runs reloaded \
+         {reloaded}; linear merges recorded {recorded}",
+        device.name(),
+        command_buffer.status(),
+        command_buffer.error(),
+    );
+    assert_eq!(command_buffer.error(), None);
+    assert_eq!(first_taken, 4, "the passes form two runs as first encoded");
+    assert_eq!(
+        (again, refused, reloaded),
+        (2, 0, 2),
+        "the rebind encodes the two readers again, each reloading its run"
+    );
+    // The first run's, the two readers' own, the merge the fourth had taken over, and the
+    // second run's last.
+    assert_eq!(recorded, 5, "the merges recorded");
+    let got = texels(&bytes(&queue, Over::Private, &buffer, row * H), width, row);
+    let differ = (0..got.len()).filter(|&i| got[i] != left[i]).count();
+    assert_eq!(differ, 0, "the texels differ from the private texture's");
+    drop((texture, buffer, chunk));
+}

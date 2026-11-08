@@ -288,6 +288,7 @@ pub(crate) struct Counters {
     linear_merge_scratches_reused: AtomicU64,
     linear_merges_recorded: AtomicU64,
     linear_merges_taken_over: AtomicU64,
+    linear_runs_reloaded: AtomicU64,
     kept_bytes_passes: AtomicU64,
     kept_texels_passes: AtomicU64,
     color_group_passes: AtomicU64,
@@ -2497,6 +2498,12 @@ impl Counters {
     pub(crate) fn linear_merge_taken_over(&self) {
         self.linear_merges_taken_over
             .fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A pass of a linear attachment's run, encoded again alone, copied its run's box in again
+    /// and kept it after itself (`pass_runs.rs`'s **Encoded again**).
+    pub(crate) fn linear_run_reloaded(&self) {
+        self.linear_runs_reloaded.fetch_add(1, Ordering::Relaxed);
     }
 
     /// A pass rendered a texture over a buffer it does not store through the image its texture
@@ -5344,6 +5351,11 @@ pub struct WorkCounts {
     /// The merges a later pass of their run took over: none of them is recorded, and the run's
     /// last merge writes what they would have.
     pub linear_merges_taken_over: u64,
+    /// Passes of a linear attachment's run that a rebind encoded again alone (their commands
+    /// named a buffer over host pages it moved) and a later pass of the run went on over: each
+    /// copied the run's box in again from the surface after its own merge, and kept it, for the
+    /// run's later passes and its merge (`pass_runs.rs`'s **Encoded again**).
+    pub linear_runs_reloaded: u64,
     /// Passes that rendered a color attachment over a buffer's bytes, which they do not store
     /// (`DontCare`, `MultisampleResolve`), through the image its texture keeps, so that the buffer
     /// keeps its bytes (`kept_bytes.rs`).
@@ -7007,6 +7019,7 @@ impl Device {
                 .load(Ordering::Relaxed),
             linear_merges_recorded: counters.linear_merges_recorded.load(Ordering::Relaxed),
             linear_merges_taken_over: counters.linear_merges_taken_over.load(Ordering::Relaxed),
+            linear_runs_reloaded: counters.linear_runs_reloaded.load(Ordering::Relaxed),
             kept_bytes_passes: counters.kept_bytes_passes.load(Ordering::Relaxed),
             kept_texels_passes: counters.kept_texels_passes.load(Ordering::Relaxed),
             color_group_passes: counters.color_group_passes.load(Ordering::Relaxed),

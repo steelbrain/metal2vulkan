@@ -45,6 +45,7 @@ use super::index_rewrite::{
 };
 use super::kept_commands::{Held, KeptEffects};
 use super::noted_apart::{NotedApart, NotedInto};
+use super::pass_runs::RunKeep;
 use super::pending_dispatch::PendingDispatch;
 use super::pipeline::VariantObjects;
 use super::rebind::{Holds, Taken};
@@ -2651,12 +2652,23 @@ impl EncoderCore {
         self.count_shadow_copies(&copies);
         self.shadow_copies(&copies);
         // A pass of a run that a later pass went on over keeps the run's scratch again, from the
-        // image it left, for that pass's run (`pass_runs.rs`); the encoding again clears them
-        // as it ends (`command_buffer/reencode.rs`).
+        // image it left (a shadowed texture's), or from its box copied in again (a linear
+        // attachment's), for that pass's run (`pass_runs.rs`); the encoding again clears them as
+        // it ends (`command_buffer/reencode.rs`).
         let keeps = (self.open.command_buffer.state().replaying_keeps).clone();
-        if !keeps.is_empty() {
-            self.count_shadow_copies(&keeps);
-            self.shadow_copies(&keeps);
+        let mut shadow_keeps = Vec::new();
+        for keep in keeps {
+            match keep {
+                RunKeep::Shadow(copy) => shadow_keeps.push(copy),
+                RunKeep::Linear(merge) => {
+                    merge.record_reload(&mut self);
+                    self.retain(merge);
+                }
+            }
+        }
+        if !shadow_keeps.is_empty() {
+            self.count_shadow_copies(&shadow_keeps);
+            self.shadow_copies(&shadow_keeps);
         }
         if self.uses.broke_hold() {
             return Err(internal("a held depth used but as its attachment"));

@@ -4893,15 +4893,15 @@ impl RenderLowering {
                     attach(&target.texture);
                 }
             }
-            // A pass encoded again only with every other pass of its run: its commands name no
-            // buffer over host pages, which a rebind moves and encodes the pass again for
-            // (`command_buffer/reencode.rs`), nor does any of its attachments lie over host pages
-            // but the run's own bytes, which every pass of the run renders, so a rebind of them
-            // encodes the whole run again, each pass merging alone (`pass_runs.rs`'s **Encoded
-            // again**); outside a predicated loop's laying.
+            // None of its attachments lies over host pages but the run's own bytes, which every
+            // pass of the run renders, so a rebind of them encodes the whole run again, each pass
+            // merging alone; outside a predicated loop's laying. Its commands may name buffers
+            // over host pages (a consumer's upload chunk in its guest RAM, which its
+            // `setVertexBytes` lands in): a rebind of one encodes the pass again alone, which
+            // leaves its run and copies the run's box in again after itself
+            // (`command_buffer/reencode.rs`, `pass_runs.rs`'s **Encoded again**).
             let laying = core.command_buffer().state().predication_mut().laying();
             let over_pages = |key: &ResourceKey| rebinds.host_range(*key).is_some();
-            let once = !named.iter().any(over_pages) && !laying;
             let mut joining = Vec::new();
             for &(index, c, own) in &merging {
                 let bytes = own.own.texture.use_key();
@@ -4915,7 +4915,7 @@ impl RenderLowering {
                 let others_over_pages =
                     (attached.iter()).any(|(k, _)| *k != bytes && over_pages(k));
                 let joins = quiet
-                    && once
+                    && !laying
                     && !others_over_pages
                     && !inline
                     && own.cause == Cause::Linear

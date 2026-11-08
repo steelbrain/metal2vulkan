@@ -86,7 +86,7 @@ use super::heap_sets::HeapUse;
 use super::kept_commands::KeptContext;
 use super::live_buffers::LiveTable;
 use super::merge_scratch::MergeScratch;
-use super::pass_runs::{PassRuns, RunPoint};
+use super::pass_runs::{PassRuns, RunKeep, RunPoint};
 use super::pipeline::budget::Urgency;
 use super::pipeline::kept::StepNumbers;
 use super::predication::{Event, Predication};
@@ -98,7 +98,7 @@ use super::replay::Replay;
 use super::residency::Residency;
 use super::resource::{ObjectId, ResourceKey};
 use super::scheduler::{BatchSync, Hand, StepWaits};
-use super::shadow::{ShadowCarry, ShadowCopy};
+use super::shadow::ShadowCarry;
 use super::spares::CommandPool;
 use super::sparse::encoder::SparseUpdate;
 use super::sparse::indirect;
@@ -816,7 +816,7 @@ pub(super) struct State {
     pass_runs: PassRuns,
     /// The keeps the encoder being encoded again records after itself, where it leaves a run of
     /// passes another pass went on in (`pass_runs.rs`, `command_buffer/reencode.rs`).
-    pub(super) replaying_keeps: Vec<ShadowCopy>,
+    pub(super) replaying_keeps: Vec<RunKeep>,
     /// The pools of its commands' set 0 (`descriptor_arena.rs`), given back or released with
     /// the uploads.
     pub(super) descriptors: DescriptorArena,

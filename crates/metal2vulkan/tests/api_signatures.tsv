@@ -2841,6 +2841,7 @@ field	metal2vulkan-runtime::WorkCounts.linear_merges_recorded	pub linear_merges_
 field	metal2vulkan-runtime::WorkCounts.linear_merges_taken_over	pub linear_merges_taken_over: u64
 field	metal2vulkan-runtime::WorkCounts.linear_passes_in_place	pub linear_passes_in_place: u64
 field	metal2vulkan-runtime::WorkCounts.linear_passes_through_copies	pub linear_passes_through_copies: u64
+field	metal2vulkan-runtime::WorkCounts.linear_runs_reloaded	pub linear_runs_reloaded: u64
 field	metal2vulkan-runtime::WorkCounts.linked_pipelines_shared	pub linked_pipelines_shared: u64
 field	metal2vulkan-runtime::WorkCounts.linked_use_questions_asked	pub linked_use_questions_asked: u64
 field	metal2vulkan-runtime::WorkCounts.live_tables_uploaded	pub live_tables_uploaded: u64

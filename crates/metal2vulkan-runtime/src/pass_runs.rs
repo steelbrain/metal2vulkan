@@ -75,19 +75,29 @@
 //!   laying, whose first instance does not record inline, that names neither the bytes' buffer
 //!   nor its host range and touches nothing past its attachments (as above), whose other
 //!   attachments lie over none of the bytes, and that renders over no rasterization-rate map.
-//!   A linear attachment's pass joins only where it is encoded again with every other pass of its
-//!   run alone: its commands name no buffer over host pages, which a rebind would move and encode
-//!   its encoder again for (`command_buffer/reencode.rs`), and none of its attachments lies over
-//!   host pages but the run's own bytes (an image in place over a no-copy buffer's pages, which
-//!   every pass of the run renders, so a rebind of them encodes the whole run again: **Encoded
-//!   again**); and it executes no render commands. A shadowed
+//!   A linear attachment's pass joins where none of its attachments lies over host pages but the
+//!   run's own bytes (an image in place over a no-copy buffer's pages, which every pass of the run
+//!   renders, so a rebind of them encodes the whole run again: **Encoded again**), and it executes
+//!   no render commands. Its commands may name buffers over host pages (a consumer's upload chunk
+//!   in its guest RAM, which its `setVertexBytes` and `setFragmentBytes` land in): a rebind of one
+//!   moves it and encodes that pass again alone (`command_buffer/reencode.rs`), which leaves its
+//!   run (**Encoded again**). A shadowed
 //!   texture's: one loaded and stored as a color (no stand-in, no planes, no resolve), whose
 //!   truth is a buffer's bytes it merges back into, laid out as one image's texels. Every other
 //!   pass merges after itself, as before; an encoder encoded again changes no run.
 //! - **Encoded again.** A linear attachment's run over host pages is encoded again whole by a
 //!   rebind of them: each of its passes leaves the run ([`RunMerge::leave`]) and, encoded again,
 //!   copies in, keeps and merges after itself as a pass alone does, in order, so the bytes hold
-//!   what the passes before it wrote when it copies them in. A shadowed texture's run may hold
+//!   what the passes before it wrote when it copies them in. A pass of a linear attachment's run
+//!   whose commands named a buffer over host pages that a rebind moved is encoded again alone,
+//!   and leaves its run the same way: the merge it had taken over records after all, at the pass
+//!   before it, and, encoded again, it copies its own box in, keeps it and merges after itself.
+//!   Where a later pass of the run had taken its merge over, it then copies the run's box in
+//!   again from the surface, whose bytes those merges left holding what every pass before wrote,
+//!   and keeps it into the run's scratch ([`RunMerge::keep_after`], `LinearMerge::record_reload`,
+//!   `WorkCounts::linear_runs_reloaded`): the run's later passes render over what Metal's would
+//!   load (its box may reach past the pass's own, where the pass opened it over its whole render
+//!   area), and its merge writes only what they change. A shadowed texture's run may hold
 //!   passes over host pages, which a rebind
 //!   before the command buffer's first submission encodes again (`command_buffer/reencode.rs`):
 //!   each pass whose commands named a buffer that moved, and no other. Such a pass leaves its
@@ -170,25 +180,31 @@ impl RunMerge {
     }
 
     /// The keep its pass, encoded again, records after itself where a later pass of its run took
-    /// its merge over: of the image that pass went on over into the scratch its run's merge
-    /// compares (the module's **Encoded again**). `None` for a linear attachment's run, whose
-    /// passes are encoded again all together or not at all, and a merge no later pass took over.
-    pub(super) fn keep_after(&self) -> Option<ShadowCopy> {
-        let RunWork::Shadow(copy) = &self.work else {
+    /// its merge over (the module's **Encoded again**): a shadowed texture's, of the image that
+    /// pass went on over into the scratch its run's merge compares; a linear attachment's, the
+    /// run's box copied in again from the surface and kept (`LinearMerge::record_reload`).
+    /// `None` for a merge no later pass took over.
+    pub(super) fn keep_after(&self) -> Option<RunKeep> {
+        if !self.taken.load(Ordering::Acquire) {
             return None;
-        };
-        let Step::Merge(merge) = &copy.step else {
-            return None;
-        };
-        self.taken.load(Ordering::Acquire).then(|| ShadowCopy {
-            copies: Arc::clone(&copy.copies),
-            step: Step::Keep(Arc::clone(merge)),
-            kept: false,
-            area: None,
-            cause: None,
-            moves: None,
-            clear: None,
-        })
+        }
+        match &self.work {
+            RunWork::Linear(merge) => Some(RunKeep::Linear(Arc::clone(merge))),
+            RunWork::Shadow(copy) => {
+                let Step::Merge(merge) = &copy.step else {
+                    return None;
+                };
+                Some(RunKeep::Shadow(ShadowCopy {
+                    copies: Arc::clone(&copy.copies),
+                    step: Step::Keep(Arc::clone(merge)),
+                    kept: false,
+                    area: None,
+                    cause: None,
+                    moves: None,
+                    clear: None,
+                }))
+            }
+        }
     }
 
     /// The shadowed texture's merge it records, for the counters; `None` for a linear
@@ -221,6 +237,17 @@ impl RunMerge {
             }
         }
     }
+}
+
+/// The keep a run's pass encoded again records after itself, where a later pass of its run took
+/// its merge over ([`RunMerge::keep_after`]).
+#[derive(Clone)]
+pub(super) enum RunKeep {
+    /// A linear attachment's run's merge, whose box is copied in again and kept
+    /// (`LinearMerge::record_reload`).
+    Linear(Arc<LinearMerge>),
+    /// A shadowed texture's keep, into the scratch its run's merge compares.
+    Shadow(ShadowCopy),
 }
 
 /// What a run's passes have in one: for a linear attachment, the image they render, and the

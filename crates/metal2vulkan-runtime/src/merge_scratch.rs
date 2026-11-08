@@ -25,8 +25,9 @@
 //!      attachment's by its pass's fill and keep after the copy in, its reloads at the pass's
 //!      barriers and its merge after the pass, all recorded at the pass's end into its encoder's
 //!      `VkCommandBuffer`s or the segments it leaves between them, which go between them in
-//!      submission order (a run's, by its first pass's fill and keep and the merge its last pass
-//!      leaves, between which it is lent to none); a shadow's by its keeps and merges, which the
+//!      submission order (a run's, by its first pass's fill and keep, the merge its last pass
+//!      leaves, and the fill and keep of a pass of it a rebind encoded again alone, which lie
+//!      between those two, where it is lent to none); a shadow's by its keeps and merges, which the
 //!      encoder records before its next command that touches the bytes another way, or as it
 //!      ends (`shadow.rs`), or a run's by its first pass's keep and the merge its last pass
 //!      leaves, between which it is lent to none (`pass_runs.rs`).
