@@ -878,15 +878,21 @@ fn where_the_ram_fits_its_listed_chunks_stay_imported_once_idle() {
 }
 
 /// The pages of a guest's tile as a consumer copies them: single 4 KiB pages, each pair
-/// descending, nine pages apart, across the RAM's first 64 MiB, so that no two are one run and
-/// their ranges pass the most a copy imports alone (`copy::MOST_ALONE`).
+/// descending, so that no two are one run.
 const TILE_PAGES: u64 = 1800;
 
-/// The tile's runs, at the RAM's addresses from `start`.
-fn tile_runs(start: u64) -> Vec<std::ops::Range<u64>> {
+/// The tile's runs, at the RAM's addresses from `start`: where `spread`, in 36 groups of 50
+/// pages two apart, the groups 3.5 MiB apart across both of the RAM's 64 MiB, so that their
+/// ranges pass the most a copy imports alone (`copy::MOST_ALONE`); else nine pages apart across
+/// its first 64 MiB, one range.
+fn tile_runs(start: u64, spread: bool) -> Vec<std::ops::Range<u64>> {
     (0..TILE_PAGES)
         .map(|i| {
-            let at = start + ((i ^ 1) * 9 + 3) * 4096;
+            let page = match spread {
+                true => (i / 50) * (896 + 16) + ((i % 50) ^ 1) * 2 + 1,
+                false => (i ^ 1) * 9 + 3,
+            };
+            let at = start + page * 4096;
             at..at + 4096
         })
         .collect()
@@ -935,90 +941,103 @@ fn a_tile_of_scattered_pages_copies_both_ways_over_a_ram_of_shared_pages() {
         eprintln!("HOST-RAM-TILE: the device imports no host memory here; nothing to test");
         return;
     }
-    let (ram, start, view, _asked, _dropped) = ram(true);
-    let ram = Arc::into_inner(ram).expect("the test's RAM");
-    let ram = Arc::new(ram.with_largest_dma_buf(udmabuf_size_limit()));
-    fill_pattern(view, RAM_BYTES);
-    let used = device.use_host_ram(&ram).unwrap();
-    let runs = tile_runs(start);
     let length = TILE_PAGES * 4096;
     let own = device
         .new_buffer(length, ResourceOptions::shared())
         .unwrap();
     let contents = own.contents().unwrap().as_ptr();
     let mut failures = Vec::new();
-    for round in 0..2 {
-        let imported = |counts: &crate::WorkCounts| counts.host_ram_chunks_imported;
-        if round == 1 {
-            // The chunk asked for by the first round's copies, or imported by them.
-            let began = Instant::now();
-            while imported(&device.work_counts()) == 0 && began.elapsed() < WAIT {
-                std::thread::sleep(Duration::from_millis(20));
-            }
-        }
-        for gather in [true, false] {
-            let before = device.work_counts();
-            // A scatter's bytes: the page's index and the round, in every byte.
-            if !gather {
-                for page in 0..TILE_PAGES {
-                    let byte = (page as u8) ^ (0x5a + round as u8);
-                    // SAFETY: the buffer's bytes, which no command uses now.
-                    unsafe {
-                        std::ptr::write_bytes(contents.add((page * 4096) as usize), byte, 4096)
-                    };
-                }
-            }
-            let (copied, encoded, whole) = tile_copy(&device, &ram, &runs, &own, gather);
-            let after = device.work_counts();
-            let delta = |field: fn(&crate::WorkCounts) -> u64| field(&after) - field(&before);
-            println!(
-                "HOST-RAM-TILE {}: round {round} ({} chunk imported before), {}: {copied:?} in \
-                 {:.2} ms encoding, {:.2} ms in all; copies {}, dispatches {}, chunks imported {}, \
-                 dma-buf imports {}, pointer imports failed {}, run imports live {}",
-                device.name(),
-                imported(&before),
-                match gather {
-                    true => "gather",
-                    false => "scatter",
-                },
-                encoded.as_secs_f64() * 1e3,
-                whole.as_secs_f64() * 1e3,
-                delta(|c| c.host_ram_copies),
-                delta(|c| c.host_ram_copy_dispatches),
-                delta(imported),
-                delta(|c| c.host_ram_dma_buf_imports),
-                delta(|c| c.host_ram_pointer_imports_failed),
-                after.run_imports_live,
-            );
-            let what = format!("round {round}, gather {gather}");
-            if let Err(error) = &copied {
-                failures.push(format!("{what}: {error:?}"));
-                continue;
-            }
-            for (page, run) in runs.iter().enumerate() {
-                let offset = run.start - start;
-                let read = bytes(start, offset..offset + 4096);
-                let good = match gather {
-                    true => {
-                        // SAFETY: the buffer's bytes, which no command uses now.
-                        let got =
-                            unsafe { std::slice::from_raw_parts(contents.add(page * 4096), 4096) };
-                        got == read.as_slice()
-                    }
-                    false => {
-                        let byte = (page as u8) ^ (0x5a + round as u8);
-                        let beside = bytes(start, offset + 4096..offset + 8192);
-                        read.iter().all(|&b| b == byte)
-                            && (beside.iter().zip(offset + 4096..)).all(|(&b, at)| b == pattern(at))
-                    }
+    for spread in [false, true] {
+        // A RAM of its own, none of its chunks imported.
+        let (ram, start, view, _asked, _dropped) = ram(true);
+        let ram = Arc::into_inner(ram).expect("the test's RAM");
+        let ram = Arc::new(ram.with_largest_dma_buf(udmabuf_size_limit()));
+        fill_pattern(view, RAM_BYTES);
+        let used = device.use_host_ram(&ram).unwrap();
+        let chunks = device.host_ram_chunks();
+        let runs = tile_runs(start, spread);
+        let first = device.work_counts().host_ram_chunks_imported;
+        for round in 0..2 {
+            let imported = |counts: &crate::WorkCounts| counts.host_ram_chunks_imported - first;
+            if round == 1 {
+                // The chunks the first round's copies asked for, or imported.
+                let began = Instant::now();
+                let wanted = match spread {
+                    true => chunks[0].1.len() as u64,
+                    false => 1,
                 };
-                if !good {
-                    failures.push(format!("{what}: page {page} at {offset:#x}"));
-                    break;
+                while imported(&device.work_counts()) < wanted && began.elapsed() < WAIT {
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+            }
+            for gather in [true, false] {
+                let before = device.work_counts();
+                // A scatter's bytes: the page's index and the round, in every byte.
+                if !gather {
+                    for page in 0..TILE_PAGES {
+                        let byte = (page as u8) ^ (0x5a + round as u8);
+                        // SAFETY: the buffer's bytes, which no command uses now.
+                        unsafe {
+                            std::ptr::write_bytes(contents.add((page * 4096) as usize), byte, 4096)
+                        };
+                    }
+                }
+                let (copied, encoded, whole) = tile_copy(&device, &ram, &runs, &own, gather);
+                let after = device.work_counts();
+                let delta = |field: fn(&crate::WorkCounts) -> u64| field(&after) - field(&before);
+                println!(
+                    "HOST-RAM-TILE {}: spread {spread} over chunks {chunks:?}, round {round} ({} \
+                     imported before), {}: {copied:?} in {:.2} ms encoding, {:.2} ms in all; \
+                     copies {}, dispatches {}, chunks imported {}, dma-buf imports {}, pointer \
+                     imports failed {}, run imports live {}",
+                    device.name(),
+                    imported(&before),
+                    match gather {
+                        true => "gather",
+                        false => "scatter",
+                    },
+                    encoded.as_secs_f64() * 1e3,
+                    whole.as_secs_f64() * 1e3,
+                    delta(|c| c.host_ram_copies),
+                    delta(|c| c.host_ram_copy_dispatches),
+                    delta(|c| c.host_ram_chunks_imported),
+                    delta(|c| c.host_ram_dma_buf_imports),
+                    delta(|c| c.host_ram_pointer_imports_failed),
+                    after.run_imports_live,
+                );
+                let what = format!("spread {spread}, round {round}, gather {gather}");
+                if let Err(error) = &copied {
+                    failures.push(format!("{what}: {error:?}"));
+                    continue;
+                }
+                for (page, run) in runs.iter().enumerate() {
+                    let offset = run.start - start;
+                    let read = bytes(start, offset..offset + 4096);
+                    let good = match gather {
+                        true => {
+                            // SAFETY: the buffer's bytes, which no command uses now.
+                            let got = unsafe {
+                                std::slice::from_raw_parts(contents.add(page * 4096), 4096)
+                            };
+                            got == read.as_slice()
+                        }
+                        false => {
+                            let byte = (page as u8) ^ (0x5a + round as u8);
+                            let beside = bytes(start, offset + 4096..offset + 8192);
+                            read.iter().all(|&b| b == byte)
+                                && (beside.iter().zip(offset + 4096..))
+                                    .all(|(&b, at)| b == pattern(at))
+                        }
+                    };
+                    if !good {
+                        failures.push(format!("{what}: page {page} at {offset:#x}"));
+                        break;
+                    }
                 }
             }
         }
+        drop((used, ram));
     }
-    drop((own, used, ram));
+    drop(own);
     assert!(failures.is_empty(), "{failures:#?}");
 }
