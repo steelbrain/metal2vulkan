@@ -362,6 +362,60 @@ fn refused(problem: BufferTextureProblem) -> Result<BufferLayout, BufferRefusal>
     Err(BufferRefusal::Metal(problem))
 }
 
+/// The tiled SPI takes a 2D texture's levels, its first level laid out over the buffer's rows as
+/// the public call's one level is, and holds every other rule to the public call's: a texture
+/// buffer of more levels is stopped, and its offset is held to 16 bytes, as the linear SPI's is.
+#[test]
+fn a_tiled_texture_takes_levels_over_the_buffer_s_rows() {
+    use BufferTextureProblem as Pr;
+    let tiled = |levels, case: Case| Case {
+        call: BufferTextureCall::Tiled,
+        levels,
+        ..case
+    };
+    // The guest's: `BGRA8Unorm` 54x54 of 6 levels, and 64x60 of 7, at 256 bytes a row over a
+    // 16384-byte buffer; RGBA8Unorm lays out alike.
+    for (width, height, levels) in [(54, 54, 6), (64, 60, 7), (8, 4, 1)] {
+        let case = texture(width, height, 0, 256, 16384);
+        let one = plan(case).unwrap();
+        assert_eq!(plan(tiled(levels, case)), Ok(one), "{width}x{height}");
+    }
+    // The public call stops the same levels.
+    let case = texture(54, 54, 0, 256, 16384);
+    assert_eq!(
+        plan(Case { levels: 6, ..case }),
+        refused(Pr::MipmapLevelCount { count: 6 })
+    );
+    // Its other rules are the public call's.
+    assert_eq!(
+        plan(tiled(2, texture(8, 4, 8, 32, 4096))),
+        refused(Pr::OffsetAlignment {
+            offset: 8,
+            alignment: 16,
+        })
+    );
+    assert_eq!(
+        plan(tiled(2, texture(8, 4, 0, 24, 4096))),
+        refused(Pr::RowPitch {
+            bytes_per_row: 24,
+            row_bytes: 32,
+        })
+    );
+    // A texture buffer has one level, at an offset of 16 bytes' multiple.
+    assert_eq!(
+        plan(tiled(2, texture_buffer(64, 0, 256, 4096))),
+        refused(Pr::MipmapLevelCount { count: 2 })
+    );
+    assert_eq!(
+        plan(tiled(1, texture_buffer(64, 4, 256, 4096))),
+        refused(Pr::OffsetAlignment {
+            offset: 4,
+            alignment: 16,
+        })
+    );
+    assert!(plan(texture_buffer(64, 4, 256, 4096)).is_ok());
+}
+
 /// The probes' 2D textures and texture buffers through the public call: what Metal made, and
 /// what it asserted on or stopped under validation.
 #[test]

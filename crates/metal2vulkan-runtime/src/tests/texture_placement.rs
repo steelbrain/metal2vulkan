@@ -20,6 +20,10 @@ fn each_route_answers_its_own_placement() {
     use TexturePlacement as P;
     use TextureShadowReason as R;
     let shadow = |cause| host(HostWay::Shadow(cause)).placement();
+    assert_eq!(
+        Route::Levels(6).placement(),
+        P::Shadow(R::Mipmapped { levels: 6 })
+    );
     assert_eq!(Route::Past.placement(), P::Shadow(R::PastLength));
     assert_eq!(Route::Device.placement(), P::NotHostPages);
     assert_eq!(

@@ -13,12 +13,14 @@
 //!   value ([`fill_word`]) in a small pattern buffer of the encoder. The words go as one
 //!   `vkCmdFillBuffer` (`word_fill.rs`).
 //! - **Heap shadows** (`shadow.rs`). A heap's texture held as a shadow of the heap's bytes (a
-//!   depth or stencil texture, or one of a heap over host pages, `texture/heap.rs`) is an image to
-//!   a blit: a command that uses its image copies it in from the bytes first where the encoder has
-//!   not, and what a command writes through it is copied back by `shadow.rs`'s rules, as the
-//!   encoder ends at the latest. A copy that writes every texel of a one-level, one-slice such
-//!   texture replaces them (`shadow::overwritten`): it takes no copy in and no keep. A blit writes
-//!   one destination, so none writes such a texture's bytes two ways.
+//!   depth or stencil texture, or one of a heap over host pages, `texture/heap.rs`), and a tiled
+//!   texture of more than one level over a buffer's bytes (`Buffer::new_tiled_texture`), is an
+//!   image to a blit: a command that uses its image copies it in from the bytes first where the
+//!   encoder has not, and what a command writes through it is copied back by `shadow.rs`'s rules,
+//!   as the encoder ends at the latest. A copy that writes every texel such a texture's bytes
+//!   hold (of a one-level, one-slice one, or a tiled one's first level) replaces them
+//!   (`shadow::overwritten`): it takes no copy in and no keep. A blit writes one destination, so
+//!   none writes such a texture's bytes two ways.
 
 use super::blit_fill::FillTiles;
 use super::buffer::Buffer;
@@ -340,11 +342,11 @@ impl BlitCommandEncoder {
         Ok(())
     }
 
-    /// Note `texture`, which a blit names: where it is a heap shadow, whose image the blit uses
-    /// (a texture over a buffer blits on its bytes, `blit_texture.rs`), its commands take its
-    /// copies.
+    /// Note `texture`, which a blit names: where it is a heap shadow or a tiled texture of more
+    /// than one level, whose image the blit uses (a texture over a buffer blits on its bytes,
+    /// `blit_texture.rs`, `Texture::blit_texels`), its commands take its copies.
     pub(super) fn see(&mut self, texture: &Texture) {
-        if texture.over_buffer() {
+        if texture.blit_texels().is_some() {
             return;
         }
         if let Some(copies) = texture.shadow() {

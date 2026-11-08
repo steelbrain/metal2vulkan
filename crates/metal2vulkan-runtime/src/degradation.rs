@@ -257,7 +257,11 @@ degradations! {
         /// attachment's image subresource, and Metal leaves them as the program writes them; or no
         /// linear image of the device lays its texels out as Metal does in the buffer's memory,
         /// holding no byte past them; or the buffer is over the caller's `VkBuffer`, whose memory
-        /// backs no image of the runtime's. Also a heap's texture over host pages imported as
+        /// backs no image of the runtime's; or it is a tiled texture of more than one level
+        /// (`Buffer::new_tiled_texture`), over any buffer: no image over the buffer's memory holds
+        /// levels past the first, so one image of its own holds every level, its first level's
+        /// texels copied from the bytes and back (the notice names the levels). Also a heap's
+        /// texture over host pages imported as
         /// dma-bufs where the device makes no image over a dma-buf of the texture's own pages (the
         /// notice names why). A heap's texture is a shadow of the heap's bytes in its range in
         /// three more shapes, each announced with its own reason (`texture/heap.rs`). A

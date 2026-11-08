@@ -143,6 +143,11 @@ impl Texture {
             Storage::Shadow { .. } if record.presented.rotation != 0 => {
                 self.rotated_view(call, record)
             }
+            // A tiled texture's bytes hold its first level alone, and its image is their shadow
+            // already (`Buffer::new_tiled_texture`): no second shadow holds its other levels.
+            Storage::Shadow { image, .. } if image.plan().levels > 1 => {
+                Err(refused(Some(image.as_ref())))
+            }
             Storage::Alias { texels, .. } | Storage::Shadow { texels, .. } => {
                 let mut descriptor = TextureDescriptor::texture_2d(
                     record.pixel_format,

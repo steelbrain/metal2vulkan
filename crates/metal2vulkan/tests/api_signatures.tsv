@@ -7805,6 +7805,7 @@ method	metal2vulkan-runtime::Buffer::make_aliasable	pub fn make_aliasable(&self)
 method	metal2vulkan-runtime::Buffer::new_linear_texture	pub fn new_linear_texture(&self, descriptor: &TextureDescriptor, offset: u64, bytes_per_row: u64, _bytes_per_image: u64) -> Result<Texture, Error>
 method	metal2vulkan-runtime::Buffer::new_texture	pub fn new_texture(&self, descriptor: &TextureDescriptor, offset: u64, bytes_per_row: u64) -> Result<Texture, Error>
 method	metal2vulkan-runtime::Buffer::new_texture_with_iosurface_plane	pub fn new_texture_with_iosurface_plane(&self, descriptor: &TextureDescriptor, plane: IoSurfacePlane) -> Result<Texture, Error>
+method	metal2vulkan-runtime::Buffer::new_tiled_texture	pub fn new_tiled_texture(&self, descriptor: &TextureDescriptor, offset: u64, bytes_per_row: u64) -> Result<Texture, Error>
 method	metal2vulkan-runtime::Buffer::object_id	pub fn object_id(&self) -> ObjectId
 method	metal2vulkan-runtime::Buffer::rebind_bytes_no_copy	pub unsafe fn rebind_bytes_no_copy(&self, memory: HostMemory, deallocator: Option<Deallocator>, keep_alive: Option<KeepAlive>) -> Result<(), Error>
 method	metal2vulkan-runtime::Buffer::resource_options	pub fn resource_options(&self) -> ResourceOptions
@@ -7813,6 +7814,7 @@ method	metal2vulkan-runtime::Buffer::set_purgeable_state	pub fn set_purgeable_st
 method	metal2vulkan-runtime::Buffer::storage_mode	pub fn storage_mode(&self) -> StorageMode
 method	metal2vulkan-runtime::Buffer::texture_placement	pub fn texture_placement(&self, descriptor: &TextureDescriptor, offset: u64, bytes_per_row: u64) -> Result<TexturePlacement, Error>
 method	metal2vulkan-runtime::Buffer::texture_placement_with_iosurface_plane	pub fn texture_placement_with_iosurface_plane(&self, descriptor: &TextureDescriptor, plane: IoSurfacePlane) -> Result<TexturePlacement, Error>
+method	metal2vulkan-runtime::Buffer::tiled_texture_placement	pub fn tiled_texture_placement(&self, descriptor: &TextureDescriptor, offset: u64, bytes_per_row: u64) -> Result<TexturePlacement, Error>
 method	metal2vulkan-runtime::Buffer::vk_buffer	pub unsafe fn vk_buffer(&self) -> (vk::Buffer, u64)
 method	metal2vulkan-runtime::Buffer::vk_host_memory	pub unsafe fn vk_host_memory(&self) -> Option<VkHostMemory>
 method	metal2vulkan-runtime::BufferDescriptor::new	pub fn new(length: u64, resource_options: ResourceOptions, contents: BufferContents<'a>) -> BufferDescriptor<'a>
@@ -12374,6 +12376,7 @@ variant	metal2vulkan-runtime::TextureProblem::ViewOnlyFormat	ViewOnlyFormat
 variant	metal2vulkan-runtime::TextureProblem::ZeroExtent	ZeroExtent
 variant	metal2vulkan-runtime::TextureShadowReason::CheckFailed	CheckFailed { access: InPlaceAccess, row_ends: InPlaceRowEnds }
 variant	metal2vulkan-runtime::TextureShadowReason::DeviceCopy	DeviceCopy
+variant	metal2vulkan-runtime::TextureShadowReason::Mipmapped	Mipmapped { levels: u32 }
 variant	metal2vulkan-runtime::TextureShadowReason::PastLength	PastLength
 variant	metal2vulkan-runtime::TextureShadowReason::Policy	Policy
 variant	metal2vulkan-runtime::TextureShadowReason::Refused	Refused(InPlaceRefusal)

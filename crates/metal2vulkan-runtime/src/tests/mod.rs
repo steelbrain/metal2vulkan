@@ -445,6 +445,8 @@ mod texture_resource_options;
 mod tile_pending;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod tile_rebind_making_wait;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod tiled_texture_device;
 mod tracker;
 mod trails;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]

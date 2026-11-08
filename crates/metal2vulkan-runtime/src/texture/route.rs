@@ -1,12 +1,13 @@
 //! The route of a 2D texture (or array) over a buffer's bytes: where it lies, as its making decides
 //! before it makes an image (`Device::storage_over_buffer`), and as
 //! [`Buffer::texture_placement`](crate::Buffer::texture_placement) answers it. Both call
-//! [`Device::route_over_buffer`], so the answer is the making's own decision: texels past the
-//! buffer's length, a buffer of no host pages, a device copy, bytes detached or copied, and over
-//! host pages the in-place decision (`in_place::in_place`) against the device's check's verdicts.
-//! Where that takes the image in place, the query also runs the image's making up to the bind
-//! (`texture/in_place_image.rs`), so a pitch, an image, a placement or rows the device refuses
-//! answer the shadow the texture then is.
+//! [`Device::route_over_buffer`], so the answer is the making's own decision: a tiled texture's
+//! levels past the first, texels past the buffer's length, a buffer of no host pages, a device
+//! copy, bytes detached or copied, and over host pages the in-place decision
+//! (`in_place::in_place`) against the device's check's verdicts. Where that takes the image in
+//! place, the query also runs the image's making up to the bind (`texture/in_place_image.rs`), so
+//! a pitch, an image, a placement or rows the device refuses answer the shadow the texture then
+//! is.
 
 use super::image_error;
 use crate::buffer::CallerMemory;
@@ -21,6 +22,10 @@ use metal2vulkan::metal::TextureUsage;
 
 /// Where a texture over a buffer's bytes goes, as its making decides before it makes an image.
 pub(crate) enum Route {
+    /// A tiled texture of this many levels, more than one (`Buffer::new_tiled_texture`): no image
+    /// over the buffer's memory holds its levels past the first, so the shadow, one image of every
+    /// level, which its copies keep its first level's texels in step with the bytes in.
+    Levels(u32),
     /// Its texels run past the buffer's length, which no image over the buffer's memory reaches:
     /// the shadow, its tail holding them.
     Past,
@@ -85,7 +90,7 @@ impl Device {
             .textures
             .facts(self.compile_device().profile());
         let (usage, plan) = self.declared_plan(call, descriptor, layout, &facts)?;
-        let route = match self.route_over_buffer(texels, usage, past) {
+        let route = match self.route_over_buffer(texels, usage, (layout.levels, past)) {
             Route::Host {
                 class,
                 rows,
@@ -109,8 +114,9 @@ impl Device {
         Ok(route.placement())
     }
 
-    /// The route of a texture of Metal `usage` (as the image is planned for it) over `texels`,
-    /// `past` where they run past the buffer's length (the module docs). Over host pages (a no-copy
+    /// The route of a texture of Metal `usage` (as the image is planned for it) and `levels` over
+    /// `texels`, `past` where they run past the buffer's length (the module docs): the shadow for
+    /// a tiled texture of more than one level, whatever holds the bytes. Over host pages (a no-copy
     /// buffer's, or a no-copy heap's buffer's, imported by their pointer or as dma-bufs; or fresh
     /// pages the runtime imported for a long buffer of its own, `fresh_pages.rs`): a device copy
     /// where one serves; else the shadow where the bytes were detached or copied; else as the
@@ -122,8 +128,11 @@ impl Device {
         &self,
         texels: &Texels,
         usage: TextureUsage,
-        past: bool,
+        (levels, past): (u32, bool),
     ) -> Route {
+        if levels > 1 {
+            return Route::Levels(levels);
+        }
         if past {
             return Route::Past;
         }

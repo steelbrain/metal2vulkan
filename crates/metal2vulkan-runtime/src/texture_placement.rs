@@ -84,6 +84,14 @@ pub enum TextureShadowReason {
     },
     /// The device makes no image in place over the texels: why.
     Refused(InPlaceRefusal),
+    /// A tiled texture of `levels` levels, more than one
+    /// ([`Buffer::new_tiled_texture`](crate::Buffer::new_tiled_texture)), over any buffer: one
+    /// image of its own holds every level, its first a copy of the buffer's bytes kept in step
+    /// with them, as no image over the buffer's memory holds levels past the first.
+    Mipmapped {
+        /// The texture's level count.
+        levels: u32,
+    },
     /// The texels run past the buffer's length, which no image over the buffer's memory reaches:
     /// the texture's tail holds those past it, zero when made.
     PastLength,
@@ -200,6 +208,10 @@ impl Route {
     /// Where a texture that takes this route lies, as the query answers it.
     pub(crate) fn placement(&self) -> TexturePlacement {
         let cause = match self {
+            Route::Levels(levels) => {
+                let levels = *levels;
+                return TexturePlacement::Shadow(TextureShadowReason::Mipmapped { levels });
+            }
             Route::Past => return TexturePlacement::Shadow(TextureShadowReason::PastLength),
             Route::Device => return TexturePlacement::NotHostPages,
             Route::Host { way, .. } => match way {

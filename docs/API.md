@@ -389,8 +389,9 @@ attachment stand-in, whose copies touch its texels alone.
 arguments of `new_texture` and `new_texture_with_iosurface_plane`, where the texture lies if made
 then (`TexturePlacement`): in place; `Pending`, a shadow made before its verdict that moves in place
 where the verdict passes; a shadow and why (`TextureShadowReason`: the policy, the texel width, the
-check's failed or unchecked verdict with its access and row ends, a refusal, texels past the
-buffer's length, a device copy); no host pages; or a shape no image in place takes. The making's
+check's failed or unchecked verdict with its access and row ends, a refusal, a tiled texture's
+levels, texels past the buffer's length, a device copy); no host pages; or a shape no image in place
+takes; `Buffer::tiled_texture_placement` answers it for `new_tiled_texture`'s. The making's
 own route answers it (`texture/route.rs`), after every check the making runs before it makes
 anything, so the same arguments are refused with the same errors; where the route is the image in
 place, the query runs the image's making up to the bind (`texture/in_place_image.rs`): it makes the
@@ -406,6 +407,19 @@ verdict starts the check, as a texture's making does. `Device::settle_in_place_c
 check and says when the verdicts are known (a zero timeout waits for nothing). They become known
 once per `VkDevice`: a GPU recovery's new one reads them from the record as it is made, or checks
 again where the lost one's check left none.
+`Buffer::new_tiled_texture` (Metal's private `newTiledTextureWithDescriptor:offset:bytesPerRow:`)
+makes what `new_texture` makes, and a 2D texture of more than one level, whose first level is the
+buffer's rows at the offset and pitch and whose other levels lie apart from the buffer, as on a Mac.
+No Vulkan image lays one level over the buffer's rows and the others elsewhere, so over any buffer
+such a texture is one image of its own holding every level, a shadow of its first level's texels
+(`shadowed-texture`, naming the levels; `TextureShadowReason::Mipmapped`): the encoders copy the
+bytes in before a command buffer's commands that use it and copy back what they wrote through it
+by the end of the encoder that wrote it, so the first level is a copy of the bytes kept in step at
+command boundaries, not an alias, and a CPU write made while a command buffer that uses it runs
+reaches it at the next copy in. Its other levels are its image's own memory, zero when made in a
+`Shared` or `Managed` texture; blits (`generate_mipmaps` among them) and functions use every level,
+and `get_bytes` and `replace_region` reach the first level in the bytes and the others in the
+image. A texture of one level is `new_texture`'s, in place where that is.
 On a discrete GPU, a `Managed` texture over a no-copy buffer's bytes (not an IOSurface plane's)
 that only samples or reads, whose policy takes the image in place, over memory that carries a log
 of its writes (`HostMemory::with_dirty_pages`), tracked, one slice laid out as one copy, is instead
@@ -1572,10 +1586,14 @@ bound.
   operations read and write back any byte of an attachment's image subresource, and Metal leaves
   them as the program writes them; or no linear image of the device lays its texels out as Metal
   does in the buffer's memory, holding no byte past them; or the buffer is over the caller's
-  `VkBuffer`, whose memory backs no image of the runtime's. Also a heap's texture over host pages
-  imported as dma-bufs where the device makes no image over a dma-buf of the texture's own pages
-  (the notice names why; `WorkCounts::dma_buf_image_fallbacks` counts it). A heap's texture is a
-  shadow of the heap's bytes in its range in three more shapes, each announced with its own reason.
+  `VkBuffer`, whose memory backs no image of the runtime's; or it is a tiled texture of more than
+  one level (`Buffer::new_tiled_texture`), over any buffer: no image over the buffer's memory holds
+  levels past the first, so one image of its own holds every level, its first level's texels
+  copied from the bytes and back (the notice names the levels). Also a heap's texture over host
+  pages imported as dma-bufs where the device makes no image over a dma-buf of the texture's own
+  pages (the notice names why; `WorkCounts::dma_buf_image_fallbacks` counts it). A heap's texture
+  is a shadow of the heap's bytes in its range in three more shapes, each announced with its own
+  reason.
   A single-sample depth or stencil texture whose texels fit its image's bytes, on a device whose
   driver lays such images apart from the memory they are bound to
   (`DriverFact::DepthStencilImagesLieApart`): one no such shadow serves, a multisampled one among

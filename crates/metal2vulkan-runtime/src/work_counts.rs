@@ -2984,8 +2984,8 @@ impl Counters {
         (self.linear_alignments_recalled).fetch_add(formats, Ordering::Relaxed);
     }
 
-    /// A texture over a buffer's bytes was made a shadow of them (`shadow.rs`), its image zeroed
-    /// first where `zeroed` (its copies leave an aspect out).
+    /// A texture over a buffer's bytes was made a shadow of them (`shadow.rs`), its image started
+    /// as a new texture's where `zeroed` (its copies leave an aspect or levels out).
     pub(crate) fn shadowed_texture_made(&self, zeroed: bool) {
         self.shadowed_textures.fetch_add(1, Ordering::Relaxed);
         if zeroed {
@@ -6093,10 +6093,11 @@ pub struct WorkCounts {
     /// IOSurface plane, or a view of another layout of one) that no image aliases, each an image
     /// of its own that the encoders copy the bytes into and back (`shadowed-texture`).
     pub shadowed_textures: u64,
-    /// Of `shadowed_textures`, those whose image was zeroed as it was made: its copies leave an
-    /// aspect out (a depth texture over a surface's plane, whose image's stencil reads zero).
-    /// Every other shadow's copy in writes each texel before any command reads it, so its image
-    /// starts as its memory lies.
+    /// Of `shadowed_textures`, those whose image started as a new texture of its storage mode
+    /// does (zero but in a `Private` one) as it was made: its copies leave an aspect out (a depth
+    /// texture over a surface's plane, whose image's stencil reads zero) or levels out (a tiled
+    /// texture's past its first, `Buffer::new_tiled_texture`). Every other shadow's copy in writes
+    /// each texel before any command reads it, so its image starts as its memory lies.
     pub shadows_zeroed: u64,
     /// Of `shadowed_textures`, those over a buffer that lies in fresh pages it imported
     /// (`fresh_page_buffers_made`): an image bound to imported memory starts `UNDEFINED`, and its

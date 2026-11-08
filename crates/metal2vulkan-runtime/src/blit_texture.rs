@@ -649,7 +649,7 @@ impl BlitCommandEncoder {
             destination_level,
             destination_slice,
         )?;
-        if let Some(texels) = texture.buffer_texels() {
+        if let Some(texels) = texture.blit_texels() {
             // Rows that share bytes (an IOSurface plane's on Metal's GPU): the row
             // copies would write every shared byte from one fixed row, where Metal
             // leaves it from whichever row its own command wrote last -- an order that
@@ -818,7 +818,7 @@ impl BlitCommandEncoder {
                 }
                 let unit = unit(CALL, source_texture, options)?;
                 let region = region(CALL, source_origin, size, source_level, source_slice)?;
-                if let Some(texels) = source_texture.buffer_texels() {
+                if let Some(texels) = source_texture.blit_texels() {
                     // Rows that share bytes (an IOSurface plane's on Metal's GPU) are served
                     // here, where they are read and not written. The plane is the source; the
                     // destination is the caller's buffer, whose rows share bytes only at a
@@ -1470,7 +1470,7 @@ impl BlitCommandEncoder {
         destination: &Texture,
         copies: &[ImageCopyRegion],
     ) -> Result<(), Error> {
-        if source.over_buffer() || destination.over_buffer() {
+        if source.blit_texels().is_some() || destination.blit_texels().is_some() {
             // A two-plane extended-range texture over a surface's planes (the plan paired it with
             // another): its bytes as Metal's blit moves them, else refused.
             if two_planes::holds_planes(source.pixel_format()) {
@@ -1827,7 +1827,7 @@ impl BlitCommandEncoder {
         copies: &[ImageCopyRegion],
     ) -> Result<(), Error> {
         let copy_problem = |problem| invalid(call, Problem::Copy(problem));
-        match (source.buffer_texels(), destination.buffer_texels()) {
+        match (source.blit_texels(), destination.blit_texels()) {
             (Some(from), Some(to)) => {
                 let unit = from.unit();
                 // Rows that share bytes are refused, on either side
@@ -1846,7 +1846,7 @@ impl BlitCommandEncoder {
                 if texels.plane_rows_overlap() {
                     return Err(Error::NotImplemented(RuntimeGap::OverlappingSurfaceRows));
                 }
-                let into_texture = source.over_buffer();
+                let into_texture = source.blit_texels().is_some();
                 let texture = if into_texture { destination } else { source };
                 let record = texture.record();
                 let (unit, buffer) = (texels.unit(), &texels.buffer);
@@ -2127,7 +2127,8 @@ impl BlitCommandEncoder {
         const CALL: &str = "generate_mipmaps";
         // One level, of any format, or a depth or stencil texture: Metal's plain call leaves the
         // texture as it is, over a buffer or not, and its API validation asserts. Every texture
-        // over a buffer has one level.
+        // over a buffer has one level but a tiled one, which is an image to a blit
+        // (`Texture::blit_texels`).
         self.core().check_device(CALL, texture.device())?;
         texture.check_rotated_reach()?;
         let record = texture.record();

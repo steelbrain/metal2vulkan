@@ -474,6 +474,60 @@ impl Buffer {
         )
     }
 
+    /// `newTiledTextureWithDescriptor:offset:bytesPerRow:` (SPI; the device's
+    /// `newTiledTextureWithBytesNoCopy:length:descriptor:offset:bytesPerRow:` makes its texture
+    /// over a no-copy buffer through it): as [`new_texture`](Self::new_texture), and also a 2D
+    /// texture of more than one level, its first level's texels the buffer's bytes from `offset`,
+    /// rows `bytes_per_row` apart, as a one-level texture's are, and its other levels apart from
+    /// the buffer. A texture of one level is the one `new_texture` makes, in place where that is.
+    ///
+    /// A texture of more levels is one image of its own holding every level, in the
+    /// `GENERAL` layout like every image here: no Vulkan image lays its first level over the
+    /// buffer's rows and its others elsewhere (a linear image has one level, and a sparse one is
+    /// laid out by the driver). Its first level is a copy of the buffer's bytes, held as a shadow
+    /// of a one-level texture's are (`shadow.rs`): the encoders copy the bytes in before a
+    /// command buffer's commands that use the texture, wherever the CPU or another command wrote
+    /// them since, and copy back what their commands wrote through it by the end of the encoder
+    /// that wrote it, so a write of the first level reaches the buffer's bytes once that work
+    /// completes, as on a Mac. Its other levels are the image's own memory, zero when made in a
+    /// `Shared` or `Managed` texture, as Metal's new texture's, which nothing copies. Every level is
+    /// a blit's source and destination (`generate_mipmaps` included: the texture is an image to a
+    /// blit, its first level copied in from the bytes first), its functions sample it with mip
+    /// filtering, and `get_bytes` and `replace_region` reach its first level in the buffer's bytes
+    /// and the others in the image. It takes the buffer's resource options, as `new_texture`'s
+    /// texture does: over a `Managed` buffer, `synchronize_resource` moves the first level's
+    /// bytes as the buffer's, and the other levels need none, as the runtime's own `Managed`
+    /// textures need none (the CPU reads what the GPU last wrote there, synchronized or not).
+    /// What differs from a Mac, where the first level aliases the bytes: a CPU write of the bytes
+    /// made while a command buffer that uses the texture runs reaches it at the next copy in, not
+    /// at once; a view in a format the image takes no Vulkan view of, and a binding beyond the
+    /// texture's usage, are refused (`Unsupported`), where a texture of one level over a buffer
+    /// takes them through a shadow of the bytes; and while the buffer's bytes are detached
+    /// (`detach_backing`) every level reads the stand-in's zeros, as a one-level texture over
+    /// them does. Announced once (`shadowed-texture`, naming the levels), counted in
+    /// `WorkCounts::shadowed_textures`, its copies in `WorkCounts::shadow_texels_copied_in` and
+    /// `shadow_texels_copied_back` (its first level's texels alone).
+    ///
+    /// Refused as [`new_texture`](Self::new_texture) is, but for the levels: more levels than the
+    /// extent's full chain (`Invalid`, `TextureProblem`), and a texture buffer of more than one
+    /// (`BufferTextureProblem::MipmapLevelCount`). A texture buffer's offset is held to 16 bytes,
+    /// as [`new_linear_texture`](Self::new_linear_texture)'s is: the SPI's is not measured.
+    pub fn new_tiled_texture(
+        &self,
+        descriptor: &TextureDescriptor,
+        offset: u64,
+        bytes_per_row: u64,
+    ) -> Result<Texture, Error> {
+        self.texture_over(
+            "new_tiled_texture",
+            descriptor,
+            offset,
+            bytes_per_row,
+            (BufferTextureCall::Tiled, Whose::Program),
+            None,
+        )
+    }
+
     /// The stand-in for `newTextureWithDescriptor:iosurface:plane:` over the caller's memory: a
     /// texture of `descriptor` whose texels are `plane`'s, the buffer standing for the IOSurface
     /// (a no-copy buffer over the surface's pages, `IOSurfaceGetBaseAddress` for
@@ -686,6 +740,22 @@ impl Buffer {
         self.placement_over("new_texture", descriptor, over, asked, None)
     }
 
+    /// Where a texture [`new_tiled_texture`](Self::new_tiled_texture) makes of the same arguments
+    /// lies if made now, as [`texture_placement`](Self::texture_placement) answers it for
+    /// [`new_texture`](Self::new_texture): for a texture of more than one level,
+    /// `Shadow(TextureShadowReason::Mipmapped)` over any buffer. Refused as that call refuses its
+    /// arguments. A runtime extension: Metal has no such query.
+    pub fn tiled_texture_placement(
+        &self,
+        descriptor: &TextureDescriptor,
+        offset: u64,
+        bytes_per_row: u64,
+    ) -> Result<TexturePlacement, Error> {
+        let over = (offset, bytes_per_row);
+        let asked = (BufferTextureCall::Tiled, Whose::Program, Goal::Ask);
+        self.placement_over("new_tiled_texture", descriptor, over, asked, None)
+    }
+
     /// Where a texture [`new_texture_with_iosurface_plane`](Self::new_texture_with_iosurface_plane)
     /// makes of the same arguments lies if made now, as
     /// [`texture_placement`](Self::texture_placement) answers it for
@@ -792,7 +862,9 @@ impl Buffer {
                 };
                 ResourceOptions::new(storage, cache, hazard)
             }
-            BufferTextureCall::Texture | BufferTextureCall::Linear => self.resource_options(),
+            BufferTextureCall::Texture | BufferTextureCall::Linear | BufferTextureCall::Tiled => {
+                self.resource_options()
+            }
         };
         let descriptor = &TextureDescriptor {
             resource_options: options,

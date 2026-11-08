@@ -2330,8 +2330,10 @@ impl Device {
         // over a buffer of the runtime's is. The device's check's own textures take it whatever
         // the verdict, and are neither counted nor announced. Texels past the buffer's length lie
         // in no image over its memory: the shadow's copies go through the texture's tail
-        // (`buffer_texture.rs`).
-        let route = self.route_over_buffer(&texels, usage, texels.past().is_some());
+        // (`buffer_texture.rs`). A tiled texture of more than one level is the shadow of its
+        // first level, one image holding every level (`Buffer::new_tiled_texture`).
+        let levels = layout.levels;
+        let route = self.route_over_buffer(&texels, usage, (levels, texels.past().is_some()));
         let device_copy = matches!(
             route,
             Route::Host {
@@ -2340,6 +2342,12 @@ impl Device {
             }
         );
         let why = match route {
+            Route::Levels(levels) => format!(
+                "it has {levels} levels, and no image over the buffer's memory holds levels past \
+                 the first: one image of its own holds every level, its first a copy of the \
+                 buffer's bytes, copied in before the commands that use it and back after those \
+                 that write it"
+            ),
             Route::Past => "its texels run past the buffer's length, which no image over the \
                             buffer's memory reaches: the texture's tail holds them"
                 .to_owned(),
@@ -2478,14 +2486,16 @@ impl Device {
         // Every other shadow's copy in writes each of its texels before any command reads it
         // (`shadow.rs`), so it starts as its memory lies: zeros there would never be read, and
         // writing them took most of the making (the host's zeros copied into a 1307x512 image
-        // took 0.9 ms of 1 ms on ANV).
-        let image = match aspects == every {
-            true => {
+        // took 0.9 ms of 1 ms on ANV). A tiled texture's levels past the first are no copy's:
+        // its image starts as a new texture of its storage mode does.
+        let apart = aspects != every || levels > 1;
+        let image = match apart {
+            true => self.new_image(plan, layout, descriptor, hazard)?,
+            false => {
                 let identity = Identity::new(hazard, false);
                 let owner = Device::runtime_owner;
                 self.new_image_as_it_lies(plan, layout, descriptor, identity, owner)?
             }
-            false => self.new_image(plan, layout, descriptor, hazard)?,
         };
         // A view the device does not make leaves the copies back copies. The copies hold it as
         // long as the image, which keeps it through a detach (`Image::own_view`).
@@ -2542,13 +2552,17 @@ impl Device {
         self.degrade(Degradation::ShadowedTexture, || {
             let format = descriptor.pixel_format;
             let [width, height, _] = layout.extent;
+            let levels = match levels {
+                1 => String::new(),
+                levels => format!(" and {levels} levels"),
+            };
             let object = format!(
-                "a 2D {format:?} texture of {width}x{height} over a buffer at offset {offset} with \
-                 rows of {bytes_per_row} bytes"
+                "a 2D {format:?} texture of {width}x{height}{levels} over a buffer at offset \
+                 {offset} with rows of {bytes_per_row} bytes"
             );
             (object, why)
         });
-        self.shared().counts.shadowed_texture_made(aspects != every);
+        self.shared().counts.shadowed_texture_made(apart);
         Ok(Storage::Shadow {
             image: image.shared(),
             texels,
@@ -4500,6 +4514,18 @@ impl Texture {
         }
     }
 
+    /// The buffer's bytes a blit of the texture runs on (`blit_texture.rs`'s **Textures over
+    /// buffers**): a texture over a buffer's, but a tiled one of more than one level's
+    /// (`Buffer::new_tiled_texture`), which is an image to a blit, as a heap's shadow is: its
+    /// copies keep its first level's texels in step with the bytes (`blit.rs`'s **Heap
+    /// shadows**). `None` for a texture of an image alone.
+    pub(super) fn blit_texels(&self) -> Option<&Texels> {
+        match self.storage() {
+            Storage::Shadow { image, .. } if image.plan().levels > 1 => None,
+            _ => self.buffer_texels(),
+        }
+    }
+
     /// Whether the texture's image is a linear image over its buffer's bytes now: an aliasing
     /// image (not a shadow, not a texture buffer), not presenting a stand-in while its bytes are
     /// detached (`detach.rs`), so a write of those bytes is a write of its texels.
@@ -5762,6 +5788,9 @@ impl Texture {
         };
         let image = match self.storage() {
             Storage::Image(image) => image,
+            // A tiled texture's levels past the first lie in its image alone
+            // (`Buffer::new_tiled_texture`).
+            Storage::Shadow { image, .. } if image_region.level > 0 => image,
             Storage::Texels(texels)
             | Storage::Alias { texels, .. }
             | Storage::Shadow { texels, .. } => {
@@ -6074,6 +6103,9 @@ impl Texture {
     ) -> Result<(), Error> {
         let image = match self.storage() {
             Storage::Image(image) => image,
+            // A tiled texture's levels past the first lie in its image alone
+            // (`Buffer::new_tiled_texture`).
+            Storage::Shadow { image, .. } if image_region.level > 0 => image,
             Storage::Texels(texels)
             | Storage::Alias { texels, .. }
             | Storage::Shadow { texels, .. } => {
@@ -6209,9 +6241,12 @@ impl Texture {
                     .map_err(|refusal| copy_error(call, refusal))?;
                 (unit, false)
             }
-            Storage::Texels(texels)
-            | Storage::Alias { texels, .. }
-            | Storage::Shadow { texels, .. } => (texels.unit(), true),
+            Storage::Texels(texels) | Storage::Alias { texels, .. } => (texels.unit(), true),
+            // A tiled texture's levels past the first lie in its image alone, copied as an
+            // image's (`Buffer::new_tiled_texture`).
+            Storage::Shadow { texels, .. } => {
+                (texels.unit(), u64::from(record.base_level) + level == 0)
+            }
         };
         let region = texture_region(region, level, slice)
             .ok_or_else(|| invalid(call, Problem::Copy(CopyProblem::Region)))?;

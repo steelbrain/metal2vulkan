@@ -510,7 +510,8 @@ Calls Metal does not have, for a consumer that emulates a Metal device:
   the image's making up to its bind (one or two unbound `VkImage`s, released), so a pitch or an
   image the device refuses answers the shadow the texture then is.
   `Device::settle_in_place_checks` starts the check and says when its verdicts are known (a zero
-  timeout waits for nothing).
+  timeout waits for nothing). `Buffer::tiled_texture_placement` answers it for
+  `new_tiled_texture`'s arguments.
 - `HostRam`, `Device::use_host_ram` (with `HostRamUse`) and `HostMemory::with_runs` (with
   `RunResolver`): a guest's RAM imported whole, in 64 MiB chunks, for a device that refuses views
   of guest pages made through dma-bufs; a no-copy object whose pages the consumer resolves to one

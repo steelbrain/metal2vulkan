@@ -17,7 +17,10 @@
 //!   there, not as Metal's refusal. An IOSurface plane of either 4:2:2 format is made (below).
 //! - **Types.** `newTextureWithDescriptor:offset:bytesPerRow:` makes 2D textures and texture
 //!   buffers; the SPI `newLinearTextureWithDescriptor:offset:bytesPerRow:bytesPerImage:` also
-//!   makes 2D arrays. Each has one mip level.
+//!   makes 2D arrays. Each has one mip level. The SPI
+//!   `newTiledTextureWithDescriptor:offset:bytesPerRow:` makes what the first makes, and a 2D
+//!   texture of more levels too, its first over the buffer's rows at the offset and the
+//!   `bytesPerRow` (`Buffer::new_tiled_texture`); its other rules are the first's.
 //! - **Options.** The texture's options are the buffer's, whatever the descriptor names (probe
 //!   9d, every pair of six buffer and nine descriptor options): Metal's validation alone stops a
 //!   storage or CPU cache mode other than the buffer's, or a hazard tracking mode other than the
@@ -29,8 +32,8 @@
 //!   buffer's `bytesPerRow` is any length that covers the row. A texture buffer's offset is any:
 //!   Metal's validation alone stops one off 16, and a plain run makes the texture, its functions
 //!   reading and writing from the offset rounded down to 16 and its blits and the CPU at the
-//!   offset (an M4, macOS 27.0.1; `buffer_texture.rs`), so the runtime does too. The SPI's texture
-//!   buffer, unmeasured there, keeps the validated rule. An array's `bytesPerImage` is ignored:
+//!   offset (an M4, macOS 27.0.1; `buffer_texture.rs`), so the runtime does too. The SPIs' texture
+//!   buffers, unmeasured there, keep the validated rule. An array's `bytesPerImage` is ignored:
 //!   each slice starts `bytesPerRow` × `height`, rounded up to 128, after the one before. Metal's
 //!   validation alone asserts that it is a multiple of 128; a plain run makes the array at any (16,
 //!   32, 64, 80 and 192 measured, probe 9b), so the runtime does too.
@@ -338,7 +341,8 @@ pub enum BufferTextureProblem {
         /// The descriptor's texture type.
         texture_type: TextureType,
     },
-    /// More than one mip level.
+    /// More than one mip level, of a texture but a tiled 2D one
+    /// (`Buffer::new_tiled_texture`).
     ///
     /// Basis: metal-measured (an Apple M3 Max, macOS 27.0.1: plain Metal asserts "Linear texture:
     /// cannot be mipmapped, mipmapLevelCount (2) disallowed").
@@ -368,7 +372,7 @@ pub enum BufferTextureProblem {
         alignment: u64,
     },
     /// An offset that is not a multiple of `alignment`: a 2D texture's or array's, an IOSurface
-    /// plane's, or the SPI's texture buffer's (`newTextureWithDescriptor:offset:bytesPerRow:`'s
+    /// plane's, or an SPI's texture buffer's (`newTextureWithDescriptor:offset:bytesPerRow:`'s
     /// texture buffer takes any).
     ///
     /// Basis: metal-measured (an Apple M3 Max, macOS 27.0.1: plain Metal asserts "Linear texture:
@@ -468,6 +472,10 @@ pub(super) fn linear_alignment(pf: PixelFormat) -> Result<u64, BufferTextureProb
 pub(super) enum BufferTextureCall {
     /// `newTextureWithDescriptor:offset:bytesPerRow:`: a 2D texture or a texture buffer.
     Texture,
+    /// The SPI `newTiledTextureWithDescriptor:offset:bytesPerRow:`: as
+    /// [`Texture`](Self::Texture), and a 2D texture of more than one level, its first over the
+    /// buffer's rows.
+    Tiled,
     /// The SPI `newLinearTextureWithDescriptor:offset:bytesPerRow:bytesPerImage:`, which makes
     /// 2D arrays too. Metal lays an array's slices out itself, whatever `bytesPerImage` is.
     Linear,
@@ -844,7 +852,9 @@ pub(super) fn plan_buffer_texture(
     // others in its tail (the module's **Beyond the plane's rows**, [`slices_apart`]).
     let sliced = slices_apart(texture);
     let made = match texture.call {
-        BufferTextureCall::Texture => matches!(texture_type, T::Type2D | T::TextureBuffer),
+        BufferTextureCall::Texture | BufferTextureCall::Tiled => {
+            matches!(texture_type, T::Type2D | T::TextureBuffer)
+        }
         BufferTextureCall::Linear => {
             matches!(texture_type, T::Type2D | T::TextureBuffer | T::Type2DArray)
         }
@@ -875,7 +885,10 @@ pub(super) fn plan_buffer_texture(
     if layout.levels != 1 && planar {
         return Err(BufferRefusal::PlaneShape);
     }
-    if layout.levels != 1 {
+    // A tiled 2D texture takes its levels, its first over the buffer's rows (the module's
+    // **Types**).
+    let tiled = texture.call == BufferTextureCall::Tiled && texture_type == T::Type2D;
+    if layout.levels != 1 && !tiled {
         return Err(P::MipmapLevelCount {
             count: layout.levels,
         }

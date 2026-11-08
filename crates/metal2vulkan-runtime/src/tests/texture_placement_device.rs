@@ -82,7 +82,7 @@ fn expected(placement: TexturePlacement) -> Took {
         TexturePlacement::Shadow(R::Unchecked { .. }) => Took::Unchecked,
         TexturePlacement::Shadow(R::Refused(refusal)) => Took::Refused(refusal),
         TexturePlacement::Shadow(R::DeviceCopy) => Took::DeviceCopy,
-        TexturePlacement::Shadow(R::PastLength)
+        TexturePlacement::Shadow(R::PastLength | R::Mipmapped { .. })
         | TexturePlacement::NotHostPages
         | TexturePlacement::OtherShape => Took::Uncounted,
     }
