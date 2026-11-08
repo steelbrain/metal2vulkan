@@ -1664,7 +1664,7 @@ mod tests {
         let runs = page_runs(&ranges, &span, HOST_PAGE);
         // Pages that share or touch are one run; a page between keeps two apart.
         assert_eq!(runs, vec![at(0)..at(4), at(6)..at(7)]);
-        let wide = page_runs(&[7 * HOST_PAGE..9 * HOST_PAGE], &span, HOST_PAGE);
+        let wide = page_runs(&one(7 * HOST_PAGE..9 * HOST_PAGE), &span, HOST_PAGE);
         assert_eq!(wide, vec![at(7)..at(8)], "cut at the chunk's end");
         // 1,500 runs of a page each, 1,024 a list: two lists, in order.
         let many: Vec<Range<u64>> = (0..1500u64)
