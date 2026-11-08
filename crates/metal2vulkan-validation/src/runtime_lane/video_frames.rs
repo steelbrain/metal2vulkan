@@ -29,7 +29,9 @@
 //! are those of a session whose verdicts are known. Printed by [`video_plane_placements`]
 //! (`VIDEO-PLACEMENT`): where single-plane textures over decoded planes of CoreVideo's 8-bit `420v`
 //! and 10-bit `x420` frames lie at each of several offsets into their page, sampled alone or written
-//! too, and the words of each `shadowed-texture` notice. Ignored by default: measurements, not
+//! too, and the words of each `shadowed-texture` notice. Printed by [`video_device_cache_costs`]
+//! (`VIDEO-CACHE`): the frame blitted into buffers of the runtime's own at CoreVideo's offsets,
+//! made without and with `BufferDescriptor::aligned_byte`. Ignored by default: measurements, not
 //! checks. Run them by name with `--run-ignored all`.
 
 #[cfg(target_os = "linux")]
@@ -48,9 +50,10 @@ use metal2vulkan::metal::{
 use metal2vulkan::pipeline::{ColorAttachmentDescriptor, RenderPipelineDescriptor, StageSource};
 use metal2vulkan_devtools::llvm_assemble_text;
 use metal2vulkan_runtime::{
-    Buffer, CommandQueue, Device, HostMemory, IoSurfacePlane, IoSurfaceYCbCr, LoadAction,
-    PipelineOptions, RenderPassDescriptor, RenderPipelineState, ResourceOptions, SamplerState,
-    StoreAction, SurfaceYCbCrMatrix, Texture, TextureDescriptor, WorkCounts,
+    Buffer, BufferContents, BufferDescriptor, CommandQueue, Device, HostMemory, IoSurfacePlane,
+    IoSurfaceYCbCr, LoadAction, PipelineOptions, RenderPassDescriptor, RenderPipelineState,
+    ResourceOptions, SamplerState, StoreAction, SurfaceYCbCrMatrix, Texture, TextureDescriptor,
+    WorkCounts,
 };
 use std::time::Instant;
 
@@ -409,17 +412,25 @@ fn whole_target(device: &Device) -> Buffer {
     staged(device, &corners)
 }
 
-/// One frame: a pass drawing `textures` through `pipeline` and `sampler` over the whole of
-/// `target`, in one command buffer, committed and waited for. The host's time encoding, its time
-/// from the commit until the wait returned, and the command buffer's GPU time, in microseconds.
+/// One frame: where `copy` is given, a blit of [`LEN`] bytes of its first buffer into its second,
+/// then a pass drawing `textures` through `pipeline` and `sampler` over the whole of `target`, in
+/// one command buffer, committed and waited for. The host's time encoding, its time from the
+/// commit until the wait returned, and the command buffer's GPU time, in microseconds.
 fn frame(
     queue: &CommandQueue,
     target: &Texture,
     (pipeline, sampler, corners): (&RenderPipelineState, &SamplerState, &Buffer),
     textures: &[(Texture, String)],
+    copy: Option<(&Buffer, &Buffer)>,
 ) -> (f64, f64, f64) {
     let began = Instant::now();
     let command_buffer = queue.command_buffer().unwrap();
+    if let Some((from, into)) = copy {
+        let mut blit = command_buffer.blit_command_encoder().unwrap();
+        blit.copy_from_buffer_to_buffer(from, 0, into, 0, LEN as u64)
+            .unwrap();
+        blit.end_encoding().unwrap();
+    }
     let mut pass = RenderPassDescriptor::new();
     let attachment = &mut pass.color_attachments[0];
     attachment.texture = Some(target.clone());
@@ -624,8 +635,13 @@ fn video_frame_costs() {
                             .collect::<Vec<_>>()
                             .join("; ");
                     }
-                    let (encoded, waited, gpu) =
-                        frame(&queue, &target, (&pipeline, &sampler, &corners), &made.1);
+                    let (encoded, waited, gpu) = frame(
+                        &queue,
+                        &target,
+                        (&pipeline, &sampler, &corners),
+                        &made.1,
+                        None,
+                    );
                     if making == Making::Once {
                         kept[index] = Some(made);
                     }
@@ -729,6 +745,7 @@ fn parts(device: &Device, forms: &[Form], reads: metal2vulkan::device::YCbCrInPl
                         &target,
                         (&pipeline, &sampler, &corners),
                         &made[index].1,
+                        None,
                     );
                     if k >= WARM {
                         gpus.push(gpu);
@@ -766,6 +783,81 @@ fn parts(device: &Device, forms: &[Form], reads: metal2vulkan::device::YCbCrInPl
         drop(made);
     }
     drop(surfaces);
+}
+
+/// [`video_frame_costs`]' frame over a device cache, as a consumer that lands each decoded frame
+/// in a buffer of the runtime's own: [`POOL`] `Private` buffers of [`LEN`] bytes, the planes at
+/// CoreVideo's offsets ([`LUMA_AT`] and right after the luma rows), sampled by `video_planes`
+/// through textures made once over each, each frame's bytes blitted into its buffer from a
+/// `Shared` staging buffer in the frame's command buffer before the pass (`VIDEO-CACHE`). The
+/// buffers are made without `BufferDescriptor::aligned_byte`, then laying byte [`LUMA_AT`] on a
+/// multiple of 256 (`with_aligned_byte`): where the device's linear-image alignment is past 32
+/// bytes the planes of the first are shadows copied in at every frame, those of the second the
+/// linear images over the buffer's memory.
+#[test]
+#[ignore = "a release-mode measurement: run by name"]
+fn video_device_cache_costs() {
+    let cache = ScratchCache::new().unwrap();
+    let messages = Messages::default();
+    let device = consumer_device(&messages, &cache);
+    let queue = device.new_command_queue().unwrap();
+    let sampler = sampler(&device, SamplerMinMagFilter::Linear);
+    let corners = whole_target(&device);
+    let target = target(&device);
+    let pipeline = pipeline(&device, fragment(Form::Planes));
+    let staging = [0, 1].map(|n| staged(&device, &frame_bytes(n, LUMA_AT)));
+    for aligned in [None, Some(LUMA_AT)] {
+        let made: Vec<(Buffer, Vec<(Texture, String)>)> = (0..POOL)
+            .map(|_| {
+                let d = BufferDescriptor::new(
+                    LEN as u64,
+                    ResourceOptions::private(),
+                    BufferContents::Zero,
+                );
+                let d = match aligned {
+                    Some(byte) => d.with_aligned_byte(byte),
+                    None => d,
+                };
+                let buffer = device.new_buffer_with_descriptor(d).unwrap();
+                let textures = textures(&buffer, Form::Planes);
+                (buffer, textures)
+            })
+            .collect();
+        let mut gpus = Vec::new();
+        let mut before = device.work_counts();
+        for k in 0..WARM + FRAMES {
+            if k == WARM {
+                before = device.work_counts();
+            }
+            let index = k % POOL;
+            let (_, _, gpu) = frame(
+                &queue,
+                &target,
+                (&pipeline, &sampler, &corners),
+                &made[index].1,
+                Some((&staging[k % 2], &made[index].0)),
+            );
+            if k >= WARM {
+                gpus.push(gpu);
+            }
+        }
+        let after = device.work_counts();
+        let (gpu, gpu90) = median_p90(gpus);
+        println!(
+            "VIDEO-CACHE on {}: Private caches, aligned byte {aligned:?}: [{}]; GPU {gpu:.0} us \
+             (p90 {gpu90:.0}); per frame: {}",
+            device.name(),
+            made[0]
+                .1
+                .iter()
+                .map(|(_, placement)| placement.as_str())
+                .collect::<Vec<_>>()
+                .join("; "),
+            moved_per_frame(&before, &after, FRAMES),
+        );
+    }
+    let notices = super::degrade_notices::counts(&messages.take_notices());
+    println!("VIDEO-NOTICES on {}: {notices:?}", device.name());
 }
 
 /// Where single-plane textures over a decoded frame's planes lie (`VIDEO-PLACEMENT`), as the
