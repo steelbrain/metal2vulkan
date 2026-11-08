@@ -5564,7 +5564,7 @@ impl CommandBufferShared {
                 let mut state = lock(&self.state);
                 (
                     state.uploads.take(),
-                    state.staged.drain(..).collect::<Vec<_>>(),
+                    std::mem::take(&mut state.staged),
                     state.index_pool.take(),
                     state.mesh_pool.take(),
                     state.descriptors.take(),

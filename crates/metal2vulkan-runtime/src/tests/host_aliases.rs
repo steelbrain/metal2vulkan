@@ -923,3 +923,40 @@ fn what_an_encoder_keeps_of_a_key_takes_what_a_lookup_takes() {
     }
     assert!(kept > 1000 && found > 1000, "kept {kept}, found {found}");
 }
+
+/// A staged copy's question (`host_ram/copy.rs`): a key over a byte of the range answers yes,
+/// unless it lies alone over its range and the caller calls it quiet; a range only meeting the
+/// bytes' end, or one gone, answers nothing.
+#[test]
+fn others_over_finds_every_key_but_a_quiet_one_alone() {
+    let aliases = Aliases::default();
+    assert!(
+        !aliases.others_over(0x10000, 0x20000, |_| false),
+        "none placed"
+    );
+    let (chunk, buffer, second) = (ResourceKey::new(), ResourceKey::new(), ResourceKey::new());
+    aliases.place(chunk, (0x10000, 0x10000));
+    let quiet = |key: ResourceKey| key == chunk;
+    assert!(aliases.others_over(0x18000, 0x19000, |_| false));
+    assert!(
+        !aliases.others_over(0x18000, 0x19000, quiet),
+        "the quiet key alone"
+    );
+    assert!(
+        !aliases.others_over(0x20000, 0x30000, |_| false),
+        "past the range's end"
+    );
+    // A buffer over some of the chunk's bytes: found where the bytes meet it, not elsewhere.
+    aliases.place(buffer, (0x14000, 0x1000));
+    assert!(aliases.others_over(0x14800, 0x16000, quiet));
+    assert!(!aliases.others_over(0x16000, 0x17000, quiet));
+    // A second key over the quiet key's very range: it is not alone there.
+    aliases.place(second, (0x10000, 0x10000));
+    assert!(aliases.others_over(0x16000, 0x17000, quiet));
+    aliases.forget(second);
+    aliases.forget(buffer);
+    assert!(
+        !aliases.others_over(0x10000, 0x20000, quiet),
+        "the others gone"
+    );
+}

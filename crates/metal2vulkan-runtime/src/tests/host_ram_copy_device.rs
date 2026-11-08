@@ -47,6 +47,14 @@
 //!   scatter into a chunk past the window imports its page alone while the thread imports the
 //!   chunk (on a device with `AliasedImportBlitsUnordered`, the chunk itself); the thread imports
 //!   nothing past the window.
+//! - **A first touch through the CPU**, on a device whose thread imports ahead: a gather of
+//!   pages scattered over two chunks not imported yet, more ranges in each than are imported
+//!   alone, is staged: no wait for an import, the CPU's writes after its encoding and before the
+//!   commit gathered (its pages read at its batch's submission), and its chunks imported by the
+//!   thread next, and nothing else, so the gather after it reads their imports. One encoded
+//!   before a buffer over one of its pages was made and written by the GPU in a command buffer
+//!   committed before it waits for that write (its fill gated), and reads it; one behind a
+//!   shared event reads the CPU's writes made before the signal.
 //!
 //! Every other test holds the device's thread back (`Device::hold_host_ram_imports`).
 //!
@@ -56,8 +64,8 @@
 use crate::host_ram::AHEAD_CHUNKS;
 use crate::{
     Buffer, CommandBuffer, CommandBufferStatus, Device, DeviceKind, DeviceOptions, DirtyPages,
-    DirtyStamp, Error, HostBacking, HostMemory, HostRam, ImportGate, KeepAlive, Problem,
-    ResourceOptions, RunResolver,
+    DirtyStamp, Error, EventRef, HostBacking, HostMemory, HostRam, ImportGate, KeepAlive, Problem,
+    ResourceOptions, RunResolver, WorkCounts,
 };
 use std::num::NonZeroU64;
 use std::ops::Range;
@@ -1390,6 +1398,202 @@ fn a_copy_takes_its_chunks_as_an_object_does_and_the_window_ahead_moves_past_the
     assert_eq!(
         jumped.host_ram_chunks_live - before.host_ram_chunks_live,
         CHUNKS
+    );
+    drop((used, ram));
+}
+
+/// Single pages 3 MiB apart in chunks 2 and 3 of a RAM from `start`: 20 ranges in each, more than
+/// a copy imports alone (`copy::MOST_ALONE`), none joined (`copy::JOIN_GAP`).
+fn scattered_pages(start: u64) -> Vec<Range<u64>> {
+    let mut runs = Vec::new();
+    for chunk in [2, 3] {
+        for at in 0..20 {
+            let page = start + chunk * 64 * MIB + at * 3 * MIB + (at % 3) * PAGE;
+            runs.push(page..page + PAGE);
+        }
+    }
+    runs
+}
+
+/// A device whose thread imports ahead, using a RAM of four chunks whose first the thread
+/// imported, and settled: the device, the RAM's use, the RAM and its first byte, and the counts
+/// before the use. `None` where it imports no host memory.
+fn ahead_ram() -> Option<(Device, crate::HostRamUse, Arc<HostRam>, u64, WorkCounts)> {
+    let device = ahead_device()?;
+    let (ram, start) = ram_of(4 * 64 * MIB, None);
+    let before = device.work_counts();
+    let used = device.use_host_ram(&ram).unwrap();
+    let first = settled(&device, |counts| {
+        counts.host_ram_chunks_imported_ahead - before.host_ram_chunks_imported_ahead == 1
+    });
+    assert_eq!(
+        first.host_ram_chunks_imported_ahead - before.host_ram_chunks_imported_ahead,
+        1,
+        "the RAM's first chunk"
+    );
+    Some((device, used, ram, start, before))
+}
+
+#[test]
+fn a_first_gather_over_chunks_the_thread_imports_reads_its_pages_by_the_cpu_at_its_submission() {
+    let Some((device, used, ram, start, before)) = ahead_ram() else {
+        return;
+    };
+    let ahead = |counts: &WorkCounts| {
+        counts.host_ram_chunks_imported_ahead - before.host_ram_chunks_imported_ahead
+    };
+    let runs = scattered_pages(start);
+    for run in &runs {
+        write_pattern(run.clone(), 3);
+    }
+    let total: u64 = runs.iter().map(|run| run.end - run.start).sum();
+    let cache = device
+        .new_buffer(total, ResourceOptions::private())
+        .unwrap();
+    let back = shared(&device, total, |_| 0);
+    let queue = device.new_command_queue().unwrap();
+    let command_buffer = queue.command_buffer().unwrap();
+    let mut encoder = command_buffer.blit_command_encoder().unwrap();
+    encoder.copy_from_host_ram(&ram, &runs, &cache, 0).unwrap();
+    encoder
+        .copy_from_buffer_to_buffer(&cache, 0, &back, 0, total)
+        .unwrap();
+    encoder.end_encoding().unwrap();
+    // The CPU's writes after the encoding, before the commit: in the pages the copy reads.
+    write_pattern(runs[5].clone(), 4);
+    write_pattern(runs[30].clone(), 4);
+    command_buffer.commit().unwrap();
+    command_buffer.wait_until_completed_for(WAIT).unwrap();
+    assert_eq!(command_buffer.status(), CommandBufferStatus::Completed);
+    assert!(
+        contents(&back) == gathered(&runs),
+        "the pages as they stood at the commit"
+    );
+    let after = device.work_counts();
+    assert_eq!(
+        after.host_ram_copies_staged - before.host_ram_copies_staged,
+        1
+    );
+    assert_eq!(
+        after.host_ram_copy_import_waits - before.host_ram_copy_import_waits,
+        0,
+        "no wait for a chunk's import"
+    );
+    assert_eq!(
+        after.host_ram_staged_fills_gated - before.host_ram_staged_fills_gated,
+        0
+    );
+    assert!(after.host_ram_staged_fill_nanos > before.host_ram_staged_fill_nanos);
+    // The thread imports the two chunks the copy asked for, and not the one between.
+    let imported = settled(&device, |counts| ahead(counts) == 3);
+    assert_eq!(
+        ahead(&imported),
+        3,
+        "the start's chunk and the two asked for"
+    );
+    assert_eq!(
+        imported.host_ram_chunks_imported - before.host_ram_chunks_imported,
+        3,
+        "no other chunk"
+    );
+    // The gather after it reads their imports: neither staged nor waiting.
+    let again = shared(&device, total, |_| 0);
+    blit(&device, |encoder| {
+        encoder.copy_from_host_ram(&ram, &runs, &again, 0).unwrap();
+    });
+    assert!(contents(&again) == gathered(&runs), "through the imports");
+    let last = device.work_counts();
+    assert_eq!(last.host_ram_copies_staged, after.host_ram_copies_staged);
+    assert_eq!(
+        last.host_ram_copy_import_waits,
+        after.host_ram_copy_import_waits
+    );
+    drop((used, ram));
+}
+
+#[test]
+fn a_staged_gather_after_a_gpu_write_over_its_pages_waits_for_that_write() {
+    let Some((device, used, ram, start, before)) = ahead_ram() else {
+        return;
+    };
+    let runs = scattered_pages(start);
+    for run in &runs {
+        write_pattern(run.clone(), 5);
+    }
+    let total: u64 = runs.iter().map(|run| run.end - run.start).sum();
+    let out = shared(&device, total, |_| 0);
+    let queue = device.new_command_queue().unwrap();
+    // Encoded while only the copies' keys lie over its pages: staged.
+    let gather = queue.command_buffer().unwrap();
+    let mut encoder = gather.blit_command_encoder().unwrap();
+    encoder.copy_from_host_ram(&ram, &runs, &out, 0).unwrap();
+    encoder.end_encoding().unwrap();
+    // Then a buffer over one of its pages, which a command buffer committed before it fills.
+    let target = runs[7].clone();
+    let over = over_ram(&device, target.start, PAGE, itself(), true);
+    let write = queue.command_buffer().unwrap();
+    let mut fill = write.blit_command_encoder().unwrap();
+    fill.fill_buffer(&over, 0..PAGE, 0xa5).unwrap();
+    fill.end_encoding().unwrap();
+    write.commit().unwrap();
+    gather.commit().unwrap();
+    gather.wait_until_completed_for(WAIT).unwrap();
+    write.wait_until_completed_for(WAIT).unwrap();
+    assert_eq!(gather.status(), CommandBufferStatus::Completed);
+    assert!(bytes(target).iter().all(|&byte| byte == 0xa5));
+    assert!(
+        contents(&out) == gathered(&runs),
+        "the GPU's write gathered"
+    );
+    let after = device.work_counts();
+    assert_eq!(
+        after.host_ram_copies_staged - before.host_ram_copies_staged,
+        1
+    );
+    assert_eq!(
+        after.host_ram_staged_fills_gated - before.host_ram_staged_fills_gated,
+        1,
+        "its fill waited for the work before it"
+    );
+    drop((over, used, ram));
+}
+
+#[test]
+fn a_staged_gather_behind_a_shared_event_reads_the_cpu_s_writes_before_the_signal() {
+    let Some((device, used, ram, start, before)) = ahead_ram() else {
+        return;
+    };
+    let runs = scattered_pages(start);
+    for run in &runs {
+        write_pattern(run.clone(), 6);
+    }
+    let total: u64 = runs.iter().map(|run| run.end - run.start).sum();
+    let out = shared(&device, total, |_| 0);
+    let event = device.new_shared_event().unwrap();
+    let queue = device.new_command_queue().unwrap();
+    let command_buffer = queue.command_buffer().unwrap();
+    command_buffer
+        .encode_wait_for_event(EventRef::Shared(&event), 1)
+        .unwrap();
+    let mut encoder = command_buffer.blit_command_encoder().unwrap();
+    encoder.copy_from_host_ram(&ram, &runs, &out, 0).unwrap();
+    encoder.end_encoding().unwrap();
+    command_buffer.commit().unwrap();
+    // Committed, held for the signal: the CPU's writes before it are what the copy reads.
+    std::thread::sleep(Duration::from_millis(50));
+    write_pattern(runs[3].clone(), 8);
+    write_pattern(runs[33].clone(), 8);
+    event.set_signaled_value(1);
+    command_buffer.wait_until_completed_for(WAIT).unwrap();
+    assert_eq!(command_buffer.status(), CommandBufferStatus::Completed);
+    assert!(
+        contents(&out) == gathered(&runs),
+        "the pages as they stood at the signal"
+    );
+    let after = device.work_counts();
+    assert_eq!(
+        after.host_ram_copies_staged - before.host_ram_copies_staged,
+        1
     );
     drop((used, ram));
 }
