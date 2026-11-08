@@ -124,8 +124,12 @@
 //!   rest of the chunk.
 //! - **The dirty log** ([`HostRam::with_dirty_pages`]): one log for the whole RAM, its offsets
 //!   host addresses, so one stamp per commit serves every copy over the RAM.
-//! - **Copies by the GPU** between runs of the RAM and a buffer, from the chunks' imports
-//!   (`BlitCommandEncoder::copy_from_host_ram`, `copy_to_host_ram`): `host_ram/copy.rs`.
+//! - **Copies by the GPU** between runs of the RAM and a buffer, from the chunks' imports, or the
+//!   copy's own pages imported alone where a chunk is not imported
+//!   (`BlitCommandEncoder::copy_from_host_ram`, `copy_to_host_ram`): `host_ram/copy.rs`. Where
+//!   each listed import costs every submission ([`Plan::listed`]), a copy never takes a chunk
+//!   not imported: its pages alone, joined only across pages in memory, and nothing asked of the
+//!   device's thread, so copies make none of the guest's untouched RAM resident.
 //!
 //! [`Device::use_host_ram`]: crate::Device::use_host_ram
 
@@ -257,7 +261,9 @@ impl HostRam {
     /// one held import of 64 MiB by pointer added 24.1 us to every submission). Each request is
     /// for whole host pages inside one chunk of the RAM (a chunk: 64 MiB, or as long as
     /// [`HostRam::with_largest_dma_buf`] allows where the device's held imports add to the cost of
-    /// every submission, or the rest of its range; an object's run inside one; a texture's pages
+    /// every submission, or the rest of its range; an object's run inside one; a copy's pages
+    /// inside one, one request for each of its ranges where the device's held imports add to the
+    /// cost of every submission (`BlitCommandEncoder::copy_from_host_ram`); a texture's pages
     /// inside one), its `granule` its `length`: the source answers one dma-buf of exactly those
     /// pages. The source is called on
     /// the thread importing the chunk (the device's, or one making an object over it), with no
@@ -1312,7 +1318,7 @@ fn fault_in(_: &Range<u64>) {}
 
 /// Whether every page of `span` (whole host pages of the RAM, `page` bytes each) is in memory
 /// now (`mincore`): a page of the RAM's file the guest wrote, for which a pin allocates nothing.
-/// No pages answer yes; a page swapped out, or a call the kernel refuses, no.
+/// An empty span answers yes; one with a page swapped out, or a call the kernel refuses, no.
 #[cfg(target_os = "linux")]
 fn resident(span: &Range<u64>, page: u64) -> bool {
     if span.start >= span.end {
@@ -1332,8 +1338,8 @@ fn resident(span: &Range<u64>, page: u64) -> bool {
     answered == 0 && held.iter().all(|byte| byte & 1 != 0)
 }
 
-/// Elsewhere no RAM is imported as dma-bufs ([`Plan::listed`]): no pages answer yes, any others
-/// no.
+/// Elsewhere no RAM is imported as dma-bufs ([`Plan::listed`]): an empty span answers yes, any
+/// other no.
 #[cfg(not(target_os = "linux"))]
 fn resident(span: &Range<u64>, _: u64) -> bool {
     span.start >= span.end
@@ -1715,7 +1721,11 @@ impl Device {
     /// 692 ms for 2.7 GiB on a Radeon 780M), and that object and those over the chunk meanwhile are
     /// bound in imports of their own runs alone, as above; a buffer's is released while idle, the
     /// buffer bound in the chunk at its next use, and a heap's, or a buffer's whose address was
-    /// handed out, stays while it lives. A chunk stays imported once imported, as the first
+    /// handed out, stays while it lives. A copy by runs over a chunk not imported
+    /// (`BlitCommandEncoder::copy_from_host_ram`, `copy_to_host_ram`) asks for nothing: it imports
+    /// its own pages alone, as dma-bufs of the source, held until its command buffer completed, so
+    /// copies alone make no page of the guest's RAM resident but those they copy. A chunk stays
+    /// imported once imported, as the first
     /// submission after a chunk's import waits while the kernel writes its page tables (hundreds of
     /// milliseconds for a chunk of 4 GiB in 4 KiB pages on a Radeon 780M), where the whole RAM fits
     /// in half the device's memory heaps with unified memory, else in three quarters of those that
@@ -1730,7 +1740,8 @@ impl Device {
     /// device that refuses pointers to shared memory ([`Device::imports_shared_host_pointers`]
     /// false: RADV), a RAM of shared memory (QEMU's `memory-backend-memfd,share=on` RAM) is
     /// imported so with a source; with none, it is taken but imports no chunk, and each object
-    /// over it is refused as its own import of the pointer is (`Unsupported`, `HostMemory`).
+    /// over it, and each copy by runs of it, is refused as its own import of the pointer is
+    /// (`Unsupported`, `HostMemory`).
     ///
     /// Refused: a device without `VK_EXT_external_memory_host` (`Unsupported`, naming it); a RAM
     /// whose ranges meet those of a RAM the device uses already, itself among them (`Invalid`,

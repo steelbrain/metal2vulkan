@@ -661,9 +661,19 @@ impl BlitCommandEncoder {
     /// RAM's own addresses), and `destination` is written as by any blit. An object over another
     /// mapping of the same pages is ordered against it only as the program orders it, as two
     /// no-copy buffers over two mappings of one page are. Where a chunk is not imported yet, the
-    /// runs' pages in it are imported alone for the copy while the device imports the chunk
-    /// (`WorkCounts::run_imports_live`), as an object over it is bound in its own run's import;
-    /// where that cannot be, the chunk is imported first, or its import waited for.
+    /// runs' pages in it are imported alone for the copy (`WorkCounts::run_imports_live`), held
+    /// until its command buffer completed:
+    /// - on a device whose held imports add to the cost of every submission, of a RAM with a
+    ///   source of dma-bufs (RADV's, whose chunks are long dma-bufs: `Device::use_host_ram`),
+    ///   always so, as dma-bufs of the source, those less than 2 MiB apart one only where every
+    ///   page between them is in memory already, and the chunk is not imported for it: so a copy
+    ///   makes no page of the guest's RAM resident but its runs' own;
+    /// - elsewhere for at most 16 such ranges of the chunk, while the device imports the chunk,
+    ///   as an object over it is bound in its own run's import.
+    ///
+    /// Where that cannot be (the device's barriers do not order blits through two imports of
+    /// the same pages, the device's allocations near their limit, a range's import refused), the
+    /// chunk is imported first, or its import waited for.
     ///
     /// No runs copy nothing.
     ///
@@ -673,8 +683,10 @@ impl BlitCommandEncoder {
     /// `destination` that start off a 4-byte word of its memory, or, of a copy by regions (a run
     /// ending off a word), a `destination` over host pages the runs' bytes overlap (`Invalid`,
     /// `Problem::HostRam`);
-    /// bytes past `destination`'s length or a buffer of another device (`Invalid`); and a chunk
-    /// the device cannot import (the import's error). A caller falls back to its own copy.
+    /// bytes past `destination`'s length or a buffer of another device (`Invalid`); and pages the
+    /// device cannot import, neither alone nor as their chunk (the import's error: on a device
+    /// that refuses pointers to shared memory, RADV's, a RAM of shared memory with no source of
+    /// dma-bufs, `Unsupported`, `HostMemory`). A caller falls back to its own copy.
     pub fn copy_from_host_ram(
         &mut self,
         ram: &HostRam,
