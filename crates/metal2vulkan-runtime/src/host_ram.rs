@@ -2216,9 +2216,14 @@ impl Device {
         let (first, last) = (runs.first(), runs.last());
         let span = first.zip(last).map(|(first, last)| first.start..last.end);
         let span = span.ok_or_else(|| internal("a copy's list of no runs of host RAM"))?;
+        let started = Instant::now();
         // SAFETY: the caller's.
-        let (raw, placement) = unsafe { self.ram_runs_as_dma_buf(importer, runs, source) }?;
-        self.shared().counts.host_ram_run_list_imported();
+        let made = unsafe { self.ram_runs_as_dma_buf(importer, runs, source) };
+        let took = u64::try_from(started.elapsed().as_nanos()).unwrap_or(u64::MAX);
+        let counts = &self.shared().counts;
+        counts.host_ram_run_list_import_took(took);
+        let (raw, placement) = made?;
+        counts.host_ram_run_list_imported();
         let mut list = self.ram_chunk(ram, span, Imported::Runs, raw, placement);
         let mut at = 0;
         list.runs = (runs.iter())

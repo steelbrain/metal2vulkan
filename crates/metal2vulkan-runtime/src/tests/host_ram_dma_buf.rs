@@ -1124,7 +1124,7 @@ impl TileRound<'_> {
             println!(
                 "HOST-RAM-TILE {}: {}, {name}: {copied:?} in {:.2} ms encoding, {:.2} ms in all; \
                  copies {}, dispatches {}, regions {}, chunks imported {}, dma-buf imports {}, \
-                 run lists imported {}, pointer imports failed {}, run imports live {}",
+                 run lists imported {} in {:.2} ms, pointer imports failed {}, run imports live {}",
                 self.device.name(),
                 self.what,
                 encoded.as_secs_f64() * 1e3,
@@ -1135,6 +1135,7 @@ impl TileRound<'_> {
                 delta(|c| c.host_ram_chunks_imported),
                 delta(|c| c.host_ram_dma_buf_imports),
                 delta(|c| c.host_ram_run_list_imports),
+                delta(|c| c.host_ram_run_list_import_nanos) as f64 / 1e6,
                 delta(|c| c.host_ram_pointer_imports_failed),
                 after.run_imports_live,
             );
@@ -1144,6 +1145,11 @@ impl TileRound<'_> {
                 lists: delta(|c| c.host_ram_run_list_imports),
             };
             let what = format!("{}, {name}", self.what);
+            // Each list's import is timed, as a chunk's is.
+            let lists = delta(|c| c.host_ram_run_list_imports);
+            if lists > 0 && delta(|c| c.host_ram_run_list_import_nanos) == 0 {
+                failures.push(format!("{what}: {lists} lists imported in no time counted"));
+            }
             if let Err(error) = &copied {
                 failures.push(format!("{what}: {error:?}"));
                 continue;

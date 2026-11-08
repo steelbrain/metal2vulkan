@@ -361,6 +361,7 @@ pub(crate) struct Counters {
     host_ram_staged_fill_nanos: AtomicU64,
     host_ram_dma_buf_imports: AtomicU64,
     host_ram_run_list_imports: AtomicU64,
+    host_ram_run_list_import_nanos: AtomicU64,
     host_ram_pointer_imports_failed: AtomicU64,
     host_ram_chunks_imported_ahead: AtomicU64,
     host_ram_chunks_given_back: AtomicU64,
@@ -2855,6 +2856,13 @@ impl Counters {
     /// source of run lists (`host_ram.rs`), besides counting it live as a run's import.
     pub(crate) fn host_ram_run_list_imported(&self) {
         (self.host_ram_run_list_imports).fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// The import of a list of a copy's runs of a guest RAM took `nanos` nanoseconds on the
+    /// copy's encoding thread, the source's dma-buf and the device's import together, made or
+    /// failed (`host_ram.rs`).
+    pub(crate) fn host_ram_run_list_import_took(&self, nanos: u64) {
+        (self.host_ram_run_list_import_nanos).fetch_add(nanos, Ordering::Relaxed);
     }
 
     /// An import of a chunk of a guest RAM, or of an object's run inside one, by its pointer
@@ -6142,6 +6150,12 @@ pub struct WorkCounts {
     /// cost and whose chunks of the RAM are its dma-bufs (RADV's). Each is live in
     /// `run_imports_live` until the copy's command buffer completed.
     pub host_ram_run_list_imports: u64,
+    /// The nanoseconds those imports took on the copies' encoding threads, failed ones included:
+    /// the source's dma-buf of the list's pages (`UDMABUF_CREATE_LIST`, which pins them) and the
+    /// device's import of it. Apart from `host_ram_chunk_import_nanos`, whose imports are a
+    /// chunk's, and from `host_ram_copy_import_wait_nanos`, whose waits are for a chunk's import:
+    /// a list is the copy's own import of its pages, as a range's alone is, and no wait for one.
+    pub host_ram_run_list_import_nanos: u64,
     /// The imports of guest RAM, chunks and objects' runs alike, by their pointer that failed:
     /// the driver or the runtime refused the pages (RADV refuses any shared mapping's), or memory
     /// ran out. For a RAM with a source of dma-bufs each was then tried as one dma-buf where the
@@ -7618,6 +7632,9 @@ impl Device {
             host_ram_staged_fill_nanos: counters.host_ram_staged_fill_nanos.load(Ordering::Relaxed),
             host_ram_dma_buf_imports: counters.host_ram_dma_buf_imports.load(Ordering::Relaxed),
             host_ram_run_list_imports: counters.host_ram_run_list_imports.load(Ordering::Relaxed),
+            host_ram_run_list_import_nanos: counters
+                .host_ram_run_list_import_nanos
+                .load(Ordering::Relaxed),
             host_ram_pointer_imports_failed: counters
                 .host_ram_pointer_imports_failed
                 .load(Ordering::Relaxed),
