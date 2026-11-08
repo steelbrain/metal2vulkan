@@ -524,7 +524,7 @@ impl Device {
         options: ResourceOptions,
         (placement, aligned): (Place, Option<u64>),
     ) -> Result<Buffer, Error> {
-        let (buffer, class) = self.buffer_of_length(call, length, options, placement, aligned)?;
+        let (buffer, class) = self.buffer_of_length(call, length, options, (placement, aligned))?;
         self.degrade_system_memory(&buffer, class, || format!("buffer of {length} bytes"));
         Ok(buffer)
     }
