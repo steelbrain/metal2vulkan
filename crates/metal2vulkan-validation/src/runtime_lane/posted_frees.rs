@@ -1,12 +1,14 @@
 //! Device tests of the device's free thread (`free_thread.rs` in the runtime): an object whose
 //! release frees a block of the runtime's own memory (a buffer or a texture of a block of its own,
 //! a host-visible buffer's fresh pages where the device imports them, a heap) returns with the
-//! block's `vkFreeMemory` posted to the thread
-//! (`WorkCounts::memory_frees_posted`), while a no-copy buffer's import of the caller's pages is
-//! freed before its release returns, posted never: Vulkan has "the application must ensure that the
-//! imported memory range remains valid and accessible for the lifetime of the imported memory
-//! object", and the caller frees its pages once the release returns. Each release's time is
-//! printed (`POSTED-FREES` lines).
+//! block's `vkFreeMemory` posted to the thread (`WorkCounts::memory_frees_posted`). Such a block is
+//! kept for reuse instead while its heap keeps fewer empty bytes than its budget (at most 2 GiB,
+//! the runtime's `memory.rs`), so each kind makes [`PAST_KEPT`] bytes of its objects at once and
+//! releases them one by one: the releases past the budget free their blocks. Meanwhile a no-copy
+//! buffer's import of the caller's pages is freed before its release returns, posted never: Vulkan
+//! has "the application must ensure that the imported memory range remains valid and accessible for
+//! the lifetime of the imported memory object", and the caller frees its pages once the release
+//! returns. Each release's time is printed (`POSTED-FREES` lines).
 //!
 //! What the runtime crate's own tests hold the thread for (`tests/posted_frees.rs`): a pinned
 //! address and a forced resource ID take a new resource while the old block's free waits, an
@@ -25,7 +27,16 @@ use std::time::{Duration, Instant};
 /// runtime's recycler parks: a block of its own, freed as the buffer goes.
 const APART: u64 = 96 << 20;
 
-/// Releases of each kind timed.
+/// The bytes of each kind's objects made at once before their releases: past the most a heap of
+/// the runtime's keeps of empty blocks for reuse (2 GiB, `memory.rs`'s `KEPT_EMPTY_BYTES`).
+const PAST_KEPT: u64 = 5 << 29;
+
+/// The objects of `bytes` each that make up [`PAST_KEPT`].
+fn past_kept(bytes: u64) -> usize {
+    PAST_KEPT.div_ceil(bytes) as usize
+}
+
+/// The no-copy buffers' releases timed.
 const ROUNDS: usize = 4;
 
 fn managed() -> ResourceOptions {
@@ -95,8 +106,10 @@ fn a_released_block_is_freed_on_the_free_thread_and_a_host_import_before_the_rel
             ("managed buffer", managed()),
         ] {
             let mut released = Released::new();
-            for _ in 0..ROUNDS {
-                let buffer = device.new_buffer(APART, options).unwrap();
+            let buffers: Vec<_> = (0..past_kept(APART))
+                .map(|_| device.new_buffer(APART, options).unwrap())
+                .collect();
+            for buffer in buffers {
                 released.release(device, buffer);
             }
             assert!(
@@ -112,8 +125,10 @@ fn a_released_block_is_freed_on_the_free_thread_and_a_host_import_before_the_rel
         descriptor.usage = TextureUsage::SHADER_READ;
         descriptor.resource_options = ResourceOptions::private();
         let mut released = Released::new();
-        for _ in 0..ROUNDS {
-            let texture = device.new_texture(&descriptor).unwrap();
+        let textures: Vec<_> = (0..past_kept(256 << 20))
+            .map(|_| device.new_texture(&descriptor).unwrap())
+            .collect();
+        for texture in textures {
             released.release(device, texture);
         }
         assert!(
@@ -125,8 +140,11 @@ fn a_released_block_is_freed_on_the_free_thread_and_a_host_import_before_the_rel
         // A heap's bytes are a buffer's: past what the recycler parks too.
         let heap = HeapDescriptor::new(HeapType::Automatic, APART, ResourceOptions::private());
         let mut released = Released::new();
-        for _ in 0..ROUNDS {
-            released.release(device, device.new_heap(&heap).unwrap());
+        let heaps: Vec<_> = (0..past_kept(APART))
+            .map(|_| device.new_heap(&heap).unwrap())
+            .collect();
+        for heap in heaps {
+            released.release(device, heap);
         }
         assert!(
             released.posted > 0 && released.posted <= released.blocks,

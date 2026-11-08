@@ -272,8 +272,15 @@ fn a_release_waits_for_the_batch_in_flight_where_the_device_parks_freed_memory()
 
 /// The bytes of a private buffer that takes a block of its own, with a buffer of addresses (past
 /// half a pooled block, `memory.rs`), and that the recycler parks for no later buffer (past its
-/// bytes, `recycle.rs`): its release frees its block.
+/// bytes, `recycle.rs`): its release frees its block where the device keeps no empty block
+/// ([`keeping_no_empty_block`]).
 const OWN_BLOCK: u64 = 128 << 20;
+
+/// `device`, keeping no empty block for reuse past its pools' two (the heaps' budget's test
+/// stand-in at 0, `memory.rs`'s `KEPT_EMPTY_BYTES`): a block that empties goes.
+fn keeping_no_empty_block(device: &Device) {
+    crate::device::lock(&device.shared().memory).kept_budget_stand_in = Some(0);
+}
 
 /// The `vkDestroyBuffer` calls the memory's own code made so far (`memory.rs`): its blocks'
 /// buffers of addresses (`WorkCounts::object_churn`'s release sites). Read from the counters
@@ -298,6 +305,7 @@ fn addresses_destroyed(device: &Device) -> u64 {
 fn a_block_s_buffer_of_addresses_goes_with_no_submission_inside_its_vk_queue_submit() {
     let scratch = Scratch::new("gated");
     let device = device(&scratch.0);
+    keeping_no_empty_block(&device);
     device.park_freed_memory();
     let parking = Arc::clone(device.shared().parking.get().expect("the device parks"));
     let buffer = device
@@ -343,6 +351,7 @@ const ROUNDS: usize = 24;
 fn blocks_go_while_submissions_that_make_buffers_run() {
     let scratch = Scratch::new("orders");
     let device = device(&scratch.0);
+    keeping_no_empty_block(&device);
     device.park_freed_memory();
     let (done, ended) = mpsc::channel();
     let submitter = {

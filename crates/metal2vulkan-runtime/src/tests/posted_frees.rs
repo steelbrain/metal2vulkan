@@ -26,12 +26,15 @@ const WAIT: Duration = Duration::from_secs(60);
 const HIGH: u64 = 0x7100_0000_0000;
 
 /// A buffer's bytes past half a block and past the 64 MiB of buffers the recycler parks
-/// (`recycle::BUFFERS`): a dedicated block of its own, freed as the buffer goes.
+/// (`recycle::BUFFERS`): a dedicated block of its own, freed as the buffer goes on the devices
+/// these tests make, which keep no empty block ([`device`]).
 fn dedicated() -> u64 {
     crate::memory::BLOCK_BYTES / 2 + (64 << 20)
 }
 
-/// A device of the cfg's kind, as the product makes it.
+/// A device of the cfg's kind, as the product makes it, but keeping no empty block for reuse past
+/// its pools' two (the heaps' budget's test stand-in at 0, `memory.rs`'s `KEPT_EMPTY_BYTES`): a
+/// block that empties is freed, posted to the free thread these tests hold.
 fn device() -> Device {
     let options = DeviceOptions {
         kinds: match cfg!(m2v_cpu_icd) {
@@ -44,7 +47,9 @@ fn device() -> Device {
         },
         ..DeviceOptions::default()
     };
-    Device::system_default_with(&options).unwrap()
+    let device = Device::system_default_with(&options).unwrap();
+    crate::device::lock(&device.shared().memory).kept_budget_stand_in = Some(0);
+    device
 }
 
 /// The free thread held at each free until this drops, a failing case's unwinding too, so the
