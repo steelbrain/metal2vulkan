@@ -1325,8 +1325,8 @@ impl Counters {
         }
     }
 
-    /// A YCbCr texture's conversion, or a render shadow's load, was made to sample its planes'
-    /// image through the device's own Y′CbCr conversion (`ycbcr_device.rs`).
+    /// A YCbCr texture was made whose conversion samples its planes' image through the device's
+    /// own Y′CbCr conversion (`ycbcr_device.rs`).
     pub(crate) fn ycbcr_device_conversion(&self) {
         self.ycbcr_device_conversions
             .fetch_add(1, Ordering::Relaxed);
@@ -4643,9 +4643,10 @@ pub struct WorkCounts {
     pub ycbcr_planes_images_kept_layout: u64,
     /// Bindings of two-plane YCbCr textures' planes images written into descriptor sets.
     pub ycbcr_planes_images_bound: u64,
-    /// Two-plane YCbCr textures' conversions, and render shadows' loads, made to sample the
-    /// planes' image through the device's own Y′CbCr conversion where it converts their format
-    /// (`ycbcr_device.rs`), in place of Metal's arithmetic.
+    /// Two-plane YCbCr textures made whose conversions sample the planes' image through the
+    /// device's own Y′CbCr conversion where it converts their format (`ycbcr_device.rs`), in
+    /// place of Metal's arithmetic: counted as each is made, as its conversion is, though the
+    /// conversion's image, kernel and sets are made at its first conversion.
     pub ycbcr_device_conversions: u64,
     /// Samplings of two-plane YCbCr textures' planes' images through the device's own Y′CbCr
     /// conversion recorded: one per conversion or load of such a texture, run through the

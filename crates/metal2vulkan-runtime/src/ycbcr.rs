@@ -592,9 +592,9 @@ impl Converts {
         // multiple of it (`ycbcr_device.rs`).
         let sampler = YCbCrSampler::of(device, planes, zeros).filter(|_| bytes % 4 == 0);
         if let Some(sampler) = sampler {
+            // Counted and announced as the texture was made (`YCbCrConversion::new`).
             let sampling = YCbCrDeviceSampling::new(device, (planes, sampler), view)?;
             let groups = sampling.groups();
-            announce_device_conversion(device, planes);
             return Ok((Converts::Device(Box::new(sampling)), groups));
         }
         Converts::ours(device, planes, (raw, bytes, held), shape_at, (view, false))
@@ -766,7 +766,10 @@ impl YCbCrConversion {
     /// The conversion of `planes`, whose bytes lie in `bytes` of their buffer, at `at` of its
     /// `VkBuffer`, into `view`, a storage view of the texture's image, on `device`; made at its
     /// first conversion ([`make`](Self::make)). Where the device converts the planes itself, that
-    /// is announced here, where the texture is made.
+    /// is counted (`WorkCounts::ycbcr_device_conversions`) and announced here, where the texture
+    /// is made: `Converts::new` takes the device's conversion on the same terms, the staging
+    /// copy's planes lying at `BYTES_AT`, a multiple of 4 bytes, of the staging buffer's own
+    /// `VkBuffer`.
     pub(super) fn new(
         device: &Device,
         (planes, bytes): (&YCbCrPlanes, Range<u64>),
@@ -775,7 +778,8 @@ impl YCbCrConversion {
     ) -> YCbCrConversion {
         let span = (bytes.end - bytes.start).next_multiple_of(4);
         let zeros = planes_end(planes).saturating_sub(span).next_multiple_of(4);
-        if YCbCrSampler::of(device, planes, zeros > 0).is_some() && span % 4 == 0 {
+        if YCbCrSampler::of(device, planes, zeros > 0).is_some() {
+            device.shared().counts.ycbcr_device_conversion();
             announce_device_conversion(device, planes);
         }
         YCbCrConversion {

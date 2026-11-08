@@ -773,7 +773,6 @@ impl YCbCrDeviceSampling {
                 [chroma_width, chroma_height],
             ),
         ];
-        device.shared().counts.ycbcr_device_conversion();
         Ok(YCbCrDeviceSampling {
             device: device.clone(),
             image,
