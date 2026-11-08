@@ -65,6 +65,10 @@
 //! device's in-place check answered, each line and its time printed, `SELF-READ-CHECK`), and the
 //! images made with feedback loop usage.
 //!
+//! `keep_copy_costs` times one copy of a private `BGRA8Unorm` texture of each of [`SELF_SIZES`]
+//! whole into another, as a merged shadow's keep copies its texels into its kept image
+//! (`KEEP-COPY-COST`).
+//!
 //! `snapshot_area_costs` weighs the area rule's two forms for readers through no scissor, as the
 //! consumer's guest draws them: over a private `BGRA8Unorm` target of each of [`AREA_SIZES`], a
 //! frame is one command buffer of one pass, loaded but in the first frame, which clears it, and
@@ -1105,6 +1109,46 @@ fn self_reads_of(
     }
     drop((surface, logged, private, buffer, logged_buffer));
     drop((mapping, logged_mapping));
+}
+
+/// What one copy of a shadow's every texel into another image costs, as a merged shadow's keep
+/// copies its texels into its kept image (`texture/kept_image.rs`): per command buffer of one blit
+/// encoder copying a private `BGRA8Unorm` texture of each of [`SELF_SIZES`] whole into another
+/// (`copy_texture`, a `vkCmdCopyImage`), the median GPU time of [`SELF_TIMED`] after [`SELF_WARM`]
+/// (`KEEP-COPY-COST`).
+#[test]
+#[ignore = "a release-mode measurement: run by name"]
+fn keep_copy_costs() {
+    let device = open_device(TEST_DEVICE, DeviceOptions::default()).unwrap();
+    let queue = device.new_command_queue().unwrap();
+    for [width, height] in SELF_SIZES {
+        let mut d = TextureDescriptor::texture_2d(PixelFormat::BGRA8Unorm, width, height, false);
+        d.usage = TextureUsage::RENDER_TARGET | TextureUsage::SHADER_READ;
+        d.resource_options = ResourceOptions::private();
+        let (source, kept) = (
+            device.new_texture(&d).unwrap(),
+            device.new_texture(&d).unwrap(),
+        );
+        let copy = || {
+            let command_buffer = queue.command_buffer().unwrap();
+            let mut encoder = command_buffer.blit_command_encoder().unwrap();
+            encoder.copy_texture(&source, &kept).unwrap();
+            encoder.end_encoding().unwrap();
+            command_buffer.commit().unwrap();
+            command_buffer.wait_until_completed_for(WAIT).unwrap();
+            assert_eq!(command_buffer.error(), None);
+            command_buffer.gpu_end_time().unwrap() - command_buffer.gpu_start_time().unwrap()
+        };
+        for _ in 0..SELF_WARM {
+            copy();
+        }
+        let gpu: Vec<f64> = (0..SELF_TIMED).map(|_| copy()).collect();
+        println!(
+            "KEEP-COPY-COST {} {width}x{height}: GPU {:.3} ms a copy (median)",
+            device.name(),
+            median(gpu) * 1e3
+        );
+    }
 }
 
 /// The `snapshot_area_costs` targets' sizes.
