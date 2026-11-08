@@ -1264,11 +1264,13 @@ degradations! {
              reason names, can land changed; every other value lands as Metal's copy leaves it";
         /// A texture bound by a slot as a storage image without `ShaderWrite` usage, or as a
         /// sampled one without `ShaderRead`, whose image lacks that usage because adding it
-        /// would cost the image its size or the driver's compression: the binding takes an image
-        /// of its own with both shader usages, a shadow of the texture's texels
-        /// (`texture/usage_shadow.rs`). Also a texture without `RenderTarget` usage that a render
-        /// pass renders as an attachment, through a scratch image that has it
-        /// (`attachment_stand_in.rs`).
+        /// would cost the image its size or the driver's compression, or, for an image in place
+        /// over host pages, because the device's check failed for what the usage lets reach them
+        /// (`texture/in_place_image.rs`): the binding takes an image of its own with both shader
+        /// usages, a shadow of the texture's texels (`texture/usage_shadow.rs`). Also a texture
+        /// without `RenderTarget` usage that a render pass renders as an attachment, through a
+        /// scratch image that has it (`attachment_stand_in.rs`), but one in place whose image took
+        /// the attachment usage where the device's check passed for renders over its pages.
         UndeclaredUsageShadow = "undeclared-usage-shadow", Performance,
             "its texels are copied into an image of its own before each command that binds it \
              beyond its declared usage, and back after each write through it";

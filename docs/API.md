@@ -2434,8 +2434,11 @@ bound.
 - `metal2vulkan-degrade-undeclared-usage-shadow` (performance). `UndeclaredUsageShadow`: A texture
   bound by a slot as a storage image without `ShaderWrite` usage, or as a sampled one without
   `ShaderRead`, whose image lacks that usage because adding it would cost the image its size or the
-  driver's compression: the binding takes an image of its own with both shader usages, a shadow of
-  the texture's texels. Cost: its texels are copied into an image of its own before each command
+  driver's compression, or, for a texture in place over host pages, because the device's in-place
+  check failed for what the usage lets reach them: the binding takes an image of its own with both
+  shader usages, a shadow of the texture's texels. Also a texture without `RenderTarget` usage that
+  a render pass renders into, through a scratch image that has it, except a texture in place whose
+  image took that usage where the check passed for renders over its pages. Cost: its texels are copied into an image of its own before each command
   that binds it beyond its declared usage, and back after each write through it.
 - `metal2vulkan-degrade-heap-two-plane-texture` (precision). `HeapTwoPlaneTexture`: A texture of
   `RGB10A8_2P_XR10` or its sRGB twin made in a heap whose planes no shadow of the heap's bytes

@@ -39,10 +39,12 @@
 //!   `RenderTarget`): where the device's check passed for a shader's writes (`Pointer buffer
 //!   writes` where the rows' padding is free) or for renders over the class, the write or pass
 //!   reaches the image in place, which took the usage it lacks: no shadow announced
-//!   (`undeclared-usage-shadow`), no texel copied in (`shadow_texels_copied_in`); elsewhere through
-//!   its shadow (or stand-in), announced. The image stays the texture's (`vk_image` the same
-//!   handle); every texel of the pages then holds the value, and the bytes between the rows hold
-//!   the pattern but where a shader's writes in place may change rows' padding that is free.
+//!   (`undeclared-usage-shadow`), no texel copied in (`shadow_texels_copied_in`,
+//!   `shadow_texels_copied_in_images`); elsewhere through its shadow (or stand-in), announced.
+//!   The image stays the texture's (`vk_image` the same handle), and its texels stay in the pages
+//!   at the buffer's pitch: every texel of the pages then holds the value, and the bytes between
+//!   the rows hold the pattern but where a shader's writes in place may change rows' padding that
+//!   is free. Printed (`IN-PLACE-USAGE`): each form's path and the texels copied in.
 //! - [`textures_that_render_or_write_take_the_path_their_checks_answered`], under the validation
 //!   layer: a 64x64 `R32Uint` texture over a no-copy buffer of anonymous pages, of each usage that
 //!   renders or writes, once the device's check answered: each is in place where the check passed
@@ -882,7 +884,10 @@ fn writes_and_passes_beyond_the_usage_reach_the_pages_where_their_checks_passed(
             let notices = counts(&messages.take_notices());
             let shadowed = notices.contains_key(&Degradation::UndeclaredUsageShadow);
             let after = device.work_counts();
-            let copied = after.shadow_texels_copied_in - before.shadow_texels_copied_in;
+            // A shadow's copies in from a buffer's texels, and from an image's (the usage shadow
+            // copies the image in place, image to image).
+            let copied = (after.shadow_texels_copied_in - before.shadow_texels_copied_in)
+                + (after.shadow_texels_copied_in_images - before.shadow_texels_copied_in_images);
             // In place, the write or pass reaches the texels with no shadow and no copy; else it
             // takes the shadow (or stand-in), announced.
             assert_eq!(shadowed, !reaches, "{form}: {notices:?}");

@@ -23,27 +23,29 @@
 //!   texels never reach them, and the check's bytes after its image are such bytes.
 //! - **Its usage** is the texture's declared plan's: one a shader writes (`ShaderWrite` or
 //!   `ShaderAtomic`) has storage usage, through which its kernels write its texels in place, as
-//!   the device's check of storage writes covers ([`Texture::store_in_place`]). One that does not
-//!   render also takes the usages its descriptor lacks, each where the device's check passed for
-//!   what it lets reach the pages: the storage usage where the check passed for a shader's writes
-//!   over the class and the texels' row ends (those that let the rows' padding change where it is
-//!   free) and the texel is one its kernel stores, the attachment usage where it passed for
-//!   renders, and the sampled usage wherever (a read touches the texels alone), the first set of
-//!   them, the most first, the device makes the image in place with: plain Metal writes a texture
-//!   beyond its `ShaderWrite` and renders into one made without `RenderTarget`, and such a write
-//!   or pass then reaches the texels in place. A write or pass beyond what the image takes binds
-//!   the texture's usage shadow (`texture/usage_shadow.rs`), or renders through an attachment
-//!   stand-in (`attachment_stand_in.rs`), whose copies into it touch its texels alone. The usages
-//!   change neither the image's pitch nor its place: an image that would lie otherwise is not
-//!   made, and the next plan is tried. One that renders also takes the feedback loop usage a draw takes that reads the texture its own pass
-//!   renders through a snapshot (`texture::feedback_candidate`, `render/snapshot.rs`) where the
-//!   device makes the image with it, as an aliasing image over a buffer of the runtime's does,
-//!   and with it the storage usage the snapshot's fetch of the attachment in the pixel interlock
-//!   reads through (`framebuffer_fetch::storage_candidate`, which may list a view in another
-//!   format), where the device's check passed for a shader's writes over the pages' class too and
-//!   the texel is one its kernel stores (with that usage a shader writes the texels in place, as
-//!   one declared to does): the first of those plans the device makes the image in place with,
-//!   else the declared plan's image.
+//!   the device's check of storage writes covers ([`Texture::store_in_place`]).
+//! - **The usages its descriptor lacks**, for one that does not render: each where the device's
+//!   check passed for what it lets reach the pages. The storage usage where it passed for a
+//!   shader's writes over the class and the texels' row ends (those that let the rows' padding
+//!   change, where it is free) and the texel is one the check's kernel stores; the attachment
+//!   usage where it passed for renders over them; the sampled usage wherever, as a read touches
+//!   the texels alone. The image takes the first set of them, the most first, the device makes it
+//!   in place with. Plain Metal writes a texture beyond its `ShaderWrite` and renders into one made
+//!   without `RenderTarget`; with the usage, such a write or pass reaches the texels in place. A
+//!   write or pass beyond what the image takes binds the texture's usage shadow
+//!   (`texture/usage_shadow.rs`), or renders through an attachment stand-in
+//!   (`attachment_stand_in.rs`), whose copies into it touch its texels alone. The usages change
+//!   neither the image's pitch nor its memory: an image that would lie otherwise is not made, and
+//!   the next set is tried.
+//! - **One that renders** also takes the feedback loop usage a draw takes that reads the texture
+//!   its own pass renders through a snapshot (`texture::feedback_candidate`, `render/snapshot.rs`)
+//!   where the device makes the image with it, as an aliasing image over a buffer of the
+//!   runtime's does, and with it the storage usage the snapshot's fetch of the attachment in the
+//!   pixel interlock reads through (`framebuffer_fetch::storage_candidate`, which may list a view
+//!   in another format), where the device's check passed for a shader's writes over the pages'
+//!   class too, those that keep the rows' padding, and the texel is one its kernel stores (with
+//!   that usage a shader writes the texels in place, as one declared to does): the first of those
+//!   plans the device makes the image in place with, else the declared plan's image.
 //! - **A rebind** (`rebind.rs`) makes it again over the new pages, its texels as far from their
 //!   first byte as from the old pages', as a no-copy heap's images are
 //!   ([`Device::rebound_in_place_images`]); a detach makes it present a stand-in, as it does every
@@ -484,9 +486,9 @@ impl Device {
             return false;
         }
         let line = self.shared().in_place.line();
-        let written = match texels.padding(line) {
-            Padding::Free => Access::BufferWrites,
-            Padding::Kept => Access::Writes,
+        let written = match (texels.padding(line), renders) {
+            (Padding::Free, false) => Access::BufferWrites,
+            _ => Access::Writes,
         };
         let rows = texels.rows(line);
         self.shared().in_place.verdict(class, written, rows) == Verdict::Passed
@@ -1069,8 +1071,8 @@ impl Device {
     /// that lie in lines as `rows` says: an image of attachment usage renders, one of storage
     /// usage is written, one of neither reads. The writes of one that does not render whose
     /// rows' padding is free take the check that lets it change (`in_place::in_place`); one that
-    /// renders may hold the storage usage a render target takes where the check that keeps it
-    /// passed (`Device::storage_over_buffer`'s `storable`), which it asks.
+    /// renders may hold the storage usage where the check that keeps it passed (the route's
+    /// `storable`, `texture/route.rs`), which it asks.
     fn fresh_pages_take(&self, image: &Image, (rows, padding): (RowEnds, Padding)) -> bool {
         use metal2vulkan::vk::ImageUsageFlags;
         let usage = image.plan().usage;
