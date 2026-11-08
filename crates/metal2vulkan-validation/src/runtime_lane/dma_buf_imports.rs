@@ -212,6 +212,71 @@ impl Memfd {
         View::new(self.fd.as_fd(), pieces)
     }
 
+    /// A view of the file's `pieces` `(offset, size)` in that order, mapped as a consumer maps a
+    /// view of more than one run: as udmabufs of them, each as many pieces and bytes as the host's
+    /// limits take, one after another, each one mapping (`VM_PFNMAP`).
+    pub(super) fn view_through_dma_bufs(&self, pieces: &[(usize, usize)]) -> View {
+        assert!(pieces
+            .iter()
+            .all(|&(offset, size)| offset + size <= self.len));
+        let limits = Limits::of_host();
+        let mut groups: Vec<Vec<(u64, u64)>> = vec![Vec::new()];
+        let mut bytes = 0;
+        for &(offset, size) in pieces {
+            let full = groups.last().is_some_and(|group| {
+                group.len() == limits.items || bytes + size as u64 > limits.bytes
+            });
+            if full {
+                groups.push(Vec::new());
+                bytes = 0;
+            }
+            groups
+                .last_mut()
+                .unwrap()
+                .push((offset as u64, size as u64));
+            bytes += size as u64;
+        }
+        let len: usize = pieces.iter().map(|&(_, size)| size).sum();
+        // SAFETY: a fresh reservation, then fixed shared mappings of the dma-bufs inside it.
+        unsafe {
+            let reservation = libc::mmap(
+                std::ptr::null_mut(),
+                len,
+                libc::PROT_NONE,
+                libc::MAP_PRIVATE | libc::MAP_ANON,
+                -1,
+                0,
+            );
+            assert_ne!(reservation, libc::MAP_FAILED, "mmap reservation");
+            let mut at = 0;
+            for group in &groups {
+                let size: u64 = group.iter().map(|&(_, size)| size).sum();
+                let dma_buf = udmabuf(self.fd.as_fd(), group).expect("a udmabuf of the pieces");
+                let wanted = reservation.cast::<u8>().add(at).cast();
+                let mapped = libc::mmap(
+                    wanted,
+                    size as usize,
+                    libc::PROT_READ | libc::PROT_WRITE,
+                    libc::MAP_SHARED | libc::MAP_FIXED,
+                    dma_buf.as_raw_fd(),
+                    0,
+                );
+                assert_eq!(
+                    mapped,
+                    wanted,
+                    "mmap of a udmabuf: {}",
+                    std::io::Error::last_os_error()
+                );
+                at += size as usize;
+            }
+            View {
+                at: NonNull::new(reservation.cast()).unwrap(),
+                len,
+                pieces: pieces.to_vec(),
+            }
+        }
+    }
+
     /// A source of dma-bufs of `view`'s pages, as a consumer makes them: the file pieces behind
     /// the request, split at multiples of its granule into as few chunks as keep each within the
     /// host's udmabuf limits (an `Err` where one granule alone exceeds them), the last of several
@@ -2319,9 +2384,10 @@ fn process_mappings() -> usize {
 }
 
 /// A view of guest pages as a consumer's probe makes one: single pages of the file mapped in
-/// reverse order, a no-copy `Shared` buffer over the whole view placed outside the guest's
-/// address range (`AddressPlacement::Outside`), with a dma-buf source of its pages. Made over 64
-/// pages, which one udmabuf takes, and over `list_limit + 1`, which take two. Printed
+/// reverse order, from the file (a mapping a page) or through udmabufs of them (a mapping per
+/// udmabuf, `VM_PFNMAP`), a no-copy `Shared` buffer over the whole view placed outside the
+/// guest's address range (`AddressPlacement::Outside`), with a dma-buf source of its pages. Made
+/// over 64 pages, which one udmabuf takes, and over `list_limit + 1`, which take two. Printed
 /// (`VIEW-IMPORT`): the making's answer, the source's calls, and the counts of imports, copies
 /// and mappings it took; the GPU reads the CPU's bytes where it is made.
 #[test]
@@ -2333,11 +2399,21 @@ fn a_reversed_view_of_single_pages_imports_through_its_dma_bufs() {
     on_device(|device| {
         let page = host_page();
         let queue = device.new_command_queue().unwrap();
-        for runs in [64, Limits::of_host().items + 1] {
+        let shapes = [64, Limits::of_host().items + 1]
+            .into_iter()
+            .flat_map(|runs| [(runs, false), (runs, true)]);
+        for (runs, through) in shapes {
             let ram = Memfd::new(runs * page);
             let pieces: Vec<(usize, usize)> =
                 (0..runs).map(|i| ((runs - 1 - i) * page, page)).collect();
-            let view = ram.view(&pieces);
+            let view = match through {
+                true => ram.view_through_dma_bufs(&pieces),
+                false => ram.view(&pieces),
+            };
+            let mapped_as = match through {
+                true => "through udmabufs",
+                false => "from the file",
+            };
             let mut expected = Vec::with_capacity(runs * page);
             for i in 0..runs {
                 let bytes = counting(page, i);
@@ -2363,7 +2439,8 @@ fn a_reversed_view_of_single_pages_imports_through_its_dma_bufs() {
             let after = device.work_counts();
             let calls = calls.lock().unwrap().clone();
             eprintln!(
-                "VIEW-IMPORT on {}: {runs} single pages in reverse: {}; source calls {calls:?}; \
+                "VIEW-IMPORT on {}: {runs} single pages in reverse, mapped {mapped_as}: {}; source \
+                 calls {calls:?}; \
                  dma-buf imports {}, sparse buffers {}, pointer imports {}, copied {} (degraded \
                  {}, refused {}), unpinnable {}, mappings queried {}, process mappings added \
                  {added}",
