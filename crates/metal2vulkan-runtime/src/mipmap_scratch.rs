@@ -220,6 +220,8 @@ impl Device {
             .buffer(vk::BufferCreateInfo::default().size(size).usage(usage));
         // SAFETY: the device is live and `info` valid.
         let raw = unsafe { crate::creation::buffer(raw_device, &info) }.map_err(vulkan)?;
+        #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+        crate::command_buffer::completion::trace::mark("block: buffer made");
         // SAFETY: `raw` is a live buffer of this device.
         let requirements = unsafe { raw_device.get_buffer_memory_requirements(raw) };
         let allocated = if addressed {
@@ -238,6 +240,8 @@ impl Device {
                 MemoryClass::Private,
             )
         };
+        #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+        crate::command_buffer::completion::trace::mark("block: memory placed");
         let placed = allocated.and_then(|placement| {
             // SAFETY: the placement meets the buffer's requirements and is bound nowhere
             // else.
@@ -251,6 +255,8 @@ impl Device {
                 }
             }
         });
+        #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+        crate::command_buffer::completion::trace::mark("block: bound");
         match placed {
             Ok(placement) => Ok(Block { raw, placement }),
             Err(error) => {

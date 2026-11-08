@@ -677,6 +677,8 @@ fn finish(watch: &Watch, lists: &mut FenceLists, mut finished: Vec<(usize, Submi
         }
         copied.merge_back(&device.shared().counts, &written);
     }
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    crate::command_buffer::completion::trace::mark("finish: copied");
     // So do their command buffers' shadows' copies back and merges and writes into logged host
     // pages imported in place, to the pages' logs, again now they ran (`dirty_pages.rs`,
     // `DirtyShadows::ran`): once a command buffer, at the batch that ends it, and at one before
@@ -690,6 +692,8 @@ fn finish(watch: &Watch, lists: &mut FenceLists, mut finished: Vec<(usize, Submi
             }
         }
     }
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    crate::command_buffer::completion::trace::mark("finish: dirty");
     // The holds of the batches that end no command buffer go first, their work completed: a
     // detach that sees one of their signals detaches what only they held (`detach.rs`).
     for (_, batch) in &mut finished {
@@ -759,6 +763,8 @@ fn finish(watch: &Watch, lists: &mut FenceLists, mut finished: Vec<(usize, Submi
             for buffer in ending {
                 CommandBufferShared::finish_here(buffer, Ok(()));
             }
+            #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+            crate::command_buffer::completion::trace::mark("finish: posted");
         }
         // What is pending stays pending, as Metal's does.
         Settled::Exiting => {
@@ -1295,6 +1301,8 @@ fn poll(device: &Device, queue: usize, front: Front) -> Result<u64, CommandBuffe
     // SAFETY: the semaphore is the device's timeline, live while the device is (held here).
     let read = unsafe { raw.get_semaphore_counter_value(slot.timeline) };
     exit_guard::called(Call::GetSemaphoreCounterValue);
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    crate::command_buffer::completion::trace::mark("poll: counter read");
     let read = read.map_err(|error| failure(device, error))?;
     // A wait that ran out its slice although what it waited for was signaled by now: a wake it
     // missed, counted (`WorkCounts::missed_completion_wakes`). A timeline is looked at by its
@@ -1332,6 +1340,8 @@ fn poll(device: &Device, queue: usize, front: Front) -> Result<u64, CommandBuffe
         parking.completed(queue, value);
         parking.after_completion(device);
     }
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    crate::command_buffer::completion::trace::mark("poll: parking done");
     Ok(value)
 }
 
@@ -1429,6 +1439,12 @@ pub(crate) mod trace {
         /// A commit's way to its submission reached step `what`: posted to the scheduler, its
         /// thread woken, taken in by a pass, the driver's submission called and returned.
         Submitting { what: &'static str, at: u64 },
+        /// A probe's mark `what` elsewhere in the runtime, and the thread that reached it.
+        Mark {
+            what: &'static str,
+            at: u64,
+            thread: std::thread::ThreadId,
+        },
     }
 
     static ON: AtomicBool = AtomicBool::new(false);
@@ -1459,6 +1475,15 @@ pub(crate) mod trace {
         record(|| Traced::Submitting {
             what,
             at: crate::gpu_time::host_nanos(),
+        });
+    }
+
+    /// Keep a probe's mark `what`, now, with this thread.
+    pub(crate) fn mark(what: &'static str) {
+        record(|| Traced::Mark {
+            what,
+            at: crate::gpu_time::host_nanos(),
+            thread: std::thread::current().id(),
         });
     }
 
