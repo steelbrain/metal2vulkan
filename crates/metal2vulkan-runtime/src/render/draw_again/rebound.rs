@@ -497,16 +497,6 @@ impl RenderLowering {
             (Stage::Object, &self.object),
             (Stage::Mesh, &self.mesh),
         ];
-        let mut tables = binding::Tables::new(&stages)
-            .with_pass(&self.layout, plan.views)
-            .with_residency(&self.residency)
-            .with_texture_table(None)
-            .with_sampler_table(None)
-            .with_function_tables(&[]);
-        // Its runtime samplers' address modes: the kept draw's, as `bring_in` found them.
-        if images {
-            tables = tables.with_sampler_maps(live.read_from.maps().clone());
-        }
         let commands = &live.commands;
         let command = binding::Command {
             descriptor_bytes: &commands.descriptor_bytes,
@@ -524,35 +514,41 @@ impl RenderLowering {
         // draw's binds the same buffers over the same ranges (`binding::rebind_into` writes a
         // buffer's descriptor of its buffer and range alone), so it keeps them.
         let writes_kept = moved && commands.descriptor_ranges == live.kept.ranges;
-        let objects = variant.objects();
-        let rebound = match writes_kept {
-            true => Ok(true),
-            false => {
+        // Its uses: where only buffer slots changed, the kept draw's with those slots' patched in
+        // place, which reads the stages' tables alone, else made again whole, those of what the
+        // encoder made resident kept (`binding::command_uses_into`).
+        let patched = !images
+            && binding::patch_buffer_uses((&**plan, &command, &stages), slots, &mut live.uses)
+                == Ok(true);
+        // The tables a step that works the draw out again reads (its set-0 writes where they are
+        // not the kept draw's, its uses where they were not patched), made only for one.
+        let mut rebound = true;
+        if !writes_kept || !patched {
+            let mut tables = binding::Tables::new(&stages)
+                .with_pass(&self.layout, plan.views)
+                .with_residency(&self.residency);
+            // Its runtime samplers' address modes: the kept draw's, as `bring_in` found them.
+            if images {
+                tables = tables.with_sampler_maps(live.read_from.maps().clone());
+            }
+            if !writes_kept {
                 let device = self.core.device();
+                let objects = variant.objects();
                 let writes = &mut live.kept.writes[..];
                 let set_zero = (writes, objects.dynamic_bindings(), &mut live.offsets[..]);
                 let samplers = (Some(&mut self.bind_memo), &mut live.samplers);
-                binding::rebind_into(
-                    call,
-                    device,
-                    (&**plan, &command, &tables),
-                    slots,
-                    set_zero,
-                    samplers,
-                )
+                let plan = (&**plan, &command, &tables);
+                let rebind = binding::rebind_into(call, device, plan, slots, set_zero, samplers);
+                rebound = rebind.is_ok_and(|done| done);
             }
-        };
-        let index = buffers.index.as_ref().map(DrawSource::metal);
-        let uses = (plan, &command, &tables);
-        // Its uses: where only buffer slots changed, the kept draw's with those slots' patched in
-        // place, else made again whole, those of what the encoder made resident kept
-        // (`binding::command_uses_into`).
-        let patched = !images
-            && binding::patch_buffer_uses((&**plan, &command, &tables), slots, &mut live.uses)
-                == Ok(true);
-        let rebound = rebound.is_ok_and(|done| done)
-            && (patched
-                || binding::command_uses_into(call, uses, (index, None), &mut live.uses).is_ok())
+            if rebound && !patched {
+                let index = buffers.index.as_ref().map(DrawSource::metal);
+                let uses = (plan, &command, &tables);
+                rebound =
+                    binding::command_uses_into(call, uses, (index, None), &mut live.uses).is_ok();
+            }
+        }
+        let rebound = rebound
             && binding::push_writes_into(&commands.push_constants, &[], &mut live.pushes).is_ok();
         if !rebound {
             return None;

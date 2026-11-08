@@ -685,8 +685,22 @@ pub(super) struct Bound {
 
 /// The buffer bound at buffer slot `slot`, if any.
 fn slot_buffer<'a>(tables: &Tables<'a>, slot: SlotRef) -> Option<&'a (Buffer, u64)> {
+    stage_buffer(tables.stages, slot)
+}
+
+/// The buffer the table of `stages` of its stage binds at buffer slot `slot`, if any.
+fn stage_buffer<'a>(
+    stages: &[(Stage, &'a ArgumentTable)],
+    slot: SlotRef,
+) -> Option<&'a (Buffer, u64)> {
+    let table = || {
+        stages
+            .iter()
+            .find(|(of, _)| *of == slot.stage)
+            .map(|&(_, table)| table)
+    };
     (slot.class == SlotClass::Buffer)
-        .then(|| tables.of(slot.stage)?.buffers.get(&slot.index))
+        .then(|| table()?.buffers.get(&slot.index))
         .flatten()
 }
 
@@ -2804,7 +2818,7 @@ fn bytes_use(
 }
 
 /// Patch in `into`, as [`command_uses_into`] made it of `plan`'s and `command`'s uses, the uses
-/// of the buffer slots `changed`, as `tables` now bind them, found by `into`'s list of its uses of
+/// of the buffer slots `changed`, as the `stages`' tables now bind them, found by `into`'s list of its uses of
 /// buffer slots (`CommandUses::slots`), looking at no other use: whether it did, which it does
 /// where each such slot binds the buffer it bound (its offset may have moved) and `into` holds the
 /// uses that function made alone. Its uses are then those `command_uses_into` makes: every other
@@ -2814,7 +2828,7 @@ fn bytes_use(
 /// with debug assertions check the list against the uses, and count the uses it looked at
 /// (`patched_slot_uses`).
 pub(super) fn patch_buffer_uses(
-    (plan, command, tables): (&BindingPlan, &Command<'_>, &Tables<'_>),
+    (plan, command, stages): (&BindingPlan, &Command<'_>, &[(Stage, &ArgumentTable)]),
     changed: &[SlotRef],
     into: &mut CommandUses,
 ) -> Result<bool, Error> {
@@ -2853,7 +2867,7 @@ pub(super) fn patch_buffer_uses(
             Some(at) => command.uses.get(at),
         };
         let resource = resource.ok_or_else(|| internal("a use of a resource use since gone"))?;
-        let Some((buffer, offset)) = slot_buffer(tables, slot) else {
+        let Some((buffer, offset)) = stage_buffer(stages, slot) else {
             return Ok(false);
         };
         // Its reads and writes are its resource use's, as the use made of it holds them.
