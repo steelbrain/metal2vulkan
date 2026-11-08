@@ -468,7 +468,7 @@ impl Device {
                     .fold(TextureUsage::empty(), |set, (_, &metal)| set | metal)
             })
             .collect();
-        sets.sort_by_key(|set| std::cmp::Reverse(set.bits().count_ones()));
+        sets.sort_by_key(|set| std::cmp::Reverse(set.as_raw().count_ones()));
         sets.into_iter()
             .filter_map(|set| plan_image(&layout, own | set, false, facts).ok())
             .filter(|wider| wider.format == plan.format && wider.usage.contains(plan.usage))
