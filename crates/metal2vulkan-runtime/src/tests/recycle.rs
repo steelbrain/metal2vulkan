@@ -30,6 +30,7 @@
 //!   sixty frames take parked buffers from the second frame on.
 
 use super::blit_holds::{Scratch, WAIT};
+use crate::recycle;
 use crate::{
     BlitOption, Buffer, ClearColor, CommandBufferStatus, CommandQueue, Device, DeviceKind,
     DeviceOptions, LoadAction, Origin, RenderPassDescriptor, ResourceOptions, ShaderCacheOptions,
@@ -37,6 +38,7 @@ use crate::{
 };
 use metal2vulkan::metal::{PixelFormat, TextureUsage};
 use std::path::Path;
+use std::time::Instant;
 
 const SIDE: u64 = 64;
 /// A recycled buffer's length: not a multiple of 16, so its padding is recycled too.
@@ -227,54 +229,79 @@ fn a_burst_of_one_off_makings_keeps_the_proven_image() {
     let device = device(&scratch.0);
     let queue = device.new_command_queue().unwrap();
     const ONE_OFF: u64 = 64;
+    // A burst slower than the images' park time lets the proven image go stale before the take,
+    // as the bounds say it goes (an RTX 5080 run, 1 in 13): such a try is made again, its one-offs
+    // of widths no earlier try made, at most this many times.
+    const TRIES: u64 = 3;
     let first = device.new_texture(&descriptor()).unwrap();
     let fresh = read(&device, &queue, &first);
     clear(&queue, &first);
     let cleared = read(&device, &queue, &first);
-    let start = device.work_counts().object_churn;
+    let parked = device.work_counts().object_churn.images_parked;
     drop(first);
-    parked_at_least(&device, start.images_parked + 1);
-    // The making comes again: the image a take hands out is a proven one as it goes back.
-    let second = device.new_texture(&descriptor()).unwrap();
-    let proven = second.raw_image().unwrap();
-    clear(&queue, &second);
-    drop(second);
-    parked_at_least(&device, start.images_parked + 2);
-    let before = device.work_counts().object_churn;
-    assert_eq!(before.images_recycled - start.images_recycled, 1);
-    // One-off widths, each made and released: more than the recycler keeps.
-    for width in 1..=ONE_OFF {
-        let mut one_off = descriptor();
-        one_off.width = SIDE + width;
-        drop(device.new_texture(&one_off).unwrap());
+    parked_at_least(&device, parked + 1);
+    for tried in 0..TRIES {
+        let start = device.work_counts().object_churn;
+        // The making comes again: the image a take hands out is a proven one as it goes back.
+        let second = device.new_texture(&descriptor()).unwrap();
+        let proven = second.raw_image().unwrap();
+        clear(&queue, &second);
+        // Before the park: a take sooner after this than the park time finds the image unstale.
+        let parking = Instant::now();
+        drop(second);
+        parked_at_least(&device, start.images_parked + 1);
+        let before = device.work_counts().object_churn;
+        assert_eq!(before.images_recycled - start.images_recycled, 1);
+        // One-off widths, each made and released: more than the recycler keeps.
+        for width in 1..=ONE_OFF {
+            let mut one_off = descriptor();
+            one_off.width = SIDE + tried * ONE_OFF + width;
+            drop(device.new_texture(&one_off).unwrap());
+        }
+        parked_at_least(&device, before.images_parked + ONE_OFF);
+        let burst = device.work_counts().object_churn;
+        let unfilled = device.work_counts().private_textures_unfilled;
+        assert_eq!(burst.images_recycled, before.images_recycled);
+        assert!(
+            burst.images_evicted > before.images_evicted,
+            "the one-offs went past the recycler's bounds"
+        );
+        let third = device.new_texture(&descriptor()).unwrap();
+        let taken = parking.elapsed();
+        let unfilled = device.work_counts().private_textures_unfilled - unfilled;
+        let after = device.work_counts().object_churn;
+        if taken >= recycle::IMAGES.parked_for && tried + 1 < TRIES {
+            eprintln!(
+                "RECYCLE: try {tried}: the take came {taken:?} after the park, past the park \
+                 time: made again"
+            );
+            // Parked before the next try's second texture takes it.
+            drop(third);
+            parked_at_least(&device, after.images_parked + 1);
+            continue;
+        }
+        assert!(
+            taken < recycle::IMAGES.parked_for,
+            "every try's burst outlasted the park time ({taken:?} the last)"
+        );
+        assert_eq!(
+            after.images_recycled - burst.images_recycled,
+            1,
+            "the texture took a parked image"
+        );
+        assert_eq!(
+            third.raw_image().unwrap(),
+            proven,
+            "the proven making's parked image outlasted the burst"
+        );
+        let third = read(&device, &queue, &third);
+        reads_what_a_new_one_reads(&device, unfilled, &third, &fresh, &cleared);
+        eprintln!(
+            "RECYCLE: a burst of {ONE_OFF} one-off makings: {} evicted, the proven image kept",
+            burst.images_evicted - before.images_evicted
+        );
+        return;
     }
-    parked_at_least(&device, before.images_parked + ONE_OFF);
-    let burst = device.work_counts().object_churn;
-    let unfilled = device.work_counts().private_textures_unfilled;
-    assert_eq!(burst.images_recycled, before.images_recycled);
-    assert!(
-        burst.images_evicted > before.images_evicted,
-        "the one-offs went past the recycler's bounds"
-    );
-    let third = device.new_texture(&descriptor()).unwrap();
-    let unfilled = device.work_counts().private_textures_unfilled - unfilled;
-    let after = device.work_counts().object_churn;
-    assert_eq!(
-        after.images_recycled - burst.images_recycled,
-        1,
-        "the texture took a parked image"
-    );
-    assert_eq!(
-        third.raw_image().unwrap(),
-        proven,
-        "the proven making's parked image outlasted the burst"
-    );
-    let third = read(&device, &queue, &third);
-    reads_what_a_new_one_reads(&device, unfilled, &third, &fresh, &cleared);
-    eprintln!(
-        "RECYCLE: a burst of {ONE_OFF} one-off makings: {} evicted, the proven image kept",
-        burst.images_evicted - before.images_evicted
-    );
 }
 
 /// Fill `buffer` with `value`, waited for.

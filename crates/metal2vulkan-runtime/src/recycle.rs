@@ -67,7 +67,8 @@ use std::time::{Duration, Instant};
 pub(crate) struct Bounds {
     most: usize,
     most_bytes: u64,
-    parked_for: Duration,
+    /// The longest an object stays parked: one parked longer goes at the next park or take.
+    pub(crate) parked_for: Duration,
 }
 
 /// The most parked: none in a build of `--cfg m2v_no_recycle` (each object then goes as it is
