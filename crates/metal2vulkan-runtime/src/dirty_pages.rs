@@ -1281,7 +1281,10 @@ impl DirtyCommit {
     /// Note a command's `uses`: the keys it used, each once; its writes, each once; and of them,
     /// those into logged host pages imported in place (`shadows`' [`Imports`]).
     pub(crate) fn note(&mut self, uses: &[Use<ResourceKey>], shadows: &DirtyShadows) {
-        for used in uses.iter().filter(|_| !self.used_all) {
+        for used in uses {
+            if self.used_all {
+                break;
+            }
             match self.used.len() < WRITES || self.used.contains_key(&used.key) {
                 true => {
                     self.used.insert(used.key, ());
