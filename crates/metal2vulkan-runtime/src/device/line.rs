@@ -692,12 +692,9 @@ impl Device {
     /// completion depends on, whose calls reach the lost generation ([`Line::current`]).
     #[cold]
     fn lost_under(&self, refused: &Error) -> bool {
-        let loss = matches!(
-            refused,
-            Error::DeviceLost | Error::NotImplemented(RuntimeGap::MadeBeforeRecovery)
-        );
-        loss && !crate::exit_guard::serving_completion()
+        !crate::exit_guard::serving_completion()
             && self.line().recovers_past(self.shared().generation)
+            && (*refused == Error::DeviceLost || *refused == self.lost_refusal())
     }
 
     /// The refusal of a call that reaches this generation after its loss: where the device's line
