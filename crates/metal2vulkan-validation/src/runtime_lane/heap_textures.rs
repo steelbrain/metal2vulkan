@@ -2431,7 +2431,8 @@ fn a_heap_depth_texture_keeps_a_cpu_write_made_after_its_copy_in() {
 /// (`ImageFacts::depth_clamps`: no such extension enabled, and no
 /// `DriverFact::DepthImageKeepsValuesOutsideUnitRange`), its shadow's copy in clamps each into
 /// `[0, 1]`, a NaN to 1.0 and `-0.0` kept, and a blit of the texture into a buffer reads the
-/// clamped values; elsewhere it reads the bytes as they are. Both where the texture is a shadow of
+/// clamped values; elsewhere it reads the bytes as they are. A `-0.0` reads as the device stores
+/// it, with its sign or as `0.0` (ANV's depth images keep no zero's sign). Both where the texture is a shadow of
 /// Metal's tiles, as on ANV and MoltenVK; one in place (lavapipe) lays its texels out as its
 /// driver does and copies nothing in. The texture is a `Shared` placement
 /// heap's 37x5 one, its bytes written through a buffer over them where Metal's tiles place each
@@ -2569,7 +2570,9 @@ fn a_heap_depth_texture_s_copy_in_takes_no_depth_outside_0_1() {
                 true => clamped(bits(i)),
                 false => bits(i),
             };
-            (got != want).then_some((i, bits(i), got))
+            // A zero's sign is the device's to keep or drop.
+            let zero = (want | got) & 0x7fff_ffff == 0;
+            (got != want && !zero).then_some((i, bits(i), got))
         })
         .collect();
     assert!(
