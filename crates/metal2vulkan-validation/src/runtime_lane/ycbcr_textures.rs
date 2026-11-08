@@ -1711,8 +1711,8 @@ fn assert_filter_notices(
 fn a_ycbcr_slot_takes_the_devices_filter_in_the_pipeline_its_creation_made() {
     on_device(|device, messages| {
         let kernels = Kernels::new(device);
-        let bytes = surface_bytes(9);
-        let surface = buffer_with(device, &bytes).unwrap();
+        let planes = surface_bytes(9);
+        let surface = buffer_with(device, &planes).unwrap();
         let (texture, by_device) = made_by_device(device, || video_texture(&surface));
         let texels = texels_of(device, &kernels.read, &texture, None);
         let read = Texels::of(&texels, 2048, by_device);
@@ -1734,7 +1734,7 @@ fn a_ycbcr_slot_takes_the_devices_filter_in_the_pipeline_its_creation_made() {
         // conversion of the codes exactly, in the slot's in-place variant, whatever the image
         // holds.
         let exact = super::ycbcr_in_place::reads_in_place(device);
-        let codes = || modelled(&bytes, YCbCrRange::Video, YCbCrMatrix::Bt601);
+        let codes = || modelled(&planes, YCbCrRange::Video, YCbCrMatrix::Bt601);
         let samples = Texels::sampled(&texels, codes, (by_device, exact));
         let linear = sampler(device, SamplerMinMagFilter::Linear);
         let library = device
@@ -3745,24 +3745,39 @@ fn textures_over_any_surface_read_what_metal_reads() {
             (P::RGB84202P, p3),
         ] {
             let case = format!("{pf:?} under {matrix:?}");
+            let converted = device_conversions(device);
             let made = texture(&surface, pf, (b"420v", 0, true), wide, matrix);
             let made = made.unwrap_or_else(|e| panic!("{case}: {e:?}"));
+            let by_device = device_conversions(device) > converted;
             let mut read = codes(pf);
             read.output = YCbCrOutput::Codes;
-            let raw = read_anywhere(&bytes, read, (Video, Bt601), (wide.0, Some(wide.1)));
+            let planes = (wide.0, Some(wide.1));
+            let raw = read_anywhere(&bytes, read, (Video, Bt601), planes);
             // `ycbcr_read` of codes answers red Cr, green Y, blue Cb.
-            let want: Vec<[u16; 3]> = match ycbcr_format(pf).unwrap().reads {
-                YCbCrReads::Codes => raw,
-                _ => raw.iter().map(|&[cr, y, cb]| [y, cb, cr]).collect(),
+            let in_order: fn([f64; 3]) -> [f64; 3] = match ycbcr_format(pf).unwrap().reads {
+                YCbCrReads::Codes => |t| t,
+                _ => |[cr, y, cb]| [y, cb, cr],
             };
+            let want: Vec<[u16; 3]> = raw
+                .iter()
+                .map(|&t| in_order(t.map(f64::from)).map(|c| c as u16))
+                .collect();
             let max = (1u16 << read.bits) - 1;
-            assert_codes_read(
-                &kernels,
-                &texels_of(device, &kernels.read, &made, None),
-                &want,
-                max,
-                &case,
-            );
+            let texels = texels_of(device, &kernels.read, &made, None);
+            match by_device {
+                // The device reconstructs the codes itself: the nearest codes to its
+                // reconstruction (`ycbcr_device_reads`).
+                true => {
+                    let device_codes: Vec<[f64; 3]> =
+                        vulkan_codes_of_sums(anywhere_sums(&bytes, read, planes))
+                            .into_iter()
+                            .map(in_order)
+                            .collect();
+                    let got = code_grid(&kernels, &texels, max);
+                    assert_read_codes(&got, &want, Some(&device_codes), max, &case);
+                }
+                false => assert_codes_read(&kernels, &texels, &want, max, &case),
+            }
         }
         let refused = |made: Result<Texture, Error>, what: &str| {
             assert!(
@@ -4190,15 +4205,22 @@ fn ycbcr_samples_outside_read_metals_modes() {
                 (pf, ostype, surface)
             })
             .collect();
-        let mut textures: Vec<(PixelFormat, &str, Texture)> = Vec::new();
+        // Each texture with whether its planes are read in place (`made_in_place`).
+        let mut textures: Vec<(PixelFormat, &str, Texture, bool)> = Vec::new();
+        let placed = |make: &dyn Fn() -> Texture| {
+            let before = made_in_place(device);
+            let texture = make();
+            (texture, made_in_place(device) > before)
+        };
         for pf in [
             PixelFormat::YCBCR84202P,
             PixelFormat::YCBCR84202PSRGB,
             PixelFormat::RGB84202P,
         ] {
             let surface_facts = Some(facts(VIDEO, None));
-            let texture = eight_bit_texture(&eight, pf, surface_facts, usage).unwrap();
-            textures.push((pf, "420v", texture));
+            let (texture, in_place) =
+                placed(&|| eight_bit_texture(&eight, pf, surface_facts, usage).unwrap());
+            textures.push((pf, "420v", texture, in_place));
         }
         for (pf, surface, ostype) in [
             (PixelFormat::YCBCR104202P, &ten, b"x420"),
@@ -4206,13 +4228,16 @@ fn ycbcr_samples_outside_read_metals_modes() {
             (PixelFormat::RGB104202P, &ten, b"x420"),
             (PixelFormat::RGB104202P, &ten_full, b"xf20"),
         ] {
-            let texture = ten_bit_texture(surface, pf, (ostype, 0), None).unwrap();
-            textures.push((pf, std::str::from_utf8(ostype).unwrap(), texture));
+            let (texture, in_place) =
+                placed(&|| ten_bit_texture(surface, pf, (ostype, 0), None).unwrap());
+            textures.push((pf, std::str::from_utf8(ostype).unwrap(), texture, in_place));
         }
         for &(pf, ostype, ref surface) in &family {
-            let texture = family_texture(surface, pf, ostype, None).unwrap();
-            textures.push((pf, ostype, texture));
+            let (texture, in_place) =
+                placed(&|| family_texture(surface, pf, ostype, None).unwrap());
+            textures.push((pf, ostype, texture, in_place));
         }
+        let nearest = sampler(device, SamplerMinMagFilter::Nearest);
         let border = SamplerAddressMode::ClampToBorderColor;
         let clear = SamplerBorderColor::TransparentBlack;
         let modes = [
@@ -4239,10 +4264,16 @@ fn ycbcr_samples_outside_read_metals_modes() {
                 ((filter, mode, color), device.new_sampler_state(&d).unwrap())
             })
             .collect();
-        for (pf, ostype, texture) in &textures {
+        for (pf, ostype, texture, in_place) in &textures {
             let pf = *pf;
             let codes = ycbcr_format(pf).and_then(YCbCrCodes::of).unwrap();
-            let read = texels_of(device, &kernels.read, texture, None);
+            // Read in place, a sample converts the codes itself, whatever the image holds: the
+            // texels its nearest samples at their centres read (Metal's conversion of the codes,
+            // `ycbcr_textures_read_the_texels_metal_converts`); elsewhere the image's.
+            let read = match in_place {
+                true => texels_of(device, &kernels.sample, texture, Some(&nearest)),
+                false => texels_of(device, &kernels.read, texture, None),
+            };
             let texel = |x: u64, y: u64| read[(16 * (y * W + x)) as usize..][..16].to_vec();
             for ((filter, mode, color), state) in &samplers {
                 let reads_border = codes.output != YCbCrOutput::Codes
