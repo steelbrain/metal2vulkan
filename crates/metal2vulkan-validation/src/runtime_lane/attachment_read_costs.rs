@@ -47,7 +47,10 @@
 //! `self_reads` is the consumer's guest's self-read shape (its `selfread` probe): one command
 //! buffer a frame of one render pass over a `BGRA8Unorm` target of each of [`SELF_SIZES`] (a
 //! surface over host pages, as the guest's framebuffer is, its rows 64-byte aligned as IOSurface
-//! lays them out, on a device of each setting of `host_page_textures`; or a private texture): the
+//! lays them out, on a device of each setting of `host_page_textures`, its pages' memory carrying
+//! no log of their writes or one that keeps writers apart, which nothing but the runtime writes,
+//! so a shadow's copies in after its first take no page (`HostMemory::with_dirty_pages`); or a
+//! private texture): the
 //! guest's 3662x2039 framebuffer, whose rows end inside a 64-byte line, and a 3840x2160 one, whose
 //! rows end on one (`in_place::RowEnds`, which a device's check tells apart), loaded but in the first
 //! frame, which clears it, and stored; [`SELF_PAIRS`] times a fill of a [`SELF_RECT`] rectangle, a
@@ -56,7 +59,8 @@
 //! readers, the baseline. Printed per case (`SELF-READ-COST`): the GPU time per frame, and per
 //! frame the splits, snapshots (and of them those pinned to the target's own image,
 //! `WorkCounts::reading_draws_pinned`), render pass instances begun, shadow copies, texels copied
-//! in (and of them those of a surface's shadow copied in again), keeps and their texels, merges, the
+//! in (and of them those of a surface's shadow copied in again), keeps and their texels, merges,
+//! the copies in the log gated (those it skipped, and the bytes they copied), the
 //! shadows made of render targets over host pages and the textures in place over them (once the
 //! device's in-place check answered, each line and its time printed, `SELF-READ-CHECK`), and the
 //! images made with feedback loop usage.
@@ -77,6 +81,7 @@
 use super::attachment_reads::{floats, function};
 use super::first_use_writes::CHECK_WAIT;
 use super::host_memory::{no_copy, Mapping, GUEST_PAGE};
+use super::parallel_encodes::GuestLog;
 use super::{open_device, WAIT};
 use crate::gpu::TEST_DEVICE;
 use metal2vulkan::bind::SamplerDescriptor;
@@ -86,12 +91,13 @@ use metal2vulkan::metal::{
 };
 use metal2vulkan::pipeline::{ColorAttachmentDescriptor, RenderPipelineDescriptor};
 use metal2vulkan_runtime::{
-    Buffer, ClearColor, CommandBuffer, CommandQueue, Device, DeviceOptions, IoSurfacePlane,
-    LoadAction, PipelineOptions, RenderCommandEncoder, RenderPassDescriptor, RenderPipelineState,
-    ResourceOptions, SamplerState, ScissorRect, StoreAction, Texture, TextureDescriptor,
-    WorkCounts,
+    Buffer, ClearColor, CommandBuffer, CommandQueue, Device, DeviceOptions, HostMemory,
+    IoSurfacePlane, LoadAction, PipelineOptions, RenderCommandEncoder, RenderPassDescriptor,
+    RenderPipelineState, ResourceOptions, SamplerState, ScissorRect, StoreAction, Texture,
+    TextureDescriptor, WorkCounts,
 };
 use std::collections::BTreeMap;
+use std::sync::Arc;
 use std::time::Instant;
 
 /// The target's size, a 1080p framebuffer's.
@@ -987,14 +993,31 @@ fn self_reads_of(
     let mut d = TextureDescriptor::texture_2d(bgra, width, height, false);
     d.usage = TextureUsage::RENDER_TARGET | TextureUsage::SHADER_READ;
     d.resource_options = buffer.resource_options();
-    let surface = buffer
-        .new_texture_with_iosurface_plane(&d, IoSurfacePlane::new(0, row, false))
+    let plane = IoSurfacePlane::new(0, row, false);
+    let surface = buffer.new_texture_with_iosurface_plane(&d, plane).unwrap();
+    // The same surface over pages whose memory carries a log of their writes, as a VMM keeps
+    // from its hypervisor's dirty log, which keeps writers apart: nothing writes the pages but
+    // the runtime, so each copy in after the first takes no page.
+    let log = Arc::new(GuestLog::default());
+    let logged_mapping = Mapping::anonymous(len);
+    // SAFETY: the measurement drops the texture and the buffer before the mapping.
+    let memory = unsafe { HostMemory::new(logged_mapping.pointer()) }.with_dirty_pages(log);
+    // SAFETY: as above.
+    let logged_buffer = unsafe {
+        device.new_buffer_with_bytes_no_copy(memory, len as u64, ResourceOptions::default(), None)
+    }
+    .unwrap();
+    let logged = logged_buffer
+        .new_texture_with_iosurface_plane(&d, plane)
         .unwrap();
     d.resource_options = ResourceOptions::private();
     let private = device.new_texture(&d).unwrap();
     let queue = device.new_command_queue().unwrap();
     let name = device.name().to_owned();
-    let mut targets = vec![(&surface, format!("surface ({policy:?})"))];
+    let mut targets = vec![
+        (&surface, format!("surface ({policy:?})")),
+        (&logged, format!("surface ({policy:?}), logged")),
+    ];
     if policy == HostPageTexturePolicy::InPlace {
         targets.push((&private, "private".to_owned()));
     }
@@ -1033,7 +1056,7 @@ fn self_reads_of(
                  {}x{}: GPU {:.3} ms/frame (median); per frame: splits {:.2}, snapshotted \
                  {:.2}, pinned {:.2}, instances {:.2}, shadow copies {:.2}, bounded {:.2}, texels \
                  copied in {:.0}, of a surface again {:.0}, keeps {:.2}, texels kept {:.0}, \
-                 merges {:.2}; \
+                 merges {:.2}, gated copies in {:.2} (skipped {:.2}, bytes copied {:.0}); \
                  render-target shadows over host pages {}, textures in place over host pages \
                  {}, images made with feedback loop usage: shadows {}, aliases {}",
                 SELF_PAIRS,
@@ -1064,6 +1087,15 @@ fn self_reads_of(
                 per(keeps(&before), keeps(&after)),
                 per(kept(&before), kept(&after)),
                 per(before.shadow_merges_fetched, after.shadow_merges_fetched),
+                per(before.dirty_copies_in_gated, after.dirty_copies_in_gated),
+                per(
+                    before.dirty_copies_in_skipped,
+                    after.dirty_copies_in_skipped
+                ),
+                per(
+                    before.dirty_copy_in_bytes_copied,
+                    after.dirty_copy_in_bytes_copied
+                ),
                 after.host_texture_shadows_render_target,
                 after.host_textures_in_place,
                 after.feedback_loop_shadow_images,
@@ -1071,8 +1103,8 @@ fn self_reads_of(
             );
         }
     }
-    drop((surface, private, buffer));
-    drop(mapping);
+    drop((surface, logged, private, buffer, logged_buffer));
+    drop((mapping, logged_mapping));
 }
 
 /// The `snapshot_area_costs` targets' sizes.
