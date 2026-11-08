@@ -3,8 +3,8 @@
 //! queries answer from (`capabilities.rs`).
 //!
 //! The same read answers [`PhysicalDeviceIdentity`] of a physical device no device was made of
-//! ([`Device::system_default_identity_with`](crate::Device::system_default_identity_with)), so the
-//! identity a consumer reads before making a device is the one the device then answers.
+//! ([`Device::identities_with`](crate::Device::identities_with)), so the identity a consumer reads
+//! before making a device is the one the device then answers.
 
 use crate::capabilities::DeviceIdentity;
 use ash::vk;
@@ -72,12 +72,14 @@ pub(crate) fn registry_id(uuid: &[u8; 16]) -> u64 {
 }
 
 /// A physical device's identity, read without making a device
-/// ([`Device::system_default_identity_with`](crate::Device::system_default_identity_with)).
+/// ([`Device::identities_with`](crate::Device::identities_with),
+/// [`Device::system_default_identity_with`](crate::Device::system_default_identity_with)).
 ///
 /// No Metal counterpart: Metal's program holds an `MTLDevice` and asks it, so every one of these
 /// is a property of a device that exists. The runtime answers them of the physical device alone,
-/// so a consumer can tell which GPU it is about to get before paying for it. Every field is the
-/// one the device made of that physical device answers.
+/// so a consumer can tell which GPU it is about to get before paying for it. Every field but
+/// [`recommended_max_working_set_size`](Self::recommended_max_working_set_size), which no device
+/// property answers, is the one the device made of that physical device answers.
 #[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PhysicalDeviceIdentity {
@@ -112,6 +114,18 @@ pub struct PhysicalDeviceIdentity {
     /// The physical device's DRM render node
     /// ([`DeviceProperties::drm_render`](crate::DeviceProperties::drm_render)).
     pub drm_render: Option<(i64, i64)>,
+    /// The size in bytes of the physical device's largest `DEVICE_LOCAL` memory heap
+    /// (`VkPhysicalDeviceMemoryProperties::memoryHeaps`), as its Vulkan driver reports it; the
+    /// device's [`DeviceProperties::max_buffer_length`](crate::DeviceProperties::max_buffer_length)
+    /// is at most three quarters of it, to 16 KiB. Named after Metal's nearest counterpart,
+    /// `recommendedMaxWorkingSetSize`, which it is not: Metal's is its estimate of the memory the
+    /// GPU can use without hurting its performance, and this is the heap's whole size, fixed for
+    /// the physical device, with nothing taken off for the system or for other processes' use
+    /// (what `VK_EXT_memory_budget` would report) and no device made to read it. On a discrete
+    /// GPU the heap is its own memory; on one of unified memory, the share of the host's memory
+    /// its driver reports. No device property answers it. `None` only where the driver reports
+    /// no `DEVICE_LOCAL` heap, which Vulkan requires one of.
+    pub recommended_max_working_set_size: Option<u64>,
 }
 
 impl PhysicalDeviceIdentity {
@@ -128,6 +142,7 @@ impl PhysicalDeviceIdentity {
             api_version: identity.api_version,
             pci_bus: identity.pci_bus,
             drm_render: identity.drm_render,
+            recommended_max_working_set_size: identity.device_local_heap,
         }
     }
 }

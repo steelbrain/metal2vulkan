@@ -2285,6 +2285,7 @@ field	metal2vulkan-runtime::PhysicalDeviceIdentity.drm_render	pub drm_render: Op
 field	metal2vulkan-runtime::PhysicalDeviceIdentity.kind	pub kind: DeviceKind
 field	metal2vulkan-runtime::PhysicalDeviceIdentity.name	pub name: String
 field	metal2vulkan-runtime::PhysicalDeviceIdentity.pci_bus	pub pci_bus: Option<(u32, u32, u32, u32)>
+field	metal2vulkan-runtime::PhysicalDeviceIdentity.recommended_max_working_set_size	pub recommended_max_working_set_size: Option<u64>
 field	metal2vulkan-runtime::PhysicalDeviceIdentity.registry_id	pub registry_id: u64
 field	metal2vulkan-runtime::PhysicalDeviceIdentity.vendor_id	pub vendor_id: u32
 field	metal2vulkan-runtime::PipelineOptions.binary_archives	pub binary_archives: Vec<BinaryArchive>
@@ -7971,6 +7972,7 @@ method	metal2vulkan-runtime::Device::from_raw	pub unsafe fn from_raw(raw: RawDev
 method	metal2vulkan-runtime::Device::heap_buffer_size_and_align	pub fn heap_buffer_size_and_align(&self, length: u64, _options: ResourceOptions) -> SizeAndAlign
 method	metal2vulkan-runtime::Device::heap_texture_size_and_align	pub fn heap_texture_size_and_align(&self, descriptor: &TextureDescriptor) -> Result<SizeAndAlign, Error>
 method	metal2vulkan-runtime::Device::host_range_remapped	pub fn host_range_remapped(&self, bytes: NonNull<u8>, length: u64)
+method	metal2vulkan-runtime::Device::identities_with	pub fn identities_with(options: &DeviceOptions) -> Result<Vec<PhysicalDeviceIdentity>, Error>
 method	metal2vulkan-runtime::Device::imports_shared_host_pointers	pub fn imports_shared_host_pointers(&self) -> Result<bool, Error>
 method	metal2vulkan-runtime::Device::in_place_check_line	pub fn in_place_check_line(&self) -> u64
 method	metal2vulkan-runtime::Device::in_place_check_report	pub fn in_place_check_report(&self) -> Vec<String>

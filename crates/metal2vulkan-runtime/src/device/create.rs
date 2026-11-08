@@ -2164,17 +2164,11 @@ impl Device {
     }
 
     /// The identity of the physical device [`Device::system_default_with`] makes its device of
-    /// with `options`, read without making any device: the same selection, in the same order (the
-    /// preferred qualifying kind, then enumeration order), over the same physical devices, by the
-    /// same calls (`ranked`, `identified`, `properties::query`), so the two cannot name
-    /// different physical devices. A runtime extension, no Metal call (Metal's program holds an
-    /// `MTLDevice` to ask it anything).
-    ///
-    /// What is read is the physical device's own identity, which the device made of it answers:
-    /// `properties::query`'s property reads of the physical device, and no `vkCreateDevice`, no
-    /// compile device and no queue. The instance is the one of the devices of equal options while
-    /// one lives (as [`Device::system_default_with`] takes it), else one made for the call, which
-    /// goes with it.
+    /// with `options`, read without making any device: the first of
+    /// [`Device::identities_with`]'s, whose order (the preferred qualifying kind, then
+    /// enumeration order) and physical devices are the ones that call tries, so the two cannot
+    /// name different physical devices. A runtime extension, no Metal call (Metal's program holds
+    /// an `MTLDevice` to ask it anything).
     ///
     /// The physical device named is the one [`Device::system_default_with`] tries first. Where
     /// that call then refuses it as it makes its device (unsupported, or without a graphics and
@@ -2189,41 +2183,58 @@ impl Device {
     pub fn system_default_identity_with(
         options: &DeviceOptions,
     ) -> Result<PhysicalDeviceIdentity, Error> {
-        let mut made = lock(&MADE);
-        let (_, instance) = group(&mut made, options)?;
-        let ranked = ranked(&instance, options)?;
-        let identity = (identified(&instance, ranked).into_iter().next()).map(|(_, physical)| {
-            // SAFETY: `physical` was enumerated from the instance, created at Vulkan 1.2 or
-            // later, and `identified` kept only physical devices at Vulkan 1.2 or later.
-            let (identity, _) =
-                unsafe { super::properties::query(&instance.raw, physical, instance.api_version) };
-            PhysicalDeviceIdentity::of(&identity)
-        });
-        drop(made);
-        // The instance made for the call goes here, outside the lock.
-        drop(instance);
-        identity.ok_or(Error::NoDevice)
+        let first = Device::identities_with(options)?.into_iter().next();
+        first.ok_or(Error::NoDevice)
     }
 
     /// The registry IDs ([`Device::registry_id`], `registryID`) of the physical devices
     /// [`Device::all_with`] makes its devices of, in its order, read without making any device: a
-    /// runtime extension, no Metal call (Metal lists its devices, not their IDs). The physical
-    /// devices of `options.kinds` at Vulkan 1.2 or later are listed, each by its `deviceUUID`; one
-    /// the runtime refuses as it makes its device (unsupported, or without a graphics and compute
+    /// runtime extension, no Metal call (Metal lists its devices, not their IDs). They are the
+    /// [`PhysicalDeviceIdentity::registry_id`]s of [`Device::identities_with`], one per physical
+    /// device it lists: one the runtime refuses as it makes its device (unsupported, or without a
+    /// graphics and compute queue), which [`Device::all_with`] leaves out, is listed all the
+    /// same, and [`Device::with_registry_id`] answers its refusal.
+    pub fn registry_ids_with(options: &DeviceOptions) -> Result<Vec<u64>, Error> {
+        let identities = Device::identities_with(options)?.into_iter();
+        Ok(identities.map(|identity| identity.registry_id).collect())
+    }
+
+    /// The identity of each physical device `options` admit, in [`Device::system_default_with`]'s
+    /// order (the preferred qualifying kind, then enumeration order), read without making any
+    /// device. No Metal call: a runtime extension,
+    /// whose nearest Metal counterpart is `MTLCopyAllDevices`, which answers devices that exist
+    /// where this answers what a device of each physical device would answer, before any is
+    /// made, so a consumer can choose a GPU and make only its device
+    /// ([`Device::with_registry_id`]).
+    ///
+    /// The physical devices of `options.kinds` at Vulkan 1.2 or later are listed. Each identity
+    /// is read by the property reads the device made of it takes its own from
+    /// (`properties::query`), with no `vkCreateDevice`, no compile device and no queue. One the
+    /// runtime refuses as it makes its device (unsupported, or without a graphics and compute
     /// queue), which [`Device::all_with`] leaves out, is listed all the same, and
     /// [`Device::with_registry_id`] answers its refusal. The instance is the one of the devices of
     /// equal options while one lives (as [`Device::system_default_with`] takes it), else one made
-    /// for the call, which goes with it.
-    pub fn registry_ids_with(options: &DeviceOptions) -> Result<Vec<u64>, Error> {
+    /// for the call, which goes with it. [`Device::registry_ids_with`] and
+    /// [`Device::system_default_identity_with`] answer from this list.
+    pub fn identities_with(options: &DeviceOptions) -> Result<Vec<PhysicalDeviceIdentity>, Error> {
         let mut made = lock(&MADE);
         let (_, instance) = group(&mut made, options)?;
         let ranked = ranked(&instance, options)?;
-        let ids = identified(&instance, ranked).into_iter().map(|(id, _)| id);
-        let ids = ids.collect();
+        let identities = identified(&instance, ranked)
+            .into_iter()
+            .map(|(_, physical)| {
+                // SAFETY: `physical` was enumerated from the instance, created at Vulkan 1.2 or
+                // later, and `identified` kept only physical devices at Vulkan 1.2 or later.
+                let (identity, _) = unsafe {
+                    super::properties::query(&instance.raw, physical, instance.api_version)
+                };
+                PhysicalDeviceIdentity::of(&identity)
+            });
+        let identities = identities.collect();
         drop(made);
         // The instance made for the call goes here, outside the lock.
         drop(instance);
-        Ok(ids)
+        Ok(identities)
     }
 
     /// The device of the physical device whose registry ID ([`Device::registry_id`]) is

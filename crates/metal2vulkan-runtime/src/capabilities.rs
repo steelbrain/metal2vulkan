@@ -235,7 +235,8 @@ pub(crate) struct DeviceIdentity {
     /// `sampledImageColorSampleCounts & sampledImageDepthSampleCounts`.
     pub sampled_sample_counts: SampleCountFlags,
     /// The size of the device's largest `DEVICE_LOCAL` memory heap, where it was read
-    /// (`VkPhysicalDeviceMemoryProperties`): what bounds [`DeviceProperties::max_buffer_length`].
+    /// (`VkPhysicalDeviceMemoryProperties`): what bounds [`DeviceProperties::max_buffer_length`],
+    /// and what `PhysicalDeviceIdentity::recommended_max_working_set_size` answers.
     pub device_local_heap: Option<u64>,
 }
 
