@@ -1286,6 +1286,12 @@ impl Predication {
             .is_some_and(|unit| !unit.stack.is_empty())
     }
 
+    /// Whether the open encoder's unit gates its dispatches (`Unit::gated`): where not,
+    /// [`gates`](Self::gates) makes none, so a dispatch need not list its group counts for it.
+    pub(super) fn gates_dispatches(&self) -> bool {
+        self.unit.as_ref().is_some_and(Unit::gated)
+    }
+
     /// The gates of a dispatch the open encoder records now, one per command of `counts` (its
     /// group counts), where its unit gates its dispatches (`Unit::gated`); none where not, and it
     /// runs as recorded. In the bound form they lie in the last step's record, or where it has no
@@ -1297,12 +1303,9 @@ impl Predication {
         device: &Device,
         counts: &[[u32; 3]],
     ) -> Result<(Option<Step>, Vec<Upload>), Error> {
-        let Some(unit) = &self.unit else {
+        let Some(unit) = self.unit.as_ref().filter(|unit| unit.gated()) else {
             return Ok((None, Vec::new()));
         };
-        if !unit.gated() {
-            return Ok((None, Vec::new()));
-        }
         let mut run = unit
             .run
             .ok_or_else(|| internal("a gated predication unit without its step"))?;

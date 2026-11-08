@@ -2257,12 +2257,12 @@ fn record(
             flat = flat_call;
         }
     }
-    let (kept, kept_state, resident_shadows) = match live {
+    let (kept, kept_state, resident_shadows, kept_uses) = match live {
         Some(live) => {
-            let (state, memo, shadows) = live.parts();
-            (memo.entry(), Some(state), Some(shadows))
+            let (state, memo, shadows, uses) = live.parts();
+            (memo.entry(), Some(state), Some(shadows), Some(uses))
         }
-        None => (None, None, None),
+        None => (None, None, None, None),
     };
     let settled = match (kept, &settled_here) {
         (Some(kept), _) => &kept.settled,
@@ -2432,10 +2432,26 @@ fn record(
         mesh: None,
         tessellation: None,
     };
-    let mut uses = binding::command_uses(call, plan, &command, &bound_tables, None, None)?;
+    // An encoder's own dispatch makes its uses over the last one's, in their storage
+    // (`LiveDispatch::uses`), those of what the encoder made resident kept where they are the
+    // last dispatch's, as a draw does (`LiveBind::uses`); an indirect command's state makes them
+    // whole.
+    let mut made_whole;
+    let uses = match kept_uses {
+        Some(uses) => {
+            let inputs = (plan, &command, &bound_tables);
+            binding::command_uses_into(call, inputs, (None, None), uses)?;
+            uses
+        }
+        None => {
+            made_whole = binding::command_uses(call, plan, &command, &bound_tables, None, None)?;
+            &mut made_whole
+        }
+    };
     if let Some((call, _)) = &flat {
         uses.push(call.reads());
     }
+    let uses: &binding::CommandUses = uses;
     // A dispatch that names a detached buffer records nothing: its submission fails.
     let named = uses
         .iter()
@@ -2447,21 +2463,27 @@ fn record(
     }
     let device = core.device().clone();
     // Inside a block of command predication, each command runs from its gate: the flat path's
-    // preprocess (whose command then stays zero), else each region's dispatch.
+    // preprocess (whose command then stays zero), else each region's dispatch. Their group
+    // counts are listed only for a unit that gates them.
     let gates = match own.is_some() {
         true => {
-            let counts: Vec<[u32; 3]> = match &preprocess {
-                Some(_) => vec![[1, 1, 1]],
-                None => commands
-                    .regions
-                    .iter()
-                    .map(|region| region.group_count)
-                    .collect(),
-            };
             let (further, gates) = {
                 let mut state = core.command_buffer().state();
                 let (predication, uploads) = state.predication_and_uploads();
-                predication.gates(uploads, &device, &counts)?
+                match predication.gates_dispatches() {
+                    true => {
+                        let counts: Vec<[u32; 3]> = match &preprocess {
+                            Some(_) => vec![[1, 1, 1]],
+                            None => commands
+                                .regions
+                                .iter()
+                                .map(|region| region.group_count)
+                                .collect(),
+                        };
+                        predication.gates(uploads, &device, &counts)?
+                    }
+                    false => (None, Vec::new()),
+                }
             };
             if let Some(step) = further {
                 predication::record_further(core, &step)?;
@@ -2587,10 +2609,10 @@ fn record(
     // The resident textures' shadows as the encoder keeps them (`compute/live.rs`).
     let textures = tables.table.textures.values();
     let shadows = match resident_shadows {
-        Some(kept) => shadow::shadow_uses_of(textures, kept.of(&device, tables.residency), &uses),
-        None => shadow::shadow_uses(textures.chain(tables.residency.textures()), &uses),
+        Some(kept) => shadow::shadow_uses_of(textures, kept.of(&device, tables.residency), uses),
+        None => shadow::shadow_uses(textures.chain(tables.residency.textures()), uses),
     };
-    let copies = core.plan_shadows(&shadows, &uses)?;
+    let copies = core.plan_shadows(&shadows, uses)?;
     let heap_set = match heap {
         Some(_) => Some(
             heap_sets::bind(
@@ -2598,7 +2620,7 @@ fn record(
                 &objects,
                 &mut core.command_buffer().state().heaps,
                 heap_writes,
-                &uses,
+                uses,
             )?
             .set,
         ),
@@ -2635,7 +2657,7 @@ fn record(
             // Tracked here, as a command recorded here is; its execution recorded here, its
             // creation times set as its segment records.
             let creation = core.records_executions().then(|| Arc::new(OnceLock::new()));
-            if let Some(barrier) = core.command_later(stages, &uses, uses.resident()) {
+            if let Some(barrier) = core.command_later(stages, uses, uses.resident()) {
                 let encoder = core.command_buffer().state().open_encoder_place();
                 let pending = PendingDispatch {
                     variant: Arc::clone(variant),
@@ -2649,7 +2671,7 @@ fn record(
                 };
                 core.pend(next, pending)?;
             }
-            core.shadows_used(&shadows, &uses, &[]);
+            core.shadows_used(&shadows, uses, &[]);
             if let Some(creation) = creation {
                 core.executed(|| {
                     Execution::made_later(
@@ -2662,13 +2684,13 @@ fn record(
         }
         None => {
             let made = &*pipelines;
-            core.command_reaching(stages, &uses, uses.resident(), |raw, command_buffer| {
+            core.command_reaching(stages, uses, uses.resident(), |raw, command_buffer| {
                 // SAFETY: the encoder's command buffer is recording outside a render pass;
                 // every object recorded is live until the command buffer completes (retained
                 // below), and the pipelines are the variant's, one per region.
                 unsafe { recording.record(raw, command_buffer, made) }
             });
-            core.shadows_used(&shadows, &uses, &[]);
+            core.shadows_used(&shadows, uses, &[]);
             core.executed(|| {
                 Execution::new(
                     ExecutedPipeline::Compute(Arc::clone(variant.shared_pipeline())),
